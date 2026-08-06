@@ -1076,9 +1076,12 @@ export function ChatInput({
       showRecommendationRef.current = false;
       setRecommendedPrompt(null);
     }
-    // device-link 远程会话:maker:predict-prompt 不在 allowlist,且远程对话内容
+    // device-link 远程会话 & SSH 远程会话:maker:predict-prompt 不在 allowlist,且远程对话内容
     // 不应送到控制端本地 provider/凭证 —— 跳过预测。
-    if (wasRunning && !showStopButton && recommendationEnabled && sessionId && !deviceLinkDeviceId) {
+    if (wasRunning && !showStopButton && recommendationEnabled && sessionId && !deviceLinkDeviceId && !remoteHostId) {
+      // 冷加载帧:runtimeAgentKind 尚未确认时就默认 claude-code,会将其他引擎的会话内容
+      // 发给 Claude Code provider —— 跳过预测,等 agent 身份确认后再恢复。
+      if (runtimeAgentKind == null) return;
       const latestMessages = messagesRef.current;
       const ed = editorRef.current;
       if (
@@ -1091,22 +1094,27 @@ export function ChatInput({
           role: m.role,
           content: m.content,
         }));
+        // 捕获请求时刻的 sessionId 与 turnGen 快照,落地前校验是否仍匹配。
+        const requestSessionId = sessionId;
+        const requestTurnGen = turnGenRef.current;
         window.electronAPI.maker
           .predictNextPrompt({
             sessionId,
-            agentKind: (runtimeAgentKind ?? 'claude-code') as 'claude-code' | 'codex' | 'pi',
+            agentKind: runtimeAgentKind,
             messages: contextMsgs,
           })
           .then((result) => {
-            // 请求往返期间用户可能已经开始打字、或又发起了新 turn —— 落地前重新
-            // 确认一次,否则会在非空输入框上闪一下推荐。
+            // 请求往返期间用户可能已经切换会话、发起新 turn 或开始打字 —— 落地前
+            // 重新确认 sessionId、turnGen、编辑器状态,否则旧上下文的推荐会覆盖当前轮。
             const cur = editorRef.current;
             if (
               result?.prompt &&
               cur &&
               !cur.isDestroyed &&
               composerDocIsEmpty(cur.state.doc) &&
-              !showStopButtonRef.current
+              !showStopButtonRef.current &&
+              prevSessionIdRef.current === requestSessionId &&
+              turnGenRef.current === requestTurnGen
             ) {
               showRecommendationRef.current = true;
               setRecommendedPrompt(result.prompt);
