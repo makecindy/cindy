@@ -3444,6 +3444,7 @@ export function ChatInput({
       // SSH 远端会话不扫 @ 资源(无隧道)。统一面板仍可打开(动作 + 插件条目),
       // 资源区直接置空 ready,不能留 loading 骨架。
       if (isRemoteSession) {
+        atScanSeqRef.current += 1;
         setAtState({ kind: 'ready', items: [], truncated: false });
         return;
       }
@@ -3882,13 +3883,11 @@ export function ChatInput({
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
     if (!editor || !effectiveAt) return null;
     const { from } = effectiveAt;
-    if (effectiveAt.activation === 'synthetic') {
-      const to = editor.state.selection.from;
-      return to >= from ? { from, to } : null;
-    }
 
-    // Extend replace-range to the end of the @-run (up to whitespace /
-    // chip boundary / end of paragraph). The caret may sit inside the run.
+    // Extend replace-range to the end of the complete query run (up to
+    // whitespace / chip boundary / end of paragraph). The caret may sit
+    // inside either a typed `@query` or a synthetic `query`; selecting an
+    // entry must not leave the suffix after the caret behind.
     let $from;
     try {
       $from = editor.state.doc.resolve(from);
@@ -3897,8 +3896,9 @@ export function ChatInput({
     }
     const parent = $from.parent;
     const parentStart = $from.start();
-    let runEnd = from + 1;
-    const offset = from - parentStart + 1;
+    const triggerOffset = effectiveAt.activation === 'typed' ? 1 : 0;
+    let runEnd = from + triggerOffset;
+    const offset = from - parentStart + triggerOffset;
     let stopped = false;
     parent.forEach((child, childOffset) => {
       if (stopped || childOffset + child.nodeSize <= offset) return;
