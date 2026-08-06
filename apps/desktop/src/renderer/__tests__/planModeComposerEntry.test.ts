@@ -12,6 +12,7 @@
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 
@@ -166,7 +167,8 @@ describe('统一 composer 建议入口', () => {
     expect(nextEnabledSuggestionIndex(entries, 1, -1)).toBe(1);
   });
 
-  it('引用目录管理复用统一面板的独立 section', () => {
+  it('引用目录管理复用统一面板的独立 section，移除按钮支持键盘访问', async () => {
+    const user = userEvent.setup();
     const onRemove = vi.fn();
     const entries = buildComposerSuggestionEntries({
       query: '',
@@ -189,7 +191,12 @@ describe('统一 composer 建议入口', () => {
     );
     expect(screen.getByText('extraDirs.sectionTitle')).toBeTruthy();
     expect(screen.getByText('repo-shared')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('extraDirs.remove'));
+    const removeButton = screen.getByLabelText('extraDirs.remove');
+    expect(removeButton.className).toContain('focus-visible:opacity-100');
+    expect(removeButton.className).toContain('focus-visible:ring-2');
+    removeButton.focus();
+    expect(document.activeElement).toBe(removeButton);
+    await user.keyboard('{Enter}');
     expect(onRemove).toHaveBeenCalledWith('/repo-shared');
   });
 });

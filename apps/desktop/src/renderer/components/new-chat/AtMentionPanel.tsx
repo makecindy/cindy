@@ -551,6 +551,8 @@ export function AtMentionPanel({
                                 'rounded-full p-1 opacity-0 transition-opacity',
                                 'hover:bg-[var(--cmd-palette-item-hover)]',
                                 'group-hover:opacity-70 hover:!opacity-100',
+                                'focus-visible:opacity-100 focus-visible:outline-none',
+                                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                               )}
                               aria-label={t('extraDirs.remove', { name: extraDirBasename(p) })}
                             >
