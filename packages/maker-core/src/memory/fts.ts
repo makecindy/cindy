@@ -94,9 +94,9 @@ export class MemoryFts {
     const seen = new Set(matched.map((h) => h.filename));
     // LIKE 多拉一些, 去重过滤后仍有足够的子串命中候选
     const fallback = this.searchLike(query, opts, Math.min(limit * 2, 100)).filter((h) => !seen.has(h.filename));
-    if (matched.length >= limit && fallback.length > 0) {
+    if (limit > 1 && matched.length >= limit && fallback.length > 0) {
       // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
-      // 被整 token 命中完全遮蔽 (review 反馈)
+      // 被整 token 命中完全遮蔽 (limit=1 时不预留, 保住唯一最佳 MATCH)
       return [...matched.slice(0, limit - 1), fallback[0]];
     }
     return [...matched, ...fallback].slice(0, limit);
@@ -168,7 +168,8 @@ export class MemoryFts {
         type: r.type as MemoryType,
         title: r.title,
         snippet: r.body ? truncate(r.body, SNIPPET_FALLBACK_LEN) : r.title,
-        score: 0,
+        // LIKE 兜底无 bm25: 用大值表示"未排名", 排在所有 MATCH 命中之后 (score 越小越相关)
+        score: Number.MAX_SAFE_INTEGER,
       }));
     } catch (e) {
       throw new MemoryError('io-error', `fts like-fallback failed: ${(e as Error).message}`);

@@ -118,7 +118,7 @@ function validateNoTypePrefix(type: MemoryType, slug: string): void {
   if (slug.startsWith(`${type}_`)) {
     throw new MemoryError(
       'invalid-slug',
-      `slug "${slug}" 已带 type 前缀 "${type}_", 请传纯 slug (如 "${slug.slice(type.length + 1)}")`,
+      `slug "${slug}" 已带 type 前缀 "${type}_", 请传纯 slug (如 "${slug.slice(type.length + 1) || type + '-brief'}")`,
     );
   }
 }

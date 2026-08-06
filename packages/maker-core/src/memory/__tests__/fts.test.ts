@@ -14,8 +14,9 @@ import { buildFilename } from '../storage.js';
 import type { MemoryRecord } from '../types.js';
 
 function record(filename: string, body: string, overrides?: Partial<MemoryRecord>): MemoryRecord {
-  const slug = filename.replace(/\.md$/, '');
-  const type = slug.split('_')[0] as MemoryRecord['frontmatter']['type'];
+  // 按 MemoryRecord 契约: slug 是去掉 <type>_ 前缀与 .md 后缀的部分 (types.ts)
+  const slug = filename.replace(/\.md$/, '').replace(/^(user|feedback|project|reference|digest)_/, '');
+  const type = (filename.match(/^(user|feedback|project|reference|digest)_/) ?? ['digest'])[0].replace(/_$/, '') as MemoryRecord['frontmatter']['type'];
   return {
     filename,
     slug,
@@ -61,7 +62,7 @@ describe('MemoryFts', () => {
     const hits = fts.search('MaxCompute');
     expect(hits.length).toBe(1);
     expect(hits[0].filename).toBe('project_a.md');
-    expect(hits[0].score).not.toBe(0); // 走 MATCH 路径才带 bm25
+    expect(hits[0].score).not.toBe(Number.MAX_SAFE_INTEGER); // 走 MATCH 路径才带 bm25
   });
 
   it('MATCH 命中不足时合并 LIKE 兜底并按 filename 去重', () => {
@@ -128,6 +129,14 @@ describe('MemoryFts', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('limit=1 且 MATCH 满额时不预留 (保住唯一最佳 MATCH)', () => {
+    fts.upsert(record('project_a.md', 'link 内容'));
+    fts.upsert(record('project_linkedin.md', 'LinkedIn 社交平台'));
+    const hits = fts.search('link', { limit: 1 });
+    expect(hits.length).toBe(1);
+    expect(hits[0].filename).toBe('project_a.md'); // MATCH 优先, 不被 LIKE 挤掉
   });
 
   it('upsert 按 filename 去重, delete/count/rebuild 基本行为', () => {
