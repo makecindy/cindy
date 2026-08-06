@@ -414,6 +414,7 @@ type DiscordBotTransportStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
+  | { kind: 'standby'; appId: string }
   | { kind: 'conflict'; appId: string }
   | { kind: 'error'; reason: string };
 

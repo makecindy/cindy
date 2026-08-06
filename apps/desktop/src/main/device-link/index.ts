@@ -244,8 +244,15 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
  */
 const presenceOnlineByDevice = new Map<string, boolean>();
+const presenceLastSeenByDevice = new Map<string, number>();
 
 const presenceNameByDevice = new Map<string, string>();
+type DeviceLinkPushHandler = (sourceDeviceId: string, payload: unknown) => void;
+type DeviceLinkPresenceHandler = (snapshot: PresenceSnapshot) => void;
+type DeviceLinkOwnershipHandler = (owner: boolean) => void;
+const deviceLinkPushHandlers = new Map<string, Set<DeviceLinkPushHandler>>();
+const deviceLinkPresenceHandlers = new Set<DeviceLinkPresenceHandler>();
+const deviceLinkOwnershipHandlers = new Set<DeviceLinkOwnershipHandler>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
 
 /**
@@ -466,6 +473,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 缺到下次无关恢复事件(review P1)。
     if (status !== 'online') {
       presenceOnlineByDevice.clear();
+      presenceLastSeenByDevice.clear();
       presenceAvailableByDevice.clear();
     }
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
@@ -507,6 +515,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
+    presenceLastSeenByDevice.set(snap.deviceId, snap.lastSeenAt);
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
     // `!== false` 与重放侧的 `!== true` 对称:视图清空后重连的首帧不可用 presence
@@ -516,6 +525,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (!available && wasAvailable !== false) responsivenessTracker?.clearDevice(snap.deviceId);
     setControllerPlatform(snap.deviceId, snap.platform);
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
+    for (const handler of deviceLinkPresenceHandlers) {
+      try {
+        handler(snap);
+      } catch (error) {
+        log.warn('device-link presence consumer failed', error);
+      }
+    }
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
@@ -620,6 +636,17 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       }
       return;
     }
+    const channelHandlers = deviceLinkPushHandlers.get(p?.channel ?? '');
+    if (channelHandlers) {
+      for (const handler of channelHandlers) {
+        try {
+          handler(env.src, p.payload);
+        } catch (error) {
+          log.warn(`device-link push consumer failed channel=${p.channel}`, error);
+        }
+      }
+      return;
+    }
     broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, {
       deviceId: env.src,
       channel: p.channel,
@@ -713,8 +740,22 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       pollContactsDeviceSyncSettingChange();
       pollContactsDeviceSyncDataChange();
       pollContactsDeviceSyncCrossProcessState();
+      for (const handler of deviceLinkOwnershipHandlers) {
+        try {
+          handler(true);
+        } catch (error) {
+          log.warn('device-link ownership consumer failed on acquire', error);
+        }
+      }
     },
     onDemote: () => {
+      for (const handler of deviceLinkOwnershipHandlers) {
+        try {
+          handler(false);
+        } catch (error) {
+          log.warn('device-link ownership consumer failed on demote', error);
+        }
+      }
       setContactsDeviceLinkOwnerActive(false);
       appliedSettingsSnapshot = null;
       teardownActiveLink();
@@ -889,6 +930,7 @@ function teardownActiveLink(): void {
   // 同步在降级过一次之后永久失效。清空 presence 就够了 —— 没有对端就不会发送,
   // client 为 null 时 sendPush 也是 no-op。
   presenceOnlineByDevice.clear();
+  presenceLastSeenByDevice.clear();
   clearControllerPlatforms();
   presenceNameByDevice.clear();
   resetSubscriptionRefs();
@@ -1391,6 +1433,73 @@ function assertRemoteControlTargetEnabledAfterReopen(deviceId: string): void {
  */
 export function getSelfDeviceId(): string | null {
   return client?.getSelfDeviceId() ?? null;
+}
+
+/** IM scheduler uses push as a same-account, non-control data plane. */
+export function sendDeviceLinkPush(deviceId: string, channel: string, payload: unknown): boolean {
+  if (!client || !arbiter?.isOwner() || !presenceOnlineByDevice.get(deviceId)) return false;
+  try {
+    client.sendBestEffortPush(deviceId, channel, payload);
+    return true;
+  } catch (error) {
+    log.warn(`device-link best-effort push failed channel=${channel}`, error);
+    return false;
+  }
+}
+
+export interface DeviceLinkDesktopPeer {
+  deviceId: string;
+  platform: string;
+  online: true;
+  lastSeenAt: number;
+}
+
+export function listOnlineDesktopDevices(): DeviceLinkDesktopPeer[] {
+  const self = client?.getSelfDeviceId();
+  return [...presenceOnlineByDevice.entries()]
+    .filter(([deviceId, online]) => {
+      const platform = getControllerPlatform(deviceId);
+      return Boolean(
+        online &&
+          deviceId !== self &&
+          platform &&
+          ['darwin', 'linux', 'win32'].includes(platform),
+      );
+    })
+    .flatMap(([deviceId]) => {
+      const platform = getControllerPlatform(deviceId);
+      if (!platform) return [];
+      return [{
+        deviceId,
+        platform,
+        online: true as const,
+        lastSeenAt: presenceLastSeenByDevice.get(deviceId) ?? Date.now(),
+      }];
+    });
+}
+
+export function isDeviceLinkOwner(): boolean {
+  return arbiter?.isOwner() ?? false;
+}
+
+export function onDeviceLinkPush(channel: string, handler: DeviceLinkPushHandler): () => void {
+  const handlers = deviceLinkPushHandlers.get(channel) ?? new Set<DeviceLinkPushHandler>();
+  handlers.add(handler);
+  deviceLinkPushHandlers.set(channel, handlers);
+  return () => {
+    handlers.delete(handler);
+    if (handlers.size === 0) deviceLinkPushHandlers.delete(channel);
+  };
+}
+
+export function onDeviceLinkPresenceChanged(handler: DeviceLinkPresenceHandler): () => void {
+  deviceLinkPresenceHandlers.add(handler);
+  return () => deviceLinkPresenceHandlers.delete(handler);
+}
+
+export function onDeviceLinkOwnershipChanged(handler: DeviceLinkOwnershipHandler): () => void {
+  deviceLinkOwnershipHandlers.add(handler);
+  return () => deviceLinkOwnershipHandlers.delete(handler);
 }
 
 /** 控制端:对目标设备远程 invoke 一个 allowlist 内的 channel。

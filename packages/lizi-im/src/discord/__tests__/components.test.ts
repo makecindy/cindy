@@ -196,7 +196,7 @@ describe('DiscordIM card methods', () => {
       gatewayFactory: (handlers) => {
         onButtonInteraction = handlers.onButtonInteraction as (value: unknown) => void;
         return {
-          client: null,
+          client: { user: { id: 'bot-1' } } as never,
           appId: 'app-1',
           botTag: 'bot#0000',
           connect: vi.fn(async () => {}),
@@ -240,7 +240,7 @@ describe('DiscordIM card methods', () => {
       gatewayFactory: (handlers) => {
         onButtonInteraction = handlers.onButtonInteraction as (value: unknown) => void;
         return {
-          client: null,
+          client: { user: { id: 'bot-1' } } as never,
           appId: 'app-1',
           botTag: 'bot#0000',
           connect: vi.fn(async () => {}),
@@ -426,11 +426,12 @@ function makeChannel(message: ReturnType<typeof makeEditableMessage>) {
 }
 
 function makeHost(opts: { readSecret?: (key: string) => string | null } = {}): IMHost {
+  const token = `${Buffer.from('12345678901234567').toString('base64url')}.signature.parts`;
   return {
     paths: { feishuMediaDir: '/tmp/feishu', discordMediaDir: '/tmp/discord' },
     secrets: {
       write: () => true,
-      read: (key) => opts.readSecret?.(key) ?? null,
+      read: (key) => opts.readSecret?.(key) ?? (key === 'discord-bot-token' ? token : null),
       remove: () => {},
       isAvailable: () => true,
     },

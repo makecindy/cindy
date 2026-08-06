@@ -1688,6 +1688,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'idle' }
         | { kind: 'connecting' }
         | { kind: 'connected'; appId: string }
+        | { kind: 'standby'; appId: string }
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
       ownerUserId: string | null;
@@ -1701,12 +1702,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'idle' }
         | { kind: 'connecting' }
         | { kind: 'connected'; appId: string }
+        | { kind: 'standby'; appId: string }
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
       saveErrorStatus?:
         | { kind: 'idle' }
         | { kind: 'connecting' }
         | { kind: 'connected'; appId: string }
+        | { kind: 'standby'; appId: string }
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
       ownerUserId: string | null;

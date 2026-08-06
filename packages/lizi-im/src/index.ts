@@ -39,7 +39,7 @@ export type {
 export { FeishuIM, createFeishuIM } from './feishu/index.js';
 
 export { DiscordIM, createDiscordIM } from './discord/index.js';
-export type { DiscordIMOptions } from './discord/index.js';
+export type { DiscordIMOptions, DiscordSchedulerHooks } from './discord/index.js';
 
 export { TelegramIM, createTelegramIM } from './telegram/index.js';
 export type { TelegramIMOptions, TelegramGroupWindowEntry } from './telegram/index.js';
