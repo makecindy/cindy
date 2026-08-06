@@ -115,11 +115,17 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     });
 
   const subscribers = new Set<WebContents>();
+  const destroyListeners = new WeakMap<WebContents, () => void>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let sampling = false;
 
   function dropSubscriber(wc: WebContents): void {
     subscribers.delete(wc);
+    const destroyListener = destroyListeners.get(wc);
+    if (destroyListener) {
+      wc.removeListener('destroyed', destroyListener);
+      destroyListeners.delete(wc);
+    }
     if (subscribers.size === 0 && timer) {
       clearInterval(timer);
       timer = null;
@@ -160,8 +166,10 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     assertTrustedAppRendererEvent(event);
     const wc = event.sender;
     if (!subscribers.has(wc)) {
+      const destroyListener = () => dropSubscriber(wc);
       subscribers.add(wc);
-      wc.once('destroyed', () => dropSubscriber(wc));
+      destroyListeners.set(wc, destroyListener);
+      wc.once('destroyed', destroyListener);
     }
     if (!timer) {
       timer = setInterval(() => {

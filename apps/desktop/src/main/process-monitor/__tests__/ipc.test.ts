@@ -60,10 +60,16 @@ interface FakeWebContents {
   isDestroyed(): boolean;
   send: ReturnType<typeof vi.fn>;
   once: ReturnType<typeof vi.fn>;
+  removeListener: ReturnType<typeof vi.fn>;
 }
 
 function fakeSender(): FakeWebContents {
-  return { isDestroyed: () => false, send: vi.fn(), once: vi.fn() };
+  return {
+    isDestroyed: () => false,
+    send: vi.fn(),
+    once: vi.fn(),
+    removeListener: vi.fn(),
+  };
 }
 
 function register(overrides: Parameters<typeof registerProcessMonitorIpc>[0] = {}) {
@@ -122,6 +128,24 @@ describe('process monitor IPC authorization', () => {
     mocks.isTrustedAppRendererWindow.mockReturnValue(true);
     await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
     await vi.waitFor(() => expect(sender.once).toHaveBeenCalledTimes(2));
+    expect(sender.removeListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('反复切换面板时清理旧 destroyed 监听器', async () => {
+    register();
+    const sender = fakeSender();
+    const subscribe = handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL);
+    const unsubscribe = handlerFor(PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL);
+
+    await subscribe({ sender });
+    await unsubscribe({ sender });
+    await subscribe({ sender });
+    await unsubscribe({ sender });
+
+    expect(sender.once).toHaveBeenCalledTimes(2);
+    expect(sender.removeListener).toHaveBeenCalledTimes(2);
+    expect(sender.removeListener).toHaveBeenNthCalledWith(1, 'destroyed', expect.any(Function));
+    expect(sender.removeListener).toHaveBeenNthCalledWith(2, 'destroyed', expect.any(Function));
   });
 });
 
