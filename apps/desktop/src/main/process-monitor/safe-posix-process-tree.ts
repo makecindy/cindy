@@ -119,15 +119,12 @@ export function terminateSafePosixProcessTree(
             signal(childPid, 'SIGSTOP');
           } catch (error) {
             if (isMissingProcess(error)) {
-              // 子进程消失后，其已知后代可能仍存活并被 reparent。父链已经失效，
-              // 不能继续凭旧快照里的 PID 盲目 SIGKILL；同时也不能静默返回成功。
-              // 失败关闭会由外层恢复已冻结进程，用户可在新鲜归属快照下重试。
-              if ((snapshot.childrenByParent.get(childPid)?.length ?? 0) > 0) {
-                throw new Error(
-                  `process exited before its descendants could be frozen: ${childPid}`,
-                );
-              }
-              continue;
+              // 子进程可能在本次快照之后 fork 后代再退出；即使旧快照里没有
+              // 已知后代，也不能证明该分支已清空。父链失效后必须失败关闭，
+              // 由外层恢复已冻结进程，等待用户基于新鲜归属快照重试。
+              throw new Error(
+                `process exited before its descendants could be frozen: ${childPid}`,
+              );
             }
             throw error;
           }
