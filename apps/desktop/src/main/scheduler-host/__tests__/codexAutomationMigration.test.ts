@@ -104,4 +104,22 @@ describe('CodexAutomationMigrationService', () => {
     expect(result.created).toHaveLength(1);
     expect(result.skipped[0]).toMatchObject({ sourceId: 'bad' });
   });
+
+  it('does not treat a schedule with different execution semantics as a duplicate', async () => {
+    const first = detail('one');
+    const { service, scheduler } = setup([first]);
+    scheduler.list.mockResolvedValueOnce([
+      {
+        id: 'existing',
+        ...inputFor(first),
+        status: 'active',
+        executionMode: 'script',
+        notify: { desktop: false, feishu: false },
+      },
+    ]);
+
+    const result = await service.preview();
+    expect(result.items[0]?.duplicate).toBe(false);
+    expect(result.items[0]?.selectedByDefault).toBe(true);
+  });
 });

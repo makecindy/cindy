@@ -86,6 +86,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [items, setItems] = useState<CodexAutomationPreviewItem[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -95,6 +96,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
   const reset = () => {
     setLoading(false);
     setImporting(false);
+    setLoadError(null);
     setItems([]);
     setChecked(new Set());
     setExpanded(new Set());
@@ -105,6 +107,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
     if (!open) return;
     let cancelled = false;
     setLoading(true);
+    setLoadError(null);
     setResult(null);
     void window.electronAPI.maker.schedule
       .codexAutomationPreview()
@@ -121,7 +124,11 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
         );
       })
       .catch((error) => {
-        if (!cancelled) toast.error(error instanceof Error ? error.message : String(error));
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error);
+          setLoadError(message);
+          toast.error(message);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -232,9 +239,22 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
               </div>
             )}
             {!loading && items.length === 0 && (
-              <p className="py-12 text-center text-sm text-[var(--settings-section-desc)]">
-                {t('scheduler.codexImport.empty')}
-              </p>
+              <div className="py-12 text-center text-sm text-[var(--settings-section-desc)]">
+                <p>
+                  {loadError
+                    ? t('scheduler.codexImport.loadFailed', { error: loadError })
+                    : t('scheduler.codexImport.empty')}
+                </p>
+                {loadError && (
+                  <button
+                    type="button"
+                    className="mt-2 underline"
+                    onClick={() => onOpenChange(false)}
+                  >
+                    {t('scheduler.button.close')}
+                  </button>
+                )}
+              </div>
             )}
             {!loading && items.length > 0 && (
               <div className="flex flex-col gap-2">

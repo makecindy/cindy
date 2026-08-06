@@ -134,4 +134,24 @@ describe('convertCodexAutomation', () => {
     expect(result.canImport).toBe(false);
     expect(result.diagnostics.join(' ')).toContain('name');
   });
+
+  it('rejects weekly rules that also contain a month day', () => {
+    const result = convertCodexAutomation(
+      detail({ rrule: 'FREQ=WEEKLY;BYDAY=FR;BYMONTHDAY=7;BYHOUR=15;BYMINUTE=0' }),
+      { timezone: 'UTC' },
+    );
+
+    expect(result.canImport).toBe(false);
+    expect(result.diagnostics.join(' ')).toContain('BYMONTHDAY');
+  });
+
+  it('rejects monthly rules that use unsupported BYDAY semantics', () => {
+    const result = convertCodexAutomation(
+      detail({ rrule: 'FREQ=MONTHLY;BYDAY=1FR;BYHOUR=15;BYMINUTE=0' }),
+      { timezone: 'UTC' },
+    );
+
+    expect(result.canImport).toBe(false);
+    expect(result.diagnostics.join(' ')).toContain('MONTHLY BYDAY');
+  });
 });
