@@ -29,6 +29,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:resolve-interaction',
       'maker:get-pending-interactions',
       'maker:input:compact',
+      'maker:compact-session',
       'maker:set-model',
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
@@ -368,6 +369,10 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
+  });
+
+  it('maker:compact-session 隧道超时必须覆盖 pi 压缩执行预算(core 侧 10min,不 30s 截断)', () => {
+    expect(INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session']).toBeGreaterThanOrEqual(10 * 60_000);
   });
 });
 

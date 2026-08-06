@@ -110,7 +110,7 @@ import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { useAgentCapabilities, resolveManualCompactChannel } from '@/hooks/useAgentCapabilities';
 import { useLiveErrorSourceProvider } from '@/hooks/useLiveErrorSourceProvider';
 import { resolveFastSupported } from '@/lib/providerModels';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
@@ -1292,6 +1292,15 @@ export function CCAgentSessionView({
   // 否则 intent 乐观切到 pi 但真实会话仍在跑 claude-code 时会错调 compact-session(#1933 review)。
   const realAgentKind = dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
+  // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
+  // 其余 agent 声明 manualCompact.supported(当前仅 pi)→ maker:compact-session;其余无入口。
+  // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
+  // 用它判定会与 realAgentKind 分流不一致);remoteDeviceId 让远程 pi 取被控端能力。
+  const { capabilities: realSessionCaps } = useAgentCapabilities(realAgentKind, remoteDeviceId);
+  const compactChannel = useMemo(
+    () => resolveManualCompactChannel(realAgentKind, realSessionCaps),
+    [realAgentKind, realSessionCaps],
+  );
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
@@ -2656,6 +2665,15 @@ export function CCAgentSessionView({
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
   // 多个 confirm,逐个确认就会发多次 compact 请求。in-flight 期间后续点击直接 no-op。
   const compactRequestInFlightRef = useRef(false);
+  // 发起压缩时的会话锚点:pi 压缩(LLM 摘要)可长达数分钟,在途期间用户切换会话 /
+  // 登出后,迟到的旧响应不得在新会话弹 toast,也不得由旧 finally 覆盖新请求的
+  // in-flight 状态(#1933 review:并发收口)。
+  const compactScopeSessionIdRef = useRef<string | null>(null);
+  // render 阶段同步当前会话(与 lastRemoteSessionIdRef 同款):压缩在途期间切换会话,
+  // 锚点立即指向新会话,旧响应按新锚点判定丢弃,不会在新会话弹 toast。
+  if (compactScopeSessionIdRef.current !== sessionId) {
+    compactScopeSessionIdRef.current = sessionId ?? null;
+  }
   const handleCompactRequest = useCallback(async () => {
     if (!session) return;
     if (!session.workingDir) return;
@@ -2683,11 +2701,17 @@ export function CCAgentSessionView({
         cancelText: t('ccAgent.layout.contextRing.confirmCancel'),
       });
       if (!ok) return;
-      // 按 agent 能力分流(#1927):pi 走 capability-aware 的 maker:compact-session
-      // (原生已支持手动压缩),claude-code 走输入协调器的 maker:input:compact。
-      if (realAgentKind === 'pi') {
+      if (compactChannel === 'compact-session') {
+        // capability-aware 通道(pi 原生 compact):本地 IPC / device-link 隧道均可路由。
+        // 用粘滞归属(makerApiForSticky)——relay 瞬时重连清空 origin 的窗口内仍隧道到
+        // 被控端,不退回控制端本机(本机无该 live 会话,固定调本机必 null 静默失败,
+        // greptile P1)。claude-code 分支继续走 inputCoordinator,不在此通道内。
+        const scopeSessionId = compactScopeSessionIdRef.current;
+        const maker = makerApiForSticky(session.id);
         try {
-          const result = await window.electronAPI.maker.compactSession(session.id);
+          const result = await maker.compactSession(session.id);
+          // 在途期间切换会话 / 登出:旧响应不得在新会话弹 toast。
+          if (compactScopeSessionIdRef.current !== scopeSessionId) return;
           if (result?.noop) {
             // 良性:上下文太小,无可压缩内容。信息性提示,不是失败。
             toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
@@ -2696,12 +2720,14 @@ export function CCAgentSessionView({
           }
           // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
         } catch (err) {
+          if (compactScopeSessionIdRef.current !== scopeSessionId) return;
           // 与 SessionContentHeader 的手动压缩一致:失败给可理解提示,不泄漏裸 IPC 错误。
-          log.warn('context ring pi compact failed', err);
+          log.warn('context ring compact-session failed', err);
           toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
         }
         return;
       }
+      // 真实 Claude Code:输入协调器的 maker:input:compact(旧行为不变)。
       await compactSession(
         session.model,
         session.effort as Effort,
@@ -2714,9 +2740,9 @@ export function CCAgentSessionView({
   }, [
     agentStatus.contextTokens,
     agentStatus.contextWindow,
+    compactChannel,
     compactSession,
     confirmDialog,
-    realAgentKind,
     remoteDeviceId,
     session,
     t,
@@ -3995,11 +4021,13 @@ export function CCAgentSessionView({
                     sdkContextWindow={agentStatus.contextWindow}
                     deviceId={remoteDeviceId}
                     onCompact={
-                      // 按 agent 能力分流(#1927):pi(原生支持,仅本地)与 claude-code 开放手动
-                      // 压缩入口;远程 pi 会话暂无路由通道(与 SessionContentHeader 一致,压缩
-                      // 菜单仅本地开放);codex 无手动 compact(上游自动压缩)保持纯展示。
-                      (realAgentKind === 'claude-code'
-                        || (realAgentKind === 'pi' && !remoteDeviceId))
+                      // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
+                      // 其余声明 manualCompact.supported(当前仅 pi)走 compact-session 通道;
+                      // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
+                      // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
+                      // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
+                      compactChannel !== null
+                        && !(realAgentKind === 'pi' && !!session?.remoteHostId)
                         && session != null && agentStatus.contextTokens > 0
                         ? handleCompactRequest
                         : undefined

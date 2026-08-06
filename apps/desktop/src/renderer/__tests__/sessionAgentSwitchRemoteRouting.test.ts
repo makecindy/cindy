@@ -13,6 +13,7 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
+import { resolveManualCompactChannel } from '@/hooks/useAgentCapabilities';
 
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
@@ -907,24 +908,65 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     'utf8',
   ).replace(/\r\n/g, '\n');
 
-  it('pi 与 claude-code 开放入口(pi 仅本地),codex 不开放', () => {
-    // onCompact 绑定:claude-code 恒开放;pi 仅本地会话(!remoteDeviceId)开放(远程无路由通道,
-    // 与 SessionContentHeader 压缩菜单仅本地一致);codex 保持纯展示(无手动 compact)
-    expect(viewSource).toContain("(realAgentKind === 'claude-code'");
-    expect(viewSource).toContain("(realAgentKind === 'pi' && !remoteDeviceId)");
+  it('onCompact 门控:通道存在 + pi 排除 SSH 远程(remoteHostId),codex 无通道不开放', () => {
+    // 门控不再硬编码 agentKind 排除列表:以 compactChannel(能力判定)为准;
+    // pi 的 SSH 远程会话(remoteHostId)无 compact-session 路由 → 显式排除
+    // (与 SessionContentHeader 压缩菜单仅本地/device-link 一致,Copilot P2)。
+    expect(viewSource).toContain('compactChannel !== null');
+    expect(viewSource).toContain("!(realAgentKind === 'pi' && !!session?.remoteHostId)");
+    // codex(无 manualCompact)→ compactChannel null → 不开放(纯展示)。
   });
 
-  it('pi 走 capability-aware 的 maker:compact-session,不碰 claude-code 专用通道', () => {
-    // handleCompactRequest 内:pi 分支调用 compactSession(session.id)(即 maker:compact-session),
-    // claude-code 分支才走 inputCoordinator 的 maker:input:compact(compactSession(model, effort...))
-    expect(viewSource).toContain("if (realAgentKind === 'pi') {");
-    expect(viewSource).toContain('window.electronAPI.maker.compactSession(session.id)');
-    // 确认 pi 分支不调用旧通道:pi 分支以 return 结束,return 之前只有 window.electronAPI 通道
-    const piStart = viewSource.indexOf("if (realAgentKind === 'pi')");
-    const piEnd = viewSource.indexOf('return;', piStart);
-    const piBranch = viewSource.slice(piStart, piEnd);
-    expect(piBranch).not.toContain('await compactSession(');
-    // pi 分支失败需有反馈(与 SessionContentHeader 一致):catch + compactFailed 提示
-    expect(piBranch).toContain("toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'))");
+  it('compact-session 分支:粘滞路由 makerApiForSticky + scope 锚点 + 失败反馈', () => {
+    // 分流以 compactChannel 判定(不再 if (realAgentKind === 'pi'))。
+    expect(viewSource).toContain("if (compactChannel === 'compact-session') {");
+    // device-link 远程 pi:粘滞归属路由到被控端,relay 重连窗口内不退回本机(greptile P1)。
+    expect(viewSource).toContain('const maker = makerApiForSticky(session.id);');
+    expect(viewSource).toContain('await maker.compactSession(session.id)');
+    // 在途期间切换会话 / 登出:旧响应不得在新会话弹 toast(并发收口)。
+    // 锚点在 render 阶段随 sessionId 同步(与 lastRemoteSessionIdRef 同款模式)。
+    expect(viewSource).toContain('compactScopeSessionIdRef.current = sessionId ?? null');
+    expect(viewSource).toContain('if (compactScopeSessionIdRef.current !== scopeSessionId) return;');
+    // 真实 reject 必须 catch 并显示 compactFailed(与 SessionContentHeader 一致)。
+    expect(viewSource).toContain("toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'))");
+  });
+
+  it('claude-code 分支保持 inputCoordinator compactSession(model,...),不误入 compact-session', () => {
+    // compact-session 分支以 return 结束;return 之前只有 makerApiForSticky 通道,
+    // 不调用 inputCoordinator 的 compactSession(model, effort, ...)(即 maker:input:compact)。
+    const csStart = viewSource.indexOf("if (compactChannel === 'compact-session')");
+    const csEnd = viewSource.indexOf('return;', csStart);
+    const csBranch = viewSource.slice(csStart, csEnd);
+    expect(csBranch).not.toContain('await compactSession(');
+  });
+});
+
+describe('resolveManualCompactChannel(#1927 压缩通道判定,行为测试)', () => {
+  // zqchris 要求按行为覆盖而非源码字符串匹配:共享判定收敛成纯函数,直接测语义。
+  it('真实 Claude Code → claude-input(maker:input:compact),与 capability 无关', () => {
+    expect(resolveManualCompactChannel('claude-code', null)).toBe('claude-input');
+    expect(
+      resolveManualCompactChannel('claude-code', {
+        manualCompact: { supported: false, reason: 'sdk-missing' },
+      }),
+    ).toBe('claude-input');
+  });
+
+  it('声明 manualCompact.supported(当前仅 pi)→ compact-session(capability-aware 通道)', () => {
+    expect(resolveManualCompactChannel('pi', { manualCompact: { supported: true } })).toBe(
+      'compact-session',
+    );
+  });
+
+  it('无能力(Codex / 能力快照缺失)→ 无入口,不按 agentKind 扩排除列表', () => {
+    expect(resolveManualCompactChannel('codex', null)).toBeNull();
+    expect(
+      resolveManualCompactChannel('codex', {
+        manualCompact: { supported: false, reason: 'sdk-missing' },
+      }),
+    ).toBeNull();
+    // 能力快照未命中(缓存未就绪)保守关闭入口,而不是猜能力。
+    expect(resolveManualCompactChannel('pi', null)).toBeNull();
+    expect(resolveManualCompactChannel(undefined, null)).toBeNull();
   });
 });
