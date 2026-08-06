@@ -370,6 +370,61 @@ describe('sidebar-embedded session navigation boundary', () => {
     );
   });
 
+  it('cancels pending split-pane /jump-session navigation after the source becomes stale', async () => {
+    const pendingRoute = deferred<string>();
+    mocks.resolveSessionRoute.mockReturnValueOnce(pendingRoute.promise);
+    const onSessionNavigate = vi.fn();
+    let navigationCurrent = true;
+    const navigationPromise = tryHandleNavigationCommand('/jump-session session-target', {
+      navigate: mocks.navigate,
+      t: ((key: string) => key) as never,
+      allowNavigation: true,
+      onSessionNavigate,
+      isNavigationCurrent: () => navigationCurrent,
+    });
+
+    await waitFor(() => expect(mocks.resolveSessionRoute).toHaveBeenCalled());
+    navigationCurrent = false;
+    await act(async () => {
+      pendingRoute.resolve('/cc-agent/session-target');
+      await pendingRoute.promise;
+      await navigationPromise;
+    });
+
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('cancels stale /jump-session before resolving the route after target lookup', async () => {
+    const pendingSession = deferred<{
+      id: string;
+      title: string;
+      status: 'active';
+    }>();
+    mocks.getSession.mockReturnValueOnce(pendingSession.promise);
+    const onSessionNavigate = vi.fn();
+    let navigationCurrent = true;
+    const navigationPromise = tryHandleNavigationCommand('/jump-session session-target', {
+      navigate: mocks.navigate,
+      t: ((key: string) => key) as never,
+      allowNavigation: true,
+      onSessionNavigate,
+      isNavigationCurrent: () => navigationCurrent,
+    });
+
+    await waitFor(() => expect(mocks.getSession).toHaveBeenCalledWith('session-target'));
+    navigationCurrent = false;
+    await act(async () => {
+      pendingSession.resolve({ id: 'session-target', title: 'Session target', status: 'active' });
+      await pendingSession.promise;
+      await navigationPromise;
+    });
+
+    expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
   it('wires split-pane /jump-session handling through the pane navigation reporter', () => {
     const source = readFileSync(
       resolve(__dirname, '..', '..', '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
@@ -386,13 +441,14 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(source).toContain(
       'canNavigateSession && session?.parentSessionId && session.forkedAtMessageId',
     );
-    expect(source).toContain('const forkOriginNavigationVersionRef = useRef(0);');
+    expect(source).toContain('const sessionNavigationVersionRef = useRef(0);');
     expect(source).toContain(
-      'if (forkOriginNavigationVersionRef.current !== navigationRequestVersion) return;',
+      'if (sessionNavigationVersionRef.current !== navigationRequestVersion) return;',
     );
     expect(source).toContain(
-      'if (forkOriginNavigationVersionRef.current !== forkStripNavigationVersion) return;',
+      'if (sessionNavigationVersionRef.current !== forkStripNavigationVersion) return;',
     );
+    expect(source).toContain('isNavigationCurrent:');
     expect(source).toContain('[navigationMode, sessionId],');
   });
 

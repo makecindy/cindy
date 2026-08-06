@@ -355,6 +355,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
+            supportsImageInput: true,
           },
         ],
       },

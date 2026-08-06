@@ -157,7 +157,7 @@ import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
-import { tryHandleNavigationCommand } from '@/lib/navigationCommands';
+import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
 import { subscribeLearnEvents } from '@/features/learn/learnTransport';
@@ -501,10 +501,10 @@ export function CCAgentSessionView({
   const navigate = useNavigate();
   const ownsWindowRoute = navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
-  const forkOriginNavigationVersionRef = useRef(0);
+  const sessionNavigationVersionRef = useRef(0);
   useEffect(
     () => () => {
-      forkOriginNavigationVersionRef.current += 1;
+      sessionNavigationVersionRef.current += 1;
     },
     [navigationMode, sessionId],
   );
@@ -1135,9 +1135,9 @@ export function CCAgentSessionView({
     if (!session?.parentSessionId || !session.forkedAtMessageId) return;
     const parentSessionId = session.parentSessionId;
     const forkedAtMessageId = session.forkedAtMessageId;
-    const navigationRequestVersion = ++forkOriginNavigationVersionRef.current;
+    const navigationRequestVersion = ++sessionNavigationVersionRef.current;
     void resolveSessionRoute(parentSessionId).then((target) => {
-      if (forkOriginNavigationVersionRef.current !== navigationRequestVersion) return;
+      if (sessionNavigationVersionRef.current !== navigationRequestVersion) return;
       onSessionNavigate?.(parentSessionId, getSessionRouteOwnerId(target) ?? parentSessionId);
       navigate(target, {
         state: {
@@ -2484,6 +2484,10 @@ export function CCAgentSessionView({
       },
     ) => {
       const deliveryMode = opts?.deliveryMode ?? 'queue';
+      const navigationRequestVersion =
+        deliveryMode !== 'steer' && matchNavigationCommandName(message)
+          ? ++sessionNavigationVersionRef.current
+          : null;
       if (
         deliveryMode !== 'steer' &&
         (await tryHandleNavigationCommand(message, {
@@ -2491,6 +2495,10 @@ export function CCAgentSessionView({
           t,
           allowNavigation: canNavigateSession,
           onSessionNavigate: navigationMode === 'split-pane' ? onSessionNavigate : undefined,
+          isNavigationCurrent:
+            navigationRequestVersion === null
+              ? undefined
+              : () => sessionNavigationVersionRef.current === navigationRequestVersion,
         }))
       ) {
         return;
@@ -2818,7 +2826,7 @@ export function CCAgentSessionView({
       log.info('encrypted-session fork ignored by embedded sidebar view', { sessionId });
       return;
     }
-    const forkStripNavigationVersion = ++forkOriginNavigationVersionRef.current;
+    const forkStripNavigationVersion = ++sessionNavigationVersionRef.current;
     setForkStripEncryptedRunning(true);
     try {
       const newSession = await sessionService.forkStripEncrypted(sessionId);
@@ -2826,7 +2834,7 @@ export function CCAgentSessionView({
       // 远程会话:新会话在被控端,先重拉该设备会话列表注册新 sessionId 再 navigate(否则 404)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
-      if (forkOriginNavigationVersionRef.current !== forkStripNavigationVersion) return;
+      if (sessionNavigationVersionRef.current !== forkStripNavigationVersion) return;
       onSessionNavigate?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
