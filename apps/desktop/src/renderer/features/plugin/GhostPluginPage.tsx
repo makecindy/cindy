@@ -1489,6 +1489,7 @@ export function GhostPluginPage() {
                         onToggle={(enabled) => void handleToggle(item.id, enabled, item.name)}
                         onOpenDetail={() => setSelectedId(item.id)}
                         onIconLoadError={handleMarketIconLoadError}
+                        toggleDisabled={scopeDir !== null && !item.enabled}
                       />
                     ))}
                   </div>
@@ -1517,6 +1518,7 @@ export function GhostPluginPage() {
                             onToggle={(enabled) => void handleToggle(item.id, enabled, item.name)}
                             onOpenDetail={() => setSelectedId(item.id)}
                             onIconLoadError={handleMarketIconLoadError}
+                            toggleDisabled={scopeDir !== null && !item.enabled}
                           />
                         ))}
                       </div>
@@ -1981,6 +1983,7 @@ export function GhostPluginCard({
   onToggle,
   onOpenDetail,
   onIconLoadError,
+  toggleDisabled = false,
 }: {
   item: GhostPluginListItem;
   sourceLabel?: string;
@@ -1992,6 +1995,8 @@ export function GhostPluginCard({
   onToggle: (enabled: boolean) => void;
   onOpenDetail: () => void;
   onIconLoadError?: () => void;
+  /** 全局禁用且当前在项目域时禁用开关:项目域只能清 per-workdir override,改不了全局 flag。 */
+  toggleDisabled?: boolean;
 }) {
   const { t } = useTranslation();
   const enabled = effectiveEnabled ?? item.enabled;
@@ -2100,6 +2105,7 @@ return (
           <Switch
             checked={enabled}
             onCheckedChange={onToggle}
+            disabled={toggleDisabled}
             aria-label={t('settings.ghosts.enableAria', { name: item.name })}
             style={
               toggleTrackColor

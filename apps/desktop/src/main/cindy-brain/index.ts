@@ -5031,7 +5031,19 @@ export function registerGhostIpc(): void {
         },
         connectionCount: (key) => getGhostConnectionManager().list(ghostId, key).length,
         kvValue: (key) => {
-          if (kvSnapshot === null) kvSnapshot = ghostKv.readStrict(ghostId);
+          if (kvSnapshot === null) {
+            try {
+              kvSnapshot = ghostKv.readStrict(ghostId);
+            } catch (err) {
+              // 单个插件 KV 损坏不中止整批查询:文件缺失(ENOENT)正常返回空快照,
+              // 其他 I/O 错误(磁盘故障/权限/JSON 解析失败)也退化为空快照,
+              // 让该插件判为 missing 而不是拖垮整批 IPC。
+              if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+                log.warn('[ghosts:setup-profiles] kv read failed', { ghostId, err });
+              }
+              kvSnapshot = {};
+            }
+          }
           return kvSnapshot[key];
         },
       });
