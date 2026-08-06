@@ -198,6 +198,22 @@ describe('local-html-preview-server', () => {
     expect((await get(`${base}/link.html`)).status).toBe(404);
   });
 
+  it('refuses an ENTRY that resolves into a hidden directory via an ordinary-named symlink (codex-connector P1, round 17)', async () => {
+    // `public -> .private` passes the lexical hidden-segment check, but the
+    // REAL entry path lands in a hidden directory which would become the
+    // serving root.
+    await mkdir(nodePath.join(workingDir, '.private'), { recursive: true });
+    await writeFile(nodePath.join(workingDir, '.private', 'index.html'), '<p>hidden</p>');
+    const linkPath = nodePath.join(workingDir, 'public');
+    try {
+      await symlink('.private', linkPath, 'dir');
+    } catch {
+      // Platform without symlink permission: nothing to assert.
+      return;
+    }
+    await expect(createUrl('public/index.html')).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
   it('rejects a symlink with an ordinary name that resolves into a hidden directory (Greptile P1, round 16)', async () => {
     // `assets -> .private` passes the request-path hidden-segment check
     // ("assets" is not hidden), but realpath resolves into `.private` — the

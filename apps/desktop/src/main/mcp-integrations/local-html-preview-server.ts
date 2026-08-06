@@ -217,6 +217,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   let origin: string | null = null;
   let starting: Promise<string> | null = null;
   let failed = false;
+  let disposed = false;
   const tokens = new Map<string, PreviewEntry>();
 
   /** Drop the SSRF grant for this server's origin (idempotent). */
@@ -232,6 +233,11 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     if (origin) return origin;
     if (failed) throw new LocalPreviewError('UNAVAILABLE', '预览服务已不可用');
     if (starting) return starting;
+    // A fresh start round resets the dispose flag captured by a still-running
+    // previous round (dispose → new start is the documented reuse contract);
+    // only a dispose DURING startup must fail that round — and `starting`
+    // still being set above keeps the flag intact for that case.
+    disposed = false;
     starting = (async () => {
       // Wrap the async handler: an unhandled rejection would leave the request
       // hanging (no response), so any internal error degrades to a 500.
@@ -264,6 +270,16 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
           resolve();
         });
       });
+      // Round 17 (Copilot P1): dispose() may have run while we were
+      // starting — it nulls `starting` and, before the listener was
+      // assigned to `server`, could NOT close the just-bound listener. A
+      // disposed server must never grant its origin to the SSRF policy;
+      // close the listener and fail closed.
+      if (disposed) {
+        srv.close();
+        failed = true;
+        throw new LocalPreviewError('UNAVAILABLE', '预览服务已销毁');
+      }
       const addr = srv.address();
       if (!addr || typeof addr === 'string') {
         failed = true;
@@ -378,6 +394,29 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     // with an outside symlink for fs.open, then restore it before the
     // realpath recheck) would defeat a pathname-only recheck while the fd
     // still references the outside file (codex-connector P1, round 6).
+    // Reject symlink/junction at ANY level between the serving root and the
+    // target (round 17): `lstat(abs)` only inspects the FINAL component — a
+    // swapped ANCESTOR directory link is followed by path resolution, so an
+    // outside final file would still be reported as a regular file. Check
+    // every level from the serving root down (the root itself is covered by
+    // the realpath recheck).
+    let chainOk = true;
+    let probe = entry.root;
+    const chainSegs = nodePath.relative(entry.root, abs).split(nodePath.sep).filter(Boolean);
+    for (let i = 0; i < chainSegs.length; i++) {
+      probe = nodePath.join(probe, chainSegs[i]);
+      const lst = await fs.lstat(probe, { bigint: true }).catch(() => null);
+      if (!lst) {
+        chainOk = false;
+        break;
+      }
+      const isLast = i === chainSegs.length - 1;
+      if (isLast ? !lst.isFile() : !lst.isDirectory()) {
+        chainOk = false;
+        break;
+      }
+    }
+    if (!chainOk) return refuse(res);
     // Pre-open lstat (round 15): reject symlinks outright — the swap vector
     // is a symlink/junction, and lstat reveals it even when stat/realpath
     // would resolve through it. The opened fd's identity must then match
@@ -526,6 +565,15 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       throw new LocalPreviewError('NOT_FOUND', '入口文件不可解析');
     });
     await assertInsideRoot(rootAnchor, entryReal);
+    // Re-check hidden segments on the REAL entry path (round 17): an
+    // ordinary-named symlink (e.g. `public -> .private`) passes the lexical
+    // check above but resolves into a hidden directory which would BECOME
+    // the serving root — the request-stage checks could never see it again
+    // (codex-connector P1).
+    const entryRel = nodePath.relative(rootAnchor, entryReal);
+    if (entryRel.split(nodePath.sep).some((s) => s.length > 0 && s.startsWith('.'))) {
+      throw new LocalPreviewError('PATH_NOT_ALLOWED', '入口不能位于隐藏目录内');
+    }
     return entryReal;
   }
 
@@ -560,6 +608,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
 
   function dispose(): void {
     tokens.clear();
+    disposed = true;
     // Revoke synchronously — never rely on the async 'close' event for the
     // quit path (the process may exit before it fires). The event handler
     // stays as an idempotent safety net for listener crashes.

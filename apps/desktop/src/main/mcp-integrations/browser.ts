@@ -481,12 +481,15 @@ async function closePreviewTabs(): Promise<void> {
           | { tabs?: Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> }
           | undefined
       )?.tabs;
-      if (!Array.isArray(tabs)) return;
-      for (const tab of tabs) {
-        if (!isPreviewUrl(tab.url ?? '')) continue;
-        const targetId = tab.suggestedTargetId ?? tab.targetId;
-        if (targetId) {
-          await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
+      // NOTE: no early `return` here — a failed/empty vendored response must
+      // still fall through to the RSB registry sweep below (round 17).
+      if (Array.isArray(tabs)) {
+        for (const tab of tabs) {
+          if (!isPreviewUrl(tab.url ?? '')) continue;
+          const targetId = tab.suggestedTargetId ?? tab.targetId;
+          if (targetId) {
+            await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
+          }
         }
       }
     } catch {
