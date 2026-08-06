@@ -402,6 +402,28 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
       setXdGatewayModels([]);
     }
   });
+  it('xd 清单含 responses 模型 → 跳过,只选原生 chat(Greptile P2)', () => {
+    // responses 模型需要 Codex Responses wire,标题通道固定 gateway-chat——
+    // 选中会被网关拒收,必须排除。
+    setXdGatewayModels([
+      { id: 'qwen/qwen3.8-max', mode: 'responses' },
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+    ]);
+    try {
+      const target = buildTitleTarget('xd');
+      expect(target?.model).toBe('deepseek/deepseek-v4-flash');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('xd 清单只有 responses 模型 → null(无可用 chat 模型,不发请求)', () => {
+    setXdGatewayModels([{ id: 'qwen/qwen3.8-max', mode: 'responses' }]);
+    try {
+      expect(buildTitleTarget('xd')).toBeNull();
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
   it('未知 provider → null', () => {
     expect(buildTitleTarget('does-not-exist')).toBeNull();
   });

@@ -152,9 +152,15 @@ function pickXdTitleModel(provider: Provider): CatalogModel | null {
   const candidates: CatalogModel[] = [];
   for (const agent of provider.agents) {
     for (const model of provider.models[agent] ?? []) {
-      if (isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
-        candidates.push(model);
+      if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
+        continue;
       }
+      // 只选原生 chat 模型:mode 明确为 'responses' 的模型需要走 Codex Responses
+      // wire,而标题通道固定走 gateway-chat(/v1/chat/completions)——选中的话仍会
+      // 被网关拒收(Greptile review P2,2026-08-06)。mode 缺省(网关旧条目)按 chat
+      // 处理,由 isModelSelectableForNewRoute 的 id 分类兜底。
+      if (model.mode === 'responses') continue;
+      candidates.push(model);
     }
   }
   if (candidates.length === 0) return null;
