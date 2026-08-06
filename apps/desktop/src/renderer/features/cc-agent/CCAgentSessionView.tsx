@@ -2689,11 +2689,15 @@ export function CCAgentSessionView({
   }, [compactRequestGuard, sessionId]);
   const handleCompactRequest = useCallback(async () => {
     const sourceSession = session;
-    if (!sourceSession?.workingDir) return;
+    if (!sourceSession) return;
     // 必须在第一个 await 前捕获 scope/channel。确认框打开期间路由切换时，旧闭包不得
     // 从可变 ref 读取到新 sessionId 后把旧请求误认成当前请求。
     const sourceSessionId = sourceSession.id;
     const sourceCompactChannel = compactChannel;
+    // 无通道(Codex 等)不弹确认框;workingDir 只对 claude-input 是硬前提——
+    // compact-session(pi 原生压缩)不依赖 workingDir,不能被它挡掉(copilot review)。
+    if (sourceCompactChannel === null) return;
+    if (sourceCompactChannel === 'claude-input' && !sourceSession.workingDir) return;
     if (!compactRequestGuard.tryBegin(sourceSessionId)) return;
     try {
       const contextWindow = resolveDisplayContextWindow({
@@ -2717,11 +2721,17 @@ export function CCAgentSessionView({
         cancelText: t('ccAgent.layout.contextRing.confirmCancel'),
       });
       if (!ok || !compactRequestGuard.isCurrent(sourceSessionId)) return;
-      if (sourceCompactChannel === 'compact-session') {
+      // 确认框打开期间，同一会话可能已在其它窗口 / 远程控制器被切换 agent(sessionId
+      // 不变):捕获的 sourceCompactChannel 已过期,必须按当前 render 的 channel 重新分流,
+      // 否则 Pi→Claude 会静默 null、Claude→Pi 会误走 claude 专用通道(codex P1)。
+      const channelNow = compactChannel;
+      if (channelNow === null) return;
+      if (channelNow === 'compact-session') {
         // capability-aware 通道(pi 原生 compact):本地 IPC / device-link 隧道均可路由。
         // 用粘滞归属(makerApiForSticky)——relay 瞬时重连清空 origin 的窗口内仍隧道到
         // 被控端,不退回控制端本机(本机无该 live 会话,固定调本机必 null 静默失败,
         // greptile P1)。claude-code 分支继续走 inputCoordinator,不在此通道内。
+        // pi 原生压缩不依赖 workingDir,这里不再校验(copilot review)。
         const maker = makerApiForSticky(sourceSessionId);
         try {
           const result = await maker.compactSession(sourceSessionId);
@@ -2743,7 +2753,8 @@ export function CCAgentSessionView({
         return;
       }
       // 真实 Claude Code:输入协调器的 maker:input:compact(旧行为不变)。
-      if (sourceCompactChannel !== 'claude-input') return;
+      if (channelNow !== 'claude-input') return;
+      if (!sourceSession.workingDir) return; // claude 通道硬前提:输入协调器需要工作目录
       await compactSession(
         sourceSession.model,
         sourceSession.effort as Effort,

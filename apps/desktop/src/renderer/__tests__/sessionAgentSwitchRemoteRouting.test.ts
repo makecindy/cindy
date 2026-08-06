@@ -918,9 +918,14 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     // codex(无 manualCompact)→ compactChannel null → 不开放(纯展示)。
   });
 
-  it('compact-session 分支:粘滞路由 + 确认框前捕获 scope + 失败反馈', () => {
-    // 分流使用第一个 await 前捕获的 sourceCompactChannel，不能在确认框返回后读新会话值。
-    expect(viewSource).toContain("if (sourceCompactChannel === 'compact-session') {");
+  it('compact-session 分支:粘滞路由 + 确认框后重新分流 + 失败反馈', () => {
+    // 分流以当前 render 的 compactChannel 判定(channelNow),确认框返回后重新解析——
+    // 同会话在其它窗口/远程被切换 agent 时捕获值会过期(codex P1)。
+    expect(viewSource).toContain("if (channelNow === 'compact-session') {");
+    // workingDir 只对 claude-input 是硬前提:compact-session(pi 原生压缩)不依赖它。
+    expect(viewSource).toContain(
+      "if (sourceCompactChannel === 'claude-input' && !sourceSession.workingDir) return;",
+    );
     // device-link 远程 pi:粘滞归属路由到被控端,relay 重连窗口内不退回本机(greptile P1)。
     expect(viewSource).toContain('const sourceSessionId = sourceSession.id;');
     expect(viewSource).toContain('const maker = makerApiForSticky(sourceSessionId);');
@@ -939,10 +944,17 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
   it('claude-code 分支保持 inputCoordinator compactSession(model,...),不误入 compact-session', () => {
     // compact-session 分支以 return 结束;return 之前只有 makerApiForSticky 通道,
     // 不调用 inputCoordinator 的 compactSession(model, effort, ...)(即 maker:input:compact)。
-    const csStart = viewSource.indexOf("if (compactChannel === 'compact-session')");
+    const csStart = viewSource.indexOf("if (channelNow === 'compact-session')");
+    expect(csStart).toBeGreaterThan(-1); // 定位必须命中,否则断言形同虚设(copilot review)
     const csEnd = viewSource.indexOf('return;', csStart);
     const csBranch = viewSource.slice(csStart, csEnd);
     expect(csBranch).not.toContain('await compactSession(');
+    // 确认框返回后若 channel 已消失(能力被撤/agent 切换)则放弃,不静默误调。
+    expect(viewSource).toContain('const channelNow = compactChannel;');
+    expect(viewSource).toContain('if (channelNow === null) return;');
+    // claude 通道执行前才校验 workingDir(输入协调器硬前提)。
+    expect(viewSource).toContain("if (channelNow !== 'claude-input') return;");
+    expect(viewSource).toContain('if (!sourceSession.workingDir) return;');
   });
 });
 
