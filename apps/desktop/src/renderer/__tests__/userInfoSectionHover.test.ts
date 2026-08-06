@@ -35,7 +35,7 @@ describe('UserInfoSection — outer wrapper takes over full-row hover', () => {
     expect(source).toContain('mt-auto pt-1');
   });
 
-  it('visible user card uses the tokenized capsule style (no rounded corners)', () => {
+  it('visible user card uses the tokenized capsule style with rectangular corners', () => {
     expect(source).toContain(
       'flex h-12 items-center border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',
     );
@@ -193,9 +193,9 @@ describe('UserInfoSection — Flame button carries .flame-btn marker class', () 
     expect(source).toMatch(/'transition-colors hover:bg-sidebar-item-hover'/);
   });
 
-  it('Flame button keeps correct size inside the account capsule', () => {
+  it('Flame button keeps correct size and rounded-full inside the account capsule', () => {
     expect(source).toContain(
-      'flex h-9 w-9 shrink-0 items-center justify-center',
+      'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
     );
   });
 });
