@@ -29,6 +29,13 @@ export interface UseDeviceProvidersResult {
   loading: boolean;
   /** 非 null = 拉取失败(典型:旧版被控端不识别通道);调用方据此回退扁平列表。 */
   error: string | null;
+  /**
+   * 「当前目录确为所选设备的就绪目录」——仅当 payload 来自该设备的缓存命中或拉取完成
+   * (经订阅回调确认)才为 true。`loading === false` 不能替代本信号:loading 初始值就是
+   * false(挂载 effect 尚未开拉)、切设备瞬间还会短暂保留上一设备的 payload
+   * (codex review P1)。消费方做「目录就绪后」的判定(如来源终检)必须用 ready。
+   */
+  ready: boolean;
 }
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
@@ -42,12 +49,19 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ready 的判定载体:payload 已确认属于哪个设备。仅在缓存命中 / 拉取完成(订阅回调)
+  // 时置为当前 deviceId;切设备 cache-miss 立即清 null。首渲染即按
+  // `readyFor === deviceId` 计算,不依赖 effect 先跑,故无「loading 初值 false」窗口。
+  const [readyFor, setReadyFor] = useState<string | null>(
+    deviceId && getCachedDeviceProviders(deviceId) ? deviceId : null,
+  );
 
   useEffect(() => {
     if (!deviceId) {
       setPayload(EMPTY_PAYLOAD);
       setError(null);
       setLoading(false);
+      setReadyFor(null);
       return;
     }
     let cancelled = false;
@@ -56,6 +70,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setPayload(next);
       setError(null);
       setLoading(false);
+      setReadyFor(deviceId);
     });
     const cached = getCachedDeviceProviders(deviceId);
     if (cached) {
@@ -65,12 +80,14 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       // (loading=true) when we switch to a cached device, its cancelled `finally` won't clear it,
       // so the cache-hit return must, or the UI stays stuck "loading" over fully-populated data.
       setLoading(false);
+      setReadyFor(deviceId);
       return unsubscribe;
     }
     // cache miss:先清空,避免 fetch 解析前(失败则永远)残留上一设备的供应商。
     setPayload(EMPTY_PAYLOAD);
     setLoading(true);
     setError(null);
+    setReadyFor(null);
     fetchDeviceProviders(deviceId, () => maker.listProviders())
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -92,5 +109,6 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       : {}),
     loading,
     error,
+    ready: deviceId !== undefined && readyFor === deviceId,
   };
 }

@@ -547,7 +547,7 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
 
 export function sessionFromCreateResult(
   result: CreateSessionResult,
-  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir'>,
+  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'>,
   now = new Date(),
 ): RemoteSession {
   const iso = now.toISOString();
@@ -566,6 +566,9 @@ export function sessionFromCreateResult(
     userSendAt: iso,
     createdAt: iso,
     updatedAt: iso,
+    // 兜底/乐观会话必须带出来源:buildQueuedTextMessage 从这里复制 providerId 进
+    // createOpts,缺了它,创建确认前排队的首条消息会丢来源路由(codex review P1)。
+    providerId: fallback.providerId ?? null,
     _count: { messages: 0 },
   };
 }

@@ -703,7 +703,7 @@ export default function NewRemoteSessionScreen() {
           deviceId: selectedDeviceId || undefined,
           modelRows: rows,
           currentEffort: current.effort,
-          catalogReady: !deviceProviders.loading,
+          catalogReady: deviceProviders.ready,
         });
         return {
           ...current,
@@ -767,7 +767,7 @@ export default function NewRemoteSessionScreen() {
       modelRows,
       // modelRows 按当前 draft.agentKind 构建;最近会话若是另一个 agent,纯函数内不做来源校验。
       rowsAgentKind: draft.agentKind,
-      catalogReady: !deviceProviders.loading,
+      catalogReady: deviceProviders.ready,
       currentEffort: draft.effort,
     });
     if (!result) return;
@@ -800,13 +800,13 @@ export default function NewRemoteSessionScreen() {
   // (provider 被删/断开/模型下架),就绪后必须复核——找不到 (provider, model) 匹配行即清空
   // 回默认路由,保证失效来源不会直达创建请求。无变化时返回原引用,不触发额外渲染。
   useEffect(() => {
-    if (deviceProviders.loading) return;
+    if (!deviceProviders.ready) return;
     setDraft((current) => {
       if (!current.providerId) return current;
       const valid = validateModelProviderId(modelRows, current.providerId, current.model, true);
       return valid === current.providerId ? current : { ...current, providerId: valid };
     });
-  }, [deviceProviders.loading, modelRows]);
+  }, [deviceProviders.ready, modelRows]);
 
   const draftContent = useMemo(
     // pending(乐观上传中)也算数:拍完照立刻点创建是常见路径,create() 里会等它们落定。
@@ -2288,7 +2288,7 @@ export default function NewRemoteSessionScreen() {
           deviceId: selectedDeviceId || undefined,
           modelRows: rows,
           currentEffort: current.effort,
-          catalogReady: !deviceProviders.loading,
+          catalogReady: deviceProviders.ready,
         });
         return {
           ...current,
@@ -2762,6 +2762,12 @@ export default function NewRemoteSessionScreen() {
           return;
         }
       }
+      // 提交点来源终检(Greptile review P1):目录就绪后的清理 effect 跑在渲染后,
+      // 用户可能在清理生效前点创建——创建路径自身必须守卫,失效来源即清空回默认路由。
+      effectiveDraft = {
+        ...effectiveDraft,
+        providerId: validateModelProviderId(modelRows, effectiveDraft.providerId, effectiveDraft.model, deviceProviders.ready),
+      };
       const agentKindSnapshot = effectiveDraft.agentKind;
       const deviceIdSnapshot = selectedDeviceId;
       // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
@@ -2897,7 +2903,12 @@ export default function NewRemoteSessionScreen() {
           name: selectedDeviceName || selectedDeviceId,
         },
       });
-      const createOpts = buildRemoteCreateSessionOptions(draft);
+      // 提交点来源终检(同 create(),Greptile review P1):守卫不依赖渲染后的清理 effect。
+      const finalDraft = {
+        ...draft,
+        providerId: validateModelProviderId(modelRows, draft.providerId, draft.model, deviceProviders.ready),
+      };
+      const createOpts = buildRemoteCreateSessionOptions(finalDraft);
       await withTransientRemoteRetry(async () => {
         await openLink(selectedDeviceId);
         await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
@@ -2917,7 +2928,7 @@ export default function NewRemoteSessionScreen() {
       try {
         session = await maker.getSession(result.sessionId);
       } catch {
-        session = sessionFromCreateResult(result, draft);
+        session = sessionFromCreateResult(result, finalDraft);
       }
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
       await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });

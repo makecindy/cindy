@@ -889,6 +889,7 @@ describe('new session model', () => {
       effort: 'medium',
       permissionMode: 'acceptEdits',
       fastMode: false,
+      providerId: null,
     }, new Date('2026-06-16T10:00:00.000Z'))).toMatchObject({
       id: 's-new',
       workingDir: '/repo',
@@ -909,6 +910,7 @@ describe('new session model', () => {
       effort: 'medium',
       permissionMode: 'acceptEdits',
       fastMode: true,
+      providerId: null,
     }, new Date('2026-06-16T10:00:00.000Z'))).toMatchObject({
       id: 's-dialogue',
       workingDir: '/userData/dialogues/2026-06-16/s-dialogue',
@@ -918,6 +920,31 @@ describe('new session model', () => {
 
     expect(normalizeCreateSessionResult({ sessionId: '' })).toBeNull();
     expect(normalizeCreateSessionResult(null)).toBeNull();
+  });
+
+  it('sessionFromCreateResult carries the draft providerId into the synthesized session (codex P1)', () => {
+    const session = sessionFromCreateResult({ sessionId: 's-p' }, {
+      agentKind: 'claude-code',
+      workspaceKind: 'dialogue',
+      workingDir: '',
+      model: 'deepseek-v4-flash',
+      effort: 'medium',
+      permissionMode: 'acceptEdits',
+      fastMode: false,
+      providerId: 'deepseek',
+    });
+    expect(session.providerId).toBe('deepseek');
+    // 未绑定来源的草稿 → null(默认路由),与真实会话同形
+    expect(sessionFromCreateResult({ sessionId: 's-n' }, {
+      agentKind: 'claude-code',
+      workspaceKind: 'dialogue',
+      workingDir: '',
+      model: 'claude-sonnet-4-6',
+      effort: '',
+      permissionMode: 'acceptEdits',
+      fastMode: false,
+      providerId: null,
+    }).providerId).toBeNull();
   });
 });
 
