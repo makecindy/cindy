@@ -2812,9 +2812,9 @@ export class CodexAgent extends BaseAgent {
       }
     };
 
-    const descendantUpdateTurnScope = (
+    const descendantUpdateLifecycle = (
       descendantThreadId: string,
-    ): AgentEvent['turnScope'] => {
+    ): Pick<AgentEvent, 'turnScope' | 'backgroundTurnStartedAt'> => {
       const rootTurnId = rootTurnIdByDescendantThreadId.get(descendantThreadId);
       if (
         rootTurnId
@@ -2822,11 +2822,17 @@ export class CodexAgent extends BaseAgent {
         && !completedTurnIds.has(rootTurnId)
         && !terminalErroredTurnIds.has(rootTurnId)
       ) {
-        return 'turn';
+        return {};
       }
       // Unknown ownership is safer as background: attaching it to the active
-      // turn would mutate that turn's origin, attempt token, and watchdog.
-      return 'background';
+      // turn would mutate that turn's origin, attempt token, and watchdog. Its
+      // missing start time also fails closed behind any later /clear boundary.
+      return {
+        turnScope: 'background',
+        backgroundTurnStartedAt: rootTurnId
+          ? turnOriginByTurnId.get(rootTurnId)?.startedAtMs ?? 0
+          : 0,
+      };
     };
 
     const propagateCapabilitySelectionToDescendants = (
@@ -3410,7 +3416,7 @@ export class CodexAgent extends BaseAgent {
 
     const emitSubagentCardUpdate = (
       update: SubagentLiveCardUpdate,
-      turnScope: AgentEvent['turnScope'] = 'turn',
+      lifecycle: Pick<AgentEvent, 'turnScope' | 'backgroundTurnStartedAt'> = {},
     ): void => {
       // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:每条事件都会刷新
       // upstreamIdleLastEventAt + armUpstreamIdle(),并喂给 observeReconnectStallEvent ——
@@ -3436,9 +3442,9 @@ export class CodexAgent extends BaseAgent {
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
             durationMs: update.durationMs,
           },
-        },
+          },
           source: 'codex',
-          ...(turnScope === 'background' ? { turnScope } : {}),
+          ...lifecycle,
         });
       } finally {
         emittingDescendantUpdate = false;
@@ -3550,7 +3556,6 @@ export class CodexAgent extends BaseAgent {
       method: string,
       params: unknown,
     ): void => {
-      const turnScope = descendantUpdateTurnScope(childThreadId);
       const record = params && typeof params === 'object'
         ? params as Record<string, unknown>
         : null;
@@ -3593,14 +3598,14 @@ export class CodexAgent extends BaseAgent {
             if (replayedNested) {
               emitSubagentCardUpdate(
                 replayedNested,
-                descendantUpdateTurnScope(grandChildThreadId),
+                descendantUpdateLifecycle(grandChildThreadId),
               );
             }
           }
         }
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
-      if (update) emitSubagentCardUpdate(update, turnScope);
+      if (update) emitSubagentCardUpdate(update, descendantUpdateLifecycle(childThreadId));
 
       if (method === 'turn/completed') {
         const status = record?.turn && typeof record.turn === 'object'
@@ -7776,7 +7781,7 @@ export class CodexAgent extends BaseAgent {
         registerDescendantThreadRouting(childThreadId, parentThreadId);
         const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId, childModel);
         if (replayed) {
-          emitSubagentCardUpdate(replayed, descendantUpdateTurnScope(childThreadId));
+          emitSubagentCardUpdate(replayed, descendantUpdateLifecycle(childThreadId));
         }
       },
       descendantNotification: handleDescendantNotification,
@@ -8126,7 +8131,16 @@ export class CodexAgent extends BaseAgent {
           || replayedSubagentUpdateOnCompleted?.status === 'stopped';
         if (!isLateCollabTerminal || shouldReplayLateSubagentState) {
           if (replayedSubagentUpdateOnCompleted) {
-            emitSubagentCardUpdate(replayedSubagentUpdateOnCompleted, isLateCollabTerminal ? 'background' : 'turn');
+            emitSubagentCardUpdate(
+              replayedSubagentUpdateOnCompleted,
+              isLateCollabTerminal
+                ? {
+                  turnScope: 'background',
+                  backgroundTurnStartedAt:
+                    turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
+                }
+                : {},
+            );
           }
         }
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。

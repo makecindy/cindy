@@ -16264,6 +16264,7 @@ describe('CodexAgent turn lifecycle', () => {
       },
     });
     expect(activeTurnUpdate).not.toHaveProperty('turnScope');
+    expect(activeTurnUpdate).not.toHaveProperty('backgroundTurnStartedAt');
 
     handlers!.turnCompleted?.({
       threadId: 'start-thread-id',
@@ -16516,10 +16517,12 @@ describe('CodexAgent turn lifecycle', () => {
     expect(handlers).toBeDefined();
     const iterator = handle.events()[Symbol.asyncIterator]();
 
+    const parentTurnStartedWindowStart = Date.now();
     handlers!.turnStarted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-parent' },
     });
+    const parentTurnStartedWindowEnd = Date.now();
     handlers!.itemStarted?.({
       threadId: 'start-thread-id',
       turnId: 'turn-parent',
@@ -16562,7 +16565,8 @@ describe('CodexAgent turn lifecycle', () => {
       turnId: 'child-turn',
       tokenUsage: { total: { totalTokens: 42 } },
     });
-    expect(await nextEvent(iterator)).toMatchObject({
+    const lateDescendantUpdate = await nextEvent(iterator);
+    expect(lateDescendantUpdate).toMatchObject({
       type: 'agent_task_update',
       turnScope: 'background',
       data: {
@@ -16571,6 +16575,13 @@ describe('CodexAgent turn lifecycle', () => {
         usage: { totalTokens: 42 },
       },
     });
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toEqual(expect.any(Number));
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toBeGreaterThanOrEqual(
+      parentTurnStartedWindowStart,
+    );
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toBeLessThanOrEqual(
+      parentTurnStartedWindowEnd,
+    );
 
     await handle.close();
   });
@@ -16587,10 +16598,12 @@ describe('CodexAgent turn lifecycle', () => {
     expect(handlers).toBeDefined();
     const iterator = handle.events()[Symbol.asyncIterator]();
 
+    const parentTurnStartedWindowStart = Date.now();
     handlers!.turnStarted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-parent' },
     });
+    const parentTurnStartedWindowEnd = Date.now();
     handlers!.itemStarted?.({
       threadId: 'start-thread-id',
       turnId: 'turn-parent',
@@ -16644,7 +16657,8 @@ describe('CodexAgent turn lifecycle', () => {
       },
     } as never);
 
-    expect(await nextEvent(iterator)).toMatchObject({
+    const lateFullResult = await nextEvent(iterator);
+    expect(lateFullResult).toMatchObject({
       type: 'tool_result_full',
       turnScope: 'background',
       data: { toolUseId: 'collab-running', fullText: 'child-thread: running' },
@@ -16659,11 +16673,21 @@ describe('CodexAgent turn lifecycle', () => {
       turnScope: 'background',
       data: { taskId: 'collab-running', status: 'completed' },
     });
-    expect(await nextEvent(iterator)).toMatchObject({
+    const replayedRunningUpdate = await nextEvent(iterator);
+    expect(replayedRunningUpdate).toMatchObject({
       type: 'agent_task_update',
       turnScope: 'background',
       data: { taskId: 'collab-running', status: 'running' },
     });
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBe(
+      lateFullResult.backgroundTurnStartedAt,
+    );
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBeGreaterThanOrEqual(
+      parentTurnStartedWindowStart,
+    );
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBeLessThanOrEqual(
+      parentTurnStartedWindowEnd,
+    );
 
     handlers!.itemCompleted?.({
       threadId: 'start-thread-id',
