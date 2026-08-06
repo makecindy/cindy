@@ -230,7 +230,7 @@ export class ImSchedulerManager {
         return;
       }
       if (this.isLocalIngress(identity, devices)) await this.ensureActive(identity);
-      else await this.ensureStandby(identity);
+      else await this.ensureStandby(identity, this.hasRemoteCandidate(identity));
     });
     this.reconcileTail = current.catch(() => undefined);
     await current;
@@ -309,13 +309,16 @@ export class ImSchedulerManager {
     }
   }
 
-  private async ensureStandby(identity = this.discord.getSchedulerIdentity() ?? 'discord'): Promise<void> {
+  private async ensureStandby(
+    identity = this.discord.getSchedulerIdentity() ?? 'discord',
+    clearRuntimeMarker = false,
+  ): Promise<void> {
     this.desired = 'standby';
     this.desiredIdentity = identity;
     this.lastActivationAttemptAt = 0;
     if (!this.discord.isSchedulerTransportActive()) return;
     try {
-      await this.discord.enterSchedulerStandby();
+      await this.discord.enterSchedulerStandby({ clearRuntimeActiveMarker: clearRuntimeMarker });
     } catch (error) {
       log.warn('discord scheduler standby failed', error);
     }
@@ -352,16 +355,7 @@ export class ImSchedulerManager {
         && this.connectedIdentity === identity
         && !this.reconnectGraceTimer
       ) {
-        const discoveryNonce = this.discoveryNonce;
-        this.reconnectGraceTimer = setTimeout(() => {
-          this.reconnectGraceTimer = null;
-          const withdrawal = this.withdrawAfterReconnectTimeout(identity, discoveryNonce);
-          this.reconnectWithdrawal = withdrawal;
-          void withdrawal.finally(() => {
-            if (this.reconnectWithdrawal === withdrawal) this.reconnectWithdrawal = null;
-            void this.reconcile();
-          });
-        }, RUNTIME_RECONNECT_GRACE_MS);
+        this.armReconnectGrace(identity);
       }
       return;
     }
@@ -410,6 +404,20 @@ export class ImSchedulerManager {
   private clearReconnectGrace(): void {
     if (this.reconnectGraceTimer) clearTimeout(this.reconnectGraceTimer);
     this.reconnectGraceTimer = null;
+  }
+
+  private armReconnectGrace(identity: string): void {
+    this.clearReconnectGrace();
+    const discoveryNonce = this.discoveryNonce;
+    this.reconnectGraceTimer = setTimeout(() => {
+      this.reconnectGraceTimer = null;
+      const withdrawal = this.withdrawAfterReconnectTimeout(identity, discoveryNonce);
+      this.reconnectWithdrawal = withdrawal;
+      void withdrawal.finally(() => {
+        if (this.reconnectWithdrawal === withdrawal) this.reconnectWithdrawal = null;
+        void this.reconcile();
+      });
+    }, RUNTIME_RECONNECT_GRACE_MS);
   }
 
   private advertiseAll(): void {
@@ -515,5 +523,8 @@ export class ImSchedulerManager {
       void this.reconcile();
     }, DISCOVERY_GRACE_MS);
     this.probeAll();
+    if (this.connectedIdentity && this.discord.getStatus().kind === 'connecting') {
+      this.armReconnectGrace(this.connectedIdentity);
+    }
   }
 }

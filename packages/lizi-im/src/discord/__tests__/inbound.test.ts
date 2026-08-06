@@ -1279,6 +1279,27 @@ describe('DiscordIM inbound pipeline', () => {
     expect(host.readSecret('discord-bot-runtime-active')).toBeTruthy();
   });
 
+  it('clears the runtime marker when scheduler hands ingress to another Desktop', async () => {
+    const gateway = makeGateway();
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', 'token'],
+        ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-runtime-active', 'previous-run'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+
+    await im.enterSchedulerStandby({ clearRuntimeActiveMarker: true });
+
+    expect(host.readSecret('discord-bot-runtime-active')).toBeNull();
+  });
+
   it('keeps dirty runtime marker until offlineNotice succeeds', async () => {
     const channel = makeChannel('dm-1');
     channel.send

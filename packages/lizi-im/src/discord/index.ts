@@ -370,12 +370,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return this.gateway.client !== null;
   }
 
-  async enterSchedulerStandby(): Promise<void> {
+  async enterSchedulerStandby(options: { clearRuntimeActiveMarker?: boolean } = {}): Promise<void> {
     const identity = this.getSchedulerIdentity() ?? 'discord';
     this.configVersion += 1;
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
     await this.gateway.destroy();
+    if (options.clearRuntimeActiveMarker) this.clearRuntimeActiveMarker();
     this.setStatus({ kind: 'standby', appId: identity });
   }
 

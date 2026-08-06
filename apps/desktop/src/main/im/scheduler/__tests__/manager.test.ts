@@ -367,6 +367,7 @@ describe('Discord scheduler manager', () => {
     });
     await manager.reconcile();
     expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledWith({ clearRuntimeActiveMarker: true });
 
     harness.pushHandler?.('a', {
       kind: 'advertisement',
@@ -471,6 +472,28 @@ describe('Discord scheduler manager', () => {
 
     expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
     expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(true);
+    await manager.stop();
+  });
+
+  it('re-arms reconnect grace when a new discovery generation starts mid-reconnect', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    discord.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    discord.emitStatus({ kind: 'connecting' });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    harness.statusHandler?.('online');
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_001);
+    await manager.reconcile();
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
+
     await manager.stop();
   });
 
