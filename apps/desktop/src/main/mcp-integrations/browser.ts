@@ -20,6 +20,7 @@ import { extractBrowserAvailability, type BrowserAvailability } from './browser-
 import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
 import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
+import { closePreviewTabs as closePreviewTabsImpl } from './browser-preview-tabs.js';
 import {
   BrowserBackendController,
   BrowserBackendHealthService,
@@ -468,57 +469,39 @@ export async function openBrowserForLogin(): Promise<void> {
  * host closes the tabs: the guard dies with the tab, closing the window.
  */
 async function closePreviewTabs(): Promise<void> {
-  // Skip the vendored tabs probe entirely when the runtime was never used:
-  // a bare `tabs` call would BOOT the browser control service during quit —
-  // the exact startup quit-time teardown exists to avoid (codex-connector
-  // P2, round 16). The RSB registry sweep below stays unconditional (it
-  // boots nothing).
-  if (vendoredRuntime.everCalled()) {
-    try {
+  await closePreviewTabsImpl({
+    everCalled: () => vendoredRuntime.everCalled(),
+    listVendoredTabs: async () => {
       const tabsRes = await vendoredRuntime.call({ action: 'tabs' });
-      const tabs = (
+      return (
         tabsRes.data as
           | { tabs?: Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> }
           | undefined
       )?.tabs;
-      // NOTE: no early `return` here — a failed/empty vendored response must
-      // still fall through to the RSB registry sweep below (round 17).
-      if (Array.isArray(tabs)) {
-        for (const tab of tabs) {
-          if (!isPreviewUrl(tab.url ?? '')) continue;
-          const targetId = tab.suggestedTargetId ?? tab.targetId;
-          if (targetId) {
-            await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
-          }
-        }
-      }
-    } catch {
-      /* best-effort: the origin grant is already revoked; stale-lock recovery
-         on next launch covers orphaned Chrome state */
-    }
-  }
-  // RSB webview tabs (round 15): revocation must cover BOTH backends — an
-  // RSB preview tab surviving revocation would reload its old URL on a
-  // seized port without the preview server's CSP, and the shape-matching
-  // guard would still let it through. Destroying the guest WebContents
-  // releases the registry record via its destroyed listener.
-  try {
-    const registry = getRsbBrowserBridge();
-    for (const record of registry.listAll()) {
-      const wc = registry.getWebContentsByTabId(record.tabId);
-      if (!wc || wc.isDestroyed()) continue;
-      let url = '';
-      try {
-        url = wc.getURL?.() ?? '';
-      } catch {
-        continue;
-      }
-      if (!isPreviewUrl(url)) continue;
-      wc.close();
-    }
-  } catch {
-    /* best-effort */
-  }
+    },
+    closeVendoredTab: async (targetId) => {
+      await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
+    },
+    listRsbTabs: () => {
+      const registry = getRsbBrowserBridge();
+      return registry
+        .listAll()
+        .map((record) => ({
+          tabId: record.tabId,
+          wc: registry.getWebContentsByTabId(record.tabId),
+        }))
+        .filter((row): row is { tabId: string; wc: NonNullable<typeof row.wc> } => row.wc !== null)
+        .map((row) => ({
+          tabId: row.tabId,
+          wc: {
+            getURL: () => row.wc.getURL?.(),
+            isDestroyed: () => row.wc.isDestroyed(),
+            close: () => row.wc.close(),
+          },
+        }));
+    },
+    isPreviewUrl,
+  });
 }
 
 export function disposeBrowserRuntime(): Promise<void> {
