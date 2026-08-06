@@ -2301,6 +2301,7 @@ export const __testing = {
   remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
   remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,
+  remoteInvokeOrphanTimeoutForChannelMs: remoteInvokeOrphanTimeoutMs,
   remoteInvokeResultOutboxLimit: REMOTE_INVOKE_RESULT_OUTBOX_LIMIT,
   remoteInvokeResultOutboxPerControllerLimit: REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT,
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,

@@ -217,7 +217,7 @@ function isNamedDescriptor(value: unknown): boolean {
 
 function parseAgentCapabilities(value: unknown): AgentCapabilities {
   if (!isRecord(value)) {
-    throw new Error('Invalid agent capabilities response: payload is not an object');
+    throw new Error('Invalid agent capabilities response');
   }
   if (
     !Array.isArray(value.availableModels) ||

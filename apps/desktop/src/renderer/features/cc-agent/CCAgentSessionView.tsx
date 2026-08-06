@@ -165,6 +165,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
 import { subscribeLearnEvents } from '@/features/learn/learnTransport';
 import { getUserPrompt } from '@/lib/userPromptStore';
+import { makerApiForSticky } from '@/lib/makerTransport';
 import {
   consumePending,
   consumePendingGoal,
