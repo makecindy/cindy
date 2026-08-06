@@ -900,3 +900,27 @@ describe('ChatInput 的入口门控与调用路由', () => {
     );
   });
 });
+
+describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#1927)', () => {
+  const viewSource = readFileSync(
+    resolve(process.cwd(), 'src/renderer/features/cc-agent/CCAgentSessionView.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  it('pi 与 claude-code 开放入口,codex 不开放', () => {
+    // onCompact 绑定:pi 与 claude-code 可点,codex 保持纯展示(无手动 compact)
+    expect(viewSource).toContain("(displayAgentKind === 'claude-code' || displayAgentKind === 'pi')");
+  });
+
+  it('pi 走 capability-aware 的 maker:compact-session,不碰 claude-code 专用通道', () => {
+    // handleCompactRequest 内:pi 分支调用 compactSession(session.id)(即 maker:compact-session),
+    // claude-code 分支才走 inputCoordinator 的 maker:input:compact(compactSession(model, effort...))
+    expect(viewSource).toContain("if (displayAgentKind === 'pi') {");
+    expect(viewSource).toContain('window.electronAPI.maker.compactSession(session.id)');
+    // 确认 pi 分支不调用旧通道:pi 分支以 return 结束,return 之前只有 window.electronAPI 通道
+    const piStart = viewSource.indexOf("if (displayAgentKind === 'pi')");
+    const piEnd = viewSource.indexOf('return;', piStart);
+    const piBranch = viewSource.slice(piStart, piEnd);
+    expect(piBranch).not.toContain('await compactSession(');
+  });
+});

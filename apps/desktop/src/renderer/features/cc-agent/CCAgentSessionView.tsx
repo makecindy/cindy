@@ -2680,6 +2680,17 @@ export function CCAgentSessionView({
         cancelText: t('ccAgent.layout.contextRing.confirmCancel'),
       });
       if (!ok) return;
+      // 按 agent 能力分流(#1927):pi 走 capability-aware 的 maker:compact-session
+      // (原生已支持手动压缩),claude-code 走输入协调器的 maker:input:compact。
+      if (displayAgentKind === 'pi') {
+        const result = await window.electronAPI.maker.compactSession(session.id);
+        if (result?.noop) {
+          toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
+        } else if (result) {
+          toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+        }
+        return;
+      }
       await compactSession(
         session.model,
         session.effort as Effort,
@@ -2694,6 +2705,7 @@ export function CCAgentSessionView({
     agentStatus.contextWindow,
     compactSession,
     confirmDialog,
+    displayAgentKind,
     remoteDeviceId,
     session,
     t,
@@ -3972,8 +3984,10 @@ export function CCAgentSessionView({
                     sdkContextWindow={agentStatus.contextWindow}
                     deviceId={remoteDeviceId}
                     onCompact={
-                      // codex 无手动 compact;context 为 0 时压缩无意义 → 两种情况保持纯展示
-                      !isCodex && session != null && agentStatus.contextTokens > 0
+                      // 按 agent 能力分流(#1927):pi(原生支持)与 claude-code 开放手动压缩入口,
+                      // codex 无手动 compact(上游自动压缩)保持纯展示。
+                      (displayAgentKind === 'claude-code' || displayAgentKind === 'pi')
+                        && session != null && agentStatus.contextTokens > 0
                         ? handleCompactRequest
                         : undefined
                     }
