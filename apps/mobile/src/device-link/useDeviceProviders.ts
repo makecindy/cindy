@@ -15,6 +15,7 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 import {
   fetchDeviceProviders,
   getCachedDeviceProviders,
+  getDeviceProvidersGen,
   subscribeDeviceProviders,
   type DeviceProvidersPayload,
 } from './deviceProvidersCache';
@@ -49,11 +50,16 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // ready 的判定载体:payload 已确认属于哪个设备。仅在缓存命中 / 拉取完成(订阅回调)
-  // 时置为当前 deviceId;切设备 cache-miss 立即清 null。首渲染即按
-  // `readyFor === deviceId` 计算,不依赖 effect 先跑,故无「loading 初值 false」窗口。
+  // ready 的判定载体:payload 已确认属于哪个设备 + 置位时的缓存代际。仅在缓存命中 /
+  // 拉取完成(订阅回调)时置位;切设备 cache-miss 立即清 null。首渲染即按
+  // `readyFor === deviceId` 计算,不依赖 effect 先跑,故无「loading 初值 false」窗口;
+  // 代际比对兜住「同设备 evict 后重拉中/重拉失败」——旧 payload 在重拉窗口期不再
+  // 被当作就绪目录(codex review P2)。
   const [readyFor, setReadyFor] = useState<string | null>(
     deviceId && getCachedDeviceProviders(deviceId) ? deviceId : null,
+  );
+  const [readyGen, setReadyGen] = useState<number>(() =>
+    deviceId ? getDeviceProvidersGen(deviceId) : 0,
   );
 
   useEffect(() => {
@@ -71,6 +77,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setError(null);
       setLoading(false);
       setReadyFor(deviceId);
+      setReadyGen(getDeviceProvidersGen(deviceId));
     });
     const cached = getCachedDeviceProviders(deviceId);
     if (cached) {
@@ -81,6 +88,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       // so the cache-hit return must, or the UI stays stuck "loading" over fully-populated data.
       setLoading(false);
       setReadyFor(deviceId);
+      setReadyGen(getDeviceProvidersGen(deviceId));
       return unsubscribe;
     }
     // cache miss:先清空,避免 fetch 解析前(失败则永远)残留上一设备的供应商。
@@ -109,6 +117,8 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       : {}),
     loading,
     error,
-    ready: deviceId !== undefined && readyFor === deviceId,
+    ready: deviceId !== undefined
+      && readyFor === deviceId
+      && readyGen === getDeviceProvidersGen(deviceId),
   };
 }

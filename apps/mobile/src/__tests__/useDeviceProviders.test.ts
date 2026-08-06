@@ -174,4 +174,21 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(listener).toHaveBeenLastCalledWith({ providers: [{ id: 'fresh-xd' }] });
     expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'fresh-xd' }] });
   });
+
+  it('getDeviceProvidersGen:evict / clearAll 自增代际,其他设备不受影响(codex P2 ready 代际)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    const gen0 = mod.getDeviceProvidersGen('dev-1');
+    mod.evictDeviceProviders('dev-1');
+    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 1);
+    // 重拉完成不进一步提升代际(代际只随驱逐前进,置位时记录即稳定)
+    await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
+    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 1);
+    mod.evictDeviceProviders('dev-1');
+    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 2);
+    // clearAll 只自增代际表内设备;从未有缓存活动的设备不受影响
+    const gen2 = mod.getDeviceProvidersGen('dev-2');
+    mod.clearAllDeviceProviders();
+    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 3);
+    expect(mod.getDeviceProvidersGen('dev-2')).toBe(gen2);
+  });
 });

@@ -96,6 +96,15 @@ export function evictDeviceProviders(deviceId: string): void {
 }
 
 /**
+ * 读某设备当前的缓存代际(evict 一次 +1)。useDeviceProviders 的 ready 判定用:
+ * 置位 readyFor 时记录当时代际,之后代际不一致 = 目录已被驱逐、正在重拉(或重拉失败),
+ * ready 必须为 false —— 否则旧 payload 会在重拉窗口期继续被当作就绪目录(codex review P2)。
+ */
+export function getDeviceProvidersGen(deviceId: string): number {
+  return deviceGen.get(deviceId) ?? 0;
+}
+
+/**
  * 账号登出 / 进程内切号时清空**全部**被控设备的供应商缓存。
  *
  * 这是 module 级单例缓存,不随 React 组件卸载清空。若不在登出时清,下一个登录账号会通过
