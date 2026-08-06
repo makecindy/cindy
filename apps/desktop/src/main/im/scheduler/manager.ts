@@ -24,6 +24,7 @@ import {
   type SchedulerAdvertisementFrame,
   type SchedulerRuntimeFrame,
 } from './protocol';
+import { fetchSchedulerDesktopDeviceSnapshot } from './deviceSnapshot';
 import { isDesktopSchedulerPlatform, selectIngressDevice } from './state';
 
 const log = createLogger('im:discord-scheduler');
@@ -64,6 +65,8 @@ export class ImSchedulerManager {
   private discoveryNonce = '';
   private readonly confirmedPeers = new Set<string>();
   private readonly pendingProbePeers = new Set<string>();
+  private authoritativeDesktopPeers: Map<string, string> | null = null;
+  private snapshotRequest: { nonce: string; promise: Promise<void> } | null = null;
   private readonly resolvedRuntimeGenerations = new Set<string>();
   private readonly resolvedRuntimeGenerationOrder: string[] = [];
   private localRuntime: SchedulerRuntimeFrame | null = null;
@@ -91,6 +94,20 @@ export class ImSchedulerManager {
       this.handleDiscordStatusChanged(status);
     });
     this.offPresence = onDeviceLinkPresenceChanged((snapshot) => {
+      const eligibleDesktop = snapshot.online
+        && isDesktopSchedulerPlatform(snapshot.platform)
+        && !isDeviceRevoked(snapshot.deviceId);
+      const snapshotIncludedPeer = this.authoritativeDesktopPeers?.has(snapshot.deviceId) === true;
+      if (
+        this.authoritativeDesktopPeers
+        && eligibleDesktop !== snapshotIncludedPeer
+      ) {
+        // Membership changed after the REST completion snapshot. Start a new
+        // generation so an arriving peer cannot race an election based on the
+        // previous account-wide view, and an offline peer does not leave the
+        // scheduler fail-closed forever.
+        this.beginDiscoveryGrace();
+      }
       if (
         !snapshot.online
         || !isDesktopSchedulerPlatform(snapshot.platform)
@@ -174,6 +191,7 @@ export class ImSchedulerManager {
       void this.reconcile();
     });
     this.advertisementTimer = setInterval(() => {
+      if (!this.authoritativeDesktopPeers) this.refreshAuthoritativeDesktopSnapshot();
       this.advertiseAll();
       for (const peer of this.listSchedulerPeers()) {
         if (!this.confirmedPeers.has(peer.deviceId)) this.probe(peer.deviceId);
@@ -263,9 +281,12 @@ export class ImSchedulerManager {
         await this.ensureStandby();
         return;
       }
-      if (Date.now() < this.discoveryDeadline) return;
-      const self = getSelfDeviceId();
       const identity = this.discord.getSchedulerIdentity();
+      if (Date.now() < this.discoveryDeadline || !this.authoritativeDesktopPeers) {
+        await this.ensureStandby(identity ?? 'discord');
+        return;
+      }
+      const self = getSelfDeviceId();
       if (!self || !identity) {
         await this.ensureStandby(identity ?? 'discord');
         return;
@@ -331,6 +352,14 @@ export class ImSchedulerManager {
     lastSeenAt: number;
     channels: SchedulerAdvertisementFrame['channels'];
   }> | null {
+    if (!this.authoritativeDesktopPeers) return null;
+    const schedulerPeers = this.listSchedulerPeers();
+    const schedulerPeersById = new Map(schedulerPeers.map((peer) => [peer.deviceId, peer]));
+    for (const [deviceId, platform] of this.authoritativeDesktopPeers) {
+      if (isDeviceRevoked(deviceId)) continue;
+      const peer = schedulerPeersById.get(deviceId);
+      if (!peer || peer.platform !== platform) return null;
+    }
     const devices = [{
       deviceId: self,
       online: true,
@@ -338,7 +367,7 @@ export class ImSchedulerManager {
       lastSeenAt: now,
       channels: [{ channel: 'discord' as const, identity }],
     }];
-    for (const peer of this.listSchedulerPeers()) {
+    for (const peer of schedulerPeers) {
       if (!this.confirmedPeers.has(peer.deviceId)) return null;
       const advertisement = this.peers.get(peer.deviceId);
       if (!advertisement || now - advertisement.lastSeenAt > PEER_STALE_MS) return null;
@@ -760,6 +789,8 @@ export class ImSchedulerManager {
     this.peers.clear();
     this.confirmedPeers.clear();
     this.pendingProbePeers.clear();
+    this.authoritativeDesktopPeers = null;
+    this.snapshotRequest = null;
     this.resolvedRuntimeGenerations.clear();
     this.resolvedRuntimeGenerationOrder.length = 0;
     this.localRuntime = null;
@@ -776,9 +807,49 @@ export class ImSchedulerManager {
     this.reconcileTail = Promise.resolve();
   }
 
+  private refreshAuthoritativeDesktopSnapshot(nonce = this.discoveryNonce): void {
+    if (!this.started || !this.deviceLinkReady || !nonce) return;
+    if (this.snapshotRequest?.nonce === nonce) return;
+    const promise = fetchSchedulerDesktopDeviceSnapshot()
+      .then((snapshot) => {
+        if (!this.started || this.discoveryNonce !== nonce) return;
+        const self = getSelfDeviceId();
+        if (!self || snapshot.selfDeviceId !== self) {
+          throw new Error('device-link snapshot does not match the current Desktop');
+        }
+        this.authoritativeDesktopPeers = new Map(
+          snapshot.peers
+            .filter((peer) => !isDeviceRevoked(peer.deviceId))
+            .map((peer) => [peer.deviceId, peer.platform]),
+        );
+        // The full account snapshot replaces the old fixed-delay assumption.
+        // Once it includes this exact online Desktop, election may proceed as
+        // soon as every listed peer completes the nonce-bound advertisement.
+        this.discoveryDeadline = 0;
+        if (this.startTimer) clearTimeout(this.startTimer);
+        this.startTimer = null;
+        this.advertiseAll();
+        for (const peer of this.listSchedulerPeers()) {
+          if (!this.confirmedPeers.has(peer.deviceId)) this.probe(peer.deviceId);
+        }
+        void this.reconcile();
+      })
+      .catch((error) => {
+        if (!this.started || this.discoveryNonce !== nonce) return;
+        this.authoritativeDesktopPeers = null;
+        log.warn('discord scheduler device snapshot failed', error);
+        void this.reconcile();
+      })
+      .finally(() => {
+        if (this.snapshotRequest?.promise === promise) this.snapshotRequest = null;
+      });
+    this.snapshotRequest = { nonce, promise };
+  }
+
   private beginDiscoveryGrace(): void {
     this.adoptActiveRuntimeFromAllPeers();
     this.discoveryNonce = randomUUID().replaceAll('-', '');
+    this.authoritativeDesktopPeers = null;
     this.confirmedPeers.clear();
     this.pendingProbePeers.clear();
     this.peers.clear();
@@ -789,6 +860,7 @@ export class ImSchedulerManager {
       void this.reconcile();
     }, DISCOVERY_GRACE_MS);
     this.probeAll();
+    this.refreshAuthoritativeDesktopSnapshot();
     if (this.connectedIdentity && this.discord.getStatus().kind === 'connecting') {
       this.armReconnectGrace(this.connectedIdentity);
     }

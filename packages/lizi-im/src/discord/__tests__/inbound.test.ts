@@ -781,6 +781,8 @@ describe('DiscordIM inbound pipeline', () => {
 
     await im.init();
     await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+    gateway.emitStatus({ kind: 'connecting' });
+    expect(im.getStatus()).toEqual({ kind: 'connecting' });
 
     transportAllowed = false;
     const handoff = im.enterSchedulerStandby({ clearRuntimeActiveMarker: true });
@@ -793,7 +795,7 @@ describe('DiscordIM inbound pipeline', () => {
 
     expect(gateway.destroy).not.toHaveBeenCalled();
     expect(gateway.appId).toBe('app-1');
-    expect(im.getStatus()).toEqual({ kind: 'connected', appId: '12345678901234567' });
+    expect(im.getStatus()).toEqual({ kind: 'connecting' });
   });
 
   it('connects gateway when set-config receives a token', async () => {

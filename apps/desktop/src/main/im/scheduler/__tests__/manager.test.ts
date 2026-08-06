@@ -25,6 +25,7 @@ const harness = vi.hoisted(() => ({
     onConfigurationChanged?: () => void;
   } | null,
   sendPush: vi.fn(),
+  fetchDeviceSnapshot: vi.fn(),
 }));
 
 vi.mock('../../../device-link', () => ({
@@ -57,6 +58,10 @@ vi.mock('../../../device-link', () => ({
 
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ warn: vi.fn() }),
+}));
+
+vi.mock('../deviceSnapshot', () => ({
+  fetchSchedulerDesktopDeviceSnapshot: harness.fetchDeviceSnapshot,
 }));
 
 import { ImSchedulerManager } from '../manager';
@@ -164,6 +169,14 @@ beforeEach(() => {
   harness.revoked.clear();
   harness.hooks = null;
   harness.sendPush.mockReset();
+  harness.fetchDeviceSnapshot.mockReset();
+  harness.fetchDeviceSnapshot.mockImplementation(async () => ({
+    selfDeviceId: harness.selfDeviceId,
+    peers: harness.peers.map((peer) => ({
+      deviceId: peer.deviceId,
+      platform: peer.platform,
+    })),
+  }));
 });
 
 afterEach(() => {
@@ -197,6 +210,60 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('keeps both Desktops in standby until delayed peer presence completes the account snapshot', async () => {
+    harness.owner = false;
+    harness.peers = [];
+    harness.fetchDeviceSnapshot
+      .mockResolvedValueOnce({
+        selfDeviceId: 'a',
+        peers: [{ deviceId: 'z', platform: 'darwin' }],
+      })
+      .mockResolvedValueOnce({
+        selfDeviceId: 'z',
+        peers: [{ deviceId: 'a', platform: 'darwin' }],
+      });
+    const discordA = createDiscord();
+    const discordZ = createDiscord();
+
+    harness.selfDeviceId = 'a';
+    const managerA = createManager(discordA);
+    await managerA.start();
+    harness.selfDeviceId = 'z';
+    const managerZ = createManager(discordZ);
+    await managerZ.start();
+
+    // Both sockets have received hello-ack and the full REST snapshot, but the
+    // relay has not delivered either incremental peer presence event yet.
+    await vi.advanceTimersByTimeAsync(3_500);
+    harness.owner = true;
+    harness.selfDeviceId = 'a';
+    await managerA.reconcile();
+    harness.selfDeviceId = 'z';
+    await managerZ.reconcile();
+
+    expect(discordA.init).not.toHaveBeenCalled();
+    expect(discordZ.init).not.toHaveBeenCalled();
+
+    await managerA.stop();
+    await managerZ.stop();
+  });
+
+  it('stays fail-closed when the account device snapshot is unavailable', async () => {
+    harness.selfDeviceId = 'a';
+    harness.fetchDeviceSnapshot.mockRejectedValue(new Error('snapshot unavailable'));
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await vi.advanceTimersByTimeAsync(7_000);
+    await manager.reconcile();
+
+    expect(discord.init).not.toHaveBeenCalled();
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+
+    await manager.stop();
+  });
+
   it('starts the deterministic winner and lets a standby take over after it goes offline', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [{
@@ -213,13 +280,13 @@ describe('Discord scheduler manager', () => {
     await finishDiscovery(manager);
     expect(discord.init).not.toHaveBeenCalled();
 
+    harness.peers = [];
     harness.presenceHandler?.({
       deviceId: 'a',
       platform: 'darwin',
       online: false,
       lastSeenAt: Date.now(),
     });
-    harness.peers = [];
     await manager.reconcile();
     expect(discord.init).toHaveBeenCalledTimes(1);
 
@@ -409,13 +476,13 @@ describe('Discord scheduler manager', () => {
     await finishDiscovery(manager);
     expect(discord.init).not.toHaveBeenCalled();
 
+    harness.peers = [];
     harness.presenceHandler?.({
       deviceId: 'a',
       platform: 'darwin',
       online: false,
       lastSeenAt: Date.now(),
     });
-    harness.peers = [];
     await manager.reconcile();
 
     expect(discord.markSchedulerOfflineGap).toHaveBeenCalledTimes(1);
@@ -496,7 +563,9 @@ describe('Discord scheduler manager', () => {
     harness.sendPush.mockClear();
     harness.peers = [];
     harness.presenceHandler?.({ ...peer, online: false });
-    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(true);
+    await vi.waitFor(() => {
+      expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(true);
+    });
     releaseHandoff();
     await manager.reconcile();
 
@@ -511,6 +580,7 @@ describe('Discord scheduler manager', () => {
 
   it('keeps the scheduler fail-closed until an in-flight activation settles during stop', async () => {
     harness.selfDeviceId = 'a';
+    harness.owner = false;
     const discord = createDiscord();
     let releaseActivation!: () => void;
     discord.init.mockImplementation(async () => {
@@ -523,7 +593,7 @@ describe('Discord scheduler manager', () => {
     const manager = createManager(discord);
 
     await manager.start();
-    await vi.advanceTimersByTimeAsync(3_500);
+    harness.owner = true;
     const activation = manager.reconcile();
     await vi.waitFor(() => expect(discord.init).toHaveBeenCalledTimes(1));
 
@@ -916,13 +986,13 @@ describe('Discord scheduler manager', () => {
     await manager.reconcile();
     expect(discord.init).toHaveBeenCalledTimes(1);
 
+    harness.peers = [];
     harness.presenceHandler?.({
       deviceId: 'z',
       platform: 'darwin',
       online: false,
       lastSeenAt: Date.now(),
     });
-    harness.peers = [];
     await manager.reconcile();
 
     expect(discord.init).toHaveBeenCalledTimes(2);
