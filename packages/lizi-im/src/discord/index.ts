@@ -35,6 +35,8 @@ import { startStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
+const PENDING_TOKEN_SECRET_KEY = 'discord-bot-token-pending';
+const PENDING_OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id-pending';
 const RUNTIME_ACTIVE_SECRET_KEY = 'discord-bot-runtime-active';
 const LIFECYCLE_ANNOUNCEMENT_SECRET_KEY = 'discord-bot-lifecycle-announcement';
 const MAX_OUTBOUND_FILE_BYTES = 8 * 1024 * 1024;
@@ -135,8 +137,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.runtimeOnlineAnnounced = false;
     this.lifecycleNoticeVersion += 1;
     this.lifecycleAnnouncementEnabled = this.readLifecycleAnnouncement();
-    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
-    this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
+    const pendingToken = this.readPendingToken();
+    const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
+    const token = pendingToken || previousToken?.trim() || '';
+    const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
+    this.ownerUserId = this.readConfiguredOwnerUserId(Boolean(pendingToken));
     if (!this.lifecycleAnnouncementEnabled) {
       this.clearRuntimeActiveMarker();
     }
@@ -158,10 +163,25 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       await this.gateway.connect(token);
       if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
         await this.enterSchedulerStandby();
+        return;
+      }
+      if (pendingToken && !this.promotePendingCredentials(pendingToken, this.ownerUserId)) {
+        await this.gateway.destroy();
+        this.discardPendingCredentials(pendingToken);
+        this.ownerUserId = previousOwnerUserId?.trim() ?? '';
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        this.schedulerConfigurationChanged();
+        await this.reconnectPreviousGateway(previousToken);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord gateway connect failed: ${msg}`);
+      if (pendingToken) {
+        this.discardPendingCredentials(pendingToken);
+        this.ownerUserId = previousOwnerUserId?.trim() ?? '';
+        this.schedulerConfigurationChanged();
+        await this.reconnectPreviousGateway(previousToken);
+      }
     }
   }
 
@@ -202,21 +222,23 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
       const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
       const previousRuntimeOwnerUserId = this.ownerUserId;
-
-      const tokenSaved = token ? this.host.secrets.write(TOKEN_SECRET_KEY, token) : true;
-      const ownerUserIdSaved = ownerUserId
-        ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
-        : true;
-      if (!tokenSaved || !ownerUserIdSaved) {
-        this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-        this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
-        this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
-        return configResult();
-      }
-
       const nextOwnerUserId = ownerUserId || this.ownerUserId;
       if (token) {
+        const previousPendingToken = this.host.secrets.read(PENDING_TOKEN_SECRET_KEY);
+        const previousPendingOwnerUserId = this.host.secrets.read(PENDING_OWNER_USER_ID_SECRET_KEY);
+        const tokenSaved = this.host.secrets.write(PENDING_TOKEN_SECRET_KEY, token);
+        const ownerUserIdSaved = nextOwnerUserId
+          ? this.host.secrets.write(PENDING_OWNER_USER_ID_SECRET_KEY, nextOwnerUserId)
+          : true;
+        if (!tokenSaved || !ownerUserIdSaved) {
+          this.restoreSecret(PENDING_TOKEN_SECRET_KEY, previousPendingToken);
+          this.restoreSecret(PENDING_OWNER_USER_ID_SECRET_KEY, previousPendingOwnerUserId);
+          this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+          return configResult();
+        }
+        if (!nextOwnerUserId) this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
+
         this.configVersion += 1;
         const wasConnectedBeforeReconnect = this.status.kind === 'connected';
         await this.gateway.destroy();
@@ -238,6 +260,16 @@ export class DiscordIM extends BaseIM implements ChannelIM {
             await this.enterSchedulerStandby();
             return configResult();
           }
+          if (!this.promotePendingCredentials(token, nextOwnerUserId)) {
+            const failedStatus: IMStatus = { kind: 'error', reason: SECRET_WRITE_FAILED_REASON };
+            await this.gateway.destroy();
+            this.discardPendingCredentials(token);
+            this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+            this.setStatus(failedStatus);
+            this.schedulerConfigurationChanged();
+            await this.reconnectPreviousGateway(previousToken);
+            return configResult(failedStatus);
+          }
           this.markRuntimeActive();
           const linkedNoticeConfigVersion = this.configVersion;
           await this.sendOwnerNoticeWithTimeout(
@@ -255,14 +287,20 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           this.log.warn(`discord gateway connect failed from set-config: ${msg}`);
           const failedStatus = mapDiscordLoginErrorToStatus(err);
           this.setStatus(failedStatus);
-          this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+          this.discardPendingCredentials(token);
           this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-          await this.reconnectPreviousGateway(previousToken);
           this.schedulerConfigurationChanged();
+          await this.reconnectPreviousGateway(previousToken);
           return configResult(failedStatus);
         }
       } else if (nextOwnerUserId !== this.ownerUserId) {
+        const ownerSecretKey = this.readPendingToken()
+          ? PENDING_OWNER_USER_ID_SECRET_KEY
+          : OWNER_USER_ID_SECRET_KEY;
+        if (!this.host.secrets.write(ownerSecretKey, nextOwnerUserId)) {
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+          return configResult();
+        }
         this.configVersion += 1;
         this.ownerUserId = nextOwnerUserId;
       }
@@ -309,6 +347,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       );
       this.host.secrets.remove(TOKEN_SECRET_KEY);
       this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
+      this.host.secrets.remove(PENDING_TOKEN_SECRET_KEY);
+      this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
       this.clearRuntimeActiveMarker();
       this.pendingOfflineNotice = false;
       this.runtimeOnlineAnnounced = false;
@@ -320,7 +360,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   getSchedulerIdentity(): string | null {
-    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+    const token = this.readPendingToken()
+      || this.host.secrets.read(TOKEN_SECRET_KEY)?.trim()
+      || '';
     return this.schedulerIdentityFromToken(token);
   }
 
@@ -571,6 +613,43 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return;
     }
     this.host.secrets.write(key, previousValue);
+  }
+
+  private readPendingToken(): string {
+    return this.host.secrets.read(PENDING_TOKEN_SECRET_KEY)?.trim() ?? '';
+  }
+
+  private readConfiguredOwnerUserId(hasPendingToken = Boolean(this.readPendingToken())): string {
+    const ownerKey = hasPendingToken
+      ? PENDING_OWNER_USER_ID_SECRET_KEY
+      : OWNER_USER_ID_SECRET_KEY;
+    return this.host.secrets.read(ownerKey)?.trim()
+      || this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim()
+      || '';
+  }
+
+  private promotePendingCredentials(expectedToken: string, ownerUserId: string): boolean {
+    if (this.readPendingToken() !== expectedToken) return false;
+    const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
+    const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
+    const tokenSaved = this.host.secrets.write(TOKEN_SECRET_KEY, expectedToken);
+    const ownerUserIdSaved = ownerUserId
+      ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
+      : true;
+    if (!tokenSaved || !ownerUserIdSaved) {
+      this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
+      this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+      return false;
+    }
+    if (!ownerUserId) this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
+    this.discardPendingCredentials(expectedToken);
+    return true;
+  }
+
+  private discardPendingCredentials(expectedToken?: string): void {
+    if (expectedToken && this.readPendingToken() !== expectedToken) return;
+    this.host.secrets.remove(PENDING_TOKEN_SECRET_KEY);
+    this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
   }
 
   private readLifecycleAnnouncement(): boolean {

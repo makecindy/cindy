@@ -594,6 +594,121 @@ describe('DiscordIM inbound pipeline', () => {
       gateway.connect.mock.invocationCallOrder[0],
     );
     expect(gateway.connect).toHaveBeenCalledWith(token);
+    expect(host.readSecret('discord-bot-token')).toBe(token);
+    expect(host.readSecret('discord-bot-token-pending')).toBeNull();
+  });
+
+  it('keeps a candidate token pending while scheduler discovery is incomplete', async () => {
+    const gateway = makeGateway();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    im.setSchedulerHooks({ isTransportAllowed: () => false });
+
+    im.registerIpc();
+    const result = await host.invoke('discordBot:set-config', {
+      token: candidateToken,
+      ownerUserId: 'user-2',
+    });
+
+    expect(result).toEqual({
+      status: { kind: 'standby', appId: '12345678901234567' },
+      ownerUserId: 'user-2',
+    });
+    expect(host.readSecret('discord-bot-token')).toBe(previousToken);
+    expect(host.readSecret('discord-owner-user-id')).toBe('user-1');
+    expect(host.readSecret('discord-bot-token-pending')).toBe(candidateToken);
+    expect(host.readSecret('discord-owner-user-id-pending')).toBe('user-2');
+    expect(gateway.connect).not.toHaveBeenCalled();
+  });
+
+  it('promotes a pending candidate only after its first successful connection', async () => {
+    const gateway = makeGateway();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    let allowed = false;
+    im.setSchedulerHooks({ isTransportAllowed: () => allowed });
+
+    im.registerIpc();
+    await host.invoke('discordBot:set-config', {
+      token: candidateToken,
+      ownerUserId: 'user-2',
+    });
+    allowed = true;
+    await im.init();
+
+    expect(gateway.connect).toHaveBeenCalledWith(candidateToken);
+    expect(host.readSecret('discord-bot-token')).toBe(candidateToken);
+    expect(host.readSecret('discord-owner-user-id')).toBe('user-2');
+    expect(host.readSecret('discord-bot-token-pending')).toBeNull();
+    expect(host.readSecret('discord-owner-user-id-pending')).toBeNull();
+  });
+
+  it('restores the previous usable Bot when a pending candidate fails authentication', async () => {
+    const gateway = makeGateway();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.invalid.signature`;
+    gateway.connect
+      .mockRejectedValueOnce(Object.assign(new Error('bad token'), { code: 'TokenInvalid' }))
+      .mockImplementationOnce(async () => {
+        gateway.emitStatus({ kind: 'connected', appId: 'old-bot#0000' });
+      });
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    let allowed = false;
+    const onConfigurationChanged = vi.fn();
+    im.setSchedulerHooks({ isTransportAllowed: () => allowed, onConfigurationChanged });
+
+    im.registerIpc();
+    await host.invoke('discordBot:set-config', {
+      token: candidateToken,
+      ownerUserId: 'user-2',
+    });
+    expect(host.readSecret('discord-bot-token')).toBe(previousToken);
+
+    allowed = true;
+    await im.init();
+
+    expect(gateway.connect).toHaveBeenNthCalledWith(1, candidateToken);
+    expect(gateway.connect).toHaveBeenNthCalledWith(2, previousToken);
+    expect(host.readSecret('discord-bot-token')).toBe(previousToken);
+    expect(host.readSecret('discord-owner-user-id')).toBe('user-1');
+    expect(host.readSecret('discord-bot-token-pending')).toBeNull();
+    expect(host.readSecret('discord-owner-user-id-pending')).toBeNull();
+    expect(onConfigurationChanged).toHaveBeenCalledTimes(2);
   });
 
   it('sends the owner a fixed notice after a successful link', async () => {
@@ -1829,7 +1944,7 @@ describe('DiscordIM inbound pipeline', () => {
     const gateway = makeGateway();
     const host = makeHost({
       write: (name, value, secrets) => {
-        if (name === 'discord-owner-user-id' && value === 'new-owner') return false;
+        if (name === 'discord-owner-user-id-pending' && value === 'new-owner') return false;
         secrets.set(name, value);
         return true;
       },
@@ -1865,7 +1980,7 @@ describe('DiscordIM inbound pipeline', () => {
     const host = makeHost({
       initialSecrets: [],
       write: (name, value, secrets) => {
-        if (name === 'discord-owner-user-id' && value === 'new-owner') return false;
+        if (name === 'discord-owner-user-id-pending' && value === 'new-owner') return false;
         secrets.set(name, value);
         return true;
       },

@@ -67,10 +67,13 @@ interface FakeDiscord {
   setSchedulerHooks: ReturnType<typeof vi.fn>;
 }
 
-function createDiscord(identity = '12345678901234567'): FakeDiscord {
+function createDiscord(
+  identity = '12345678901234567',
+  options: { activateOnInit?: boolean } = {},
+): FakeDiscord {
   let active = false;
   return {
-    init: vi.fn(async () => { active = true; }),
+    init: vi.fn(async () => { active = options.activateOnInit !== false; }),
     enterSchedulerStandby: vi.fn(async () => { active = false; }),
     getSchedulerIdentity: vi.fn(() => identity),
     isSchedulerTransportActive: vi.fn(() => active),
@@ -85,6 +88,30 @@ function createManager(discord: FakeDiscord): ImSchedulerManager {
 async function finishDiscovery(manager: ImSchedulerManager): Promise<void> {
   await vi.advanceTimersByTimeAsync(3_500);
   await manager.reconcile();
+}
+
+function latestProbeNonce(deviceId = 'a'): string {
+  const call = [...harness.sendPush.mock.calls].reverse().find(
+    ([target, , payload]) => target === deviceId
+      && typeof payload === 'object'
+      && payload !== null
+      && (payload as { kind?: unknown }).kind === 'probe',
+  );
+  const nonce = (call?.[2] as { nonce?: unknown } | undefined)?.nonce;
+  if (typeof nonce !== 'string') throw new Error(`missing scheduler probe for ${deviceId}`);
+  return nonce;
+}
+
+function confirmPeer(
+  deviceId: string,
+  channels: Array<{ channel: 'discord'; identity: string }>,
+): void {
+  harness.pushHandler?.(deviceId, {
+    kind: 'advertisement',
+    sentAt: Date.now(),
+    channels,
+    inReplyTo: latestProbeNonce(deviceId),
+  });
 }
 
 beforeEach(() => {
@@ -117,17 +144,13 @@ describe('Discord scheduler manager', () => {
     const manager = createManager(discord);
 
     await manager.start();
-    harness.pushHandler?.('a', {
-      kind: 'advertisement',
-      sentAt: Date.now(),
-      channels: [{ channel: 'discord', identity: '12345678901234567' }],
-    });
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
     await finishDiscovery(manager);
 
     expect(discord.init).not.toHaveBeenCalled();
     expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
     expect(harness.sendPush).toHaveBeenCalled();
-    expect(harness.sendPush.mock.calls[0]?.[2]).toEqual({
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual({
       kind: 'advertisement',
       sentAt: expect.any(Number),
       channels: [{ channel: 'discord', identity: '12345678901234567' }],
@@ -148,11 +171,7 @@ describe('Discord scheduler manager', () => {
     const manager = createManager(discord);
 
     await manager.start();
-    harness.pushHandler?.('a', {
-      kind: 'advertisement',
-      sentAt: Date.now(),
-      channels: [{ channel: 'discord', identity: '12345678901234567' }],
-    });
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
     await finishDiscovery(manager);
     expect(discord.init).not.toHaveBeenCalled();
 
@@ -235,7 +254,7 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
-  it('restarts discovery grace when the local Discord identity changes', async () => {
+  it('requires a current probe reply after the local Discord identity changes', async () => {
     harness.selfDeviceId = null;
     harness.peers = [{
       deviceId: 'a',
@@ -247,11 +266,7 @@ describe('Discord scheduler manager', () => {
     const manager = createManager(discord);
 
     await manager.start();
-    harness.pushHandler?.('a', {
-      kind: 'advertisement',
-      sentAt: Date.now(),
-      channels: [],
-    });
+    confirmPeer('a', []);
     await finishDiscovery(manager);
     expect(discord.init).not.toHaveBeenCalled();
 
@@ -260,14 +275,96 @@ describe('Discord scheduler manager', () => {
     await manager.reconcile();
     expect(discord.init).not.toHaveBeenCalled();
 
+    // An in-flight advertisement from before the configuration change is not
+    // proof that the peer observed the new discovery round.
     harness.pushHandler?.('a', {
       kind: 'advertisement',
       sentAt: Date.now(),
-      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      channels: [],
     });
     await finishDiscovery(manager);
-
     expect(discord.init).not.toHaveBeenCalled();
+
+    confirmPeer('a', []);
+    await manager.reconcile();
+
+    expect(discord.init).toHaveBeenCalledTimes(1);
+    await manager.stop();
+  });
+
+  it('invalidates an active lease when the peer starts a new discovery generation', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('a', []);
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledTimes(1);
+
+    harness.pushHandler?.('a', {
+      kind: 'probe',
+      sentAt: 100,
+      nonce: 'remoteconfig1234',
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+    });
+    await manager.reconcile();
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
+
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: 99,
+      channels: [],
+    });
+    await manager.reconcile();
+    expect(discord.init).toHaveBeenCalledTimes(1);
+
+    await manager.stop();
+  });
+
+  it('withdraws a failed winner until the healthy peer disappears', async () => {
+    harness.selfDeviceId = 'a';
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord('12345678901234567', { activateOnInit: false });
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('z', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+
+    expect(discord.init).toHaveBeenCalledTimes(1);
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual({
+      kind: 'advertisement',
+      sentAt: expect.any(Number),
+      channels: [],
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await manager.reconcile();
+    expect(discord.init).toHaveBeenCalledTimes(1);
+
+    harness.presenceHandler?.({
+      deviceId: 'z',
+      platform: 'darwin',
+      online: false,
+      lastSeenAt: Date.now(),
+    });
+    harness.peers = [];
+    await manager.reconcile();
+
+    expect(discord.init).toHaveBeenCalledTimes(2);
     await manager.stop();
   });
 });

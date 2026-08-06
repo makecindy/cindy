@@ -13,11 +13,19 @@ describe('Discord scheduler protocol', () => {
       kind: 'advertisement',
       sentAt: 1,
       channels: [],
+      inReplyTo: '1234567890abcdef',
+    })).toBe(true);
+    expect(isImSchedulerFrame({
+      kind: 'probe',
+      sentAt: 1,
+      nonce: '1234567890abcdef',
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
     })).toBe(true);
   });
 
   it('rejects other channels, secrets, and malformed Discord identities', () => {
     expect(isImSchedulerFrame({ kind: 'request', requestId: 'r1' })).toBe(false);
+    expect(isImSchedulerFrame({ kind: 'probe', sentAt: 1, nonce: 'short', channels: [] })).toBe(false);
     expect(isImSchedulerFrame({
       kind: 'advertisement',
       sentAt: 1,

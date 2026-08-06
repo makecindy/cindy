@@ -1,5 +1,7 @@
 /** Same-account Desktop scheduler for the personal Discord bot only. */
 
+import { randomUUID } from 'node:crypto';
+
 import type { DiscordIM } from '@cindy/im';
 
 import {
@@ -30,6 +32,7 @@ const ACTIVATION_RETRY_MS = 10_000;
 
 interface PeerAdvertisement {
   deviceId: string;
+  sentAt: number;
   lastSeenAt: number;
   channels: SchedulerAdvertisementFrame['channels'];
 }
@@ -47,6 +50,11 @@ export class ImSchedulerManager {
   private advertisementTimer: ReturnType<typeof setInterval> | null = null;
   private discoveryDeadline = 0;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
+  private activationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private activationCooldownUntil = 0;
+  private discoveryNonce = '';
+  private readonly confirmedPeers = new Set<string>();
+  private readonly pendingProbePeers = new Set<string>();
   private started = false;
   private deviceLinkReady = false;
 
@@ -63,8 +71,11 @@ export class ImSchedulerManager {
     this.offPresence = onDeviceLinkPresenceChanged((snapshot) => {
       if (!snapshot.online || !isDesktopSchedulerPlatform(snapshot.platform)) {
         this.peers.delete(snapshot.deviceId);
+        this.confirmedPeers.delete(snapshot.deviceId);
+        this.pendingProbePeers.delete(snapshot.deviceId);
       } else {
         this.advertise(snapshot.deviceId);
+        if (!this.confirmedPeers.has(snapshot.deviceId)) this.probe(snapshot.deviceId);
       }
       void this.reconcile();
     });
@@ -81,8 +92,30 @@ export class ImSchedulerManager {
     });
     this.offPush = onDeviceLinkPush(IM_SCHEDULER_PUSH_CHANNEL, (source, payload) => {
       if (!isImSchedulerFrame(payload)) return;
+      if (payload.kind === 'probe') {
+        this.confirmedPeers.add(source);
+        this.pendingProbePeers.delete(source);
+        this.peers.set(source, {
+          deviceId: source,
+          sentAt: payload.sentAt,
+          lastSeenAt: Date.now(),
+          channels: payload.channels,
+        });
+        this.advertise(source, payload.nonce);
+        void this.reconcile();
+        return;
+      }
+      if (payload.inReplyTo === this.discoveryNonce) {
+        this.confirmedPeers.add(source);
+        this.pendingProbePeers.delete(source);
+      } else if (!this.confirmedPeers.has(source)) {
+        return;
+      }
+      const previous = this.peers.get(source);
+      if (previous && payload.sentAt < previous.sentAt) return;
       this.peers.set(source, {
         deviceId: source,
+        sentAt: payload.sentAt,
         lastSeenAt: Date.now(),
         channels: payload.channels,
       });
@@ -97,6 +130,9 @@ export class ImSchedulerManager {
     });
     this.advertisementTimer = setInterval(() => {
       this.advertiseAll();
+      for (const peer of listOnlineDesktopDevices()) {
+        if (!this.confirmedPeers.has(peer.deviceId)) this.probe(peer.deviceId);
+      }
       void this.reconcile();
     }, ADVERTISEMENT_INTERVAL_MS);
     this.beginDiscoveryGrace();
@@ -109,8 +145,11 @@ export class ImSchedulerManager {
     this.started = false;
     if (this.advertisementTimer) clearInterval(this.advertisementTimer);
     if (this.startTimer) clearTimeout(this.startTimer);
+    if (this.activationRetryTimer) clearTimeout(this.activationRetryTimer);
     this.advertisementTimer = null;
     this.startTimer = null;
+    this.activationRetryTimer = null;
+    this.activationCooldownUntil = 0;
     this.offPresence?.();
     this.offPush?.();
     this.offOwnership?.();
@@ -122,6 +161,9 @@ export class ImSchedulerManager {
     this.deviceLinkReady = false;
     this.discord.setSchedulerHooks(null);
     this.peers.clear();
+    this.confirmedPeers.clear();
+    this.pendingProbePeers.clear();
+    this.discoveryNonce = '';
     this.desired = null;
     this.desiredIdentity = null;
     this.lastActivationAttemptAt = 0;
@@ -173,6 +215,7 @@ export class ImSchedulerManager {
     const self = getSelfDeviceId();
     const resolvedIdentity = identity ?? this.discord.getSchedulerIdentity();
     if (!self || !resolvedIdentity) return false;
+    if (this.isActivationCoolingDown(resolvedIdentity)) return false;
     const now = Date.now();
     this.dropStalePeers(now);
     const snapshot = devices ?? this.buildElectionSnapshot(self, resolvedIdentity, now);
@@ -199,6 +242,7 @@ export class ImSchedulerManager {
       channels: [{ channel: 'discord' as const, identity }],
     }];
     for (const peer of listOnlineDesktopDevices()) {
+      if (!this.confirmedPeers.has(peer.deviceId)) return null;
       const advertisement = this.peers.get(peer.deviceId);
       if (!advertisement || now - advertisement.lastSeenAt > PEER_STALE_MS) return null;
       devices.push({ ...peer, channels: advertisement.channels });
@@ -215,11 +259,17 @@ export class ImSchedulerManager {
     this.lastActivationAttemptAt = Date.now();
     try {
       await this.discord.init();
+      if (!this.discord.isSchedulerTransportActive()) {
+        this.markActivationFailure(identity);
+        return;
+      }
+      this.clearActivationFailure();
       if (!this.isLocalIngress(identity) && this.discord.isSchedulerTransportActive()) {
         await this.ensureStandby(identity);
       }
     } catch (error) {
       log.warn('discord scheduler activation failed', error);
+      this.markActivationFailure(identity);
     }
   }
 
@@ -241,6 +291,9 @@ export class ImSchedulerManager {
     // had a full round trip to advertise and confirm the binding. Reset the
     // grace window before reconciling so two Desktops configured at the same
     // time cannot both treat the previous empty advertisement as final.
+    this.peers.clear();
+    this.confirmedPeers.clear();
+    this.clearActivationFailure();
     this.beginDiscoveryGrace();
     this.advertiseAll();
     void this.reconcile();
@@ -250,17 +303,38 @@ export class ImSchedulerManager {
     for (const peer of listOnlineDesktopDevices()) this.advertise(peer.deviceId);
   }
 
-  private advertise(deviceId: string): void {
-    const identity = this.discord.getSchedulerIdentity();
-    const channels = identity && isSchedulerChannelIdentity({ channel: 'discord', identity })
-      ? [{ channel: 'discord' as const, identity }]
-      : [];
+  private advertise(deviceId: string, inReplyTo?: string): void {
     const frame: SchedulerAdvertisementFrame = {
       kind: 'advertisement',
       sentAt: Date.now(),
-      channels,
+      channels: this.advertisedChannels(),
+      ...(inReplyTo ? { inReplyTo } : {}),
     };
     sendDeviceLinkPush(deviceId, IM_SCHEDULER_PUSH_CHANNEL, frame);
+  }
+
+  private probeAll(): void {
+    for (const peer of listOnlineDesktopDevices()) this.probe(peer.deviceId);
+  }
+
+  private probe(deviceId: string): void {
+    if (!this.discoveryNonce) return;
+    this.pendingProbePeers.add(deviceId);
+    sendDeviceLinkPush(deviceId, IM_SCHEDULER_PUSH_CHANNEL, {
+      kind: 'probe',
+      sentAt: Date.now(),
+      nonce: this.discoveryNonce,
+      channels: this.advertisedChannels(),
+    });
+  }
+
+  private advertisedChannels(): SchedulerAdvertisementFrame['channels'] {
+    const identity = this.discord.getSchedulerIdentity();
+    return identity
+      && !this.isActivationCoolingDown(identity)
+      && isSchedulerChannelIdentity({ channel: 'discord', identity })
+      ? [{ channel: 'discord' as const, identity }]
+      : [];
   }
 
   private dropStalePeers(now: number): void {
@@ -269,12 +343,64 @@ export class ImSchedulerManager {
     }
   }
 
+  private isActivationCoolingDown(identity: string): boolean {
+    if (identity !== this.discord.getSchedulerIdentity() || !this.activationCooldownUntil) return false;
+    if (Date.now() < this.activationCooldownUntil) return true;
+    if (this.hasRemoteCandidate(identity)) return true;
+    this.clearActivationFailure();
+    return false;
+  }
+
+  private markActivationFailure(identity: string): void {
+    if (!this.started || identity !== this.discord.getSchedulerIdentity()) return;
+    this.activationCooldownUntil = Date.now() + ACTIVATION_RETRY_MS;
+    this.advertiseAll();
+    if (this.activationRetryTimer) clearTimeout(this.activationRetryTimer);
+    this.activationRetryTimer = setTimeout(() => {
+      this.activationRetryTimer = null;
+      if (this.hasRemoteCandidate(identity)) {
+        this.advertiseAll();
+        return;
+      }
+      this.activationCooldownUntil = 0;
+      this.advertiseAll();
+      void this.reconcile();
+    }, ACTIVATION_RETRY_MS);
+  }
+
+  private hasRemoteCandidate(identity: string): boolean {
+    const now = Date.now();
+    this.dropStalePeers(now);
+    return listOnlineDesktopDevices().some((peer) => {
+      if (!this.confirmedPeers.has(peer.deviceId)) return false;
+      const advertisement = this.peers.get(peer.deviceId);
+      return Boolean(
+        advertisement
+        && now - advertisement.lastSeenAt <= PEER_STALE_MS
+        && advertisement.channels.some(
+          (configured) => configured.channel === 'discord' && configured.identity === identity,
+        ),
+      );
+    });
+  }
+
+  private clearActivationFailure(): void {
+    this.activationCooldownUntil = 0;
+    if (this.activationRetryTimer) clearTimeout(this.activationRetryTimer);
+    this.activationRetryTimer = null;
+  }
+
   private beginDiscoveryGrace(): void {
+    this.discoveryNonce = randomUUID().replaceAll('-', '');
+    this.confirmedPeers.clear();
+    this.pendingProbePeers.clear();
+    this.peers.clear();
     this.discoveryDeadline = Date.now() + DISCOVERY_GRACE_MS;
     if (this.startTimer) clearTimeout(this.startTimer);
     this.startTimer = setTimeout(() => {
       this.startTimer = null;
       void this.reconcile();
     }, DISCOVERY_GRACE_MS);
+    this.probeAll();
   }
 }
