@@ -18,7 +18,7 @@ export interface WorkdirResolveResult {
   ok: boolean;
   path?: string;
   /**
-   * Worktree 上新建的分支名（如 `xdt/sched-abc12345`）。
+   * Worktree 上新建的分支名（如 `cindy/sched-abc12345`）。
    * 仅 useWorktree=true 时填；非 worktree 模式下保持 undefined。
    * Runner 应优先使用此字段，避免再用 `git rev-parse --abbrev-ref HEAD` 兜底。
    */

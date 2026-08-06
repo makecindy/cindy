@@ -8,6 +8,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import type { Message } from '@/lib/ccAgent.types';
+import {
+  __testing as dataOwnerTesting,
+  setDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -29,9 +33,15 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 
 const DEVICE_ID = 'dev-A';
 const DEVICE_B_ID = 'dev-B';
+const TEST_OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
 let n = 0;
 const sid = () => `reconcile-${n++}`;
-type RemotePush = { deviceId: string; channel: string; payload: unknown };
+type RemotePush = {
+  deviceId: string;
+  channel: string;
+  payload: unknown;
+  ownerStamp?: typeof TEST_OWNER_STAMP;
+};
 let remotePush: ((push: RemotePush) => void) | undefined;
 
 function dbMessage(sessionId: string, id: string, content: string, ts: string, role: Message['role'] = 'assistant'): Message {
@@ -102,7 +112,7 @@ function stubApi(): void {
       deviceLink: {
         invoke,
         onRemotePush: (cb: (push: RemotePush) => void) => {
-          remotePush = cb;
+          remotePush = (push) => cb({ ...push, ownerStamp: push.ownerStamp ?? TEST_OWNER_STAMP });
           return vi.fn();
         },
       },
@@ -138,6 +148,8 @@ async function openRemoteWithHistory(s: string, initial: Message[]): Promise<voi
 }
 
 beforeEach(() => {
+  dataOwnerTesting.reset();
+  setDataOwnerGeneration(TEST_OWNER_STAMP.dataOwnerId, TEST_OWNER_STAMP.ownerGeneration);
   makerChatStore.__teardownGlobalListeners();
   stubApi();
   remoteList = [];
@@ -153,6 +165,7 @@ afterEach(() => {
   makerChatStore.__teardownGlobalListeners();
   remoteProjectsStore.clear();
   vi.unstubAllGlobals();
+  dataOwnerTesting.reset();
 });
 
 describe('makerChatStore.reconcileRemoteMessages', () => {

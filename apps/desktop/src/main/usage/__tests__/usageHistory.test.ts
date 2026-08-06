@@ -210,9 +210,15 @@ beforeEach(async () => {
   );
   currentDbClient.userId = 'user-a';
   __resetUsageHistoryCacheForTesting();
-  // 账本币种是跨用例的模块级状态,逐例重置回未知,让默认路径的用例始终从
-  // 构建默认币种起算,不受前一例显式设定的账号币种影响。
+  // 账本币种是跨用例的模块级状态,逐例重置,不受前一例显式设定的账号币种影响。
+  // 重置后必须再显式落一次账号币种:生产里由 modelPricing(报价目录同步/磁盘快照
+  // 恢复)写入,而本文件把它整体 mock 掉了;不落这一笔,回退链会落到与构建区域
+  // 无关的 USD(见 usage/ledgerCurrency),CN 构建上用 actual() 构造的 CNY 行会被
+  // 当成异币种整批归零。落成构建默认币种,使各用例在 cn / global 构建下分别验证
+  // CNY / USD 账本口径,断言两种构建下同形。需要异币种账号的用例(如 USD 结算
+  // 账号)在用例内自行覆写。
   __resetActiveLedgerCurrencyForTesting();
+  setActiveLedgerCurrency(DEFAULT_USAGE_CURRENCY);
   vi.mocked(getAllSpendDays).mockResolvedValue([]);
   vi.mocked(getModelUsageSince).mockResolvedValue([]);
   vi.mocked(getGatewayModelPricing).mockResolvedValue(null);
@@ -392,7 +398,7 @@ describe('readUsageHistoryWith', () => {
     expect(result.totals.last30DaysEstimatedValue.amount).toBeCloseTo(regionalUsdAmount(5));
   });
 
-  it('keeps current-region subscription estimates when history uses another currency', async () => {
+  it('keeps active-ledger subscription estimates when history uses another currency', async () => {
     const historicalCurrency = DEFAULT_USAGE_CURRENCY === 'CNY' ? 'USD' : 'CNY';
     const estimateAmount = regionalUsdAmount(2);
     const result = await readUsageHistoryWith(

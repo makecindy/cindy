@@ -306,6 +306,37 @@ export async function removeRefs(
 }
 
 /**
+ * Remove one session-attachment ref only when no live message in that session
+ * still contains the blob hash.  The predicate is part of the DELETE so a
+ * concurrent message commit cannot turn a read-then-delete check into data
+ * loss; at worst a later commit recreates the coarse session ref.
+ */
+export async function removeSessionAttachmentRefIfUnreferencedByLiveMessage(
+  params: { sessionId: string; hash: string },
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  if (!/^[0-9a-f]{64}$/.test(params.hash)) return 0;
+  const result = await db
+    .delete(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.refKind, 'session-attachment'),
+        eq(mediaRefs.refId, params.sessionId),
+        eq(mediaRefs.hash, params.hash),
+        sql`NOT EXISTS (
+          SELECT 1
+            FROM messages
+           WHERE messages.session_id = ${params.sessionId}
+             AND messages.rewind_at IS NULL
+             AND messages.content LIKE ${`%${params.hash}%`}
+        )`,
+      ),
+    )
+    .run();
+  return result.changes;
+}
+
+/**
  * 意识面板供图归属校验:该指纹「出生自本意识」「挂在本意识画廊」「用户
  * 显式引渡给本意识(ghost-grant)」「Host 代办交接给本意识
  * (ghost-tool-grant)」或「本意识寄存的(ghost-deposit)」才放行。

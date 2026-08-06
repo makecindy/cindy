@@ -102,21 +102,57 @@ const store = createOverrideSettingsFile<AnalyticsSettings>({
 type RecordProbe = 'none' | 'valid' | 'invalid';
 let recordProbe: RecordProbe | null = null;
 
-function probeRecordOnce(): RecordProbe {
-  if (recordProbe !== null) return recordProbe;
-  let probed: RecordProbe;
+/** 本 store 会落盘的 boolean 字段。盘上若带这些键却不是 boolean,一定不是本 writer 写的。 */
+const BOOLEAN_FIELDS = [
+  'privacyConsentAccepted',
+  'analyticsEnabled',
+  'legacyConsentMigrationClosed',
+] as const;
+
+/**
+ * 纯分类：给定盘上内容（`null` = 文件不存在）判 none / valid / invalid。抽出来是为了不碰 fs
+ * 也能单测。
+ *
+ * 「能解析成 object」还不够（2026-08-04 review copilot）：`createOverrideSettingsFile` 的 writer
+ * 在 override 清空时**删文件**、从不落 `{}`，写入时 `normalize` 保证已知字段都是 boolean。
+ * 所以盘上出现空对象、或已知字段存在却非 boolean，都不可能来自本 writer —— 是外部手改或半截
+ * 写入。当成 valid 会让 `isAnalyticsConsentRecordReadable()` 误判「可读但未同意」，闸走 denied
+ * 清空待补传标记；判 invalid 让闸走 `unknown`（不传也不清）。
+ *
+ * 迁移不受影响：`migrateExistingLoginAsConsented` 只在 `=== 'none'` 时迁移，而 `{}` 无论算
+ * valid 还是 invalid 都 `!== 'none'`，结论一致（都不迁移）。
+ */
+function classifyAnalyticsContent(fileContent: string | null): RecordProbe {
+  if (fileContent === null) return 'none';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fileContent);
+  } catch {
+    return 'invalid';
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invalid';
+  const obj = parsed as Record<string, unknown>;
+  if (Object.keys(obj).length === 0) return 'invalid';
+  for (const field of BOOLEAN_FIELDS) {
+    if (field in obj && typeof obj[field] !== 'boolean') return 'invalid';
+  }
+  return 'valid';
+}
+
+/** 现读盘一次并分类（文件不存在 ⇒ none；读盘本身失败 ⇒ invalid，绝不当「没有记录」）。 */
+function probeSettingsFileNow(): RecordProbe {
   try {
     const file = settingsFilePath();
-    if (!fs.existsSync(file)) {
-      probed = 'none';
-    } else {
-      const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
-      probed = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? 'valid' : 'invalid';
-    }
+    if (!fs.existsSync(file)) return 'none';
+    return classifyAnalyticsContent(fs.readFileSync(file, 'utf-8'));
   } catch {
-    // 读不出来 / 解析失败都算「存在但非法」,绝不当成「没有记录」。
-    probed = 'invalid';
+    return 'invalid';
   }
+}
+
+function probeRecordOnce(): RecordProbe {
+  if (recordProbe !== null) return recordProbe;
+  const probed = probeSettingsFileNow();
   recordProbe = probed;
   if (probed !== 'none') {
     log.info('analytics settings record probed', { probe: probed });
@@ -124,9 +160,62 @@ function probeRecordOnce(): RecordProbe {
   return probed;
 }
 
+/**
+ * 一次成功写入之后刷新探针结论（2026-08-04 review P2）。
+ *
+ * 若首次分类是 `invalid`，`probeRecordOnce()` 会一直返回 `invalid`，于是本会话里
+ * `isAnalyticsConsentRecordReadable()` 一直判「不可读」—— 用户即便重新同意、日志上报的授权闸
+ * 也仍然把它当读取故障，手动上报走 consent-required、崩溃补传卡到重启。写入成功后盘上内容
+ * 就是本 writer 刚写的(合法),或 override 清空后被删(= none),据此把陈旧的 `invalid` 结论作废。
+ */
+function refreshProbeAfterWrite(): void {
+  recordProbe = store.readState().isCustomized ? 'valid' : 'none';
+}
+
+/**
+ * 盘上的同意记录**现在是否可读**。
+ *
+ * 「文件不存在」算可读:那是「从未同意」这个合法状态,不是读取故障。只有「文件在、但内容
+ * 解析不出来」才算不可读。
+ *
+ * 为什么需要它(2026-08-04 review P2):`createOverrideSettingsFile` 读到坏 JSON 会**吞掉
+ * 异常并返回默认值**,于是 `privacyConsentAccepted` 变成 `false`——与「用户明确没同意」
+ * 无法区分。日志上报的授权闸据此会判成「明确拒绝」并**清空待补传标记**,一次设置文件
+ * 读取故障就永久丢掉一个崩溃现场。有了这个探针,闸才能把它判成 `unknown`(不传、也不清)。
+ *
+ * 两道判据取交集:一是进程启动期那次 `probeRecordOnce()` 的结论(store 读到坏文件时会把它
+ * **删掉**,现读就再也看不到了,而那次探针的结论是删除之前抓到的),二是**现读**盘上的文件
+ * (捕捉此刻仍在盘上的损坏)。任一判为损坏即返回 false。
+ *
+ * ⚠️ 先跑一次 `probeRecordOnce()`(2026-08-04 review copilot):本函数原先只读 `recordProbe`
+ * 的现值,若从没有别的入口触发过探针,那次「删除之前」的启动快照就丢了,损坏文件被删后现读
+ * 看到「文件不存在 ⇒ 可读」,闸误判「可读但未同意」清空标记。probeRecordOnce 幂等,首次调用
+ * 抓快照,之后是零成本读缓存。
+ */
+export function isAnalyticsConsentRecordReadable(): boolean {
+  if (probeRecordOnce() === 'invalid') return false;
+  return probeSettingsFileNow() !== 'invalid';
+}
+
 export function readAnalyticsSettings(): AnalyticsSettings {
   probeRecordOnce();
   return store.read();
+}
+
+/**
+ * 现读盘一次(mtime 守卫,文件没变时零开销)。
+ *
+ * 消费方是日志上报的授权闸:开发版与正式版共享同一份 userData,用户可能在另一个实例里
+ * 刚刚撤回同意,而崩溃 / 启动这类自动路径在判定前必须看到最新值,不能用进程内的旧缓存
+ * 继续上传(需求 §4.3)。
+ *
+ * 刻意做成**显式入口**而不是在 readAnalyticsSettings 里默认现读:既有的
+ * `analytics:settings-get` 是 renderer 挂载即调的高频路径,给它加一次 stat 没有必要,
+ * 而且会改变现有缓存语义。
+ */
+export function refreshAnalyticsSettingsFromDisk(): void {
+  probeRecordOnce();
+  store.invalidateIfChanged();
 }
 
 export function readAnalyticsSettingsState(): OverrideSettingsState<AnalyticsSettings> {
@@ -200,6 +289,7 @@ export function acceptPrivacyConsent(): AnalyticsSettings {
   if (current.privacyConsentAccepted) return current;
   // preserveDefaults 无关:true ≠ 默认值 false,override 会被保留。
   store.writePatch({ privacyConsentAccepted: true });
+  refreshProbeAfterWrite();
   log.info('privacy consent accepted');
   return store.read();
 }
@@ -210,6 +300,7 @@ export function setAnalyticsEnabled(analyticsEnabled: boolean): AnalyticsSetting
   // 会被当成「未自定义」而删除 override。这里要留痕,否则无法区分「没碰过」和
   // 「关掉后又打开」——后者在合规问询时是需要能自证的。
   store.writePatch({ analyticsEnabled }, { preserveDefaults: true });
+  refreshProbeAfterWrite();
   log.info('analytics setting written', { analyticsEnabled });
   return store.read();
 }
@@ -235,6 +326,7 @@ export function migrateExistingLoginAsConsented(isSignedIn: boolean): boolean {
   // 再判一次,免得将来有人改动探针/override 语义时静默失守)。
   if (state.value.legacyConsentMigrationClosed) return false;
   store.writePatch({ privacyConsentAccepted: true });
+  refreshProbeAfterWrite();
   log.info('existing signed-in user migrated as consented');
   return true;
 }
@@ -253,6 +345,7 @@ export function closeLegacyConsentMigration(): boolean {
   if (current.legacyConsentMigrationClosed) return false;
   // true ≠ 默认值 false,override 会被保留(无需 preserveDefaults)。
   store.writePatch({ legacyConsentMigrationClosed: true });
+  refreshProbeAfterWrite();
   log.info('legacy consent migration window closed for this machine');
   return true;
 }
@@ -273,6 +366,9 @@ export function isAnalyticsEnabledCustomized(): boolean {
 export function clearAnalyticsEnabledOverride(): AnalyticsSettings {
   probeRecordOnce();
   store.writePatch({ analyticsEnabled: DEFAULTS.analyticsEnabled });
+  // 这条可能把最后一个 override 删掉(文件随之删除)⇒ 结论应为 none 而非 valid;
+  // refreshProbeAfterWrite 按 isCustomized 区分,不会误标 valid。
+  refreshProbeAfterWrite();
   log.info('analytics enabled override cleared');
   return store.read();
 }
@@ -289,6 +385,7 @@ export const __testing = {
   DEFAULTS,
   isReportingBuild,
   DEV_REPORTING_ENV,
+  classifyAnalyticsContent,
   resetProbe(): void {
     recordProbe = null;
   },

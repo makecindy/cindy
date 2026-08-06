@@ -48,6 +48,7 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -863,7 +864,8 @@ function ExpandedView({
           off();
           if (timer) clearTimeout(timer);
         };
-        const off = window.electronAPI.maker.schedule.onEvent((raw) => {
+        const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
+          if (!isDataOwnerPushCurrent(ownerStamp)) return;
           const event = raw as SchedulerEvent;
           if (done) return;
           // 全局事件不含 scheduleId，提前过滤。
@@ -2941,17 +2943,12 @@ function ExpandedView({
                   partial
                 />
               )}
-              {remoteDeviceDirectoryStatus === 'loading' && (
-                <RemoteSidebarLoadNotice kind="devices" status="loading" partial />
-              )}
-              {remoteSessionBootstrapLoadingDevices.length > 0 && (
-                <RemoteSidebarLoadNotice
-                  kind="tasks"
-                  status="loading"
-                  deviceLabel={loadingRemoteDeviceLabel}
-                  partial
-                />
-              )}
+              {/*
+               * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
+               * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
+               * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。错误提示仍保留
+               * 在列表前，便于用户知道已有内容不是本轮权威结果。
+               */}
               <PinnedSection
                 entries={visiblePinnedEntries}
                 allKnownProjects={visibleProjectUniverse}
@@ -3767,7 +3764,7 @@ function RailPanels({
 
   const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-extrabold text-foreground">
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-foreground">
         {title}
       </span>
       <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">

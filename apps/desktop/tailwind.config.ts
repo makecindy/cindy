@@ -58,6 +58,15 @@ const config: Config = {
         mono: ['var(--app-font-code, var(--app-font-code-default))'],
       },
       fontSize: {
+        xs: ['var(--text-xs)', { lineHeight: 'var(--text-xs-line-height)' }],
+        sm: ['var(--text-sm)', { lineHeight: 'var(--text-sm-line-height)' }],
+        base: ['var(--text-base)', { lineHeight: 'var(--text-base-line-height)' }],
+        lg: ['var(--text-lg)', { lineHeight: 'var(--text-lg-line-height)' }],
+        xl: ['var(--text-xl)', { lineHeight: 'var(--text-xl-line-height)' }],
+        '2xl': ['var(--text-2xl)', { lineHeight: 'var(--text-2xl-line-height)' }],
+        '3xl': ['var(--text-3xl)', { lineHeight: 'var(--text-3xl-line-height)' }],
+        '4xl': ['var(--text-4xl)', { lineHeight: 'var(--text-4xl-line-height)' }],
+        '5xl': ['var(--text-5xl)', { lineHeight: 'var(--text-5xl-line-height)' }],
         9: 'var(--text-9)',
         10: 'var(--text-10)',
         11: 'var(--text-11)',
@@ -123,8 +132,7 @@ const config: Config = {
       animation: {
         // 功能性 loading spinner 使用 DESIGN.md §14.4 明确登记的语义循环 token；
         // 不复用 Tailwind animate-spin 的硬编码 1s,也不耦合 enter/exit 交互档位。
-        spinner:
-          'spin var(--motion-spinner-cycle, 1000ms) linear infinite',
+        spinner: 'spin var(--motion-spinner-cycle, 1000ms) linear infinite',
         // float-out 需要 forwards:Radix 等 animationend 才卸载,fill 不驻留
         // 会在动画结束到卸载之间闪回原状。
         'float-in':

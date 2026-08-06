@@ -4,18 +4,19 @@ import { createSubagentLiveCardTracker } from '../subagent-live-cards.js';
 import { readCodexSubagentSpawnRegistration } from '../translator.js';
 
 /** V2(codex 0.145):spawn 只发瞬时 subAgentActivity,带 agentThreadId。 */
-function v2SpawnItem(id: string, agentThreadId: string, agentPath?: string) {
+function v2SpawnItem(id: string, agentThreadId: string, agentPath?: string, model?: string) {
   return {
     type: 'subAgentActivity',
     id,
     kind: 'started',
     agentThreadId,
     ...(agentPath ? { agentPath } : {}),
+    ...(model ? { model } : {}),
   };
 }
 
 /** V1(老模型 / 自定义接入模型):spawn 走 collabAgentToolCall,目标在 receiverThreadIds。 */
-function v1SpawnItem(id: string, receiverThreadIds: string[]) {
+function v1SpawnItem(id: string, receiverThreadIds: string[], model?: string) {
   return {
     type: 'collabAgentToolCall',
     id,
@@ -23,6 +24,7 @@ function v1SpawnItem(id: string, receiverThreadIds: string[]) {
     senderThreadId: 'root-1',
     receiverThreadIds,
     prompt: 'survey the repo rules',
+    ...(model ? { model } : {}),
   };
 }
 
@@ -32,17 +34,19 @@ function toolItem(id: string, type = 'commandExecution') {
 
 describe('readCodexSubagentSpawnRegistration', () => {
   it('maps V2 subAgentActivity to its child thread', () => {
-    expect(readCodexSubagentSpawnRegistration(v2SpawnItem('i-1', 't-child', '/root/scout'))).toEqual({
+    expect(readCodexSubagentSpawnRegistration(v2SpawnItem('i-1', 't-child', '/root/scout', 'gpt-5.6-terra'))).toEqual({
       taskId: 'i-1',
       childThreadIds: ['t-child'],
       agentPath: '/root/scout',
+      model: 'gpt-5.6-terra',
     });
   });
 
   it('maps V1 collab spawn to every receiver thread', () => {
-    expect(readCodexSubagentSpawnRegistration(v1SpawnItem('i-2', ['t-a', 't-b']))).toEqual({
+    expect(readCodexSubagentSpawnRegistration(v1SpawnItem('i-2', ['t-a', 't-b'], 'codex/gpt-5.5'))).toEqual({
       taskId: 'i-2',
       childThreadIds: ['t-a', 't-b'],
+      model: 'codex/gpt-5.5',
     });
   });
 
@@ -92,6 +96,84 @@ describe('createSubagentLiveCardTracker', () => {
     });
     expect(afterUsage?.totalTokens).toBe(12_345);
     expect(afterUsage?.toolUses).toBe(1);
+  });
+
+  it('uses Cindy configured model only until the child thread reports its actual model', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({
+      taskId: 'card-1',
+      model: 'gpt-5.6-terra',
+    });
+
+    expect(tracker.noteDescendantThread('t-child', 'root-thread', 'codex/gpt-5.5')).toMatchObject({
+      model: 'codex/gpt-5.5',
+    });
+  });
+
+  it('emits an observed model that arrived before a quiet spawn item', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    // thread/started 先到且之后没有 item/token/turn 通知:spawn 登记本身必须把
+    // 已缓存的实际模型发出来,不能等一条可能永远不来的 descendant 通知。
+    expect(
+      tracker.noteDescendantThread('t-child', 'root-thread', 'codex/gpt-5.5'),
+    ).toBeNull();
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({
+      taskId: 'card-1',
+      model: 'codex/gpt-5.5',
+    });
+  });
+
+  it('retains an observed nested model when lineage arrives before attachment', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    // 父线程从 spawn 参数拿到模型;孙线程的观测值只能靠 pendingThreadModels 保住——
+    // 徽标要求全员观测一致,retention 一丢徽标就灭。
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent', undefined, 'codex/gpt-5.5'));
+    expect(
+      tracker.noteDescendantThread('t-grandchild', 't-parent', 'codex/gpt-5.5'),
+    ).toMatchObject({ model: 'codex/gpt-5.5' });
+  });
+
+  it('hides the aggregate model badge until every thread has reported a consistent model', () => {
+    // 多 receiver 卡:只有部分线程报了模型时,不许把局部观测投影成全卡事实;
+    // 也不回退到配置兜底(已有相反观测,兜底反而更可能是错的)(codex review)。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    expect(tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']))).toMatchObject({
+      model: 'gpt-5.6-terra',
+    });
+
+    const partial = tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5');
+    expect(partial).not.toBeNull();
+    expect(partial?.model).toBeNull();
+
+    // 全员报齐且一致 → 亮实际模型。
+    expect(tracker.noteDescendantThread('t-b', 'root-1', 'codex/gpt-5.5')).toMatchObject({
+      model: 'codex/gpt-5.5',
+    });
+  });
+
+  it('hides the aggregate model badge when receiver threads report different models', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']));
+    tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5');
+    const conflicting = tracker.noteDescendantThread('t-b', 'root-1', 'gpt-5.6-terra');
+    expect(conflicting).not.toBeNull();
+    expect(conflicting?.model).toBeNull();
+  });
+
+  it('clears an observed model when a quiet descendant joins the card', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent'));
+    expect(
+      tracker.noteDescendantThread('t-parent', 'root-thread', 'codex/gpt-5.5'),
+    ).toMatchObject({ model: 'codex/gpt-5.5' });
+
+    // 孙线程已加入但尚未报告模型,且之后可能没有任何通知。入卡这一刻就必须
+    // 发 model:null 清掉旧徽标,不能继续把父线程的模型投影到整张卡。
+    expect(tracker.noteDescendantThread('t-grandchild', 't-parent')).toMatchObject({
+      taskId: 'card-parent',
+      status: 'running',
+      model: null,
+    });
   });
 
   it('counts a tool item once even when both phases arrive', () => {
@@ -386,6 +468,28 @@ describe('createSubagentLiveCardTracker', () => {
     expect(
       tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } })?.status,
     ).toBe('failed');
+  });
+
+  it('keeps receiver ids from a failed nested spawn terminal', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+
+    // The failed nested spawn can still carry receiver ids. Buffer any real
+    // work they emitted, but never attach them as an unbounded running child.
+    tracker.handleDescendantNotification('t-grand', 'item/started', toolItem('g-1'));
+    expect(tracker.noteDescendantThread('t-grand', 't-child', undefined, true)).toMatchObject({
+      status: 'running',
+      toolUses: 1,
+    });
+
+    // Late lifecycle events cannot reopen a receiver whose spawn itself failed.
+    expect(tracker.handleDescendantNotification('t-grand', 'turn/started', {})).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('failed');
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'completed' } }),
+    ).toBeNull();
   });
 
   it('ignores lineage for threads unrelated to any subagent card', () => {

@@ -16,6 +16,7 @@
 
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import type { AgentEvent } from '@cindy/maker-core';
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
@@ -316,6 +317,8 @@ interface TurnAccumulator {
   text: string;
   sawToolUse: boolean;
   tokensThisTurn: number;
+  /** Usage already sealed by claimed SDK boundaries inside this product turn. */
+  continuationTokens: number;
   /** 本轮是否已 finalize(去重 done / 终止 error 双触发)。 */
   finalized: boolean;
   /** 正常 turn 换代只递增 generation，不替换整个 Goal 生命周期 owner。 */
@@ -337,6 +340,7 @@ function freshTurn(
     text: '',
     sawToolUse: false,
     tokensThisTurn: 0,
+    continuationTokens: 0,
     finalized: false,
     generation: 0,
     cancelled,
@@ -374,6 +378,29 @@ export class GoalController {
    *  只在 clearGoal / resumeGoal / dispose 取消。 */
   private readonly usageResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
+   * 用户在旧 vendor turn 尚未完全 idle 时点下 Resume 的一次性意图。
+   *
+   * 此时不能立刻挂 listener / 改 active，否则旧 turn 的迟到终态会被算进新一代 Goal；
+   * 也不能静默 return，否则用户必须猜何时 idle 后再点一次。由 turn idle observer 在
+   * 安全边界后重试，Stop / clear / setGoal / session teardown 会显式取消。
+   */
+  private readonly deferredManualResumes = new Set<string>();
+  private readonly deferredManualResumeTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  /**
+   * deferred Resume 从等待 idle 到 active 落库之间的生命周期上下文。
+   *
+   * waiting set 会在真正重试时先被 claim，避免重复 observer 再排一轮；这里继续保留
+   * boundary + usageResetAt，供并发 close/replacement 精确释放本次边界，并在提交前被
+   * 取消时恢复 usageLimited 的自动续跑 timer。
+   */
+  private readonly deferredManualResumeContexts = new Map<
+    string,
+    { boundary: TurnAccumulator; usageResetAt: number | null }
+  >();
+  /**
    * 连续以"上游没容量"收尾的轮数,按 sessionId。
    *
    * 存在理由:三道预算护栏(budgetTokens / maxTurns / noProgressLimit)**都只在用户
@@ -398,6 +425,7 @@ export class GoalController {
     const sessionId = input.sessionId;
     const objective = input.objective.trim();
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
+    this.cancelDeferredManualResume(sessionId);
     let entryBoundary = this.turns.get(sessionId);
     // 连续过载计数是 per-goal 状态：换目标(含替换既有目标的编辑路径)必须清零，
     // 否则上一个目标撞过载上限变 blocked 后，新目标会继承耗尽的计数，第一次容量
@@ -810,6 +838,7 @@ export class GoalController {
   async clearGoal(sessionId: string): Promise<void> {
     this.clarificationApplied.delete(sessionId);
     this.consecutiveOverloadTurns.delete(sessionId);
+    this.cancelDeferredManualResume(sessionId);
     this.cancelUsageResume(sessionId);
     // 只中断 GoalController 自己发起的 turn。目标仍挂着时，用户可能已经让一条普通
     // 消息进入队列；clear 必须保留它，并在旧 goal turn 终止后让 coordinator 正常
@@ -856,6 +885,7 @@ export class GoalController {
     // 落到旧 listener，idle 兜底会把 active goal 立即续起来。先同步 detach listener、
     // continuation timer 与 firing 状态，再用同一 turns owner 留下 cancelled 边界，
     // 阻止 pause 落盘期间的 resume-on-open / 迟到事件重建旧生命周期。
+    this.cancelDeferredManualResume(sessionId);
     this.cancelUsageResume(sessionId);
     const previousBoundary = this.turns.get(sessionId);
     this.stopSession(sessionId);
@@ -917,9 +947,13 @@ export class GoalController {
       if (this.turns.get(sessionId) !== existingBoundary) return;
       if (
         !state ||
-        (state.status !== 'paused' && state.status !== 'blocked' && state.status !== 'usageLimited') ||
-        this.isBusy(sessionId)
+        (state.status !== 'paused' && state.status !== 'blocked' && state.status !== 'usageLimited')
       ) {
+        this.cancelDeferredManualResume(sessionId);
+        return;
+      }
+      if (this.isBusy(sessionId)) {
+        this.deferManualResumeUntilIdle(sessionId, existingBoundary, state);
         return;
       }
       this.turns.delete(sessionId);
@@ -928,12 +962,16 @@ export class GoalController {
     const lookupBoundary = existingBoundary ?? freshTurn();
     const ownsLookupBoundary = existingBoundary === undefined;
     if (ownsLookupBoundary) this.turns.set(sessionId, lookupBoundary);
+    if (!opts?.auto) this.rebindDeferredManualResumeBoundary(sessionId, lookupBoundary);
     await this.awaitPendingLifecycle(lookupBoundary);
     if (this.turns.get(sessionId) !== lookupBoundary) return;
     if (state === undefined) {
       try {
         state = await this.deps.storage.get(sessionId);
       } catch (error) {
+        if (!opts?.auto) {
+          this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+        }
         if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
           this.turns.delete(sessionId);
         }
@@ -945,12 +983,17 @@ export class GoalController {
       !state ||
       (state.status !== 'paused' && state.status !== 'blocked' && state.status !== 'usageLimited')
     ) {
+      if (!opts?.auto) this.cancelDeferredManualResume(sessionId);
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
         this.turns.delete(sessionId);
       }
       return;
     }
-    this.cancelUsageResume(sessionId); // 早恢复 / 手动恢复 → 取消挂着的自动续 timer
+    if (!opts?.auto && this.isBusy(sessionId)) {
+      this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
+      return;
+    }
+    if (!opts?.auto) this.claimDeferredManualResume(sessionId, lookupBoundary);
     // 用户显式恢复 = 给一次干净的重来机会,连续过载计数清零(否则上次被过载掐停
     // 的目标一恢复就立刻又撞上限)。
     // **自动续跑(opts.auto)绝不清零**:到点自动续跑正是过载循环的一环,在这里清
@@ -962,12 +1005,22 @@ export class GoalController {
       try {
         ensured = await this.deps.ensureSession(sessionId);
       } catch (error) {
+        if (!opts?.auto) {
+          this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+        }
         if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
         throw error;
       }
       if (this.turns.get(sessionId) !== lookupBoundary) return;
       if (!ensured) {
-        this.turns.delete(sessionId);
+        if (!opts?.auto) {
+          this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+        }
+        if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
+        return;
+      }
+      if (!opts?.auto && this.isBusy(sessionId)) {
+        this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
         return;
       }
     }
@@ -984,6 +1037,9 @@ export class GoalController {
         }),
       );
     } catch (error) {
+      if (!opts?.auto) {
+        this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+      }
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
         this.turns.delete(sessionId);
       }
@@ -991,11 +1047,18 @@ export class GoalController {
     }
     if (this.turns.get(sessionId) !== lookupBoundary) return;
     if (!updated) {
+      if (!opts?.auto) {
+        this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+      }
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
         this.turns.delete(sessionId);
       }
       return;
     }
+    if (!opts?.auto) this.completeDeferredManualResume(sessionId);
+    // usageLimited 的 reset timer 必须活到 active 写真正提交；否则 deferred Resume 在
+    // close/replacement 或持久化失败前被取消时，会同时失去手动意图和唯一自动恢复机会。
+    this.cancelUsageResume(sessionId);
     // 并发 Resume 可能已经在同一个 lookup owner 上登记了另一笔 active 写；新 active
     // owner 必须继承整个 barrier，后续 Stop 才能等所有较早 Resume settle 后最后写 paused。
     const resumedBoundary = freshTurn(
@@ -1013,13 +1076,18 @@ export class GoalController {
 
   /**
    * idle 兜底(#9):会话转 idle 时由 main 的 turn-complete observer 调用。
-   * 仅当该会话有 controller 挂着的 active goal(unsubscribers.has)、未在 firing、
-   * 会话空闲时,走防抖续跑路径补一轮。**race-free**:scheduleContinuation 幂等
+   * 有待兑现的手动 Resume 时先在防抖边界后重试；否则仅当该会话有 controller 挂着的
+   * active goal(unsubscribers.has)、未在 firing、会话空闲时,走防抖续跑路径补一轮。
+   * **race-free**:scheduleContinuation 幂等
    * (清旧 timer)、stopSession 会清 timer、fireTurn 内再从 storage 重校 status——
    * 与 finalizeTurn 的 scheduleContinuation 任意交错都只会有一次有效续跑。
    * dormant(没挂 listener)的 goal 不归这里管,由 resume-on-open 处理。
    */
   async maybeContinueActiveGoal(sessionId: string): Promise<void> {
+    if (this.deferredManualResumes.has(sessionId)) {
+      this.scheduleDeferredManualResume(sessionId);
+      return;
+    }
     if (!this.unsubscribers.has(sessionId)) return;
     if (this.firing.has(sessionId)) return;
     const state = await this.deps.storage.get(sessionId);
@@ -1029,6 +1097,32 @@ export class GoalController {
     // scheduleContinuation 幂等(与 finalizeTurn 的调度互斥),且其 timer 回调 fireTurn 会
     // 在真正发轮前重新校验 isBusy + status —— 等到那时(150ms 后)turn 已 idle。
     this.scheduleContinuation(sessionId);
+  }
+
+  /** Session lifecycle superseded the pending Resume; cancel it without changing Goal state. */
+  cancelDeferredManualResume(
+    sessionId: string,
+    opts?: { restoreUsageResume?: boolean },
+  ): void {
+    this.clearDeferredManualResumeRetry(sessionId);
+    const context = this.deferredManualResumeContexts.get(sessionId);
+    this.deferredManualResumeContexts.delete(sessionId);
+    if (!context) return;
+    // 普通 Stop / clear / setGoal 仍要继承当前 barrier；只有 session teardown 或提交失败
+    // 需要把本次 deferred Resume 自己登记的 boundary 精确释放，让恢复后的 usage timer 可跑。
+    if (
+      opts?.restoreUsageResume &&
+      this.turns.get(sessionId) === context.boundary
+    ) {
+      this.turns.delete(sessionId);
+    }
+    if (
+      opts?.restoreUsageResume &&
+      context.usageResetAt != null &&
+      !this.usageResumeTimers.has(sessionId)
+    ) {
+      this.scheduleUsageResume(sessionId, context.usageResetAt);
+    }
   }
 
   /** GET_GOAL_STATUS:返回当前状态扁平 payload(无 goal 返回 null)。 */
@@ -1147,6 +1241,11 @@ export class GoalController {
     for (const sessionId of [...this.usageResumeTimers.keys()]) {
       this.cancelUsageResume(sessionId);
     }
+    for (const sessionId of [...this.deferredManualResumeTimers.keys()]) {
+      this.cancelDeferredManualResume(sessionId);
+    }
+    this.deferredManualResumes.clear();
+    this.deferredManualResumeContexts.clear();
     this.turns.clear();
     this.consecutiveOverloadTurns.clear();
   }
@@ -1186,6 +1285,7 @@ export class GoalController {
     turn.text = '';
     turn.sawToolUse = false;
     turn.tokensThisTurn = 0;
+    turn.continuationTokens = 0;
     turn.finalized = false;
     turn.generation += 1;
   }
@@ -1325,11 +1425,16 @@ export class GoalController {
         // 快照值也无妨(done 必在 status 之后到)。
         const d = event.data as { isRunning?: boolean; tokenUsage?: number } | null;
         if (d && d.isRunning === false && typeof d.tokenUsage === 'number') {
-          turn.tokensThisTurn = d.tokenUsage;
+          if (isTurnContinuationBoundaryEvent(event)) {
+            turn.continuationTokens += Math.max(0, d.tokenUsage);
+          } else {
+            turn.tokensThisTurn = turn.continuationTokens + Math.max(0, d.tokenUsage);
+          }
         }
         return;
       }
       case 'done': {
+        if (isTurnContinuationBoundaryEvent(event)) return;
         // AgentInputCoordinator releases the input boundary on the same terminal
         // event and may immediately start a queued user turn. Drop Goal ownership
         // synchronously here, before finalizeTurn awaits storage, so Clear cannot
@@ -1344,7 +1449,9 @@ export class GoalController {
         // promptTokens/completionTokens → 不命中,沿用上面 status 的 per-turn tokenUsage。
         const u = (event.data as { usage?: { promptTokens?: number; completionTokens?: number } } | null)?.usage;
         if (u && (typeof u.promptTokens === 'number' || typeof u.completionTokens === 'number')) {
-          turn.tokensThisTurn = Math.max(0, (u.promptTokens ?? 0) + (u.completionTokens ?? 0));
+          turn.tokensThisTurn =
+            turn.continuationTokens +
+            Math.max(0, (u.promptTokens ?? 0) + (u.completionTokens ?? 0));
         }
         void this.finalizeTurn(sessionId, event, false);
         return;
@@ -1569,6 +1676,78 @@ export class GoalController {
     // Node 环境;不 block 进程退出。
     (timer as { unref?: () => void }).unref?.();
     this.timers.set(sessionId, timer);
+  }
+
+  private deferManualResumeUntilIdle(
+    sessionId: string,
+    boundary: TurnAccumulator,
+    state: Pick<GoalState, 'status' | 'usageResetAt'>,
+  ): void {
+    if (this.turns.get(sessionId) !== boundary) return;
+    let deferredBoundary = boundary;
+    if (!boundary.cancelled) {
+      deferredBoundary = freshTurn(
+        true,
+        boundary.pendingPersistence,
+        boundary.pendingCompletion,
+      );
+      this.stopSession(sessionId);
+      this.turns.set(sessionId, deferredBoundary);
+    }
+    this.deferredManualResumes.add(sessionId);
+    this.deferredManualResumeContexts.set(sessionId, {
+      boundary: deferredBoundary,
+      usageResetAt: state.status === 'usageLimited' ? state.usageResetAt : null,
+    });
+    // busy 可能只来自一个尚未 dispatch 的旧 Goal fire；上面的 stopSession 已同步
+    // 取消它，不会再有 turn terminal 触发 idle observer。此时主动排一次即可。
+    if (!this.isBusy(sessionId)) this.scheduleDeferredManualResume(sessionId);
+  }
+
+  private rebindDeferredManualResumeBoundary(
+    sessionId: string,
+    boundary: TurnAccumulator,
+  ): void {
+    const context = this.deferredManualResumeContexts.get(sessionId);
+    if (!context) return;
+    this.deferredManualResumeContexts.set(sessionId, { ...context, boundary });
+  }
+
+  private claimDeferredManualResume(sessionId: string, boundary: TurnAccumulator): void {
+    if (!this.deferredManualResumeContexts.has(sessionId)) return;
+    this.clearDeferredManualResumeRetry(sessionId);
+    this.rebindDeferredManualResumeBoundary(sessionId, boundary);
+  }
+
+  private completeDeferredManualResume(sessionId: string): void {
+    this.clearDeferredManualResumeRetry(sessionId);
+    this.deferredManualResumeContexts.delete(sessionId);
+  }
+
+  private clearDeferredManualResumeRetry(sessionId: string): void {
+    this.deferredManualResumes.delete(sessionId);
+    const timer = this.deferredManualResumeTimers.get(sessionId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.deferredManualResumeTimers.delete(sessionId);
+  }
+
+  private scheduleDeferredManualResume(sessionId: string): void {
+    if (!this.deferredManualResumes.has(sessionId)) return;
+    const existing = this.deferredManualResumeTimers.get(sessionId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.deferredManualResumeTimers.delete(sessionId);
+      if (!this.deferredManualResumes.has(sessionId)) return;
+      void this.resumeGoal(sessionId).catch((error) => {
+        this.deps.logger.warn('[goal] deferred manual resume failed', {
+          sessionId,
+          error: String(error),
+        });
+      });
+    }, this.debounceMs);
+    (timer as { unref?: () => void }).unref?.();
+    this.deferredManualResumeTimers.set(sessionId, timer);
   }
 
   /**

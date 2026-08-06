@@ -103,6 +103,7 @@ const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
+const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
@@ -176,6 +177,34 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     '[::1]',
   ])).join(',');
   delete env.no_proxy;
+}
+
+/**
+ * 把 host 已校验的 rg 复制到本会话私有 bin。
+ *
+ * Pi 上游 grep 会先从 PI_CODING_AGENT_DIR/bin 解析工具并返回该绝对路径；find bridge
+ * 也直接 spawn 同一路径。不能只改 PATH：Windows executable lookup 会先看 cwd，仓库里的
+ * rg.exe 便可劫持自动放行的只读工具并继承 Pi 父进程凭证。
+ */
+async function stageManagedRipgrep(
+  configHome: string,
+  sourcePath: string | undefined,
+): Promise<string | undefined> {
+  if (!sourcePath) return undefined;
+  if (!path.isAbsolute(sourcePath)) {
+    throw new Error('pi: managed ripgrep path must be absolute');
+  }
+  const sourceStat = await fs.stat(sourcePath);
+  if (!sourceStat.isFile()) {
+    throw new Error('pi: managed ripgrep path must point to a file');
+  }
+
+  const binDir = path.join(configHome, 'bin');
+  const targetPath = path.join(binDir, process.platform === 'win32' ? 'rg.exe' : 'rg');
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.copyFile(sourcePath, targetPath);
+  if (process.platform !== 'win32') await fs.chmod(targetPath, 0o755);
+  return targetPath;
 }
 
 /** cindy Effort → pi thinking level(pi 无 ultra;cindy 无 off)。 */
@@ -406,7 +435,7 @@ export class PiAgent extends BaseAgent {
     agentHome: string,
     nativeProviders: PiNativeProviderSpec[] = [],
     retainedRuntimeModel?: ModelDescriptor,
-  ): Promise<void> {
+  ): Promise<Map<string, boolean>> {
     const endpoint = this.deps.runtimeConfig.endpoint;
     if (!endpoint) {
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
@@ -415,17 +444,20 @@ export class PiAgent extends BaseAgent {
     const runtimeModels = retainedRuntimeModel && !publicModels.some((m) => m.id === retainedRuntimeModel.id)
       ? [...publicModels, retainedRuntimeModel]
       : publicModels;
+    const gatewayImageInputByModel = new Map<string, boolean>();
     const models = runtimeModels.map((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
       // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
       const m = this.deps.resolvePiGatewayModelDescriptor?.(publicModel.id) ?? publicModel;
+      const supportsImageInput = m.supportsImageInput === true;
+      gatewayImageInputByModel.set(m.id, supportsImageInput);
       return {
         id: m.id,
         name: m.displayName,
         reasoning: m.efforts.length > 0,
-        input: ['text', 'image'],
+        input: supportsImageInput ? ['text', 'image'] : ['text'],
         contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
         maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
@@ -475,6 +507,7 @@ export class PiAgent extends BaseAgent {
     }
     await fs.mkdir(agentHome, { recursive: true });
     await fs.writeFile(path.join(agentHome, 'models.json'), JSON.stringify({ providers }, null, 2) + '\n');
+    return gatewayImageInputByModel;
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
@@ -687,7 +720,11 @@ export class PiAgent extends BaseAgent {
       configHomeCleaned = true;
       void fs.rm(configHome, { recursive: true, force: true }).catch(() => {});
     };
-    await this.writeModelsJson(configHome, nativeProviders, retainedRuntimeModel);
+    const gatewayImageInputByModel = await this.writeModelsJson(
+      configHome,
+      nativeProviders,
+      retainedRuntimeModel,
+    );
     const sessionDir = path.join(agentHome, 'sessions');
     await fs.mkdir(sessionDir, { recursive: true });
 
@@ -758,6 +795,10 @@ export class PiAgent extends BaseAgent {
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode = normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    // 与 Claude / Codex 一致，运行期 Orca 身份更新必须原地落在同一个对象上。
+    // Desktop Pi MCP bridge 在 startSession 时持有这个引用；start_team 成功后 host
+    // 调 setVendorOptions，后续 create_worker 等工具才能立即读到最新 Lead 身份。
+    const mutableVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
     type PermissionSnapshot = {
       mode: 'ask' | 'auto' | 'bypassPermissions';
       readOnlyRoots: string[];
@@ -904,7 +945,7 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
-          vendorOptions: opts.vendorOptions,
+          vendorOptions: mutableVendorOptions,
         });
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
@@ -1102,6 +1143,10 @@ export class PiAgent extends BaseAgent {
       if (firstError) throw firstError;
     };
     try {
+      const managedRipgrepPath = await stageManagedRipgrep(
+        configHome,
+        this.deps.runtimeConfig.managedExecutablePaths?.ripgrep,
+      );
       if (opts.sessionId && this.deps.registerPiProxySession) {
         const disposer = this.deps.registerPiProxySession(opts.sessionId, proxySessionToken);
         if (typeof disposer === 'function') disposeProxySession = disposer;
@@ -1123,6 +1168,8 @@ export class PiAgent extends BaseAgent {
         // 只从 bash/模型工具的 spawn 边界剥离;子代理自己的 spawn 不走 bridge 的 bash 钩子,
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
+        // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
+        ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
       ]));
       const spawnEnv: NodeJS.ProcessEnv = {
         ...process.env,
@@ -1154,6 +1201,12 @@ export class PiAgent extends BaseAgent {
           ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) }
           : {}),
       };
+      // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
+      // 所有 casing 再写入 host 校验并 stage 后的唯一绝对路径。
+      for (const key of Object.keys(spawnEnv)) {
+        if (key.toLowerCase() === PI_MANAGED_RG_PATH_ENV.toLowerCase()) delete spawnEnv[key];
+      }
+      if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
       mergeLoopbackNoProxy(spawnEnv);
       proc = new PiRpcProcess({
         binaryPath: this.deps.binaryPath,
@@ -1427,11 +1480,14 @@ export class PiAgent extends BaseAgent {
     };
 
     const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
-      if (images.length === 0 || mutablePiProviderId === PI_PROVIDER_ID) return;
-      const nativeModel = nativeProviderById
-        .get(mutablePiProviderId)
-        ?.models.find((candidate) => candidate.id === mutableModel);
-      if (nativeModel?.input?.includes('image')) return;
+      if (images.length === 0) return;
+      const supportsImageInput = mutablePiProviderId === PI_PROVIDER_ID
+        ? gatewayImageInputByModel.get(mutableModel) === true
+        : nativeProviderById
+          .get(mutablePiProviderId)
+          ?.models.find((candidate) => candidate.id === mutableModel)
+          ?.input?.includes('image') === true;
+      if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
     };
 
@@ -1749,6 +1805,11 @@ export class PiAgent extends BaseAgent {
           ...requestedPermissionSnapshot,
           readOnlyRoots: [...dirs],
         });
+      },
+
+      async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
+        Object.assign(mutableVendorOptions, patch);
+        deps.logger.debug('pi setVendorOptions', { patchKeys: Object.keys(patch) });
       },
 
       isTurnRunning(): boolean {

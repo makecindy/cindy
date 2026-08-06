@@ -74,7 +74,11 @@ export interface AgentTaskUpdateEventData {
   lastToolName?: string;
   taskType?: string;
   workflowName?: string;
-  model?: string;
+  /**
+   * 实际模型名；`null` 是子代理多 receiver 观测冲突/显式清除的合法值，
+   * 用于让下游清掉旧模型徽标，而不是回退到未经证明的旧值。
+   */
+  model?: string | null;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
   /**
@@ -123,6 +127,13 @@ export interface AgentEvent {
   turnOrigin?: SendOrigin;
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
+  /**
+   * Provider-owned claim attached synchronously to a `done` boundary when that
+   * boundary has an automatic continuation. Consumers pass it back to the
+   * session lifecycle API; unlike a live task-map sample it cannot race later
+   * task notifications or a fast result-only continuation turn.
+   */
+  turnContinuationId?: number;
   /**
    * Vendor-specific 元数据透传 (claude-code 的 SDK uuid / parentUuid / sdkSessionId /
    * model / stopReason / requestId / usage 等)。host 落库时塞进 messages.agent_meta 列,

@@ -115,8 +115,23 @@ function deriveRequirementGroups(manifest: GhostManifest): GhostSetupRequirement
 }
 
 /** 需求条目 → 展示项(label 取声明原文;kind 决定弹窗文案口径)。 */
-function requirementRef(req: GhostSetupRequirement): string {
+export function requirementRef(req: GhostSetupRequirement): string {
   return `${req.kind}:${req.key}`;
+}
+
+/**
+ * oauth_connect 动作 id 的唯一编解码对:actionFor 与 reauthSuggest 生产、
+ * executeGhostSetupAction 反解共用。改动作 id 格式只能改这两个函数,
+ * 任何一侧散落的字面量都会造成"点重连拿 ACTION_STALE"的静默失配。
+ */
+export function oauthConnectActionId(ref: string): string {
+  return `oauth_connect:${ref}`;
+}
+
+export function parseOauthConnectSecretKey(actionId: string): string | null {
+  const prefix = oauthConnectActionId('secret:');
+  const key = actionId.startsWith(prefix) ? actionId.slice(prefix.length) : '';
+  return key.length > 0 ? key : null;
 }
 
 function actionFor(
@@ -134,7 +149,12 @@ function actionFor(
         : kind === 'client_config'
           ? 'open_client_settings'
           : 'open_plugin_settings';
-  return [{ id: `${actionKind}:${ref}`, kind: actionKind }];
+  return [
+    {
+      id: actionKind === 'oauth_connect' ? oauthConnectActionId(ref) : `${actionKind}:${ref}`,
+      kind: actionKind,
+    },
+  ];
 }
 
 function inlineSecretAction(

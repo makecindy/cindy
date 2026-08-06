@@ -41,7 +41,12 @@ vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ tx: h.tx }) 
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
-vi.mock('../device-link/broadcast-tap', () => ({ tapWindowBroadcast: h.tapWindowBroadcast }));
+vi.mock('../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => true),
+  tapWindowBroadcast: h.tapWindowBroadcast,
+}));
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => h.agentIslandService,
 }));
@@ -215,7 +220,7 @@ describe('setSessionsStatusInDb', () => {
       'utf8',
     );
     const batchBody = source.match(
-      /export async function setSessionsStatusInDb[\s\S]*?return applied\.map/,
+      /export async function setSessionsStatusInDb[\s\S]*return applied\.map/,
     )?.[0];
     expect(batchBody).toContain('scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status)');
   });

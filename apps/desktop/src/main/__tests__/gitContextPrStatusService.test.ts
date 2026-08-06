@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
   PrStatusService,
+  filterPrStatusQueriesForRefs,
   mapRemoteToStatus,
   type PrRemoteState,
 } from '../git-context/prStatusService';
@@ -30,6 +31,20 @@ describe('mapRemoteToStatus', () => {
     expect(mapRemoteToStatus(remote({ state: 'closed' }))).toBe('closed');
     expect(mapRemoteToStatus(remote({ draft: true }))).toBe('draft');
     expect(mapRemoteToStatus(remote({}))).toBe('open');
+  });
+});
+
+describe('filterPrStatusQueriesForRefs', () => {
+  it('远程查询只保留目标 session 已记录的 PR,owner/repo 大小写不敏感', () => {
+    expect(
+      filterPrStatusQueriesForRefs(
+        [
+          { owner: 'MakeCindy', repo: 'Cindy', prNumber: 85 },
+          { owner: 'private', repo: 'secret', prNumber: 1 },
+        ],
+        [{ owner: 'makecindy', repo: 'cindy', prNumber: 85 }],
+      ),
+    ).toEqual([{ owner: 'MakeCindy', repo: 'Cindy', prNumber: 85 }]);
   });
 });
 

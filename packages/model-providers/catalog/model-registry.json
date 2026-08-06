@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-01T00:00:00.000Z",
+  "updatedAt": "2026-08-05T00:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -1537,6 +1537,26 @@
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-pro",
           "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "deepseek",
+          "modelId": "deepseek-v4-pro",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.435,
+              "outputPerMtok": 0.87,
+              "cacheReadPerMtok": 0.003625,
+              "effectiveFrom": "2026-07-31",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                "verifiedAt": "2026-08-05"
+              }
+            }
+          ]
         }
       ]
     },
@@ -1555,6 +1575,26 @@
           "providerId": "xd",
           "modelId": "deepseek/deepseek-v4-flash",
           "agents": ["claude-code", "codex"]
+        },
+        {
+          "providerId": "deepseek",
+          "modelId": "deepseek-v4-flash",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.14,
+              "outputPerMtok": 0.28,
+              "cacheReadPerMtok": 0.0028,
+              "effectiveFrom": "2026-07-31",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                "verifiedAt": "2026-08-05"
+              }
+            }
+          ]
         }
       ]
     },

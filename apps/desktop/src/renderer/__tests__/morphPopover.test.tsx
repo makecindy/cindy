@@ -70,6 +70,16 @@ afterEach(() => {
 });
 
 describe('MorphPopover interaction contract', () => {
+  it('keeps the portaled panel outside Electron window drag regions', async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+
+    expect((panel.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion).toBe(
+      'no-drag',
+    );
+  });
+
   it('打开聚焦首个可交互项;Esc 关闭并把焦点归还 trigger', async () => {
     render(<Harness />);
     const trigger = screen.getByRole('button', { name: 'Toggle' });
@@ -168,9 +178,7 @@ describe('MorphPopover interaction contract', () => {
     fireEvent.pointerDown(action);
     fireEvent.click(action);
 
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Select action' })).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Select action' })).toBeNull());
     expect(document.activeElement).not.toBe(trigger);
   });
 
@@ -215,9 +223,7 @@ describe('MorphPopover interaction contract', () => {
     action.focus();
     fireEvent.click(action);
 
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Open dialog' })).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Open dialog' })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Dialog field' }));
   });
 

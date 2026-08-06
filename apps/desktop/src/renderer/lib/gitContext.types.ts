@@ -22,9 +22,10 @@ export interface GitContextSnapshot {
  *   telemetry  = 从 agent tool-call(Codex cwd / cc 编辑路径)推出的真实工作目录,可信
  *   worktree   = app 托管 worktree 的 live 路径,可信
  *   workingDir = 兜底用 session.working_dir(共享主 checkout,低信任,优先让位 PR 分支)
+ *   remote      = 远端 SSH 主机上直接探测到的目录分支,可信
  *   null       = 无可解析目录
  */
-export type GitContextDirSource = 'telemetry' | 'worktree' | 'workingDir' | null;
+export type GitContextDirSource = 'telemetry' | 'worktree' | 'workingDir' | 'remote' | null;
 
 /** git-context:get-for-session 的返回:解析出的目录 + 其 HEAD + 来源。 */
 export interface SessionGitDirResult {

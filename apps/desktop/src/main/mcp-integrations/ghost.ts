@@ -50,7 +50,11 @@ import {
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { deriveGhostSessionContext, type GhostSessionContextInjected } from '../../shared/ghost.js';
+import {
+  deriveGhostSessionContext,
+  type GhostSessionContextInjected,
+  type GhostSetupAssessment,
+} from '../../shared/ghost.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
@@ -1110,8 +1114,9 @@ export function getCindyGhostsMcpDeps(
             message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
           };
         }
+        let postGrantAssessment: GhostSetupAssessment;
         try {
-          const postGrantAssessment = getGhostSetupAssessment(ghostId);
+          postGrantAssessment = getGhostSetupAssessment(ghostId);
           if (postGrantAssessment.state !== 'ready') {
             return {
               ok: false,
@@ -1130,6 +1135,7 @@ export function getCindyGhostsMcpDeps(
         log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
         return {
           ok: true,
+          ...(postGrantAssessment.reauthSuggest ? { setup: postGrantAssessment } : {}),
           result: {
             ok: true,
             granted_count: grant.hashes.length,
@@ -1314,8 +1320,9 @@ export function getCindyGhostsMcpDeps(
           message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools),
         };
       }
+      let postCtxAssessment: GhostSetupAssessment;
       try {
-        const postCtxAssessment = getGhostSetupAssessment(ghostId);
+        postCtxAssessment = getGhostSetupAssessment(ghostId);
         if (postCtxAssessment.state !== 'ready') {
           return {
             ok: false,
@@ -1358,7 +1365,12 @@ export function getCindyGhostsMcpDeps(
       // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
       const producedMedia = drainGhostCallMedia(ghostId, callId);
       const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
-      return finalized.ok && producedMedia.length > 0 ? { ...finalized, producedMedia } : finalized;
+      if (!finalized.ok) return finalized;
+      // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。
+      const advisory = postCtxAssessment.reauthSuggest ? { setup: postCtxAssessment } : {};
+      return producedMedia.length > 0
+        ? { ...finalized, ...advisory, producedMedia }
+        : { ...finalized, ...advisory };
     },
     async forgeGuide(): Promise<string> {
       return FORGE_GUIDE;

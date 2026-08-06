@@ -35,6 +35,18 @@ const projectNodeSrc = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'sections', 'ProjectNode.tsx'),
   'utf8',
 );
+const makerChatStoreSrc = readFileSync(
+  resolve(__dirname, '..', 'lib', 'makerChatStore.ts'),
+  'utf8',
+);
+const makerTransportSrc = readFileSync(
+  resolve(__dirname, '..', 'lib', 'makerTransport.ts'),
+  'utf8',
+);
+const chatInputSrc = readFileSync(
+  resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
+  'utf8',
+);
 
 describe('useRemoteSessionSync 接线不变式', () => {
   it('WS 重连(onStatusChanged online)重建重 topic 订阅 + 对账', () => {
@@ -64,23 +76,57 @@ describe('CCAgentSessionView 接线不变式', () => {
     expect(sessionViewSrc).toContain('useRemoteSessionConnection(remoteDeviceId)');
     expect(sessionViewSrc).toContain('<RemoteSessionBanner');
     // 旧的 mount-once 重 topic effect 已被 hook 取代(不再就地订阅 session: topic)。
-    expect(sessionViewSrc).not.toContain("const topic = `session:${sessionId}`");
+    expect(sessionViewSrc).not.toContain('const topic = `session:${sessionId}`');
   });
-  it('断线缓存的远程 session 可打开查看,但禁用 composer 并拦截发送', () => {
-    expect(sessionViewSrc).toContain("const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline'");
-    expect(sessionViewSrc).toContain('if (remoteSessionUnavailable) return false');
-    // device-link 远程交接期间也要禁用(见 remoteHandoffPreparing):那几段 await
-    // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。断线这一档不变。
+  it('断线缓存的远程 session 可打开查看并继续乐观发送', () => {
     expect(sessionViewSrc).toContain(
-      'disabled={remoteSessionUnavailable || remoteHandoffPreparing}',
+      "const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline'",
+    );
+    expect(sessionViewSrc).not.toContain('if (remoteSessionUnavailable) return false');
+    expect(sessionViewSrc).not.toContain('remoteSessionUnavailableRef');
+    expect(sessionViewSrc).toContain('if (!remoteDeviceId) {');
+    expect(sessionViewSrc).not.toContain('beforeEnqueue: checkVendorReady');
+    // device-link 远程交接期间仍要禁用(见 remoteHandoffPreparing):那几段 await
+    // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。
+    expect(sessionViewSrc).toContain('disabled={remoteHandoffPreparing}');
+  });
+  it('补选目录后的续发保持 delivery mode，并按本地/远端策略清理原 composer', () => {
+    expect(sessionViewSrc).toContain('deliveryMode: MessageDeliveryMode;');
+    expect(sessionViewSrc).toContain(
+      "const dispatch = deliveryMode === 'steer' ? steerMessage : sendMessage;",
+    );
+    expect(sessionViewSrc).toContain('if (accepted) onDeferredAccepted?.();');
+    expect(sessionViewSrc).toContain(
+      '...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {})',
+    );
+    expect(chatInputSrc).toContain('onDeferredAccepted,');
+    expect(chatInputSrc).toMatch(
+      /if \(optimisticallyClearRemoteComposer\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n){2}\s*optimisticComposerRestored = false;\s*clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\} else \{[\s\S]*?clearSentComposer\(\);\s*\}/,
+    );
+  });
+  it('已有远程 session 断线时跳过来源门禁，远程草稿与本地任务仍保留门禁', () => {
+    expect(chatInputSrc).toContain(
+      'const enforceConnectedSourceGate = !sessionId || !deviceLinkDeviceId;',
+    );
+    expect(chatInputSrc).toMatch(
+      /const noConnectedSource =\s*enforceConnectedSourceGate &&\s*!!currentModelAgentKind/,
+    );
+    expect(chatInputSrc).toMatch(
+      /if\s*\(\s*enforceConnectedSourceGate\s*&&\s*currentModelAgentKind\s*&&[\s\S]*?\)\s*\{/,
     );
   });
   it('断线缓存的远程 session 可查看,但生命周期/元数据写操作必须走统一 gate', () => {
-    expect(sessionHeaderSrc).toContain('remoteSessionUnavailable || isRemoteSessionWriteBlocked(session)');
+    expect(sessionHeaderSrc).toContain(
+      'remoteSessionUnavailable || isRemoteSessionWriteBlocked(session)',
+    );
     expect(sidebarUpperSrc).toContain('isRemoteSessionWriteBlocked(session)');
     expect(sidebarUpperSrc).toContain('selectedSessions.some(isRemoteSessionWriteBlocked)');
-    expect(sessionItemSrc).toContain('const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)');
-    expect(sessionCardSrc).toContain('const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)');
+    expect(sessionItemSrc).toContain(
+      'const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)',
+    );
+    expect(sessionCardSrc).toContain(
+      'const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)',
+    );
     expect(sessionViewSrc).toContain('remoteSessionUnavailable={remoteSessionUnavailable}');
   });
   it('断线 device-link session 不能触发 Stop 或新窗口写入口', () => {
@@ -111,10 +157,40 @@ describe('CCAgentSessionView 接线不变式', () => {
     expect(sessionViewSrc).toContain('sessionInterruptAcked || remoteTurnActive');
   });
   it('断线 device-link project 不能从项目标题 + 入口创建远程 draft', () => {
-    expect(projectNodeSrc).toContain('const projectWritesBlocked = isDeviceLinkWriteBlocked(project)');
+    expect(projectNodeSrc).toContain(
+      'const projectWritesBlocked = isDeviceLinkWriteBlocked(project)',
+    );
     expect(projectNodeSrc).toContain('disabled={projectWritesBlocked}');
     expect(projectNodeSrc).toContain('handleCreateInProject');
     expect(projectNodeSrc).toContain('handleArchiveAll');
     expect(sidebarUpperSrc).toContain('isDeviceLinkWriteBlocked(project)');
+  });
+});
+
+describe('弱网 optimistic mutation 粘滞路由不变式', () => {
+  it('发送相关的控制操作在 mirror clear 后仍使用 pinned device', () => {
+    expect(makerChatStoreSrc).toContain(
+      'const remoteDeviceId = getStickySessionDeviceId(sessionId);',
+    );
+    expect(makerChatStoreSrc).toContain(
+      'const steerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);',
+    );
+    expect(makerChatStoreSrc).toContain(
+      'const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);',
+    );
+    expect(makerChatStoreSrc).toContain(
+      'const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);',
+    );
+    expect(makerChatStoreSrc).toMatch(/clearOperation\.api\s*\.closeSession/);
+    expect(makerChatStoreSrc).toContain(
+      'const remoteDeviceId = sourceRemoteDeviceId ?? getStickySessionDeviceId(sessionId);',
+    );
+  });
+
+  it('自动标题和会话元数据读取使用 sticky 远端判定', () => {
+    expect(makerChatStoreSrc).toContain('if (getStickySessionDeviceId(sessionId)) {');
+    expect(makerTransportSrc).toContain(
+      '// Session metadata is part of the same remote send attempt as the later',
+    );
   });
 });

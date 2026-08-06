@@ -226,8 +226,21 @@ describe('CreateWorkerPopover', () => {
     expect(pairedFields?.className).toContain('grid-cols-[220px_minmax(0,1fr)]');
     expect(pairedFields?.contains(screen.getByTestId('model-selector'))).toBe(true);
 
+    const permissionMode = screen.getByTestId('worker-permission-mode');
+    expect(permissionMode.textContent).toContain('orca.createWorker.permissionLabel');
+    expect(permissionMode.textContent).toContain(
+      'newChat.permissionSelector.modes.codex.auto.label',
+    );
+    expect(permissionMode.querySelector('button, input, select, [role="combobox"]')).toBeNull();
+
     const initialTask = screen.getByPlaceholderText('orca.createWorker.initialTaskPlaceholder');
     expect(initialTask.className).toContain('h-[96px]');
+  });
+
+  it('does not claim Auto-review for a device-link worker controlled by an older peer', () => {
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
+
+    expect(screen.queryByTestId('worker-permission-mode')).toBeNull();
   });
 
   it('disables immediately and collapses repeated click events into one request', async () => {

@@ -161,9 +161,18 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     }
   }
   const anchorAgent = provider.agents[0] ?? 'claude-code';
-  const media: Array<{ id: string; name: string; disabled?: boolean; group: 'image' | 'video' }> = [
+  // 向量清单同理(PR #1707 review):派生侧一直按 isModelDisabled 过滤,但设置页
+  // 没有对应的行 —— 停用轴有实现无入口,用户没法单独拦住某个向量型号的付费调用。
+  // group 钉 'embedding'(classifyModel 的已知非聊天分类,已有 i18n 标签「向量」)。
+  const media: Array<{
+    id: string;
+    name: string;
+    disabled?: boolean;
+    group: 'image' | 'video' | 'embedding';
+  }> = [
     ...(provider.imageModels ?? []).map((m) => ({ ...m, group: 'image' as const })),
     ...(provider.videoModels ?? []).map((m) => ({ ...m, group: 'video' as const })),
+    ...(provider.embeddingModels ?? []).map((m) => ({ ...m, group: 'embedding' as const })),
   ];
   for (const m of media) {
     if (realIds.has(m.id) || byKey.has(m.id)) continue;

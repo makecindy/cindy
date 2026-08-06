@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { getSessionFor } from '@/lib/makerTransport';
 import {
   legacyUsdMoney,
@@ -54,7 +55,8 @@ export function useSessionSpend(
             : null),
       );
     };
-    const unsubscribe = window.electronAPI.onUsageSessionSpendChanged((res) => {
+    const unsubscribe = window.electronAPI.onUsageSessionSpendChanged((res, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (res.sessionId === sessionId) {
         receivedCurrentEvent = true;
         applyMoney(res.totalMoney, res.totalCostUsd);

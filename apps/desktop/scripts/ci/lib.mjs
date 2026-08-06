@@ -474,10 +474,147 @@ export function runDbValidate() {
 
 // ── macOS local signing ────────────────────────────────────────────────────
 
-export function writeMacEntitlements(destPath, { appleEvents = false } = {}) {
+const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+const MAC_BUNDLE_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/;
+
+/** 正式签名包的 WebAuthn Touch ID keychain access group。 */
+export function macWebAuthnKeychainAccessGroup(teamId, bundleId) {
+  const normalizedTeamId = String(teamId ?? '').trim();
+  const normalizedBundleId = String(bundleId ?? '').trim();
+  if (!APPLE_TEAM_ID_PATTERN.test(normalizedTeamId)) {
+    throw new Error(`invalid Apple Team ID for WebAuthn: ${normalizedTeamId || '(empty)'}`);
+  }
+  if (!MAC_BUNDLE_ID_PATTERN.test(normalizedBundleId) || normalizedBundleId.includes('..')) {
+    throw new Error(`invalid macOS bundle id for WebAuthn: ${normalizedBundleId || '(empty)'}`);
+  }
+  return `${normalizedTeamId}.${normalizedBundleId}.webauthn`;
+}
+
+function entitlementValueAllows(values, requestedValue) {
+  return values.some((value) => {
+    if (typeof value !== 'string') return false;
+    if (value === requestedValue) return true;
+    return value.endsWith('*') && requestedValue.startsWith(value.slice(0, -1));
+  });
+}
+
+/** Validate the authorization carried by a decoded Developer ID profile. */
+export function assertMacWebAuthnProvisioningProfile(
+  profile,
+  { teamId, bundleId, keychainAccessGroup, now = new Date() },
+) {
+  const profileTeams = Array.isArray(profile?.TeamIdentifier) ? profile.TeamIdentifier : [];
+  if (!profileTeams.includes(teamId)) {
+    throw new Error(`WebAuthn provisioning profile does not authorize Apple Team ID ${teamId}`);
+  }
+  const expiresAt = new Date(profile?.ExpirationDate ?? Number.NaN);
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= now) {
+    throw new Error('WebAuthn provisioning profile is expired or has no valid expiration date');
+  }
+  const entitlements = profile?.Entitlements;
+  if (!entitlements || typeof entitlements !== 'object' || Array.isArray(entitlements)) {
+    throw new Error('WebAuthn provisioning profile has no entitlement allowlist');
+  }
+  if (entitlements['com.apple.developer.team-identifier'] !== teamId) {
+    throw new Error(`WebAuthn provisioning profile entitlement Team ID does not match ${teamId}`);
+  }
+  const requestedApplicationId = `${teamId}.${bundleId}`;
+  const applicationId =
+    entitlements['com.apple.application-identifier'] ?? entitlements['application-identifier'];
+  if (!entitlementValueAllows([applicationId], requestedApplicationId)) {
+    throw new Error(`WebAuthn provisioning profile does not authorize ${requestedApplicationId}`);
+  }
+  const keychainAccessGroups = entitlements['keychain-access-groups'];
+  if (
+    !Array.isArray(keychainAccessGroups) ||
+    !entitlementValueAllows(keychainAccessGroups, keychainAccessGroup)
+  ) {
+    throw new Error(
+      `WebAuthn provisioning profile does not authorize keychain group ${keychainAccessGroup}`,
+    );
+  }
+}
+
+/** Decode, validate and embed the profile required by keychain-access-groups. */
+export function embedMacWebAuthnProvisioningProfile(
+  appPath,
+  profilePath,
+  expected,
+  dependencies = {},
+) {
+  const spawnCommand = dependencies.spawnCommand ?? spawnSync;
+  const decodeResult = spawnCommand('/usr/bin/security', ['cms', '-D', '-i', profilePath], {
+    encoding: 'utf8',
+  });
+  if (decodeResult.error || decodeResult.status !== 0) {
+    throw new Error(
+      `failed to decode WebAuthn provisioning profile: ${decodeResult.error?.message ?? decodeResult.stderr?.trim() ?? `exit ${decodeResult.status}`}`,
+    );
+  }
+  const decodedProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-webauthn-profile-'));
+  const decodedProfilePath = path.join(decodedProfileDir, 'decoded.plist');
+  try {
+    fs.writeFileSync(decodedProfilePath, decodeResult.stdout);
+
+    const extractProfileField = (field, format) => {
+      const result = spawnCommand(
+        '/usr/bin/plutil',
+        ['-extract', field, format, '-o', '-', '--', decodedProfilePath],
+        { encoding: 'utf8' },
+      );
+      if (result.error || result.status !== 0) {
+        throw new Error(
+          `failed to inspect WebAuthn provisioning profile: ${field} extraction failed: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`}`,
+        );
+      }
+      return result.stdout;
+    };
+
+    let profile;
+    try {
+      profile = {
+        TeamIdentifier: JSON.parse(extractProfileField('TeamIdentifier', 'json')),
+        ExpirationDate: extractProfileField('ExpirationDate', 'raw').trim(),
+        Entitlements: JSON.parse(extractProfileField('Entitlements', 'json')),
+      };
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(
+          'failed to inspect WebAuthn provisioning profile: plist field extraction returned invalid JSON',
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    assertMacWebAuthnProvisioningProfile(profile, expected);
+  } finally {
+    fs.rmSync(decodedProfileDir, { recursive: true, force: true });
+  }
+  const embeddedPath = path.join(appPath, 'Contents', 'embedded.provisionprofile');
+  fs.copyFileSync(profilePath, embeddedPath);
+  return embeddedPath;
+}
+
+function escapeXmlText(value) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+export function writeMacEntitlements(destPath, { appleEvents = false, keychainAccessGroup } = {}) {
   const appleEventsEntitlement = appleEvents
     ? `    <key>com.apple.security.automation.apple-events</key>
     <true/>
+`
+    : '';
+  const keychainAccessGroupEntitlement = keychainAccessGroup
+    ? `    <key>keychain-access-groups</key>
+    <array>
+        <string>${escapeXmlText(keychainAccessGroup)}</string>
+    </array>
 `
     : '';
   const content = `<?xml version="1.0" encoding="UTF-8"?>
@@ -492,7 +629,7 @@ export function writeMacEntitlements(destPath, { appleEvents = false } = {}) {
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
-${appleEventsEntitlement}</dict>
+${appleEventsEntitlement}${keychainAccessGroupEntitlement}</dict>
 </plist>`;
   fs.writeFileSync(destPath, content);
 }
@@ -509,8 +646,38 @@ function readCodesignEntitlements(bundlePath) {
   return `${result.stdout || ''}${result.stderr || ''}`;
 }
 
+export function parseCodesignTeamIdentifier(output) {
+  return (
+    String(output ?? '')
+      .match(/^TeamIdentifier=(.+)$/m)?.[1]
+      ?.trim() ?? ''
+  );
+}
+
+function readCodesignTeamIdentifier(bundlePath) {
+  const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', bundlePath], {
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `codesign identity inspection failed for ${bundlePath}: ${result.stderr || result.stdout}`,
+    );
+  }
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  return parseCodesignTeamIdentifier(output);
+}
+
 function hasAppleEventsEntitlement(entitlements) {
-  return /<key>com\.apple\.security\.automation\.apple-events<\/key>\s*<true\s*\/>/.test(entitlements);
+  return /<key>com\.apple\.security\.automation\.apple-events<\/key>\s*<true\s*\/>/.test(
+    entitlements,
+  );
+}
+
+function hasKeychainAccessGroup(entitlements, keychainAccessGroup) {
+  const escaped = keychainAccessGroup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `<key>keychain-access-groups<\\/key>\\s*<array>[\\s\\S]*?<string>${escaped}<\\/string>[\\s\\S]*?<\\/array>`,
+  ).test(entitlements);
 }
 
 function readPlistString(infoPlistPath, key) {
@@ -525,8 +692,12 @@ function readPlistString(infoPlistPath, key) {
   return result.stdout.trim();
 }
 
+export function readMacBundleIdentifier(appPath) {
+  return readPlistString(path.join(appPath, 'Contents', 'Info.plist'), 'CFBundleIdentifier');
+}
+
 /** Verify the packaged Contacts/JXA privacy contract after signing. */
-export function verifyMacContactsPermissions(appPath) {
+export function verifyMacContactsPermissions(appPath, { keychainAccessGroup, signingTeamId } = {}) {
   const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
   const appleEventsUsage = readPlistString(infoPlistPath, 'NSAppleEventsUsageDescription');
   const contactsUsage = readPlistString(infoPlistPath, 'NSContactsUsageDescription');
@@ -539,8 +710,26 @@ export function verifyMacContactsPermissions(appPath) {
     }
   }
 
-  if (!hasAppleEventsEntitlement(readCodesignEntitlements(appPath))) {
+  const mainEntitlements = readCodesignEntitlements(appPath);
+  if (!hasAppleEventsEntitlement(mainEntitlements)) {
     throw new Error('main app is missing com.apple.security.automation.apple-events=true');
+  }
+  if (keychainAccessGroup && !hasKeychainAccessGroup(mainEntitlements, keychainAccessGroup)) {
+    throw new Error(`main app is missing WebAuthn keychain access group ${keychainAccessGroup}`);
+  }
+  if (signingTeamId) {
+    const actualTeamId = readCodesignTeamIdentifier(appPath);
+    if (actualTeamId !== signingTeamId) {
+      throw new Error(
+        `macOS signature TeamIdentifier mismatch: expected ${signingTeamId}, got ${actualTeamId || '(empty)'}`,
+      );
+    }
+  }
+  if (
+    keychainAccessGroup &&
+    !fs.existsSync(path.join(appPath, 'Contents', 'embedded.provisionprofile'))
+  ) {
+    throw new Error('main app is missing the WebAuthn provisioning profile');
   }
 
   const frameworksDir = path.join(appPath, 'Contents', 'Frameworks');
@@ -551,8 +740,16 @@ export function verifyMacContactsPermissions(appPath) {
     if (hasAppleEventsEntitlement(readCodesignEntitlements(helperApp))) {
       throw new Error(`helper app must not receive Apple Events entitlement: ${helperApp}`);
     }
+    if (
+      keychainAccessGroup &&
+      hasKeychainAccessGroup(readCodesignEntitlements(helperApp), keychainAccessGroup)
+    ) {
+      throw new Error(`helper app must not receive WebAuthn keychain access group: ${helperApp}`);
+    }
   }
-  console.log('==> Verified macOS Contacts usage descriptions and main-only Apple Events entitlement');
+  console.log(
+    `==> Verified macOS Contacts usage descriptions and main-only Apple Events${keychainAccessGroup ? ' / WebAuthn' : ''} entitlements`,
+  );
 }
 
 export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath) {
@@ -587,7 +784,13 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
  * Developer ID 由内向外逐层签名(Electron app 不能依赖 --deep)。
  * @param {{ signIdentity: string }} identity
  */
-export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity) {
+export function signMacAppWithIdentity(
+  appPath,
+  helperEntitlementsPath,
+  mainEntitlementsPath,
+  identity,
+  { keychainAccessGroup } = {},
+) {
   console.log('    Removing provenance attributes...');
   exec(`/usr/bin/xattr -dr com.apple.provenance "${appPath}" 2>/dev/null || true`);
 
@@ -629,7 +832,10 @@ export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEnti
 
   console.log('    Verifying signature...');
   exec(`/usr/bin/codesign --verify --deep --strict "${appPath}"`);
-  verifyMacContactsPermissions(appPath);
+  verifyMacContactsPermissions(appPath, {
+    keychainAccessGroup,
+    signingTeamId: identity.teamId,
+  });
 }
 
 const NOTARYTOOL_TIMEOUT_MS = 1800000;

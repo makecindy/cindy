@@ -44,6 +44,7 @@ import {
   type InvokeResultPayload,
   type LinkClosePayload,
   type LinkOpenPayload,
+  type PushOwnerStamp,
   type Topic,
 } from '@cindy/device-link';
 import {
@@ -68,7 +69,10 @@ import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
 import { readDictionaryProjectionForMobile } from '../voice-input/dictionarySyncDriver.js';
-import { setBroadcastTapListener } from './broadcast-tap';
+import {
+  setBroadcastTapListener,
+} from './broadcast-tap';
+import * as broadcastTap from './broadcast-tap';
 import { createOfflinePushQueue } from './offlinePushQueue';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
@@ -572,8 +576,8 @@ const SESSION_ACTIVITY_DRAIN_RETRY_MS = 250;
 const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
 
 interface SessionActivityStage {
-  /** sessionId → 最新 payload;Map 插入序即更新序,超限时淘汰最旧键。 */
-  queue: Map<string, unknown>;
+  /** sessionId → 最新 payload + source owner;Map 插入序即更新序。 */
+  queue: Map<string, { payload: unknown; ownerStamp?: PushOwnerStamp }>;
   retryTimer: ReturnType<typeof setTimeout> | null;
 }
 const sessionActivityStages = new Map<string, SessionActivityStage>();
@@ -584,7 +588,11 @@ function sessionActivityKey(payload: unknown): string | null {
   return typeof sessionId === 'string' && sessionId ? sessionId : null;
 }
 
-function stageSessionActivityPush(dst: string, payload: unknown): void {
+function stageSessionActivityPush(
+  dst: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
   const key = sessionActivityKey(payload);
   // 无 sessionId 的活动帧无法键控(契约上不存在);丢弃而不是绕行,避免未知
   // 形状绕过整流重新制造窗口竞争。
@@ -595,7 +603,7 @@ function stageSessionActivityPush(dst: string, payload: unknown): void {
     sessionActivityStages.set(dst, stage);
   }
   stage.queue.delete(key);
-  stage.queue.set(key, payload);
+  stage.queue.set(key, { payload, ...(ownerStamp ? { ownerStamp } : {}) });
   while (stage.queue.size > SESSION_ACTIVITY_STAGE_MAX_KEYS) {
     const oldest = stage.queue.keys().next().value as string | undefined;
     if (oldest === undefined) break;
@@ -624,11 +632,17 @@ function drainSessionActivityStage(dst: string, stage: SessionActivityStage): vo
       scheduleSessionActivityRetry(dst, stage);
       return;
     }
-    const next = stage.queue.entries().next().value as [string, unknown] | undefined;
+    const next = stage.queue.entries().next().value as
+      | [string, { payload: unknown; ownerStamp?: PushOwnerStamp }]
+      | undefined;
     if (!next) return;
-    const [key, payload] = next;
+    const [key, item] = next;
     try {
-      activeClient.sendPush(dst, SESSION_ACTIVITY_CHANNEL, payload);
+      if (item.ownerStamp === undefined) {
+        activeClient.sendPush(dst, SESSION_ACTIVITY_CHANNEL, item.payload);
+      } else {
+        activeClient.sendPush(dst, SESSION_ACTIVITY_CHANNEL, item.payload, item.ownerStamp);
+      }
       stage.queue.delete(key);
     } catch (err) {
       if (err instanceof DeviceLinkError && err.code === 'BACKPRESSURE') {
@@ -675,14 +689,14 @@ export function pushSessionActivityToController(
 ): void {
   if (!activeClient) return;
   if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
-  stageSessionActivityPush(controllerDeviceId, payload);
+  stageSessionActivityPush(controllerDeviceId, payload, broadcastTap.getSafeDataOwnerPushStamp?.());
 }
 
 /**
  * 按 topic 把一条本机广播转发给订阅了它的控制端。listener 注册后每条 tap 都过这里
  * (live 读 registry,topic 变化即时生效)。topic 算不出(无 session 标识)→ 丢弃。
  */
-function forwardPush(channel: string, payload: unknown): void {
+function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
   if (!topic) return;
@@ -714,19 +728,20 @@ function forwardPush(channel: string, payload: unknown): void {
         channel,
         payload: remotePayload,
         topic,
+        ...(ownerStamp ? { ownerStamp } : {}),
       });
     }
   }
   for (const dst of liveTargets) {
     // 会话活动是高频状态镜像:走 latest-wins 暂存整流,不直接冲可靠传输窗口。
     if (channel === SESSION_ACTIVITY_CHANNEL) {
-      stageSessionActivityPush(dst, remotePayload);
+      stageSessionActivityPush(dst, remotePayload, ownerStamp);
       continue;
     }
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
-    sendPushBestEffort(dst, channel, remotePayload);
+    sendPushBestEffort(dst, channel, remotePayload, ownerStamp);
   }
 }
 
@@ -736,14 +751,24 @@ function forwardPush(channel: string, payload: unknown): void {
  * 引擎产生,不是 renderer 广播)。路由与 tap 路径同一 forwardPush,scoped 到
  * 订阅者;无 active client / 无订阅者时 no-op。
  */
-export function pushToTopicSubscribers(channel: string, payload: unknown): void {
-  forwardPush(channel, payload);
+export function pushToTopicSubscribers(
+  channel: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
+  forwardPush(channel, payload, ownerStamp);
 }
 
-function sendPushBestEffort(dst: string, channel: string, payload: unknown): void {
+function sendPushBestEffort(
+  dst: string,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
   if (!activeClient) return;
   try {
-    activeClient.sendPush(dst, channel, payload);
+    if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
+    else activeClient.sendPush(dst, channel, payload, ownerStamp);
     return;
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
@@ -758,7 +783,8 @@ function sendPushBestEffort(dst: string, channel: string, payload: unknown): voi
     }
 
     try {
-      activeClient.sendPush(dst, channel, compactPayload);
+      if (ownerStamp === undefined) activeClient.sendPush(dst, channel, compactPayload);
+      else activeClient.sendPush(dst, channel, compactPayload, ownerStamp);
       log.warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
     } catch (retryErr) {
       log.warn(
@@ -1093,7 +1119,7 @@ function handleLinkOpen(
   flushRemoteInvokeResultOutbox(src);
   if (!knownModernController) {
     for (const queued of offlinePushQueue.drain(src, [LEGACY_TOPIC])) {
-      sendPushBestEffort(src, queued.channel, queued.payload);
+      sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
     }
   }
   log.info(`control link opened by ${shortId(src)} (${name})`);
@@ -1975,7 +2001,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
   }
   if (isSub && topics.length > 0) {
     for (const queued of offlinePushQueue.drain(src, topics)) {
-      sendPushBestEffort(src, queued.channel, queued.payload);
+      sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
     }
   }
   return { ok: true, result: { ok: true } };

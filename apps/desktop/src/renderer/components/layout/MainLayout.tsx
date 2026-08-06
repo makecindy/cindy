@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { BrowserWebviewPool } from '@/components/layout/BrowserWebviewPool';
 import { ChromeActions } from '@/components/layout/ChromeActions';
+import { shouldReserveLeftChromeActions } from '@/components/layout/chromeActionsLayout';
 import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
 import { rightSidebarOwnsRailChromeActions as resolveRightSidebarRailChromeActionsOwner } from '@/components/layout/railChromeActions';
 import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
@@ -28,7 +29,9 @@ import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictD
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
+import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
+import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
@@ -69,6 +72,7 @@ import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
 import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
+import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
@@ -467,6 +471,8 @@ export function MainLayout() {
   useSchemaDriftWarningToast();
   // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
   useVoiceInputShortcutRecoveryToast();
+  // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
+  usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
 
@@ -527,6 +533,49 @@ export function MainLayout() {
     });
     return unsubscribe;
   }, [navigateToSession]);
+
+  // 插件请求新建自动化(agent 槽的 schedule 加档):main 的 scheduleSlot 已做资格审 /
+  // 净化截断 / 频率钳制 / 限速,这里只负责把用户带到自动化页并把预填内容交过去。
+  // 挂在 MainLayout 的理由同上面那条:它在 ProtectedRoute + LocalDbGate 之内,用户
+  // 必然已登录、可以安全 navigate;而插件请求可能在任何路由下到达(用户当时正在
+  // 插件面板里),SchedulerPage 那时还没挂载,接不到这条推送。
+  //
+  // main 侧**只投一个主壳窗**(见 cindy-brain 的 isMainShellWindowUrl):独立的插件
+  // 面板窗 / 右侧栏窗与 MainLayout 平级、没有本订阅,所以别在那两个轻壳里再加一份
+  // 处理——它们收不到,加了也是死代码。同一窗口内仍需去重(下游 SchedulerPage 的
+  // handledScheduleCreateRequestRef):navigate 带的 state 可能被 effect 重复消费。
+  //
+  // ⚠️ 这里**只导航**。任务落库只发生在用户于面板上点保存之后 —— 插件全程没有
+  // 直接建任务的通道(scheduleSlot 的 deps 里压根没有 schedule storage)。
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
+      if (
+        typeof requestId !== 'string' || !requestId ||
+        typeof ghostId !== 'string' || !ghostId ||
+        typeof ghostName !== 'string' || !ghostName ||
+        typeof name !== 'string' || !name ||
+        typeof prompt !== 'string' || !prompt
+      ) {
+        return;
+      }
+      navigate('/cc-agent/scheduled', {
+        state: pluginScheduleNavigationState({
+          kind: 'plugin-schedule-draft',
+          requestId,
+          ghostId,
+          ghostName,
+          name,
+          prompt,
+          ...(typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
+            ? { intervalMs }
+            : {}),
+        }),
+      });
+    });
+    return unsubscribe;
+  }, [navigate]);
 
   // cindy://(+ 历史 xdt-maker://)深度链接 + --open-folder 右键菜单订阅 —— main 端解析后推 payload,
   // 这里按 type 分发。
@@ -1238,6 +1287,10 @@ export function MainLayout() {
                     重跑导致的"刷新一帧"闪烁。
                     ContentHeader 在 FadeSwitcher 之外 —— header chrome 不参与路由切换
                     动画，只有注入的中部内容随路由变化。 */}
+                  {/* 持久凭证库故障全局警示条(#1687):ContentHeader 之下、路由内容之上,
+                      shrink-0 在 main 的 flex 列里独占一行把内容推下(不遮盖)。放在
+                      FadeSwitcher 之外 —— 它是全局状态提示,不参与路由切换动画。 */}
+                  <CredentialStoreBanner />
                   <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
                     <Outlet
                       context={{
@@ -1276,7 +1329,11 @@ export function MainLayout() {
                   onCloseSidebar={isMac ? undefined : handleToggleRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
-                  reserveLeftChromeActions={isRightSidebarMaximized && isSidebarCollapsed}
+                  reserveLeftChromeActions={shouldReserveLeftChromeActions({
+                    isSidebarCollapsed,
+                    rightSidebarSide,
+                    isRightSidebarMaximized,
+                  })}
                   railChromeActionsHitHole={rightSidebarOwnsRailChromeActions}
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { estimatedSessionValueFor } from '@/lib/makerTransport';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
@@ -301,10 +302,13 @@ export function useSessionEstimatedValue(
       };
     }
 
-    const unsubscribeTurnCost = window.electronAPI.onUsageMessageTurnCost?.((payload) => {
-      if (payload.sessionId !== sessionId) return;
-      mergeEntry(resolveEstimatedValueTurnCostEntry(payload));
-    });
+    const unsubscribeTurnCost = window.electronAPI.onUsageMessageTurnCost?.(
+      (payload, ownerStamp) => {
+        if (!isDataOwnerPushCurrent(ownerStamp)) return;
+        if (payload.sessionId !== sessionId) return;
+        mergeEntry(resolveEstimatedValueTurnCostEntry(payload));
+      },
+    );
     // 按会话来源路由:device-link 远程会话查被控端(本地库无该会话的行,查本机恒 0)。
     void estimatedSessionValueFor(sessionId)
       .then((snapshot) => {

@@ -23,9 +23,14 @@ vi.mock('../../logger', () => ({
 
 vi.mock('../mirrorCachePurgeQueue', () => ({
   enqueuePurge: vi.fn(async () => undefined),
-  hasPendingPurgeRecords: async (): Promise<boolean> => pendingPurges > 0,
+  hasPendingPurgeRecords: async (): Promise<boolean> => {
+    purgeChecks += 1;
+    onPurgeCheck?.(purgeChecks);
+    return pendingPurges > 0;
+  },
 }));
 vi.mock('../../appSessionState', () => ({
+  activeOwnerScopeKey: (): string => `cloud:${ownerKey}:${ownerGeneration}`,
   ownerScopedUserDataPath: (...parts: string[]): string =>
     ['/data/owners', ownerKey, ...parts].join('/'),
 }));
@@ -45,9 +50,16 @@ function fakeCache() {
     readMessagesWithInvalidation: vi.fn(async () => ({
       messages: [{ id: 'm1' }],
       invalidation: 3,
+      ownerRoot: '/data/owners/owner-a/device-link-mirror-cache',
+      accountCounter: 0,
     })),
     writeMessages: vi.fn(async () => ({ invalidation: 3 })),
     readSessionList: vi.fn(async () => [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }]),
+    readSessionListWithInvalidation: vi.fn(async () => ({
+      devices: [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }],
+      ownerRoot: '/data/owners/owner-a/device-link-mirror-cache',
+      accountCounter: 0,
+    })),
     writeSessionList: vi.fn(async () => undefined),
     clearDevice: vi.fn(async () => undefined),
     clearAll: vi.fn(async () => undefined),
@@ -56,6 +68,7 @@ function fakeCache() {
     readMessagesWithInvalidation: ReturnType<typeof vi.fn>;
     writeMessages: ReturnType<typeof vi.fn>;
     readSessionList: ReturnType<typeof vi.fn>;
+    readSessionListWithInvalidation: ReturnType<typeof vi.fn>;
     writeSessionList: ReturnType<typeof vi.fn>;
     clearDevice: ReturnType<typeof vi.fn>;
     clearAll: ReturnType<typeof vi.fn>;
@@ -65,21 +78,32 @@ function fakeCache() {
 let cache: ReturnType<typeof fakeCache>;
 /** 由 mock 的 pendingPurgeCount 读取:>0 表示队列里还有删不掉的东西。 */
 let pendingPurges = 0;
-/** 由 mock 的 ownerScopedUserDataPath 读取:模拟账号边界推进(owner 换人)。 */
+let purgeChecks = 0;
+let onPurgeCheck: ((call: number) => void) | null = null;
+/** 由 mock 的 appSessionState 读取:模拟账号边界推进(owner / generation 变化)。 */
 let ownerKey = 'owner-a';
+let ownerGeneration = 1;
 
 beforeEach(() => {
   cache = fakeCache();
   pendingPurges = 0;
+  purgeChecks = 0;
+  onPurgeCheck = null;
   ownerKey = 'owner-a';
+  ownerGeneration = 1;
 });
 
 describe('messages get / put', () => {
-  it('读:转发给 store 并包成 { messages, invalidation }', async () => {
-    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+  it('读:只向 renderer 返回 opaque owner token,不暴露 store 绝对路径', async () => {
+    const result = await handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1');
+    expect(result).toEqual({
       messages: [{ id: 'm1' }],
       invalidation: 3,
+      ownerToken: expect.any(String),
+      accountCounter: 0,
     });
+    expect(result.ownerToken).not.toContain('/');
+    expect(result.ownerToken).not.toBe('/data/owners/owner-a/device-link-mirror-cache');
     expect(cache.readMessagesWithInvalidation).toHaveBeenCalledWith('dev-1', 'sess-1');
   });
 
@@ -112,7 +136,78 @@ describe('messages get / put', () => {
 
   it('空数组照常透传(空 = 清掉该条缓存,是有意义的写)', async () => {
     await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', []);
-    expect(cache.writeMessages).toHaveBeenCalledWith('dev-1', 'sess-1', [], undefined);
+    expect(cache.writeMessages).toHaveBeenCalledWith(
+      'dev-1',
+      'sess-1',
+      [],
+      undefined,
+      undefined,
+      undefined,
+    );
+  });
+
+  it('作废计数 / 账号代际只接受非负整数,opaque token 验证后才还原内部 root', async () => {
+    const { ownerToken } = await handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1');
+    const owner = '/data/owners/owner-a/device-link-mirror-cache';
+    for (const [invalidation, account] of [
+      [-1, -1],
+      [1.5, 2.5],
+      [Number.NaN, Number.POSITIVE_INFINITY],
+    ]) {
+      cache.writeMessages.mockClear();
+      await handleMirrorCachePutMessages(
+        cache,
+        'dev-1',
+        'sess-1',
+        [{ id: 'm1' }],
+        undefined,
+        invalidation,
+        ownerToken,
+        account,
+      );
+      expect(cache.writeMessages).toHaveBeenCalledWith(
+        'dev-1',
+        'sess-1',
+        [{ id: 'm1' }],
+        undefined,
+        owner,
+        undefined,
+      );
+    }
+
+    cache.writeMessages.mockClear();
+    await handleMirrorCachePutMessages(
+      cache,
+      'dev-1',
+      'sess-1',
+      [{ id: 'm1' }],
+      undefined,
+      7,
+      ownerToken,
+      3,
+    );
+    expect(cache.writeMessages).toHaveBeenCalledWith(
+      'dev-1',
+      'sess-1',
+      [{ id: 'm1' }],
+      7,
+      owner,
+      3,
+    );
+
+    // 绝对路径不是合法 token:即使 renderer 猜到路径也只能落到 fail-closed。
+    cache.writeMessages.mockClear();
+    await handleMirrorCachePutMessages(
+      cache,
+      'dev-1',
+      'sess-1',
+      [{ id: 'm1' }],
+      undefined,
+      7,
+      owner,
+      3,
+    );
+    expect(cache.writeMessages.mock.calls[0]?.[4]).toBeUndefined();
   });
 });
 
@@ -218,6 +313,8 @@ describe('待清未清时读路径不命中', () => {
     await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
       messages: [{ id: 'm1' }],
       invalidation: 3,
+      ownerToken: expect.any(String),
+      accountCounter: 0,
     });
   });
 });
@@ -269,9 +366,13 @@ describe('读完成之后又有待清记录', () => {
   });
 
   it('读列表期间被登记待清 → 丢弃结果', async () => {
-    cache.readSessionList.mockImplementationOnce(async () => {
+    cache.readSessionListWithInvalidation.mockImplementationOnce(async () => {
       pendingPurges = 1;
-      return [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }];
+      return {
+        devices: [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }],
+        ownerRoot: '/data/owners/owner-a/device-link-mirror-cache',
+        accountCounter: 0,
+      };
     });
     await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
   });
@@ -291,16 +392,88 @@ describe('读期间账号边界推进', () => {
   });
 
   it('读列表期间 owner 变了 → 丢弃结果,返回空', async () => {
-    cache.readSessionList.mockImplementationOnce(async () => {
+    cache.readSessionListWithInvalidation.mockImplementationOnce(async () => {
       ownerKey = 'owner-b';
-      return [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }];
+      return {
+        devices: [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }],
+        ownerRoot: '/data/owners/owner-b/device-link-mirror-cache',
+        accountCounter: 0,
+      };
     });
     await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
   });
 
-  it('owner 没变 → 照常返回', async () => {
+  it('最终 purge 检查的 await 期间 A→B → 返回前最后安全门丢弃消息与列表', async () => {
+    onPurgeCheck = (call) => {
+      if (call === 2) {
+        ownerKey = 'owner-b';
+        ownerGeneration = 2;
+      }
+    };
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+      messages: [],
+    });
+
+    ownerKey = 'owner-a';
+    ownerGeneration = 1;
+    purgeChecks = 0;
+    onPurgeCheck = (call) => {
+      if (call === 2) {
+        ownerKey = 'owner-b';
+        ownerGeneration = 2;
+      }
+    };
+    await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
+  });
+
+  it('最终 purge 检查期间 A→B→A:root 相同但 generation 已变 → 仍丢弃', async () => {
+    onPurgeCheck = (call) => {
+      if (call === 2) {
+        ownerKey = 'owner-b';
+        ownerGeneration = 2;
+        ownerKey = 'owner-a';
+        ownerGeneration = 3;
+      }
+    };
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+      messages: [],
+    });
+  });
+
+  it('A→B→A ABA:首尾 root 相同但 store 读自 B root → 消息与列表都丢弃', async () => {
+    cache.readMessagesWithInvalidation.mockImplementationOnce(async () => {
+      ownerKey = 'owner-b';
+      const result = {
+        messages: [{ id: 'secret-b' }],
+        invalidation: 3,
+        ownerRoot: '/data/owners/owner-b/device-link-mirror-cache',
+        accountCounter: 0,
+      };
+      ownerKey = 'owner-a';
+      return result;
+    });
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+      messages: [],
+    });
+
+    cache.readSessionListWithInvalidation.mockImplementationOnce(async () => {
+      ownerKey = 'owner-b';
+      const result = {
+        devices: [{ deviceId: 'dev-b', deviceName: 'Bob Mac', sessions: [] }],
+        ownerRoot: '/data/owners/owner-b/device-link-mirror-cache',
+        accountCounter: 0,
+      };
+      ownerKey = 'owner-a';
+      return result;
+    });
+    await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
+  });
+
+  it('owner 没变 → 照常返回(并带回 opaque token / 账号代际供回写比对)', async () => {
     await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({
       devices: [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }],
+      ownerToken: expect.any(String),
+      accountCounter: 0,
     });
   });
 });
@@ -369,10 +542,14 @@ describe('清理失败登记重试', () => {
 });
 
 describe('session list get / put', () => {
-  it('读:包成 { devices }', async () => {
-    await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({
+  it('读:包成 { devices } 并只带 opaque owner token / 账号代际', async () => {
+    const result = await handleMirrorCacheGetSessionList(cache);
+    expect(result).toEqual({
       devices: [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }],
+      ownerToken: expect.any(String),
+      accountCounter: 0,
     });
+    expect(result.ownerToken).not.toContain('/');
   });
 
   it('devices 非数组 → INVALID_PARAMS', async () => {
@@ -388,6 +565,21 @@ describe('session list get / put', () => {
     }));
     await handleMirrorCachePutSessionList(cache, devices);
     expect((cache.writeSessionList.mock.calls[0]?.[0] as unknown[]).length).toBe(64);
+  });
+
+  it('列表账号代际只接受非负整数,opaque token 验证后才还原内部 root', async () => {
+    const devices = [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }];
+    const { ownerToken } = await handleMirrorCacheGetSessionList(cache);
+    const owner = '/data/owners/owner-a/device-link-mirror-cache';
+    for (const account of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      cache.writeSessionList.mockClear();
+      await handleMirrorCachePutSessionList(cache, devices, undefined, ownerToken, account);
+      expect(cache.writeSessionList).toHaveBeenCalledWith(devices, owner, undefined);
+    }
+
+    cache.writeSessionList.mockClear();
+    await handleMirrorCachePutSessionList(cache, devices, undefined, ownerToken, 3);
+    expect(cache.writeSessionList).toHaveBeenCalledWith(devices, owner, 3);
   });
 });
 

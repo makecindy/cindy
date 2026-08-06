@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Editor } from '@tiptap/core';
 
 import {
+  resolveSerializedSessionMessageReferencesForSend,
   resolveSessionMessageReferencesForSend,
   sanitizeSessionChipTitle,
   pastedSessionChipAttrs,
@@ -132,5 +133,44 @@ describe('resolveSessionMessageReferencesForSend', () => {
       titled: true,
       agentText: 'Full cross-device message body',
     });
+  });
+
+  it('hydrates an immutable click-time reference snapshot without mutating later composer state', async () => {
+    const frozenReferences = [
+      {
+        kind: 'message' as const,
+        start: 0,
+        end: MESSAGE_URL.length,
+        href: MESSAGE_URL,
+        sessionId: 'ee59672a-5591-48a7-a44d-aa97e3808c64',
+        messageClientId: 'client-message-12345678',
+      },
+    ];
+    const liveReferences = [...frozenReferences];
+    let release!: (value: string | null) => void;
+    const messageText = new Promise<string | null>((resolve) => {
+      release = resolve;
+    });
+
+    const pending = resolveSerializedSessionMessageReferencesForSend(
+      frozenReferences,
+      async () => messageText,
+    );
+    liveReferences.splice(0, 1, {
+      ...frozenReferences[0],
+      href: `${SESSION_URL}?message=new-live-message`,
+      messageClientId: 'new-live-message',
+    });
+    release('Body captured for the original click');
+
+    await expect(pending).resolves.toEqual([
+      expect.objectContaining({
+        href: MESSAGE_URL,
+        messageClientId: 'client-message-12345678',
+        text: 'Body captured for the original click',
+      }),
+    ]);
+    expect(frozenReferences[0]).not.toHaveProperty('text');
+    expect(liveReferences[0]?.messageClientId).toBe('new-live-message');
   });
 });

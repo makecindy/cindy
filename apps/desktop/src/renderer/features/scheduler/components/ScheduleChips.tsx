@@ -4,7 +4,8 @@ import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizon
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
-import { VendorIcon } from '@/components/sidebar/VendorIcon';
+import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import {
   addRecentFolder,
   FolderPickerPopover,
@@ -41,7 +42,11 @@ import {
   type CodexScheduleConfig,
 } from '../lib/cronCodexPreset';
 import { getScheduleDefaultModel, type EffortValue } from '../hooks/useScheduleForm';
-import { PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
+import {
+  isFollowingSessionSelection,
+  PENDING_SESSION_ID,
+  usesBoundSessionModel,
+} from '../lib/scheduleFormLogic';
 import type { SessionReference } from '../../../../shared/sessionReference';
 
 export type Destination = 'local' | 'worktree' | 'thread';
@@ -160,42 +165,25 @@ export function ProjectChip({
   );
 }
 
-const AGENT_META: Record<AgentKind, { label: string; vendor: 'cc' | 'codex' | 'pi' }> = {
-  'claude-code': { label: 'Claude Code', vendor: 'cc' },
-  codex: { label: 'Codex', vendor: 'codex' },
-  pi: { label: 'Pi', vendor: 'pi' },
-};
-
+/**
+ * Scheduler compatibility adapter: keep the persisted scheduler kind shape,
+ * while sharing the same AgentSelect dropdown used by IM settings and chat.
+ */
 export function AgentTabs({ value, onChange, disabled }: { value: AgentKind; onChange: (v: AgentKind) => void; disabled?: boolean }) {
   return (
-    <div
-      className={cn(
-        'flex h-[34px] w-[78px] shrink-0 items-center gap-0.5 rounded-full p-[3px]',
-        'bg-[var(--chat-input-chip-bg)] dark:border dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
-        disabled && 'pointer-events-none opacity-50',
-      )}
-    >
-      {(Object.keys(AGENT_META) as AgentKind[]).map((kind) => {
-        const active = kind === value;
-        const meta = AGENT_META[kind];
-        return (
-          <button
-            key={kind}
-            type="button"
-            aria-label={meta.label}
-            onClick={() => onChange(kind)}
-            className={cn(
-              'flex h-full flex-1 items-center justify-center rounded-full transition-colors',
-              active
-                ? 'border border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] dark:border-transparent dark:bg-[var(--chat-input-chip-bg)]'
-                : 'border border-transparent bg-transparent hover:bg-black/5 dark:hover:bg-white/5',
-            )}
-          >
-            <VendorIcon vendor={meta.vendor} size={14} />
-          </button>
-        );
-      })}
-    </div>
+    <AgentSelect
+      value={agentKindToVendor(value)}
+      disabled={disabled}
+      side="top"
+      // ScheduleFormDialog 是 Radix modal。MorphPopover 的 custom portal 不在
+      // Dialog focus scope 内，动画结束聚焦选中项时会被拉回并立即自动收起；
+      // 此处使用 Radix Popover，让嵌套焦点与 outside-interaction 语义正确组合。
+      useMorphPopover={false}
+      overlayContentClassName="z-[10010]"
+      onChange={(vendor) => {
+        onChange(vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex');
+      }}
+    />
   );
 }
 
@@ -1129,18 +1117,30 @@ export function ModelEffortChip({
       ),
     [availableModels, agentKind, xdConnected],
   );
-  // followSession 形态下 model 空值 = "跟随会话",不做默认回退(回退会显示一个并不会
-  // 运行的模型);非 followSession 维持原逻辑:空值回退跟实际运行语义同源(三级回退默认),
-  // 绝不回退 models[0]——列表第一个是最贵的 Opus,显示它实际跑别的就是 2026-06 的事故根源。
-  const isFollowingSession = !!followSession && !modelValue;
-  const effectiveId = isFollowingSession ? '' : modelValue || getScheduleDefaultModel(agentKind);
+  // 只有 model/provider/effort 都为空时才显示「跟随会话」;混合覆盖态必须显式暴露，
+  // 不能把来源或强度覆盖伪装成完整继承。非 followSession 维持原逻辑:空值回退跟实际
+  // 运行语义同源(三级回退默认),绝不回退 models[0]。
+  const isFollowingSession = isFollowingSessionSelection({
+    followSession,
+    model: modelValue,
+    providerId,
+    effort: effortValue,
+  });
+  const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
+  const effectiveId = followsSessionModel ? '' : modelValue || getScheduleDefaultModel(agentKind);
   const current = models.find((m) => m.id === effectiveId);
   const allowedEfforts = (current?.efforts ?? []) as readonly EffortValue[];
   const fallbackEffort = (current?.defaultEffort ?? 'high') as EffortValue;
   const effectiveEffort: EffortValue = effortValue && allowedEfforts.includes(effortValue) ? effortValue : fallbackEffort;
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
-  const display = isFollowingSession
-    ? t('scheduler.chips.model.followSession')
+  const display = followsSessionModel
+    ? [
+      t('scheduler.chips.model.followSession'),
+      providerId.trim()
+        ? (providers.find((provider) => provider.id === providerId)?.name ?? providerId)
+        : null,
+      effortValue ? effortLabel(effortValue) : null,
+    ].filter(Boolean).join(' · ')
     : current
       ? `${current.displayName} · ${allowedEfforts.length ? effortLabel(effectiveEffort) : t('scheduler.chips.model.effortDefault')}`
       : t('scheduler.chips.model.default');
@@ -1223,9 +1223,16 @@ export function ModelEffortChip({
           onProviderChange={(pid, reconciledModelId, reconciledEffort) => {
             onChangeProviderId(pid && pid !== nativeDefault ? pid : '');
             if (reconciledModelId) onChangeModel(reconciledModelId);
-            if (reconciledEffort) onChangeEffort(reconciledEffort as EffortValue);
+            if (reconciledEffort !== undefined) {
+              onChangeEffort(reconciledEffort as EffortValue | '');
+            }
           }}
           onNavigateToProviders={onNavigateToProviders}
+          // A stale explicit provider is rendered as the effective fallback row.
+          // Re-selecting that highlighted row must repair the stored provider
+          // before the effort configuration card opens.
+          reselectEmitsChange
+          selectedRowClickOpensConfiguration
           overlayContentClassName="z-[10020]"
           discoveringModels={discovery.pending}
           followSession={

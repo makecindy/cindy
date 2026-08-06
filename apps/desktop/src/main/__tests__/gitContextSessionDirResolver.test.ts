@@ -62,6 +62,15 @@ describe('extractDirCandidate', () => {
     expect(extractDirCandidate('not json')).toBeNull();
     expect(extractDirCandidate('{"toolName":"exec"}')).toBeNull();
   });
+
+  it('远端 POSIX 遥测不按 Windows 控制端转换盘符路径', () => {
+    expect(
+      extractDirCandidate(toolUse('exec', { command: 'pwd', cwd: '/e/remote/repo' }), 'linux'),
+    ).toBe('/e/remote/repo');
+    expect(
+      extractDirCandidate(toolUse('Edit', { file_path: '/e/remote/repo/src/a.ts' }), 'linux'),
+    ).toBe('/e/remote/repo/src');
+  });
 });
 
 describe('posixDriveToWin32', () => {

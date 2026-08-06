@@ -14,12 +14,18 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-const { mockGetAppCapabilities } = vi.hoisted(() => ({
+const { mockGetAppCapabilities, mockReadModelDisableOverrides } = vi.hoisted(() => ({
   mockGetAppCapabilities: vi.fn(() => ({ canUseCindyGateway: true })),
+  mockReadModelDisableOverrides: vi.fn(() => ({})),
 }));
 
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: mockGetAppCapabilities,
+}));
+
+// 用户停用覆盖(disable override store)在测试里可控;默认空 = 无停用。
+vi.mock('../model-disable-store.js', () => ({
+  readModelDisableOverrides: mockReadModelDisableOverrides,
 }));
 
 // xd 网关上游运行期来自 model-access server 下发(effectiveXdGatewayBaseUrl),
@@ -240,19 +246,24 @@ describe('generateTitleViaProvider — provider 解析', () => {
   });
 
   it('DB 无显式 + xd 已连接 → 走 xd(cc 默认)', async () => {
-    const fetchImpl = fakeFetch(() => ({
-      json: { choices: [{ message: { content: '网关标题' } }] },
-    }));
-    const title = await generateTitleViaProvider(
-      { sessionId: 's2', agentKind: 'claude-code', prompt: 'x' },
-      {
-        fetchImpl,
-        readSessionProviderId: async () => null,
-        listConnectedProviders: async () => [providerStub('xd')],
-        readGatewayKey: () => 'gk',
-      },
-    );
-    expect(title).toBe('网关标题');
+    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: '网关标题' } }] },
+      }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 's2', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => null,
+          listConnectedProviders: async () => [providerStub('xd')],
+          readGatewayKey: () => 'gk',
+        },
+      );
+      expect(title).toBe('网关标题');
+    } finally {
+      setXdGatewayModels([]);
+    }
   });
 
   it('DB 无显式 + 只有 anthropic 已连接(无 xd)→ 走 anthropic', async () => {
@@ -348,18 +359,105 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
       setActiveCatalog(BUNDLED_CATALOG);
     }
   });
-  it('xd → gpt-5.4-mini / 网关 chat-completions(/v1 upstream)', () => {
-    // xd 模型以网关实时清单为准(默认空):注入 titleModel 同 id 条目,
-    // 元数据(efforts)回落目录静态条目 → 最低 effort = low。
-    setXdGatewayModels([{ id: 'gpt-5.4-mini' }]);
+  it('xd → 从网关实时清单选可用聊天模型 / 网关 chat-completions(/v1 upstream)', () => {
+    // xd 模型以网关实时清单为准(2026-08-06 #1891 修复:不再读静态 titleModel):
+    // 注入清单含聊天模型与图像模型,标题应选聊天模型(最经济)。
+    setXdGatewayModels([
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+      { id: 'gpt-image-2', mode: 'image' },
+    ]);
     try {
       expect(buildTitleTarget('xd')).toEqual({
         providerId: 'xd',
-        model: 'gpt-5.4-mini',
+        model: 'deepseek/deepseek-v4-flash',
         effort: 'low',
         wire: 'gateway-chat',
         upstream: `${XD_GATEWAY_BASE_URL}/v1`,
       });
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('xd 清单只有非聊天模型(图像/向量)→ null,不发送无效请求', () => {
+    setXdGatewayModels([
+      { id: 'gpt-image-2', mode: 'image' },
+      { id: 'voyage/voyage-4', mode: 'embedding' },
+    ]);
+    try {
+      expect(buildTitleTarget('xd')).toBeNull();
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('xd 清单为空 → null(网关清单即权威,不回落静态 titleModel)', () => {
+    setXdGatewayModels([]);
+    expect(buildTitleTarget('xd')).toBeNull();
+  });
+  it('xd 清单只有 chat + 图像混合 → 只选 chat,模式权威过滤', () => {
+    setXdGatewayModels([
+      { id: 'gpt-image-2', mode: 'image' },
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+      { id: 'moonshotai/kimi-k3', mode: 'chat' },
+    ]);
+    try {
+      const target = buildTitleTarget('xd');
+      // 两个 chat 模型无 cost 信息 → 都保持可用,选中任意一个 chat 模型(非图像)
+      expect(['deepseek/deepseek-v4-flash', 'moonshotai/kimi-k3']).toContain(target?.model);
+      expect(target?.model).not.toBe('gpt-image-2');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('xd 清单含 responses 模型 → 跳过,只选原生 chat(Greptile P2)', () => {
+    // responses 模型需要 Codex Responses wire,标题通道固定 gateway-chat——
+    // 选中会被网关拒收,必须排除。
+    setXdGatewayModels([
+      { id: 'qwen/qwen3.8-max', mode: 'responses' },
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+    ]);
+    try {
+      const target = buildTitleTarget('xd');
+      expect(target?.model).toBe('deepseek/deepseek-v4-flash');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('xd 清单只有 responses 模型 → null(无可用 chat 模型,不发请求)', () => {
+    setXdGatewayModels([{ id: 'qwen/qwen3.8-max', mode: 'responses' }]);
+    try {
+      expect(buildTitleTarget('xd')).toBeNull();
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('用户停用清单中最便宜的模型 → 选次便宜可用模型(Codex round 2)', () => {
+    setXdGatewayModels([
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat', inputCostPerToken: 0.1, outputCostPerToken: 0.2 },
+      { id: 'moonshotai/kimi-k3', mode: 'chat', inputCostPerToken: 1, outputCostPerToken: 2 },
+    ]);
+    mockReadModelDisableOverrides.mockReturnValueOnce({
+      disabledModels: { 'xd:deepseek/deepseek-v4-flash': true },
+    });
+    try {
+      // 最便宜的 deepseek 被用户停用 → 应跳过,选 kimi-k3
+      expect(buildTitleTarget('xd')?.model).toBe('moonshotai/kimi-k3');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('清单中全部 chat 模型都被用户停用 → null', () => {
+    setXdGatewayModels([
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+      { id: 'moonshotai/kimi-k3', mode: 'chat' },
+    ]);
+    mockReadModelDisableOverrides.mockReturnValueOnce({
+      disabledModels: {
+        'xd:deepseek/deepseek-v4-flash': true,
+        'xd:moonshotai/kimi-k3': true,
+      },
+    });
+    try {
+      expect(buildTitleTarget('xd')).toBeNull();
     } finally {
       setXdGatewayModels([]);
     }
@@ -540,41 +638,70 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
 // ── generateTitleViaProvider — xd(网关 chat-completions)─────────────────
 
 describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
-  it('200 → 解析 choices[].message.content;请求形状正确', async () => {
-    const fetchImpl = fakeFetch(() => ({
-      json: { choices: [{ message: { content: '网关标题' } }] },
-    }));
-    const title = await generateTitleViaProvider(
-      { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
-      {
-        fetchImpl,
-        readSessionProviderId: async () => 'xd',
-        listConnectedProviders: async () => [providerStub('xd')],
-        readGatewayKey: () => 'gk-1',
-      },
-    );
-    expect(title).toBe('网关标题');
-    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
-      string,
-      { headers: Record<string, string>; body: string },
-    ];
-    expect(url).toBe(`${XD_GATEWAY_BASE_URL}/v1/chat/completions`);
-    expect(init.headers.authorization).toBe('Bearer gk-1');
-    expect(JSON.parse(init.body).model).toBe('gpt-5.4-mini');
+  it('200 → 解析 choices[].message.content;请求形状正确(模型取自网关清单)', async () => {
+    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: '网关标题' } }] },
+      }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'xd',
+          listConnectedProviders: async () => [providerStub('xd')],
+          readGatewayKey: () => 'gk-1',
+        },
+      );
+      expect(title).toBe('网关标题');
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      expect(url).toBe(`${XD_GATEWAY_BASE_URL}/v1/chat/completions`);
+      expect(init.headers.authorization).toBe('Bearer gk-1');
+      expect(JSON.parse(init.body).model).toBe('deepseek/deepseek-v4-flash');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('网关清单无聊天模型 → 不发送请求、回落 null', async () => {
+    setXdGatewayModels([{ id: 'gpt-image-2', mode: 'image' }]);
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: {} }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'xd',
+          listConnectedProviders: async () => [providerStub('xd')],
+          readGatewayKey: () => 'gk-1',
+        },
+      );
+      expect(title).toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      setXdGatewayModels([]);
+    }
   });
   it('无网关 key → null', async () => {
-    const fetchImpl = fakeFetch(() => ({ json: {} }));
-    const title = await generateTitleViaProvider(
-      { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
-      {
-        fetchImpl,
-        readSessionProviderId: async () => 'xd',
-        listConnectedProviders: async () => [providerStub('xd')],
-        readGatewayKey: () => null,
-      },
-    );
-    expect(title).toBeNull();
-    expect(fetchImpl).not.toHaveBeenCalled();
+    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: {} }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'xd',
+          listConnectedProviders: async () => [providerStub('xd')],
+          readGatewayKey: () => null,
+        },
+      );
+      expect(title).toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      setXdGatewayModels([]);
+    }
   });
 });
 

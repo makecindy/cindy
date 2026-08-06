@@ -139,26 +139,75 @@ function titleRouteUnavailableReason(
 }
 
 /**
+ * XD 网关实时清单中选标题模型:存在 + 具备聊天能力 + 未停用/未退休,取单价最低者
+ * (标题 oneShot 语义 = 最经济模型)。清单为空或无可用聊天模型 → null(回落启发式,
+ * 不向网关发送必然 400 的无效请求)。
+ *
+ * 2026-08-06 修复(#1891):此前 xd 分支直发静态 titleModel `gpt-5.4-mini`,而网关
+ * 清单已不含该模型(网关 /v1/models 是权威,模型 id 均带供应商前缀)——修复后改为
+ * 从 active catalog 中 xd provider 的 models(由 setXdGatewayModels 整体重建)选择,
+ * 网关清单变化不再导致标题通道硬失败。
+ */
+function pickXdTitleModel(provider: Provider): CatalogModel | null {
+  // 用户显式停用(disable override store)优先于清单排序:active catalog 的 xd
+  // 模型不带 buildRegistry 烘焙的 disabled 字段(那在 rail 的 ProviderView 上),
+  // 只查目录会选中已停用模型,派发前 routeUnavailableNow 再中止整个 one-shot,
+  // 标题退回落启发式而非次便宜可用模型(Codex review round 2)。
+  const disableOverrides = readModelDisableOverrides();
+  const candidates: CatalogModel[] = [];
+  for (const agent of provider.agents) {
+    for (const model of provider.models[agent] ?? []) {
+      if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
+        continue;
+      }
+      // 只选原生 chat 模型:mode 明确为 'responses' 的模型需要走 Codex Responses
+      // wire,而标题通道固定走 gateway-chat(/v1/chat/completions)——选中的话仍会
+      // 被网关拒收(Greptile review P2,2026-08-06)。mode 缺省(网关旧条目)按 chat
+      // 处理,由 isModelSelectableForNewRoute 的 id 分类兜底。
+      if (model.mode === 'responses') continue;
+      if (isModelDisabled(disableOverrides, provider.id, model.id)) continue;
+      candidates.push(model);
+    }
+  }
+  if (candidates.length === 0) return null;
+  // 按 per-1M token 总价升序选最经济;无价条目排后(仍可被选中,兜底保证可用性)。
+  const costRank = (m: CatalogModel): number => {
+    const c = m.cost;
+    if (!c) return Number.POSITIVE_INFINITY;
+    return (typeof c.input === 'number' ? c.input : 0) + (typeof c.output === 'number' ? c.output : 0);
+  };
+  return [...candidates].sort((a, b) => costRank(a) - costRank(b))[0];
+}
+
+/**
  * 据 providerId 组装标题目标(模型 + 最低 effort + wire + upstream)。
  * provider 无 titleModel / 无对应路由 / 未知 provider → null(不参与智能起名)。
  *
  * wire 按 provider 分派:内置三家协议各异且无法纯靠 authStrategy 区分(anthropic 与 openai
  * 同为 oauth-passthrough 但 wire 不同),故按 id 显式分派。**新增供应商的标题支持 = 加一个 case。**
+ *
+ * 注意:anthropic / openai 的 titleModel 是各自订阅通道内有效的静态值(haiku /
+ * gpt-5.4-mini 在 ChatGPT 后端有效);xd 是动态清单供应商,**标题模型从网关实时
+ * 清单选择**(pickXdTitleModel),不读静态 titleModel(网关清单即权威)。
  */
 export function buildTitleTarget(providerId: string): TitleTarget | null {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  if (!provider?.titleModel) return null;
-  const model = provider.titleModel;
-  const effort = lowestEffort(findCatalogModel(provider, model)?.efforts ?? []);
+  if (!provider) return null;
 
   switch (provider.id) {
     case 'anthropic': {
+      if (!provider.titleModel) return null;
+      const model = provider.titleModel;
+      const effort = lowestEffort(findCatalogModel(provider, model)?.efforts ?? []);
       const routing = provider.routing['claude-code'];
       return routing
         ? { providerId, model, effort, wire: 'anthropic-messages', upstream: routing.upstream }
         : null;
     }
     case 'openai': {
+      if (!provider.titleModel) return null;
+      const model = provider.titleModel;
+      const effort = lowestEffort(findCatalogModel(provider, model)?.efforts ?? []);
       const routing = provider.routing['codex'];
       return routing
         ? { providerId, model, effort, wire: 'codex-responses', upstream: routing.upstream }
@@ -166,20 +215,25 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
     }
     case 'xd': {
       if (!getAppCapabilities().canUseCindyGateway) return null;
-      // titleModel 为 gpt-5.4-mini(OpenAI 系)→ 走网关 litellm 的 chat-completions。
       // 上游不取 catalog routing.upstream:XD 网关入口一律用 model-access server
       // 随凭据下发的 endpoint(与 key 同租户,见 effectiveEndpoint.ts);凭据未
       // 就绪(空串)时返回 null,回落启发式起名。
       const base = effectiveXdGatewayBaseUrl().trim();
-      return base
-        ? {
-            providerId,
-            model,
-            effort,
-            wire: 'gateway-chat',
-            upstream: `${trimTrailingSlash(base)}/v1`,
-          }
-        : null;
+      if (!base) return null;
+      const model = pickXdTitleModel(provider);
+      if (!model) {
+        log.debug('title oneShot skipped: no usable chat model in xd gateway catalog', {
+          providerId,
+        });
+        return null;
+      }
+      return {
+        providerId,
+        model: model.id,
+        effort: lowestEffort(model.efforts ?? []),
+        wire: 'gateway-chat',
+        upstream: `${trimTrailingSlash(base)}/v1`,
+      };
     }
     default:
       return null;

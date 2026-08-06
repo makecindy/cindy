@@ -3555,7 +3555,7 @@ Apache License
 Only the viewer JavaScript (viewer-static.min.js) is redistributed. Upstream icon sets / stencils / templates carry an additional no-Atlassian-use restriction; none of those assets are redistributed by this product.
 
 ------------------------------------------------------------------------------
-Electron (bundled runtime) 41.2.0
+Electron (bundled runtime) 41.10.3
 License: MIT
 Source: https://github.com/electron/electron
 ------------------------------------------------------------------------------

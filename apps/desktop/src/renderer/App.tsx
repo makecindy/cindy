@@ -26,6 +26,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
+import { PluginMarketPermissionReviewHost } from '@/features/plugin/PluginMarketPermissionReviewHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { installSystemNetworkErrorToastListener } from '@/lib/systemNetworkErrorToast';
 import { installSilentInstallToastListener } from '@/lib/silentInstallToast';
@@ -37,9 +38,7 @@ import {
   preloadLocalCatalogSnapshot,
   refreshLocalCatalogSnapshot,
 } from '@/lib/localCatalogSnapshot';
-import {
-  useResyncAgentIslandSettingsAfterLogin,
-} from '@/hooks/useAgentIslandSettings';
+import { useResyncAgentIslandSettingsAfterLogin } from '@/hooks/useAgentIslandSettings';
 import {
   getDraftForPreferenceSync,
   subscribeDraft,
@@ -75,10 +74,7 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
       {/* 认证恢复后已登录(直进受保护路由、LoginPage 不挂载)时结束首启亮色门,
           避免 renderer localStorage 被清空但主进程仍持有会话时整个已登录会话
           被永久锁亮色;未登录场景仍由 LoginPage 卸载结束门(见组件头注释)。 */}
-      <LoginFirstLaunchLightGateBridge
-        authResolved={!isInitializing}
-        canEnterApp={canEnterApp}
-      />
+      <LoginFirstLaunchLightGateBridge authResolved={!isInitializing} canEnterApp={canEnterApp} />
       {children}
     </LoginHandoffProvider>
   );
@@ -110,6 +106,12 @@ function MakerBootstrap() {
     void preloadLocalCatalogSnapshot();
   }, [dataOwnerId]);
   return null;
+}
+
+function OwnerScopedRouter() {
+  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
+  return <RouterProvider key={ownerKey} router={router} />;
 }
 
 export function App() {
@@ -192,7 +194,8 @@ export function App() {
       ({ agent, providerId, modelId, active, effort, fast, markModelChoice }) => {
         const vendor = agentKindToVendor(agent);
         if (active) {
-          const patch = markModelChoice === false ? patchVendorPrefsPreservingModelChoice : patchVendorPrefs;
+          const patch =
+            markModelChoice === false ? patchVendorPrefsPreservingModelChoice : patchVendorPrefs;
           const shouldPatchActiveModel = markModelChoice !== false || effort !== undefined;
           if (shouldPatchActiveModel) {
             patch(vendor, {
@@ -296,8 +299,12 @@ export function App() {
                         {/* 副窗口(「在新窗口打开」)/ 右侧栏子窗口跳过 splash:env/热更检查
                             由主窗启动时完成,附属窗 EnvCheckProvider 初始即 'passed',
                             不需要也不应再走 splash 流程。 */}
-                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <LoginBrandStage />}
-                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <SplashScreen />}
+                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
+                          <LoginBrandStage />
+                        )}
+                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
+                          <SplashScreen />
+                        )}
                         <EnvCheckGuard>
                           <MakerBootstrap />
                           <ProjectAutomationNotifyBridge />
@@ -305,13 +312,16 @@ export function App() {
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
-                          <RouterProvider router={router} />
+                          <PluginMarketPermissionReviewHost />
+                          <OwnerScopedRouter />
                         </EnvCheckGuard>
                       </LoginHandoffHost>
                       <FindInPageBar />
                       <ToastContainer />
                       {/* 首登轻量数据迁移弹窗:只挂主窗(副窗/侧栏窗不重复弹) */}
-                      {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <LegacyMigrationDialog />}
+                      {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
+                        <LegacyMigrationDialog />
+                      )}
                     </Tooltip.Provider>
                   </PrRefsProvider>
                 </WorktreeProvider>

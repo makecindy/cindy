@@ -39,6 +39,76 @@ describe('resolveBoundSessionGenerationRoute', () => {
     })).toEqual({ providerId: 'custom-claude', agentKind: 'claude-code', model: 'claude-connect-4-6' });
   });
 
+  it('uses an explicit task provider with the bound session model', () => {
+    const providersWithSessionModel = providers.map((provider) => provider.id === 'custom-claude'
+      ? {
+        ...provider,
+        models: {
+          'claude-code': [
+            ...(provider.models['claude-code'] ?? []),
+            { id: 'claude-sonnet', name: 'Sonnet', contextWindow: 200_000 },
+          ],
+        },
+      }
+      : provider) as unknown as ProviderView[];
+    expect(resolveBoundSessionGenerationRoute({
+      session: { agentKind: 'claude-code', model: 'claude-sonnet' },
+      sessionProviderId: 'xd',
+      requestedProviderId: 'custom-claude',
+      providers: providersWithSessionModel,
+    })).toEqual({ providerId: 'custom-claude', agentKind: 'claude-code', model: 'claude-sonnet' });
+  });
+
+  it('keeps the bound session provider when only the task model is explicit', () => {
+    const providersWithBothModels = providers.map((provider) => provider.id === 'xd'
+      ? {
+        ...provider,
+        models: {
+          'claude-code': [
+            ...(provider.models['claude-code'] ?? []),
+            { id: 'claude-connect-4-6', name: 'Claude Connect', contextWindow: 200_000 },
+          ],
+        },
+      }
+      : provider) as unknown as ProviderView[];
+    expect(resolveBoundSessionGenerationRoute({
+      session: { agentKind: 'claude-code', model: 'claude-sonnet' },
+      sessionProviderId: 'xd',
+      requestedModel: 'claude-connect-4-6',
+      providers: providersWithBothModels,
+    })).toEqual({ providerId: 'xd', agentKind: 'claude-code', model: 'claude-connect-4-6' });
+  });
+
+  it('uses a new-route provider when only the task model is explicit and the session has no provider', () => {
+    const providersWithRetiredDefault = providers.map((provider) => provider.id === 'xd'
+      ? {
+        ...provider,
+        models: {
+          'claude-code': [
+            ...(provider.models['claude-code'] ?? []),
+            { id: 'claude-connect-4-6', name: 'Claude Connect', contextWindow: 200_000, status: 'retired' as const },
+          ],
+        },
+      }
+      : provider.id === 'custom-claude'
+        ? {
+          ...provider,
+          models: {
+            'claude-code': [
+              ...(provider.models['claude-code'] ?? []),
+              { id: 'claude-connect-4-6', name: 'Claude Connect', contextWindow: 200_000 },
+            ],
+          },
+        }
+        : provider) as unknown as ProviderView[];
+    expect(resolveBoundSessionGenerationRoute({
+      session: { agentKind: 'claude-code', model: 'claude-sonnet' },
+      sessionProviderId: null,
+      requestedModel: 'claude-connect-4-6',
+      providers: providersWithRetiredDefault,
+    })).toEqual({ providerId: 'custom-claude', agentKind: 'claude-code', model: 'claude-connect-4-6' });
+  });
+
   it('materializes the effective provider when the session follows the default source', () => {
     expect(resolveBoundSessionGenerationRoute({
       session: { agentKind: 'claude-code', model: 'claude-sonnet' },
@@ -131,19 +201,17 @@ describe('resolveBoundSessionGenerationRoute', () => {
 });
 
 describe('shouldResolveBoundSessionGenerationRoute', () => {
-  it('resolves the session route when the bound request omits provider and model', () => {
+  it('resolves the session route when the renderer marks a bound target', () => {
     expect(shouldResolveBoundSessionGenerationRoute({
       targetSessionId: 'session-1',
-      providerId: undefined,
-      model: undefined,
+      resolveBoundSessionRoute: true,
     })).toBe(true);
   });
 
   it('keeps an explicit task route for a persistent schedule with targetSessionId', () => {
     expect(shouldResolveBoundSessionGenerationRoute({
       targetSessionId: 'session-1',
-      providerId: 'tapsvc',
-      model: 'gpt-5.5',
+      resolveBoundSessionRoute: false,
     })).toBe(false);
   });
 });

@@ -31,8 +31,10 @@ import { createId } from '@paralleldrive/cuid2';
 
 import { BrowserWindow } from 'electron';
 import { desc, eq } from 'drizzle-orm';
+import { resolveCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
 
 import {
+  broadcastMessageRow,
   broadcastMessageAgentMetaUpdate,
   createMessage as createDbMessage,
   patchMessageAgentMetaWithResult,
@@ -42,7 +44,7 @@ import { getDbClient } from './localDb/client/current.js';
 import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
 import { createLogger } from './logger.js';
-import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
@@ -75,6 +77,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
 }
 
 type CreateDbMessageBody = Parameters<typeof createDbMessage>[1];
+type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /**
  * session-agent-switch:每会话当前 agent 引擎('cc'/'codex'),由 register.ts
@@ -99,18 +102,24 @@ function withAgentKindStamp(sessionId: string, body: CreateDbMessageBody): Creat
   return kind ? { ...body, agentKind: kind } : body;
 }
 
-function createVisibleDbMessage(sessionId: string, body: CreateDbMessageBody): ReturnType<typeof createDbMessage> {
+function createVisibleDbMessage(
+  sessionId: string,
+  body: CreateDbMessageBody,
+  ownerScope: OwnerScope,
+): ReturnType<typeof createDbMessage> {
   const createdAt = typeof body.createdAt === 'number' && Number.isFinite(body.createdAt)
     ? body.createdAt
     : undefined;
-  if (createdAt === undefined) {
-    return createDbMessage(sessionId, body);
-  }
   return createDbMessage(sessionId, body, {
-    shouldBroadcast: () => {
-      const latestBoundary = clearBoundaryBySession.get(sessionId);
-      return latestBoundary === undefined || createdAt > latestBoundary;
-    },
+    ...(createdAt === undefined
+      ? {}
+      : {
+          shouldBroadcast: () => {
+            const latestBoundary = clearBoundaryBySession.get(sessionId);
+            return latestBoundary === undefined || createdAt > latestBoundary;
+          },
+        }),
+    broadcastOwnerScope: ownerScope,
   });
 }
 
@@ -243,12 +252,12 @@ function markAssistantTurnBoundary(
   completed: boolean,
 ): Promise<boolean> {
   if (!sessionId || !clientId) return Promise.resolve(false);
-  return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async () => {
+  return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async (ownerScope) => {
     const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
       turnCompleted: completed,
     });
     if (!patched) return false;
-    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
+    return broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
   });
 }
 
@@ -276,6 +285,20 @@ export function markAssistantTurnFailed(
 }
 
 /**
+ * Codex emits `done` for every terminal turn, including user interruption and
+ * failure. Only the successful variant may create a persisted completion seal;
+ * otherwise historical plan recovery would later treat partial work as done.
+ */
+export function isSuccessfulCodexDoneEventData(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const done = data as { cancelled?: unknown; raw?: unknown };
+  if (done.cancelled === true) return false;
+  if (!done.raw || typeof done.raw !== 'object' || Array.isArray(done.raw)) return false;
+  const status = (done.raw as { status?: unknown }).status;
+  return status === 'completed';
+}
+
+/**
  * 给一条自动续跑（中断自愈）的 user 消息补上**结果**。
  *
  * 为什么必须有这一步:那条消息在「续跑指令发出去」的瞬间就落库了,而那时还完全不知道
@@ -291,12 +314,12 @@ export function markAutoResumeOutcome(
   outcome: 'succeeded' | 'failed',
 ): Promise<boolean> {
   if (!sessionId || !clientId) return Promise.resolve(false);
-  return enqueueDurableWrite(`auto-resume-outcome:${sessionId}:${clientId}`, async () => {
+  return enqueueDurableWrite(`auto-resume-outcome:${sessionId}:${clientId}`, async (ownerScope) => {
     const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
       autoResumeOutcome: outcome,
     });
     if (!patched) return false;
-    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
+    return broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
   });
 }
 
@@ -305,9 +328,42 @@ export function markAutoResumeOutcome(
  * 序列化(sqlite 本就单写者)。每个 link 单独 catch,失败只 warn、不打断后续写。
  */
 let writeChain: Promise<unknown> = Promise.resolve();
-function enqueueWrite(label: string, fn: () => Promise<unknown>): void {
+const OWNER_SCOPE_SUPERSEDED = 'OWNER_SCOPE_SUPERSEDED';
+
+function captureOwnerScope(): ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null {
+  return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
+}
+
+function isOwnerScopeCurrent(
+  scope: ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null,
+): boolean {
+  return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
+}
+
+function ownerScopeSupersededError(): Error & { code: string } {
+  return Object.assign(new Error('durable write superseded by an app-session boundary'), {
+    code: OWNER_SCOPE_SUPERSEDED,
+  });
+}
+
+function isOwnerScopeSupersededError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    (error as { code?: unknown }).code === OWNER_SCOPE_SUPERSEDED
+  );
+}
+
+function enqueueWrite(label: string, fn: (ownerScope: OwnerScope) => Promise<unknown>): void {
+  const ownerScope = captureOwnerScope();
   writeChain = writeChain
-    .then(fn)
+    .then(() => {
+      if (!isOwnerScopeCurrent(ownerScope)) {
+        log.debug('message persist skipped after app-session boundary', { label });
+        return;
+      }
+      return fn(ownerScope);
+    })
     .catch((err) => {
       log.warn('message persist failed', {
         label,
@@ -323,7 +379,7 @@ function enqueueVisibleDbMessage(
   body: CreateDbMessageBody,
 ): void {
   const stamped = withAgentKindStamp(sessionId, body);
-  enqueueWrite(label, () => createVisibleDbMessage(sessionId, stamped));
+  enqueueWrite(label, (ownerScope) => createVisibleDbMessage(sessionId, stamped, ownerScope));
 }
 
 /**
@@ -336,18 +392,33 @@ function enqueueVisibleDbMessage(
  * `fn` 在 microtask 里跑, 内部用 sync drizzle write OK; reject 透传给调用方, 单
  * 个 link reject 不打断后续 chain (跟 enqueueWrite 的吞错语义对齐, log.warn 即可)。
  */
-export function enqueueDurableWrite<T>(label: string, fn: () => Promise<T> | T): Promise<T> {
+export function enqueueDurableWrite<T>(
+  label: string,
+  fn: (ownerScope: OwnerScope) => Promise<T> | T,
+): Promise<T> {
+  const ownerScope = captureOwnerScope();
   return new Promise<T>((resolve, reject) => {
     writeChain = writeChain
       .then(async () => {
+        if (!isOwnerScopeCurrent(ownerScope)) {
+          reject(ownerScopeSupersededError());
+          return;
+        }
         try {
-          const value = await fn();
+          const value = await fn(ownerScope);
+          // The durable side effect may have committed just before an app
+          // session boundary becomes observable.  Keep that commit's result:
+          // callers must not retry or compensate a row/ledger write merely
+          // because its owner-scoped broadcast is now stale.  Each fn owns
+          // suppressing its old-owner broadcast via ownerScope.
           resolve(value);
         } catch (err) {
-          log.warn('durable write failed', {
-            label,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          if (!isOwnerScopeSupersededError(err)) {
+            log.warn('durable write failed', {
+              label,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
           reject(err);
         }
       })
@@ -512,6 +583,65 @@ export function onToolUseEvent(
   }
   notePersistedMessage(sessionId, 'tool_use', persistId);
   return persistId;
+}
+
+/**
+ * Persist the same terminal Codex plan convergence that the renderer applies
+ * immediately on `done`. Without this DB update, switching tasks or reloading
+ * the renderer resurrects the last in-progress snapshot and leaves the pinned
+ * plan visible forever even though the turn completed successfully.
+ *
+ * The turn id is the ownership boundary: only `plan:<raw.id>` may be updated.
+ * Failed, interrupted, or unrelated turns never infer completion. A matching
+ * failed turn still stamps `turnCompleted: false` on its plan row because the
+ * turn may have ended before any assistant row existed to carry that seal.
+ */
+export function persistCodexPlanOnDone(
+  sessionId: string,
+  data:
+    | { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+    | null
+    | undefined,
+): boolean {
+  const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
+  if (!turnId) return false;
+
+  const toolUseId = `plan:${turnId}`;
+  const infoMap = toolUseInfoBySession.get(sessionId);
+  const info = infoMap?.get(toolUseId);
+  const persistId = updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId);
+  if (!info || info.toolName !== 'update_plan' || !persistId) return false;
+
+  const input = info.input && typeof info.input === 'object' && !Array.isArray(info.input)
+    ? info.input as Record<string, unknown>
+    : null;
+  if (!input || !Array.isArray(input.plan)) return false;
+
+  const isSuccessfulTerminal = isSuccessfulCodexDoneEventData(data);
+  const nextPlan =
+    resolveCodexPlanSnapshotOnDone(input.plan, data?.plan, isSuccessfulTerminal) ??
+    (isSuccessfulTerminal ? null : input.plan);
+  if (!nextPlan) return false;
+  // Even when Codex already emitted the exact completed/empty plan, stamp the
+  // durable row at done. Renderer must distinguish this authoritative write
+  // from an older ordinary DB echo that merely happens to look completed.
+  const nextInput = { ...input, plan: nextPlan };
+  infoMap?.set(toolUseId, { ...info, input: nextInput });
+  enqueueWrite(`codex_plan_done:${sessionId}:${persistId}`, async (ownerScope) => {
+    const updated = await updateDbMessageContent(sessionId, persistId, {
+      toolUseId,
+      toolName: 'update_plan',
+      input: nextInput,
+      ...(isSuccessfulTerminal
+        ? { terminalPlanSnapshot: true }
+        : { turnCompleted: false }),
+    });
+    // Reuse the existing upsert-style row broadcast so a renderer that mounts
+    // between `done` and this queued write, plus remote mirrors, receives the
+    // durable terminal snapshot instead of keeping its stale local copy.
+    if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+  });
+  return true;
 }
 
 /**
@@ -1110,6 +1240,7 @@ export function onTurnErrorEvent(
 ): string | undefined {
   const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
   if (!message) return undefined;
+  const ownerScope = captureOwnerScope();
   const capturedAt = Date.now();
   const recordedTurnStartedAt =
     _turnStartedAtBySession.get(sessionId) ??
@@ -1206,16 +1337,26 @@ export function onTurnErrorEvent(
       },
       { shouldBroadcast: () => false },
     );
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;
       try {
-        win.webContents.send('local-db:session:error-persisted', { sessionId });
+        if (ownerScope === null) {
+          win.webContents.send('local-db:session:error-persisted', { sessionId });
+        } else {
+          win.webContents.send('local-db:session:error-persisted', { sessionId }, ownerStamp);
+        }
       } catch {
         /* swallow per-window broadcast failures */
       }
     }
     // device-link:把脏信号也转发给远控端,让已加载该会话历史的控制端窗口同样失效。
-    tapWindowBroadcast('local-db:session:error-persisted', { sessionId });
+    if (ownerScope === null) {
+      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId });
+    } else {
+      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId }, ownerStamp);
+    }
   });
   notePersistedMessage(sessionId, 'error', persistId);
   return persistId;

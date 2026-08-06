@@ -33,33 +33,40 @@ describe('buildHookPromptNote', () => {
     expect(buildHookPromptNote('slack')).not.toContain('[Telegram 回复格式]');
   });
 
-  it('X 平台名正确且给出纯文本回帖格式约束, 不复用 Telegram/Slack 提示', () => {
+  it('X 渠道使用中性回复说明, 明确付费账号不受 280 字符限制', () => {
     const x = buildHookPromptNote('x');
     expect(x).toContain('本会话来自 X。');
-    expect(x).toContain('[X 回复格式]');
-    expect(x).toContain('纯文本');
-    expect(x).toContain('不要使用 Markdown 标题、列表标记、表格、强调');
-    expect(x).toContain('代码围栏或 Markdown 链接语法');
+    expect(x).toContain('[X 回复说明]');
+    expect(x).not.toContain('回答方式与普通任务及其他渠道保持一致');
+    expect(x).toContain('当前账号为付费账号');
+    expect(x).toContain('不受 280 个字符限制');
+    expect(x).toContain('无需针对当前渠道调整回答篇幅');
+    expect(x).not.toContain('不要主动压缩或删减必要内容');
+    expect(x).toContain('按桌面版规则拼出正式正文');
+    expect(x).toContain('以一条回复发回 X');
+    expect(x).toContain('正文可以使用标题、列表、表格');
+    expect(x).toContain('发布时会转换为纯文本');
     expect(x).toContain('上述附件引用除外');
+    expect(x).toContain('在 X 中除上述附件引用外,尽量避免输出其他 URL 链接');
     expect(x).toContain('不要解释或复述这些格式要求');
-    const xFormat = x.slice(x.indexOf('[X 回复格式]'));
-    expect(xFormat).not.toMatch(/280|字数|字符|长度|简短|压缩|截断|篇幅|不超过|以内/i);
+    expect(x).toContain('作为 X 附件发回');
+    expect(x).not.toContain('X (Twitter)');
+    expect(x).not.toContain('公开回帖');
+    expect(x).not.toContain('最后一条助手消息');
     expect(x).not.toContain('[Telegram 回复格式]');
     expect(x).not.toContain('本会话来自 Slack');
-    // 未接线前的回归写法: x 曾被三元兜底误标成 Slack。
-    expect(buildHookPromptNote('slack')).not.toContain('[X 回复格式]');
+    expect(buildHookPromptNote('slack')).not.toContain('[X 回复说明]');
   });
 
-  it('X 提示词陈述取文机制, 而不是要求模型自律(与 turnTextsFor 同一约定)', () => {
+  it('X 提示词保留渠道名和正式正文拼接机制', () => {
     const x = buildHookPromptNote('x');
-    // 机制侧: session-runner 的 turnTextsFor 对 X 取 observer.finalSegment() 当
-    // 公开正文。提示词必须把这条规则告诉模型 —— 否则它会把结论拆在多条消息里,
-    // 而只有最后一条会被发出。
-    expect(x).toContain('只有你的最后一条消息会被发出');
-    expect(x).toContain('最终结论必须完整地放进最后');
-    // 反面: 不得退回"要求模型不要写过程叙述"的纯软约束写法 —— 模型不听就直接
-    // 穿透到公开时间线(2026-08-01 实踩)。
-    expect(x).not.toContain('不要写「我先看看');
+    // 机制侧: session-runner 的 turnTextsFor 对所有 IM 取 observer.finalText() 当
+    // 公开正文; X 的单条限制只在发送层生效。提示词只陈述这条必要机制。
+    expect(x).toContain('本会话来自 X。');
+    expect(x).toContain('按桌面版规则拼出正式正文');
+    expect(x).toContain('以一条回复发回 X');
+    expect(x).not.toContain('只有你的最后一条消息会被发出');
+    expect(x).not.toContain('最后一条助手消息');
   });
 
   it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
@@ -122,6 +129,34 @@ describe('collectOutboundAttachments', () => {
     expect(r.skipped).toBe(0);
   });
 
+  it('未闭合 file 引用在前仍收集后续合法图片(#1856 review P2:共享解析器畸形恢复)', async () => {
+    // 修复前: 畸形候选把 good.png 的右括号当自己的结尾, 图整个不收集,
+    // 正文变换还会把含合法引用的整段错误改写成失败文件标签。
+    const text = '[bad](xdt-file://unterminated ![good](xdt-image://good.png) 完事';
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/cache/good.png': Buffer.from('png-good') }),
+    );
+    expect(r.attachments.map((a) => a.name)).toEqual(['good.png']);
+    expect(r.text).toContain('🖼️ _good(已作为附件发送)_');
+    expect(r.text).toContain('[bad](xdt-file://unterminated');
+    expect(r.text).not.toContain('xdt-image://');
+    expect(r.skipped).toBe(0);
+  });
+
+  it('方括号文件名附件走全流程被收集(#1856 review P1:畸形恢复判据不能误伤合法 URL)', async () => {
+    const text = '详见 [报告](xdt-file:///out/report[final].pdf) 收工';
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/out/report[final].pdf': Buffer.from('%PDF-1.4') }, { allowedFileRoots: ['/out'] }),
+    );
+    expect(r.attachments.map((a) => a.name)).toEqual(['report[final].pdf']);
+    expect(r.text).not.toContain('xdt-file://');
+    expect(r.skipped).toBe(0);
+  });
+
   it('cindy-media 图片引用同样收集(媒体总仓双协议;只认 xdt-image 会让 hook Slack 拿不到生成图)', async () => {
     const hash = 'b'.repeat(64);
     const text = `画好了 ![猫](cindy-media://blobs/${hash}.png)`;
@@ -162,8 +197,8 @@ describe('collectOutboundAttachments', () => {
   });
 
   it('refScanText: 引用范围可宽于正文, 正文变换仍只作用于正文', async () => {
-    // X 只发最后一条助手消息, 而图常贴在中间那条。两者绑在一起的话那些图会
-    // 静默丢失(PR #1272 review 指出) —— 所以扫描范围与正文范围分开。
+    // X 只发一条公开回帖, 而图常贴在被折叠的工作过程里。两者绑在一起的话那些
+    // 图会静默丢失(PR #1272 review 指出) —— 所以扫描范围与正文范围分开。
     const turnText = '先看图 ![图](xdt-image://chart.png)\n\n结论: 趋势向上。';
     const publicText = '结论: 趋势向上。';
     const r = await collectOutboundAttachments(publicText, [], {

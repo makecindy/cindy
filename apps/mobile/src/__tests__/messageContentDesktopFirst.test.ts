@@ -12,7 +12,7 @@ describe('mobile message content desktop-first surface', () => {
     const fileChipSource = source.slice(fileChipStart, fileChipEnd);
 
     expect(desktopSource).toContain("'h-7 px-2.5 py-1.5'");
-    expect(desktopSource).toContain('<span className="truncate">{f.name}</span>');
+    expect(desktopSource).toContain('<span className="truncate">{file.name}</span>');
     expect(source).toContain('File as FileIcon,');
     expect(source).toContain('<FileIcon color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />');
     expect(source).toContain('style={[styles.fileIconFrame, { width: layout.fileChipIconWidth }]}');

@@ -24,6 +24,7 @@ function stubElectron() {
     closeSession: vi.fn(),
     enableOrca: vi.fn(),
     disableOrca: vi.fn(),
+    regenerateSessionTitle: vi.fn().mockResolvedValue({ title: 'local title' }),
     plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
     input: { clearSession: vi.fn(), compact: vi.fn() },
   };
@@ -126,10 +127,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await api.setModel('rs', 'with-revision', null, 7);
     await api.setModel('rs', 'with-selection', 'provider-b', undefined, selection);
 
-    expect(invoke).toHaveBeenCalledWith('dev-wire', 'maker:set-model', [
-      'rs',
-      'model-only',
-    ]);
+    expect(invoke).toHaveBeenCalledWith('dev-wire', 'maker:set-model', ['rs', 'model-only']);
     expect(invoke).toHaveBeenCalledWith('dev-wire', 'maker:set-model', [
       'rs',
       'with-provider',
@@ -170,6 +168,50 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('getSessionFor:镜像清空期间仍从最后已知设备读取任务元数据', async () => {
+    const { invoke } = stubElectron();
+    invoke.mockResolvedValue({ id: 'rs', workingDir: '/remote/worktree' });
+    const { getSessionFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+    await getSessionFor('rs'); // seed sticky origin before the simulated clear
+    invoke.mockClear();
+    remoteProjectsStore.clear();
+
+    await getSessionFor('rs');
+
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:get', ['rs']);
+  });
+
+  it('regenerateSessionTitleFor:镜像清空期间仍在被控端自动起名，不回落控制端本机', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    invoke.mockResolvedValue({ title: 'remote title' });
+    const { regenerateSessionTitleFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+    await regenerateSessionTitleFor('rs');
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:regenerate-title', [{ sessionId: 'rs' }]);
+
+    invoke.mockClear();
+    remoteProjectsStore.clear();
+    await regenerateSessionTitleFor('rs');
+
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:regenerate-title', [{ sessionId: 'rs' }]);
+    expect(makerSpies.regenerateSessionTitle).not.toHaveBeenCalled();
+  });
+
+  it('regenerateSessionTitleFor:从未有远程归属的会话仍走本机', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    const { regenerateSessionTitleFor } = await import('@/lib/makerTransport');
+
+    await regenerateSessionTitleFor('local-only');
+
+    expect(makerSpies.regenerateSessionTitle).toHaveBeenCalledWith('local-only');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('远程会话 patchMeta(删/归档/改名/置顶)经隧道 local-db:sessions:patch-meta', async () => {
     const { invoke } = stubElectron();
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
@@ -187,6 +229,15 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:patch-meta', [
       'rs',
       { title: 'New' },
+    ]);
+
+    // Relay reconnect may temporarily clear the live mirror. The sticky
+    // origin must keep the archived-session auto-unarchive on the remote host.
+    remoteProjectsStore.clear();
+    await sessionService.setStatus('rs', 'active');
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:patch-meta', [
+      'rs',
+      { status: 'active' },
     ]);
   });
 
@@ -264,9 +315,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     const { makerSpies, invoke } = stubElectron();
     const { makerApiFor, makerApiForSticky } = await import('@/lib/makerTransport');
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
-    const { getStickySessionDeviceId } = await import(
-      '@/features/device-link/stickySessionOrigin'
-    );
+    const { getStickySessionDeviceId } = await import('@/features/device-link/stickySessionOrigin');
 
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('lead')]);
     // 先解析一次,让粘滞归属记住 dev-1(与真实链路一致:视图渲染时已解析过)。
@@ -303,11 +352,11 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     invoke.mockResolvedValue({ effectiveEnabled: false });
     const { pluginEnableStateFor } = await import('@/lib/makerTransport');
 
-    await expect(
-      pluginEnableStateFor('dev-1', 'collab', '/host/proj', 'project'),
-    ).resolves.toEqual({
-      effectiveEnabled: false,
-    });
+    await expect(pluginEnableStateFor('dev-1', 'collab', '/host/proj', 'project')).resolves.toEqual(
+      {
+        effectiveEnabled: false,
+      },
+    );
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
       'collab',
       '/host/proj',
@@ -317,11 +366,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
 
     invoke.mockClear();
     await pluginEnableStateFor(null, 'collab', '/local/proj', 'project');
-    expect(makerSpies.plugins.getState).toHaveBeenCalledWith(
-      'collab',
-      '/local/proj',
-      'project',
-    );
+    expect(makerSpies.plugins.getState).toHaveBeenCalledWith('collab', '/local/proj', 'project');
     expect(invoke).not.toHaveBeenCalled();
 
     // skipQuery 档(SSH 远端):不传 workingDir → 落用户级/全局级,两条路由都要保持原样透传。

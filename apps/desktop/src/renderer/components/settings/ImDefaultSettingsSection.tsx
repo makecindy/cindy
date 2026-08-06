@@ -231,9 +231,15 @@ export function ImDefaultSettingsSection({
     void persist({ agentKind, ...buildAgentSettingsPatch(agentKind, next) });
   };
 
-  const changeModel = (model: string, providerId: string | null = activeSettings.providerId) => {
+  const changeModel = (
+    model: string,
+    providerId: string | null = activeSettings.providerId,
+    reconciledEffort?: Effort,
+  ) => {
     const nextProviderId = resolveProviderId(settings.agentKind, model, providerId);
-    const effort = resolveEffort(settings.agentKind, model, activeSettings.effort);
+    const effort = isImDefaultEffort(reconciledEffort)
+      ? reconciledEffort
+      : resolveEffort(settings.agentKind, model, activeSettings.effort);
     void persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
@@ -319,8 +325,8 @@ export function ImDefaultSettingsSection({
             onEffortChange={changeEffort}
             vendorKey={vendorKeyFor(settings.agentKind)}
             currentProviderId={activeSettings.providerId}
-            onProviderChange={(providerId, modelId) => {
-              changeModel(modelId ?? activeSettings.model, providerId);
+            onProviderChange={(providerId, modelId, reconciledEffort) => {
+              changeModel(modelId ?? activeSettings.model, providerId, reconciledEffort);
             }}
             switching={pending}
             triggerVariant="field"

@@ -77,7 +77,10 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     getTitle: () => opts?.title ?? 'Example',
     isDestroyed: () => false,
     loadURL: vi.fn(async () => undefined),
-    capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from('PNGDATA') })),
+    capturePage: vi.fn(async () => ({
+      toPNG: () => Buffer.from('PNGDATA'),
+      toJPEG: (quality: number) => Buffer.from(`JPEGDATA-${quality}`),
+    })),
     printToPDF: vi.fn(async () => Buffer.from('PDFDATA')),
     on: vi.fn(),
     consoleListeners: [] as Array<(...args: unknown[]) => void>,
@@ -430,6 +433,53 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
       mimeType: 'image/png',
       data: Buffer.from('PNGDATA').toString('base64'),
     });
+  });
+
+  it('screenshot honors type=jpeg with jpeg MIME and encoding', async () => {
+    const wc = fakeWc();
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+    const res = await backend.call({
+      action: 'screenshot',
+      targetId: 't1',
+      type: 'jpeg',
+    } as never);
+    expect(wc.capturePageMock).toHaveBeenCalledTimes(1);
+    expect(res.data).toMatchObject({
+      mimeType: 'image/jpeg',
+      data: Buffer.from('JPEGDATA-85').toString('base64'),
+      bytes: Buffer.from('JPEGDATA-85').length,
+    });
+  });
+
+  it('screenshot rejects fullPage explicitly', async () => {
+    const wc = fakeWc();
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+    const res = await backend.call({
+      action: 'screenshot',
+      targetId: 't1',
+      fullPage: true,
+    } as never);
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/fullPage is not supported/);
+    expect(wc.capturePageMock).not.toHaveBeenCalled();
   });
 
   it('pdf returns base64-encoded PDF', async () => {

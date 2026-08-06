@@ -61,7 +61,7 @@ const SCAN_LIMIT = 200;
 export interface SessionGitDirResult {
   workdir: string | null;
   head: GitHeadInfo | null;
-  source: 'telemetry' | 'worktree' | 'workingDir' | null;
+  source: 'telemetry' | 'worktree' | 'workingDir' | 'remote' | null;
 }
 
 /**
@@ -71,7 +71,10 @@ export interface SessionGitDirResult {
  *   - 其它(Read / 普通 Bash / 脏 JSON / 相对路径)→ null。
  * 纯函数,不碰 IO。
  */
-export function extractDirCandidate(content: string): string | null {
+export function extractDirCandidate(
+  content: string,
+  pathPlatform: NodeJS.Platform = process.platform,
+): string | null {
   let obj: unknown;
   try {
     obj = JSON.parse(content);
@@ -92,14 +95,16 @@ export function extractDirCandidate(content: string): string | null {
   if (toolName === 'exec') {
     const cwd = (input as { cwd?: unknown }).cwd;
     if (typeof cwd === 'string' && cwd.trim() !== '' && path.isAbsolute(cwd)) {
-      return posixDriveToWin32(cwd);
+      return posixDriveToWin32(cwd, pathPlatform);
     }
   }
 
   // cc 编辑类:先归一 POSIX 盘符路径(Windows 上 cc 常发 `/e/...`)再取 dirname。
   if (EDIT_TOOL_NAMES.has(toolName)) {
     const fp = (input as { file_path?: unknown }).file_path;
-    if (typeof fp === 'string' && path.isAbsolute(fp)) return path.dirname(posixDriveToWin32(fp));
+    if (typeof fp === 'string' && path.isAbsolute(fp)) {
+      return path.dirname(posixDriveToWin32(fp, pathPlatform));
+    }
   }
   return null;
 }
@@ -161,7 +166,7 @@ export async function resolveSessionGitDir(
 }
 
 /** 查该 session 可见的 tool-use 消息 content,createdAt 降序、bounded(可见性同 prRefsStore)。 */
-async function queryRecentToolUseContents(sessionId: string): Promise<string[]> {
+export async function queryRecentToolUseContents(sessionId: string): Promise<string[]> {
   const db = getDbClient().drizzle;
   const [sessionRow] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -184,6 +189,30 @@ async function queryRecentToolUseContents(sessionId: string): Promise<string[]> 
     .orderBy(desc(messages.createdAt))
     .limit(SCAN_LIMIT);
   return rows.map((r) => r.content);
+}
+
+/**
+ * Live wrapper used by remote probes: return only the newest telemetry-derived
+ * directory, without touching the local filesystem. The path is meaningful on
+ * the SSH host (or on the controlled device), so the caller must probe it there.
+ */
+export async function getSessionGitTelemetryCandidateLive(
+  sessionId: string,
+  pathPlatform: NodeJS.Platform = process.platform,
+): Promise<string | null> {
+  try {
+    const contents = await queryRecentToolUseContents(sessionId);
+    for (const content of contents) {
+      const candidate = extractDirCandidate(content, pathPlatform);
+      if (candidate) return candidate;
+    }
+  } catch (err) {
+    log.warn('query remote git telemetry failed (no telemetry)', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return null;
 }
 
 /**

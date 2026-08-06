@@ -98,7 +98,12 @@ import {
   parseOverloadError,
 } from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
-import { buildCodexCapabilityConfigOverrides } from './capability-routing.js';
+import {
+  buildCodexCapabilityConfigOverrides,
+  buildCodexCapabilitySkillConfigOverrides,
+  buildCodexSessionCapabilityRoutingPolicy,
+  requiresCodexCapabilitySkillDiscovery,
+} from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
 import {
@@ -112,6 +117,7 @@ import {
   translateAccountRateLimitsUpdated,
   translatePlanUpdatedNotification,
   extractRolloutUpdatePlanFunctionCallEvent,
+  readCodexSubagentSpawnRegistration,
   type CodexRuntimeState,
 } from './translator.js';
 import {
@@ -124,6 +130,10 @@ import {
   buildBackendUnreachableMessage,
   type OutboundPathFact,
 } from './retry-escalation.js';
+import {
+  CompactionStormTracker,
+  buildCompactionStormTerminalError,
+} from './compaction-storm.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -813,6 +823,18 @@ const TIGHTEN_INTERRUPT_ACK_TIMEOUT_MS = 10_000;
 // ignore Stop.
 const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
 
+// The Browser fallback route is resolved before thread/start, so the app-server
+// can only answer its readiness query against the global MCP inventory. Keep
+// that pre-thread probe bounded: a slow unrelated MCP server must not stretch
+// Codex session creation to the companion's full startup timeout (which may be
+// as high as 120 seconds). Once a concrete thread exists, callers can use the
+// thread-scoped status API instead of this pre-thread path.
+const CODEX_BROWSER_USE_READINESS_PROBE_TIMEOUT_MS = 2_000;
+// A single short miss can race the MCP child process finishing its cold start.
+// Retry once before freezing the thread's capability routing, while keeping a
+// genuinely unavailable companion bounded to two short probes.
+const CODEX_BROWSER_USE_READINESS_PROBE_ATTEMPTS = 2;
+
 // thread/start / thread/resume / turn/start 的 RPC 上限。AppServerClient.request
 // 默认无超时 — 远端 daemon 失联 (SSH 隧道半开 / daemon 挂起但 socket 未断) 时
 // 裸 await 永久挂起, session 永远停在 generating (issue #677 同类断链面)。
@@ -1364,11 +1386,23 @@ export class CodexAgent extends BaseAgent {
     forceReload: boolean,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
     const { host } = await this.getUtilityHost();
-    const response = await host.request<SkillsListResponse>(Method.SkillsList, {
+    return await this.listSkillsForHost(host, workingDir, forceReload);
+  }
+
+  private async listSkillsForHost(
+    host: AppServerHost,
+    workingDir: string,
+    forceReload: boolean,
+    timeoutMs?: number,
+  ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
+    const params = {
       cwds: [workingDir],
       forceReload,
       perCwdExtraUserRoots: null,
-    });
+    };
+    const response = timeoutMs == null
+      ? await host.request<SkillsListResponse>(Method.SkillsList, params)
+      : await host.request<SkillsListResponse>(Method.SkillsList, params, { timeoutMs });
     const entry = response.data.find((item) => item.cwd === workingDir) ?? response.data[0];
     return {
       skills: entry?.skills ?? [],
@@ -1999,8 +2033,12 @@ export class CodexAgent extends BaseAgent {
     let env: Record<string, string> = {};
     let extraArgs: string[] = [];
     let codexProxyActive = false;
+    let codexBrowserUseAvailable = false;
+    let codexBrowserUseVersion: string | undefined;
+    let codexBrowserUseStartupTimeoutMs: number | undefined;
     let remoteCompactionProviderId: string | undefined;
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
+    let subagentModelFallback: string | undefined;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -2020,8 +2058,12 @@ export class CodexAgent extends BaseAgent {
 
       extraArgs = [];
       codexProxyActive = false;
+      codexBrowserUseAvailable = false;
+      codexBrowserUseVersion = undefined;
+      codexBrowserUseStartupTimeoutMs = undefined;
       remoteCompactionProviderId = undefined;
       buildSessionMcpConfig = undefined;
+      subagentModelFallback = undefined;
       if (this.deps.prepareCodexExtraSpawnConfig) {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
@@ -2036,7 +2078,14 @@ export class CodexAgent extends BaseAgent {
           Object.assign(env, cfg.extraEnv);
           extraArgs = cfg.extraArgs;
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;
+          subagentModelFallback = cfg.subagentModelFallback;
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
+          // Remote daemons own their browser companion and its CODEX_HOME;
+          // preserve the host-provided availability snapshot instead of
+          // forcing every remote target into the local fail-closed state.
+          codexBrowserUseAvailable = cfg.codexBrowserUseAvailable === true;
+          codexBrowserUseVersion = cfg.codexBrowserUseVersion;
+          codexBrowserUseStartupTimeoutMs = cfg.codexBrowserUseStartupTimeoutMs;
           // OpenAI 身份 provider 依赖 loopback proxy 路由订阅直连;proxy 不可用
           // (退化直连网关)时不得下发,否则远端压缩请求会打到不支持它的上游。
           if (codexProxyActive && cfg.codexRemoteCompactionProviderId) {
@@ -2110,8 +2159,12 @@ export class CodexAgent extends BaseAgent {
       // (2026-07-17 随品牌翻转改 cindy;上游 gating 走 originator,与此无关)。
       clientInfo: { name: 'cindy', version: '0.0.0' },
       codexProxyActive,
+      codexBrowserUseAvailable,
+      codexBrowserUseVersion,
+      codexBrowserUseStartupTimeoutMs,
       remoteCompactionProviderId,
       buildSessionMcpConfig,
+      subagentModelFallback,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
@@ -2372,7 +2425,19 @@ export class CodexAgent extends BaseAgent {
      *
      * app-server 对网关路由的模型常报**基础模型**的窗口, 忽略该路由的实际限制 ——
      * 例如目录 372K 的 GPT-5.6-Sol 会被报成 1M。虚高值会让上下文占比被低估,
-     * memory flush 阈值也跟着推迟, 所以两者都有时取小值。
+     * memory flush 阈值也跟着推迟。
+     *
+     * **已核实窗口存在时一律用它, 不与上报值取小** (2026-08-04 修正)。原先取
+     * `min(verified, reported)` 隐含「上报值可信, 只是可能虚高」; 实测证伪了这个
+     * 前提 —— 会话中途切模型后 codex 不刷新 modelContextWindow, 整个会话继续上报
+     * **切换前**那个模型的窗口, 于是 min() 把我们已经算对的新模型窗口又拉回旧值,
+     * 上下文占比与 memory flush 阈值全程按错的窗口走。取小本是为了防虚高, 而
+     * verified 本身就是这条路由的核实上限, 直接用它不会虚高。
+     *
+     * 代价说清楚: 上游「路由真被降窗」而报出更小值的情形不再被采纳。这个场景与
+     * 「上报值陈旧」在协议上无法区分 (两者都只是一个更小的数字), 二选一时优先信
+     * 我们自己按 (provider, model) 核实过的那份 —— 它至少不会指向一个用户已经切走
+     * 的模型。
      *
      * 两个约束都不是可省的细节:
      * - **按 turn 归属模型**, 不读 mutableModel: 见 activeTurnModel 注释。
@@ -2384,16 +2449,14 @@ export class CodexAgent extends BaseAgent {
      *   (模型发现 / 切账号 / 自定义 provider 增删改都即时反映), 见该 dep 的注释。
      *
      * 拿不到已核实窗口时(host 未注入、目录未覆盖、'gpt-5' 这类 server 默认哨兵、只有
-     * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为; 上报值反过来比它小时
-     * 同样取上报值(路由真被降窗)。
+     * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为。
      */
     const capContextWindow = (reported: number | null): number | null => {
       const verified = activeTurnModel
         ? (this.deps.resolveVerifiedContextWindow?.(activeTurnProviderId, activeTurnModel) ?? null)
         : null;
       if (!verified || verified <= 0) return reported;
-      if (!reported || reported <= 0) return verified;
-      return Math.min(verified, reported);
+      return verified;
     };
 
     let sdkSessionId: string | undefined;
@@ -2441,6 +2504,47 @@ export class CodexAgent extends BaseAgent {
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
     const turnRetryTracker = new TurnRetryTracker();
+    // 上下文压缩不收敛的终局升级 (见 compaction-storm.ts): codex 按陈旧窗口反复
+    // 压缩、每次压完水位纹丝不动时, 本地熔断并合成终态错误, 与上面的 retry-loop
+    // 升级同路径 (onUpstreamIdleTimeout)。
+    const compactionStormTracker = new CompactionStormTracker();
+    /**
+     * 会话中途切过模型的记录 (from = 本会话最初那个模型)。只服务压缩风暴的诊断
+     * 消息 —— 它是这个故障唯一已知的触发路径, 也是用户唯一能自己动手绕开的。
+     *
+     * `from` 一旦记下就不再更新: 多次切换后要提示的仍是那个「codex 还在按它算窗口」
+     * 的最初模型, 而不是中间某一跳 (A→B→C 得 {from:A, to:C})。
+     *
+     * **切回 from 时整条记录清空** (A→B→A): 那时当前模型与 codex 拿来算窗口的模型
+     * 又一致了, 窗口失配这个诱因已经消失, 再提示"切回 A"是让用户去做他刚做过的事。
+     * 留着记录还会写出 {from:A, to:A} 这种自相矛盾的文案。清空后若仍压不动, 走的是
+     * 不点名原因的那条兜底文案 —— 那时确实不知道原因, 不猜比猜错强。
+     *
+     * **两个字段都必须是目录 (catalog) id, 不能用 mutableModel** (2026-08-05, Codex
+     * review): server 会把请求 id 规范化成只在 wire 上存在的变体 (`gpt-5.4` →
+     * `gpt-5.4-codex`), threadSettingsUpdated 只把那个变体写进 mutableModel、**刻意
+     * 不动 mutableCatalogModel** (见该处注释)。而 setModel 收到的 newModel 是用户从
+     * 选择器点的目录 id。两种口径混着比会同时坏掉这条记录的两个用途:
+     *   - 清除判据失效: A→B→A 时 `'gpt-5.4' !== 'gpt-5.4-codex'`, 记录清不掉, 熔断
+     *     文案继续声称"本任务切换过模型", 而用户其实已经切回来了;
+     *   - 诊断指向一个用户点不到的 id: 文案会让人"切回 gpt-5.4-codex", 但选择器是按
+     *     目录渲染的, 那个变体根本不在里面 —— 比不给建议更糟。
+     * 记录只在 setModel(唯一的用户切换入口)写入; thread/start 的 'gpt-5' 哨兵解析、
+     * thread/resume 的 hydrate、threadSettingsUpdated 的 wire 对齐都不是用户切换,
+     * 本来就不该记, 也确实没有写入点。
+     */
+    let modelSwitchRecord: { from: string; to: string } | null = null;
+    /**
+     * codex 投出 contextCompaction 边界时的统一入口。
+     *
+     * 无条件注册: 压缩风暴熔断与 Maker Memory 是否开启无关, 而这个回调此前只在
+     * memoryFlushController 存在时才挂上去 —— 关掉 Maker Memory 的用户会连熔断
+     * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
+     */
+    const handleCompactBoundary = (): void => {
+      compactionStormTracker.noteCompaction();
+      memoryFlushController?.onCompactBoundary();
+    };
     const deferredTerminalTurnCompletions = new Map<string, TurnCompletedParams>();
     // 最近一次 thread/tokenUsage/updated 的 last 增量 + contextWindow,
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
@@ -2657,6 +2761,7 @@ export class CodexAgent extends BaseAgent {
 
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
+    let sessionHostForceRetired = false;
     let subscription: ThreadSubscription | null = null;
     let interactionResolver: InteractionResolver | null = null;
     // Kept across the internal plan implementation/revision turns. A later
@@ -2666,6 +2771,52 @@ export class CodexAgent extends BaseAgent {
     // carried it. A global "last send text" can be poisoned by a turn/start
     // that later fails, and can then unlock an unrelated surviving turn.
     const capabilitySelectionTextByTurnId = new Map<string, string>();
+    /**
+     * Descendant turns do not have their own user-facing selector. Their
+     * capability choice is inherited from the root turn that spawned them.
+     * Keep that choice by thread as well as by turn so a child can spawn a
+     * grandchild after the root turn has already completed.
+     */
+    const capabilitySelectionTextByThreadId = new Map<string, string>();
+    const descendantParentThreadByThreadId = new Map<string, string>();
+    /** A terminal child turn must not re-register tool provenance from late items. */
+    const terminalDescendantTurnIds = new Set<string>();
+
+    const propagateCapabilitySelectionToDescendants = (
+      parentThreadId: string,
+      visited = new Set<string>(),
+    ): void => {
+      if (visited.has(parentThreadId)) return;
+      visited.add(parentThreadId);
+      const selectionText = capabilitySelectionTextByThreadId.get(parentThreadId);
+      if (selectionText === undefined) return;
+      for (const [childThreadId, parent] of descendantParentThreadByThreadId) {
+        if (parent !== parentThreadId) continue;
+        // Descendants have no independent user selector. Keep their inherited
+        // view in sync when the root accepts a later steer as well as when a
+        // route is first registered.
+        capabilitySelectionTextByThreadId.set(childThreadId, selectionText);
+        propagateCapabilitySelectionToDescendants(childThreadId, visited);
+      }
+    };
+
+    const bindCapabilitySelectionToDescendantTurn = (
+      childThreadId: string,
+      turnId: string | undefined,
+    ): void => {
+      if (!turnId || terminalDescendantTurnIds.has(turnId)) return;
+      const selectionText = capabilitySelectionTextByThreadId.get(childThreadId);
+      if (selectionText !== undefined) {
+        capabilitySelectionTextByTurnId.set(turnId, selectionText);
+      }
+    };
+
+    const bindRootCapabilitySelection = (turnId: string, selectionText: string): void => {
+      capabilitySelectionTextByTurnId.set(turnId, selectionText);
+      capabilitySelectionTextByThreadId.set(threadId, selectionText);
+      propagateCapabilitySelectionToDescendants(threadId);
+    };
+
     type PendingCapabilitySteer = {
       completion: Promise<void>;
       resolve: () => void;
@@ -2696,6 +2847,13 @@ export class CodexAgent extends BaseAgent {
         return;
       }
       appendCapabilitySelectionText(turnId, selectionText);
+      if (currentTurnId === turnId) {
+        capabilitySelectionTextByThreadId.set(
+          threadId,
+          capabilitySelectionTextByTurnId.get(turnId) ?? '',
+        );
+        propagateCapabilitySelectionToDescendants(threadId);
+      }
     };
 
     const registerPendingCapabilitySteer = (
@@ -2889,6 +3047,7 @@ export class CodexAgent extends BaseAgent {
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
     const connectionId = host.getConnectionId();
     const isCurrentHost = (): boolean => {
+      if (sessionHostForceRetired) return false;
       const currentHost = this.hosts.get(currentHostKey);
       if ((this.hostGenerations.get(currentHostKey) ?? 0) !== hostGeneration) return false;
       return capturedHostWasRegistered ? currentHost === host : currentHost === undefined;
@@ -2944,8 +3103,37 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
-    const capabilityRoutingPolicy = this.deps.capabilityRouting;
-    const capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
+    const codexBrowserUseProvisioned = host.isCodexBrowserUseAvailable();
+    const hostCapabilityRoutingPolicy =
+      await this.deps.resolveCapabilityRouting?.({
+        workingDir: opts.workingDir,
+        remoteHostId: opts.remoteHostId,
+        vendorOptions: vo,
+        codexBrowserUseProvisioned,
+        codexBrowserUseVersion: host.getCodexBrowserUseVersion(),
+        ensureCodexBrowserUseReady: async () => {
+          if (!codexBrowserUseProvisioned) return false;
+          for (let attempt = 0; attempt < CODEX_BROWSER_USE_READINESS_PROBE_ATTEMPTS; attempt++) {
+            if (await host.waitForMcpTool('node_repl', 'js', {
+              timeoutMs: CODEX_BROWSER_USE_READINESS_PROBE_TIMEOUT_MS,
+            })) {
+              return true;
+            }
+          }
+          return false;
+        },
+      }) ?? this.deps.capabilityRouting;
+    assertCurrentHost('capability routing resolution');
+    const capabilityRoutingPolicy = buildCodexSessionCapabilityRoutingPolicy(
+      hostCapabilityRoutingPolicy,
+      {
+        // Remote Codex does not receive the local Cindy MCP bridge. Keep
+        // compatibility restrictions, but do not disable a remote capability
+        // in favor of a replacement that only exists on the local host.
+        cindyHostReplacementsAvailable: !opts.remoteHostId,
+      },
+    );
+    let capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
       capabilityRoutingPolicy,
       {
         // Remote Codex uses its own isolated CODEX_HOME. Cindy currently
@@ -2954,6 +3142,35 @@ export class CodexAgent extends BaseAgent {
         isolatedPluginOverlays: !opts.remoteHostId,
       },
     );
+    if (requiresCodexCapabilitySkillDiscovery(capabilityRoutingPolicy)) {
+      try {
+        assertCurrentHost('capability Skill discovery');
+        const { skills, errors } = await this.listSkillsForHost(
+          host,
+          opts.workingDir,
+          false,
+          CRITICAL_THREAD_RPC_TIMEOUT_MS,
+        );
+        assertCurrentHost('capability Skill discovery');
+        capabilityRoutingConfig = {
+          ...capabilityRoutingConfig,
+          ...buildCodexCapabilitySkillConfigOverrides(capabilityRoutingPolicy, [
+            ...skills,
+            // A malformed restricted Skill may be absent from `skills` while
+            // its concrete SKILL.md path is still reported here. Disable that
+            // path too instead of failing open on a catalog parse error.
+            ...errors.flatMap((error) =>
+              error.path ? [{ path: error.path, enabled: true }] : [],
+            ),
+          ]),
+        };
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw new Error(
+          `Cannot start Codex safely because Cindy could not inspect restricted Codex Skills: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     const capabilityRoutingProtocolSupported =
       supportsCodexCapabilityRoutingProtocol(initResp.userAgent);
     if (
@@ -3138,7 +3355,11 @@ export class CodexAgent extends BaseAgent {
      * 只在同步的 emitSubagentCardUpdate 内为 true(见那里的注释)。
      */
     let emittingDescendantUpdate = false;
-    const subagentLiveCards = createSubagentLiveCardTracker();
+    const subagentLiveCards = createSubagentLiveCardTracker({
+      // Fake/legacy hosts used by older callers may not expose this optional
+      // Cindy metadata accessor; absence must remain an honest no-model state.
+      subagentModelFallback: host.getSubagentModelFallback?.(),
+    });
 
     const emitSubagentCardUpdate = (update: SubagentLiveCardUpdate): void => {
       // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:每条事件都会刷新
@@ -3159,6 +3380,7 @@ export class CodexAgent extends BaseAgent {
           parentToolUseId: update.taskId,
           status: update.status,
           ...(update.agentPath ? { title: update.agentPath } : {}),
+          ...(update.model !== undefined ? { model: update.model } : {}),
           usage: {
             ...(update.totalTokens > 0 ? { totalTokens: update.totalTokens } : {}),
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
@@ -3172,13 +3394,161 @@ export class CodexAgent extends BaseAgent {
       }
     };
 
+    /**
+     * 把一个子线程接进本会话的后代路由:host 血缘(通知与 approval 归 root)+
+     * MCP context + 宿主的 child-thread 登记。
+     *
+     * codex 0.145 对 spawn 出的子线程**从不发** `thread/started`(它只在显式
+     * thread/start / fork RPC 时发),所以血缘的唯一可靠来源是 spawn item 自带的
+     * agentThreadId / receiverThreadIds —— 识别 spawn 的那一刻就得登记,不能等一条
+     * 永远不会来的通知。等待的后果(2026-08-04 生产实测):子线程全部通知在 host 的
+     * 5s TTL 缓冲里静默过期,子代理卡没有任何实时数据、终态永远不到,永久转圈。
+     * 各步幂等:更新版 codex 若补发 thread/started,重复建边是 no-op,但 host 仍会
+     * 转发该通知——它携带的 thread.model 是实际模型的唯一观测入口(codex review)。
+     */
+    const registerDescendantThreadRouting = (
+      childThreadId: string,
+      parentThreadId: string,
+    ): void => {
+      if (!childThreadId || childThreadId === parentThreadId) return;
+      // 测试用的 fake host 可能没有这个方法;真实 AppServerHost 恒有。
+      host.registerDescendantLineage?.(childThreadId, parentThreadId);
+      descendantParentThreadByThreadId.set(childThreadId, parentThreadId);
+      const inheritedSelection = capabilitySelectionTextByThreadId.get(parentThreadId)
+        ?? (parentThreadId === threadId && currentTurnId
+          ? capabilitySelectionTextByTurnId.get(currentTurnId)
+          : undefined);
+      if (
+        inheritedSelection !== undefined
+        && !capabilitySelectionTextByThreadId.has(childThreadId)
+      ) {
+        capabilitySelectionTextByThreadId.set(childThreadId, inheritedSelection);
+        propagateCapabilitySelectionToDescendants(childThreadId);
+      }
+      registerDescendantCodexMcpContext(childThreadId);
+      this.deps.registerCodexChildThreadForParent?.({ parentThreadId, childThreadId });
+    };
+
+    const reserveDescendantThreadRouting = (
+      childThreadId: string,
+      parentThreadId: string,
+    ): void => {
+      if (!childThreadId || childThreadId === parentThreadId) return;
+      host.reserveDescendantLineage?.(childThreadId, parentThreadId);
+    };
+
+    /**
+     * 只登记 spawn item 暴露的血缘,不建卡、不发帧。
+     *
+     * pre-turn / turn-start 对账会把 item handler 整体排队;若连血缘也等到重放才登记,
+     * child 通知会在 AppServerHost 的 5s TTL 内过期。这里允许在归属尚未对账时先做
+     * 幂等路由登记,卡片 tracker 与 translator 仍严格留在原队列顺序里处理。
+     */
+    const reserveSubagentSpawnLineage = (item: unknown): string[] => {
+      const registration = readCodexSubagentSpawnRegistration(item);
+      if (!registration) return [];
+      for (const childThreadId of registration.childThreadIds) {
+        reserveDescendantThreadRouting(childThreadId, threadId);
+      }
+      return registration.childThreadIds;
+    };
+
+    const registerSubagentSpawnLineage = (item: unknown): boolean => {
+      const registration = readCodexSubagentSpawnRegistration(item);
+      if (!registration) return false;
+      for (const childThreadId of registration.childThreadIds) {
+        registerDescendantThreadRouting(childThreadId, threadId);
+      }
+      return true;
+    };
+
+    const pendingSpawnLineageByTurn = new Map<string, Set<string>>();
+    const rememberPendingSpawnLineage = (turnId: string | null | undefined, childThreadIds: string[]): void => {
+      if (!turnId || childThreadIds.length === 0) return;
+      const pending = pendingSpawnLineageByTurn.get(turnId) ?? new Set<string>();
+      for (const childThreadId of childThreadIds) pending.add(childThreadId);
+      pendingSpawnLineageByTurn.set(turnId, pending);
+    };
+    const discardPendingSpawnLineage = (turnId: string | null | undefined): void => {
+      if (!turnId) return;
+      const pending = pendingSpawnLineageByTurn.get(turnId);
+      if (!pending) return;
+      pendingSpawnLineageByTurn.delete(turnId);
+      for (const childThreadId of pending) {
+        host.discardPendingDescendantLineage?.(childThreadId, threadId);
+      }
+    };
+    const discardPendingSpawnLineageIds = (childThreadIds: string[]): void => {
+      for (const childThreadId of childThreadIds) {
+        host.discardPendingDescendantLineage?.(childThreadId, threadId);
+      }
+    };
+
     const handleDescendantNotification = (
       childThreadId: string,
       method: string,
       params: unknown,
     ): void => {
+      const record = params && typeof params === 'object'
+        ? params as Record<string, unknown>
+        : null;
+      const turnId = typeof record?.turnId === 'string'
+        ? record.turnId
+        : record?.turn && typeof record.turn === 'object'
+          && typeof (record.turn as Record<string, unknown>).id === 'string'
+          ? (record.turn as Record<string, unknown>).id as string
+          : undefined;
+      const isItemNotification =
+        method === 'item/started' || method === 'item/updated' || method === 'item/completed';
+      const descendantTurnIsTerminal = turnId !== undefined
+        && terminalDescendantTurnIds.has(turnId);
+
+      if (method === 'turn/started') {
+        bindCapabilitySelectionToDescendantTurn(childThreadId, turnId);
+      } else if (isItemNotification && !descendantTurnIsTerminal) {
+        bindCapabilitySelectionToDescendantTurn(childThreadId, turnId);
+        noteActiveToolContext(record?.item, turnId);
+      }
+
+      // 嵌套子代理:孙线程的 spawn item 只出现在**子线程自己**的事件流里,主线程的
+      // itemStarted 永远看不到。0.145 又没有 thread/started 可等,这里就是孙线程
+      // 唯一的入卡(和 approval 路由)入口。
+      // turn/completed 可以先于后台收尾的 item/completed。迟到 item 不得重建工具
+      // provenance,但 completed spawn 仍是 0.145 的权威血缘来源,不能一起被终态闩挡掉。
+      if (isItemNotification && (!descendantTurnIsTerminal || method === 'item/completed')) {
+        const nested = readCodexSubagentSpawnRegistration(
+          record?.item,
+        );
+        if (nested) {
+          for (const grandChildThreadId of nested.childThreadIds) {
+            registerDescendantThreadRouting(grandChildThreadId, childThreadId);
+            const replayedNested = subagentLiveCards.noteDescendantThread(
+              grandChildThreadId,
+              childThreadId,
+              nested.model,
+              nested.failed === true,
+            );
+            if (replayedNested) emitSubagentCardUpdate(replayedNested);
+          }
+        }
+      }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
       if (update) emitSubagentCardUpdate(update);
+
+      if (method === 'turn/completed') {
+        const status = record?.turn && typeof record.turn === 'object'
+          ? (record.turn as Record<string, unknown>).status
+          : undefined;
+        if (turnId && status !== 'inProgress') {
+          terminalDescendantTurnIds.add(turnId);
+          capabilitySelectionTextByTurnId.delete(turnId);
+          clearActiveToolContextsForTurn(turnId);
+        }
+      } else if (method === 'error' && turnId && record?.willRetry !== true) {
+        terminalDescendantTurnIds.add(turnId);
+        capabilitySelectionTextByTurnId.delete(turnId);
+        clearActiveToolContextsForTurn(turnId);
+      }
     };
 
     /**
@@ -3192,6 +3562,10 @@ export class CodexAgent extends BaseAgent {
      *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
      */
     const noteSubagentSpawnItem = (item: unknown): (() => void) | null => {
+      if (!registerSubagentSpawnLineage(item)) return null;
+      // 先接 host 路由再进 tracker:registerDescendantLineage 会把子线程 TTL 缓冲里的
+      // 早到通知同步补投进 handleDescendantNotification(tracker 缓冲),随后
+      // noteSpawnItem 建卡时统一重放,首帧就带上真实用量。
       const replayed = subagentLiveCards.noteSpawnItem(item);
       if (!replayed) return null;
       return () => emitSubagentCardUpdate(replayed);
@@ -3202,6 +3576,11 @@ export class CodexAgent extends BaseAgent {
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      activeToolContexts.clear();
+      capabilitySelectionTextByTurnId.clear();
+      capabilitySelectionTextByThreadId.clear();
+      descendantParentThreadByThreadId.clear();
+      terminalDescendantTurnIds.clear();
       // 与 close() 同规:handle 被终止后子代理卡不会再有消费者。同样先收终态再清 ——
       // 这条路径(thread cleanup failure / 强制 retire)恰恰是最容易留下永久转圈卡的。
       for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
@@ -4958,7 +5337,7 @@ export class CodexAgent extends BaseAgent {
       params: CommandExecutionRequestApprovalParams,
     ): Promise<CommandExecutionRequestApprovalResponse> => {
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
@@ -4992,7 +5371,7 @@ export class CodexAgent extends BaseAgent {
       params: FileChangeRequestApprovalParams,
     ): Promise<FileChangeRequestApprovalResponse> => {
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       const requestId = params.itemId;
@@ -5124,7 +5503,7 @@ export class CodexAgent extends BaseAgent {
       params: McpServerElicitationRequestParams,
     ): Promise<McpServerElicitationRequestResponse> => {
       // buffered/墓碑 turn 的 elicitation 不得上 UI / auto-approve (codex R12 P1)。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { action: 'decline', content: null, _meta: null };
       if (turnGate instanceof Promise && !(await turnGate)) {
         return { action: 'decline', content: null, _meta: null };
@@ -5138,7 +5517,7 @@ export class CodexAgent extends BaseAgent {
       }
 
       const capabilityRoute = findCapabilityRouteOverride(
-        this.deps.capabilityRouting,
+        capabilityRoutingPolicy,
         {
           harness: 'codex',
           surface: 'mcp',
@@ -5176,8 +5555,10 @@ export class CodexAgent extends BaseAgent {
         !isCapabilityRouteInvocationAllowed(
           capabilityRoute,
           params.turnId
-            ? capabilitySelectionTextByTurnId.get(params.turnId) ?? ''
-            : '',
+            ? capabilitySelectionTextByTurnId.get(params.turnId)
+              ?? capabilitySelectionTextByThreadId.get(params.threadId)
+              ?? ''
+            : capabilitySelectionTextByThreadId.get(params.threadId) ?? '',
         )
       ) {
         log.warn('Codex MCP invocation blocked by host capability routing', {
@@ -5259,7 +5640,7 @@ export class CodexAgent extends BaseAgent {
     ): Promise<PermissionsRequestApprovalResponse> => {
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒
       // (空 permissions 即拒绝授权, 与非 accept 分支同款)。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
       const requestId = params.itemId ?? params.turnId;
@@ -5564,7 +5945,7 @@ export class CodexAgent extends BaseAgent {
       meta: { requestId: string | number },
     ): Promise<ToolRequestUserInputResponse> => {
       // buffered/墓碑 turn 的输入请求不得上 UI (codex R12 P1) — 空 answers 即拒。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { answers: {} };
       if (turnGate instanceof Promise && !(await turnGate)) return { answers: {} };
       const requestId = String(meta.requestId);
@@ -5611,7 +5992,7 @@ export class CodexAgent extends BaseAgent {
       meta: { requestId: string | number },
     ): Promise<DynamicToolCallResponse> => {
       // buffered/墓碑 turn 的 tool call 不得上 UI (codex R12 P1)。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) {
         return {
           contentItems: [
@@ -5869,6 +6250,7 @@ export class CodexAgent extends BaseAgent {
       });
 
     const settleBufferedTurnReconcile = (turnId: string, valid: boolean): void => {
+      if (!valid) discardPendingSpawnLineage(turnId);
       const waiters = bufferedReconcileWaiters.get(turnId);
       if (!waiters) return;
       bufferedReconcileWaiters.delete(turnId);
@@ -5880,10 +6262,13 @@ export class CodexAgent extends BaseAgent {
     // settle — handler 永远悬挂, dispatchServerRequest 永不返回, server
     // 侧请求卡死。所有不走路径对账的退出点都必须调用。
     const abandonBufferedTurns = (reason: string): void => {
-      if (bufferedOrphanTurnIds.size === 0) return;
+      if (bufferedOrphanTurnIds.size === 0 && pendingSpawnLineageByTurn.size === 0) return;
       log.debug('abandoning buffered turns', { reason, turnIds: [...bufferedOrphanTurnIds] });
       for (const bufferedId of bufferedOrphanTurnIds) {
         settleBufferedTurnReconcile(bufferedId, false);
+      }
+      for (const turnId of pendingSpawnLineageByTurn.keys()) {
+        discardPendingSpawnLineage(turnId);
       }
       bufferedOrphanTurnIds.clear();
       bufferedTurnEventQueues.clear();
@@ -5895,7 +6280,16 @@ export class CodexAgent extends BaseAgent {
     // 同步快速路径不引入 microtask 延迟 — handler 第一行的 broker.track 与
     // 紧随其后的 serverRequest/resolved 存在竞态, 哪怕一跳 await 也会让
     // resolved 抢在 track 之前到达 (测试回归实证)。
-    const gateServerRequestTurn = (turnId: string | null | undefined): boolean | Promise<boolean> => {
+    const gateServerRequestTurn = (
+      turnId: string | null | undefined,
+      requestThreadId: string | null | undefined,
+    ): boolean | Promise<boolean> => {
+      // AppServerHost only forwards descendant requests after it has verified that
+      // requestThreadId belongs to this root subscription. Child turn ids live in a
+      // different namespace/state machine, so applying root orphan/tombstone guards
+      // here would reject valid child interactions after an unrelated root start
+      // failure (and may interrupt the root thread with the child turn id).
+      if (requestThreadId && requestThreadId !== threadId) return true;
       if (!turnId) return true;
       if (terminalErroredTurnIds.has(turnId) || completedTurnIds.has(turnId)) return false;
       // idle 孤儿 (greptile R16 P1): 无 RPC 在飞时未知 id 的请求只可能来自
@@ -6326,6 +6720,9 @@ export class CodexAgent extends BaseAgent {
       const completedCapabilitySelectionText =
         capabilitySelectionTextByTurnId.get(turn.id) ?? '';
       capabilitySelectionTextByTurnId.delete(turn.id);
+      if (currentTurnId === turn.id || currentTurnId === null) {
+        capabilitySelectionTextByThreadId.delete(threadId);
+      }
       const suppressTerminalUi = terminalErroredTurnIds.has(turn.id);
       deferredTerminalTurnCompletions.delete(turn.id);
       if (currentTurnId === turn.id || currentTurnId === null) {
@@ -7174,6 +7571,72 @@ export class CodexAgent extends BaseAgent {
 
     // ── subscribeThread: notification 路由 + approval handlers ─────────────
     const handlers: ThreadEventHandlers = {
+      // 强制退役(账号切换/auth 失效)时由 host 发结构化信号，按本会话自身真实状态收口。
+      // 空闲/已完成 → 静默失效；真实在飞(turn in-flight / turn/start pending /
+      // overload retry) → 清理在途状态并推终态 error + Done。
+      // 不能在 host 层用空 turnId 的 transport error 广播：error handler 的
+      // targetsPendingTurn 要求非空 turnId、wasTurnRunning 不含 overload retry，
+      // pending/retry 会话会收不了口（busy 永久卡死）。所以由这里统一收口。
+      hostForcedRetire: ({ reason }) => {
+        sessionHostForceRetired = true;
+        subscriptionInvalidatedByTransport = false;
+
+        const hadPendingWork =
+          isTurnInFlight
+          || isTurnStartPending
+          || overloadRetryPending();
+        if (!hadPendingWork) {
+          log.info('idle Codex session invalidated by forced host retirement', { threadId });
+          eventQueue.end();
+          return;
+        }
+
+        // turn/start 可能尚未返回 id。先把所有在途请求标为已收口并隔离，随后 RPC
+        // reject/迟到 resolve 时复用既有 finally/墓碑路径，不再发第二组终态。
+        markInFlightStartsTerminallySettled();
+        quarantineAllInFlightStarts();
+        discardOverloadRetry('app-server force-retired');
+        // 强制退役后 host 不再投递后代 turn/completed 通知, 与 close /
+        // transport-error 同款: 先把仍在跑的子代理卡收成终态, 否则渲染端在
+        // parent 已推 Done 之后仍会看到子代理卡永久转圈。
+        for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
+        subagentLiveCards.clear();
+        dismissAllPending('app_server_force_retired', 'deny');
+        dismissAllPendingUserInput('transport_error');
+        activeToolContexts.clear();
+        capabilitySelectionTextByTurnId.clear();
+        capabilitySelectionTextByThreadId.clear();
+        descendantParentThreadByThreadId.clear();
+        terminalDescendantTurnIds.clear();
+        stopActiveRolloutPlanFallback();
+        resetUpstreamIdleForTurnEnd();
+        if (currentTurnId) terminalErroredTurnIds.add(currentTurnId);
+        currentTurnId = null;
+        isTurnInFlight = false;
+        isTurnStartPending = false;
+        currentTurnPlanModeActive = false;
+        pendingTurnStartPlanMode = null;
+
+        eventQueue.push({
+          type: 'error',
+          data: {
+            message: `app-server force-retired: ${reason}`,
+            isTerminal: true,
+            willRetry: false,
+            reason: 'app-server-force-retired',
+          },
+          source: 'codex',
+        });
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+          source: 'codex',
+        });
+        // 该 host 已被永久替换，handle 不可能原地恢复。结束内部事件流，让已启动的
+        // Session 走既有 auto-close → Maker lazy create；尚未启动 event loop 的
+        // Session 会在下一次 send 明确失败后 drain 到这里并重建。
+        eventQueue.end();
+      },
       threadStarted: (params) => {
         const sid = params.thread?.id;
         if (sid && sid !== sdkSessionId) sdkSessionId = sid;
@@ -7182,18 +7645,18 @@ export class CodexAgent extends BaseAgent {
         }
       },
       descendantThreadStarted: (params) => {
+        // 0.145 不会为 spawn 出的子线程发 thread/started(血缘主路径已改走 spawn item,
+        // 见 registerDescendantThreadRouting);保留本 handler 兼容会发的新版 codex,
+        // 它还带 thread.model —— 实际模型观测值优先于 spawn 参数与配置兜底。
         const childThreadId = params.thread.id;
         const parentThreadId = params.thread.parentThreadId;
         if (!parentThreadId || childThreadId === parentThreadId) return;
-        registerDescendantCodexMcpContext(childThreadId);
-        this.deps.registerCodexChildThreadForParent?.({
-          parentThreadId,
-          childThreadId,
-        });
-        // 嵌套子代理:孙线程的 spawn item 只出现在**子线程自己**的事件流里,主线程的
-        // itemStarted 看不到,所以只能靠血缘把它并进父线程所属的那张卡 —— 否则孙线程的
-        // 工具调用与 token 全部进 pending 且再也没有登记路径可以重放(greptile P1)。
-        const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId);
+        const childModel =
+          typeof params.thread.model === 'string' && params.thread.model.length > 0
+            ? params.thread.model
+            : undefined;
+        registerDescendantThreadRouting(childThreadId, parentThreadId);
+        const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId, childModel);
         if (replayed) emitSubagentCardUpdate(replayed);
       },
       descendantNotification: handleDescendantNotification,
@@ -7265,7 +7728,7 @@ export class CodexAgent extends BaseAgent {
           !startedOwner[1].quarantined &&
           !startedOwner[1].terminalSettled
         ) {
-          capabilitySelectionTextByTurnId.set(
+          bindRootCapabilitySelection(
             params.turn.id,
             startedOwner[1].capabilitySelectionText,
           );
@@ -7343,6 +7806,47 @@ export class CodexAgent extends BaseAgent {
           const snap = usageTracker.snapshot();
           memoryFlushController.onUsageUpdate(snap.contextTokens, snap.contextWindow);
         }
+        // 压缩风暴熔断 (见 compaction-storm.ts)。喂**上报的 input 总量**而不是
+        // usageTracker 快照: 判据比的是「压缩前后同一口径的水位」, 而 tracker 的
+        // contextTokens 掺了本地口径的换算与跨 turn 累计, 拿它比会把口径差当成压缩效果。
+        const stormDecision = compactionStormTracker.noteUsage(totalInput, Date.now());
+        if (stormDecision?.escalate) {
+          // reason 与 message 一起取: renderer 会用 reason 的本地化文案盖掉 message,
+          // 两者必须同源, 否则用户看到的那半可能与证据不符 (见该函数注释)。
+          const { reason, message } = buildCompactionStormTerminalError({
+            ineffectiveCount: stormDecision.ineffectiveCount,
+            contextTokens: stormDecision.contextTokens,
+            elapsedMs: stormDecision.elapsedMs,
+            switchedModel: modelSwitchRecord,
+          });
+          log.error('codex compaction storm escalated to terminal error (compaction not converging)', {
+            threadId,
+            turnId: params.turnId,
+            ineffectiveCount: stormDecision.ineffectiveCount,
+            // pre / post 一起记: 排查时最有说服力的一行就是"把 pre 那么大的历史压完,
+            // 总量还是 post" —— 风暴时典型是 30k 的历史压出 326k 的总量。
+            preCompactionTokens: stormDecision.preCompactionTokens,
+            contextTokens: stormDecision.contextTokens,
+            elapsedMs: stormDecision.elapsedMs,
+            reportedContextWindow: params.tokenUsage?.modelContextWindow ?? null,
+            effectiveContextWindow: lastModelContextWindow,
+            reason,
+            ...(modelSwitchRecord ? { modelSwitch: modelSwitchRecord } : {}),
+          });
+          // 熔断后重新计数: 用户若选择继续 (发新消息前上游又压了几轮), 不会因为
+          // 残留计数在下一条 usage 上立刻二次熔断。
+          compactionStormTracker.reset();
+          // 复用 idle watchdog 的收口路径 (终态墓碑 + error + turn 收口 + interrupt)。
+          // ignorePendingTools: idle watchdog 停表是因为"球在 daemon 手里, 不该算它
+          // 超时"; 而这里的判据是"压缩本身失效了", 与球在谁手里无关。留着那道闸只会
+          // 让残留的未收口工具条目把熔断挡在门外, 用户继续看着它循环。
+          onUpstreamIdleTimeout({
+            reason,
+            message,
+            logLabel: 'compaction storm — interrupting current turn',
+            ignorePendingTools: true,
+          });
+        }
       },
       turnCompleted: (params) => {
         // buffered turn 的终态同样进队列等对账 (greptile R11 P1 + codex R12 P1):
@@ -7365,11 +7869,24 @@ export class CodexAgent extends BaseAgent {
         handleTurnCompleted(params);
       },
       itemStarted: (params) => {
+        // 血缘不能跟着 turn 对账队列一起迟到:AppServerHost 只为未知 child 缓冲 5s。
+        // 卡片/翻译仍在队列内,这里只保留 provisional claim；父 turn 被接受后
+        // 重放 item 才 commit root route，孤儿则 discard。
+        const reservedChildThreadIds = reserveSubagentSpawnLineage(params.item);
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
-        })) return;
-        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        if (interceptProposedPlanItem(params.item)) return;
+        })) {
+          rememberPendingSpawnLineage(params.turnId, reservedChildThreadIds);
+          return;
+        }
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+          discardPendingSpawnLineageIds(reservedChildThreadIds);
+          return;
+        }
+        if (interceptProposedPlanItem(params.item)) {
+          discardPendingSpawnLineageIds(reservedChildThreadIds);
+          return;
+        }
         // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。SDK echo 类 item
         // (userMessage 等)不算产出, 见 itemRepresentsModelWork。
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
@@ -7381,19 +7898,27 @@ export class CodexAgent extends BaseAgent {
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
           log,
-          ...(memoryFlushController
-            ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
-            : {}),
+          onCompactBoundary: handleCompactBoundary,
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
         emitReplayedSubagentUpdate?.();
       },
       itemUpdated: (params) => {
+        const reservedChildThreadIds = reserveSubagentSpawnLineage(params.item);
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
-        })) return;
-        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        if (interceptProposedPlanItem(params.item)) return;
+        })) {
+          rememberPendingSpawnLineage(params.turnId, reservedChildThreadIds);
+          return;
+        }
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+          discardPendingSpawnLineageIds(reservedChildThreadIds);
+          return;
+        }
+        if (interceptProposedPlanItem(params.item)) {
+          discardPendingSpawnLineageIds(reservedChildThreadIds);
+          return;
+        }
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         // updated 也要登记映射,顺序与 started / completed 一致(先登记 → 翻译 → 后发重放帧)。
@@ -7405,18 +7930,26 @@ export class CodexAgent extends BaseAgent {
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
           log,
-          ...(memoryFlushController
-            ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
-            : {}),
+          onCompactBoundary: handleCompactBoundary,
         });
         emitReplayedSubagentUpdateOnUpdated?.();
       },
       itemCompleted: (params) => {
+        const reservedChildThreadIds = reserveSubagentSpawnLineage(params.item);
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
-        })) return;
-        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        if (interceptProposedPlanItem(params.item)) return;
+        })) {
+          rememberPendingSpawnLineage(params.turnId, reservedChildThreadIds);
+          return;
+        }
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+          discardPendingSpawnLineageIds(reservedChildThreadIds);
+          return;
+        }
+        if (interceptProposedPlanItem(params.item)) {
+          discardPendingSpawnLineageIds(reservedChildThreadIds);
+          return;
+        }
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'completed');
@@ -7425,9 +7958,7 @@ export class CodexAgent extends BaseAgent {
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
           log,
-          ...(memoryFlushController
-            ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
-            : {}),
+          onCompactBoundary: handleCompactBoundary,
         });
         emitReplayedSubagentUpdateOnCompleted?.();
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
@@ -7539,6 +8070,10 @@ export class CodexAgent extends BaseAgent {
           subagentLiveCards.clear();
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
+          capabilitySelectionTextByTurnId.clear();
+          capabilitySelectionTextByThreadId.clear();
+          descendantParentThreadByThreadId.clear();
+          terminalDescendantTurnIds.clear();
           submittedUserInputByTurn.clear();
           clearAllPendingUserInputInteractions();
         }
@@ -7820,6 +8355,11 @@ export class CodexAgent extends BaseAgent {
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      activeToolContexts.clear();
+      capabilitySelectionTextByTurnId.clear();
+      capabilitySelectionTextByThreadId.clear();
+      descendantParentThreadByThreadId.clear();
+      terminalDescendantTurnIds.clear();
       // 会话收口后子代理卡不再有消费者。清状态**之前**必须先把仍在跑的卡收成终态:
       // 之后后代通知永远不会再到,只清内部状态会让渲染端一直留着最后一帧 running,卡片
       // 永久转圈(review)。
@@ -7888,6 +8428,9 @@ export class CodexAgent extends BaseAgent {
         // 用户发新消息 = 上一轮的过载重投彻底作废(它要重投的是旧消息)。
         // 这里也是**唯一**重置重投预算的地方，见 turnStarted 的说明。
         discardOverloadRetry('new send');
+        // 压缩风暴计数按用户消息归零: 每条消息都重新获得一次完整的判定机会, 熔断
+        // 过一次不会让后续消息一压就断; 反过来病因没解决时也只要几轮就会再次熔断。
+        compactionStormTracker.reset();
         // 产出记账不需要按 send 归零: 它按 turn id 存, 新一轮读的是新 turn 的账。
         // 早先的标量要在这里清, 是因为"新 turn 的响应 / 容量错误先于它的 turnStarted
         // 到达"时会读到上一个 turn 的状态(review #844 codex P1); 按 id 记账后这类乱序
@@ -8136,11 +8679,16 @@ export class CodexAgent extends BaseAgent {
             // 墓碑: 该 turn 的终态已抢在本响应之前到达 (典型: 收紧补中断后
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
-            if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id)) {
+            // 强退守卫 (Greptile P1 on #1720): hostForcedRetire 已把本会话终态收口
+            // (eventQueue.end), 迟到的 turn/start 成功响应不得重新激活。正常流程里
+            // client.close() 会 reject 挂起 RPC 且 quarantine 已在 adoptUnidentifiedDeadTurn
+            // 落墓碑, 这里再显式挡一道, 不依赖那些间接语义 —— 否则 currentTurnId /
+            // isTurnInFlight 复活后事件队列已 end, 上层 busy 永久卡死。
+            if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id) && !sessionHostForceRetired) {
               // The app-server has now acknowledged which turn owns this
               // input. Bind explicit source selection before buffered tool
               // requests are released, and never on a pre-accept failure.
-              capabilitySelectionTextByTurnId.set(
+              bindRootCapabilitySelection(
                 resp.turn.id,
                 capabilitySelectionText,
               );
@@ -8173,6 +8721,9 @@ export class CodexAgent extends BaseAgent {
                 });
                 for (const replay of replayQueue) replay();
               }
+              // Any claim not consumed by a replayed spawn item is stale residue from a
+              // malformed/duplicate queue entry; clear it without touching committed routes.
+              discardPendingSpawnLineage(resp.turn.id);
             } else {
               // 未激活 (墓碑): 队列丢弃, 挂起请求按拒绝释放 — 不得穿透。
               bufferedTurnEventQueues.delete(resp.turn.id);
@@ -8798,6 +9349,18 @@ export class CodexAgent extends BaseAgent {
         const prevModel = mutableModel;
         const prevCatalogModel = mutableCatalogModel;
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
+        // 压缩风暴诊断用 (见 modelSwitchRecord): 首个 from 是 codex 一直拿来算窗口
+        // 的那个模型, 后续切换只更新 to; 切回 from 则整条清空 (诱因已消失)。
+        // **基准取 prevCatalogModel 而不是 prevModel**: 后者可能已被 server 规范化成
+        // 只在 wire 上存在的变体, 与用户选的目录 id 比不相等 —— 详见 modelSwitchRecord。
+        // 拿不到目录口径的来源时 (catalog 快照缺失) 不记录: 宁可走不猜原因的兜底文案,
+        // 也不要把用户引向一个他点不到的 id。
+        const prevSwitchRecord = modelSwitchRecord;
+        const switchOrigin = modelSwitchRecord?.from ?? prevCatalogModel;
+        modelSwitchRecord =
+          !switchOrigin || newModel === switchOrigin
+            ? null
+            : { from: switchOrigin, to: newModel };
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
@@ -8822,6 +9385,7 @@ export class CodexAgent extends BaseAgent {
           mutableProviderId = prevProviderId;
           mutableModel = prevModel;
           mutableCatalogModel = prevCatalogModel;
+          modelSwitchRecord = prevSwitchRecord;
           throw e;
         }
       },

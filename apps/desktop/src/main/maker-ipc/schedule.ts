@@ -448,7 +448,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     let providerId = typeof body.providerId === 'string' ? body.providerId : undefined;
     let agentKind: AgentKind | undefined = requestedAgentKind;
     let model = typeof body.model === 'string' ? body.model : undefined;
-    if (targetSessionId && shouldResolveBoundSessionGenerationRoute({ targetSessionId, providerId, model })) {
+    if (targetSessionId && shouldResolveBoundSessionGenerationRoute({
+      targetSessionId,
+      resolveBoundSessionRoute: body.resolveBoundSessionRoute === true,
+    })) {
       const session = await maker.getSessionMeta(targetSessionId).catch(() => null);
       // Bound-session fallback must use the same live connection snapshot as
       // the provider picker. Never turn an unconnected built-in provider into
@@ -458,6 +461,8 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       const route = resolveBoundSessionGenerationRoute({
         session,
         sessionProviderId: getSessionProvider(targetSessionId),
+        requestedProviderId: providerId,
+        requestedModel: model,
         providers,
       });
       if (!route) {

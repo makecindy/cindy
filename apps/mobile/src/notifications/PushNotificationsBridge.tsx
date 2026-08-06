@@ -1,8 +1,9 @@
-import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
-import { parseNotificationDeepLink } from './pushRegistrationModel';
+import Notifications from './nativeNotifications';
+import { parseNotificationResponseDeepLink } from './pushRegistrationModel';
 import {
   configureForegroundNotificationBehavior,
   isPushSupported,
@@ -11,22 +12,35 @@ import {
   syncPushRegistration,
 } from './pushNotifications';
 
-/** 冷启动 last-response 的已消费标记(模块级:组件重挂/Provider 重建也不重复路由)。 */
-const consumedLastResponseIds = new Set<string>();
+/** 已消费点击的去重键(模块级:组件重挂/Provider 重建也不重复路由)。 */
+const consumedNotificationResponseKeys = new Set<string>();
+type NotificationResponse = Parameters<
+  Parameters<typeof Notifications.addNotificationResponseReceivedListener>[0]
+>[0];
 
 /**
  * 移动推送的运行时桥(挂在 AuthProvider 内、导航树旁,不渲染任何 UI):
  *
  * 1. 登录后按本机开关同步 token 注册(启动补偿:上次注册失败/换账号后自愈);
  * 2. APNs token 轮换时重新上报;
- * 3. 通知点击(前台/后台/冷启动)→ 校验 data.deepLink → 路由到对应会话;
+ * 3. 通知点击(前台/后台/冷启动)→ 解析 APNs / Expo 深链 → 路由到对应会话;
  * 4. 前台压掉系统横幅。
  */
 export function PushNotificationsBridge() {
   const auth = useAuth();
   const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
   /** 冷启动点通知时 auth 可能未就绪,先存下待路由的深链。 */
   const pendingDeepLinkRef = useRef<string | null>(null);
+  const authStateRef = useRef({
+    initialized: auth.initialized,
+    isAuthenticated: auth.isAuthenticated,
+  });
+  authStateRef.current = {
+    initialized: auth.initialized,
+    isAuthenticated: auth.isAuthenticated,
+  };
   const apiFetchRef = useRef(auth.apiFetch);
   apiFetchRef.current = auth.apiFetch;
 
@@ -69,41 +83,56 @@ export function PushNotificationsBridge() {
     return () => sub.remove();
   }, [auth.initialized, auth.isAuthenticated]);
 
-  // 通知点击路由:后台点击经 response listener,冷启动经 last response 补偿
+  const flushPendingDeepLink = useCallback((): void => {
+    const target = pendingDeepLinkRef.current;
+    if (!target) return;
+    const { initialized, isAuthenticated } = authStateRef.current;
+    if (!initialized || !isAuthenticated) return; // 待 auth 就绪后由下方 effect 重放
+    pendingDeepLinkRef.current = null;
+    routerRef.current.push(target as never);
+  }, []);
+
+  // 通知点击路由:后台点击经 response listener,冷启动 / 回前台经 last response 补偿
   useEffect(() => {
     if (!isPushSupported()) return;
-    const routeTo = (deepLink: string | null): void => {
+    const consumeResponse = (response: NotificationResponse): void => {
+      const deepLink = parseNotificationResponseDeepLink(response);
       if (!deepLink) return;
+      const identifier = response.notification.request.identifier;
+      const dedupeKey = identifier ? `id:${identifier}` : `deepLink:${deepLink}`;
+      if (consumedNotificationResponseKeys.has(dedupeKey)) return;
+      consumedNotificationResponseKeys.add(dedupeKey);
+      void Notifications.clearLastNotificationResponseAsync?.()?.catch(() => undefined);
       pendingDeepLinkRef.current = deepLink;
       flushPendingDeepLink();
     };
-    const flushPendingDeepLink = (): void => {
-      const target = pendingDeepLinkRef.current;
-      if (!target) return;
-      if (!auth.initialized || !auth.isAuthenticated) return; // 待 auth 就绪后由下方 effect 重放
-      pendingDeepLinkRef.current = null;
-      router.push(target as never);
+
+    const readLastResponse = (): void => {
+      void Notifications.getLastNotificationResponseAsync()
+        .then((response) => {
+          if (response) consumeResponse(response);
+        })
+        .catch(() => undefined);
     };
-    // effect 因 auth 就绪重跑时,冷启动阶段暂存的深链在此重放——last response
-    // 已被上一轮消费/清除,不能依赖再次读取它来触发
-    flushPendingDeepLink();
+
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      routeTo(parseNotificationDeepLink(response.notification.request.content.data));
+      consumeResponse(response);
     });
-    void Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (!response) return;
-      // last response 会一直返回同一次点击(effect 因 auth 变化重跑、组件重挂时会
-      // 再次读到):按 request.identifier 去重,消费后清掉系统侧记录,避免用户处理
-      // 完通知后又被重复推回旧会话。
-      const identifier = response.notification.request.identifier;
-      if (identifier && consumedLastResponseIds.has(identifier)) return;
-      if (identifier) consumedLastResponseIds.add(identifier);
-      void Notifications.clearLastNotificationResponseAsync?.().catch(() => undefined);
-      routeTo(parseNotificationDeepLink(response.notification.request.content.data));
+    readLastResponse();
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') readLastResponse();
     });
-    return () => sub.remove();
-    // auth 状态变化时重跑以重放 pending 深链(冷启动点通知 → 登录恢复完成 → 进会话)
-  }, [auth.initialized, auth.isAuthenticated, router]);
+    return () => {
+      sub.remove();
+      appStateSub.remove();
+    };
+  }, [flushPendingDeepLink]);
+
+  // auth 就绪后重放冷启动 / 点击期间暂存的深链。监听本身保持挂载，避免 auth
+  // 状态变化重建 effect 时与 last-response 读取发生竞态。
+  useEffect(() => {
+    flushPendingDeepLink();
+  }, [auth.initialized, auth.isAuthenticated, flushPendingDeepLink]);
 
   return null;
 }

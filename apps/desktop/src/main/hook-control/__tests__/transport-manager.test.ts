@@ -21,8 +21,10 @@ import {
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
+  HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
   HOOK_FEATURE_SLACK_TOOLS,
+  HOOK_FEATURE_TURN_DELIVERY,
   makeBindState,
   makeBindUpdate,
   makePing,
@@ -33,6 +35,7 @@ import {
   makeProviderPrefsState,
   makeQueryRequest,
   makeTaskDispatch,
+  makeTurnDelivery,
   makeToolResponse,
   makeWelcome,
   parseHookMessage,
@@ -175,6 +178,63 @@ afterEach(() => {
 });
 
 describe('hook-control runtime capability gate', () => {
+  it('X hello 声明 delivery ACK，且只在 welcome 双向协商后把回执路由给 dispatcher', () => {
+    const transportOpts: HookTransportOpts[] = [];
+    const handleTurnDelivery = vi.fn();
+    const dispatcher = {
+      handleDispatch: vi.fn(),
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      cancel: vi.fn(),
+      handleSessionArchive: vi.fn(),
+      handleInteractionDecision: vi.fn(),
+      handleTurnDelivery,
+      activateAccount: vi.fn(),
+      deactivateAccount: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as NonNullable<HookControlManagerDeps['dispatcher']>;
+    const manager = makeManager(
+      memoryStore({ url: 'wss://unused.example', enabled: false, xEnabled: true }),
+      {
+        dispatcher,
+        getXUrl: () => 'wss://x-hook.example',
+        createTransport: (opts) => {
+          transportOpts.push(opts);
+          return { send: () => true, dispose: () => {} };
+        },
+      },
+    );
+    manager.sync();
+    const opts = transportOpts[0];
+    if (opts === undefined) throw new Error('X transport was not created');
+    expect(opts.buildHello().features).toContain(HOOK_FEATURE_TURN_DELIVERY);
+
+    const delivery = makeTurnDelivery({
+      requestId: 'x:999:post-1',
+      state: 'accepted',
+      attempt: 0,
+      retryAt: null,
+      error: null,
+    });
+    opts.onMessage(delivery, () => true);
+    expect(handleTurnDelivery).not.toHaveBeenCalled();
+
+    opts.onWelcome?.({
+      serverName: 'x-hook',
+      features: [
+        HOOK_FEATURE_PROVIDER_BIND,
+        HOOK_FEATURE_PROVIDER_PREFS,
+        HOOK_FEATURE_SESSION_PICKER,
+        HOOK_FEATURE_PROVIDER_X,
+        HOOK_FEATURE_TURN_DELIVERY,
+      ],
+    });
+    opts.onStatus('connected', null);
+    opts.onMessage(delivery, () => true);
+    expect(handleTurnDelivery).toHaveBeenCalledWith(expect.stringMatching(/:x$/), delivery.payload);
+    manager.dispose();
+  });
+
   it('keeps an enabled cloud preference disconnected when the capability is unavailable', () => {
     const createTransport = vi.fn(() => {
       throw new Error('transport must not start');
@@ -1524,6 +1584,7 @@ describe('Telegram provider capability, binding and prefs', () => {
       cancel: vi.fn(),
       handleSessionArchive: vi.fn(),
       handleInteractionDecision: vi.fn(),
+      handleTurnDelivery: vi.fn(),
       activateAccount: vi.fn(),
       deactivateAccount: vi.fn(async () => undefined),
       dispose: vi.fn(),
@@ -2619,9 +2680,7 @@ describe('Telegram provider capability, binding and prefs', () => {
     const server = collectFrames(sock);
     const hello = await server.waitFor('hello');
     if (hello.type !== 'hello') throw new Error('unreachable');
-    expect(hello.payload.features).toEqual(
-      expect.arrayContaining(TELEGRAM_FEATURES),
-    );
+    expect(hello.payload.features).toEqual(expect.arrayContaining(TELEGRAM_FEATURES));
     sock.send(
       serializeHookMessage(
         makeWelcome({ serverName: 'telegram-server', features: TELEGRAM_FEATURES }),

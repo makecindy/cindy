@@ -7,6 +7,7 @@ import {
   requestWindowsTrayQuit,
   type WindowsClosePromptWindow,
   type WindowsTrayMenuHost,
+  type WindowsTrayPopupMenu,
   type WindowsTrayWindow,
 } from '../windowsTrayLifecycle';
 
@@ -153,23 +154,27 @@ describe('Windows tray lifecycle', () => {
 });
 
 /** Tray fake for the JS-driven menu popup (`setContextMenu` is deliberately unused). */
-function makeTrayMenuHost(): WindowsTrayMenuHost<object> & { destroyed: boolean } {
+function makeTrayMenuHost(): WindowsTrayMenuHost & { destroyed: boolean } {
   return {
     destroyed: false,
     isDestroyed() {
       return this.destroyed;
     },
-    popUpContextMenu: vi.fn(),
   };
+}
+
+function makePopupMenu(id: string): WindowsTrayPopupMenu & { id: string } {
+  return { id, popup: vi.fn() };
 }
 
 describe('Windows tray menu popup', () => {
   it('builds the menu on first popup and keeps it referenced for the next one', () => {
     const tray = makeTrayMenuHost();
-    const built = { id: 'built' };
+    const built = makePopupMenu('built');
     const buildMenu = vi.fn(() => built);
-    let retained: object | null = null;
-    const retainMenu = vi.fn((menu: object) => {
+    let retained: typeof built | null = null;
+    const activeMenus = new Set<WindowsTrayPopupMenu>();
+    const retainMenu = vi.fn((menu: typeof built) => {
       retained = menu;
     });
 
@@ -179,40 +184,60 @@ describe('Windows tray menu popup', () => {
         menu: retained,
         buildMenu,
         retainMenu,
+        retainActiveMenu: (menu) => activeMenus.add(menu),
+        releaseActiveMenu: (menu) => activeMenus.delete(menu),
         onUnavailable: vi.fn(),
         onError: vi.fn(),
       }),
     ).toBe(true);
     expect(buildMenu).toHaveBeenCalledTimes(1);
     expect(retained).toBe(built);
+    expect(activeMenus.has(built)).toBe(true);
+    const firstPopupOptions = vi.mocked(built.popup).mock.calls[0][0];
+    expect(firstPopupOptions).toEqual({ callback: expect.any(Function) });
+    expect(firstPopupOptions).not.toHaveProperty('window');
+    expect(firstPopupOptions).not.toHaveProperty('x');
+    expect(firstPopupOptions).not.toHaveProperty('y');
+    firstPopupOptions.callback();
+    expect(activeMenus.has(built)).toBe(false);
 
-    // 第二次右键复用同一个菜单对象: 弹出期间必须一直有 JS 引用,不能每次交出新对象。
+    // 第二次右键复用同一个菜单对象。
     expect(
       popUpWindowsTrayMenu({
         tray,
         menu: retained,
         buildMenu,
         retainMenu,
+        retainActiveMenu: (menu) => activeMenus.add(menu),
+        releaseActiveMenu: (menu) => activeMenus.delete(menu),
         onUnavailable: vi.fn(),
         onError: vi.fn(),
       }),
     ).toBe(true);
     expect(buildMenu).toHaveBeenCalledTimes(1);
-    expect(tray.popUpContextMenu).toHaveBeenNthCalledWith(1, built);
-    expect(tray.popUpContextMenu).toHaveBeenNthCalledWith(2, built);
+    expect(built.popup).toHaveBeenCalledTimes(2);
   });
 
-  it('rebuilds the menu after the caller drops it on a language change', () => {
+  it('keeps an open menu alive while rebuilding after a language change', () => {
     const tray = makeTrayMenuHost();
-    const menus = [{ id: 'zh-CN' }, { id: 'en' }];
-    const buildMenu = vi.fn(() => menus.shift() ?? { id: 'exhausted' });
+    const menus = [makePopupMenu('zh-CN'), makePopupMenu('en')];
+    const buildMenu = vi.fn(() => menus.shift() ?? makePopupMenu('exhausted'));
     const retainMenu = vi.fn();
+    const activeMenus = new Set<WindowsTrayPopupMenu>();
+    const retainActiveMenu = (menu: WindowsTrayPopupMenu): void => {
+      activeMenus.add(menu);
+    };
+    const releaseActiveMenu = (menu: WindowsTrayPopupMenu): void => {
+      activeMenus.delete(menu);
+    };
 
     popUpWindowsTrayMenu({
       tray,
       menu: null,
       buildMenu,
       retainMenu,
+      retainActiveMenu,
+      releaseActiveMenu,
       onUnavailable: vi.fn(),
       onError: vi.fn(),
     });
@@ -222,17 +247,22 @@ describe('Windows tray menu popup', () => {
       menu: null,
       buildMenu,
       retainMenu,
+      retainActiveMenu,
+      releaseActiveMenu,
       onUnavailable: vi.fn(),
       onError: vi.fn(),
     });
 
     expect(buildMenu).toHaveBeenCalledTimes(2);
-    expect(retainMenu.mock.calls).toEqual([[{ id: 'zh-CN' }], [{ id: 'en' }]]);
-    expect(tray.popUpContextMenu).toHaveBeenNthCalledWith(2, { id: 'en' });
+    expect(activeMenus.size).toBe(2);
+    for (const [menu] of retainMenu.mock.calls) {
+      vi.mocked(menu.popup).mock.calls[0][0].callback();
+    }
+    expect(activeMenus.size).toBe(0);
   });
 
   it('reports a missing tray icon without building a menu', () => {
-    const buildMenu = vi.fn(() => ({}));
+    const buildMenu = vi.fn(() => makePopupMenu('unused'));
     const onUnavailable = vi.fn();
 
     expect(
@@ -241,6 +271,8 @@ describe('Windows tray menu popup', () => {
         menu: null,
         buildMenu,
         retainMenu: vi.fn(),
+        retainActiveMenu: vi.fn(),
+        releaseActiveMenu: vi.fn(),
         onUnavailable,
         onError: vi.fn(),
       }),
@@ -253,7 +285,7 @@ describe('Windows tray menu popup', () => {
   it('reports a destroyed tray icon without building a menu', () => {
     const tray = makeTrayMenuHost();
     tray.destroyed = true;
-    const buildMenu = vi.fn(() => ({}));
+    const buildMenu = vi.fn(() => makePopupMenu('unused'));
     const onUnavailable = vi.fn();
 
     expect(
@@ -262,6 +294,8 @@ describe('Windows tray menu popup', () => {
         menu: null,
         buildMenu,
         retainMenu: vi.fn(),
+        retainActiveMenu: vi.fn(),
+        releaseActiveMenu: vi.fn(),
         onUnavailable,
         onError: vi.fn(),
       }),
@@ -269,29 +303,35 @@ describe('Windows tray menu popup', () => {
 
     expect(onUnavailable).toHaveBeenCalledWith('destroyed');
     expect(buildMenu).not.toHaveBeenCalled();
-    expect(tray.popUpContextMenu).not.toHaveBeenCalled();
   });
 
   it('surfaces a failing popup instead of throwing into the tray event handler', () => {
     const tray = makeTrayMenuHost();
     const failure = new Error('popup rejected by the shell');
-    tray.popUpContextMenu = vi.fn(() => {
+    const menu = makePopupMenu('failing');
+    menu.popup = vi.fn(() => {
       throw failure;
     });
     const onError = vi.fn();
+    const retainActiveMenu = vi.fn();
+    const releaseActiveMenu = vi.fn();
 
     expect(
       popUpWindowsTrayMenu({
         tray,
         menu: null,
-        buildMenu: () => ({}),
+        buildMenu: () => menu,
         retainMenu: vi.fn(),
+        retainActiveMenu,
+        releaseActiveMenu,
         onUnavailable: vi.fn(),
         onError,
       }),
     ).toBe(false);
 
     expect(onError).toHaveBeenCalledWith(failure);
+    expect(retainActiveMenu).toHaveBeenCalledWith(menu);
+    expect(releaseActiveMenu).toHaveBeenCalledWith(menu);
   });
 
   it('surfaces a failing menu build', () => {
@@ -307,12 +347,13 @@ describe('Windows tray menu popup', () => {
           throw failure;
         },
         retainMenu: vi.fn(),
+        retainActiveMenu: vi.fn(),
+        releaseActiveMenu: vi.fn(),
         onUnavailable: vi.fn(),
         onError,
       }),
     ).toBe(false);
 
     expect(onError).toHaveBeenCalledWith(failure);
-    expect(tray.popUpContextMenu).not.toHaveBeenCalled();
   });
 });

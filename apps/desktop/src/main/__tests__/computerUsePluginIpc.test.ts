@@ -62,6 +62,22 @@ describe('computer use plugin IPC invariants', () => {
     );
   });
 
+  it('schedules a retry when the shared host is busy', async () => {
+    const onDeferred = vi.fn();
+
+    await expect(
+      refreshCodexMcpEnvironment({
+        restartCodex: vi.fn(async () => {
+          throw new Error('codex busy');
+        }),
+        shutdownCodexEnvironment: vi.fn(async () => undefined),
+        onDeferred,
+      }),
+    ).resolves.toEqual({ codexMcpRefreshed: false });
+
+    expect(onDeferred).toHaveBeenCalledOnce();
+  });
+
   it('returns the non-blocking refresh result after global plugin persistence', () => {
     const registerSource = fs.readFileSync(
       path.resolve(__dirname, '../maker-ipc/register.ts'),
@@ -86,6 +102,7 @@ describe('computer use plugin IPC invariants', () => {
 
     for (const body of [setEnabledBody, clearEnabledBody]) {
       expect(body).toContain('GLOBAL_PLUGIN_IDS.has(id)');
+      expect(body).toContain("id !== 'browser'");
       expect(body).toContain('await getPluginRegistry()');
       expect(body).toContain('return { codexMcpRefreshed: true };');
       expect(body).toContain('return refreshCodexMcpEnvironment({');

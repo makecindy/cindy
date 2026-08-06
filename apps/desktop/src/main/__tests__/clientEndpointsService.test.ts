@@ -781,6 +781,102 @@ describe('用户确认的离线出口', () => {
     expect(fetchManifest).toHaveBeenCalledTimes(1);
   });
 
+  it('自动模式下网络失败 + 有缓存 → 不弹框、不诊断，直接用缓存启动', async () => {
+    const loadOfflineManifest = vi.fn(offlineCandidate);
+    const promptRetry = vi.fn();
+    const diagnose = vi.fn();
+    const exitApp = vi.fn();
+    const onResolved = vi.fn();
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest: failFetch('ERR_INTERNET_DISCONNECTED'),
+      promptRetry,
+      exitApp,
+      diagnose,
+      loadOfflineManifest,
+      offlineFallbackMode: 'automatic',
+      onResolved,
+      ...NO_AUTO_RETRY,
+    });
+
+    expect(result?.authApiBaseUrl).toBe('https://auth.cached.example.com');
+    expect(loadOfflineManifest).toHaveBeenCalledTimes(1);
+    expect(promptRetry).not.toHaveBeenCalled();
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(exitApp).not.toHaveBeenCalled();
+    expect(onResolved).toHaveBeenCalledWith(expect.anything(), 'cache');
+  });
+
+  it('自动模式仍优先等待短重试自愈，远端成功时不读取缓存', async () => {
+    const fetchManifest = vi
+      .fn<BlockingResolveDeps['fetchManifest']>()
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_NAME_NOT_RESOLVED' })
+      .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
+    const loadOfflineManifest = vi.fn(offlineCandidate);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry: vi.fn(),
+      exitApp: vi.fn(),
+      loadOfflineManifest,
+      offlineFallbackMode: 'automatic',
+      autoRetryDelaysMs: [10],
+      sleep: async () => {},
+    });
+
+    expect(result?.authApiBaseUrl).toBe('https://auth.remote.example.com');
+    expect(fetchManifest).toHaveBeenCalledTimes(2);
+    expect(loadOfflineManifest).not.toHaveBeenCalled();
+  });
+
+  it('自动模式没有可用缓存时仍诊断并弹框', async () => {
+    const diagnose = vi.fn().mockResolvedValue({
+      summary: 'proxy=DIRECT dns=fail(ENOTFOUND)',
+      logPath: '/tmp/cindy-test-logs',
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const exitApp = vi.fn();
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest: failFetch('ERR_INTERNET_DISCONNECTED'),
+      promptRetry,
+      exitApp,
+      diagnose,
+      loadOfflineManifest: () => null,
+      offlineFallbackMode: 'automatic',
+      ...NO_AUTO_RETRY,
+    });
+
+    expect(result).toBeNull();
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(promptRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'network',
+        offlineSavedAt: null,
+        diagnosis: 'proxy=DIRECT dns=fail(ENOTFOUND)',
+      }),
+    );
+    expect(exitApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('自动模式绝不让缓存掩盖配置事故', async () => {
+    const loadOfflineManifest = vi.fn(offlineCandidate);
+    const promptRetry = vi.fn().mockReturnValue('exit');
+
+    await resolveClientEndpointsBlocking({
+      fetchManifest: okFetch('not json'),
+      promptRetry,
+      exitApp: vi.fn(),
+      loadOfflineManifest,
+      offlineFallbackMode: 'automatic',
+    });
+
+    expect(loadOfflineManifest).not.toHaveBeenCalled();
+    expect(promptRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'config', offlineSavedAt: null }),
+    );
+  });
+
   it('走离线出口时 onResolved 收到 source=cache;网络成功则是 network 并带原文', async () => {
     const cacheResolved = vi.fn();
     await resolveClientEndpointsBlocking({

@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  insertComposerDocumentForRestore,
   normalizeComposerDocumentJSON,
   plainTextToComposerDocument,
 } from '@/lib/composerListDocument';
+
+const bulletListDocument = (text: string) => ({
+  type: 'doc',
+  content: [
+    {
+      type: 'bulletList',
+      content: [
+        {
+          type: 'listItem',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+        },
+      ],
+    },
+  ],
+});
 
 describe('composer list document normalization', () => {
   it('promotes plain ordered rows into one structured list', () => {
@@ -226,9 +242,7 @@ describe('composer list document normalization', () => {
   });
 
   it('does not promote marker-shaped lines inside fenced code', () => {
-    expect(
-      plainTextToComposerDocument('before\n```js\n1. literal\n```\n2. real'),
-    ).toEqual({
+    expect(plainTextToComposerDocument('before\n```js\n1. literal\n```\n2. real')).toEqual({
       type: 'doc',
       content: [
         { type: 'paragraph', content: [{ type: 'text', text: 'before' }] },
@@ -287,5 +301,137 @@ describe('composer list document normalization', () => {
       ],
     };
     expect(normalizeComposerDocumentJSON(document)).toEqual(document);
+  });
+
+  it('restores a failed send before text entered while it was waiting', () => {
+    expect(
+      insertComposerDocumentForRestore(
+        {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'failed send' }] }],
+        },
+        {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'new draft' }] }],
+        },
+      ).document,
+    ).toEqual({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'failed send' }] },
+        { type: 'paragraph' },
+        { type: 'paragraph', content: [{ type: 'text', text: 'new draft' }] },
+      ],
+    });
+  });
+
+  it('inserts consecutive failed sends at a stable FIFO cursor', () => {
+    const current = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'C' }] }],
+    };
+    const first = insertComposerDocumentForRestore(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'A' }] }],
+      },
+      current,
+    );
+    const second = insertComposerDocumentForRestore(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'B' }] }],
+      },
+      first.document,
+      first.nextInsertAt,
+    );
+
+    expect(second.document.content).toEqual([
+      { type: 'paragraph', content: [{ type: 'text', text: 'A' }] },
+      { type: 'paragraph' },
+      { type: 'paragraph', content: [{ type: 'text', text: 'B' }] },
+      { type: 'paragraph' },
+      { type: 'paragraph', content: [{ type: 'text', text: 'C' }] },
+    ]);
+  });
+
+  it('keeps compatible lists separate across a recovery boundary', () => {
+    expect(
+      insertComposerDocumentForRestore(
+        {
+          type: 'doc',
+          content: [
+            {
+              type: 'bulletList',
+              content: [
+                {
+                  type: 'listItem',
+                  content: [
+                    { type: 'paragraph', content: [{ type: 'text', text: 'failed item' }] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          type: 'doc',
+          content: [
+            {
+              type: 'bulletList',
+              content: [
+                {
+                  type: 'listItem',
+                  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'new item' }] }],
+                },
+              ],
+            },
+          ],
+        },
+      ).document,
+    ).toEqual({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'failed item' }] }],
+            },
+          ],
+        },
+        { type: 'paragraph' },
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'new item' }] }],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('keeps consecutive compatible list recoveries in FIFO order', () => {
+    const first = insertComposerDocumentForRestore(
+      bulletListDocument('A'),
+      bulletListDocument('C'),
+    );
+    const second = insertComposerDocumentForRestore(
+      bulletListDocument('B'),
+      first.document,
+      first.nextInsertAt,
+    );
+
+    expect(second.document.content).toEqual([
+      bulletListDocument('A').content[0],
+      { type: 'paragraph' },
+      bulletListDocument('B').content[0],
+      { type: 'paragraph' },
+      bulletListDocument('C').content[0],
+    ]);
   });
 });
