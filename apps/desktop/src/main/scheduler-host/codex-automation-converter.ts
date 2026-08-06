@@ -182,6 +182,11 @@ export function convertCodexAutomation(
   if (!['ACTIVE', 'PAUSED', 'DISABLED', 'INACTIVE'].includes(detail.status.toUpperCase())) {
     blockingDiagnostics.push(`Codex status ${detail.status || '(empty)'} is not recognized`);
   }
+  if (!detail.name.trim()) {
+    const message = 'name must not be empty';
+    diagnostics.push(message);
+    blockingDiagnostics.push(message);
+  }
   if (!detail.prompt.trim()) {
     const message = 'prompt must not be empty';
     diagnostics.push(message);

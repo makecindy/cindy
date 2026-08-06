@@ -127,4 +127,11 @@ describe('convertCodexAutomation', () => {
     expect(result.diagnostics).toEqual(expect.arrayContaining(['malformed field']));
     expect(result.diagnostics.join(' ')).toContain('prompt');
   });
+
+  it('rejects an automation without a display name', () => {
+    const result = convertCodexAutomation(detail({ name: '   ' }), { timezone: 'UTC' });
+
+    expect(result.canImport).toBe(false);
+    expect(result.diagnostics.join(' ')).toContain('name');
+  });
 });
