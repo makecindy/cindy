@@ -1062,16 +1062,39 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             active.routeSessionId = sessionId;
           }
         },
-        turnPermissionPolicyForRoute: (row, capabilities) =>
-          createWechatTurnPermissionPolicyForMode(task.id, capabilities, row.permissionMode, {
-            onInteractionStateChange: (state) => {
-              void this.#requireStore().setWaitingDesktop(
-                task.bindingEpoch,
-                task.id,
-                state === 'waiting',
+        turnPermissionPolicyForRoute: (row, capabilities) => {
+          try {
+            return createWechatTurnPermissionPolicyForMode(
+              task.id,
+              capabilities,
+              row.permissionMode,
+              {
+                onInteractionStateChange: (state) => {
+                  void this.#requireStore().setWaitingDesktop(
+                    task.bindingEpoch,
+                    task.id,
+                    state === 'waiting',
+                  );
+                },
+              },
+            );
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message.startsWith(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED)
+            ) {
+              // 区分「Agent 不支持」与「权限模式不支持」:未声明 turnPermissionPolicy
+              // 的 Agent(如 Pi)在任何模式下都无法提供微信所需的逐条确认,换权限模式
+              // 无用,只能换 Agent;已声明的 Agent(Claude Code / Codex)仅个别模式
+              // 不可用,换权限模式即可。给用户可执行的指引而非含混提示。
+              const unsupportedKind = capabilities.turnPermissionPolicy ? 'mode' : 'agent';
+              throw new Error(
+                `${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:${unsupportedKind}:${row.permissionMode}`,
               );
-            },
-          }),
+            }
+            throw error;
+          }
+        },
       });
     } catch (error) {
       await stopTyping();
@@ -1376,13 +1399,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   }
 
   async #commitPreDispatchFailure(task: WechatTask, reason: string): Promise<void> {
-    const text =
-      reason.includes(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED) ||
-      reason.includes('unsupported_turn_permission')
-        ? '当前 Agent 无法在个人微信中安全使用此权限模式。请在 Cindy 中切换权限模式；若仍失败，请改用支持个人微信权限确认的 Agent。'
-        : reason === 'missing_auth'
-          ? '当前 Agent 尚未完成授权，请先在 Cindy 中连接模型服务。'
-          : '这条消息暂时无法启动，请稍后重试。';
+    const text = wechatPreDispatchFailureText(reason);
     const chunks = chunkWechatText(text);
     await this.#requireStore().commitPreDispatchFailure({
       bindingEpoch: task.bindingEpoch,
@@ -1906,6 +1923,33 @@ function safeMachineCode(value: string): string {
   return normalized || 'PRE_DISPATCH_REJECTED';
 }
 
+/**
+ * 派发前失败的用户可见文案(纯函数,便于单测)。reason 来源:
+ *  - `${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent:<mode>` — Agent 未声明
+ *    turnPermissionPolicy(如 Pi),任何模式都不可用 → 引导换 Agent;
+ *  - `${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:mode:<mode>` — 当前权限模式
+ *    在该 Agent 的 unsupportedPermissionModes 里 → 引导换权限模式;
+ *  - 旧格式 `TURN_PERMISSION_POLICY_UNSUPPORTED:<mode>` / `unsupported_turn_permission`
+ *    兜底按「换权限模式或换 Agent」处理;
+ *  - 'missing_auth' — 未连接模型服务;
+ *  - 其余 — 通用重试提示。
+ */
+export function wechatPreDispatchFailureText(reason: string): string {
+  if (reason.includes(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent`)) {
+    return ui.error.agentUnsupported;
+  }
+  if (
+    reason.includes(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED) ||
+    reason.includes('unsupported_turn_permission')
+  ) {
+    return ui.error.permissionModeUnsupported;
+  }
+  if (reason === 'missing_auth') {
+    return '当前 Agent 尚未完成授权，请先在 Cindy 中连接模型服务。';
+  }
+  return '这条消息暂时无法启动，请稍后重试。';
+}
+
 function normalizeFinalOutputText(text: string): string {
   return filterWechatMarkdown(text) || '✅ (本轮无文本输出)';
 }
@@ -2006,6 +2050,7 @@ export const __testing = {
   formatWechatInteractionPrompt,
   parseWechatInteractionReply,
   stopActiveWechatTurns,
+  wechatPreDispatchFailureText,
 };
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

@@ -10,7 +10,7 @@ import {
   getModel,
   isModelSelectableForNewRoute,
 } from '@cindy/model-providers';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils';
 import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
+  isUnconditionalTurnPolicyChannel,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -215,6 +216,13 @@ export function ImDefaultSettingsSection({
   }
 
   const activeSettings = settings.agents[settings.agentKind];
+  // 个人微信对每次 dispatch 无条件挂 turnPermissionPolicy;Pi 未声明该 capability,
+  // 选它发消息必然失败,此处给可执行提示。(Telegram / 钉钉仅在群聊挂 policy,
+  // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
+  const piUnsupportedOnChannel =
+    channel !== undefined &&
+    isUnconditionalTurnPolicyChannel(channel) &&
+    settings.agentKind === 'pi';
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
@@ -334,6 +342,22 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {piUnsupportedOnChannel && (
+        <div
+          role="note"
+          className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2"
+        >
+          <AlertTriangle
+            size={14}
+            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+            aria-hidden
+          />
+          <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.piUnsupportedHint')}
+          </p>
+        </div>
+      )}
     </section>
   );
 }

@@ -69,6 +69,17 @@ export const ui = {
       `ℹ️ 以下内容我消化不了，先丢一边了：\n${entries.map((entry) => `• ${entry.label}`).join('\n')}\n\n` +
       '其它部分收到啦，正在处理~',
   },
+  error: {
+    // turnPermissionPolicy 分类:agent(如 Pi)未声明该 capability,任何权限模式
+    // 都无法提供微信所需的逐条确认 → 换 Agent;已声明的 agent 仅个别模式不可用
+    // (如 bypassPermissions / acceptEdits) → 换权限模式。
+    agentUnsupported:
+      '⚠️ 当前 Agent（Pi）不支持个人微信的逐条权限确认，消息无法启动。\n' +
+      '请在 desktop 设置里把微信渠道的 Agent 换成 Claude Code 或 Codex，再重试。',
+    permissionModeUnsupported:
+      '⚠️ 当前 Agent 无法在个人微信中安全使用此权限模式。\n' +
+      '请在 desktop 设置里调整权限模式（或发 /permission），再重试。',
+  },
   cards: {
     permission: {
       title: (toolName: string) => `🔧 工具调用：${toolName}`,

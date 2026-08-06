@@ -3033,6 +3033,7 @@
           "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
+        "piUnsupportedHint": "Pi Agent 不支持此渠道的逐条权限确认，消息将无法处理。请改用 Claude Code 或 Codex。",
         "modelLabel": "模型配置",
         "loading": "正在读取新对话配置…",
         "loadFailed": "读取新对话配置失败",
