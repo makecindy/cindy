@@ -376,6 +376,9 @@ const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored')
 const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
   'plugin-market:removal-notice-available',
 );
+const fanOutPluginMarketPackagePermissionReview = createIpcFanOut(
+  'plugin-market:package-permission-review',
+);
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
@@ -1163,6 +1166,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ): Promise<import('../shared/pluginMarket').PluginMarketInstallResult> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
+    onPackagePermissionReview: fanOutPluginMarketPackagePermissionReview,
+    resolvePackagePermissionReview: (
+      requestId: string,
+      confirmed: boolean,
+    ): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke('plugin-market:resolve-package-permission-review', {
+        requestId,
+        confirmed,
+      }),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
     consumeRemovalNotice: (): Promise<

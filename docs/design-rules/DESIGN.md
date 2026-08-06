@@ -553,7 +553,7 @@ Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc
 
 #### Motion tokens (the only tier source)
 
-Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first. The single semantic loop-cycle exception is recorded directly below.
+Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 three-tier radius. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
 
 | Token | Value | Use |
 |---|---|---|
@@ -573,6 +573,17 @@ Spinner rotation remains linear, transform-only, mounted on an HTML wrapper, and
 must become static under reduced motion. This exception keeps loading rotation
 readable without coupling it to dialog timing or copying a hardcoded Tailwind
 default into components.
+
+**Sidebar title reading exception:** `--motion-sidebar-title-marquee-per-viewport`
+= `2400ms` is the reading time for each visible-width span of an overflowing
+Desktop sidebar task title. It is not an interaction-duration tier and is confined
+to `SidebarTitleMarquee` in `SessionItem.tsx`: actual-overflow only, pointer hover
+only, one-shot, reset immediately on pointer leave, and proportional to the number
+of viewport spans needed to reveal the full title. The track may animate only
+`transform` / `opacity`; `prefers-reduced-motion` keeps the original static
+ellipsis (with the native full-title tooltip) and disables the track. This narrow
+exception preserves readable, constant-paced title playback without allowing the
+long duration to leak into any other hover or transition.
 
 #### Semantics → motion prototypes (one semantic, one motion, app-wide)
 

@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
 
 /**
@@ -492,8 +493,10 @@ export function MorphPopover({
             // data-[state=closed]:pointer-events-none —— 收合动画期间面板已透明但仍以
             // position:fixed 覆盖视口,不加会拦住底下点击(选完项 / Esc 后那 300ms)。
             className="group fixed z-50 overflow-hidden border outline-none data-[state=closed]:pointer-events-none"
-            // 初始几何由 useLayoutEffect 直写;这里只兜首帧不可见位置
-            style={{ left: -9999, bottom: -9999 }}
+            // 初始几何由 useLayoutEffect 直写;这里只兜首帧不可见位置。
+            // Electron 的 app-region 按视口几何命中；矮窗口里面板会顶到标题栏，
+            // 必须显式 no-drag 才能保留搜索框和首行模型的 pointer / focus 交互。
+            style={{ left: -9999, bottom: -9999, ...WINDOW_NO_DRAG_STYLE }}
           >
             {/* 面板内容: 随生长淡入(50ms 延迟 + 5px 浮入);形变期禁滚(防滚动条
                 闪现挤压行宽),settle 后由 JS 切回自滚 */}

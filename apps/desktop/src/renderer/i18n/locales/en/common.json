@@ -3274,6 +3274,9 @@
           "listTitle": "Added Marketplaces",
           "pluginCount": "{{count}} plugins",
           "sourceError": "Unavailable",
+          "empty": "No plugin entries in this marketplace",
+          "skippedEntries": "Skipped {{count}} invalid plugin entries",
+          "unreadableEntries": "{{count}} plugin entries are temporarily unreadable; refresh to retry",
           "localBadge": "Local",
           "defaultRef": "Default branch",
           "neverSynced": "Never synced",
@@ -3422,6 +3425,8 @@
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
+        "cindySearchWeb": "Can search the public web with Cindy AI",
+        "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -5058,6 +5063,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "hidden": "Hidden",
       "subscriptionDirectDisabled": {
         "chatgpt": "Subscription-direct GPT models are not supported in SSH remote sessions yet",
         "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",

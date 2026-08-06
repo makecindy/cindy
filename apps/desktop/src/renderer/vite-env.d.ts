@@ -1473,6 +1473,15 @@ interface ElectronAPI {
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
+    onPackagePermissionReview: (
+      callback: (
+        request: import('../shared/pluginMarket').PluginMarketPackageReviewRequest,
+      ) => void,
+    ) => () => void;
+    resolvePackagePermissionReview: (
+      requestId: string,
+      confirmed: boolean,
+    ) => Promise<{ handled: boolean }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
     consumeRemovalNotice: () => Promise<
       import('../shared/pluginMarket').PluginRemovalUserNotice | null

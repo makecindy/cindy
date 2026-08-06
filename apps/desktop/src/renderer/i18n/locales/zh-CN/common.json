@@ -3273,6 +3273,9 @@
           "listTitle": "已添加的市场",
           "pluginCount": "{{count}} 个插件",
           "sourceError": "读取失败",
+          "empty": "市场清单中没有插件条目",
+          "skippedEntries": "已跳过 {{count}} 个无效插件条目",
+          "unreadableEntries": "{{count}} 个插件条目暂时无法读取，请刷新重试",
           "localBadge": "本地",
           "defaultRef": "默认分支",
           "neverSynced": "尚未同步",
@@ -3421,6 +3424,8 @@
         "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
         "cindyEmbedText": "可把文字送去算成向量（用于语义检索）",
         "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
+        "cindySearchWeb": "可使用 Cindy AI 搜索公网",
+        "cindySearchWebDetail": "查询会访问公网，并可能消耗 Cindy AI 配额。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
@@ -5056,6 +5061,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在设置里配置 API key 才能使用",
+      "hidden": "已隐藏",
       "subscriptionDirectDisabled": {
         "chatgpt": "订阅直连的 GPT 模型协议暂不支持 SSH 远程会话",
         "xai": "订阅直连的 Grok 模型协议暂不支持 SSH 远程会话",

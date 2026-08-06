@@ -121,4 +121,12 @@ describe('HELP_KNOWLEDGE invariants', () => {
     // 对应意识详情页收单,帮助文档随面板一并退役。
     expect(HELP_KNOWLEDGE.find((d) => d.id === 'api-keys')).toBeUndefined();
   });
+
+  it('collaboration guidance includes Pi as a local lead and worker without claiming remote Pi support', () => {
+    const collaboration = HELP_KNOWLEDGE.find((d) => d.id === 'collaboration');
+
+    expect(collaboration?.content).toContain('Pi can lead in local sessions');
+    expect(collaboration?.content).toContain('Claude Code, Codex, or Pi');
+    expect(collaboration?.content).toContain('Pi sessions are local-only');
+  });
 });
