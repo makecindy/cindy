@@ -340,6 +340,21 @@ describe('codexHttpBridge', () => {
       result: { content: [{ type: 'text', text: 'instance-current' }] },
     });
 
+    const activeWithoutThreadId = await fetch(activeUrl, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 6,
+        method: 'tools/call',
+        params: { name: 'current_session', arguments: {} },
+      }),
+    });
+    expect(activeWithoutThreadId.status).toBe(200);
+    expect(await readRpcResponse(activeWithoutThreadId)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'session-instance' }] },
+    });
+
     const stale = await call(
       withMcpRouteIdentity(bridge.url('cindy_test'), {
         sessionInstanceId: 'instance-stale',
@@ -349,6 +364,24 @@ describe('codexHttpBridge', () => {
     );
     expect(stale.status).toBe(401);
     await stale.text();
+
+    const staleWithoutThreadId = await fetch(
+      withMcpRouteIdentity(bridge.url('cindy_test'), {
+        sessionInstanceId: 'instance-stale',
+      }),
+      {
+        method: 'POST',
+        headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'current_session', arguments: {} },
+        }),
+      },
+    );
+    expect(staleWithoutThreadId.status).toBe(401);
+    await staleWithoutThreadId.text();
 
     // An old unbound URL keeps ordinary session-aware tools compatible, but
     // deliberately removes the capability needed for Full Access auto-grants.
@@ -1068,6 +1101,7 @@ describe('codexHttpBridge', () => {
     bridge.registerThreadContext('thread-disabled', {
       agentKind: 'codex',
       sessionId: 'session-disabled',
+      sessionInstanceId: 'instance-disabled',
       workingDir: '/repo',
       vendorOptions: {
         [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['ssh'],
@@ -1079,7 +1113,10 @@ describe('codexHttpBridge', () => {
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
     };
-    const initResp = await fetch(bridge.url('lizi_test'), {
+    const sessionUrl = withMcpRouteIdentity(bridge.url('lizi_test'), {
+      sessionInstanceId: 'instance-disabled',
+    });
+    const initResp = await fetch(sessionUrl, {
       method: 'POST',
       headers: baseHeaders,
       body: JSON.stringify({
@@ -1097,7 +1134,7 @@ describe('codexHttpBridge', () => {
     expect(mcpSessionId).toBeTruthy();
     await initResp.text();
 
-    const callResp = await fetch(bridge.url('lizi_test'), {
+    const callResp = await fetch(sessionUrl, {
       method: 'POST',
       headers: { ...baseHeaders, 'mcp-session-id': mcpSessionId ?? '' },
       body: JSON.stringify({
@@ -1114,6 +1151,24 @@ describe('codexHttpBridge', () => {
 
     expect(callResp.status).toBe(200);
     expect(await readRpcResponse(callResp)).toMatchObject({
+      result: {
+        isError: true,
+        content: [{ type: 'text', text: expect.stringContaining('ssh') }],
+      },
+    });
+
+    const withoutThreadId = await fetch(sessionUrl, {
+      method: 'POST',
+      headers: { ...baseHeaders, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'current_session', arguments: {} },
+      }),
+    });
+    expect(withoutThreadId.status).toBe(200);
+    expect(await readRpcResponse(withoutThreadId)).toMatchObject({
       result: {
         isError: true,
         content: [{ type: 'text', text: expect.stringContaining('ssh') }],
@@ -1173,7 +1228,7 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(callResp)).toMatchObject({
       result: {
         isError: true,
-        content: [{ type: 'text', text: expect.stringContaining('could not verify') }],
+        content: [{ type: 'text', text: expect.stringContaining('verified Cindy session') }],
       },
     });
   });

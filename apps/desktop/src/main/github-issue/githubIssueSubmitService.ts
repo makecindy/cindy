@@ -20,6 +20,7 @@ import type {
   IssueConfirmDecision,
   IssueDraft,
   IssueEnvInfo,
+  IssueSubmissionChoices,
   IssueSubmissionIdentity,
 } from './issueConfirmBridge';
 
@@ -70,11 +71,11 @@ export interface GithubIssueSubmitServiceDeps {
     sessionId: string,
     draft: IssueDraft,
     env: IssueEnvInfo,
-    submissionIdentity: IssueSubmissionIdentity,
+    submissionChoices: IssueSubmissionChoices,
     suggestedPublicName?: string,
   ) => Promise<IssueConfirmDecision>;
-  /** 每次发起确认前现查；已绑定但凭证失效时应抛 AUTH_NOT_READY，不能冒充未绑定。 */
-  resolveSubmissionIdentity: (workingDir: string) => Promise<IssueSubmissionIdentity>;
+  /** 平台身份必有；仅当实时验证到可用账号时附加 GitHub 用户身份。 */
+  resolveSubmissionChoices: (workingDir: string) => Promise<IssueSubmissionChoices>;
   /** body factory must be evaluated for each network attempt after auth refresh. */
   postIssue: (
     submissionIdentity: IssueSubmissionIdentity,
@@ -110,22 +111,19 @@ export async function submitGithubIssueWithConfirm(
     region: deps.getRegion(),
   };
 
-  let submissionIdentity: IssueSubmissionIdentity;
+  let submissionChoices: IssueSubmissionChoices;
   try {
-    submissionIdentity = await deps.resolveSubmissionIdentity(req.workingDir);
+    submissionChoices = await deps.resolveSubmissionChoices(req.workingDir);
   } catch (err) {
     return mapSubmitError(err);
   }
 
-  const suggestedPublicName =
-    submissionIdentity.kind === 'platform'
-      ? (normalizeIssuePublicName(deps.getSubmitterName()) ?? undefined)
-      : undefined;
+  const suggestedPublicName = normalizeIssuePublicName(deps.getSubmitterName()) ?? undefined;
   const decision = await deps.confirm(
     req.sessionId,
     { title: req.title, body: req.body, type: req.type },
     env,
-    submissionIdentity,
+    submissionChoices,
     suggestedPublicName,
   );
 
@@ -144,6 +142,7 @@ export async function submitGithubIssueWithConfirm(
     };
   }
 
+  const submissionIdentity = decision.submissionIdentity ?? submissionChoices.platform;
   const confirmedPublicName =
     submissionIdentity.kind === 'platform' ? normalizeIssuePublicName(decision.publicName) : null;
   if (submissionIdentity.kind === 'platform' && !confirmedPublicName) {
@@ -157,9 +156,7 @@ export async function submitGithubIssueWithConfirm(
   // 用户确认版优先 —— agent 传入值在这里被丢弃,代码层保证。
   const finalTitle = decision.title.slice(0, SERVER_TITLE_MAX);
   const editedByUser =
-    decision.title !== req.title ||
-    decision.body !== req.body ||
-    decision.type !== req.type;
+    decision.title !== req.title || decision.body !== req.body || decision.type !== req.type;
 
   const uiLanguage = decision.uiLanguage ?? deps.getFallbackLocale();
   const regionCode = CINDY_REGION_CODE[env.region];

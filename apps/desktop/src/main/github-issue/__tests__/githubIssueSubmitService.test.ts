@@ -9,7 +9,7 @@ import {
   submitGithubIssueWithConfirm,
   type GithubIssueSubmitServiceDeps,
 } from '../githubIssueSubmitService';
-import type { IssueConfirmDecision, IssueSubmissionIdentity } from '../issueConfirmBridge';
+import type { IssueConfirmDecision } from '../issueConfirmBridge';
 
 const REQ = {
   sessionId: 'sess-1',
@@ -36,7 +36,7 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
   }));
   const deps: GithubIssueSubmitServiceDeps = {
     confirm,
-    resolveSubmissionIdentity: async () => PLATFORM_IDENTITY,
+    resolveSubmissionChoices: async () => ({ platform: PLATFORM_IDENTITY }),
     postIssue,
     getAppVersion: () => '0.0.112',
     getOsInfo: () => ({ platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' }),
@@ -86,7 +86,7 @@ describe('submitGithubIssueWithConfirm', () => {
         osVersion: '25.5.0',
         region: 'cn',
       },
-      PLATFORM_IDENTITY,
+      { platform: PLATFORM_IDENTITY },
       'Carol',
     );
     expect(postIssue).toHaveBeenCalledTimes(1);
@@ -135,11 +135,11 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(description).toContain('**界面语言**: zh-CN');
   });
 
-  it('身份解析收到当前 session workingDir', async () => {
-    const resolveSubmissionIdentity = vi.fn(async () => PLATFORM_IDENTITY);
-    const { deps } = makeDeps({ resolveSubmissionIdentity });
+  it('身份选项解析收到当前 session workingDir', async () => {
+    const resolveSubmissionChoices = vi.fn(async () => ({ platform: PLATFORM_IDENTITY }));
+    const { deps } = makeDeps({ resolveSubmissionChoices });
     await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
-    expect(resolveSubmissionIdentity).toHaveBeenCalledWith('/repo');
+    expect(resolveSubmissionChoices).toHaveBeenCalledWith('/repo');
   });
 
   it('未编辑时 editedByUser=false;未回传 uiLanguage 时用 fallback locale', async () => {
@@ -255,25 +255,35 @@ describe('submitGithubIssueWithConfirm', () => {
     }
   });
 
-  it('已绑定身份会展示并严格按该身份提交', async () => {
+  it('已绑定身份作为额外选项展示，并严格按用户选择提交', async () => {
     const identity = { kind: 'github-user', login: 'octocat' } as const;
-    const { deps, confirm, postIssue } = makeDeps({
-      resolveSubmissionIdentity: async (): Promise<IssueSubmissionIdentity> => identity,
+    const submissionChoices = { platform: PLATFORM_IDENTITY, githubUser: identity } as const;
+    const confirm = vi.fn<GithubIssueSubmitServiceDeps['confirm']>(async () => ({
+      confirmed: true as const,
+      title: REQ.title,
+      body: REQ.body,
+      type: REQ.type,
+      submissionIdentity: identity,
+      uiLanguage: 'zh-CN',
+    }));
+    const { deps, postIssue } = makeDeps({
+      resolveSubmissionChoices: async () => submissionChoices,
+      confirm,
     });
     const res = await submitGithubIssueWithConfirm(deps, REQ);
     expect(res).toMatchObject({ ok: true });
-    expect(confirm.mock.calls[0]![3]).toEqual(identity);
-    expect(confirm.mock.calls[0]![4]).toBeUndefined();
+    expect(confirm.mock.calls[0]![3]).toEqual(submissionChoices);
+    expect(confirm.mock.calls[0]![4]).toBe('Carol');
     expect(postIssue.mock.calls[0]![0]).toEqual(identity);
     expect(postIssue.mock.calls[0]![1]()).not.toHaveProperty('userName');
   });
 
-  it('身份解析失败时不弹确认卡、不提交', async () => {
+  it('身份选项解析意外失败时不弹确认卡、不提交', async () => {
     const error = Object.assign(new Error('GitHub token 已失效，请重新绑定'), {
       issueErrorCode: 'AUTH_NOT_READY' as const,
     });
     const { deps, confirm, postIssue } = makeDeps({
-      resolveSubmissionIdentity: async () => Promise.reject(error),
+      resolveSubmissionChoices: async () => Promise.reject(error),
     });
     const res = await submitGithubIssueWithConfirm(deps, REQ);
     expect(res).toMatchObject({ ok: false, errorCode: 'AUTH_NOT_READY' });
@@ -300,9 +310,20 @@ describe('submitGithubIssueWithConfirm', () => {
   });
 
   it('GitHub 用户直发成功后记账,带 login、不带公开署名', async () => {
+    const identity = { kind: 'github-user', login: 'octocat' } as const;
     const onSubmitted = vi.fn();
     const { deps } = makeDeps({
-      resolveSubmissionIdentity: async () => ({ kind: 'github-user', login: 'octocat' }) as const,
+      resolveSubmissionChoices: async () => ({
+        platform: PLATFORM_IDENTITY,
+        githubUser: identity,
+      }),
+      confirm: vi.fn(async () => ({
+        confirmed: true as const,
+        title: REQ.title,
+        body: REQ.body,
+        type: REQ.type,
+        submissionIdentity: identity,
+      })),
       onSubmitted,
     });
     await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
@@ -359,7 +380,9 @@ describe('submitGithubIssueWithConfirm', () => {
     const failed = vi.fn();
     await submitGithubIssueWithConfirm(
       makeDeps({
-        postIssue: vi.fn(async () => Promise.reject(Object.assign(new Error('x'), { statusCode: 500 }))),
+        postIssue: vi.fn(async () =>
+          Promise.reject(Object.assign(new Error('x'), { statusCode: 500 })),
+        ),
         onSubmitted: failed,
       }).deps,
       REQ,
@@ -387,7 +410,17 @@ describe('submitGithubIssueWithConfirm', () => {
       });
     });
     const { deps } = makeDeps({
-      resolveSubmissionIdentity: async () => identity,
+      resolveSubmissionChoices: async () => ({
+        platform: PLATFORM_IDENTITY,
+        githubUser: identity,
+      }),
+      confirm: vi.fn(async () => ({
+        confirmed: true as const,
+        title: REQ.title,
+        body: REQ.body,
+        type: REQ.type,
+        submissionIdentity: identity,
+      })),
       postIssue,
     });
     const res = await submitGithubIssueWithConfirm(deps, REQ);
