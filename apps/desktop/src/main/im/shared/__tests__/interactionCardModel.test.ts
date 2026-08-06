@@ -293,7 +293,8 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     for (const req of [ASK_NO_OPTIONS, PLAN_LONG, PERMISSION_RICH]) {
       const model = composeInteractionModel(req)!;
       const p = registerPending(req.requestId, model.kind, 'msg-1');
-      expect(cancelPending(req.requestId, reason)).toBe(true);
+      // 取消成功时交还卡片地址(调用方据此收口卡片), 取消不到才是 null。
+      expect(cancelPending(req.requestId, reason)).toEqual({ messageId: 'msg-1' });
       await expect(p).resolves.toEqual(model.buildDefaultDecision(reason));
     }
     // hook 侧同一模型 + 自己的超时 reason
