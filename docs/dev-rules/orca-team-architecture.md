@@ -128,12 +128,13 @@ Codex app-server 是单例进程，多 thread 共用同一批 MCP server。Codex
 
 关键约束：`mcp-session-id` 只标识 MCP transport，不证明 maker session 归属，因此**不作为路由依据**。Codex HTTP bridge 在已初始化的 MCP POST message 里读取 `params._meta.threadId`，用它查 maker-core 注册的 Codex thread context；缺失、未知、batch 内不一致或不完整时，bridge 宁可不给 context（让工具调用安全降级为 NO_SESSION_CONTEXT），也不猜一个错误 context 造成跨会话串线。实现见 `apps/desktop/src/main/mcp-integrations/codexHttpBridge.ts` 的 MCP bridge request handling，以及 `apps/desktop/src/main/mcp-integrations/codexMcpThreadContextStore.ts` 的 `registerThreadContext`、`unregisterThreadContext`、`getContextForThreadId`。
 
-Codex prompt / developerInstructions 有双通道：
+Codex `developerInstructions` 有两条投递通道。最终选择取决于本 thread 的 Responses 传输形态以及 proxy registry 是否可用，不能只按凭据类型，也不能只看请求是否进入 loopback proxy。凭据类型会参与 provider 选择，但不是 instructions 通道的最终判据；在 proxy 就绪的本地 `oauth-bearer` host 中，`cindy_gateway` 与 `cindy_openai` 的 `base_url` 都指向同一个 proxy：
 
-- API key 模式：走 local proxy registry，把拼好的 instructions 按 thread 注册，再由 proxy 注入顶层 instructions。实现见 `packages/maker-core/src/agents/codex/index.ts` 的 `registerCodexDeveloperInstructions`、`apps/desktop/src/main/maker-host/index.ts` 的 Codex agent deps、`apps/desktop/src/main/maker-host/codex-proxy-host.ts` 的 `registerComposed`。
-- OAuth / 非 proxy 模式：直接把 developerInstructions 放进 `thread/start`；resume 时按会话的产品 prompt 状态决定是否补发。实现见 `packages/maker-core/src/agents/codex/index.ts` 的 `ThreadStart/ThreadResume` 参数组装。
+- `cindy_gateway`：`supports_websockets=false`，使用可解析请求正文的 HTTP Responses。proxy 就绪时，API key／gateway、`codex/` 前缀、第三方 provider，以及其它依赖正文路由或兼容改写的请求都使用这个 provider；proxy registry 通道可用时，maker-core 把启动时拼好的 instructions 按 thread 注册，再由 proxy 注入顶层 `instructions`。通道不可用时，只有满足下述 `gateway-key` 直连降级条件的会话改走原生通道。实现见 `apps/desktop/src/main/maker-host/codex-gateway-config.ts` 的 provider 装配、`packages/maker-core/src/agents/codex/index.ts` 的 `registerCodexDeveloperInstructions`，以及 `apps/desktop/src/main/maker-host/codex-proxy-host.ts` 的 `registerComposed`。
+- `cindy_openai`：只在 `oauth-bearer` host 中定义，并由官方订阅 thread 显式选择；`supports_websockets=true`，Codex 默认使用 Responses WebSocket。loopback proxy 在这条通道上只做 socket 隧道，看不到也不能改写请求正文，因此 instructions 由 `thread/start`／`thread/resume` 的原生 `developerInstructions` 承载。即使 proxy 用 426 让该 session 降级到 HTTP，也继续以原生通道为唯一投递来源，不能临时切成 registry 注入。
+- proxy 不可用时不能假装 registry 仍有效：当前仅 `gateway-key` host 允许退化为直连 gateway，maker-core 会改走原生 `developerInstructions`；OAuth 与第三方凭证注入依赖 proxy，启动失败时 fail closed。
 
-因此 Codex Lead 不依赖 proxy 才能注入提示词；proxy 只是 API key 模式下更稳定的投递通道。
+任何依赖宿主追加 instructions 的能力都必须复用 `isCodexProxyChannelReady`／`useProxyChannel` 的完整判定（host proxy active、thread 非 WebSocket、registry 注册 hook 可用），为每个 thread 选择且只选择一个投递来源；禁止按 API key／OAuth 另做一套推导，也禁止为了兜底同时走两条通道。未来若要在会话运行中刷新任意上下文，设计必须分别说明 HTTP registry 与 app-server 原生通道的更新入口，以及 start／resume／compact 后如何保持一致；原生通道没有运行期更新能力时，不得宣称 WebSocket thread 支持逐请求刷新。
 
 #### ADR：Codex per-role 工具隔离不走 proxy 改写 tools
 
