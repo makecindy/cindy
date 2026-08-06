@@ -570,7 +570,7 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain("wakeKind: 'queued' as const");
   });
 
-  it('preserves stored extraDirs when sendToWorker resumes an idle worker', () => {
+  it('preserves stored permission and extraDirs when sendToWorker resumes a worker', () => {
     const resumeBranch = extractBetween(
       source,
       'async function resumeOrcaWorkerSessionIfMissing',
@@ -593,6 +593,7 @@ describe('sendToSession ordering', () => {
     );
 
     expect(resumeBranch).toContain('const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);');
+    expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
     expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
     expectOrder(resumeBranch, 'const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);', 'const opts = buildCreateOptsWithStderr({');
     expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
@@ -813,7 +814,8 @@ describe('sendToSession ordering', () => {
     );
 
     expect(serviceDispatchBlock).toContain('const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;');
-    expectOrder(serviceDispatchBlock, 'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;', "if ((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch) {");
+    expectOrder(serviceDispatchBlock, 'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;', 'if (!wasLiveBeforeDispatch) {');
+    expect(serviceDispatchBlock).not.toContain("target.status === 'idle' || target.status === 'done'");
     expect(returnBlock).toContain('wakeKind: dispatchResult.wakeKind,');
     expect(returnBlock).toContain('targetTitle: dispatchResult.targetTitle,');
     expect(returnBlock).toContain('targetLastUserSendAt: dispatchResult.targetLastUserSendAt,');

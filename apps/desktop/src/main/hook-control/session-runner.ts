@@ -68,6 +68,7 @@ import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
   getSessionRowSnapshot,
+  getSessionRowSnapshotStrict,
   setSessionProviderIdInDb,
   setSessionSourceInDb,
   setWorktreePathInDb,
@@ -431,10 +432,8 @@ export function createMakerHookSessionRunner(deps: {
 
     async inspect(sessionId) {
       const [meta, row] = await Promise.all([
-        getMaker()
-          .getSessionMeta(sessionId)
-          .catch(() => null),
-        getSessionRowSnapshot(sessionId),
+        getMaker().getSessionMeta(sessionId),
+        getSessionRowSnapshotStrict(sessionId),
       ]);
       if (!meta && !row) return null;
       const usable =

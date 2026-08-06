@@ -3,12 +3,12 @@
  * `mcpProviders` 数组。
  *
  * 背景:ClaudeCodeAgent / CodexAgent 的 `mcpProviders` 数组在 maker-host 启动时
- * **构建一次**并存进 agent 实例;两处消费点(claude buildMcpServers / codex
- * codexEnvironment)每次 startSession 时**重新遍历该数组**。因此只要**原地**改这两个
- * 数组的内容(不换引用),下一次新建会话就会看到最新的自定义 MCP;进行中的会话不受影响
+ * **构建一次**并存进 agent 实例;Claude/Codex/Pi 的消费点每次 startSession 时
+ * **重新遍历该数组**。因此只要**原地**改已注册数组的内容(不换引用),下一次新建会话
+ * 就会看到最新的自定义 MCP;进行中的会话不受影响
  * (与内置 plugin 的 mtime-cached 语义一致)。
  *
- * 用法:maker-host 构造两个 agent 后,把它们各自的 mcpProviders 数组注册进来
+ * 用法:maker-host 构造各 agent 的 provider 数组后,把实际 mcpProviders 引用注册进来
  * (`registerCustomMcpArrays`),再在启动时与每次 CRUD 后调 `refreshCustomMcpProviders`。
  * refresh 会把数组里旧的 CustomMcpProvider 全部移除、按当前 DB 重新追加。
  */

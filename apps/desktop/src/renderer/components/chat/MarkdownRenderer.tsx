@@ -25,9 +25,10 @@ import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
-import remarkPreserveLocalImagePaths, {
+import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
-} from './remarkPreserveLocalImagePaths';
+  RAW_LOCAL_LINK_HREF_PROP,
+} from './remarkPreserveRawLocalDestinations';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
@@ -186,6 +187,11 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // 全中招);mobile 自研 parser 用正则配对本就能渲染这些写法,此处对齐。只放宽
 // emphasis/strong 的定界判定,不碰 `~~` 删除线(gfm strikethrough 有独立定界
 // 逻辑,行为不变),也不影响带空格的 `2 ** 3 ** 4` 这类本应保持字面量的写法。
+// remarkPreserveRawLocalDestinations 必须排在**链尾**:它给 image / link 节点存原始
+// 本地目的地(见该文件头部说明),必须在所有会新建这两类节点的插件之后运行——
+// remarkHtmlImages(<img> HTML → mdast image)与 remarkLocalPathLinks(正文裸路径
+// → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
+// 顺序无关。
 const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
@@ -193,8 +199,8 @@ const REMARK_PLUGINS: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
-  remarkPreserveLocalImagePaths,
   remarkLocalPathLinks,
+  remarkPreserveRawLocalDestinations,
 ];
 const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   [remarkGfm, { singleTilde: false }],
@@ -203,9 +209,9 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
-  remarkPreserveLocalImagePaths,
   remarkSessionLinks,
   remarkLocalPathLinks,
+  remarkPreserveRawLocalDestinations,
 ];
 // rehypeSlug: assigns a slug-style `id` to every heading. Without it
 // in-document anchor links (`[Section](#section-name)`) hit dead targets.
@@ -1738,8 +1744,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         // remarkLocalPathLinks 打的标记:这条 link 来自正文裸写的路径,不是作者手写的
         // `[label](path)`。读完即从 DOM props 里剥掉(它只是内部信道,不该落到 <a> 上)。
         const fromBarePath = BARE_PATH_ATTR in rawProps;
+        // remarkPreserveRawLocalDestinations 存的原始本地 href。mdast→hast 序列化会把
+        // 反斜杠 percent-encode 成 %5C,`C:\Users\...` 变成 `C:%5CUsers...` 后既过不了
+        // trustedUrlTransform 的 Windows 绝对路径白名单(href 被清成 "" → 链接退化
+        // 纯文本,#1629),字面 `%20` 与真实空格也不可区分。与 img 渲染器同构:
+        // 分类/解析优先用原始值;仅受信任内容启用(untrusted 保持既有降级)。
+        const rawLocalHref = rawProps[RAW_LOCAL_LINK_HREF_PROP];
         const safeProps = omitMarkdownInternalProps(rawProps);
         delete safeProps[BARE_PATH_ATTR];
+        delete safeProps[RAW_LOCAL_LINK_HREF_PROP];
+        const targetHref =
+          allowPrivilegedLinks && typeof rawLocalHref === 'string' ? rawLocalHref : href;
         if (allowPrivilegedLinks && href != null && hasDeepLinkPathPrefix(href, 'session-card/')) {
           const parsed = parseSessionCardHref(href);
           if (parsed) {
@@ -1776,7 +1791,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         }
         return (
           <MarkdownTargetLink
-            href={href}
+            href={targetHref}
             workingDir={workingDir}
             isStreaming={isStreaming}
             localFileRefs={localFileRefs}

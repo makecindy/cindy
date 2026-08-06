@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -39,6 +40,13 @@ export function MarketPluginDetailView({
           : 'settings.ghosts.market.install';
   const actionDisabled =
     busy || detail.installState === 'installed' || detail.installState === 'conflict';
+  // 冲突态的行动按钮只说「暂不可用」,原因必须在详情页也给出——列表卡片同一处理。
+  // 详情可能是先以非冲突态打开、随后目录或本地安装状态变化才转冲突的。
+  const conflictDescriptionId = useId();
+  const conflictDescription =
+    detail.installState === 'conflict'
+      ? t('settings.ghosts.market.conflictDescription')
+      : undefined;
 
   return (
     <main
@@ -80,6 +88,7 @@ export function MarketPluginDetailView({
               type="button"
               onClick={onInstall}
               disabled={actionDisabled}
+              aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
               className={cn(
                 'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -92,8 +101,11 @@ export function MarketPluginDetailView({
               {t(actionKey)}
             </button>
           </div>
-          <p className="mt-5 text-14 leading-[22px] text-[var(--text-secondary)]">
-            {detail.description || detail.ghostId}
+          <p
+            id={conflictDescription ? conflictDescriptionId : undefined}
+            className="mt-5 text-14 leading-[22px] text-[var(--text-secondary)]"
+          >
+            {conflictDescription ?? (detail.description || detail.ghostId)}
           </p>
         </header>
 

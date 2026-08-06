@@ -21,6 +21,7 @@ import { markAppContentWindow } from '../windowFocusClassifier.js';
 import { readWindowBehaviorSettings } from '../window-behavior-settings-store.js';
 import { installExternalLinkGuards } from '../secondary-windows.js';
 import { installSelectionContextMenu } from '../selection-context-menu.js';
+import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
 
 const log = createLogger('ghost-panel-window');
 
@@ -74,6 +75,11 @@ export function createGhostPanelWindow(ghostId: string, title: string): BrowserW
     },
   });
   markAppContentWindow(win);
+  applyAppearanceToWindow(win);
+  win.webContents.on('did-finish-load', () => {
+    if (win.isDestroyed()) return;
+    applyAppearanceToWindow(win);
+  });
   installSelectionContextMenu(win);
   windowState.manage(win);
 

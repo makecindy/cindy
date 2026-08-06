@@ -195,11 +195,14 @@ export function GhostErrandPrefs({
           onFastModeChange={(enabled) =>
             void save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
           }
-          onProviderChange={(providerId, modelId) =>
+          onProviderChange={(providerId, modelId, reconciledEffort) =>
             void save({
               ...config,
               agentKind: vendor,
               model: modelId ?? shownModel,
+              effort: ERRAND_EFFORTS.has(reconciledEffort ?? '')
+                ? reconciledEffort
+                : undefined,
               providerId: providerId ?? undefined,
             })
           }

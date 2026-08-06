@@ -217,7 +217,7 @@ describe('MessageActionBar', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
-  it('renders the user-turn total and SDK segment details on separate lines', () => {
+  it('renders the user-turn total and aggregated details on separate lines', () => {
     render(
       <MessageActionBar
         copyText="message body"
@@ -242,6 +242,17 @@ describe('MessageActionBar', () => {
           cacheCreateTokens: 0,
           totalTokens: 15,
           cacheHitRate: 0,
+          models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
+          perModelCost: [
+            {
+              model: 'claude-fable-5',
+              money: { amount: 0.75, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+            },
+            {
+              model: 'claude-opus-5',
+              money: { amount: 1.25, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+            },
+          ],
         }}
       />,
     );
@@ -249,13 +260,15 @@ describe('MessageActionBar', () => {
     const tooltip = screen.getByText(
       (_, element) =>
         element?.classList.contains('whitespace-pre-line') === true &&
-        element.textContent?.includes('chat.messageActionBar.userTurnCostTotalLine') === true,
+        element.textContent?.includes('chat.messageActionBar.userTurnCostDetailsTitle') === true,
     );
     expect(tooltip.textContent).toBe(
       [
-        'chat.messageActionBar.userTurnCostTotalLine',
         'chat.messageActionBar.userTurnCostDetailsTitle',
         'usageDetails.costLine',
+        'usageDetails.costBreakdownHeader',
+        'usageDetails.modelCostLine',
+        'usageDetails.modelCostLine',
         'usageDetails.tokenLine',
         'usageDetails.cacheLine',
       ].join('\n'),

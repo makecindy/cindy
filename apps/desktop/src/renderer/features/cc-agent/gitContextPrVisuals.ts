@@ -28,7 +28,8 @@ export function pickBranchLabel(opts: {
   hasPrRefs: boolean;
 }): string | null {
   const { localBranch, prBranch, branchSource, hasPrRefs } = opts;
-  const trusted = branchSource === 'telemetry' || branchSource === 'worktree';
+  const trusted =
+    branchSource === 'telemetry' || branchSource === 'worktree' || branchSource === 'remote';
   if (trusted && localBranch) return localBranch;
   if (prBranch) return prBranch;
   if (branchSource === 'workingDir' && !hasPrRefs) return localBranch;

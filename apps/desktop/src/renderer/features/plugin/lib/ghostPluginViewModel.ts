@@ -16,6 +16,17 @@ import {
 } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
+/**
+ * cindy 详单里**可钉后端**的类目 —— 详情页给每个申请到的动作渲染一行模型选择。
+ *
+ * 新增 cindy 能力类目时必须回到这里登记,否则那个类目在详情页**完全没有选型
+ * 入口**(不是少个下拉:`cindyCapabilities` 为空时整张卡片都不渲染),插件只能
+ * 吃全局默认档。2026-08-04 加 `embed` 时就漏过一次。
+ *
+ * `media` 有意不在其中:寄存(deposit)不经模型,没有"用哪个型号"可选。
+ */
+const PINNABLE_CINDY_CATEGORIES = ['image', 'video', 'text', 'embed'] as const;
+
 export interface GhostPluginListItem {
   id: string;
   name: string;
@@ -162,6 +173,62 @@ export function sortGhostPluginItemsByRecentUse<T extends Pick<GhostPluginListIt
 }
 
 /**
+ * Ranks the installed shortcut row for display. Three lexicographic tiers:
+ *   1. Plugins with an unread notification (notify.badge) first, newest badge (larger `at`) on top.
+ *      A pushed notification has no other entry point, so surfacing it is the whole point.
+ *   2. Then recently used (host-recorded MRU), newest first.
+ *   3. Then base install order, stably.
+ * `marketUpdate` is deliberately NOT a key: the updates banner already surfaces updatable plugins,
+ * so letting them jump the row would only bury the unread signal.
+ * Pure and reactive — recompute freely from current signals; there is no frozen snapshot to go stale.
+ */
+export function sortInstalledForDisplay<T extends Pick<GhostPluginListItem, 'id'>>(
+  items: readonly T[],
+  {
+    recentIds,
+    unreadAtById,
+  }: { recentIds: readonly string[]; unreadAtById: ReadonlyMap<string, number> },
+): T[] {
+  const recentIndex = new Map(recentIds.map((id, index) => [id, index]));
+  return items
+    .map((item, stableIndex) => ({ item, stableIndex }))
+    .sort((a, b) => {
+      // Tier 1 — unread notifications, newest badge first.
+      const aAt = unreadAtById.get(a.item.id);
+      const bAt = unreadAtById.get(b.item.id);
+      if ((aAt !== undefined) !== (bAt !== undefined)) return aAt !== undefined ? -1 : 1;
+      if (aAt !== undefined && bAt !== undefined && aAt !== bAt) return bAt - aAt;
+      // Tier 2 — recently used, newest first.
+      const aRecent = recentIndex.get(a.item.id);
+      const bRecent = recentIndex.get(b.item.id);
+      if (aRecent !== undefined || bRecent !== undefined) {
+        if (aRecent === undefined) return 1;
+        if (bRecent === undefined) return -1;
+        if (aRecent !== bRecent) return aRecent - bRecent;
+      }
+      // Tier 3 — base install order, stable.
+      return a.stableIndex - b.stableIndex;
+    })
+    .map(({ item }) => item);
+}
+
+/**
+ * Size of the always-visible installed window: at least `cap`, expanded to also cover every
+ * plugin carrying an unread notification. Because `sortInstalledForDisplay` ranks unread items
+ * first, taking this many from the front guarantees no unread plugin is ever folded away — even
+ * when the user has many plugins. Updatable-but-read plugins can still fold (the banner surfaces
+ * updates).
+ */
+export function installedVisibleCount<T extends Pick<GhostPluginListItem, 'id'>>(
+  items: readonly T[],
+  unreadAtById: ReadonlyMap<string, number>,
+  cap: number,
+): number {
+  const unreadCount = items.reduce((count, item) => count + (unreadAtById.has(item.id) ? 1 : 0), 0);
+  return Math.max(cap, unreadCount);
+}
+
+/**
  * 将安装清单转换成列表卡片需要的最小字段。
  *
  * 这里刻意不加入安装量、使用量、认证徽章等旧原型字段;这些字段在 Ghost
@@ -213,13 +280,9 @@ export function toGhostPluginDetail(
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],
     hasSettingsUi: Boolean(manifest.settingsHtml),
-    cindyCapabilities: [
-      ...(manifest.cindy?.image ?? []).map((action) => `image.${action}`),
-      ...(manifest.cindy?.video ?? []).map((action) => `video.${action}`),
-      // 文本类(快问快答)同样可钉后端:漏掉它,声明了 cindy.text 的插件在
-      // 详情页就没有任何选型入口,只能吃全局轻量链的默认档。
-      ...(manifest.cindy?.text ?? []).map((action) => `text.${action}`),
-    ],
+    cindyCapabilities: PINNABLE_CINDY_CATEGORIES.flatMap((category) =>
+      (manifest.cindy?.[category] ?? []).map((action) => `${category}.${action}`),
+    ),
     hasErrand: manifest.agent?.errand === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,

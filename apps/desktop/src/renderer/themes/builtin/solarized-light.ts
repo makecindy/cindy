@@ -77,6 +77,7 @@ const slotOverrides = {
   'accent-soft': GREEN_DEEP,
   'accent-hover': GREEN_DEEP,
   'accent-pure-cta-fg': '#FFFFFF',
+  'switch-track-on': GREEN_DEEP, // 官方绿 #859900 对 thumb 2.97/对 surface 2.62 低于 3:1,取深绿变体(用户裁决 2026-08-05)
 } as const;
 
 const singletonOverrides = {

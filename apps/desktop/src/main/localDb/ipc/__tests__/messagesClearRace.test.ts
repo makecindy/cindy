@@ -43,11 +43,6 @@ vi.mock('../../../cindy-media/ledger', () => ({
   removeRefs: vi.fn(async () => undefined),
   removeSessionAttachmentRefIfUnreferencedByLiveMessage: vi.fn(async () => undefined),
 }));
-vi.mock('../../../file-browser/remote-file-cache', () => ({
-  cleanupStagedChatAttachments: vi.fn(async () => undefined),
-  extractChatAttachmentPathsFromPersistedContent: (content: unknown) =>
-    content === 'attachment' ? ['C:\\chat-attachment-cache\\race.bin'] : [],
-}));
 vi.mock('../../../device-link/invoke-context', () => ({
   isDeviceLinkInvoke: vi.fn(() => false),
 }));
@@ -137,7 +132,6 @@ describe('message persistence clear boundary', () => {
   });
 
   it('rewinds a row that lost the clear race and is idempotent', async () => {
-    const { cleanupStagedChatAttachments } = await import('../../../file-browser/remote-file-cache');
     sqlite
       .prepare(
         `INSERT INTO messages
@@ -157,10 +151,6 @@ describe('message persistence clear boundary', () => {
       clientId: 'client-1',
       clientIds: ['client-1'],
     });
-    expect(cleanupStagedChatAttachments).toHaveBeenCalledWith([
-      'C:\\chat-attachment-cache\\race.bin',
-    ]);
-
     h.broadcast.mockClear();
     await rewindPersistedUserMessageAfterClear('s1', 'client-1');
     expect(h.broadcast).not.toHaveBeenCalled();

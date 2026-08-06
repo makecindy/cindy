@@ -1,3 +1,4 @@
+import dns from 'node:dns';
 import { createServer as createHttpServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -166,6 +167,25 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
   });
 
   it('falls back to direct connection when the resolver throws or returns unsupported urls', async () => {
+    // 本用例是文件里唯一真的对 .invalid 假域做**直连**(前面的用例域名都原样交给
+    // 代理桩,不走本地解析)。macOS 上 NXDOMAIN 即时返回,但 Windows 的解析器会
+    // 带着 DNS 搜索后缀逐个重查,轻松拖过测试超时。桩掉 .invalid 的 lookup 让它
+    // 立即 ENOTFOUND —— 仍走真实 net.connect 失败路径,只是把结果变成确定性的;
+    // 其余域名(本文件只有 IP 字面量,压根不进 lookup)原样放行。
+    const realLookup = dns.lookup;
+    vi.spyOn(dns, 'lookup').mockImplementation(((hostname: string, options: unknown, callback?: unknown) => {
+      const cb = (typeof options === 'function' ? options : callback) as (err: NodeJS.ErrnoException | null) => void;
+      if (!hostname.endsWith('.invalid')) {
+        return (realLookup as (...args: unknown[]) => unknown)(hostname, options, callback);
+      }
+      const err: NodeJS.ErrnoException = Object.assign(
+        new Error(`getaddrinfo ENOTFOUND ${hostname}`),
+        { code: 'ENOTFOUND', syscall: 'getaddrinfo', hostname },
+      );
+      queueMicrotask(() => cb(err));
+    }) as typeof dns.lookup);
+    cleanups.push(() => { vi.restoreAllMocks(); });
+
     const warns: string[] = [];
     proxy = await createAnthropicCompatProxy({
       upstream: 'http://upstream.invalid:8080',

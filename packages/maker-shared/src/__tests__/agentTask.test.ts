@@ -84,6 +84,22 @@ describe('mergeAgentTaskUpdate', () => {
     const next: AgentTaskUpdate = { provider: 'codex', taskId: 't1', status: 'running' };
     expect(mergeAgentTaskUpdate(undefined, next)).toBe(next);
   });
+
+  it('clears a stale model when a live update explicitly sends null', () => {
+    const first = applyAgentTaskUpdateEvent(
+      undefined,
+      { provider: 'codex', taskId: 't1', status: 'running', model: 'codex/gpt-5.5' },
+      'codex',
+      NOW,
+    )!;
+    const cleared = applyAgentTaskUpdateEvent(
+      first,
+      { provider: 'codex', taskId: 't1', status: 'running', model: null },
+      'codex',
+      '2026-06-24T00:00:01.000Z',
+    )!;
+    expect(cleared.get('t1')?.model).toBeNull();
+  });
 });
 
 describe('applyAgentTaskUpdateEvent', () => {

@@ -19,6 +19,10 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
       {children}
     </button>
   ),
+  // 「打开方式」子菜单:测试只关心顶层菜单项路由,子菜单展开为直接渲染即可。
+  DropdownMenuSub: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuSubTrigger: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({

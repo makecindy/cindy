@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { MorphPopover } from '@/components/ui/morph-popover';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 
 import { AGENT_OPTIONS, agentOptionOf } from './agentOptions';
@@ -92,6 +93,13 @@ interface AgentSelectProps {
   triggerVariant?: 'toolbar' | 'field';
   /** field 形态的紧凑高(h-9); 与同排 ModelSelector 的 dense 保持一致。 */
   dense?: boolean;
+  /**
+   * false 时改用 Radix Popover。嵌在 Radix Dialog 内必须关闭 MorphPopover：
+   * custom portal 不属于 Dialog focus scope，动画结束聚焦选中项时会被拉回并自动收起。
+   */
+  useMorphPopover?: boolean;
+  /** Radix PopoverContent 的附加 class（例如高层级 Dialog 内的 z-index）。 */
+  overlayContentClassName?: string;
 }
 
 export function AgentSelect({
@@ -108,6 +116,8 @@ export function AgentSelect({
   reselectEmitsChange = false,
   triggerVariant = 'toolbar',
   dense = false,
+  useMorphPopover = true,
+  overlayContentClassName,
 }: AgentSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -115,8 +125,10 @@ export function AgentSelect({
   const [autoSide, setAutoSide] = useState<'top' | 'bottom' | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const selectedOptionRef = useRef<HTMLButtonElement>(null);
   const isCreateAgent = visualVariant === 'create-agent';
   const isField = triggerVariant === 'field';
+  const morphEnabled = useMorphPopover;
   const current = agentOptionOf(value);
   // 当前值始终保留 —— 隐藏它会让触发器显示一个列表里不存在的引擎。
   const visibleOptions =
@@ -143,7 +155,7 @@ export function AgentSelect({
    * capture 阶段监听: scroll 不冒泡, 只有捕获期才能收到祖先滚动容器的事件。
    */
   useEffect(() => {
-    if (!isField || !open) return;
+    if (!morphEnabled || !isField || !open) return;
     const close = (): void => setOpen(false);
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
@@ -151,7 +163,7 @@ export function AgentSelect({
       window.removeEventListener('scroll', close, true);
       window.removeEventListener('resize', close);
     };
-  }, [isField, open]);
+  }, [isField, morphEnabled, open]);
 
   /**
    * 朝下空间放得下就朝下(设置字段的自然方向), 否则比较上下取更宽裕的一侧。
@@ -168,6 +180,15 @@ export function AgentSelect({
   const select = (next: MakerVendor) => {
     setOpen(false);
     if (next !== value || reselectEmitsChange) onChange(next);
+  };
+
+  const handleOpenChange = (next: boolean): void => {
+    if (disabled) {
+      setOpen(false);
+      return;
+    }
+    if (morphEnabled && isField && next) setAutoSide(resolveFieldSide());
+    setOpen(next);
   };
 
   // ↑↓ 在选项间移动(菜单语义);Home/End 跳首尾。Esc / 外部点击由 MorphPopover 兜。
@@ -198,16 +219,8 @@ export function AgentSelect({
       disabled={disabled}
       // 阻 mousedown 抢焦点 —— 否则点击时下方 ChatInput 的 :focus-within 边框会瞬间掉色。
       // 键盘 Tab 仍可正常 focus(preventDefault 只阻断鼠标路径)。
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        if (disabled) {
-          setOpen(false);
-          return;
-        }
-        // 每次打开都重算 —— 设置卡可停在滚动视口任意位置。
-        if (isField && !open) setAutoSide(resolveFieldSide());
-        setOpen((prev) => !prev);
-      }}
+      onMouseDown={morphEnabled ? (e) => e.preventDefault() : undefined}
+      onClick={morphEnabled ? () => handleOpenChange(!open) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
       aria-label={
@@ -290,34 +303,14 @@ export function AgentSelect({
     </button>
   );
 
-  return (
-    <MorphPopover
-      open={open && !disabled}
-      onOpenChange={(next) => setOpen(disabled ? false : next)}
-      side={isField ? (autoSide ?? side) : side}
-      align="start"
-      // 字段形态不传定宽, 改用 trigger 实测宽度(DESIGN.md §4 宽度铁则)。
-      {...(isField ? { panelWidthMode: 'trigger' as const } : { panelWidth: 196 })}
-      panelClassName="p-2"
-      panelAriaLabel={t('newChat.agentSelect.label')}
-      startBg={
-        isCreateAgent ? 'var(--create-agent-control-bg)' : 'var(--composer-pill-bg, #FCFCFC)'
-      }
-      startBorderColor={
-        isCreateAgent ? 'var(--create-agent-control-border)' : 'var(--border-default)'
-      }
-      // 字段形态: wrapper 也要撑满, 否则 inline-flex + shrink-0 会把 trigger 的
-      // w-full 压回内容宽, 面板跟着缩 —— 字段就不是字段宽了。
-      wrapperClassName={isField ? 'w-full min-w-0' : 'shrink-0'}
-      trigger={trigger}
+  const optionsList = (
+    <div
+      ref={listRef}
+      role="listbox"
+      aria-label={t('newChat.agentSelect.label')}
+      onKeyDown={onListKeyDown}
+      className="flex flex-col gap-0.5"
     >
-      <div
-        ref={listRef}
-        role="listbox"
-        aria-label={t('newChat.agentSelect.label')}
-        onKeyDown={onListKeyDown}
-        className="flex flex-col gap-0.5"
-      >
         <div className="px-2.5 pb-2 pt-1.5 text-11 leading-none text-[var(--model-section-label)]">
           {t('newChat.agentSelect.label')}
         </div>
@@ -325,6 +318,7 @@ export function AgentSelect({
           const selected = opt.vendor === value;
           return (
             <button
+              ref={selected ? selectedOptionRef : undefined}
               key={opt.vendor}
               type="button"
               role="option"
@@ -352,7 +346,58 @@ export function AgentSelect({
             </button>
           );
         })}
-      </div>
-    </MorphPopover>
+    </div>
+  );
+
+  if (morphEnabled) {
+    return (
+      <MorphPopover
+        open={open && !disabled}
+        onOpenChange={handleOpenChange}
+        side={isField ? (autoSide ?? side) : side}
+        align="start"
+        // 字段形态不传定宽, 改用 trigger 实测宽度(DESIGN.md §4 宽度铁则)。
+        {...(isField ? { panelWidthMode: 'trigger' as const } : { panelWidth: 196 })}
+        panelClassName="p-2"
+        panelAriaLabel={t('newChat.agentSelect.label')}
+        startBg={
+          isCreateAgent ? 'var(--create-agent-control-bg)' : 'var(--composer-pill-bg, #FCFCFC)'
+        }
+        startBorderColor={
+          isCreateAgent ? 'var(--create-agent-control-border)' : 'var(--border-default)'
+        }
+        // 字段形态: wrapper 也要撑满, 否则 inline-flex + shrink-0 会把 trigger 的
+        // w-full 压回内容宽, 面板跟着缩 —— 字段就不是字段宽了。
+        wrapperClassName={isField ? 'w-full min-w-0' : 'shrink-0'}
+        trigger={trigger}
+      >
+        {optionsList}
+      </MorphPopover>
+    );
+  }
+
+  return (
+    <Popover open={open && !disabled} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent
+        side={side}
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        onOpenAutoFocus={(event) => {
+          if (!selectedOptionRef.current) return;
+          event.preventDefault();
+          selectedOptionRef.current.focus({ preventScroll: true });
+        }}
+        className={cn(
+          isField ? 'w-[var(--radix-popover-trigger-width)]' : 'w-[196px]',
+          'overflow-hidden rounded-[12px] border p-2 shadow-[var(--shadow-menu)]',
+          'border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+          overlayContentClassName,
+        )}
+      >
+        {optionsList}
+      </PopoverContent>
+    </Popover>
   );
 }

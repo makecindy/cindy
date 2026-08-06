@@ -712,6 +712,27 @@
       "logsDirLabel": "日志目录",
       "openLogsDir": "打开",
       "openLogsDirTooltip": "在系统文件管理器中打开日志目录",
+      "logUpload": {
+        "crashAutoLabel": "崩溃时自动上传日志",
+        "crashAutoDescription": "开启后，Cindy 崩溃时会自动把崩溃前后的运行记录送到我们的后台，你不用再手动上传。默认关闭，随时可关；关闭后已经排队等待上传的崩溃记录会被立即清除。",
+        "crashAutoEnabledToast": "已开启崩溃时自动上传日志",
+        "crashAutoDisabledToast": "已关闭崩溃时自动上传日志",
+        "saveFailed": "保存日志上传设置失败",
+        "uploadLabel": "上传日志",
+        "uploadButton": "上传",
+        "uploading": "上传中",
+        "uploadTooltip": "把最近的运行记录上传到我们的后台，并得到一个可报的上传编号",
+        "uploadDescription": "遇到问题时点一下，把最近的运行记录送到我们的后台。上传成功后会给出一个上传编号，报障时把编号发给我们即可，不用自己找文件。",
+        "scopeDescription": "上传内容：Cindy 自身的运行记录（启动与退出、崩溃、网络、更新、数据库、登录）和设备环境信息（系统版本、应用版本、设备标识符），登录后还包含你的账号 ID。不上传：对话内容、文件内容、提示词、工作目录路径。凭证与邮箱地址会在上传前自动抹除。",
+        "successToast": "日志已上传，上传编号 {{code}}（已复制，报障时发给我们）",
+        "errorUnavailable": "当前版本未配置日志上传，暂时无法使用",
+        "errorConsentRequired": "需要先同意《隐私政策》才能上传日志",
+        "errorEmpty": "没有可上传的运行记录",
+        "errorBusy": "已有一次上传正在进行，请稍候",
+        "errorFailed": "日志上传失败，请检查网络后重试",
+        "unavailableNotConfigured": "当前版本未配置日志上传。",
+        "unavailableNoConsent": "需要先同意《隐私政策》。"
+      },
       "openLogsDirError": "打开日志目录失败",
       "autoUpdateLabel": "空闲时自动安装更新",
       "autoUpdateDescription": "更新下载完成后，当这台电脑 10 分钟无操作且没有任务运行时，自动重启应用完成安装。",
@@ -1832,6 +1853,11 @@
         "confirm": "解绑",
         "cancel": "取消"
       },
+      "lifecycleAnnouncement": {
+        "label": "上下线通知",
+        "cellLabel": "消息通知",
+        "hint": "上下线时由 Discord Bot 发送通知消息"
+      },
       "ownerNotice": {
         "linked": "✅ 关联好啦，直接开聊就行~",
         "disconnected": "🔌 已断开关联啦，需要时再连上就行~",
@@ -2412,6 +2438,7 @@
         "toggleHint": "这个全局开关只对之后新建的 Agent 会话生效；已在运行的 Agent 会话不受影响。",
         "status": {
           "checking": "正在检查 ADB 状态…",
+          "disabled": "Android 自动化未启用。启用后将检测 ADB 与设备。",
           "preparing": "正在准备 ADB…",
           "ready": "ADB 已就绪。可用设备：{{count}}。默认设备：{{device}}",
           "adbDetail": "{{version}}，路径 {{path}}",
@@ -3157,6 +3184,8 @@
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
         "installedSection": "已安装",
+        "installedExpand": "展开全部 {{count}} 个已安装插件",
+        "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
         "updatesAvailable": "{{count}} 个插件有可用更新",
         "updateAll": "全部更新",
@@ -3196,13 +3225,21 @@
         },
         "install": "安装",
         "details": "详情",
+        "detailsAria": "查看 {{name}} 的详情",
         "update": "从市场更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安装",
-        "conflict": "插件标识冲突",
+        "conflict": "暂不可用",
+        "conflictAria": "{{name}} 存在插件标识冲突",
+        "conflictDescription": "插件标识已被占用，当前无法安装",
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
+        "removalNotice": {
+          "single": "插件“{{name}}”已被组织移除，本机副本与数据已清理",
+          "multiple_one": "{{count}} 个插件已被组织移除，本机副本与数据已清理",
+          "multiple_other": "{{count}} 个插件已被组织移除，本机副本与数据已清理"
+        },
         "errors": {
           "generic": "插件市场操作失败，请重试。",
           "invalidRequest": "插件请求无效。",
@@ -3382,12 +3419,16 @@
         "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
         "cindyTextOneshot": "可向 Cindy 的快速通道提问并获得文字回答",
         "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
+        "cindyEmbedText": "可把文字送去算成向量（用于语义检索）",
+        "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
         "agentBackgroundDetail": "不需要当次点击，但只能使用你曾为这个插件建立过关联的任务，可能产生模型费用。",
         "agentErrand": "可把任务交给 Cindy Agent 代办并取回结果",
         "agentErrandDetail": "这些代办会在这个插件的专属任务里进行，你随时可以在侧边栏看到并叫停；默认只能读不能改，要放开需你在插件配置里亲手调整，可能产生模型费用。",
+        "agentSchedule": "可以请你新建自动化",
+        "agentScheduleDetail": "它只能为你打开新建自动化的面板并把内容填好，是否创建由你在面板上选好模型后亲手保存决定。创建后由 Cindy 按你设定的时间运行，可能产生模型费用。",
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
@@ -3501,7 +3542,8 @@
             "image.edit": "改图",
             "video.generate": "生成视频",
             "video.edit": "图生视频",
-            "text.oneshot": "快问快答(文字)"
+            "text.oneshot": "快问快答(文字)",
+            "embed.text": "文本转向量"
           },
           "defaultOption": "{{model}}(默认)",
           "noModels": "暂无可用模型"
@@ -3870,6 +3912,8 @@
     "controlledTooltip": "另一台登录同账号的设备正在远程控制本机。你可以撤销其访问权限。",
     "revokeAccess": "撤销权限",
     "viewControllers": "查看",
+    "collapseControlledNotice": "收起被控提示",
+    "expandControlledNotice": "展开被控提示：{{label}}",
     "versionMismatch": "对方版本不一致，部分功能可能受限"
   },
   "accountDeletion": {
@@ -3922,6 +3966,21 @@
       "processingCopy": "等待期已结束，Cindy 登录账号正在删除。",
       "completedCopy": "Cindy 登录账号已删除。",
       "dismissButton": "我知道了"
+    }
+  },
+  "credentialStore": {
+    "banner": {
+      "message": "系统凭证存储不可用，登录状态无法维持",
+      "viewHelp": "查看解决方法",
+      "dismiss": "关闭提示"
+    },
+    "dialog": {
+      "title": "系统凭证存储不可用",
+      "intro": "Cindy 无法通过系统凭证存储读取登录凭证，登录状态和相关集成会持续失效。可尝试以下步骤恢复：",
+      "stepMacKeychain": "退出 Cindy，打开「钥匙串访问」，搜索「Cindy Safe Storage」并检查其访问控制；必要时删除该条目（已保存的集成凭证会失效，需要重新连接）",
+      "stepRestart": "重新启动 Cindy",
+      "stepRelogin": "如果仍未恢复，退出登录后重新登录",
+      "confirm": "知道了"
     }
   },
   "localDbGate": {
@@ -4157,6 +4216,29 @@
       "latestUserTurnTitle": "最近一轮用户请求累计"
     }
   },
+  "quotaCard": {
+    "fiveHourLabel": "5 小时",
+    "weeklyLabel": "周限",
+    "modelWeeklyLabel": "{{model}} 周限",
+    "windowsRegionLabel": "配额窗口列表",
+    "usedPercent": "已用 {{percent}}%",
+    "resetAt": "{{at}} 重置",
+    "noWindows": "暂无配额窗口数据",
+    "limitRejected": "已触发套餐限额，请求可能被拒绝",
+    "limitWarning": "接近套餐限额",
+    "extraUsageEnabled": "额外用量已启用",
+    "costLine": "本轮消耗：{{cost}}",
+    "valueLine": "本轮 token 价值：{{cost}}",
+    "noBilledCost": "本轮费用暂不可用，仅显示用量",
+    "latestMessageTitle": "最近一轮用户请求累计",
+    "turnCostUnavailable": "本轮费用暂无法估算",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
+    "cacheLabel": "缓存",
+    "modelLabel": "模型",
+    "staleData": "数据更新于 {{minutes}} 分钟前",
+    "waiting": "Claude 订阅余量会在下一轮完成后更新。"
+  },
   "usageDetails": {
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
@@ -4207,6 +4289,7 @@
     "maximize": "最大化",
     "close": "关闭",
     "menuItems": {
+      "settings": "设置",
       "help": "帮助",
       "issues": "问题反馈",
       "checkForUpdates": "检查更新"
@@ -5134,9 +5217,7 @@
       "loading": "加载分支中…",
       "loadFailed": "分支列表加载失败，点此重试",
       "currentTooltip": "当前分支",
-      "sourceTooltip": "worktree 源分支",
-      "worktreeHint": "选择其他分支将以 worktree 隔离启动",
-      "exitWorktreeHint": "选择当前分支将退出 worktree，直接在当前分支上启动"
+      "sourceTooltip": "worktree 源分支"
     },
     "folderPicker": {
       "selectFolder": "选择文件夹",
@@ -5259,9 +5340,24 @@
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
       "fullAccessConfirmation": {
         "title": "开启 Full access？",
-        "description": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
+        "description": "Full access 会关闭工作区沙箱并跳过常规审批，Cindy 无需询问即可：",
+        "items": {
+          "files": {
+            "title": "文件与文件夹",
+            "description": "读取和修改工作区外的文件"
+          },
+          "commands": {
+            "title": "终端命令",
+            "description": "直接执行终端命令与脚本"
+          },
+          "network": {
+            "title": "网络访问",
+            "description": "执行联网命令、访问网络资源"
+          }
+        },
+        "note": "内置高风险操作仍会要求确认。",
         "confirm": "开启 Full access",
-        "cancel": "保留当前权限"
+        "cancel": "取消"
       },
       "attachmentRejection": {
         "dismiss": "关闭"
@@ -5515,7 +5611,7 @@
       "outputFile": "输出：{{path}}"
     },
     "planPill": {
-      "step": "步骤 {{current}} / {{total}}"
+      "step": "第 {{current}} / {{total}} 步"
     },
     "forkOrigin": {
       "label": "基于原任务创建"
@@ -5560,8 +5656,7 @@
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "本轮累计：{{cost}}",
-      "userTurnCostDetailsTitle": "最后一个 SDK 分段"
+      "userTurnCostDetailsTitle": "本轮明细"
     },
     "errorBanner": {
       "retryTitle": "重新发送最后一条消息",
@@ -5950,6 +6045,8 @@
       "duplicateFiles": "找到 {{count}} 个同名文件，请改用绝对路径",
       "copyFile": "复制",
       "copyFilePath": "复制文件路径",
+      "openWith": "打开方式",
+      "openWithAppFailed": "无法用所选应用打开",
       "revealFile": "打开文件所在目录",
       "openInBrowser": "在浏览器中查看",
       "fileCopied": "文件已复制",
@@ -6082,6 +6179,11 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。"
+    },
+    "generatedFiles": {
+      "title": "本轮生成的文件",
+      "showMore": "再显示 {{count}} 个文件",
+      "showLess": "收起"
     },
     "agentActions": {
       "part": {
@@ -7043,6 +7145,7 @@
         "titleProjectCreate": "新建项目自动化",
         "titleProjectEdit": "编辑项目自动化",
         "subtitle": "用 Claude 或 Codex 按计划运行 Prompt。",
+        "subtitleFromGhost": "「{{name}}」请你新建一个自动化。选好模型后保存即可生效。",
         "save": "保存",
         "create": "创建",
         "saveAria": "保存自动化",
@@ -7263,7 +7366,8 @@
       "actionFailed": "操作失败：{{error}}",
       "renameFailed": "重命名失败：{{error}}",
       "deleteFailed": "删除失败：{{error}}",
-      "restartFailed": "重启失败：{{error}}"
+      "restartFailed": "重启失败：{{error}}",
+      "pluginDraftIgnoredFormOpen": "「{{name}}」请你新建自动化，但当前有正在编辑的自动化表单。已保留你填写的内容；保存或关闭后请再点一次。"
     },
     "deleteDialog": {
       "title": "删除自动化「{{name}}」？",
@@ -8359,6 +8463,7 @@
       "customRolePredefinedError": "自定义角色不能使用预设角色名",
       "agentLabel": "Agent",
       "modelLabel": "模型",
+      "permissionLabel": "权限模式",
       "noAvailableModels": "没有可用的 {{agent}} 模型，请在设置中检查供应商连接和凭证。",
       "effortLabel": "Effort",
       "initialTaskLabel": "初始任务",

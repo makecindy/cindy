@@ -18,6 +18,7 @@ import {
 } from 'electron';
 import type { Rectangle, WebContents } from 'electron';
 
+import { markAppearanceSettingsReaderWindow } from '../appearance-settings-reader.js';
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import { createLogger } from '../logger.js';
@@ -937,6 +938,7 @@ export async function showComputerPermissionGuideWindow(
       spellcheck: false,
     },
   });
+  markAppearanceSettingsReaderWindow(backdrop);
   backdropWindow = backdrop;
   backdrop.setIgnoreMouseEvents(true, { forward: true });
   preventPermissionGuideNavigation(backdrop.webContents);
@@ -1006,6 +1008,7 @@ export async function showComputerPermissionGuideWindow(
       spellcheck: false,
     },
   });
+  markAppearanceSettingsReaderWindow(guide);
   guideWindow = guide;
   preventPermissionGuideNavigation(guide.webContents);
   guide.webContents.once('did-finish-load', () => {

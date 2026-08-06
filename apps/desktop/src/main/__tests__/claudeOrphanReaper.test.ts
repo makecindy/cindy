@@ -245,9 +245,9 @@ describe('reapClaudeOrphansSync', () => {
   });
 
   it('reaps dev-checkout orphans launched from apps/claude-code-bin', async () => {
-    const devOrphanPid = 901;
-    const worktreeOrphanPid = 902;
-    const liveDevPeerPid = 903;
+    const devOrphanPid = process.pid + 10;
+    const worktreeOrphanPid = process.pid + 11;
+    const liveDevPeerPid = process.pid + 12;
     const execFileSync = vi.fn((file: string) => {
       if (file === 'taskkill') return '';
       return [

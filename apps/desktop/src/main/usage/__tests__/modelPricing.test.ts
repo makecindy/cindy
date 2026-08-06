@@ -55,7 +55,6 @@ vi.mock('../../secrets/providerSecretStore', () => ({
 
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
-import { DEFAULT_USAGE_CURRENCY } from '../../../shared/regionalMoney';
 import { getActiveCatalog } from '../../maker-host/active-catalog';
 import {
   applyModelPriceOverrides,
@@ -63,7 +62,11 @@ import {
   readModelPriceOverridesSnapshot,
   setModelPriceOverride,
 } from '../modelPriceOverrideStore';
-import { __resetActiveLedgerCurrencyForTesting, currentLedgerCurrency } from '../ledgerCurrency';
+import {
+  __resetActiveLedgerCurrencyForTesting,
+  currentLedgerCurrency,
+  LEDGER_CURRENCY_FALLBACK,
+} from '../ledgerCurrency';
 import {
   __resetModelPricingCacheForTesting,
   clearGatewayModelPricing,
@@ -331,10 +334,12 @@ describe('pricing cache lifecycle', () => {
       });
     });
 
-    // 模拟重启:清掉内存缓存与账本币种，只留磁盘缓存
+    // 模拟重启:清掉内存缓存与账本币种，只留磁盘缓存。重置后回退链落在最后一档
+    // USD(不按构建区域猜,见 usage/ledgerCurrency),下面从磁盘恢复出 USD 才是
+    // 「快照真的把币种带回来了」的证据。
     __resetModelPricingCacheForTesting();
     __resetActiveLedgerCurrencyForTesting();
-    expect(currentLedgerCurrency()).toBe(DEFAULT_USAGE_CURRENCY);
+    expect(currentLedgerCurrency()).toBe(LEDGER_CURRENCY_FALLBACK);
 
     const hydrated = await getGatewayModelPricing();
     expect(hydrated).toEqual({});

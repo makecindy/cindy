@@ -274,6 +274,42 @@ describe('collectTurnFinalAssistantClientIds', () => {
 // ── case 1: 流式追加 token 不改变 message item key ────────────────────────
 
 describe('buildRenderItems — key stability', () => {
+  it('bounds historical command-generated files by the next user turn timestamp', () => {
+    const firstUser = { ...mkUser('u1'), createdAt: '2026-08-05T10:00:00.000Z' };
+    const command = {
+      ...mkTool('cmd1', 'Bash', { command: "python gen.py 'out/report.xlsx'" }),
+      createdAt: '2026-08-05T10:00:05.000Z',
+    };
+    const nextUser = { ...mkUser('u2'), createdAt: '2026-08-05T10:01:00.000Z' };
+    const { items } = buildRenderItems([firstUser, command, nextUser], undefined, undefined, {
+      workingDir: 'C:/work',
+    });
+    const card = items.find(
+      (it): it is Extract<RenderItem, { type: 'generated_files' }> =>
+        it.type === 'generated_files',
+    );
+
+    expect(card?.turnStartMs).toBe(Date.parse(firstUser.createdAt));
+    expect(card?.turnEndMs).toBe(Date.parse(nextUser.createdAt));
+  });
+
+  it('leaves the current tail turn unbounded above', () => {
+    const user = { ...mkUser('u1'), createdAt: '2026-08-05T10:00:00.000Z' };
+    const command = {
+      ...mkTool('cmd1', 'Bash', { command: "python gen.py 'out/report.xlsx'" }),
+      createdAt: '2026-08-05T10:00:05.000Z',
+    };
+    const { items } = buildRenderItems([user, command], undefined, undefined, {
+      workingDir: 'C:/work',
+    });
+    const card = items.find(
+      (it): it is Extract<RenderItem, { type: 'generated_files' }> =>
+        it.type === 'generated_files',
+    );
+
+    expect(card?.turnEndMs).toBeNull();
+  });
+
   it('streaming token append to an assistant message keeps the same item key', () => {
     const m1: ChatMessage = { ...mkAssistant('a1', 'partial'), isStreaming: true };
     const before = buildRenderItems([mkUser('u1'), m1]);

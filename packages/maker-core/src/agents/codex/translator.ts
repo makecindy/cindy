@@ -1584,6 +1584,8 @@ interface SubAgentActivityItem {
   kind: string;
   agentThreadId?: string;
   agentPath?: string;
+  /** Newer Codex builds may include the selected child model on the activity. */
+  model?: string;
 }
 
 /**
@@ -1598,6 +1600,7 @@ export function readCodexSubagentSpawnRegistration(item: unknown): {
   taskId: string;
   childThreadIds: string[];
   agentPath?: string;
+  model?: string;
   /**
    * spawn **本身**收口为失败(V1 `collabAgentToolCall.status === 'failed'`)。
    * translator 此时已推过 failed 帧,聚合器据此不得再用快照(仍是 running)盖回去。
@@ -1618,6 +1621,7 @@ export function readCodexSubagentSpawnRegistration(item: unknown): {
       taskId,
       childThreadIds: [childThreadId],
       ...(typeof record.agentPath === 'string' && record.agentPath ? { agentPath: record.agentPath } : {}),
+      ...(typeof record.model === 'string' && record.model ? { model: record.model } : {}),
     };
   }
 
@@ -1632,6 +1636,7 @@ export function readCodexSubagentSpawnRegistration(item: unknown): {
     return {
       taskId,
       childThreadIds: receivers,
+      ...(typeof record.model === 'string' && record.model ? { model: record.model } : {}),
       ...(record.status === 'failed' ? { failed: true } : {}),
     };
   }
@@ -1655,9 +1660,11 @@ function handleSubAgentActivity(
   // started phase 登记等 completed 清理;只收到 completed(防御)时无后续 phase,不登记。
   if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
   const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
+  const model = typeof item.model === 'string' && item.model ? item.model : undefined;
   const input: Record<string, unknown> = {};
   if (agentPath) input.name = agentPath;
   if (item.agentThreadId) input.agentThreadId = item.agentThreadId;
+  if (model) input.model = model;
   queue.push({
     type: 'tool_use',
     data: { toolUseId: item.id, toolName: 'collab:spawn', input },
@@ -1686,6 +1693,7 @@ function handleSubAgentActivity(
       parentToolUseId: item.id,
       status: 'running',
       ...(agentPath ? { title: agentPath } : {}),
+      ...(model ? { model } : {}),
     },
     source: 'codex',
   });

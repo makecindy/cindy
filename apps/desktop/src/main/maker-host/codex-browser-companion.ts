@@ -45,7 +45,8 @@ export type CodexBrowserCompanionResult =
     }
   | {
       status: 'unavailable';
-      extraArgs: [];
+      /** Fail-closed spawn overrides prepared for this result (may be empty). */
+      extraArgs: string[];
       reason: CodexBrowserCompanionUnavailableReason;
       detail: string;
     };
@@ -58,7 +59,8 @@ export type CodexBrowserCompanionSpawnConfig = {
 /**
  * Only a verified companion may enable Cindy's privileged node_repl bridge.
  * A null result belongs to the control-plane host and must remain neutral;
- * every concrete unavailable result fails closed for the local app-server.
+ * every concrete unavailable result fails closed for the local app-server
+ * (its extraArgs carry the disable override when one is applicable).
  */
 export function resolveCodexBrowserCompanionSpawnConfig(
   companion: CodexBrowserCompanionResult | null,
@@ -66,12 +68,9 @@ export function resolveCodexBrowserCompanionSpawnConfig(
   if (companion === null) {
     return { codexBrowserUseAvailable: false, extraArgs: [] };
   }
-  if (companion.status === 'ready') {
-    return { codexBrowserUseAvailable: true, extraArgs: companion.extraArgs };
-  }
   return {
-    codexBrowserUseAvailable: false,
-    extraArgs: ['-c', 'mcp_servers.node_repl.enabled=false'],
+    codexBrowserUseAvailable: companion.status === 'ready',
+    extraArgs: companion.extraArgs,
   };
 }
 
@@ -593,17 +592,55 @@ async function inspectCodexBrowserCompanion(
   };
 }
 
+/**
+ * Codex 0.145.0's config loader requires every `mcp_servers` entry to carry a
+ * complete transport even when disabled: a bare
+ * `-c mcp_servers.node_repl.enabled=false` on a config whose node_repl entry
+ * is missing (or transport-less) synthesizes/completes an invalid entry and
+ * kills the app-server at spawn ("invalid transport", child exit 1; verified
+ * against codex-cli 0.145.0). Only emit the fail-closed disable when the
+ * isolated config defines the entry with a real transport — the override then
+ * deep-merges onto that transport, which the loader accepts. In every other
+ * case codex itself refuses to load a runnable node_repl from that config
+ * (absent entry, or "Invalid configuration; using defaults"), so fail-closed
+ * already holds without an override.
+ */
+async function nodeReplFailClosedOverrideArgs(codexHome: string): Promise<string[]> {
+  try {
+    const parsed = parseToml(
+      await fsp.readFile(path.join(codexHome, 'config.toml'), 'utf8'),
+    ) as Record<string, unknown>;
+    const mcpServers = isRecord(parsed.mcp_servers) ? parsed.mcp_servers : {};
+    const nodeRepl = mcpServers.node_repl;
+    if (
+      isRecord(nodeRepl)
+      && (typeof nodeRepl.command === 'string' || typeof nodeRepl.url === 'string')
+    ) {
+      return ['-c', 'mcp_servers.node_repl.enabled=false'];
+    }
+  } catch {
+    // Missing or unparseable isolated config: codex cannot load a node_repl
+    // entry from it either, so there is nothing to fail closed against.
+  }
+  return [];
+}
+
 export async function prepareCodexBrowserCompanion(
   opts: PrepareCodexBrowserCompanionOptions,
 ): Promise<CodexBrowserCompanionResult> {
+  let result: CodexBrowserCompanionResult;
   try {
-    return await inspectCodexBrowserCompanion(opts);
+    result = await inspectCodexBrowserCompanion(opts);
   } catch (error) {
-    return unavailable(
+    result = unavailable(
       'descriptor_invalid',
       `browser companion preflight failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  if (result.status === 'unavailable') {
+    return { ...result, extraArgs: await nodeReplFailClosedOverrideArgs(opts.codexHome) };
+  }
+  return result;
 }
 
 /**

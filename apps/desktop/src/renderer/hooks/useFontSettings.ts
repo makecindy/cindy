@@ -6,13 +6,22 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
+
+import {
+  APPEARANCE_LIMITS,
+  DEFAULT_APPEARANCE_SETTINGS,
+  clampAppearanceCodeSize,
+  clampAppearanceUiSize,
+  normalizeAppearanceSettings,
+  type AppearanceSettings,
+} from '@/../shared/appearanceSettings';
 
 export interface FontSettings {
   uiFamily: string;
   codeFamily: string;
-  // UI size applies through --app-ui-font-size and opt-in --text-N tokens.
   uiSize: number;
   codeSize: number;
 }
@@ -28,44 +37,41 @@ interface FontSettingsContextValue extends FontSettings {
   resetCodeSize: () => void;
 }
 
-const UI_FAMILY_KEY = 'font.uiFamily';
-const CODE_FAMILY_KEY = 'font.codeFamily';
-const UI_SIZE_KEY = 'font.uiSize';
-const CODE_SIZE_KEY = 'font.codeSize';
+export const DEFAULT_UI_FONT_SIZE = DEFAULT_APPEARANCE_SETTINGS.uiSize;
+export const DEFAULT_CODE_FONT_SIZE = DEFAULT_APPEARANCE_SETTINGS.codeSize;
+const MIN_UI_FONT_SIZE = APPEARANCE_LIMITS.uiSize.min;
+const MIN_FONT_SIZE = APPEARANCE_LIMITS.codeSize.min;
+const MAX_FONT_SIZE = APPEARANCE_LIMITS.codeSize.max;
 
-export const DEFAULT_UI_FONT_SIZE = 14;
-export const DEFAULT_CODE_FONT_SIZE = 14;
-const MIN_UI_FONT_SIZE = 12;
-const MIN_FONT_SIZE = 10;
-const MAX_FONT_SIZE = 24;
 const UI_TEXT_TOKEN_SIZES = [
-  9,
-  10,
-  11,
-  12,
-  13,
-  14,
-  15,
-  16,
-  17,
-  18,
-  19,
-  20,
-  21,
-  22,
-  23,
-  24,
-  25,
-  26,
-  27,
-  28,
+  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 ] as const;
 
-const FontSettingsContext = createContext<FontSettingsContextValue | undefined>(undefined);
+const SCALED_TAILWIND_TOKENS = {
+  xs: 12,
+  sm: 14,
+  base: 16,
+  lg: 18,
+  xl: 20,
+  '2xl': 24,
+  '3xl': 30,
+  '4xl': 36,
+  '5xl': 48,
+} as const;
 
-function normalizeFamily(value: string): string {
-  return value.trim();
-}
+const TAILWIND_LINE_HEIGHTS = {
+  xs: 16,
+  sm: 20,
+  base: 24,
+  lg: 28,
+  xl: 28,
+  '2xl': 32,
+  '3xl': 36,
+  '4xl': 40,
+  '5xl': 48,
+} as const;
+
+const FontSettingsContext = createContext<FontSettingsContextValue | undefined>(undefined);
 
 export function clampFontSize(value: number, fallback = DEFAULT_CODE_FONT_SIZE): number {
   if (!Number.isFinite(value)) return fallback;
@@ -74,74 +80,29 @@ export function clampFontSize(value: number, fallback = DEFAULT_CODE_FONT_SIZE):
 
 export function clampUiFontSize(value: number, fallback = DEFAULT_UI_FONT_SIZE): number {
   if (!Number.isFinite(value)) return fallback;
-  return Math.min(MAX_FONT_SIZE, Math.max(MIN_UI_FONT_SIZE, Math.round(value)));
+  return Math.min(APPEARANCE_LIMITS.uiSize.max, Math.max(MIN_UI_FONT_SIZE, Math.round(value)));
 }
 
-function getStoredString(key: string): string {
-  try {
-    return localStorage.getItem(key)?.trim() ?? '';
-  } catch {
-    return '';
-  }
+function normalizeFamily(value: string): string {
+  return value.trim().slice(0, 256);
 }
 
-function getStoredSize(key: string, fallback: number): number {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw == null || raw.trim() === '') return fallback;
-    return clampFontSize(Number(raw), fallback);
-  } catch {
-    return fallback;
-  }
+function getBridge(): typeof window.electronAPI.appearanceSettings | null {
+  return window.electronAPI?.appearanceSettings ?? null;
 }
 
-function getStoredUiSize(key: string, fallback: number): number {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw == null || raw.trim() === '') return fallback;
-    return clampUiFontSize(Number(raw), fallback);
-  } catch {
-    return fallback;
-  }
-}
-
-function setOrRemoveStorage(key: string, value: string): void {
-  try {
-    if (value) {
-      localStorage.setItem(key, value);
-    } else {
-      localStorage.removeItem(key);
-    }
-  } catch {
-    // localStorage may be unavailable
-  }
-}
-
-function setSizeStorage(key: string, value: number, fallback: number): void {
-  try {
-    if (value === fallback) {
-      localStorage.removeItem(key);
-    } else {
-      localStorage.setItem(key, String(value));
-    }
-  } catch {
-    // localStorage may be unavailable
-  }
-}
-
-function withDefaultFallback(
-  family: string,
-  defaultVar: '--app-font-ui-default' | '--app-font-code-default',
-): string {
-  return family ? `${family}, var(${defaultVar})` : '';
+export function getInitialAppearanceSettings(): AppearanceSettings {
+  const snapshot = getBridge()?.getSync?.();
+  return normalizeAppearanceSettings(snapshot ?? DEFAULT_APPEARANCE_SETTINGS);
 }
 
 export function getInitialFontSettings(): FontSettings {
+  const settings = getInitialAppearanceSettings();
   return {
-    uiFamily: getStoredString(UI_FAMILY_KEY),
-    codeFamily: getStoredString(CODE_FAMILY_KEY),
-    uiSize: getStoredUiSize(UI_SIZE_KEY, DEFAULT_UI_FONT_SIZE),
-    codeSize: getStoredSize(CODE_SIZE_KEY, DEFAULT_CODE_FONT_SIZE),
+    uiFamily: settings.uiFamily,
+    codeFamily: settings.codeFamily,
+    uiSize: settings.uiSize,
+    codeSize: settings.codeSize,
   };
 }
 
@@ -149,62 +110,131 @@ export function applyFontSettings(settings: FontSettings): void {
   const root = document.documentElement;
   const uiFamily = normalizeFamily(settings.uiFamily);
   const codeFamily = normalizeFamily(settings.codeFamily);
-
-  const uiValue = withDefaultFallback(uiFamily, '--app-font-ui-default');
-  if (uiValue) {
-    root.style.setProperty('--app-font-ui', uiValue);
-  } else {
-    root.style.removeProperty('--app-font-ui');
-  }
-
-  const codeValue = withDefaultFallback(codeFamily, '--app-font-code-default');
-  if (codeValue) {
-    root.style.setProperty('--app-font-code', codeValue);
-  } else {
-    root.style.removeProperty('--app-font-code');
-  }
-
-  root.style.setProperty('--app-code-font-size', `${clampFontSize(settings.codeSize)}px`);
-
   const uiSize = clampUiFontSize(settings.uiSize);
+  const codeSize = clampFontSize(settings.codeSize);
   const scale = uiSize / DEFAULT_UI_FONT_SIZE;
-  root.style.setProperty('--app-ui-font-size', `${uiSize}px`);
+  const targets = [root, document.body].filter(Boolean);
+
+  const set = (name: string, value: string) => {
+    for (const target of targets) target.style.setProperty(name, value);
+  };
+
+  for (const target of targets) {
+    if (uiFamily) {
+      target.style.setProperty('--app-font-ui', `${uiFamily}, var(--app-font-ui-default)`);
+    } else {
+      target.style.removeProperty('--app-font-ui');
+    }
+    if (codeFamily) {
+      target.style.setProperty('--app-font-code', `${codeFamily}, var(--app-font-code-default)`);
+    } else {
+      target.style.removeProperty('--app-font-code');
+    }
+  }
+  set('--app-code-font-size', `${codeSize}px`);
+  set('--app-ui-font-size', `${uiSize}px`);
+
   for (const tokenSize of UI_TEXT_TOKEN_SIZES) {
-    root.style.setProperty(`--text-${tokenSize}`, `${Math.round(tokenSize * scale)}px`);
+    set(`--text-${tokenSize}`, `${Math.round(tokenSize * scale)}px`);
+  }
+  for (const [token, base] of Object.entries(SCALED_TAILWIND_TOKENS)) {
+    set(`--text-${token}`, `${Math.round(base * scale)}px`);
+  }
+  for (const [token, base] of Object.entries(TAILWIND_LINE_HEIGHTS)) {
+    set(`--text-${token}-line-height`, `${Math.round(base * scale)}px`);
   }
 }
 
 export function FontSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<FontSettings>(getInitialFontSettings);
+  const settingsRef = useRef(settings);
+  const confirmedSettingsRef = useRef(settings);
+  const pendingWritesRef = useRef<Array<{ id: number; patch: Partial<FontSettings> }>>([]);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const nextRequestIdRef = useRef(0);
 
   useEffect(() => {
     applyFontSettings(settings);
   }, [settings]);
 
-  const setUiFamily = useCallback((family: string) => {
-    const next = normalizeFamily(family);
-    setOrRemoveStorage(UI_FAMILY_KEY, next);
-    setSettings((prev) => ({ ...prev, uiFamily: next }));
+  useEffect(() => {
+    const bridge = getBridge();
+    if (!bridge?.onChanged) return;
+    return bridge.onChanged((next: AppearanceSettings) => {
+      const normalized = normalizeAppearanceSettings(next);
+      const confirmed = {
+        uiFamily: normalized.uiFamily,
+        codeFamily: normalized.codeFamily,
+        uiSize: normalized.uiSize,
+        codeSize: normalized.codeSize,
+      };
+      confirmedSettingsRef.current = confirmed;
+      const optimistic = pendingWritesRef.current.reduce(
+        (current, pending) => ({ ...current, ...pending.patch }),
+        confirmed,
+      );
+      settingsRef.current = optimistic;
+      setSettings(optimistic);
+    });
   }, []);
 
-  const setCodeFamily = useCallback((family: string) => {
-    const next = normalizeFamily(family);
-    setOrRemoveStorage(CODE_FAMILY_KEY, next);
-    setSettings((prev) => ({ ...prev, codeFamily: next }));
+  const patch = useCallback((next: Partial<FontSettings>) => {
+    const previous = settingsRef.current;
+    const merged = { ...previous, ...next };
+    const bridge = getBridge();
+    if (!bridge) {
+      settingsRef.current = merged;
+      setSettings(merged);
+      return;
+    }
+    const requestId = nextRequestIdRef.current + 1;
+    nextRequestIdRef.current = requestId;
+    pendingWritesRef.current.push({ id: requestId, patch: next });
+    settingsRef.current = merged;
+    setSettings(merged);
+    writeQueueRef.current = writeQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await bridge.setPatch(next);
+          pendingWritesRef.current = pendingWritesRef.current.filter(
+            (pending) => pending.id !== requestId,
+          );
+        } catch (error: unknown) {
+          window.electronAPI?.logToMain?.(
+            'error',
+            'renderer/appearance-settings',
+            `appearance settings write failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          pendingWritesRef.current = pendingWritesRef.current.filter(
+            (pending) => pending.id !== requestId,
+          );
+          const optimistic = pendingWritesRef.current.reduce(
+            (current, pending) => ({ ...current, ...pending.patch }),
+            confirmedSettingsRef.current,
+          );
+          settingsRef.current = optimistic;
+          setSettings(optimistic);
+        }
+      });
   }, []);
 
-  const setUiSize = useCallback((size: number) => {
-    const next = clampUiFontSize(size, DEFAULT_UI_FONT_SIZE);
-    setSizeStorage(UI_SIZE_KEY, next, DEFAULT_UI_FONT_SIZE);
-    setSettings((prev) => ({ ...prev, uiSize: next }));
-  }, []);
-
-  const setCodeSize = useCallback((size: number) => {
-    const next = clampFontSize(size, DEFAULT_CODE_FONT_SIZE);
-    setSizeStorage(CODE_SIZE_KEY, next, DEFAULT_CODE_FONT_SIZE);
-    setSettings((prev) => ({ ...prev, codeSize: next }));
-  }, []);
-
+  const setUiFamily = useCallback(
+    (family: string) => patch({ uiFamily: normalizeFamily(family) }),
+    [patch],
+  );
+  const setCodeFamily = useCallback(
+    (family: string) => patch({ codeFamily: normalizeFamily(family) }),
+    [patch],
+  );
+  const setUiSize = useCallback(
+    (size: number) => patch({ uiSize: clampAppearanceUiSize(size) }),
+    [patch],
+  );
+  const setCodeSize = useCallback(
+    (size: number) => patch({ codeSize: clampAppearanceCodeSize(size) }),
+    [patch],
+  );
   const resetUiFamily = useCallback(() => setUiFamily(''), [setUiFamily]);
   const resetCodeFamily = useCallback(() => setCodeFamily(''), [setCodeFamily]);
   const resetUiSize = useCallback(() => setUiSize(DEFAULT_UI_FONT_SIZE), [setUiSize]);

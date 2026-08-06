@@ -217,9 +217,9 @@ const SETUP_REQUIREMENT_KINDS = new Set([
   "client_config",
 ]);
 const SETUP_REQUIREMENT_STATES = new Set(["missing", "expired", "satisfied"]);
-// 对主机声明上限 GHOST_OAUTH_SCOPES_MAX(desktop shared/ghost.ts,当前 48;包依赖
-// 方向不允许引用)只留防御余量;该值涨过 64 时必须同步,否则整份 assessment 判废。
-const SETUP_REAUTH_SCOPE_MAX = 64;
+// 对主机声明上限 GHOST_OAUTH_SCOPES_MAX(desktop shared/ghost.ts,当前 256;包依赖
+// 方向不允许引用)留 64 条防御余量;该值涨过 320 时必须同步,否则整份 assessment 判废。
+const SETUP_REAUTH_SCOPE_MAX = 320;
 
 function sanitizeSetupAction(
   raw: unknown,

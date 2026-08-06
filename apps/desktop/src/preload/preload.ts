@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import type { AppearanceSettings } from '../shared/appearanceSettings';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
@@ -30,6 +31,11 @@ import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
+import {
+  LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL,
+  type LogUploadResult,
+  type LogUploadSettingsPayload,
+} from '../shared/logUpload';
 import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
@@ -367,6 +373,9 @@ const fanOutApplicationMenuCommand = createIpcFanOut('app-menu:command');
 // 首登轻量数据迁移(mToc)弹窗阶段推送(confirm / running / done / failed)
 const fanOutLegacyMigrationState = createIpcFanOut('legacy-migration:state');
 const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored');
+const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
+  'plugin-market:removal-notice-available',
+);
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
@@ -499,6 +508,8 @@ const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
 const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
+// 插件自动化草稿(agent 槽 schedule 加档:renderer 开自动化创建面板并预填)。
+const fanOutGhostScheduleDraft = createIpcFanOut('ghosts:schedule-draft');
 const fanOutVoiceInputModifierShortcutKeys = createIpcFanOut('voice-input:modifier-shortcut-keys');
 // 「待授权」快捷键在设置页之外自动恢复失败（helper 起不来）。设置页不在,它的 toast 也就
 // 不在,所以由常挂载的 MainLayout 接这条并提示。main 侧一次 App 运行只推一次。
@@ -596,6 +607,7 @@ const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:respo
 const fanOutMakerDraftPrefApply = createIpcFanOut('maker:draft-pref:apply');
 const fanOutMakerWorktreePrefApply = createIpcFanOut('maker:worktree-pref:apply');
 const fanOutMakerSessionPrefApply = createIpcFanOut('maker:session-pref:apply');
+const fanOutAppearanceSettingsChanged = createIpcFanOut('appearance-settings:changed');
 
 // 跨 Agent 迁移项的 wire 形态（同 main/cross-agent-convert/types.ts 的 MigrationItem，
 // 但 preload 是单独编译单元，不便 import；renderer 真正消费在 vite-env.d.ts 重新声明）。
@@ -764,6 +776,10 @@ const clientEndpointsInfo = ipcRenderer.sendSync('client-endpoints:get-sync') as
   websiteUrl: string;
 };
 
+const appearanceSettingsInfo = ipcRenderer.sendSync(
+  'appearance-settings:get-sync',
+) as AppearanceSettings | null;
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   osRelease: ipcRenderer.sendSync('get-os-release') as string,
@@ -793,10 +809,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * catch 后兜底当作 false (那个阶段本来就不可能有 in-flight)。
    */
   anySessionInTurn: (): Promise<boolean> => ipcRenderer.invoke('maker:any-session-in-turn'),
-  pageZoomIn: (): Promise<{ ok: true; zoomLevel: number }> => ipcRenderer.invoke('page-zoom:in'),
-  pageZoomOut: (): Promise<{ ok: true; zoomLevel: number }> => ipcRenderer.invoke('page-zoom:out'),
-  pageZoomReset: (): Promise<{ ok: true; zoomLevel: number }> =>
+  pageZoomIn: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:in'),
+  pageZoomOut: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:out'),
+  pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
+  appearanceSettings: {
+    getSync: (): AppearanceSettings | null => appearanceSettingsInfo,
+    get: (): Promise<unknown> => ipcRenderer.invoke('appearance-settings:get'),
+    setPatch: (patch: Partial<AppearanceSettings>): Promise<AppearanceSettings> =>
+      ipcRenderer.invoke('appearance-settings:set-patch', patch),
+    reset: (): Promise<AppearanceSettings> => ipcRenderer.invoke('appearance-settings:reset'),
+    onChanged: fanOutAppearanceSettingsChanged,
+  },
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void): (() => void) =>
     fanOutApplicationMenuCommand((payload) => {
       if (isApplicationMenuCommand(payload)) {
@@ -945,8 +969,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearUnread: (id: string, seenAt?: number): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('ghosts:clear-unread', id, seenAt),
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
-    setupStatus: (id: string): Promise<unknown> =>
-      ipcRenderer.invoke('ghosts:setup-status', id),
+    setupStatus: (id: string): Promise<unknown> => ipcRenderer.invoke('ghosts:setup-status', id),
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },
@@ -973,6 +996,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       };
       /** 文本类(快问快答):选项是轻量任务模型链的档位(供应商×模型),不是媒体目录模型。 */
       text: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
+      /** 向量类(文本转向量):同 image/video 走目录派生。 */
+      embed: {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
@@ -1068,6 +1096,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resolveConfirm: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
       ipcRenderer.invoke('ghosts:confirm:resolve', { requestId, confirmed }),
     onPreviewOpen: fanOutGhostPreviewOpen,
+    onScheduleDraft: fanOutGhostScheduleDraft,
     getCard: (
       callId: string,
     ): Promise<{
@@ -1136,6 +1165,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
+    consumeRemovalNotice: (): Promise<
+      import('../shared/pluginMarket').PluginRemovalUserNotice | null
+    > => ipcRenderer.invoke('plugin-market:consume-removal-notice'),
+    onRemovalNoticeAvailable: fanOutPluginRemovalNoticeAvailable,
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
     pickLocalSource: (
@@ -1663,6 +1696,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
       ownerUserId: string | null;
+      lifecycleAnnouncement: boolean;
     }> => ipcRenderer.invoke('discordBot:get-status'),
     setConfig: (payload: {
       token: string;
@@ -1690,6 +1724,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
     }> => ipcRenderer.invoke('discordBot:disconnect'),
+    setLifecycleAnnouncement: (enabled: boolean): Promise<{
+      ok: boolean;
+      lifecycleAnnouncement: boolean;
+    }> => ipcRenderer.invoke('discordBot:set-lifecycle-announcement', { enabled }),
     checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
       ipcRenderer.invoke('discordBot:check-session-auth'),
     onStatusChange: fanOutDiscordBotStatusChange,
@@ -3123,6 +3161,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openPath: (filePathOrUrl: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:open-path', filePathOrUrl),
 
+  // 文件 chip 右键「打开方式」。appId 只能是 listOpenWithApps 返回的 id,
+  // main 侧反查可执行体;renderer 无法让 main 执行任意路径。
+  listOpenWithApps: (params: {
+    filePath: string;
+  }): Promise<{
+    success: boolean;
+    apps: Array<{ id: string; label: string; iconDataUrl?: string }>;
+    error?: string;
+  }> => ipcRenderer.invoke('open-with:list', params),
+  openFileWithApp: (params: { filePath: string; appId: string }): Promise<void> =>
+    ipcRenderer.invoke('open-with:open', params),
+
   // 危险本地附件入托盘前先复制成受控缓存里的 `.bin` 副本。显示名仍由
   // renderer 单独保留，后续只能经“另存为”恢复原始扩展名。
   stageChatAttachment: (params: {
@@ -3169,6 +3219,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Open <userData>/logs in the OS file manager (Settings → About).
   openLogsDir: (): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('app:open-logs-dir'),
+
+  // ── 客户端日志上报(Settings → About)──
+  // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
+  // 判定,renderer 只消费结论。上传编号由 main 生成并回传,用户报障时口述给我们。
+  getLogUploadSettings: (): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:settings-get'),
+  setLogUploadCrashAuto: (enabled: boolean): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:set-crash-auto', enabled === true),
+  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:reset-crash-auto'),
+  /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
+  uploadLogsNow: (): Promise<LogUploadResult> => ipcRenderer.invoke('log-upload:upload-now'),
+  onLogUploadSettingsChange: (
+    callback: (payload: LogUploadSettingsPayload) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      // preload 是边界:逐字段校验后才放行,形状漂移时 renderer 不会拿到隐式 falsy 值。
+      if (!payload || typeof payload !== 'object') return;
+      const raw = payload as Record<string, unknown>;
+      if (
+        typeof raw.targetConfigured !== 'boolean' ||
+        typeof raw.privacyConsentAccepted !== 'boolean' ||
+        typeof raw.crashAutoUploadEnabled !== 'boolean' ||
+        typeof raw.crashAutoUploadCustomized !== 'boolean' ||
+        typeof raw.manualUploadAvailable !== 'boolean'
+      ) {
+        return;
+      }
+      callback({
+        targetConfigured: raw.targetConfigured,
+        privacyConsentAccepted: raw.privacyConsentAccepted,
+        crashAutoUploadEnabled: raw.crashAutoUploadEnabled,
+        crashAutoUploadCustomized: raw.crashAutoUploadCustomized,
+        manualUploadAvailable: raw.manualUploadAvailable,
+      });
+    };
+    ipcRenderer.on(LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL, handler);
+  },
 
   // Reveal a file in the OS file manager (Explorer / Finder).
   // Accepts either an xdt-image:// URL or an absolute file path.
@@ -3619,24 +3709,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
       getMessages: (
         deviceId: string,
         sessionId: string,
-      ): Promise<{ messages: Record<string, unknown>[]; invalidation?: number }> =>
-        ipcRenderer.invoke('device-link:mirror-cache:messages:get', { deviceId, sessionId }),
+      ): Promise<{
+        messages: Record<string, unknown>[];
+        invalidation?: number;
+        ownerToken?: string;
+        accountCounter?: number;
+      }> => ipcRenderer.invoke('device-link:mirror-cache:messages:get', { deviceId, sessionId }),
       /**
        * 写某 (设备, 会话) 的最近一页消息;空数组 = 清掉该条缓存。
        * `expectedInvalidation` = 取到这批内容时 main 侧的会话级作废计数(由 get / put 带回,
        * renderer 缓存):不一致说明期间**任意窗口 / 进程**作废过这个会话,main 会丢弃这次写。
+       * `expectedOwnerToken` = 取到这批内容时 main 侧的 opaque owner token(由 get 带回、renderer
+       * 原样回传):账号切换后写入侧靠它丢弃「上一个账号名下取到」的内容(见 #1783)。
+       * `expectedAccountCounter` = 取到这批内容时 main 侧的账号代际计数:同一账号登出再登录
+       * 时 token 可保持不变、但 clearAll 已自增该计数,靠它丢弃登出前取到的内容(见 codex P1)。
+       * 注意:非空写入**缺失**这两个锚点(或与当前不符)会被 main fail-closed 拒绝落盘;
+       * 只有空写(清缓存)不要求它们。
        */
       putMessages: (
         deviceId: string,
         sessionId: string,
         messages: readonly Record<string, unknown>[],
         expectedInvalidation?: number,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ): Promise<{ ok: true; invalidation?: number }> =>
         ipcRenderer.invoke('device-link:mirror-cache:messages:put', {
           deviceId,
           sessionId,
           messages,
           expectedInvalidation,
+          expectedOwnerToken,
+          expectedAccountCounter,
         }),
       /** 读侧边栏远程会话列表快照 */
       getSessionList: (): Promise<{
@@ -3645,6 +3749,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           deviceName: string;
           sessions: Record<string, unknown>[];
         }>;
+        ownerToken?: string;
+        accountCounter?: number;
       }> => ipcRenderer.invoke('device-link:mirror-cache:session-list:get'),
       /** 写侧边栏远程会话列表快照 */
       putSessionList: (
@@ -3653,8 +3759,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
           deviceName: string;
           sessions: readonly Record<string, unknown>[];
         }>,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ): Promise<{ ok: true }> =>
-        ipcRenderer.invoke('device-link:mirror-cache:session-list:put', { devices }),
+        ipcRenderer.invoke('device-link:mirror-cache:session-list:put', {
+          devices,
+          expectedOwnerToken,
+          expectedAccountCounter,
+        }),
       /**
        * 清掉一台设备的缓存(撤销 / 关被控 / 禁用控制)。deviceId 必填 ——
        * 登出的整体清理由 main 在账号边界自己做,renderer 不持有那个能力。
@@ -4055,11 +4167,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitContext: {
     /** 读 workdir 当前分支(非 git 目录返回 head=null)。 */
     get: (workdir: string): Promise<unknown> => ipcRenderer.invoke('git-context:get', workdir),
-    /** 按 session 解析「对话真实工作目录」+ HEAD + 来源(遥测/worktree/working_dir)。 */
+    /** 按 session 解析「对话真实工作目录」+ HEAD + 来源(含 SSH 远端)。 */
     getForSession: (input: {
       sessionId: string;
       workingDir: string | null;
       worktreePath: string | null;
+      remoteHostId?: string | null;
     }): Promise<unknown> => ipcRenderer.invoke('git-context:get-for-session', input),
     /** 开始监听该 workdir 的 HEAD 变化(refcount;变化经 onChanged 推送)。 */
     watch: (workdir: string): Promise<void> => ipcRenderer.invoke('git-context:watch', workdir),
@@ -5871,6 +5984,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         model?: string;
         /** 绑定会话任务:workingDir 空时 main 按会话 meta.workDir 解析落盘/自测目录。 */
         targetSessionId?: string;
+        /** 绑定任务的缺省模型/来源维度由 targetSessionId 的会话路由补齐。 */
+        resolveBoundSessionRoute?: boolean;
         currentCommand?: string;
       }): Promise<
         | {

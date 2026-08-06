@@ -82,3 +82,17 @@ export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): st
   }
   return args;
 }
+
+/**
+ * A display fallback is truthful only for the local app-server that receives
+ * the matching `agents.default_subagent_model` override. SSH remote daemons
+ * use their own isolated CODEX_HOME, so the local setting must not be shown as
+ * if it were the remote thread's actual model.
+ */
+export function resolveCodexSubagentModelFallback(
+  settings: SubagentModelSettings,
+  remoteHostId?: string,
+): string | undefined {
+  if (remoteHostId || !settings.codexSubagentsEnabled) return undefined;
+  return settings.codex?.trim() || undefined;
+}

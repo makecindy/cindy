@@ -81,6 +81,7 @@ import {
 import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
 import { createHookBindingStore } from './bindings.js';
+import { createHookRequestLedger } from './requestLedger.js';
 import {
   buildGroupContextPrefix,
   listTelegramKnownGroupsForStableBinding,
@@ -332,6 +333,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       bindings: createHookBindingStore({
         filePath: ownerScopedUserDataPath('hook-bindings.json'),
+        log,
+      }),
+      terminalLedger: createHookRequestLedger({
+        filePath: ownerScopedUserDataPath('hook-request-ledger.json'),
         log,
       }),
       runner: createMakerHookSessionRunner({ log }),

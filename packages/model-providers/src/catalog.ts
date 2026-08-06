@@ -208,7 +208,8 @@ function validateProvider(p: Provider): void {
   // 图像通道直调,不需要任何 agent 路由;没有媒体清单的空 agents 仍是无效数据。
   const hasMediaModels =
     (Array.isArray(p.imageModels) && p.imageModels.length > 0) ||
-    (Array.isArray(p.videoModels) && p.videoModels.length > 0);
+    (Array.isArray(p.videoModels) && p.videoModels.length > 0) ||
+    (Array.isArray(p.embeddingModels) && p.embeddingModels.length > 0);
   assert(
     Array.isArray(p.agents) && (p.agents.length > 0 || hasMediaModels),
     `provider.agents missing for '${p.id}'`,
@@ -293,6 +294,17 @@ function validateProvider(p: Provider): void {
   // agent runtime);默认选型必须与清单配套且每个值指向在册 id。
   validateMediaModels(p.id, 'imageModels', p.imageModels, 'imageDefaults', p.imageDefaults);
   validateMediaModels(p.id, 'videoModels', p.videoModels, 'videoDefaults', p.videoDefaults);
+  // 向量清单同一套规则(PR #1707 review):不校验的话,远端把 embeddingModels 写成
+  // 对象、给重复/空 id、或让 embeddingDefaults 指向清单外型号,都能通过
+  // parseCatalog();前一种随后在 deriveCindyMediaConfig 的 for...of 里抛错,被上层
+  // 降级成空清单 —— 表现是所有插件向量请求变 NO_CANDIDATE,而真正的坏数据在目录里。
+  validateMediaModels(
+    p.id,
+    'embeddingModels',
+    p.embeddingModels,
+    'embeddingDefaults',
+    p.embeddingDefaults,
+  );
   validateAccess(p);
   validateOAuthDescriptor(p);
 }

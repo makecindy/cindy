@@ -40,6 +40,11 @@ function noopLogger() {
   return l;
 }
 
+/** 测试用的小批上限:注入 deps.systemWriteBatchSize 让分批在几笔建卡内触发,
+ * 避免为跨过 host 默认 200 上限而建 201 张卡(Windows 慢 runner 上撞 vitest 5s
+ * 超时, 见 #1598)。分批/锚点回归意图不变。 */
+const TEST_SYSTEM_WRITE_BATCH_SIZE = 5;
+
 function parseResult(res: { content: Array<{ type: string; text?: string }> }): {
   ok: boolean;
   data?: unknown;
@@ -76,6 +81,8 @@ describe('cindy_contacts tools', () => {
       onMutated: () => {
         mutations += 1;
       },
+      // 测试用小批上限:分批/锚点回归在几笔建卡内触发, 避免建 201 张卡撞超时
+      systemWriteBatchSize: TEST_SYSTEM_WRITE_BATCH_SIZE,
       // stub 回写器: 记录计划, created 返回伪 apple id
       writeSystemContacts: async (items): Promise<SystemContactWriteResult[]> => {
         writeCalls.push(items);
@@ -416,33 +423,73 @@ describe('cindy_contacts tools', () => {
     expect(vcfExport.count).toBe(1);
   });
 
-  it('系统回写: group 超 200 条时按 host 单批上限分批执行, 不整批被拒', async () => {
-    // 回归: group 路径条数不受 zod cap 约束, 曾把 >200 的 plans 整批传给
+  it('系统回写: group 超单批上限时按批上限分批执行, 不整批被拒', async () => {
+    // 回归: group 路径条数不受 zod cap 约束, 曾把超单批上限的 plans 整批传给
     // writeSystemContacts(host 上限 200 直接拒绝) — dry_run 能过, 真执行全军覆没
     const store = manager.getStore();
     const g = parseResult(await registry.call('contacts_create_group', { name: '大组' })).data as {
       id: string;
     };
     const ids: string[] = [];
-    for (let i = 0; i < 201; i += 1) {
+    for (let i = 0; i < TEST_SYSTEM_WRITE_BATCH_SIZE + 1; i += 1) {
       ids.push(store.createContact({ kind: 'person', displayName: `批量成员${i}`, source: 'agent' }).id);
     }
     store.addToGroup(g.id, ids);
 
     const res = parseResult(await registry.call('contacts_export_system', { group: '大组' }));
     expect(res.ok).toBe(true);
-    expect((res.data as { created: number }).created).toBe(201);
-    expect(writeCalls.map((batch) => batch.length)).toEqual([200, 1]);
+    expect((res.data as { created: number }).created).toBe(TEST_SYSTEM_WRITE_BATCH_SIZE + 1);
+    expect(writeCalls.map((batch) => batch.length)).toEqual([TEST_SYSTEM_WRITE_BATCH_SIZE, 1]);
+  });
+
+  it('系统回写: 非法 systemWriteBatchSize(0/负数/非整数/超限)回退默认 200, 小批量单批不分批', async () => {
+    // 回归: 注入值只接受 1..200 正整数, 0/负数/非整数/超限一律回退默认 200
+    // (防 for 步进失序或死循环, 防单批 slice 超 host 硬限制被拒)
+    const store = manager.getStore();
+    const g = parseResult(await registry.call('contacts_create_group', { name: '回退组' })).data as {
+      id: string;
+    };
+    const ids: string[] = [];
+    for (let i = 0; i < TEST_SYSTEM_WRITE_BATCH_SIZE + 1; i += 1) {
+      ids.push(store.createContact({ kind: 'person', displayName: `回退成员${i}`, source: 'agent' }).id);
+    }
+    store.addToGroup(g.id, ids);
+
+    for (const bad of [0, -1, 1.5, Number.NaN, 201] as const) {
+      writeCalls.length = 0; // 每次迭代独立统计
+      const badDeps: ContactsMcpDeps = {
+        getManager: () => manager,
+        isEnabled: () => true,
+        systemWriteBatchSize: bad,
+        writeSystemContacts: async (items): Promise<SystemContactWriteResult[]> => {
+          writeCalls.push(items);
+          return items.map((it) => ({
+            contactId: it.contactId,
+            name: it.name,
+            action: 'created' as const,
+            appleId: `fake-${it.contactId.slice(0, 8)}`,
+          }));
+        },
+      };
+      const badRegistry = new ContactsToolRegistry();
+      registerContactsExportSystemTool(badRegistry, badDeps);
+      const res = parseResult(await badRegistry.call('contacts_export_system', { group: '回退组' }));
+      expect(res.ok).toBe(true);
+      // 回退 200 > 6: 单批写入, 未跨批
+      expect(writeCalls).toHaveLength(1);
+      expect(writeCalls[0]).toHaveLength(TEST_SYSTEM_WRITE_BATCH_SIZE + 1);
+    }
   });
 
   it('系统回写: 锚点每批立即回填, 后续批失败时已建卡不失锚', async () => {
     // 回归: 锚点回填曾等全部批次完成后统一做 — 第二批抛错(权限被收回/超时)时
-    // 首批已建的 200 张系统卡失锚, 下次回写同一批人会重复建卡
+    // 首批已建的系统卡失锚, 下次回写同一批人会重复建卡。
     const store = manager.getStore();
     let call = 0;
     const failingDeps: ContactsMcpDeps = {
       getManager: () => manager,
       isEnabled: () => true,
+      systemWriteBatchSize: TEST_SYSTEM_WRITE_BATCH_SIZE,
       writeSystemContacts: async (items): Promise<SystemContactWriteResult[]> => {
         call += 1;
         if (call > 1) throw new Error('[PERMISSION_DENIED] revoked mid-run');
@@ -462,18 +509,18 @@ describe('cindy_contacts tools', () => {
       id: string;
     };
     const ids: string[] = [];
-    for (let i = 0; i < 201; i += 1) {
+    for (let i = 0; i < TEST_SYSTEM_WRITE_BATCH_SIZE + 1; i += 1) {
       ids.push(store.createContact({ kind: 'person', displayName: `中断成员${i}`, source: 'agent' }).id);
     }
     store.addToGroup(g.id, ids);
 
     const res = parseResult(await failingRegistry.call('contacts_export_system', { group: '中断组' }));
     expect(res.ok).toBe(false); // 第二批失败照常报错
-    // 但首批 200 人的锚点已落库, 不会因后续批失败而丢
+    // 但首批的锚点已落库, 不会因后续批失败而丢
     const anchored = ids.filter((id) =>
       store.getContact(id).identities.some((i) => i.platform === 'apple-contacts'),
     );
-    expect(anchored).toHaveLength(200);
+    expect(anchored).toHaveLength(TEST_SYSTEM_WRITE_BATCH_SIZE);
   });
 
   it('write/manage 工具成功后触发 onMutated, 只读工具不触发(UI 刷新通道)', async () => {

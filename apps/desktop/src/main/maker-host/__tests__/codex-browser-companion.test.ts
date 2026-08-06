@@ -234,9 +234,79 @@ describe('prepareCodexBrowserCompanion', () => {
       status: 'unavailable',
       reason: 'platform_unsupported',
     });
+    // codex 0.145.0 rejects a config whose node_repl entry has no complete
+    // transport ("invalid transport" → child exit 1). With no runnable entry
+    // in the isolated config there is nothing to disable, so the fail-closed
+    // result must not synthesize one via `-c` overrides.
+    expect(resolveCodexBrowserCompanionSpawnConfig(companion)).toEqual({
+      codexBrowserUseAvailable: false,
+      extraArgs: [],
+    });
+  });
+
+  it('fails closed against a runnable node_repl entry in the isolated config', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-browser-companion-'));
+    tempDirs.push(root);
+    const codexHome = path.join(root, 'cindy-codex-home');
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(codexHome, 'config.toml'),
+      [
+        '[mcp_servers.node_repl]',
+        'command = "/tmp/untrusted/node_repl"',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const companion = await prepareCodexBrowserCompanion({
+      codexHome,
+      platform: 'win32',
+      arch: 'x64',
+    });
+
+    expect(companion).toMatchObject({
+      status: 'unavailable',
+      reason: 'platform_unsupported',
+    });
     expect(resolveCodexBrowserCompanionSpawnConfig(companion)).toEqual({
       codexBrowserUseAvailable: false,
       extraArgs: ['-c', 'mcp_servers.node_repl.enabled=false'],
+    });
+  });
+
+  it('does not complete a transport-less node_repl entry into a fatal override', async () => {
+    // A `-c mcp_servers.node_repl.*` override on a transport-less entry turns
+    // codex's survivable "Invalid configuration; using defaults" degradation
+    // into a fatal config load error. Codex already refuses to run such an
+    // entry, so no override may be emitted.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-browser-companion-'));
+    tempDirs.push(root);
+    const codexHome = path.join(root, 'cindy-codex-home');
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(codexHome, 'config.toml'),
+      [
+        '[mcp_servers.node_repl.env]',
+        'NODE_OPTIONS = "--require=/tmp/untrusted.cjs"',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const companion = await prepareCodexBrowserCompanion({
+      codexHome,
+      platform: 'win32',
+      arch: 'x64',
+    });
+
+    expect(companion).toMatchObject({
+      status: 'unavailable',
+      reason: 'platform_unsupported',
+    });
+    expect(resolveCodexBrowserCompanionSpawnConfig(companion)).toEqual({
+      codexBrowserUseAvailable: false,
+      extraArgs: [],
     });
   });
 

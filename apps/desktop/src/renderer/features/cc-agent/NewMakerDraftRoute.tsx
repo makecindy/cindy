@@ -2118,17 +2118,12 @@ export function NewMakerDraftRoute() {
     [handleWorkingDirChange],
   );
 
-  // 用户切换 worktree(2026-07-29 实测后第二版):
-  //  - source='chip'(点 checkbox 本体)→ 写穿「工作端勾选记忆」——本地草稿写本地
-  //    newMakerDraft 根字段;device-link 远程草稿写到被控端(状态归工作端所有,
-  //    控制端只是远程操作器,与手机端同语义);
-  //  - source='branch-pick'(分支选择的双向联动)→ 仅本次草稿的 UI 态,不落记忆
-  //    ——分支选择表达"这一次从哪启动",不改全局默认。
-  // 系统/环境路径没有任何入口能触达这里(不变量)。
+  // 用户点击 checkbox 切换 worktree:写穿「工作端勾选记忆」——本地草稿写本地
+  // newMakerDraft 根字段;device-link 远程草稿写到被控端(状态归工作端所有,
+  // 控制端只是远程操作器,与手机端同语义)。分支选择不会隐式改动这个状态。
   const handleWtEnabledChange = useCallback(
-    (enabled: boolean, source: 'chip' | 'branch-pick') => {
+    (enabled: boolean) => {
       setWtEnabled(enabled);
-      if (source !== 'chip') return;
       if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
         remoteDraftRevisionRef.current += 1;
         window.electronAPI.deviceLink

@@ -428,6 +428,28 @@ export interface Provider {
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
    */
   videoDefaults?: { standard: string; draft?: string; best?: string };
+  /**
+   * 该供应商提供的**文本向量(embedding)模型**清单(与 imageModels 同地位:
+   * 不挂 agent,由主机 embedding 通道直调)。消费方为意识 cindy 槽的向量代办
+   * (白名单 + 详情页下拉)。可选,additions-only。
+   *
+   * 与聊天模型清单里被 `classifyModel` 归到 `'embedding'` 的条目**不是同一回事**:
+   * 那些是网关多返回的、不能当 agent 用的条目(设置页折叠在「向量」分组里供
+   * 用户停用);本字段是"哪些型号可以被当作向量能力的后端派单",要显式声明。
+   * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
+   */
+  embeddingModels?: { id: string; name: string; disabled?: boolean }[];
+  /**
+   * 向量能力的默认选型(与 embeddingModels 配套;值必须是 embeddingModels 里的
+   * id;语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
+   *
+   * 注意向量与图像/视频的一处本质差异:**换模型 = 换向量空间**。跟随默认的
+   * 消费方在这里被热更换掉型号后,它此前存下的向量与新向量不可比 —— 所以
+   * 改这个值不像改 imageDefaults 那样无痛,消费方必须自己记住"这批向量是哪个
+   * 模型算的"并在不一致时重嵌(主机侧 chat-history-embedder 就是钉死常量而
+   * 不跟随默认的)。
+   */
+  embeddingDefaults?: { standard: string; draft?: string; best?: string };
 }
 
 /**

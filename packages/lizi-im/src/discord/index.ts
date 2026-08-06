@@ -36,6 +36,7 @@ import { startStreaming } from './streamingText.js';
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
 const RUNTIME_ACTIVE_SECRET_KEY = 'discord-bot-runtime-active';
+const LIFECYCLE_ANNOUNCEMENT_SECRET_KEY = 'discord-bot-lifecycle-announcement';
 const MAX_OUTBOUND_FILE_BYTES = 8 * 1024 * 1024;
 const DISCORD_CREATE_MESSAGE_MAX_BYTES = 25 * 1024 * 1024;
 // Leave room for multipart framing/content; Discord also caps bot message uploads by file count.
@@ -92,6 +93,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private pendingOfflineNotice = false;
   private runtimeOnlineAnnounced = false;
   private runtimeOnlineNotice: Promise<void> | null = null;
+  private lifecycleAnnouncementEnabled = true;
+  private lifecycleNoticeVersion = 0;
   private disposing = false;
 
   constructor(host: IMHost, private readonly opts: DiscordIMOptions = {}) {
@@ -116,14 +119,19 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
     this.runtimeOnlineAnnounced = false;
+    this.lifecycleNoticeVersion += 1;
+    this.lifecycleAnnouncementEnabled = this.readLifecycleAnnouncement();
     const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
     this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
+    if (!this.lifecycleAnnouncementEnabled) {
+      this.clearRuntimeActiveMarker();
+    }
     if (!token) {
       this.setStatus({ kind: 'idle' });
       return;
     }
 
-    this.pendingOfflineNotice = Boolean(
+    this.pendingOfflineNotice = this.lifecycleAnnouncementEnabled && Boolean(
       this.ownerUserId && this.host.secrets.read(RUNTIME_ACTIVE_SECRET_KEY),
     );
 
@@ -153,6 +161,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     });
 
     this.host.ipc.handle('discordBot:set-config', async (payload) => {
+      // IPC handlers are registered before init(). Sync the persisted preference
+      // before any gateway status can queue a lifecycle notice or write its marker.
+      this.applyLifecycleAnnouncement(this.readLifecycleAnnouncement());
       const config = isRecord(payload) ? payload : {};
       const token = typeof config.token === 'string' ? config.token.trim() : '';
       const ownerUserId =
@@ -217,10 +228,30 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return configResult();
     });
 
+    // Renderer IPC can run after handler registration but before init(). Read the
+    // persisted preference here instead of exposing the constructor default.
     this.host.ipc.handle('discordBot:get-status', () => ({
       status: this.status,
       ownerUserId: this.ownerUserId || null,
+      lifecycleAnnouncement: this.readLifecycleAnnouncement(),
     }));
+
+    this.host.ipc.handle('discordBot:set-lifecycle-announcement', (payload) => {
+      if (!isRecord(payload) || typeof payload.enabled !== 'boolean') {
+        return this.host.ipc.throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+      }
+      const enabled = payload.enabled;
+      if (!this.writeLifecycleAnnouncement(enabled)) {
+        return {
+          ok: false,
+          // Roll back to the persisted source of truth, which may differ from
+          // the runtime cache before init or after an external account change.
+          lifecycleAnnouncement: this.readLifecycleAnnouncement(),
+        };
+      }
+      this.applyLifecycleAnnouncement(enabled);
+      return { ok: true, lifecycleAnnouncement: enabled };
+    });
 
     this.host.ipc.handle('discordBot:disconnect', async () => {
       this.configVersion += 1;
@@ -423,6 +454,58 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.host.secrets.write(key, previousValue);
   }
 
+  private readLifecycleAnnouncement(): boolean {
+    return this.host.secrets.read(LIFECYCLE_ANNOUNCEMENT_SECRET_KEY) !== 'false';
+  }
+
+  private writeLifecycleAnnouncement(enabled: boolean): boolean {
+    try {
+      if (!this.host.secrets.isAvailable()) return false;
+      return this.host.secrets.write(LIFECYCLE_ANNOUNCEMENT_SECRET_KEY, String(enabled));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`discord lifecycle announcement preference write threw: ${msg}`);
+      return false;
+    }
+  }
+
+  private applyLifecycleAnnouncement(enabled: boolean): void {
+    if (this.lifecycleAnnouncementEnabled === enabled) {
+      if (!enabled) {
+        this.pendingOfflineNotice = false;
+        this.clearRuntimeActiveMarker();
+      } else if (
+        !this.disposing &&
+        this.status.kind === 'connected' &&
+        this.ownerUserId &&
+        this.gateway.client
+      ) {
+        this.markRuntimeActive();
+      }
+      return;
+    }
+
+    this.lifecycleAnnouncementEnabled = enabled;
+    this.lifecycleNoticeVersion += 1;
+    this.runtimeOnlineNotice = null;
+    this.runtimeOnlineAnnounced = false;
+    this.pendingOfflineNotice = false;
+    this.suppressNextOnlineNotice = false;
+
+    if (!enabled) {
+      this.clearRuntimeActiveMarker();
+      return;
+    }
+    if (
+      !this.disposing &&
+      this.status.kind === 'connected' &&
+      this.ownerUserId &&
+      this.gateway.client
+    ) {
+      this.markRuntimeActive();
+    }
+  }
+
   private async reconnectPreviousGateway(previousToken: string | null): Promise<void> {
     const token = previousToken?.trim() ?? '';
     if (!token) return;
@@ -457,6 +540,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private shouldQueueRuntimeOnlineNotice(): boolean {
+    if (!this.lifecycleAnnouncementEnabled) return false;
     if (this.runtimeOnlineNotice) return false;
     return this.suppressNextOnlineNotice || this.pendingOfflineNotice || !this.runtimeOnlineAnnounced;
   }
@@ -464,9 +548,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private queueRuntimeOnlineNotice(): void {
     const expectedConfigVersion = this.configVersion;
     const expectedOwnerUserId = this.ownerUserId;
+    const expectedLifecycleNoticeVersion = this.lifecycleNoticeVersion;
     const notice = this.announceRuntimeOnline(
       expectedConfigVersion,
       expectedOwnerUserId,
+      expectedLifecycleNoticeVersion,
     ).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord runtime online notice failed: ${msg}`);
@@ -514,8 +600,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private async announceRuntimeOnline(
     expectedConfigVersion: number,
     expectedOwnerUserId: string,
+    expectedLifecycleNoticeVersion: number,
   ): Promise<void> {
-    if (!this.isOwnerNoticeCurrent(expectedConfigVersion, expectedOwnerUserId)) {
+    if (!this.isLifecycleNoticeCurrent(
+      expectedConfigVersion,
+      expectedOwnerUserId,
+      expectedLifecycleNoticeVersion,
+    )) {
       return;
     }
 
@@ -528,9 +619,17 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       const sent = await this.sendOwnerNotice(
         expectedOwnerUserId,
         'offlineNotice',
-        () => this.isOwnerNoticeCurrent(expectedConfigVersion, expectedOwnerUserId),
+        () => this.isLifecycleNoticeCurrent(
+          expectedConfigVersion,
+          expectedOwnerUserId,
+          expectedLifecycleNoticeVersion,
+        ),
       );
-      if (!this.isOwnerNoticeCurrent(expectedConfigVersion, expectedOwnerUserId)) {
+      if (!this.isLifecycleNoticeCurrent(
+        expectedConfigVersion,
+        expectedOwnerUserId,
+        expectedLifecycleNoticeVersion,
+      )) {
         return;
       }
       if (sent) {
@@ -538,7 +637,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       }
     }
 
-    if (!this.isOwnerNoticeCurrent(expectedConfigVersion, expectedOwnerUserId)) {
+    if (!this.isLifecycleNoticeCurrent(
+      expectedConfigVersion,
+      expectedOwnerUserId,
+      expectedLifecycleNoticeVersion,
+    )) {
       return;
     }
     if (this.disposing) return;
@@ -551,9 +654,17 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       const sent = await this.sendOwnerNotice(
         expectedOwnerUserId,
         'online',
-        () => this.isOwnerNoticeCurrent(expectedConfigVersion, expectedOwnerUserId),
+        () => this.isLifecycleNoticeCurrent(
+          expectedConfigVersion,
+          expectedOwnerUserId,
+          expectedLifecycleNoticeVersion,
+        ),
       );
-      if (!this.isOwnerNoticeCurrent(expectedConfigVersion, expectedOwnerUserId)) {
+      if (!this.isLifecycleNoticeCurrent(
+        expectedConfigVersion,
+        expectedOwnerUserId,
+        expectedLifecycleNoticeVersion,
+      )) {
         return;
       }
       if (sent) {
@@ -573,19 +684,51 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     );
   }
 
+  private isLifecycleNoticeCurrent(
+    expectedConfigVersion: number,
+    expectedOwnerUserId: string,
+    expectedLifecycleNoticeVersion: number,
+  ): boolean {
+    return Boolean(
+      this.lifecycleAnnouncementEnabled &&
+      this.lifecycleNoticeVersion === expectedLifecycleNoticeVersion &&
+      this.isOwnerNoticeCurrent(expectedConfigVersion, expectedOwnerUserId),
+    );
+  }
+
   private async announceRuntimeOffline(deadlineMs?: number): Promise<void> {
+    if (!this.lifecycleAnnouncementEnabled) {
+      this.pendingOfflineNotice = false;
+      this.clearRuntimeActiveMarker();
+      return;
+    }
     if (!this.ownerUserId) return;
     if (!this.gateway.client) return;
     if (!this.host.secrets.read(RUNTIME_ACTIVE_SECRET_KEY) && this.status.kind !== 'connected') return;
 
+    const expectedConfigVersion = this.configVersion;
+    const expectedOwnerUserId = this.ownerUserId;
+    const expectedLifecycleNoticeVersion = this.lifecycleNoticeVersion;
     const timeoutMs = deadlineMs !== undefined
       ? Math.min(RUNTIME_OFFLINE_NOTICE_TIMEOUT_MS, Math.max(0, deadlineMs - Date.now()))
       : RUNTIME_OFFLINE_NOTICE_TIMEOUT_MS;
     const sent = await this.sendOwnerNoticeWithTimeout(
-      this.ownerUserId,
+      expectedOwnerUserId,
       'offline',
       timeoutMs,
+      () => this.isLifecycleNoticeCurrent(
+        expectedConfigVersion,
+        expectedOwnerUserId,
+        expectedLifecycleNoticeVersion,
+      ),
     );
+    if (!this.isLifecycleNoticeCurrent(
+      expectedConfigVersion,
+      expectedOwnerUserId,
+      expectedLifecycleNoticeVersion,
+    )) {
+      return;
+    }
     if (sent && !this.pendingOfflineNotice) {
       this.clearRuntimeActiveMarker();
     } else {
@@ -595,6 +738,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   private markRuntimeActive(): void {
     try {
+      if (!this.lifecycleAnnouncementEnabled) return;
       if (!this.host.secrets.isAvailable()) return;
       const ok = this.host.secrets.write(RUNTIME_ACTIVE_SECRET_KEY, String(Date.now()));
       if (!ok) this.log.warn('discord runtime active marker write failed');

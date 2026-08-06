@@ -199,6 +199,39 @@ describe('makerChatStore agent task updates', () => {
       title: 'Math quiz agent A',
     });
   });
+
+  it('clears a stale model when Codex aggregate evidence becomes ambiguous', () => {
+    const resolved = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, messages: [], taskUpdates: new Map() },
+      {
+        sessionId: 's1',
+        type: 'agent_task_update',
+        source: 'codex',
+        data: {
+          provider: 'codex',
+          taskId: 'codex-task-1',
+          status: 'running',
+          model: 'codex/gpt-5.5',
+        },
+      } as CCAgentStreamEvent,
+    );
+    const cleared = handleStreamEvent(
+      resolved,
+      {
+        sessionId: 's1',
+        type: 'agent_task_update',
+        source: 'codex',
+        data: {
+          provider: 'codex',
+          taskId: 'codex-task-1',
+          status: 'running',
+          model: null,
+        },
+      } as CCAgentStreamEvent,
+    );
+
+    expect(cleared.taskUpdates?.get('codex-task-1')?.model).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

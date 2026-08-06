@@ -102,7 +102,7 @@ export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwit
  * 不耦合具体存储)。
  *   - 本地草稿 / 已创建会话 → providerModelMemory(跨对话、跨重启持久)
  *   - device-link 远程草稿 / 会话 → 被控端全局预设的纯显示镜像(写穿被控端),控制端本地不落记忆
- *   - 不传(flat 选择器:CreateWorkerPopover / scheduler)→ 非选中行不读不写任何记忆,只显示模型默认
+ *   - 不传(flat 选择器:CreateWorkerPopover 等)→ 非选中行不读不写任何记忆,只显示模型默认
  * 选中行仍只读调用方 props:已创建会话的 props 来自 live DB/runtime,因此不会被其它对话覆盖;
  * 首页草稿的 props 则由 NewMakerDraftRoute 从同一份全局预设派生,没有“当前会话保护”。
  */
@@ -390,7 +390,8 @@ interface ModelSelectorProps {
   /**
    * per-session 来源选择(B · Provider-first)。
    *   - currentProviderId:本会话当前显式选定的供应商 id(null = 跟随默认路由)。
-   *   - onProviderChange:选某行(供应商, 模型)时调用,第 2 参为该行模型 id(原子切 provider+model+effort)。
+   *   - onProviderChange:选某行(供应商, 模型)时调用,第 2 参为该行模型 id,第 3 参为该来源该模型的
+   *     当前 effort(无 effort 档时为空串),由各调用方一次性落下 provider/model/effort。
    *   - onNavigateToProviders:0 个可连来源时空态 CTA / 列表底部「连接来源」跳设置→供应商页。
    * 三者都不传 → 单栏纯列表(无供应商分段),选行只 onModelChange(老入口 / CreateWorkerPopover)。
    */
@@ -473,6 +474,8 @@ interface ModelSelectorProps {
    * 会话场景不要开——那里 modelId 本就是已持久化的值，重选自己是纯无操作。
    */
   reselectEmitsChange?: boolean;
+  /** 点击当前已选模型行时打开该行的配置浮层，而不是直接收起选择器。 */
+  selectedRowClickOpensConfiguration?: boolean;
   /**
    * modelId 非空但不在可见清单时的 trigger 文案（默认落「选择模型」占位符）。
    * 供展示已持久化偏好的调用方给出诊断性文案，避免把「存过但当前不可用」显示成「没选过」。
@@ -549,6 +552,8 @@ interface ModelSelectorContentProps {
   configurationEnabled?: boolean;
   /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
   reselectEmitsChange?: boolean;
+  /** 点击当前已选模型行时打开该行的配置浮层，而不是直接收起选择器。 */
+  selectedRowClickOpensConfiguration?: boolean;
   /** Morph 原位展开时，要求真实 pointer move 后才展示行级配置，避免静止光标误触。 */
   pointerRevealRequiresIntent?: boolean;
   /**
@@ -668,6 +673,7 @@ function ModelSelectorContentView({
   followSession,
   configurationEnabled = true,
   reselectEmitsChange = false,
+  selectedRowClickOpensConfiguration = false,
   pointerRevealRequiresIntent = false,
   fluidWidth = false,
   agentSwitch,
@@ -774,6 +780,7 @@ function ModelSelectorContentView({
 
   const listRef = useRef<HTMLDivElement>(null);
   const configPanelRef = useRef<HTMLDivElement>(null);
+  const previousSelectionRef = useRef<{ modelId: string; sourceId: string | null } | null>(null);
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不应收起行配置浮层。
   const suppressScrollDismissRef = useRef(false);
   const closeOptionsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1003,9 +1010,14 @@ function ModelSelectorContentView({
         ? t('newChat.modelSelector.subscriptionDirectDisabled.xai')
         : t('newChat.modelSelector.subscriptionDirectDisabled.generic');
   };
-  const modelDisabledOf = (id: string): boolean => {
+  const modelDisabledOf = (provider: ProviderView | null, id: string): boolean => {
     if (!deviceId) {
       if (subscriptionDirectDisabledReason(id)) return true;
+      // codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
+      // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
+      // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
+      // 为 null,无供应商概念)与内置来源保持原前缀判定。
+      if (provider?.source === 'user') return false;
       return id.startsWith('codex/') && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
@@ -1197,15 +1209,32 @@ function ModelSelectorContentView({
     return cand && m.efforts.includes(cand) ? cand : (m.defaultEffort ?? m.efforts[0] ?? null);
   };
 
-  // 滚动到选中行(打开 / 列表变化时)。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: sections / flatModels 作为列表内容变化信号,用于重新对齐选中行。
+  // 列表变化时只在选中行跑出可视区域时做最小滚动。
+  // 选中模型 / 来源本身变化触发的分组重算不做任何对齐,否则用户刚点击一行后列表会
+  // 突然跳位;真正的过滤、加载或排序变化仍保留“确保选中项可见”的能力。
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
     const raf = requestAnimationFrame(() => {
+      const previousSelection = previousSelectionRef.current;
+      const selectionChanged =
+        previousSelection !== null &&
+        (previousSelection.modelId !== modelId || previousSelection.sourceId !== activeSourceId);
+      previousSelectionRef.current = { modelId, sourceId: activeSourceId };
+      if (selectionChanged) {
+        flashScrollbar(el);
+        return;
+      }
       const sel = el.querySelector<HTMLElement>('[data-model-selected="true"]');
       if (sel) {
-        const delta = sel.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        const listRect = el.getBoundingClientRect();
+        const selectedRect = sel.getBoundingClientRect();
+        const delta =
+          selectedRect.top < listRect.top
+            ? selectedRect.top - listRect.top
+            : selectedRect.bottom > listRect.bottom
+              ? selectedRect.bottom - listRect.bottom
+              : 0;
         const next = Math.max(0, el.scrollTop + delta);
         if (Math.abs(delta) > 1 && next !== el.scrollTop) {
           suppressScrollDismissRef.current = true;
@@ -1215,10 +1244,15 @@ function ModelSelectorContentView({
       flashScrollbar(el);
     });
     return () => cancelAnimationFrame(raf);
-  }, [sections, flatModels]);
+  }, [sections, flatModels, modelId, activeSourceId]);
 
   // ── 行选择 ───────────────────────────────────────────────────────────────
-  const handleRowSelect = (providerId: string | null, id: string, dismiss = true) => {
+  const handleRowSelect = (
+    providerId: string | null,
+    id: string,
+    dismiss = true,
+    effortOverride?: Effort,
+  ) => {
     if (interactionDisabled) return;
     // 浏览目标引擎态:选中模型 = 确认切换引擎(两步式的第二步),走切换事务。
     // providerId 一起带上:切换后 sessions.provider_id 直接落用户选的来源,
@@ -1232,21 +1266,58 @@ function ModelSelectorContentView({
       if (dismiss) onDismiss?.();
       return;
     }
+    const selectedModel = sections
+      ? sections
+          .find((section) => section.provider.id === providerId)
+          ?.models.find((m) => m.id === id)
+      : flatModels?.find((m) => m.id === id);
+    // Provider rows own their effort metadata.  Return the value rendered on the
+    // clicked row so every caller (chat, scheduler, settings, worker) applies the
+    // same provider/model/effort tuple instead of re-deriving it locally.
+    const reconciledEffort =
+      effortOverride ??
+      (selectedModel ? (rowEffortOf(providerId, selectedModel) ?? '') : undefined);
     if (isSelectedRow(providerId, id)) {
+      const selectedModelHasConfiguration =
+        !!selectedModel &&
+        (selectedModel.efforts.length > 0 || fastEditable(providerId, selectedModel));
+      const opensConfiguration =
+        selectedRowClickOpensConfiguration &&
+        configurationEnabled &&
+        selectedModelHasConfiguration;
+      // A selected row can be the effective fallback for a stale explicit
+      // provider.  Repair that route before opening its configuration, but do
+      // not persist the row's derived/default effort just by opening the card.
+      if (reselectEmitsChange) {
+        if (sections && providerId) {
+          const needsProviderRepair =
+            !!currentProviderId &&
+            currentProviderId !== providerId;
+          if (!opensConfiguration || needsProviderRepair) {
+            onProviderChange?.(
+              providerId,
+              id,
+              opensConfiguration ? undefined : reconciledEffort,
+            );
+          }
+        } else if (!opensConfiguration) {
+          onModelChange(id);
+        }
+      }
+      if (opensConfiguration) {
+        setEditing({ providerId, modelId: id });
+        return;
+      }
       // 默认:重选当前行 = 无操作,直接收起(会话场景点自己没有意义)。
       // reselectEmitsChange:调用方的「当前值」可能是**解析出来的继承值**而非已持久化的
       // 显式值(IM 工作目录偏好),这时点当前行的语义是「把继承值钉成显式值」,必须照常回调,
       // 否则用户点了没反应、之后上游默认一变这条偏好就被静默改掉。
-      if (reselectEmitsChange) {
-        if (sections && providerId) onProviderChange?.(providerId, id);
-        else onModelChange(id);
-      }
       if (dismiss) onDismiss?.();
       return;
     }
     if (sections && providerId) {
-      // 原子切 provider+model+effort(effort 由 handleProviderChange 内 resolveSwitchEffort 从记忆解析)。
-      onProviderChange?.(providerId, id);
+      // 原子切 provider+model+effort; effort 由目标来源行的 catalog/记忆统一解析。
+      onProviderChange?.(providerId, id, reconciledEffort);
     } else {
       onModelChange(id);
     }
@@ -1271,15 +1342,23 @@ function ModelSelectorContentView({
     editing.modelId === modelId &&
     (editing.providerId === null || editing.providerId === activeSourceId);
   const editingProviderId = editing?.providerId ?? null;
-  // 当前行可编辑配置的边界:选中行写实时状态;非选中供应商行写模型级全局预设。
-  // flat 非选中行没有来源 capability / 写穿上下文,只展示模型信息,避免出现点击后无效果的配置项。
+  // 当前行可编辑配置的边界:选中行写实时状态;非选中供应商行可把 effort 与
+  // provider/model 一次性交给调用方。若调用方另传 modelMemory,同时允许编辑该模型的
+  // 全局 effort/Fast 预设。flat 非选中行没有来源 capability / 原子选择上下文,仍只展示信息。
+  const inactiveProviderCanSelectEffort =
+    !editingIsActive && !!editingProviderId && !!onProviderChange;
+  const inactiveProviderHasMemory =
+    !editingIsActive && !!modelMemory && !!currentAgentKind && !!editingProviderId;
   const canConfigure =
     !interactionDisabled &&
     configurationEnabled &&
     !!editingModel &&
-    (editingIsActive || (!!modelMemory && !!currentAgentKind && !!editingProviderId));
+    (editingIsActive || inactiveProviderCanSelectEffort || inactiveProviderHasMemory);
   const editShowFast =
-    canConfigure && !!editingModel && fastEditable(editingProviderId, editingModel);
+    canConfigure &&
+    (editingIsActive || inactiveProviderHasMemory) &&
+    !!editingModel &&
+    fastEditable(editingProviderId, editingModel);
   const editHasEfforts = canConfigure && (editingModel?.efforts.length ?? 0) > 0;
 
   // 配置列当前 effort 值(选中 → live;否则记忆/默认)。
@@ -1299,14 +1378,15 @@ function ModelSelectorContentView({
     if (editingIsActive) {
       onEffortChange(e);
     } else {
-      // 非选中行:先写该设备的全局模型预设,再选中这行。选择事务会同步读取刚写入的
-      // effort,从而一次点击同时落定 model/provider/effort,不再留下「改了配置但勾还在旧模型」的状态。
+      // 非选中行:若入口提供模型记忆则同步预设；无论是否有记忆,都把本次明确点击的
+      // effort 直接交给选择事务,一次落定 model/provider/effort。Scheduler / 设置页因此
+      // 无需为了显示同一张配置卡而伪造或复制一套 effort 状态。
       if (currentAgentKind && editing.providerId) {
         modelMemory?.setEffort(currentAgentKind, editing.providerId, editingModel.id, e);
       }
       bump();
       // 配置点击同时选中模型，但保留模型选择窗口，方便继续比较和调整。
-      handleRowSelect(editing.providerId, editingModel.id, false);
+      handleRowSelect(editing.providerId, editingModel.id, false, e);
     }
   };
   const handleEditFast = (enabled: boolean) => {
@@ -1526,7 +1606,7 @@ function ModelSelectorContentView({
     const providerId = provider?.id ?? null;
     const isSelected = isSelectedRow(providerId, model.id);
     const isSubscriptionModel = provider?.access?.kind === 'subscription';
-    const disabled = interactionDisabled || modelDisabledOf(model.id);
+    const disabled = interactionDisabled || modelDisabledOf(provider, model.id);
     const disabledReason = subscriptionDirectDisabledReason(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
@@ -1976,6 +2056,7 @@ export function ModelSelector({
   configurationEnabled = true,
   fallbackOption,
   reselectEmitsChange = false,
+  selectedRowClickOpensConfiguration = false,
   unknownModelLabel,
   ariaContext,
   currentProviderId,
@@ -2561,6 +2642,7 @@ export function ModelSelector({
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
       reselectEmitsChange={reselectEmitsChange}
+      selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}
       fluidWidth={isFieldTrigger}
       agentSwitch={contentAgentSwitch}
