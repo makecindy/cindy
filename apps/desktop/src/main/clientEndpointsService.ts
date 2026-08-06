@@ -397,14 +397,16 @@ export interface BlockingResolveDeps {
   diagnosisBudgetMs?: number;
   /**
    * 读取并**严格解析**离线缓存;返回 null = 无可用缓存(缺失 / 损坏 / 清单地址
-   * 变化 / region 不符)。只在网络层失败时调用,且结果仅用于点亮弹框上的离线按钮。
+   * 变化 / region 不符)。只在网络层失败时调用;结果可用于 automatic 模式的缓存回退,
+   * 也可用于点亮弹框上的离线按钮。
    */
   loadOfflineManifest?(): OfflineManifestCandidate | null;
   /** 默认保留弹框确认；正式 CDN 启动可显式启用自动缓存回退。 */
   offlineFallbackMode?: 'prompt' | 'automatic';
   /**
    * 启动宿主保存清单元数据;纯端点调用方无需提供。
-   * source 区分本次是网络拉到的还是用户选了离线缓存——宿主据此决定是否回写缓存。
+   * source 区分本次是网络拉到的还是使用了离线缓存(自动回退或用户确认)——宿主据此
+   * 决定是否回写缓存。
    * rawText 只在 source==='network' 时给出:**校验通过的原始正文**。缓存必须存它而
    * 不是按当前 CLIENT_ENDPOINT_KEYS 重新序列化的结果,否则清单里那些本构建还不认识
    * 的新字段会被抹掉(前向兼容的发布模型正是"先发清单再发客户端"),等客户端升级后
