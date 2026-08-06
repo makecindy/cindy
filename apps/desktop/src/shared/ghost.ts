@@ -6185,11 +6185,15 @@ export const GHOST_FETCH_DIR_UPLOAD_MAX_FILES = 500;
 /** 目录上传:单文件字节上限。 */
 export const GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE = 50 * 1024 * 1024;
 /** 目录上传:单次总字节上限(multipart 体整体驻内存组装,必须封顶)。 */
-export const GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+export const GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES = 500 * 1024 * 1024;
 /** 目录上传:随行普通表单字段条数上限。 */
 export const GHOST_FETCH_DIR_UPLOAD_MAX_FIELDS = 8;
-/** 目录上传:普通表单字段值长度上限(字符)。 */
-export const GHOST_FETCH_DIR_UPLOAD_FIELD_VALUE_MAX_CHARS = 2048;
+/** 目录上传:普通表单字段值长度上限(字符)。
+ * 要容纳与 MAX_FILES(500)同量级的部署清单类字段(站点部署插件的
+ * metadata 按每文件路径+摘要 ~250 字符计,500 文件 ≈ 125K):2048 时
+ * ~100 文件即溢出,大目录部署被本校验拦死。内存上界仍受
+ * MAX_FIELDS(8)封顶(~1MB),远小于 multipart 总量上限。 */
+export const GHOST_FETCH_DIR_UPLOAD_FIELD_VALUE_MAX_CHARS = 131072;
 /** 目录过户票据形状(主机 randomUUID 发放)。 */
 export const GHOST_DIR_DEPOSIT_TOKEN_RE = /^[a-f0-9-]{36}$/;
 /** 目录过户票据有效期(毫秒;过期未消费自动作废)。 */

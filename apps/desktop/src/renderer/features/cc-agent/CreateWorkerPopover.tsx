@@ -779,6 +779,23 @@ export function CreateWorkerPopover({
           </div>
         </div>
 
+        {/* device-link creation executes on the controlled app. An older peer may still default
+            Workers to Full access, so do not make an Auto-review claim without a versioned remote
+            capability. Local and SSH Workers use this app's creation service and remain accurate. */}
+        {!deviceId && (
+          <div
+            data-testid="worker-permission-mode"
+            className="mb-4 flex items-center justify-between rounded-xl border border-[var(--border-default)] px-3.5 py-3"
+          >
+            <span className="text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+              {t('orca.createWorker.permissionLabel')}
+            </span>
+            <span className="text-13 font-medium text-[var(--text-primary)]">
+              {t(`newChat.permissionSelector.modes.${agent}.auto.label`)}
+            </span>
+          </div>
+        )}
+
         <div className="mb-5">
           <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
             {t('orca.createWorker.initialTaskLabel')}{' '}

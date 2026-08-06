@@ -30,7 +30,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'usageDetails.modelCostLine') return `· ${options.model} ${options.cost}`;
       if (key === 'quotaCard.turnCostUnavailable') return '本轮费用暂无法估算';
       if (key === 'quotaCard.latestMessageTitle') return '最近一轮用户请求累计';
-      if (key === 'chat.messageActionBar.userTurnCostDetailsTitle') return '最后一个 SDK 分段';
+      if (key === 'chat.messageActionBar.userTurnCostDetailsTitle') return '本轮明细';
       if (key === 'quotaCard.staleData') return `quotaCard.staleData:${options.minutes}`;
       return key;
     },
@@ -341,7 +341,7 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('本任务价值 $0.50')).toBeTruthy();
   });
 
-  it('marks estimated value and separates cumulative totals from final-segment details', () => {
+  it('marks estimated value and labels user-turn totals without exposing SDK segments', () => {
     const { rerender } = render(
       <QuotaHoverCard
         snapshot={null}
@@ -355,7 +355,7 @@ describe('QuotaHoverCard', () => {
     );
 
     expect(screen.getByText('本轮 token 价值：$0.46')).toBeTruthy();
-    expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
+    expect(screen.queryByText('本轮明细')).toBeNull();
 
     rerender(
       <QuotaHoverCard
@@ -364,7 +364,6 @@ describe('QuotaHoverCard', () => {
         turnUsage={{
           costText: '$0.70',
           isUserTurnTotal: true,
-          finalSegment: { costText: '$0.20' },
           totalTokensText: '74.1K',
         }}
       />,
@@ -372,8 +371,7 @@ describe('QuotaHoverCard', () => {
 
     expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
     expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
-    expect(screen.getByText('最后一个 SDK 分段')).toBeTruthy();
-    expect(screen.getByText('本轮消耗：$0.20')).toBeTruthy();
+    expect(screen.queryByText('本轮明细')).toBeNull();
   });
 
   it('多模型分段逐模型展示费用，不再重复笼统模型行', () => {

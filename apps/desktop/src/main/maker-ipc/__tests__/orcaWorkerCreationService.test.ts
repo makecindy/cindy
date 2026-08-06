@@ -1391,7 +1391,7 @@ describe('OrcaWorkerCreationService', () => {
       providerId: 'xd',
       effort: 'high',
       fastMode: true,
-      permissionMode: 'bypassPermissions',
+      permissionMode: 'auto',
       title: 'Worker · reviewer · reviewer',
       orcaRole: 'worker',
       vendorOptions: expect.objectContaining({
@@ -1417,6 +1417,53 @@ describe('OrcaWorkerCreationService', () => {
       `markOrcaRoleIfNeeded:${WORKER_SESSION_ID}:worker`,
     ]);
   });
+
+  it.each(
+    (['ask', 'auto', 'bypassPermissions'] as const).flatMap((leadPermissionMode) =>
+      (['claude-code', 'codex', 'pi'] as const).map((workerAgent) => ({
+        leadPermissionMode,
+        workerAgent,
+      })),
+    ),
+  )(
+    'starts a $workerAgent Worker in auto mode when the Lead uses $leadPermissionMode',
+    async ({ leadPermissionMode, workerAgent }) => {
+      const workerModel = workerAgent === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6';
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => ({
+          id: 'lead-1',
+          agentKind: 'codex' as const,
+          workspaceKind: 'project' as const,
+          workingDir: 'C:\\\\repo',
+          model: 'gpt-5.5',
+          effort: 'medium',
+          permissionMode: leadPermissionMode,
+          fastMode: false,
+          providerId: 'xd',
+          remoteHostId: null,
+        })),
+        getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+          'claude-code': [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
+          codex: [{ id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] }],
+          pi: [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
+        })),
+      });
+
+      await expect(service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: workerAgent,
+        label: 'reviewer',
+        model: workerModel,
+        providerId: 'xd',
+      })).resolves.toMatchObject({ ok: true });
+
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        agentKind: workerAgent,
+        permissionMode: 'auto',
+      }));
+    },
+  );
 
   it('inherits the target-agent New Maker provider and persists it on the worker session', async () => {
     const { deps, service } = createDeps({

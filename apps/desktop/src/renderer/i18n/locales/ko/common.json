@@ -2438,6 +2438,7 @@
         "toggleHint": "이 시스템 전체 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "status": {
           "checking": "ADB 상태 확인 중…",
+          "disabled": "Android 자동화가 꺼져 있습니다. 켜면 ADB와 기기를 감지합니다.",
           "preparing": "ADB 준비 중…",
           "ready": "ADB 준비됨. 사용 가능한 기기: {{count}}. 기본값: {{device}}",
           "adbDetail": "{{version}} 위치: {{path}}",
@@ -5652,8 +5653,7 @@
       "turnCostEstimated": "이번 턴 토큰 가치(API 단가 환산)",
       "turnCostEstimatedValue": "가치 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "이번 사용자 턴 합계: {{cost}}",
-      "userTurnCostDetailsTitle": "마지막 SDK 세그먼트"
+      "userTurnCostDetailsTitle": "이번 요청 상세"
     },
     "errorBanner": {
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -6042,6 +6042,8 @@
       "duplicateFiles": "동일한 이름의 파일 {{count}}개를 찾았습니다. 절대 경로를 사용해 주세요",
       "copyFile": "복사",
       "copyFilePath": "파일 경로 복사",
+      "openWith": "앱으로 열기",
+      "openWithAppFailed": "선택한 앱으로 열 수 없습니다",
       "revealFile": "파일 위치 열기",
       "openInBrowser": "브라우저에서 열기",
       "fileCopied": "파일이 복사되었습니다",
@@ -6174,6 +6176,11 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
+    },
+    "generatedFiles": {
+      "title": "이번 턴에 생성된 파일",
+      "showMore": "{{count}}개 더 보기",
+      "showLess": "접기"
     },
     "agentActions": {
       "part": {
@@ -8453,6 +8460,7 @@
       "customRolePredefinedError": "사용자 지정 역할에는 기본 역할 이름을 사용할 수 없습니다",
       "agentLabel": "Agent",
       "modelLabel": "모델",
+      "permissionLabel": "권한 모드",
       "noAvailableModels": "사용 가능한 {{agent}} 모델이 없습니다. 설정에서 제공자 연결과 자격 증명을 확인하세요.",
       "effortLabel": "추론 강도",
       "initialTaskLabel": "초기 작업",

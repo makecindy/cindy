@@ -2438,6 +2438,7 @@
         "toggleHint": "このマシン全体の切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
         "status": {
           "checking": "ADB の状態を確認しています…",
+          "disabled": "Android 自動操作はオフです。オンにすると ADB とデバイスを検出します。",
           "preparing": "ADB を準備しています…",
           "ready": "ADB は準備できています。利用可能なデバイス: {{count}}。デフォルト: {{device}}",
           "adbDetail": "{{version}}（{{path}}）",
@@ -5652,8 +5653,7 @@
       "turnCostEstimated": "このターンの token 価値(API 単価換算)",
       "turnCostEstimatedValue": "価値 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "このユーザーターンの合計: {{cost}}",
-      "userTurnCostDetailsTitle": "最終 SDK セグメント"
+      "userTurnCostDetailsTitle": "リクエストの明細"
     },
     "errorBanner": {
       "retryTitle": "最後のメッセージを再送信",
@@ -6042,6 +6042,8 @@
       "duplicateFiles": "同名のファイルが {{count}} 件見つかりました。絶対パスを使用してください",
       "copyFile": "コピー",
       "copyFilePath": "ファイルパスをコピー",
+      "openWith": "アプリで開く",
+      "openWithAppFailed": "選択したアプリで開けませんでした",
       "revealFile": "ファイルの場所を開く",
       "openInBrowser": "ブラウザで開く",
       "fileCopied": "ファイルをコピーしました",
@@ -6174,6 +6176,11 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
+    },
+    "generatedFiles": {
+      "title": "このターンで生成されたファイル",
+      "showMore": "さらに {{count}} 件を表示",
+      "showLess": "折りたたむ"
     },
     "agentActions": {
       "part": {
@@ -8453,6 +8460,7 @@
       "customRolePredefinedError": "カスタムロールには既定ロール名を使用できません",
       "agentLabel": "Agent",
       "modelLabel": "モデル",
+      "permissionLabel": "権限モード",
       "noAvailableModels": "利用可能な {{agent}} モデルがありません。設定でプロバイダーの接続と認証情報を確認してください。",
       "effortLabel": "推論強度",
       "initialTaskLabel": "初期タスク",

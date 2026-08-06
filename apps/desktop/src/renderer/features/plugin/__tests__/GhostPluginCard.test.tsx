@@ -44,10 +44,6 @@ const {
   InstalledPluginOverflow,
   MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS,
   MAX_VISIBLE_INSTALLED_PLUGINS,
-  initializeInstalledPluginOrderSnapshot,
-  reconcileInstalledPluginOrderSnapshot,
-  shouldInitializeInstalledPluginOrderSnapshot,
-  surfaceNewlyUpdatableInstalledPlugins,
   visibleInstalledPluginItems,
 } = __installedPluginLayoutForTests;
 
@@ -448,83 +444,6 @@ describe('MarketPluginCard', () => {
 });
 
 describe('installed Plugin disclosure', () => {
-  it('surfaces newly installed plugins before the collapsed grid cutoff', () => {
-    const previousIds = Array.from(
-      { length: MAX_VISIBLE_INSTALLED_PLUGINS },
-      (_, index) => `plugin-${index}`,
-    );
-
-    expect(
-      reconcileInstalledPluginOrderSnapshot(previousIds, previousIds, [
-        ...previousIds,
-        'new-plugin',
-      ]),
-    ).toEqual(['new-plugin', ...previousIds]);
-  });
-
-  it('seeds installs that arrive before the first market snapshot', () => {
-    const preSnapshotIds = Array.from(
-      { length: MAX_VISIBLE_INSTALLED_PLUGINS },
-      (_, index) => `plugin-${index}`,
-    );
-    const marketSortedIds = [...preSnapshotIds].reverse();
-
-    expect(
-      initializeInstalledPluginOrderSnapshot(marketSortedIds, preSnapshotIds, [
-        ...preSnapshotIds,
-        'new-plugin',
-      ]),
-    ).toEqual(['new-plugin', ...marketSortedIds]);
-  });
-
-  it('upgrades a provisional installed order once market data recovers', () => {
-    const unavailableMarketSnapshot = {
-      items: [],
-      unavailableReason: 'authentication-required',
-      customSourceNames: [],
-    };
-    const availableMarketSnapshot = {
-      items: [],
-      unavailableReason: null,
-      customSourceNames: [],
-    };
-
-    expect(
-      shouldInitializeInstalledPluginOrderSnapshot(false, false, unavailableMarketSnapshot),
-    ).toBe(true);
-    expect(
-      shouldInitializeInstalledPluginOrderSnapshot(true, false, unavailableMarketSnapshot),
-    ).toBe(false);
-    expect(shouldInitializeInstalledPluginOrderSnapshot(true, false, availableMarketSnapshot)).toBe(
-      true,
-    );
-    expect(shouldInitializeInstalledPluginOrderSnapshot(true, true, availableMarketSnapshot)).toBe(
-      false,
-    );
-  });
-
-  it('surfaces newly update-available plugins only when they were hidden by the cutoff', () => {
-    const orderSnapshot = Array.from(
-      { length: MAX_VISIBLE_INSTALLED_PLUGINS + 3 },
-      (_, index) => `plugin-${index}`,
-    );
-
-    expect(surfaceNewlyUpdatableInstalledPlugins(orderSnapshot, [], ['plugin-6'])).toBe(
-      orderSnapshot,
-    );
-    expect(
-      surfaceNewlyUpdatableInstalledPlugins(
-        orderSnapshot,
-        ['plugin-1'],
-        ['plugin-1', 'plugin-6', 'plugin-9', 'plugin-10'],
-      ),
-    ).toEqual([
-      'plugin-9',
-      'plugin-10',
-      ...orderSnapshot.filter((id) => id !== 'plugin-9' && id !== 'plugin-10'),
-    ]);
-  });
-
   it('shows at most eight installed plugins until the user expands the section', () => {
     const items = Array.from({ length: MAX_VISIBLE_INSTALLED_PLUGINS + 3 }, (_, index) => index);
 

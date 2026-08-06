@@ -2439,6 +2439,7 @@
         "toggleHint": "This machine-wide toggle only applies to agent sessions started afterward; it does not affect a session that is already running.",
         "status": {
           "checking": "Checking ADB status…",
+          "disabled": "Android automation is off. Turn it on to detect ADB and devices.",
           "preparing": "Preparing ADB…",
           "ready": "ADB ready. Ready devices: {{count}}. Default: {{device}}",
           "adbDetail": "{{version}} at {{path}}",
@@ -5654,8 +5655,7 @@
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "User-turn total: {{cost}}",
-      "userTurnCostDetailsTitle": "Final SDK segment"
+      "userTurnCostDetailsTitle": "Request details"
     },
     "errorBanner": {
       "retryTitle": "Resend the last message",
@@ -6044,6 +6044,8 @@
       "duplicateFiles": "Found {{count}} files with the same name, please use an absolute path",
       "copyFile": "Copy",
       "copyFilePath": "Copy file path",
+      "openWith": "Open with",
+      "openWithAppFailed": "Couldn't open with the selected app",
       "revealFile": "Reveal in folder",
       "openInBrowser": "Open in browser",
       "fileCopied": "File copied",
@@ -6176,6 +6178,11 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
+    },
+    "generatedFiles": {
+      "title": "Files created this turn",
+      "showMore": "Show {{count}} more",
+      "showLess": "Show less"
     },
     "agentActions": {
       "part": {
@@ -8465,6 +8472,7 @@
       "customRolePredefinedError": "Custom role cannot use a predefined role name",
       "agentLabel": "Agent",
       "modelLabel": "Model",
+      "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
       "effortLabel": "Effort",
       "initialTaskLabel": "Initial Task",

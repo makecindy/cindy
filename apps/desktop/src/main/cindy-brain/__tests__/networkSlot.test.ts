@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
+  GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
   GHOST_FETCH_INFLIGHT_LIMIT,
   GHOST_FETCH_MEDIA_MAX_BYTES,
   GHOST_FETCH_RESPONSE_MAX_BYTES,
@@ -1277,13 +1278,15 @@ describe('networkSlot · 目录上传(uploadDir,过户票据)', () => {
   });
 
   it('读盘期间总量超限整单拒(过户后文件被撑大也兜得住)', async () => {
-    // 单块恰好取目录通道的单文件上限(50MB,不触发单文件拒),6 块累计 300MB
-    // 超过 256MB 总限——只有总量分支能拦住。原用例误用媒体上传的 64MB 常量,
+    // 单块恰好取目录通道的单文件上限(不触发单文件拒),块数按总量上限动态算,
+    // 恰好超过总限一块——只有总量分支能拦住。原用例误用媒体上传的 64MB 常量,
     // 每块先撞单文件检查,总量分支永远走不到。
     const big = new Uint8Array(GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE);
+    const count =
+      Math.floor(GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES / big.byteLength) + 1;
     const takeDirDeposit = vi.fn(() => ({
-      totalBytes: big.byteLength * 6,
-      files: Array.from({ length: 6 }, (_, i) => ({
+      totalBytes: big.byteLength * count,
+      files: Array.from({ length: count }, (_, i) => ({
         relPath: `f${i}.bin`,
         size: big.byteLength,
         read: async () => big,

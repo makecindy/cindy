@@ -58,7 +58,11 @@ import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/instal
 import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { useGhostUnread, useGhostUnreadSummary } from '@/cindy-brain/ghostUnreadStore';
+import {
+  useGhostUnread,
+  useGhostUnreadEntries,
+  useGhostUnreadSummary,
+} from '@/cindy-brain/ghostUnreadStore';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import { resolveSystemLocale } from '../../../shared/locale';
@@ -85,8 +89,9 @@ import {
   ghostPanelOwnerKey,
   ghostPrimaryAction,
   marketPresentationForInstalledGhost,
+  installedVisibleCount,
   nextOpenPanelIdForOwner,
-  sortGhostPluginItemsByRecentUse,
+  sortInstalledForDisplay,
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
 import { ignoredRoundStorageKey, isBatchFinished, updateRoundKey } from './lib/updateAllModel';
@@ -153,55 +158,6 @@ function visibleInstalledPluginItems<T>(items: readonly T[]): T[] {
 
 function collapsedInstalledPluginPreviewItems<T>(items: readonly T[]): T[] {
   return items.slice(0, MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS);
-}
-
-function reconcileInstalledPluginOrderSnapshot(
-  snapshot: readonly string[],
-  previousIds: readonly string[],
-  nextIds: readonly string[],
-): string[] {
-  const previousSet = new Set(previousIds);
-  const nextSet = new Set(nextIds);
-  const addedIds = nextIds.filter((id) => !previousSet.has(id));
-  const addedSet = new Set(addedIds);
-  const retainedIds = snapshot.filter((id) => nextSet.has(id) && !addedSet.has(id));
-  const retainedSet = new Set(retainedIds);
-  const untrackedIds = nextIds.filter((id) => !addedSet.has(id) && !retainedSet.has(id));
-  return [...addedIds, ...retainedIds, ...untrackedIds];
-}
-
-function initializeInstalledPluginOrderSnapshot(
-  marketSortedIds: readonly string[],
-  preSnapshotIds: readonly string[],
-  currentIds: readonly string[],
-): string[] {
-  return reconcileInstalledPluginOrderSnapshot(marketSortedIds, preSnapshotIds, currentIds);
-}
-
-function shouldInitializeInstalledPluginOrderSnapshot(
-  hasOrderSnapshot: boolean,
-  orderSnapshotHasAvailableMarket: boolean,
-  marketSnapshot: PluginMarketSnapshot | null,
-): boolean {
-  if (marketSnapshot === null) return false;
-  if (!hasOrderSnapshot) return true;
-  return !orderSnapshotHasAvailableMarket && marketSnapshot.unavailableReason === null;
-}
-
-function surfaceNewlyUpdatableInstalledPlugins(
-  orderSnapshot: readonly string[],
-  previousUpdatableIds: readonly string[],
-  nextUpdatableIds: readonly string[],
-): readonly string[] {
-  const previousUpdatableSet = new Set(previousUpdatableIds);
-  const newlyUpdatableSet = new Set(nextUpdatableIds.filter((id) => !previousUpdatableSet.has(id)));
-  const hiddenNewlyUpdatableIds = orderSnapshot
-    .slice(MAX_VISIBLE_INSTALLED_PLUGINS)
-    .filter((id) => newlyUpdatableSet.has(id));
-  if (hiddenNewlyUpdatableIds.length === 0) return orderSnapshot;
-
-  const promotedSet = new Set(hiddenNewlyUpdatableIds);
-  return [...hiddenNewlyUpdatableIds, ...orderSnapshot.filter((id) => !promotedSet.has(id))];
 }
 
 type InstalledPluginPreviewItem = Pick<PresentedGhostPluginItem, 'id' | 'name' | 'iconDataUrl'>;
@@ -298,10 +254,6 @@ export const __installedPluginLayoutForTests = {
   MAX_VISIBLE_INSTALLED_PLUGINS,
   MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS,
   visibleInstalledPluginItems,
-  initializeInstalledPluginOrderSnapshot,
-  reconcileInstalledPluginOrderSnapshot,
-  shouldInitializeInstalledPluginOrderSnapshot,
-  surfaceNewlyUpdatableInstalledPlugins,
   InstalledPluginOverflow,
   InstalledPluginDisclosure,
 };
@@ -343,18 +295,11 @@ export function GhostPluginPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [installedExpanded, setInstalledExpanded] = useState(false);
-  const [orderSnapshot, setOrderSnapshot] = useState<string[] | null>(null);
-  const preOrderSnapshotInstalledGhostIdsRef = useRef(installedGhostIds);
   const installedOverflowId = useId();
   const [marketSnapshot, setMarketSnapshot] = useState<PluginMarketSnapshot | null>(null);
   const [openPanelId, setOpenPanelId] = useState<string | null>(null);
-  // 数据归属键:面板宿主与排序快照都按它失效(定义要早于两处消费点)。
+  // 数据归属键:面板宿主按它失效(定义要早于消费点)。
   const panelOwnerKey = ghostPanelOwnerKey(mode, dataOwnerId);
-  const orderSnapshotStatusRef = useRef<{
-    ownerKey: string | null;
-    hasAvailableMarket: boolean;
-    updatableIds: string[];
-  }>({ ownerKey: panelOwnerKey, hasAvailableMarket: false, updatableIds: [] });
   const ignoredRoundKey = ignoredRoundStorageKey(mode, dataOwnerId);
   const [ignoredRound, setIgnoredRound] = useState(() => readIgnoredRound(ignoredRoundKey));
   // 账号 / 本地云模式切换:换桶重读,不把上一个身份的「忽略本轮」带进来。
@@ -388,7 +333,6 @@ export function GhostPluginPage() {
   const lastMarketRefreshAtRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
   const installedGhostIdsKeyRef = useRef(installedGhostIdsKey);
-  const installedGhostIdsRef = useRef(installedGhostIds);
   const legacyRecoveryStatusRequestRef = useRef(0);
   const legacyRecoveryRetryRequestRef = useRef(0);
   const [legacyRecoveryStatus, setLegacyRecoveryStatus] =
@@ -435,22 +379,10 @@ export function GhostPluginPage() {
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
   useEffect(() => {
     if (installedGhostIdsKeyRef.current === installedGhostIdsKey) return;
-    const previousInstalledGhostIds = installedGhostIdsRef.current;
     installedGhostIdsKeyRef.current = installedGhostIdsKey;
-    installedGhostIdsRef.current = installedGhostIds;
-    setOrderSnapshot((snapshot) =>
-      snapshot === null
-        ? null
-        : reconcileInstalledPluginOrderSnapshot(
-            snapshot,
-            previousInstalledGhostIds,
-            installedGhostIds,
-          ),
-    );
-    // refreshMarket(true) reports an unavailable market by rejecting after preserving
-    // the current snapshot; the state update already happened in refreshMarket.
+    // 已装集合变化(装/卸)时刷新市场;排序是反应式的,没有快照需要维护。
     void refreshMarket(true).catch(() => undefined);
-  }, [installedGhostIds, installedGhostIdsKey, refreshMarket]);
+  }, [installedGhostIdsKey, refreshMarket]);
   const activeSessionWorkingDir = useSyncExternalStore(
     subscribeToLastWorkingDir,
     getLastWorkingDir,
@@ -666,120 +598,47 @@ export function GhostPluginPage() {
     return counts;
   }, [searchedAvailableMarketItems]);
 
-  // ── 排序快照:首个市场结果先定序;若它不可用,首次恢复时再升级一次 ──
-  // 可更新的排最前,其余按最近使用。有效快照建立后保持稳定;只有刷新中新出现
-  // 且原本藏在折叠区的更新会临时移入前 8,避免更新提示不可见。
-  // 换账号/模式要丢弃旧顺序:两个 owner 的已装集合、可更新集合与最近使用
-  // 都不同,沿用账号 A 的 id 顺序会把 B 的非更新项排到更新项前面,违背
-  // 「可更新优先」。清空后由下面的 effect 基于**新 owner 的首个市场快照**重排。
-  const orderOwnerKeyRef = useRef(panelOwnerKey);
+  // ── 已安装区排序:未读通知(新→旧) → 最近使用 → 基础序,实时计算 ──
+  // 反应式而非冻结快照:排序信号变化即重排。安全边界——`markUsed` 只在对话里
+  // 触发(ChatInput),插件页自身不打点,所以「最近使用」的变化只发生在离开本页
+  // 之后,回到页面即已重排,不会在用户眼皮下洗牌;后台到达的未读通知冒头则正是
+  // 目的所在。切账号/模式时 recentGhostIds 与未读表都会随 owner 快照整体作废。
+  // marketUpdate 刻意不作排序键——更新已有统一横幅兜底,可被折叠。
+  const unreadEntries = useGhostUnreadEntries();
+  const unreadAtById = useMemo(
+    () => new Map(unreadEntries.map((entry) => [entry.ghostId, entry.at])),
+    [unreadEntries],
+  );
+  // 切账号/模式收起折叠区:换 owner 的已装集合不同,上一个身份的展开态不带过去。
+  const collapseOwnerKeyRef = useRef(panelOwnerKey);
   useEffect(() => {
-    if (orderOwnerKeyRef.current === panelOwnerKey) return;
-    orderOwnerKeyRef.current = panelOwnerKey;
-    orderSnapshotStatusRef.current = {
-      ownerKey: null,
-      hasAvailableMarket: false,
-      updatableIds: [],
-    };
-    preOrderSnapshotInstalledGhostIdsRef.current = installedGhostIds;
-    setOrderSnapshot(null);
+    if (collapseOwnerKeyRef.current === panelOwnerKey) return;
+    collapseOwnerKeyRef.current = panelOwnerKey;
     setInstalledExpanded(false);
-  }, [installedGhostIds, panelOwnerKey]);
-  useEffect(() => {
-    const orderSnapshotStatus = orderSnapshotStatusRef.current;
-    if (orderSnapshot !== null && orderSnapshotStatus.ownerKey !== panelOwnerKey) return;
-    if (marketSnapshot === null) return;
-    const updatableIds = installedItems
-      .filter((item) => item.marketUpdate !== null)
-      .map((item) => item.id);
-    const marketAvailable = marketSnapshot.unavailableReason === null;
-    const shouldInitializeOrder = shouldInitializeInstalledPluginOrderSnapshot(
-      orderSnapshot !== null,
-      orderSnapshotStatus.hasAvailableMarket,
-      marketSnapshot,
-    );
-    if (!shouldInitializeOrder) {
-      if (orderSnapshot === null || !marketAvailable || !orderSnapshotStatus.hasAvailableMarket) {
-        return;
-      }
-      orderSnapshotStatusRef.current = {
-        ownerKey: panelOwnerKey,
-        hasAvailableMarket: true,
-        updatableIds,
-      };
-      setOrderSnapshot((currentOrderSnapshot) => {
-        if (currentOrderSnapshot === null) return currentOrderSnapshot;
-        const nextOrderSnapshot = surfaceNewlyUpdatableInstalledPlugins(
-          currentOrderSnapshot,
-          orderSnapshotStatus.updatableIds,
-          updatableIds,
-        );
-        return nextOrderSnapshot === currentOrderSnapshot
-          ? currentOrderSnapshot
-          : [...nextOrderSnapshot];
-      });
-      return;
-    }
-    const updatable = new Set(updatableIds);
-    const byRecentUse = sortGhostPluginItemsByRecentUse(installedItems, recentGhostIds);
-    const ids = byRecentUse
-      .map((item, stableIndex) => ({ item, stableIndex }))
-      .sort((a, b) => {
-        const aUp = updatable.has(a.item.id) ? 0 : 1;
-        const bUp = updatable.has(b.item.id) ? 0 : 1;
-        if (aUp !== bUp) return aUp - bUp;
-        return a.stableIndex - b.stableIndex;
-      })
-      .map(({ item }) => item.id);
-    orderSnapshotStatusRef.current = {
-      ownerKey: panelOwnerKey,
-      hasAvailableMarket: marketAvailable,
-      updatableIds: marketAvailable ? updatableIds : [],
-    };
-    setOrderSnapshot(
-      initializeInstalledPluginOrderSnapshot(
-        ids,
-        preOrderSnapshotInstalledGhostIdsRef.current,
-        installedGhostIds,
-      ),
-    );
-  }, [
-    orderSnapshot,
-    marketSnapshot,
-    installedGhostIds,
-    installedItems,
-    panelOwnerKey,
-    recentGhostIds,
-  ]);
-  const displayInstalledItems = useMemo(() => {
-    if (orderSnapshot === null) return searchedInstalledItems;
-    const orderIndex = new Map(orderSnapshot.map((id, index) => [id, index]));
-    return searchedInstalledItems
-      .map((item, stableIndex) => ({ item, stableIndex }))
-      .sort((a, b) => {
-        const aIndex = orderIndex.get(a.item.id);
-        const bIndex = orderIndex.get(b.item.id);
-        if (aIndex !== undefined && bIndex !== undefined && aIndex !== bIndex) {
-          return aIndex - bIndex;
-        }
-        if (aIndex !== undefined && bIndex === undefined) return -1;
-        if (aIndex === undefined && bIndex !== undefined) return 1;
-        return a.stableIndex - b.stableIndex;
-      })
-      .map(({ item }) => item);
-  }, [orderSnapshot, searchedInstalledItems]);
+  }, [panelOwnerKey]);
+  const displayInstalledItems = useMemo(
+    () =>
+      sortInstalledForDisplay(searchedInstalledItems, {
+        recentIds: recentGhostIds,
+        unreadAtById,
+      }),
+    [searchedInstalledItems, recentGhostIds, unreadAtById],
+  );
+  // 未读通知永不折叠:可见窗口至少 MAX_VISIBLE_INSTALLED_PLUGINS 个,并容纳全部
+  // 未读——未读已排在最前,按未读数量扩窗即可保证它们都落在可见区(更新可被折叠)。
+  const visibleInstalledCount = useMemo(
+    () => installedVisibleCount(displayInstalledItems, unreadAtById, MAX_VISIBLE_INSTALLED_PLUGINS),
+    [displayInstalledItems, unreadAtById],
+  );
   const primaryInstalledItems = useMemo(
-    () => visibleInstalledPluginItems(displayInstalledItems),
-    [displayInstalledItems],
+    () => displayInstalledItems.slice(0, visibleInstalledCount),
+    [displayInstalledItems, visibleInstalledCount],
   );
   const additionalInstalledItems = useMemo(
-    () => displayInstalledItems.slice(MAX_VISIBLE_INSTALLED_PLUGINS),
-    [displayInstalledItems],
+    () => displayInstalledItems.slice(visibleInstalledCount),
+    [displayInstalledItems, visibleInstalledCount],
   );
-  const hiddenInstalledCount = Math.max(
-    0,
-    displayInstalledItems.length - MAX_VISIBLE_INSTALLED_PLUGINS,
-  );
+  const hiddenInstalledCount = Math.max(0, displayInstalledItems.length - visibleInstalledCount);
 
   // ── 更新横幅与批量更新(设计定稿:全部更新;扩权单独确认,绝不静默放行)──
   const updatableInstalledItems = useMemo(

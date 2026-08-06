@@ -107,6 +107,51 @@ function sanitizePerModelCost(
     : undefined;
 }
 
+/**
+ * 合并同一用户轮里多个 SDK segment 的用量明细。
+ *
+ * Claude Code 的一次可见回答可能跨多个 SDK segment（例如并行 Task/
+ * subagent 先后结束）。金额账本按 segment 保存，但 tooltip 需要把 token、模型
+ * 和按模型成本投影成同一轮，避免只展示最后一个 segment 而藏掉子 agent。
+ */
+export function aggregateTurnUsageDetails(
+  detailsList: readonly (TurnUsageDetails | null | undefined)[],
+): TurnUsageDetails | null {
+  const details = detailsList.filter(
+    (item): item is TurnUsageDetails => Boolean(item && item.totalTokens > 0),
+  );
+  if (details.length === 0) return null;
+
+  const modelNames: string[] = [];
+  const addModel = (model: string | undefined) => {
+    if (model && !modelNames.includes(model)) modelNames.push(model);
+  };
+  const perModel = new Map<string, RegionalMoney>();
+  for (const detail of details) {
+    addModel(detail.model);
+    for (const model of detail.models ?? []) addModel(model);
+    for (const item of detail.perModelCost ?? []) {
+      const current = perModel.get(item.model);
+      perModel.set(
+        item.model,
+        current
+          ? (addCompatibleRegionalMoney([current, item.money]) ?? item.money)
+          : item.money,
+      );
+    }
+  }
+
+  return buildTurnUsageDetails({
+    inputTokens: details.reduce((sum, item) => sum + item.inputTokens, 0),
+    outputTokens: details.reduce((sum, item) => sum + item.outputTokens, 0),
+    cacheReadTokens: details.reduce((sum, item) => sum + item.cacheReadTokens, 0),
+    cacheCreateTokens: details.reduce((sum, item) => sum + item.cacheCreateTokens, 0),
+    model: modelNames.length === 1 ? modelNames[0] : undefined,
+    models: modelNames,
+    perModelCost: [...perModel.entries()].map(([model, money]) => ({ model, money })),
+  });
+}
+
 /** Build a normalized usage detail object. Returns null when all token counts are 0. */
 export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUsageDetails | null {
   const inputTokens = sanitizeToken(input.inputTokens);

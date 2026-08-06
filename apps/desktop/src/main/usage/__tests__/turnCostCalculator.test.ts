@@ -19,7 +19,6 @@ import {
   type TurnPricingContext,
 } from '../turnCostCalculator';
 import {
-  DEFAULT_USAGE_CURRENCY,
   type ModelPriceQuote,
   type ModelPricingCatalog,
   type RegionalMoney,
@@ -299,11 +298,11 @@ describe('resolveTurnCost', () => {
     expect(claude.money?.amount).toBe(5);
   });
 
-  it('lets the build default ledger currency decide the SDK fallback when the Gateway quote is missing', () => {
-    // 没有活动账本币种(冷启动、目录还没同步下来)时由构建默认币种定夺,断言因此
-    // 跟着构建区域走:Global(USD 账本)直接按 SDK 的 USD 兜底记账;中国大陆版
-    // (CNY 账本)按 resolveTurnCost 里 sdk-fallback 的币种守卫这一轮不记。
-    // 不能写死 USD —— 那样只有 Global 构建下能过,等于把构建默认值当成了常量。
+  it('falls back to USD for the SDK amount when the ledger currency is unknown — never the build region', () => {
+    // 没有活动账本币种(冷启动、目录还没同步下来)时按 ledgerCurrency.ts 的回退链
+    // 落到 USD,绝不按构建区域猜(#1302:按区域回落会让同一账号的账本币种反复翻转,
+    // 覆盖当天累计)。SDK 的 costDelta 本来就是 USD 口径,与兜底币种同口径,因此
+    // 无论 cn / global 构建,这一轮都按 USD 原值兜底记账,断言两种构建下同形。
     __resetActiveLedgerCurrencyForTesting();
     const result = resolveTurnCost({
       rawModel: 'unknown-model',
@@ -318,16 +317,12 @@ describe('resolveTurnCost', () => {
       context: XD_GATEWAY,
     });
     expect(result.source).toBe('sdk-fallback');
-    expect(result.money).toEqual(
-      DEFAULT_USAGE_CURRENCY === 'USD'
-        ? {
-            amount: 1.23,
-            currency: 'USD',
-            approximate: false,
-            kind: 'actual-cost',
-          }
-        : null,
-    );
+    expect(result.money).toEqual({
+      amount: 1.23,
+      currency: 'USD',
+      approximate: false,
+      kind: 'actual-cost',
+    });
   });
 
   it('falls back to the SDK USD amount for a USD-settled account on a CN build', () => {

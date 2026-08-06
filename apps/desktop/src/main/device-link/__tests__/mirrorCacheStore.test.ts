@@ -39,16 +39,40 @@ let root: string;
  * `mirrorCacheClient.invalidationAtRequestStart`;这里等价地补上,好让其余用例继续专注
  * 各自要守的行为。刻意**不给**令牌的用例直接用 `rawCache()`。
  */
-function withAutoToken(store: MirrorCache): MirrorCache {
+function withAutoToken(store: MirrorCache, rootFn: () => string = () => root): MirrorCache {
   return {
     ...store,
-    async writeMessages(deviceId, sessionId, messages, expected) {
-      const token =
-        expected ??
-        (messages.length > 0
-          ? (await store.readMessagesWithInvalidation(deviceId, sessionId)).invalidation
-          : undefined);
-      return store.writeMessages(deviceId, sessionId, messages, token);
+    async writeMessages(deviceId, sessionId, messages, expected, expectedOwnerRoot) {
+      // 与真实 renderer 流程(makerTransport 在请求发起时同时捕获会话计数 / owner root /
+      // 账号代际)对齐:非空写**任何一个**令牌缺失都补读一次,把三者一起取回 —— 现实中三者
+      // 必然同源(同一份 getMessages)。store 对「没带会话计数」「没带 owner root」「没带
+      // 账号代际」的非空写都是 fail-closed,这里保持三者同步,别让只想测会话计数机制的用例
+      // 被 owner root / 账号代际缺失误伤。
+      let token = expected;
+      let ownerRoot = expectedOwnerRoot;
+      let accountCounter: number | undefined;
+      if (messages.length > 0) {
+        const capture = await store.readMessagesWithInvalidation(deviceId, sessionId);
+        if (token === undefined) token = capture.invalidation;
+        if (ownerRoot === undefined) ownerRoot = capture.ownerRoot;
+        accountCounter = capture.accountCounter;
+      }
+      return store.writeMessages(deviceId, sessionId, messages, token, ownerRoot, accountCounter);
+    },
+    async writeSessionList(devices, expectedOwnerRoot) {
+      // 非空快照缺 owner root / 账号代际时补当前值(现实中由 scheduleSessionListPersist 在
+      // 排程时从 readCachedSessionListWithInvalidation 带回;这里直接取 store 当前 root)。
+      const ownerRoot =
+        expectedOwnerRoot !== undefined
+          ? expectedOwnerRoot
+          : normalizeDeviceSessions(devices).length > 0
+            ? rootFn()
+            : undefined;
+      const accountCounter =
+        normalizeDeviceSessions(devices).length > 0
+          ? (await store.readSessionListWithInvalidation()).accountCounter
+          : undefined;
+      return store.writeSessionList(devices, ownerRoot, accountCounter);
     },
   };
 }
@@ -58,7 +82,7 @@ function rawCache(rootFn: () => string = () => root) {
 }
 
 function cache(rootFn: () => string = () => root) {
-  return withAutoToken(createMirrorCache(rootFn));
+  return withAutoToken(createMirrorCache(rootFn), rootFn);
 }
 
 function messagesDir(): string {
@@ -375,6 +399,108 @@ describe('readMessages / writeMessages', () => {
 
     expect(fs.existsSync(file)).toBe(false);
     expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+  });
+
+  it('旧账号超限响应被 owner 闸拒绝前,不得删除新账号同 sessionId 的有效缓存', async () => {
+    // review(codex P2):超限分支也是副作用(删旧文件),必须先过与普通非空写完全相同的提交闸。
+    const rootA = root;
+    const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-mirror-cache-owner-b-'));
+    let activeRoot = rootA;
+    const c = rawCache(() => activeRoot);
+    try {
+      const aliceRead = await c.readMessagesWithInvalidation('dev-1', 'shared-session');
+
+      activeRoot = rootB;
+      const bobRead = await c.readMessagesWithInvalidation('dev-1', 'shared-session');
+      await c.writeMessages(
+        'dev-1',
+        'shared-session',
+        [row('bob', '2026-02-01T00:00:00.000Z')],
+        bobRead.invalidation,
+        bobRead.ownerRoot,
+        bobRead.accountCounter,
+      );
+
+      const staleHuge = [
+        row('alice-huge', '2026-02-02T00:00:00.000Z', {
+          content: 'x'.repeat(MAX_MESSAGE_FILE_BYTES + 1),
+        }),
+      ];
+      await c.writeMessages(
+        'dev-1',
+        'shared-session',
+        staleHuge,
+        aliceRead.invalidation,
+        aliceRead.ownerRoot,
+        aliceRead.accountCounter,
+      );
+
+      expect((await c.readMessages('dev-1', 'shared-session')).map((m) => m.id)).toEqual(['bob']);
+    } finally {
+      await fsp.rm(rootB, { recursive: true, force: true });
+      await fsp.rm(`${rootB}.control`, { recursive: true, force: true });
+    }
+  });
+
+  it('超限提交闸等待 IO 期间 generation 变化 → 删除前二次复核保留有效旧缓存', async () => {
+    const c = rawCache();
+    const before = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('keep', '2026-01-01T00:00:00.000Z')],
+      before.invalidation,
+      before.ownerRoot,
+      before.accountCounter,
+    );
+    const token = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    const sessionKey = messageFileName('dev-1', 'sess-1').replace(/\.json$/, '');
+    const counterFile = path.join(`${root}.control`, 'cleared', sessionKey);
+    const original = fsp.readFile;
+    let releaseRead!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let reachedRead!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      reachedRead = resolve;
+    });
+    let paused = false;
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (!paused && typeof target === 'string' && target === counterFile) {
+        paused = true;
+        reachedRead();
+        await blocked;
+      }
+      return (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as unknown as typeof fsp.readFile);
+    try {
+      const hugeWrite = c.writeMessages(
+        'dev-1',
+        'sess-1',
+        [
+          row('huge', '2026-02-01T00:00:00.000Z', {
+            content: 'x'.repeat(MAX_MESSAGE_FILE_BYTES + 1),
+          }),
+        ],
+        token.invalidation,
+        token.ownerRoot,
+        token.accountCounter,
+      );
+      await reached;
+      // clearDevice 同步 bump generation,随后因 root mutex 排在当前超限写后面。
+      const clearOther = c.clearDevice('dev-2');
+      releaseRead();
+      await hugeWrite;
+      await clearOther;
+
+      expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['keep']);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // review(copilot):`.tmp` 里是完整明文,而 /clear、rewind 正是"这些消息必须消失"的场合。
@@ -1226,6 +1352,7 @@ describe('会话级作废计数(跨窗口 / 跨进程)', () => {
     // review(codex P1):缓存读与远端请求刻意并行,远端页先到时 renderer 还没有令牌。放行
     // 那笔写等于绕过唯一的会话级比对(设备 / 账号基线是写入开始时才采样的,已在清理之后)。
     const c = rawCache();
+    // 既没会话令牌也没 owner root → fail-closed 拒绝(见 store 注释)。
     const first = await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
     expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
     // 拒了不等于永久关掉这条缓存:返回值里带着当前计数,下一次对账带上它就能写进去。
@@ -1235,14 +1362,18 @@ describe('会话级作废计数(跨窗口 / 跨进程)', () => {
       'sess-1',
       [row('m1', '2026-01-01T00:00:00.000Z')],
       first.invalidation,
+      root,
+      0, // 账号代际(fresh root 下 _account 计数为 0)
     );
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
   });
 
   it('空写(清缓存)不需要令牌 —— 删除是安全方向', async () => {
     const c = rawCache();
-    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')], 0);
+    // 非空写带 owner root + 账号代际(隔离本用例要守的"会话计数"机制;缺失另有用例覆盖)。
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')], 0, root, 0);
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+    // 空写不需要会话令牌、也不需要 owner root / 账号代际 —— 删除是安全方向。
     await c.writeMessages('dev-1', 'sess-1', []);
     expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
   });
@@ -1676,8 +1807,8 @@ describe('并发写入', () => {
     const second = [row('m1', '2026-01-01T00:00:00.000Z'), row('m2', '2026-01-02T00:00:00.000Z')];
 
     await Promise.all([
-      c.writeMessages('dev-1', 'sess-1', first, 0),
-      c.writeMessages('dev-1', 'sess-1', second, 0),
+      c.writeMessages('dev-1', 'sess-1', first, 0, root, 0),
+      c.writeMessages('dev-1', 'sess-1', second, 0, root, 0),
     ]);
 
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1', 'm2']);
@@ -1686,26 +1817,235 @@ describe('并发写入', () => {
     const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
     const past = new Date(2020, 0, 1);
     await fsp.utimes(file, past, past);
-    await c.writeMessages('dev-1', 'sess-1', second, 0);
+    await c.writeMessages('dev-1', 'sess-1', second, 0, root, 0);
     expect((await fsp.stat(file)).mtimeMs).toBe(past.getTime());
 
-    await c.writeMessages('dev-1', 'sess-1', first, 0);
+    await c.writeMessages('dev-1', 'sess-1', first, 0, root, 0);
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
   });
 
   it('列表快照的并发写入同样串行化', async () => {
-    const c = cache();
+    // 同消息版并发写:用 rawCache + 显式令牌,避免 withAutoToken 的补读把准入顺序变成
+    // "谁的补读先回来"(生产里令牌在排程时同步捕获)。
+    const c = rawCache();
     await Promise.all([
-      c.writeSessionList([
-        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
-      ]),
-      c.writeSessionList([
-        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
-        { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
-      ]),
+      c.writeSessionList(
+        [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] }],
+        root,
+        0,
+      ),
+      c.writeSessionList(
+        [
+          { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+          { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
+        ],
+        root,
+        0,
+      ),
     ]);
 
     const devices = (await c.readSessionList()).map((d) => d.deviceId).sort();
     expect(devices).toEqual(['dev-1', 'dev-2']);
+  });
+});
+
+describe('跨账号 owner 切换(#1783)', () => {
+  // 登出 / 切账号是 clearAll 路径:删整棵缓存根、自增账号级计数。但账号级计数是**每 owner
+  // 一份**(住 `<root>.control`),新账号从 0 起 —— 旧账号在途响应若落在新账号写入之后,会话级
+  // 与账号级计数都可能与"取到内容时"撞值。唯一可靠的「内容属于哪个账号」标记是 owner root,
+  // 它由 read 时下发、写入时回传比对(review: #1783)。
+
+  it('写入携带的 owner root 与当前 root 不符(账号已切换)→ 丢弃,不落进新账号目录', async () => {
+    const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'mirror-cache-test-b-'));
+    try {
+      let current = root;
+      const c = rawCache(() => current);
+      const fileName = messageFileName('dev-1', 'sess-1');
+      // T0:alice 取内容时捕获会话计数 + owner root
+      const { invalidation, ownerRoot } = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+      expect(ownerRoot).toBe(root);
+      // T1:登出 alice
+      await c.clearAll();
+      // T2:切换 owner 到 bob
+      current = rootB;
+      // T3:alice 在途响应到达
+      await c.writeMessages(
+        'dev-1',
+        'sess-1',
+        [row('m1', '2026-01-01T00:00:00.000Z')],
+        invalidation,
+        ownerRoot,
+      );
+      // bob 目录不得出现 alice 的数据
+      expect(fs.existsSync(path.join(rootB, 'messages', fileName))).toBe(false);
+      // alice 目录已整体删除,也不应有
+      expect(fs.existsSync(path.join(root, 'messages', fileName))).toBe(false);
+    } finally {
+      fs.rmSync(rootB, { recursive: true, force: true });
+      fs.rmSync(`${rootB}.control`, { recursive: true, force: true });
+    }
+  });
+
+  it('B 复用同一 sessionId:alice 迟到写入被丢,bob 以 bob root 重建成功', async () => {
+    // review(#1801):账号切换后若 B 复用同一 sessionId,A 的迟到响应必须被丢;同时 B 自己的
+    // 响应(带着 B 的 owner root)必须能正常建立 B 的缓存 —— 否则新账号缓存被静默拒写,
+    // 是功能性回归。
+    const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'mirror-cache-test-b-'));
+    try {
+      let current = root;
+      const c = rawCache(() => current);
+      const fileName = messageFileName('dev-1', 'sess-1');
+      // T0:alice 取内容
+      const aliceRead = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+      await c.clearAll(); // 登出 alice
+      current = rootB; // 切到 bob
+      // T3:alice 迟到响应(带 alice root / alice 代际)→ 丢(owner root 与代际都不匹配)
+      await c.writeMessages(
+        'dev-1',
+        'sess-1',
+        [row('m1', '2026-01-01T00:00:00.000Z')],
+        aliceRead.invalidation,
+        aliceRead.ownerRoot,
+        aliceRead.accountCounter,
+      );
+      expect(fs.existsSync(path.join(rootB, 'messages', fileName))).toBe(false);
+      // T4:bob 自己的响应(带 bob root / bob 代际)→ 成功建立 bob 缓存
+      const bobRead = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+      expect(bobRead.ownerRoot).toBe(rootB);
+      await c.writeMessages(
+        'dev-1',
+        'sess-1',
+        [row('m2', '2026-02-01T00:00:00.000Z')],
+        bobRead.invalidation,
+        bobRead.ownerRoot,
+        bobRead.accountCounter,
+      );
+      expect(fs.existsSync(path.join(rootB, 'messages', fileName))).toBe(true);
+      expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m2']);
+    } finally {
+      fs.rmSync(rootB, { recursive: true, force: true });
+      fs.rmSync(`${rootB}.control`, { recursive: true, force: true });
+    }
+  });
+
+  it('会话列表快照携带的 owner root 与当前 root 不符(账号已切换)→ 丢弃', async () => {
+    const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'mirror-cache-test-b-'));
+    try {
+      let current = root;
+      const c = rawCache(() => current);
+      // T0:alice 读到快照时捕获 owner root
+      await c.readSessionList();
+      const ownerRoot = root;
+      await c.clearAll();
+      current = rootB;
+      // T2→T3:alice 在途回写携带旧 owner root
+      await c.writeSessionList(
+        [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] }],
+        ownerRoot,
+      );
+      const bobList = path.join(rootB, 'session-list.json');
+      expect(fs.existsSync(bobList)).toBe(false);
+    } finally {
+      fs.rmSync(rootB, { recursive: true, force: true });
+      fs.rmSync(`${rootB}.control`, { recursive: true, force: true });
+    }
+  });
+
+  it('owner 未切换时,携带 owner root 的正常写入与会话列表回写仍成功', async () => {
+    const c = rawCache(() => root);
+    const fileName = messageFileName('dev-1', 'sess-1');
+    const { invalidation, ownerRoot, accountCounter } =
+      await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      invalidation,
+      ownerRoot,
+      accountCounter,
+    );
+    expect(fs.existsSync(path.join(root, 'messages', fileName))).toBe(true);
+    await c.writeSessionList(
+      [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] }],
+      ownerRoot,
+      accountCounter,
+    );
+    const devices = (await c.readSessionList()).map((d) => d.deviceId);
+    expect(devices).toEqual(['dev-1']);
+  });
+
+  it('非空写入未携带 owner root(取不到)→ fail-closed 拒绝,不落盘', async () => {
+    // review(#1783 / Greptile):owner root 缺失时若放行,renderer 补读失败 / owner 边界
+    // 推进 / IPC 波动等现实竞态会让"清理前的旧页"按**写入时**的新账号 root 落盘 —— 与
+    // 不带会话令牌一样属于不可比对的 fail-open,必须拒写。缓存是纯优化,少写一次无妨。
+    const c = rawCache(() => root);
+    const fileName = messageFileName('dev-1', 'sess-1');
+    // 只带会话计数、不带 owner root
+    const { invalidation } = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      invalidation,
+      undefined,
+    );
+    expect(fs.existsSync(path.join(root, 'messages', fileName))).toBe(false);
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+  });
+
+  it('空写(清缓存)无需 owner root,照常删除', async () => {
+    const c = rawCache(() => root);
+    const fileName = messageFileName('dev-1', 'sess-1');
+    // 先落一条(带会话计数 + owner root + 账号代际)
+    const { invalidation, ownerRoot, accountCounter } =
+      await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      invalidation,
+      ownerRoot,
+      accountCounter,
+    );
+    expect(fs.existsSync(path.join(root, 'messages', fileName))).toBe(true);
+    // 空写(删除)不带 owner root / 账号代际也能清掉 —— 删除是安全方向,fail-closed 只针对非空写。
+    await c.writeMessages('dev-1', 'sess-1', [], undefined, undefined, undefined);
+    expect(fs.existsSync(path.join(root, 'messages', fileName))).toBe(false);
+  });
+
+  it('同一账号登出再登录:root 相同但账号代际已变 → 登出前的在途写入被丢', async () => {
+    // review(codex P1):owner root 是 `ownerScopedUserDataPath`(由 dataOwnerId 派生),
+    // **同一账号**登出再登录后路径完全一样 —— 只比 owner root 拦不住 clearAll 已发生过的
+    // 隐私边界。clearAll 会自增 `_account` 计数,携带「取到内容时的计数」才能看出期间发生过
+    // 登出清理。这是 owner root 之外的独立维度。
+    const c = rawCache(() => root);
+    const fileName = messageFileName('dev-1', 'sess-1');
+    // T0:登出前取内容,捕获 owner root(同一账号)与账号代际
+    const beforeLogout = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    await c.clearAll(); // 登出:clearAll 删整棵 root、自增 _account
+    // T3:登出前在途响应到达 —— root 相同、代际不同 → 丢
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      beforeLogout.invalidation,
+      beforeLogout.ownerRoot,
+      beforeLogout.accountCounter,
+    );
+    expect(fs.existsSync(path.join(root, 'messages', fileName))).toBe(false);
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+    // 重新登录后取到新代际,新写入成功(缓存可重建)
+    const afterLogin = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    expect(afterLogin.accountCounter).toBeGreaterThan(beforeLogout.accountCounter);
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m2', '2026-02-01T00:00:00.000Z')],
+      afterLogin.invalidation,
+      afterLogin.ownerRoot,
+      afterLogin.accountCounter,
+    );
+    expect(fs.existsSync(path.join(root, 'messages', fileName))).toBe(true);
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m2']);
   });
 });

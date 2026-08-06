@@ -19,10 +19,6 @@ export interface QuotaHoverCardTurnUsage {
   costText?: string | null;
   costIsEstimate?: boolean;
   isUserTurnTotal?: boolean;
-  finalSegment?: {
-    costText?: string | null;
-    costIsEstimate?: boolean;
-  } | null;
   totalTokensText?: string | null;
   inputTokensText?: string | null;
   outputTokensText?: string | null;
@@ -237,21 +233,6 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
           'quotaCard.turnCostUnavailable',
         )}
       </div>
-
-      {turnUsage.finalSegment ? (
-        <div className="mt-2">
-          <div className="mb-[3px] text-xs font-medium text-[var(--text-secondary)]">
-            {t('chat.messageActionBar.userTurnCostDetailsTitle')}
-          </div>
-          <div className="tabular-nums">
-            {renderCostLine(
-              turnUsage.finalSegment.costText,
-              turnUsage.finalSegment.costIsEstimate,
-              'quotaCard.noBilledCost',
-            )}
-          </div>
-        </div>
-      ) : null}
 
       {showModelCostBreakdown ? (
         <div data-testid="quota-model-cost-breakdown" className="mt-2">

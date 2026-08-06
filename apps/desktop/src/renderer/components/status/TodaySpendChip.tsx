@@ -92,6 +92,7 @@ import {
   buildTurnUsageTooltipLines,
   getTurnUsageSuggestion,
 } from '@/lib/turnUsageTooltip';
+import { aggregateAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import {
   DEFAULT_USAGE_CURRENCY,
@@ -685,9 +686,6 @@ interface LatestTurnUsageSummary {
   money?: RegionalMoney;
   costUsd?: number;
   isEstimate?: boolean;
-  segmentMoney?: RegionalMoney;
-  segmentCostUsd?: number;
-  segmentIsEstimate?: boolean;
   isUserTurnTotal: boolean;
   details: TurnUsageDetails;
 }
@@ -737,26 +735,11 @@ function toQuotaHoverCardTurnUsage(
     : summary.costUsd != null
       ? formatTurnCostUsd(summary.costUsd)
       : null;
-  const finalSegmentCostText = summary.segmentMoney
-    ? formatTurnCostMoney(summary.segmentMoney)
-    : summary.segmentCostUsd != null
-      ? formatTurnCostUsd(summary.segmentCostUsd)
-      : null;
 
   return {
     costText,
     costIsEstimate: summary.isEstimate,
     isUserTurnTotal: summary.isUserTurnTotal,
-    // userTurnMoney 是用户轮累计，而 turnUsageDetails 始终只描述收尾 SDK 分段。
-    // 两笔金额可能因前段无报价而恰好相等，不能用金额相等反推只有一个分段。
-    ...(summary.isUserTurnTotal
-      ? {
-          finalSegment: {
-            costText: finalSegmentCostText,
-            costIsEstimate: summary.segmentIsEstimate,
-          },
-        }
-      : {}),
     totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
     inputTokensText: formatCompactTokens(details.inputTokens),
     outputTokensText: formatCompactTokens(details.outputTokens),
@@ -825,21 +808,13 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
         || displayedMoney?.kind === 'value-estimate'
         ? { isEstimate: true }
         : {}),
-      ...((userTurnMoney || userTurnCostUsd != null) && message.turnMoney?.amount
-        ? {
-            segmentMoney: message.turnMoney,
-            segmentIsEstimate:
-              message.turnCostIsEstimate === true
-              || message.turnMoney.kind === 'value-estimate',
-          }
-        : userTurnCostUsd != null && typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
-        ? {
-            segmentCostUsd: message.turnCostUsd,
-            segmentIsEstimate: message.turnCostIsEstimate === true,
-          }
-        : {}),
       isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null),
-      details: message.turnUsageDetails,
+      // Amount and token/model detail now describe the same visible user turn.
+      // Raw segment costs remain persisted for billing and analytics, but are
+      // an implementation detail rather than a second user-facing total.
+      details:
+        aggregateAssistantTurnUsageDetails(messages, message.clientId) ??
+        message.turnUsageDetails,
     };
   }
   return null;
@@ -879,28 +854,17 @@ function appendLatestTurnUsageLines(
 ): void {
   if (!summary) return;
   if (lines.length > 0) lines.push('');
-  if (
-    summary.isUserTurnTotal &&
-    (summary.money?.amount || summary.costUsd != null)
-  ) {
-    lines.push(t('todaySpend.tooltip.latestUserTurnTitle'));
-    lines.push(t(summary.isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', {
-      cost: summary.money
-        ? formatTurnCostMoney(summary.money)
-        : formatTurnCostUsd(summary.costUsd ?? 0),
-    }));
-  }
   lines.push(...buildTurnUsageTooltipLines({
     details: summary.details,
     t,
-    // Token / model detail remains scoped to the final SDK segment. Keep its
-    // cost line separate from the user-turn total shown above.
-    money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money,
-    costUsd: summary.isUserTurnTotal ? summary.segmentCostUsd : summary.costUsd,
-    isEstimate: summary.isUserTurnTotal ? summary.segmentIsEstimate : summary.isEstimate,
-    title: t(summary.isUserTurnTotal
-      ? 'chat.messageActionBar.userTurnCostDetailsTitle'
-      : 'todaySpend.tooltip.latestTurnTitle'),
+    money: summary.money,
+    costUsd: summary.costUsd,
+    isEstimate: summary.isEstimate,
+    title: t(
+      summary.isUserTurnTotal
+        ? 'todaySpend.tooltip.latestUserTurnTitle'
+        : 'todaySpend.tooltip.latestTurnTitle',
+    ),
   }));
 }
 

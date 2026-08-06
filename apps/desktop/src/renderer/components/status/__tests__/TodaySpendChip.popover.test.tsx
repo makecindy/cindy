@@ -48,7 +48,7 @@ vi.mock('react-i18next', () => ({
         'quotaCard.modelLabel': '模型',
         'quotaCard.waiting': '等待额度数据',
         'quotaCard.latestMessageTitle': '最近一轮用户请求累计',
-        'chat.messageActionBar.userTurnCostDetailsTitle': '最后一个 SDK 分段',
+        'chat.messageActionBar.userTurnCostDetailsTitle': '本轮明细',
         'quotaCard.costLine': '本轮消耗：{{cost}}',
         'quotaCard.valueLine': '本轮 token 价值：{{cost}}',
         'quotaCard.noBilledCost': '本轮费用暂不可用，仅显示用量',
@@ -137,6 +137,7 @@ function usdMoney(
 function setLatestUsageMessage(overrides: Record<string, unknown> = {}) {
   mocks.displaySnapshot.messages = [
     {
+      clientId: 'assistant-1',
       role: 'assistant',
       turnMoney: usdMoney(0.46),
       turnUsageDetails: TURN_USAGE_DETAILS,
@@ -476,7 +477,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(within(sessionSection).queryByText('本任务已用 $0.50')).toBeNull();
   });
 
-  it('等额累计投影仍分开用户轮累计与最后分段明细', () => {
+  it('等额累计投影仍只展示一份用户轮明细', () => {
     setLatestUsageMessage({
       turnMoney: usdMoney(0.46, 'value-estimate'),
       userTurnMoney: usdMoney(0.46, 'value-estimate'),
@@ -486,8 +487,8 @@ describe('TodaySpendChip Claude subscription popover', () => {
     const equalAmount = renderClaudeSubscriptionChip();
     openCardFromHover();
     expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
-    expect(screen.getByText('最后一个 SDK 分段')).toBeTruthy();
-    expect(screen.getAllByText('本轮 token 价值：$0.46')).toHaveLength(2);
+    expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
+    expect(screen.getAllByText('本轮 token 价值：$0.46')).toHaveLength(1);
 
     equalAmount.unmount();
     vi.clearAllTimers();
@@ -501,9 +502,70 @@ describe('TodaySpendChip Claude subscription popover', () => {
     openCardFromHover();
     expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
     expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
-    expect(screen.getByText('最后一个 SDK 分段')).toBeTruthy();
-    expect(screen.getByText('本轮消耗：$0.20')).toBeTruthy();
+    expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
     expect(screen.getByText(/^74\.0k/)).toBeTruthy();
+  });
+
+  it('聚合自动续跑前后的 Token 与逐模型费用', () => {
+    mocks.displaySnapshot.messages = [
+      {
+        clientId: 'user-1',
+        role: 'user',
+        delivery: 'turn',
+        content: '开始任务',
+      },
+      {
+        clientId: 'assistant-fable',
+        role: 'assistant',
+        content: '第一段',
+        turnMoney: usdMoney(0.2),
+        turnUsageDetails: {
+          inputTokens: 50,
+          outputTokens: 20,
+          cacheReadTokens: 60,
+          cacheCreateTokens: 5,
+          totalTokens: 135,
+          cacheHitRate: 60 / 115,
+          model: 'claude-fable-5',
+          perModelCost: [{ model: 'claude-fable-5', money: usdMoney(0.2) }],
+        },
+      },
+      {
+        clientId: 'auto-resume-1',
+        role: 'user',
+        delivery: 'turn',
+        systemCardType: 'auto-resume',
+        content: '',
+      },
+      {
+        clientId: 'assistant-opus',
+        role: 'assistant',
+        content: '第二段',
+        turnMoney: usdMoney(0.5),
+        userTurnMoney: usdMoney(0.7),
+        turnUsageDetails: {
+          inputTokens: 30,
+          outputTokens: 12,
+          cacheReadTokens: 15,
+          cacheCreateTokens: 5,
+          totalTokens: 62,
+          cacheHitRate: 0.3,
+          model: 'claude-opus-5',
+          perModelCost: [{ model: 'claude-opus-5', money: usdMoney(0.5) }],
+        },
+      },
+    ];
+
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+
+    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
+    expect(screen.getByText(/^197/)).toBeTruthy();
+    expect(screen.getByText('按模型拆分：')).toBeTruthy();
+    expect(screen.getByText('· claude-fable-5 $0.20')).toBeTruthy();
+    expect(screen.getByText('· claude-opus-5 $0.50')).toBeTruthy();
+    expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
   });
 
   it('无报价时说明费用不可用并保留 Token、缓存和模型明细', () => {
@@ -517,7 +579,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
   });
 
-  it('保留最后 SDK 分段的逐模型费用拆分', () => {
+  it('保留用户轮的逐模型费用拆分', () => {
     setLatestUsageMessage({
       turnUsageDetails: {
         ...TURN_USAGE_DETAILS,
