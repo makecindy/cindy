@@ -2338,6 +2338,11 @@
       },
       "toggleAria": "질문 내비게이션 레일 전환"
     },
+    "promptRecommendation": {
+      "label": "입력창 추천 프롬프트",
+      "description": "답변이 끝나면 입력창에 예측된 다음 프롬프트를 표시합니다. Tab 키로 입력할 수 있습니다.",
+      "toggleAria": "추천 프롬프트 전환"
+    },
     "collaboration": {
       "loading": "협업 설정을 불러오는 중…",
       "title": "협업",

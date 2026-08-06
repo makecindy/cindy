@@ -1,11 +1,11 @@
 /**
- * title-one-shot —— 会话标题「单次 HTTP」生成器测试。
+ * provider-one-shot —— 会话标题「单次 HTTP」生成器测试。
  *
  * 覆盖三块:
  *   1. provider 解析(WYSIWYG):DB 显式来源优先 / 无显式则 nativeDefaultSourceId / 零已连接→null。
- *   2. buildTitleTarget:据 catalog titleModel 组装目标(模型 / 最低 effort / wire / upstream)
+ *   2. buildOneShotTarget:据 catalog titleModel 组装目标(模型 / 最低 effort / wire / upstream)
  *      —— 同时锁定 providers.json 里三家 titleModel 的配置(haiku / gpt-5.4-mini / gpt-5.4-mini)。
- *   3. generateTitleViaProvider:三家 wire 各发一次 fetch,断言 URL/headers/body 形状 + 响应解析;
+ *   3. runProviderOneShot:三家 wire 各发一次 fetch,断言 URL/headers/body 形状 + 响应解析;
  *      凭证缺失 / 非 2xx → 返回 null(不抛、不试别家)。
  *
  * electron 在此 mock(stub app.getPath)纯粹是为了让 import 链(auth-adapters 顶层单例)能在
@@ -54,11 +54,11 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 });
 
 import {
-  buildTitleTarget,
-  generateTitleViaProvider,
+  buildOneShotTarget,
+  runProviderOneShot,
   parseResponsesSse,
-  type TitleOneShotDeps,
-} from '../title-one-shot.js';
+  type ProviderOneShotDeps,
+} from '../provider-one-shot.js';
 import { setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
 
 /** openai 是动态清单供应商(2026-07-19 统一重构):注入 codex 注册表快照模拟运行时形态。 */
@@ -106,7 +106,7 @@ function fakeFetch(
       json: async () => r.json,
       text: async () => r.text ?? '',
     };
-  }) as unknown as NonNullable<TitleOneShotDeps['fetchImpl']>;
+  }) as unknown as NonNullable<ProviderOneShotDeps['fetchImpl']>;
 }
 
 /** 造一个最小 ProviderView stub(nativeDefaultSourceId 只用 .id)。 */
@@ -123,12 +123,12 @@ function providerStub(id: string): ProviderView {
 
 // ── Provider 解析(WYSIWYG)─────────────────────────────────────────────────
 
-describe('generateTitleViaProvider — provider 解析', () => {
+describe('runProviderOneShot — provider 解析', () => {
   it('DB 有显式来源且在可路由 rail 内 → 走该来源(不落默认解析)', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: '标题' }] },
     }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -146,7 +146,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: '不应出现' }] },
     }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -176,7 +176,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
       },
     ];
 
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's-retired', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -215,7 +215,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
     });
 
     setActiveCatalog(BUNDLED_CATALOG);
-    const titlePromise = generateTitleViaProvider(
+    const titlePromise = runProviderOneShot(
       { sessionId: 's-retired-race', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -251,7 +251,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
       const fetchImpl = fakeFetch(() => ({
         json: { choices: [{ message: { content: '网关标题' } }] },
       }));
-      const title = await generateTitleViaProvider(
+      const title = await runProviderOneShot(
         { sessionId: 's2', agentKind: 'claude-code', prompt: 'x' },
         {
           fetchImpl,
@@ -270,7 +270,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: '订阅标题' }] },
     }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -288,7 +288,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
       'data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":"codex标题"}]}]}}',
     ].join('\n');
     const fetchImpl = fakeFetch(() => ({ text: SSE }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's4', agentKind: 'codex', prompt: 'x' },
       {
         fetchImpl,
@@ -303,7 +303,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
 
   it('零已连接来源 → null,不发请求', async () => {
     const fetchImpl = fakeFetch(() => ({ json: {} }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's5', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -316,15 +316,15 @@ describe('generateTitleViaProvider — provider 解析', () => {
   });
 });
 
-// ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────
+// ── buildOneShotTarget(锁定 catalog titleModel 配置)────────────────────────
 
-describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
+describe('buildOneShotTarget(锁定 catalog titleModel 配置)', () => {
   it('本地模式不构造 XD 网关标题请求', () => {
     mockGetAppCapabilities.mockReturnValueOnce({ canUseCindyGateway: false });
-    expect(buildTitleTarget('xd')).toBeNull();
+    expect(buildOneShotTarget('xd')).toBeNull();
   });
   it('anthropic → haiku / Messages,haiku 无 effort', () => {
-    expect(buildTitleTarget('anthropic')).toEqual({
+    expect(buildOneShotTarget('anthropic')).toEqual({
       providerId: 'anthropic',
       model: 'claude-haiku-4-5',
       effort: null,
@@ -334,7 +334,7 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('openai → gpt-5.4-mini / Responses,最低 effort=low(效仿运行时注入注册表快照)', async () => {
     await withDiscoveredMini(() => {
-      expect(buildTitleTarget('openai')).toEqual({
+      expect(buildOneShotTarget('openai')).toEqual({
         providerId: 'openai',
         model: 'gpt-5.4-mini',
         effort: 'low',
@@ -350,7 +350,7 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     delete catalog.modelRegistry;
     setActiveCatalog(catalog);
     try {
-      expect(buildTitleTarget('openai')).toMatchObject({
+      expect(buildOneShotTarget('openai')).toMatchObject({
         providerId: 'openai',
         model: 'gpt-5.4-mini',
         effort: null,
@@ -367,7 +367,7 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
       { id: 'gpt-image-2', mode: 'image' },
     ]);
     try {
-      expect(buildTitleTarget('xd')).toEqual({
+      expect(buildOneShotTarget('xd')).toEqual({
         providerId: 'xd',
         model: 'deepseek/deepseek-v4-flash',
         effort: 'low',
@@ -463,18 +463,18 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     }
   });
   it('未知 provider → null', () => {
-    expect(buildTitleTarget('does-not-exist')).toBeNull();
+    expect(buildOneShotTarget('does-not-exist')).toBeNull();
   });
 });
 
-// ── generateTitleViaProvider — anthropic(Messages)────────────────────────
+// ── runProviderOneShot — anthropic(Messages)────────────────────────
 
-describe('generateTitleViaProvider — anthropic(Messages)', () => {
+describe('runProviderOneShot — anthropic(Messages)', () => {
   it('200 → 解析 content[].text;请求形状正确', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: 'TS 编译报错排查' }] },
     }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: '为这条消息起标题：编译报错' },
       {
         fetchImpl,
@@ -500,7 +500,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
   it('先验证完整响应再按旧契约截到 40 个 Unicode 字符', async () => {
     const longTitle = '标题'.repeat(30);
     const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: longTitle }] } }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -515,7 +515,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: '长'.repeat(257) }] },
     }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -530,7 +530,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: '正常标题'.padEnd(40, '好') + ' Assistant: 继续' }] },
     }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -543,7 +543,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
   });
   it('无 OAuth → null,不发请求', async () => {
     const fetchImpl = fakeFetch(() => ({ json: {} }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -557,7 +557,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
   });
   it('非 2xx → null', async () => {
     const fetchImpl = fakeFetch(() => ({ ok: false, status: 401, json: {} }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
       {
         fetchImpl,
@@ -570,9 +570,9 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
   });
 });
 
-// ── generateTitleViaProvider — openai(codex Responses SSE)───────────────
+// ── runProviderOneShot — openai(codex Responses SSE)───────────────
 
-describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
+describe('runProviderOneShot — openai(codex Responses SSE)', () => {
   const SSE = [
     'data: {"type":"response.output_text.delta","delta":"接力"}',
     'data: {"type":"response.output_text.delta","delta":"测试"}',
@@ -583,7 +583,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
   it('200 SSE → 解析 output_text;header/body 正确,带最低 effort', async () => {
     const fetchImpl = fakeFetch(() => ({ text: SSE }));
     const title = await withDiscoveredMini(() =>
-      generateTitleViaProvider(
+      runProviderOneShot(
         { sessionId: 's2', agentKind: 'codex', prompt: '起个标题' },
         {
           fetchImpl,
@@ -621,7 +621,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
   });
   it('无 codex 凭证 → null,不发请求', async () => {
     const fetchImpl = fakeFetch(() => ({ text: SSE }));
-    const title = await generateTitleViaProvider(
+    const title = await runProviderOneShot(
       { sessionId: 's2', agentKind: 'codex', prompt: 'x' },
       {
         fetchImpl,
@@ -635,16 +635,16 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
   });
 });
 
-// ── generateTitleViaProvider — xd(网关 chat-completions)─────────────────
+// ── runProviderOneShot — xd(网关 chat-completions)─────────────────
 
-describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
+describe('runProviderOneShot — xd(网关 chat-completions)', () => {
   it('200 → 解析 choices[].message.content;请求形状正确(模型取自网关清单)', async () => {
     setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
     try {
       const fetchImpl = fakeFetch(() => ({
         json: { choices: [{ message: { content: '网关标题' } }] },
       }));
-      const title = await generateTitleViaProvider(
+      const title = await runProviderOneShot(
         { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
         {
           fetchImpl,
@@ -669,7 +669,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
     setXdGatewayModels([{ id: 'gpt-image-2', mode: 'image' }]);
     try {
       const fetchImpl = fakeFetch(() => ({ json: {} }));
-      const title = await generateTitleViaProvider(
+      const title = await runProviderOneShot(
         { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
         {
           fetchImpl,
@@ -688,7 +688,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
     setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
     try {
       const fetchImpl = fakeFetch(() => ({ json: {} }));
-      const title = await generateTitleViaProvider(
+      const title = await runProviderOneShot(
         { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
         {
           fetchImpl,

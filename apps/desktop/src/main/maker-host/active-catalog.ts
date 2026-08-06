@@ -15,7 +15,7 @@
  * 所有消费方统一读 `getActiveCatalog()`,而非各自 import `BUNDLED_CATALOG`:
  *   - maker availableModels 派生(maker-host/index.ts)
  *   - 统一路由器(provider-route.ts)
- *   - 会话标题模型(title-one-shot.ts)
+ *   - 会话标题模型(provider-one-shot.ts)
  *   - 供应商注册表(provider-service.ts,经 createDesktopProviderService 注入)
  *
  * 「启动 await 一次、之后全同步读」是关键:`getActiveCatalog()` 同步返回,消费方(含路由

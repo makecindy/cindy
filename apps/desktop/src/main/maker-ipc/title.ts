@@ -4,7 +4,7 @@
  * 给会话起一个 ≤ 20 字标题。标题 oneShot 已统一为「单次 HTTP 请求」:按本会话所属 provider
  * (WYSIWYG,与模型选择器高亮同口径:DB 显式选中优先,无则取已连接供应商的原生默认)
  * 取 catalog 配的 `titleModel`(最经济模型),用该 provider 自家凭证直起
- * (见 maker-host/title-one-shot)。起不出来(零已连接 / 凭证缺失 / HTTP 失败 / 超时)
+ * (见 maker-host/provider-one-shot)。起不出来(零已连接 / 凭证缺失 / HTTP 失败 / 超时)
  * → 返回 null,renderer 回落「消息前 40 字」启发式。fire-and-forget,
  * 不阻塞主流程,也不向用户暴露失败。
  *
@@ -25,7 +25,7 @@ import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { generateTitleViaProvider } from '../maker-host/title-one-shot.js';
+import { runProviderOneShot } from '../maker-host/provider-one-shot.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import {
   regenerateTitleMaterial,
@@ -44,6 +44,10 @@ import {
   type SessionAutoTitleRequest,
   type SessionAutoTitleResult,
 } from './sessionAutoTitle.js';
+import {
+  generatePromptPrediction,
+  type PromptPredictionParams,
+} from './promptPrediction.js';
 
 const log = createLogger('maker-ipc/title');
 
@@ -103,7 +107,7 @@ export async function generateMakerSessionTitle(
   // "请提供用户消息内容"式回复当标题返回。直接放弃,调用方保留默认名。
   const trimmed = message.trim();
   if (!trimmed) return null;
-  return generateTitleViaProvider(
+  return runProviderOneShot(
     {
       sessionId: sessionId ?? '',
       agentKind,
@@ -151,7 +155,7 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
   readSessionAgentKind: readSessionAgentKindFromDb,
   collectMaterial: regenerateTitleMaterial,
   generateTitle: (sessionId, agentKind, prompt) =>
-    generateTitleViaProvider(
+    runProviderOneShot(
       { sessionId, agentKind, prompt },
       {
         readSessionProviderId: readSessionProviderIdFromDb,
@@ -354,7 +358,43 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
       };
     },
   );
-  // 自动起名:renderer 只负责给素材,占位/条件写/归属表全在 main(单一真相源)。
+/** 推荐提示词素材上限(消息条数)。 */
+const PREDICTION_MESSAGES_MAX = 40;
+/** 推荐提示词单条消息截断长度(UTF-16 code unit)。 */
+const PREDICTION_MSG_SLICE = 600;
+/** 推荐提示词 workingDir 截断长度。 */
+const PREDICTION_WORKDIR_MAX = 512;
+
+function parsePredictPromptRequest(raw: unknown): PromptPredictionParams {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('predict-prompt request required');
+  }
+  const { sessionId, agentKind, messages, workingDir } = raw as Record<string, unknown>;
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > SESSION_ID_MAX) {
+    throw new Error('invalid sessionId');
+  }
+  if (!TITLE_AGENT_KINDS.includes(agentKind as AgentKind)) {
+    throw new Error('invalid agentKind');
+  }
+  if (!Array.isArray(messages)) {
+    throw new Error('messages must be an array');
+  }
+  const sliced = messages.slice(-PREDICTION_MESSAGES_MAX).map((m: unknown) => {
+    const msg = m as Record<string, unknown>;
+    return {
+      role: typeof msg.role === 'string' ? msg.role : '',
+      content: typeof msg.content === 'string' ? msg.content.slice(0, PREDICTION_MSG_SLICE) : '',
+    };
+  });
+  return {
+    sessionId,
+    agentKind: agentKind as AgentKind,
+    messages: sliced,
+    ...(typeof workingDir === 'string' && workingDir.length <= PREDICTION_WORKDIR_MAX
+      ? { workingDir }
+      : {}),
+  };
+}
   // 本 handler 会改写会话标题并可能触发一次付费模型调用,属于新增特权入口 ——
   // 按 electron-security-and-process-boundaries §5 做 sender 断言 + 运行期 payload
   // 校验,不把 Renderer 传来的 sessionId / text 视为已授权(TS 类型不是运行期校验)。
@@ -366,6 +406,20 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
     ): Promise<SessionAutoTitleResult> => {
       assertTrustedAppRendererEvent(event);
       return runSessionAutoTitle(parseAutoTitleRequest(request));
+    },
+  );
+  // 输入框推荐提示词:turn 结束后预测用户下一步输入,复用 title one-shot 基础设施。
+  // 本 handler 会触发一次付费模型调用,按 electron-security-and-process-boundaries §5
+  // 做 sender 断言 + 运行期 payload 校验。
+  ipcMain.handle(
+    MAKER_INVOKE.PREDICT_PROMPT,
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      request: unknown,
+    ): Promise<{ prompt: string | null }> => {
+      assertTrustedAppRendererEvent(event);
+      const params = parsePredictPromptRequest(request);
+      return { prompt: await generatePromptPrediction(params) };
     },
   );
 }

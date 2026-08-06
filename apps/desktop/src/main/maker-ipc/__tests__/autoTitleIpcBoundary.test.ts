@@ -44,8 +44,8 @@ vi.mock('../../localDb/latestMessageText.js', () => ({
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: vi.fn(),
 }));
-vi.mock('../../maker-host/title-one-shot.js', () => ({
-  generateTitleViaProvider: h.generateTitle,
+vi.mock('../../maker-host/provider-one-shot.js', () => ({
+  runProviderOneShot: h.generateTitle,
 }));
 vi.mock('../../messagePersistBroadcaster.js', () => ({
   drainPersistQueue: h.drainPersistQueue,

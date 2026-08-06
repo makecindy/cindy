@@ -1,5 +1,5 @@
 /**
- * title-one-shot —— 会话标题的「单次 HTTP」生成器。
+ * provider-one-shot —— 会话标题的「单次 HTTP」生成器。
  *
  * 设计:每个会话按其所属 provider 取 catalog 配的 `titleModel`(最经济模型),
  * 用该 provider 自家凭证 + **一次** HTTP 请求起标题。
@@ -53,40 +53,40 @@ import { outboundUndiciFetch } from './outbound-fetch.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { validateTitleOutput } from './title-output-validation.js';
 
-const log = createLogger('maker-host:title-one-shot');
+const log = createLogger('maker-host:provider-one-shot');
 
 /** 标题 oneShot 单次请求超时(对齐 renderer scheduleAutoName 的等待窗口语义,留余量)。 */
-const TITLE_TIMEOUT_MS = 12_000;
+const ONE_SHOT_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
-const TITLE_MAX_TOKENS = 32;
+const ONE_SHOT_DEFAULT_MAX_TOKENS = 32;
 /** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
-const TITLE_OUTPUT_MAX_CHARS = 256;
+const ONE_SHOT_DEFAULT_OUTPUT_MAX_CHARS = 256;
 /**
  * Codex Responses 要求 instructions 字段，但语言和长度必须由调用方 prompt 决定。
  * 这里仅约束输出形状，避免覆盖 locale-aware 标题指令。
  */
-const CODEX_TITLE_INSTRUCTIONS =
+const CODEX_DEFAULT_INSTRUCTIONS =
   'Output only the short conversation title requested by the user message, without quotation marks or ending punctuation.';
 
 type FetchImpl = typeof undiciFetch;
 
 /** 标题 wire 协议 —— 决定 endpoint 路径、请求体形状、响应解析方式。 */
-export type TitleWire = 'anthropic-messages' | 'codex-responses' | 'gateway-chat';
+export type ProviderOneShotWire = 'anthropic-messages' | 'codex-responses' | 'gateway-chat';
 
 /** 解析出的「这条会话用谁、什么模型、走什么 wire」目标。null = 无法智能起名(回落启发式)。 */
-export interface TitleTarget {
+export interface ProviderOneShotTarget {
   providerId: string;
   /** catalog model id(titleModel)。anthropic 走 wire 前会经 toSdkModelString 还原成 dated 串。 */
   model: string;
   /** 该模型在目录里的最低 effort 档;null = 该模型不支持 effort(如 Haiku)。 */
   effort: Effort | null;
-  wire: TitleWire;
+  wire: ProviderOneShotWire;
   /** 上游 base(anthropic/openai 取自 catalog routing.upstream;xd 取 server 下发 endpoint)。 */
   upstream: string;
 }
 
 /** 注入点 —— 便于单测(mock fetch / 伪造凭证 / 伪造 provider)。缺省均返回 null(回落启发式)。 */
-export interface TitleOneShotDeps {
+export interface ProviderOneShotDeps {
   fetchImpl?: FetchImpl;
   /** 读 DB sessions.provider_id(race-free 显式来源)。null = 未显式选,走默认。 */
   readSessionProviderId?: (sessionId: string) => Promise<string | null>;
@@ -190,7 +190,7 @@ function pickXdTitleModel(provider: Provider): CatalogModel | null {
  * gpt-5.4-mini 在 ChatGPT 后端有效);xd 是动态清单供应商,**标题模型从网关实时
  * 清单选择**(pickXdTitleModel),不读静态 titleModel(网关清单即权威)。
  */
-export function buildTitleTarget(providerId: string): TitleTarget | null {
+export function buildOneShotTarget(providerId: string): ProviderOneShotTarget | null {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) return null;
 
@@ -250,6 +250,7 @@ async function fetchAnthropicTitle(
   oauthToken: string,
   fetchImpl: FetchImpl,
   signal: AbortSignal,
+  maxTokens: number = ONE_SHOT_DEFAULT_MAX_TOKENS,
 ): Promise<string> {
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/v1/messages`, {
     method: 'POST',
@@ -262,7 +263,7 @@ async function fetchAnthropicTitle(
     },
     body: JSON.stringify({
       model: toSdkModelString(modelId),
-      max_tokens: TITLE_MAX_TOKENS,
+      max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -284,10 +285,11 @@ async function fetchCodexTitle(
   creds: { accessToken: string; accountId: string },
   fetchImpl: FetchImpl,
   signal: AbortSignal,
+  instructions: string = CODEX_DEFAULT_INSTRUCTIONS,
 ): Promise<string> {
   const body: Record<string, unknown> = {
     model: modelId,
-    instructions: CODEX_TITLE_INSTRUCTIONS,
+    instructions,
     input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     tools: [],
     tool_choice: 'auto',
@@ -323,6 +325,7 @@ async function fetchGatewayTitle(
   gatewayKey: string,
   fetchImpl: FetchImpl,
   signal: AbortSignal,
+  maxTokens: number = ONE_SHOT_DEFAULT_MAX_TOKENS,
 ): Promise<string> {
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/chat/completions`, {
     method: 'POST',
@@ -333,7 +336,7 @@ async function fetchGatewayTitle(
     },
     body: JSON.stringify({
       model: modelId,
-      max_tokens: TITLE_MAX_TOKENS,
+      max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -376,13 +379,32 @@ export function parseResponsesSse(raw: string): string {
 }
 
 /**
+ * 非标题 one-shot 调用的可选参数覆盖。标题调用不传(走默认值)。
+ * 用于 prompt prediction 等复用同一条 provider 通路但需要不同 token/校验的场景。
+ */
+export interface OneShotOpts {
+  /** 覆盖 max_tokens(标题默认 32)。 */
+  maxTokens?: number;
+  /** 覆盖 Codex instructions(标题默认 CODEX_DEFAULT_INSTRUCTIONS)。 */
+  codexInstructions?: string;
+  /** 覆盖输出校验时的最大 Unicode 长度(标题默认 256)。0 跳过 validateTitleOutput。 */
+  maxOutputChars?: number;
+  /** 校验通过后的 Unicode 截断长度(标题默认 40)。0 跳过截断。 */
+  maxVisualChars?: number;
+}
+
+/**
  * 标题 oneShot 主入口:解析本会话 provider → titleModel → 单次 HTTP 起标题。
  * 任何环节失败(无 titleModel / 凭证缺失 / HTTP 错 / 空响应 / 超时)→ 返回 null,调用方回落启发式。
  * 全程不打印 token(只记 providerId / model / wire / 耗时)。
+ *
+ * `opts` 仅用于非标题场景(如 prompt prediction)覆盖默认 token 数/校验规则;
+ * 标题场景不传即可走默认值。
  */
-export async function generateTitleViaProvider(
+export async function runProviderOneShot(
   args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
-  deps: TitleOneShotDeps = {},
+  deps: ProviderOneShotDeps = {},
+  opts?: OneShotOpts,
 ): Promise<string | null> {
   // 默认走吃系统代理的 undici fetch:上游可能是境外端点(catalog routing.upstream)。
   const fetchImpl = deps.fetchImpl ?? outboundUndiciFetch;
@@ -416,14 +438,14 @@ export async function generateTitleViaProvider(
     return null;
   }
 
-  const target = buildTitleTarget(providerId);
+  const target = buildOneShotTarget(providerId);
   if (!target) {
     log.debug('title oneShot skipped: no title target', { providerId, agentKind: args.agentKind });
     return null;
   }
   // 标题模型这份拷贝被用户停用 → 跳过(回落启发式起名)。rail 条目带 buildRegistry
   // 烘焙的 disabled 标志。查找必须跨该供应商的**所有 agent** 清单(findCatalogModel,
-  // 与 buildTitleTarget 解析 titleModel 的口径一致):cc 会话经 OpenAI 路由时,标题模型
+  // 与 buildOneShotTarget 解析 titleModel 的口径一致):cc 会话经 OpenAI 路由时,标题模型
   // gpt-5.4-mini 挂在 codex 清单下,只查会话 agent 会漏掉停用标志(PR #744 review
   // 第十一轮)。目录里完全找不到该模型时不额外拦。
   const railProvider = rail.find((p) => p.id === providerId);
@@ -442,7 +464,7 @@ export async function generateTitleViaProvider(
 
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), ONE_SHOT_TIMEOUT_MS);
   // 外部 signal(发送被取消)联动到本次请求。
   const onExternalAbort = () => controller.abort();
   args.signal?.addEventListener('abort', onExternalAbort);
@@ -486,6 +508,12 @@ export async function generateTitleViaProvider(
     });
     return false;
   };
+  // 非标题场景(如 prompt prediction)可覆盖 token 数/校验规则。
+  const maxTokens = opts?.maxTokens ?? ONE_SHOT_DEFAULT_MAX_TOKENS;
+  const codexInstructions = opts?.codexInstructions ?? CODEX_DEFAULT_INSTRUCTIONS;
+  const maxOutputChars = opts?.maxOutputChars ?? ONE_SHOT_DEFAULT_OUTPUT_MAX_CHARS;
+  const maxVisualChars = opts?.maxVisualChars ?? 40;
+
   try {
     let text = '';
     switch (target.wire) {
@@ -503,6 +531,7 @@ export async function generateTitleViaProvider(
           oauth.accessToken,
           fetchImpl,
           controller.signal,
+          maxTokens,
         );
         break;
       }
@@ -521,6 +550,7 @@ export async function generateTitleViaProvider(
           creds,
           fetchImpl,
           controller.signal,
+          codexInstructions,
         );
         break;
       }
@@ -538,17 +568,22 @@ export async function generateTitleViaProvider(
           key,
           fetchImpl,
           controller.signal,
+          maxTokens,
         );
         break;
       }
     }
     // The prompt is advisory; never persist a transcript continuation, role-labelled
     // response, Markdown wrapper, or multiline answer. Validate the complete response
-    // before applying the historical 40-character auto-title truncation, so a bad suffix
-    // cannot hide beyond the slice boundary.
-    const normalized = validateTitleOutput(text, TITLE_OUTPUT_MAX_CHARS);
-    const title = normalized ? Array.from(normalized).slice(0, 40).join('') : null;
-    if (!title) {
+    // before applying the truncation, so a bad suffix cannot hide beyond the slice boundary.
+    // `maxOutputChars === 0`: skip validation (non-title use cases like prompt prediction).
+    const normalized =
+      maxOutputChars > 0 ? validateTitleOutput(text, maxOutputChars) : text.trim() || null;
+    const result =
+      normalized && maxVisualChars > 0
+        ? Array.from(normalized).slice(0, maxVisualChars).join('')
+        : normalized;
+    if (!result) {
       log.warn('title oneShot rejected invalid model output', {
         providerId,
         model: target.model,
@@ -562,9 +597,9 @@ export async function generateTitleViaProvider(
       model: target.model,
       wire: target.wire,
       elapsedMs: Date.now() - startedAt,
-      chars: Array.from(title).length,
+      chars: Array.from(result).length,
     });
-    return title;
+    return result;
   } catch (err) {
     log.warn('title oneShot failed (swallowed)', {
       providerId,

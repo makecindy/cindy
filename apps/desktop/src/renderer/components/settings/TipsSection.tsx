@@ -13,18 +13,40 @@
  * 应用, 不需要修改任何 cell 组件。
  */
 
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Sparkles } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { Switch } from '@/components/ui/switch';
 
 import { ChatEmbeddingCell } from './ChatEmbeddingCell';
 import { MessageNavRailCell } from './MessageNavRailCell';
 import { SilentEncryptedRetryCell } from './SilentEncryptedRetryCell';
 
+const RECOMMENDATION_KEY = 'prompt-recommendation-enabled';
+
 export function TipsSection() {
   const { t } = useTranslation();
   const { mode } = useAuth();
+  const [recommendationEnabled, setRecommendationEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(RECOMMENDATION_KEY) !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const handleRecommendationToggle = useCallback((next: boolean) => {
+    setRecommendationEnabled(next);
+    try {
+      localStorage.setItem(RECOMMENDATION_KEY, String(next));
+    } catch {
+      // localStorage 不可用 → 静默
+    }
+  }, []);
+
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="flex flex-col gap-1">
@@ -46,6 +68,32 @@ export function TipsSection() {
           '[&>*+*]:border-t [&>*+*]:border-[var(--settings-theme-card-border)]',
         )}
       >
+        {/* 输入框推荐提示词:任务结束后自动预测用户下一步输入 */}
+        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
+          <div className="flex items-center gap-3">
+            <div
+              className={cn(
+                'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                'bg-[var(--settings-input-bg)]',
+              )}
+            >
+              <Sparkles size={18} className="text-[var(--settings-section-title)]" />
+            </div>
+            <div className="flex flex-col gap-[8px]">
+              <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
+                {t('settings.promptRecommendation.label')}
+              </p>
+              <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">
+                {t('settings.promptRecommendation.description')}
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={recommendationEnabled}
+            onCheckedChange={handleRecommendationToggle}
+            aria-label={t('settings.promptRecommendation.toggleAria')}
+          />
+        </div>
         <SilentEncryptedRetryCell />
         {mode !== 'local' ? <ChatEmbeddingCell /> : null}
         <MessageNavRailCell />
