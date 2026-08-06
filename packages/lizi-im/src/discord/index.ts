@@ -391,6 +391,16 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       // the current Gateway/client and lease generation alive only long enough
       // for work accepted before the handoff to commit its terminal response.
       await this.drainSchedulerHandoffWork();
+      // Presence can change while an accepted Agent turn is draining. If the
+      // remote winner disappeared and this Desktop owns ingress again, the
+      // original handoff decision is stale: keep the existing Gateway instead
+      // of manufacturing a clean logout/relogin gap.
+      if (this.schedulerHooks && this.schedulerTransportAllowed(identity)) {
+        if (this.status.kind !== 'connected') {
+          this.setStatus({ kind: 'connected', appId: identity });
+        }
+        return;
+      }
       this.configVersion += 1;
       await this.gateway.destroy();
       if (options.clearRuntimeActiveMarker && !this.pendingOfflineNotice) {

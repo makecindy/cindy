@@ -463,6 +463,52 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('keeps the active runtime when the remote winner disappears during handoff drain', async () => {
+    harness.selfDeviceId = 'z';
+    const discord = createDiscord();
+    let releaseHandoff!: () => void;
+    const handoffGate = new Promise<void>((resolve) => {
+      releaseHandoff = resolve;
+    });
+    discord.enterSchedulerStandby.mockImplementation(async () => {
+      await handoffGate;
+      if (!harness.hooks?.isTransportAllowed('12345678901234567')) {
+        discord.emitStatus({ kind: 'standby', appId: '12345678901234567' });
+      }
+    });
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.isSchedulerTransportActive()).toBe(true);
+
+    const peer = {
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true as const,
+      lastSeenAt: Date.now(),
+    };
+    harness.peers = [peer];
+    harness.presenceHandler?.(peer);
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await vi.waitFor(() => expect(discord.enterSchedulerStandby).toHaveBeenCalledOnce());
+
+    harness.sendPush.mockClear();
+    harness.peers = [];
+    harness.presenceHandler?.({ ...peer, online: false });
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(true);
+    releaseHandoff();
+    await manager.reconcile();
+
+    expect(discord.isSchedulerTransportActive()).toBe(true);
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).not.toContainEqual(
+      expect.objectContaining({
+        runtime: expect.objectContaining({ state: 'clean' }),
+      }),
+    );
+    await manager.stop();
+  });
+
   it('keeps the scheduler fail-closed until an in-flight activation settles during stop', async () => {
     harness.selfDeviceId = 'a';
     const discord = createDiscord();

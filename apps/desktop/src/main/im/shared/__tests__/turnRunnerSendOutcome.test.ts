@@ -1968,9 +1968,20 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
     const h = setupSession(async () => ({ accepted: true }));
     await runDefaultTurn(vi.fn(), { userMessageId: 'msg-first', text: 'first user message' });
-    await runDefaultTurn(vi.fn(), { userMessageId: 'msg-second', text: 'second user message' });
+    let queuedTerminal: Promise<unknown> | undefined;
+    await getRunner().runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-second',
+      text: 'second user message',
+      attachments: [],
+      onTurnAccepted: (terminal) => {
+        queuedTerminal = terminal;
+      },
+    });
     await flushMicrotasks();
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(queuedTerminal).toBeInstanceOf(Promise);
 
     const result = await getRunner().stopActiveTurn({
       botContextId: 'cli_test_bot',
@@ -1979,6 +1990,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     expect(result).toEqual({ stopped: true, droppedQueued: 1 });
     expect(h.abort).toHaveBeenCalledTimes(1);
+    if (!queuedTerminal) throw new Error('expected queued terminal');
+    await expect(queuedTerminal).resolves.toMatchObject({
+      kind: 'aborted',
+      errorCode: 'pending_send_dropped',
+    });
     // 被丢弃的排队消息的 ack 表情要撤掉(否则永远挂在用户消息上)
     await waitForAssertion(() => {
       expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith(

@@ -394,6 +394,16 @@ export class ImSchedulerManager {
     }
     try {
       await this.discord.enterSchedulerStandby({ clearRuntimeActiveMarker: clearRuntimeMarker });
+      if (this.discord.isSchedulerTransportActive()) {
+        // The winning peer may have disappeared while Discord drained an
+        // already accepted turn. The provider re-checks the lease before
+        // destroy and keeps the Gateway alive in that case; preserve the
+        // active generation instead of publishing a stale clean handoff.
+        this.desired = 'active';
+        this.desiredIdentity = identity;
+        this.advertiseAll();
+        return;
+      }
       this.finishLocalRuntime(identity, clearRuntimeMarker);
       this.advertiseAll();
     } catch (error) {

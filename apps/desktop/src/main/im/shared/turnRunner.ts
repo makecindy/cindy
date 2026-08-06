@@ -2726,6 +2726,9 @@ export function createTurnRunner(
     log.warn(`dropping ${dropped.length} queued message(s) on cleanup/detach`);
     for (const item of dropped) {
       releaseAttachedImTurnHeadless(item.turn);
+      item.turn.terminalKind = 'aborted';
+      item.turn.terminalErrorCode ??= 'pending_send_dropped';
+      settleTurnTerminal(item.turn);
       void cancelAckReaction(item.turn);
     }
   }

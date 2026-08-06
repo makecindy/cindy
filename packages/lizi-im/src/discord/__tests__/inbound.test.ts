@@ -758,6 +758,44 @@ describe('DiscordIM inbound pipeline', () => {
     expect(handoffFinished).toBe(true);
   });
 
+  it('cancels a stale handoff when this Desktop regains ingress while accepted work drains', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage(() => {
+      im.trackAcceptedTask(releaseTask.promise);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby({ clearRuntimeActiveMarker: true });
+    await flushMicrotasks();
+    expect(gateway.destroy).not.toHaveBeenCalled();
+
+    transportAllowed = true;
+    releaseTask.resolve();
+    await handoff;
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(gateway.appId).toBe('app-1');
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: '12345678901234567' });
+  });
+
   it('connects gateway when set-config receives a token', async () => {
     const gateway = makeGateway();
     const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
