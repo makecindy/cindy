@@ -938,6 +938,20 @@ test("test gate lock decision prefers an existing owner over an earlier free por
 	assert.equal(classifyTestGateLockProbeError("ETIMEDOUT"), "collision");
 });
 
+test("test gate lock rejects invalid port counts before deriving candidates", async () => {
+	for (const lockPortCount of [0, -1, 1.5, Number.NaN]) {
+		await assert.rejects(
+			() =>
+				acquireTestGateLock({
+					repoRoot: "unused",
+					owner: { pid: 99, tier: "unit", cwd: "unused" },
+					lockPortCount,
+				}),
+			/lockPortCount must be a positive integer/,
+		);
+	}
+});
+
 test("test gate lock reports the holder, waits, and acquires after release", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-lock-"));
 	let probeRound = 0;

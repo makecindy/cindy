@@ -247,6 +247,9 @@ export async function acquireTestGateLock({
 } = {}) {
 	if (!repoRoot) throw new Error("repoRoot is required");
 	if (!owner || typeof owner !== "object") throw new Error("owner is required");
+	if (!Number.isInteger(lockPortCount) || lockPortCount <= 0) {
+		throw new Error("lockPortCount must be a positive integer");
+	}
 	const commonDir = await resolveTestGateCommonDir(repoRoot);
 	const identity = testGateLockIdentity(commonDir);
 	const ports = Array.from(
