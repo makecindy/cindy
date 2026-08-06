@@ -567,9 +567,9 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
  * Historical compatibility for plans written before terminal convergence was
  * persisted. A successful assistant seal before the next normal user turn is
  * the durable proof that this Codex plan's ownership window ended. Steer
- * messages remain inside the same product turn and therefore do not cut the
- * search window. Interrupted and failed Codex turns persist `turnCompleted:
- * false`, so they are deliberately ignored here.
+ * messages remain inside a still-running product turn and therefore do not cut
+ * the search window. An explicit interrupted/failed assistant seal does end
+ * that ownership window, so no later turn may complete the old plan.
  */
 function findPersistedCodexCompletionBoundary<
   TMessage extends MessageRenderSourceMessageLike,
@@ -577,7 +577,10 @@ function findPersistedCodexCompletionBoundary<
   for (let index = planIndex + 1; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.role === 'user' && message.delivery !== 'steer') return null;
-    if (message.role === 'assistant' && message.turnCompleted === true) return message;
+    if (message.role === 'assistant') {
+      if (message.turnCompleted === false) return null;
+      if (message.turnCompleted === true) return message;
+    }
   }
   return null;
 }

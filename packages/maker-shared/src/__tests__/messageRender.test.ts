@@ -916,6 +916,68 @@ describe('message render todo grouping', () => {
     });
   });
 
+  it('does not let a later successful turn close a plan after an interrupted seal', () => {
+    const plan = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Wait for user', status: 'in_progress' }],
+    });
+    const interruptedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'partial-answer-1',
+      content: 'Partial work before the user stopped the turn.',
+      createdAt: at(6),
+      turnCompleted: false,
+    };
+    const continuedAsSteer: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-2',
+      content: 'Continue',
+      createdAt: at(7),
+      delivery: 'steer',
+    };
+    const laterBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-2',
+      content: 'The later turn is done.',
+      createdAt: at(8),
+      turnCompleted: true,
+    };
+
+    expect(
+      findLatestMessageTodoInsertion([
+        plan,
+        interruptedBoundary,
+        continuedAsSteer,
+        laterBoundary,
+      ]),
+    ).toMatchObject({
+      todos: [{ content: 'Wait for user', status: 'in_progress' }],
+    });
+  });
+
+  it('keeps a steer inside a still-running Codex plan ownership window', () => {
+    const plan = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Apply the requested adjustment', status: 'in_progress' }],
+    });
+    const steer: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-steer',
+      content: 'Keep the existing layout.',
+      createdAt: at(7),
+      delivery: 'steer',
+    };
+    const completedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-1',
+      content: 'Done.',
+      createdAt: at(8),
+      turnCompleted: true,
+    };
+
+    expect(findLatestMessageTodoInsertion([plan, steer, completedBoundary])).toMatchObject({
+      todos: [{ content: 'Apply the requested adjustment', status: 'completed' }],
+    });
+  });
+
   it('does not use a later turn completion to close an earlier open Codex plan', () => {
     const plan = tool('plan1', 'update_plan', {
       plan: [{ step: 'Wait for user', status: 'in_progress' }],
