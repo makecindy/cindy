@@ -51,6 +51,8 @@ export interface PipeDispatcherDeps {
 interface PendingCall {
   ghostId: string;
   tool: string;
+  /** 宿主能力按用途一次性绑定，防插件在同一 tool-call 下重复消费付费通道。 */
+  claimedBindings: Set<string>;
   resolve: (result: GhostToolCallResult) => void;
   timer: ReturnType<typeof setTimeout> | undefined;
   /** 派发时刻(续命天花板从这里起算)。 */
@@ -167,6 +169,7 @@ export class GhostPipeDispatcher {
       const entry: PendingCall = {
         ghostId,
         tool,
+        claimedBindings: new Set(),
         resolve,
         timer: undefined,
         startedAt,
@@ -183,6 +186,20 @@ export class GhostPipeDispatcher {
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
       }
     });
+  }
+
+  /**
+   * 一次性认领真实在途 tool-call 的宿主能力绑定。
+   *
+   * callId、ghostId、tool 三者都来自派发器事实表；binding 同一卷只能认领一次。
+   * 不删除 pending entry，插件仍需用原 callId 正常交卷。
+   */
+  claimPendingCall(ghostId: string, callId: string, tool: string, binding: string): boolean {
+    const entry = this.pending.get(callId);
+    if (!entry || entry.ghostId !== ghostId || entry.tool !== tool) return false;
+    if (entry.claimedBindings.has(binding)) return false;
+    entry.claimedBindings.add(binding);
+    return true;
   }
 
   /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */

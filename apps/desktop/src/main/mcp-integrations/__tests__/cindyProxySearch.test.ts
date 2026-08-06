@@ -25,6 +25,9 @@ describe('cindyProxySearch', () => {
     expect(buildCindySearchUrl('https://gateway.example.test/v1/messages')).toBe(
       'https://gateway.example.test/v1/messages',
     );
+    expect(
+      buildCindySearchUrl('https://gateway.example.test/api/v1?tenant=alpha&mode=fast#local'),
+    ).toBe('https://gateway.example.test/api/v1/messages?tenant=alpha&mode=fast');
   });
 
   it('固定调用 cindy/web-search 的 Messages Web Search，并解析工具结果与 citations', async () => {
@@ -250,6 +253,40 @@ describe('cindyProxySearch', () => {
         status: 200,
       });
     }
+  });
+
+  it('响应体读取中断时返回可重试的上游错误并保留诊断元数据', async () => {
+    const warn = vi.fn();
+    const service = createCindyProxySearchService({
+      getBaseUrl: () => 'https://gateway.example.test',
+      getApiKey: () => 'test-key',
+      fetchImpl: vi.fn(async () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'x-request-id': 'request-body-failed' }),
+          text: vi.fn(async () => {
+            throw new Error('stream interrupted');
+          }),
+        }) as unknown as Response,
+      ) as unknown as typeof fetch,
+      log: { info: vi.fn(), warn },
+    });
+
+    await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+      status: 200,
+      requestId: 'request-body-failed',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'cindy search response body failed',
+      expect.objectContaining({
+        status: 200,
+        requestId: 'request-body-failed',
+        error: 'body read failure',
+      }),
+    );
   });
 
   it('日志只包含状态元数据，不包含 query 或 Authorization', async () => {

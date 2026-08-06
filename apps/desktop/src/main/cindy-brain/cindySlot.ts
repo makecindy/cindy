@@ -306,6 +306,8 @@ export interface CindySlotDeps {
    */
   holdPipeCall?(ghostId: string, callId: string, budgetMs: number): void;
   releasePipeCall?(ghostId: string, callId: string): void;
+  /** 一次性绑定真实在途 tool-call；缺依赖或配对失败必须 fail closed。 */
+  claimPipeCall?(ghostId: string, callId: string, tool: string, binding: string): boolean;
   /**
    * 视频型号预期耗时(秒;video registry 登记值)。hold 预算与异步受理
    * 返回的 expectedSeconds 共用。未注入/查无该型号 → null(用缺省)。
@@ -1253,6 +1255,13 @@ export class GhostCindySlot {
       };
     }
     const callId = p.callId;
+    if (!this.deps.claimPipeCall?.(ghostId, callId, 'search_web', 'cindy.search.web')) {
+      return {
+        ok: false,
+        message: 'Cindy AI 搜索只允许由当前插件真实在途的 search_web 工具调用触发',
+        errorCode: 'PERMISSION_DENIED',
+      };
+    }
     const searchWeb = this.deps.searchWeb;
     if (!searchWeb) {
       return {

@@ -15,17 +15,22 @@ const CINDY_SEARCH_TIMEOUT_MS = 30_000;
  */
 export function buildCindySearchUrl(baseUrl: string): string {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
-  let pathname = '';
   try {
-    pathname = new URL(normalizedBaseUrl).pathname.replace(/\/+$/, '');
+    const url = new URL(normalizedBaseUrl);
+    const pathname = url.pathname.replace(/\/+$/, '');
+    if (pathname === '/v1/messages' || pathname.endsWith('/v1/messages')) {
+      url.pathname = pathname || '/v1/messages';
+    } else {
+      const suffix = pathname === '/v1' || pathname.endsWith('/v1') ? '/messages' : '/v1/messages';
+      url.pathname = `${pathname}${suffix}` || '/v1/messages';
+    }
+    url.hash = '';
+    return url.toString();
   } catch {
     // The caller validates configured URLs; retaining the old path makes this
     // helper harmless for injected unit-test values as well.
   }
-  if (pathname === '/v1/messages' || pathname.endsWith('/v1/messages')) {
-    return normalizedBaseUrl;
-  }
-  const suffix = pathname === '/v1' || pathname.endsWith('/v1') ? '/messages' : '/v1/messages';
+  const suffix = normalizedBaseUrl.endsWith('/v1') ? '/messages' : '/v1/messages';
   return `${normalizedBaseUrl}${suffix}`;
 }
 
@@ -356,9 +361,30 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
         };
       }
 
-      const latencyMs = Date.now() - startedAt;
       const requestId = requestIdOf(response);
-      const body = await response.text();
+      let body: string;
+      try {
+        body = await response.text();
+      } catch {
+        const latencyMs = Date.now() - startedAt;
+        deps.log?.warn('cindy search response body failed', {
+          logicalProvider: 'cindy',
+          upstreamProtocol: 'anthropic-messages',
+          modelAlias: CINDY_SEARCH_MODEL_NAME,
+          status: response.status,
+          latencyMs,
+          ...(requestId ? { requestId } : {}),
+          error: 'body read failure',
+        });
+        return {
+          ok: false,
+          errorCode: 'UPSTREAM_UNAVAILABLE',
+          message: 'Cindy AI 搜索响应传输中断，请稍后再试',
+          status: response.status,
+          ...(requestId ? { requestId } : {}),
+        };
+      }
+      const latencyMs = Date.now() - startedAt;
       if (!response.ok) {
         const failure = classifyHttpFailure(response.status, body);
         deps.log?.warn('cindy search request rejected', {

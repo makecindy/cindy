@@ -76,6 +76,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   depositUsageBytes: ReturnType<typeof vi.fn>;
   releaseDeposit: ReturnType<typeof vi.fn>;
   searchWeb: ReturnType<typeof vi.fn>;
+  claimPipeCall: ReturnType<typeof vi.fn>;
 } {
   const generateImage = vi.fn(async () => ({
     buffer: new Uint8Array([1, 2, 3]),
@@ -156,6 +157,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     ],
     requestId: 'search-call-1',
   }));
+  const claimPipeCall = vi.fn(() => true);
   const slot = new GhostCindySlot({
     getGhost: () => fakeGhost(),
     getOwnerScopeKey: () => 'cloud:test-owner:1',
@@ -176,6 +178,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     depositUsageBytes,
     releaseDeposit,
     searchWeb,
+    claimPipeCall,
     ...overrides,
   } as CindySlotDeps);
   return {
@@ -195,6 +198,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     depositUsageBytes,
     releaseDeposit,
     searchWeb,
+    claimPipeCall,
   };
 }
 
@@ -326,7 +330,7 @@ describe('Cindy Web Search', () => {
       ],
       requestId: 'litellm-call-1',
     }));
-    const { slot } = makeSlot({
+    const { slot, claimPipeCall } = makeSlot({
       getGhost: searchGhost,
       searchWeb,
     });
@@ -334,6 +338,12 @@ describe('Cindy Web Search', () => {
     const result = await slot.handleModelRequest('art', SEARCH_REQ);
 
     expect(searchWeb).toHaveBeenCalledWith({ query: 'Cindy Web Search', limit: 5 });
+    expect(claimPipeCall).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'search_web',
+      'cindy.search.web',
+    );
     expect(result).toEqual({
       ok: true,
       provider: 'cindy',
@@ -360,6 +370,16 @@ describe('Cindy Web Search', () => {
         errorCode: 'PERMISSION_DENIED',
       });
     }
+
+    const unbound = makeSlot({
+      getGhost: searchGhost,
+      searchWeb,
+      claimPipeCall: vi.fn(() => false),
+    });
+    expect(await unbound.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+    });
 
     const { slot } = makeSlot({ getGhost: searchGhost, searchWeb });
     for (const request of [
