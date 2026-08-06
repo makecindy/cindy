@@ -360,7 +360,14 @@ export async function assembleGroupWindowContext(args: {
                     }
                   }
                 }
-                args.log.warn(`group context cursor rollback failed: ${String(lastError)}`);
+                const rollbackError =
+                  lastError instanceof Error ? lastError : new Error(String(lastError));
+                args.log.warn(`group context cursor rollback failed: ${rollbackError.message}`);
+                // Do not report compensation as successful after the bounded
+                // retry budget is exhausted. Callers must keep the failure
+                // visible rather than discarding an unexecuted task as if its
+                // durable cursor had been restored.
+                throw rollbackError;
               },
             };
             if (guard !== undefined && !(await guard())) {
