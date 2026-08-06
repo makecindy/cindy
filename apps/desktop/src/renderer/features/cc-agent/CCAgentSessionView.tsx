@@ -4075,9 +4075,13 @@ export function CCAgentSessionView({
                       // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
                       // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
                       // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
+                      // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
+                      // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
+                      // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
                       compactChannel !== null
                         && !(realAgentKind === 'pi' && !!session?.remoteHostId)
                         && session != null && agentStatus.contextTokens > 0
+                        && !(compactChannel === 'compact-session' && agentStatus.isRunning)
                         ? handleCompactRequest
                         : undefined
                     }
