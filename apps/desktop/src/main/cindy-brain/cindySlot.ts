@@ -52,6 +52,9 @@ import {
   GHOST_CINDY_EMBED_TIMEOUT_MS,
   GHOST_CINDY_JOB_TTL_MS,
   GHOST_CINDY_MAX_ASYNC_JOBS,
+  GHOST_CINDY_SEARCH_DEFAULT_RESULTS,
+  GHOST_CINDY_SEARCH_MAX_QUERY_CHARS,
+  GHOST_CINDY_SEARCH_MAX_RESULTS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
   GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
@@ -75,6 +78,7 @@ import {
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { probeImageSize } from './imageProbe.js';
 
 /**
@@ -269,6 +273,13 @@ export interface CindySlotDeps {
   depositUsageBytes?(ghostId: string): Promise<number>;
   /** 撤回该意识对某指纹的寄存引用;返回是否真的删掉了行(false = 本就没有)。 */
   releaseDeposit?(params: { ghostId: string; hash: string }): Promise<boolean>;
+  /**
+   * Cindy 托管 Web Search。实现固定读取主机 XD endpoint + XD user key，
+   * 并通过固定模型别名调用 Anthropic Messages 原生网页搜索；插件不能注入
+   * 上游地址、凭证、模型名或工具定义。
+   * 可选依赖:未接线的宿主/测试环境 fail closed。
+   */
+  searchWeb?: CindyProxySearchService['search'];
   /**
    * 快问快答(text.oneshot,2026-07-31):把 prompt 交给主机的轻量任务
    * 模型链直答一次。注入实现包装 utility-model/oneShotCandidates 的
@@ -562,6 +573,9 @@ export class GhostCindySlot {
       data?: unknown;
       label?: unknown;
       hash?: unknown;
+      query?: unknown;
+      limit?: unknown;
+      provider?: unknown;
     };
     if (p?.kind === 'query_job') {
       return this.handleQueryJob(ghostId, p);
@@ -627,13 +641,28 @@ export class GhostCindySlot {
         return { ok: false, message: `文本转向量失败:${message}`, errorCode };
       }
     }
+    if (p?.kind === 'search_web') {
+      try {
+        return await this.handleSearchWeb(ghostId, payload);
+      } catch (err) {
+        this.deps.log?.warn('ghost cindy-request search_web unexpected failure', {
+          ghostId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return {
+          ok: false,
+          message: 'Cindy AI 搜索失败，请稍后再试',
+          errorCode: 'INTERNAL',
+        };
+      }
+    }
     const info = typeof p?.kind === 'string' ? KIND_INFO[p.kind] : undefined;
     if (!info) {
       return {
         ok: false,
         message:
           `未知的代办类型(当前支持 ${Object.keys(KIND_INFO).join(' / ')} / ` +
-          'deposit_media / release_media / oneshot_text / embed_text / query_job)',
+          'deposit_media / release_media / oneshot_text / embed_text / search_web / query_job)',
       };
     }
     const kind = p.kind as string;
@@ -1139,6 +1168,172 @@ export class GhostCindySlot {
       };
     }
     return null;
+  }
+
+  /**
+   * search_web:Cindy 托管公网搜索。它与插件 network 槽里的 BYO Provider
+   * 完全分账，主机只接受 provider:'cindy'，失败不做任何跨 Provider fallback。
+   * 查询文本不进日志；日志只留归因号、状态、耗时、结果数和上游 request id。
+   */
+  private async handleSearchWeb(
+    ghostId: string,
+    payload: unknown,
+  ): Promise<GhostPipeModelResult> {
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost || !ghost.enabled) {
+      return {
+        ok: false,
+        message: '意识不在可用状态',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+    if (!ghost.manifest.slots?.includes('cindy')) {
+      return {
+        ok: false,
+        message: '本意识未声明 cindy 卡槽，无权请 Cindy 搜索',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+    const declared: readonly string[] = ghost.manifest.cindy?.search ?? [];
+    if (!declared.includes('web')) {
+      return {
+        ok: false,
+        message:
+          '本意识未声明搜索「网页搜索」能力(身份卡 cindy.search 缺 "web")，请意识作者更新声明',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    const p = payload as {
+      query?: unknown;
+      limit?: unknown;
+      provider?: unknown;
+      callId?: unknown;
+    };
+    if (p.provider !== 'cindy') {
+      return {
+        ok: false,
+        message: 'search_web 的 provider 必须固定为 cindy',
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (typeof p.query !== 'string' || p.query.trim().length === 0) {
+      return { ok: false, message: 'query 不能为空', errorCode: 'INVALID_PARAMS' };
+    }
+    const query = p.query.trim();
+    if (query.length > GHOST_CINDY_SEARCH_MAX_QUERY_CHARS) {
+      return {
+        ok: false,
+        message: `query 过长(上限 ${GHOST_CINDY_SEARCH_MAX_QUERY_CHARS} 字符)`,
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (
+      p.limit !== undefined &&
+      (typeof p.limit !== 'number' ||
+        !Number.isInteger(p.limit) ||
+        p.limit < 1 ||
+        p.limit > GHOST_CINDY_SEARCH_MAX_RESULTS)
+    ) {
+      return {
+        ok: false,
+        message: `limit 不合法(1–${GHOST_CINDY_SEARCH_MAX_RESULTS} 的整数，或不传)`,
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (
+      typeof p.callId !== 'string' ||
+      p.callId.length === 0 ||
+      p.callId.length > MAX_CALL_ID_LEN
+    ) {
+      return {
+        ok: false,
+        message: 'callId 不合法(搜索必须透传 1–128 字符的 tool-call 归因号)',
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    const callId = p.callId;
+    const searchWeb = this.deps.searchWeb;
+    if (!searchWeb) {
+      return {
+        ok: false,
+        message: '主机当前不支持 Cindy AI 搜索(能力未接线)',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    const inflight = this.inflight.get(ghostId) ?? 0;
+    const inflightLimit = this.deps.getInflightLimit?.(ghostId) ?? null;
+    if (inflightLimit !== null && inflight >= inflightLimit) {
+      return {
+        ok: false,
+        message: `同时进行的代办已达上限(${inflightLimit} 单)，请稍后再试`,
+        errorCode: 'RATE_LIMITED',
+      };
+    }
+
+    this.inflight.set(ghostId, inflight + 1);
+    try {
+      if (this.deps.isOwnerBoundaryPending()) {
+        return {
+          ok: false,
+          message: '账号正在切换，请稍后再试',
+          errorCode: 'UPSTREAM_UNAVAILABLE',
+        };
+      }
+      const ownerScopeKey = this.deps.getOwnerScopeKey();
+      this.deps.log?.info('ghost cindy-request search_web start', {
+        ghostId,
+        callId,
+        logicalProvider: 'cindy',
+      });
+      const outcome = await searchWeb({
+        query,
+        limit: (p.limit as number | undefined) ?? GHOST_CINDY_SEARCH_DEFAULT_RESULTS,
+      });
+      if (
+        this.deps.isOwnerBoundaryPending() ||
+        this.deps.getOwnerScopeKey() !== ownerScopeKey
+      ) {
+        return {
+          ok: false,
+          message: '搜索期间账号已切换，本次结果已丢弃',
+          errorCode: 'UPSTREAM_UNAVAILABLE',
+        };
+      }
+      if (!outcome.ok) {
+        this.deps.log?.warn('ghost cindy-request search_web failed', {
+          ghostId,
+          callId,
+          logicalProvider: 'cindy',
+          errorCode: outcome.errorCode,
+          ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+          ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
+        });
+        return {
+          ok: false,
+          message: outcome.message,
+          errorCode: outcome.errorCode,
+        };
+      }
+      this.deps.log?.info('ghost cindy-request search_web done', {
+        ghostId,
+        callId,
+        logicalProvider: 'cindy',
+        resultCount: outcome.results.length,
+        ...(outcome.webSearchRequests !== undefined
+          ? { webSearchRequests: outcome.webSearchRequests }
+          : {}),
+        ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
+      });
+      return {
+        ok: true,
+        provider: 'cindy',
+        results: outcome.results,
+      };
+    } finally {
+      this.releaseInflight(ghostId);
+    }
   }
 
   /**

@@ -28,6 +28,7 @@ function fakeGhost(
       media?: string[];
       text?: string[];
       embed?: string[];
+      search?: string[];
     } | null;
   } = {},
 ): InstalledGhost {
@@ -74,6 +75,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   depositMedia: ReturnType<typeof vi.fn>;
   depositUsageBytes: ReturnType<typeof vi.fn>;
   releaseDeposit: ReturnType<typeof vi.fn>;
+  searchWeb: ReturnType<typeof vi.fn>;
 } {
   const generateImage = vi.fn(async () => ({
     buffer: new Uint8Array([1, 2, 3]),
@@ -143,6 +145,17 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   );
   const depositUsageBytes = vi.fn(async () => 0);
   const releaseDeposit = vi.fn(async () => true);
+  const searchWeb = vi.fn(async () => ({
+    ok: true as const,
+    results: [
+      {
+        title: 'Cindy',
+        url: 'https://example.test/cindy',
+        snippet: 'Search result',
+      },
+    ],
+    requestId: 'search-call-1',
+  }));
   const slot = new GhostCindySlot({
     getGhost: () => fakeGhost(),
     getOwnerScopeKey: () => 'cloud:test-owner:1',
@@ -162,6 +175,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     depositMedia,
     depositUsageBytes,
     releaseDeposit,
+    searchWeb,
     ...overrides,
   } as CindySlotDeps);
   return {
@@ -180,6 +194,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     depositMedia,
     depositUsageBytes,
     releaseDeposit,
+    searchWeb,
   };
 }
 
@@ -285,6 +300,104 @@ describe('载荷校验', () => {
     expect(videoBad).toMatchObject({ ok: false });
     expect((videoBad as { message: string }).message).toContain('ratio');
     expect(generateVideo).not.toHaveBeenCalled();
+  });
+});
+
+describe('Cindy Web Search', () => {
+  const SEARCH_REQ = {
+    type: 'cindy-request',
+    kind: 'search_web',
+    query: '  Cindy Web Search  ',
+    provider: 'cindy',
+    callId: 'call-search-1',
+  };
+
+  const searchGhost = () => fakeGhost({ model: { search: ['web'] } });
+
+  it('按能力声明放行，trim query、补默认结果数并保持逻辑 Provider 为 cindy', async () => {
+    const searchWeb = vi.fn(async () => ({
+      ok: true as const,
+      results: [
+        {
+          title: 'Result',
+          url: 'https://example.test/result',
+          snippet: 'Summary',
+        },
+      ],
+      requestId: 'litellm-call-1',
+    }));
+    const { slot } = makeSlot({
+      getGhost: searchGhost,
+      searchWeb,
+    });
+
+    const result = await slot.handleModelRequest('art', SEARCH_REQ);
+
+    expect(searchWeb).toHaveBeenCalledWith({ query: 'Cindy Web Search', limit: 5 });
+    expect(result).toEqual({
+      ok: true,
+      provider: 'cindy',
+      results: [
+        {
+          title: 'Result',
+          url: 'https://example.test/result',
+          snippet: 'Summary',
+        },
+      ],
+    });
+  });
+
+  it('拒绝未声明能力、非 cindy Provider、非法 query/limit/callId，且不出网', async () => {
+    const searchWeb = vi.fn();
+    const undeclared = makeSlot({ searchWeb });
+    expect(await undeclared.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'NOT_CONFIGURED',
+    });
+
+    const { slot } = makeSlot({ getGhost: searchGhost, searchWeb });
+    for (const request of [
+      { ...SEARCH_REQ, provider: 'tavily' },
+      { ...SEARCH_REQ, query: '   ' },
+      { ...SEARCH_REQ, query: 'x'.repeat(2001) },
+      { ...SEARCH_REQ, limit: 0 },
+      { ...SEARCH_REQ, limit: 1.5 },
+      { ...SEARCH_REQ, limit: 11 },
+      { ...SEARCH_REQ, callId: '' },
+    ]) {
+      expect(await slot.handleModelRequest('art', request)).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_PARAMS',
+      });
+    }
+    expect(searchWeb).not.toHaveBeenCalled();
+  });
+
+  it('保留主机搜索错误码；账号切换期间 fail closed', async () => {
+    const searchWeb = vi.fn(async () => ({
+      ok: false as const,
+      errorCode: 'QUOTA_EXHAUSTED' as const,
+      message: 'Cindy AI 搜索额度不足',
+      status: 402,
+      requestId: 'litellm-call-2',
+    }));
+    const quota = makeSlot({ getGhost: searchGhost, searchWeb });
+    expect(await quota.slot.handleModelRequest('art', SEARCH_REQ)).toEqual({
+      ok: false,
+      errorCode: 'QUOTA_EXHAUSTED',
+      message: 'Cindy AI 搜索额度不足',
+    });
+
+    const switching = makeSlot({
+      getGhost: searchGhost,
+      searchWeb,
+      isOwnerBoundaryPending: () => true,
+    });
+    expect(await switching.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+    });
+    expect(searchWeb).toHaveBeenCalledTimes(1);
   });
 });
 
