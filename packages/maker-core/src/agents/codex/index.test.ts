@@ -16249,6 +16249,22 @@ describe('CodexAgent turn lifecycle', () => {
       data: { taskId: 'collab-1', status: 'running' },
     });
 
+    handlers!.descendantNotification?.('child-thread', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      tokenUsage: { total: { totalTokens: 21 } },
+    });
+    const activeTurnUpdate = await nextEvent(iterator);
+    expect(activeTurnUpdate).toMatchObject({
+      type: 'agent_task_update',
+      data: {
+        taskId: 'collab-1',
+        status: 'running',
+        usage: { totalTokens: 21 },
+      },
+    });
+    expect(activeTurnUpdate).not.toHaveProperty('turnScope');
+
     handlers!.turnCompleted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-parent', status: 'completed' },
@@ -16396,6 +16412,77 @@ describe('CodexAgent turn lifecycle', () => {
       threadId: 'start-thread-id',
       turn: { id: 'turn-parent', status: 'failed', error: { message: 'terminal error' } },
     });
+    await handle.close();
+  });
+
+  it('REPRO: scopes descendant updates from a completed parent turn as background', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-descendant-background-scope',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working after the parent turn',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-next' },
+    });
+
+    handlers!.descendantNotification?.('child-thread', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      tokenUsage: { total: { totalTokens: 42 } },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: {
+        taskId: 'collab-1',
+        status: 'running',
+        usage: { totalTokens: 42 },
+      },
+    });
+
     await handle.close();
   });
 

@@ -2783,8 +2783,45 @@ export class CodexAgent extends BaseAgent {
      */
     const capabilitySelectionTextByThreadId = new Map<string, string>();
     const descendantParentThreadByThreadId = new Map<string, string>();
+    /**
+     * Descendant notifications carry the child turn id, not the root turn that
+     * spawned the child. Preserve that root ownership for the lifetime of the
+     * handle so late child progress cannot attach itself to a newer root turn.
+     */
+    const rootTurnIdByDescendantThreadId = new Map<string, string>();
     /** A terminal child turn must not re-register tool provenance from late items. */
     const terminalDescendantTurnIds = new Set<string>();
+
+    const propagateRootTurnToDescendants = (
+      parentThreadId: string,
+      rootTurnId: string,
+      visited = new Set<string>(),
+    ): void => {
+      if (visited.has(parentThreadId)) return;
+      visited.add(parentThreadId);
+      for (const [childThreadId, parent] of descendantParentThreadByThreadId) {
+        if (parent !== parentThreadId) continue;
+        rootTurnIdByDescendantThreadId.set(childThreadId, rootTurnId);
+        propagateRootTurnToDescendants(childThreadId, rootTurnId, visited);
+      }
+    };
+
+    const descendantUpdateTurnScope = (
+      descendantThreadId: string,
+    ): AgentEvent['turnScope'] => {
+      const rootTurnId = rootTurnIdByDescendantThreadId.get(descendantThreadId);
+      if (
+        rootTurnId
+        && currentTurnId === rootTurnId
+        && !completedTurnIds.has(rootTurnId)
+        && !terminalErroredTurnIds.has(rootTurnId)
+      ) {
+        return 'turn';
+      }
+      // Unknown ownership is safer as background: attaching it to the active
+      // turn would mutate that turn's origin, attempt token, and watchdog.
+      return 'background';
+    };
 
     const propagateCapabilitySelectionToDescendants = (
       parentThreadId: string,
@@ -3417,11 +3454,21 @@ export class CodexAgent extends BaseAgent {
     const registerDescendantThreadRouting = (
       childThreadId: string,
       parentThreadId: string,
+      rootTurnId?: string,
     ): void => {
       if (!childThreadId || childThreadId === parentThreadId) return;
+      descendantParentThreadByThreadId.set(childThreadId, parentThreadId);
+      const inheritedRootTurnId = rootTurnId
+        ?? rootTurnIdByDescendantThreadId.get(parentThreadId);
+      if (inheritedRootTurnId) {
+        rootTurnIdByDescendantThreadId.set(childThreadId, inheritedRootTurnId);
+        // A grandchild lineage may have arrived before the root spawn item.
+        // Backfill the whole known subtree before host registration replays its
+        // buffered notifications synchronously.
+        propagateRootTurnToDescendants(childThreadId, inheritedRootTurnId);
+      }
       // 测试用的 fake host 可能没有这个方法;真实 AppServerHost 恒有。
       host.registerDescendantLineage?.(childThreadId, parentThreadId);
-      descendantParentThreadByThreadId.set(childThreadId, parentThreadId);
       const inheritedSelection = capabilitySelectionTextByThreadId.get(parentThreadId)
         ?? (parentThreadId === threadId && currentTurnId
           ? capabilitySelectionTextByTurnId.get(currentTurnId)
@@ -3461,11 +3508,11 @@ export class CodexAgent extends BaseAgent {
       return registration.childThreadIds;
     };
 
-    const registerSubagentSpawnLineage = (item: unknown): boolean => {
+    const registerSubagentSpawnLineage = (item: unknown, rootTurnId: string): boolean => {
       const registration = readCodexSubagentSpawnRegistration(item);
       if (!registration) return false;
       for (const childThreadId of registration.childThreadIds) {
-        registerDescendantThreadRouting(childThreadId, threadId);
+        registerDescendantThreadRouting(childThreadId, threadId, rootTurnId);
       }
       return true;
     };
@@ -3497,6 +3544,7 @@ export class CodexAgent extends BaseAgent {
       method: string,
       params: unknown,
     ): void => {
+      const turnScope = descendantUpdateTurnScope(childThreadId);
       const record = params && typeof params === 'object'
         ? params as Record<string, unknown>
         : null;
@@ -3536,12 +3584,17 @@ export class CodexAgent extends BaseAgent {
               nested.model,
               nested.failed === true,
             );
-            if (replayedNested) emitSubagentCardUpdate(replayedNested);
+            if (replayedNested) {
+              emitSubagentCardUpdate(
+                replayedNested,
+                descendantUpdateTurnScope(grandChildThreadId),
+              );
+            }
           }
         }
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
-      if (update) emitSubagentCardUpdate(update);
+      if (update) emitSubagentCardUpdate(update, turnScope);
 
       if (method === 'turn/completed') {
         const status = record?.turn && typeof record.turn === 'object'
@@ -3571,8 +3624,9 @@ export class CodexAgent extends BaseAgent {
      */
     const noteSubagentSpawnItem = (
       item: unknown,
+      rootTurnId: string,
     ): SubagentLiveCardUpdate | null => {
-      if (!registerSubagentSpawnLineage(item)) return null;
+      if (!registerSubagentSpawnLineage(item, rootTurnId)) return null;
       // 先接 host 路由再进 tracker:registerDescendantLineage 会把子线程 TTL 缓冲里的
       // 早到通知同步补投进 handleDescendantNotification(tracker 缓冲),随后
       // noteSpawnItem 建卡时统一重放,首帧就带上真实用量。
@@ -3588,6 +3642,7 @@ export class CodexAgent extends BaseAgent {
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();
+      rootTurnIdByDescendantThreadId.clear();
       terminalDescendantTurnIds.clear();
       // 与 close() 同规:handle 被终止后子代理卡不会再有消费者。同样先收终态再清 ——
       // 这条路径(thread cleanup failure / 强制 retire)恰恰是最容易留下永久转圈卡的。
@@ -7663,6 +7718,7 @@ export class CodexAgent extends BaseAgent {
         capabilitySelectionTextByTurnId.clear();
         capabilitySelectionTextByThreadId.clear();
         descendantParentThreadByThreadId.clear();
+        rootTurnIdByDescendantThreadId.clear();
         terminalDescendantTurnIds.clear();
         stopActiveRolloutPlanFallback();
         resetUpstreamIdleForTurnEnd();
@@ -7713,7 +7769,9 @@ export class CodexAgent extends BaseAgent {
             : undefined;
         registerDescendantThreadRouting(childThreadId, parentThreadId);
         const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId, childModel);
-        if (replayed) emitSubagentCardUpdate(replayed);
+        if (replayed) {
+          emitSubagentCardUpdate(replayed, descendantUpdateTurnScope(childThreadId));
+        }
       },
       descendantNotification: handleDescendantNotification,
       turnStarted: (params) => {
@@ -7949,7 +8007,7 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
         // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
-        const replayedSubagentUpdate = noteSubagentSpawnItem(params.item);
+        const replayedSubagentUpdate = noteSubagentSpawnItem(params.item, params.turnId);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
@@ -7982,7 +8040,7 @@ export class CodexAgent extends BaseAgent {
         // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
         // 子线程的 item / token / turn 终态全被缓冲,卡片在整个运行期(可能好几分钟)没有实时
         // 数据,最后才一次性补上。那恰好是本 PR 要解决的问题本身(review)。
-        const replayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item);
+        const replayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item, params.turnId);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
           log,
@@ -8020,6 +8078,7 @@ export class CodexAgent extends BaseAgent {
         // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
         const replayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(
           params.item,
+          params.turnId,
         );
         const itemEventQueue = isLateCollabTerminal
           ? {
@@ -8160,6 +8219,7 @@ export class CodexAgent extends BaseAgent {
           capabilitySelectionTextByTurnId.clear();
           capabilitySelectionTextByThreadId.clear();
           descendantParentThreadByThreadId.clear();
+          rootTurnIdByDescendantThreadId.clear();
           terminalDescendantTurnIds.clear();
           submittedUserInputByTurn.clear();
           clearAllPendingUserInputInteractions();
@@ -8446,6 +8506,7 @@ export class CodexAgent extends BaseAgent {
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();
+      rootTurnIdByDescendantThreadId.clear();
       terminalDescendantTurnIds.clear();
       // 会话收口后子代理卡不再有消费者。清状态**之前**必须先把仍在跑的卡收成终态:
       // 之后后代通知永远不会再到,只清内部状态会让渲染端一直留着最后一帧 running,卡片

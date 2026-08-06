@@ -494,11 +494,12 @@ export function beginLocalCapabilitiesRefresh(): number {
 }
 
 /**
- * 读取本地 agent 能力快照；核心 agent 失败向上抛，可选 Pi 的能力读取失败不阻断 provider 目录。
+ * 读取本地 agent 能力快照；核心 agent 失败向上抛，只有明确的 Pi 未注册结果才不阻断 provider 目录。
  *
  * Pi 的 CLI 是 best-effort 下载的目录分发，开发机或网络受限时可能暂时缺失。
- * 这种情况下不能让 `maker:get-capabilities('pi')` 的单点失败把 Claude/Codex
- * 模型目录整组回滚为空；Pi 自己仍会保持未注册状态，由可用 agent 门控隐藏入口。
+ * 明确未注册时不能让 `maker:get-capabilities('pi')` 的单点失败把 Claude/Codex
+ * 模型目录整组回滚为空；但临时 IPC、序列化或解析错误必须向上抛，让联合刷新保留
+ * 上一份完整快照。
  */
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
@@ -508,7 +509,13 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
       try {
         return [agent, await api.getCapabilities(agent)] as const;
       } catch (error) {
-        if (agent !== 'pi') throw error;
+        const message =
+          error instanceof Error
+            ? error.message
+            : typeof error === 'object' && error !== null && 'message' in error
+              ? String(error.message)
+              : String(error);
+        if (agent !== 'pi' || !message.includes("Agent 'pi' is not registered")) throw error;
         log.warn('optional Pi capabilities unavailable; continuing with core agents:', error);
         return null;
       }
