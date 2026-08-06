@@ -44,7 +44,6 @@ import { Tip } from '@/components/ui/tooltip';
 import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import type { AtResourceItem } from '@/lib/atResourceService';
 import {
-  isComposerSuggestionEntryDisabled,
   composerSuggestionEntryKey,
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
@@ -95,6 +94,8 @@ interface AtMentionPanelProps {
   onRetry: () => void;
   /** Reference-directories management rows (empty query only; `+`-menu parity). */
   referenceDirs?: ReferenceDirsSection | null;
+  /** `+` 的 MorphPopover 内嵌形态；容器、阴影与 outside-click 由 MorphPopover 负责。 */
+  embedded?: boolean;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
 }
@@ -117,6 +118,7 @@ export function AtMentionPanel({
   onClose,
   onRetry,
   referenceDirs = null,
+  embedded = false,
   maxHeight = 400,
 }: AtMentionPanelProps) {
   const { t } = useTranslation();
@@ -152,10 +154,11 @@ export function AtMentionPanel({
   }, [entries.length, focusedIndex, onFocusedIndexChange]);
 
   useEffect(() => {
-    focusedRef.current?.scrollIntoView({ block: 'nearest' });
+    focusedRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [focusedIndex]);
 
   useEffect(() => {
+    if (embedded) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (!rootRef.current) return;
       const target = e.target as Node;
@@ -172,11 +175,11 @@ export function AtMentionPanel({
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
+  }, [embedded, onClose]);
 
   const focusedEntry = entries[focusedIndex];
   const focusedItem = focusedEntry?.kind === 'resource' ? focusedEntry.item : undefined;
-  const showTooltip = !!focusedItem?.description;
+  const showTooltip = !embedded && !!focusedItem?.description;
   const tooltipKey = showTooltip && focusedItem
     ? `${focusedItem.type}:${focusedItem.relPath}:${focusedItem.name}:${focusedItem.description ?? ''}`
     : null;
@@ -435,18 +438,24 @@ export function AtMentionPanel({
   return (
     <div
       ref={rootRef}
-      className={cn('pointer-events-auto absolute left-0 bottom-full mb-2 z-50')}
+      className={cn(
+        'pointer-events-auto',
+        embedded ? 'relative' : 'absolute left-0 bottom-full mb-2 z-50',
+      )}
     >
       <div
         ref={panelRef}
         onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
         className={cn(
           'w-[480px] overflow-y-auto',
-          'rounded-[12px] border p-[6px]',
-          'bg-[var(--cmd-palette-bg)]',
-          'border-[var(--cmd-palette-border)]',
+          'p-[6px]',
+          !embedded && [
+            'rounded-[12px] border',
+            'bg-[var(--cmd-palette-bg)]',
+            'border-[var(--cmd-palette-border)]',
+          ],
         )}
-        style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
+        style={{ boxShadow: embedded ? undefined : 'var(--cmd-palette-shadow)', maxHeight }}
       >
         {showLoadingSkeleton && (
           <div className="space-y-[4px] p-[4px]">

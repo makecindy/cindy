@@ -56,6 +56,30 @@ export interface ComposerPluginSuggestion {
   disabledReason?: string;
 }
 
+export type ComposerAtActivation =
+  | { activation: 'typed'; from: number; query: string }
+  | { activation: 'synthetic'; from: number; query: string };
+
+/**
+ * Resolve the shared panel activation. A synthetic `+` open is explicit and
+ * therefore owns the panel until its anchor becomes invalid, even when text
+ * before the caret still happens to match a typed `@` run.
+ */
+export function resolveComposerAtActivation({
+  typed,
+  syntheticAnchor,
+  syntheticQuery,
+}: {
+  typed: { from: number; query: string } | null;
+  syntheticAnchor: number | null;
+  syntheticQuery: string | null;
+}): ComposerAtActivation | null {
+  if (syntheticAnchor !== null && syntheticQuery !== null) {
+    return { activation: 'synthetic', from: syntheticAnchor, query: syntheticQuery };
+  }
+  return typed ? { activation: 'typed', ...typed } : null;
+}
+
 /** Per-section caps on the empty-query view (tabs / agents only — plugins
  *  render in full like the legacy `+` menu did; the panel scrolls). */
 export const EMPTY_QUERY_CONTEXT_SECTION_LIMIT = 3;

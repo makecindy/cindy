@@ -105,6 +105,46 @@ describe('MorphPopover interaction contract', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Morph panel' })).toBeNull());
   });
 
+  it('允许显式的外部 autofocus 目标保持焦点且不误关闭面板', async () => {
+    function ExternalFocusHarness() {
+      const [open, setOpen] = useState(false);
+      const composerRef = useRef<HTMLTextAreaElement>(null);
+      return (
+        <>
+          <textarea ref={composerRef} aria-label="Composer" />
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            autoFocusTarget={() => composerRef.current}
+            panelAriaLabel="External focus panel"
+            trigger={
+              <button type="button" onClick={() => setOpen(true)}>
+                Open with composer focus
+              </button>
+            }
+          >
+            <button type="button">Suggestion</button>
+          </MorphPopover>
+          <button type="button">Unrelated control</button>
+        </>
+      );
+    }
+
+    render(<ExternalFocusHarness />);
+    const trigger = screen.getByRole('button', { name: 'Open with composer focus' });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const panel = await screen.findByRole('group', { name: 'External focus panel' });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Composer')));
+    expect(panel).toBeTruthy();
+
+    act(() => screen.getByRole('button', { name: 'Unrelated control' }).focus());
+    await waitFor(() =>
+      expect(screen.queryByRole('group', { name: 'External focus panel' })).toBeNull(),
+    );
+  });
+
   it('动作把焦点交接到别处时不抢回 trigger(焦点已在面板外)', async () => {
     function FocusHandoffHarness() {
       const [open, setOpen] = useState(false);

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { __extraDirsPathOverlapForTesting } from '../components/new-chat/ExtraDirsButton';
+import { __extraDirsPathOverlapForTesting } from '../components/new-chat/extraDirsActions';
 
 describe('ExtraDirsButton path overlap normalization', () => {
   const { hasExtraDir, isParentOrAncestor, isSelfOrSubdir } = __extraDirsPathOverlapForTesting;

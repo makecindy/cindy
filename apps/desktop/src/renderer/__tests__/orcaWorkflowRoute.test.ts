@@ -79,8 +79,8 @@ const chatInputSource = readTextLf(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
   'utf8',
 );
-const extraDirsButtonSource = readTextLf(
-  resolve(__dirname, '..', 'components', 'new-chat', 'ExtraDirsButton.tsx'),
+const atMentionPanelSource = readTextLf(
+  resolve(__dirname, '..', 'components', 'new-chat', 'AtMentionPanel.tsx'),
   'utf8',
 );
 const sessionStatusIconSource = readTextLf(
@@ -158,24 +158,18 @@ describe('OrcaWorkflowRoute source invariants', () => {
   it('uses the right-sidebar UsersRound mark for every collaboration entry point', () => {
     expect(rightSidebarTabBarSource).toContain("'orca-workers': UsersRound");
     expect(orcaWorkersPluginSource).toContain('<UsersRound size={13} />');
-    expect(extraDirsButtonSource).toContain('<UsersRound');
-    expect(extraDirsButtonSource).not.toContain('<Puzzle');
+    expect(atMentionPanelSource).toContain('collaboration: UsersRound');
+    expect(atMentionPanelSource).not.toContain('<Puzzle');
     expect(sessionStatusIconSource).toContain('<UsersRound');
     expect(sessionStatusIconSource).not.toContain('<Puzzle');
     expect(sessionStatusIconSource).toContain("'text-[var(--cmd-palette-item-meta)]'");
   });
 
   it('keeps policy reasons scoped to the disabled collaboration menu item', () => {
-    expect(extraDirsButtonSource).toContain(
-      'const collaborationPolicyDisabled = collaboration?.disabled === true;',
-    );
-    expect(extraDirsButtonSource).toContain(
-      'text={collaborationPolicyDisabled ? collaboration.disabledReason : null}',
-    );
-    expect(extraDirsButtonSource).toContain(
-      'collaborationPolicyDisabled && !collaborationRetryable ? true : undefined',
-    );
-    expect(extraDirsButtonSource).toContain('collaboration.onDisabledActivate?.();');
+    expect(chatInputSource).toContain('const policyDisabled = collaboration.disabled === true;');
+    expect(chatInputSource).toContain('disabledReason: collaboration.disabledReason');
+    expect(chatInputSource).toContain('policyDisabled && !retryable');
+    expect(chatInputSource).toContain('collaboration.onDisabledActivate?.();');
   });
 
   it('keeps the active collaboration tooltip free of policy-disabled reasons', () => {
@@ -188,8 +182,8 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('onDisabledActivate: collabPolicy.unavailable');
     expect(sessionViewSource).toContain('void collabPolicy.refresh().then((policy) => {');
     expect(sessionViewSource).toContain('if (policy.enabled && !policy.unavailable) {');
-    expect(chatInputSource).toContain('collaboration={collaboration}');
-    expect(extraDirsButtonSource).toContain('!!collaboration?.onDisabledActivate');
+    expect(chatInputSource).toContain('if (collaboration) {');
+    expect(chatInputSource).toContain('!!collaboration.onDisabledActivate');
   });
 
   it('does not subscribe to project policy updates from the legacy Orca route', () => {
@@ -287,8 +281,8 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('label: createWorkerLabel(form.role, [])');
     expect(sessionViewSource).toContain('model: form.model');
     expect(sessionViewSource).toContain('delegateTask: form.initialTask || undefined');
-    expect(chatInputSource).toContain('collaboration={collaboration}');
-    expect(extraDirsButtonSource).toContain('collaboration.onOpenDetails();');
+    expect(chatInputSource).toContain('if (collaboration) {');
+    expect(chatInputSource).toContain('collaboration.onOpenDetails();');
   });
 
   it('maps manual collaboration start failures through i18n instead of raw IPC messages', () => {
