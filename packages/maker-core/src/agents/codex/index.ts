@@ -5229,7 +5229,7 @@ export class CodexAgent extends BaseAgent {
       params: CommandExecutionRequestApprovalParams,
     ): Promise<CommandExecutionRequestApprovalResponse> => {
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
@@ -5263,7 +5263,7 @@ export class CodexAgent extends BaseAgent {
       params: FileChangeRequestApprovalParams,
     ): Promise<FileChangeRequestApprovalResponse> => {
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       const requestId = params.itemId;
@@ -5395,7 +5395,7 @@ export class CodexAgent extends BaseAgent {
       params: McpServerElicitationRequestParams,
     ): Promise<McpServerElicitationRequestResponse> => {
       // buffered/墓碑 turn 的 elicitation 不得上 UI / auto-approve (codex R12 P1)。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { action: 'decline', content: null, _meta: null };
       if (turnGate instanceof Promise && !(await turnGate)) {
         return { action: 'decline', content: null, _meta: null };
@@ -5530,7 +5530,7 @@ export class CodexAgent extends BaseAgent {
     ): Promise<PermissionsRequestApprovalResponse> => {
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒
       // (空 permissions 即拒绝授权, 与非 accept 分支同款)。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
       const requestId = params.itemId ?? params.turnId;
@@ -5835,7 +5835,7 @@ export class CodexAgent extends BaseAgent {
       meta: { requestId: string | number },
     ): Promise<ToolRequestUserInputResponse> => {
       // buffered/墓碑 turn 的输入请求不得上 UI (codex R12 P1) — 空 answers 即拒。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { answers: {} };
       if (turnGate instanceof Promise && !(await turnGate)) return { answers: {} };
       const requestId = String(meta.requestId);
@@ -5882,7 +5882,7 @@ export class CodexAgent extends BaseAgent {
       meta: { requestId: string | number },
     ): Promise<DynamicToolCallResponse> => {
       // buffered/墓碑 turn 的 tool call 不得上 UI (codex R12 P1)。
-      const turnGate = gateServerRequestTurn(params.turnId);
+      const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) {
         return {
           contentItems: [
@@ -6170,7 +6170,16 @@ export class CodexAgent extends BaseAgent {
     // 同步快速路径不引入 microtask 延迟 — handler 第一行的 broker.track 与
     // 紧随其后的 serverRequest/resolved 存在竞态, 哪怕一跳 await 也会让
     // resolved 抢在 track 之前到达 (测试回归实证)。
-    const gateServerRequestTurn = (turnId: string | null | undefined): boolean | Promise<boolean> => {
+    const gateServerRequestTurn = (
+      turnId: string | null | undefined,
+      requestThreadId: string | null | undefined,
+    ): boolean | Promise<boolean> => {
+      // AppServerHost only forwards descendant requests after it has verified that
+      // requestThreadId belongs to this root subscription. Child turn ids live in a
+      // different namespace/state machine, so applying root orphan/tombstone guards
+      // here would reject valid child interactions after an unrelated root start
+      // failure (and may interrupt the root thread with the child turn id).
+      if (requestThreadId && requestThreadId !== threadId) return true;
       if (!turnId) return true;
       if (terminalErroredTurnIds.has(turnId) || completedTurnIds.has(turnId)) return false;
       // idle 孤儿 (greptile R16 P1): 无 RPC 在飞时未知 id 的请求只可能来自

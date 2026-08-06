@@ -14814,6 +14814,127 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('keeps verified descendant server requests outside the root orphan gate', async () => {
+    const failedStart = deferred<unknown>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return failedStart.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-request-after-root-start-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+    const handlers = host.getThreadHandlers();
+    if (
+      !handlers?.commandExecutionApproval
+      || !handlers.fileChangeApproval
+      || !handlers.mcpServerElicitation
+      || !handlers.permissionsApproval
+      || !handlers.requestUserInput
+      || !handlers.dynamicToolCall
+    ) {
+      throw new Error('expected all descendant server request handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const resolver = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
+      if (request.kind === 'permission') {
+        return { kind: 'permission', behavior: 'allow' };
+      }
+      if (request.kind !== 'ask_user_question') {
+        throw new Error(`unexpected interaction kind: ${request.kind}`);
+      }
+      return {
+        kind: 'ask_user_question',
+        answers: { [request.questions[0]?.question ?? '']: 'Continue' },
+      };
+    });
+    handle.setInteractionResolver(resolver);
+
+    const send = handle.send({ type: 'user', content: 'start root turn' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    failedStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    const interruptsBeforeRequests = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnInterrupt,
+    ).length;
+    const child = { threadId: 'child-thread-id', turnId: 'child-turn-id' };
+
+    await expect(handlers.commandExecutionApproval({
+      ...child,
+      itemId: 'child-command',
+      command: 'pwd',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    await expect(handlers.fileChangeApproval({
+      ...child,
+      itemId: 'child-file-change',
+      grantRoot: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    await expect(handlers.mcpServerElicitation({
+      ...child,
+      serverName: 'cindy_contacts',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_params: { name: 'contacts_search', args: { query: 'Carol' } },
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    })).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+    await expect(handlers.permissionsApproval({
+      ...child,
+      itemId: 'child-permissions',
+      permissions: { network: true },
+    })).resolves.toEqual({ permissions: { network: true }, scope: 'turn' });
+    await expect(handlers.requestUserInput({
+      ...child,
+      itemId: 'child-input',
+      questions: [{
+        id: 'continue',
+        header: 'Continue',
+        question: 'Continue child task?',
+        isOther: false,
+        isSecret: false,
+        options: [],
+      }],
+    }, { requestId: 'child-input-request' })).resolves.toEqual({
+      answers: { continue: { answers: ['Continue'] } },
+    });
+    await expect(handlers.dynamicToolCall({
+      ...child,
+      callId: 'child-dynamic-call',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'direction',
+          header: 'Direction',
+          question: 'Choose child direction?',
+        }],
+      },
+    }, { requestId: 'child-dynamic-request' })).resolves.toMatchObject({
+      success: true,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(6);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnInterrupt,
+    )).toHaveLength(interruptsBeforeRequests);
+    await handle.close();
+  });
+
   it('rejects a late orphan server request after the replacement turn was accepted (codex R17 P1)', async () => {
     // 替换 turn 已被接受 (currentTurnId 非 null): 孤儿迟到的审批请求既不是
     // idle 也不是 buffered, gate 必须直接拒 — 否则为隐藏孤儿 turn 上 UI。
