@@ -1507,9 +1507,20 @@ export class GhostCindySlot {
       let route: OneshotRoute | undefined;
       if (override !== undefined) {
         const catalogPin = decodeCatalogPin(override);
-        route = catalogPin
-          ? { kind: 'catalog', ...catalogPin }
-          : { kind: 'utility-profile', profileId: override };
+        if (catalogPin) {
+          route = { kind: 'catalog', ...catalogPin };
+        } else if (override.startsWith('cat:')) {
+          // 带目录钉前缀但解码失败(存储损坏/未来格式):目录钉的语义是「钉死
+          // 不回落」,静默落到系统默认链会悄悄烧错链路的钱——按无可选通道
+          // 收单,引导用户到详情页重新钉档。
+          return {
+            ok: false,
+            message: '快问快答的钉档值无法解析(可能已损坏或来自新版本),请到插件详情页重新钉档',
+            errorCode: 'NO_CANDIDATE',
+          };
+        } else {
+          route = { kind: 'utility-profile', profileId: override };
+        }
       } else {
         const declaredModel = ghost.manifest.cindy?.oneshotModel;
         const resolved = declaredModel ? this.deps.resolveOneshotModel?.(declaredModel) : null;

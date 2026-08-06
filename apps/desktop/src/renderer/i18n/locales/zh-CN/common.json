@@ -3484,6 +3484,7 @@
         "codeDetailWithNode": "面板 UI 在独立沙箱中运行；本地处理能力由上方声明的 Node 运行时提供。",
         "added": "新增",
         "removed": "移除",
+        "updated": "更新",
         "unchanged": "其余 {{count}} 项权限不变",
         "noChange": "权限无变化。",
         "pick": "可请求你选择一个文件夹交给它",

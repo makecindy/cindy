@@ -319,6 +319,31 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options.map((o) => o.modelId)).toEqual(['gpt-early', 'gpt-late', 'gpt-none']);
   });
 
+  it('下发 renderer 的 routing 剥掉 headerOverride(可含明文 key),其余结构字段保留', () => {
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        provider({
+          id: 'dual',
+          source: 'user',
+          agents: ['codex'],
+          routing: {
+            codex: {
+              upstream: 'https://up.example.com',
+              authStrategy: 'api-key-header',
+              headerOverride: { authorization: 'Bearer plain-text-key' },
+            },
+          } as Provider['routing'],
+          models: { codex: [chat('gpt-m', { group: 'custom:dual' })] },
+        }),
+      ),
+      undefined,
+    );
+    expect(options).toHaveLength(1);
+    const routing = options[0]!.routing as Record<string, Record<string, unknown>>;
+    expect(routing['codex']?.['upstream']).toBe('https://up.example.com');
+    expect(routing['codex']).not.toHaveProperty('headerOverride');
+  });
+
   it('凭证探测:未配置的 (供应商×agent) 组合不进清单;声明解析跳过未配置落到下一家', () => {
     const catalog = catalogOf(
       provider({ id: 'xd', models: { codex: [chat('gpt-a')] } }),

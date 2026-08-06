@@ -112,6 +112,22 @@ const AGENT_LABEL: Record<(typeof ONESHOT_ROUTE_AGENTS)[number], string> = {
   'claude-code': 'Claude Code',
 };
 
+/**
+ * 下发 renderer 的 routing 先剥 headerOverride:旧版 header-only 配置的自定义
+ * 供应商把明文 API key 写在里面,而「运行期鉴权头不下发任何 Renderer」是仓库
+ * 既定不变量(与 providerHandlers.withoutProviderHeaderCredentials 同款)。
+ * 渲染层判厂牌图标只用 upstream 等结构字段。
+ */
+function routingForRenderer(routing: Provider['routing']): Provider['routing'] {
+  return Object.fromEntries(
+    Object.entries(routing).map(([agent, descriptor]) => {
+      if (!descriptor) return [agent, descriptor];
+      const { headerOverride: _secretHeaders, ...safeDescriptor } = descriptor;
+      return [agent, safeDescriptor];
+    }),
+  ) as Provider['routing'];
+}
+
 export interface TextOneshotPinOption {
   /** 钉值(cat: 编码)。 */
   id: string;
@@ -138,8 +154,9 @@ export interface TextOneshotPinOption {
 
 /**
  * 快问快答的系统默认链家在 XD 网关:用户没有显式供应商排序时,钉档清单让
- * xd 在首(其余按目录序);有显式排序(设置页拖拽的那一份)则全听用户的——
- * 与设置页 / 新建对话选择器同一份顺序,三个入口不打架。
+ * xd 在首(其余按目录序);有显式排序(设置页拖拽的那一份)则全听用户的。
+ * 注意:缺省 bias 是本清单刻意的产品选择,新建对话选择器无此 bias(空排序
+ * 纯按目录序)——两个入口只在用户有显式排序时严格同序。
  */
 function orderedProviders(catalog: Catalog, providerOrder: readonly string[] | undefined): Provider[] {
   return applyProviderOrder(
@@ -227,7 +244,7 @@ export function buildTextOneshotPinOptions(
       ...(e.model.icon !== undefined ? { icon: e.model.icon } : {}),
       budget: classifyModel(e.model) === 'gpt-budget',
       subscription: e.provider.access?.kind === 'subscription',
-      ...(e.provider.routing !== undefined ? { routing: e.provider.routing } : {}),
+      ...(e.provider.routing !== undefined ? { routing: routingForRenderer(e.provider.routing) } : {}),
       ...(dup ? { agentSuffix: AGENT_LABEL[e.agentKind] } : {}),
     };
   });

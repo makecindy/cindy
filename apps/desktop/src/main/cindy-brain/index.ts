@@ -254,7 +254,6 @@ import {
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import {
   CINDY_CAPABILITY_KEYS,
-  cindyCapabilityValueDomain,
   readGhostCindyOverrides,
   readGhostCindyInflightLimit,
   writeGhostCindyOverride,
@@ -4797,7 +4796,9 @@ export function registerGhostIpc(): void {
     }
     // 白名单按能力键类目分流:image.*/video.*/embed.* 钉各媒体目录模型 id;
     // text.*(快问快答)钉轻量档位键或目录钉(cat: 编码)——与消费方(cindySlot
-    // route)同一判据,否则存进去的值链路不认。
+    // route)同一判据,否则存进去的值链路不认。刻意不查凭证态(与清单的凭证
+    // 过滤不同):凭证是瞬态(可以后补/会过期),钉档是持久意图;执行侧
+    // fail-closed 兜底,不在这层把「暂时没配 key」当成非法值。
     if (
       !isCindyOverrideModelAllowed(capability as string, model, {
         image: getCatalogImageConfig().models,

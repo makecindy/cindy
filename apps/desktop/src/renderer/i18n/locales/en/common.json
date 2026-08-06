@@ -3485,6 +3485,7 @@
         "codeDetailWithNode": "The panel UI runs in an isolated sandbox; local processing is provided by the Node runtime declared above.",
         "added": "New",
         "removed": "Removed",
+        "updated": "Updated",
         "unchanged": "{{count}} other permissions unchanged",
         "noChange": "No permission changes.",
         "pick": "Can ask you to pick a folder for it",

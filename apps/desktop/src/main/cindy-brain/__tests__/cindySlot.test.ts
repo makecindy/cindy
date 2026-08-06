@@ -1822,6 +1822,20 @@ describe('快问快答(oneshot_text)', () => {
     expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
   });
 
+  // 2026-08-06 终审:带 cat: 前缀但解码失败的钉档值必须 fail-closed——目录钉的
+  // 语义是「钉死不回落」,静默落到系统默认链会悄悄烧错链路的钱。
+  it('畸形目录钉(cat: 前缀但解码失败)→ NO_CANDIDATE,不回落默认链、不下链', async () => {
+    const oneshotText = vi.fn(async () => ({ ok: true as const, text: 'ok' }));
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      getOverride: () => 'cat:broken',
+      oneshotText,
+    });
+    const r = await slot.handleModelRequest('art', ONESHOT);
+    expect(r).toMatchObject({ ok: false, errorCode: 'NO_CANDIDATE' });
+    expect(oneshotText).not.toHaveBeenCalled();
+  });
+
   it('链路失败三档映射:no_candidate → NO_CANDIDATE,timeout → TIMEOUT,failed → INTERNAL', async () => {
     for (const [reason, errorCode] of [
       ['no_candidate', 'NO_CANDIDATE'],

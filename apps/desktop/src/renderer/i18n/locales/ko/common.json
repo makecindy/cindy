@@ -3484,6 +3484,7 @@
         "codeDetailWithNode": "패널 UI는 독립된 샌드박스에서 실행됩니다. 로컬 처리는 위에서 선언된 Node 런타임이 제공합니다.",
         "added": "추가",
         "removed": "제거",
+        "updated": "업데이트됨",
         "unchanged": "그 외 {{count}}개 권한은 변경 없음",
         "noChange": "권한 변경이 없습니다.",
         "pick": "폴더 선택을 요청할 수 있습니다",

@@ -16,6 +16,7 @@ const CATALOGS = {
     { id: 'img-basic' },
   ],
   video: [{ id: 'vid-pro' }],
+  embed: [{ id: 'emb-1' }],
   // text.* 的目录钉全集(调用侧按当前供应商目录现算)。
   textPinIds: ['cat:xd:codex:codex/gpt-5.5', 'cat:openai:codex:gpt-5.5'],
 } as const;
@@ -54,6 +55,11 @@ describe('isCindyOverrideModelAllowed', () => {
     expect(isCindyOverrideModelAllowed('video.generate', 'vid-pro', CATALOGS)).toBe(true);
     expect(isCindyOverrideModelAllowed('video.edit', 'vid-pro', CATALOGS)).toBe(true);
     expect(isCindyOverrideModelAllowed('video.generate', 'img-pro', CATALOGS)).toBe(false);
+  });
+
+  it('embed.* 钉向量目录(上游 #1707 新增的能力域)', () => {
+    expect(isCindyOverrideModelAllowed('embed.text', 'emb-1', CATALOGS)).toBe(true);
+    expect(isCindyOverrideModelAllowed('embed.text', 'vid-pro', CATALOGS)).toBe(false);
   });
 
   it('非字符串值(数字/对象/undefined)一律拒', () => {
