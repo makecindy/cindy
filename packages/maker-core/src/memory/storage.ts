@@ -118,9 +118,18 @@ function validateNoTypePrefix(type: MemoryType, slug: string): void {
   if (slug.startsWith(`${type}_`)) {
     throw new MemoryError(
       'invalid-slug',
-      `slug "${slug}" 已带 type 前缀 "${type}_", 请传纯 slug (如 "${slug.slice(type.length + 1) || type + '-brief'}")`,
+      `slug "${slug}" 已带 type 前缀 "${type}_", 请传纯 slug (如 "${stripAllTypePrefixes(type, slug) || type + '-brief'}")`,
     );
   }
+}
+
+/** 剥掉 slug 上所有重复的 `<type>_` 前缀 — 错误信息示例必须本身可通过校验 */
+function stripAllTypePrefixes(type: MemoryType, slug: string): string {
+  let out = slug;
+  while (out.startsWith(`${type}_`)) {
+    out = out.slice(type.length + 1);
+  }
+  return out;
 }
 /** 解析 filename 反推 type + slug, 不匹配返 null */
 export function parseFilename(filename: string): { type: MemoryType; slug: string } | null {
