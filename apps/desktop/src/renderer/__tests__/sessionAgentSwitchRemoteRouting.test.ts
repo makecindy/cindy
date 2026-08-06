@@ -971,6 +971,13 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     expect(viewSource).toContain("if (channelNow !== 'claude-input') return;");
     expect(viewSource).toContain('if (!sessionNow?.workingDir) return;');
     expect(viewSource).toContain('sessionNow.model,');
+    // 确认框期间 turn 可能已从其它窗口/远程启动:render 时 isRunning 守卫失效,重读
+    // 最新 running ref,活跃 turn 的 pi 拒绝压缩 → 放弃(codex P2);claude-input 保留旧行为。
+    expect(viewSource).toContain('const isRunningRef = useRef(agentStatus.isRunning);');
+    expect(viewSource).toContain('isRunningRef.current = agentStatus.isRunning;');
+    expect(viewSource).toContain(
+      "if (channelNow === 'compact-session' && isRunningRef.current) return;",
+    );
   });
 });
 

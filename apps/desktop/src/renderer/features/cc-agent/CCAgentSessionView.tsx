@@ -1317,6 +1317,12 @@ export function CCAgentSessionView({
   // (greptile P1 / codex P2 review)。compact-session 分支只依赖 sessionId,无需此快照。
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  // 最新 running 状态的可变镜像(与 compactChannelRef / sessionRef 同款):render 闭包
+  // 固定捕获 agentStatus.isRunning——确认框 await 期间 turn 可能已从其它窗口 / 远程
+  // 启动,旧 async 闭包读不到;ref 每次 render 同步,确认后重读才能拦住「活跃 turn
+  // 仍调 compact-session → pi 拒绝 → confirm 后吃 rejection toast」(codex P2)。
+  const isRunningRef = useRef(agentStatus.isRunning);
+  isRunningRef.current = agentStatus.isRunning;
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
@@ -2743,6 +2749,10 @@ export function CCAgentSessionView({
       // 否则 Pi→Claude 会静默 null、Claude→Pi 会误走 claude 专用通道(codex P1 / greptile)。
       const channelNow = compactChannelRef.current;
       if (channelNow === null) return;
+      // 确认框期间 turn 可能已从其它窗口 / 远程启动:render 时的 isRunning 守卫已失效,
+      // 重读最新 running——活跃 turn 的 pi 会拒绝压缩,直接放弃,避免 confirm 后吃
+      // rejection toast(codex P2)。claude-input 保留旧行为。
+      if (channelNow === 'compact-session' && isRunningRef.current) return;
       if (channelNow === 'compact-session') {
         // capability-aware 通道(pi 原生 compact):本地 IPC / device-link 隧道均可路由。
         // 用粘滞归属(makerApiForSticky)——relay 瞬时重连清空 origin 的窗口内仍隧道到
