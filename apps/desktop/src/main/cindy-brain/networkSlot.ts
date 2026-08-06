@@ -1147,8 +1147,10 @@ export class GhostNetworkSlot {
           // headers 语义;multipart 的 boundary 头留着会误导服务端)。
           if (bodyDropped) deleteHeaderVariants(hopHeaders, 'Content-Type');
           if (hop > 0) {
-            // 换了域名的跳转:上一跳注入的凭证不能跟着走,按新 host 重算
-            // (injectSecrets 开头会先把所有声明凭证头的大小写变体删干净)。
+            // 每一跳都按实际 host / pathname / method 重新匹配凭证注入:换了
+            // 域名的跳转上一跳注入的凭证不能跟着走,同域不同 endpoint 的跳转
+            // 也要重新判断(injectSecrets 开头会先把所有声明凭证头的大小写
+            // 变体删干净)。
             const hopInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, currentUrl, currentMethod, net.hosts, hopHeaders, authAccount);
             if (hopInject.error) return { ok: false, message: hopInject.error };
             currentUsedExchange = hopInject.usedExchange;
@@ -1245,6 +1247,7 @@ export class GhostNetworkSlot {
         retryConnectionInjected = responseConnectionInjected;
         if (
           response.status === 401
+          && responseMethod === originalRequestMethod
           && (
             responseUsedExchange
             || responseOauthInjected.size > 0

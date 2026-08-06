@@ -3889,6 +3889,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             }
             injectHosts.push(ihNorm);
           }
+          // 与 paths / methods 同款排序归一化:host 顺序的无意义变动不该引起
+          // 权限 detail / diff 抖动。
+          injectHosts.sort();
         }
         let injectPaths: string[] | undefined;
         if (inj.paths !== undefined) {

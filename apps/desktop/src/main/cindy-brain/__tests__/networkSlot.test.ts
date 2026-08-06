@@ -1770,6 +1770,39 @@ describe('networkSlot · 凭证交换(key 换令牌二段式)', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('POST 经 302 降级为 GET 后 401:不重放原始 POST(副作用请求不重复)', async () => {
+    // 链路:POST /submit → 302 Location /result(降级 GET、丢 body)→ GET /result 401。
+    // 交换型凭证收到 401 本会作废重换后整链重试,但降级后重试会把原始 POST
+    // 再发一遍,违背"降级成 GET 后不得在 401 后重放副作用请求"的意图,因此
+    // 只有当最终响应 method 与原始 method 一致时才允许重试。
+    const { slot, fetchImpl } = makeExchangeSlot({
+      tokenResponses: [
+        () => fakeResponse({ body: '{"session":"tok-1"}' }),
+        () => fakeResponse({ body: '{"session":"tok-2"}' }),
+      ],
+      apiResponses: [
+        () => fakeResponse({ status: 302, headers: { location: 'https://aigc.example.com/result' } }),
+        () => fakeResponse({ status: 401, body: '{"error":"expired"}' }),
+      ],
+    });
+    const r = await slot.handleFetchRequest('web-search', {
+      url: 'https://aigc.example.com/submit',
+      method: 'POST',
+      body: 'payload=1',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok && 'body' in r) expect(r.status).toBe(401);
+    const api = apiCalls(fetchImpl);
+    // 只走一跳:原始 POST → 降级后的 GET /result(401)即止,没有第二次整链重试。
+    expect(api).toHaveLength(2);
+    expect(api[0][1].method).toBe('POST');
+    expect(api[0][1].body).toBe('payload=1');
+    expect(api[1][1].method).toBe('GET');
+    expect(api[1][1].body).toBeUndefined();
+    // 未重放原始 POST,令牌也不重换。
+    expect(exchangeCalls(fetchImpl)).toHaveLength(1);
+  });
+
   it('交换端点非 2xx:整单结构化失败,错误带状态码与摘录、不发业务请求、不泄 key', async () => {
     const { slot, fetchImpl } = makeExchangeSlot({
       tokenResponses: [() => fakeResponse({ status: 403, body: 'invalid subscriber' })],
