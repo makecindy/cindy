@@ -703,20 +703,24 @@ function ModelSelectorContentView({
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t } = useTranslation();
   const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
-  const paneRef = useRef<HTMLDivElement | null>(null);
+  const [paneElement, setPaneElement] = useState<HTMLDivElement | null>(null);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
+  const bindPaneElement = useCallback((node: HTMLDivElement | null) => {
+    setPaneElement(node);
+  }, []);
   useEffect(() => {
-    if (!paneRef.current || typeof ResizeObserver === 'undefined') {
+    if (!paneElement || typeof ResizeObserver === 'undefined') {
       setPaneWidth(null);
       return;
     }
-    const paneElement = paneRef.current;
-    const updateWidth = () => setPaneWidth(paneElement.getBoundingClientRect().width);
-    updateWidth();
-    const observer = new ResizeObserver(updateWidth);
+    setPaneWidth(paneElement.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.find((candidate) => candidate.target === paneElement) ?? entries[0];
+      if (entry) setPaneWidth(entry.contentRect.width);
+    });
     observer.observe(paneElement);
     return () => observer.disconnect();
-  }, [fluidWidth]);
+  }, [paneElement]);
   // 非 fluid 选择器的契约宽度就是 320px。此前这里直接传 null，导致固定宽度的聊天
   // 选择器永远处于 full 密度，英文 Subscription 会把当前模型名挤成 GPT-...。
   // ResizeObserver 可用时仍以实际宽度为准；测试/首帧则用契约宽度避免标签闪现。
@@ -986,6 +990,30 @@ function ModelSelectorContentView({
         : null,
     [providers, currentProviderId, modelId, currentAgentKind, resolveCurrentSourceId],
   );
+  const currentModelProvider = useMemo(
+    () =>
+      activeSourceId ? providers.find((provider) => provider.id === activeSourceId) : undefined,
+    [activeSourceId, providers],
+  );
+  const currentCatalogModel =
+    currentModelProvider && currentAgentKind
+      ? getModel(currentModelProvider, modelId, currentAgentKind)
+      : undefined;
+  const isCurrentModelHidden =
+    !browsing &&
+    !!currentAgentKind &&
+    !!currentModelProvider &&
+    (deviceId
+      ? !isDeviceModelVisible(
+          remoteProviders.modelVisibilityOverrides,
+          currentAgentKind,
+          currentModelProvider.id,
+          { id: modelId, defaultEnabled: currentCatalogModel?.defaultEnabled },
+        )
+      : !isModelEnabled(currentAgentKind, currentModelProvider.id, {
+          id: modelId,
+          defaultEnabled: currentCatalogModel?.defaultEnabled,
+        }));
 
   // 行级 Fast 可编辑性 = agent 能力 × 该(供应商, 模型)条目的 supportsFastMode。
   // Fast 能力是 per-(provider, agent) 的(见 CatalogModel)：按该行供应商现查它自己的模型条目,
@@ -1194,7 +1222,13 @@ function ModelSelectorContentView({
             ).map((model) => model.id),
           ),
         );
-    const selectable = selectableIds ? base.filter((model) => selectableIds.has(model.id)) : base;
+    // flat 清单没有 buildProviderSections 的 keepSelected。这里只豁免当前且确实已隐藏的
+    // 模型，避免它从已有会话的选择器消失；其它隐藏模型仍按正常可见性过滤。
+    const selectable = selectableIds
+      ? base.filter(
+          (model) => selectableIds.has(model.id) || (isCurrentModelHidden && model.id === modelId),
+        )
+      : base;
     if (!q) return selectable;
     return selectable.filter(
       (m) => m.displayName.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
@@ -1207,6 +1241,8 @@ function ModelSelectorContentView({
     agentKind,
     providers,
     deviceId,
+    isCurrentModelHidden,
+    modelId,
     visibilityVersion,
     remoteProviders.modelVisibilityOverrides,
   ]);
@@ -1637,21 +1673,26 @@ function ModelSelectorContentView({
   const renderModelItem = (provider: ProviderView | null, model: RowModel) => {
     const providerId = provider?.id ?? null;
     const isSelected = isSelectedRow(providerId, model.id);
-    const isSubscriptionModel = provider?.access?.kind === 'subscription';
+    // flat 行仍保持 providerId=null 的选择语义，但当前行的状态展示要读取会话实际来源：
+    // 否则拍平后既看不到 Subscription，也无法判断该 (agent,provider,model) 是否已隐藏。
+    const statusProvider = provider ?? (isSelected ? currentModelProvider : undefined);
+    const isSubscriptionModel = statusProvider?.access?.kind === 'subscription';
     const selectedCatalogModel =
-      provider && currentAgentKind ? getModel(provider, model.id, currentAgentKind) : undefined;
+      statusProvider && currentAgentKind
+        ? getModel(statusProvider, model.id, currentAgentKind)
+        : undefined;
     const isHiddenSelectedModel =
       isSelected &&
-      !!provider &&
+      !!statusProvider &&
       !!currentAgentKind &&
       (deviceId
         ? !isDeviceModelVisible(
             remoteProviders.modelVisibilityOverrides,
             currentAgentKind,
-            provider.id,
+            statusProvider.id,
             { id: model.id, defaultEnabled: selectedCatalogModel?.defaultEnabled },
           )
-        : !isModelEnabled(currentAgentKind, provider.id, {
+        : !isModelEnabled(currentAgentKind, statusProvider.id, {
             id: model.id,
             defaultEnabled: selectedCatalogModel?.defaultEnabled,
           }));
@@ -1901,7 +1942,7 @@ function ModelSelectorContentView({
   //    portal 到 body,hover 时主菜单完全不重排 ─────
   const pane = (
     <div
-      ref={paneRef}
+      ref={bindPaneElement}
       data-model-tag-density={modelTagDensity}
       className={cn(
         'flex shrink-0 flex-col gap-1.5 p-2',

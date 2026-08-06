@@ -284,12 +284,18 @@ const providersRef = vi.hoisted(() => {
       },
     },
   ] as unknown[];
-  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS, providerOrder: [] as string[] };
+  return {
+    DEFAULT_PROVIDERS,
+    providers: DEFAULT_PROVIDERS,
+    providerOrder: [] as string[],
+    loading: false,
+  };
 });
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
     providers: providersRef.providers,
     providerOrder: providersRef.providerOrder,
+    loading: providersRef.loading,
   }),
 }));
 
@@ -426,7 +432,9 @@ const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const 
 beforeEach(() => {
   requestProviderModelsAutoRefresh.mockClear();
   modelVisibilityRef.isEnabled = () => true;
+  providersRef.providers = providersRef.DEFAULT_PROVIDERS;
   providersRef.providerOrder = [];
+  providersRef.loading = false;
   agentCapabilitiesRef.loading = false;
   agentCapabilitiesRef.error = null;
   deviceProvidersRef.loading = false;
@@ -1929,6 +1937,34 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  it('keeps only the selected hidden model in the flat picker', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    modelVisibilityRef.isEnabled = () => false;
+
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: 'anthropic',
+        fluidWidth: true,
+      }),
+    );
+
+    const selected = screen.getByRole('option', { name: /Opus 4\.8/ });
+    expect(selected.querySelector('[data-model-hidden-label]')?.textContent).toBe('已隐藏');
+    expect(within(selected).getByText('settings.providers.models.subscription')).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /Sonnet 4\.6/ })).toBeNull();
+    expect(screen.queryByRole('option', { name: /Haiku 4\.5/ })).toBeNull();
+  });
+
   it('prioritizes the full selected model name in the fixed 320px picker', () => {
     providersRef.providers = [
       {
@@ -1987,7 +2023,6 @@ describe('ModelSelector trigger variants', () => {
           vendorKey: 'cc',
           deviceId: 'remote-device',
           currentProviderId: 'anthropic',
-          onProviderChange: vi.fn(),
         }),
       );
 
@@ -1996,6 +2031,107 @@ describe('ModelSelector trigger variants', () => {
     } finally {
       deviceProvidersRef.providers = [];
       deviceProvidersRef.modelVisibilityOverrides = undefined;
+    }
+  });
+
+  it('binds the pane observer when providers arrive after the empty state', async () => {
+    type ObserverInstance = {
+      callback: ResizeObserverCallback;
+      observe: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+    };
+    const instances: ObserverInstance[] = [];
+    const originalResizeObserver = globalThis.ResizeObserver;
+    class MockResizeObserver {
+      readonly callback: ResizeObserverCallback;
+      readonly observe = vi.fn();
+      readonly unobserve = vi.fn();
+      readonly disconnect = vi.fn();
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        instances.push(this);
+      }
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      configurable: true,
+      writable: true,
+      value: MockResizeObserver,
+    });
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          top: 0,
+          bottom: 100,
+          left: 0,
+          right: 500,
+          width: 500,
+          height: 100,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    providersRef.providers = [];
+
+    try {
+      const props = {
+        modelId: 'claude-opus-4-8',
+        effort: 'high' as Effort,
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc' as const,
+        currentProviderId: 'anthropic',
+        onProviderChange: vi.fn(),
+        fluidWidth: true,
+      };
+      const view = render(React.createElement(ModelSelectorContent, props));
+
+      expect(screen.getByText('newChat.modelSelector.source.emptyTitle')).toBeTruthy();
+      expect(instances).toHaveLength(0);
+
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      view.rerender(React.createElement(ModelSelectorContent, props));
+
+      await waitFor(() => expect(instances).toHaveLength(1));
+      const firstPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
+      expect(firstPane).not.toBeNull();
+      expect(instances[0].observe).toHaveBeenCalledWith(firstPane);
+      expect(firstPane?.getAttribute('data-model-tag-density')).toBe('full');
+
+      act(() => {
+        instances[0].callback(
+          [
+            {
+              target: firstPane,
+              contentRect: { width: 320 },
+            } as unknown as ResizeObserverEntry,
+          ],
+          instances[0] as unknown as ResizeObserver,
+        );
+      });
+      expect(firstPane?.getAttribute('data-model-tag-density')).toBe('hidden');
+
+      providersRef.providers = [];
+      view.rerender(React.createElement(ModelSelectorContent, props));
+      await waitFor(() => expect(instances[0].disconnect).toHaveBeenCalledTimes(1));
+
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      view.rerender(React.createElement(ModelSelectorContent, props));
+      await waitFor(() => expect(instances).toHaveLength(2));
+      const secondPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
+      expect(secondPane).not.toBeNull();
+      expect(instances[1].observe).toHaveBeenCalledWith(secondPane);
+
+      view.unmount();
+      expect(instances[1].disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      rectSpy.mockRestore();
+      Object.defineProperty(globalThis, 'ResizeObserver', {
+        configurable: true,
+        writable: true,
+        value: originalResizeObserver,
+      });
     }
   });
 
