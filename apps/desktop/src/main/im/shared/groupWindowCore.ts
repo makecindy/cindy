@@ -28,7 +28,12 @@ export interface GroupWindowEntryInput {
 export interface GroupContextAssembly {
   prefix: string;
   /** 任务/消息被实际受理后调用；拒绝时不调用，未读批次留给下次触发。 */
-  commit: (guard?: GroupContextCommitGuard) => void | Promise<void>;
+  commit: (
+    guard?: GroupContextCommitGuard,
+  ) =>
+    | void
+    | GroupContextCommitReceipt
+    | Promise<void | GroupContextCommitReceipt>;
 }
 
 /**
@@ -36,6 +41,11 @@ export interface GroupContextAssembly {
  * commit 必须回滚自己刚写入的游标，避免“任务没跑但上下文已跳过”。
  */
 export type GroupContextCommitGuard = () => boolean | Promise<boolean>;
+
+/** commit 已落下游标后的补偿句柄；只撤销本次写入，不覆盖并发推进的更高游标。 */
+export interface GroupContextCommitReceipt {
+  rollback(): Promise<void>;
+}
 
 interface GroupWindowRow {
   id: number;
@@ -154,7 +164,7 @@ async function rollbackPersistedCursor(
   cursorKey: string,
   maxId: number,
   previousCursor: number,
-): Promise<void> {
+): Promise<number> {
   const db = getDbClient().drizzle;
   const rowFilter = and(
     eq(hookGroupContextCursors.provider, provider),
@@ -166,9 +176,10 @@ async function rollbackPersistedCursor(
       .update(hookGroupContextCursors)
       .set({ cursorId: previousCursor, updatedAt: Date.now() })
       .where(rowFilter);
-    return;
+  } else {
+    await db.delete(hookGroupContextCursors).where(rowFilter);
   }
-  await db.delete(hookGroupContextCursors).where(rowFilter);
+  return readPersistedCursor(provider, cursorKey);
 }
 
 function rememberCursor(cursors: Map<string, number>, cursorKey: string, cursor: number): void {
@@ -287,27 +298,47 @@ export async function assembleGroupWindowContext(args: {
 
   const commit =
     maxId > cursor
-      ? async (guard?: GroupContextCommitGuard): Promise<void> => {
+      ? async (
+          guard?: GroupContextCommitGuard,
+        ): Promise<void | GroupContextCommitReceipt> => {
           const current = args.cursors.get(args.cursorKey) ?? 0;
           if (maxId <= current) return;
           if (guard !== undefined && !(await guard())) return;
           try {
             const previousDurableCursor = await readPersistedCursor(args.provider, args.cursorKey);
             const durableCursor = await persistCursor(args.provider, args.cursorKey, maxId);
+            let rolledBack = false;
+            const receipt: GroupContextCommitReceipt = {
+              rollback: async (): Promise<void> => {
+                if (rolledBack) return;
+                rolledBack = true;
+                try {
+                  const restoredDurableCursor = await rollbackPersistedCursor(
+                    args.provider,
+                    args.cursorKey,
+                    maxId,
+                    previousDurableCursor,
+                  );
+                  const latest = args.cursors.get(args.cursorKey) ?? 0;
+                  if (latest <= maxId) {
+                    rememberCursor(
+                      args.cursors,
+                      args.cursorKey,
+                      Math.max(current, restoredDurableCursor),
+                    );
+                  }
+                } catch (error) {
+                  args.log.warn(`group context cursor rollback failed: ${String(error)}`);
+                }
+              },
+            };
             if (guard !== undefined && !(await guard())) {
-              await rollbackPersistedCursor(
-                args.provider,
-                args.cursorKey,
-                maxId,
-                previousDurableCursor,
-              );
-              if ((args.cursors.get(args.cursorKey) ?? 0) === maxId) {
-                rememberCursor(args.cursors, args.cursorKey, current);
-              }
+              await receipt.rollback();
               return;
             }
             const latest = args.cursors.get(args.cursorKey) ?? 0;
             if (durableCursor > latest) rememberCursor(args.cursors, args.cursorKey, durableCursor);
+            return receipt;
           } catch (error) {
             // Durable cursor failure must not turn an already-routable message
             // into a stuck queue/running slot. Keep the old in-memory cursor so

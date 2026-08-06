@@ -242,7 +242,12 @@ export interface HookDispatcherDeps {
    */
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
-    commit: (guard?: () => boolean | Promise<boolean>) => void | Promise<void>;
+    commit: (
+      guard?: () => boolean | Promise<boolean>,
+    ) =>
+      | void
+      | { rollback(): void | Promise<void> }
+      | Promise<void | { rollback(): void | Promise<void> }>;
   }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
@@ -1960,7 +1965,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         let contextPrefix = '';
         let commitContextCursor: (
           guard?: () => boolean | Promise<boolean>,
-        ) => void | Promise<void> = () => undefined;
+        ) =>
+          | void
+          | { rollback(): void | Promise<void> }
+          | Promise<void | { rollback(): void | Promise<void> }> = () => undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
@@ -2014,8 +2022,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
           // 代次守卫覆盖写库前后；账号边界若在 await 期间失效，commit 会回滚
           // 自己的 durable cursor，下面也不会留下 queue/running/ACK 副作用。
-          await commitContextCursor(() => isCurrentGeneration(admittedGeneration));
-          if (!isCurrentGeneration(admittedGeneration)) return;
+          const cursorCommit = await commitContextCursor(() =>
+            isCurrentGeneration(admittedGeneration),
+          );
+          if (!isCurrentGeneration(admittedGeneration)) {
+            await cursorCommit?.rollback();
+            return;
+          }
 
           const queue = queues.get(sessionId) ?? [];
           if (running.has(sessionId) || runner.isBusy(sessionId) || queue.length > 0) {

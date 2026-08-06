@@ -372,6 +372,7 @@ function setupSessionWithId(
 interface TurnOverrides {
   userMessageId?: string;
   text?: string;
+  onRouteResolved?: (sessionId: string) => void | Promise<void>;
 }
 
 async function runDefaultTurn(
@@ -394,6 +395,7 @@ async function startDefaultTurn(
     text: overrides.text ?? 'PROMPT_SECRET full user message TOKEN_VALUE file body',
     attachments: [],
     onTurnComplete,
+    ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -991,11 +993,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const busy = new CredentialModeSwitchBusyError(['busy-session']);
     mocks.getMaker.mockReturnValue(createMakerCreateSessionFailureHarness(busy));
     const onTurnComplete = vi.fn();
+    const onRouteResolved = vi.fn();
 
-    await runDefaultTurn(onTurnComplete);
+    await runDefaultTurn(onTurnComplete, { onRouteResolved });
     await flushMicrotasks();
 
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(onRouteResolved).not.toHaveBeenCalled();
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', 'reaction-1');
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
       'ou_user',
@@ -1203,7 +1207,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
-  it('reports the attached Desktop route before provider startup', async () => {
+  it('reports the attached Desktop route only after provider startup is accepted', async () => {
     const h = setupAttachedSession(async () => ({ accepted: true }));
     const onRouteResolved = vi.fn();
     const beforeProviderStart = vi.fn(async () => undefined);
@@ -1221,7 +1225,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     expect(dispatch.kind).toBe('accepted');
     expect(onRouteResolved).toHaveBeenCalledWith('desktop-attached-session');
-    expect(onRouteResolved.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(onRouteResolved.mock.invocationCallOrder[0]).toBeGreaterThan(
       beforeProviderStart.mock.invocationCallOrder[0]!,
     );
 
@@ -1835,7 +1839,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('does not report route resolution before auth passes on an existing route', async () => {
     // 群窗口游标的 commit 挂在 onRouteResolved 上(prepareAgentTurnText 契约):
-    // 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标永久跳过。
+    // 受理前鉴权失败若先触发它, 这批群上下文会被游标永久跳过。
     mocks.readXdGatewayApiKey.mockReturnValue(null);
     mocks.findActiveSession.mockResolvedValue({
       id: 'feishu-session',

@@ -215,8 +215,8 @@ export function createMessageHandler(
         ...(prepared ? { agentText: prepared.agentText } : {}),
         ...(prepared?.commit
           ? {
-              // 路由解析成功 = 消息确定会被派发/排队 — 群窗口游标此刻才推进,
-              // 路由失败(鉴权缺失等)不推进, 上下文批次下次仍进 prompt。
+              // turnRunner 只在消息完成鉴权、wiring 且确定派发/排队后调用；
+              // 受理前失败不推进, 上下文批次下次仍进 prompt。
               onRouteResolved: async () => {
                 await prepared?.commit?.();
               },

@@ -1657,26 +1657,27 @@ describe('dispatcher 核心语义', () => {
     ]);
   });
 
-  it('账号边界与异步群游标 commit 重叠时不确认受理也不启动 runner', async () => {
-    let releaseCommit!: () => void;
-    const commitPending = new Promise<void>((resolve) => {
-      releaseCommit = resolve;
-    });
-    let commitGuard: (() => boolean | Promise<boolean>) | undefined;
-    let persisted = false;
+  it('群游标 commit 返回后账号代次失效时回滚且不确认受理', async () => {
+    let beginDeactivation: () => Promise<void> = async () => undefined;
+    let deactivation: Promise<void> | null = null;
+    const rollback = vi.fn(async () => undefined);
     const fr = fakeRunner();
     const { d } = makeDispatcher({
       runner: fr.runner,
       buildContextPrefix: async () => ({
         prefix: '<group_chat_context>背景</group_chat_context>',
         commit: async (guard) => {
-          commitGuard = guard;
-          await commitPending;
-          if (guard !== undefined && !(await guard())) return;
-          persisted = true;
+          expect(await guard?.()).toBe(true);
+          // commit 已完成；让账号边界微任务先于 dispatcher 的 await continuation
+          // 失效，钉住“返回后、ACK 前”的窄竞态。
+          queueMicrotask(() => {
+            deactivation = beginDeactivation();
+          });
+          return { rollback };
         },
       }),
     });
+    beginDeactivation = () => d.deactivateAccount();
     const c = collector();
 
     d.handleDispatch(
@@ -1684,15 +1685,12 @@ describe('dispatcher 核心语义', () => {
       dispatch({ requestId: 'stale-commit', externalKey: 'telegram:group:bot:-900:9:g0' }),
       c.send,
     );
-    for (let i = 0; i < 20 && commitGuard === undefined; i += 1) await Promise.resolve();
-    expect(commitGuard).toBeDefined();
-
-    const deactivation = d.deactivateAccount();
-    releaseCommit();
-    await deactivation;
+    for (let i = 0; i < 30 && deactivation === null; i += 1) await Promise.resolve();
+    expect(deactivation).not.toBeNull();
+    await deactivation!;
     await tick();
 
-    expect(persisted).toBe(false);
+    expect(rollback).toHaveBeenCalledTimes(1);
     expect(c.ofType('task.ack')).toHaveLength(0);
     expect(fr.calls).toHaveLength(0);
   });

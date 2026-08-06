@@ -275,6 +275,34 @@ describe('recordGroupMessage', () => {
     ).toEqual({ cursor_id: 99 });
   });
 
+  it('commit 返回后由受理方回滚时恢复本次游标', async () => {
+    await recordGroupMessage(frame({ messageId: 'receipt-rollback', text: '待补偿消息' }));
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'receipt-rollback-context',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+
+    const receipt = await assembly.commit();
+    expect(receipt).toBeDefined();
+    await receipt?.rollback();
+    expect(
+      sqlite
+        .prepare('SELECT 1 FROM hook_group_context_cursors WHERE provider = ?')
+        .get('telegram:9'),
+    ).toBeUndefined();
+    const replay = await buildGroupContextPrefix({
+      requestId: 'receipt-rollback-replay',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    expect(replay.prefix).toContain('待补偿消息');
+  });
+
   it('群历史不按时间过期，但每个 principal + 群/topic 只保留最近 500 条', async () => {
     for (let i = 0; i < 502; i += 1) {
       await recordGroupMessage(frame({ messageId: `m${i}`, text: `msg ${i}` }));

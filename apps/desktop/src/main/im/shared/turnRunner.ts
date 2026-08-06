@@ -324,7 +324,7 @@ export interface ImRunAgentTurnArgs {
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
-  /** Reports the concrete channel/default or attached Desktop session before provider startup. */
+  /** Reports the concrete session only after this message is accepted or queued for dispatch. */
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   /** Keep fire-and-forget work inside the ingress account's drain boundary. */
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
@@ -597,10 +597,6 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'missing_auth' };
       }
     }
-    // onRouteResolved 必须在鉴权通过之后才算"路由解析成功" —— 群窗口游标的
-    // commit 挂在它上面, 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标
-    // 永久跳过(prepareAgentTurnText 的契约: 路由失败不推进游标)。
-    await args.onRouteResolved?.(row.id);
     // ── thread 名片卡(threadScoped 新 thread 会话)─────────────────────────
     // 在 bot 第一条回复之前发进 thread, 让用户第一眼理解"这个 thread = 一条
     // 独立会话";首条消息的 oneshot 标题生成完成后, 名片原地升级为正式标题
@@ -758,6 +754,9 @@ export function createTurnRunner(
         return { kind: 'busy', reason: 'session_running' };
       }
       state.sendQueue.push(item);
+      // wiring 已成功且消息已可靠入队；此刻才推进群窗口游标，避免
+      // credential-mode switch 等 pre-dispatch 失败跳过未受理上下文。
+      await args.onRouteResolved?.(row.id);
       log.info(`queued message for session=${row.id.slice(-8)} position=${state.sendQueue.length}`);
       // 本渠道没有未收口的 turn(纯 desktop turn 在跑) → 派发只能靠它的 stray
       // done/error 触发;若该事件在 enqueue 前已送达(isTurnRunning 释放略晚于
@@ -771,6 +770,13 @@ export function createTurnRunner(
     }
 
     const dispatch = await dispatchQueuedSend(state, userId, item);
+    if (
+      dispatch.kind === 'accepted' ||
+      (dispatch.kind === 'busy' && dispatch.reason === 'queued_internally')
+    ) {
+      // accepted 或 SESSION_RUNNING 竞态下已可靠回队首，均已确定会执行。
+      await args.onRouteResolved?.(row.id);
+    }
     if (dispatch.kind !== 'accepted') return dispatch;
     return {
       kind: 'accepted',
