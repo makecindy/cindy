@@ -5,7 +5,7 @@
  * phrase MATCH 无法命中中文子串, 必须由 LIKE 兜底捞回 (模式对齐 contacts/fts.ts)。
  * 另覆盖 buildFilename 的 type 前缀剥离 (#1652 附带小 bug)。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import DatabaseCtor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 
@@ -112,6 +112,20 @@ describe('MemoryFts', () => {
     expect(fts.search('共同词', { limit: 100 }).length).toBe(20); // 上限 50 不越界即可
   });
 
+  it('MATCH 命中满 limit 时 LIKE 兜底仍执行 (不被提前返回跳过)', () => {
+    const spy = vi.spyOn(fts as unknown as { searchLike: (q: string, o: unknown, n: number) => unknown }, 'searchLike');
+    try {
+      for (let i = 0; i < 10; i++) {
+        fts.upsert(record(`project_${String(i).padStart(2, '0')}.md`, `link 内容 ${i}`));
+      }
+      const hits = fts.search('link', { limit: 3 }); // MATCH 命中 10 条 >= limit 3
+      expect(hits.length).toBeLessThanOrEqual(3);
+      expect(spy).toHaveBeenCalled(); // 子串检索仍执行, 子串独有命中才不会被永久遮蔽
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('upsert 按 filename 去重, delete/count/rebuild 基本行为', () => {
     fts.upsert(record('project_a.md', 'v1 边界'));
     fts.upsert(record('project_a.md', 'v2 索引'));
@@ -127,10 +141,12 @@ describe('MemoryFts', () => {
   });
 });
 
-describe('buildFilename · type 前缀剥离 (#1652 附带小 bug)', () => {
-  it('slug 已带同 type 前缀时剥掉, 避免双前缀分片', () => {
-    expect(buildFilename('feedback', 'feedback_foo')).toBe('feedback_foo.md');
-    expect(buildFilename('project', 'project_pricing')).toBe('project_pricing.md');
+describe('buildFilename · 拒绝 type 前缀 slug (#1652 附带小 bug)', () => {
+  it('slug 已带同 type 前缀时拒绝 (而非剥离), 避免存量分片定位错位', () => {
+    // 存量 feedback_feedback_foo.md 被 parseFilename 解析为 slug 'feedback_foo',
+    // 若剥离成 'foo' 会定位到不存在的 feedback_foo.md (not-found 或静默改错分片)
+    expect(() => buildFilename('feedback', 'feedback_foo')).toThrow(/invalid-slug/);
+    expect(() => buildFilename('project', 'project_pricing')).toThrow(/invalid-slug/);
   });
 
   it('不带前缀的纯 slug 原样拼装', () => {
@@ -141,7 +157,7 @@ describe('buildFilename · type 前缀剥离 (#1652 附带小 bug)', () => {
     expect(() => buildFilename('feedback', 'feedback')).toThrow(/invalid-slug/);
   });
 
-  it('剥掉前缀后为空的 slug 报 invalid-slug', () => {
+  it('只带前缀没有实体的 slug 报 invalid-slug', () => {
     expect(() => buildFilename('feedback', 'feedback_')).toThrow(/invalid-slug/);
   });
 });

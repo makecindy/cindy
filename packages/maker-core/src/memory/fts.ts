@@ -82,14 +82,13 @@ export class MemoryFts {
    * 返回按 bm25 排序 (越小越相关) 的命中, 含 snippet() 高亮片段。
    *
    * CJK 兜底: MATCH 只覆盖整 token 命中; 中文子串(「数据分析链路」含「边界」)
-   * 只有 LIKE 扫描捞得到 — MATCH 命中不足 limit 时合并 LIKE 兜底结果并按
-   * filename 去重, 否则子串命中行被整 token 命中行遮蔽 (模式对齐 contacts/fts.ts)。
+   * 只有 LIKE 扫描捞得到 — 始终合并 LIKE 兜底结果并按 filename 去重
+   * (即使 MATCH 已满 limit, 保证子串检索不被提前返回跳过), 再截断到 limit。
    */
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
     if (!query || query.trim().length === 0) return [];
     const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
     const matched = this.searchMatch(query, opts, limit);
-    if (matched.length >= limit) return matched;
     const seen = new Set(matched.map((h) => h.filename));
     const fallback = this.searchLike(query, opts, limit).filter((h) => !seen.has(h.filename));
     return [...matched, ...fallback].slice(0, limit);
