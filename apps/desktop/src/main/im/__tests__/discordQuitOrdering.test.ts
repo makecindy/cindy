@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { stopImBeforeDeviceLink } from '../discordQuitOrdering';
+import {
+  stopImAndDeviceLinkBeforeDbClient,
+  stopImBeforeDeviceLink,
+} from '../discordQuitOrdering';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -41,5 +44,59 @@ describe('stopImBeforeDeviceLink', () => {
       }, stopDeviceLink),
     ).rejects.toThrow('im shutdown failed');
     expect(stopDeviceLink).toHaveBeenCalledOnce();
+  });
+});
+
+describe('stopImAndDeviceLinkBeforeDbClient', () => {
+  it('keeps DbClient available until ownership release finishes', async () => {
+    const im = deferred();
+    const deviceLink = deferred();
+    const order: string[] = [];
+    const shutdown = stopImAndDeviceLinkBeforeDbClient(
+      async () => {
+        order.push('im:start');
+        await im.promise;
+        order.push('im:done');
+      },
+      async () => {
+        order.push('device-link:start');
+        await deviceLink.promise;
+        order.push('device-link:done');
+      },
+      async () => {
+        order.push('db-client:stop');
+      },
+    );
+
+    await vi.waitFor(() => expect(order).toEqual(['im:start']));
+    im.resolve();
+    await vi.waitFor(() =>
+      expect(order).toEqual(['im:start', 'im:done', 'device-link:start']),
+    );
+    deviceLink.resolve();
+    await shutdown;
+
+    expect(order).toEqual([
+      'im:start',
+      'im:done',
+      'device-link:start',
+      'device-link:done',
+      'db-client:stop',
+    ]);
+  });
+
+  it('still disposes DbClient after an ownership release failure', async () => {
+    const stopDbClient = vi.fn(async () => undefined);
+
+    await expect(
+      stopImAndDeviceLinkBeforeDbClient(
+        async () => undefined,
+        async () => {
+          throw new Error('ownership release failed');
+        },
+        stopDbClient,
+      ),
+    ).rejects.toThrow('ownership release failed');
+    expect(stopDbClient).toHaveBeenCalledOnce();
   });
 });

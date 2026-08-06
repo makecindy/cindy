@@ -16,3 +16,22 @@ export async function stopImBeforeDeviceLink(
     await stopDeviceLink();
   }
 }
+
+/**
+ * Keep the DbClient alive through Device Link ownership release. The ownership
+ * DELETE uses that client, so disposing it concurrently would force surviving
+ * Desktop instances to wait for the stale-owner timeout before taking over.
+ */
+export async function stopImAndDeviceLinkBeforeDbClient(
+  stopIm: () => Promise<void>,
+  stopDeviceLink: () => Promise<void>,
+  stopDbClient: () => Promise<void>,
+): Promise<void> {
+  try {
+    await stopImBeforeDeviceLink(stopIm, stopDeviceLink);
+  } finally {
+    // Run even when an earlier shutdown step rejects, but never before Device
+    // Link has finished its ownership release attempt.
+    await stopDbClient();
+  }
+}

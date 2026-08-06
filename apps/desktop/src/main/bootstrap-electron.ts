@@ -172,7 +172,7 @@ import {
   startImConnection,
   stopImConnection,
 } from './im';
-import { stopImBeforeDeviceLink } from './im/discordQuitOrdering';
+import { stopImAndDeviceLinkBeforeDbClient } from './im/discordQuitOrdering';
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
@@ -6675,9 +6675,11 @@ onQuit(
 //                           shared app-server 子进程 SIGTERM)。**必须 await** —
 //                           kill 是 Layer 2 才发出, fire-and-forget 会让 app.exit
 //                           在 kill 之前就掐掉 Node, Windows 上子进程会变孤儿。
-//   - im.dispose:           wsClient.stop() 内部先发 announce offline (quit path waits 4.5s)
+//   - IM → Device Link → DbClient:
+//                           wsClient.stop() 内部先发 announce offline (quit path waits 4.5s)
 //                           再 close WS。Device Link presence 必须保留到 Discord Gateway
-//                           已关闭，否则远端会先接管并与旧 ingress 短暂双活。
+//                           已关闭；ownership DELETE 又必须早于 DbClient dispose，三步
+//                           因而注册为同一个串行 disposer，避免双活或 15s stale 接管延迟。
 //   - codex env shutdown:   关 MCP HTTP bridge。语义上要在 maker.shutdown() 杀完
 //                           codex 子进程之后, 这里并发跑最坏是 log noise。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
@@ -6685,11 +6687,12 @@ onQuit(
 onQuit('shutdown-maker', shutdownMaker, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit(
-  'im-device-link',
+  'im-device-link-db-client',
   () =>
-    stopImBeforeDeviceLink(
+    stopImAndDeviceLinkBeforeDbClient(
       () => stopImConnection('quit'),
       () => stopDeviceLinkServiceForQuit(),
+      () => lifecycleDbClientManager.dispose('quit'),
     ),
   'async',
 );
@@ -6716,8 +6719,6 @@ onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'async');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
-
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 
