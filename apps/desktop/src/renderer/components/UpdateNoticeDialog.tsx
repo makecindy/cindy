@@ -477,14 +477,51 @@ function VersionDropdown({
 function AutoBody({
   releaseNotes,
   locale,
+  onStickyChange,
 }: {
   releaseNotes: ReleaseNotes[];
   locale: string;
+  onStickyChange: (version: string) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const blockRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Sticky-header observer: track which version block is at the top of the
+  // scroll area so the header badge can follow. Only active for multi-version
+  // auto mode — single-version stays at its initial value.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || releaseNotes.length <= 1) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let best: { v: string; top: number } | null = null;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const v = (entry.target as HTMLElement).dataset.version;
+          if (!v) continue;
+          const top = entry.boundingClientRect.top;
+          if (best === null || top < best.top) best = { v, top };
+        }
+        if (best) onStickyChange(best.v);
+      },
+      { root, rootMargin: '0px 0px -99% 0px', threshold: 0 },
+    );
+    for (const el of blockRefs.current.values()) observer.observe(el);
+    return () => observer.disconnect();
+  }, [releaseNotes, onStickyChange]);
+
   return (
-    <div className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
+    <div ref={scrollRef} className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
       {releaseNotes.map((notes, i) => (
-        <div key={notes.version} className="flex flex-col">
+        <div
+          key={notes.version}
+          ref={(el) => {
+            if (el) blockRefs.current.set(notes.version, el);
+            else blockRefs.current.delete(notes.version);
+          }}
+          data-version={notes.version}
+          className="flex flex-col"
+        >
           {i > 0 && <div className="mx-auto h-px w-full max-w-[800px] bg-[var(--cmd-palette-border)]" />}
           <VersionBlock notes={notes} locale={locale} />
         </div>
@@ -768,17 +805,10 @@ export function UpdateNoticeDialog({
         })
       : t('update.notice.ariaDescription', { version: newest.version });
 
-  // Header's right cell — a version count, and in manual mode the entry point
-  // for jumping across history. Version number, date and contributors all moved
-  // into each version's own block, so there is nothing else left up here.
-  //   - Manual:     "N versions" + dropdown
-  //   - Auto multi: "N versions", static
-  //   - Auto single: nothing (a single version's identity is in its block)
-  const versionCountLabel = isManual
-    ? t('update.notice.versionsSpan', { count: allVersions?.length ?? 1 })
-    : isAutoMulti
-      ? t('update.notice.versionsSpan', { count: releaseNotes.length })
-      : null;
+  // Header's right cell: version badge that follows scroll.
+  //   - Manual multi:   v<version> badge + dropdown for history navigation.
+  //   - Auto multi:     v<version> badge, updates as user scrolls.
+  //   - Auto / manual single: static v<version> badge.
 
   return (
     <AlertDialog.Root
@@ -846,11 +876,11 @@ export function UpdateNoticeDialog({
               {t('update.notice.title')}
             </AlertDialog.Title>
             <div className="min-w-0 justify-self-end">
-              {isManual && allVersions && allVersions.length > 1 && versionCountLabel ? (
+              {isManual && allVersions && allVersions.length > 1 ? (
                 <VersionDropdown
                   versions={allVersions}
                   currentVersion={stickyVersion || newest.version}
-                  triggerLabel={versionCountLabel}
+                  triggerLabel={`v${stickyVersion || newest.version}`}
                   triggerAriaLabel={t('update.notice.versionJumpAria', {
                     count: allVersions.length,
                     version: stickyVersion || newest.version,
@@ -869,11 +899,9 @@ export function UpdateNoticeDialog({
                     if (!dropOpen) dropdownClosedAtRef.current = Date.now();
                   }}
                 />
-              ) : versionCountLabel ? (
-                <span className="whitespace-nowrap text-13 text-[var(--cmd-palette-item-meta)]">
-                  {versionCountLabel}
-                </span>
-              ) : null}
+              ) : (
+                <VersionBadge label={`v${stickyVersion || newest.version}`} />
+              )}
             </div>
           </div>
 
@@ -893,7 +921,11 @@ export function UpdateNoticeDialog({
               registerJump={registerJump}
             />
           ) : (
-            <AutoBody releaseNotes={releaseNotes} locale={i18n.language} />
+            <AutoBody
+              releaseNotes={releaseNotes}
+              locale={i18n.language}
+              onStickyChange={setStickyVersion}
+            />
           )}
 
           <div className="h-px bg-[var(--cmd-palette-border)]" />
