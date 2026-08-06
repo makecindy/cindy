@@ -100,6 +100,12 @@ export function CindyCapabilityPrefs({
         // 这项能力),但右侧不给下拉,改一句不可点的灰字,不拿旧型号冒充可选。
         const defaultModel = kind.defaultModel;
         const unavailable = kind.options.length === 0 || defaultModel === null;
+        // 文本类例外:目录清单空(含凭证过滤后为空)但用户已有一个 text pin 时,
+        // 仍要能把它清掉/改掉——unavailable 的灰字会锁死坏 pin(Codex 2026-08-06
+        // P1)。此时渲染选择器,只露出「跟随默认」与 stale 行。
+        const textPinUnavailable = isText
+          ? unavailable && overrides[capability] === undefined
+          : unavailable;
         // 文本类:身份卡声明了偏好模型时,"跟随默认"行如实说出实际路由
         // (插件声明优先于系统链;用户在下面的钉档永远最大)。
         const declaredModel = isText ? (prefs.text?.declaredModel ?? null) : null;
@@ -126,7 +132,7 @@ export function CindyCapabilityPrefs({
               >
                 {t(`settings.ghosts.detail.cindyPrefs.cap.${capability}`)}
               </span>
-              {unavailable ? (
+              {textPinUnavailable ? (
                 <span
                   className={cn(
                     'cindy-capability-empty min-w-0 truncate text-[var(--text-tertiary)]',
@@ -138,7 +144,7 @@ export function CindyCapabilityPrefs({
               ) : (
                 <OneshotModelPinPicker
                   value={selectValue === FOLLOW_DEFAULT_VALUE ? undefined : selectValue}
-                  defaultLabel={defaultModel.label}
+                  defaultLabel={defaultModel?.label ?? ''}
                   declaredLabel={declaredModel?.label ?? null}
                   legacyPinLabel={legacyPinLabel}
                   options={textOptions}
