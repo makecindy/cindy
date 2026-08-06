@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
   owner: true,
+  deviceLinkStatus: 'online' as 'online' | 'offline',
   selfDeviceId: 'z' as string | null,
   peers: [] as Array<{
     deviceId: string;
@@ -17,6 +18,7 @@ const harness = vi.hoisted(() => ({
     lastSeenAt: number;
   }) => void) | null,
   ownershipHandler: null as ((owner: boolean) => void) | null,
+  statusHandler: null as ((status: 'online' | 'offline') => void) | null,
   hooks: null as {
     isTransportAllowed(identity?: string | null): boolean;
     onConfigurationChanged?: () => void;
@@ -25,6 +27,7 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../device-link', () => ({
+  getDeviceLinkStatus: () => harness.deviceLinkStatus,
   getSelfDeviceId: () => harness.selfDeviceId,
   isDeviceLinkOwner: () => harness.owner,
   listOnlineDesktopDevices: () => harness.peers,
@@ -42,6 +45,10 @@ vi.mock('../../../device-link', () => ({
   ) => {
     harness.pushHandler = handler;
     return () => { harness.pushHandler = null; };
+  },
+  onDeviceLinkStatusChanged: (handler: (status: 'online' | 'offline') => void) => {
+    harness.statusHandler = handler;
+    return () => { harness.statusHandler = null; };
   },
   sendDeviceLinkPush: harness.sendPush,
 }));
@@ -83,11 +90,13 @@ async function finishDiscovery(manager: ImSchedulerManager): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers();
   harness.owner = true;
+  harness.deviceLinkStatus = 'online';
   harness.selfDeviceId = 'z';
   harness.peers = [];
   harness.pushHandler = null;
   harness.presenceHandler = null;
   harness.ownershipHandler = null;
+  harness.statusHandler = null;
   harness.hooks = null;
   harness.sendPush.mockReset();
 });
@@ -187,6 +196,42 @@ describe('Discord scheduler manager', () => {
 
     expect(discord.init).not.toHaveBeenCalled();
     expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+    await manager.stop();
+  });
+
+  it('stops the active transport when the relay goes offline', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledTimes(1);
+
+    harness.deviceLinkStatus = 'offline';
+    harness.statusHandler?.('offline');
+    await manager.reconcile();
+
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
+    await manager.stop();
+  });
+
+  it('stays fail-closed when an online peer has no fresh Discord advertisement', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+
+    expect(discord.init).not.toHaveBeenCalled();
+    expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
     await manager.stop();
   });
 });

@@ -75,8 +75,9 @@ const NOT_CONFIGURED: TelegramRemoteStatus = { kind: 'idle', appId: null, reason
 function projectStatus(): TelegramRemoteStatus {
   if (!source) return { ...NOT_CONFIGURED };
   const status = source.getStatus();
+  const projectedKind = status.kind === 'standby' ? 'idle' : status.kind;
   return {
-    kind: status.kind,
+    kind: projectedKind,
     appId: 'appId' in status ? status.appId : null,
     reason: status.kind === 'error' ? status.reason : null,
     code: status.kind === 'error' ? (status.code ?? null) : null,

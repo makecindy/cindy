@@ -4,11 +4,13 @@ import type { DiscordIM } from '@cindy/im';
 
 import {
   getSelfDeviceId,
+  getDeviceLinkStatus,
   isDeviceLinkOwner,
   listOnlineDesktopDevices,
   onDeviceLinkOwnershipChanged,
   onDeviceLinkPresenceChanged,
   onDeviceLinkPush,
+  onDeviceLinkStatusChanged,
   sendDeviceLinkPush,
 } from '../../device-link';
 import { createLogger } from '../../logger';
@@ -41,16 +43,19 @@ export class ImSchedulerManager {
   private offPresence: (() => void) | null = null;
   private offPush: (() => void) | null = null;
   private offOwnership: (() => void) | null = null;
+  private offStatus: (() => void) | null = null;
   private advertisementTimer: ReturnType<typeof setInterval> | null = null;
   private discoveryDeadline = 0;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
+  private deviceLinkReady = false;
 
   constructor(private readonly discord: DiscordIM) {}
 
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.deviceLinkReady = getDeviceLinkStatus() === 'online';
     this.discord.setSchedulerHooks({
       isTransportAllowed: (identity) => this.isLocalIngress(identity),
       onConfigurationChanged: () => this.notifyLocalConfigurationChanged(),
@@ -60,6 +65,17 @@ export class ImSchedulerManager {
         this.peers.delete(snapshot.deviceId);
       } else {
         this.advertise(snapshot.deviceId);
+      }
+      void this.reconcile();
+    });
+    this.offStatus = onDeviceLinkStatusChanged((status) => {
+      this.deviceLinkReady = status === 'online';
+      if (!this.deviceLinkReady) {
+        this.peers.clear();
+        void this.ensureStandby();
+      } else {
+        this.beginDiscoveryGrace();
+        this.advertiseAll();
       }
       void this.reconcile();
     });
@@ -98,9 +114,12 @@ export class ImSchedulerManager {
     this.offPresence?.();
     this.offPush?.();
     this.offOwnership?.();
+    this.offStatus?.();
     this.offPresence = null;
     this.offPush = null;
     this.offOwnership = null;
+    this.offStatus = null;
+    this.deviceLinkReady = false;
     this.discord.setSchedulerHooks(null);
     this.peers.clear();
     this.desired = null;
@@ -112,7 +131,7 @@ export class ImSchedulerManager {
     if (!this.started) return;
     const current = this.reconcileTail.catch(() => undefined).then(async () => {
       if (!this.started) return;
-      if (!isDeviceLinkOwner()) {
+      if (!this.deviceLinkReady || !isDeviceLinkOwner()) {
         await this.ensureStandby();
         return;
       }
@@ -150,7 +169,7 @@ export class ImSchedulerManager {
       channels: SchedulerAdvertisementFrame['channels'];
     }>,
   ): boolean {
-    if (!this.started || Date.now() < this.discoveryDeadline || !isDeviceLinkOwner()) return false;
+    if (!this.started || !this.deviceLinkReady || Date.now() < this.discoveryDeadline || !isDeviceLinkOwner()) return false;
     const self = getSelfDeviceId();
     const resolvedIdentity = identity ?? this.discord.getSchedulerIdentity();
     if (!self || !resolvedIdentity) return false;

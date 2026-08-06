@@ -250,9 +250,11 @@ const presenceNameByDevice = new Map<string, string>();
 type DeviceLinkPushHandler = (sourceDeviceId: string, payload: unknown) => void;
 type DeviceLinkPresenceHandler = (snapshot: PresenceSnapshot) => void;
 type DeviceLinkOwnershipHandler = (owner: boolean) => void;
+type DeviceLinkStatusHandler = (status: DeviceLinkStatus) => void;
 const deviceLinkPushHandlers = new Map<string, Set<DeviceLinkPushHandler>>();
 const deviceLinkPresenceHandlers = new Set<DeviceLinkPresenceHandler>();
 const deviceLinkOwnershipHandlers = new Set<DeviceLinkOwnershipHandler>();
+const deviceLinkStatusHandlers = new Set<DeviceLinkStatusHandler>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
 
 /**
@@ -475,6 +477,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       presenceOnlineByDevice.clear();
       presenceLastSeenByDevice.clear();
       presenceAvailableByDevice.clear();
+    }
+    for (const handler of deviceLinkStatusHandlers) {
+      try {
+        handler(status);
+      } catch (error) {
+        log.warn('device-link status consumer failed', error);
+      }
     }
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     handleContactsDeviceLinkStatusChanged(status === 'online');
@@ -1500,6 +1509,11 @@ export function onDeviceLinkPresenceChanged(handler: DeviceLinkPresenceHandler):
 export function onDeviceLinkOwnershipChanged(handler: DeviceLinkOwnershipHandler): () => void {
   deviceLinkOwnershipHandlers.add(handler);
   return () => deviceLinkOwnershipHandlers.delete(handler);
+}
+
+export function onDeviceLinkStatusChanged(handler: DeviceLinkStatusHandler): () => void {
+  deviceLinkStatusHandlers.add(handler);
+  return () => deviceLinkStatusHandlers.delete(handler);
 }
 
 /** 控制端:对目标设备远程 invoke 一个 allowlist 内的 channel。
