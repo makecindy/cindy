@@ -1494,7 +1494,10 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
   });
 
   it('search 类目落进 cindy.search，并生成独立的 Web Search 权限行', () => {
-    const v = validateGhostManifest(chipWithModel({ search: ['web'] }));
+    const manifest = chipWithModel({ search: ['web'] });
+    manifest.slots = ['panel', 'cindy', 'tool'];
+    manifest.tools = [{ name: 'research', description: '查询资料' }];
+    const v = validateGhostManifest(manifest);
     expect(v.ok, JSON.stringify(v)).toBe(true);
     if (!v.ok) return;
     expect(v.manifest.cindy).toEqual({ search: ['web'] });
@@ -1508,6 +1511,12 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
         }),
       ]),
     );
+  });
+
+  it('search.web 缺少 tool 槽或工具声明时拒装', () => {
+    const withoutTool = validateGhostManifest(chipWithModel({ search: ['web'] }));
+    expect(withoutTool.ok).toBe(false);
+    expect(!withoutTool.ok && withoutTool.reason).toContain('tool');
   });
 });
 

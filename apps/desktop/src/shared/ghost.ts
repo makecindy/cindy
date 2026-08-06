@@ -3070,6 +3070,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
     }
+    if (cindy.search?.includes('web') && (!slots.includes('tool') || tools === undefined)) {
+      return {
+        ok: false,
+        reason: 'cindy.search.web 只允许由真实 tool-call 触发，必须同时声明 "tool" 槽和 tools',
+      };
+    }
   }
 
   // agent 槽详单:有槽无详单 = 仅允许真实用户点击触发；background 是

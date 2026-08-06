@@ -1243,7 +1243,8 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 \`embed\`(\`text\`=文本转向量,§4.0.3)、\`search\`(\`web\`=Cindy 托管
 公网搜索,见 §4 的 \`search_web\` 段)。
 详单里没申请的动作,运行时点单直接被拒;声明了 cindy 槽却漏写详单 = 零能力,
-别漏。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
+别漏。\`search.web\` 只能由真实 tool-call 触发,还必须同时声明 \`tool\` 槽和
+至少一个工具。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
 
 **network 详单**(声明了 network 槽时必写,详见 §4.7):
 
