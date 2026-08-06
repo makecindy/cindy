@@ -596,6 +596,11 @@ export default function NewRemoteSessionScreen() {
   modelRowsRef.current = modelRows;
   const catalogReadyRef = useRef(deviceProviders.ready);
   catalogReadyRef.current = deviceProviders.ready;
+  // 供应商目录本身的渲染期镜像:异步回调(权限确认 .then)提交时用它现场重建目标
+  // agent 的 rows——确认弹窗期间目录可能从未就绪变为就绪或同设备刷新,触发时捕获的
+  // rows 与最新 ready 不同代会误判/抄旧首项(codex review P2)。
+  const deviceProvidersRef = useRef(deviceProviders);
+  deviceProvidersRef.current = deviceProviders;
   // 发送前鉴权门禁(对齐桌面 useVendorAuthGate):选中 agent 在被控端没有已连接
   // 供应商时提前提示 + 拦截创建,不让用户发出注定失败的首条消息。unknown 不拦截。
   const agentAuthVerdict = useMemo(
@@ -689,13 +694,6 @@ export default function NewRemoteSessionScreen() {
     // 该路径同时负责恢复 agent 权限，下面的通用权限记忆 effect 不再重复弹框。
     appliedPermissionMemoryRef.current = true;
     if (selectedDeviceId) autoDefaultDeviceRef.current = selectedDeviceId;
-    const rows = flattenProviderSections(
-      buildMobileModelSections({
-        providers: deviceProviders.providers,
-        agentKind: storedAgentKind,
-        visibilityOverrides: deviceProviders.modelVisibilityOverrides,
-      }).sections,
-    );
     const storedPermissionMode = newSessionPreferences?.permissionModeByAgent[storedAgentKind];
     const nextPermissionMode =
       storedPermissionMode ??
@@ -713,11 +711,20 @@ export default function NewRemoteSessionScreen() {
       // 确认期间用户又切了 agent / 手动选了模型 → 旧回调不得覆盖新选择。
       if (seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => {
+        // rows 与 ready 必须同一代(codex review P2):提交时用最新目录现场重建,
+        // 不用触发时捕获的旧 rows。
+        const rowsNow = flattenProviderSections(
+          buildMobileModelSections({
+            providers: deviceProvidersRef.current.providers,
+            agentKind: storedAgentKind,
+            visibilityOverrides: deviceProvidersRef.current.modelVisibilityOverrides,
+          }).sections,
+        );
         const next = pickAgentDefaultRuntime({
           agentKind: storedAgentKind,
           sessions,
           deviceId: selectedDeviceId || undefined,
-          modelRows: rows,
+          modelRows: rowsNow,
           currentEffort: current.effort,
           catalogReady: catalogReadyRef.current,
         });
@@ -2303,14 +2310,6 @@ export default function NewRemoteSessionScreen() {
     explicitProviderModelSelectionRef.current = null;
     const seqAtTrigger = ++runtimeActionSeqRef.current;
     void saveNewSessionPreferences({ agentKind: nextKind });
-    // 取目标 agent 自己的模型列表(providers 已加载时同步可得),用于"列表最上面"兜底 + effort reconcile。
-    const rows = flattenProviderSections(
-      buildMobileModelSections({
-        providers: deviceProviders.providers,
-        agentKind: nextKind,
-        visibilityOverrides: deviceProviders.modelVisibilityOverrides,
-      }).sections,
-    );
     const storedPermissionMode = newSessionPreferences?.permissionModeByAgent[nextKind];
     const nextPermissionMode =
       storedPermissionMode ??
@@ -2323,11 +2322,20 @@ export default function NewRemoteSessionScreen() {
       // 确认期间用户又切了 agent / 手动选了模型 → 旧回调不得覆盖新选择(Greptile P1)。
       if (seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => {
+        // rows 与 ready 必须同一代(codex review P2):提交时用最新目录现场重建目标
+        // agent 的 rows,不用触发时捕获的旧 rows。
+        const rowsNow = flattenProviderSections(
+          buildMobileModelSections({
+            providers: deviceProvidersRef.current.providers,
+            agentKind: nextKind,
+            visibilityOverrides: deviceProvidersRef.current.modelVisibilityOverrides,
+          }).sections,
+        );
         const next = pickAgentDefaultRuntime({
           agentKind: nextKind,
           sessions,
           deviceId: selectedDeviceId || undefined,
-          modelRows: rows,
+          modelRows: rowsNow,
           currentEffort: current.effort,
           catalogReady: catalogReadyRef.current,
         });
