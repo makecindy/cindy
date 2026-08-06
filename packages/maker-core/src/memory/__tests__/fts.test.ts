@@ -3,7 +3,7 @@
  *
  * 重点覆盖 #1537: unicode61 tokenizer 把连续 CJK 文本当一个 token,
  * phrase MATCH 无法命中中文子串, 必须由 LIKE 兜底捞回 (模式对齐 contacts/fts.ts)。
- * 另覆盖 buildFilename 的 type 前缀剥离 (#1652 附带小 bug)。
+ * 另覆盖 buildFilename 对带 type 前缀 slug 的拒绝 (#1652 附带小 bug)。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import DatabaseCtor from 'better-sqlite3';
@@ -112,15 +112,19 @@ describe('MemoryFts', () => {
     expect(fts.search('共同词', { limit: 100 }).length).toBe(20); // 上限 50 不越界即可
   });
 
-  it('MATCH 命中满 limit 时 LIKE 兜底仍执行 (不被提前返回跳过)', () => {
+  it('MATCH 命中满 limit 时为 LIKE-only 子串命中预留 1 个名额', () => {
     const spy = vi.spyOn(fts as unknown as { searchLike: (q: string, o: unknown, n: number) => unknown }, 'searchLike');
     try {
-      for (let i = 0; i < 10; i++) {
+      // 3 条整 token 命中 (= limit 3, 满额) + 1 条 LIKE-only (LinkedIn, MATCH 不中)
+      for (let i = 0; i < 3; i++) {
         fts.upsert(record(`project_${String(i).padStart(2, '0')}.md`, `link 内容 ${i}`));
       }
-      const hits = fts.search('link', { limit: 3 }); // MATCH 命中 10 条 >= limit 3
-      expect(hits.length).toBeLessThanOrEqual(3);
-      expect(spy).toHaveBeenCalled(); // 子串检索仍执行, 子串独有命中才不会被永久遮蔽
+      fts.upsert(record('project_linkedin.md', 'LinkedIn 社交平台'));
+      const hits = fts.search('link', { limit: 3 });
+      expect(spy).toHaveBeenCalled(); // 子串检索仍执行
+      expect(hits.length).toBe(3);
+      // 预留名额生效: 唯一的 LIKE-only 命中必须可见
+      expect(hits.some((h) => h.filename === 'project_linkedin.md')).toBe(true);
     } finally {
       spy.mockRestore();
     }

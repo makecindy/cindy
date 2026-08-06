@@ -78,19 +78,27 @@ export class MemoryFts {
   }
 
   /**
-   * 全文检索. query 直接走 FTS5 MATCH 语法 (支持 AND/OR/NOT/phrase "...")。
+   * 全文检索. query 经 escapeFtsQuery 转义为 phrase 后走 FTS5 MATCH
+   * (AND/OR/NOT 等高级语法会被转义吞掉, 见 escapeFtsQuery 说明)。
    * 返回按 bm25 排序 (越小越相关) 的命中, 含 snippet() 高亮片段。
    *
-   * CJK 兜底: MATCH 只覆盖整 token 命中; 中文子串(「数据分析链路」含「边界」)
-   * 只有 LIKE 扫描捞得到 — 始终合并 LIKE 兜底结果并按 filename 去重
-   * (即使 MATCH 已满 limit, 保证子串检索不被提前返回跳过), 再截断到 limit。
+   * CJK 兜底: unicode61 把连续 CJK 文本当一个 token, MATCH 只能覆盖整 token 命中;
+   * 中文子串(如「边界」在「边界索引配置说明」中) 只有 LIKE 扫描捞得到 —
+   * 始终合并 LIKE 兜底结果并按 filename 去重; MATCH 已满 limit 时为 LIKE-only
+   * 子串命中预留 1 个名额, 避免其被整 token 命中完全遮蔽。
    */
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
     if (!query || query.trim().length === 0) return [];
     const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
     const matched = this.searchMatch(query, opts, limit);
     const seen = new Set(matched.map((h) => h.filename));
-    const fallback = this.searchLike(query, opts, limit).filter((h) => !seen.has(h.filename));
+    // LIKE 多拉一些, 去重过滤后仍有足够的子串命中候选
+    const fallback = this.searchLike(query, opts, Math.min(limit * 2, 100)).filter((h) => !seen.has(h.filename));
+    if (matched.length >= limit && fallback.length > 0) {
+      // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
+      // 被整 token 命中完全遮蔽 (review 反馈)
+      return [...matched.slice(0, limit - 1), fallback[0]];
+    }
     return [...matched, ...fallback].slice(0, limit);
   }
 
