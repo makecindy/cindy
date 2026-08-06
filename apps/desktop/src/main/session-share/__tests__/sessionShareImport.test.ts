@@ -35,6 +35,7 @@ const codexMock = vi.hoisted(() => ({
 const cindyMediaMock = vi.hoisted(() => ({
   ingestCalls: [] as Array<{ buffer: Buffer; mimeType: string; refs: Array<Record<string, unknown>> }>,
   removeSessionRefsCalls: [] as string[],
+  removeSessionRefsErrorFor: null as string | null,
   /** 置为 Error 让 ingest 全部失败(测回落老目录路径)。 */
   ingestError: null as Error | null,
 }));
@@ -150,6 +151,9 @@ vi.mock('../../cindy-media/ingest.js', () => ({
 vi.mock('../../cindy-media/ledger.js', () => ({
   removeSessionRefs: async (sessionId: string) => {
     cindyMediaMock.removeSessionRefsCalls.push(sessionId);
+    if (cindyMediaMock.removeSessionRefsErrorFor === sessionId) {
+      throw new Error('media cleanup failed');
+    }
     return 0;
   },
 }));
@@ -173,9 +177,13 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({
     worktreeMock.removeCalls.push(sessionId);
   },
 }));
-const { inspectShareFile, unlockShareDraft, commitShareImport, cancelShareDraft } = await import(
-  '../sessionShareImport.js'
-);
+const {
+  inspectShareFile,
+  unlockShareDraft,
+  commitShareImport,
+  cancelShareDraft,
+  cleanupReplacedSessionMediaRefs,
+} = await import('../sessionShareImport.js');
 const { buildLooseUrl } = await import('../mediaUrlRewrite.pure.js');
 const { buildPlainFile, sealPayload } = await import('../xdtshareCrypto.js');
 
@@ -397,6 +405,7 @@ describe('sessionShareImport', () => {
     codexMock.removeCalls = [];
     cindyMediaMock.ingestCalls = [];
     cindyMediaMock.removeSessionRefsCalls = [];
+    cindyMediaMock.removeSessionRefsErrorFor = null;
     cindyMediaMock.ingestError = null;
     legacyImageMock.removeSessionCalls = [];
     worktreeMock.detect = null;
@@ -1336,6 +1345,37 @@ describe('sessionShareImport', () => {
       replaceSessions?: Array<{ id: string; status: string }>;
     };
     expect(txArgs.replaceSessions).toEqual(result.replacedSessions);
+  });
+
+  it('overwrite media cleanup removes every replaced session ref after commit', async () => {
+    cindyMediaMock.removeSessionRefsCalls = [];
+
+    await cleanupReplacedSessionMediaRefs([
+      { id: 'old-lead' },
+      { id: 'old-worker' },
+    ]);
+
+    expect(cindyMediaMock.removeSessionRefsCalls).toEqual([
+      'old-lead',
+      'old-worker',
+    ]);
+  });
+
+  it('overwrite media cleanup isolates failures and continues with the remaining graph', async () => {
+    cindyMediaMock.removeSessionRefsCalls = [];
+    cindyMediaMock.removeSessionRefsErrorFor = 'old-lead';
+
+    await expect(
+      cleanupReplacedSessionMediaRefs([
+        { id: 'old-lead' },
+        { id: 'old-worker' },
+      ]),
+    ).resolves.toBeUndefined();
+
+    expect(cindyMediaMock.removeSessionRefsCalls).toEqual([
+      'old-lead',
+      'old-worker',
+    ]);
   });
 
   it('orca bundle: cc Worker transcripts land beside lead in the same re-sanitized dir', async () => {

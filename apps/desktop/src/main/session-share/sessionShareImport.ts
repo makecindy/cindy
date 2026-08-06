@@ -285,6 +285,32 @@ interface WorkerImportPlan {
   activeSdkSessionId: string | null;
 }
 
+/**
+ * 覆盖事务提交后的旧会话媒体账本收尾。只删旧 session 名下的引用行；共享 blob
+ * 字节不直接删除，引用归零后由 recycler 统一回收。失败不反转已经提交的新会话图，
+ * 与普通会话删除的媒体清理保持 best-effort 语义。
+ */
+export async function cleanupReplacedSessionMediaRefs(
+  sessions: ReadonlyArray<{ id: string }>,
+): Promise<void> {
+  for (const session of sessions) {
+    try {
+      const removed = await removeSessionMediaRefs(session.id);
+      if (removed > 0) {
+        log.info('replaced session media refs removed', {
+          sessionId: session.id,
+          count: removed,
+        });
+      }
+    } catch (err) {
+      log.warn('replaced session media ref cleanup failed', {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
 /** 第三段:落三层数据。前置校验全过才写;文件步登记 journal,失败逆序回滚。 */
 export async function commitShareImport(
   opts: CommitShareImportOptions,

@@ -30,6 +30,7 @@ import {
 } from '../../session-share/xdtshareFormat.pure.js';
 import {
   cancelShareDraft,
+  cleanupReplacedSessionMediaRefs,
   commitShareImport,
   inspectShareFile,
   unlockShareDraft,
@@ -168,11 +169,12 @@ export function registerSessionShareIpc(): void {
       const useWorktree = payload.useWorktree === true;
       try {
         const result = await commitShareImport({ draftId, workingDir, draftPrefs, overwrite, useWorktree });
-        // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI 收尾：
+        // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI/账本收尾：
         // - 关闭旧 lead + 完整旧 Worker 图的 live runtime，避免被标 deleted 后仍跑；
-        // - 广播 patched 让 sidebar/会话视图立即移除旧任务。
-        // 不在这里删除转录/媒体/worktree 字节：同 resume id 的新任务可能复用它们，
-        // 资源回收交既有对账/启动期 reconcile，避免覆盖成功后误伤新任务。
+        // - 广播 patched 让 sidebar/会话视图立即移除旧任务；
+        // - 删除旧 session 名下的媒体引用，引用归零的共享 blob 交 recycler 回收。
+        // 不在这里删除转录、worktree 或媒体字节：同 resume id/内容的
+        // 新任务可能复用它们，直接删物理资源会误伤新任务。
         for (const replaced of result.replacedSessions) {
           await getMakerIfReady()?.closeSession(replaced.id).catch((err) => {
             log.warn('share overwrite close replaced session failed', {
@@ -182,6 +184,7 @@ export function registerSessionShareIpc(): void {
           });
           broadcastSessionPatched(replaced.id, { status: 'deleted' });
         }
+        await cleanupReplacedSessionMediaRefs(result.replacedSessions);
         // replacedSessions 是 main 内部收尾信息，不暴露给 renderer/preload 契约。
         const publicResult: CommitShareImportResult = {
           sessionId: result.sessionId,
