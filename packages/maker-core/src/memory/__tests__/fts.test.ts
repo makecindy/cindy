@@ -116,8 +116,9 @@ describe('MemoryFts', () => {
   it('MATCH 命中满 limit 时为 LIKE-only 子串命中预留 1 个名额', () => {
     const spy = vi.spyOn(fts as unknown as { searchLike: (q: string, o: unknown, n: number) => unknown }, 'searchLike');
     try {
-      // 3 条整 token 命中 (= limit 3, 满额) + 1 条 LIKE-only (LinkedIn, MATCH 不中)
-      for (let i = 0; i < 3; i++) {
+      // 7 条整 token 命中 (>= limit 3, 满额; 且 7 > limit*2=6, LIKE 全扫也排在前面) +
+      // 1 条 LIKE-only (LinkedIn, MATCH 不中) 在物理顺序最后 — 若 SQL 先 LIMIT 会被截掉
+      for (let i = 0; i < 7; i++) {
         fts.upsert(record(`project_${String(i).padStart(2, '0')}.md`, `link 内容 ${i}`));
       }
       fts.upsert(record('project_linkedin.md', 'LinkedIn 社交平台'));

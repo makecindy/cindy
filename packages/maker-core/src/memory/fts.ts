@@ -90,20 +90,22 @@ export class MemoryFts {
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
     if (!query || query.trim().length === 0) return [];
     const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
-    const matched = this.searchMatch(query, opts, limit);
+    // MATCH 全量拉取 (量级小, 无 LIMIT): top = bm25 最佳 limit 条;
+    // 全量集合用作 seen, 保证 fallback 里只剩 MATCH 永远命不中的 true LIKE-only
+    const matched = this.searchMatch(query, opts);
+    const top = matched.slice(0, limit);
     const seen = new Set(matched.map((h) => h.filename));
-    // LIKE 多拉一些, 去重过滤后仍有足够的子串命中候选
-    const fallback = this.searchLike(query, opts, Math.min(limit * 2, 100)).filter((h) => !seen.has(h.filename));
-    if (limit > 1 && matched.length >= limit && fallback.length > 0) {
+    const fallback = this.searchLike(query, opts).filter((h) => !seen.has(h.filename));
+    if (limit > 1 && top.length >= limit && fallback.length > 0) {
       // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
       // 被整 token 命中完全遮蔽 (limit=1 时不预留, 保住唯一最佳 MATCH)
-      return [...matched.slice(0, limit - 1), fallback[0]];
+      return [...top.slice(0, limit - 1), fallback[0]];
     }
-    return [...matched, ...fallback].slice(0, limit);
+    return [...top, ...fallback].slice(0, limit);
   }
 
   /** FTS5 MATCH 路径; query 语法错静默返空(让 LIKE 兜底接管) */
-  private searchMatch(query: string, opts: SearchOptions, limit: number): SearchHit[] {
+  private searchMatch(query: string, opts: SearchOptions): SearchHit[] {
     const escapedQuery = escapeFtsQuery(query);
 
     let sql = `SELECT filename, type, title,
@@ -116,8 +118,7 @@ export class MemoryFts {
       sql += ` AND type = ?`;
       params.push(opts.type);
     }
-    sql += ` ORDER BY score LIMIT ?`;
-    params.push(limit);
+    sql += ` ORDER BY score`;
 
     try {
       const rows = this.db.prepare(sql).all(...params) as Array<{
@@ -142,8 +143,12 @@ export class MemoryFts {
     }
   }
 
-  /** LIKE 子串兜底: 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确), 无 bm25/snippet */
-  private searchLike(query: string, opts: SearchOptions, limit: number): SearchHit[] {
+  /**
+   * LIKE 子串兜底: 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确), 无 bm25/snippet。
+   * 不做 SQL LIMIT — 由调用方去重后再截断: 否则 LIKE-only 命中排在 MATCH 双命中行
+   * 之后时会被先截掉, 预留名额失效 (memory 量级小, 全扫可接受)。
+   */
+  private searchLike(query: string, opts: SearchOptions): SearchHit[] {
     const pattern = `%${escapeLikePattern(query.trim())}%`;
     let sql = `SELECT filename, type, title, body
                FROM ${TABLE}
@@ -153,8 +158,6 @@ export class MemoryFts {
       sql += ` AND type = ?`;
       params.push(opts.type);
     }
-    sql += ` LIMIT ?`;
-    params.push(limit);
 
     try {
       const rows = this.db.prepare(sql).all(...params) as Array<{
