@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { isPluginManifestIncompatibilityError } from '../protocolErrors';
+
 /**
  * The IPC registration module imports Electron and the full Ghost host graph,
  * so guard its error-boundary contract using the established main-process
@@ -36,6 +38,8 @@ describe('Plugin Market IPC error boundary', () => {
     const body = registerSource.slice(start, end);
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
+    expect(body).toContain('isPluginManifestIncompatibilityError(error)');
+    expect(body).toContain("throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');");
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
     expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(13);
   });
@@ -52,6 +56,24 @@ describe('Plugin Market IPC error boundary', () => {
     expect(body).toContain(
       "throwIpcError('PRECONDITION_FAILED', 'Too many local Plugin icon requests');",
     );
+  });
+
+  it('recognizes only manifest failures from the market protocol as incompatibilities', () => {
+    expect(
+      isPluginManifestIncompatibilityError(
+        Object.assign(new Error('response.plugin.currentRelease.manifest 不合法'), {
+          name: 'PluginProtocolError',
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPluginManifestIncompatibilityError(
+        Object.assign(new Error('response.schemaVersion 必须为 2'), {
+          name: 'PluginProtocolError',
+        }),
+      ),
+    ).toBe(false);
+    expect(isPluginManifestIncompatibilityError(new Error('network failed'))).toBe(false);
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {
