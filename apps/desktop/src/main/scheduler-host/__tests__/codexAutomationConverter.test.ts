@@ -42,6 +42,12 @@ describe('codexRruleToCron', () => {
     });
   });
 
+  it('rejects monthly days that Cindy clamps in short months', () => {
+    const result = codexRruleToCron('FREQ=MONTHLY;BYMONTHDAY=31;BYHOUR=9;BYMINUTE=5');
+    expect(result.cronExpr).toBeUndefined();
+    expect(result.diagnostics.join(' ')).toContain('clamps short months');
+  });
+
   it('rejects an every-other-week rule instead of changing its meaning', () => {
     const result = codexRruleToCron('FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=15;BYMINUTE=0');
     expect(result.cronExpr).toBeUndefined();

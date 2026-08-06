@@ -156,7 +156,17 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
       );
     }
     const monthDay = singleInteger(values, 'BYMONTHDAY', 1, 31, diagnostics);
-    if (monthDay !== undefined) dayOfMonth = String(monthDay);
+    if (monthDay !== undefined) {
+      // Cindy clamps monthly day 29/30/31 to short-month ends, while RFC 5545
+      // BYMONTHDAY skips dates that do not exist in the current month.
+      if (monthDay > 28) {
+        diagnostics.push(
+          `RRULE MONTHLY BYMONTHDAY=${monthDay} cannot be represented exactly; Cindy clamps short months`,
+        );
+      } else {
+        dayOfMonth = String(monthDay);
+      }
+    }
   } else if (values.has('BYDAY') || values.has('BYMONTHDAY')) {
     diagnostics.push('RRULE BYDAY/BYMONTHDAY is not valid for DAILY cron conversion');
   }

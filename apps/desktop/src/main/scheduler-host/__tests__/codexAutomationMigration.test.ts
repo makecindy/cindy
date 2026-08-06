@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { CreateScheduleInput, Schedule } from '@cindy/maker-scheduler';
 
 import type { CodexAutomationDetail, CodexAutomationReader } from '../codex-automation-reader.js';
 import {
@@ -39,15 +40,28 @@ function inputFor(item: CodexAutomationDetail) {
 }
 
 function setup(items: CodexAutomationDetail[]) {
-  const schedules: any[] = [];
+  const schedules: Schedule[] = [];
   const scheduler = {
     list: vi.fn(async () => schedules),
-    create: vi.fn(async (input: any) => {
-      const created = { id: `schedule-${schedules.length + 1}`, status: 'active', ...input };
+    create: vi.fn(async (input: CreateScheduleInput) => {
+      const created = {
+        id: `schedule-${schedules.length + 1}`,
+        status: 'active' as const,
+        ...input,
+      } as Schedule;
       schedules.push(created);
       return created;
     }),
-    pause: vi.fn(async (id: string) => schedules.find((item) => item.id === id)),
+    pause: vi.fn(async (id: string) => {
+      const schedule = schedules.find((item) => item.id === id);
+      if (!schedule) throw new Error(`schedule ${id} not found`);
+      schedule.status = 'paused';
+      return schedule;
+    }),
+    delete: vi.fn(async (id: string) => {
+      const index = schedules.findIndex((item) => item.id === id);
+      if (index >= 0) schedules.splice(index, 1);
+    }),
   };
   const reader: CodexAutomationReader = {
     list: vi.fn(async () => items),
@@ -87,10 +101,21 @@ describe('CodexAutomationMigrationService', () => {
     expect(second.failed[0]?.sourceId).toBe('missing');
   });
 
+  it('serializes concurrent imports to avoid duplicate creation', async () => {
+    const first = detail('one');
+    const { service, scheduler, reader } = setup([first]);
+    const second = createCodexAutomationMigrationService({ reader, scheduler });
+
+    const [left, right] = await Promise.all([service.import(['one']), second.import(['one'])]);
+
+    expect(scheduler.create).toHaveBeenCalledTimes(1);
+    expect([left.created.length, right.created.length].sort()).toEqual([0, 1]);
+  });
+
   it('continues importing other records when one record is unsupported', async () => {
     const good = detail('good');
     const bad = detail('bad');
-    const { service, scheduler, reader } = setup([good, bad]);
+    const { scheduler, reader } = setup([good, bad]);
     const converter: CodexAutomationMigrationConverter = (item) =>
       item.id === 'bad'
         ? { canImport: false, diagnostics: ['unsupported recurrence'], status: 'active' }
@@ -115,11 +140,43 @@ describe('CodexAutomationMigrationService', () => {
         status: 'active',
         executionMode: 'script',
         notify: { desktop: false, feishu: false },
-      },
+      } as Schedule,
     ]);
 
     const result = await service.preview();
     expect(result.items[0]?.duplicate).toBe(false);
     expect(result.items[0]?.selectedByDefault).toBe(true);
+  });
+
+  it('deduplicates diagnostics in skipped import results', async () => {
+    const item = detail('bad', { diagnostics: ['unsupported recurrence'] });
+    const { scheduler } = setup([item]);
+    const custom = createCodexAutomationMigrationService({
+      reader: {
+        list: vi.fn(async () => [item]),
+        get: vi.fn(async () => item),
+      },
+      scheduler,
+      converter: () => ({
+        canImport: false,
+        diagnostics: ['unsupported recurrence'],
+        status: 'active',
+      }),
+    });
+
+    const result = await custom.import(['bad']);
+    expect(result.skipped[0]?.reason).toBe('unsupported recurrence');
+  });
+
+  it('deletes a newly created schedule when pausing a disabled task fails', async () => {
+    const item = detail('paused', { status: 'PAUSED' });
+    const { service, scheduler } = setup([item]);
+    scheduler.pause.mockRejectedValueOnce(new Error('pause failed'));
+
+    const result = await service.import(['paused']);
+
+    expect(result.created).toHaveLength(0);
+    expect(result.failed[0]?.error).toContain('pause failed');
+    expect(scheduler.delete).toHaveBeenCalledWith('schedule-1');
   });
 });

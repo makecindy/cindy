@@ -79,6 +79,7 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import {
   resolveBoundSessionGenerationRoute,
@@ -418,16 +419,18 @@ export function registerScheduleHandlers(
   });
 
   const codexAutomationReader = options?.codexAutomationReader ?? createCodexAutomationReader();
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_CODEX_AUTOMATION_PREVIEW, async () =>
-    withScheduler(({ scheduler }) =>
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_CODEX_AUTOMATION_PREVIEW, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return withScheduler(({ scheduler }) =>
       createCodexAutomationMigrationService({
         reader: codexAutomationReader,
         scheduler: asCodexAutomationMigrationScheduler(scheduler),
       }).preview(),
-    ),
-  );
+    );
+  });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_CODEX_AUTOMATION_IMPORT, async (_e, payload: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_CODEX_AUTOMATION_IMPORT, async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const body = requireObject(payload, 'payload');
     if (!Array.isArray(body.sourceIds)) {
       throwIpcError('INVALID_PARAMS', 'sourceIds must be an array');

@@ -14,6 +14,7 @@ export interface CodexAutomationMigrationScheduler {
   list(): Promise<Schedule[]>;
   create(input: CreateScheduleInput): Promise<Schedule>;
   pause(id: string): Promise<Schedule>;
+  delete(id: string): Promise<void>;
 }
 
 export interface CodexAutomationMigrationPreviewItem {
@@ -67,6 +68,21 @@ function normalized(value: string | undefined): string {
   return (value ?? '').trim();
 }
 
+function uniqueDiagnostics(...groups: string[][]): string[] {
+  return [...new Set(groups.flat())];
+}
+
+let importTail: Promise<void> = Promise.resolve();
+
+function withImportLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = importTail.then(task, task);
+  importTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 /**
  * Determines whether an existing Cindy schedule has the same semantic payload
  * as a converted Codex automation. There is no source-id column on schedules,
@@ -111,7 +127,7 @@ function toPreviewItem(
   converted: CodexAutomationConversionResult,
   duplicateScheduleId?: string,
 ): CodexAutomationMigrationPreviewItem {
-  const diagnostics = [...new Set([...detail.diagnostics, ...converted.diagnostics])];
+  const diagnostics = uniqueDiagnostics(detail.diagnostics, converted.diagnostics);
   const canImport = converted.canImport && converted.input !== undefined;
   const selectedByDefault = canImport && duplicateScheduleId === undefined;
   return {
@@ -167,70 +183,87 @@ export function createCodexAutomationMigrationService(
     },
 
     async import(sourceIds: string[]): Promise<CodexAutomationImportResult> {
-      const requestedIds = Array.from(
-        new Set(
-          sourceIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
-        ),
-      );
-      const [details, schedules] = await Promise.all([deps.reader.list(), deps.scheduler.list()]);
-      const byId = new Map(details.map((detail) => [detail.id, detail]));
-      const created: CodexAutomationImportResult['created'] = [];
-      const skipped: CodexAutomationImportResult['skipped'] = [];
-      const failed: CodexAutomationImportResult['failed'] = [];
-      const knownSchedules = [...schedules];
+      return withImportLock(async () => {
+        const requestedIds = Array.from(
+          new Set(
+            sourceIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+          ),
+        );
+        const [details, schedules] = await Promise.all([deps.reader.list(), deps.scheduler.list()]);
+        const byId = new Map(details.map((detail) => [detail.id, detail]));
+        const created: CodexAutomationImportResult['created'] = [];
+        const skipped: CodexAutomationImportResult['skipped'] = [];
+        const failed: CodexAutomationImportResult['failed'] = [];
+        const knownSchedules = [...schedules];
 
-      for (const sourceId of requestedIds) {
-        const detail = byId.get(sourceId);
-        if (!detail) {
-          failed.push({ sourceId, error: 'Codex automation not found' });
-          continue;
-        }
-        let converted: CodexAutomationConversionResult;
-        try {
-          converted = converter(detail);
-        } catch (error) {
-          failed.push({
-            sourceId,
-            name: detail.name,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          continue;
-        }
-        if (!converted.canImport || !converted.input) {
-          skipped.push({
-            sourceId,
-            name: detail.name,
-            reason:
-              [...detail.diagnostics, ...converted.diagnostics].join('; ') || 'Not importable',
-          });
-          continue;
-        }
-        const duplicate = findDuplicateSchedule(knownSchedules, converted.input);
-        if (duplicate) {
-          skipped.push({
-            sourceId,
-            name: detail.name,
-            scheduleId: duplicate.id,
-            reason: 'Equivalent Cindy schedule already exists',
-          });
-          continue;
-        }
-        try {
-          const schedule = await deps.scheduler.create(converted.input);
-          knownSchedules.push(schedule);
-          if (converted.status === 'paused' && schedule.status === 'active') {
-            await deps.scheduler.pause(schedule.id);
+        for (const sourceId of requestedIds) {
+          const detail = byId.get(sourceId);
+          if (!detail) {
+            failed.push({ sourceId, error: 'Codex automation not found' });
+            continue;
           }
-          created.push({ sourceId, scheduleId: schedule.id, name: schedule.name });
-        } catch (error) {
-          failed.push({
-            sourceId,
-            name: detail.name,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          let converted: CodexAutomationConversionResult;
+          try {
+            converted = converter(detail);
+          } catch (error) {
+            failed.push({
+              sourceId,
+              name: detail.name,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            continue;
+          }
+          if (!converted.canImport || !converted.input) {
+            skipped.push({
+              sourceId,
+              name: detail.name,
+              reason:
+                uniqueDiagnostics(detail.diagnostics, converted.diagnostics).join('; ') ||
+                'Not importable',
+            });
+            continue;
+          }
+          const duplicate = findDuplicateSchedule(knownSchedules, converted.input);
+          if (duplicate) {
+            skipped.push({
+              sourceId,
+              name: detail.name,
+              scheduleId: duplicate.id,
+              reason: 'Equivalent Cindy schedule already exists',
+            });
+            continue;
+          }
+          let createdSchedule: Schedule | undefined;
+          try {
+            createdSchedule = await deps.scheduler.create(converted.input);
+            let importedSchedule = createdSchedule;
+            if (converted.status === 'paused' && createdSchedule.status === 'active') {
+              importedSchedule = await deps.scheduler.pause(createdSchedule.id);
+            }
+            knownSchedules.push(importedSchedule);
+            created.push({
+              sourceId,
+              scheduleId: importedSchedule.id,
+              name: importedSchedule.name,
+            });
+          } catch (error) {
+            let errorMessage = error instanceof Error ? error.message : String(error);
+            if (createdSchedule) {
+              try {
+                await deps.scheduler.delete(createdSchedule.id);
+              } catch (cleanupError) {
+                errorMessage = `${errorMessage}; cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+              }
+            }
+            failed.push({
+              sourceId,
+              name: detail.name,
+              error: errorMessage,
+            });
+          }
         }
-      }
-      return { created, skipped, failed };
+        return { created, skipped, failed };
+      });
     },
   };
 }

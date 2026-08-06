@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
+import { AlertTriangle, Check, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -83,7 +83,7 @@ function asImportResult(value: unknown): CodexAutomationImportResult {
 }
 
 export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -155,10 +155,9 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
 
   const runImport = async () => {
     if (selectedCount === 0 || importing) return;
-    const selectedNames = items
-      .filter((item) => checked.has(item.id))
-      .map((item) => item.name)
-      .join('、');
+    const selectedNames = new Intl.ListFormat(i18n.language, { type: 'conjunction' }).format(
+      items.filter((item) => checked.has(item.id)).map((item) => item.name),
+    );
     const confirmed = await confirm({
       title: t('scheduler.codexImport.confirmTitle'),
       description: t('scheduler.codexImport.confirmDescription', {
@@ -191,6 +190,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
   };
 
   const handleOpenChange = (value: boolean) => {
+    if (!value && (loading || importing)) return;
     if (!value) reset();
     onOpenChange(value);
   };
@@ -204,42 +204,36 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
         />
         <Dialog.Content
           aria-describedby={undefined}
-          onPointerDownOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => {
+            if (loading || importing) event.preventDefault();
+          }}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[82vh] w-[720px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+            'flex max-h-[min(640px,85vh)] w-full max-w-[600px] flex-col overflow-hidden rounded-xl',
+            'border border-[var(--border-default)] bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <header className="flex shrink-0 items-center justify-between border-b border-[var(--cmd-palette-border)] px-5 py-3.5">
+          <header className="flex shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5 py-3.5">
             <div>
-              <Dialog.Title className="text-15 font-medium text-[var(--settings-section-title)]">
+              <Dialog.Title className="text-15 font-medium text-[var(--confirm-title)]">
                 {t('scheduler.codexImport.title')}
               </Dialog.Title>
-              <p className="mt-1 text-11 text-[var(--settings-section-desc)]">
+              <p className="mt-1 text-11 text-[var(--confirm-desc)]">
                 {t('scheduler.codexImport.description')}
               </p>
             </div>
-            <Dialog.Close asChild>
-              <button
-                type="button"
-                aria-label={t('scheduler.button.close')}
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--settings-section-desc)] hover:bg-[var(--settings-input-bg)]"
-              >
-                <X size={15} />
-              </button>
-            </Dialog.Close>
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             {loading && (
-              <div className="flex items-center justify-center gap-2 py-12 text-sm text-[var(--settings-section-desc)]">
+              <div className="flex items-center justify-center gap-2 py-12 text-sm text-[var(--confirm-desc)]">
                 <Loader2 size={16} className="animate-spin" />
                 {t('scheduler.codexImport.loading')}
               </div>
             )}
             {!loading && items.length === 0 && (
-              <div className="py-12 text-center text-sm text-[var(--settings-section-desc)]">
+              <div className="py-12 text-center text-sm text-[var(--confirm-desc)]">
                 <p>
                   {loadError
                     ? t('scheduler.codexImport.loadFailed', { error: loadError })
@@ -249,7 +243,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                   <button
                     type="button"
                     className="mt-2 underline"
-                    onClick={() => onOpenChange(false)}
+                    onClick={() => handleOpenChange(false)}
                   >
                     {t('scheduler.button.close')}
                   </button>
@@ -258,13 +252,13 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
             )}
             {!loading && items.length > 0 && (
               <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between px-1 pb-1 text-11 text-[var(--settings-section-desc)]">
+                <div className="flex items-center justify-between px-1 pb-1 text-11 text-[var(--confirm-desc)]">
                   <span>{t('scheduler.codexImport.available', { count: importableCount })}</span>
                   <button
                     type="button"
                     onClick={toggleAll}
                     disabled={importing || importableCount === 0}
-                    className="text-[var(--settings-section-title)] underline decoration-dotted underline-offset-2 disabled:opacity-50"
+                    className="text-[var(--confirm-title)] underline decoration-dotted underline-offset-2 disabled:opacity-50"
                   >
                     {checked.size === importableCount
                       ? t('scheduler.codexImport.clearAll')
@@ -278,46 +272,46 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                     <div
                       key={item.id}
                       className={cn(
-                        'rounded-lg border p-3',
+                        'rounded-xl border p-3',
                         blocked
-                          ? 'border-[var(--cmd-palette-border)] opacity-75'
-                          : 'border-[var(--settings-theme-card-border)]',
+                          ? 'border-[var(--border-default)] opacity-75'
+                          : 'border-[var(--border-default)]',
                       )}
                     >
                       <div className="flex items-start gap-3">
                         <input
                           type="checkbox"
                           aria-label={item.name}
-                          className="mt-1 h-4 w-4 accent-[var(--lightbox-cta-bg)]"
+                          className="mt-1 h-4 w-4 accent-[var(--confirm-btn-primary-bg)]"
                           checked={checked.has(item.id)}
                           disabled={blocked || importing}
                           onChange={(event) => toggle(item.id, event.target.checked)}
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="truncate text-13 font-medium text-[var(--settings-section-title)]">
+                            <span className="truncate text-13 font-medium text-[var(--confirm-title)]">
                               {item.name}
                             </span>
-                            <span className="rounded bg-[var(--chat-input-chip-bg)] px-1.5 py-0.5 text-10 text-[var(--cmd-palette-item-meta)]">
+                            <span className="rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 text-[var(--confirm-desc)]">
                               {item.rrule || 'RRULE ?'}
                             </span>
                             {item.duplicate && (
-                              <span className="text-10 text-amber-500">
+                              <span className="text-10 text-[var(--warning-fg)]">
                                 {t('scheduler.codexImport.duplicate')}
                               </span>
                             )}
                             {!item.duplicate && item.canImport && (
-                              <span className="text-10 text-emerald-500">
+                              <span className="text-10 text-[var(--card-status-done)]">
                                 {t('scheduler.codexImport.importable')}
                               </span>
                             )}
                             {!item.canImport && (
-                              <span className="text-10 text-amber-500">
+                              <span className="text-10 text-[var(--warning-fg)]">
                                 {t('scheduler.codexImport.manualRequired')}
                               </span>
                             )}
                           </div>
-                          <div className="mt-1 grid grid-cols-1 gap-x-4 gap-y-0.5 text-11 text-[var(--settings-section-desc)] md:grid-cols-2">
+                          <div className="mt-1 grid grid-cols-1 gap-x-4 gap-y-0.5 text-11 text-[var(--confirm-desc)] md:grid-cols-2">
                             <span>
                               {t('scheduler.codexImport.status')}: {item.status}
                             </span>
@@ -331,7 +325,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                           </div>
                           <button
                             type="button"
-                            className="mt-1 text-left text-11 text-[var(--cmd-palette-item-meta)] underline decoration-dotted underline-offset-2"
+                            className="mt-1 text-left text-11 text-[var(--confirm-desc)] underline decoration-dotted underline-offset-2"
                             onClick={() =>
                               setExpanded((current) => {
                                 const next = new Set(current);
@@ -346,12 +340,12 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                               : t('scheduler.codexImport.expandPrompt')}
                           </button>
                           {isExpanded && (
-                            <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded bg-[var(--settings-input-bg)] p-2 text-11 text-[var(--settings-section-title)]">
+                            <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--surface-elevated)] p-2 text-11 text-[var(--confirm-title)]">
                               {item.prompt || '—'}
                             </pre>
                           )}
                           {item.diagnostics.length > 0 && (
-                            <div className="mt-2 flex gap-1.5 text-11 text-amber-500">
+                            <div className="mt-2 flex gap-1.5 text-11 text-[var(--warning-fg)]">
                               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
                               <div>{item.diagnostics.join('；')}</div>
                             </div>
@@ -364,12 +358,12 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
               </div>
             )}
             {result && (
-              <div className="mt-4 rounded-lg border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] p-3 text-12 text-[var(--settings-section-title)]">
+              <div className="mt-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 text-12 text-[var(--confirm-title)]">
                 <div className="flex items-center gap-1.5 font-medium">
-                  <Check size={14} className="text-emerald-500" />
+                  <Check size={14} className="text-[var(--card-status-done)]" />
                   {t('scheduler.codexImport.resultTitle')}
                 </div>
-                <p className="mt-1 text-[var(--settings-section-desc)]">
+                <p className="mt-1 text-[var(--confirm-desc)]">
                   {t('scheduler.codexImport.resultSummary', {
                     created: result.created.length,
                     skipped: result.skipped.length,
@@ -380,8 +374,8 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
             )}
           </div>
 
-          <footer className="flex shrink-0 items-center justify-between border-t border-[var(--cmd-palette-border)] px-5 py-3">
-            <span className="text-11 text-[var(--settings-section-desc)]">
+          <footer className="flex shrink-0 items-center justify-between border-t border-[var(--border-default)] px-5 py-3">
+            <span className="text-11 text-[var(--confirm-desc)]">
               {t('scheduler.codexImport.selectionSummary', {
                 selected: selectedCount,
                 total: importableCount,
@@ -391,7 +385,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
               <button
                 type="button"
                 onClick={() => handleOpenChange(false)}
-                className="rounded-lg px-3 py-1.5 text-12 text-[var(--settings-section-desc)] hover:bg-[var(--settings-input-bg)]"
+                className="rounded-full border border-[var(--confirm-btn-secondary-border)] px-3 py-1.5 text-12 text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]"
               >
                 {t('scheduler.button.close')}
               </button>
@@ -399,7 +393,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                 type="button"
                 disabled={selectedCount === 0 || importing || loading}
                 onClick={() => void runImport()}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--lightbox-cta-bg)] px-3.5 py-1.5 text-12 font-medium text-[var(--lightbox-cta-fg)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--confirm-btn-primary-bg)] px-3.5 py-1.5 text-12 font-medium text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {importing && <Loader2 size={13} className="animate-spin" />}
                 {t('scheduler.codexImport.importSelected', { count: selectedCount })}

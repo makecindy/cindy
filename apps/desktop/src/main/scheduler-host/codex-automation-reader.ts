@@ -232,8 +232,14 @@ export function createCodexAutomationReader(
     },
     async get(id: string): Promise<CodexAutomationDetail | null> {
       if (!id || id.includes('..') || path.basename(id) !== id) return null;
-      const items = await this.list();
-      return items.find((item) => item.id === id) ?? null;
+      const sourcePath = path.join(rootDir, id, 'automation.toml');
+      try {
+        await fs.access(sourcePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+      return readAutomationFile(rootDir, id);
     },
   };
 }
