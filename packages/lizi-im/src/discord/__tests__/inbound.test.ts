@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DiscordIM } from '../index.js';
 import { normalizeDmMessage } from '../inbound.js';
 import type { AttachmentLike, StickerLike } from '../inbound.js';
-import type { IMHost, IMMessageEvent, IMStatus } from '../../types.js';
+import { encodeCustomId } from '../codec.js';
+import type { IMCardActionEvent, IMHost, IMMessageEvent, IMStatus } from '../../types.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -569,7 +570,7 @@ describe('DiscordIM inbound pipeline', () => {
   });
 
   it('closes the Gateway and drains DMs accepted before a scheduler handoff', async () => {
-    const gateway = makeGateway();
+    const gateway = makeGateway({ clearAppIdOnDestroy: true });
     const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
     const im = new DiscordIM(makeHost({
       initialSecrets: [
@@ -624,6 +625,7 @@ describe('DiscordIM inbound pipeline', () => {
     await flushMicrotasks();
 
     expect(gateway.destroy).toHaveBeenCalledTimes(1);
+    expect(gateway.appId).toBe('');
     expect(handoffFinished).toBe(false);
     expect(received).toEqual([]);
 
@@ -634,6 +636,62 @@ describe('DiscordIM inbound pipeline', () => {
 
     await gateway.emitDm(message({ id: 'msg-after-handoff', content: 'must not enter' }));
     expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-handoff']);
+  });
+
+  it('drains a button accepted before ACK when the scheduler hands off', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const acknowledged = deferred();
+    const received: IMCardActionEvent[] = [];
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onCardAction((event) => received.push(event));
+
+    await im.init();
+    gateway.emitButton({
+      customId: encodeCustomId('control:start', { source: 'accepted' }),
+      user: { id: 'user-1' },
+      channelId: 'dm-1',
+      message: { id: 'msg-button' },
+    }, acknowledged.promise);
+
+    transportAllowed = false;
+    let handoffFinished = false;
+    const handoff = im.enterSchedulerStandby().then(() => {
+      handoffFinished = true;
+    });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+    expect(handoffFinished).toBe(false);
+    expect(received).toEqual([]);
+
+    gateway.emitButton({
+      customId: encodeCustomId('control:start', { source: 'late' }),
+      user: { id: 'user-1' },
+      channelId: 'dm-1',
+      message: { id: 'msg-late' },
+    });
+    acknowledged.resolve(undefined);
+    await handoff;
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      buttonId: 'control:start',
+      messageId: 'dm-1|msg-button',
+      payload: { source: 'accepted' },
+    });
   });
 
   it('connects gateway when set-config receives a token', async () => {
@@ -2290,8 +2348,11 @@ function makeHost(options: {
   };
 }
 
-function makeGateway(options: { client?: unknown } = {}) {
+function makeGateway(options: { client?: unknown; clearAppIdOnDestroy?: boolean } = {}) {
   let onDmMessage: ((m: never) => void) | null = null;
+  let onButtonInteraction:
+    | ((i: never, acknowledged: Promise<void>) => void)
+    | null = null;
   let onStatus: ((s: IMStatus) => void) | null = null;
   let appId = 'app-1';
   const client = options.client ?? null;
@@ -2304,10 +2365,17 @@ function makeGateway(options: { client?: unknown } = {}) {
     },
     botTag: 'bot#0000',
     connect: vi.fn(async () => {}),
-    destroy: vi.fn(async () => {}),
-    setHandlers(handlers: { onStatus: (s: IMStatus) => void; onDmMessage: (m: never) => void }) {
+    destroy: vi.fn(async () => {
+      if (options.clearAppIdOnDestroy) appId = '';
+    }),
+    setHandlers(handlers: {
+      onStatus: (s: IMStatus) => void;
+      onDmMessage: (m: never) => void;
+      onButtonInteraction: (i: never, acknowledged: Promise<void>) => void;
+    }) {
       onStatus = handlers.onStatus;
       onDmMessage = handlers.onDmMessage;
+      onButtonInteraction = handlers.onButtonInteraction;
     },
     setAppId(nextAppId: string) {
       appId = nextAppId;
@@ -2318,6 +2386,9 @@ function makeGateway(options: { client?: unknown } = {}) {
     async emitDm(m: unknown) {
       onDmMessage?.(m as never);
       await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    emitButton(i: unknown, acknowledged: Promise<void> = Promise.resolve()) {
+      onButtonInteraction?.(i as never, acknowledged);
     },
   };
 }

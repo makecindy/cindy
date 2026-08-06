@@ -247,6 +247,41 @@ describe('discord gateway pure logic', () => {
     await gateway.destroy();
   });
 
+  it('publishes button acceptance before the Discord ACK settles', async () => {
+    const acknowledged = deferred<void>();
+    const onButtonInteraction = vi.fn();
+    const gateway = createDiscordGateway({
+      onButtonInteraction,
+      onDmMessage: vi.fn(),
+      onStatus: vi.fn(),
+    });
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    const interaction = {
+      isButton: () => true,
+      deferUpdate: vi.fn(() => acknowledged.promise),
+    };
+
+    client.emit('interactionCreate', interaction);
+
+    expect(onButtonInteraction).toHaveBeenCalledOnce();
+    const acceptedAck = onButtonInteraction.mock.calls[0]?.[1] as Promise<void> | undefined;
+    let ackSettled = false;
+    void acceptedAck?.then(() => {
+      ackSettled = true;
+    });
+    await Promise.resolve();
+    expect(ackSettled).toBe(false);
+
+    acknowledged.resolve(undefined);
+    await acceptedAck;
+    expect(ackSettled).toBe(true);
+    expect(interaction.deferUpdate).toHaveBeenCalledOnce();
+
+    await gateway.destroy();
+  });
+
   it('keeps a newer client when an older login rejects after reconnect', async () => {
     const loginA = deferred<string>();
     const loginB = deferred<string>();

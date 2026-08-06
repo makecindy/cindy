@@ -104,6 +104,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private dmResolverClient: unknown = null;
   private dmResolver: ((userId: string) => Promise<DMChannelLike>) | null = null;
   private readonly dmMessageQueues = new Map<string, Promise<void>>();
+  private readonly buttonInteractionQueues = new Set<Promise<void>>();
   private readonly mediaDir: string;
   private suppressNextOnlineNotice = false;
   private pendingOfflineNotice = false;
@@ -125,8 +126,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       onDmMessage: (m) => {
         void this.handleDmMessage(m as unknown as MessageLike);
       },
-      onButtonInteraction: (i) => {
-        void this.handleButtonInteraction(i as unknown as ButtonInteractionLike);
+      onButtonInteraction: (i, acknowledged) => {
+        void this.handleButtonInteraction(
+          i as unknown as ButtonInteractionLike,
+          acknowledged,
+        );
       },
     });
   }
@@ -382,8 +386,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.runtimeOnlineNotice = null;
     await this.gateway.destroy();
     // The Gateway is closed before draining so no second ingress can overlap,
-    // while DMs already accepted by this lease still reach the local task.
-    await this.drainAcceptedDmMessages();
+    // while inbound work already accepted by this lease still reaches the local task.
+    await Promise.all([
+      this.drainAcceptedDmMessages(),
+      this.drainAcceptedButtonInteractions(),
+    ]);
     if (options.clearRuntimeActiveMarker && !this.pendingOfflineNotice) {
       this.clearRuntimeActiveMarker();
     }
@@ -1103,8 +1110,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       if (
         this.disposing ||
         this.inboundConfigVersion !== acceptedContext.inboundConfigVersion ||
-        this.ownerUserId !== acceptedContext.ownerUserId ||
-        this.gateway.appId !== acceptedContext.appId
+        this.ownerUserId !== acceptedContext.ownerUserId
       ) {
         return;
       }
@@ -1127,14 +1133,43 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     }
   }
 
-  private async handleButtonInteraction(i: ButtonInteractionLike): Promise<void> {
-    if (this.disposing || !this.schedulerTransportAllowed()) return;
+  private handleButtonInteraction(
+    i: ButtonInteractionLike,
+    acknowledged: Promise<void> = Promise.resolve(),
+  ): Promise<void> {
+    if (this.disposing || !this.schedulerTransportAllowed()) return Promise.resolve();
+    const acceptedContext = {
+      inboundConfigVersion: this.inboundConfigVersion,
+      ownerUserId: this.ownerUserId,
+    };
+    const current = this.processAcceptedButtonInteraction(i, acknowledged, acceptedContext);
+    this.buttonInteractionQueues.add(current);
+    void current.then(
+      () => this.buttonInteractionQueues.delete(current),
+      () => this.buttonInteractionQueues.delete(current),
+    );
+    return current;
+  }
+
+  private async processAcceptedButtonInteraction(
+    i: ButtonInteractionLike,
+    acknowledged: Promise<void>,
+    acceptedContext: { inboundConfigVersion: number; ownerUserId: string },
+  ): Promise<void> {
+    await acknowledged.catch(() => undefined);
+    if (
+      this.disposing ||
+      this.inboundConfigVersion !== acceptedContext.inboundConfigVersion ||
+      this.ownerUserId !== acceptedContext.ownerUserId
+    ) {
+      return;
+    }
     const event = parseInteraction(i);
     if (!event) {
       await this.notifyExpiredInteraction(i);
       return;
     }
-    if (event.senderId !== this.ownerUserId) return;
+    if (event.senderId !== acceptedContext.ownerUserId) return;
     if (event.buttonId === DISCORD_CARD_PAGE_BUTTON_ID) {
       await this.handleCardPageInteraction(event, i);
       return;
@@ -1146,6 +1181,12 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       } catch {
         /* swallow */
       }
+    }
+  }
+
+  private async drainAcceptedButtonInteractions(): Promise<void> {
+    while (this.buttonInteractionQueues.size > 0) {
+      await Promise.allSettled([...this.buttonInteractionQueues]);
     }
   }
 

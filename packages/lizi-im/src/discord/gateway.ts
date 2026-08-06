@@ -16,7 +16,12 @@ const log = defaultLogger('im:discord:gateway');
 export interface DiscordGatewayEvents {
   onStatus(s: IMStatus): void;
   onDmMessage(m: Message): void;
-  onButtonInteraction(i: ButtonInteraction): void;
+  /**
+   * Fired synchronously after the interaction is accepted from the current
+   * Gateway, with the Discord ACK completion exposed separately. Consumers can
+   * capture their ingress lease before awaiting the network round trip.
+   */
+  onButtonInteraction(i: ButtonInteraction, acknowledged: Promise<void>): void;
 }
 
 export interface DiscordGateway {
@@ -159,12 +164,20 @@ class DiscordJsGateway implements DiscordGateway {
     client.on(Events.InteractionCreate, async (interaction) => {
       if (this.#client !== client) return;
       if (!interaction.isButton()) return;
+      let acknowledged: Promise<void>;
       try {
-        await interaction.deferUpdate();
+        acknowledged = interaction.deferUpdate().then(
+          () => undefined,
+          () => undefined,
+        );
       } catch {
         // The 3s ACK may already be gone; keep the gateway alive either way.
+        acknowledged = Promise.resolve();
       }
-      this.ev.onButtonInteraction(interaction);
+      // Publish acceptance before awaiting the ACK. Scheduler handoff can happen
+      // during that await; the previous lease must still finish this interaction.
+      this.ev.onButtonInteraction(interaction, acknowledged);
+      await acknowledged;
     });
 
     client.on(Events.Error, (error) => {
