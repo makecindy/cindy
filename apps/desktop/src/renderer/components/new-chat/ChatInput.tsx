@@ -208,9 +208,17 @@ import {
   getAtDirectoryCompletionQuery,
   mergeAtResourceItems,
   scanAtResources,
-  filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
+import {
+  buildComposerSuggestionEntries,
+  isComposerSuggestionEntryDisabled,
+  nextEnabledSuggestionIndex,
+  type ComposerPluginSuggestion,
+  type ComposerSuggestionAction,
+  type ComposerSuggestionEntry,
+} from '@/lib/composerSuggestion';
+import { MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
 import { isAtResourceInsertTargetCurrent } from '@/lib/atResourceInsertionGuard';
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
@@ -878,6 +886,33 @@ function detectTrigger(editor: Editor): TriggerState {
   return { kind: 'none' };
 }
 
+/**
+ * 合成激活(「+」按钮打开统一建议面板,Codex 模式)的 query 推导:
+ * 不向文档插入 `@`,query = 锚点→光标之间的纯文本。返回 null 表示锚点失效
+ * (选区非空 / 光标移到锚点前 / 跨段落 / 中间出现空白、chip 或换行),此时
+ * ChatInput 会清掉合成锚点、关闭面板。
+ */
+function deriveSyntheticAtQuery(editor: Editor, anchor: number): string | null {
+  const { state } = editor;
+  const { selection, doc } = state;
+  if (!selection.empty) return null;
+  const pos = selection.from;
+  if (pos < anchor || anchor > doc.content.size) return null;
+  let $anchor;
+  let $pos;
+  try {
+    $anchor = doc.resolve(anchor);
+    $pos = doc.resolve(pos);
+  } catch {
+    return null;
+  }
+  if ($anchor.parent.type.name !== 'paragraph' || $anchor.parent !== $pos.parent) return null;
+  // textBetween 用占位符替换非文本节点(chip / hardBreak),含占位符或空白即失效。
+  const text = doc.textBetween(anchor, pos, '￼', '￼');
+  if (/[\s￼]/.test(text)) return null;
+  return text;
+}
+
 export function ChatInput({
   onSend,
   sessionId,
@@ -1156,6 +1191,26 @@ export function ChatInput({
     remoteHostId,
     deviceLinkDeviceId,
   });
+
+  // ── 「+」合成打开统一建议面板(Codex 模式)────────────────────────────
+  // state 在 at-panel 区声明;editor 回调(render gate / blur)先于 state 声明
+  // 创建,通过 ref 读最新锚点。锚点 = 打开面板那一刻的光标位,query = 锚点→光标
+  // 纯文本(deriveSyntheticAtQuery)。
+  const syntheticAtAnchorRef = useRef<number | null>(null);
+  // render gate 的 trigger 快照:typed 触发优先;合成激活期间以 pseudo-at 快照
+  // 参与 diff,保证「+」打开后继续打字仍能触发 React 刷新(否则 gate 会把
+  // trigger:none 的普通输入吞掉,面板不过滤)。锚点失效时返回哨兵 query,
+  // 放行一次刷新让清锚点 effect 跑掉。
+  const composerTriggerSnapshotOf = (ed: Editor): TriggerState => {
+    const typed = detectTrigger(ed);
+    if (typed.kind !== 'none') return typed;
+    const anchor = syntheticAtAnchorRef.current;
+    if (anchor != null) {
+      const q = deriveSyntheticAtQuery(ed, anchor);
+      return { kind: 'at', query: q ?? ' synthetic-invalid', from: anchor };
+    }
+    return typed;
+  };
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -2140,7 +2195,7 @@ export function ChatInput({
         });
       }
       const nextRenderSnapshot = composerRenderSnapshot(
-        detectTrigger(ed),
+        composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
@@ -2205,7 +2260,7 @@ export function ChatInput({
     },
     onSelectionUpdate: ({ editor: ed }) => {
       const nextRenderSnapshot = composerRenderSnapshot(
-        detectTrigger(ed),
+        composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
@@ -2233,6 +2288,9 @@ export function ChatInput({
           const t = detectTrigger(ed);
           if (t.kind === 'slash') setSuppressedSlashAt(t.from);
           else if (t.kind === 'at') setSuppressedAtAt(t.from);
+          // 合成打开的统一面板同样随失焦关闭(「+」按钮本身 mousedown
+          // preventDefault 不夺焦,不会触发这里)。
+          setSyntheticAtAnchor(null);
         }
       }, 0);
     },
@@ -2392,25 +2450,39 @@ export function ChatInput({
       ),
     [ghostsForCommand],
   );
-  const atPluginItems = useMemo<AtResourceItem[]>(
+  // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
+  // 未生效项保留展示但置灰(entry 级 disabled + 原因)。
+  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(
     () => {
       // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
       // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
       if (deviceLinkDeviceId) return [];
-      return pluginsForMenu
-        .filter((ghost) => pluginAvailableIds.has(ghost.manifest.id) && ghost.manifest.command)
-        .map((ghost) => ({
-          type: 'plugin-command',
-          name: ghost.manifest.name,
-          relPath: ghost.manifest.command!,
-          pluginId: ghost.manifest.id,
-          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-          sourceLabel: ghost.manifest.command!,
-          _nameLower: `${ghost.manifest.name} ${ghost.manifest.command}`.toLowerCase(),
-          _relPathLower: `${ghost.manifest.command} ${ghost.manifest.id}`.toLowerCase(),
-        }));
+      return pluginsForMenu.map((ghost) => {
+        const hasCommand = !!ghost.manifest.command;
+        const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasCommand;
+        return {
+          item: {
+            type: 'plugin-command' as const,
+            name: ghost.manifest.name,
+            relPath: ghost.manifest.command ?? `cindy://plugin/${ghost.manifest.id}`,
+            pluginId: ghost.manifest.id,
+            ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+            sourceLabel: ghost.manifest.command ?? '',
+            _nameLower: `${ghost.manifest.name} ${ghost.manifest.command ?? ''}`.toLowerCase(),
+            _relPathLower: `${ghost.manifest.command ?? ''} ${ghost.manifest.id}`.toLowerCase(),
+          },
+          ...(selectable
+            ? {}
+            : {
+                disabled: true,
+                disabledReason: t(
+                  hasCommand ? 'extraDirs.pluginDisabled' : 'extraDirs.pluginNoCommand',
+                ),
+              }),
+        };
+      });
     },
-    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds],
+    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, t],
   );
   useEffect(() => {
     setGhostCommandRoster(editor, ghostsForCommand);
@@ -3371,8 +3443,12 @@ export function ChatInput({
 
   const runAtScan = useCallback(
     (query?: string, reservedSeq?: number) => {
-      // SSH 远端会话不扫 @ 资源(无隧道);atOpen 也已对其关闭面板,这里再兜一层。
-      if (isRemoteSession) return;
+      // SSH 远端会话不扫 @ 资源(无隧道)。统一面板仍可打开(动作 + 插件条目),
+      // 资源区直接置空 ready,不能留 loading 骨架。
+      if (isRemoteSession) {
+        setAtState({ kind: 'ready', items: [], truncated: false });
+        return;
+      }
       // device-link 远程会话:带 deviceId 经隧道在被控端扫描(workingDir 是被控端路径);
       // 本机会话 deviceId 为 undefined → 本地扫描。
       // 远程**草稿**(NewMakerDraftRoute)此时 sessionId 还是 undefined、但 deviceLinkDeviceId prop 已设——
@@ -3387,9 +3463,6 @@ export function ChatInput({
       setAtState((prev) => {
         if (prev.kind === 'ready' && normalizedQuery) {
           return { ...prev, searching: true };
-        }
-        if (atPluginItems.length > 0) {
-          return { kind: 'ready', items: atPluginItems, truncated: false, searching: true };
         }
         return { kind: 'loading' };
       });
@@ -3409,8 +3482,8 @@ export function ChatInput({
             setAtState((prev) => ({
               kind: 'ready',
               items: preservePreviousItems && prev.kind === 'ready'
-                ? mergeAtResourceItems(prev.items, [...atPluginItems, ...partial.items])
-                : [...atPluginItems, ...partial.items],
+                ? mergeAtResourceItems(prev.items, partial.items)
+                : partial.items,
               truncated: partial.truncated || (prev.kind === 'ready' && prev.truncated),
               searching: true,
             }));
@@ -3420,16 +3493,14 @@ export function ChatInput({
         .then((res) => {
           if (atScanSeqRef.current !== seq) return;
           if (!res.success) {
-            if (atPluginItems.length > 0) {
-              setAtState({ kind: 'ready', items: atPluginItems, truncated: false });
-            } else {
-              setAtState({ kind: 'error', message: res.error ?? 'scan failed' });
-            }
+            // 扫描失败不再整面板报错兜底插件:插件/动作条目独立于 atState,
+            // 面板在有其它条目时把错误降级为底部一行 + 重试。
+            setAtState({ kind: 'error', message: res.error ?? 'scan failed' });
             return;
           }
           setAtState({
             kind: 'ready',
-            items: [...atPluginItems, ...res.items],
+            items: res.items,
             truncated: res.truncated,
           });
         })
