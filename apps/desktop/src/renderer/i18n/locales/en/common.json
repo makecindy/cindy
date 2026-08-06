@@ -3426,7 +3426,7 @@
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
-        "cindySearchWebDetail": "Uses Cindy AI by default; you can turn it off in the plugin settings.",
+        "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
