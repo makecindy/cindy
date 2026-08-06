@@ -26,6 +26,8 @@ import {
   ExternalChromeBackend,
   RsbWebviewBackend,
   type BackendKind,
+  guardPreviewPageNavigation,
+  isPreviewUrl,
 } from './browser-backend/index.js';
 import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
@@ -446,10 +448,47 @@ export async function openBrowserForLogin(): Promise<void> {
  * NOTE: updater force-quit (updateService.ts) bypasses `before-quit`, so this may
  * not run on the auto-update relaunch path; stale-lock recovery covers that case.
  */
+/**
+ * Close every managed-browser tab whose URL is a sandboxed preview URL.
+ *
+ * After the preview listener is gone and its origin revoked, a still-open
+ * preview tab keeps its persistent navigation guard alive (it was created
+ * with the then-valid grant) and would keep allowing same-origin document
+ * navigations — a local process seizing the freed port could then serve
+ * untrusted content into that tab (Copilot P1, round 11). The vendored
+ * guard cannot re-read the live policy (policy is passed per-call), so the
+ * host closes the tabs: the guard dies with the tab, closing the window.
+ */
+async function closePreviewTabs(): Promise<void> {
+  try {
+    const tabsRes = await vendoredRuntime.call({ action: 'tabs' });
+    const tabs = (
+      tabsRes.data as
+        | { tabs?: Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> }
+        | undefined
+    )?.tabs;
+    if (!Array.isArray(tabs)) return;
+    for (const tab of tabs) {
+      if (!isPreviewUrl(tab.url ?? '')) continue;
+      const targetId = tab.suggestedTargetId ?? tab.targetId;
+      if (targetId) {
+        await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
+      }
+    }
+  } catch {
+    /* best-effort: the origin grant is already revoked; stale-lock recovery
+       on next launch covers orphaned Chrome state */
+  }
+}
+
 export function disposeBrowserRuntime(): Promise<void> {
   // Revoke the preview origin + close its listener first, so the SSRF policy
   // never outlives the port it trusts.
   localPreviewServer.dispose();
+  // Close preview tabs BEFORE stopping the runtime: their persistent guard
+  // would otherwise outlive the revoked grant (port-seizure window,
+  // Copilot P1, round 11). Best-effort.
+  void closePreviewTabs();
   // Always stop the vendored Chrome directly, NOT through the active controller.
   // The controller may currently point at RsbWebviewBackend, whose dispose only
   // releases control listeners and does not own the external Chrome process. If
