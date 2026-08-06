@@ -8549,7 +8549,11 @@
     "empty": "还没有引用目录",
     "add": "添加目录…",
     "atLimit": "已达上限 {{max}} 个",
-    "remove": "移除 {{name}}"
+    "remove": "移除 {{name}}",
+    "parentConfirmTitle": "添加父目录？",
+    "parentConfirmDescription": "选中的目录是当前工作目录的父级或祖先。这会扩大 Agent 的可见范围，使其能看到工作目录之外的内容。\n\n仍要添加吗？\n\n{{path}}",
+    "parentConfirmAccept": "仍然添加",
+    "parentConfirmCancel": "取消"
   },
   "commands": {
     "toast": {

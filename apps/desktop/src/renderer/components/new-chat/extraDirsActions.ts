@@ -74,6 +74,12 @@ export interface PickAndAddExtraDirOptions {
     confirmText: string;
     cancelText: string;
   }) => Promise<boolean>;
+  parentDirectoryConfirm: {
+    title: string;
+    description: (path: string) => string;
+    confirmText: string;
+    cancelText: string;
+  };
 }
 
 /**
@@ -85,6 +91,7 @@ export async function pickAndAddExtraDir({
   workingDir,
   onChange,
   confirm,
+  parentDirectoryConfirm,
 }: PickAndAddExtraDirOptions): Promise<void> {
   if (extraDirs.length >= MAX_EXTRA_DIRS) return;
   let picked: string | null = null;
@@ -111,10 +118,10 @@ export async function pickAndAddExtraDir({
   // 父目录 / 祖先警告 — 通过则继续。
   if (workingDir && isParentOrAncestor(normalizedPicked, workingDir)) {
     const ok = await confirm({
-      title: '添加父目录?',
-      description: `选中的目录是当前工作目录的父级或祖先。这会扩大 agent 的可见范围 —— 它能看到工作目录之外的内容。\n\n要添加吗?\n\n${normalizedPicked}`,
-      confirmText: '仍然添加',
-      cancelText: '取消',
+      title: parentDirectoryConfirm.title,
+      description: parentDirectoryConfirm.description(normalizedPicked),
+      confirmText: parentDirectoryConfirm.confirmText,
+      cancelText: parentDirectoryConfirm.cancelText,
     });
     if (!ok) return;
   }

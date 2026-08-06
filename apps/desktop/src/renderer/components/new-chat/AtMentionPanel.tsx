@@ -265,6 +265,8 @@ export function AtMentionPanel({
         }
         onMouseDown={(e) => {
           e.preventDefault();
+        }}
+        onClick={() => {
           if (action.disabled) return;
           onSelect({ kind: 'action', action });
         }}
@@ -273,29 +275,31 @@ export function AtMentionPanel({
         }}
         className={cn(
           'flex w-full items-center gap-2',
-          'h-[44px] px-[10px] rounded-[6px]',
+          'rounded-[8px] px-3 py-2',
           'text-left outline-none transition-colors',
-          focused && 'bg-[var(--cmd-palette-item-hover)]',
+          focused && 'bg-[var(--model-item-hover)]',
+          'hover:bg-[var(--model-item-hover)]',
+          emphasized && 'bg-[var(--model-item-hover)]',
           action.disabled && 'cursor-not-allowed opacity-50',
         )}
       >
         <Icon
-          size={16}
+          size={14}
           className={cn(
             'shrink-0',
-            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--cmd-palette-item-icon)]',
+            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--model-item-text)]',
           )}
         />
         <span
           className={cn(
-            'min-w-0 truncate text-[14px] font-medium',
-            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--cmd-palette-item-text)]',
+            'min-w-0 flex-1 truncate text-[13px]',
+            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--model-item-text)]',
           )}
         >
           {action.label}
         </span>
         {isCheckbox && action.checked && (
-          <Check size={14} className="ml-auto shrink-0 text-[var(--cmd-palette-item-icon)]" />
+          <Check size={13} className="ml-auto shrink-0 text-[var(--model-item-check)]" />
         )}
       </button>
     );
@@ -367,6 +371,8 @@ export function AtMentionPanel({
         aria-disabled={disabled ? true : undefined}
         onMouseDown={(e) => {
           e.preventDefault();
+        }}
+        onClick={() => {
           if (disabled) return;
           onSelect(entry);
         }}
@@ -479,6 +485,8 @@ export function AtMentionPanel({
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
+              }}
+              onClick={() => {
                 onRetry();
               }}
               className={cn(
@@ -589,6 +597,8 @@ export function AtMentionPanel({
                 type="button"
                 onMouseDown={(e) => {
                   e.preventDefault();
+                }}
+                onClick={() => {
                   onRetry();
                 }}
                 className={cn(

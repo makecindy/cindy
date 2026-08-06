@@ -137,7 +137,11 @@ describe('统一 composer 建议入口', () => {
     expect(screen.getByText('Cindy Art')).toBeTruthy();
     const plan = screen.getByRole('menuitemcheckbox', { name: 'planMode.menuItem' });
     expect(plan.getAttribute('aria-checked')).toBe('true');
-    fireEvent.mouseDown(plan);
+    expect(plan.className).toContain('rounded-[8px]');
+    expect(plan.className).toContain('px-3');
+    expect(plan.className).toContain('py-2');
+    expect(plan.className).toContain('hover:bg-[var(--model-item-hover)]');
+    fireEvent.click(plan);
     expect(onPlanToggle).toHaveBeenCalledWith(false);
     expect(
       (screen.getByRole('menuitemcheckbox', {

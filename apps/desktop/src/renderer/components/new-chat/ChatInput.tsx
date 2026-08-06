@@ -3614,6 +3614,12 @@ export function ChatInput({
             workingDir,
             onChange: onExtraDirsChange,
             confirm: confirmDialog,
+            parentDirectoryConfirm: {
+              title: t('extraDirs.parentConfirmTitle'),
+              description: (path) => t('extraDirs.parentConfirmDescription', { path }),
+              confirmText: t('extraDirs.parentConfirmAccept'),
+              cancelText: t('extraDirs.parentConfirmCancel'),
+            },
           });
         },
       });
@@ -4038,7 +4044,6 @@ export function ChatInput({
     } else if (trigger.kind === 'at') {
       setSuppressedAtAt(trigger.from);
     }
-    setSuppressedAtAt(null);
     setSyntheticAtAnchor(editor.state.selection.from);
     setAtFocus(0);
     editor.commands.focus();

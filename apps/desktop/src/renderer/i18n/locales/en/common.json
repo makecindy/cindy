@@ -8562,7 +8562,11 @@
     "empty": "No reference directories yet",
     "add": "Add directory…",
     "atLimit": "Limit reached ({{max}})",
-    "remove": "Remove {{name}}"
+    "remove": "Remove {{name}}",
+    "parentConfirmTitle": "Add a parent directory?",
+    "parentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. This expands the Agent's visible scope beyond the working directory.\n\nAdd it anyway?\n\n{{path}}",
+    "parentConfirmAccept": "Add anyway",
+    "parentConfirmCancel": "Cancel"
   },
   "commands": {
     "toast": {
