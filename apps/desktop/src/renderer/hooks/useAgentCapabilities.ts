@@ -227,6 +227,8 @@ const cache = new Map<CacheKey, AgentCapabilities>();
 const inflight = new Map<CacheKey, Promise<AgentCapabilities | null>>();
 /** 本地能力刷新代际；使刷新前的在途 IPC 结果无法回写旧快照。 */
 let localGen = 0;
+/** 已提交的本地快照 revision；失败刷新不会前进，用来区分缺失 tombstone 与未提交。 */
+let localSnapshotRevision = 0;
 /** 已挂载 hook 的本地能力订阅者；刷新完成后一次性切到新快照，避免中途空白帧。 */
 const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities | null) => void>();
 /** 远程能力缓存事件；驱逐时先标 stale，成功 / 失败后再结束这一轮刷新。 */
@@ -281,8 +283,11 @@ async function fetchCapabilities(
 
   // 捕获发起时的设备代际;回调里若代际已变(被 evict)则认为本次请求作废。
   const startGen = deviceId ? (deviceGen.get(deviceId) ?? 0) : localGen;
+  const startLocalSnapshotRevision = localSnapshotRevision;
   const isCurrent = (): boolean =>
-    deviceId ? (deviceGen.get(deviceId) ?? 0) === startGen : localGen === startGen;
+    deviceId
+      ? (deviceGen.get(deviceId) ?? 0) === startGen
+      : localGen === startGen && localSnapshotRevision === startLocalSnapshotRevision;
 
   let raw: Promise<AgentCapabilities>;
   if (deviceId) {
@@ -306,10 +311,16 @@ async function fetchCapabilities(
         if (deviceId)
           notifyRemoteCapabilities(deviceId, agentKind, { status: 'ready', capabilities: caps });
       } else if (!deviceId) {
-        // 本地热刷新可能已原子换入更新快照；旧请求的调用方也应拿当前 cache，不能在
-        // listener 更新之后又把 hook state 覆盖回旧对象。刷新仍在途时保留旧对象，完成后再通知；
-        // 若提交的快照明确删除了该 agent，null 是 tombstone，阻止旧请求复活自身结果。
-        return cache.get(key) ?? null;
+        // 已提交的新快照优先：有值就返回当前 cache，明确删除则以 null 作为 tombstone。
+        const current = cache.get(key);
+        if (current) return current;
+        if (localSnapshotRevision !== startLocalSnapshotRevision) return null;
+        // 只有刷新代际变化、但最终没有快照提交时，成功的 cache-miss 结果仍然有效。
+        // 若已有更新请求占住 inflight，则服从更新请求，避免旧结果抢先落缓存。
+        const newer = inflight.get(key);
+        if (newer) return newer;
+        cache.set(key, caps);
+        return caps;
       }
       return caps;
     })
@@ -537,6 +548,7 @@ export function commitLocalCapabilitiesSnapshot(
   entries: LocalCapabilitiesSnapshot,
 ): boolean {
   if (!isLocalCapabilitiesRefreshCurrent(generation)) return false;
+  localSnapshotRevision += 1;
   const snapshot = new Map(entries);
   for (const agent of ALL_AGENT_KINDS) {
     const caps = snapshot.get(agent) ?? null;

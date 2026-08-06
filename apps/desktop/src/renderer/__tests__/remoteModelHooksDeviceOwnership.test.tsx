@@ -135,6 +135,51 @@ describe('remote model hook device ownership', () => {
     view.unmount();
   });
 
+  it('keeps a successful cache-miss result when a newer local refresh fails before commit', async () => {
+    let resolveInitialPi!: (value: ReturnType<typeof capabilities>) => void;
+    const initialPi = new Promise<ReturnType<typeof capabilities>>((resolve) => {
+      resolveInitialPi = resolve;
+    });
+    let piRequests = 0;
+    let failRefresh = false;
+    const getCapabilities = vi.fn((agentKind: string) => {
+      if (agentKind === 'pi' && piRequests++ === 0) return initialPi;
+      if (agentKind === 'claude-code' && failRefresh) {
+        return Promise.reject(new Error('temporary capability IPC failure'));
+      }
+      return Promise.resolve(capabilities(`refresh:${agentKind}`));
+    });
+    setElectronApi({ maker: { getCapabilities } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];
+    function Probe() {
+      frames.push(mod.useAgentCapabilities('pi'));
+      return null;
+    }
+
+    const view = render(<Probe />);
+    await waitFor(() => expect(getCapabilities).toHaveBeenCalledWith('pi'));
+
+    failRefresh = true;
+    await act(async () => {
+      await mod.refreshLocalCapabilities();
+    });
+    await act(async () => {
+      resolveInitialPi(capabilities('initial:pi'));
+      await initialPi;
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(frames.at(-1)?.capabilities?.availableModels[0]?.displayName).toBe('initial:pi');
+      expect(frames.at(-1)?.loading).toBe(false);
+      expect(frames.at(-1)?.error).toBeNull();
+    });
+    expect(mod.getCachedCapabilities('pi')?.availableModels[0]?.displayName).toBe('initial:pi');
+    view.unmount();
+  });
+
   it('never renders the previous device capabilities under a newly selected device', async () => {
     const invoke = vi.fn((deviceId: string) => {
       if (deviceId === 'dev-a') return Promise.resolve(capabilities('Mac A'));
