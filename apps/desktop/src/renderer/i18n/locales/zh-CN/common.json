@@ -7097,6 +7097,7 @@
       "importable": "可直接迁移",
       "manualRequired": "需要手工调整",
       "duplicate": "已存在相同任务",
+      "status": "状态",
       "model": "模型",
       "workingDir": "工作目录",
       "expandPrompt": "展开 Prompt",

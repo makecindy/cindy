@@ -299,6 +299,9 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                           </div>
                           <div className="mt-1 grid grid-cols-1 gap-x-4 gap-y-0.5 text-11 text-[var(--settings-section-desc)] md:grid-cols-2">
                             <span>
+                              {t('scheduler.codexImport.status')}: {item.status}
+                            </span>
+                            <span>
                               {t('scheduler.codexImport.model')}: {item.model || '—'}
                               {item.reasoningEffort ? ` · ${item.reasoningEffort}` : ''}
                             </span>

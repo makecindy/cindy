@@ -7097,6 +7097,7 @@
       "importable": "インポート可能",
       "manualRequired": "手動調整が必要",
       "duplicate": "既に存在します",
+      "status": "ステータス",
       "model": "モデル",
       "workingDir": "作業ディレクトリ",
       "expandPrompt": "プロンプトを表示",

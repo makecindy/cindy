@@ -7097,6 +7097,7 @@
       "importable": "가져올 수 있음",
       "manualRequired": "수동 조정 필요",
       "duplicate": "이미 존재함",
+      "status": "상태",
       "model": "모델",
       "workingDir": "작업 디렉터리",
       "expandPrompt": "프롬프트 표시",
