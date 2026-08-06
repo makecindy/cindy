@@ -5672,6 +5672,22 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "이번 요청 상세"
     },
+    "shareImage": {
+      "entry": "이미지로 공유",
+      "title": "대화 공유",
+      "subtitle_other": "메시지 {{count}}개 선택 · 자격 증명은 자동으로 가려집니다",
+      "shortcutHint": "{{selectAll}} 전체 선택/해제 · Esc 종료",
+      "selectAll": "전체 선택",
+      "clearAll": "선택 해제",
+      "checkboxLabel": "이 메시지 선택",
+      "cancel": "취소",
+      "download": "이미지 저장",
+      "copy": "이미지 복사",
+      "generating": "생성 중…",
+      "copied": "이미지를 복사했습니다",
+      "saved": "이미지를 저장했습니다",
+      "failed": "이미지를 생성하지 못했습니다. 다시 시도해 주세요"
+    },
     "errorBanner": {
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",

@@ -5672,6 +5672,22 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "リクエストの明細"
     },
+    "shareImage": {
+      "entry": "画像として共有",
+      "title": "会話を共有",
+      "subtitle_other": "{{count}} 件のメッセージを選択中 · 認証情報は自動的に隠されます",
+      "shortcutHint": "{{selectAll}} で全選択/解除 · Esc で終了",
+      "selectAll": "すべて選択",
+      "clearAll": "選択を解除",
+      "checkboxLabel": "このメッセージを選択",
+      "cancel": "キャンセル",
+      "download": "画像を保存",
+      "copy": "画像をコピー",
+      "generating": "生成中…",
+      "copied": "画像をコピーしました",
+      "saved": "画像を保存しました",
+      "failed": "画像を生成できませんでした。もう一度お試しください"
+    },
     "errorBanner": {
       "retryTitle": "最後のメッセージを再送信",
       "cancelTitle": "エラーを閉じる",

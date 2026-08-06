@@ -5674,6 +5674,23 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details"
     },
+    "shareImage": {
+      "entry": "Share as Image",
+      "title": "Share Conversation",
+      "subtitle_one": "{{count}} message selected · credentials are redacted automatically",
+      "subtitle_other": "{{count}} messages selected · credentials are redacted automatically",
+      "shortcutHint": "{{selectAll}} select/deselect all · Esc to exit",
+      "selectAll": "Select All",
+      "clearAll": "Deselect All",
+      "checkboxLabel": "Select this message",
+      "cancel": "Cancel",
+      "download": "Save Image",
+      "copy": "Copy Image",
+      "generating": "Generating…",
+      "copied": "Image copied",
+      "saved": "Image saved",
+      "failed": "Couldn't generate the image — try again"
+    },
     "errorBanner": {
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",

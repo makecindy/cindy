@@ -5672,6 +5672,22 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本轮明细"
     },
+    "shareImage": {
+      "entry": "分享为图片",
+      "title": "分享对话",
+      "subtitle_other": "已选 {{count}} 条消息 · 生成图片会自动脱敏凭证",
+      "shortcutHint": "{{selectAll}} 全选/取消全选 · Esc 退出",
+      "selectAll": "全选",
+      "clearAll": "取消全选",
+      "checkboxLabel": "选择这条消息",
+      "cancel": "取消",
+      "download": "下载到本地",
+      "copy": "复制为图片",
+      "generating": "正在生成…",
+      "copied": "图片已复制",
+      "saved": "图片已保存",
+      "failed": "图片生成失败，请重试"
+    },
     "errorBanner": {
       "retryTitle": "重新发送最后一条消息",
       "cancelTitle": "关闭错误提示",

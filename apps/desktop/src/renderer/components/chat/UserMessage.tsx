@@ -70,6 +70,7 @@ import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -1125,6 +1126,15 @@ export function UserMessage({
     insertSessionLinkIntoComposer({ targetSessionId: sessionId, href: messageDeepLink });
   }, [messageDeepLink, sessionId]);
 
+  // 分享为图片:进入选择模式并预选本条(入口那条天然该已勾选,省一次点击)。
+  const handleShareAsImage = useMemo(
+    () =>
+      sessionId && messageClientId
+        ? () => shareSelectionStore.enter(sessionId, messageClientId)
+        : undefined,
+    [messageClientId, sessionId],
+  );
+
   // fork-from-here: only wire when both sessionId + messageClientId are
   // present (older code paths that render UserMessage without these props
   // simply won't show the Fork button). 流程收敛在 useForkAtMessage —
@@ -1693,6 +1703,7 @@ export function UserMessage({
                   hovered={hovered}
                   onFork={!isBlocked && canFork ? handleFork : undefined}
                   onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
+                  onShareAsImage={handleShareAsImage}
                   onDelete={!isBlocked && sessionId && messageClientId ? handleDelete : undefined}
                   onEdit={canEdit ? handleEdit : undefined}
                   onRewind={!isBlocked && canRewind ? handleRewind : undefined}
