@@ -82,6 +82,9 @@ function toDescriptor(
   if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
+  const supportsImageInput = m.supportsImageInput
+    ?? (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
+  if (supportsImageInput !== undefined) d.supportsImageInput = supportsImageInput;
   return d;
 }
 

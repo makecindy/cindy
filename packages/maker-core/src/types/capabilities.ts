@@ -270,6 +270,11 @@ export interface ModelDescriptor {
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
   /** 最大输出 tokens(源自目录 maxOutput)。缺省时各 agent 用自身默认值。 */
   maxOutputTokens?: number;
+  /**
+   * 当前实际 provider-model 路由是否明确支持图片输入。
+   * 缺省表示能力未知；调用方必须 fail closed，不能据模型名或协议猜测。
+   */
+  supportsImageInput?: boolean;
 }
 
 /**
