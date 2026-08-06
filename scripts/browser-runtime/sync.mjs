@@ -54,6 +54,23 @@ function resolveRef(repoSlug, ref) {
     stdio: ['ignore', 'pipe', 'inherit'],
   }).trim();
 }
+/** Whether the `tar` on PATH is GNU tar (msys/GNU accept `--wildcards`;
+ * bsdtar/libarchive — the Windows/macOS system default — rejects it). */
+let gnuTarChecked = false;
+let gnuTar = false;
+function isGnuTar() {
+  if (!gnuTarChecked) {
+    gnuTarChecked = true;
+    try {
+      gnuTar = /GNU tar/i.test(
+        execFileSync('tar', ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }),
+      );
+    } catch {
+      gnuTar = false;
+    }
+  }
+  return gnuTar;
+}
 function shHide(cmd) {
   // Windows (msys) compatibility ONLY. On win32, msys GNU tar treats `C:\`
   // drive letters as remote hosts and does not glob by default, so quoted
@@ -64,10 +81,15 @@ function shHide(cmd) {
     execFileSync('sh', ['-c', cmd], { stdio: ['ignore', 'ignore', 'inherit'] });
     return;
   }
+  // Inject --wildcards ONLY when the resolved tar is actually GNU tar: on
+  // win32 the PATH may resolve to the system bsdtar, which treats unsupported
+  // options as fatal errors (Greptile P1 round 1). bsdtar matches extraction
+  // paths as shell-style patterns natively, so no flag is needed there.
+  const wildcards = isGnuTar() ? ' --wildcards' : '';
   const toMsys = (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`).replace(/\\/g, '/');
   const posix = cmd
     .replace(/"((?:[A-Za-z]:)?[^"]*)"/g, (m, p) => JSON.stringify(toMsys(p)))
-    .replace(/(^|\s)tar(\s)/g, '$1tar --wildcards$2');
+    .replace(/(^|\s)tar(\s)/g, `$1tar${wildcards}$2`);
   execFileSync('sh', ['-c', posix], { stdio: ['ignore', 'ignore', 'inherit'] });
 }
 
