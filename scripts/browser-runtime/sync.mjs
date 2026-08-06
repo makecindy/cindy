@@ -63,8 +63,18 @@ function isGnuTar() {
   if (!gnuTarChecked) {
     gnuTarChecked = true;
     try {
+      // Probe tar in the SAME environment that will execute it: on win32 the
+      // Node process PATH may resolve `tar` to System32\bsdtar while the Git
+      // sh resolves GNU tar — probing through the resolved sh keeps
+      // detection and execution consistent (Greptile P1 + codex-connector
+      // P1, round 4).
+      const sh = resolvePosixShell('sh');
+      if (!sh) throw new Error('no sh resolved');
       gnuTar = /GNU tar/i.test(
-        execFileSync('tar', ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }),
+        execFileSync(sh, ['-c', 'tar --version'], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }),
       );
     } catch {
       gnuTar = false;
