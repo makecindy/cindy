@@ -1052,7 +1052,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   } catch (err) {
     authBoundaryLog.error(`stopHookControlAccount on ${reason} failed (non-fatal):`, err);
   } finally {
-    resetHookControlOwnerBoundary();
+    // Auth/runtime boundaries keep durable group cursors for a later relogin;
+    // only explicit account deletion is a data-removal boundary.
+    resetHookControlOwnerBoundary({ clearPersisted: reason === 'account-deletion' });
   }
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
