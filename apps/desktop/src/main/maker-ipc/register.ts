@@ -5144,7 +5144,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     removeOAuthCredentials: (providerId) => removeGenericOAuthCredentialsReversibly(providerId),
   });
 
-  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新两个 agent 的 mcpProviders 数组
+  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
     refreshProviders: () => refreshCustomMcpProviders(),
