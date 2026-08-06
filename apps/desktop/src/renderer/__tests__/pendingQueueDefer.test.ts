@@ -505,11 +505,9 @@ describe('renderer input queue facade', () => {
 
     const steer = makerChatStore.steerMessage(sid, 'pre-stop text', MODEL, EFFORT, PERM, WD);
     await flushPromises();
-    const steered = (input.steer.mock.calls.at(-1) as unknown as [
-      string,
-      AgentInputQueuedMessage,
-      unknown,
-    ])[1];
+    const steered = (
+      input.steer.mock.calls.at(-1) as unknown as [string, AgentInputQueuedMessage, unknown]
+    )[1];
 
     makerChatStore.stopSession(sid);
     input.getProjection.mockResolvedValueOnce(

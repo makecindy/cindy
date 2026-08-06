@@ -11177,8 +11177,7 @@ function steerMessage(
   }
   const clearGenerationAtStart =
     remoteScopeAtStart?.clearGeneration ?? rendererClearGenerationBySession.get(sessionId) ?? 0;
-  const queueDiscardGenerationAtStart =
-    rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0;
+  const queueDiscardGenerationAtStart = rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0;
   const current = getOrCreateState(sessionId);
   if (!canStartComposerSteer(current)) {
     // 镜像里有在飞 steer 事务 → 静默拒绝对用户就是"没反应", 留痕 + 主动向
@@ -11325,8 +11324,7 @@ async function steerMessageCore(
     (remoteScopeAtStart
       ? !isRemoteOptimisticSendScopeActive(sessionId, remoteScopeAtStart)
       : (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGenerationAtStart) ||
-    (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) !==
-      queueDiscardGenerationAtStart
+    (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) !== queueDiscardGenerationAtStart
   ) {
     return false;
   }
