@@ -129,6 +129,10 @@ export interface MakerSendTransactionDeps {
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
   withRehydrateCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
+  withInputPreservingRuntimeReplacementClose<T>(
+    sessionId: string,
+    fn: () => Promise<T>,
+  ): Promise<T>;
   bootstrapSession(opts: CreateOpts): Promise<{
     session: MakerSendTransactionSession;
     didInjectOrcaInstructions: boolean;
@@ -433,7 +437,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'active-orca-rehydrate');
     try {
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
-        await deps.closeSession(sessionId);
+        await deps.withInputPreservingRuntimeReplacementClose(
+          sessionId,
+          () => deps.closeSession(sessionId),
+        );
         // close 后重新 bootstrap，避免旧 SDK handle 缺 Orca MCP vendorOptions。
         const {
           session: newSess,

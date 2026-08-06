@@ -382,7 +382,15 @@ describe('maker:event hot path ordering', () => {
     const wireSessionSource = extractWireSessionSource();
     const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
 
+    expect(closedBlock).toContain(
+      'rehydrateCloseSuppression.runInputCoordinatorSessionClosed(session.id',
+    );
     expect(closedBlock).toContain('gitSnapshotCoordinator?.onSessionClosed(session.id);');
+    expectOrder(
+      closedBlock,
+      'rehydrateCloseSuppression.runInputCoordinatorSessionClosed(session.id',
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
+    );
     expectOrder(
       closedBlock,
       'agentInputCoordinatorHolder?.onSessionClosed(session.id);',

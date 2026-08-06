@@ -4503,6 +4503,18 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
     expect(projection.queueAbortPending).toBe(false);
   });
+
+  it('aborts the active input boundary on status=closed', () => {
+    const h = createHarness();
+    const sid = 'closed-aborts-input-boundary';
+    const signal = h.coordinator.getInputAbortSignal(sid);
+
+    expect(signal.aborted).toBe(false);
+
+    h.coordinator.onSessionClosed(sid);
+
+    expect(signal.aborted).toBe(true);
+  });
 });
 
 describe('AgentInputCoordinator steer transaction', () => {

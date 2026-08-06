@@ -49,6 +49,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     readSessionExtraDirsFromDb: vi.fn(async () => []),
     readSessionWorkingDirFromDb: vi.fn(async () => null),
     withRehydrateCloseSuppressed: vi.fn(async (_sessionId, fn) => await fn()),
+    withInputPreservingRuntimeReplacementClose: vi.fn(async (_sessionId, fn) => await fn()),
     bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => ({
       session: createSession({
         id: opts.id ?? session.id,
@@ -1062,6 +1063,81 @@ describe('maker SEND transaction', () => {
     expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('orca-session', 'lead');
     expect(oldSession.send).not.toHaveBeenCalled();
     expect(newSession.send).toHaveBeenCalled();
+  });
+
+  it('preserves the current send signal while closing the stale Orca runtime', async () => {
+    const inputBoundary = new AbortController();
+    let replacingRuntime = false;
+    const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const newSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      send: vi.fn(async (
+        _message: UserMessage | string,
+        opts?: SessionSendOptions,
+      ) => {
+        if (opts?.signal?.aborted) {
+          return {
+            accepted: false,
+            reason: 'cancelled-before-dispatch',
+          } satisfies SessionSendResult;
+        }
+        await opts?.onAccepted?.();
+        opts?.onDispatching?.();
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      closeSession: vi.fn(async () => {
+        // Mirrors register.ts status=closed handling: only a runtime replacement
+        // close may preserve the input boundary driving the replacement.
+        if (!replacingRuntime) inputBoundary.abort();
+      }),
+      bootstrapSession: vi.fn(async () => {
+        expect(replacingRuntime).toBe(false);
+        return {
+          session: newSession,
+          didInjectOrcaInstructions: true,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+    const withInputPreservingRuntimeReplacementClose = vi.fn(async (
+      _sessionId: string,
+      fn: () => Promise<unknown>,
+    ) => {
+      replacingRuntime = true;
+      try {
+        return await fn();
+      } finally {
+        replacingRuntime = false;
+      }
+    });
+    Object.assign(deps, { withInputPreservingRuntimeReplacementClose });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted(
+      'orca-session',
+      'hello',
+      {
+        id: 'orca-session',
+        agentKind: 'pi',
+        workingDir: 'C:\\repo',
+        model: 'deepseek-v4-flash',
+        orcaRole: 'lead',
+      },
+      { signal: inputBoundary.signal },
+    )).resolves.toMatchObject({ accepted: true });
+
+    expect(withInputPreservingRuntimeReplacementClose).toHaveBeenCalledWith(
+      'orca-session',
+      expect.any(Function),
+    );
+    expect(inputBoundary.signal.aborted).toBe(false);
+    expect(newSession.send).toHaveBeenCalledTimes(1);
   });
 
   it('returns rehydrate failure without sending when active Orca rehydrate fails', async () => {

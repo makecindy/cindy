@@ -274,7 +274,11 @@ import {
   setNewMakerDraftCache,
   setProviderModelMemoryCache,
 } from '../maker-host/newMakerDefaultsCache.js';
-import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
+import {
+  rehydrateCloseSuppression,
+  withInputPreservingRuntimeReplacementClose,
+  withRehydrateCloseSuppressed,
+} from '../maker-host/rehydrateCloseSuppression.js';
 import { handleCloseSessionRequest } from './closeSessionRequest.js';
 import {
   createOrcaIdleReleaseWatcher,
@@ -4546,7 +4550,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
           interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
           autoResumeBookkeeping.teardown(session.id);
-          agentInputCoordinatorHolder?.onSessionClosed(session.id);
+          rehydrateCloseSuppression.runInputCoordinatorSessionClosed(session.id, () => {
+            agentInputCoordinatorHolder?.onSessionClosed(session.id);
+          });
           // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
           pendingCredentialSwitchHolder?.onSessionClosed(session.id);
           deferredCodexRestartHolder?.onSessionSettled();
@@ -8511,6 +8517,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readSessionExtraDirsFromDb,
     readSessionWorkingDirFromDb,
     withRehydrateCloseSuppressed,
+    withInputPreservingRuntimeReplacementClose,
     bootstrapSession,
     markOrcaRoleIfNeeded,
     broadcastSessionCreated,
