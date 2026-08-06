@@ -86,7 +86,14 @@ function shHide(cmd) {
   // options as fatal errors (Greptile P1 round 1). bsdtar matches extraction
   // paths as shell-style patterns natively, so no flag is needed there.
   const wildcards = isGnuTar() ? ' --wildcards' : '';
-  const toMsys = (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`).replace(/\\/g, '/');
+  const toMsys = (p) =>
+    p
+      // Collapse JSON-escaped double backslashes FIRST: converting each `\\`
+      // separately would emit doubled separators like /c//Users//foo
+      // (Copilot P1, round 2).
+      .replace(/\\\\/g, '\\')
+      .replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`)
+      .replace(/\\/g, '/');
   const posix = cmd
     .replace(/"((?:[A-Za-z]:)?[^"]*)"/g, (m, p) => JSON.stringify(toMsys(p)))
     .replace(/(^|\s)tar(\s)/g, `$1tar${wildcards}$2`);
