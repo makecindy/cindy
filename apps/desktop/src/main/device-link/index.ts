@@ -227,7 +227,7 @@ let appliedSettingsSnapshot: {
  * 初始化时设为盘上初值,本实例自己改写时即时更新,轮询检测外部实例的改写。
  */
 let appliedKeepAwake: boolean | null = null;
-/** 退出路径的持有权 DELETE 完成信号:sync 阶段发起,async 阶段 disposer await(见 onQuit 注释) */
+/** 退出路径的完整 Device Link 收尾信号；Discord transport 关闭后才会创建。 */
 let pendingQuitOwnershipRelease: Promise<void> | null = null;
 const openLinkInFlight = new Map<string, Promise<LinkAcceptPayload>>();
 const presenceAvailableByDevice = new Map<string, boolean>();
@@ -785,7 +785,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     observedAuthRealm = nextRealm;
     syncWithAuthState(state.isAuthenticated, realmChanged);
   });
-  onQuit('device-link', () => {
+  onQuit('device-link-prepare', () => {
     authRealmReconnectGeneration += 1;
     unsubscribeAuthState?.();
     unsubscribeAuthState = null;
@@ -798,30 +798,39 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       clearInterval(responsivenessProbeTimer);
       responsivenessProbeTimer = null;
     }
-    // 先释放持有权(删行),幸存实例在下一轮 tick 内接管,无需等心跳过期。
-    // sync 阶段只发起 DELETE(RPC 已入 worker 队列),真正的落盘等待交给下面
-    // async 阶段的 disposer —— sync 阶段不 await,直接退出会与 DbClient
-    // dispose / 进程退出竞速,输了就退化成 15s 过期窗口。
-    pendingQuitOwnershipRelease = arbiter?.stop() ?? null;
-    arbiter = null;
-    // 优雅告知在控的控制端本机即将下线。teardownActiveLink 幂等:持有者路径
-    // 已由上面 stop() 的 onDemote 执行过一次,linkTornDown 标记拦截重复清理。
-    teardownActiveLink();
-    setControllersChangedListener(null);
-    setRemoteInvokeBusyChangedListener(null);
-    client = null;
+    // 这里只冻结会触发重连/状态推进的入口，不释放 ownership 或 relay presence。
+    // Discord 正常退出需要先发 offline 公告并关闭 Gateway；若本同步阶段先让
+    // presence 消失，另一台 Desktop 会立即接管，而旧 Gateway 仍可能存活数秒。
+    // 真正的 Device Link 拆线由 bootstrap 的有序 async disposer 在 IM 之后调用。
   });
 
-  // async 阶段(被 await、先于 post-async 的关库)等 DELETE 真正落盘
-  onQuit(
-    'device-link-ownership-release',
-    async () => {
-      if (pendingQuitOwnershipRelease) await pendingQuitOwnershipRelease;
-    },
-    'async',
-  );
-
   log.info(`device-link service initialized → ${wsUrl()}`);
+}
+
+/**
+ * App quit 的第二阶段收尾。调用方必须先关闭 IM aggregate（其中包含 Discord
+ * Gateway），再调用本函数释放 relay presence；这样幸存 Desktop 看到本机离线并
+ * 接管时，旧 Discord ingress 已经关闭。幂等，未初始化时也是 no-op。
+ */
+export async function stopDeviceLinkServiceForQuit(): Promise<void> {
+  if (!pendingQuitOwnershipRelease) {
+    pendingQuitOwnershipRelease = (async () => {
+      const stoppingArbiter = arbiter;
+      arbiter = null;
+      try {
+        // stop() 会同步 demote/teardown relay，并异步等待 ownership DELETE 落盘。
+        // 此时 IM 已完成 dispose，所以 presence 消失不会与旧 Gateway 重叠。
+        await stoppingArbiter?.stop();
+      } finally {
+        // 非 owner / 极早期初始化路径不会经过 onDemote，显式幂等收尾。
+        teardownActiveLink();
+        setControllersChangedListener(null);
+        setRemoteInvokeBusyChangedListener(null);
+        client = null;
+      }
+    })();
+  }
+  await pendingQuitOwnershipRelease;
 }
 
 function syncWithAuthState(isAuthenticated: boolean, realmChanged = false): void {
