@@ -55,6 +55,7 @@ import type {
 } from '../shared/local-themes';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
+import type { RawReleaseNotes } from '../shared/releaseNotesContent';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
   type ModelAccessStatus as ModelAccessStatusPayload,
@@ -3629,7 +3630,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform is resolved in main via getPlatformKey() to keep the CDN path
   // axis identical to the hot-update manifest.
   // Returns null on 404 / network / parse error — caller decides UX.
-  fetchReleaseNotes: (version: string): Promise<RawReleaseNotesPayload | null> =>
+  fetchReleaseNotes: (version: string): Promise<RawReleaseNotes | null> =>
     ipcRenderer.invoke('release-notes:fetch', version),
 
   // Sorted ascending list of every version with a notice on the CDN. Renderer

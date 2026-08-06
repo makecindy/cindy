@@ -45,6 +45,7 @@ type PendingRemotePrecreatedWorktreeTarget =
   import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktreeTarget;
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
+type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawReleaseNotes;
 
 interface NewMakerWorktreeBranchPreferenceSnapshot {
   baseRepo: string;
@@ -5719,43 +5720,6 @@ interface ElectronAPI {
       onUpdateProgress: (callback: (progress: ComputerDriverUpdateProgress) => void) => () => void;
     };
   };
-}
-
-/* ── Release notes raw payload shape from CDN ── */
-
-/** Author-grouped item: one block per contributor, with their bullets. */
-interface RawReleaseNotesItem {
-  name: string;
-  list: string[];
-}
-
-interface RawReleaseNotesSection {
-  title: string;
-  items: RawReleaseNotesItem[];
-}
-
-/** Topic-format (v2) block: one user-facing theme with a short narrative. */
-interface RawReleaseNotesTopic {
-  emoji?: string;
-  title: string;
-  text: string;
-  contributors?: string[];
-}
-
-interface RawReleaseNotesPayload {
-  version: string;
-  date: string;
-  /**
-   * Flat contributor list — collective hall-of-fame on top of per-item `by`.
-   * Optional: older notice files predate the field (renderer defaults to []).
-   */
-  contributors?: string[];
-  /** Legacy author-grouped sections. Absent on topic-format payloads. */
-  sections?: RawReleaseNotesSection[];
-  /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */
-  topics?: RawReleaseNotesTopic[];
-  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
-  intro?: string;
 }
 
 /* ── SkillHub Registry types (v0.6) ──

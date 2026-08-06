@@ -19,6 +19,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useLocale', () => ({
+  useLocale: () => ({ locale: 'en', effectiveLocale: 'en', setLocale: vi.fn() }),
+}));
+
 const updateStatus = vi.hoisted(() => ({
   current: { status: 'ready', version: '1.4.2' } as {
     status: string;
@@ -72,7 +76,7 @@ describe('UpdateBanner release-notes link', () => {
     render(<UpdateBanner isCollapsed={false} onOpenVersionNotice={onOpenVersionNotice} />);
 
     const link = await screen.findByText(LINK);
-    expect(fetchReleaseNotes).toHaveBeenCalledWith('1.4.2');
+    expect(fetchReleaseNotes).toHaveBeenCalledWith('1.4.2', 'en');
 
     fireEvent.click(link);
     expect(onOpenVersionNotice).toHaveBeenCalledWith('1.4.2');
