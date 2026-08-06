@@ -10,12 +10,14 @@ import { SplitGroup } from '../SplitGroup';
 import { getSplitPanes, splitGroupStore } from '../splitGroupStore';
 
 const {
+  deferredRouteActionMock,
   navigateMock,
   resolveSessionRouteMock,
   routeActionMock,
   sessionGetMock,
   useCCSessionsMock,
 } = vi.hoisted(() => ({
+  deferredRouteActionMock: vi.fn(),
   navigateMock: vi.fn(),
   resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   routeActionMock: vi.fn(),
@@ -100,6 +102,14 @@ vi.mock('../CCAgentSessionView', () => ({
       </button>
       <button
         type="button"
+        data-testid={`deferred-route-action-${sessionIdProp}`}
+        data-split-pane-route-action=""
+        onClick={() => deferredRouteActionMock(onSessionNavigate)}
+      >
+        Deferred route action
+      </button>
+      <button
+        type="button"
         data-testid={`composer-action-${sessionIdProp}`}
         onContextMenu={routeActionMock}
       >
@@ -122,6 +132,7 @@ function renderSplitGroup(activeSessionId: string) {
 describe('SplitGroup', () => {
   beforeEach(() => {
     localStorage.clear();
+    deferredRouteActionMock.mockClear();
     navigateMock.mockClear();
     resolveSessionRouteMock.mockClear();
     routeActionMock.mockClear();
@@ -836,6 +847,39 @@ describe('SplitGroup', () => {
     expect(screen.getByTestId('session-view-session-a')).toBeTruthy();
     expect(screen.queryByTestId('session-view-session-b')).toBeNull();
     expect(screen.getByTestId('session-view-lead-c').dataset.routeOwner).toBe('true');
+  });
+
+  it('来源 pane 已关闭时忽略延迟完成的子路由替换意图', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+
+    act(() => {
+      fireEvent.click(screen.getByTestId('deferred-route-action-session-b'));
+    });
+    const reportNavigation = deferredRouteActionMock.mock.calls[0]?.[0] as
+      ((targetSessionId: string, routeOwnerSessionId?: string) => void) | undefined;
+    const sessionBPane = view.container.querySelector('[data-split-pane-session-id="session-b"]');
+    const closeButton = sessionBPane?.querySelector('button[aria-label="splitGroup.closeAria"]');
+    if (!(closeButton instanceof HTMLElement)) throw new Error('session-b close button missing');
+
+    act(() => {
+      fireEvent.click(closeButton);
+      reportNavigation?.('session-d', 'session-d');
+    });
+    view.rerender(
+      <MemoryRouter>
+        <SplitGroup activeSessionId="session-d">
+          <div data-testid="route-outlet" />
+        </SplitGroup>
+      </MemoryRouter>,
+    );
+
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-a', 'session-c'],
+    );
   });
 
   it('递归渲染左一右二与左二右二混合布局', () => {

@@ -276,9 +276,19 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
     const pendingPaneNavigation = pendingPaneNavigationRef.current;
     pendingPaneNavigationRef.current = null;
+    const pendingNavigationMatchesRoute =
+      pendingPaneNavigation?.routeOwnerSessionId === activeSessionId;
+    const pendingNavigationSourceExists = Boolean(
+      pendingPaneNavigation &&
+      panes.some((pane) => pane.sessionId === pendingPaneNavigation.sourceSessionId),
+    );
+    if (pendingNavigationMatchesRoute && !pendingNavigationSourceExists) {
+      // The child action resolved after its source pane was removed. Do not let
+      // the stale intent fall through and replace the current owner pane.
+      return;
+    }
     const pendingSource =
-      pendingPaneNavigation?.routeOwnerSessionId === activeSessionId &&
-      panes.some((pane) => pane.sessionId === pendingPaneNavigation.sourceSessionId)
+      pendingNavigationMatchesRoute && pendingNavigationSourceExists
         ? pendingPaneNavigation.sourceSessionId
         : null;
     const replaceTarget =
