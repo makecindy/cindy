@@ -2805,6 +2805,7 @@ function _touchSession(sessionId: string): void {
 const _lastInboundEventAt = new Map<string, number>();
 const rendererClearBoundaryBySession = new Map<string, number>();
 const rendererClearGenerationBySession = new Map<string, number>();
+const rendererQueueDiscardGenerationBySession = new Map<string, number>();
 
 type RemoteInputClearBoundary = number | null | undefined;
 
@@ -3016,6 +3017,13 @@ function bumpRendererClearGeneration(sessionId: string): void {
   rendererClearGenerationBySession.set(
     sessionId,
     (rendererClearGenerationBySession.get(sessionId) ?? 0) + 1,
+  );
+}
+
+function bumpRendererQueueDiscardGeneration(sessionId: string): void {
+  rendererQueueDiscardGenerationBySession.set(
+    sessionId,
+    (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) + 1,
   );
 }
 
@@ -7224,6 +7232,7 @@ function __teardownGlobalListeners(): void {
   remoteInputClearBoundaryBySession.clear();
   rendererClearBoundaryBySession.clear();
   rendererClearGenerationBySession.clear();
+  rendererQueueDiscardGenerationBySession.clear();
   // Stage 2 C1: 老的 cc-agent:* fan-out 已退役, __resetCCAgentFanOuts 也跟着删了。
   // 新链路 maker:* fan-out 当前不会泄漏 (initGlobalListeners 顶部 if guard +
   // dispose 时调对应 unsub()), 不需要 reset 兜底; 真发现 HMR fan-out 重复时
@@ -11168,6 +11177,8 @@ function steerMessage(
   }
   const clearGenerationAtStart =
     remoteScopeAtStart?.clearGeneration ?? rendererClearGenerationBySession.get(sessionId) ?? 0;
+  const queueDiscardGenerationAtStart =
+    rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0;
   const current = getOrCreateState(sessionId);
   if (!canStartComposerSteer(current)) {
     // 镜像里有在飞 steer 事务 → 静默拒绝对用户就是"没反应", 留痕 + 主动向
@@ -11197,6 +11208,7 @@ function steerMessage(
           mentions,
           opts,
           clearGenerationAtStart,
+          queueDiscardGenerationAtStart,
           remoteScopeAtStart,
         );
       }
@@ -11217,6 +11229,7 @@ function steerMessage(
           mentions,
           opts,
           clearGenerationAtStart,
+          queueDiscardGenerationAtStart,
           remoteScopeAtStart,
           files,
           identity,
@@ -11272,6 +11285,7 @@ function steerMessage(
             mentions,
             opts,
             clearGenerationAtStart,
+            queueDiscardGenerationAtStart,
             remoteScopeAtStart,
             files,
           ),
@@ -11300,6 +11314,7 @@ async function steerMessageCore(
     onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
   },
   clearGenerationAtStart = 0,
+  queueDiscardGenerationAtStart = 0,
   remoteScopeAtStart: RemoteOptimisticSendScope | null = null,
   recoveryFiles?: readonly AttachedFile[],
   identity?: { clientId: string; createdAt: string },
@@ -11309,7 +11324,9 @@ async function steerMessageCore(
     (remoteClearInFlight.has(sessionId) && !remoteScopeAtStart) ||
     (remoteScopeAtStart
       ? !isRemoteOptimisticSendScopeActive(sessionId, remoteScopeAtStart)
-      : (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGenerationAtStart)
+      : (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGenerationAtStart) ||
+    (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) !==
+      queueDiscardGenerationAtStart
   ) {
     return false;
   }
@@ -11424,7 +11441,10 @@ async function steerMessageCore(
           operation,
           latest,
         );
-        if (operationAuthorityCurrent && latestHasQueuedItem) {
+        const queueDiscardGenerationCurrent =
+          (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) ===
+          queueDiscardGenerationAtStart;
+        if (operationAuthorityCurrent && queueDiscardGenerationCurrent && latestHasQueuedItem) {
           // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
           // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
           // (review P1)。是否真该改名仍由 main 权威判定。
@@ -11623,6 +11643,7 @@ function stopSession(
 ): void {
   if (!sessionId) return;
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
+  if (opts?.keepQueue !== true) bumpRendererQueueDiscardGeneration(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
   // 让 Stop 自己的权威响应仍属于新代际。

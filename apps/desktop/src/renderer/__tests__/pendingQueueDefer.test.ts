@@ -493,6 +493,33 @@ describe('renderer input queue facade', () => {
     await expect(steer).resolves.toBe(true);
   });
 
+  it('rejects a pre-stop materialized steer when plain stop drops the queue', async () => {
+    const sid = `steer-materialized-drop-stop-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveSteer!: (value: boolean) => void;
+    input.steer.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveSteer = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'pre-stop text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (input.steer.mock.calls.at(-1) as unknown as [
+      string,
+      AgentInputQueuedMessage,
+      unknown,
+    ])[1];
+
+    makerChatStore.stopSession(sid);
+    input.getProjection.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [steered], queuePaused: true }),
+    );
+    resolveSteer(false);
+
+    await expect(steer).resolves.toBe(false);
+  });
+
   it('rejects a pre-clear materialized steer after the clear generation advances', async () => {
     const sid = `steer-materialized-clear-${Math.random().toString(36).slice(2, 8)}`;
     let resolveProjection!: (value: AgentInputProjection) => void;
