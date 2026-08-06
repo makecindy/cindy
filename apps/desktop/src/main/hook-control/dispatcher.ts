@@ -647,6 +647,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
    * 收口(run 返回时 session 必已建好)。因此表的规模 ≤ 并发新建数, 不会泄漏。
    */
   const awaitingPersist = new Map<string, string>();
+  /**
+   * 当前 externalKey 最近一次由失效显式接管替换出的 session。显式 stale 请求
+   * 必须跳过进场时的无关旧 binding, 但同一消息线随后再次携带同一个 stale id
+   * 时要认出刚创建的 replacement, 否则会在串行等待后再拆出一个新 session。
+   */
+  const staleTakeoverReplacements = new Map<string, string>();
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
@@ -803,6 +809,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
   function ackKey(connectionId: string, requestId: string): string {
     return `${connectionId} ${requestId}`;
+  }
+
+  function bindingKey(connectionId: string, externalKey: string): string {
+    return `${connectionId}\u0000${externalKey}`;
   }
 
   function persistTerminalRecord(record: HookTerminalRecord): boolean {
@@ -1462,9 +1472,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       connectionName: config.name,
       externalKey: payload.externalKey,
     };
-    const whitelistDirs = Object.values(config.workspaces);
-    const inWhitelist = (dir: string | null): boolean =>
-      dir !== null && whitelistDirs.some((base) => isPathWithin(base, dir));
     /**
      * 同上, 但每次都重读连接配置 —— 撤权判定必须用**此刻**的映射: `config` 是
      * 消息进来那一刻的快照, 而下面要 await `runner.inspect()`。用快照判定的话,
@@ -1488,6 +1495,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     let recreatedNotice: string | null = null;
 
     const laneKind = deriveLaneKind(payload.externalKey);
+    const laneKey = bindingKey(connectionId, payload.externalKey);
     // v1 stored every mapping under the literal "slack" namespace.  A new
     // account/provider namespace may read it only as a candidate; it is moved
     // after current-account DB existence + workspace allowlist checks pass.
@@ -1498,7 +1506,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const info = await runner.inspect(payload.sessionId);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       if (info?.usable) {
-        if (!inWhitelist(info.workingDir) && !inDialogueRoot(info.workingDir)) {
+        if (!inWhitelistNow(info.workingDir) && !inDialogueRoot(info.workingDir)) {
           return { reject: 'workspace_not_allowed' };
         }
         // 接管路径刚校验过白名单, 授权来源恒为 workspace(远端不能凭接管把会话
@@ -1577,12 +1585,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ? bindings.get(legacyNamespace, payload.externalKey)
         : null;
     const bound = namespacedBound ?? legacyBound;
+    const trackedReplacement = staleTakeoverReplacements.get(laneKey);
+    if (trackedReplacement !== undefined && trackedReplacement !== bound) {
+      staleTakeoverReplacements.delete(laneKey);
+    }
     const migrateLegacyBinding = (): void => {
       if (!legacyBound || !legacyNamespace) return;
       bindings.set(connectionId, payload.externalKey, legacyBound);
       bindings.remove(legacyNamespace, payload.externalKey);
     };
-    if (!forceNew && bound) {
+    if ((!forceNew || trackedReplacement === bound) && bound) {
       const info = await runner.inspect(bound);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
@@ -1680,7 +1692,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (legacyNamespace) bindings.remove(legacyNamespace, payload.externalKey);
       // 旧绑定作废后下面会新建会话 —— 渠道侧只会看到"换了个会话"却无从得知
       // 原因, 因此带一条说明随本次 turn.end 回去(见 execute)。
-      recreatedNotice = info?.usable ? NOTICE_SESSION_RECREATED : NOTICE_SESSION_GONE;
+      if (!forceNew) {
+        recreatedNotice = info?.usable ? NOTICE_SESSION_RECREATED : NOTICE_SESSION_GONE;
+      }
       log.info(
         `hook binding for ${payload.externalKey} dropped: session ${bound} ${
           info?.usable ? 'left the workspace map' : 'is gone or archived'
@@ -1730,6 +1744,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
     // 新建会话跑在别名目录(或对话根)里, 是否还能复用每次现场按映射判定
     bindings.set(connectionId, payload.externalKey, sessionId);
+    if (forceNew) {
+      staleTakeoverReplacements.set(laneKey, sessionId);
+    } else {
+      staleTakeoverReplacements.delete(laneKey);
+    }
     // 显式接管失效时 forceNew 已跳过旧 binding 复用；等新目录准备成功后才覆盖
     // 当前 binding 并清理旧版 namespace，避免分配失败 / 账号切换时无谓解绑。
     if (forceNew && legacyNamespace) bindings.remove(legacyNamespace, payload.externalKey);
@@ -2033,6 +2052,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         // 不在这里清的话, 每次切账号都永久留下一条 sessionId + 完整工作目录路径
         // (PR #733 review 指出)。这些会话属于上一个账号, 新账号下本就不该免检。
         awaitingPersist.clear();
+        staleTakeoverReplacements.clear();
         keyChains.clear();
       })();
       accountDeactivation = drain.finally(() => {
@@ -2237,6 +2257,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         dropContinuation(sessionId, { silent: true, remember: false });
       }
       pendingReopens.clear();
+      staleTakeoverReplacements.clear();
       serverFeatures.clear();
       sendFns.clear();
       pendingTurnEnds.clear();

@@ -179,6 +179,7 @@ async function tick(times = 10): Promise<void> {
 }
 
 function makeDispatcher(overrides?: {
+  getConnection?: HookDispatcherDeps['getConnection'];
   runner?: HookSessionRunner;
   bindings?: HookBindingStore;
   terminalLedger?: HookRequestLedger;
@@ -197,7 +198,9 @@ function makeDispatcher(overrides?: {
   const fr = fakeRunner();
   const runner = overrides?.runner ?? fr.runner;
   const d = createHookDispatcher({
-    getConnection: () => (overrides?.config === undefined ? CONFIG : overrides.config),
+    getConnection:
+      overrides?.getConnection ??
+      (() => (overrides?.config === undefined ? CONFIG : overrides.config)),
     bindings,
     terminalLedger: overrides?.terminalLedger,
     runner,
@@ -1152,6 +1155,79 @@ describe('dispatcher 核心语义', () => {
       result: 'rejected',
       reason: 'workspace_not_allowed',
     });
+  });
+
+  it('接管白名单按 inspect 完成后的当前映射判定', async () => {
+    let currentConfig: HookConnectionConfig = CONFIG;
+    const fr = fakeRunner({
+      sessions: {
+        'sess-in': { workingDir: path.join(WS_DIR, 'sub'), usable: true },
+      },
+    });
+    const runner: HookSessionRunner = {
+      ...fr.runner,
+      inspect: async (id) => {
+        const info = await fr.runner.inspect(id);
+        currentConfig = {
+          ...CONFIG,
+          workspaces: { moved: path.resolve('/repos/moved') },
+        };
+        return info;
+      },
+    };
+    const { d } = makeDispatcher({ runner, getConnection: () => currentConfig });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ sessionId: 'sess-in', workspace: null }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload).toMatchObject({
+      result: 'rejected',
+      reason: 'workspace_not_allowed',
+    });
+  });
+
+  it('连续携带同一失效 sessionId 时复用第一次替换出的 session 并排队', async () => {
+    const dd = dialogueDep();
+    const fr = fakeRunner();
+    const externalKey = 'team-slack:C1:repeat-stale';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-1', externalKey, sessionId: 'ghost', workspace: null }),
+      c.send,
+    );
+    await tick();
+    const firstSessionId = fr.calls[0]?.sessionId;
+    expect(firstSessionId).toBeTruthy();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-2', externalKey, sessionId: 'ghost', workspace: null }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls).toHaveLength(1);
+    expect(c.ofType('task.ack').map((message) => message.payload)).toEqual([
+      expect.objectContaining({
+        requestId: 'stale-1',
+        result: 'accepted',
+        sessionId: firstSessionId,
+      }),
+      expect.objectContaining({
+        requestId: 'stale-2',
+        result: 'queued',
+        sessionId: firstSessionId,
+      }),
+    ]);
+
+    fr.finish();
+    await tick();
+    expect(fr.calls).toHaveLength(2);
+    expect(fr.calls[1]?.sessionId).toBe(firstSessionId);
+    fr.finish();
   });
 
   it('显式目标不存在且无可用提示时静默新建 chat，并替换当前及旧版 binding', async () => {
