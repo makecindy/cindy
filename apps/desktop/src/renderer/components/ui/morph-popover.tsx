@@ -437,12 +437,22 @@ export function MorphPopover({
   /** 打开期间的全局关闭手势:outside pointerdown / Esc(分层) / 窗口 resize */
   useEffect(() => {
     if (!mounted || !open) return;
+    const isWithinExternalFocusTarget = (target: Node): boolean => {
+      const externalFocusTarget = autoFocusTarget?.();
+      return Boolean(
+        externalFocusTarget &&
+          (externalFocusTarget === target || externalFocusTarget.contains(target)),
+      );
+    };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (panelRef.current?.contains(t) || wrapRef.current?.contains(t)) return;
       // 面板内容可能再弹 Radix 浮层(portal 到 body,如模型行的 effort/Fast 配置
       // 子面板)——点它不算 outside,否则子面板永远点不了(整个面板会先被关掉)
       if ((t as Element).closest?.('[data-radix-popper-content-wrapper]')) return;
+      // autoFocusTarget 是当前交互层的一部分(例如统一建议面板外的 composer)。
+      // 指针在该目标内调整光标时也不应按 outside pointerdown 收起。
+      if (isWithinExternalFocusTarget(t)) return;
       // outside pointerdown 也是鼠标关闭。目标控件可能 preventDefault 阻止默认聚焦
       // (如 AgentSelect 为维持 composer focus-within),不能因此把旧层误判成键盘关闭、
       // 在收合结束后延迟抢回旧 trigger 焦点并关掉刚打开的相邻弹层。
@@ -471,13 +481,7 @@ export function MorphPopover({
       // 某些 MorphPopover（如 composer 的统一建议面板）有意把焦点留在
       // 面板外的编辑器上，以便打开后直接输入筛选。这个显式目标仍属于当前
       // 交互层，不能被“焦点离开即关闭”误判；其它外部焦点照常关闭。
-      const externalFocusTarget = autoFocusTarget?.();
-      if (
-        externalFocusTarget &&
-        (externalFocusTarget === target || externalFocusTarget.contains(target))
-      ) {
-        return;
-      }
+      if (isWithinExternalFocusTarget(target)) return;
       requestClose();
     };
     const onResize = () => requestClose();

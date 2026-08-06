@@ -136,8 +136,13 @@ describe('MorphPopover interaction contract', () => {
     fireEvent.click(trigger);
 
     const panel = await screen.findByRole('group', { name: 'External focus panel' });
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Composer')));
+    const composer = screen.getByLabelText('Composer');
+    await waitFor(() => expect(document.activeElement).toBe(composer));
     expect(panel).toBeTruthy();
+
+    // autoFocusTarget 属于当前交互层:点击编辑器调整光标时不能被 outside pointerdown 收起。
+    fireEvent.pointerDown(composer);
+    expect(screen.getByRole('group', { name: 'External focus panel' })).toBeTruthy();
 
     act(() => screen.getByRole('button', { name: 'Unrelated control' }).focus());
     await waitFor(() =>
