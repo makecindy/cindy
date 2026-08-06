@@ -5505,6 +5505,8 @@ interface ElectronAPI {
       pause: (id: string) => Promise<unknown>;
       resume: (id: string) => Promise<unknown>;
       runNow: (id: string) => Promise<{ runId: string }>;
+      codexAutomationPreview: () => Promise<unknown>;
+      codexAutomationImport: (sourceIds: string[]) => Promise<unknown>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{

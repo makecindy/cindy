@@ -65,6 +65,14 @@ import {
   stabilizeHookCommand,
 } from '../scheduler-host/hook-script-generator.js';
 import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capability-status.js';
+import {
+  createCodexAutomationReader,
+  type CodexAutomationReader,
+} from '../scheduler-host/codex-automation-reader.js';
+import {
+  asCodexAutomationMigrationScheduler,
+  createCodexAutomationMigrationService,
+} from '../scheduler-host/codex-automation-migration.js';
 import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -303,7 +311,10 @@ function buildCreateScheduleInput(
  * 调用,因此需要每次先 removeHandler;新 API handler 不依赖 scheduler 实例闭包,
  * scheduler 切换通过 setSchedulerReady 喂入,handler 本身永远不需要重注册。
  */
-export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
+export function registerScheduleHandlers(
+  getMaker?: () => Maker | null,
+  options?: { codexAutomationReader?: CodexAutomationReader },
+): void {
   log.info('registering maker:schedule:* IPC handlers (boot-eager, awaiting readiness)');
 
   const resolveSessionWorkDir = async (sessionId: string): Promise<string | undefined> => {
@@ -406,6 +417,30 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId));
   });
 
+  const codexAutomationReader = options?.codexAutomationReader ?? createCodexAutomationReader();
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_CODEX_AUTOMATION_PREVIEW, async () =>
+    withScheduler(({ scheduler }) =>
+      createCodexAutomationMigrationService({
+        reader: codexAutomationReader,
+        scheduler: asCodexAutomationMigrationScheduler(scheduler),
+      }).preview(),
+    ),
+  );
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_CODEX_AUTOMATION_IMPORT, async (_e, payload: unknown) => {
+    const body = requireObject(payload, 'payload');
+    if (!Array.isArray(body.sourceIds)) {
+      throwIpcError('INVALID_PARAMS', 'sourceIds must be an array');
+    }
+    const sourceIds = body.sourceIds.map((id) => requireString(id, 'sourceId'));
+    return withScheduler(({ scheduler }) =>
+      createCodexAutomationMigrationService({
+        reader: codexAutomationReader,
+        scheduler: asCodexAutomationMigrationScheduler(scheduler),
+      }).import(sourceIds),
+    );
+  });
+
   // 表单「AI 生成」:按用户自然语言描述生成前置检查脚本(utility model 单次生成,
   // 带供应商回退链),落盘后返回可直接填入的命令。修改流传 currentCommand,
   // 生成器识别出旧脚本路径时覆写同一文件(命令不变)。
@@ -415,7 +450,9 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   // 运行 cwd 是绑定会话的 meta.workDir —— 测试 / AI 生成必须用同一目录,否则
   // repo-relative 检查在弹窗里给出与生产运行相反的误导结果。renderer 只传
   // targetSessionId,解析在 main 用代码完成(规则 9)。
-  const resolveHookWorkingDir = async (body: Record<string, unknown>): Promise<string | undefined> => {
+  const resolveHookWorkingDir = async (
+    body: Record<string, unknown>,
+  ): Promise<string | undefined> => {
     const explicit =
       typeof body.workingDir === 'string' && body.workingDir.trim() ? body.workingDir : undefined;
     if (explicit) return explicit;
@@ -437,26 +474,30 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     const maker = getMaker?.();
     if (!maker) throwIpcError('INTERNAL', 'maker not ready for hook script generation');
     const workingDir = await resolveHookWorkingDir(body);
-    const requestedAgentKind: AgentKind | undefined = body.agentKind === 'codex'
-      || body.agentKind === 'claude-code'
-      || body.agentKind === 'pi'
-      ? body.agentKind
-      : undefined;
-    const targetSessionId = typeof body.targetSessionId === 'string' && body.targetSessionId.trim()
-      ? body.targetSessionId.trim()
-      : undefined;
+    const requestedAgentKind: AgentKind | undefined =
+      body.agentKind === 'codex' || body.agentKind === 'claude-code' || body.agentKind === 'pi'
+        ? body.agentKind
+        : undefined;
+    const targetSessionId =
+      typeof body.targetSessionId === 'string' && body.targetSessionId.trim()
+        ? body.targetSessionId.trim()
+        : undefined;
     let providerId = typeof body.providerId === 'string' ? body.providerId : undefined;
     let agentKind: AgentKind | undefined = requestedAgentKind;
     let model = typeof body.model === 'string' ? body.model : undefined;
-    if (targetSessionId && shouldResolveBoundSessionGenerationRoute({
-      targetSessionId,
-      resolveBoundSessionRoute: body.resolveBoundSessionRoute === true,
-    })) {
+    if (
+      targetSessionId &&
+      shouldResolveBoundSessionGenerationRoute({
+        targetSessionId,
+        resolveBoundSessionRoute: body.resolveBoundSessionRoute === true,
+      })
+    ) {
       const session = await maker.getSessionMeta(targetSessionId).catch(() => null);
       // Bound-session fallback must use the same live connection snapshot as
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.
-      const { getDesktopProviderService } = await import('../maker-host/createDesktopProviderService.js');
+      const { getDesktopProviderService } =
+        await import('../maker-host/createDesktopProviderService.js');
       const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
       const route = resolveBoundSessionGenerationRoute({
         session,
@@ -469,13 +510,18 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         return {
           ok: false as const,
           reason: 'no_candidate' as const,
-          attempts: [{
-            providerId: getSessionProvider(targetSessionId) ?? targetSessionId,
-            model: session?.model?.trim() ?? '',
-            transport: session?.agentKind === 'codex' ? 'codex-responses' as const : 'litellm-chat-completions' as const,
-            status: 'skipped' as const,
-            reason: 'model_unavailable' as const,
-          }],
+          attempts: [
+            {
+              providerId: getSessionProvider(targetSessionId) ?? targetSessionId,
+              model: session?.model?.trim() ?? '',
+              transport:
+                session?.agentKind === 'codex'
+                  ? ('codex-responses' as const)
+                  : ('litellm-chat-completions' as const),
+              status: 'skipped' as const,
+              reason: 'model_unavailable' as const,
+            },
+          ],
         };
       }
       providerId = route.providerId;
@@ -532,11 +578,14 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_RUNS, async (_e, scheduleId: unknown, limit: unknown) => {
-    const id = requireString(scheduleId, 'scheduleId');
-    const lim = typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined;
-    return withScheduler(({ scheduler }) => scheduler.listRuns(id, lim));
-  });
+  ipcMain.handle(
+    MAKER_INVOKE.SCHEDULE_LIST_RUNS,
+    async (_e, scheduleId: unknown, limit: unknown) => {
+      const id = requireString(scheduleId, 'scheduleId');
+      const lim = typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined;
+      return withScheduler(({ scheduler }) => scheduler.listRuns(id, lim));
+    },
+  );
 
   // 一并回传引擎的 in-flight runId 快照:renderer 的通知抑制标记要靠它区分「DB 里查不到
   // 这条 run」的两种含义 —— 已结束并被清理,还是自删除场景下行已消失却仍在跑(见
@@ -639,11 +688,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     return withScheduler(({ scheduler }) => {
       const template = findTemplate(templateId);
       if (!template) throwIpcError('NOT_FOUND', `template ${templateId} not found`);
-      const prompt = applyTemplateParams(
-        template.prompt ?? '',
-        paramValues,
-        template.parameters,
-      );
+      const prompt = applyTemplateParams(template.prompt ?? '', paramValues, template.parameters);
       return scheduler.create(buildCreateScheduleInput(template, prompt, overrides));
     });
   });

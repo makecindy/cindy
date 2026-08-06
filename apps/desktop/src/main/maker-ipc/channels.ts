@@ -435,7 +435,7 @@ export const MAKER_INVOKE = {
    * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
-  */
+   */
   PROVIDER_LIST: 'maker:provider:list',
   /**
    * 内置四家模型清单手动刷新。入参仅允许 xd / anthropic / openai / xai；
@@ -529,6 +529,8 @@ export const MAKER_INVOKE = {
   SCHEDULE_PAUSE: 'maker:schedule:pause',
   SCHEDULE_RESUME: 'maker:schedule:resume',
   SCHEDULE_RUN_NOW: 'maker:schedule:run-now',
+  SCHEDULE_CODEX_AUTOMATION_PREVIEW: 'maker:schedule:codex-automation-preview',
+  SCHEDULE_CODEX_AUTOMATION_IMPORT: 'maker:schedule:codex-automation-import',
   /** 表单「测试运行」按钮:立即执行一次前置检查脚本,返回 exit code / 输出 / 耗时。 */
   SCHEDULE_TEST_PRE_RUN_HOOK: 'maker:schedule:test-pre-run-hook',
   /** 表单「AI 生成」:按自然语言描述生成前置检查脚本并落盘,返回可填入的命令。 */
