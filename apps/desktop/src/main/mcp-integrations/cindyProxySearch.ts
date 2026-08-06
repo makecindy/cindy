@@ -171,6 +171,17 @@ interface SearchSource {
   snippet: string;
 }
 
+type ParsedSearchResponse =
+  | {
+      ok: true;
+      results: CindyProxySearchItem[];
+    }
+  | {
+      ok: false;
+      errorCode: CindyProxySearchErrorCode;
+      message: string;
+    };
+
 function sourceFromRecord(value: Record<string, unknown>): SearchSource | null {
   const url = normalizedHttpUrl(value.url);
   if (!url) return null;
@@ -187,12 +198,53 @@ function sourceFromRecord(value: Record<string, unknown>): SearchSource | null {
   return { url, title, snippet };
 }
 
-function parseSearchResults(raw: unknown, limit: number): CindyProxySearchItem[] | null {
+function invalidSearchResponse(): ParsedSearchResponse {
+  return {
+    ok: false,
+    errorCode: 'RESPONSE_INVALID',
+    message: 'Cindy AI 搜索返回了无法识别的结果，请稍后再试',
+  };
+}
+
+function searchToolFailure(errorCode: unknown): ParsedSearchResponse {
+  if (errorCode === 'too_many_requests') {
+    return {
+      ok: false,
+      errorCode: 'RATE_LIMITED',
+      message: 'Cindy AI 搜索请求过于频繁，请稍后再试',
+    };
+  }
+  if (errorCode === 'max_uses_exceeded') {
+    return {
+      ok: false,
+      errorCode: 'RATE_LIMITED',
+      message: 'Cindy AI 搜索已达到本次调用上限，请稍后再试',
+    };
+  }
+  if (errorCode === 'invalid_tool_input' || errorCode === 'query_too_long') {
+    return {
+      ok: false,
+      errorCode: 'INVALID_PARAMS',
+      message: 'Cindy AI 搜索请求参数未被服务接受',
+    };
+  }
+  if (errorCode === 'unavailable') {
+    return {
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+      message: 'Cindy AI 搜索服务暂时不可用，请稍后再试',
+    };
+  }
+  return invalidSearchResponse();
+}
+
+function parseSearchResponse(raw: unknown, limit: number): ParsedSearchResponse {
   if (!isRecord(raw) || !Array.isArray(raw.content)) {
-    return null;
+    return invalidSearchResponse();
   }
 
   const sources = new Map<string, SearchSource>();
+  let sawCandidate = false;
   const mergeSource = (source: SearchSource) => {
     const existing = sources.get(source.url);
     if (!existing) {
@@ -208,15 +260,23 @@ function parseSearchResults(raw: unknown, limit: number): CindyProxySearchItem[]
   for (const block of raw.content) {
     if (!isRecord(block)) continue;
 
-    if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
-      for (const item of block.content) {
-        if (!isRecord(item) || item.type !== 'web_search_result') continue;
-        const source = sourceFromRecord(item);
-        if (source) mergeSource(source);
+    if (block.type === 'web_search_tool_result') {
+      if (Array.isArray(block.content)) {
+        if (block.content.length > 0) sawCandidate = true;
+        for (const item of block.content) {
+          if (!isRecord(item) || item.type !== 'web_search_result') continue;
+          const source = sourceFromRecord(item);
+          if (source) mergeSource(source);
+        }
+      } else if (isRecord(block.content) && block.content.type === 'web_search_tool_result_error') {
+        return searchToolFailure(block.content.error_code);
+      } else {
+        return invalidSearchResponse();
       }
     }
 
     if (block.type === 'text' && Array.isArray(block.citations)) {
+      if (block.citations.length > 0) sawCandidate = true;
       for (const citation of block.citations) {
         if (!isRecord(citation)) continue;
         const source = sourceFromRecord(citation);
@@ -225,8 +285,11 @@ function parseSearchResults(raw: unknown, limit: number): CindyProxySearchItem[]
     }
   }
 
-  if (sources.size === 0) return null;
-  return Array.from(sources.values()).slice(0, limit);
+  if (sawCandidate && sources.size === 0) return invalidSearchResponse();
+  return {
+    ok: true,
+    results: Array.from(sources.values()).slice(0, limit),
+  };
 }
 
 function webSearchRequestsOf(raw: unknown): number | undefined {
@@ -321,25 +384,27 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
       } catch {
         decoded = null;
       }
-      const results = parseSearchResults(decoded, limit);
+      const parsed = parseSearchResponse(decoded, limit);
       const webSearchRequests = webSearchRequestsOf(decoded);
-      if (!results) {
-        deps.log?.warn('cindy search returned invalid response', {
+      if (!parsed.ok) {
+        deps.log?.warn('cindy search response rejected', {
           logicalProvider: 'cindy',
           upstreamProtocol: 'anthropic-messages',
           modelAlias: CINDY_SEARCH_MODEL_NAME,
           status: response.status,
           latencyMs,
           ...(requestId ? { requestId } : {}),
+          errorCode: parsed.errorCode,
         });
         return {
           ok: false,
-          errorCode: 'RESPONSE_INVALID',
-          message: 'Cindy AI 搜索返回了无法识别的结果，请稍后再试',
+          errorCode: parsed.errorCode,
+          message: parsed.message,
           status: response.status,
           ...(requestId ? { requestId } : {}),
         };
       }
+      const results = parsed.results;
 
       deps.log?.info('cindy search request completed', {
         logicalProvider: 'cindy',

@@ -1184,14 +1184,14 @@ export class GhostCindySlot {
       return {
         ok: false,
         message: '意识不在可用状态',
-        errorCode: 'NOT_CONFIGURED',
+        errorCode: 'PERMISSION_DENIED',
       };
     }
     if (!ghost.manifest.slots?.includes('cindy')) {
       return {
         ok: false,
         message: '本意识未声明 cindy 卡槽，无权请 Cindy 搜索',
-        errorCode: 'NOT_CONFIGURED',
+        errorCode: 'PERMISSION_DENIED',
       };
     }
     const declared: readonly string[] = ghost.manifest.cindy?.search ?? [];
@@ -1200,7 +1200,7 @@ export class GhostCindySlot {
         ok: false,
         message:
           '本意识未声明搜索「网页搜索」能力(身份卡 cindy.search 缺 "web")，请意识作者更新声明',
-        errorCode: 'NOT_CONFIGURED',
+        errorCode: 'PERMISSION_DENIED',
       };
     }
 

@@ -194,6 +194,64 @@ describe('cindyProxySearch', () => {
     });
   });
 
+  it('将无匹配结果和未触发搜索工具视为有效空结果', async () => {
+    for (const body of [
+      {
+        content: [{ type: 'web_search_tool_result', content: [] }],
+      },
+      {
+        content: [{ type: 'text', text: 'No web search was needed.' }],
+      },
+    ]) {
+      const service = createCindyProxySearchService({
+        getBaseUrl: () => 'https://gateway.example.test',
+        getApiKey: () => 'test-key',
+        fetchImpl: vi.fn(async () => response(body)) as unknown as typeof fetch,
+      });
+
+      await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
+        ok: true,
+        results: [],
+      });
+    }
+  });
+
+  it('归一化 Messages Web Search 的 HTTP 200 工具级错误', async () => {
+    const cases = [
+      { upstream: 'too_many_requests', code: 'RATE_LIMITED' },
+      { upstream: 'max_uses_exceeded', code: 'RATE_LIMITED' },
+      { upstream: 'invalid_tool_input', code: 'INVALID_PARAMS' },
+      { upstream: 'query_too_long', code: 'INVALID_PARAMS' },
+      { upstream: 'unavailable', code: 'UPSTREAM_UNAVAILABLE' },
+    ] as const;
+
+    for (const testCase of cases) {
+      const service = createCindyProxySearchService({
+        getBaseUrl: () => 'https://gateway.example.test',
+        getApiKey: () => 'test-key',
+        fetchImpl: vi.fn(async () =>
+          response({
+            content: [
+              {
+                type: 'web_search_tool_result',
+                content: {
+                  type: 'web_search_tool_result_error',
+                  error_code: testCase.upstream,
+                },
+              },
+            ],
+          }),
+        ) as unknown as typeof fetch,
+      });
+
+      await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
+        ok: false,
+        errorCode: testCase.code,
+        status: 200,
+      });
+    }
+  });
+
   it('日志只包含状态元数据，不包含 query 或 Authorization', async () => {
     const info = vi.fn();
     const warn = vi.fn();

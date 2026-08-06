@@ -347,13 +347,19 @@ describe('Cindy Web Search', () => {
     });
   });
 
-  it('拒绝未声明能力、非 cindy Provider、非法 query/limit/callId，且不出网', async () => {
+  it('权限不足返回 PERMISSION_DENIED；非法参数返回 INVALID_PARAMS，且不出网', async () => {
     const searchWeb = vi.fn();
-    const undeclared = makeSlot({ searchWeb });
-    expect(await undeclared.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
-      ok: false,
-      errorCode: 'NOT_CONFIGURED',
-    });
+    for (const getGhost of [
+      () => fakeGhost({ enabled: false, model: { search: ['web'] } }),
+      () => fakeGhost({ slots: ['tool'], model: { search: ['web'] } }),
+      () => fakeGhost(),
+    ]) {
+      const denied = makeSlot({ getGhost, searchWeb });
+      expect(await denied.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+      });
+    }
 
     const { slot } = makeSlot({ getGhost: searchGhost, searchWeb });
     for (const request of [
