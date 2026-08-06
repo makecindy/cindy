@@ -313,23 +313,47 @@ export interface NewSessionRuntime {
 }
 
 /**
- * 继承最近会话来源时的安全校验:
- * - modelRows 已加载(非空):来源必须仍连接且仍提供该模型才继承,否则清空回默认路由 ——
- *   provider 被删 / 模型下架后盲目继承会把创建参数钉到失效来源上;
- * - modelRows 未加载(空,providers 仍在拉取):无法校验,信任最近会话的来源 —— 同设备
- *   最近会话是当时最强的证据,且被控端是最终路由真相;此处清空反而会把绑定丢掉(#1898)。
+ * 校验 draft 里的来源(providerId)对当前 model 是否仍然有效:
+ * - providerId 为空 → null(默认路由);
+ * - catalogReady=false(目录未就绪,providers 仍在拉取)→ 无法校验,信任既有绑定 ——
+ *   同设备最近会话的来源是当时最强的证据,被控端是最终路由真相;此处清空反而会把
+ *   绑定丢掉(#1898);
+ * - catalogReady=true(目录已就绪,哪怕为空)→ 必须仍存在 (provider, model) 匹配行,
+ *   否则清空回默认路由 —— provider 被删/断开/模型下架后,继续带着失效来源会让创建
+ *   或首条消息直接失败(Greptile/Copilot review P1:空清单与"加载中"必须区分)。
+ *
+ * 同时服务两个场景:自动默认继承最近会话来源时的校验,与目录就绪后的来源终检
+ * (codex review P1:加载期信任的来源,就绪后必须复核)。
  */
-function inheritRecentProviderId(
+export function validateModelProviderId(
   modelRows: readonly ProviderModelRow[],
   providerId: string | null | undefined,
   modelId: string,
+  catalogReady: boolean,
 ): string | null {
   if (!providerId) return null;
-  if (modelRows.length === 0) return providerId;
+  if (!catalogReady) return providerId;
   const stillOffered = modelRows.some(
     (row) => row.provider.id === providerId && row.model.id === modelId,
   );
   return stillOffered ? providerId : null;
+}
+
+/**
+ * 按 (providerId, modelId) 精确找 row;providerId 为空或无精确匹配时退回 modelId 首匹配。
+ * 同一 modelId 可被多个 provider 提供(各自 effort 档位表可能不同)——reconcile effort
+ * 必须用最终选中来源的那一行,否则会被错误降档/升档(Copilot review)。
+ */
+function findSectionModelRow(
+  modelRows: readonly ProviderModelRow[],
+  modelId: string,
+  providerId: string | null,
+): ProviderModelRow | undefined {
+  if (providerId) {
+    const exact = modelRows.find((row) => row.provider.id === providerId && row.model.id === modelId);
+    if (exact) return exact;
+  }
+  return modelRows.find((row) => row.model.id === modelId);
 }
 
 /**
@@ -375,11 +399,12 @@ export function pickMostRecentSessionRuntime(
  *      与下拉渲染的第一项一致);
  *   3) 否则该 agent 的内置默认 DEFAULT_MODELS[agentKind]。
  * providerId 跟随 model 同源:
- *   1) 跟随最近会话 → 继承该会话的来源(inheritRecentProviderId 校验:来源已删/不再提供
- *      该模型时清空回默认路由;同设备+同 agent 范围,供应商集天然兼容);
+ *   1) 跟随最近会话 → 继承该会话的来源(validateModelProviderId 校验:目录已就绪且来源
+ *      已删/不再提供该模型时清空回默认路由;同设备+同 agent 范围,供应商集天然兼容);
  *   2) 取列表首项 → 该行的 provider(modelRows[0].provider.id);
  *   3) 内置默认兜底 → null(默认路由)。
- * effort:reconcile 到目标 model 的合法档(reconcileEffortForModel,base = 最近会话 effort ?? 当前 effort);
+ * effort:reconcile 到目标 model 的合法档(reconcileEffortForModel,base = 最近会话 effort ?? 当前 effort,
+ *   SectionModel 按 (providerId, modelId) 精确匹配行——同模型多来源时不串档);
  *   拿不到目标 model 对应的 SectionModel(model 不在 modelRows 里,如走了 DEFAULT_MODELS 兜底或历史模型已下架)
  *   时保留 base effort 不动。
  */
@@ -389,26 +414,25 @@ export function pickAgentDefaultRuntime(args: {
   modelRows: readonly ProviderModelRow[];
   currentEffort: string;
   deviceId?: string;
+  /** 供应商目录是否已就绪(加载完成);未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
+  catalogReady: boolean;
 }): NewSessionRuntime {
-  const { agentKind, sessions, modelRows, currentEffort, deviceId } = args;
+  const { agentKind, sessions, modelRows, currentEffort, deviceId, catalogReady } = args;
   const recent = pickMostRecentSessionRuntime(sessions, { deviceId, agentKind });
   const baseEffort = recent?.effort ?? currentEffort;
   let model: string;
   let providerId: string | null;
-  let sectionModel = recent?.model
-    ? modelRows.find((row) => row.model.id === recent.model)?.model
-    : undefined;
   if (recent?.model) {
     model = recent.model;
-    providerId = inheritRecentProviderId(modelRows, recent.providerId, recent.model);
+    providerId = validateModelProviderId(modelRows, recent.providerId, recent.model, catalogReady);
   } else if (modelRows[0]) {
-    sectionModel = modelRows[0].model;
-    model = sectionModel.id;
+    model = modelRows[0].model.id;
     providerId = modelRows[0].provider.id;
   } else {
     model = DEFAULT_MODELS[agentKind];
     providerId = null;
   }
+  const sectionModel = findSectionModelRow(modelRows, model, providerId)?.model;
   const effort = sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : baseEffort;
   return { agentKind, model, effort, providerId };
 }
@@ -419,8 +443,8 @@ export function pickAgentDefaultRuntime(args: {
  * 返回 { patch, appliedDeviceId } = 调用方 setDraft(prev => ({ ...prev, ...patch })) 并记录 appliedDeviceId。
  * 三条意图与 effect 完全一致:
  *   1) 有最近会话(按 selectedDeviceId scope)→ 整套跟随(agentKind + model + effort + providerId,
- *      effort reconcile 同 pickAgentDefaultRuntime 口径:model 命中 modelRows 才 reconcile,否则保留;
- *      providerId 经 inheritRecentProviderId 校验后继承);
+ *      effort reconcile 同 pickAgentDefaultRuntime 口径:SectionModel 按 (providerId, modelId)
+ *      精确匹配;providerId 经 validateModelProviderId 校验后继承);
  *   2) 无最近会话但 modelRows 就绪 → 取列表最上面(model + effort reconcile + 该行 provider,不动 agentKind);
  *   3) 无最近会话且 modelRows 未就绪(providers 加载中)→ null(等下次 modelRows 就绪再设,绝不误设)。
  * currentEffort = 当前 draft.effort,作为 reconcile 的 base(与 effect 里 setDraft updater 读 current.effort 等价)。
@@ -431,15 +455,26 @@ export function resolveNewSessionAutoDefault(input: {
   selectedDeviceId: string;
   sessions: readonly RemoteSession[];
   modelRows: readonly ProviderModelRow[];
+  /** modelRows 是按哪个 agent 的目录构建的。跟随的最近会话可能是另一个 agent ——
+   *  目录不一致时不做来源校验(无权评判,直接信任),否则会把合法来源误清(codex review P1)。 */
+  rowsAgentKind: NewSessionAgentKind;
+  /** 供应商目录是否已就绪;未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
+  catalogReady: boolean;
   currentEffort: string;
 }): { patch: Partial<NewSessionDraft>; appliedDeviceId: string } | null {
-  const { userTouched, appliedDeviceId, selectedDeviceId, sessions, modelRows, currentEffort } = input;
+  const { userTouched, appliedDeviceId, selectedDeviceId, sessions, modelRows, rowsAgentKind, catalogReady, currentEffort } = input;
   if (userTouched) return null;
   if (!selectedDeviceId) return null;
   if (appliedDeviceId === selectedDeviceId) return null;
   const recent = pickMostRecentSessionRuntime(sessions, { deviceId: selectedDeviceId });
   if (recent) {
-    const sectionModel = modelRows.find((row) => row.model.id === recent.model)?.model;
+    const providerId = validateModelProviderId(
+      modelRows,
+      recent.providerId,
+      recent.model,
+      catalogReady && recent.agentKind === rowsAgentKind,
+    );
+    const sectionModel = findSectionModelRow(modelRows, recent.model, providerId)?.model;
     return {
       appliedDeviceId: selectedDeviceId,
       patch: {
@@ -449,7 +484,7 @@ export function resolveNewSessionAutoDefault(input: {
           ? reconcileEffortForModel(sectionModel, recent.effort || currentEffort)
           : recent.effort || currentEffort,
         permissionMode: defaultPermissionModeForNewSessionAgent(recent.agentKind),
-        providerId: inheritRecentProviderId(modelRows, recent.providerId, recent.model),
+        providerId,
       },
     };
   }

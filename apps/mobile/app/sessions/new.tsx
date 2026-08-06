@@ -143,6 +143,7 @@ import {
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   sessionFromCreateResult,
+  validateModelProviderId,
   validateNewSessionDraft,
   type NewSessionAgentKind,
   type NewSessionDraft,
@@ -550,6 +551,11 @@ export default function NewRemoteSessionScreen() {
   // 持久草稿不会写入该 ref，因此已下架模型仍走 mobile 的首项降级。
   const explicitProviderModelSelectionRef = useRef<string | null>(null);
   const autoDefaultDeviceRef = useRef<string | null>(null);
+  // selectedDeviceId 的渲染期镜像:异步回调(权限确认 .then)提交前比对触发时捕获的设备,
+  // 不一致即放弃写入 —— 防止确认弹窗期间用户切了设备,回调把旧设备的来源/配置写进草稿
+  // (Greptile review P1:异步切换写入旧设备来源)。
+  const selectedDeviceRef = useRef(selectedDeviceId);
+  selectedDeviceRef.current = selectedDeviceId;
   const runtimeOptions = useMemo(
     () => buildSessionRuntimeOptions(draft, capabilities),
     [capabilities, draft.model],
@@ -682,11 +688,14 @@ export default function NewRemoteSessionScreen() {
       storedPermissionMode ??
       defaultPermissionModeForNewSessionAgent(storedAgentKind);
     let cancelled = false;
+    const deviceAtTrigger = selectedDeviceId;
     void (async () => {
       const confirmed = await confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
         restoringRememberedChoice: storedPermissionMode !== undefined,
       });
       if (cancelled) return;
+      // 确认期间设备已切换 → 放弃本次写入,新设备自己的恢复/自动默认 effect 会接管。
+      if (deviceAtTrigger !== selectedDeviceRef.current) return;
       setDraft((current) => {
         const next = pickAgentDefaultRuntime({
           agentKind: storedAgentKind,
@@ -694,6 +703,7 @@ export default function NewRemoteSessionScreen() {
           deviceId: selectedDeviceId || undefined,
           modelRows: rows,
           currentEffort: current.effort,
+          catalogReady: !deviceProviders.loading,
         });
         return {
           ...current,
@@ -755,6 +765,9 @@ export default function NewRemoteSessionScreen() {
       selectedDeviceId,
       sessions,
       modelRows,
+      // modelRows 按当前 draft.agentKind 构建;最近会话若是另一个 agent,纯函数内不做来源校验。
+      rowsAgentKind: draft.agentKind,
+      catalogReady: !deviceProviders.loading,
       currentEffort: draft.effort,
     });
     if (!result) return;
@@ -782,6 +795,19 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
     };
   }, [draft.effort, draft.permissionMode, draft.agentKind, modelRows, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
+
+  // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
+  // (provider 被删/断开/模型下架),就绪后必须复核——找不到 (provider, model) 匹配行即清空
+  // 回默认路由,保证失效来源不会直达创建请求。无变化时返回原引用,不触发额外渲染。
+  useEffect(() => {
+    if (deviceProviders.loading) return;
+    setDraft((current) => {
+      if (!current.providerId) return current;
+      const valid = validateModelProviderId(modelRows, current.providerId, current.model, true);
+      return valid === current.providerId ? current : { ...current, providerId: valid };
+    });
+  }, [deviceProviders.loading, modelRows]);
+
   const draftContent = useMemo(
     // pending(乐观上传中)也算数:拍完照立刻点创建是常见路径,create() 里会等它们落定。
     () => ({ attachmentCount: attachments.length + pendingUploads.length }),
@@ -2253,6 +2279,8 @@ export default function NewRemoteSessionScreen() {
     void confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
       restoringRememberedChoice: storedPermissionMode !== undefined,
     }).then((confirmed) => {
+      // 确认期间设备已切换 → 放弃本次写入,新设备自己的 effect 会接管(Greptile P1)。
+      if (selectedDeviceId !== selectedDeviceRef.current) return;
       setDraft((current) => {
         const next = pickAgentDefaultRuntime({
           agentKind: nextKind,
@@ -2260,6 +2288,7 @@ export default function NewRemoteSessionScreen() {
           deviceId: selectedDeviceId || undefined,
           modelRows: rows,
           currentEffort: current.effort,
+          catalogReady: !deviceProviders.loading,
         });
         return {
           ...current,

@@ -22,6 +22,7 @@ import {
   sessionFromCreateResult,
   serializeNewSessionDeviceOptions,
   summarizeNewSessionDraft,
+  validateModelProviderId,
   validateNewSessionDraft,
   withAgentDefaults,
 } from '@/session/newSession';
@@ -134,6 +135,31 @@ describe('pickMostRecentSessionRuntime', () => {
   });
 });
 
+describe('validateModelProviderId', () => {
+  const rows = [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')];
+
+  it('null / undefined providerId → null', () => {
+    expect(validateModelProviderId(rows, null, 'deepseek-v4-flash', true)).toBeNull();
+    expect(validateModelProviderId(rows, undefined, 'deepseek-v4-flash', true)).toBeNull();
+  });
+
+  it('catalog not ready → trust the binding as-is (terminal truth is the controlled end)', () => {
+    expect(validateModelProviderId([], 'deepseek', 'deepseek-v4-flash', false)).toBe('deepseek');
+    expect(validateModelProviderId(rows, 'prov-anything', 'm', false)).toBe('prov-anything');
+  });
+
+  it('catalog ready + matching (provider, model) row → keep', () => {
+    expect(validateModelProviderId(rows, 'prov-deepseek-v4-flash', 'deepseek-v4-flash', true)).toBe('prov-deepseek-v4-flash');
+  });
+
+  it('catalog ready + no matching row → clear to default route (incl. loaded-but-empty)', () => {
+    expect(validateModelProviderId(rows, 'prov-gone', 'deepseek-v4-flash', true)).toBeNull();
+    expect(validateModelProviderId([], 'deepseek', 'deepseek-v4-flash', true)).toBeNull();
+    // provider 仍在但不再提供该模型 → 同样清空(不匹配 modelId)
+    expect(validateModelProviderId(rows, 'prov-deepseek-v4-flash', 'other-model', true)).toBeNull();
+  });
+});
+
 describe('pickAgentDefaultRuntime', () => {
   it('follows the target agent\'s most recent session model + effort (reconciled)', () => {
     const runtime = pickAgentDefaultRuntime({
@@ -144,6 +170,7 @@ describe('pickAgentDefaultRuntime', () => {
       ],
       modelRows: [modelRow('gpt-5.4', ['low', 'medium', 'high'], 'medium')],
       currentEffort: 'medium',
+      catalogReady: true,
     });
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'high', providerId: null });
   });
@@ -154,6 +181,7 @@ describe('pickAgentDefaultRuntime', () => {
       sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', effort: 'xhigh', userSendAt: '2026-01-01T00:00:00.000Z' })],
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
       currentEffort: 'medium',
+      catalogReady: true,
     });
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: null });
   });
@@ -164,6 +192,7 @@ describe('pickAgentDefaultRuntime', () => {
       sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-legacy', effort: 'high', userSendAt: '2026-01-01T00:00:00.000Z' })],
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
       currentEffort: 'medium',
+      catalogReady: true,
     });
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-legacy', effort: 'high', providerId: null });
   });
@@ -174,6 +203,7 @@ describe('pickAgentDefaultRuntime', () => {
       sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-deepseek-v4-flash', userSendAt: '2026-01-01T00:00:00.000Z' })],
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')],
       currentEffort: 'medium',
+      catalogReady: true,
     });
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'deepseek-v4-flash', effort: 'medium', providerId: 'prov-deepseek-v4-flash' });
   });
@@ -184,6 +214,7 @@ describe('pickAgentDefaultRuntime', () => {
       sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')],
       currentEffort: 'medium',
+      catalogReady: true,
     });
     expect(runtime.providerId).toBeNull();
   });
@@ -194,8 +225,42 @@ describe('pickAgentDefaultRuntime', () => {
       sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'deepseek', userSendAt: '2026-01-01T00:00:00.000Z' })],
       modelRows: [],
       currentEffort: 'medium',
+      catalogReady: false,
     });
     expect(runtime.providerId).toBe('deepseek');
+  });
+
+  it('clears the recent providerId when the catalog is ready but empty (loaded ≠ loading, Greptile P1)', () => {
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'deepseek', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [],
+      currentEffort: 'medium',
+      catalogReady: true,
+    });
+    expect(runtime.providerId).toBeNull();
+  });
+
+  it('reconciles effort with the exact (providerId, modelId) row when multiple providers offer the same model (Copilot)', () => {
+    const shared = (providerId: string, efforts: readonly string[], defaultEffort: string): ProviderModelRow => ({
+      provider: { id: providerId, name: providerId } as ProviderModelRow['provider'],
+      model: {
+        id: 'shared-model',
+        displayName: 'shared-model',
+        efforts: efforts as ProviderModelRow['model']['efforts'],
+        defaultEffort: defaultEffort as ProviderModelRow['model']['defaultEffort'],
+        contextWindow: 0,
+      },
+    });
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [remoteSession('s', { agentKind: 'cc', model: 'shared-model', providerId: 'provB', effort: 'xhigh', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [shared('provA', ['low'], 'low'), shared('provB', ['high', 'xhigh'], 'high')],
+      currentEffort: 'medium',
+      catalogReady: true,
+    });
+    // 若误用 provA 的 SectionModel,xhigh 会被降档为 low;精确匹配 provB 行则保留
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'xhigh', providerId: 'provB' });
   });
 
   it('falls back to the top of the target agent\'s model list when it has no recent session', () => {
@@ -204,6 +269,7 @@ describe('pickAgentDefaultRuntime', () => {
       sessions: [remoteSession('cc', { agentKind: 'cc', model: 'claude-opus-4-8', userSendAt: '2026-02-02T00:00:00.000Z' })],
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low'), modelRow('gpt-mini', ['low'], 'low')],
       currentEffort: 'high', // 不被目标模型支持 → reconcile 到默认 'low'
+      catalogReady: true,
     });
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: 'prov-gpt-5.4' });
   });
@@ -214,12 +280,14 @@ describe('pickAgentDefaultRuntime', () => {
       sessions: [],
       modelRows: [],
       currentEffort: 'medium',
+      catalogReady: true,
     })).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
       sessions: [],
       modelRows: [],
       currentEffort: 'high',
+      catalogReady: true,
     })).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'high', providerId: null });
   });
 
@@ -233,6 +301,7 @@ describe('pickAgentDefaultRuntime', () => {
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
       currentEffort: 'medium',
       deviceId: 'devA',
+      catalogReady: true,
     });
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: null });
   });
@@ -246,6 +315,7 @@ describe('pickAgentDefaultRuntime', () => {
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
       currentEffort: 'medium',
       deviceId: 'devA',
+      catalogReady: true,
     });
     // devB 的会话被设备过滤排除 → 落到列表首项分支,来源取该行的 provider,不串 devB 的 prov-b
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: 'prov-gpt-5.4' });
@@ -259,6 +329,8 @@ describe('resolveNewSessionAutoDefault', () => {
     selectedDeviceId: 'devA',
     sessions: [] as RemoteSession[],
     modelRows: [] as ProviderModelRow[],
+    rowsAgentKind: 'claude-code' as const,
+    catalogReady: true,
     currentEffort: 'medium',
   };
 
@@ -300,6 +372,22 @@ describe('resolveNewSessionAutoDefault', () => {
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium', 'high'], 'medium')],
     });
     expect(result?.patch.providerId).toBeNull();
+  });
+
+  it('intent ①x: trusts the recent providerId when it belongs to a different agent than the rows (codex P1)', () => {
+    // 目录按 claude-code 构建,最近会话是 codex —— 目录不一致时不做校验,合法来源不被误清
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      rowsAgentKind: 'claude-code',
+      catalogReady: true,
+      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', providerId: 'prov-codex-only', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'medium')],
+    });
+    expect(result?.patch).toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      providerId: 'prov-codex-only',
+    });
   });
 
   it('intent ①b: keeps the recent effort when the recent model is not in modelRows (cross-agent / delisted)', () => {
