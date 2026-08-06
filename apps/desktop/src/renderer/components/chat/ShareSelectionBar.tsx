@@ -13,8 +13,8 @@
  * Esc / ⌘A 都应生效。本组件只在选择模式挂载,所以无需额外的 active 判断。
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { Minus } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -53,16 +53,35 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
   const { t } = useTranslation();
   const count = useShareSelectionCount();
   const [busy, setBusy] = useState<BusyKind | null>(null);
+  const selectionBeforeSelectAllRef = useRef<string[] | null>(null);
   // 页脚使用产品指定的 Cindy 主视觉；wordmark 仍跟随当前主题。
   const logoSrc = useBrandLogo();
+  const shareableMessageIds = queryShareableMessageIds(sessionId);
+  const selectedVisibleCount =
+    shareSelectionStore.getSelectedIdsInOrder(shareableMessageIds).length;
+  const allSelected =
+    shareableMessageIds.length > 0 &&
+    selectedVisibleCount === shareableMessageIds.length &&
+    selectedVisibleCount === count;
 
   // 全选与产物顺序都以「已渲染的消息」为准(见 queryShareableMessageIds 注释:
   // render-window 外的消息克隆不到,按 messages 全集全选会静默丢内容)。
   // 每次动作时当场查 DOM —— 唯一事实源,不维护第二份可能过期的列表。
   const toggleAll = useCallback(() => {
-    if (count > 0) shareSelectionStore.clearSelection();
-    else shareSelectionStore.setSelection(queryShareableMessageIds(sessionId));
-  }, [count, sessionId]);
+    const messageIds = queryShareableMessageIds(sessionId);
+    const selectedCount = shareSelectionStore.getSelectedIdsInOrder(messageIds).length;
+    const isAllSelected =
+      messageIds.length > 0 &&
+      selectedCount === messageIds.length &&
+      selectedCount === shareSelectionStore.count();
+    if (isAllSelected) {
+      shareSelectionStore.setSelection(selectionBeforeSelectAllRef.current ?? []);
+      selectionBeforeSelectAllRef.current = null;
+      return;
+    }
+    selectionBeforeSelectAllRef.current = shareSelectionStore.getSelectedIds();
+    shareSelectionStore.setSelection(messageIds);
+  }, [sessionId]);
 
   const buildBlob = useCallback(async () => {
     const orderedSelectedIds = shareSelectionStore.getSelectedIdsInOrder(
@@ -113,7 +132,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
             ? t('chat.shareImage.notMounted')
             : err instanceof ShareImageTooLargeError
               ? t('chat.shareImage.tooLarge')
-            : t('chat.shareImage.failed'),
+              : t('chat.shareImage.failed'),
         );
       } finally {
         setBusy(null);
@@ -140,7 +159,6 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [busy, toggleAll]);
 
-  const modifierLabel = window.electronAPI?.platform === 'darwin' ? '⌘A' : 'Ctrl+A';
   const disabled = count === 0 || busy !== null;
 
   return (
@@ -149,23 +167,33 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
       style={{ width: barWidth }}
       className="flex items-center gap-3 border-t border-[var(--border-default)] pt-3"
     >
-      {/* 两态即可,不需要「已全选」第三态:有选中 → 点一下清空(Minus),
-          全空 → 点一下全选。这样也不必维护一个可能过期的 total。 */}
+      {/* 部分勾选不等于全选:按钮仍显示未选中,点击后临时补齐全部；只有当前
+          可选项全部勾上时才显示选中态,再次点击恢复全选前的用户选择。 */}
       <button
         type="button"
         role="checkbox"
-        aria-checked={count > 0}
-        aria-label={count > 0 ? t('chat.shareImage.clearAll') : t('chat.shareImage.selectAll')}
+        aria-checked={allSelected}
+        aria-label={allSelected ? t('chat.shareImage.clearAll') : t('chat.shareImage.selectAll')}
         onClick={toggleAll}
+        disabled={busy !== null || shareableMessageIds.length === 0}
         className={cn(
-          'flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors',
+          'inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-colors',
           'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          count > 0
-            ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-            : 'border border-[var(--border-default)] bg-transparent hover:border-[var(--text-secondary)]',
+          'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-primary)]',
+          'hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-50',
         )}
       >
-        {count > 0 ? <Minus size={12} strokeWidth={2.5} aria-hidden /> : null}
+        <span
+          className={cn(
+            'flex h-4 w-4 items-center justify-center rounded-full border transition-colors',
+            allSelected
+              ? 'border-[var(--accent-cta-bg-pure)] bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
+              : 'border-[var(--text-tertiary)] bg-transparent',
+          )}
+        >
+          {allSelected ? <Check size={11} strokeWidth={2.5} aria-hidden /> : null}
+        </span>
+        <span>{t('chat.shareImage.selectAll')}</span>
       </button>
 
       <div className="min-w-0 flex-1">
@@ -174,9 +202,6 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
         </div>
         <div className="mt-0.5 truncate text-[12px] leading-tight text-[var(--text-secondary)]">
           {t('chat.shareImage.subtitle', { count })}
-        </div>
-        <div className="mt-0.5 truncate text-[11px] leading-tight text-[var(--text-tertiary)]">
-          {t('chat.shareImage.shortcutHint', { selectAll: modifierLabel })}
         </div>
       </div>
 

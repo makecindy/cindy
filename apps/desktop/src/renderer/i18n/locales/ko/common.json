@@ -5675,8 +5675,7 @@
     "shareImage": {
       "entry": "이미지로 공유",
       "title": "대화 공유",
-      "subtitle_other": "메시지 {{count}}개 선택 · 자격 증명은 자동으로 가려집니다",
-      "shortcutHint": "{{selectAll}} 전체 선택/해제 · Esc 종료",
+      "subtitle_other": "메시지 {{count}}개 선택",
       "selectAll": "전체 선택",
       "clearAll": "선택 해제",
       "checkboxLabel": "이 메시지 선택",

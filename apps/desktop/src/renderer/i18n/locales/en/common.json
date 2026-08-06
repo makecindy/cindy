@@ -5677,9 +5677,8 @@
     "shareImage": {
       "entry": "Share as Image",
       "title": "Share Conversation",
-      "subtitle_one": "{{count}} message selected · credentials are redacted automatically",
-      "subtitle_other": "{{count}} messages selected · credentials are redacted automatically",
-      "shortcutHint": "{{selectAll}} select/deselect all · Esc to exit",
+      "subtitle_one": "{{count}} message selected",
+      "subtitle_other": "{{count}} messages selected",
       "selectAll": "Select All",
       "clearAll": "Deselect All",
       "checkboxLabel": "Select this message",

@@ -5675,8 +5675,7 @@
     "shareImage": {
       "entry": "画像として共有",
       "title": "会話を共有",
-      "subtitle_other": "{{count}} 件のメッセージを選択中 · 認証情報は自動的に隠されます",
-      "shortcutHint": "{{selectAll}} で全選択/解除 · Esc で終了",
+      "subtitle_other": "{{count}} 件のメッセージを選択中",
       "selectAll": "すべて選択",
       "clearAll": "選択を解除",
       "checkboxLabel": "このメッセージを選択",

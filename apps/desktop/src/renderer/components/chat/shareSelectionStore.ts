@@ -9,8 +9,8 @@
  *   - 勾选(高频)只重渲染那一个复选框(useIsMessageSelected 按 clientId 自筛)。
  *
  * getSnapshot 一律返回原始值(boolean / number)。**不要**导出返回 Set / 数组的
- * hook —— useSyncExternalStore 会因每次新引用而无限重渲染。选中集合只在点击出口
- * 按钮时用 `getSelectedIdsInOrder` 一次性读取。
+ * hook —— useSyncExternalStore 会因每次新引用而无限重渲染。选中集合只在事件处理时
+ * 用 `getSelectedIds` / `getSelectedIdsInOrder` 一次性读取。
  *
  * 不持久:纯 in-memory,切会话 / 刷新即清空(分享是一次性动作,没有恢复语义)。
  */
@@ -86,6 +86,11 @@ export const shareSelectionStore = {
 
   count(): number {
     return selected.size;
+  },
+
+  /** 当前完整选中集合的快照；用于「全选」临时覆盖后恢复用户原选择。 */
+  getSelectedIds(): string[] {
+    return Array.from(selected);
   },
 
   /**

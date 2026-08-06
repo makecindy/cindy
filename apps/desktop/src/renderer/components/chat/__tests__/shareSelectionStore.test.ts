@@ -122,6 +122,16 @@ describe('shareSelectionStore', () => {
     expect(shareSelectionStore.isActive('s1')).toBe(true);
   });
 
+  it('getSelectedIds 返回可用于恢复的独立快照', () => {
+    shareSelectionStore.enter('s1', 'm1');
+    shareSelectionStore.toggle('m2');
+    const snapshot = shareSelectionStore.getSelectedIds();
+
+    shareSelectionStore.setSelection(['all-1', 'all-2']);
+    expect(snapshot).toEqual(['m1', 'm2']);
+    expect(shareSelectionStore.getSelectedIds()).toEqual(['all-1', 'all-2']);
+  });
+
   it('getSelectedIdsInOrder 按消息流顺序返回,而不是点击顺序', () => {
     shareSelectionStore.enter('s1');
     // 倒序勾选

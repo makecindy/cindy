@@ -5675,8 +5675,7 @@
     "shareImage": {
       "entry": "分享为图片",
       "title": "分享对话",
-      "subtitle_other": "已选 {{count}} 条消息 · 生成图片会自动脱敏凭证",
-      "shortcutHint": "{{selectAll}} 全选/取消全选 · Esc 退出",
+      "subtitle_other": "已选 {{count}} 条消息",
       "selectAll": "全选",
       "clearAll": "取消全选",
       "checkboxLabel": "选择这条消息",
