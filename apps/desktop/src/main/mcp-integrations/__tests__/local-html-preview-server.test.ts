@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import nodePath from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createLocalPreviewServer,
@@ -111,6 +112,33 @@ describe('local-html-preview-server', () => {
     expect((await get(url)).status).toBe(404);
     // cleanup so afterEach dispose doesn't hit a stale path
     await import('node:fs/promises').then(({ rename }) => rename(renamed, entryDir));
+  });
+
+  it('refuses a served fd whose dev/ino differs from the pre-open snapshot (swap-and-restore)', async () => {
+    // Simulates the round-10 attack: the pre-open `stat` snapshot is forged to
+    // carry the victim file's size/timestamps but a DIFFERENT filesystem-object
+    // identity (dev/ino), while `fs.open` really opens the outside file. The
+    // size/timestamp comparison alone would pass; the dev/ino check must refuse.
+    const { url } = await createUrl();
+    const realStat = await fsPromises.stat(
+      nodePath.join(workingDir, 'dist', 'index.html'),
+      { bigint: true },
+    );
+    const forged = {
+      ...realStat,
+      size: realStat.size,
+      mtimeNs: realStat.mtimeNs,
+      birthtimeNs: realStat.birthtimeNs,
+      dev: realStat.dev + 1n,
+      ino: realStat.ino + 1n,
+      isFile: () => true,
+    };
+    const statSpy = vi.spyOn(fsPromises, 'stat').mockResolvedValueOnce(forged as never);
+    try {
+      expect((await get(url)).status).toBe(404);
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   it('serves relative CSS/JS resources from the entry directory', async () => {

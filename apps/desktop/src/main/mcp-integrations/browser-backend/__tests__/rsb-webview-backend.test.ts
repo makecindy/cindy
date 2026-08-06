@@ -72,6 +72,7 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
   printToPDFMock: ReturnType<typeof vi.fn>;
   consoleListeners: Array<(...args: unknown[]) => void>;
   willNavigateListeners: Array<(event: { preventDefault: () => void }, url: string) => void>;
+  didStartNavigationListeners: Array<(event: unknown, url: string, isInPlace: boolean, isMainFrame: boolean) => void>;
   windowOpenHandler: ((details: { url: string }) => { action: string }) | null;
   debuggerMock: {
     isAttachedMock: ReturnType<typeof vi.fn>;
@@ -111,11 +112,15 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     debugger: debuggerMock,
     consoleListeners: [] as Array<(...args: unknown[]) => void>,
     willNavigateListeners: [] as Array<(event: { preventDefault: () => void }, url: string) => void>,
+    didStartNavigationListeners: [] as Array<
+      (event: unknown, url: string, isInPlace: boolean, isMainFrame: boolean) => void
+    >,
     windowOpenHandler: null as ((details: { url: string }) => { action: string }) | null,
   };
   wc.on.mockImplementation((event: string, fn: (...args: unknown[]) => void) => {
     if (event === 'console-message') wc.consoleListeners.push(fn);
     if (event === 'will-navigate') wc.willNavigateListeners.push(fn as never);
+    if (event === 'did-start-navigation') wc.didStartNavigationListeners.push(fn as never);
   });
   wc.setWindowOpenHandler.mockImplementation(
     (fn: (details: { url: string }) => { action: string }) => {
@@ -129,6 +134,7 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     printToPDFMock: typeof wc.printToPDF;
     consoleListeners: typeof wc.consoleListeners;
     willNavigateListeners: typeof wc.willNavigateListeners;
+    didStartNavigationListeners: typeof wc.didStartNavigationListeners;
     windowOpenHandler: typeof wc.windowOpenHandler;
     debuggerMock: typeof debuggerMock;
   };
@@ -137,6 +143,7 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     loadURLMock: wc.loadURL,
     capturePageMock: wc.capturePage,
     printToPDFMock: wc.printToPDF,
+    didStartNavigationListeners: wc.didStartNavigationListeners,
     debuggerMock,
   });
   return result;
@@ -420,16 +427,20 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
     listener({ preventDefault: () => { prevented = true; } }, 'https://evil.example/?exfil=1');
     expect(prevented).toBe(true);
 
-    // navigating TO a preview URL installs the main-world WebRTC kill
-    // script via CDP (addScriptToEvaluateOnNewDocument) — before the
-    // document is created (round 9: preload worlds are isolated)
-    listener({ preventDefault: () => { prevented = true; } }, PREVIEW_URL);
+    // EVERY navigation — including renderer/loadURL, which does NOT emit
+    // will-navigate (round 10) — fires did-start-navigation: the main-world
+    // WebRTC kill script is installed before the document is created
+    const startNav = wc.didStartNavigationListeners[0];
+    expect(startNav).toBeTruthy();
+    startNav({}, PREVIEW_URL, false, true);
     expect(wc.debuggerMock.attachMock).toHaveBeenCalled();
     const addScript = wc.debuggerMock.commands.find(
       (c) => c.method === 'Page.addScriptToEvaluateOnNewDocument',
     );
     expect(addScript).toBeTruthy();
     expect((addScript?.params as { source?: string })?.source ?? '').toContain('RTCPeerConnection');
+    // the injected script is scoped to the preview origin (round-10 P2)
+    expect((addScript?.params as { source?: string })?.source ?? '').toContain('location.href');
 
     // navigation within the preview origin (reload / sibling resource) → allowed
     prevented = false;
@@ -482,6 +493,45 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
 
     expect(wc.loadURLMock).toHaveBeenCalledWith('https://destination.test');
     expect(res.ok).toBe(true);
+  });
+
+  it('installs the main-world WebRTC kill-script BEFORE loadURL on a preview first navigation', async () => {
+    // A preview first navigation goes through wc.loadURL, which does NOT emit
+    // `will-navigate` — the guard's will-navigate handler never runs for it.
+    // loadUrlWithTimeout must install the kill-script up front so the entry
+    // HTML's first script can never reach RTCPeerConnection (Greptile P1,
+    // round 10).
+    const PREVIEW_URL =
+      'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+    const wc = fakeWc();
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+
+    const res = await backend.call({
+      action: 'navigate',
+      targetId: 't1',
+      url: PREVIEW_URL,
+    } as never);
+
+    expect(res.ok).toBe(true);
+    expect(wc.debuggerMock.attachMock).toHaveBeenCalled();
+    const addScript = wc.debuggerMock.commands.find(
+      (c) => c.method === 'Page.addScriptToEvaluateOnNewDocument',
+    );
+    expect(addScript).toBeTruthy();
+    expect((addScript?.params as { source?: string })?.source ?? '').toContain('RTCPeerConnection');
+    // The install resolves BEFORE loadURL starts.
+    expect(wc.debuggerMock.sendCommandMock.mock.invocationCallOrder[0]).toBeLessThan(
+      wc.loadURLMock.mock.invocationCallOrder[0],
+    );
   });
 
   it('navigate fails clearly when targetId missing', async () => {

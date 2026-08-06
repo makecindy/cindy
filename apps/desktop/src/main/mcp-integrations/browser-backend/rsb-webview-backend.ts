@@ -170,6 +170,18 @@ async function loadUrlWithTimeout(
   signal: AbortSignal,
 ): Promise<void> {
   if (signal.aborted) throw new Error('embedded browser control generation was replaced');
+  // Preview first navigation (open path / reuse-existing-tab) does NOT emit
+  // `will-navigate`, so the main-world WebRTC kill-script must be installed
+  // BEFORE loadURL — the entry HTML's first script must never reach
+  // RTCPeerConnection (Greptile P1, round 10). Idempotent per WebContents.
+  // Bounded: a stuck CDP install must not block the navigation itself
+  // (Worker review #2).
+  if (isPreviewUrl(url)) {
+    await Promise.race([
+      killPreviewWebRtc(wc),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopNavigation = () => {
     try {
@@ -254,27 +266,36 @@ const previewWebRtcKilled = new WeakSet<WebContents>();
  * the page (codex-connector P1, round 9). The debugger stays attached;
  * RsbWebviewAutomation.withDebugger leases externally-owned attachments and
  * reuses them without detaching, so snapshot/act keep working.
+ *
+ * Resolves after the CDP install command completes: the caller that is about
+ * to loadURL a preview page (which does NOT emit `will-navigate`) awaits this
+ * so the kill-script is in place BEFORE the first page script runs
+ * (Greptile P1, round 10).
  */
-function killPreviewWebRtc(wc: WebContents): void {
+async function killPreviewWebRtc(wc: WebContents): Promise<void> {
   if (previewWebRtcKilled.has(wc)) return;
-  previewWebRtcKilled.add(wc);
   try {
     const transport = (wc as unknown as { debugger?: PreviewDebuggerTransport }).debugger;
     if (!transport) return;
     if (!transport.isAttached()) transport.attach('1.3');
-    void transport
-      .sendCommand('Page.addScriptToEvaluateOnNewDocument', {
-        source:
-          'try {' +
-          "Object.defineProperty(window, 'RTCPeerConnection', { value: undefined, configurable: true });" +
-          "Object.defineProperty(window, 'webkitRTCPeerConnection', { value: undefined, configurable: true });" +
-          '} catch (e) { /* best-effort */ }',
-      })
-      .catch(() => {
-        /* best-effort: navigation guard + CSP still apply */
-      });
+    await transport.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
+      // Scoped to the preview origin (round-10 P2): the script runs on EVERY
+      // navigation of this target, so non-preview pages (e.g. after the tab
+      // was navigated to a WebRTC-dependent site) must keep RTCPeerConnection.
+      source:
+        'try {' +
+        "if (/^http:\\/\\/127\\.0\\.0\\.1:\\d+\\/preview\\/[a-f0-9]{64}\\//.test(location.href)) {" +
+        "Object.defineProperty(window, 'RTCPeerConnection', { value: undefined, configurable: true });" +
+        "Object.defineProperty(window, 'webkitRTCPeerConnection', { value: undefined, configurable: true });" +
+        '}' +
+        '} catch (e) { /* best-effort */ }',
+    });
+    // Mark ONLY after the install succeeded: a failed install (attach /
+    // sendCommand throw) must retry on the next preview navigation instead
+    // of being permanently skipped as "already killed" (Worker review #1).
+    previewWebRtcKilled.add(wc);
   } catch {
-    /* best-effort */
+    /* best-effort: retried on the next preview navigation */
   }
 }
 
@@ -296,17 +317,22 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   if (previewGuardedContents.has(wc)) return;
   previewGuardedContents.add(wc);
   wc.on('will-navigate', (event, url) => {
-    if (isPreviewUrl(url)) {
-      // The target is a preview page: install the main-world WebRTC
-      // kill-script BEFORE the document is created (round 9: preload
-      // worlds are isolated, shadowing there is ineffective). Idempotent.
-      killPreviewWebRtc(wc);
-    }
     const current = currentUrlOf(wc);
     if (!isPreviewUrl(current)) return; // not a preview page — leave it alone
     const currentOrigin = originOf(current);
     if (!currentOrigin || originOf(url) !== currentOrigin || !isPreviewUrl(url)) {
       event.preventDefault();
+    }
+  });
+  // did-start-navigation fires for EVERY navigation — including renderer
+  // / webContents.loadURL, which does NOT emit will-navigate (round 10).
+  // Attach here covers the open path (previewLocalHtml without targetId,
+  // where the renderer loads the URL) and reuse-existing-tab navigations:
+  // the kill-script is registered before the document is created. The
+  // handleNavigate path awaits the install up front too (idempotent).
+  wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
+    if (isMainFrame && isPreviewUrl(url)) {
+      void killPreviewWebRtc(wc);
     }
   });
 }

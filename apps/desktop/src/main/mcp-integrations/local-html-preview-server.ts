@@ -389,7 +389,13 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       !stat.isFile() ||
       stat.size !== preStat.size ||
       stat.mtimeNs !== preStat.mtimeNs ||
-      stat.birthtimeNs !== preStat.birthtimeNs
+      stat.birthtimeNs !== preStat.birthtimeNs ||
+      // Filesystem-object identity: size + timestamps can be forged by a
+      // swap-and-restore attacker; dev/ino cannot. Without this, an fd opened
+      // on an outside file (same size/timestamps) would still be served
+      // (Greptile P1, round 10).
+      stat.dev !== preStat.dev ||
+      stat.ino !== preStat.ino
     ) {
       await fd.close().catch(() => {});
       return refuse(res);

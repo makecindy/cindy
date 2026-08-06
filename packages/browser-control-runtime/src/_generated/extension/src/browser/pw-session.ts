@@ -1445,19 +1445,27 @@ export async function gotoPageWithNavigationGuard(
   // credentials); --disable-webrtc was probed INEFFECTIVE (API still
   // constructable), so the constructor is shadowed before ANY page
   // script runs (addInitScript runs on every navigation, incl. the
-  // first).
+  // first). Scoped to the preview origin (round-10 P2): a tab that
+  // navigates to a normal WebRTC-dependent site afterwards keeps
+  // RTCPeerConnection.
   if (previewOrigin !== null) {
     await opts.page
       .addInitScript(() => {
         try {
-          Object.defineProperty(window, "RTCPeerConnection", {
-            value: undefined,
-            configurable: true,
-          });
-          Object.defineProperty(window, "webkitRTCPeerConnection", {
-            value: undefined,
-            configurable: true,
-          });
+          if (
+            /^http:\/\/127\.0\.0\.1:\d+\/preview\/[a-f0-9]{64}\//.test(
+              window.location.href,
+            )
+          ) {
+            Object.defineProperty(window, "RTCPeerConnection", {
+              value: undefined,
+              configurable: true,
+            });
+            Object.defineProperty(window, "webkitRTCPeerConnection", {
+              value: undefined,
+              configurable: true,
+            });
+          }
         } catch {
           /* ignore */
         }

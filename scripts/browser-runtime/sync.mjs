@@ -495,19 +495,27 @@ const LOCAL_PATCHES = {
         '  // credentials); --disable-webrtc was probed INEFFECTIVE (API still\n' +
         '  // constructable), so the constructor is shadowed before ANY page\n' +
         '  // script runs (addInitScript runs on every navigation, incl. the\n' +
-        '  // first).\n' +
+        '  // first). Scoped to the preview origin (round-10 P2): a tab that\n' +
+        '  // navigates to a normal WebRTC-dependent site afterwards keeps\n' +
+        '  // RTCPeerConnection.\n' +
         '  if (previewOrigin !== null) {\n' +
         '    await opts.page\n' +
         '      .addInitScript(() => {\n' +
         '        try {\n' +
-        '          Object.defineProperty(window, "RTCPeerConnection", {\n' +
-        '            value: undefined,\n' +
-        '            configurable: true,\n' +
-        '          });\n' +
-        '          Object.defineProperty(window, "webkitRTCPeerConnection", {\n' +
-        '            value: undefined,\n' +
-        '            configurable: true,\n' +
-        '          });\n' +
+        '          if (\n' +
+        '            /^http:\\/\\/127\\.0\\.0\\.1:\\d+\\/preview\\/[a-f0-9]{64}\\//.test(\n' +
+        '              window.location.href,\n' +
+        '            )\n' +
+        '          ) {\n' +
+        '            Object.defineProperty(window, "RTCPeerConnection", {\n' +
+        '              value: undefined,\n' +
+        '              configurable: true,\n' +
+        '            });\n' +
+        '            Object.defineProperty(window, "webkitRTCPeerConnection", {\n' +
+        '              value: undefined,\n' +
+        '              configurable: true,\n' +
+        '            });\n' +
+        '          }\n' +
         '        } catch {\n' +
         '          /* ignore */\n' +
         '        }\n' +
