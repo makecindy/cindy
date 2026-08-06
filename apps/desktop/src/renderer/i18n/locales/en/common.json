@@ -6972,6 +6972,7 @@
       "importable": "Ready to import",
       "manualRequired": "Needs manual adjustment",
       "duplicate": "Already exists",
+      "status": "Status",
       "model": "Model",
       "workingDir": "Working directory",
       "expandPrompt": "Show prompt",
