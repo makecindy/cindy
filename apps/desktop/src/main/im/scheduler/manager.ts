@@ -29,6 +29,7 @@ const DISCOVERY_GRACE_MS = 3_500;
 const ADVERTISEMENT_INTERVAL_MS = 2_000;
 const PEER_STALE_MS = 8_000;
 const ACTIVATION_RETRY_MS = 10_000;
+const RUNTIME_RECONNECT_GRACE_MS = 15_000;
 
 interface PeerAdvertisement {
   deviceId: string;
@@ -52,7 +53,11 @@ export class ImSchedulerManager {
   private discoveryDeadline = 0;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private activationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectWithdrawal: Promise<void> | null = null;
   private activationCooldownUntil = 0;
+  private connectedIdentity: string | null = null;
+  private withdrawingIdentity: string | null = null;
   private discoveryNonce = '';
   private readonly confirmedPeers = new Set<string>();
   private readonly pendingProbePeers = new Set<string>();
@@ -69,6 +74,9 @@ export class ImSchedulerManager {
       isTransportAllowed: (identity) => this.isLocalIngress(identity),
       onConfigurationChanged: () => this.notifyLocalConfigurationChanged(),
     });
+    if (this.discord.getStatus().kind === 'connected') {
+      this.connectedIdentity = this.discord.getSchedulerIdentity();
+    }
     this.offDiscordStatus = this.discord.onStatusChange((status) => {
       this.handleDiscordStatusChanged(status);
     });
@@ -150,10 +158,15 @@ export class ImSchedulerManager {
     if (this.advertisementTimer) clearInterval(this.advertisementTimer);
     if (this.startTimer) clearTimeout(this.startTimer);
     if (this.activationRetryTimer) clearTimeout(this.activationRetryTimer);
+    if (this.reconnectGraceTimer) clearTimeout(this.reconnectGraceTimer);
     this.advertisementTimer = null;
     this.startTimer = null;
     this.activationRetryTimer = null;
+    this.reconnectGraceTimer = null;
+    this.reconnectWithdrawal = null;
     this.activationCooldownUntil = 0;
+    this.connectedIdentity = null;
+    this.withdrawingIdentity = null;
     this.offPresence?.();
     this.offPush?.();
     this.offOwnership?.();
@@ -177,6 +190,7 @@ export class ImSchedulerManager {
 
   async reconcile(): Promise<void> {
     if (!this.started) return;
+    if (this.reconnectWithdrawal) await this.reconnectWithdrawal;
     const current = this.reconcileTail.catch(() => undefined).then(async () => {
       if (!this.started) return;
       if (!this.deviceLinkReady || !isDeviceLinkOwner()) {
@@ -221,6 +235,7 @@ export class ImSchedulerManager {
     const self = getSelfDeviceId();
     const resolvedIdentity = identity ?? this.discord.getSchedulerIdentity();
     if (!self || !resolvedIdentity) return false;
+    if (this.withdrawingIdentity === resolvedIdentity) return false;
     if (this.isActivationCoolingDown(resolvedIdentity)) return false;
     const now = Date.now();
     this.dropStalePeers(now);
@@ -299,6 +314,9 @@ export class ImSchedulerManager {
     // time cannot both treat the previous empty advertisement as final.
     this.peers.clear();
     this.confirmedPeers.clear();
+    this.connectedIdentity = null;
+    this.withdrawingIdentity = null;
+    this.clearReconnectGrace();
     this.clearActivationFailure();
     this.beginDiscoveryGrace();
     this.advertiseAll();
@@ -306,8 +324,38 @@ export class ImSchedulerManager {
   }
 
   private handleDiscordStatusChanged(status: IMStatus): void {
-    if (!this.started || status.kind !== 'error') return;
+    if (!this.started) return;
     const identity = this.discord.getSchedulerIdentity();
+    if (status.kind === 'connected') {
+      this.connectedIdentity = identity;
+      this.clearReconnectGrace();
+      return;
+    }
+    if (status.kind === 'connecting') {
+      if (
+        identity
+        && this.connectedIdentity === identity
+        && this.desired === 'active'
+        && this.desiredIdentity === identity
+        && !this.reconnectGraceTimer
+      ) {
+        const discoveryNonce = this.discoveryNonce;
+        this.reconnectGraceTimer = setTimeout(() => {
+          this.reconnectGraceTimer = null;
+          const withdrawal = this.withdrawAfterReconnectTimeout(identity, discoveryNonce);
+          this.reconnectWithdrawal = withdrawal;
+          void withdrawal.finally(() => {
+            if (this.reconnectWithdrawal === withdrawal) this.reconnectWithdrawal = null;
+            void this.reconcile();
+          });
+        }, RUNTIME_RECONNECT_GRACE_MS);
+      }
+      return;
+    }
+
+    this.connectedIdentity = null;
+    this.clearReconnectGrace();
+    if (status.kind !== 'error') return;
     if (!identity || this.desired !== 'active' || this.desiredIdentity !== identity) return;
 
     // A terminal provider error after a successful activation must release the
@@ -315,6 +363,40 @@ export class ImSchedulerManager {
     // identity forever and prevents a healthy standby from taking over.
     this.markActivationFailure(identity);
     void this.reconcile();
+  }
+
+  private async withdrawAfterReconnectTimeout(identity: string, discoveryNonce: string): Promise<void> {
+    if (
+      !this.started
+      || this.discoveryNonce !== discoveryNonce
+      || this.connectedIdentity !== identity
+      || this.desired !== 'active'
+      || this.desiredIdentity !== identity
+    ) return;
+    this.withdrawingIdentity = identity;
+    try {
+      // Destroy the reconnecting Gateway before publishing an empty
+      // advertisement. Releasing the election first would briefly allow a
+      // second device to connect while this client could still resume.
+      await this.discord.enterSchedulerStandby();
+    } catch (error) {
+      this.withdrawingIdentity = null;
+      log.warn('discord scheduler reconnect timeout standby failed', error);
+      return;
+    }
+    this.withdrawingIdentity = null;
+    if (
+      !this.started
+      || this.discoveryNonce !== discoveryNonce
+      || identity !== this.discord.getSchedulerIdentity()
+    ) return;
+    this.connectedIdentity = null;
+    this.markActivationFailure(identity);
+  }
+
+  private clearReconnectGrace(): void {
+    if (this.reconnectGraceTimer) clearTimeout(this.reconnectGraceTimer);
+    this.reconnectGraceTimer = null;
   }
 
   private advertiseAll(): void {

@@ -59,8 +59,16 @@ vi.mock('../../../logger', () => ({
 
 import { ImSchedulerManager } from '../manager';
 
+type FakeDiscordStatus =
+  | { kind: 'connecting' }
+  | { kind: 'connected'; appId: string }
+  | { kind: 'error'; reason: string }
+  | { kind: 'standby'; appId: string }
+  | { kind: 'idle' };
+
 interface FakeDiscord {
-  emitStatus: (status: { kind: 'error'; reason: string }) => void;
+  emitStatus: (status: FakeDiscordStatus) => void;
+  getStatus: ReturnType<typeof vi.fn>;
   init: ReturnType<typeof vi.fn>;
   enterSchedulerStandby: ReturnType<typeof vi.fn>;
   getSchedulerIdentity: ReturnType<typeof vi.fn>;
@@ -74,12 +82,17 @@ function createDiscord(
   options: { activateOnInit?: boolean } = {},
 ): FakeDiscord {
   let active = false;
-  let statusHandler: ((status: { kind: 'error'; reason: string }) => void) | null = null;
+  let status: FakeDiscordStatus = { kind: 'idle' };
+  let statusHandler: ((nextStatus: FakeDiscordStatus) => void) | null = null;
   return {
-    emitStatus: (status) => {
-      active = false;
-      statusHandler?.(status);
+    emitStatus: (nextStatus) => {
+      status = nextStatus;
+      if (nextStatus.kind === 'error' || nextStatus.kind === 'standby' || nextStatus.kind === 'idle') {
+        active = false;
+      }
+      statusHandler?.(nextStatus);
     },
+    getStatus: vi.fn(() => status),
     init: vi.fn(async () => { active = options.activateOnInit !== false; }),
     enterSchedulerStandby: vi.fn(async () => { active = false; }),
     getSchedulerIdentity: vi.fn(() => identity),
@@ -413,6 +426,60 @@ describe('Discord scheduler manager', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     await manager.reconcile();
     expect(discord.init).toHaveBeenCalledTimes(1);
+    await manager.stop();
+  });
+
+  it('keeps the active winner during a transient Discord reconnect', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    discord.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    discord.emitStatus({ kind: 'connecting' });
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    discord.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    await vi.advanceTimersByTimeAsync(1);
+    await manager.reconcile();
+
+    expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(true);
+    await manager.stop();
+  });
+
+  it('withdraws a winner when Discord reconnecting exceeds the grace period', async () => {
+    harness.selfDeviceId = 'a';
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('z', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+    discord.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    discord.emitStatus({ kind: 'connecting' });
+
+    for (let elapsed = 0; elapsed < 14_000; elapsed += 2_000) {
+      await vi.advanceTimersByTimeAsync(2_000);
+      confirmPeer('z', [{ channel: 'discord', identity: '12345678901234567' }]);
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    await manager.reconcile();
+
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual({
+      kind: 'advertisement',
+      sentAt: expect.any(Number),
+      channels: [],
+    });
     await manager.stop();
   });
 });
