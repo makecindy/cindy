@@ -49,6 +49,45 @@ function provider(id: string): ProviderView {
 }
 
 describe('remote model hook device ownership', () => {
+  it('clears a mounted local capability hook when optional Pi becomes unavailable', async () => {
+    let piAvailable = true;
+    const getCapabilities = vi.fn(async (agentKind: string) => {
+      if (agentKind === 'pi' && !piAvailable) {
+        throw new Error("Agent 'pi' is not registered");
+      }
+      return capabilities(`local:${agentKind}`);
+    });
+    setElectronApi({ maker: { getCapabilities } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.preloadAllCapabilities();
+
+    const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];
+    function Probe() {
+      frames.push(mod.useAgentCapabilities('pi'));
+      return null;
+    }
+
+    const view = render(<Probe />);
+    await waitFor(() =>
+      expect(frames.at(-1)?.capabilities?.availableModels[0]?.displayName).toBe('local:pi'),
+    );
+
+    piAvailable = false;
+    const generation = mod.beginLocalCapabilitiesRefresh();
+    const entries = await mod.loadLocalCapabilitiesSnapshot();
+    await act(async () => {
+      expect(mod.commitLocalCapabilitiesSnapshot(generation, entries)).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(frames.at(-1)?.capabilities).toBeNull();
+      expect(frames.at(-1)?.loading).toBe(false);
+      expect(frames.at(-1)?.error).toBeNull();
+    });
+    expect(mod.getCachedCapabilities('pi')).toBeNull();
+    view.unmount();
+  });
+
   it('never renders the previous device capabilities under a newly selected device', async () => {
     const invoke = vi.fn((deviceId: string) => {
       if (deviceId === 'dev-a') return Promise.resolve(capabilities('Mac A'));

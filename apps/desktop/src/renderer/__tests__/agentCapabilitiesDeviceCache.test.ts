@@ -146,12 +146,13 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(capabilities.getCachedCapabilities('pi')).toBeNull();
   });
 
-  it('Pi 不可用时用新 provider 快照替换 last-valid snapshot', async () => {
+  it('Pi 变为不可用时清除旧能力，并用新 provider 快照替换核心能力', async () => {
     const harness = stubLocalCatalog();
     const catalog = await import('@/lib/localCatalogSnapshot');
     const providers = await import('@/lib/providersSnapshotStore');
     const capabilities = await import('@/hooks/useAgentCapabilities');
     await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe('old:pi');
 
     harness.setSnapshot('provider-new', 'new');
     harness.setUnavailableAgent('pi');
@@ -164,6 +165,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
       'new:codex',
     );
+    expect(capabilities.getCachedCapabilities('pi')).toBeNull();
   });
 
   it('核心 agent 失败时联合刷新保留 last-valid provider 与能力快照', async () => {

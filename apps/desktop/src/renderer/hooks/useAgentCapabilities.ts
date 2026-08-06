@@ -228,7 +228,7 @@ const inflight = new Map<CacheKey, Promise<AgentCapabilities>>();
 /** 本地能力刷新代际；使刷新前的在途 IPC 结果无法回写旧快照。 */
 let localGen = 0;
 /** 已挂载 hook 的本地能力订阅者；刷新完成后一次性切到新快照，避免中途空白帧。 */
-const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities) => void>();
+const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities | null) => void>();
 /** 远程能力缓存事件；驱逐时先标 stale，成功 / 失败后再结束这一轮刷新。 */
 export type DeviceCapabilitiesEvent =
   | { status: 'loading' }
@@ -373,13 +373,13 @@ export function useAgentCapabilities(
       setError(null);
     };
     if (deviceId) return subscribeDeviceCapabilities(deviceId, agentKind, applyRemoteEvent);
-    const applySnapshot = (caps: AgentCapabilities): void => {
+    const applySnapshot = (caps: AgentCapabilities | null): void => {
       setOwnerKey(key);
       setCapabilities(caps);
       setLoading(false);
       setError(null);
     };
-    const onRefresh = (refreshedAgent: AgentKind, caps: AgentCapabilities): void => {
+    const onRefresh = (refreshedAgent: AgentKind, caps: AgentCapabilities | null): void => {
       if (refreshedAgent !== agentKind) return;
       applySnapshot(caps);
     };
@@ -523,14 +523,17 @@ export function isLocalCapabilitiesRefreshCurrent(generation: number): boolean {
   return localGen === generation;
 }
 
-/** 仅提交当前代际的可用能力快照，并在提交后统一通知 mounted hooks。 */
+/** 仅提交当前代际的完整能力快照，并在提交后统一通知 mounted hooks。 */
 export function commitLocalCapabilitiesSnapshot(
   generation: number,
   entries: LocalCapabilitiesSnapshot,
 ): boolean {
   if (!isLocalCapabilitiesRefreshCurrent(generation)) return false;
-  for (const [agent, caps] of entries) cache.set(cacheKey(agent), caps);
-  for (const [agent, caps] of entries) {
+  const snapshot = new Map(entries);
+  for (const agent of ALL_AGENT_KINDS) {
+    const caps = snapshot.get(agent) ?? null;
+    if (caps) cache.set(cacheKey(agent), caps);
+    else cache.delete(cacheKey(agent));
     for (const listener of localListeners) listener(agent, caps);
   }
   return true;
