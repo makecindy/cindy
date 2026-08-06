@@ -7,7 +7,7 @@ import type { Provider } from '@cindy/model-providers';
 
 vi.mock('../../maker-host/auth-adapters.js', () => ({ readClaudeApiKey: vi.fn() }));
 vi.mock('../../maker-host/claude-oauth-refresh.js', () => ({ getClaudeAiOAuthForSpawn: vi.fn() }));
-vi.mock('../../maker-host/codex-oauth-readiness.js', () => ({ hasCodexOAuthLoginReadOnly: vi.fn() }));
+vi.mock('../../maker-host/codex-oauth-readiness.js', () => ({ hasChatgptOneshotReadiness: vi.fn() }));
 vi.mock('../../maker-host/generic-oauth.js', () => ({ readCachedGenericOAuthAccessToken: vi.fn() }));
 vi.mock('../../maker-host/grok-oauth-login.js', () => ({ hasGrokOAuthLogin: vi.fn() }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({ effectiveXdGatewayBaseUrl: vi.fn() }));
@@ -15,7 +15,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomProviderKey: 
 
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getClaudeAiOAuthForSpawn } from '../../maker-host/claude-oauth-refresh.js';
-import { hasCodexOAuthLoginReadOnly } from '../../maker-host/codex-oauth-readiness.js';
+import { hasChatgptOneshotReadiness } from '../../maker-host/codex-oauth-readiness.js';
 import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
 import { hasGrokOAuthLogin } from '../../maker-host/grok-oauth-login.js';
 import { effectiveXdGatewayBaseUrl } from '../../model-access/effectiveEndpoint.js';
@@ -38,7 +38,7 @@ function provider(over: Partial<Provider> & { id: string }): Provider {
 beforeEach(() => {
   vi.mocked(readClaudeApiKey).mockReset();
   vi.mocked(getClaudeAiOAuthForSpawn).mockReset();
-  vi.mocked(hasCodexOAuthLoginReadOnly).mockReset();
+  vi.mocked(hasChatgptOneshotReadiness).mockReset();
   vi.mocked(readCachedGenericOAuthAccessToken).mockReset();
   vi.mocked(hasGrokOAuthLogin).mockReset();
   vi.mocked(effectiveXdGatewayBaseUrl).mockReset();
@@ -63,9 +63,9 @@ describe('hasOneshotProviderCredential · 内置四家', () => {
     vi.mocked(getClaudeAiOAuthForSpawn).mockReturnValue(null);
     expect(hasOneshotProviderCredential(provider({ id: 'anthropic' }), 'claude-code')).toBe(false);
 
-    vi.mocked(hasCodexOAuthLoginReadOnly).mockReturnValue(true);
+    vi.mocked(hasChatgptOneshotReadiness).mockReturnValue(true);
     expect(hasOneshotProviderCredential(provider({ id: 'openai' }), 'codex')).toBe(true);
-    vi.mocked(hasCodexOAuthLoginReadOnly).mockReturnValue(false);
+    vi.mocked(hasChatgptOneshotReadiness).mockReturnValue(false);
     expect(hasOneshotProviderCredential(provider({ id: 'openai' }), 'codex')).toBe(false);
 
     vi.mocked(hasGrokOAuthLogin).mockReturnValue(true);

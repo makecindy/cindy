@@ -10,7 +10,7 @@ import type { AgentKind, Provider } from '@cindy/model-providers';
 
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getClaudeAiOAuthForSpawn } from '../maker-host/claude-oauth-refresh.js';
-import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
+import { hasChatgptOneshotReadiness } from '../maker-host/codex-oauth-readiness.js';
 import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
 import { hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -28,7 +28,7 @@ export function hasOneshotProviderCredential(provider: Provider, agentKind: Agen
       case 'anthropic':
         return getClaudeAiOAuthForSpawn() !== null;
       case 'openai':
-        return hasCodexOAuthLoginReadOnly();
+        return hasChatgptOneshotReadiness();
       case 'xai':
         return hasGrokOAuthLogin();
       default:
