@@ -1167,6 +1167,8 @@ interface ElectronAPI {
      * 引导去配置。未装 NOT_FOUND。
      */
     setupStatus: (id: string) => Promise<import('../shared/ghost').GhostSetupStatus>;
+    /** 批量授权状态查询(插件列表卡片颜色 + 账号名展示;返回 id→GhostSetupProfile)。 */
+    setupProfiles: (ids: string[]) => Promise<Record<string, import('../shared/ghost').GhostSetupProfile>>;
     /** 只列入口元数据，不运行插件工具；远程/device-link 不暴露。 */
     /** 用户选定一个入口后，按固定只读摘要契约搜索该插件。 */
     /** 最近使用顺序变化（发送 /卸载），多窗口同步。 */

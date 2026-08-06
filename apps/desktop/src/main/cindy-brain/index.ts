@@ -31,6 +31,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostSetupProfile,
   type GhostSetupReauthSuggest,
   type GhostVideoRefMode,
   type GhostVideoResultParams,
@@ -91,6 +92,7 @@ import {
   type GhostKvStore,
 } from './ghostKvStore.js';
 import {
+  evaluateGhostSetup,
   evaluateGhostSetupAssessment,
   handleGhostSetupStatusRequest,
   parseOauthConnectSecretKey,
@@ -4674,6 +4676,67 @@ export function registerGhostIpc(): void {
       },
     }),
   );
+
+  // ── 插件列表授权状态批量查询(插件页卡片颜色 + 账号名展示)──────────
+  // 接受已装插件 id 数组,返回 id → GhostSetupProfile 的映射。
+  // 判定复用 setup-status 的同一套探针真身(同步毫秒级),不加缓存。
+  // 未知 id 静默跳过(不报错——列表渲染时的竞态窗口里可能已卸载)。
+  ipcMain.handle('ghosts:setup-profiles', (_event, ids: unknown) => {
+    if (!Array.isArray(ids) || !ids.every((id): id is string => typeof id === 'string')) {
+      throwIpcError('INVALID_PARAMS', 'ids must be a string array');
+    }
+    const oauthManager = getGhostOauthAccountManager();
+    const result: Record<string, GhostSetupProfile> = {};
+    for (const ghostId of ids) {
+      const ghost = findAvailableGhost(ghostId);
+      if (!ghost) continue;
+      const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+      const requirementGroups = runtimeManifest.setup
+        ? runtimeManifest.setup.requires.map((g) => g.anyOf)
+        : [];
+      const implicitSecrets =
+        runtimeManifest.network?.secrets?.filter(
+          (s) => s.source !== 'login-email' && s.source !== 'oidc-token',
+        ) ?? [];
+      const implicitConnections = runtimeManifest.network?.connections ?? [];
+      const nodeSecrets = runtimeManifest.node?.secretBindings ?? [];
+      const hasSetupRequirements =
+        requirementGroups.length > 0 ||
+        implicitSecrets.length > 0 ||
+        implicitConnections.length > 0 ||
+        nodeSecrets.length > 0;
+
+      // 判定就绪度:复用 evaluateGhostSetup 的纯函数(与单个 setup-status 同口径)。
+      const status = evaluateGhostSetup(runtimeManifest, {
+        secretSaved: (key) => ghostSecretSaved(ghostId, key),
+        oauthStatus: (key) => {
+          const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
+          const accounts = oauthManager.listAccounts(ghostId, key);
+          return {
+            clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+            connected: accounts.filter((a) => a.status === 'connected').length,
+            expired: accounts.filter((a) => a.status === 'expired').length,
+          };
+        },
+        connectionCount: (key) => getGhostConnectionManager().list(ghostId, key).length,
+        kvValue: () => undefined,
+      });
+
+      // 授权细分状态:区分「未配置」与「已配置但过期/失败」。
+      const setupState: GhostSetupProfile['setupState'] = status.ready
+        ? 'ready'
+        : status.missingGroups.length === 0 && status.reauth.length > 0
+          ? 'failed'
+          : 'missing';
+
+      result[ghostId] = {
+        hasSetupRequirements,
+        setupReady: status.ready,
+        setupState,
+      };
+    }
+    return result;
+  });
 
   // ── 面板媒体换发(拖拽引渡 + 右键菜单)──────────────────────────────
   // 只由宿主 renderer(可信应用层)调用——意识面板零桥碰不到 IPC。

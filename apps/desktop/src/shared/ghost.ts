@@ -1096,6 +1096,24 @@ export interface GhostSetupStatus {
   reauth: GhostSetupStatusItem[];
 }
 
+/**
+ * 插件列表卡片所需的授权状态摘要(ghosts:setup-profiles IPC 产出)。
+ * 列表页不展示完整的 missingGroups / reauth 明细,只需要颜色判定与账号名。
+ */
+export interface GhostSetupProfile {
+  /** 插件是否声明了需要配置的项(有 secrets / connections / oauth 声明)。 */
+  hasSetupRequirements: boolean;
+  /** 所有配置需求是否已满足(不需要配置的插件也为 true)。 */
+  setupReady: boolean;
+  /**
+   * 授权细分状态,用于卡片开关颜色:
+   * - 'ready':已就绪或无需授权 → 绿色
+   * - 'missing':声明了配置需求但未配置 → 黄色
+   * - 'failed':已配置但授权过期/失败 → 红色
+   */
+  setupState: 'ready' | 'missing' | 'failed';
+}
+
 /** Setup Runtime 暴露给 Agent / Renderer 的需求类型；不包含任何配置值。 */
 export type GhostSetupRequirementKind =
   | 'oauth'
