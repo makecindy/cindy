@@ -5686,6 +5686,7 @@
       "generating": "正在生成…",
       "copied": "图片已复制",
       "saved": "图片已保存",
+      "notMounted": "有些已选消息暂未显示，请滚动回去让它们显示后重试",
       "failed": "图片生成失败，请重试"
     },
     "errorBanner": {

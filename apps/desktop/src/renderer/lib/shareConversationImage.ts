@@ -17,6 +17,7 @@
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { diffChars } from 'diff';
 
 import { isImageBytesReachable, loadImageSourceBase64 } from '@/lib/annotationBurnIn';
 import { createLogger } from '@/lib/logger';
@@ -72,6 +73,14 @@ export class ShareImageNoContentError extends Error {
   }
 }
 
+/** 找不到仍挂载的已选消息时抛这个 —— 调用方应引导用户滚回后重试。 */
+export class ShareImageSelectionNotMountedError extends Error {
+  constructor() {
+    super('one or more selected message nodes are not mounted');
+    this.name = 'ShareImageSelectionNotMountedError';
+  }
+}
+
 /**
  * 当前**已渲染**的可选消息 id,按文档顺序(= 消息流顺序)。
  *
@@ -103,20 +112,133 @@ export function stripCloneAnchors(root: HTMLElement): void {
   }
 }
 
+const REDACTION_SCOPE_TAGS = new Set([
+  'ADDRESS',
+  'ARTICLE',
+  'ASIDE',
+  'BLOCKQUOTE',
+  'DIV',
+  'DL',
+  'FIELDSET',
+  'FIGURE',
+  'FOOTER',
+  'FORM',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'H5',
+  'H6',
+  'HEADER',
+  'LI',
+  'MAIN',
+  'NAV',
+  'OL',
+  'P',
+  'PRE',
+  'SECTION',
+  'TABLE',
+  'TD',
+  'TH',
+  'TR',
+  'UL',
+]);
+
+interface TextNodeRange {
+  node: Text;
+  start: number;
+  end: number;
+}
+
+function redactionScopeFor(node: Text, root: HTMLElement): Element {
+  let current = node.parentElement;
+  while (current && current !== root) {
+    if (REDACTION_SCOPE_TAGS.has(current.tagName)) return current;
+    current = current.parentElement;
+  }
+  return root;
+}
+
+function textNodeRanges(nodes: readonly Text[]): TextNodeRange[] {
+  let offset = 0;
+  return nodes.map((node) => {
+    const text = node.nodeValue ?? '';
+    const range = { node, start: offset, end: offset + text.length };
+    offset = range.end;
+    return range;
+  });
+}
+
+function textNodeIndexAtOffset(ranges: readonly TextNodeRange[], offset: number): number {
+  for (let index = 0; index < ranges.length; index += 1) {
+    const range = ranges[index];
+    if (offset < range.end || (offset === range.end && index === ranges.length - 1)) {
+      return index;
+    }
+  }
+  return Math.max(0, ranges.length - 1);
+}
+
+function projectRedactedText(nodes: readonly Text[], redactedText: string): void {
+  const ranges = textNodeRanges(nodes);
+  const projected = nodes.map(() => '');
+  const originalText = ranges.map((range) => range.node.nodeValue ?? '').join('');
+  let originalOffset = 0;
+
+  for (const change of diffChars(originalText, redactedText)) {
+    if (change.added) {
+      const index = textNodeIndexAtOffset(ranges, originalOffset);
+      projected[index] += change.value;
+      continue;
+    }
+
+    if (change.removed) {
+      originalOffset += change.count;
+      continue;
+    }
+
+    let valueOffset = 0;
+    while (valueOffset < change.value.length) {
+      const index = textNodeIndexAtOffset(ranges, originalOffset + valueOffset);
+      const range = ranges[index];
+      const available = range.end - (originalOffset + valueOffset);
+      const chunkLength = Math.min(available, change.value.length - valueOffset);
+      projected[index] += change.value.slice(valueOffset, valueOffset + chunkLength);
+      valueOffset += chunkLength;
+    }
+    originalOffset += change.count;
+  }
+
+  nodes.forEach((node, index) => {
+    node.nodeValue = projected[index];
+  });
+}
+
 /**
- * 逐 text node 跑凭证脱敏。只改 nodeValue,不动结构 —— 已渲染的 markdown
- * (代码高亮的 span 切分、KaTeX 的字形节点)必须原样保留。
+ * 按逻辑连续文本段脱敏,再把结果投影回原有 text node。只改 nodeValue,不动结构 ——
+ * 已渲染的 markdown(代码高亮的 span 切分、KaTeX 的字形节点)必须原样保留。
+ * 不能逐 node 调用:JSON 高亮会把 key、分隔符、value 拆到多个 span,逐段脱敏会
+ * 看不到完整的 assignment,从而把 opaque secret 原样带进图片。
  */
 export function redactTextNodes(root: HTMLElement): void {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const runs = new Map<Element, Text[]>();
   let node = walker.nextNode();
   while (node) {
-    const text = node.nodeValue;
-    if (text) {
-      const redacted = redactSensitiveText(text);
-      if (redacted !== text) node.nodeValue = redacted;
+    const textNode = node as Text;
+    if (textNode.nodeValue) {
+      const scope = redactionScopeFor(textNode, root);
+      const run = runs.get(scope);
+      if (run) run.push(textNode);
+      else runs.set(scope, [textNode]);
     }
     node = walker.nextNode();
+  }
+
+  for (const run of runs.values()) {
+    const originalText = run.map((textNode) => textNode.nodeValue ?? '').join('');
+    const redactedText = redactSensitiveText(originalText);
+    if (redactedText !== originalText) projectRedactedText(run, redactedText);
   }
 }
 
@@ -184,6 +306,20 @@ export function expandScrollableBlocks(root: HTMLElement): void {
       el.style.maxHeight = 'none';
     }
   }
+}
+
+/**
+ * 把克隆体里的消息恢复到完整可读状态。用户消息可能由 line-clamp-3/10 收起,
+ * 克隆时正文其实已经在 DOM 中,但 clamp 会让图片只包含前几行;展开按钮也没有可用
+ * 的交互,所以两者都必须在光栅化前移除。
+ */
+export function expandCollapsedMessages(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>('[class]').forEach((element) => {
+    for (const className of Array.from(element.classList)) {
+      if (/^line-clamp-\d+$/.test(className)) element.classList.remove(className);
+    }
+  });
+  root.querySelectorAll('button[aria-expanded]').forEach((element) => element.remove());
 }
 
 /**
@@ -369,6 +505,7 @@ export async function buildShareImageBlob({
       prevIndex = currentIndex;
     }
     stripInteractiveElements(stage);
+    expandCollapsedMessages(stage);
     stripCloneAnchors(stage);
     redactTextNodes(stage);
 
@@ -419,5 +556,8 @@ export async function buildShareImageBlob({
  * 但选择器拼接一律走转义 —— 不给未来的 id 格式变更留注入面。
  */
 function cssAttrValue(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value);
+  }
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }

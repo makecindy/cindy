@@ -26,6 +26,7 @@ import {
   buildShareImageBlob,
   queryShareableMessageIds,
   SHARE_EXCLUDE_ATTR,
+  ShareImageSelectionNotMountedError,
   shareSiteHostForRegion,
 } from '@/lib/shareConversationImage';
 import { toast } from '@/lib/toast';
@@ -66,6 +67,9 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
     const orderedSelectedIds = shareSelectionStore.getSelectedIdsInOrder(
       queryShareableMessageIds(sessionId),
     );
+    if (orderedSelectedIds.length !== shareSelectionStore.count()) {
+      throw new ShareImageSelectionNotMountedError();
+    }
     return buildShareImageBlob({
       sessionId,
       orderedSelectedIds,
@@ -99,7 +103,11 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
           kind,
           error: err instanceof Error ? err.message : String(err),
         });
-        toast.error(t('chat.shareImage.failed'));
+        toast.error(
+          err instanceof ShareImageSelectionNotMountedError
+            ? t('chat.shareImage.notMounted')
+            : t('chat.shareImage.failed'),
+        );
       } finally {
         setBusy(null);
       }

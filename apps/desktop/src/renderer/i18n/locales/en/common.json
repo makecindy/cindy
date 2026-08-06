@@ -5689,6 +5689,7 @@
       "generating": "Generating…",
       "copied": "Image copied",
       "saved": "Image saved",
+      "notMounted": "Some selected messages are not currently visible. Scroll back to show them, then try again",
       "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
