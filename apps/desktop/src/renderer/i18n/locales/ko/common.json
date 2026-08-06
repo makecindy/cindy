@@ -1109,7 +1109,7 @@
         "managedDialogue": "내부 대화",
         "managedDialogueHint": "Cindy 관리 디렉터리의 고아/내부 대화 — 표시하거나 가져오지 않음",
         "filtered": "건너뜀",
-        "filteredHint": "내부 에이전트 세션, 잘못된 파일 또는 스캔 범위 밖 — 표시하거나 가져오지 않음",
+        "filteredHint": "내부 Agent 세션, 잘못된 파일 또는 스캔 범위 밖 — 표시하거나 가져오지 않음",
         "reasonListOpen": " (",
         "reasonListSep": ", ",
         "reasonListClose": ")",

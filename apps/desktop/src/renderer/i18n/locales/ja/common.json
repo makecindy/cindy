@@ -1109,7 +1109,7 @@
         "managedDialogue": "内部ダイアログ",
         "managedDialogueHint": "Cindy 管理ディレクトリ下の孤立/内部ダイアログ — 表示もインポートもされません",
         "filtered": "スキップ済み",
-        "filteredHint": "内部エージェントセッション、無効なファイル、またはスキャンウィンドウ外 — 表示もインポートもされません",
+        "filteredHint": "内部 Agent セッション、無効なファイル、またはスキャンウィンドウ外 — 表示もインポートもされません",
         "reasonListOpen": "（",
         "reasonListSep": "・",
         "reasonListClose": "）",
