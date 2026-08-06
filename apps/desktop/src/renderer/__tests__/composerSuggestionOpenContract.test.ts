@@ -55,6 +55,38 @@ describe('composer synthetic suggestion open contract', () => {
     expect(resolver).not.toContain('const to = editor.state.selection.from;');
   });
 
+  it('synthetic 空查询保持零长度替换范围', () => {
+    const start = source.indexOf('const resolveEffectiveAtRange = useCallback');
+    const end = source.indexOf('const insertAtResource', start);
+    const resolver = source.slice(start, end);
+    const emptyQueryGuard =
+      "if (effectiveAt.activation === 'synthetic' && effectiveAt.query.length === 0) {";
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(resolver).toContain(emptyQueryGuard);
+    expect(resolver).toContain('return { from, to: from };');
+    expect(resolver.indexOf(emptyQueryGuard)).toBeLessThan(
+      resolver.indexOf('editor.state.doc.resolve(from)'),
+    );
+  });
+
+  it('已有文本选区时 + 仍以选区起点打开空查询面板', () => {
+    const deriveStart = source.indexOf('function deriveSyntheticAtQuery');
+    const deriveEnd = source.indexOf('\n}\n\nexport function ChatInput', deriveStart);
+    const derive = source.slice(deriveStart, deriveEnd);
+    const handlerStart = source.indexOf('const handleComposerSuggestionOpenChange = useCallback');
+    const handlerEnd = source.indexOf('const composerSuggestionFocusTarget', handlerStart);
+    const handler = source.slice(handlerStart, handlerEnd);
+
+    expect(deriveStart).toBeGreaterThanOrEqual(0);
+    expect(deriveEnd).toBeGreaterThan(deriveStart);
+    expect(derive).toContain("if (!selection.empty) return selection.from === anchor ? '' : null;");
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(handler).toContain('setSyntheticAtAnchor(editor.state.selection.from);');
+  });
+
   it('打开 + 时保留同一 typed @ run 的 Esc suppression', () => {
     const start = source.indexOf('const handleComposerSuggestionOpenChange = useCallback');
     const end = source.indexOf('const composerSuggestionFocusTarget', start);

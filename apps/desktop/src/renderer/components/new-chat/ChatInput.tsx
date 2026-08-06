@@ -888,13 +888,16 @@ function detectTrigger(editor: Editor): TriggerState {
 /**
  * 合成激活(「+」按钮打开统一建议面板,Codex 模式)的 query 推导:
  * 不向文档插入 `@`,query = 锚点→光标之间的纯文本。返回 null 表示锚点失效
- * (选区非空 / 光标移到锚点前 / 跨段落 / 中间出现空白、chip 或换行),此时
+ * (光标移到锚点前 / 跨段落 / 中间出现空白、chip 或换行),此时
  * ChatInput 会清掉合成锚点、关闭面板。
  */
 function deriveSyntheticAtQuery(editor: Editor, anchor: number): string | null {
   const { state } = editor;
   const { selection, doc } = state;
-  if (!selection.empty) return null;
+  // 点击「+」前可能已有文本选区。synthetic anchor 就落在 selection.from，
+  // 选区未变化时仍是空查询；用户继续输入后 ProseMirror 会自然替换选区并折叠光标，
+  // 后续字符再按 anchor → caret 推导 query。
+  if (!selection.empty) return selection.from === anchor ? '' : null;
   const pos = selection.from;
   if (pos < anchor || anchor > doc.content.size) return null;
   let $anchor;
@@ -3883,6 +3886,12 @@ export function ChatInput({
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
     if (!editor || !effectiveAt) return null;
     const { from } = effectiveAt;
+
+    // 「+」刚打开且尚未输入过滤词时，激活范围只是光标处的零长度锚点。
+    // 不向后扫描已有文本，避免选择条目时误删光标后的完整单词。
+    if (effectiveAt.activation === 'synthetic' && effectiveAt.query.length === 0) {
+      return { from, to: from };
+    }
 
     // Extend replace-range to the end of the complete query run (up to
     // whitespace / chip boundary / end of paragraph). The caret may sit
