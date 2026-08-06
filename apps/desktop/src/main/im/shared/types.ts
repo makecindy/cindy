@@ -239,6 +239,8 @@ export interface ImUiTextPack {
   error?: {
     agentUnsupported: string;
     permissionModeUnsupported: string;
+    /** 换 Agent 后仍可能不兼容的权限模式(bypassPermissions / acceptEdits)时附加。 */
+    agentSwitchAlsoCheckPermissionMode?: string;
   };
   cards: {
     permission: {
