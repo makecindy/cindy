@@ -14,6 +14,7 @@
 
 import type { AgentKind } from '@cindy/maker-core';
 
+import { getResolvedMainLocale } from '../i18n.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { runProviderOneShot } from '../maker-host/provider-one-shot.js';
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
@@ -69,12 +70,24 @@ function escapeReferenceData(value: string): string {
 
 function buildPredictionPrompt(
   context: string,
+  locale: string,
   workingDir?: string,
 ): { system: string; user: string } {
+  const languageHints: Record<string, string> = {
+    'zh-CN': "Match the user's language. The user types in Simplified Chinese.",
+    en: "Match the user's language. The user types in English.",
+    ja: "Match the user's language. The user types in Japanese.",
+    ko: "Match the user's language. The user types in Korean.",
+  };
   const wdLine = workingDir ? `Current working directory: ${workingDir}` : null;
 
+  // 系统指令写入 Anthropic Messages API 顶层 system 字段（非 Anthropic wire 忽略），
+  // 不混入 user message，避免被 Anthropic API 拒绝。
   const system = [
-    'You are a terse predictive text engine. Return only the predicted user prompt.',
+    'You are a terse predictive text engine for a coding chat input.',
+    'Return only the predicted next user message — no quotes, markdown, commentary, or multiple options.',
+    'Keep it under 140 characters. Make it actionable for a coding agent.',
+    languageHints[locale] ?? "Match the user's language and tone.",
   ].join('\n');
 
   const user = [
@@ -86,7 +99,7 @@ function buildPredictionPrompt(
     '</recent_conversation>',
     '',
     'Return exactly one concise user prompt.',
-    'Match the user\'s tone, brevity, phrasing, and terminology based on their recent messages.',
+    "Match the user's tone, brevity, phrasing, and terminology based on their recent messages.",
     'Do not copy prior messages verbatim.',
     'Make it actionable.',
     'Keep it under 140 characters.',
@@ -145,15 +158,21 @@ export async function generatePromptPrediction(
     return null;
   }
 
-  const { system, user } = buildPredictionPrompt(context, params.workingDir);
+  const locale = getResolvedMainLocale();
+  const { system: systemPrompt, user: userPrompt } = buildPredictionPrompt(
+    context,
+    locale,
+    params.workingDir,
+  );
 
   // 截断到上限(char 数),防止超长上下文撑爆 prompt
-  const userPrompt = user.slice(0, PREDICTION_CONTEXT_MAX_CHARS + 1024); // prompt 固定部分 ~200 chars
+  const truncated = userPrompt.slice(0, PREDICTION_CONTEXT_MAX_CHARS + 1024); // prompt 固定部分 ~200 chars
 
+  // 仅记录长度用于调试，不记录对话内容避免敏感数据泄漏。
   log.debug('prompt prediction params', {
-    context,
-    system,
-    user: userPrompt,
+    contextLen: context.length,
+    systemLen: systemPrompt.length,
+    userLen: truncated.length,
     agentKind: params.agentKind,
     sessionId: params.sessionId,
   });
@@ -161,13 +180,14 @@ export async function generatePromptPrediction(
   // 复用 title one-shot 通路,但覆盖 token/校验参数以适配预测场景:
   //   - maxTokens=96: 标题仅需 32 token,预测 ≤140 chars 需要更多
   //   - codexInstructions: 告诉模型这是预测而非标题
+  //   - systemPrompt: Anthropic Messages API 顶层 system 字段(非 Anthropic wire 忽略)
   //   - maxOutputChars=0: 跳过 validateTitleOutput(该函数面向单行标题,拒绝多行/长文本)
   //   - maxVisualChars=140: 截断到推荐提示词上限
   return runProviderOneShot(
     {
       sessionId: params.sessionId,
       agentKind: params.agentKind,
-      prompt: userPrompt,
+      prompt: truncated,
     },
     {
       readSessionProviderId: readSessionProviderIdFromDb,
@@ -177,9 +197,9 @@ export async function generatePromptPrediction(
       maxTokens: 96,
       codexInstructions:
         'Output only the predicted next user message — no quotes, markdown, or commentary.',
+      systemPrompt,
       maxOutputChars: 0,
       maxVisualChars: 140,
-      systemPrompt: system,
     },
   );
 }

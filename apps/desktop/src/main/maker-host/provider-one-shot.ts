@@ -242,7 +242,9 @@ export function buildOneShotTarget(providerId: string): ProviderOneShotTarget | 
 
 // ── wire fetchers(各自一次 fetch;失败 / 空 → 抛错,由编排层吞成 null)─────────────
 
-/** Anthropic Messages:Bearer 订阅 OAuth + anthropic-beta;model 经 toSdkModelString 还原 wire 串。 */
+/** Anthropic Messages:Bearer 订阅 OAuth + anthropic-beta;model 经 toSdkModelString 还原 wire 串。
+ *  systemPrompt(可选)写入 Messages API 顶层 `system` 字段，而非作为消息角色。
+ *  prompt prediction 依赖此字段将系统指令与对话上下文正确分离。 */
 async function fetchAnthropicTitle(
   upstream: string,
   modelId: string,
@@ -253,10 +255,16 @@ async function fetchAnthropicTitle(
   maxTokens: number = ONE_SHOT_DEFAULT_MAX_TOKENS,
   systemPrompt?: string,
 ): Promise<string> {
-  const messages: Array<{ role: string; content: string }> = [];
-  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-  messages.push({ role: 'user', content: prompt });
-
+  // Anthropic Messages API 不支持 role: 'system' 消息 —— 系统指令必须写入
+  // 顶层 `system` 字段，否则请求会被 API 拒绝。
+  const body: Record<string, unknown> = {
+    model: toSdkModelString(modelId),
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content: prompt }],
+  };
+  if (systemPrompt) {
+    body.system = systemPrompt;
+  }
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/v1/messages`, {
     method: 'POST',
     signal,
@@ -266,11 +274,7 @@ async function fetchAnthropicTitle(
       'anthropic-beta': 'oauth-2025-04-20',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      model: toSdkModelString(modelId),
-      max_tokens: maxTokens,
-      messages,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`anthropic messages HTTP ${res.status}`);
   const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
@@ -405,7 +409,13 @@ export interface OneShotOpts {
   maxOutputChars?: number;
   /** 校验通过后的 Unicode 截断长度(标题默认 40)。0 跳过截断。 */
   maxVisualChars?: number;
-  /** 可选的 system 消息:有值时各 wire 在 user prompt 前追加一条 system role 消息。 */
+  /**
+   * 可选的 system 指令。
+   * - Anthropic Messages wire: 写入顶层 `system` 字段（该 API 不接受 role: 'system' 消息）。
+   * - Codex Responses wire: 拼接到 instructions 前。
+   * - Gateway chat wire: 作为 role: 'system' 消息插入 messages 数组。
+   * prompt prediction 用此字段将系统指令与对话上下文正确分离。
+   */
   systemPrompt?: string;
 }
 

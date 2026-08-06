@@ -1047,23 +1047,32 @@ export function ChatInput({
   // → React render」之间旧 Promise 落地的空窗;useEffect 里照旧做清除推荐 UI 的副作用。
   const turnGenRef = useRef(0);
   const prevShowStopRender = useRef(false);
-  // 同步层:render 阶段检测 turn 开始,在 React commit 前就让旧预测的 turnGen 失效。
-  const turnStarting = showStopButton && !prevShowStopRender.current;
-  prevShowStopRender.current = showStopButton;
-  if (turnStarting) {
-    turnGenRef.current += 1;
-  }
-  // sessionId 切换时在 render 阶段同步更新预测相关 ref，关闭 useEffect 延迟空窗：
-  // 若旧 session 的预测请求在 render→commit 之间返回，prevSessionIdRef 已指向
-  // 新 session，落地校验会拒绝该结果，不会让旧会话推荐词写入新会话输入框。
   const prevSessionIdRef = useRef(sessionId);
-  if (prevSessionIdRef.current !== sessionId) {
-    prevSessionIdRef.current = sessionId;
-    prevShowStopRef.current = false;
-    turnGenRef.current = 0;
-    prevShowStopRender.current = false;
-    showRecommendationRef.current = false;
-  }
+  // useLayoutEffect 在 React commit 后、浏览器绘制前同步执行，比 useEffect 更接近
+  // render 阶段的时序，同时避免 React concurrent rendering 下 render 被丢弃但 ref
+  // 已被错误修改的风险。防御纵深：发送时已通过 turnGenRef.current += 1 立即失效
+  // 旧预测（见 handleSend），此处作为兜底处理 showStopButton 跳变场景。
+  useLayoutEffect(() => {
+    const turnStarting = showStopButton && !prevShowStopRender.current;
+    prevShowStopRender.current = showStopButton;
+    if (turnStarting) {
+      turnGenRef.current += 1;
+    }
+  });
+  // sessionId 切换时同步更新预测相关 ref。使用 useLayoutEffect 而非 render 阶段直接
+  // 修改 ref，避免 concurrent rendering 的潜在风险。sessionId 在 commit 后立即更新
+  // ref，旧 session 预测请求若在 commit→layout effect 之间返回，仍会因 sessionId
+  // 不匹配被落地校验拒绝（defense-in-depth）。
+  useLayoutEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      prevShowStopRef.current = false;
+      turnGenRef.current = 0;
+      prevShowStopRender.current = false;
+      showRecommendationRef.current = false;
+      setRecommendedPrompt(null);
+    }
+  }, [sessionId]);
   useEffect(() => {
     // sessionId 变化时清除推荐 UI（ref 已在 render 阶段同步更新）
     setRecommendedPrompt(null);
@@ -4473,6 +4482,10 @@ export function ChatInput({
             // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
             effortForSend = coordinator.getCommittedEffort(sessionId) ?? activeEffort;
           }
+          // 发送新消息时立即递增 turnGen，让任何还未落地的旧 turn 预测结果失效。
+          // 防止「编辑器已清空 → showStopButton 尚未变 true」之间的空窗导致
+          // 旧上下文推荐短暂显示。
+          turnGenRef.current += 1;
           result = await onSend(
             textToSend,
             activeModel,
