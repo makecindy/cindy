@@ -106,6 +106,19 @@ function replaceXdtRefs(
   return parts.join('');
 }
 
+/**
+ * 剥掉 Windows 盘符路径解码后残留的多余前导斜杠。
+ *
+ * 约定写法 xdt-file:///<绝对路径>:Unix 下剥协议后的首个 `/` 就是根;
+ * Windows 盘符路径剥完剩 `/C:\...`(或 /C:/...),多余前导 `/` 会让下游
+ * 存在性检查 / 目录白名单比对失败 → 文件静默丢失(2026-07-16 hook 渠道
+ * 实踩)。这里是该归一化的唯一实现 —— hook-control/outbound.ts 的严格版
+ * 解析(fail-closed 读盘校验)也消费它, 不再各持副本。
+ */
+export function normalizeXdtAbsPath(decoded: string): string {
+  return decoded.replace(/^\/+([A-Za-z]:[\\/])/, '$1');
+}
+
 /** xdt-file://<absPath> → absPath (URL-decoded). */
 export function xdtFileUrlToAbsPath(url: string): string {
   const raw = url.replace(/^xdt-file:\/\//, '');
@@ -115,11 +128,7 @@ export function xdtFileUrlToAbsPath(url: string): string {
   } catch {
     decoded = raw;
   }
-  // 约定写法 xdt-file:///<绝对路径>:Unix 下剥协议后的首个 `/` 就是根;
-  // Windows 盘符路径剥完剩 `/C:\...`(或 /C:/...),多余前导 `/` 会让下游
-  // 存在性检查 / 目录白名单比对失败 → 文件静默丢失(2026-07-16 hook 渠道
-  // 实踩)。与 hook-control/outbound.ts 的副本同步修改。
-  return decoded.replace(/^\/+([A-Za-z]:[\\/])/, '$1');
+  return normalizeXdtAbsPath(decoded);
 }
 
 /** Replace xdt-* refs with placeholder text suitable for intermediate frames. */
@@ -181,6 +190,43 @@ export function collectXdtImageRefs(text: string): XdtImageRef[] {
   return parseXdtRefs(text)
     .filter((ref) => ref.kind === 'image')
     .map(({ alt, url, start, end }) => ({ alt, url, start, end }));
+}
+
+/** 文件引用(与 XdtImageRef 同形, url 未解码 —— 调用方自行决定解码与校验策略)。 */
+export type XdtFileRef = XdtImageRef;
+
+/**
+ * Collect xdt-file refs in source order, including the raw URL. 与
+ * collectXdtFileLinks 的差异: 不解码路径、不去重 —— 给需要按 URL 维度
+ * 记账 / 自带严格路径校验的调用方(hook-control/outbound)用。
+ */
+export function collectXdtFileRefs(text: string): XdtFileRef[] {
+  return parseXdtRefs(text)
+    .filter((ref) => ref.kind === 'file')
+    .map(({ alt, url, start, end }) => ({ alt, url, start, end }));
+}
+
+export interface XdtRefTransform {
+  /** 图片引用替换文本; 缺省 = 该类引用原样保留。 */
+  image?: (ref: XdtImageRef) => string;
+  /** 文件引用替换文本; 缺省 = 该类引用原样保留。 */
+  file?: (ref: XdtFileRef) => string;
+}
+
+/**
+ * 单遍变换文本里的托管媒体引用(收口正文改写的共享原语)。
+ * 与 strip 系列的差异: 替换文案由调用方按引用逐个决定(如"已作为附件
+ * 发送" vs 保留可读标签), 而不是固定剥离。
+ */
+export function transformXdtRefs(text: string, transform: XdtRefTransform): string {
+  const refs = parseXdtRefs(text).filter((ref) =>
+    ref.kind === 'image' ? transform.image !== undefined : transform.file !== undefined,
+  );
+  return replaceXdtRefs(text, refs, (ref) =>
+    ref.kind === 'image'
+      ? transform.image!({ alt: ref.alt, url: ref.url, start: ref.start, end: ref.end })
+      : transform.file!({ alt: ref.alt, url: ref.url, start: ref.start, end: ref.end }),
+  );
 }
 
 /** Collect unique xdt-image URLs from text. */

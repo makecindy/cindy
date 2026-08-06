@@ -9,11 +9,14 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyXdtOnly,
   collectXdtFileLinks,
+  collectXdtFileRefs,
   collectXdtImageRefs,
   collectXdtImageUrls,
+  normalizeXdtAbsPath,
   stripXdtFileLinks,
   stripXdtForStreaming,
   stripXdtImageLinks,
+  transformXdtRefs,
   xdtFileUrlToAbsPath,
 } from '../xdtRefs.js';
 
@@ -84,5 +87,43 @@ describe('linear managed-media parser', () => {
 
     expect(collectXdtImageUrls(text)).toEqual([BLOB]);
     expect(stripXdtImageLinks(text)).toBe('broken [ prefix ');
+  });
+});
+
+describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
+  it('按源顺序返回未解码 URL,不去重(URL 维度记账由调用方做)', () => {
+    const file = 'xdt-file:///tmp/a%20b.txt';
+    const text = `一份 [报告](${file}) 再引一次 [同一份](${file})`;
+    const refs = collectXdtFileRefs(text);
+    expect(refs.map((r) => r.url)).toEqual([file, file]);
+    expect(refs.map((r) => r.alt)).toEqual(['报告', '同一份']);
+    expect(refs[0].start).toBe(text.indexOf('[报告]'));
+  });
+
+  it('图片语法 + xdt-file 协议不算文件引用(与个人渠道收口同口径)', () => {
+    expect(collectXdtFileRefs('![f](xdt-file:///tmp/x.txt)')).toEqual([]);
+  });
+});
+
+describe('transformXdtRefs(收口正文改写共享原语)', () => {
+  it('图片/文件各自按引用逐个替换,缺省的类别原样保留', () => {
+    const file = 'xdt-file:///tmp/r.txt';
+    const text = `头 ![猫](${BLOB}) 中 [报告](${file}) 尾`;
+    expect(
+      transformXdtRefs(text, {
+        image: ({ alt }) => `<img:${alt}>`,
+        file: ({ alt }) => `<file:${alt}>`,
+      }),
+    ).toBe('头 <img:猫> 中 <file:报告> 尾');
+    expect(transformXdtRefs(text, { image: () => '' })).toBe(`头  中 [报告](${file}) 尾`);
+    expect(transformXdtRefs(text, {})).toBe(text);
+  });
+});
+
+describe('normalizeXdtAbsPath(Windows 前缀归一化唯一实现)', () => {
+  it('剥掉盘符路径前导斜杠,Unix 绝对路径不动', () => {
+    expect(normalizeXdtAbsPath('/C:\\Users\\x\\f.txt')).toBe('C:\\Users\\x\\f.txt');
+    expect(normalizeXdtAbsPath('//C:/Users/x/f.txt')).toBe('C:/Users/x/f.txt');
+    expect(normalizeXdtAbsPath('/home/u/f.txt')).toBe('/home/u/f.txt');
   });
 });
