@@ -380,6 +380,9 @@ function parsePredictPromptRequest(raw: unknown): PromptPredictionParams {
     throw new Error('messages must be an array');
   }
   const sliced = messages.slice(-PREDICTION_MESSAGES_MAX).map((m: unknown) => {
+    if (typeof m !== 'object' || m === null) {
+      throwIpcError('INVALID_PARAMS', 'messages entry must be an object');
+    }
     const msg = m as Record<string, unknown>;
     return {
       role: typeof msg.role === 'string' ? msg.role : '',

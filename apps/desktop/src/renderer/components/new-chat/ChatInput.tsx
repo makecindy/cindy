@@ -1041,13 +1041,44 @@ export function ChatInput({
   // messages 在流式期间每个 delta 都变,放进 deps 会让本 effect 反复重跑并把
   // prevShowStopRef 冲掉,从而永远检测不到那次跳变 —— 所以走 ref 读最新值。
   const prevShowStopRef = useRef(false);
+  // turnGen: 每次新 turn 开始递增,预测请求携带代次;落地时检查代次与 sessionId
+  // 是否仍匹配,避免旧请求覆盖新轮推荐或跨 session 残留。
+  // 递增分两层:render 阶段同步检测 showStopButton false→true 跳变,关闭「用户操作
+  // → React render」之间旧 Promise 落地的空窗;useEffect 里照旧做清除推荐 UI 的副作用。
+  const turnGenRef = useRef(0);
+  const prevShowStopRender = useRef(false);
+  // 同步层:render 阶段检测 turn 开始,在 React commit 前就让旧预测的 turnGen 失效。
+  const turnStarting = showStopButton && !prevShowStopRender.current;
+  prevShowStopRender.current = showStopButton;
+  if (turnStarting) {
+    turnGenRef.current += 1;
+  }
+  // sessionId 切换时重置预测相关 ref,防止旧 session 的推荐/ref 残留。
+  const prevSessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      prevShowStopRef.current = false;
+      turnGenRef.current = 0;
+      prevShowStopRender.current = false;
+      showRecommendationRef.current = false;
+      setRecommendedPrompt(null);
+    }
+  }, [sessionId]);
   // messages 是可选 prop,缺省按空历史处理(空历史不发预测请求)。
   const messagesRef = useRef(messages ?? []);
   messagesRef.current = messages ?? [];
   useEffect(() => {
     const wasRunning = prevShowStopRef.current;
     prevShowStopRef.current = showStopButton;
-    if (wasRunning && !showStopButton && recommendationEnabled && sessionId) {
+    // 新 turn 开始 → 清除推荐 UI(代次已在 render 阶段同步递增)
+    if (showStopButton) {
+      showRecommendationRef.current = false;
+      setRecommendedPrompt(null);
+    }
+    // device-link 远程会话:maker:predict-prompt 不在 allowlist,且远程对话内容
+    // 不应送到控制端本地 provider/凭证 —— 跳过预测。
+    if (wasRunning && !showStopButton && recommendationEnabled && sessionId && !deviceLinkDeviceId) {
       const latestMessages = messagesRef.current;
       const ed = editorRef.current;
       if (
