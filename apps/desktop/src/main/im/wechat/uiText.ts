@@ -76,7 +76,7 @@ export const ui = {
     // 注意:微信渠道的 Agent 配置只在 /new 时应用到现有会话(设置仅影响新对话),
     // 所以「换 Agent」指引必须带 /new,否则用户改完设置重发仍路由到旧 Agent。
     agentUnsupported:
-      '⚠️ 当前 Agent（Pi）不支持个人微信的逐条权限确认，消息无法启动。\n' +
+      '⚠️ 当前 Agent 不支持个人微信的逐条权限确认，消息无法启动。\n' +
       '请在 desktop 设置里把微信渠道的 Agent 换成 Claude Code 或 Codex，再在微信发送 /new，然后重试。',
     permissionModeUnsupported:
       '⚠️ 当前 Agent 无法在个人微信中安全使用此权限模式。\n' +

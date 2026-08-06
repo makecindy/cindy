@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IM_DEFAULT_SETTINGS, type ImDefaultSettingsState } from '../../../../shared/imDefaultSettings';
 import { ImDefaultSettingsSection } from '../ImDefaultSettingsSection';
 
+const capabilityMockState = vi.hoisted(() => ({
+  loadingAgent: null as string | null,
+  errorAgent: null as string | null,
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -19,11 +24,24 @@ vi.mock('@/hooks/useAgentCapabilities', () => {
         unsupportedPermissionModes: [],
       },
     },
+    loading: false,
+    error: null,
   };
-  const unsupported = { capabilities: { availableModels: [] } };
+  const unsupported = {
+    capabilities: { availableModels: [] },
+    loading: false,
+    error: null,
+  };
   return {
-    useAgentCapabilities: (agentKind: string) =>
-      agentKind === 'pi' ? unsupported : supported,
+    useAgentCapabilities: (agentKind: string) => {
+      if (capabilityMockState.loadingAgent === agentKind) {
+        return { capabilities: null, loading: true, error: null };
+      }
+      if (capabilityMockState.errorAgent === agentKind) {
+        return { capabilities: null, loading: false, error: 'capabilities unavailable' };
+      }
+      return agentKind === 'pi' ? unsupported : supported;
+    },
   };
 });
 
@@ -64,6 +82,8 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
 
 describe('ImDefaultSettingsSection Pi channel warning', () => {
   beforeEach(() => {
+    capabilityMockState.loadingAgent = null;
+    capabilityMockState.errorAgent = null;
     window.electronAPI = {
       maker: {
         imDefaultSettingsGet: vi.fn(async () => defaults('pi')),
@@ -90,6 +110,26 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
         imDefaultSettingsGet: vi.fn(async () => defaults('claude-code')),
       },
     } as unknown as typeof window.electronAPI;
+    render(<ImDefaultSettingsSection channel="wechat" />);
+
+    await screen.findByText('settings.imBot.defaults.agentLabel');
+    expect(
+      screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
+    ).toBeNull();
+  });
+
+  it('does not warn while the selected Agent capabilities are loading', async () => {
+    capabilityMockState.loadingAgent = 'pi';
+    render(<ImDefaultSettingsSection channel="wechat" />);
+
+    await screen.findByText('settings.imBot.defaults.agentLabel');
+    expect(
+      screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
+    ).toBeNull();
+  });
+
+  it('does not warn when the selected Agent capabilities failed to load', async () => {
+    capabilityMockState.errorAgent = 'pi';
     render(<ImDefaultSettingsSection channel="wechat" />);
 
     await screen.findByText('settings.imBot.defaults.agentLabel');

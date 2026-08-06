@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Capabilities } from '@cindy/maker-core';
 import type { IMHost } from '@cindy/im';
 import {
   WechatIlinkError,
@@ -66,7 +65,7 @@ describe('WechatIM host boundary', () => {
   it('distinguishes agent-unsupported from permission-mode-unsupported pre-dispatch failures', () => {
     // Agent 未声明 turnPermissionPolicy(如 Pi):换权限模式无效,文案引导换 Agent。
     expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:ask')).toContain(
-      'Pi',
+      '换成 Claude Code 或 Codex',
     );
     expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:auto')).not.toContain(
       '权限模式',
@@ -82,42 +81,6 @@ describe('WechatIM host boundary', () => {
     expect(__testing.wechatPreDispatchFailureText('unsupported_turn_permission')).toContain('权限模式');
     expect(__testing.wechatPreDispatchFailureText('missing_auth')).toContain('模型服务');
     expect(__testing.wechatPreDispatchFailureText('boom')).toContain('稍后重试');
-  });
-
-  it('classifies failure kind by the capability gate, not mere field presence', () => {
-    // 未声明 → agent;声明且 supported → mode;声明但 supported:false → agent。
-    expect(__testing.wechatPermissionPolicyFailureKind({} as Capabilities)).toBe('agent');
-    expect(
-      __testing.wechatPermissionPolicyFailureKind({
-        turnPermissionPolicy: {
-          supported: { supported: true },
-          unsupportedPermissionModes: [],
-        },
-      } as unknown as Capabilities),
-    ).toBe('mode');
-    expect(
-      __testing.wechatPermissionPolicyFailureKind({
-        turnPermissionPolicy: {
-          supported: { supported: false },
-          unsupportedPermissionModes: [],
-        },
-      } as unknown as Capabilities),
-    ).toBe('agent');
-  });
-
-  it('maps the agent-side TurnPermissionPolicyUnsupportedError message to the switch-agent copy', () => {
-    // Pi 在 send 侧 fail-closed 抛的内部错误(message 形态与渠道侧前缀不同),
-    // 同样应给「换 Agent」指引而不是通用「稍后重试」。
-    expect(
-      __testing.wechatPreDispatchFailureText(
-        'Turn permission policy is not supported by pi in permission mode ask',
-      ),
-    ).toContain('Pi');
-    expect(
-      __testing.wechatPreDispatchFailureText(
-        'Turn permission policy is not supported by pi in permission mode ask',
-      ),
-    ).not.toContain('稍后重试');
   });
 
   it('dispatches attachment-only WeChat messages to the agent', () => {

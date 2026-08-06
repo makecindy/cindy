@@ -228,7 +228,10 @@ export function ImDefaultSettingsSection({
         ? codex
         : pi;
   const selectedAgentUnsupported =
-    selectedAgentCaps.capabilities?.turnPermissionPolicy?.supported.supported !== true;
+    !selectedAgentCaps.loading &&
+    selectedAgentCaps.error === null &&
+    selectedAgentCaps.capabilities !== null &&
+    selectedAgentCaps.capabilities.turnPermissionPolicy?.supported.supported !== true;
   const agentUnsupportedOnChannel =
     channel !== undefined &&
     isUnconditionalTurnPolicyChannel(channel) &&

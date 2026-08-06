@@ -67,11 +67,13 @@ import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import {
+  isTerminalAgentErrorEvent,
+  TurnPermissionPolicyUnsupportedError,
+} from '@cindy/maker-core';
 import type {
   AgentEvent,
   AgentKind,
-  Capabilities,
   InteractionDecision,
   InteractionRequest,
   PermissionMode,
@@ -342,11 +344,6 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
-  /** Resolve a channel safety policy after the concrete session route is known. */
-  turnPermissionPolicyForRoute?(
-    row: ImSessionRow,
-    capabilities: Capabilities,
-  ): TurnPermissionPolicy | undefined;
 }
 
 export interface ImTurnTerminal {
@@ -737,11 +734,6 @@ export function createTurnRunner(
       startBackgroundTask(() => maybeGenerateImSessionTitle(row.id, text, threadHeaderCardId));
     }
 
-    const turnPermissionPolicy =
-      args.turnPermissionPolicyForRoute?.(
-        row,
-        getMaker().getCapabilities(row.agentKind),
-      ) ?? args.turnPermissionPolicy;
     const item: QueuedSend = {
       turn,
       userMessage: buildImUserMessage(args.agentText ?? text, attachments, target.attached),
@@ -752,7 +744,7 @@ export function createTurnRunner(
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
-      ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
+      ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -845,6 +837,7 @@ export function createTurnRunner(
       } else {
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       }
+
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入自己接——切换后首条消息若来自 IM 渠道,新引擎同样需要交接上下文
       // (2026-07-20 审计)。落库(persistUserMessage)仍是渠道原文。
@@ -855,6 +848,7 @@ export function createTurnRunner(
             pendingHandoff,
           )
         : item.userMessage;
+
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         ...(item.turnPermissionPolicy ? { turnPermissionPolicy: item.turnPermissionPolicy } : {}),
@@ -978,6 +972,16 @@ export function createTurnRunner(
       return { kind: 'accepted', acceptedAt: acceptedAt || Date.now() };
     } catch (err) {
       if (turnChangeSetStarted) clearPendingTurnChangeSets(rowId);
+      const turnPolicyFailureReason = classifyTurnPermissionPolicySendFailure(err, item, state);
+      if (turnPolicyFailureReason) {
+        await handleSendPreDispatchFailure(state, userId, {
+          turn: item.turn,
+          source: `${channel}-runner`,
+          reason: turnPolicyFailureReason,
+          context: buildSendContext(rowId),
+        });
+        return { kind: 'rejected', reason: turnPolicyFailureReason };
+      }
       const normalized = normalizeSendError(err);
       if (normalized.reason === 'SESSION_RUNNING') {
         releaseTurnInteractionRoute(item.turn, 'session_running_race');
@@ -1028,6 +1032,21 @@ export function createTurnRunner(
     } finally {
       releaseAgentSwitchLock();
     }
+  }
+
+  function classifyTurnPermissionPolicySendFailure(
+    error: unknown,
+    item: QueuedSend,
+    state: SessionState,
+  ): string | null {
+    if (!(error instanceof TurnPermissionPolicyUnsupportedError) || !item.turnPermissionPolicy) {
+      return null;
+    }
+    const failureKind =
+      state.makerSession.capabilities.turnPermissionPolicy?.supported.supported === true
+        ? 'mode'
+        : 'agent';
+    return `${error.code}:${failureKind}:${error.permissionMode}`;
   }
 
   async function beginChunkedReply(turn: TurnState): Promise<void> {

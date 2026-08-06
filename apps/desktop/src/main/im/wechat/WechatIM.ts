@@ -23,18 +23,14 @@ import {
   type WechatInboundMessage,
   type WechatTransport,
 } from '@cindy/wechat-ilink';
-import type {
-  Capabilities,
-  InteractionDecision,
-  InteractionRequest,
-} from '@cindy/maker-core';
+import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 
 import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
 import {
-  createWechatTurnPermissionPolicyForMode,
+  createWechatTurnPermissionPolicy,
   WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
   WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED,
 } from './permissionPolicy';
@@ -1066,51 +1062,18 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             active.routeSessionId = sessionId;
           }
         },
-        turnPermissionPolicyForRoute: (row, capabilities) => {
-          try {
-            return createWechatTurnPermissionPolicyForMode(
+        turnPermissionPolicy: createWechatTurnPermissionPolicy(task.id, {
+          onInteractionStateChange: (state) => {
+            void this.#requireStore().setWaitingDesktop(
+              task.bindingEpoch,
               task.id,
-              capabilities,
-              row.permissionMode,
-              {
-                onInteractionStateChange: (state) => {
-                  void this.#requireStore().setWaitingDesktop(
-                    task.bindingEpoch,
-                    task.id,
-                    state === 'waiting',
-                  );
-                },
-              },
+              state === 'waiting',
             );
-          } catch (error) {
-            if (
-              error instanceof Error &&
-              error.message.startsWith(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED)
-            ) {
-              // 区分「Agent 不支持」与「权限模式不支持」:未声明 turnPermissionPolicy
-              // (或声明了但 supported.supported !== true)的 Agent(如 Pi)在任何模式下
-              // 都无法提供微信所需的逐条确认,换权限模式无用,只能换 Agent;声明且受
-              // 支持的 Agent(Claude Code / Codex)仅个别模式不可用,换权限模式即可。
-              // 判定逻辑见 wechatPermissionPolicyFailureKind(纯函数,便于单测)。
-              const unsupportedKind = wechatPermissionPolicyFailureKind(capabilities);
-              throw new Error(
-                `${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:${unsupportedKind}:${row.permissionMode}`,
-              );
-            }
-            throw error;
-          }
-        },
+          },
+        }),
       });
     } catch (error) {
       await stopTyping();
-      if (
-        error instanceof Error &&
-        error.message.startsWith(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED)
-      ) {
-        this.#activeTasks.delete(task.peerId);
-        await this.#commitPreDispatchFailure(task, error.message);
-        return;
-      }
       throw error;
     }
 
@@ -1929,18 +1892,6 @@ function safeMachineCode(value: string): string {
 }
 
 /**
- * turnPermissionPolicy 不支持时的分类:agent 无法提供该机制(换 Agent 才能解决)
- * 还是仅当前权限模式被排除(切权限模式即可)。判定与
- * supportsWechatTurnPermissionMode 同口径——字段存在但 supported.supported !== true
- * 时所有模式都不可用,同样归为 agent(不能只看字段是否存在)。纯函数,便于单测。
- */
-export function wechatPermissionPolicyFailureKind(
-  capabilities: Capabilities,
-): 'agent' | 'mode' {
-  return capabilities.turnPermissionPolicy?.supported.supported === true ? 'mode' : 'agent';
-}
-
-/**
  * 派发前失败的用户可见文案(纯函数,便于单测)。reason 来源:
  *  - `${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent:<mode>` — Agent 未声明
  *    turnPermissionPolicy(如 Pi),任何模式都不可用 → 引导换 Agent;
@@ -1952,14 +1903,7 @@ export function wechatPermissionPolicyFailureKind(
  *  - 其余 — 通用重试提示。
  */
 export function wechatPreDispatchFailureText(reason: string): string {
-  // Pi 等 agent 在 send 侧 fail-closed 抛的 TurnPermissionPolicyUnsupportedError 的
-  // message 是 "Turn permission policy is not supported by <agent> in permission
-  // mode <mode>"(与 WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED 前缀大小写/格式不同),
-  // 同样按「Agent 不支持」给可执行指引,而不是落入通用重试提示。
-  if (
-    reason.includes(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent`) ||
-    /turn permission policy is not supported/i.test(reason)
-  ) {
+  if (reason.includes(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent`)) {
     return ui.error.agentUnsupported;
   }
   if (
@@ -2074,7 +2018,6 @@ export const __testing = {
   formatWechatInteractionPrompt,
   parseWechatInteractionReply,
   stopActiveWechatTurns,
-  wechatPermissionPolicyFailureKind,
   wechatPreDispatchFailureText,
 };
 
