@@ -17,6 +17,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { isIpcErrorCode } from '../../../shared/ipc-errors.js';
 import { createLogger } from '../../logger.js';
+import { getMakerIfReady } from '../../maker-host/index.js';
 import { notifyGhostSessionEvent } from '../../cindy-brain/index.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import {
@@ -38,6 +39,7 @@ import {
   type ShareImportDraftPrefs,
 } from '../../session-share/sessionShareImport.js';
 import { getDbClient } from '../client/current.js';
+import { broadcastSessionPatched } from './sessions.js';
 
 const log = createLogger('session-share-ipc');
 
@@ -166,11 +168,31 @@ export function registerSessionShareIpc(): void {
       const useWorktree = payload.useWorktree === true;
       try {
         const result = await commitShareImport({ draftId, workingDir, draftPrefs, overwrite, useWorktree });
-        // 订阅槽①:分享导入建的会话不走普通"创建会话"handler,did-session-created
+        // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI 收尾：
+        // - 关闭旧 lead + 完整旧 Worker 图的 live runtime，避免被标 deleted 后仍跑；
+        // - 广播 patched 让 sidebar/会话视图立即移除旧任务。
+        // 不在这里删除转录/媒体/worktree 字节：同 resume id 的新任务可能复用它们，
+        // 资源回收交既有对账/启动期 reconcile，避免覆盖成功后误伤新任务。
+        for (const replaced of result.replacedSessions) {
+          await getMakerIfReady()?.closeSession(replaced.id).catch((err) => {
+            log.warn('share overwrite close replaced session failed', {
+              sessionId: replaced.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+          broadcastSessionPatched(replaced.id, { status: 'deleted' });
+        }
+        // replacedSessions 是 main 内部收尾信息，不暴露给 renderer/preload 契约。
+        const publicResult: CommitShareImportResult = {
+          sessionId: result.sessionId,
+          fidelity: result.fidelity,
+          notes: result.notes,
+          orcaWorkers: result.orcaWorkers,
+        };
         // 在此补发(fire-and-forget;workdir 由通知内部的资格查询回填)——否则订阅
         // 了 session 的意识对导入会话只见 switched/archived 不见 created(review P2)。
         notifyGhostSessionEvent('created', { sessionId: result.sessionId });
-        return result;
+        return publicResult;
       } catch (err) {
         log.warn('session share commit failed', {
           code: (err as { code?: unknown }).code,

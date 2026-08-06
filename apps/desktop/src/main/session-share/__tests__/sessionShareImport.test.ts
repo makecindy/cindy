@@ -23,6 +23,7 @@ const dbMock = vi.hoisted(() => ({
   conflictRow: null as { id: string; status?: string } | null,
   /** 只对指定 resume id 命中冲突(协同包按 Worker 定向测冲突)。 */
   conflictForResumeId: null as string | null,
+  conflictGraphRows: [] as Array<{ id: string; status: 'active' | 'archived' }>,
   queryCalls: [] as Array<{ sql: string; params: unknown[] }>,
   txCalls: [] as Array<{ name: string; args: unknown }>,
   txError: null as Error | null,
@@ -54,6 +55,13 @@ vi.mock('../../localDb/client/current.js', () => ({
           : undefined;
       }
       return dbMock.conflictRow ?? undefined;
+    },
+    query: async (sql: string, params: unknown[]) => {
+      dbMock.queryCalls.push({ sql, params });
+      if (typeof sql === 'string' && sql.includes('FROM orca_teams t')) {
+        return dbMock.conflictGraphRows;
+      }
+      return [];
     },
     tx: async (name: string, args: unknown) => {
       if (dbMock.txError) throw dbMock.txError;
@@ -378,6 +386,7 @@ describe('sessionShareImport', () => {
   beforeEach(async () => {
     dbMock.conflictRow = null;
     dbMock.conflictForResumeId = null;
+    dbMock.conflictGraphRows = [];
     dbMock.queryCalls = [];
     dbMock.txCalls = [];
     dbMock.txError = null;
@@ -650,8 +659,10 @@ describe('sessionShareImport', () => {
     });
     expect(result.sessionId).toBeTruthy();
     expect(dbMock.txCalls).toHaveLength(1);
-    const txArgs = dbMock.txCalls[0].args as { replaceSessionIds?: string[] };
-    expect(txArgs.replaceSessionIds).toEqual(['existing-session']);
+    const txArgs = dbMock.txCalls[0].args as {
+      replaceSessions?: Array<{ id: string; status: 'active' | 'archived' }>;
+    };
+    expect(txArgs.replaceSessions).toEqual([{ id: 'existing-session', status: 'active' }]);
   });
 
   it('overwrite failure leaves replacement entirely to the failed transaction', async () => {
@@ -686,8 +697,8 @@ describe('sessionShareImport', () => {
     });
     expect(result.sessionId).toBeTruthy();
     expect(dbMock.txCalls).toHaveLength(1);
-    const txArgs = dbMock.txCalls[0].args as { replaceSessionIds?: string[] };
-    expect(txArgs.replaceSessionIds).toBeUndefined();
+    const txArgs = dbMock.txCalls[0].args as { replaceSessions?: Array<{ id: string; status: string }> };
+    expect(txArgs.replaceSessions).toBeUndefined();
   });
 
   it('reuses pre-existing transcript on disk without overwriting (deleted-session re-import)', async () => {
@@ -1247,8 +1258,41 @@ describe('sessionShareImport', () => {
     });
     expect(result.orcaWorkers).toBe(1);
     expect(dbMock.txCalls).toHaveLength(1);
-    const txArgs = dbMock.txCalls[0].args as OrcaTxArgs & { replaceSessionIds?: string[] };
-    expect(txArgs.replaceSessionIds).toEqual(['existing-worker-session']);
+    const txArgs = dbMock.txCalls[0].args as OrcaTxArgs & {
+      replaceSessions?: Array<{ id: string; status: string }>;
+    };
+    expect(txArgs.replaceSessions).toEqual([
+      { id: 'existing-worker-session', status: 'active' },
+    ]);
+  });
+
+  it('overwrite expands a conflicting Orca lead to its complete previous Worker graph', async () => {
+    dbMock.conflictRow = { id: 'existing-lead', status: 'active' };
+    dbMock.conflictGraphRows = [
+      { id: 'old-worker-active', status: 'active' },
+      { id: 'old-worker-archived', status: 'archived' },
+    ];
+    const filePath = await writeBundleFile(await buildBundle({ orcaWorker: { agentKind: 'codex' } }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+      overwrite: true,
+    });
+
+    expect(result.replacedSessions).toEqual([
+      { id: 'existing-lead', status: 'active' },
+      { id: 'old-worker-active', status: 'active' },
+      { id: 'old-worker-archived', status: 'archived' },
+    ]);
+    const txArgs = dbMock.txCalls[0].args as {
+      replaceSessions?: Array<{ id: string; status: string }>;
+    };
+    expect(txArgs.replaceSessions).toEqual(result.replacedSessions);
   });
 
   it('orca bundle: cc Worker transcripts land beside lead in the same re-sanitized dir', async () => {

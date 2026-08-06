@@ -588,11 +588,19 @@ function sessionImportShare(readyDb, args) {
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
   const messages = expectArray(payload.messages, 'messages');
-  const replaceSessionIds = payload.replaceSessionIds == null
+  const replaceSessions = payload.replaceSessions == null
     ? []
-    : expectArray(payload.replaceSessionIds, 'replaceSessionIds').map((id, i) =>
-        expectString(id, 'replaceSessionIds[' + i + ']'),
-      );
+    : expectArray(payload.replaceSessions, 'replaceSessions').map((raw, i) => {
+        const replacement = asRecord(raw, 'replaceSessions[' + i + ']');
+        const status = expectString(replacement.status, 'replaceSessions[' + i + '].status');
+        if (status !== 'active' && status !== 'archived') {
+          throw new Error('replaceSessions[' + i + '].status must be active or archived');
+        }
+        return {
+          id: expectString(replacement.id, 'replaceSessions[' + i + '].id'),
+          status,
+        };
+      });
   const orca = payload.orca == null ? null : asRecord(payload.orca, 'orca');
   const insertSession = readyDb.prepare(
     'INSERT INTO sessions (id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode, provider_id, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled, agent_kind, orca_role, source, extra_dirs, codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -658,8 +666,8 @@ function sessionImportShare(readyDb, args) {
       "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
     );
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
-    for (const replacedSessionId of replaceSessionIds) {
-      deleteReplacedSession.run(replacementUpdatedAt, replacedSessionId);
+    for (const replacedSession of replaceSessions) {
+      deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
     }
     let count = insertSessionWithMessages(session, messages);
     if (orca) {

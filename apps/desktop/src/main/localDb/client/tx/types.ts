@@ -379,10 +379,10 @@ export interface SessionImportShareArgs {
   session: SessionImportShareSessionRow;
   messages: SessionImportShareMessageRow[];
   /**
-   * 覆盖导入命中的旧会话:与新会话/消息/Orca 关系在同一事务先标 deleted。
-   * 事务失败时旧会话状态自动回滚,避免编排层提前软删触发不可逆资源清理。
+   * 覆盖导入命中的完整旧会话图（冲突会话 + 若其为 Orca lead，则含 team Workers）。
+   * 与新会话/消息/Orca 关系在同一事务先标 deleted；事务失败时旧状态自动回滚。
    */
-  replaceSessionIds?: string[];
+  replaceSessions?: Array<{ id: string; status: 'active' | 'archived' }>;
   orca?: {
     team: {
       id: string;

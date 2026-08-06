@@ -349,9 +349,9 @@ describe('tx session.importShare', () => {
       1,
     );
     const args = orcaArgs();
-    (args.args as typeof args.args & { replaceSessionIds?: string[] }).replaceSessionIds = [
-      'existing-session',
-    ];
+    (args.args as typeof args.args & {
+      replaceSessions?: Array<{ id: string; status: 'active' | 'archived' }>;
+    }).replaceSessions = [{ id: 'existing-session', status: 'active' }];
 
     tx(db, args);
 
@@ -399,9 +399,9 @@ describe('tx session.importShare', () => {
       1,
     );
     const args = orcaArgs();
-    (args.args as typeof args.args & { replaceSessionIds?: string[] }).replaceSessionIds = [
-      'existing-session',
-    ];
+    (args.args as typeof args.args & {
+      replaceSessions?: Array<{ id: string; status: 'active' | 'archived' }>;
+    }).replaceSessions = [{ id: 'existing-session', status: 'active' }];
     (args.args.orca.workers[0].session as Record<string, unknown>).title = 42;
 
     expect(() => tx(db, args)).toThrow();

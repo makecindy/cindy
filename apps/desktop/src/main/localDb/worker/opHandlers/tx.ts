@@ -1037,11 +1037,19 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
   const messages = expectArray(payload.messages, 'messages');
-  const replaceSessionIds = payload.replaceSessionIds == null
+  const replaceSessions = payload.replaceSessions == null
     ? []
-    : expectArray(payload.replaceSessionIds, 'replaceSessionIds').map((id, i) =>
-        expectString(id, `replaceSessionIds[${i}]`),
-      );
+    : expectArray(payload.replaceSessions, 'replaceSessions').map((raw, i) => {
+        const replacement = asRecord(raw, `replaceSessions[${i}]`);
+        const status = expectString(replacement.status, `replaceSessions[${i}].status`);
+        if (status !== 'active' && status !== 'archived') {
+          throw new Error(`replaceSessions[${i}].status must be active or archived`);
+        }
+        return {
+          id: expectString(replacement.id, `replaceSessions[${i}].id`),
+          status,
+        };
+      });
   const orca = payload.orca == null ? null : asRecord(payload.orca, 'orca');
   const insertSession = db.prepare(
     `INSERT INTO sessions (
@@ -1124,8 +1132,8 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
       "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
     );
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
-    for (const replacedSessionId of replaceSessionIds) {
-      deleteReplacedSession.run(replacementUpdatedAt, replacedSessionId);
+    for (const replacedSession of replaceSessions) {
+      deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
     }
     let messageCount = insertSessionWithMessages(session, messages);
     if (orca) {

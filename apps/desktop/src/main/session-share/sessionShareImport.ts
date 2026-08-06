@@ -252,6 +252,11 @@ export interface CommitShareImportResult {
   orcaWorkers: number;
 }
 
+/** main 内部结果：额外携带覆盖成功后的旧会话图，供 IPC 层做 runtime/UI 收尾。 */
+export interface CommitShareImportInternalResult extends CommitShareImportResult {
+  replacedSessions: Array<{ id: string; status: 'active' | 'archived' }>;
+}
+
 interface BundleMessageRow {
   id: string;
   clientId: string;
@@ -283,7 +288,7 @@ interface WorkerImportPlan {
 /** 第三段:落三层数据。前置校验全过才写;文件步登记 journal,失败逆序回滚。 */
 export async function commitShareImport(
   opts: CommitShareImportOptions,
-): Promise<CommitShareImportResult> {
+): Promise<CommitShareImportInternalResult> {
   sweepExpiredDrafts();
   const draft = drafts.get(opts.draftId);
   if (!draft) throw codedError('NOT_FOUND', 'draft expired or not found');
@@ -419,7 +424,7 @@ export async function commitShareImport(
   // overwrite = 用户在冲突弹窗确认"覆盖导入":记下旧会话,写入阶段先软删它,
   // 再走既有的"已删除会话重导"路径(盘上转录复用)——净效果是替换而非叠加。
   // 协同包对 lead 与每个 Worker 逐一预检,任一命中即冲突;覆盖导入软删全部命中。
-  const conflictExisting: Array<{ id: string; status: string }> = [];
+  const conflictExisting: Array<{ id: string; status: 'active' | 'archived' }> = [];
   const conflictProbes: Array<{ agentKind: string; resumeId: string }> = [
     ...(activeSdkSessionId
       ? [{ agentKind: manifest.agentKind as string, resumeId: activeSdkSessionId }]
@@ -431,7 +436,10 @@ export async function commitShareImport(
     ),
   ];
   for (const probe of conflictProbes) {
-    const existing = await getDbClient().queryOne<{ id: string; status: string }>(
+    const existing = await getDbClient().queryOne<{
+      id: string;
+      status: 'active' | 'archived';
+    }>(
       `SELECT id, status FROM sessions
        WHERE agent_kind = ? AND sdk_session_id = ? AND status != 'deleted' LIMIT 1`,
       [probe.agentKind, probe.resumeId],
@@ -441,6 +449,28 @@ export async function commitShareImport(
         throw codedError('SHARE_CONFLICT', `session with same resume id already imported: ${existing.id}`);
       }
       if (!conflictExisting.some((c) => c.id === existing.id)) conflictExisting.push(existing);
+    }
+  }
+
+  // 如果冲突行本身是旧 Orca lead，覆盖语义必须替换它的完整图，而不是只删
+  // manifest 本次碰巧探测到的 resume ids。把旧 team 下全部 Worker session 纳入
+  // 同一事务，防止旧隐藏 Worker/关系残留成孤儿或与新图并存。
+  for (const existing of [...conflictExisting]) {
+    const graphRows = await getDbClient().query<{
+      id: string;
+      status: 'active' | 'archived';
+    }>(
+      `SELECT s.id, s.status
+       FROM orca_teams t
+       JOIN orca_workers w ON w.team_id = t.id
+       JOIN sessions s ON s.id = w.session_id
+       WHERE t.lead_session_id = ? AND s.status != 'deleted'`,
+      [existing.id],
+    );
+    for (const row of graphRows) {
+      if (!conflictExisting.some((candidate) => candidate.id === row.id)) {
+        conflictExisting.push(row);
+      }
     }
   }
 
@@ -769,7 +799,7 @@ export async function commitShareImport(
       }),
       messages: dbMessages,
       ...(conflictExisting.length > 0
-        ? { replaceSessionIds: conflictExisting.map((existing) => existing.id) }
+        ? { replaceSessions: conflictExisting }
         : {}),
       ...(orcaTxArgs ? { orca: orcaTxArgs } : {}),
     });
@@ -796,7 +826,16 @@ export async function commitShareImport(
       notes,
     });
     drafts.delete(opts.draftId);
-    return { sessionId: newId, fidelity, notes, orcaWorkers: workerPlans.length };
+    // 回传被原子替换的旧图，IPC 层在 commit 成功后执行可逆性不再需要的
+    // 运行时/UI 收尾（closeSession + patched 广播）。资源字节不立即删除，避免
+    // 与同 resume id 的新任务复用转录/媒体发生竞态，交既有对账/回收路径处理。
+    return {
+      sessionId: newId,
+      fidelity,
+      notes,
+      orcaWorkers: workerPlans.length,
+      replacedSessions: conflictExisting,
+    };
   } catch (err) {
     await rollback();
     const code = (err as { code?: unknown }).code;
