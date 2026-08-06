@@ -449,6 +449,17 @@ function outboxEntryMaxAgeMs(channel: string | undefined): number {
  * 这里只在远超控制端等待窗后回收本地 bookkeeping；底层 Promise 仍带 catch 并允许自行收尾。
  */
 const REMOTE_INVOKE_ORPHAN_TIMEOUT_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
+/**
+ * 逐 channel 收窄(codex P2):orphan 截止时间按「该 channel 的控制端等待预算 × 2」取,
+ * 被全局上限(REMOTE_INVOKE_ORPHAN_TIMEOUT_MS)封顶,与 outboxEntryMaxAgeMs 同款。
+ * 否则 maker:compact-session 的 11min 覆盖会把全局 orphan 拉高到 22min——任何挂起的
+ * 默认 30s handler 都会占满 controller 的 in-flight 配额整整 22 分钟,后续远程控制
+ * 动作看起来卡住(BACKPRESSURE)。
+ */
+function remoteInvokeOrphanTimeoutMs(channel: string | undefined): number {
+  const budgetMs = (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || 30_000;
+  return Math.min(budgetMs * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+}
 interface CachedRemoteInvokeResult {
   result: InvokeResultPayload;
   bytes: number;
@@ -1323,6 +1334,7 @@ function settleRemoteInvokeWithOrphanDeadline(
   channel: string | undefined,
 ): Promise<InvokeResultPayload> {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const orphanMs = remoteInvokeOrphanTimeoutMs(channel);
   const timeout = new Promise<InvokeResultPayload>((resolve) => {
     timer = setTimeout(() => {
       timer = null;
@@ -1335,11 +1347,11 @@ function settleRemoteInvokeWithOrphanDeadline(
         error: {
           code: 'IPC_ERROR',
           message:
-            `[TIMEOUT] remote invoke exceeded ${REMOTE_INVOKE_ORPHAN_TIMEOUT_MS}ms; ` +
+            `[TIMEOUT] remote invoke exceeded ${orphanMs}ms; ` +
             'the underlying operation may still be running',
         },
       });
-    }, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+    }, orphanMs);
     (timer as unknown as { unref?: () => void }).unref?.();
   });
   return Promise.race([execution, timeout]).finally(() => {
