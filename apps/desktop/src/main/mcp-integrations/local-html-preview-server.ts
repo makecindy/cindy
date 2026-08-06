@@ -277,7 +277,9 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       // close the listener and fail closed.
       if (disposed) {
         srv.close();
-        failed = true;
+        // NOTE: do NOT set `failed` here — dispose → new start is the
+        // documented reuse contract; only THIS start round must fail
+        // (Copilot P1, round 19).
         throw new LocalPreviewError('UNAVAILABLE', '预览服务已销毁');
       }
       const addr = srv.address();

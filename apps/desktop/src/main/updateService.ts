@@ -49,6 +49,7 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { disposeAndroidAdb } from './mcp-integrations/android';
+import { revokePreviewState } from './mcp-integrations/browser.js';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
 
@@ -1012,6 +1013,10 @@ function forceQuit(): void {
   // 本路径绕过 lifecycle 的 before-quit 链 —— 显式给 run marker 打上「更新重启」
   // 标记,否则下次启动的退出尸检会把这次强退误判成异常退出 (issue #758)。
   noteExpectedExit('update-relaunch');
+  // 预览清理同 onQuit 链一样被绕过——同步撤销预览 origin 并启动预览标签
+  // 关闭,否则外置 Chrome 会保留指向已释放端口的预览标签、RSB 持久记录
+  // 也会在重启后恢复旧 URL (codex-connector P1, round 19)。
+  revokePreviewState();
   // 绕过 onQuit 链意味着 disposeAndroidAdb 不会被自动调用——显式 fire-and-forget
   // 收掉自带 adb server,避免它锁住安装目录阻碍 updater 替换文件。
   disposeAndroidAdb();

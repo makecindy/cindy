@@ -505,13 +505,37 @@ async function closePreviewTabs(): Promise<void> {
     closeRsbTab: async (sessionId, tabId) => {
       // Close through the renderer bridge so the PERSISTENT tab store row
       // is removed too (round 18) — see browser-preview-tabs.ts.
-      await dispatchTabOp(
-        { op: 'close', sessionId, tabId },
-        { getHostWebContents: () => readMainWindowForBackend(), logger },
-      ).catch(() => {});
+      const bridge = { getHostWebContents: () => readMainWindowForBackend(), logger };
+      try {
+        const result = await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge);
+        // Business failure (e.g. storeCloseTab DB error) resolves ok:false —
+        // do NOT swallow it: the persistent row would survive revocation and
+        // reload the stale URL after restart. Retry once, then log
+        // (codex-connector P1, round 19).
+        if (result?.ok === false) {
+          logger.warn?.(`[preview] RSB close tab ok:false, retrying: ${sessionId}/${tabId}`);
+          await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge).catch(() => {});
+        }
+      } catch {
+        /* best-effort: registry record is still released on destroy */
+      }
     },
     isPreviewUrl,
   });
+}
+
+/**
+ * Synchronously revoke the preview origin + close its listener, and start
+ * closing preview tabs — for paths that bypass the graceful before-quit
+ * chain (updater force-quit in updateService.ts destroys windows and calls
+ * process.exit(0) directly, never reaching disposeBrowserRuntime). Without
+ * this, external Chrome would keep a preview tab pointing at the freed port
+ * and RSB persistent tab rows would reload the stale URL after restart
+ * (codex-connector P1, round 19).
+ */
+export function revokePreviewState(): void {
+  localPreviewServer.dispose();
+  void closePreviewTabs();
 }
 
 export function disposeBrowserRuntime(): Promise<void> {
