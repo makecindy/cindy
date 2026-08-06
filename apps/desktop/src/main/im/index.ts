@@ -100,6 +100,7 @@ import {
   resetWechatWorkingDir,
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export {
   registerTelegramBotConfigIpc,
@@ -209,7 +210,7 @@ export function startImOrchestrators(): void {
   // the authenticated account's initialized DB boundary.
   deactivateImAccountBoundary();
 
-  ipcMain.on('desktop:cc-prefs-changed', (_e: IpcMainEvent, prefs: unknown) => {
+  ipcMain.on(IPC_CHANNELS.DESKTOP.CC_PREFS_CHANGED, (_e: IpcMainEvent, prefs: unknown) => {
     if (prefs && typeof prefs === 'object') {
       _desktopCcPrefs = prefs as DesktopCcPrefs;
     }
@@ -222,31 +223,31 @@ export function startImOrchestrators(): void {
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
   wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
 
-  ipcMain.handle('wechatBot:get-state', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECHAT_BOT.GET_STATE, (event) => {
     assertTrustedAppRendererEvent(event);
     return wechatIm.getState();
   });
-  ipcMain.handle('wechatBot:authorize', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECHAT_BOT.AUTHORIZE, (event) => {
     assertTrustedAppRendererEvent(event);
     return connectionLifecycle.runWhileStarted(() => wechatIm.authorize());
   });
-  ipcMain.handle('wechatBot:cancel-authorization', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECHAT_BOT.CANCEL_AUTHORIZATION, (event) => {
     assertTrustedAppRendererEvent(event);
     wechatIm.cancelAuthorization();
     return { ok: true };
   });
-  ipcMain.handle('wechatBot:unbind', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECHAT_BOT.UNBIND, (event) => {
     assertTrustedAppRendererEvent(event);
     return connectionLifecycle.runWhileStarted(async () => {
       await wechatIm.unbind();
       return { ok: true };
     });
   });
-  ipcMain.handle('wechatBot:get-channel-settings', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECHAT_BOT.GET_CHANNEL_SETTINGS, (event) => {
     assertTrustedAppRendererEvent(event);
     return readWechatChannelSettings();
   });
-  ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECHAT_BOT.CHOOSE_WORKING_DIRECTORY, async (event) => {
     assertTrustedAppRendererEvent(event);
     const owner = BrowserWindow.fromWebContents(event.sender);
     if (!owner || owner.isDestroyed()) throw new Error('WECHAT_SETTINGS_WINDOW_UNAVAILABLE');
@@ -275,7 +276,7 @@ export function startImOrchestrators(): void {
       throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
     }
   });
-  ipcMain.handle('wechatBot:reset-working-directory', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECHAT_BOT.RESET_WORKING_DIRECTORY, (event) => {
     assertTrustedAppRendererEvent(event);
     try {
       return resetWechatWorkingDir();
@@ -323,7 +324,7 @@ export function startImOrchestrators(): void {
     // 2. 广播给所有 renderer window — desktop UI 用这个广播实时渲染 mask /
     //    收回按钮。渲染 attach 状态的 renderer 不需要知道 prevValue,
     //    它会按 sessionId 自己重拉 binding:resolve-session。
-    broadcastToAllWindows('binding:changed', {
+    broadcastToAllWindows(IPC_CHANNELS.BINDING.CHANGED, {
       sessionId: event.value, // null = detach
       attached: event.value !== null,
       channel,
@@ -335,7 +336,7 @@ export function startImOrchestrators(): void {
   // displayName 直接取 desktop 当前登录用户的姓名 — desktop 跟 feishu 是同一个
   // 人 (owner 模型, /ctr 接管的本质就是"我自己换个端继续操作"), 不需要去飞书
   // 通讯录绕一圈。未登录时 null, mask fallback 到 open_id 末尾。
-  ipcMain.handle('binding:resolve-session', async (_e, sessionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.BINDING.RESOLVE_SESSION, async (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) {
       return { attached: false };
     }
@@ -347,21 +348,21 @@ export function startImOrchestrators(): void {
 
   // 一次性快照所有被接管的 sessionId — sidebar mount 时用, 之后跟 binding:changed
   // 增量同步。等价于"全量 resolve",但避免对每行 session item 各发一次 IPC。
-  ipcMain.handle('binding:list-attached', async () => {
+  ipcMain.handle(IPC_CHANNELS.BINDING.LIST_ATTACHED, async () => {
     return { sessionIds: bindingStore.listAttachedTargets() };
   });
 
   // Reconnect is account-scoped: serialize it with login/logout so a click
   // racing logout cannot bring the Feishu transport back after the account
   // boundary has closed. Credentials and TOFU owner binding stay untouched.
-  ipcMain.handle('feishuBot:reconnect', async () => {
+  ipcMain.handle(IPC_CHANNELS.FEISHU_BOT.RECONNECT, async () => {
     return connectionLifecycle.runWhileStarted(() => feishuIm.reconnect());
   });
 
   // 注册 binding:revoke IPC — desktop UI 上"收回"按钮调它结束接管。
   // Reverse-lookup: renderer 只知道 sessionId, 反查 identity 才能 detach +
   // 通知对应的 IM 用户。
-  ipcMain.handle('binding:revoke', async (_e, sessionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.BINDING.REVOKE, async (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) {
       throw new Error('sessionId required');
     }

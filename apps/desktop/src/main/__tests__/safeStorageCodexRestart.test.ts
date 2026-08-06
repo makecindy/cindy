@@ -7,8 +7,8 @@ describe('safe storage Codex restart invariants', () => {
 
   it('prepares api_key store before mutating storage and finalizes after', () => {
     const src = source();
-    const start = src.indexOf("'safe-storage-store'");
-    const end = src.indexOf("'safe-storage-read'", start);
+    const start = src.indexOf('IPC_CHANNELS.SAFE_STORAGE_STORE.SAFE_STORAGE_STORE');
+    const end = src.indexOf('IPC_CHANNELS.SAFE_STORAGE_READ.SAFE_STORAGE_READ', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
@@ -25,7 +25,7 @@ describe('safe storage Codex restart invariants', () => {
 
   it('prepares api_key remove before mutating storage and finalizes after', () => {
     const src = source();
-    const start = src.indexOf("'safe-storage-remove'");
+    const start = src.indexOf('IPC_CHANNELS.SAFE_STORAGE_REMOVE.SAFE_STORAGE_REMOVE');
     const end = src.indexOf('// ── Auth IPC handlers', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
@@ -44,9 +44,15 @@ describe('safe storage Codex restart invariants', () => {
   it('gates generic store, read, and remove through the Renderer key allowlist', () => {
     const src = source();
     for (const [channel, nextChannel] of [
-      ["'safe-storage-store'", "'safe-storage-read'"],
-      ["'safe-storage-read'", "'safe-storage-remove'"],
-      ["'safe-storage-remove'", '// ── Auth IPC handlers'],
+      [
+        'IPC_CHANNELS.SAFE_STORAGE_STORE.SAFE_STORAGE_STORE',
+        'IPC_CHANNELS.SAFE_STORAGE_READ.SAFE_STORAGE_READ',
+      ],
+      [
+        'IPC_CHANNELS.SAFE_STORAGE_READ.SAFE_STORAGE_READ',
+        'IPC_CHANNELS.SAFE_STORAGE_REMOVE.SAFE_STORAGE_REMOVE',
+      ],
+      ['IPC_CHANNELS.SAFE_STORAGE_REMOVE.SAFE_STORAGE_REMOVE', '// ── Auth IPC handlers'],
     ] as const) {
       const start = src.indexOf(channel);
       const end = src.indexOf(nextChannel, start + channel.length);
@@ -58,8 +64,8 @@ describe('safe storage Codex restart invariants', () => {
 
   it('keeps safe-storage-read fail-closed and downgrades expected permission denials', () => {
     const src = source();
-    const start = src.indexOf("'safe-storage-read'");
-    const end = src.indexOf("'safe-storage-remove'", start);
+    const start = src.indexOf('IPC_CHANNELS.SAFE_STORAGE_READ.SAFE_STORAGE_READ');
+    const end = src.indexOf('IPC_CHANNELS.SAFE_STORAGE_REMOVE.SAFE_STORAGE_REMOVE', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);

@@ -90,6 +90,7 @@ import {
   readPriorUserRoundCost,
   registerMessageIpc,
 } from '../messages';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function createDb(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -284,7 +285,7 @@ describe('local-db:messages:list cursor', () => {
     insertMessage(sqlite, { id: 'row-old', createdAt: 999, content: 'older row' });
 
     registerMessageIpc();
-    const listHandler = h.handlers.get('local-db:messages:list');
+    const listHandler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST);
     expect(listHandler).toBeTypeOf('function');
 
     const rows = await listHandler?.({}, 's1', { limit: 10, before: 'row-a' });
@@ -334,7 +335,7 @@ describe('local-db:messages:list cursor', () => {
     insertMessage(sqlite, { id: 'row-m', createdAt: 1_000, content: 'same timestamp newest' });
 
     registerMessageIpc();
-    const aroundHandler = h.handlers.get('local-db:messages:around');
+    const aroundHandler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND);
     expect(aroundHandler).toBeTypeOf('function');
 
     const rows = await aroundHandler?.({}, 's1', 'row-a', { radius: 1 });
@@ -357,7 +358,7 @@ describe('local-db:messages:list cursor', () => {
     insertMessage(sqlite, { id: 'row-m', createdAt: 1_000, content: 'same timestamp newest' });
 
     registerMessageIpc();
-    const aroundClientIdHandler = h.handlers.get('local-db:messages:around-client-id');
+    const aroundClientIdHandler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID);
     expect(aroundClientIdHandler).toBeTypeOf('function');
 
     const rows = await aroundClientIdHandler?.({}, 's1', 'row-a', { radius: 1 });
@@ -378,7 +379,7 @@ describe('local-db:messages:list cursor', () => {
     insertMessage(sqlite, { id: 'anchor', createdAt: 1_000, content: '0123456789' });
 
     registerMessageIpc();
-    const handler = h.handlers.get('local-db:messages:around-client-id');
+    const handler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID);
     const rows = (await handler?.({}, 's1', 'anchor', {
       radius: 0,
       contentCharLimit: 5,
@@ -427,7 +428,7 @@ describe('local-db:messages:list cursor', () => {
 
     registerMessageIpc();
     const prepareSpy = vi.spyOn(sqlite, 'prepare');
-    const listHandler = h.handlers.get('local-db:messages:list');
+    const listHandler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST);
     const rows = (await listHandler?.({}, 's1', { limit: 10 })) as Array<{
       id: string;
       agentMeta: Record<string, unknown> | null;

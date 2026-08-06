@@ -54,22 +54,23 @@ import {
   type PrStatusQuery,
   type PrRemoteState,
 } from './prStatusService.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('git-context/ipc');
 
 export const GIT_CONTEXT_INVOKE = {
-  GET: 'git-context:get',
-  GET_FOR_SESSION: 'git-context:get-for-session',
-  WATCH: 'git-context:watch',
-  UNWATCH: 'git-context:unwatch',
-  PR_REFS_LIST: 'git-context:pr-refs:list',
-  PR_REFS_LIST_ALL: 'git-context:pr-refs:list-all',
-  PR_STATUS: 'git-context:pr-status',
+  GET: IPC_CHANNELS.GIT_CONTEXT.GET,
+  GET_FOR_SESSION: IPC_CHANNELS.GIT_CONTEXT.GET_FOR_SESSION,
+  WATCH: IPC_CHANNELS.GIT_CONTEXT.WATCH,
+  UNWATCH: IPC_CHANNELS.GIT_CONTEXT.UNWATCH,
+  PR_REFS_LIST: IPC_CHANNELS.GIT_CONTEXT.PR_REFS_LIST,
+  PR_REFS_LIST_ALL: IPC_CHANNELS.GIT_CONTEXT.PR_REFS_LIST_ALL,
+  PR_STATUS: IPC_CHANNELS.GIT_CONTEXT.PR_STATUS,
 } as const;
 
 export const GIT_CONTEXT_PUSH = {
-  CHANGED: 'git-context:changed',
-  PR_REFS_CHANGED: 'git-context:pr-refs-changed',
+  CHANGED: IPC_CHANNELS.GIT_CONTEXT.CHANGED,
+  PR_REFS_CHANGED: IPC_CHANNELS.GIT_CONTEXT.PR_REFS_CHANGED,
 } as const;
 
 function broadcastToAllWindows(channel: string, payload: unknown): void {

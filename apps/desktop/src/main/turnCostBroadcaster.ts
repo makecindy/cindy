@@ -42,12 +42,13 @@ import {
   normalizeRegionalMoney,
   type RegionalMoney,
 } from '../shared/regionalMoney.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('turnCostBroadcaster');
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /** IPC channel: main → renderer 推单条消息的 per-turn 费用。 */
-export const MESSAGE_TURN_COST_CHANGED = 'usage:message-turn-cost';
+export const MESSAGE_TURN_COST_CHANGED = IPC_CHANNELS.USAGE.MESSAGE_TURN_COST;
 
 // payload 契约的正本在 shared(跨进程协议不放 main —— 否则 renderer 的类型图会反向
 // 依赖 main 实现模块,把 Electron / DB / 调度器副作用拖进 renderer 工具链)。这里再导出

@@ -9,6 +9,7 @@ import {
   stripOutboundSessionReferenceSideChannels,
 } from '../outboundSessionReferences.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function queued(sessionRefs?: AgentInputQueuedMessage['sessionRefs']): AgentInputQueuedMessage {
   return {
@@ -64,7 +65,7 @@ describe('rewriteOutboundSessionReferences', () => {
     ];
     resolveSessionReferences.mockResolvedValueOnce(snapshot);
 
-    const rewritten = await rewriteOutboundSessionReferences('maker:input:enqueue', [
+    const rewritten = await rewriteOutboundSessionReferences(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
       'target-on-b',
       queued(refs),
     ]);
@@ -78,7 +79,7 @@ describe('rewriteOutboundSessionReferences', () => {
 
   it('falls back to raw link text when the controller cannot read a third device', async () => {
     resolveSessionReferences.mockRejectedValueOnce(new Error('source device access revoked'));
-    const rewritten = await rewriteOutboundSessionReferences('maker:input:steer', [
+    const rewritten = await rewriteOutboundSessionReferences(IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER, [
       'target-on-b',
       queued([{ sessionId: 'on-c', deviceId: 'device-c' }]),
     ]);
@@ -95,16 +96,16 @@ describe('rewriteOutboundSessionReferences', () => {
     delete projected.trustedSessionReferenceContexts;
     const args = ['target-on-b', projected, { removeFromQueue: true }];
 
-    await expect(rewriteOutboundSessionReferences('maker:input:steer', args)).resolves.toBe(args);
+    await expect(rewriteOutboundSessionReferences(IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER, args)).resolves.toBe(args);
     expect(resolveSessionReferences).not.toHaveBeenCalled();
-    expect(outboundSessionReferencesRequested('maker:input:steer', args)).toBe(false);
+    expect(outboundSessionReferencesRequested(IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER, args)).toBe(false);
   });
 
   it('refreshes the trusted snapshot when a remotely queued message changes its links', async () => {
     const refs = [{ sessionId: 'replacement', deviceId: 'device-c' }];
     const snapshot = [{ sessionId: 'replacement', messages: [] }];
     resolveSessionReferences.mockResolvedValueOnce(snapshot);
-    const rewritten = await rewriteOutboundSessionReferences('maker:input:update-text', [
+    const rewritten = await rewriteOutboundSessionReferences(IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT, [
       'target-on-b',
       'client-1',
       'now use cindy://session/replacement',
@@ -136,7 +137,7 @@ describe('rewriteOutboundSessionReferences', () => {
 
   it('keeps the legacy three-argument update-text shape unchanged', async () => {
     const args = ['target-on-b', 'client-1', 'plain edit'];
-    const rewritten = await rewriteOutboundSessionReferences('maker:input:update-text', args);
+    const rewritten = await rewriteOutboundSessionReferences(IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT, args);
 
     expect(rewritten).toBe(args);
     expect(JSON.stringify(rewritten)).toBe('["target-on-b","client-1","plain edit"]');
@@ -179,7 +180,7 @@ describe('rewriteOutboundSessionReferences', () => {
   it('resolves references in a full queued-content replacement', async () => {
     const refs = [{ sessionId: 'replacement', deviceId: 'device-c' }];
     resolveSessionReferences.mockResolvedValueOnce([{ sessionId: 'replacement', messages: [] }]);
-    const rewritten = await rewriteOutboundSessionReferences('maker:input:update-content', [
+    const rewritten = await rewriteOutboundSessionReferences(IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT, [
       'target-on-b',
       'client-1',
       queued(refs),
@@ -192,33 +193,33 @@ describe('rewriteOutboundSessionReferences', () => {
 
   it('does not rewrite unrelated channels', async () => {
     const args = ['target-on-b', queued([{ sessionId: 'on-c', deviceId: 'device-c' }])];
-    await expect(rewriteOutboundSessionReferences('maker:input:stop', args)).resolves.toBe(args);
+    await expect(rewriteOutboundSessionReferences(IPC_CHANNELS.MAKER_INVOKE.INPUT_STOP, args)).resolves.toBe(args);
     expect(resolveSessionReferences).not.toHaveBeenCalled();
   });
 
   it('detects every reference-bearing queue mutation that requires a target probe', () => {
     expect(
-      outboundSessionReferencesRequested('maker:input:enqueue', [
+      outboundSessionReferencesRequested(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
         'target',
         queued([{ sessionId: 'source' }]),
       ]),
     ).toBe(true);
     expect(
-      outboundSessionReferencesRequested('maker:input:update-content', [
+      outboundSessionReferencesRequested(IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT, [
         'target',
         'client-1',
         queued([{ sessionId: 'source' }]),
       ]),
     ).toBe(true);
     expect(
-      outboundSessionReferencesRequested('maker:input:update-text', [
+      outboundSessionReferencesRequested(IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT, [
         'target',
         'client-1',
         'text',
         [{ sessionId: 'source' }],
       ]),
     ).toBe(true);
-    expect(outboundSessionReferencesRequested('maker:input:enqueue', ['target', queued()])).toBe(
+    expect(outboundSessionReferencesRequested(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, ['target', queued()])).toBe(
       false,
     );
   });

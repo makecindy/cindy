@@ -1,4 +1,5 @@
 import { ipcMain, net } from 'electron';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import {
   captureImAccountGeneration,
@@ -292,12 +293,12 @@ export function initWecomGroupNotificationIpc(): void {
     return runInImAccountGeneration(accountGeneration, async () => operation(accountGeneration));
   };
 
-  ipcMain.handle('wecomGroupNotification:get-state', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECOM_GROUP_NOTIFICATION.GET_STATE, (event) => {
     assertTrustedAppRendererEvent(event);
     return wecomGroupNotificationService.getState();
   });
   ipcMain.handle(
-    'wecomGroupNotification:save-and-test',
+    IPC_CHANNELS.WECOM_GROUP_NOTIFICATION.SAVE_AND_TEST,
     async (event, webhookUrl: unknown, testMessage: unknown) => {
       assertTrustedAppRendererEvent(event);
       if (typeof webhookUrl !== 'string') throw new TypeError('webhookUrl must be a string');
@@ -310,7 +311,7 @@ export function initWecomGroupNotificationIpc(): void {
       );
     },
   );
-  ipcMain.handle('wecomGroupNotification:test', async (event, testMessage: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.WECOM_GROUP_NOTIFICATION.TEST, async (event, testMessage: unknown) => {
     assertTrustedAppRendererEvent(event);
     return runAccountScoped(async (accountGeneration) => {
       await wecomGroupNotificationService.test(parseTestMessage(testMessage), () =>
@@ -319,12 +320,12 @@ export function initWecomGroupNotificationIpc(): void {
       return { ok: true as const };
     });
   });
-  ipcMain.handle('wecomGroupNotification:set-enabled', (event, enabled: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.WECOM_GROUP_NOTIFICATION.SET_ENABLED, (event, enabled: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean');
     return runAccountScoped(() => wecomGroupNotificationService.setEnabled(enabled));
   });
-  ipcMain.handle('wecomGroupNotification:clear', (event) => {
+  ipcMain.handle(IPC_CHANNELS.WECOM_GROUP_NOTIFICATION.CLEAR, (event) => {
     assertTrustedAppRendererEvent(event);
     return runAccountScoped(() => wecomGroupNotificationService.clear());
   });

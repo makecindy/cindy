@@ -73,6 +73,7 @@ vi.mock('../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn
 vi.mock('../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));
 
 import { registerSessionIpc } from '../localDb/ipc/sessions.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -126,7 +127,7 @@ function listRow(id: string, patch: Record<string, unknown> = {}) {
 
 function sessionsListHandler(readLogScope?: () => string | null) {
   registerSessionIpc(readLogScope);
-  const call = h.ipcHandle.mock.calls.find(([channel]) => channel === 'local-db:sessions:list');
+  const call = h.ipcHandle.mock.calls.find(([channel]) => channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST);
   if (!call) throw new Error('local-db:sessions:list handler not registered');
   return call[1] as (
     event: unknown,
@@ -139,7 +140,7 @@ function sessionsListHandler(readLogScope?: () => string | null) {
 function resolveReferencesHandler() {
   registerSessionIpc();
   const call = h.ipcHandle.mock.calls.find(
-    ([channel]) => channel === 'local-db:sessions:resolve-references',
+    ([channel]) => channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_RESOLVE_REFERENCES,
   );
   if (!call) throw new Error('local-db:sessions:resolve-references handler not registered');
   return call[1] as (
@@ -219,7 +220,7 @@ describe('local-db:sessions:list includePinned', () => {
   });
 });
 
-describe('local-db:sessions:resolve-references', () => {
+describe(IPC_CHANNELS.LOCAL_DB.SESSIONS_RESOLVE_REFERENCES, () => {
   it('classifies live, archived, deleted, and missing ids in caller order', async () => {
     const handler = resolveReferencesHandler();
     h.queryResults.push([

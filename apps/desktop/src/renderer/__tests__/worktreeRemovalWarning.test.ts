@@ -7,6 +7,7 @@ import {
   countDirtyWorktreesForRemoval,
   fetchDirtyWorktreeForRemoval,
 } from '../lib/worktreeRemovalWarning';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const localPreview = vi.fn();
 const remoteInvoke = vi.fn();
@@ -41,7 +42,7 @@ describe('fetchDirtyWorktreeForRemoval', () => {
     await expect(fetchDirtyWorktreeForRemoval('s1', 'device-1')).resolves.toBe(true);
     expect(remoteInvoke).toHaveBeenCalledWith(
       'device-1',
-      'worktree:removal-preview',
+      IPC_CHANNELS.WORKTREE.REMOVAL_PREVIEW,
       ['s1'],
     );
     expect(localPreview).not.toHaveBeenCalled();

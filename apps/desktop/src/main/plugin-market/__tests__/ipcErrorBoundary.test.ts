@@ -34,9 +34,12 @@ describe('Plugin Market IPC error boundary', () => {
 
   it('guards removal notice consumption and signals trusted app windows only', () => {
     const consumeStart = registerSource.indexOf(
-      "ipcMain.handle('plugin-market:consume-removal-notice'",
+      'ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.CONSUME_REMOVAL_NOTICE,',
     );
-    const consumeEnd = registerSource.indexOf("ipcMain.handle('plugin-market:detail'", consumeStart);
+    const consumeEnd = registerSource.indexOf(
+      'ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.DETAIL,',
+      consumeStart,
+    );
     const consumeBody = registerSource.slice(consumeStart, consumeEnd);
     expect(consumeBody).toContain('assertTrustedAppRendererEvent(event);');
     expect(consumeBody).toContain('service().consumeRemovalNotice()');
@@ -55,7 +58,7 @@ describe('Plugin Market IPC error boundary', () => {
     // 目录选择器签发(用户的选择即授权)。此断言防止有人退回"直传即添加"。
     expect(registerSource).toContain("parsed.source.type === 'local'");
     expect(registerSource).toContain('Local folders must be added via the directory picker');
-    expect(registerSource).toContain("ipcMain.handle('plugin-market:pick-local-source'");
+    expect(registerSource).toContain('ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.PICK_LOCAL_SOURCE');
     expect(serviceSource).toContain('addLocalSourceFromPicker');
     expect(serviceSource).toContain("properties: ['openDirectory']");
   });

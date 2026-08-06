@@ -12,6 +12,7 @@ import {
   loadDeviceLinkExistingProjects,
   removeDeviceLinkExistingProject,
 } from '@/components/new-chat/remoteExistingProjects';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const sess = (partial: Partial<Session>): Session =>
   ({
@@ -113,7 +114,7 @@ describe('loadDeviceLinkExistingProjects', () => {
       { path: '/remote/lib', lastUsedAt: '2026-06-14T00:00:00.000Z' },
     ]);
     const out = await loadDeviceLinkExistingProjects('dev-1');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:recent-workdirs:list', []);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_LIST, []);
     expect(out).toEqual([
       { path: '/remote/app', name: 'app' },
       { path: '/remote/lib', name: 'lib' },
@@ -152,8 +153,10 @@ describe('loadDeviceLinkExistingProjects', () => {
   it('从被控端最近项目列表移除路径,不调用本机 recent-workdirs API', async () => {
     invoke.mockResolvedValue({ deleted: true });
     await removeDeviceLinkExistingProject('dev-1', '/remote/app');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:recent-workdirs:remove', [
-      { path: '/remote/app' },
-    ]);
+    expect(invoke).toHaveBeenCalledWith(
+      'dev-1',
+      IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE,
+      [{ path: '/remote/app' }],
+    );
   });
 });

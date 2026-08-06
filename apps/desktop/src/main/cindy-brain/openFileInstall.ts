@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { BrowserWindow } from 'electron';
 
 import { createLogger } from '../logger.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 双击 .cindy 文件的转交通道。
@@ -47,6 +48,6 @@ export async function handleIncomingCindyFile(filePath: string, source: string):
   // 已运行的窗口立即收到信号;冷启动时没有窗口,renderer 挂载后主动来取。
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:install-requested');
+    window.webContents.send(IPC_CHANNELS.GHOSTS.INSTALL_REQUESTED);
   });
 }

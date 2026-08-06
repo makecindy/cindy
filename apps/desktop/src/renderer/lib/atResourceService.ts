@@ -5,6 +5,7 @@ import {
   conversationSearchTitle,
   type ConversationSearchResponse,
 } from '../../shared/conversationSearch';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('AtResourceService');
 /**
@@ -294,7 +295,7 @@ async function searchRemoteHistoricalTasks(
   try {
     const response = await window.electronAPI.deviceLink.invoke(
       deviceId,
-      'local-db:conversations:search',
+      IPC_CHANNELS.LOCAL_DB.CONVERSATIONS_SEARCH,
       [{
         query,
         limit: TASK_SEARCH_CANDIDATE_LIMIT,
@@ -314,7 +315,7 @@ async function searchRemoteHistoricalTasks(
     // Older controlled clients do not allow the conversation-search channel.
     const sessions = await window.electronAPI.deviceLink.invoke(
       deviceId,
-      'local-db:sessions:list',
+      IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST,
       [100, 'active'],
     ) as Session[];
     return normalizeHistoricalTaskResources(sessions, currentSessionId, deviceId, unnamedLabel);
@@ -349,7 +350,7 @@ export async function scanAtResources(
   }
   const workspacePromise: Promise<RawWorkspaceScan | null> = workingDir
     ? deviceId
-      ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:scan-at-resources', [
+      ? (window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.SCAN_AT_RESOURCES, [
           agentKind,
           { workingDir, cap, query },
         ]) as Promise<RawWorkspaceScan>)
@@ -389,7 +390,7 @@ export async function scanAtResources(
       : deviceId
         ? (window.electronAPI.deviceLink.invoke(
             deviceId,
-            'local-db:sessions:list',
+            IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST,
             [100, 'active'],
           ) as Promise<Session[]>).then((sessions) => normalizeHistoricalTaskResources(
             sessions,

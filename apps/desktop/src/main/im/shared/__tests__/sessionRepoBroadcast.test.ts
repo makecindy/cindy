@@ -58,6 +58,7 @@ vi.mock('../../defaultSessionSettings', () => ({
 
 import { createImSessionRepo, type ImSessionRow } from '../sessionRepo';
 import type { ImOrchestratorConfig, ImSessionNamespace } from '../types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const ns: ImSessionNamespace = {
   source: 'slack',
@@ -93,10 +94,10 @@ describe('sessionRepo.createSession broadcast', () => {
     await repo.createSession('bot', 'user', undefined, preparedRow);
 
     expect(mocks.insertValues).toHaveBeenCalledTimes(1);
-    expect(mocks.webContentsSend).toHaveBeenCalledWith('local-db:sessions:created', {
+    expect(mocks.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, {
       sessionId: 'slack-bot-user',
     });
-    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:created', {
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, {
       sessionId: 'slack-bot-user',
     });
   });

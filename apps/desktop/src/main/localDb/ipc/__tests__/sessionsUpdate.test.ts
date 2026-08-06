@@ -60,6 +60,7 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
 }));
 
 import { registerSessionIpc } from '../sessions';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -134,7 +135,7 @@ function createDb(): void {
 }
 
 async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise<unknown> {
-  const handler = h.handlers.get('local-db:sessions:update');
+  const handler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSIONS_UPDATE);
   if (!handler) throw new Error('update handler not registered');
   return handler({}, id, patch);
 }
@@ -156,7 +157,7 @@ describe('local-db:sessions:update handler wiring', () => {
       .get('codex-local') as { title: string };
     expect(persisted.title).toBe('排查远程标题同步');
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
-      'local-db:sessions:patched',
+      IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED,
       expect.objectContaining({
         sessionId: 'codex-local',
         patch: expect.objectContaining({ title: '排查远程标题同步' }),
@@ -168,7 +169,7 @@ describe('local-db:sessions:update handler wiring', () => {
     await invokeUpdate('codex-local', { permissionMode: 'ask' });
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
-      'local-db:sessions:patched',
+      IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED,
       expect.objectContaining({
         sessionId: 'codex-local',
         patch: { permissionMode: 'ask' },
@@ -247,7 +248,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(updated.sdkSessionId).toBe(liveId);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
-      'local-db:sessions:patched',
+      IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED,
       expect.objectContaining({
         sessionId: 'cc-local',
         patch: expect.objectContaining({ sdkSessionId: liveId }),

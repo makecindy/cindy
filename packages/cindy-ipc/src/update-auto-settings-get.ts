@@ -1,0 +1,5 @@
+export const UPDATE_AUTO_SETTINGS_GET_CHANNELS = {
+  UPDATE_AUTO_SETTINGS_GET: "update-auto-settings-get",
+} as const;
+
+export type UPDATE_AUTO_SETTINGS_GETChannel = typeof UPDATE_AUTO_SETTINGS_GET_CHANNELS[keyof typeof UPDATE_AUTO_SETTINGS_GET_CHANNELS];

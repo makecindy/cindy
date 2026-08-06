@@ -52,6 +52,7 @@ import { registerMessageIpc, runMessagesListImportSideEffects } from '../message
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
 import { importExternalCodexMessagesForSession } from '../../../maker-host/codex-local-sessions';
 import { importExternalClaudeCodeMessagesForSession } from '../../../maker-host/claude-local-sessions';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const codexMock = vi.mocked(importExternalCodexMessagesForSession);
 const claudeMock = vi.mocked(importExternalClaudeCodeMessagesForSession);
@@ -173,7 +174,7 @@ describe('local-db:messages:list × import side-effects (integration)', () => {
   it('普通任务 invoke → 跳过真实 importer', async () => {
     createDb('s1');
     registerMessageIpc();
-    const listHandler = h.handlers.get('local-db:messages:list');
+    const listHandler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST);
     expect(listHandler).toBeTypeOf('function');
 
     await listHandler?.({}, 's1', { limit: 10 });
@@ -185,11 +186,11 @@ describe('local-db:messages:list × import side-effects (integration)', () => {
   it('device-link Codex 首页 invoke → 只跑真实 Codex importer', async () => {
     createDb('codex-s1');
     registerMessageIpc();
-    const listHandler = h.handlers.get('local-db:messages:list');
+    const listHandler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST);
     expect(listHandler).toBeTypeOf('function');
 
     const rows = await runDeviceLinkInvokeContext(
-      { controllerDeviceId: 'ctrl-1', channel: 'local-db:messages:list' },
+      { controllerDeviceId: 'ctrl-1', channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST },
       () => listHandler?.({}, 'codex-s1', { limit: 10 }),
     );
 
@@ -202,11 +203,11 @@ describe('local-db:messages:list × import side-effects (integration)', () => {
   it('device-link 分页 invoke(带 beforeTs)→ 跳过真实 importer(#318 性能语义)', async () => {
     createDb('s1');
     registerMessageIpc();
-    const listHandler = h.handlers.get('local-db:messages:list');
+    const listHandler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST);
     expect(listHandler).toBeTypeOf('function');
 
     const rows = await runDeviceLinkInvokeContext(
-      { controllerDeviceId: 'ctrl-1', channel: 'local-db:messages:list' },
+      { controllerDeviceId: 'ctrl-1', channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST },
       () => listHandler?.({}, 's1', { limit: 10, beforeTs: Date.now() }),
     );
 

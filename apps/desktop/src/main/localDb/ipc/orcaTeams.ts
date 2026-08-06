@@ -16,6 +16,7 @@ import {
   requireString,
   requireEnum,
 } from '../../utils/ipcValidate.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export {
   invalidateWorkersByLeadSingleFlight,
@@ -39,21 +40,21 @@ export function __resetOrcaWorkflowIpcForTest(): void {
 
 export function registerOrcaWorkflowIpc(): void {
   ipcMain.handle(
-    'local-db:orca-workflows:get-by-lead',
+    IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_GET_BY_LEAD,
     async (_e, leadSessionId: unknown) => {
       return getTeamByLeadSession(requireString(leadSessionId, 'leadSessionId'));
     },
   );
 
   ipcMain.handle(
-    'local-db:orca-workflows:get-by-worker-session',
+    IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_GET_BY_WORKER_SESSION,
     async (_e, workerSessionId: unknown) => {
       return getTeamByWorkerSession(requireString(workerSessionId, 'workerSessionId'));
     },
   );
 
   ipcMain.handle(
-    'local-db:orca-workflows:list-workers-by-lead',
+    IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_LIST_WORKERS_BY_LEAD,
     async (_e, leadSessionId: unknown) => {
       const normalizedLeadSessionId = requireString(leadSessionId, 'leadSessionId');
       return listWorkersByLeadSingleFlight(normalizedLeadSessionId);
@@ -61,7 +62,7 @@ export function registerOrcaWorkflowIpc(): void {
   );
 
   ipcMain.handle(
-    'local-db:orca-workflows:list-workers-by-leads',
+    IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_LIST_WORKERS_BY_LEADS,
     async (_e, leadSessionIds: unknown) => {
       const normalizedLeadSessionIds = requireLeadSessionIdArray(leadSessionIds);
       return listWorkersByLeadsSingleFlight(normalizedLeadSessionIds);
@@ -69,7 +70,7 @@ export function registerOrcaWorkflowIpc(): void {
   );
 
   ipcMain.handle(
-    'local-db:orca-workflows:update-worker-status',
+    IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_UPDATE_WORKER_STATUS,
     async (_e, workerId: unknown, status: unknown) => {
       return updateWorkerStatus(
         requireString(workerId, 'workerId'),

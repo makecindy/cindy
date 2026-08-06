@@ -36,6 +36,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const DEVICE_ID = 'dev-A';
 let n = 0;
@@ -58,11 +59,11 @@ function dbMessage(sessionId: string, id: string, content: string): Message {
 let remoteHistory: Message[] = [];
 let remoteProjectionOwner: string | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]) => {
-  if (channel === 'local-db:messages:list') return remoteHistory;
-  if (channel === 'local-db:sessions:get') {
+  if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST) return remoteHistory;
+  if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET) {
     return { agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false, contextTokens: 0, contextWindow: 0, totalCostUsd: 0 };
   }
-  if (channel === 'maker:input:get-projection') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION) {
     return {
       sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false,
       queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false,
@@ -119,7 +120,7 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     await flush();
     expect(makerChatStore.getSnapshot(s).historyLoaded).toBe(true);
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
-    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, expect.anything());
 
     // 2) bootstrap 注入该会话来源 + 被控端真历史就位。
     remoteHistory = [dbMessage(s, 'r1', '被控端的历史消息')];
@@ -130,7 +131,7 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     await flush();
 
     // 4) 已经隧道重载,本机镜像出被控端历史。
-    expect(invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(invoke).toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, expect.anything());
     const msgs = makerChatStore.getSnapshot(s).messages;
     expect(msgs).toHaveLength(1);
     expect(msgs[0].clientId).toBe('client-r1');
@@ -142,12 +143,12 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     seedRemote(s); // 加载前来源已知
     makerChatStore.ensureInitialMessages(s);
     await flush();
-    const firstCalls = invoke.mock.calls.filter((c) => c[1] === 'local-db:messages:list').length;
+    const firstCalls = invoke.mock.calls.filter((c) => c[1] === IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST).length;
     expect(firstCalls).toBe(1);
 
     makerChatStore.reconcileOpenSessionOrigins(); // current === loaded → no-op
     await flush();
-    const afterCalls = invoke.mock.calls.filter((c) => c[1] === 'local-db:messages:list').length;
+    const afterCalls = invoke.mock.calls.filter((c) => c[1] === IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST).length;
     expect(afterCalls).toBe(1);
   });
 
@@ -160,7 +161,7 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
 
     makerChatStore.reconcileOpenSessionOrigins();
     await flush();
-    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, expect.anything());
   });
 
   it('设备下线(current 变 undefined)不重载——避免回落本机空库', async () => {

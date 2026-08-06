@@ -27,6 +27,7 @@ import { recentWorkdirs } from '../schema';
 import { createLogger } from '../../logger';
 import { requireString } from '../../utils/ipcValidate.js';
 import { getManagedWorktreeBasePath } from '../../../shared/managedWorktreePaths';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('recentWorkdirs');
 
@@ -158,7 +159,7 @@ async function dirExists(path: string): Promise<boolean> {
 }
 
 export function registerRecentWorkdirsIpc(): void {
-  ipcMain.handle('local-db:recent-workdirs:list', async () => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_LIST, async () => {
     const db = getDbClient().drizzle;
     // LIMIT 是兜底 —— upsert 已经按 MAX_RECENT_WORKDIRS 驱逐过,
     // 这里加 limit 防御任何"绕过 upsert"的写入路径(比如未来的 migration)
@@ -178,7 +179,7 @@ export function registerRecentWorkdirsIpc(): void {
     }));
   });
 
-  ipcMain.handle('local-db:recent-workdirs:remove', async (_evt, input: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, async (_evt, input: unknown) => {
     const body = (input ?? {}) as { path?: unknown };
     const raw = requireString(body.path, 'path');
     // 归一化后再删,保证与写入侧同一主键形态;归一失败(纯空白等)当 no-op,
@@ -201,7 +202,7 @@ export function registerRecentWorkdirsIpc(): void {
     if (deleted) {
       for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed()) {
-          w.webContents.send('local-db:recent-workdirs:changed', { path: normalized });
+          w.webContents.send(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_CHANGED, { path: normalized });
         }
       }
     }

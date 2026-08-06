@@ -16,14 +16,16 @@
  * (browserCommentPreload.ts)引用,保持单一来源。
  */
 
+import { BROWSER_COMMENT_CHANNELS } from '@cindy/cindy-ipc';
+
 // ── host → guest ───────────────────────────────────────────────────────────
 
 /** 进入评论模式:guest 挂交互层(hover 高亮 + 点选)。payload: {@link BrowserCommentEnterModePayload} */
-export const BROWSER_COMMENT_ENTER_MODE_CHANNEL = 'browser-comment:enter-mode';
+export const BROWSER_COMMENT_ENTER_MODE_CHANNEL = BROWSER_COMMENT_CHANNELS.ENTER_MODE;
 /** 退出评论模式:guest 拆除全部 overlay DOM 与监听器。无 payload。 */
-export const BROWSER_COMMENT_EXIT_MODE_CHANNEL = 'browser-comment:exit-mode';
+export const BROWSER_COMMENT_EXIT_MODE_CHANNEL = BROWSER_COMMENT_CHANNELS.EXIT_MODE;
 /** 取消当前 pending 选择:移除 marker,回到点选状态(评论模式保持)。无 payload。 */
-export const BROWSER_COMMENT_CANCEL_PENDING_CHANNEL = 'browser-comment:cancel-pending';
+export const BROWSER_COMMENT_CANCEL_PENDING_CHANNEL = BROWSER_COMMENT_CHANNELS.CANCEL_PENDING;
 /**
  * 截图前置:guest 隐藏交互层与 hover 高亮,只保留蓝色 marker(含已提交的常驻
  * marker)与当前 pending 的区域框 / 文本高亮,并继续保留透明 blocker 隔离
@@ -32,13 +34,14 @@ export const BROWSER_COMMENT_CANCEL_PENDING_CHANNEL = 'browser-comment:cancel-pe
  * 收到 matching ACK 后再调 main capturePage,保证截图里只有标注、没有可见
  * 交互 UI。
  */
-export const BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL = 'browser-comment:prepare-screenshot';
+export const BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL =
+  BROWSER_COMMENT_CHANNELS.PREPARE_SCREENSHOT;
 /**
  * 提交成功后的收尾(Phase 2 多评论):pending marker 转为常驻(区域框 / 文本
  * 高亮撤除,只留编号圆点),交互层恢复,继续点选下一条。payload:
  * {@link BrowserCommentCommitPendingPayload}(带下一条评论的 marker 编号)。
  */
-export const BROWSER_COMMENT_COMMIT_PENDING_CHANNEL = 'browser-comment:commit-pending';
+export const BROWSER_COMMENT_COMMIT_PENDING_CHANNEL = BROWSER_COMMENT_CHANNELS.COMMIT_PENDING;
 /**
  * 样式实时预览(Phase 3 styling feedback):host 气泡样式编辑器每次变更把
  * **全量当前编辑状态**发给 guest,guest 以 inline !important 应用到 pending
@@ -46,9 +49,9 @@ export const BROWSER_COMMENT_COMMIT_PENDING_CHANNEL = 'browser-comment:commit-pe
  * 整体还原走 design-reset / cancel / exit)。payload:
  * {@link BrowserCommentDesignPreviewPayload}。
  */
-export const BROWSER_COMMENT_DESIGN_PREVIEW_CHANNEL = 'browser-comment:design-preview';
+export const BROWSER_COMMENT_DESIGN_PREVIEW_CHANNEL = BROWSER_COMMENT_CHANNELS.DESIGN_PREVIEW;
 /** 还原当前 pending 元素上的全部样式预览(host 气泡「重置」按钮)。无 payload。 */
-export const BROWSER_COMMENT_DESIGN_RESET_CHANNEL = 'browser-comment:design-reset';
+export const BROWSER_COMMENT_DESIGN_RESET_CHANNEL = BROWSER_COMMENT_CHANNELS.DESIGN_RESET;
 
 // ── guest → host ───────────────────────────────────────────────────────────
 
@@ -56,11 +59,11 @@ export const BROWSER_COMMENT_DESIGN_RESET_CHANNEL = 'browser-comment:design-rese
  * 关键 host → guest 命令的统一完成回执。host 只在收到当前 WebView 代际发回的
  * matching requestId 后推进评论状态机，避免 `webview.send()` 丢失时两端状态分叉。
  */
-export const BROWSER_COMMENT_COMMAND_RESULT_CHANNEL = 'browser-comment:command-result';
+export const BROWSER_COMMENT_COMMAND_RESULT_CHANNEL = BROWSER_COMMENT_CHANNELS.COMMAND_RESULT;
 /** 用户在页面里点选了一个元素。payload: {@link BrowserCommentTargetInfo} */
-export const BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL = 'browser-comment:element-selected';
+export const BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL = BROWSER_COMMENT_CHANNELS.ELEMENT_SELECTED;
 /** guest 侧主动退出评论模式(用户在页面里按 Esc)。无 payload。 */
-export const BROWSER_COMMENT_MODE_EXITED_CHANNEL = 'browser-comment:mode-exited';
+export const BROWSER_COMMENT_MODE_EXITED_CHANNEL = BROWSER_COMMENT_CHANNELS.MODE_EXITED;
 
 // ── payload 类型 ────────────────────────────────────────────────────────────
 

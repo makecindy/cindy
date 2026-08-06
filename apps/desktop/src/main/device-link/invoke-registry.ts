@@ -14,6 +14,7 @@
 
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { createLogger } from '../logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('device-link-invoke-registry');
 
@@ -30,9 +31,9 @@ const MIN_EXPECTED_HANDLERS = 50;
  * 比单纯的数量阈值更能定位「patch 装晚了」——数量可能因后续增删而漂移,哨兵语义稳定。
  */
 const SENTINEL_CHANNELS: readonly string[] = [
-  'maker:create-session',
-  'maker:send',
-  'local-db:sessions:list',
+  IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
+  IPC_CHANNELS.MAKER_INVOKE.SEND,
+  IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST,
 ];
 
 /**

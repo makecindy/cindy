@@ -46,6 +46,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const DEVICE_ID = 'dev-A';
 let n = 0;
@@ -56,8 +57,8 @@ let onInputProjection: ((data: unknown) => void) | undefined;
 let remoteList: Message[] = [];
 
 const invoke = vi.fn(async (_deviceId: string, channel: string) => {
-  if (channel === 'local-db:messages:list') return remoteList;
-  if (channel === 'local-db:sessions:get') {
+  if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST) return remoteList;
+  if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET) {
     return { agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false, contextTokens: 0, contextWindow: 0, totalCostUsd: 0 };
   }
   return null;

@@ -38,6 +38,7 @@ import {
   VoiceInputDataStore,
 } from '../VoiceInputDataStore.js';
 import { createVoiceInputHistoryEntry } from '../../../shared/voiceInputData.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 describe('VoiceInputDataStore persistence', () => {
   let dataDir: string;
@@ -66,7 +67,7 @@ describe('VoiceInputDataStore persistence', () => {
     expect(store.getSettings().language).toBe('en');
     expect(mocks.window.webContents.send).toHaveBeenCalledTimes(1);
     expect(mocks.window.webContents.send).toHaveBeenCalledWith(
-      'voice-input:data-changed',
+      IPC_CHANNELS.VOICE_INPUT.DATA_CHANGED,
       expect.objectContaining({ settings: expect.objectContaining({ language: 'en' }) }),
     );
   });
@@ -101,11 +102,11 @@ describe('VoiceInputDataStore persistence', () => {
     registerVoiceInputDataStoreIpc();
 
     const recordEvent: { returnValue?: unknown } = {};
-    mocks.onHandlers.get('voice-input:history:record')?.(recordEvent, '原始语音文本');
+    mocks.onHandlers.get(IPC_CHANNELS.VOICE_INPUT.HISTORY_RECORD)?.(recordEvent, '原始语音文本');
     expect(recordEvent.returnValue).toEqual(expect.any(String));
 
     const updateEvent: { returnValue?: unknown } = {};
-    mocks.onHandlers.get('voice-input:history:update')?.(updateEvent, {
+    mocks.onHandlers.get(IPC_CHANNELS.VOICE_INPUT.HISTORY_UPDATE)?.(updateEvent, {
       id: recordEvent.returnValue,
       text: '润色后文本',
     });
@@ -115,16 +116,16 @@ describe('VoiceInputDataStore persistence', () => {
     ]);
 
     const deleteEvent: { returnValue?: unknown } = {};
-    mocks.onHandlers.get('voice-input:history:delete')?.(deleteEvent, recordEvent.returnValue);
+    mocks.onHandlers.get(IPC_CHANNELS.VOICE_INPUT.HISTORY_DELETE)?.(deleteEvent, recordEvent.returnValue);
     expect(deleteEvent.returnValue).toBe(true);
     expect(voiceInputDataStore.getHistory()).toEqual([]);
 
     const invalidUpdateEvent: { returnValue?: unknown } = {};
-    mocks.onHandlers.get('voice-input:history:update')?.(invalidUpdateEvent, {});
+    mocks.onHandlers.get(IPC_CHANNELS.VOICE_INPUT.HISTORY_UPDATE)?.(invalidUpdateEvent, {});
     expect(invalidUpdateEvent.returnValue).toBe(true);
 
     const invalidDeleteEvent: { returnValue?: unknown } = {};
-    mocks.onHandlers.get('voice-input:history:delete')?.(invalidDeleteEvent, undefined);
+    mocks.onHandlers.get(IPC_CHANNELS.VOICE_INPUT.HISTORY_DELETE)?.(invalidDeleteEvent, undefined);
     expect(invalidDeleteEvent.returnValue).toBe(true);
   });
 
@@ -143,7 +144,7 @@ describe('VoiceInputDataStore persistence', () => {
     });
 
     const event: { returnValue?: unknown } = {};
-    mocks.onHandlers.get('voice-input:history:get-for-refinement')?.(event);
+    mocks.onHandlers.get(IPC_CHANNELS.VOICE_INPUT.HISTORY_GET_FOR_REFINEMENT)?.(event);
 
     expect(event.returnValue).toEqual({
       ok: false,

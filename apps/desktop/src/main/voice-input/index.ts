@@ -141,6 +141,7 @@ import {
   type VoiceInputConnectionTestResult,
 } from '../../shared/voiceInputConnectionTest.js';
 import { runSerializedVoiceInputConnectionTest } from './voiceInputConnectionTest.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('voice-input');
 let customAsrCredentialRevision = 0;
@@ -1812,7 +1813,7 @@ export function registerVoiceInputIpc(): void {
   void refreshVoiceInputReadinessCache('register');
 
   ipcMain.handle(
-    'voice-input:prewarm',
+    IPC_CHANNELS.VOICE_INPUT.PREWARM,
     async (_event, payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> => {
       void refreshVoiceInputReadinessCache('prewarm');
       void prewarmVoiceInputProvider(payload);
@@ -1820,25 +1821,25 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.on('voice-input:get-microphone-permission-cached', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GET_MICROPHONE_PERMISSION_CACHED, (event) => {
     event.returnValue = getCachedMicrophonePermission();
   });
 
-  ipcMain.handle('voice-input:set-renderer-microphone-permission-verified', async (_event, verified: boolean) => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.SET_RENDERER_MICROPHONE_PERMISSION_VERIFIED, async (_event, verified: boolean) => {
     rendererVerifiedMicrophonePermission = verified;
     refreshMicrophonePermissionCache();
     return { ok: true };
   });
 
-  ipcMain.on('voice-input:get-system-permissions-cached', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GET_SYSTEM_PERMISSIONS_CACHED, (event) => {
     event.returnValue = getVoiceInputSystemPermissions();
   });
 
-  ipcMain.on('voice-input:get-readiness-cached', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GET_READINESS_CACHED, (event) => {
     event.returnValue = cachedVoiceInputReadiness;
   });
 
-  ipcMain.handle('voice-input:benchmark-fixture-audio', async (): Promise<BenchmarkFixtureAudioResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.BENCHMARK_FIXTURE_AUDIO, async (): Promise<BenchmarkFixtureAudioResult> => {
     try {
       return await readBenchmarkFixtureAudio();
     } catch (error) {
@@ -1849,7 +1850,7 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:request-microphone-permission', async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.REQUEST_MICROPHONE_PERMISSION, async (): Promise<{ ok: true } | { ok: false; error: string }> => {
     const cached = refreshMicrophonePermissionCache();
     if (cached.ok) return { ok: true };
     if (process.platform !== 'darwin') return { ok: false, error: cached.error };
@@ -1859,11 +1860,11 @@ export function registerVoiceInputIpc(): void {
     return { ok: false, error: next.ok ? 'Microphone permission is required for voice input.' : next.error };
   });
 
-  ipcMain.handle('voice-input:get-system-permissions', async (): Promise<VoiceInputSystemPermissions> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.GET_SYSTEM_PERMISSIONS, async (): Promise<VoiceInputSystemPermissions> => {
     return refreshVoiceInputSystemPermissions();
   });
 
-  ipcMain.handle('voice-input:open-microphone-settings', async (): Promise<VoiceInputActionResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.OPEN_MICROPHONE_SETTINGS, async (): Promise<VoiceInputActionResult> => {
     const settingsUrl = getMicrophoneSettingsUrl(process.platform);
     if (!settingsUrl) {
       return { ok: false, error: 'Microphone settings are only available on macOS and Windows.' };
@@ -1876,7 +1877,7 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:get-readiness', async (event): Promise<VoiceInputReadiness> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.GET_READINESS, async (event): Promise<VoiceInputReadiness> => {
     assertTrustedAppRendererEvent(event);
     return refreshVoiceInputReadinessCache('ipc');
   });
@@ -1921,13 +1922,13 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.handle('voice-input:model-selection:get', async (event): Promise<VoiceInputModelSelectionIpcResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.MODEL_SELECTION_GET, async (event): Promise<VoiceInputModelSelectionIpcResult> => {
     assertTrustedAppRendererEvent(event);
     return buildVoiceInputModelSelectionIpcResult('get');
   });
 
   ipcMain.handle(
-    'voice-input:model-selection:set',
+    IPC_CHANNELS.VOICE_INPUT.MODEL_SELECTION_SET,
     async (event, payload: unknown): Promise<VoiceInputModelSelectionIpcResult> => {
       assertTrustedAppRendererEvent(event);
       const patch = voiceInputModelSelectionPatchFromIpc(payload);
@@ -1958,7 +1959,7 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.handle('voice-input:model-selection:reload', async (event): Promise<VoiceInputModelSelectionIpcResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.MODEL_SELECTION_RELOAD, async (event): Promise<VoiceInputModelSelectionIpcResult> => {
     assertTrustedAppRendererEvent(event);
     const selection = reloadVoiceInputModelSelection();
     markVoiceInputModelSelectionApplied('ipc-reload', selection);
@@ -1968,7 +1969,7 @@ export function registerVoiceInputIpc(): void {
   });
 
   ipcMain.handle(
-    'voice-input:dictionary-learning:advise',
+    IPC_CHANNELS.VOICE_INPUT.DICTIONARY_LEARNING_ADVISE,
     async (event, payload: DictationDictionaryAdviceInput | undefined): Promise<DictionaryAdviceIpcResult> => {
       return adviseAndRecordVoiceInputDictionaryLearning(payload, {
         senderId: event.sender.id,
@@ -1979,7 +1980,7 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.handle('voice-input:mute-system-audio', async (event): Promise<VoiceInputActionResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.MUTE_SYSTEM_AUDIO, async (event): Promise<VoiceInputActionResult> => {
     try {
       await systemAudioMuteGuard.mute(event.sender.id);
       return { ok: true };
@@ -1990,7 +1991,7 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:restore-system-audio', async (event): Promise<VoiceInputActionResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.RESTORE_SYSTEM_AUDIO, async (event): Promise<VoiceInputActionResult> => {
     try {
       await systemAudioMuteGuard.restore(event.sender.id);
       return { ok: true };
@@ -2001,7 +2002,7 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.START, async (event, payload: StartPayload | undefined): Promise<StartResult> => {
     const isInlineSender = !isGlobalVoiceInputOverlaySender(event.sender);
     const existing = activeByWebContentsId.get(event.sender.id);
     if (existing) {
@@ -2120,7 +2121,7 @@ export function registerVoiceInputIpc(): void {
     let runId = '';
     const emit = (message: VoiceInputRendererEvent): void => {
       if (event.sender.isDestroyed()) return;
-      event.sender.send('voice-input:event', message);
+      event.sender.send(IPC_CHANNELS.VOICE_INPUT.EVENT, message);
     };
     let refiner: DictationRefiner | undefined;
     let managedRefinerCacheScope: string | undefined;
@@ -2325,15 +2326,15 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.on('voice-input:audio', (event, payload: AudioPayload | undefined) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.AUDIO, (event, payload: AudioPayload | undefined) => {
     const active = activeByWebContentsId.get(event.sender.id);
     if (!active || !payload?.pcm16k) return;
     active.controller.appendAudio(payload.pcm16k, payload.trace);
   });
 
-  ipcMain.handle('voice-input:audio-drain', (): { ok: true } => ({ ok: true }));
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.AUDIO_DRAIN, (): { ok: true } => ({ ok: true }));
 
-  ipcMain.handle('voice-input:stop', async (event): Promise<{ ok: true } | { ok: false; error: string }> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.STOP, async (event): Promise<{ ok: true } | { ok: false; error: string }> => {
     const active = activeByWebContentsId.get(event.sender.id);
     if (!active) {
       await restoreSystemAudioForSender(event.sender.id);
@@ -2357,7 +2358,7 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:cancel', async (event, payload?: { runId?: string }): Promise<{ ok: true }> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.CANCEL, async (event, payload?: { runId?: string }): Promise<{ ok: true }> => {
     const active = activeByWebContentsId.get(event.sender.id);
     const requestedRunId = typeof payload?.runId === 'string' ? payload.runId : undefined;
     log.debug('voice input cancel requested', {

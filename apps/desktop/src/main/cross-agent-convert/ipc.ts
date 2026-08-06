@@ -15,13 +15,14 @@ import { createLogger } from '../logger.js';
 import { detect, type DetectInput } from './detector.js';
 import { convertAll } from './converter.js';
 import type { AgentKind, DetectResult, MigrationItem, MigrationStepEvent } from './types.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('cross-agent-convert:ipc');
 
 export const CROSS_AGENT_CHANNELS = {
-  DETECT: 'maker:cross-agent:detect',
-  CONVERT: 'maker:cross-agent:convert',
-  STEP: 'maker:cross-agent:step',
+  DETECT: IPC_CHANNELS.MAKER_EXTRA.CROSS_AGENT_DETECT,
+  CONVERT: IPC_CHANNELS.MAKER_EXTRA.CROSS_AGENT_CONVERT,
+  STEP: IPC_CHANNELS.MAKER_EXTRA.CROSS_AGENT_STEP,
 } as const;
 
 function broadcastStep(ev: MigrationStepEvent): void {

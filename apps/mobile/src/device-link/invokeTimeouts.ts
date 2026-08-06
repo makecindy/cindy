@@ -1,4 +1,5 @@
 import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 /**
  * mobile 侧 invoke 超时解析(优先级:mobile 精确表 → schedule 前缀规则 →
@@ -47,21 +48,21 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
-  'device-link:media:fetch': 30_000,
-  'device-link:voice:dictionary-learning': 30_000,
-  'device-link:voice:transcribe': 30_000,
-  'file-browser:remote-op': 30_000,
-  'maker:create-session': 30_000,
-  'maker:fork': 30_000,
-  'maker:get-context-usage': 30_000,
-  'maker:goal:resume': 30_000,
-  'maker:goal:set': 30_000,
-  'maker:message:delete': 30_000,
-  'maker:regenerate-title': 30_000,
-  'maker:rewind:commit': 30_000,
-  'maker:send': 30_000,
-  'maker:usage:codex-rate-limit-reset': 30_000,
-  'maker:usage:codex-rate-limits': 30_000,
+  [IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH]: 30_000,
+  [IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_LEARNING]: 30_000,
+  [IPC_CHANNELS.DEVICE_LINK.VOICE_TRANSCRIBE]: 30_000,
+  [IPC_CHANNELS.FILE_BROWSER.REMOTE_OP]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.FORK]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.GET_CONTEXT_USAGE]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.GOAL_RESUME]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.GOAL_SET]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.DELETE_MESSAGE]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.REGENERATE_TITLE]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.REWIND_COMMIT]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.SEND]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET]: 30_000,
+  [IPC_CHANNELS.MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS]: 30_000,
 };
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;

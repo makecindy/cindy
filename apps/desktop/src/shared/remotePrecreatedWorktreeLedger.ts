@@ -1,8 +1,4 @@
-export const REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS = {
-  LIST: 'remote-precreated-worktree-ledger:list',
-  REGISTER: 'remote-precreated-worktree-ledger:register',
-  FORGET: 'remote-precreated-worktree-ledger:forget',
-} as const;
+export { REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS } from '@cindy/cindy-ipc/remote-precreated-worktree-ledger';
 
 interface PendingRemotePrecreatedWorktreeBase {
   deviceId: string;

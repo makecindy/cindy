@@ -20,18 +20,19 @@ import type {
 } from '../../shared/learnTypes';
 import { getLearnController } from './index';
 import { LearnError } from './controller';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('learn-host:ipc');
 
 /** learn:* channel 常量 —— preload 与 renderer 按同名字符串消费。 */
 export const LEARN_CHANNELS = {
-  START: 'learn:start',
-  LIST_RUNS: 'learn:list-runs',
-  GET_PROPOSAL_DIFF: 'learn:get-proposal-diff',
-  APPLY: 'learn:apply',
-  DISCARD: 'learn:discard',
-  CANCEL: 'learn:cancel',
-  EVENT: 'learn:event',
+  START: IPC_CHANNELS.LEARN.START,
+  LIST_RUNS: IPC_CHANNELS.LEARN.LIST_RUNS,
+  GET_PROPOSAL_DIFF: IPC_CHANNELS.LEARN.GET_PROPOSAL_DIFF,
+  APPLY: IPC_CHANNELS.LEARN.APPLY,
+  DISCARD: IPC_CHANNELS.LEARN.DISCARD,
+  CANCEL: IPC_CHANNELS.LEARN.CANCEL,
+  EVENT: IPC_CHANNELS.LEARN.EVENT,
 } as const;
 
 /** LearnError.code → IpcErrorCode(同名直传;controller 的 code 集合就是按此设计的)。 */

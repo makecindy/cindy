@@ -14,6 +14,7 @@ vi.mock('../index.js', () => ({
 }));
 
 import { installNewMakerWindowShortcut } from '../new-maker-window-shortcut.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type BeforeInputHandler = (
   event: { preventDefault: ReturnType<typeof vi.fn> },
@@ -98,8 +99,8 @@ describe('installNewMakerWindowShortcut', () => {
     expect(press(secondary, input('KeyN', { control: true }))).toHaveBeenCalledOnce();
     expect(main.send).toHaveBeenCalledOnce();
     expect(secondary.send).toHaveBeenCalledOnce();
-    expect(main.send).toHaveBeenCalledWith('app-menu:command', 'new-maker-shortcut');
-    expect(secondary.send).toHaveBeenCalledWith('app-menu:command', 'new-maker-shortcut');
+    expect(main.send).toHaveBeenCalledWith(IPC_CHANNELS.APP_MENU.COMMAND, 'new-maker-shortcut');
+    expect(secondary.send).toHaveBeenCalledWith(IPC_CHANNELS.APP_MENU.COMMAND, 'new-maker-shortcut');
   });
 
   it('reads custom bindings immediately and yields while shortcut recording is active', () => {

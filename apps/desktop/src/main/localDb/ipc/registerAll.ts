@@ -26,6 +26,7 @@ import { registerRemoteHistoryIpc } from './history';
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
 import { createOwnerEnsureCoordinator } from './ownerEnsureCoordinator';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('registerAll');
 
@@ -71,7 +72,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await opts.discardStaleOwner?.(userId);
     },
   });
-  ipcMain.handle('local-db:ensure-ready', async (_e, userId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.ENSURE_READY, async (_e, userId: unknown) => {
     const startedAt = performance.now();
     log.info(
       JSON.stringify({

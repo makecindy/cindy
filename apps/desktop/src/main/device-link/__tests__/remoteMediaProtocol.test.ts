@@ -14,7 +14,10 @@ vi.mock('electron', () => ({
   protocol: { handle: vi.fn(), registerSchemesAsPrivileged: vi.fn() },
   app: { getPath: () => '/tmp' },
 }));
-vi.mock('@cindy/device-link', () => ({ DL_MEDIA_FETCH_CHANNEL: 'device-link:media:fetch' }));
+vi.mock('@cindy/device-link', async () => {
+  const { IPC_CHANNELS } = await vi.importActual<typeof import('@cindy/cindy-ipc')>('@cindy/cindy-ipc');
+  return { DL_MEDIA_FETCH_CHANNEL: IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH };
+});
 
 const remoteInvoke = vi.hoisted(() => vi.fn());
 vi.mock('../index', () => ({ remoteInvoke }));
@@ -68,6 +71,7 @@ vi.mock('../../lightboxMediaActions', async (importOriginal) => {
 
 import { __testing, fetchRemoteMediaImageBytes } from '../remoteMediaProtocol';
 import { buildRemoteMediaUrl } from '../../../shared/remoteMediaUrl';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const { handleRemoteMedia } = __testing;
 const URL_IMG = buildRemoteMediaUrl({ kind: 'device', deviceId: 'dev-1' }, 'xdt-image://s/a.png');
@@ -149,7 +153,7 @@ describe('handleRemoteMedia', () => {
         mimeType: 'image/png',
       });
       const r = await handleRemoteMedia(URL_BLOB, null);
-      expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'device-link:media:fetch', [
+      expect(remoteInvoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, [
         { url: BLOB_URL },
       ]);
       expect(r.status).toBe(200);
@@ -214,7 +218,7 @@ describe('handleRemoteMedia', () => {
     });
 
     const r = await handleRemoteMedia(URL_IMG, null);
-    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'device-link:media:fetch', [
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, [
       { url: 'xdt-image://s/a.png' },
     ]);
     expect(downloadToBuffer).toHaveBeenCalledWith('oss/k.png');
@@ -317,10 +321,10 @@ describe('handleRemoteMedia', () => {
     });
 
     const r = await handleRemoteMedia(URL_IMG, null);
-    expect(remoteInvoke).toHaveBeenNthCalledWith(1, 'dev-1', 'device-link:media:fetch', [
+    expect(remoteInvoke).toHaveBeenNthCalledWith(1, 'dev-1', IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, [
       { url: 'xdt-image://s/a.png' },
     ]);
-    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', 'device-link:media:fetch', [
+    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, [
       { url: 'xdt-image://s/a.png', skipCache: true },
     ]);
     expect(downloadToBuffer).toHaveBeenNthCalledWith(2, 'oss/fresh.png');
@@ -394,7 +398,7 @@ describe('handleRemoteMedia', () => {
       );
 
     const r = await handleRemoteMedia(URL_IMG, null);
-    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', 'device-link:media:fetch', [
+    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, [
       { url: 'xdt-image://s/a.png', skipCache: true },
     ]);
     expect(evictEntry).toHaveBeenCalledWith('dev-1', 'xdt-image://s/a.png', 'oss/stale.png'); // 只逐出失败的那把 key
@@ -437,7 +441,7 @@ describe('handleRemoteMedia', () => {
       );
 
     const r = await handleRemoteMedia(URL_CINDY, null);
-    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', 'device-link:media:fetch', [
+    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, [
       { url: 'cindy-media://blobs/abcdef1234567890.png', skipCache: true },
     ]);
     expect(evictEntry).toHaveBeenCalledWith(
@@ -553,7 +557,7 @@ describe('handleRemoteMedia', () => {
     });
     const [r1, r2] = await Promise.all([p1, p2]);
     expect(remoteInvoke).toHaveBeenCalledTimes(2); // 初始 + skipCache,没有第三次普通取件
-    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', 'device-link:media:fetch', [
+    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, [
       { url: 'xdt-image://s/a.png', skipCache: true },
     ]);
     expect(r1.status).toBe(200);

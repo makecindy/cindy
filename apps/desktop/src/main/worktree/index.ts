@@ -23,6 +23,7 @@ import type {
   RevealReq,
   SuggestNameReq,
 } from './types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export * as WorktreeManager from './WorktreeManager';
 export * as WorktreePool from './WorktreePool';
@@ -46,21 +47,21 @@ export * from './types';
  * 调用方保证只调一次。
  */
 export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
-  ipcMain.handle('worktree:create', (_e, req: CreateWorktreeReq) =>
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.CREATE, (_e, req: CreateWorktreeReq) =>
     WorktreeManager.createWorktree(req),
   );
 
-  ipcMain.handle('worktree:detect-cwd', (_e, req: DetectCwdReq) =>
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.DETECT_CWD, (_e, req: DetectCwdReq) =>
     WorktreeManager.detectCwd(req.cwd),
   );
 
-  ipcMain.handle('worktree:get-for-session', (_e, sessionId: string) =>
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.GET_FOR_SESSION, (_e, sessionId: string) =>
     WorktreeManager.getForSession(sessionId),
   );
 
-  ipcMain.handle('worktree:list-all', () => WorktreeManager.listAll());
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.LIST_ALL, () => WorktreeManager.listAll());
 
-  ipcMain.handle('worktree:reveal', async (_e, req: RevealReq) => {
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.REVEAL, async (_e, req: RevealReq) => {
     if (!req?.path || typeof req.path !== 'string') {
       return {
         ok: false,
@@ -97,11 +98,11 @@ export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
     }
   });
 
-  ipcMain.handle('worktree:suggest-name', (_e, req: SuggestNameReq) =>
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.SUGGEST_NAME, (_e, req: SuggestNameReq) =>
     WorktreeManager.suggestName(req.baseRepo),
   );
 
-  ipcMain.handle('worktree:list-branches', (_e, req: ListBranchesReq) =>
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.LIST_BRANCHES, (_e, req: ListBranchesReq) =>
     WorktreeManager.listBranches(req.baseRepo),
   );
 
@@ -109,17 +110,17 @@ export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
   // removal-preview 是只读查询，允许 device-link 控制端在被控端执行；restore 仍是
   // 本机入口，远程会话未进 allowlist，控制端保持无恢复入口降级。
 
-  ipcMain.handle('worktree:removal-preview', (_e, sessionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.REMOVAL_PREVIEW, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return { hasWorktree: false, dirty: false };
     return WorktreeManager.getRemovalPreview(sessionId);
   });
 
-  ipcMain.handle('worktree:restore-status', (_e, sessionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.RESTORE_STATUS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return { state: 'no-worktree' };
     return getWorktreeRestoreStatus(sessionId);
   });
 
-  ipcMain.handle('worktree:restore-for-session', (_e, sessionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.RESTORE_FOR_SESSION, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) {
       return { ok: false, message: 'invalid sessionId' };
     }

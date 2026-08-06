@@ -17,11 +17,12 @@ import { assertTrustedAppRendererEvent, isTrustedAppRendererEvent } from '../sec
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isValidGhostId } from '../../shared/ghost.js';
 import type { GhostPanelWindowsController } from './controller.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('ghost-panel-window-ipc');
 
 /** 首帧同步读通道(与 layout:get / ghosts:list 同模式,见 channels.ts 注释)。 */
-export const GHOST_PANEL_WINDOW_GET_STATE_SYNC = 'ghost-panel-window:get-state-sync';
+export const GHOST_PANEL_WINDOW_GET_STATE_SYNC = IPC_CHANNELS.GHOST_PANEL_WINDOW.GET_STATE_SYNC;
 
 export function registerGhostPanelWindowIpc(controller: GhostPanelWindowsController): void {
   ipcMain.handle(MAKER_INVOKE.GHOST_PANEL_WINDOW_GET_STATE, (event) => {

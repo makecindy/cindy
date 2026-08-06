@@ -50,6 +50,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 // ─── 忠实的被控端内存替身(单一真相源)───────────────────────────────────────────
 
@@ -88,24 +89,24 @@ function makeFakeHost(deviceId: string, deviceName: string) {
 
   const invoke = vi.fn(async (_d: string, channel: string, args: unknown[]) => {
     switch (channel) {
-      case 'local-db:messages:list': {
+      case IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST: {
         const sid = args[0] as string;
         const opts = (args[1] ?? {}) as { limit?: number };
         const all = messages.get(sid) ?? [];
         return opts.limit ? all.slice(-opts.limit) : all;
       }
-      case 'local-db:sessions:get':
+      case IPC_CHANNELS.LOCAL_DB.SESSIONS_GET:
         return meta(args[0] as string);
-      case 'local-db:sessions:list':
+      case IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST:
         return [...sessionsMeta.keys()].map((id) => ({ id, ...meta(id) }) as unknown as Session);
-      case 'maker:create-session': {
+      case IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION: {
         const opts = (args[0] ?? {}) as Record<string, unknown>;
         const id = `remote-sess-${sessionsMeta.size + 1}`;
         sessionsMeta.set(id, { ...opts });
         messages.set(id, []);
         return { sessionId: id };
       }
-      case 'maker:input:get-projection':
+      case IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION:
         return emptyProjection(args[0] as string);
       default:
         return null; // set-* 等:ok/no-op
@@ -132,22 +133,22 @@ function makeFakeHost(deviceId: string, deviceName: string) {
       const arr = messages.get(sid) ?? [];
       arr.push(msg);
       messages.set(sid, arr);
-      if (!opts?.lossy) pushCb?.({ deviceId, channel: 'local-db:messages:created', payload: { sessionId: sid, message: msg } });
+      if (!opts?.lossy) pushCb?.({ deviceId, channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, payload: { sessionId: sid, message: msg } });
     },
     /** 被控端改某会话设置 → 广播 sessions:patched(控制端镜像收敛)。 */
     hostPatch(sid: string, patch: Record<string, unknown>): void {
       sessionsMeta.set(sid, { ...(sessionsMeta.get(sid) ?? {}), ...patch });
-      pushCb?.({ deviceId, channel: 'local-db:sessions:patched', payload: { sessionId: sid, patch } });
+      pushCb?.({ deviceId, channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, payload: { sessionId: sid, patch } });
     },
     /** 被控端 turn 结束落库累计 cost → usage:session-spend-changed(sessionSpendBroadcaster tap)。 */
     hostSessionSpend(sid: string, totalCostUsd: number): void {
       sessionsMeta.set(sid, { ...(sessionsMeta.get(sid) ?? {}), totalCostUsd });
-      pushCb?.({ deviceId, channel: 'usage:session-spend-changed', payload: { sessionId: sid, totalCostUsd } });
+      pushCb?.({ deviceId, channel: IPC_CHANNELS.USAGE.SESSION_SPEND_CHANGED, payload: { sessionId: sid, totalCostUsd } });
     },
     /** 被控端 turn 结束落库累计 token → usage:session-tokens-changed。 */
     hostSessionTokens(sid: string, totalTokens: number): void {
       sessionsMeta.set(sid, { ...(sessionsMeta.get(sid) ?? {}), totalTokenUsage: totalTokens });
-      pushCb?.({ deviceId, channel: 'usage:session-tokens-changed', payload: { sessionId: sid, totalTokens } });
+      pushCb?.({ deviceId, channel: IPC_CHANNELS.USAGE.SESSION_TOKENS_CHANGED, payload: { sessionId: sid, totalTokens } });
     },
   };
 }
@@ -213,7 +214,7 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     makerChatStore.ensureInitialMessages(s);
     await flush();
     await flush();
-    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, expect.anything());
     expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual(['client-h1']);
 
     // 2) 被控端实时 push 两条 → 控制端就地追加。
@@ -280,9 +281,9 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
 
   it('经隧道 maker:create-session 建会话 → 拿回 sessionId、出现在该设备会话列表', async () => {
     const opts = { agentKind: 'claude-code', workingDir: '/host/proj', workspaceKind: 'project', model: 'claude-sonnet-4-6' };
-    const res = (await host.invoke(DEVICE_ID, 'maker:create-session', [opts])) as { sessionId?: string };
+    const res = (await host.invoke(DEVICE_ID, IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, [opts])) as { sessionId?: string };
     expect(res.sessionId).toBeTruthy();
-    const list = (await host.invoke(DEVICE_ID, 'local-db:sessions:list', [])) as Session[];
+    const list = (await host.invoke(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, [])) as Session[];
     expect(list.map((x) => x.id)).toContain(res.sessionId);
 
     // 注册进控制端镜像后,传输层认其为远程会话(后续读写走隧道)。
@@ -295,7 +296,7 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     makerChatStore.ensureInitialMessages(s); // 本机空库
     await flush();
     await flush();
-    expect(host.invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(host.invoke).not.toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, expect.anything());
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
   });
 });

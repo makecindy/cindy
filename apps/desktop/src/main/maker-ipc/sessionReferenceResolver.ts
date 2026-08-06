@@ -19,6 +19,7 @@ import {
   type AgentInputSessionReferenceMessage,
   type AgentInputSessionReferenceTerminal,
 } from '../../shared/agentInputQueue.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export const MAX_SESSION_REFERENCES = 8;
 export const MAX_REFERENCE_MESSAGES = 20;
@@ -602,7 +603,7 @@ async function resolveRemote(
   }
   let sessionResponse: Awaited<ReturnType<typeof invokeRemote>>;
   try {
-    sessionResponse = await invokeRemote(ref.deviceId, 'local-db:sessions:get', [ref.sessionId]);
+    sessionResponse = await invokeRemote(ref.deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, [ref.sessionId]);
   } catch (error) {
     throw new SessionReferenceError(
       'SESSION_REFERENCE_OFFLINE',
@@ -633,7 +634,7 @@ async function resolveRemote(
       mapped = visibleRows.slice(-messageLimit);
       sourceTruncated = page.sourceTruncated || visibleRows.length > messageLimit;
     } else {
-      const anchorResponse = await invokeRemote(ref.deviceId, 'local-db:messages:around-client-id', [
+      const anchorResponse = await invokeRemote(ref.deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID, [
         ref.sessionId,
         ref.messageClientId,
         { radius: 0, contentCharLimit: 8_000 },

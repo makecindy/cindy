@@ -810,7 +810,7 @@ describe('词典同步落盘 —— 第十轮收口', () => {
       path.join(__dirname, '..', 'VoiceInputDataStore.ts'),
       'utf-8',
     );
-    const handler = source.slice(source.indexOf("'voice-input:dictionary:delete-entries'"));
+    const handler = source.slice(source.indexOf('IPC_CHANNELS.VOICE_INPUT.DICTIONARY_DELETE_ENTRIES'));
     const body = handler.slice(0, handler.indexOf('});'));
     expect(body).toContain('assertTrustedAppRendererEvent');
     expect(body).toContain('sanitizeDictionaryEntryIds');

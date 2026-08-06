@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 import type { BrowserWindow } from 'electron';
 
 /**
@@ -26,7 +27,7 @@ import type { BrowserWindow } from 'electron';
  * 该 channel 是窗口本地 UI 状态,不进 device-link allowlist —— 那里把 window-* 归为
  * 「永不放行」类别,远程控制端的窗口可见性与被控端无关。
  */
-export const WINDOW_HIDDEN_CHANGE_CHANNEL = 'window-hidden-change';
+export const WINDOW_HIDDEN_CHANGE_CHANNEL = IPC_CHANNELS.WINDOW_HIDDEN.CHANGE;
 
 export function installWindowHiddenBroadcast(win: BrowserWindow): void {
   const emit = (): void => {

@@ -38,6 +38,7 @@ import {
   type ShareImportDraftPrefs,
 } from '../../session-share/sessionShareImport.js';
 import { getDbClient } from '../client/current.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('session-share-ipc');
 
@@ -61,7 +62,7 @@ function rethrowIpc(err: unknown, fallbackCode: 'SHARE_EXPORT_FAILED' | 'SHARE_I
 
 export function registerSessionShareIpc(): void {
   ipcMain.handle(
-    'local-db:session-share:export',
+    IPC_CHANNELS.LOCAL_DB.SESSION_SHARE_EXPORT,
     async (_e, request?: SessionShareExportRequest): Promise<SessionShareExportResponse> => {
       const payload = requireObject(request, 'request');
       const sessionId = requireString(payload.sessionId, 'sessionId');
@@ -100,7 +101,7 @@ export function registerSessionShareIpc(): void {
 
   // inspect:filePath 缺省时弹系统打开对话框(设置页按钮路径);拖入路径直接传。
   ipcMain.handle(
-    'local-db:session-share:inspect',
+    IPC_CHANNELS.LOCAL_DB.SESSION_SHARE_INSPECT,
     async (_e, request?: { filePath?: unknown }): Promise<SessionShareInspectResponse> => {
       let filePath = typeof request?.filePath === 'string' ? request.filePath : null;
       if (!filePath) {
@@ -132,7 +133,7 @@ export function registerSessionShareIpc(): void {
   );
 
   ipcMain.handle(
-    'local-db:session-share:unlock',
+    IPC_CHANNELS.LOCAL_DB.SESSION_SHARE_UNLOCK,
     async (_e, request?: { draftId?: unknown; password?: unknown }): Promise<SharePreview> => {
       const payload = requireObject(request, 'request');
       const draftId = requireString(payload.draftId, 'draftId');
@@ -147,7 +148,7 @@ export function registerSessionShareIpc(): void {
   );
 
   ipcMain.handle(
-    'local-db:session-share:commit',
+    IPC_CHANNELS.LOCAL_DB.SESSION_SHARE_COMMIT,
     async (
       _e,
       request?: {
@@ -181,7 +182,7 @@ export function registerSessionShareIpc(): void {
     },
   );
 
-  ipcMain.handle('local-db:session-share:cancel', async (_e, request?: { draftId?: unknown }) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSION_SHARE_CANCEL, async (_e, request?: { draftId?: unknown }) => {
     const draftId = typeof request?.draftId === 'string' ? request.draftId : null;
     if (draftId) cancelShareDraft(draftId);
     return { ok: true };
@@ -190,7 +191,7 @@ export function registerSessionShareIpc(): void {
   // 窗口级拖拽路由的路径分类:.cshare / 旧 .xdtshare → 导入向导;目录 → 新建
   // 会话(PR4);其它忽略。放本模块因为分享文件识别是它的域;目录分支为通用能力。
   ipcMain.handle(
-    'local-db:session-share:classify-path',
+    IPC_CHANNELS.LOCAL_DB.SESSION_SHARE_CLASSIFY_PATH,
     async (_e, request?: { path?: unknown }): Promise<{ kind: 'share' | 'directory' | 'other' }> => {
       const raw = typeof request?.path === 'string' ? request.path : '';
       if (!raw) return { kind: 'other' };

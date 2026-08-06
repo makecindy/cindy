@@ -28,6 +28,7 @@ vi.mock('../../logger.js', () => ({
 
 import { DesktopCommandRegistry } from '../registry.js';
 import { registerBuiltinDesktopCommands } from '../builtins.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type Payload = Record<string, unknown>;
 
@@ -59,7 +60,7 @@ describe('/goal 远程路由', () => {
   it('deviceId + objective → 隧道 maker:goal:set,不触本机 controller', async () => {
     const { registry, goalController, remoteInvoke } = makeHarness();
     await registry.execute('goal', { sessionId: 'rs', deviceId: 'dev-1', args: '目标 X' });
-    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'maker:goal:set', [
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_SET, [
       { sessionId: 'rs', objective: '目标 X' },
     ]);
     expect(goalController.setGoal).not.toHaveBeenCalled();
@@ -69,7 +70,7 @@ describe('/goal 远程路由', () => {
   it('deviceId + clear → 隧道 maker:goal:clear', async () => {
     const { registry, goalController, remoteInvoke } = makeHarness();
     await registry.execute('goal', { sessionId: 'rs', deviceId: 'dev-1', args: 'clear' });
-    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'maker:goal:clear', ['rs']);
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_CLEAR, ['rs']);
     expect(goalController.clearGoal).not.toHaveBeenCalled();
     expect(sentPayloads().at(-1)).toMatchObject({ command: 'goal', goalAction: 'cleared' });
   });
@@ -98,7 +99,7 @@ describe('/learn 远程路由', () => {
       remoteInvoke: async () => ({ runId: 'remote-run' }),
     });
     await registry.execute('learn', { sessionId: 'rs', deviceId: 'dev-1', args: '学习 X 工作流' });
-    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'learn:start', [
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.START, [
       { input: '学习 X 工作流', sourceKind: 'freetext', originSessionId: 'rs' },
     ]);
     expect(learnController.startLearn).not.toHaveBeenCalled();
@@ -110,7 +111,7 @@ describe('/learn 远程路由', () => {
       remoteInvoke: async () => ({ runId: 'r2' }),
     });
     await registry.execute('learn', { sessionId: 'rs', deviceId: 'dev-1', args: 'hub:my-skill 精简点' });
-    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'learn:start', [
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.START, [
       { input: '精简点', sourceKind: 'hub', hubSlug: 'my-skill', originSessionId: 'rs' },
     ]);
   });
@@ -156,7 +157,7 @@ describe('/cmd 远程路由', () => {
       workingDir: '/remote/dir',
       args: 'ls',
     });
-    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'desktop-cmd:run', [
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.DESKTOP_CMD.RUN, [
       { cmdLine: 'ls', cwd: '/remote/dir' },
     ]);
     expect(sentPayloads().at(-1)).toMatchObject({ command: 'cmd', result: remoteResult });

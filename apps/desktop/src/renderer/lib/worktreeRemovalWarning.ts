@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 /**
  * 删除/归档前的 worktree 脏状态预检(P1)。
  *
@@ -21,7 +22,7 @@ async function queryWorktreeRemovalPreflight(
     const preview = deviceLinkDeviceId
       ? await window.electronAPI.deviceLink.invoke(
           deviceLinkDeviceId,
-          'worktree:removal-preview',
+          IPC_CHANNELS.WORKTREE.REMOVAL_PREVIEW,
           [sessionId],
         ) as { hasWorktree: boolean; dirty: boolean }
       : await window.electronAPI.worktreeRemovalPreview(sessionId);

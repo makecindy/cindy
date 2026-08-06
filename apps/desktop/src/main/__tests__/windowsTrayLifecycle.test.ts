@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import {
   hideWindowToWindowsTray,
@@ -108,19 +109,21 @@ describe('Windows tray lifecycle', () => {
     window.minimized = true;
     window.visible = false;
 
-    requestWindowsCloseBehavior(window, 'window-behavior:close-requested');
+    requestWindowsCloseBehavior(window, IPC_CHANNELS.WINDOW_BEHAVIOR.WINDOWS_CLOSE_BEHAVIOR_REQUESTED);
 
     expect(window.restore).toHaveBeenCalledTimes(1);
     expect(window.show).toHaveBeenCalledTimes(1);
     expect(window.focus).toHaveBeenCalledTimes(1);
-    expect(window.webContents.send).toHaveBeenCalledWith('window-behavior:close-requested');
+    expect(window.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.WINDOW_BEHAVIOR.WINDOWS_CLOSE_BEHAVIOR_REQUESTED,
+    );
   });
 
   it('does not request the custom dialog after the renderer is destroyed', () => {
     const window = makePromptWindow();
     window.webContentsDestroyed = true;
 
-    requestWindowsCloseBehavior(window, 'window-behavior:close-requested');
+    requestWindowsCloseBehavior(window, IPC_CHANNELS.WINDOW_BEHAVIOR.WINDOWS_CLOSE_BEHAVIOR_REQUESTED);
 
     expect(window.focus).not.toHaveBeenCalled();
     expect(window.webContents.send).not.toHaveBeenCalled();

@@ -8,6 +8,7 @@
  * 需求与设计见 `docs/client-log-upload-requirements.md`、
  * `docs/client-log-upload-implementation-plan.md`。
  */
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** 一次上报的触发原因。后台按它区分手动报障与崩溃现场。 */
 export type LogUploadReason = 'manual' | 'crash-immediate' | 'crash-backfill';
@@ -38,7 +39,7 @@ export interface LogUploadResult {
   recordCount: number;
 }
 
-export const LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL = 'log-upload:settings-change';
+export const LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL = IPC_CHANNELS.LOG_UPLOAD.SETTINGS_CHANGE;
 
 /**
  * 上传编号的字符集：Crockford base32 去掉易混字符（I / L / O / U）与 0 / 1。

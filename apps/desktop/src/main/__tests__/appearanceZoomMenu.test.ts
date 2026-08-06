@@ -13,8 +13,12 @@ describe('persisted page zoom menu accelerators', () => {
   });
 
   it('guards every persistent renderer zoom write with the app-content sender check', () => {
-    for (const channel of ['page-zoom:in', 'page-zoom:out', 'page-zoom:reset']) {
-      const start = bootstrapSource.indexOf(`ipcMain.handle('${channel}'`);
+    for (const channelConst of [
+      'IPC_CHANNELS.PAGE_ZOOM.IN',
+      'IPC_CHANNELS.PAGE_ZOOM.OUT',
+      'IPC_CHANNELS.PAGE_ZOOM.RESET',
+    ]) {
+      const start = bootstrapSource.indexOf(`ipcMain.handle(${channelConst},`);
       const end = bootstrapSource.indexOf('\n  });', start);
       const handler = bootstrapSource.slice(start, end);
 

@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
+
 import {
   normalizePendingRemotePrecreatedWorktrees,
   type PendingRemotePrecreatedWorktree,
@@ -268,7 +270,7 @@ async function probeClaimedSession(
 ): Promise<boolean> {
   try {
     assertCurrent(isCurrent);
-    const value = await invoke('local-db:sessions:get', [sessionId]);
+    const value = await invoke(IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, [sessionId]);
     assertCurrent(isCurrent);
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     return (value as { id?: unknown }).id === sessionId;
@@ -293,7 +295,7 @@ async function discardPendingRecord(
       ? { sessionId: record.sessionId, path: record.path }
       : { sessionId: record.sessionId, recoveryKey: record.recoveryKey };
     assertCurrent(isCurrent);
-    await invoke('worktree:discard-precreated', [locator]);
+    await invoke(IPC_CHANNELS.WORKTREE.DISCARD_PRECREATED, [locator]);
     assertCurrent(isCurrent);
     return forgetPendingRemotePrecreatedWorktree(record, isCurrent);
   } catch (error) {
@@ -386,7 +388,7 @@ export async function createRemoteSessionWithPrecreatedWorktree(
   let createFailure: unknown;
   try {
     assertCurrent(input.isCurrent);
-    const result = await input.invoke('maker:create-session', [input.createArgs]);
+    const result = await input.invoke(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, [input.createArgs]);
     assertCurrent(input.isCurrent);
     const sessionId = matchingSessionId(result, input.sessionId);
     if (sessionId) {
@@ -408,7 +410,7 @@ export async function createRemoteSessionWithPrecreatedWorktree(
 
   try {
     assertCurrent(input.isCurrent);
-    await input.invoke('worktree:discard-precreated', [{
+    await input.invoke(IPC_CHANNELS.WORKTREE.DISCARD_PRECREATED, [{
       sessionId: input.sessionId,
       path: input.path,
     }]);

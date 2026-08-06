@@ -91,6 +91,7 @@ import { shouldSuppressRemoteListEmptyState } from '@/session/sessionEmptyState'
 import type { RemoteSession } from '@/session/types';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 const LIST_LIMIT = 200;
 // label 走 i18n key(在使用点 t() 求值),不在模块顶层冻结语言。
@@ -195,7 +196,7 @@ export default function DeviceDetailScreen() {
     try {
       const list = await withTransientRemoteRetry(async () => {
         await subscribe(`device:${deviceId}`, deviceId, ['sessions']);
-        return invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
+        return invoke<RemoteSession[]>(deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, [
           LIST_LIMIT,
           // 自动化任务作用域页承诺展示"该任务的全部 N 次运行",归档的 run 也算,
           // 必须拉全量;其余模式仍按当前筛选拉取。

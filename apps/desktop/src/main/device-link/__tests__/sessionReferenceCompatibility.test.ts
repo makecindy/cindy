@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
 
 import { handleInvoke, type DeviceLinkIpcDeps } from '../ipc.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function depsForInvoke(
   invoke: DeviceLinkIpcDeps['invoke'],
@@ -33,7 +34,7 @@ describe('device-link target session-reference capability gate', () => {
     const rewrite = vi.fn(async (_channel: string, args: unknown[]) => args);
 
     await expect(
-      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', 'maker:input:enqueue', [
+      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
         'target-session',
         queuedWithReference(),
       ]),
@@ -69,7 +70,7 @@ describe('device-link target session-reference capability gate', () => {
     ]);
 
     await expect(
-      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', 'maker:input:enqueue', [
+      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
         'target-session',
         queuedWithReference(),
       ]),
@@ -77,7 +78,7 @@ describe('device-link target session-reference capability gate', () => {
 
     expect(invoke.mock.calls.map((call) => call[1])).toEqual([
       DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
-      'maker:input:enqueue',
+      IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE,
     ]);
     expect(rewrite).toHaveBeenCalledTimes(1);
   });
@@ -117,7 +118,7 @@ describe('device-link target session-reference capability gate', () => {
     const rewrite = vi.fn(async (_channel: string, args: unknown[]) => args);
 
     await expect(
-      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', 'maker:input:enqueue', [
+      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
         'target-session',
         queuedWithReference(),
       ]),
@@ -131,14 +132,14 @@ describe('device-link target session-reference capability gate', () => {
       .mockResolvedValue({ ok: true, result: { accepted: true } });
 
     await expect(
-      handleInvoke(depsForInvoke(invoke), 'target-device', 'maker:input:enqueue', [
+      handleInvoke(depsForInvoke(invoke), 'target-device', IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
         'target-session',
         { text: 'ordinary message' },
       ]),
     ).resolves.toEqual({ accepted: true });
 
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('target-device', 'maker:input:enqueue', [
+    expect(invoke).toHaveBeenCalledWith('target-device', IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
       'target-session',
       { text: 'ordinary message' },
     ]);
@@ -151,7 +152,7 @@ describe('device-link target session-reference capability gate', () => {
     });
 
     await expect(
-      handleInvoke(depsForInvoke(invoke), 'target-device', 'maker:input:update-text', [
+      handleInvoke(depsForInvoke(invoke), 'target-device', IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT, [
         'target-session',
         'client-1',
         'linked',
@@ -167,7 +168,7 @@ describe('device-link target session-reference capability gate', () => {
     });
 
     await expect(
-      handleInvoke(depsForInvoke(invoke), 'target-device', 'maker:input:enqueue', [
+      handleInvoke(depsForInvoke(invoke), 'target-device', IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
         'target-session',
         queuedWithReference(),
       ]),

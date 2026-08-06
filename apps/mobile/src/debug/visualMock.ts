@@ -16,6 +16,7 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 export const VISUAL_MOCK_DEVICE_ID = 'cindy-visual-mock-mac';
 export const VISUAL_MOCK_DEVICE_NAME = 'CINDY Visual Mock Mac';
@@ -166,77 +167,77 @@ async function visualMockInvoke<T = unknown>(
   const realData = await loadVisualRealDataSnapshot();
   if (realData) {
     switch (channel) {
-      case 'local-db:sessions:list':
+      case IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST:
         return realDataSessions(realData, args[0] as string | undefined) as T;
-      case 'local-db:sessions:get':
+      case IPC_CHANNELS.LOCAL_DB.SESSIONS_GET:
         return realDataSession(realData, String(args[0] ?? realData.selectedSessionId ?? '')) as T;
-      case 'local-db:messages:list':
+      case IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST:
         return (realData.messagesBySession[String(args[0] ?? realData.selectedSessionId ?? '')] ?? []) as T;
-      case 'maker:get-pending-interactions':
+      case IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS:
         return (realData.pendingInteractionsBySession?.[String(args[0] ?? realData.selectedSessionId ?? '')] ?? []) as T;
-      case 'maker:input:get-projection':
+      case IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION:
         return realDataProjection(realData, String(args[0] ?? realData.selectedSessionId ?? '')) as T;
-      case 'maker:list-active':
+      case IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE:
         return [] as T;
     }
   }
   switch (channel) {
-    case 'local-db:sessions:list':
+    case IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST:
       return visualMockSessions(args[0] as string | undefined) as T;
-    case 'local-db:sessions:get':
+    case IPC_CHANNELS.LOCAL_DB.SESSIONS_GET:
       return visualMockSession(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
-    case 'local-db:messages:list':
+    case IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST:
       return visualMockMessages(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
-    case 'maker:get-pending-interactions':
+    case IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS:
       return visualMockPendingInteractions(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
-    case 'maker:input:get-projection':
+    case IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION:
       return visualMockProjection(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
-    case 'maker:list-active':
+    case IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE:
       return [
         { sessionId: 'visual-running', agentKind: 'cc', isTurnRunning: true },
         { sessionId: 'visual-automation-running', agentKind: 'cc', isTurnRunning: true },
       ] as T;
-    case 'maker:get-capabilities':
+    case IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES:
       return visualMockCapabilities() as T;
-    case 'maker:provider:list':
+    case IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST:
       return { providers: [] } as T;
-    case 'maker:api-key:present':
+    case IPC_CHANNELS.MAKER_INVOKE.API_KEY_PRESENT:
       return { present: true } as T;
-    case 'maker:usage:model-pricing':
+    case IPC_CHANNELS.MAKER_INVOKE.USAGE_MODEL_PRICING:
       return {
         'claude-sonnet-4-6': { inputUsdPerMtok: 3, outputUsdPerMtok: 15 },
         'gpt-5.5': { inputUsdPerMtok: 2, outputUsdPerMtok: 10 },
       } as T;
-    case 'maker:usage:account':
+    case IPC_CHANNELS.MAKER_INVOKE.USAGE_ACCOUNT:
       return {
         windows: [
           { label: '5h', used: 42, limit: 100 },
           { label: 'weekly', used: 180, limit: 500 },
         ],
       } as T;
-    case 'maker:schedule:list':
+    case IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_LIST:
       return visualMockSchedules() as T;
-    case 'maker:schedule:get':
+    case IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_GET:
       return (visualMockSchedules().find((item) => item.id === args[0]) ?? visualMockSchedules()[0]) as T;
-    case 'maker:schedule:list-runs':
+    case IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_LIST_RUNS:
       return visualMockScheduleRuns(String(args[0] ?? 'visual-schedule-1')) as T;
-    case 'maker:schedule:list-templates':
+    case IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_LIST_TEMPLATES:
       return visualMockScheduleTemplates() as T;
-    case 'file-browser:remote-op':
+    case IPC_CHANNELS.FILE_BROWSER.REMOTE_OP:
       return handleVisualMockFileBrowser(args[0]) as T;
-    case 'fs:list-dir':
+    case IPC_CHANNELS.FS.LIST_DIR:
       return visualMockDirectory() as T;
-    case 'fs:stat-path':
+    case IPC_CHANNELS.FS.STAT_PATH:
       return { kind: 'dir', resolvedPath: '/repo/xdt-maker' } satisfies RemotePathStatResult as T;
-    case 'text-file:read-preview':
+    case IPC_CHANNELS.TEXT_FILE.READ_PREVIEW:
       return visualMockTextPreview() as T;
-    case 'maker:list-agent-commands':
+    case IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_COMMANDS:
       return { success: true, commands: [{ kind: 'agent-builtin', name: 'status', description: 'Show status' }] } as T;
-    case 'maker:list-agent-skills':
+    case IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS:
       return { success: true, skills: [{ kind: 'agent-skill', name: 'visual-check', source: 'skill' }] } as T;
-    case 'maker:scan-at-resources':
+    case IPC_CHANNELS.MAKER_INVOKE.SCAN_AT_RESOURCES:
       return { success: true, items: [{ type: 'file', name: 'README.md', relPath: 'README.md' }] } as T;
-    case 'maker:goal:get-status':
+    case IPC_CHANNELS.MAKER_INVOKE.GOAL_GET_STATUS:
       return null as T;
     default:
       return {} as T;

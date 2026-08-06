@@ -42,6 +42,7 @@ vi.mock('../../client/current', () => ({
 }));
 
 import { registerRecentWorkdirsIpc } from '../recentWorkdirs';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function createDb(): void {
   h.sqlite?.close();
@@ -83,7 +84,7 @@ afterAll(() => {
   h.sqlite?.close();
 });
 
-describe('local-db:recent-workdirs:remove', () => {
+describe(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, () => {
   beforeEach(() => {
     h.handlers.clear();
     h.webContentsSend = vi.fn();
@@ -95,14 +96,14 @@ describe('local-db:recent-workdirs:remove', () => {
     seed('/repo/project-a', 1000);
     seed('/repo/project-b', 2000);
 
-    const res = (await invoke('local-db:recent-workdirs:remove', {
+    const res = (await invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, {
       path: '/repo/project-a',
     })) as { deleted: boolean };
 
     expect(res.deleted).toBe(true);
     expect(rows()).toEqual([{ path: '/repo/project-b' }]);
     // 其它窗口靠这条广播刷新各自的模块级缓存,漏发 = 别的窗口残留可选的已删项目。
-    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+    expect(h.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_CHANGED, {
       path: '/repo/project-a',
     });
   });
@@ -111,7 +112,7 @@ describe('local-db:recent-workdirs:remove', () => {
     // 写入侧主键是 posix 归一形态;删除侧必须走同一归一,否则 Windows 路径删不掉。
     seed('E:/foo/bar', 1000);
 
-    const res = (await invoke('local-db:recent-workdirs:remove', {
+    const res = (await invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, {
       path: 'E:\\foo\\bar\\',
     })) as { deleted: boolean };
 
@@ -120,7 +121,7 @@ describe('local-db:recent-workdirs:remove', () => {
   });
 
   it('is idempotent: missing path resolves deleted:false without broadcasting', async () => {
-    const res = (await invoke('local-db:recent-workdirs:remove', {
+    const res = (await invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, {
       path: '/not/in/table',
     })) as { deleted: boolean };
     expect(res.deleted).toBe(false);
@@ -128,13 +129,13 @@ describe('local-db:recent-workdirs:remove', () => {
   });
 
   it('rejects non-string / blank path with INVALID_PARAMS', async () => {
-    await expect(invoke('local-db:recent-workdirs:remove', { path: 42 })).rejects.toThrow(
+    await expect(invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, { path: 42 })).rejects.toThrow(
       /INVALID_PARAMS/,
     );
-    await expect(invoke('local-db:recent-workdirs:remove', undefined)).rejects.toThrow(
+    await expect(invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, undefined)).rejects.toThrow(
       /INVALID_PARAMS/,
     );
-    await expect(invoke('local-db:recent-workdirs:remove', { path: '   ' })).rejects.toThrow(
+    await expect(invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, { path: '   ' })).rejects.toThrow(
       /INVALID_PARAMS/,
     );
   });
@@ -142,7 +143,7 @@ describe('local-db:recent-workdirs:remove', () => {
   it('treats managed-worktree path as no-op (normalize returns null)', async () => {
     // 这类路径本来进不了表(upsert 同样拒绝),删除侧对齐:归一失败即幂等 no-op。
     seed('/repo/project-a', 1000);
-    const res = (await invoke('local-db:recent-workdirs:remove', {
+    const res = (await invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE, {
       path: '/repo/.cindy-worktrees/task-x',
     })) as { deleted: boolean };
     expect(res.deleted).toBe(false);
@@ -165,7 +166,7 @@ describe('local-db:recent-workdirs:list exists probe', () => {
     seed(filePath.replace(/\\/g, '/'), 2000);
     seed('/definitely/not/a/real/dir/xyz', 1000);
 
-    const list = (await invoke('local-db:recent-workdirs:list')) as Array<{
+    const list = (await invoke(IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_LIST)) as Array<{
       path: string;
       lastUsedAt: string;
       exists: boolean;

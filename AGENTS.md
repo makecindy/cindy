@@ -29,6 +29,10 @@
 - 启动、调试或验证 Desktop 时，必须先读 `docs/dev-rules/desktop-development.md`。
 - 修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、导航或 Electron
   特权能力前，必须先读 `docs/dev-rules/electron-security-and-process-boundaries.md`。
+- 新增或修改 Electron IPC channel、device-link invoke/push allowlist、preload bridge、
+  `ipcMain` / `ipcRenderer` / `webContents.send` 调用点前，必须先读
+  `docs/dev-rules/ipc-channel-contracts.md`：channel 字符串唯一事实源是
+  `@cindy/cindy-ipc`，低层 IPC API 调用点禁止直接写字符串 channel。
 - 修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件或测试目录前，必须
   先读 `docs/dev-rules/credentials-and-local-storage.md`。
 - 新增或修改媒体生成、导入、缓存、附件、持久化、协议解析或回收逻辑前，必须先读

@@ -214,6 +214,7 @@ export default {
     requiredUnitWorkspace('@cindy/responses-chat-bridge', 'packages/responses-chat-bridge'),
     requiredUnitWorkspace('@cindy/auth-client', 'packages/auth-client'),
     requiredUnitWorkspace('@cindy/browser-control-runtime', 'packages/browser-control-runtime'),
+    noCollectableWorkspace('@cindy/cindy-ipc', 'packages/cindy-ipc'),
     requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
     requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
     noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),

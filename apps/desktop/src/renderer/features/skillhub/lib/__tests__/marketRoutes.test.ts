@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { i18n } from '@/i18n';
 import { marketActionErrorKey, marketActionErrorMessage } from '../marketErrors';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const skillhubDir = resolve(here, '../..');
@@ -19,7 +20,7 @@ describe('market route scope', () => {
 
   it('keeps cloud market management out of the local skill detail page', () => {
     expect(localDetailSource).not.toContain('市场管理');
-    expect(localDetailSource).not.toContain('skillhub:update-published');
+    expect(localDetailSource).not.toContain(IPC_CHANNELS.SKILLHUB.UPDATE_PUBLISHED);
     expect(localDetailSource).not.toContain('updatePublished');
     expect(localDetailSource).not.toContain('deletePublished');
     expect(localDetailSource).not.toContain('marketManagePath');

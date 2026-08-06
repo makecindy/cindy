@@ -744,10 +744,10 @@ describe('sendToSession ordering', () => {
 
   it('keeps worker idle/archive adapters passing the caller lead session id', () => {
     expect(preloadSource).toContain("idleWorker: (leadSessionId: string, workerId: string, expectedStatus?: 'done'): Promise<unknown> =>");
-    expect(preloadSource).toContain("ipcRenderer.invoke('maker:worker:idle', {");
-    expect(preloadSource).toContain("ipcRenderer.invoke('maker:worker:acknowledge-done', {");
+    expect(preloadSource).toContain('ipcRenderer.invoke(IPC_CHANNELS.MAKER_INVOKE.WORKER_IDLE, {');
+    expect(preloadSource).toContain('ipcRenderer.invoke(IPC_CHANNELS.MAKER_INVOKE.WORKER_ACKNOWLEDGE_DONE, {');
     expect(preloadSource).toContain("archiveWorker: (leadSessionId: string, workerId: string): Promise<unknown> =>");
-    expect(preloadSource).toContain("ipcRenderer.invoke('maker:worker:archive', { leadSessionId, workerId })");
+    expect(preloadSource).toContain('ipcRenderer.invoke(IPC_CHANNELS.MAKER_INVOKE.WORKER_ARCHIVE, { leadSessionId, workerId })');
     // device-link:归档入口(现居 useOrcaWorkerSelection)经 orcaWorkflowsFor 按 lead 来源路由
     // (本机直连 / 远程隧道),但仍把 (leadSessionId, workerId) 传给 archiveWorker ——
     // 本不变式守的是「带上 caller lead id」;正则容忍链式调用换行。

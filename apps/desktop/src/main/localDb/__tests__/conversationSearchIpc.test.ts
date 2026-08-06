@@ -22,12 +22,13 @@ vi.mock('../conversationSearch.js', () => ({
 }));
 
 import { registerSearchIpc } from '../ipc/search.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type Handler = (event: unknown, payload: unknown) => Promise<unknown>;
 
 function handler(): Handler {
   registerSearchIpc();
-  const call = h.ipcHandle.mock.calls.find(([channel]) => channel === 'local-db:conversations:search');
+  const call = h.ipcHandle.mock.calls.find(([channel]) => channel === IPC_CHANNELS.LOCAL_DB.CONVERSATIONS_SEARCH);
   if (!call) throw new Error('search handler not registered');
   return call[1] as Handler;
 }

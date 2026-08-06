@@ -34,14 +34,15 @@ vi.mock('../../logger', () => ({
 }));
 
 import { __testing } from '../dispatch';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const project = (result: unknown) =>
-  __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
+  __testing.projectInvokeResultForTunnel(IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, result) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 const projectForCurrentController = (result: unknown) =>
-  __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
+  __testing.projectInvokeResultForTunnel(IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, result, true) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
   };
@@ -270,11 +271,11 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
   it('非 maker:provider:list 通道 → 原样返回不改', () => {
     const other = { foo: 'bar', providers: [xdProviderWithFullRouting()] };
-    expect(__testing.projectInvokeResultForTunnel('maker:set-model', other)).toBe(other);
+    expect(__testing.projectInvokeResultForTunnel(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, other)).toBe(other);
   });
 
   it('result 非 { providers: [] } 形状 → 原样返回', () => {
     const weird = { notProviders: 1 };
-    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', weird)).toBe(weird);
+    expect(__testing.projectInvokeResultForTunnel(IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, weird)).toBe(weird);
   });
 });

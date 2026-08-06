@@ -90,54 +90,55 @@ import {
 import { removeRemoteMcpForwardPref } from './codex-remote-mcp.js';
 import { ensureDaemonRunning } from '../maker-host/cc-manager-client.js';
 import { softCloseCcSessionsForHost } from '../maker-host/index.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('remote-ssh/ipc');
 
 export const REMOTE_SSH_INVOKE = {
-  LIST: 'maker:remote-ssh:list',
-  RELOAD_CONFIG: 'maker:remote-ssh:reload-config',
-  ADD: 'maker:remote-ssh:add',
-  UPDATE: 'maker:remote-ssh:update',
-  REMOVE: 'maker:remote-ssh:remove',
-  CONNECT: 'maker:remote-ssh:connect',
-  DISCONNECT: 'maker:remote-ssh:disconnect',
+  LIST: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_LIST,
+  RELOAD_CONFIG: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_RELOAD_CONFIG,
+  ADD: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_ADD,
+  UPDATE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_UPDATE,
+  REMOVE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_REMOVE,
+  CONNECT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CONNECT,
+  DISCONNECT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_DISCONNECT,
   // Phase B
-  PROBE_AGENT: 'maker:remote-ssh:probe-agent',
-  INSTALL_AGENT: 'maker:remote-ssh:install-agent',
-  UNINSTALL_AGENT: 'maker:remote-ssh:uninstall-agent',
-  RUN_AGENT_ONE_SHOT: 'maker:remote-ssh:run-agent-one-shot',
+  PROBE_AGENT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_PROBE_AGENT,
+  INSTALL_AGENT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_INSTALL_AGENT,
+  UNINSTALL_AGENT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_UNINSTALL_AGENT,
+  RUN_AGENT_ONE_SHOT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_RUN_AGENT_ONE_SHOT,
   // Phase B+ — Codex credential sync
-  CHECK_CODEX_AUTH: 'maker:remote-ssh:check-codex-auth',
-  SYNC_CODEX_AUTH: 'maker:remote-ssh:sync-codex-auth',
+  CHECK_CODEX_AUTH: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CHECK_CODEX_AUTH,
+  SYNC_CODEX_AUTH: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_SYNC_CODEX_AUTH,
   // Phase B++ — SSH key setup wizard
-  LIST_LOCAL_KEYS: 'maker:remote-ssh:list-local-keys',
-  GENERATE_KEY: 'maker:remote-ssh:generate-key',
-  READ_PUBKEY: 'maker:remote-ssh:read-pubkey',
-  BUILD_INSTALL_CMD: 'maker:remote-ssh:build-install-cmd',
+  LIST_LOCAL_KEYS: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_LIST_LOCAL_KEYS,
+  GENERATE_KEY: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_GENERATE_KEY,
+  READ_PUBKEY: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_READ_PUBKEY,
+  BUILD_INSTALL_CMD: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_BUILD_INSTALL_CMD,
   /**
    * Inline variant that doesn't require the host to exist in the pool.
    * Renderer can use it while still composing a new / unsaved host form,
    * so the key-picker dialog can surface the ssh-copy-id command before
    * the user actually submits the host.
    */
-  BUILD_INSTALL_CMD_INLINE: 'maker:remote-ssh:build-install-cmd-inline',
-  ADD_KEY_TO_AGENT: 'maker:remote-ssh:add-key-to-agent',
+  BUILD_INSTALL_CMD_INLINE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_BUILD_INSTALL_CMD_INLINE,
+  ADD_KEY_TO_AGENT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_ADD_KEY_TO_AGENT,
   // Phase C — generic remote fs primitives (reusable by a future remote
   // file browser; currently consumed by StartRemoteSessionPanel for the
   // "workdir doesn't exist → confirm + mkdir" UX).
-  STAT_REMOTE_PATH: 'maker:remote-ssh:stat-remote-path',
-  MKDIR_P_REMOTE: 'maker:remote-ssh:mkdir-p-remote',
+  STAT_REMOTE_PATH: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_STAT_REMOTE_PATH,
+  MKDIR_P_REMOTE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_MKDIR_P_REMOTE,
   // Phase D — per-host autoConnect preference + lightweight remote dir
   // browser (powers the "添加远程项目" entry in NewMaker chat composer).
-  SET_AUTO_CONNECT: 'maker:remote-ssh:set-auto-connect',
-  HAS_ANY_AUTO_CONNECT_HOST: 'maker:remote-ssh:has-any-auto-connect-host',
-  LIST_REMOTE_DIR: 'maker:remote-ssh:list-remote-dir',
+  SET_AUTO_CONNECT: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_SET_AUTO_CONNECT,
+  HAS_ANY_AUTO_CONNECT_HOST: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_HAS_ANY_AUTO_CONNECT_HOST,
+  LIST_REMOTE_DIR: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_LIST_REMOTE_DIR,
   // cc-mgr 版本管理 — UpgradeBanner 后端。force-upgrade 触发 kill + re-upload
   // (会中断 host 上所有 alive cc session);list-pending 给 renderer 启动时
   // 同步 push 之前的 pending 状态;dismiss-pending 用户点 banner X 关掉。
-  CC_MGR_FORCE_UPGRADE: 'maker:remote-ssh:cc-mgr-force-upgrade',
-  CC_MGR_LIST_PENDING_UPGRADES: 'maker:remote-ssh:cc-mgr-list-pending-upgrades',
-  CC_MGR_DISMISS_PENDING_UPGRADE: 'maker:remote-ssh:cc-mgr-dismiss-pending-upgrade',
+  CC_MGR_FORCE_UPGRADE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CC_MGR_FORCE_UPGRADE,
+  CC_MGR_LIST_PENDING_UPGRADES: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CC_MGR_LIST_PENDING_UPGRADES,
+  CC_MGR_DISMISS_PENDING_UPGRADE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CC_MGR_DISMISS_PENDING_UPGRADE,
 } as const;
 
 /**
@@ -156,17 +157,17 @@ export function isCcMgrUpgradeInFlight(sessionId: string | null | undefined): bo
 }
 
 export const REMOTE_SSH_PUSH = {
-  STATUS_CHANGED: 'maker:remote-ssh:status-changed',
-  INSTALL_PROGRESS: 'maker:remote-ssh:install-progress',
+  STATUS_CHANGED: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_STATUS_CHANGED,
+  INSTALL_PROGRESS: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_INSTALL_PROGRESS,
   // Phase D — maker:send 触发的静默 install 状态推送 (粗粒度: started/progress/done/failed)。
   // 跟 INSTALL_PROGRESS 解耦: 后者是逐行 log (RemoteHostDetail 消费),
   // 这条是 toast 状态机用的高层 phase, 避免 toast 跟每条 log 同频更新刷屏。
-  SILENT_INSTALL_STATUS: 'maker:remote-ssh:silent-install-status',
+  SILENT_INSTALL_STATUS: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_SILENT_INSTALL_STATUS,
   // cc-mgr 版本管理: silent install pipeline 探到远端 daemon 版本 != desktop
   // 手里的 bundle 版本, 且 daemon 上有 alive session 时, 不强升, push 这条让
   // 该 host 上每个 cc remote ChatView 顶部显示一条 UpgradeBanner 提示用户主动升。
   // payload.available=null 表示 pending 被清空 (升级完成 / 显式 dismiss), banner 自己消失。
-  CC_MGR_UPGRADE_AVAILABLE: 'maker:remote-ssh:cc-mgr-upgrade-available',
+  CC_MGR_UPGRADE_AVAILABLE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CC_MGR_UPGRADE_AVAILABLE,
 } as const;
 
 /** silent-install push payload — renderer-side 状态机消费这条切 toast 文案。 */

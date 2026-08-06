@@ -189,7 +189,7 @@ describe('Shared create project picker', () => {
     expect(worktreeChipsSource).toContain('onToggle={onEnabledChange}');
     expect(worktreeChipsSource).not.toContain("'branch-pick'");
     expect(branchPickSource).not.toContain("kind: 'disable-worktree'");
-    expect(newMakerDraftRouteSource).toContain("'maker:apply-new-maker-worktree-pref'");
+    expect(newMakerDraftRouteSource).toContain('IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_PREF');
     expect(newMakerDraftRouteSource).toContain('setWorktreePreference(enabled)');
     expect(newMakerDraftRouteSource).toContain('setWtEnabled(worktreePref)');
     expect(newMakerDraftRouteSource).toContain('wt.enabled && wt.baseRepo');
@@ -299,7 +299,7 @@ describe('Shared create project picker', () => {
     // hook 用权威的 runtime 注册来源,而非模型目录;远程走 device-link 隧道。
     expect(availableAgentsHookSource).toContain('api.listAvailableAgents()');
     expect(availableAgentsHookSource).toContain(
-      "dl.invoke(deviceId, 'maker:list-available-agents', [])",
+      'dl.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.LIST_AVAILABLE_AGENTS, [])',
     );
     // claude-code → cc 归一,fail-open(未加载不隐藏)。
     expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");

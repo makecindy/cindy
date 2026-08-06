@@ -18,6 +18,7 @@ import {
   installAutoPermissionFallbackToastListener,
   type AutoPermissionFallbackPayload,
 } from '../lib/autoPermissionFallbackToast';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const payload: AutoPermissionFallbackPayload = {
   sessionId: 'session-1',
@@ -76,12 +77,12 @@ describe('autoPermissionFallbackToast', () => {
     localListener?.(payload);
     remoteListener?.({
       deviceId: 'device-1',
-      channel: 'maker:auto-permission:fallback',
+      channel: IPC_CHANNELS.MAKER_PUSH.AUTO_PERMISSION_FALLBACK,
       payload,
     });
     remoteListener?.({
       deviceId: 'device-1',
-      channel: 'maker:auto-permission:fallback',
+      channel: IPC_CHANNELS.MAKER_PUSH.AUTO_PERMISSION_FALLBACK,
       payload: { ...payload, to: 'bypassPermissions' },
     });
 

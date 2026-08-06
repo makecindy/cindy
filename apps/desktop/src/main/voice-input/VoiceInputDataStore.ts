@@ -35,6 +35,7 @@ import {
   type VoiceInputSettings,
   type VoiceInputSyncErrorResult,
 } from '../../shared/voiceInputData.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('voice-input:data-store');
 const DATA_FILE_NAME = 'voice-input-data.v1.json';
@@ -688,11 +689,11 @@ export function registerVoiceInputDataStoreIpc(): void {
   if (ipcRegistered) return;
   ipcRegistered = true;
 
-  ipcMain.on('voice-input:data:get', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.DATA_GET, (event) => {
     event.returnValue = voiceInputDataStore.getSnapshot();
   });
 
-  ipcMain.on('voice-input:data:migrate-legacy', (event, payload: LegacyRendererDataPayload | undefined) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.DATA_MIGRATE_LEGACY, (event, payload: LegacyRendererDataPayload | undefined) => {
     try {
       event.returnValue = voiceInputDataStore.migrateLegacyRendererStorage(payload);
     } catch (error) {
@@ -700,7 +701,7 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:settings:update', (_event, patch: unknown): VoiceInputSettings => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE, (_event, patch: unknown): VoiceInputSettings => {
     try {
       return voiceInputDataStore.updateSettings(patch);
     } catch (error) {
@@ -708,7 +709,7 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:dictionary:delete-entries', (event, entryIds: unknown): VoiceInputSettings => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.DICTIONARY_DELETE_ENTRIES, (event, entryIds: unknown): VoiceInputSettings => {
     try {
       // 删除现在会写 CRDT 墓碑并传播到用户的每一台电脑,和 add/import/rename 是
       // 同一级别的写操作 —— 守卫不能只加在新增那几个上。超长数组也要挡:逐条
@@ -722,7 +723,7 @@ export function registerVoiceInputDataStoreIpc(): void {
 
   // 词典的增改都是语义化操作,不接受 renderer 整份覆盖词条数组:同步状态是词典的
   // 真相,整份覆盖既表达不了「用户到底做了什么」,也会在下一次物化时被丢掉。
-  ipcMain.handle('voice-input:dictionary:add-entry', (event, text: unknown): VoiceInputSettings => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.DICTIONARY_ADD_ENTRY, (event, text: unknown): VoiceInputSettings => {
     try {
       // 词典写入会改用户的持久数据 —— 只接受可信的主 renderer,不能让任意子框架 /
       // WebView 拿到这几个全局 channel 就能改词典。
@@ -733,7 +734,7 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:dictionary:import-entries', (event, texts: unknown): VoiceInputSettings => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.DICTIONARY_IMPORT_ENTRIES, (event, texts: unknown): VoiceInputSettings => {
     try {
       assertTrustedAppRendererEvent(event);
       // renderer 直连时可以绕开 CSV UI 的容量裁决,这里必须自己兜底。三重上限
@@ -752,7 +753,7 @@ export function registerVoiceInputDataStoreIpc(): void {
   });
 
   ipcMain.handle(
-    'voice-input:dictionary:rename-entry',
+    IPC_CHANNELS.VOICE_INPUT.DICTIONARY_RENAME_ENTRY,
     (event, payload: { entryId?: unknown; text?: unknown }): VoiceInputSettings => {
       try {
         assertTrustedAppRendererEvent(event);
@@ -766,7 +767,7 @@ export function registerVoiceInputDataStoreIpc(): void {
     },
   );
 
-  ipcMain.handle('voice-input:dictionary-learning:record-actions', (event, actions: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.DICTIONARY_LEARNING_RECORD_ACTIONS, (event, actions: unknown) => {
     try {
       // 这个 handler 直接往词典正本里写。没有守卫的话,任意子帧(webview、插件面板)
       // 都能提交一大批唯一的 add_entry:主进程被同步写盘卡住,sidecar 也被撑过物化
@@ -780,11 +781,11 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.on('voice-input:history:get', (event, limit?: number) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.HISTORY_GET, (event, limit?: number) => {
     event.returnValue = voiceInputDataStore.getHistory(limit);
   });
 
-  ipcMain.on('voice-input:history:get-for-refinement', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.HISTORY_GET_FOR_REFINEMENT, (event) => {
     try {
       event.returnValue = voiceInputDataStore.getHistoryForRefinement();
     } catch (error) {
@@ -792,7 +793,7 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.on('voice-input:history:record', (event, text: string) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.HISTORY_RECORD, (event, text: string) => {
     try {
       event.returnValue = voiceInputDataStore.recordHistory(text);
     } catch (error) {
@@ -800,7 +801,7 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.on('voice-input:history:update', (event, payload: { id?: string; text?: string }) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.HISTORY_UPDATE, (event, payload: { id?: string; text?: string }) => {
     try {
       if (typeof payload?.id === 'string' && typeof payload.text === 'string') {
         voiceInputDataStore.updateHistoryEntry(payload.id, payload.text);
@@ -813,7 +814,7 @@ export function registerVoiceInputDataStoreIpc(): void {
     }
   });
 
-  ipcMain.on('voice-input:history:delete', (event, id: string) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.HISTORY_DELETE, (event, id: string) => {
     try {
       if (typeof id === 'string') {
         voiceInputDataStore.deleteHistoryEntry(id);
@@ -850,7 +851,7 @@ function broadcastVoiceInputDataChanged(payload: DataChangedPayload): void {
   const snapshot = cloneSnapshot(payload);
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
-    window.webContents.send('voice-input:data-changed', snapshot);
+    window.webContents.send(IPC_CHANNELS.VOICE_INPUT.DATA_CHANGED, snapshot);
   });
 }
 

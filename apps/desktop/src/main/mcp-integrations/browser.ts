@@ -41,6 +41,7 @@ import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 
@@ -352,13 +353,13 @@ export function registerBrowserBackendIpc(): void {
     getHealth: getBrowserBackendHealth,
     recover: recoverActiveBrowserBackend,
   });
-  ipcMain.handle('browser-backend:get-state', handlers.getState);
-  ipcMain.handle('browser-backend:set-kind', handlers.setKind);
-  ipcMain.handle('browser-backend:reset', handlers.reset);
-  ipcMain.handle('browser-backend:get-health', handlers.getHealth);
-  ipcMain.handle('browser-backend:recover', handlers.recover);
+  ipcMain.handle(IPC_CHANNELS.BROWSER_BACKEND.GET_STATE, handlers.getState);
+  ipcMain.handle(IPC_CHANNELS.BROWSER_BACKEND.SET_KIND, handlers.setKind);
+  ipcMain.handle(IPC_CHANNELS.BROWSER_BACKEND.RESET, handlers.reset);
+  ipcMain.handle(IPC_CHANNELS.BROWSER_BACKEND.GET_HEALTH, handlers.getHealth);
+  ipcMain.handle(IPC_CHANNELS.BROWSER_BACKEND.RECOVER, handlers.recover);
 
-  ipcMain.handle('rsb-browser-bridge:set-active-session', (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.RSB_BROWSER_BRIDGE.SET_ACTIVE_SESSION, (_e, payload: unknown) => {
     const obj = requireObject(payload, 'set-active-session payload');
     // optionalNullableString accepts `null` explicitly + non-empty string +
     // undefined/empty as "no value". Anything else (e.g. {sessionId: 42})

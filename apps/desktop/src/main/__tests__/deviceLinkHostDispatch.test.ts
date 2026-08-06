@@ -60,6 +60,7 @@ import {
 import { checkRemoteWorkingDir } from '../device-link/remote-workdir-guard';
 import { __testing as registry } from '../device-link/invoke-registry';
 import type { InvokeResultPayload } from '@cindy/device-link';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const SRC = 'controller-device';
 const TMP_DIR = os.tmpdir(); // 真实存在的目录(模拟"浏览到/新建的远程目录")
@@ -106,9 +107,9 @@ function registerHandler(channel: string, impl: (...args: unknown[]) => unknown)
 
 describe('device-link host dispatch (runInvoke) — real gate + async fs guard + routing', () => {
   it('Bug1:create-session 的 workingDir 是真实存在的新目录 → 放行到 handler', async () => {
-    const handler = registerHandler('maker:create-session', () => ({ sessionId: 's-new' }));
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, () => ({ sessionId: 's-new' }));
     const res = (await runInvoke(SRC, {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: TMP_DIR, workspaceKind: 'project' }],
     })) as Extract<InvokeResultPayload, { ok: true }>;
     expect(res.ok).toBe(true);
@@ -117,9 +118,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('create-session 的 workingDir 是刚创建的 Cindy 托管 worktree → 放行到 handler', async () => {
-    const handler = registerHandler('maker:create-session', () => ({ sessionId: 's-worktree' }));
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, () => ({ sessionId: 's-worktree' }));
     const res = (await runInvoke(SRC, {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ id: 's-worktree', workingDir: managedWorktreeDir, workspaceKind: 'project' }],
     })) as Extract<InvokeResultPayload, { ok: true }>;
     expect(res.ok).toBe(true);
@@ -128,9 +129,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('Bug1:create-session 的 workingDir 不存在 → 结构化拒绝,不落到 handler', async () => {
-    const handler = registerHandler('maker:create-session', () => ({ sessionId: 'should-not-happen' }));
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, () => ({ sessionId: 'should-not-happen' }));
     const res = (await runInvoke(SRC, {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: '/definitely/not/a/real/dir/xyz123' }],
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
@@ -140,9 +141,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('create-session 的历史 recent 路径当前不存在 → 拒绝', async () => {
-    const handler = registerHandler('maker:create-session', () => ({ sessionId: 's2' }));
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, () => ({ sessionId: 's2' }));
     const res = (await runInvoke(SRC, {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: '/seeded/recent/proj' }],
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
@@ -151,9 +152,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('create-session 的历史 session 路径当前不存在 → 拒绝', async () => {
-    const handler = registerHandler('maker:create-session', () => ({ sessionId: 's3' }));
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, () => ({ sessionId: 's3' }));
     const res = (await runInvoke(SRC, {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: '/existing/session/dir' }],
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
@@ -162,9 +163,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('create-session 的 workingDir 是文件(存在但非目录)→ 拒', async () => {
-    const handler = registerHandler('maker:create-session', () => ({ sessionId: 'nope' }));
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, () => ({ sessionId: 'nope' }));
     const res = (await runInvoke(SRC, {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: __filename }], // 真实文件,非目录
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
@@ -176,9 +177,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   // 远程 worktree:worktree:create 的 baseRepo 与 create-session 的 workingDir 同口径收敛
   // (决定在被控端哪个仓库下跑 git worktree add)。
   it('worktree:create 的 baseRepo 是真实存在目录 → 放行到 handler', async () => {
-    const handler = registerHandler('worktree:create', () => ({ ok: true }));
+    const handler = registerHandler(IPC_CHANNELS.WORKTREE.CREATE, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
-      channel: 'worktree:create',
+      channel: IPC_CHANNELS.WORKTREE.CREATE,
       args: [{ sessionId: 's-wt', baseRepo: TMP_DIR, name: 'auto-x1', sourceBranch: 'main' }],
     })) as Extract<InvokeResultPayload, { ok: true }>;
     expect(res.ok).toBe(true);
@@ -186,9 +187,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('worktree:create 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async () => {
-    const handler = registerHandler('worktree:create', () => ({ ok: true }));
+    const handler = registerHandler(IPC_CHANNELS.WORKTREE.CREATE, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
-      channel: 'worktree:create',
+      channel: IPC_CHANNELS.WORKTREE.CREATE,
       args: [{ sessionId: 's-wt', baseRepo: '/definitely/not/a/real/repo/xyz123', name: 'auto-x1', sourceBranch: 'main' }],
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
@@ -199,8 +200,8 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   it('双层门禁第一道:remoteControlEnabled=false → REMOTE_DISABLED(不查 allowlist/guard)', async () => {
     h.settings.remoteControlEnabled = false;
-    const handler = registerHandler('maker:list-active', () => []);
-    const res = (await runInvoke(SRC, { channel: 'maker:list-active', args: [] })) as Extract<
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => []);
+    const res = (await runInvoke(SRC, { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] })) as Extract<
       InvokeResultPayload,
       { ok: false }
     >;
@@ -211,8 +212,8 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   it('逐设备黑名单:src 已撤销访问权限 → ACCESS_REVOKED(不查 allowlist/guard、不落 handler)', async () => {
     h.settings.revokedControllers = [SRC];
-    const handler = registerHandler('maker:list-active', () => []);
-    const res = (await runInvoke(SRC, { channel: 'maker:list-active', args: [] })) as Extract<
+    const handler = registerHandler(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => []);
+    const res = (await runInvoke(SRC, { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] })) as Extract<
       InvokeResultPayload,
       { ok: false }
     >;
@@ -233,9 +234,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('set-* 成功后回流持久化(args[1] 作为字段值,以被控端为准)', async () => {
-    registerHandler('maker:set-model', () => undefined);
+    registerHandler(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, () => undefined);
     const res = (await runInvoke(SRC, {
-      channel: 'maker:set-model',
+      channel: IPC_CHANNELS.MAKER_INVOKE.SET_MODEL,
       args: ['sess-1', 'claude-opus-4-8'],
     })) as Extract<InvokeResultPayload, { ok: true }>;
     expect(res.ok).toBe(true);
@@ -244,11 +245,11 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   it('set-extra-dirs 回流持久化 handler 实际应用的子集(剔除被拒目录,非原始请求值)', async () => {
     // 模拟被控端校验:请求 3 个目录,/rejected 在被控端被拒 → handler 返回 validation.valid 子集
-    registerHandler('maker:set-extra-dirs', (_sessionId: unknown, dirs: unknown) =>
+    registerHandler(IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS, (_sessionId: unknown, dirs: unknown) =>
       (dirs as string[]).filter((d) => d !== '/rejected'),
     );
     const res = (await runInvoke(SRC, {
-      channel: 'maker:set-extra-dirs',
+      channel: IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS,
       args: ['sess-1', ['/ok/a', '/rejected', '/ok/b']],
     })) as Extract<InvokeResultPayload, { ok: true }>;
     expect(res.ok).toBe(true);
@@ -258,9 +259,9 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   it('set-extra-dirs handler no-op(返回 undefined)→ 不持久化', async () => {
     // session 不在 / capability 不支持 → handler 返回 undefined,不应把请求目录写进 DB
-    registerHandler('maker:set-extra-dirs', () => undefined);
+    registerHandler(IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS, () => undefined);
     const res = (await runInvoke(SRC, {
-      channel: 'maker:set-extra-dirs',
+      channel: IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS,
       args: ['sess-1', ['/some/dir']],
     })) as Extract<InvokeResultPayload, { ok: true }>;
     expect(res.ok).toBe(true);
@@ -268,16 +269,16 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
   });
 
   it('非 set-* channel 不触发回流', async () => {
-    registerHandler('maker:list-active', () => []);
-    await runInvoke(SRC, { channel: 'maker:list-active', args: [] });
+    registerHandler(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => []);
+    await runInvoke(SRC, { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
     expect(persistSpy).not.toHaveBeenCalled();
   });
 
   it('被控端 handler 抛 throwIpcError → invoke-result 透传 [CODE] message(控制端可解码)', async () => {
-    registerHandler('maker:send', () => {
+    registerHandler(IPC_CHANNELS.MAKER_INVOKE.SEND, () => {
       throw new Error('[BUSY] turn already in progress');
     });
-    const res = (await runInvoke(SRC, { channel: 'maker:send', args: ['s', 'hi'] })) as Extract<
+    const res = (await runInvoke(SRC, { channel: IPC_CHANNELS.MAKER_INVOKE.SEND, args: ['s', 'hi'] })) as Extract<
       InvokeResultPayload,
       { ok: false }
     >;
@@ -288,7 +289,7 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   it('allowlist 内但无本机 handler → dispatchLocalInvoke 抛 NOT_FOUND → IPC_ERROR 透传', async () => {
     // 不注册 handler。maker:list-active 在 allowlist 内、门禁过、guard 不管它 → 进 dispatchLocalInvoke。
-    const res = (await runInvoke(SRC, { channel: 'maker:list-active', args: [] })) as Extract<
+    const res = (await runInvoke(SRC, { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] })) as Extract<
       InvokeResultPayload,
       { ok: false }
     >;

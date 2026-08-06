@@ -6,6 +6,7 @@ import type { ProjectAlias } from '../../../shared/projectAliases.js';
 import { getDbClient } from '../client/current';
 import { projectAliases } from '../schema';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const MAX_ALIAS_LENGTH = 80;
 
@@ -40,7 +41,7 @@ function requireProjectKey(raw: unknown): string {
 
 function broadcastProjectAliasesChanged(): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('local-db:project-aliases:changed');
+    if (!w.isDestroyed()) w.webContents.send(IPC_CHANNELS.LOCAL_DB.PROJECT_ALIASES_CHANGED);
   }
 }
 
@@ -84,14 +85,14 @@ export async function deleteProjectAlias(projectKeyRaw: unknown): Promise<void> 
 }
 
 export function registerProjectAliasesIpc(): void {
-  ipcMain.handle('local-db:project-aliases:list', async () => listProjectAliases());
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.PROJECT_ALIASES_LIST, async () => listProjectAliases());
 
-  ipcMain.handle('local-db:project-aliases:set', async (_event, input: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.PROJECT_ALIASES_SET, async (_event, input: unknown) => {
     const body = requireObject(input, 'input');
     return upsertProjectAlias(body.projectKey, body.alias);
   });
 
-  ipcMain.handle('local-db:project-aliases:delete', async (_event, projectKeyRaw: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.PROJECT_ALIASES_DELETE, async (_event, projectKeyRaw: unknown) => {
     await deleteProjectAlias(projectKeyRaw);
   });
 }

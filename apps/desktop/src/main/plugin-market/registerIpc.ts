@@ -13,11 +13,12 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { parseMarketSource } from './sources/parse.js';
 import { PluginMarketService } from './service.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 let serviceSingleton: PluginMarketService | null = null;
-const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
+const REMOVAL_NOTICE_AVAILABLE_CHANNEL = IPC_CHANNELS.PLUGIN_MARKET.REMOVAL_NOTICE_AVAILABLE;
 
 function service(): PluginMarketService {
   serviceSingleton ??= new PluginMarketService();
@@ -78,22 +79,22 @@ export function registerPluginMarketIpc(): void {
   setGhostUninstallLedgerPreparer((ghostId) =>
     service().prepareLocalUninstallTracking(ghostId),
   );
-  ipcMain.handle('plugin-market:snapshot', (event) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.SNAPSHOT, (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() => snapshotAndSignalRemovalNotice());
   });
-  ipcMain.handle('plugin-market:consume-removal-notice', (event) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.CONSUME_REMOVAL_NOTICE, (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(async () => service().consumeRemovalNotice());
   });
-  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.DETAIL, (event, pluginId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
       service().detail(requireString(pluginId, 'pluginId')),
     );
   });
   ipcMain.handle(
-    'plugin-market:install',
+    IPC_CHANNELS.PLUGIN_MARKET.INSTALL,
     (event, pluginId: unknown, options: unknown) => {
       assertTrustedAppRendererEvent(event);
       const obj =
@@ -136,7 +137,7 @@ export function registerPluginMarketIpc(): void {
       );
     },
   );
-  ipcMain.handle('plugin-market:uninstall', (event, pluginId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.UNINSTALL, (event, pluginId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
       service().uninstall(requireString(pluginId, 'pluginId')),
@@ -145,11 +146,11 @@ export function registerPluginMarketIpc(): void {
 
   /* ------------------------- 自定义市场源管理 ------------------------- */
 
-  ipcMain.handle('plugin-market:list-sources', (event) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.LIST_SOURCES, (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() => service().listSources());
   });
-  ipcMain.handle('plugin-market:add-source', (event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.ADD_SOURCE, (event, payload: unknown) => {
     assertTrustedAppRendererEvent(event);
     const obj = requireObject(payload);
     const source = requireString(obj.source, 'source');
@@ -190,7 +191,7 @@ export function registerPluginMarketIpc(): void {
       }),
     );
   });
-  ipcMain.handle('plugin-market:pick-local-source', (event, defaultPath: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.PICK_LOCAL_SOURCE, (event, defaultPath: unknown) => {
     assertTrustedAppRendererEvent(event);
     const hint =
       defaultPath === undefined || defaultPath === null
@@ -202,19 +203,19 @@ export function registerPluginMarketIpc(): void {
     // 授权来自用户在 Main 原生选择器里的选择;hint 只影响初始定位。
     return invokePluginMarket(() => service().addLocalSourceFromPicker(hint));
   });
-  ipcMain.handle('plugin-market:remove-source', (event, name: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.REMOVE_SOURCE, (event, name: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
       service().removeSource(requireString(name, 'name')),
     );
   });
-  ipcMain.handle('plugin-market:refresh-source', (event, name: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.REFRESH_SOURCE, (event, name: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
       service().refreshSource(requireString(name, 'name')),
     );
   });
-  ipcMain.handle('plugin-market:git-preflight', (event) => {
+  ipcMain.handle(IPC_CHANNELS.PLUGIN_MARKET.GIT_PREFLIGHT, (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() => service().gitPreflight());
   });

@@ -6,6 +6,7 @@
  */
 
 import { BrowserWindow } from 'electron';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import {
   getModelPriceQuote,
@@ -24,7 +25,8 @@ import {
 export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
-export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pricing-changed';
+export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL =
+  IPC_CHANNELS.USAGE.REFERENCE_MODEL_PRICING_CHANGED;
 
 /** Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。 */
 export function getReferenceModelPricing(): ModelPricingCatalog {

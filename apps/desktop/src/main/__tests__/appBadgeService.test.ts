@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type IpcHandler = (event: unknown, sessionId: unknown, intent?: unknown) => Promise<void> | void;
 
@@ -150,7 +151,7 @@ describe('appBadgeService', () => {
     const service = await freshService('darwin');
     service.markSessionNeedsAttention('s1');
 
-    await registeredHandlers.get('notification:clear-session-attention')?.({}, 's1');
+    await registeredHandlers.get(IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION)?.({}, 's1');
 
     expect(service.getAttentionCount()).toBe(0);
     expect(setBadgeCount).toHaveBeenLastCalledWith(0);
@@ -160,7 +161,7 @@ describe('appBadgeService', () => {
   it('clear IPC reports explicit read acknowledgement even when the app badge is already clear', async () => {
     const service = await freshService('darwin');
 
-    await registeredHandlers.get('notification:clear-session-attention')?.({}, 's1');
+    await registeredHandlers.get(IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION)?.({}, 's1');
 
     expect(service.getAttentionCount()).toBe(0);
     expect(setBadgeCount).not.toHaveBeenCalled();
@@ -171,7 +172,7 @@ describe('appBadgeService', () => {
     const service = await freshService('darwin');
     service.markSessionNeedsAttention('s1');
 
-    await registeredHandlers.get('notification:clear-session-attention')?.({}, 's1', 'explicit');
+    await registeredHandlers.get(IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION)?.({}, 's1', 'explicit');
 
     expect(service.getAttentionCount()).toBe(0);
     expect(onSessionAttentionCleared).toHaveBeenCalledWith('s1', 'explicit');
@@ -184,7 +185,7 @@ describe('appBadgeService', () => {
 
     // 远程控制端经 device-link dispatch 打进同一个 clear handler:本机 renderer 的
     // sessionAttentionStore 靠这条广播同步清侧栏红绿点。
-    await registeredHandlers.get('notification:clear-session-attention')?.({}, 's1', 'explicit');
+    await registeredHandlers.get(IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION)?.({}, 's1', 'explicit');
 
     expect(webContentsSend).toHaveBeenCalledWith(
       service.SESSION_ATTENTION_CLEARED_CHANNEL,
@@ -207,7 +208,7 @@ describe('appBadgeService', () => {
   it('mark IPC adds a session attention badge', async () => {
     const service = await freshService('darwin');
 
-    await registeredHandlers.get('notification:mark-session-attention')?.({}, 's1');
+    await registeredHandlers.get(IPC_CHANNELS.NOTIFICATION.MARK_SESSION_ATTENTION)?.({}, 's1');
 
     expect(service.getAttentionCount()).toBe(1);
     expect(setBadgeCount).toHaveBeenLastCalledWith(1);

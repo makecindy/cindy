@@ -133,7 +133,7 @@ describe('TodaySpendChip dashboard routing', () => {
       'getCodexRateLimits: (): Promise<MobileCodexRateLimitsResult>',
     );
     expect(preloadSource).toContain(
-      "ipcRenderer.invoke('maker:usage:codex-rate-limits')",
+      'ipcRenderer.invoke(IPC_CHANNELS.MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS)',
     );
     expect(rendererTypesSource).toContain(
       'getCodexRateLimits: () => Promise<',

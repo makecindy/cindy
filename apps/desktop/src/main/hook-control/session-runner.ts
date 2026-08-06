@@ -102,6 +102,7 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
@@ -204,11 +205,11 @@ async function resolveNewSessionConfig(
  * 与 fork.ts / cardActionHandler.ts / learn-host 同款(各模块本地副本是既有惯例)。
  */
 function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
+  tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
+      win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
     } catch {
       // best-effort UI refresh
     }

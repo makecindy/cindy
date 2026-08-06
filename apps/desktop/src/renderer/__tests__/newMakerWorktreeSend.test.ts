@@ -94,7 +94,7 @@ describe('NewMakerDraftRoute worktree send flow', () => {
       'const reservationRecorded = await registerPendingRemotePrecreatedWorktree(',
       retainedGuard,
     );
-    const worktreeCreate = source.indexOf("'worktree:create'", retainedGuard);
+    const worktreeCreate = source.indexOf('IPC_CHANNELS.WORKTREE.CREATE', retainedGuard);
     const ledgerRegistration = source.indexOf(
       'createRemoteSessionWithPrecreatedWorktree({',
       worktreeCreate,
@@ -138,7 +138,10 @@ describe('NewMakerDraftRoute worktree send flow', () => {
 
   it('retries remote draft defaults after the relay or selected workstation reconnects', () => {
     const epochHook = source.indexOf('useDeviceLinkReconnectEpoch(');
-    const defaultsFetch = source.indexOf("'maker:get-new-maker-defaults'", epochHook);
+    const defaultsFetch = source.indexOf(
+      'IPC_CHANNELS.MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
+      epochHook,
+    );
     const effectDependencies = source.indexOf('remoteDraftRefreshEpoch,', defaultsFetch);
     const transientPreserve = source.indexOf(
       'value: unsupported ? null : previous.value',

@@ -19,7 +19,8 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "@cindy/device-link-protocol": "workspace:*"
+    "@cindy/device-link-protocol": "workspace:*",
+    "@cindy/cindy-ipc": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "*",

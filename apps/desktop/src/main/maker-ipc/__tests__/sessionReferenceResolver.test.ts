@@ -14,6 +14,7 @@ import {
   MAX_REFERENCE_TOKENS,
   resolveSessionReferences,
 } from '../sessionReferenceResolver.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function historyPage(items: Record<string, unknown>[], hasMore = false) {
   return { ok: true, result: { items, hasMore, nextCursor: null } };
@@ -46,7 +47,7 @@ describe('sessionReferenceResolver', () => {
       messageCount: 2,
       truncated: false,
     }]);
-    expect(remoteInvoke).toHaveBeenNthCalledWith(1, 'dev-1', 'local-db:sessions:get', ['s-1']);
+    expect(remoteInvoke).toHaveBeenNthCalledWith(1, 'dev-1', IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, ['s-1']);
     expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', DL_HISTORY_MESSAGES_CHANNEL, [
       expect.objectContaining({
         sessionId: 's-1',
@@ -203,7 +204,7 @@ describe('sessionReferenceResolver', () => {
       truncated: true,
     });
     expect(context.messages.some((message) => message.content === 'anchor content')).toBe(true);
-    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', 'local-db:messages:around-client-id', [
+    expect(remoteInvoke).toHaveBeenNthCalledWith(2, 'dev-1', IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID, [
       's-1',
       'anchor',
       { radius: 0, contentCharLimit: 8_000 },

@@ -90,6 +90,7 @@ vi.mock('../agent-island/service.js', () => ({
 
 import { notifyAgentIslandSessionPatch } from '../localDb/agentIslandSessionPatch.js';
 import { clearSessionContextInDb, touchUserSendInDb, persistSessionFields } from '../localDb/ipc/sessions.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -110,12 +111,12 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
 
     const iso = new Date(atMs).toISOString();
     // 本机所有窗口都收到(被控端自己的 renderer 据此把会话重归项目下)。
-    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'sess-1',
       patch: { userSendAt: iso, updatedAt: iso },
     });
     // device-link tap:经 topic 路由把权威 userSendAt 推给订阅 sessions 的控制端。
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'sess-1',
       patch: { userSendAt: iso, updatedAt: iso },
     });
@@ -131,7 +132,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     expect(ts).toBeGreaterThanOrEqual(before);
 
     const tapArg = h.tapWindowBroadcast.mock.calls.at(-1);
-    expect(tapArg?.[0]).toBe('local-db:sessions:patched');
+    expect(tapArg?.[0]).toBe(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED);
     const payload = tapArg?.[1] as { sessionId: string; patch: Record<string, unknown> };
     expect(payload.sessionId).toBe('sess-2');
     expect(typeof payload.patch.userSendAt).toBe('string'); // ISO
@@ -156,7 +157,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     h.selectResults.push([{ userSendAt: firedAt, updatedAt: finishedAt }]);
     await touchUserSendInDb('sess-max', firedAt);
 
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'sess-max',
       patch: {
         userSendAt: new Date(firedAt).toISOString(),
@@ -180,11 +181,11 @@ describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收
     expect(typeof h.updateSetCalls[0].updatedAt).not.toBe('number');
 
     const iso = new Date(atMs).toISOString();
-    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'sess-clear',
       patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso },
     });
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'sess-clear',
       patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso },
     });
@@ -195,7 +196,7 @@ describe('persistSessionFields(远程 set-* 回流:字段白名单 + 广播)', (
   /** 取最近一次 tap 广播的 patch(persistSessionFields 末尾 broadcastSessionPatched 用)。 */
   function lastTapPatch(): { sessionId: string; patch: Record<string, unknown> } | undefined {
     const call = h.tapWindowBroadcast.mock.calls.at(-1);
-    if (!call || call[0] !== 'local-db:sessions:patched') return undefined;
+    if (!call || call[0] !== IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED) return undefined;
     return call[1] as { sessionId: string; patch: Record<string, unknown> };
   }
 

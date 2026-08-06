@@ -34,6 +34,7 @@ import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 
 import { createLogger } from './logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** marker 文件名(userData 根下)。存在 = 本 profile 已做过首登轻量迁移。 */
 export const LEGACY_MIGRATION_MARKER_FILENAME = 'mToc';
@@ -468,7 +469,7 @@ function broadcastPhase(phase: LegacyMigrationPhase): void {
   currentPhase = phase;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send('legacy-migration:state', { phase });
+      win.webContents.send(IPC_CHANNELS.LEGACY_MIGRATION.STATE, { phase });
     }
   }
 }
@@ -557,7 +558,7 @@ const electronUiDeps: LegacyMigrationUiDeps = {
  * 只约束失败路径)。
  */
 export function registerLegacyMigrationIpc(): void {
-  ipcMain.handle('legacy-migration:confirm', () => {
+  ipcMain.handle(IPC_CHANNELS.LEGACY_MIGRATION.CONFIRM, () => {
     const resolver = pendingConfirmResolver;
     pendingConfirmResolver = null;
     if (resolver != null) {
@@ -567,7 +568,7 @@ export function registerLegacyMigrationIpc(): void {
     // failed 态下的「继续」:清态,防止 renderer 重挂载后经 get-state 再次弹出。
     if (currentPhase === 'failed' || currentPhase === 'done') currentPhase = null;
   });
-  ipcMain.handle('legacy-migration:get-state', () => ({ phase: currentPhase }));
+  ipcMain.handle(IPC_CHANNELS.LEGACY_MIGRATION.GET_STATE, () => ({ phase: currentPhase }));
 }
 
 /**

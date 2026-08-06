@@ -46,6 +46,7 @@ vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary:
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 
 import { registerSessionIpc } from '../sessions';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type ExpectedIdentity = {
   workingDir: string | null;
@@ -131,7 +132,7 @@ async function restore(
   id = 'target',
   expected: ExpectedIdentity = ORIGINAL_IDENTITY,
 ): Promise<unknown> {
-  const handler = h.handlers.get('local-db:sessions:restore-if-archived');
+  const handler = h.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSIONS_RESTORE_IF_ARCHIVED);
   if (!handler) throw new Error('restore-if-archived handler not registered');
   return handler({}, id, expected);
 }
@@ -151,13 +152,13 @@ beforeEach(() => {
   registerSessionIpc();
 });
 
-describe('local-db:sessions:restore-if-archived', () => {
+describe(IPC_CHANNELS.LOCAL_DB.SESSIONS_RESTORE_IF_ARCHIVED, () => {
   it('restores when archived status and the full project identity still match', async () => {
     const updated = (await restore()) as { id: string; status: string };
 
     expect(updated).toMatchObject({ id: 'target', status: 'active' });
     expect(readStatus()).toBe('active');
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'target',
       patch: { status: 'active' },
     });

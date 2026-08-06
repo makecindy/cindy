@@ -18,6 +18,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('useDeviceProviders');
 
@@ -190,7 +191,7 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
   const dl = getDeviceLink();
   if (!dl) throw new Error('device-link IPC not available');
   const p = (
-    dl.invoke(deviceId, 'maker:provider:list', [
+    dl.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, [
       {
         capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
       },

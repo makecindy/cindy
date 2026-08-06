@@ -531,6 +531,7 @@ import { useTranslation } from 'react-i18next';
 import { i18n } from '@/i18n';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 const SESSION_ACTION_TEST_IDS = {
   files: 'session.filesButton',
@@ -7329,7 +7330,7 @@ export default function SessionScreen() {
           // 字段连续两次操作时,前笔在等待中被取代不得再发出(review P2)。
           (assertStillLatest) => invoke<RemoteSession>(
             deviceId,
-            'local-db:sessions:patch-meta',
+            IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META,
             [sessionId, patch],
             { preSend: assertStillLatest },
           ),

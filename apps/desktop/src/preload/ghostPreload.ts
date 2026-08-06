@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 意识电子脑的最小管子桥(脑机接口;docs/dev-rules/plugin-security-and-authoring.md)。
@@ -38,51 +39,51 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 type HostMessageListener = (payload: unknown) => void;
 const listeners = new Set<HostMessageListener>();
-ipcRenderer.on('ghost-pipe:message', (_event, payload: unknown) => {
+ipcRenderer.on(IPC_CHANNELS.GHOST_PIPE.MESSAGE, (_event, payload: unknown) => {
   listeners.forEach((listener) => listener(payload));
 });
 
 contextBridge.exposeInMainWorld('cindy', {
-  ping: (): Promise<{ ok: true; id: string }> => ipcRenderer.invoke('ghost-pipe:ping'),
+  ping: (): Promise<{ ok: true; id: string }> => ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.PING),
   onHostMessage: (cb: HostMessageListener): (() => void) => {
     listeners.add(cb);
     return () => listeners.delete(cb);
   },
-  send: (payload: unknown): Promise<unknown> => ipcRenderer.invoke('ghost-pipe:send', payload),
+  send: (payload: unknown): Promise<unknown> => ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, payload),
   request: (req: Record<string, unknown>): Promise<unknown> =>
-    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'host-request' }),
+    ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
-    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fetch-request' }),
+    ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'fetch-request' }),
   fs: (req: Record<string, unknown>): Promise<unknown> =>
-    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fs-request' }),
+    ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'fs-request' }),
   agent: {
     run: (req: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-request' }),
+      ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'agent-request' }),
     // 派活取件(agent.errand 加档)的便捷口:errand = 提交(kind:'run'),
     // queryErrand = 取件(kind:'query')。都是 send({type:'agent-errand-request'})
     // 的语法糖,资格审与频控在主机 errandSlot。
     errand: (req: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-errand-request', kind: 'run' }),
+      ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'agent-errand-request', kind: 'run' }),
     queryErrand: (req: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-errand-request', kind: 'query' }),
+      ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'agent-errand-request', kind: 'query' }),
     // 请用户新建一条自动化(agent.schedule 加档):只能**打开预填好的创建面板**,
     // 建不建由用户在面板上选好模型后亲手保存。{ ok:true } 只表示"请求已被接受并投递",
     // 既不保证面板真开了(用户正编辑另一个表单时本次草稿会被丢弃),也不表示任务已创建
     // ——本版没有回执通道,绑定与查改由后续版本提供(语义见 GhostPipeScheduleDraftResult)。
     // 资格审 / 净化 / 频率钳制 / 限速都在主机 scheduleSlot。
     requestSchedule: (req: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'schedule-request' }),
+      ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'schedule-request' }),
   },
   node: {
     request: (req: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'node-request' }),
+      ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'node-request' }),
   },
   pick: (req: Record<string, unknown>): Promise<unknown> =>
-    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'pick-request' }),
+    ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'pick-request' }),
   preview: (req: Record<string, unknown>): Promise<unknown> =>
-    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'preview-request' }),
+    ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'preview-request' }),
   workspace: (req: Record<string, unknown>): Promise<unknown> =>
-    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'workspace-request' }),
+    ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'workspace-request' }),
   confirm: (req: Record<string, unknown>): Promise<unknown> =>
-    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'confirm-request' }),
+    ipcRenderer.invoke(IPC_CHANNELS.GHOST_PIPE.SEND, { ...req, type: 'confirm-request' }),
 });

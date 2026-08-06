@@ -41,6 +41,7 @@
  */
 
 import { BrowserWindow } from 'electron';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import type { MoneyCurrency } from '../../shared/regionalMoney';
 import { getAuthState } from '../authManager';
@@ -54,7 +55,7 @@ import { currentLedgerCurrency } from './ledgerCurrency';
 const log = createLogger('claudeAccountUsage');
 
 /** IPC channel: main → renderer 推 Claude 月度配额变化。 */
-export const USAGE_CLAUDE_ACCOUNT_CHANGED = 'usage:claude-account-changed';
+export const USAGE_CLAUDE_ACCOUNT_CHANGED = IPC_CHANNELS.USAGE.CLAUDE_ACCOUNT_CHANGED;
 
 export interface ClaudeAccountUsageSnapshot {
   /**

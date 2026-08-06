@@ -5,6 +5,7 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { Layout } from '../../shared/layoutTree.js';
 import { LAYOUT_FILE_NAME, LayoutStore } from './LayoutStore.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 主界面布局树的进程级单例 + IPC 注册。
@@ -41,11 +42,11 @@ export function registerLayoutIpc(): void {
   // 启动即落盘 + 自愈损坏存档(QA:启动后 userData 出现合法 layout.v1.json)。
   store.ensurePersisted();
 
-  ipcMain.on('layout:get', (event) => {
+  ipcMain.on(IPC_CHANNELS.LAYOUT.GET, (event) => {
     event.returnValue = { layout: store.getLayout() };
   });
 
-  ipcMain.handle('layout:set', (_event, layout: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LAYOUT.SET, (_event, layout: unknown) => {
     const result = store.setLayout(layout);
     if ('rejection' in result) {
       throwIpcError('INVALID_PARAMS', `invalid layout: ${result.rejection}`);
@@ -53,12 +54,12 @@ export function registerLayoutIpc(): void {
     return { layout: result.layout };
   });
 
-  ipcMain.handle('layout:reset', () => ({ layout: store.reset() }));
+  ipcMain.handle(IPC_CHANNELS.LAYOUT.RESET, () => ({ layout: store.reset() }));
 }
 
 function broadcastLayoutChanged(layout: Layout): void {
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
-    window.webContents.send('layout:changed', { layout });
+    window.webContents.send(IPC_CHANNELS.LAYOUT.CHANGED, { layout });
   });
 }

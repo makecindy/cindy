@@ -125,6 +125,7 @@ import {
   type ProtectedFolderKind,
 } from '../file-access/permissions.js';
 import { SessionActivityRelay } from './sessionActivityRelay.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('agent-island');
 const HARDWARE_NOTCH_CENTER_TOLERANCE_PX = 2;
@@ -2012,7 +2013,7 @@ export class AgentIslandService {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
-    mainWindow.webContents.send('notification:focus-session', nextSessionId);
+    mainWindow.webContents.send(IPC_CHANNELS.NOTIFICATION.FOCUS_SESSION, nextSessionId);
     if (focusChanged) this.publish();
   }
 
@@ -2033,7 +2034,7 @@ export class AgentIslandService {
       mainWindow.show();
       mainWindow.focus();
     }
-    mainWindow.webContents.send('app-menu:command', command);
+    mainWindow.webContents.send(IPC_CHANNELS.APP_MENU.COMMAND, command);
   }
 }
 

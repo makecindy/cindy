@@ -9,6 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.resetModules();
@@ -25,20 +26,20 @@ async function primeOwnerFence(): Promise<void> {
 }
 
 const GOAL_TUNNEL_CHANNELS = [
-  'maker:goal:set',
-  'maker:goal:clear',
-  'maker:goal:pause',
-  'maker:goal:resume',
-  'maker:goal:update',
-  'maker:goal:get-status',
+  IPC_CHANNELS.MAKER_INVOKE.GOAL_SET,
+  IPC_CHANNELS.MAKER_INVOKE.GOAL_CLEAR,
+  IPC_CHANNELS.MAKER_INVOKE.GOAL_PAUSE,
+  IPC_CHANNELS.MAKER_INVOKE.GOAL_RESUME,
+  IPC_CHANNELS.MAKER_INVOKE.GOAL_UPDATE,
+  IPC_CHANNELS.MAKER_INVOKE.GOAL_GET_STATUS,
 ];
 const LEARN_TUNNEL_CHANNELS = [
-  'learn:start',
-  'learn:list-runs',
-  'learn:get-proposal-diff',
-  'learn:apply',
-  'learn:discard',
-  'learn:cancel',
+  IPC_CHANNELS.LEARN.START,
+  IPC_CHANNELS.LEARN.LIST_RUNS,
+  IPC_CHANNELS.LEARN.GET_PROPOSAL_DIFF,
+  IPC_CHANNELS.LEARN.APPLY,
+  IPC_CHANNELS.LEARN.DISCARD,
+  IPC_CHANNELS.LEARN.CANCEL,
 ];
 
 function stubElectron() {
@@ -90,14 +91,14 @@ describe('goalApiFor 路由', () => {
     api.updateGoal('rs', { objective: 'o2' });
     api.getGoalStatus('rs');
 
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:set', [{ sessionId: 'rs', objective: 'o' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:clear', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:pause', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:resume', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:update', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_SET, [{ sessionId: 'rs', objective: 'o' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_CLEAR, ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_PAUSE, ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_RESUME, ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_UPDATE, [
       { sessionId: 'rs', patch: { objective: 'o2' } },
     ]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:get-status', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_GET_STATUS, ['rs']);
     expect(makerSpies.setGoal).not.toHaveBeenCalled();
   });
 
@@ -125,11 +126,11 @@ describe('goalApiFor 路由', () => {
     expect(makerSpies.onGoalStatusChanged).not.toHaveBeenCalled();
     const listener = remotePushListeners[0];
     // 其它设备 / 其它 channel / 其它会话都不触发
-    listener({ deviceId: 'dev-2', channel: 'maker:goal:status-changed', payload: { sessionId: 'rs', goal: null } });
-    listener({ deviceId: 'dev-1', channel: 'maker:event', payload: { sessionId: 'rs' } });
-    listener({ deviceId: 'dev-1', channel: 'maker:goal:status-changed', payload: { sessionId: 'other', goal: null } });
+    listener({ deviceId: 'dev-2', channel: IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED, payload: { sessionId: 'rs', goal: null } });
+    listener({ deviceId: 'dev-1', channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { sessionId: 'rs' } });
+    listener({ deviceId: 'dev-1', channel: IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED, payload: { sessionId: 'other', goal: null } });
     expect(cb).not.toHaveBeenCalled();
-    listener({ deviceId: 'dev-1', channel: 'maker:goal:status-changed', payload: { sessionId: 'rs', goal: null } });
+    listener({ deviceId: 'dev-1', channel: IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED, payload: { sessionId: 'rs', goal: null } });
     expect(cb).toHaveBeenCalledWith({ sessionId: 'rs', goal: null });
   });
 });
@@ -148,11 +149,11 @@ describe('learnApiFor 路由', () => {
     api.discard({ runId: 'r1' });
     api.cancel({ runId: 'r1' });
 
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'learn:list-runs', []);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'learn:get-proposal-diff', [{ runId: 'r1' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'learn:apply', [{ runId: 'r1' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'learn:discard', [{ runId: 'r1' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'learn:cancel', [{ runId: 'r1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.LIST_RUNS, []);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.GET_PROPOSAL_DIFF, [{ runId: 'r1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.APPLY, [{ runId: 'r1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.DISCARD, [{ runId: 'r1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.CANCEL, [{ runId: 'r1' }]);
     expect(learnSpies.listRuns).not.toHaveBeenCalled();
   });
 
@@ -177,11 +178,11 @@ describe('learnApiFor 路由', () => {
     subscribeLearnEvents('rs', cb);
     expect(learnSpies.onEvent).not.toHaveBeenCalled();
     const listener = remotePushListeners[0];
-    listener({ deviceId: 'dev-2', channel: 'learn:event', payload: { type: 'state-changed' } });
-    listener({ deviceId: 'dev-1', channel: 'maker:event', payload: {} });
+    listener({ deviceId: 'dev-2', channel: IPC_CHANNELS.LEARN.EVENT, payload: { type: 'state-changed' } });
+    listener({ deviceId: 'dev-1', channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: {} });
     expect(cb).not.toHaveBeenCalled();
     const evt = { type: 'state-changed', run: { runId: 'r1' } };
-    listener({ deviceId: 'dev-1', channel: 'learn:event', payload: evt });
+    listener({ deviceId: 'dev-1', channel: IPC_CHANNELS.LEARN.EVENT, payload: evt });
     expect(cb).toHaveBeenCalledWith(evt);
   });
 
@@ -203,7 +204,7 @@ describe('origin 注入竞态(Codex review #548 回归)', () => {
     const api = learnApiFor('rs'); // 此刻 origin 尚未注册
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]); // 异步重拉完成,origin 注入
     api.cancel({ runId: 'r1' });
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'learn:cancel', [{ runId: 'r1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LEARN.CANCEL, [{ runId: 'r1' }]);
     expect(learnSpies.cancel).not.toHaveBeenCalled();
   });
 
@@ -219,7 +220,7 @@ describe('origin 注入竞态(Codex review #548 回归)', () => {
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]); // 注入 → 重绑
     expect(remotePushListeners.length).toBe(1);
     const evt = { type: 'state-changed', run: { runId: 'r1' } };
-    remotePushListeners[0]({ deviceId: 'dev-1', channel: 'learn:event', payload: evt });
+    remotePushListeners[0]({ deviceId: 'dev-1', channel: IPC_CHANNELS.LEARN.EVENT, payload: evt });
     expect(cb).toHaveBeenCalledWith(evt);
   });
 
@@ -233,8 +234,8 @@ describe('origin 注入竞态(Codex review #548 回归)', () => {
     api.pauseGoal('rs'); // 解析并粘滞 dev-1
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', []); // 模拟镜像清空(会话 origin 丢失)
     api.resumeGoal('rs'); // 粘滞值兜底,仍走隧道
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:pause', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:goal:resume', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_PAUSE, ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GOAL_RESUME, ['rs']);
     expect(makerSpies.resumeGoal).not.toHaveBeenCalled();
   });
 });
@@ -266,13 +267,13 @@ describe('listActiveRunsForSession 远程失败分类(终态 vs 瞬态)', () => 
 
 describe('drift 守卫:适配器 channel 必须在协议白名单内', () => {
   it('goal / learn 隧道 invoke channel 全部在 REMOTE_INVOKE_ALLOWLIST', () => {
-    for (const ch of [...GOAL_TUNNEL_CHANNELS, ...LEARN_TUNNEL_CHANNELS, 'desktop-cmd:run']) {
+    for (const ch of [...GOAL_TUNNEL_CHANNELS, ...LEARN_TUNNEL_CHANNELS, IPC_CHANNELS.DESKTOP_CMD.RUN]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch), `${ch} 不在 REMOTE_INVOKE_ALLOWLIST`).toBe(true);
     }
   });
 
   it('goal / learn 推送 channel 全部在 PUSH_FORWARD_ALLOWLIST', () => {
-    for (const ch of ['maker:goal:status-changed', 'learn:event']) {
+    for (const ch of [IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED, IPC_CHANNELS.LEARN.EVENT]) {
       expect(PUSH_FORWARD_ALLOWLIST.has(ch), `${ch} 不在 PUSH_FORWARD_ALLOWLIST`).toBe(true);
     }
   });

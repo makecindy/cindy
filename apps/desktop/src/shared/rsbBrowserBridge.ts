@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 /**
  * RSB browser bridge IPC contract.
  *
@@ -18,9 +19,9 @@
  */
 
 /** Channel name for renderer → main "I have just attached webContents X to RSB tab Y". */
-export const RSB_BROWSER_BRIDGE_REPORT_CHANNEL = 'rsb-browser-bridge:report';
+export const RSB_BROWSER_BRIDGE_REPORT_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.REPORT;
 /** Channel name for renderer → main "RSB tab Y's webview is being torn down". */
-export const RSB_BROWSER_BRIDGE_RELEASE_CHANNEL = 'rsb-browser-bridge:release';
+export const RSB_BROWSER_BRIDGE_RELEASE_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.RELEASE;
 /**
  * Channel name for renderer → main "here is my full pool snapshot, reconcile against it".
  *
@@ -30,7 +31,7 @@ export const RSB_BROWSER_BRIDGE_RELEASE_CHANNEL = 'rsb-browser-bridge:release';
  * registry entry that isn't in the snapshot AND whose webContents is
  * destroyed.
  */
-export const RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL = 'rsb-browser-bridge:snapshot';
+export const RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.SNAPSHOT;
 
 /**
  * Channel name for renderer → main "capture the current page of RSB tab Y and
@@ -41,7 +42,7 @@ export const RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL = 'rsb-browser-bridge:snapshot'
  * only has the tabId) and `clipboard.writeImage` is a main-process API.
  */
 export const RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_CHANNEL =
-  'rsb-browser-bridge:capture-screenshot';
+  IPC_CHANNELS.RSB_BROWSER_BRIDGE.CAPTURE_SCREENSHOT;
 
 /**
  * Channel name for renderer → main "capture the current page of RSB tab Y and
@@ -53,12 +54,12 @@ export const RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_CHANNEL =
  * 混在一个 channel 里加 flag 会让剪贴板行为变成隐式契约。
  */
 export const RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_DATA_CHANNEL =
-  'rsb-browser-bridge:capture-screenshot-data';
+  IPC_CHANNELS.RSB_BROWSER_BRIDGE.CAPTURE_SCREENSHOT_DATA;
 
 /** Channel name for main → renderer "pin this tab against LRU eviction". */
-export const RSB_BROWSER_BRIDGE_PIN_CHANNEL = 'rsb-browser-bridge:pin';
+export const RSB_BROWSER_BRIDGE_PIN_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.PIN;
 /** Channel name for main → renderer "release the pin on this tab". */
-export const RSB_BROWSER_BRIDGE_UNPIN_CHANNEL = 'rsb-browser-bridge:unpin';
+export const RSB_BROWSER_BRIDGE_UNPIN_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.UNPIN;
 
 /**
  * Channel name for renderer → main "the user is currently looking at THIS
@@ -66,7 +67,7 @@ export const RSB_BROWSER_BRIDGE_UNPIN_CHANNEL = 'rsb-browser-bridge:unpin';
  * 内存超硬阈值时才强杀,后台页面可以被更激进地淘汰(对用户等价于 LRU 淘汰)。
  * 语义是 per-renderer 的"全量状态"(最新一次上报覆盖之前的),不是增量事件。
  */
-export const RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL = 'rsb-browser-bridge:set-foreground';
+export const RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.SET_FOREGROUND;
 
 /**
  * Channel name for renderer → main "force-kill the guest process of tab Y"。
@@ -74,7 +75,7 @@ export const RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL = 'rsb-browser-bridge:set
  * 在 main:`forcefullyCrashRenderer()` 是 webContents 的特权方法。归属校验与
  * 截图 channel 相同(tabId → registry → hostWebContents === sender)。
  */
-export const RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL = 'rsb-browser-bridge:force-kill';
+export const RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.FORCE_KILL;
 
 /**
  * Channel name for main → renderer resource watchdog events(见
@@ -87,7 +88,7 @@ export const RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL = 'rsb-browser-bridge:force-k
  *  - `cpu-alert`:前台 guest 持续高 CPU;renderer 显示非阻断提示条 + 终止按钮,
  *    不自动杀(可能是用户在跑正经的重页面)。
  */
-export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = 'rsb-browser-bridge:resource-event';
+export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.RESOURCE_EVENT;
 
 /**
  * Channel name for main → renderer "execute this tab operation against the
@@ -95,9 +96,9 @@ export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = 'rsb-browser-bridge:res
  * actions).
  * The renderer answers via `tab-op-result` keyed by `reqId`.
  */
-export const RSB_BROWSER_BRIDGE_TAB_OP_REQUEST_CHANNEL = 'rsb-browser-bridge:tab-op-request';
+export const RSB_BROWSER_BRIDGE_TAB_OP_REQUEST_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_REQUEST;
 /** Channel name for renderer → main answer to a tab-op-request. */
-export const RSB_BROWSER_BRIDGE_TAB_OP_RESULT_CHANNEL = 'rsb-browser-bridge:tab-op-result';
+export const RSB_BROWSER_BRIDGE_TAB_OP_RESULT_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_RESULT;
 
 /**
  * The actual tab-op variants WITHOUT the reqId — so `dispatchTabOp` can take

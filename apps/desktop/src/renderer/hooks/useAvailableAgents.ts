@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('useAvailableAgents');
 
@@ -45,7 +46,7 @@ async function fetchAvailableAgents(deviceId?: string | null): Promise<RuntimeAg
   if (deviceId) {
     const dl = getDeviceLink();
     if (!dl) throw new Error('device-link IPC not available');
-    const raw = await dl.invoke(deviceId, 'maker:list-available-agents', []);
+    const raw = await dl.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.LIST_AVAILABLE_AGENTS, []);
     return Array.isArray(raw) ? (raw.filter((v): v is RuntimeAgentKind =>
       v === 'claude-code' || v === 'codex' || v === 'pi') as RuntimeAgentKind[]) : [];
   }

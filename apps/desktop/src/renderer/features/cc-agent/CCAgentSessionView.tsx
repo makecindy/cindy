@@ -249,6 +249,7 @@ import {
   parseConversationSearchJump,
   type ConversationSearchJump,
 } from '../../../shared/conversationSearchJump';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('CCAgentSessionView');
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
@@ -754,7 +755,7 @@ export function CCAgentSessionView({
     };
 
     window.electronAPI.deviceLink
-      .invoke(deviceId, 'maker:get-new-maker-defaults', [agent])
+      .invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, [agent])
       .then((value) => {
         const defaults = value as { providerModelMemory?: RemoteModelMemorySnapshot } | null;
         applySnapshot(defaults?.providerModelMemory);
@@ -764,7 +765,7 @@ export function CCAgentSessionView({
       });
 
     const off = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
-      if (push.deviceId !== deviceId || push.channel !== 'maker:new-maker-draft:changed') return;
+      if (push.deviceId !== deviceId || push.channel !== IPC_CHANNELS.MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED) return;
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       const payload = push.payload as Record<
         string,
@@ -785,7 +786,7 @@ export function CCAgentSessionView({
     const deviceId = remoteDeviceId;
     return makeMirrorAccessors(remoteModelMemoryScopeKey, (agent, providerId, model, patch) => {
       window.electronAPI.deviceLink
-        .invoke(deviceId, 'maker:apply-new-maker-draft-pref', [
+        .invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, [
           {
             agent,
             providerId,

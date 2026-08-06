@@ -10,6 +10,7 @@ import {
   trimSessionLinkMatch,
 } from '@/session/sessionLinks';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 export const MAX_MOBILE_SESSION_REFERENCES = 8;
 export const MAX_MOBILE_REFERENCE_MESSAGES = 20;
@@ -624,7 +625,7 @@ async function resolveRemoteReference(
   const remoteSession = await invokeSource<unknown>(
     invoke,
     ref,
-    'local-db:sessions:get',
+    IPC_CHANNELS.LOCAL_DB.SESSIONS_GET,
     [ref.sessionId],
   );
   if (!remoteSession || typeof remoteSession !== 'object' || Array.isArray(remoteSession)) {
@@ -656,7 +657,7 @@ async function resolveRemoteReference(
     const rawAnchorRows = await invokeSource<unknown>(
       invoke,
       ref,
-      'local-db:messages:around-client-id',
+      IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID,
       [ref.sessionId, ref.messageClientId, { radius: 0, contentCharLimit: 8_000 }],
     );
     const anchorRows = Array.isArray(rawAnchorRows)

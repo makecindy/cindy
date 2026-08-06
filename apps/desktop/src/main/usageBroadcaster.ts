@@ -33,6 +33,7 @@ import {
   type ClaudeSubscriptionUsageSnapshot,
 } from '../shared/claudeSubscriptionUsage';
 import type { AgentKind } from '@cindy/maker-core';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import {
   UNSAFE_BUCKET_KEYS,
@@ -46,15 +47,15 @@ import type { RegionalMoney } from '../shared/regionalMoney.js';
 const log = createLogger('usageBroadcaster');
 
 /** IPC channel: main → renderer 推今日累计值变化 (Claude USD)。 */
-export const USAGE_TODAY_SPEND_CHANGED = 'usage:today-spend-changed';
+export const USAGE_TODAY_SPEND_CHANGED = IPC_CHANNELS.USAGE.TODAY_SPEND_CHANGED;
 /** IPC channel: main → renderer 推今日 token 累计变化 (Codex)。 */
-export const USAGE_TODAY_TOKENS_CHANGED = 'usage:today-tokens-changed';
+export const USAGE_TODAY_TOKENS_CHANGED = IPC_CHANNELS.USAGE.TODAY_TOKENS_CHANGED;
 /** IPC channel: main → renderer 推 Codex 账号订阅用量变化。 */
-export const USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed';
+export const USAGE_CODEX_ACCOUNT_CHANGED = IPC_CHANNELS.USAGE.CODEX_ACCOUNT_CHANGED;
 /** IPC channel: main → renderer 推 xAI(SuperGrok bridge)上游限流快照变化。 */
-export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
+export const USAGE_XAI_RATE_LIMIT_CHANGED = IPC_CHANNELS.USAGE.XAI_RATE_LIMIT_CHANGED;
 /** IPC channel: main → renderer 推 Claude 订阅账号余量变化 (端点刷新 / headers 旁路)。 */
-export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-changed';
+export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = IPC_CHANNELS.USAGE.CLAUDE_SUBSCRIPTION_CHANGED;
 
 export interface TodaySpendPayload {
   /** 本地时区 YYYY-MM-DD。 */

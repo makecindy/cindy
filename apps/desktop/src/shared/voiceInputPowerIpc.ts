@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
+
 /**
  * 语音输入保活麦克风的电源事件契约(main → renderer 单向推送)。
  *
@@ -7,7 +9,7 @@
  */
 
 /** main → renderer 推送 channel。 */
-export const VOICE_INPUT_POWER_STATE_CHANNEL = 'voice-input:power-state-change';
+export const VOICE_INPUT_POWER_STATE_CHANNEL = IPC_CHANNELS.VOICE_INPUT.POWER_STATE_CHANGE;
 
 /**
  * 触发释放保活麦克风的系统电源事件。

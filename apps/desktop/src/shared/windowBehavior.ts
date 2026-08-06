@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
+
 /**
  * windowBehavior — 窗口交互行为相关的 IPC 通道 & 常量。
  *
@@ -11,18 +13,18 @@
  */
 
 export const WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL =
-  'window-behavior:set-swallow-activation-click';
+  IPC_CHANNELS.WINDOW_BEHAVIOR.SET_SWALLOW_ACTIVATION_CLICK;
 
 export type WindowsCloseBehavior = 'quit' | 'tray';
 
 export const WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL =
-  'window-behavior:get-windows-close-behavior';
+  IPC_CHANNELS.WINDOW_BEHAVIOR.GET_WINDOWS_CLOSE_BEHAVIOR;
 export const WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL =
-  'window-behavior:set-windows-close-behavior';
+  IPC_CHANNELS.WINDOW_BEHAVIOR.SET_WINDOWS_CLOSE_BEHAVIOR;
 export const WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL =
-  'window-behavior:windows-close-behavior-requested';
+  IPC_CHANNELS.WINDOW_BEHAVIOR.WINDOWS_CLOSE_BEHAVIOR_REQUESTED;
 export const WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL =
-  'window-behavior:windows-close-behavior-shown';
+  IPC_CHANNELS.WINDOW_BEHAVIOR.WINDOWS_CLOSE_BEHAVIOR_SHOWN;
 
 export function isWindowsCloseBehavior(value: unknown): value is WindowsCloseBehavior {
   return value === 'quit' || value === 'tray';

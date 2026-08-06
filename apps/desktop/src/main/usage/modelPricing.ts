@@ -30,6 +30,7 @@ import { currentLedgerCurrency, setActiveLedgerCurrency } from './ledgerCurrency
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 export type {
@@ -48,7 +49,7 @@ const log = createLogger('modelPricing');
 const DISK_CACHE_VERSION = 9;
 const DISK_CACHE_FILE = 'model-pricing.json';
 
-export const MODEL_PRICING_CHANGED_CHANNEL = 'usage:model-pricing-changed';
+export const MODEL_PRICING_CHANGED_CHANNEL = IPC_CHANNELS.USAGE.MODEL_PRICING_CHANGED;
 
 interface DiskCachePayload {
   version: number;

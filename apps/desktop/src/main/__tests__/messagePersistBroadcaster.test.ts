@@ -80,6 +80,7 @@ import {
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
 } from '../messagePersistBroadcaster.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const SESSION = 'sess-tr';
 const FULL =
@@ -1082,7 +1083,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     expect((optsArg as { shouldBroadcast?: () => boolean })?.shouldBroadcast?.()).toBe(false);
     // 脏信号必须发:让已加载历史的后台会话下次打开时从 DB 重拉,error 卡正常浮现。
     expect(mockSend).toHaveBeenCalledWith(
-      'local-db:session:error-persisted',
+      IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED,
       { sessionId: SESSION },
       undefined,
     );

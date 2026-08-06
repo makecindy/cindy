@@ -117,6 +117,7 @@ vi.mock('../remote-deps.js', () => ({
 }));
 
 import { __deviceOpTesting } from '../device-op.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const { handleRemoteOp, onFsWatchSubscribed, onFsWatchReleased } = __deviceOpTesting;
 
@@ -378,7 +379,7 @@ describe('file-browser device-op', () => {
       () => {
         const hit = pushSpy.mock.calls.find(
           ([channel, payload]) =>
-            channel === 'maker:file-browser:event' &&
+            channel === IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_EVENT &&
             (payload as { relPath?: string }).relPath === 'src/watched.ts',
         );
         if (!hit) throw new Error('no push yet');

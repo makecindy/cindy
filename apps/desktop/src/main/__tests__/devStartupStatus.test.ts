@@ -12,6 +12,7 @@ import {
   recordDesktopDevAuthStartupResult,
   recordDesktopDevLocalDbStartupResult,
 } from '../devStartupStatus.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 describe('devStartupStatus', () => {
   let tempDir: string;
@@ -207,7 +208,7 @@ describe('devStartupStatus', () => {
       state: 'failed',
       code: 'MIGRATE_FAILED',
       message: expect.stringContaining('seq 77 (0077_nebulous_veda.sql)'),
-      detail: { phase: 'local-db:ensure-ready' },
+      detail: { phase: IPC_CHANNELS.LOCAL_DB.ENSURE_READY },
     });
   });
 

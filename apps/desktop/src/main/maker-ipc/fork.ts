@@ -20,6 +20,7 @@ import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 
 import { MAKER_INVOKE } from './channels.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('maker-ipc/fork');
 
@@ -30,11 +31,11 @@ const log = createLogger('maker-ipc/fork');
  * 靠手动重拉能看到;这里补上,使所有端收敛。
  */
 function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
+  tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
+      win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
     } catch {
       // best-effort UI refresh
     }

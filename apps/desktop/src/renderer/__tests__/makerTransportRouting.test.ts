@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.resetModules();
@@ -79,27 +80,27 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     );
     api.input.clearSession('rs');
 
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:fork', ['rs', 'msg']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:fork-strip-encrypted', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:rewind:preview', ['rs', 'c1']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:rewind:commit', ['rs', 'c1']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-context-usage', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.FORK, ['rs', 'msg']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.FORK_STRIP_ENCRYPTED, ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.REWIND_PREVIEW, ['rs', 'c1']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.REWIND_COMMIT, ['rs', 'c1']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GET_CONTEXT_USAGE, [
       'rs',
       { agentKind: 'codex', workingDir: '/w', model: 'm' },
     ]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:set-extra-dirs', ['rs', ['/a']]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:close-session', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:enable-orca', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS, ['rs', ['/a']]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.CLOSE_SESSION, ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.SESSION_ENABLE_ORCA, [
       'rs',
       { workerAgent: 'codex' },
     ]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:disable-orca', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:input:compact', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.SESSION_DISABLE_ORCA, ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.INPUT_COMPACT, [
       'rs',
       { agentKind: 'claude-code', workingDir: '/w', model: 'm' },
       { userName: 'Carol' },
     ]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:input:clear-session', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.INPUT_CLEAR_SESSION, ['rs']);
   });
 
   it('已捕获的 deviceId 在 session origin 暂时消失后仍固定走远程隧道', async () => {
@@ -110,8 +111,8 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await api.setModel('rs', 'claude-fable-5');
     await api.setEffort('rs', 'xhigh');
 
-    expect(invoke).toHaveBeenCalledWith('dev-sticky', 'maker:set-model', ['rs', 'claude-fable-5']);
-    expect(invoke).toHaveBeenCalledWith('dev-sticky', 'maker:set-effort', ['rs', 'xhigh']);
+    expect(invoke).toHaveBeenCalledWith('dev-sticky', IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, ['rs', 'claude-fable-5']);
+    expect(invoke).toHaveBeenCalledWith('dev-sticky', IPC_CHANNELS.MAKER_INVOKE.SET_EFFORT, ['rs', 'xhigh']);
     expect(makerSpies.setModel).not.toHaveBeenCalled();
     expect(makerSpies.setEffort).not.toHaveBeenCalled();
   });
@@ -220,13 +221,13 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
 
     // setStatus 是 patchMeta 的便捷封装:delete → { status: 'deleted' }
     await sessionService.setStatus('rs', 'deleted');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:patch-meta', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META, [
       'rs',
       { status: 'deleted' },
     ]);
     // 改名 / 置顶走同一窄口径通道
     await sessionService.patchMeta('rs', { title: 'New' });
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:patch-meta', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META, [
       'rs',
       { title: 'New' },
     ]);
@@ -264,10 +265,10 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await api.listWorkersByLead('remote-lead');
     await api.endTeam('remote-lead');
 
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:orca-workflows:list-workers-by-lead', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_LIST_WORKERS_BY_LEAD, [
       'remote-lead',
     ]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:team:end', ['remote-lead']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.TEAM_END, ['remote-lead']);
     expect(orcaWorkflows.listWorkersByLead).not.toHaveBeenCalled();
     expect(orcaWorkflows.endTeam).not.toHaveBeenCalled();
   });
@@ -280,7 +281,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
 
     await expect(isSessionTurnRunningFor('rs')).resolves.toBe(true);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session-in-turn', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.SESSION_IN_TURN, ['rs']);
 
     invoke.mockClear();
     // 未注册 → 本机会话:直接 false,不经隧道(看门狗对本机会话整体不生效)
@@ -300,7 +301,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
       totalValueUsd: 1.5,
       entries: [{ clientId: 'a', costUsd: 1.5 }],
     });
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:messages:estimatedSessionValue', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.MESSAGES_ESTIMATED_SESSION_VALUE, ['rs']);
     expect(localMessages.estimatedSessionValue).not.toHaveBeenCalled();
 
     invoke.mockClear();
@@ -329,7 +330,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     invoke.mockClear();
     makerSpies.enableOrca.mockClear();
     await makerApiForSticky('lead').enableOrca('lead', { workerAgent: 'codex' });
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:enable-orca', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.SESSION_ENABLE_ORCA, [
       'lead',
       { workerAgent: 'codex' },
     ]);
@@ -357,7 +358,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
         effectiveEnabled: false,
       },
     );
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.PLUGINS_GET_STATE, [
       'collab',
       '/host/proj',
       'project',
@@ -373,23 +374,41 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     invoke.mockClear();
     makerSpies.plugins.getState.mockClear();
     await pluginEnableStateFor('dev-1', 'collab', undefined);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', ['collab', undefined]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.PLUGINS_GET_STATE, ['collab', undefined]);
     await pluginEnableStateFor(undefined, 'collab', undefined);
     expect(makerSpies.plugins.getState).toHaveBeenCalledWith('collab', undefined);
   });
 });
 
 describe('drift 守卫:makerTransport 隧道的每个 channel 都在 REMOTE_INVOKE_ALLOWLIST 内', () => {
-  it('适配器里 t(...) / invokeRemote(deviceId, ...) 的 channel 串无一逃出 allowlist', async () => {
+  it('适配器里 t(...) / invokeRemote(deviceId, ...) 的 channel 常量无一逃出 allowlist', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const { REMOTE_INVOKE_ALLOWLIST } = await import('@cindy/device-link');
     const src = readFileSync(resolve(__dirname, '..', 'lib', 'makerTransport.ts'), 'utf8');
-    // 抓两种隧道写法的字面量 channel:通用 t('<ch>') 与手动打包的 invokeRemote(deviceId, '<ch>', ...)。
+    const resolveChannelRef = (ref: string): string | null => {
+      const path = ref.split('.').slice(1);
+      let value: unknown = IPC_CHANNELS;
+      for (const key of path) {
+        if (typeof value !== 'object' || value === null || !(key in value)) return null;
+        value = (value as Record<string, unknown>)[key];
+      }
+      return typeof value === 'string' ? value : null;
+    };
+
+    // 抓两种隧道写法的 channel 常量:通用 t(IPC_CHANNELS.*) 与手动打包的 invokeRemote(deviceId, IPC_CHANNELS.*, ...)。
     const channels = new Set<string>();
-    for (const m of src.matchAll(/\bt\('([^']+)'\)/g)) channels.add(m[1]);
-    for (const m of src.matchAll(/invokeRemote\(deviceId,\s*'([^']+)'/g)) channels.add(m[1]);
-    expect(channels.size).toBeGreaterThan(10); // 正则没失效(当前 ~41 个)
+    for (const m of src.matchAll(/\bt\(\s*(IPC_CHANNELS(?:\.[A-Z0-9_]+)+)/g)) {
+      const channel = resolveChannelRef(m[1]);
+      expect(channel, `unresolved channel ref: ${m[1]}`).toBeTypeOf('string');
+      channels.add(channel!);
+    }
+    for (const m of src.matchAll(/invokeRemote\(deviceId,\s*(IPC_CHANNELS(?:\.[A-Z0-9_]+)+)/g)) {
+      const channel = resolveChannelRef(m[1]);
+      expect(channel, `unresolved channel ref: ${m[1]}`).toBeTypeOf('string');
+      channels.add(channel!);
+    }
+    expect(channels.size).toBeGreaterThan(10); // 正则没失效(当前几十个)
     // 任一 channel 不在 allowlist → 远程调用会 CHANNEL_NOT_ALLOWED,这里提前在 CI 红。
     const offenders = [...channels].filter((c) => !REMOTE_INVOKE_ALLOWLIST.has(c));
     expect(offenders).toEqual([]);

@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useCollabProjectPolicy } from '../useCollabProjectPolicy';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({
@@ -338,7 +339,7 @@ describe('useCollabProjectPolicy', () => {
     );
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.PLUGINS_GET_STATE, [
       'collab',
       '/host/proj',
       'project',
@@ -410,7 +411,7 @@ describe('useCollabProjectPolicy', () => {
 
     rerender({ deviceId: 'dev-b' });
     await waitFor(() => expect(result.current.enabled).toBe(false));
-    expect(invoke).toHaveBeenNthCalledWith(2, 'dev-b', 'maker:plugins:get-state', [
+    expect(invoke).toHaveBeenNthCalledWith(2, 'dev-b', IPC_CHANNELS.MAKER_INVOKE.PLUGINS_GET_STATE, [
       'collab',
       '/Users/me/proj',
     ]);

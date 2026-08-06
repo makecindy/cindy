@@ -18,6 +18,7 @@ import { BrowserWindow } from 'electron';
 
 import { desktopSessionStorage } from '../../maker-host/session-storage';
 import { generateMakerSessionTitle } from '../../maker-ipc/title';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export const FBOT_TITLE_PREFIX = 'FBot · ';
 /** 草稿占位 title, 跟 desktop 'New Maker' 同语义 — 等首条消息到来后由 oneshot 替换。 */
@@ -38,7 +39,7 @@ export function broadcastSessionPatched(
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:patched', { sessionId, patch });
+      win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch });
     } catch {
       /* swallow */
     }

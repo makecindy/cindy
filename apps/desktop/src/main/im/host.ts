@@ -56,6 +56,7 @@ import {
   WechatCompatibilityPolicyService,
 } from './wechat/compatibilityPolicy';
 import { fetchPublicImageBytes } from './publicImageFetch';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('im/host');
 
@@ -211,16 +212,16 @@ export const wecomIm = createWecomIM(host);
 export function registerTelegramBotConfigIpc(): void {
   // 每个 handler 先验事件来自可信 app renderer(与 bootstrap 内敏感通道同口径):
   // 共享的 host.ipc.handle 适配器会丢弃 event, 所以这组通道直接走 ipcMain。
-  ipcMain.handle('telegramBot:get-behavior', (e) => {
+  ipcMain.handle(IPC_CHANNELS.TELEGRAM_BOT.GET_BEHAVIOR, (e) => {
     assertTrustedAppRendererEvent(e);
     return readTelegramBehavior();
   });
-  ipcMain.handle('telegramBot:set-behavior', (e, patch) => {
+  ipcMain.handle(IPC_CHANNELS.TELEGRAM_BOT.SET_BEHAVIOR, (e, patch) => {
     assertTrustedAppRendererEvent(e);
     return patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]);
   });
   // 群聊节: 已知群列表(窗口表 distinct chat)+ per-chat 参与模式读写。
-  ipcMain.handle('telegramBot:list-groups', async (e) => {
+  ipcMain.handle(IPC_CHANNELS.TELEGRAM_BOT.LIST_GROUPS, async (e) => {
     assertTrustedAppRendererEvent(e);
     const groups = await listTelegramKnownGroups(telegramIm.botContextId);
     const activation = readTelegramBehavior().groupActivation ?? {};
@@ -232,7 +233,7 @@ export function registerTelegramBotConfigIpc(): void {
       })),
     };
   });
-  ipcMain.handle('telegramBot:set-group-activation', (e, payload) => {
+  ipcMain.handle(IPC_CHANNELS.TELEGRAM_BOT.SET_GROUP_ACTIVATION, (e, payload) => {
     assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { chatId?: string; mode?: string };
     const chatId = typeof p.chatId === 'string' && /^-?\d+$/.test(p.chatId) ? p.chatId : null;
@@ -241,11 +242,11 @@ export function registerTelegramBotConfigIpc(): void {
     return setTelegramGroupActivation(chatId, mode);
   });
   // 人格配置(soul + 名字); 保存后可选把名字同步到 Telegram 资料页(setMyName)。
-  ipcMain.handle('telegramBot:get-persona', (e) => {
+  ipcMain.handle(IPC_CHANNELS.TELEGRAM_BOT.GET_PERSONA, (e) => {
     assertTrustedAppRendererEvent(e);
     return readTelegramPersona();
   });
-  ipcMain.handle('telegramBot:set-persona', async (e, payload) => {
+  ipcMain.handle(IPC_CHANNELS.TELEGRAM_BOT.SET_PERSONA, async (e, payload) => {
     assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { botName?: string; soul?: string; syncProfile?: boolean };
     const persona = patchTelegramPersona({

@@ -1,10 +1,11 @@
 /** 把通讯录变更广播给 renderer，并按来源通知设备同步驱动。 */
 
 import { BrowserWindow } from 'electron';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import { emitLocalContactsChanged } from './contacts-change-events.js';
 
-export const CONTACTS_CHANGED_CHANNEL = 'maker:contacts:changed';
+export const CONTACTS_CHANGED_CHANNEL = IPC_CHANNELS.MAKER_EXTRA.CONTACTS_CHANGED;
 
 export function broadcastContactsChanged(options: { origin?: 'local' | 'remote' } = {}): void {
   for (const win of BrowserWindow.getAllWindows()) {

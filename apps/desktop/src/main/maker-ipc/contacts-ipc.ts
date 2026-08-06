@@ -44,12 +44,11 @@ import {
 import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-export {
-  CONTACTS_CHANGED_CHANNEL,
-  broadcastContactsChanged,
-} from '../maker-host/contacts-change-broadcast.js';
-export const CONTACTS_SYNC_STATUS_CHANGED_CHANNEL = 'maker:contacts:sync:status-changed';
+export const CONTACTS_CHANGED_CHANNEL = IPC_CHANNELS.MAKER_EXTRA.CONTACTS_CHANGED;
+export const CONTACTS_SYNC_STATUS_CHANGED_CHANNEL = IPC_CHANNELS.MAKER_EXTRA.CONTACTS_SYNC_STATUS_CHANGED;
+export { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 
 const log = createLogger('contactsIpc');
 

@@ -26,11 +26,12 @@ import type {
   ListBranchesResp,
   SuggestNameResp,
 } from '@/lib/worktree.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** 本机走既有 preload API;deviceId 非空走 device-link 隧道到被控端同名 channel。 */
 function invokeDetectCwd(cwd: string, deviceId?: string | null): Promise<DetectCwdResp> {
   if (deviceId) {
-    return window.electronAPI.deviceLink.invoke(deviceId, 'worktree:detect-cwd', [
+    return window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.WORKTREE.DETECT_CWD, [
       { cwd },
     ]) as Promise<DetectCwdResp>;
   }
@@ -39,7 +40,7 @@ function invokeDetectCwd(cwd: string, deviceId?: string | null): Promise<DetectC
 
 function invokeListBranches(baseRepo: string, deviceId?: string | null): Promise<ListBranchesResp> {
   if (deviceId) {
-    return window.electronAPI.deviceLink.invoke(deviceId, 'worktree:list-branches', [
+    return window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.WORKTREE.LIST_BRANCHES, [
       { baseRepo },
     ]) as Promise<ListBranchesResp>;
   }
@@ -48,7 +49,7 @@ function invokeListBranches(baseRepo: string, deviceId?: string | null): Promise
 
 function invokeSuggestName(baseRepo: string, deviceId?: string | null): Promise<SuggestNameResp> {
   if (deviceId) {
-    return window.electronAPI.deviceLink.invoke(deviceId, 'worktree:suggest-name', [
+    return window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.WORKTREE.SUGGEST_NAME, [
       { baseRepo },
     ]) as Promise<SuggestNameResp>;
   }

@@ -230,6 +230,7 @@ import {
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('NewMakerDraftRoute');
 const IS_MAC_PLATFORM = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
@@ -1137,7 +1138,7 @@ export function NewMakerDraftRoute() {
       value: sameIdentity ? previous.value : null,
     }));
     window.electronAPI.deviceLink
-      .invoke(effectiveDeviceLinkDeviceId, 'maker:get-new-maker-defaults', [capabilityAgentKind])
+      .invoke(effectiveDeviceLinkDeviceId, IPC_CHANNELS.MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, [capabilityAgentKind])
       .then((v) => {
         if (!cancelled && remoteDraftRevisionRef.current === requestRevision) {
           setRemoteDraftState({
@@ -1237,7 +1238,7 @@ export function NewMakerDraftRoute() {
     return window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (push.deviceId !== effectiveDeviceLinkDeviceId) return;
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
-      if (push.channel !== 'maker:new-maker-draft:changed') return;
+      if (push.channel !== IPC_CHANNELS.MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED) return;
       const payload = push.payload as Record<string, RemoteDraftDefaults | undefined> | null;
       const next = payload?.[vendorSlot] ?? null;
       remoteDraftRevisionRef.current += 1;
@@ -1280,7 +1281,7 @@ export function NewMakerDraftRoute() {
     const deviceId = effectiveDeviceLinkDeviceId;
     return makeMirrorAccessors(mirrorScopeKey, (agent, providerId, model, patch) => {
       window.electronAPI.deviceLink
-        .invoke(deviceId, 'maker:apply-new-maker-draft-pref', [
+        .invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, [
           {
             agent,
             providerId,
@@ -1318,7 +1319,7 @@ export function NewMakerDraftRoute() {
         patch.effort ??
         (patch.fast !== undefined ? (dlSel?.effort ?? deviceLinkInitial?.effort) : undefined);
       window.electronAPI.deviceLink
-        .invoke(effectiveDeviceLinkDeviceId, 'maker:apply-new-maker-draft-pref', [
+        .invoke(effectiveDeviceLinkDeviceId, IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, [
           {
             agent: capabilityAgentKind,
             providerId: dlSel?.providerId ?? deviceLinkInitial?.providerId ?? '',
@@ -1632,15 +1633,15 @@ export function NewMakerDraftRoute() {
         // 验证设备可达:直接 invoke 能力 + 供应商(不走 swallow 的 prefetch)。
         // 失败 throw → dialog 留 open,不破坏当前草稿状态。
         const [freshCaps] = await Promise.all([
-          window.electronAPI.deviceLink.invoke(target.deviceId, 'maker:get-capabilities', [
+          window.electronAPI.deviceLink.invoke(target.deviceId, IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES, [
             capabilityAgentKind,
           ]) as Promise<AgentCapabilities>,
-          window.electronAPI.deviceLink.invoke(target.deviceId, 'maker:provider:list', []),
+          window.electronAPI.deviceLink.invoke(target.deviceId, IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, []),
         ]);
         // 只有旧版被控端明确不支持 defaults channel 时才回落 capabilities 默认；网络失败
         // 仍然是连接失败，必须让 dialog 保持打开，不能把 null 当成权威空配置。
         const freshDefaults = await window.electronAPI.deviceLink
-          .invoke(target.deviceId, 'maker:get-new-maker-defaults', [capabilityAgentKind])
+          .invoke(target.deviceId, IPC_CHANNELS.MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, [capabilityAgentKind])
           .then((v) => (v as RemoteDraftDefaults | null) ?? null)
           .catch((error) => {
             if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return null;
@@ -2127,7 +2128,7 @@ export function NewMakerDraftRoute() {
       if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
         remoteDraftRevisionRef.current += 1;
         window.electronAPI.deviceLink
-          .invoke(effectiveDeviceLinkDeviceId, 'maker:apply-new-maker-worktree-pref', [
+          .invoke(effectiveDeviceLinkDeviceId, IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_PREF, [
             { worktreeEnabled: enabled },
           ])
           .catch(() => {
@@ -2409,7 +2410,7 @@ export function NewMakerDraftRoute() {
               }
               setWtCreating(true);
               try {
-                const resp = (await invokeRemote('worktree:create', [
+                const resp = (await invokeRemote(IPC_CHANNELS.WORKTREE.CREATE, [
                   {
                     sessionId: presetSessionId,
                     baseRepo,
@@ -2504,7 +2505,7 @@ export function NewMakerDraftRoute() {
                     invoke: invokeRemote,
                     isCurrent: isCurrentDataOwner,
                   })
-                : (created = (await invokeRemote('maker:create-session', [createArgs])) as {
+                : (created = (await invokeRemote(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, [createArgs])) as {
                     sessionId?: string;
                     workDir?: string;
                   } | null)?.sessionId;
@@ -3104,7 +3105,7 @@ export function NewMakerDraftRoute() {
             capabilityAgentKind,
           });
           const createResult = await window.electronAPI.deviceLink
-            .invoke(deviceId, 'maker:create-session', [createArgs])
+            .invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, [createArgs])
             .catch((err) => {
               const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
               if (remoteWorkdirMessage) throw new Error(remoteWorkdirMessage);
@@ -3177,7 +3178,7 @@ export function NewMakerDraftRoute() {
               try {
                 const preCheck = (await window.electronAPI.deviceLink.invoke(
                   deviceId,
-                  'local-db:sessions:get',
+                  IPC_CHANNELS.LOCAL_DB.SESSIONS_GET,
                   [remoteSessionId],
                 )) as { title?: string | null } | null;
                 const preTitle = preCheck?.title?.trim();
@@ -3190,7 +3191,7 @@ export function NewMakerDraftRoute() {
               try {
                 await window.electronAPI.deviceLink.invoke(
                   deviceId,
-                  'local-db:sessions:patch-meta',
+                  IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META,
                   [remoteSessionId, { title: placeholderTitle }],
                 );
               } catch {
@@ -3198,7 +3199,7 @@ export function NewMakerDraftRoute() {
               }
               const gen = (await window.electronAPI.deviceLink.invoke(
                 deviceId,
-                'maker:generate-title',
+                IPC_CHANNELS.MAKER_INVOKE.GENERATE_TITLE,
                 [{ message: objective, agentKind: titleAgentKind, sessionId: remoteSessionId }],
               )) as { title: string | null } | null;
               const title = gen?.title?.trim();
@@ -3208,7 +3209,7 @@ export function NewMakerDraftRoute() {
               if (!title) return;
               const current = (await window.electronAPI.deviceLink.invoke(
                 deviceId,
-                'local-db:sessions:get',
+                IPC_CHANNELS.LOCAL_DB.SESSIONS_GET,
                 [remoteSessionId],
               )) as { title?: string | null } | null;
               const existingTitle = current?.title?.trim();
@@ -3221,7 +3222,7 @@ export function NewMakerDraftRoute() {
               ) {
                 return;
               }
-              await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:patch-meta', [
+              await window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META, [
                 remoteSessionId,
                 { title },
               ]);

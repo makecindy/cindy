@@ -46,6 +46,7 @@ import {
   DEEP_LINK_URL_PREFIX,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('deepLink');
 
@@ -353,7 +354,7 @@ function dispatchDeepLink(payload: DeepLinkPayload): void {
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
   win.focus();
-  win.webContents.send('deep-link:navigate', payload);
+  win.webContents.send(IPC_CHANNELS.DEEP_LINK.NAVIGATE, payload);
 }
 
 /**

@@ -69,6 +69,7 @@ import {
   isPrecreatedWorktreeRegistrationInFlight,
   recoverPendingPrecreatedWorktrees,
 } from '@/session/precreatedWorktreeRecovery';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 function NavigationGate() {
   const auth = useAuth();
@@ -243,12 +244,12 @@ function PrecreatedWorktreeRecoveryBridge() {
       openLink,
       discardPrecreated: (deviceId, input) => invoke(
         deviceId,
-        'worktree:discard-precreated',
+        IPC_CHANNELS.WORKTREE.DISCARD_PRECREATED,
         [input],
       ),
       isSessionClaimed: async (deviceId, sessionId) => {
         try {
-          const session = await invoke(deviceId, 'local-db:sessions:get', [sessionId]);
+          const session = await invoke(deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, [sessionId]);
           return !!session;
         } catch (error) {
           const code = typeof error === 'object' && error && 'code' in error

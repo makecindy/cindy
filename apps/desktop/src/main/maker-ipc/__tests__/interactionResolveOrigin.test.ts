@@ -5,10 +5,11 @@ import {
   runDeviceLinkInvokeContext,
 } from '../../device-link/invoke-context.js';
 import { assertResolveInteractionOrigin } from '../interactionResolveOrigin.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function fromDeviceLink(decision: unknown, desktopOnlyConfirmationPending = false): void {
   runDeviceLinkInvokeContext(
-    { controllerDeviceId: 'controller-1', channel: 'maker:resolve-interaction' },
+    { controllerDeviceId: 'controller-1', channel: IPC_CHANNELS.MAKER_INVOKE.RESOLVE_INTERACTION },
     () => assertResolveInteractionOrigin(decision, desktopOnlyConfirmationPending),
   );
 }

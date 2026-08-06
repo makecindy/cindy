@@ -33,6 +33,7 @@ import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('analytics-settings');
 
@@ -254,12 +255,12 @@ export function initAnalyticsSettingsService(): void {
     broadcastSettingsChange();
   });
 
-  ipcMain.handle('analytics:settings-get', (event) => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS.SETTINGS_GET, (event) => {
     assertTrustedAppRendererEvent(event);
     return analyticsSettingsPayload();
   });
 
-  ipcMain.handle('analytics:settings-set-enabled', (event, rawEnabled: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS.SETTINGS_SET_ENABLED, (event, rawEnabled: unknown) => {
     assertTrustedAppRendererEvent(event);
     // payload 只信运行时校验过的布尔;非布尔一律当关闭处理(fail closed)。
     const enabled = rawEnabled === true;
@@ -270,7 +271,7 @@ export function initAnalyticsSettingsService(): void {
 
   // 「恢复默认」= 删掉 enabled override 跟随当前默认值,同意事实不动
   // (configuration-and-overrides §4)。
-  ipcMain.handle('analytics:settings-reset-enabled', (event) => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS.SETTINGS_RESET_ENABLED, (event) => {
     assertTrustedAppRendererEvent(event);
     writeOrThrowIpcError(
       () => clearAnalyticsEnabledOverride(),
@@ -280,7 +281,7 @@ export function initAnalyticsSettingsService(): void {
     return analyticsSettingsPayload();
   });
 
-  ipcMain.handle('analytics:consent-accept', (event) => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS.CONSENT_ACCEPT, (event) => {
     assertTrustedAppRendererEvent(event);
     writeOrThrowIpcError(() => acceptPrivacyConsent(), 'record privacy consent failed');
     broadcastSettingsChange();

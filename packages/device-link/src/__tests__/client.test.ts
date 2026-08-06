@@ -16,6 +16,7 @@ import {
   makeTransportSkipPayload,
   parseTransportPayload,
 } from '../transport.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -308,7 +309,7 @@ describe('DeviceLinkClient', () => {
     await tick();
     h.current().ack();
 
-    const p = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] });
+    const p = h.client.invoke('dev-b', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
     const sentInvoke = h.current().sent.find((e) => e.kind === 'invoke')!;
     expect(sentInvoke.dst).toBe('dev-b');
     expect(sentInvoke.id).toBeTruthy();
@@ -410,8 +411,8 @@ describe('DeviceLinkClient', () => {
     });
     await open;
 
-    h.client.sendPush('dev-b', 'maker:event', { text: 'first' });
-    h.client.sendPush('dev-b', 'maker:event', { text: 'second' });
+    h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { text: 'first' });
+    h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { text: 'second' });
     const initial = h.current().sent
       .filter((env) => env.kind === 'push')
       .map((env) => parseTransportPayload(env.payload))
@@ -466,7 +467,7 @@ describe('DeviceLinkClient', () => {
       kind: 'push',
       src: 'dev-b',
       payload: {
-        channel: 'maker:event',
+        channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
         payload: { seq: 1, text: '弱'.repeat(100_000) },
       },
     }, streamId, 1);
@@ -478,7 +479,7 @@ describe('DeviceLinkClient', () => {
         v: PROTOCOL_VERSION,
         kind: 'push',
         src: 'dev-b',
-        payload: { channel: 'maker:event', payload: { seq } },
+        payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { seq } },
       }, streamId, seq)[0]);
     }
     expect(received).toEqual([]);
@@ -519,7 +520,7 @@ describe('DeviceLinkClient', () => {
       src: 'dev-b',
       payload: {
         __cindyDeviceLinkTransport: { version: 1, streamId, seq },
-        data: JSON.stringify({ channel: 'maker:event', payload: { text } }),
+        data: JSON.stringify({ channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { text } }),
       },
     });
     h.current().push(make(2, 'second'));
@@ -562,7 +563,7 @@ describe('DeviceLinkClient', () => {
       src: 'dev-b',
       payload: {
         __cindyDeviceLinkTransport: { version: 1, streamId, seq },
-        data: JSON.stringify({ channel: 'maker:event', payload: { text } }),
+        data: JSON.stringify({ channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { text } }),
       },
     });
 
@@ -608,7 +609,7 @@ describe('DeviceLinkClient', () => {
       src: 'dev-b',
       payload: {
         __cindyDeviceLinkTransport: { version: 1, streamId: 'slow-stream', seq: 1 },
-        data: JSON.stringify({ channel: 'maker:event', payload: { text: 'slow' } }),
+        data: JSON.stringify({ channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { text: 'slow' } }),
       },
     });
     // 确定性回 pong:监听出站 ping、同步应答,彻底消除对真实计时器调度的依赖
@@ -1425,12 +1426,12 @@ describe('DeviceLinkClient', () => {
 
     await expect(invoke).rejects.toMatchObject({ code: 'NOT_CONNECTED', inFlight: true });
 
-    const listing = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    const listing = h.client.invoke('dev-b', { channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, args: [] });
     const sentListing = h.current().sent.at(-1)!;
     expect(sentListing).toMatchObject({
       kind: 'invoke',
       dst: 'dev-b',
-      payload: { channel: 'local-db:sessions:list', args: [] },
+      payload: { channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, args: [] },
     });
     expect(parseTransportPayload(sentListing.payload)).toBeNull();
     h.current().push({
@@ -1488,7 +1489,7 @@ describe('DeviceLinkClient', () => {
     await expect(invoke).rejects.toMatchObject({ code: 'NOT_CONNECTED', inFlight: true });
     await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
     h.current().ack();
-    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'stale' })).toThrow(
+    expect(() => h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { text: 'stale' })).toThrow(
       expect.objectContaining({ code: 'LINK_NOT_OPEN' }),
     );
     const reopen = h.client.openLink(
@@ -1555,12 +1556,12 @@ describe('DeviceLinkClient', () => {
     expect((blockedInvoke as DeviceLinkError).inFlight).not.toBe(true);
     expect(h.current().sent).toHaveLength(sentBeforeBlockedInvoke);
 
-    const listing = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    const listing = h.client.invoke('dev-b', { channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, args: [] });
     const sentListing = h.current().sent.at(-1)!;
     expect(sentListing).toMatchObject({
       kind: 'invoke',
       dst: 'dev-b',
-      payload: { channel: 'local-db:sessions:list', args: [] },
+      payload: { channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, args: [] },
     });
     expect(parseTransportPayload(sentListing.payload)).toBeNull();
 
@@ -1673,7 +1674,7 @@ describe('DeviceLinkClient', () => {
           seq: 101,
         },
         data: JSON.stringify({
-          channel: 'maker:event',
+          channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
           payload: { text: 'after restart' },
         }),
       },
@@ -1714,7 +1715,7 @@ describe('DeviceLinkClient', () => {
           ...(baseSeq ? { baseSeq } : {}),
         },
         data: JSON.stringify({
-          channel: 'maker:event',
+          channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
           payload: { text },
         }),
       },
@@ -1760,7 +1761,7 @@ describe('DeviceLinkClient', () => {
       v: PROTOCOL_VERSION,
       kind: 'push',
       src: 'dev-b',
-      payload: { channel: 'maker:event', payload: { seq: 1 } },
+      payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { seq: 1 } },
     }, streamId, 1)[0]);
     await tick();
     expect(failedHeadAttempts).toBe(1);
@@ -1770,7 +1771,7 @@ describe('DeviceLinkClient', () => {
       v: PROTOCOL_VERSION,
       kind: 'push',
       src: 'dev-b',
-      payload: { channel: 'maker:event', payload: { seq: 2 } },
+      payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { seq: 2 } },
     }, streamId, 2, 2)[0]);
     await tick();
 
@@ -1831,7 +1832,7 @@ describe('DeviceLinkClient', () => {
       v: PROTOCOL_VERSION,
       kind: 'push',
       src: 'dev-b',
-      payload: { channel: 'maker:event', payload: { text: 'must stay closed' } },
+      payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { text: 'must stay closed' } },
     }, 'remote-stream', 1)[0]);
     await tick();
 
@@ -1875,7 +1876,7 @@ describe('DeviceLinkClient', () => {
       v: PROTOCOL_VERSION,
       kind: 'push',
       src: 'dev-b',
-      payload: { channel: 'maker:event', payload: { text: 'must stay closed' } },
+      payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { text: 'must stay closed' } },
     }, 'remote-stream', 1)[0]);
     await tick();
 
@@ -1928,7 +1929,7 @@ describe('DeviceLinkClient', () => {
         v: PROTOCOL_VERSION,
         kind: 'push',
         src: 'dev-b',
-        payload: { channel: 'maker:event', payload: { seq } },
+        payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { seq } },
       }, 'closing-stream', seq)[0]);
     }
     await vi.waitFor(() => expect(received).toEqual([1]));
@@ -1975,7 +1976,7 @@ describe('DeviceLinkClient', () => {
         v: PROTOCOL_VERSION,
         kind: 'push',
         src: 'legacy-peer',
-        payload: { channel: 'maker:event', payload: { i } },
+        payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { i } },
       });
     }
     await tick();
@@ -2008,7 +2009,7 @@ describe('DeviceLinkClient', () => {
       v: PROTOCOL_VERSION,
       kind: 'push',
       src: 'legacy-peer',
-      payload: { channel: 'maker:event', payload: { seq: 1 } },
+      payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { seq: 1 } },
     });
     await vi.waitFor(() => expect(calls).toBe(1));
 
@@ -2019,7 +2020,7 @@ describe('DeviceLinkClient', () => {
       v: PROTOCOL_VERSION,
       kind: 'push',
       src: 'legacy-peer',
-      payload: { channel: 'maker:event', payload: { seq: 2 } },
+      payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { seq: 2 } },
     });
     await vi.waitFor(() => expect(calls).toBe(2));
     h.client.stop();
@@ -2047,11 +2048,11 @@ describe('DeviceLinkClient', () => {
     await open;
 
     h.current().bufferedAmount = 9 * 1024 * 1024;
-    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+    expect(() => h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { text: 'blocked' })).toThrow(
       expect.objectContaining({ code: 'BACKPRESSURE' }),
     );
     h.current().bufferedAmount = 0;
-    h.client.sendPush('dev-b', 'maker:event', { text: 'sent' });
+    h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { text: 'sent' });
     const sent = h.current().sent.filter((e) => e.kind === 'push' && e.dst === 'dev-b');
     expect(parseTransportPayload(sent.at(-1)!.payload)?.meta.seq).toBe(1);
     h.client.stop();
@@ -2493,7 +2494,7 @@ describe('DeviceLinkClient', () => {
       await tick();
       h.current().ack();
 
-      const p = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] });
+      const p = h.client.invoke('dev-b', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
       const sentInvoke = h.current().sent.find((e) => e.kind === 'invoke')!;
       expect(sentInvoke.id).toMatch(/^[0-9a-f-]{36}$/);
 
@@ -2591,7 +2592,7 @@ describe('DeviceLinkClient', () => {
     });
     await open;
 
-    const invoke = h.client.invoke('dev-b', { channel: 'maker:send', args: ['hello'] });
+    const invoke = h.client.invoke('dev-b', { channel: IPC_CHANNELS.MAKER_INVOKE.SEND, args: ['hello'] });
     const sentInvoke = h.current().sent.find((e) => e.kind === 'invoke')!;
     const original = parseTransportPayload(sentInvoke.payload)!;
     h.current().push({
@@ -2667,7 +2668,7 @@ describe('DeviceLinkClient', () => {
     });
     await open;
 
-    h.client.sendPush('dev-b', 'maker:event', { text: 'offline target' });
+    h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { text: 'offline target' });
     h.current().push({
       v: PROTOCOL_VERSION,
       kind: 'relay-error',
@@ -2748,7 +2749,7 @@ describe('DeviceLinkClient', () => {
     // 新实现按字节判定,这里应直接 reject(回归:bytes vs code-units)。
     const cjk = '好'.repeat(800_000);
     await expect(
-      h.client.invoke('dev-b', { channel: 'maker:send', args: [cjk] }),
+      h.client.invoke('dev-b', { channel: IPC_CHANNELS.MAKER_INVOKE.SEND, args: [cjk] }),
     ).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
     h.client.stop();
   });
@@ -2915,8 +2916,8 @@ describe('DeviceLinkClient', () => {
     await tick();
     h.current().ack();
 
-    h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke', id: 'r1', src: 'dev-a', payload: { channel: 'maker:send', args: [] } });
-    h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: { channel: 'maker:event', payload: {} } });
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke', id: 'r1', src: 'dev-a', payload: { channel: IPC_CHANNELS.MAKER_INVOKE.SEND, args: [] } });
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: {} } });
     h.current().push({ v: PROTOCOL_VERSION, kind: 'link-close', src: 'dev-a', payload: { reason: 'user' } });
     expect(frames.map((f) => f.kind)).toEqual(['invoke', 'push', 'link-close']);
     h.client.stop();
@@ -2951,17 +2952,17 @@ describe('DeviceLinkClient', () => {
     const h = makeHarness();
     // 未 start(status=stopped):直接忽略,不抛
     expect(() => h.client.sendPresence({ busy: true })).not.toThrow();
-    expect(() => h.client.sendPush('dev-b', 'maker:event', {})).not.toThrow();
+    expect(() => h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, {})).not.toThrow();
 
     h.client.start();
     await tick();
     // 已建 socket 但未 ack(status=connecting):仍忽略,不发 push,且 online 后不补发(无队列)
-    h.client.sendPush('dev-b', 'maker:event', { stale: true });
+    h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { stale: true });
     expect(h.current().sent.some((e) => e.kind === 'push')).toBe(false);
 
     h.current().ack();
     expect(h.current().sent.some((e) => e.kind === 'push')).toBe(false); // 离线那条没被补发
-    h.client.sendPush('dev-b', 'maker:event', { x: 1 });
+    h.client.sendPush('dev-b', IPC_CHANNELS.MAKER_PUSH.EVENT, { x: 1 });
     expect(h.current().sent.some((e) => e.kind === 'push' && e.dst === 'dev-b')).toBe(true);
     h.client.stop();
   });
@@ -3584,7 +3585,7 @@ describe('DeviceLinkClient', () => {
       h.client.start();
       await tick();
       h.current().ack();
-      const p = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] });
+      const p = h.client.invoke('dev-b', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
 
       // 公开 API 下 online 期间不会重入 connect(connectNow 有 online 守卫),白盒直调
       // 钉住防御性契约:任何丢弃在用 socket 的重建路径(文档描述的 getToken 竞态、未来
@@ -3602,7 +3603,7 @@ describe('DeviceLinkClient', () => {
       await tick();
       const ws = h.current();
       ws.ack();
-      const p = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] });
+      const p = h.client.invoke('dev-b', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
       const sentInvoke = ws.sent.find((e) => e.kind === 'invoke')!;
 
       // relay 在同一条 socket 上重发 hello-ack(relay 侧恢复/迁移):不是新连接

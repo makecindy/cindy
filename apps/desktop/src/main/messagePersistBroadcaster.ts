@@ -49,6 +49,7 @@ import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('messagePersistBroadcaster');
 
@@ -1343,9 +1344,9 @@ export function onTurnErrorEvent(
       if (win.isDestroyed()) continue;
       try {
         if (ownerScope === null) {
-          win.webContents.send('local-db:session:error-persisted', { sessionId });
+          win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED, { sessionId });
         } else {
-          win.webContents.send('local-db:session:error-persisted', { sessionId }, ownerStamp);
+          win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED, { sessionId }, ownerStamp);
         }
       } catch {
         /* swallow per-window broadcast failures */
@@ -1353,9 +1354,9 @@ export function onTurnErrorEvent(
     }
     // device-link:把脏信号也转发给远控端,让已加载该会话历史的控制端窗口同样失效。
     if (ownerScope === null) {
-      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId });
+      broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED, { sessionId });
     } else {
-      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId }, ownerStamp);
+      broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED, { sessionId }, ownerStamp);
     }
   });
   notePersistedMessage(sessionId, 'error', persistId);

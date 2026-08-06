@@ -22,6 +22,7 @@ import {
   getLocalSkillUsageSummary,
   requestLocalSkillUsageAnalyticsRefresh,
 } from './usageIndexer';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('skillhub');
 const LOCAL_IMPORT_GRANT_TTL_MS = 10 * 60 * 1_000;
@@ -82,7 +83,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   const broadcastPublishProgress = (payload: unknown) => {
     for (const win of BrowserWindow.getAllWindows()) {
       try {
-        if (!win.isDestroyed()) win.webContents.send('skillhub:publish-progress', payload);
+        if (!win.isDestroyed()) win.webContents.send(IPC_CHANNELS.SKILLHUB.PUBLISH_PROGRESS, payload);
       } catch {
         // Window teardown can race with background scan reconciliation.
       }
@@ -91,7 +92,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   const broadcastUsageAnalyticsRefreshed = () => {
     for (const win of BrowserWindow.getAllWindows()) {
       try {
-        if (!win.isDestroyed()) win.webContents.send('skillhub:usage-analytics-refreshed', {});
+        if (!win.isDestroyed()) win.webContents.send(IPC_CHANNELS.SKILLHUB.USAGE_ANALYTICS_REFRESHED, {});
       } catch {
         // 窗口关闭和后台索引完成可能竞态，忽略即可。
       }
@@ -119,7 +120,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // v0.7 起 agent-customization 发现 (~/.claude 扫盘 / codex RPC) 由 maker-core 完成,
   // 本 handler 只负责 join registry / 补 SkillhubSkill 字段 (id / projectHash)。
   ipcMain.handle(
-    'skillhub:scan',
+    IPC_CHANNELS.SKILLHUB.SCAN,
     async (
       _event,
       params: { projects?: import('./scanner').ProjectInput[] },
@@ -138,7 +139,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // view. Path validation lives in the scanner module to keep this channel
   // from devolving into a generic file-read API.
   ipcMain.handle(
-    'skillhub:read-skill',
+    IPC_CHANNELS.SKILLHUB.READ_SKILL,
     async (_event, params: { mdPath: string }) => {
       return readSkillContent(params);
     },
@@ -148,7 +149,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // ships a one-level-deep listing in the scan result; expanding a folder
   // calls back into here for its contents.
   ipcMain.handle(
-    'skillhub:list-children',
+    IPC_CHANNELS.SKILLHUB.LIST_CHILDREN,
     async (_event, params: { dirPath: string }) => {
       return listSkillFolderChildren(params);
     },
@@ -157,7 +158,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // Read a sibling file inside a skill folder for in-pane preview. Used
   // when the user clicks a non-SKILL.md file in the FILES list.
   ipcMain.handle(
-    'skillhub:read-sibling-file',
+    IPC_CHANNELS.SKILLHUB.READ_SIBLING_FILE,
     async (_event, params: { filePath: string }) => {
       return readSkillSiblingFile(params);
     },
@@ -169,7 +170,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // kinds (skills / commands / agents) since the editor is opened on a
   // .md across kind boundaries.
   ipcMain.handle(
-    'skillhub:read-raw',
+    IPC_CHANNELS.SKILLHUB.READ_RAW,
     async (_event, params: { filePath: string }) => {
       return readSkillRawFile(params);
     },
@@ -177,7 +178,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // write-file: atomic tmp+rename, file-must-exist (no creation), 1MB cap,
   // realpath check defends against symlink-out-of-tree. See scanner module.
   ipcMain.handle(
-    'skillhub:write-file',
+    IPC_CHANNELS.SKILLHUB.WRITE_FILE,
     async (_event, params: { filePath: string; content: string }) => {
       return writeSkillFile(params);
     },
@@ -186,7 +187,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 放在 main 是为了避免 renderer 打包 gray-matter (Rollup 会对其 eval 报警),
   // 同时统一 main/renderer 的 YAML 解析行为,防止之前出现过的浏览器/Node 差异。
   ipcMain.handle(
-    'skillhub:validate-frontmatter',
+    IPC_CHANNELS.SKILLHUB.VALIDATE_FRONTMATTER,
     async (_event, params: { content: string; kind: MdKind }) => {
       try {
         return { success: true, ...parseAndValidateFrontmatter(params.content, params.kind) };
@@ -199,7 +200,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 用于"市场名字撞车,本地需改名再发布"流程。返回新的 absolutePath,调用方
   // 拿去走 publish 即可。失败时盘上已回滚到原状态。
   ipcMain.handle(
-    'skillhub:rename-local',
+    IPC_CHANNELS.SKILLHUB.RENAME_LOCAL,
     async (_event, params: { absolutePath: string; newName: string }) => {
       return renameLocalSkill(params);
     },
@@ -207,7 +208,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // ── SkillHub market broker IPC ───────────────────────────────────────────
   ipcMain.handle(
-    'skillhub:sync',
+    IPC_CHANNELS.SKILLHUB.SYNC,
     async (_event, params: { slugs?: string[] } | undefined) => {
       try {
         return await marketService.sync(params);
@@ -220,7 +221,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:list-market',
+    IPC_CHANNELS.SKILLHUB.LIST_MARKET,
     async (_event, params: Parameters<SkillhubMarketService['listMarket']>[0]) => {
       try {
         return await marketService.listMarket(params);
@@ -233,7 +234,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:info',
+    IPC_CHANNELS.SKILLHUB.INFO,
     async (_event, { name }: { name: string }) => {
       try {
         return await marketService.info(name);
@@ -249,7 +250,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:get-published-files',
+    IPC_CHANNELS.SKILLHUB.GET_PUBLISHED_FILES,
     async (_event, params: { name: string; version?: string }) => {
       try {
         return await marketService.getPublishedFiles(params);
@@ -260,7 +261,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:read-published-file',
+    IPC_CHANNELS.SKILLHUB.READ_PUBLISHED_FILE,
     async (_event, params: { name: string; path: string; version?: string }) => {
       try {
         return await marketService.readPublishedFile(params);
@@ -271,7 +272,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:list-published-versions',
+    IPC_CHANNELS.SKILLHUB.LIST_PUBLISHED_VERSIONS,
     async (_event, { name }: { name: string }) => {
       try {
         return await marketService.listPublishedVersions(name);
@@ -282,7 +283,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:update-published',
+    IPC_CHANNELS.SKILLHUB.UPDATE_PUBLISHED,
     async (_event, { name, fields }: {
       name: string;
       fields: Parameters<SkillhubMarketService['updatePublished']>[1];
@@ -296,7 +297,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:delete-published',
+    IPC_CHANNELS.SKILLHUB.DELETE_PUBLISHED,
     async (_event, { name }: { name: string }) => {
       try {
         return await marketService.deletePublished(name);
@@ -307,7 +308,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:unpublish-published',
+    IPC_CHANNELS.SKILLHUB.UNPUBLISH_PUBLISHED,
     async (_event, { name }: { name: string }) => {
       try {
         return await marketService.unpublishPublished(name);
@@ -318,7 +319,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:set-published-visibility',
+    IPC_CHANNELS.SKILLHUB.SET_PUBLISHED_VISIBILITY,
     async (_event, params: Parameters<SkillhubMarketService['setPublishedVisibility']>[0]) => {
       try {
         return await marketService.setPublishedVisibility(params);
@@ -330,7 +331,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 读取已发布 skill 的可见对象(共享团队 + 可见部门),编辑可见范围弹窗回显用
   ipcMain.handle(
-    'skillhub:get-published-visibility',
+    IPC_CHANNELS.SKILLHUB.GET_PUBLISHED_VISIBILITY,
     async (_event, { name }: { name: string }) => {
       try {
         return await marketService.getPublishedVisibility(name);
@@ -342,7 +343,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 拉当前用户所属一级部门（PublishDialog 打开前触发，按需获取）
   ipcMain.handle(
-    'skillhub:get-my-depts',
+    IPC_CHANNELS.SKILLHUB.GET_MY_DEPTS,
     async () => {
       log.debug('get-my-depts requested');
       try {
@@ -362,7 +363,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // Market 分类列表 — 若 broker / 网络不可用，降级空数组
   ipcMain.handle(
-    'skillhub:list-categories',
+    IPC_CHANNELS.SKILLHUB.LIST_CATEGORIES,
     async () => {
       try {
         return await marketService.listCategories();
@@ -376,7 +377,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 拉当前用户所属团队列表（PublishDialog 选多团队可见时触发）
   ipcMain.handle(
-    'skillhub:list-user-teams',
+    IPC_CHANNELS.SKILLHUB.LIST_USER_TEAMS,
     async () => {
       try {
         return await marketService.listUserTeams();
@@ -390,7 +391,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 查询发布后的安全扫描状态（renderer 轮询用）
   ipcMain.handle(
-    'skillhub:get-scan-status',
+    IPC_CHANNELS.SKILLHUB.GET_SCAN_STATUS,
     async (_event, params: { slug: string; version?: string }) => {
       try {
         return await marketService.getScanStatus(params);
@@ -401,13 +402,13 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     },
   );
 
-  ipcMain.handle('skillhub:stop-scan-poll', () => {
+  ipcMain.handle(IPC_CHANNELS.SKILLHUB.STOP_SCAN_POLL, () => {
     publishService.stopScanPoll();
     return { success: true };
   });
 
   ipcMain.handle(
-    'skillhub:start-scan-poll',
+    IPC_CHANNELS.SKILLHUB.START_SCAN_POLL,
     (_event, { slug, version }: { slug: string; version: string }) => {
       publishService.startScanPoll(slug, version);
       return { success: true };
@@ -418,7 +419,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 返回 hash + manifest（文件清单 + 各自 sha256），manifest 用于 renderer 端
   // 排查"我没改但 dirty" — 直接 console.table 即可看到本地参与 hash 的全部文件。
   ipcMain.handle(
-    'skillhub:get-folder-hash',
+    IPC_CHANNELS.SKILLHUB.GET_FOLDER_HASH,
     async (_event, { absolutePath }: { absolutePath: string }) => {
       try {
         const { hash, manifest } = await computeFolderHashDetailed(absolutePath);
@@ -433,7 +434,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 计算本地 skill 与上次发布快照的文件级 diff（点击 dirty banner 触发）
   // hasSnapshot=false 表示本地无快照(历史已发布或换机器),UI 显示提示
   ipcMain.handle(
-    'skillhub:get-snapshot-diff',
+    IPC_CHANNELS.SKILLHUB.GET_SNAPSHOT_DIFF,
     async (_event, { absolutePath, name }: { absolutePath: string; name: string }) => {
       try {
         const result = await computeSnapshotDiff(absolutePath, name);
@@ -448,7 +449,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 仅查 snapshot 是否存在 — DetailView 状态机判断"hash 不一致但本地无快照"用,
   // 一次 fs.stat,比上面的 diff IPC 轻得多,适合每次进 detail 都打。
   ipcMain.handle(
-    'skillhub:has-snapshot',
+    IPC_CHANNELS.SKILLHUB.HAS_SNAPSHOT,
     (_event, { name }: { name: string }) => {
       return { success: true, exists: snapshotExists(name) };
     },
@@ -457,7 +458,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 读取单个 skill 的本地真实使用表现。只返回派生统计;原始 transcript 内容仍留在
   // Claude/Codex 自己的 JSONL 文件里,不复制进 Cindy DB。
   ipcMain.handle(
-    'skillhub:get-usage-summary',
+    IPC_CHANNELS.SKILLHUB.GET_USAGE_SUMMARY,
     async (_event, { name, mdPath }: { name: string; mdPath?: string }) => {
       try {
         let currentSkillContent: string | null = null;
@@ -491,7 +492,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 生成 skill 诊断会话首条消息。只返回统计摘要和 transcript 索引,不复制原始对话内容。
   ipcMain.handle(
-    'skillhub:get-usage-diagnosis-context',
+    IPC_CHANNELS.SKILLHUB.GET_USAGE_DIAGNOSIS_CONTEXT,
     async (_event, { name, mdPath }: { name: string; mdPath?: string }) => {
       try {
         let currentSkillContent: string | null = null;
@@ -528,7 +529,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 发布 skill（renderer 点"发布"按钮时触发）
   ipcMain.handle(
-    'skillhub:publish',
+    IPC_CHANNELS.SKILLHUB.PUBLISH,
     async (event, params: PublishParams) => {
       void event;
       return publishService.publish(params);
@@ -536,14 +537,14 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   // 取消当前发布（renderer 点"取消"时触发）
-  ipcMain.handle('skillhub:cancel-publish', () => {
+  ipcMain.handle(IPC_CHANNELS.SKILLHUB.CANCEL_PUBLISH, () => {
     publishService.cancel();
     return { success: true };
   });
 
   // ── Local import (zip / SKILL.md) ────────────────────────────────────────
   ipcMain.handle(
-    'skillhub:pick-local',
+    IPC_CHANNELS.SKILLHUB.PICK_LOCAL,
     async (event) => {
       assertTrustedAppRendererEvent(event);
       const owner = BrowserWindow.fromWebContents(event.sender);
@@ -582,7 +583,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   ipcMain.handle(
-    'skillhub:import-local',
+    IPC_CHANNELS.SKILLHUB.IMPORT_LOCAL,
     async (
       event,
       params: { grantToken?: unknown; installPath?: unknown; force?: unknown },
@@ -627,7 +628,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // ── Market install / uninstall / cancel ──────────────────────────────────
   // install：异步流程，进度通过 skillhub:install-progress 推。返回值是终态。
   ipcMain.handle(
-    'skillhub:install',
+    IPC_CHANNELS.SKILLHUB.INSTALL,
     async (event, params: import('./installService').InstallParams) => {
       const publicParams: import('./installService').InstallParams = {
         name: params.name,
@@ -637,7 +638,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
         ...(params.skipBackup !== undefined ? { skipBackup: params.skipBackup } : {}),
       };
       const result = await installService.install(publicParams, (e) => {
-        event.sender.send('skillhub:install-progress', e);
+        event.sender.send(IPC_CHANNELS.SKILLHUB.INSTALL_PROGRESS, e);
       });
       if (!result.success) return result;
       await refreshCodexProjectSkillCache(result.projectWorkingDir);
@@ -653,7 +654,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 取消正在进行的 install（按 name 索引）
   ipcMain.handle(
-    'skillhub:cancel-install',
+    IPC_CHANNELS.SKILLHUB.CANCEL_INSTALL,
     (_event, { name }: { name: string }) => {
       const ok = installService.cancelInstall(name);
       return { success: ok };
@@ -662,7 +663,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // 卸载（删本地文件夹）—— service 内校验路径白名单
   ipcMain.handle(
-    'skillhub:uninstall',
+    IPC_CHANNELS.SKILLHUB.UNINSTALL,
     async (_event, { absolutePath }: { absolutePath: string }) => {
       const result = await installService.uninstall(absolutePath);
       if (!result.success) return result;
@@ -679,7 +680,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 输入由 renderer 提供 server 权威 authorId,main 只负责落盘。
   // 已有记录但 authorId 不一致(老 manifest 缺字段或换 server 用户体系)→ 覆盖刷新。
   ipcMain.handle(
-    'skillhub:reconcile-mine-registry',
+    IPC_CHANNELS.SKILLHUB.RECONCILE_MINE_REGISTRY,
     async (
       _event,
       {
@@ -694,7 +695,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // ── SkillHub Registry IPC（v0.6 重构新增） ────────────────────────────────
   ipcMain.handle(
-    'skillhub:registry:get-by-name',
+    IPC_CHANNELS.SKILLHUB.REGISTRY_GET_BY_NAME,
     async (_event, { name }: { name: string }) => {
       try {
         const manifest = await registryService.readManifest(name);

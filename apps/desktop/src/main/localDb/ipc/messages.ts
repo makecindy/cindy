@@ -50,6 +50,7 @@ import {
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('localDb/messages');
 
@@ -156,7 +157,7 @@ export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
 }
 
 export function registerMessageIpc(): void {
-  ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, async (_e, sessionId: unknown, opts: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
     const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
@@ -249,7 +250,7 @@ export function registerMessageIpc(): void {
   });
 
   ipcMain.handle(
-    'local-db:messages:around',
+    IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND,
     async (_e, sessionId: unknown, messageId: unknown, opts: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const mid = requireString(messageId, 'messageId');
@@ -331,7 +332,7 @@ export function registerMessageIpc(): void {
   );
 
   ipcMain.handle(
-    'local-db:messages:around-client-id',
+    IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID,
     async (_e, sessionId: unknown, clientId: unknown, opts: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
@@ -415,7 +416,7 @@ export function registerMessageIpc(): void {
     },
   );
 
-  ipcMain.handle('local-db:messages:estimatedSessionValue', async (_e, sessionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.MESSAGES_ESTIMATED_SESSION_VALUE, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
     const db = getDbClient().drizzle;
 
@@ -456,7 +457,7 @@ export function registerMessageIpc(): void {
     };
   });
 
-  ipcMain.handle('local-db:messages:create', async (_e, sessionId: unknown, body: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATE, async (_e, sessionId: unknown, body: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
     if (!body || typeof body !== 'object') {
       throwIpcError('INVALID_PARAMS', 'body 必须是对象');
@@ -507,7 +508,7 @@ export function registerMessageIpc(): void {
   // rewind-session：把 SDK echo 出的 user 消息 cc 元信息（uuid / sdkSessionId）
   // 回写到那条已存在的 user 消息。renderer 暂时用不到，注册 IPC 仅为对称完整性。
   ipcMain.handle(
-    'local-db:messages:updateAgentMeta',
+    IPC_CHANNELS.LOCAL_DB.MESSAGES_UPDATE_AGENT_META,
     async (_e, sessionId: unknown, clientId: unknown, agentMeta: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
@@ -519,7 +520,7 @@ export function registerMessageIpc(): void {
   );
 
   ipcMain.handle(
-    'local-db:messages:updateContent',
+    IPC_CHANNELS.LOCAL_DB.MESSAGES_UPDATE_CONTENT,
     async (_e, sessionId: unknown, clientId: unknown, content: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
@@ -532,7 +533,7 @@ export function registerMessageIpc(): void {
   // error-tail-banner:「关闭 / 忽略」错误行(merge dismissed:true,main 读原
   // content,不丢 sdkError 等字段)。中断行与普通错误行共用。
   ipcMain.handle(
-    'local-db:messages:dismiss-error',
+    IPC_CHANNELS.LOCAL_DB.MESSAGES_DISMISS_ERROR,
     async (_e, sessionId: unknown, clientId: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
@@ -619,22 +620,22 @@ export function broadcastMessageRow(
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
   if (ownerScope !== undefined && ownerScope !== null) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId, message: msg }, ownerStamp);
   } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId, message: msg });
   } else {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId, message: msg }, ownerStamp);
   }
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
       if (hasCapturedScope) {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+        win.webContents.send(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId, message: msg }, ownerStamp);
       } else if (ownerStamp === undefined) {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg });
+        win.webContents.send(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId, message: msg });
       } else {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+        win.webContents.send(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId, message: msg }, ownerStamp);
       }
     } catch {
       /* swallow per-window broadcast failures */
@@ -932,19 +933,19 @@ export function broadcastMessageDeleted(
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
   if (ownerScope !== undefined && ownerScope !== null) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload, ownerStamp);
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED, payload, ownerStamp);
   } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload);
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED, payload);
   } else {
-    broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload, ownerStamp);
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED, payload, ownerStamp);
   }
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      if (hasCapturedScope) win.webContents.send('local-db:messages:deleted', payload, ownerStamp);
-      else if (ownerStamp === undefined) win.webContents.send('local-db:messages:deleted', payload);
-      else win.webContents.send('local-db:messages:deleted', payload, ownerStamp);
+      if (hasCapturedScope) win.webContents.send(IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED, payload, ownerStamp);
+      else if (ownerStamp === undefined) win.webContents.send(IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED, payload);
+      else win.webContents.send(IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED, payload, ownerStamp);
     } catch {
       /* swallow per-window broadcast failures */
     }

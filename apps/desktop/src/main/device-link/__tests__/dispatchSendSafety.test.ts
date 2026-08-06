@@ -43,6 +43,7 @@ vi.mock('../settings-store', () => ({
 
 import { __testing } from '../dispatch';
 import * as subscriptions from '../subscriptions';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
 function mkClient(
@@ -106,7 +107,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
         'ctrl-1',
         'req-1',
         big,
-        'local-db:messages:list',
+        IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST,
       ),
     ).not.toThrow();
 
@@ -155,7 +156,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
         'ctrl-1',
         'req-1',
         big,
-        'local-db:messages:list',
+        IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST,
       ),
     ).not.toThrow();
 
@@ -202,7 +203,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
         'ctrl-1',
         'req-1',
         big,
-        'local-db:messages:list',
+        IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST,
       ),
     ).not.toThrow();
 
@@ -246,7 +247,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
         'ctrl-1',
         'req-1',
         big,
-        'local-db:messages:list',
+        IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST,
       ),
     ).not.toThrow();
 
@@ -286,7 +287,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
         'ctrl-1',
         'req-1',
         big,
-        'local-db:messages:list',
+        IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST,
       ),
     ).not.toThrow();
 
@@ -339,7 +340,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
         'ctrl-1',
         'req-1',
         big,
-        'local-db:messages:around',
+        IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND,
         ['s1', 'anchor-message', { radius: 20 }],
       ),
     ).not.toThrow();
@@ -376,7 +377,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
         'ctrl-1',
         'req-1',
         big,
-        'local-db:messages:around-client-id',
+        IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID,
         ['s1', 'anchor-client', { radius: 20 }],
       ),
     ).not.toThrow();
@@ -451,7 +452,7 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     subscriptions.subscribe('ctrl-1', ['session:s1']);
 
     // maker:event + {sessionId:'s1'} → topic 'session:s1' → ctrl-1 命中。
-    expect(() => __testing.forwardPush('maker:event', { sessionId: 's1' })).not.toThrow();
+    expect(() => __testing.forwardPush(IPC_CHANNELS.MAKER_PUSH.EVENT, { sessionId: 's1' })).not.toThrow();
     expect(sendPush).toHaveBeenCalledTimes(1);
   });
 
@@ -465,7 +466,7 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     const huge = 'x'.repeat(220_000);
 
     expect(() =>
-      __testing.forwardPush('maker:event', {
+      __testing.forwardPush(IPC_CHANNELS.MAKER_PUSH.EVENT, {
         sessionId: 's1',
         event: {
           type: 'tool_result_full',
@@ -500,12 +501,12 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     subscriptions.clearController('live-s1');
     __testing.setActiveClient(client as never);
 
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    __testing.forwardPush(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId: 's1', id: 'm1' });
     expect(sendPush).not.toHaveBeenCalled();
     expect(__testing.queuedPushesFor('ctrl-sessions')).toEqual([]);
     expect(__testing.queuedPushesFor('ctrl-s1')).toEqual([
       {
-        channel: 'local-db:messages:created',
+        channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
         topic: 'session:s1',
         payload: { sessionId: 's1', id: 'm1' },
       },
@@ -518,7 +519,7 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     __testing.setActiveClient(client as never);
     subscriptions.subscribe('ctrl-revoked', ['session:s1']);
     subscriptions.clearController('ctrl-revoked');
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    __testing.forwardPush(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId: 's1', id: 'm1' });
     deviceLinkSettings.value.revokedControllers = ['ctrl-revoked'];
 
     __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-1', undefined);
@@ -535,14 +536,14 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     __testing.setActiveClient(client as never);
     subscriptions.subscribe('ctrl-legacy', ['*']);
     subscriptions.clearController('ctrl-legacy');
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    __testing.forwardPush(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId: 's1', id: 'm1' });
 
     __testing.handleLinkOpen(client as never, 'ctrl-legacy', 'open-1', undefined);
 
     expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
     expect(client.sendPush).toHaveBeenCalledWith(
       'ctrl-legacy',
-      'local-db:messages:created',
+      IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       { sessionId: 's1', id: 'm1' },
     );
     expect(subscriptions.__testing.topicsOf('ctrl-legacy')).toEqual(['*']);
@@ -558,7 +559,7 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
       [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
     );
     subscriptions.clearController('ctrl-modern');
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    __testing.forwardPush(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, { sessionId: 's1', id: 'm1' });
 
     __testing.handleLinkOpen(client as never, 'ctrl-modern', 'open-1', {
       controllerName: 'Mobile',
@@ -582,7 +583,7 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     expect(result).toEqual({ ok: true, result: { ok: true } });
     expect(client.sendPush).toHaveBeenCalledWith(
       'ctrl-modern',
-      'local-db:messages:created',
+      IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       { sessionId: 's1', id: 'm1' },
     );
   });

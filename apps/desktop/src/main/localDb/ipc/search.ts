@@ -10,6 +10,7 @@ import type {
   ConversationSearchStatusFilter,
 } from '../../../shared/conversationSearch.js';
 import { optionalEnum, requireObject, throwIpcError } from '../../utils/ipcValidate.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const SORT_VALUES = ['relevance', 'activityDesc', 'activityAsc'] as const;
 const SEMANTIC_MODE_VALUES = ['hybrid', 'keyword'] as const;
@@ -18,7 +19,7 @@ const AGENT_VALUES = ['all', 'cc', 'codex'] as const;
 const LAST_ACTIVITY_VALUES = ['all', '1d', '3d', '7d', '30d'] as const;
 
 export function registerSearchIpc(): void {
-  ipcMain.handle('local-db:conversations:search', async (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.CONVERSATIONS_SEARCH, async (_e, payload: unknown) => {
     const body = requireObject(payload, 'payload');
     const query = typeof body.query === 'string' ? body.query.trim() : '';
     if (!query) {

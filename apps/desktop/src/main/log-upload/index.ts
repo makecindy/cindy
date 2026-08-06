@@ -62,6 +62,7 @@ import { PendingMarkerStore, type MarkerFs } from './pendingMarkers';
 import type { LogUploadMeta, LogUploadTarget } from './types';
 import { generateUploadCode } from './uploadCode';
 import { runUpload, type UploadOutcome } from './uploadRunner';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('log-upload');
 
@@ -398,12 +399,12 @@ export function initLogUploadService(): void {
   // 崩溃即时路径。注册在 onFatalShutdown 而不是 onQuit:见 lifecycle.onFatalShutdown 注释。
   onFatalShutdown(handleFatalShutdown);
 
-  ipcMain.handle('log-upload:settings-get', (event) => {
+  ipcMain.handle(IPC_CHANNELS.LOG_UPLOAD.SETTINGS_GET, (event) => {
     assertTrustedAppRendererEvent(event);
     return logUploadSettingsPayload();
   });
 
-  ipcMain.handle('log-upload:set-crash-auto', (event, rawEnabled: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOG_UPLOAD.SET_CRASH_AUTO, (event, rawEnabled: unknown) => {
     assertTrustedAppRendererEvent(event);
     // 非布尔一律当关闭处理(fail closed)。
     const enabled = rawEnabled === true;
@@ -424,7 +425,7 @@ export function initLogUploadService(): void {
     return logUploadSettingsPayload();
   });
 
-  ipcMain.handle('log-upload:reset-crash-auto', (event) => {
+  ipcMain.handle(IPC_CHANNELS.LOG_UPLOAD.RESET_CRASH_AUTO, (event) => {
     assertTrustedAppRendererEvent(event);
     try {
       clearCrashAutoUploadOverride();
@@ -438,7 +439,7 @@ export function initLogUploadService(): void {
     return logUploadSettingsPayload();
   });
 
-  ipcMain.handle('log-upload:upload-now', async (event): Promise<LogUploadResult> => {
+  ipcMain.handle(IPC_CHANNELS.LOG_UPLOAD.UPLOAD_NOW, async (event): Promise<LogUploadResult> => {
     assertTrustedAppRendererEvent(event);
     if (manualUploadInFlight) {
       return throwIpcError('LOG_UPLOAD_BUSY', 'a log upload is already in progress');

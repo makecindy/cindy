@@ -40,6 +40,7 @@ import {
   parseTransportPayload,
   byteLength,
 } from './transport.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 /** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
@@ -2817,27 +2818,27 @@ function isReliableKind(kind: Envelope['kind']): kind is 'invoke' | 'invoke-resu
  * 显式 closeLink() 只应撤掉可靠 streaming 层；列表刷新、能力探针、词典
  * 快照和 topic 订阅仍要沿用旧 envelope 路径，兼容 link-open 之前的既有语义。
  */
-const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set([
-  'device-link:subscribe',
-  'device-link:unsubscribe',
-  'device-link:voice:dictionary:get',
-  'maker:provider:list',
-  'maker:get-capabilities',
-  'maker:get-new-maker-defaults',
-  'maker:list-active',
-  'maker:list-available-agents',
-  'maker:list-agent-commands',
-  'maker:list-agent-skills',
-  'local-db:sessions:list',
-  'local-db:sessions:get',
-  'local-db:history:messages',
-  'local-db:messages:list',
-  'local-db:messages:around',
-  'local-db:messages:around-client-id',
-  'local-db:messages:estimatedSessionValue',
-  'local-db:recent-workdirs:list',
-  'local-db:sessions:interrupted-pending',
-  'maker:git-safety:get',
+const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set<string>([
+  IPC_CHANNELS.DEVICE_LINK.SUBSCRIBE,
+  IPC_CHANNELS.DEVICE_LINK.UNSUBSCRIBE,
+  IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_GET,
+  IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST,
+  IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES,
+  IPC_CHANNELS.MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS,
+  IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
+  IPC_CHANNELS.MAKER_INVOKE.LIST_AVAILABLE_AGENTS,
+  IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_COMMANDS,
+  IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS,
+  IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST,
+  IPC_CHANNELS.LOCAL_DB.SESSIONS_GET,
+  IPC_CHANNELS.LOCAL_DB.HISTORY_MESSAGES,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_ESTIMATED_SESSION_VALUE,
+  IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_LIST,
+  IPC_CHANNELS.LOCAL_DB.SESSIONS_INTERRUPTED_PENDING,
+  IPC_CHANNELS.MAKER_INVOKE.GIT_SAFETY_GET,
 ]);
 
 function isUnlinkedLegacyEnvelope(env: Envelope): boolean {

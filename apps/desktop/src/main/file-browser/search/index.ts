@@ -19,16 +19,17 @@ import { RipgrepSearcher, type SearchEvent } from '@cindy/file-browser-core';
 import { createLogger } from '../../logger.js';
 import { getRipgrepBinaryPath } from '../../maker-host/runtime-configs.js';
 import { getRemoteFileBrowser } from '../remote-deps.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('file-browser/search');
 
 export const SEARCH_INVOKE = {
-  START: 'maker:search:start',
-  CANCEL: 'maker:search:cancel',
+  START: IPC_CHANNELS.MAKER_EXTRA.SEARCH_START,
+  CANCEL: IPC_CHANNELS.MAKER_EXTRA.SEARCH_CANCEL,
 } as const;
 
 export const SEARCH_PUSH = {
-  EVENT: 'maker:search:event',
+  EVENT: IPC_CHANNELS.MAKER_EXTRA.SEARCH_EVENT,
 } as const;
 
 interface StartArgs {

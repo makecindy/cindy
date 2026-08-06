@@ -150,6 +150,7 @@ import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import type { RemoteSession } from '@/session/types';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 const LIST_LIMIT = 200;
 const DEVICE_LIST_TIMEOUT_MS = 12_000;
@@ -338,7 +339,7 @@ export default function HomeScreen() {
         // the older snapshot, while progress predating this attempt can be cleared.
         const activeSessionSnapshotEpoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
         const [list, activeSessions] = await Promise.all([
-          invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
+          invoke<RemoteSession[]>(device.deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, [
             LIST_LIMIT,
             remoteListStatusFilter(statusFilter),
             { includePinned: true },
@@ -346,7 +347,7 @@ export default function HomeScreen() {
           // `sessions` topic replay covers list-level Agent Island activity, but the authoritative
           // "turn currently running" snapshot is maker:list-active. Pull it with the list so Home
           // does not need a session-detail round trip before showing running rows.
-          invoke<unknown[]>(device.deviceId, 'maker:list-active', []).catch((err) => {
+          invoke<unknown[]>(device.deviceId, IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, []).catch((err) => {
             if (isOptionalActiveSessionSnapshotError(err)) return null;
             throw err;
           }),
@@ -1053,7 +1054,7 @@ export default function HomeScreen() {
         // 再查一次,等待期间被同字段新写取代的旧笔就地让位,不再发出(review P2)。
         (assertStillLatest) => invoke<RemoteSession>(
           rpcDeviceId,
-          'local-db:sessions:patch-meta',
+          IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META,
           [session.id, patch],
           { preSend: assertStillLatest },
         ),

@@ -1,0 +1,5 @@
+export const SHOW_OPEN_DIRECTORY_DIALOG_CHANNELS = {
+  SHOW_OPEN_DIRECTORY_DIALOG: "show-open-directory-dialog",
+} as const;
+
+export type SHOW_OPEN_DIRECTORY_DIALOGChannel = typeof SHOW_OPEN_DIRECTORY_DIALOG_CHANNELS[keyof typeof SHOW_OPEN_DIRECTORY_DIALOG_CHANNELS];

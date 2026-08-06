@@ -7,12 +7,17 @@
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createLogger } from '../logger.js';
 import { resolveSessionReferences } from '../maker-ipc/sessionReferenceResolver.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-const QUEUED_CHANNELS = new Set(['maker:input:enqueue', 'maker:input:steer', 'maker:input:update-content']);
 const log = createLogger('device-link:session-reference');
+const QUEUED_CHANNELS = new Set<string>([
+  IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE,
+  IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER,
+  IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT,
+]);
 
 function usesTargetStoredSnapshot(channel: string, args: unknown[], item: AgentInputQueuedMessage): boolean {
-  if (channel !== 'maker:input:steer') return false;
+  if (channel !== IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER) return false;
   const opts = args[2];
   return (
     !!opts &&
@@ -26,11 +31,11 @@ function usesTargetStoredSnapshot(channel: string, args: unknown[], item: AgentI
 
 /** 是否需要在发送前确认目标端能消费可信引用快照。 */
 export function outboundSessionReferencesRequested(channel: string, args: unknown[]): boolean {
-  if (channel === 'maker:input:update-text') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT) {
     return Array.isArray(args[3]) && args[3].length > 0;
   }
   if (!QUEUED_CHANNELS.has(channel)) return false;
-  const itemIndex = channel === 'maker:input:update-content' ? 2 : 1;
+  const itemIndex = channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT ? 2 : 1;
   const item = args[itemIndex];
   if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
   const queued = item as AgentInputQueuedMessage;
@@ -44,7 +49,7 @@ export function stripOutboundSessionReferenceSideChannels(
   channel: string,
   args: unknown[],
 ): unknown[] {
-  if (channel === 'maker:input:update-text') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT) {
     if (!Array.isArray(args[3])) return args;
     const next = [...args];
     next[3] = [];
@@ -52,7 +57,7 @@ export function stripOutboundSessionReferenceSideChannels(
     return next;
   }
   if (!QUEUED_CHANNELS.has(channel)) return args;
-  const itemIndex = channel === 'maker:input:update-content' ? 2 : 1;
+  const itemIndex = channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT ? 2 : 1;
   const item = args[itemIndex];
   if (!item || typeof item !== 'object' || Array.isArray(item)) return args;
   const nextItem: AgentInputQueuedMessage = { ...(item as AgentInputQueuedMessage) };
@@ -68,7 +73,7 @@ export async function rewriteOutboundSessionReferences(
   channel: string,
   args: unknown[],
 ): Promise<unknown[]> {
-  if (channel === 'maker:input:update-text') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT) {
     if (!Array.isArray(args[3])) return args;
     const refs = args[3] as AgentInputQueuedMessage['sessionRefs'];
     const next = [...args];
@@ -87,7 +92,7 @@ export async function rewriteOutboundSessionReferences(
     return next;
   }
   if (!QUEUED_CHANNELS.has(channel)) return args;
-  const itemIndex = channel === 'maker:input:update-content' ? 2 : 1;
+  const itemIndex = channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT ? 2 : 1;
   const item = args[itemIndex];
   if (!item || typeof item !== 'object' || Array.isArray(item)) return args;
   const queued = item as AgentInputQueuedMessage;

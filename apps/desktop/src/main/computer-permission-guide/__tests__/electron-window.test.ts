@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import type { BrowserWindowConstructorOptions, WebContents } from 'electron';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const originalPlatform = process.platform;
 const VALID_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo=';
@@ -534,7 +535,7 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.nativeDismiss).toHaveBeenCalledOnce();
     expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
     expect(harness.broadcastSend).toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
   });
 
@@ -564,7 +565,7 @@ describe('Electron Computer Use permission guide window', () => {
 
     expect(harness.nativeDismiss).toHaveBeenCalledOnce();
     expect(harness.broadcastSend).toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
   });
 
@@ -601,7 +602,7 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.nativeDismiss).not.toHaveBeenCalled();
     expect(harness.cancelComputerDriverPermissionGrant).toHaveBeenCalledOnce();
     expect(harness.broadcastSend).toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
 
     await guide.openComputerPermissionPaneForStatus(initialStatus);
@@ -629,7 +630,7 @@ describe('Electron Computer Use permission guide window', () => {
 
     expect(harness.cancelComputerDriverPermissionGrant).not.toHaveBeenCalled();
     expect(harness.broadcastSend).not.toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
     expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalled();
   });
@@ -648,7 +649,7 @@ describe('Electron Computer Use permission guide window', () => {
     });
     expect(harness.closeComputerUseSwitchLocator).not.toHaveBeenCalled();
     expect(harness.broadcastSend).not.toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
 
     nativeStarted.resolve(false);
@@ -677,7 +678,7 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.windows[0].close).not.toHaveBeenCalled();
     expect(harness.windows[1].close).not.toHaveBeenCalled();
     expect(harness.broadcastSend).not.toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
   });
 
@@ -697,7 +698,7 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.nativeDismiss).toHaveBeenCalledOnce();
     expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
     expect(harness.broadcastSend).toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
   });
 
@@ -711,7 +712,7 @@ describe('Electron Computer Use permission guide window', () => {
       expect(harness.resumeComputerDriverPermissionProbe).toHaveBeenCalledOnce();
       expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
       expect(harness.broadcastSend).toHaveBeenCalledWith(
-        'maker:computer:permission-guide-cancelled',
+        IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
       );
     });
     expect(harness.windows[0].close).toHaveBeenCalledOnce();
@@ -729,7 +730,7 @@ describe('Electron Computer Use permission guide window', () => {
 
     expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
     expect(harness.broadcastSend).toHaveBeenCalledWith(
-      'maker:computer:permission-guide-cancelled',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED,
     );
   });
 
@@ -1016,7 +1017,7 @@ describe('Electron Computer Use permission guide window', () => {
 
     expect(harness.nativeUpdate).not.toHaveBeenCalled();
     expect(harness.broadcastSend).not.toHaveBeenCalledWith(
-      'maker:computer:permission-guide-status-changed',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_STATUS_CHANGED,
       expect.objectContaining({
         permissionState: expect.objectContaining({ status: 'granted' }),
       }),
@@ -1280,11 +1281,11 @@ describe('Electron Computer Use permission guide window', () => {
       }));
     });
     expect(harness.broadcastSend).toHaveBeenCalledWith(
-      'maker:computer:permission-guide-status-changed',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_STATUS_CHANGED,
       pausedStatus,
     );
     expect(harness.windows[1].webContents.send).toHaveBeenCalledWith(
-      'maker:computer:permission-guide-status-changed',
+      IPC_CHANNELS.MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_STATUS_CHANGED,
       preflightStatus,
     );
     expect(guide.getComputerPermissionGuideStatus(

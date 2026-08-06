@@ -82,6 +82,7 @@ import {
   remoteWorkingDirRejectionToIpcError,
   type RemoteWorkingDirCheckResult,
 } from './remote-workdir-guard';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('device-link-dispatch');
 
@@ -108,9 +109,9 @@ const MAX_CONTROLLER_NAME_LEN = 64;
 const MAX_CONTROLLER_CAPABILITIES = 32;
 const MAX_CONTROLLER_CAPABILITY_LEN = 80;
 const REMOTE_MESSAGE_CHANNELS: ReadonlySet<string> = new Set([
-  'local-db:messages:list',
-  'local-db:messages:around',
-  'local-db:messages:around-client-id',
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID,
 ]);
 const REMOTE_MESSAGE_CONTENT_LIMIT = 128 * 1024;
 const REMOTE_TOOL_RESULT_CONTENT_LIMIT = 8 * 1024;
@@ -123,24 +124,24 @@ const REMOTE_INVOKE_FRAME_SAFETY_BYTES = 1024;
 // Remote project viewers reconcile this list on a timer. Treating that background read as
 // interactive activity would refresh the updater quiet period forever for sessions-only viewers.
 const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
-  'local-db:sessions:list',
+  IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST,
 ]);
 const textEncoder = new TextEncoder();
 const offlinePushQueue = createOfflinePushQueue();
 
 /** 只排队可由 session snapshot 对账、且不携带权限终态的会话域事件。 */
 const OFFLINE_QUEUEABLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
-  'local-db:messages:created',
-  'local-db:messages:deleted',
-  'local-db:session:error-persisted',
-  'maker:event',
-  'maker:status-changed',
-  'maker:interaction-request',
-  'maker:interaction-dismissed',
-  'maker:input:projection',
-  'maker:goal:status-changed',
-  'usage:message-turn-cost',
-  'usage:message-model-mismatch',
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED,
+  IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED,
+  IPC_CHANNELS.MAKER_PUSH.EVENT,
+  IPC_CHANNELS.MAKER_PUSH.STATUS_CHANGED,
+  IPC_CHANNELS.MAKER_PUSH.INTERACTION_REQUEST,
+  IPC_CHANNELS.MAKER_PUSH.INTERACTION_DISMISSED,
+  IPC_CHANNELS.MAKER_PUSH.INPUT_PROJECTION,
+  IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED,
+  IPC_CHANNELS.USAGE.MESSAGE_TURN_COST,
+  IPC_CHANNELS.USAGE.MESSAGE_MODEL_MISMATCH,
 ]);
 
 /** wire 输入 fail-closed：未知形状视为空能力集，并限制数量/长度避免撑大常驻 registry。 */
@@ -200,8 +201,8 @@ export type { ActiveController } from './subscriptions';
  * 故无需(也无法)在此收敛。
  */
 const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = new Map([
-  ['maker:create-session', 'workingDir'],
-  ['worktree:create', 'baseRepo'],
+  [IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, 'workingDir'],
+  [IPC_CHANNELS.WORKTREE.CREATE, 'baseRepo'],
 ]);
 
 type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult;
@@ -255,12 +256,12 @@ export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void
 
 /** set-* channel → 持久化的 session 字段名(args[0]=sessionId, args[1]=value)。 */
 const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs'> = {
-  'maker:set-model': 'model',
-  'maker:set-effort': 'effort',
-  'maker:set-permission-mode': 'permissionMode',
-  'maker:set-fast-mode': 'fastMode',
-  'maker:set-plan-mode': 'planModeEnabled',
-  'maker:set-extra-dirs': 'extraDirs',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_MODEL]: 'model',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_EFFORT]: 'effort',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_PERMISSION_MODE]: 'permissionMode',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE]: 'fastMode',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_PLAN_MODE]: 'planModeEnabled',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS]: 'extraDirs',
 };
 
 async function persistRemoteSetting(channel: string, args: unknown[], result: unknown): Promise<void> {
@@ -279,7 +280,7 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   // 请求值 != 生效值(控制端选的路径在被控端常被拒或不存在)。必须持久化 handler 实际应用的子集
   // (其返回值),否则被控端 DB 会写进会话从未接受的目录,未来 resume 加载到不可用 extraDirs。
   // handler no-op(session 不在 / capability 不支持)时返回 undefined → 不持久化。
-  if (channel === 'maker:set-extra-dirs') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS) {
     if (!Array.isArray(result)) return;
     await settingsPersist(sessionId, { extraDirs: result });
     return;
@@ -288,7 +289,7 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   // 必须把它一并持久化进被控端 DB.provider_id,否则远程切来源只进了 runtime store、跨重启/resume 丢
   // (G2)。与被控端 handler 同语义:args[2]===undefined(老 2 参调用)不动 provider_id;string→写;
   // null/''→清除(回落默认路由)。写进 DB 后 mapper 自动带进 sessions:patched → 回流控制端镜像。
-  if (channel === 'maker:set-model') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.SET_MODEL) {
     // 同引擎重选的第二段带 host revision CAS。handler 返回 superseded 表示
     // 另一控制端已在两段之间更新过意图：runtime 未应用，DB 也必须同样不落
     // 这次请求参数，否则 sessions:patched 会把过期选择反向盖回控制端。
@@ -355,7 +356,7 @@ function projectInvokeResultForTunnel(
   result: unknown,
   supportsFullLogoKinds = false,
 ): unknown {
-  if (channel !== 'maker:provider:list') return result;
+  if (channel !== IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST) return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown };
   if (!Array.isArray(r.providers)) return result;
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
@@ -545,7 +546,7 @@ function shouldAcquireRemoteInvokeBusyLease(
   if (isControllerRevoked(src)) return false;
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) return false;
   if (
-    payload.channel === 'local-db:sessions:get' &&
+    payload.channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET &&
     payload.args?.[1] === DEVICE_LINK_RECONCILIATION_PROBE_MARKER
   ) {
     return false;
@@ -807,7 +808,7 @@ interface TruncationState {
 function compactOversizedPushPayload(channel: string, payload: unknown): unknown | null {
   // 最近日志里的超限帧集中在 maker:event:大型 tool_result/tool_result_full 会同时携带
   // event.data 与 resolvedContent。普通帧仍首发原样,这里只兜底首发超限后的实时流镜像。
-  if (channel !== 'maker:event') return null;
+  if (channel !== IPC_CHANNELS.MAKER_PUSH.EVENT) return null;
   const state: TruncationState = {
     remainingChars: REMOTE_PUSH_TEXT_BUDGET_CHARS,
     truncated: false,
@@ -1747,7 +1748,7 @@ function sliceRemoteMessageWindowForChannel(
   args?: unknown[],
 ): unknown[] {
   // messages:list returns desc(createdAt), so the front of the page is newest.
-  if (channel === 'local-db:messages:list') {
+  if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST) {
     return markRemoteRowsTrimmed(messages.slice(0, keep), messages.length);
   }
 
@@ -1759,9 +1760,9 @@ function sliceRemoteMessageWindowForChannel(
 }
 
 function findRemoteMessageAnchorIndex(channel: string, messages: unknown[], args?: unknown[]): number {
-  const anchorKey = channel === 'local-db:messages:around'
+  const anchorKey = channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND
     ? 'id'
-    : channel === 'local-db:messages:around-client-id'
+    : channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID
       ? 'clientId'
       : null;
   const anchorValue = args?.[1];
@@ -2150,7 +2151,7 @@ export async function runInvoke(
 
   try {
     const args = payload.args ?? [];
-    const listingCapabilities = payload.channel === 'maker:provider:list'
+    const listingCapabilities = payload.channel === IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST
       ? invokeControllerCapabilities(payload)
       : [];
     const result = await runDeviceLinkInvokeContext(
@@ -2164,7 +2165,7 @@ export async function runInvoke(
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
       () => dispatchLocalInvoke(
         payload.channel,
-        payload.channel === 'maker:provider:list' ? [] : args,
+        payload.channel === IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST ? [] : args,
       ),
     );
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端

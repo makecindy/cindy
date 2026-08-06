@@ -17,11 +17,12 @@ import {
   getEmbeddingService,
   isEmbeddingHostStarted,
 } from '../../embedding-host';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export function registerDevEmbeddingIpc(): void {
   if (app.isPackaged) return;
 
-  ipcMain.handle('dev:embedding:status', async () => {
+  ipcMain.handle(IPC_CHANNELS.DEV.EMBEDDING_STATUS, async () => {
     if (!isEmbeddingHostStarted()) {
       return { ok: false, error: 'embedding-host not started' };
     }
@@ -36,7 +37,7 @@ export function registerDevEmbeddingIpc(): void {
     }
   });
 
-  ipcMain.handle('dev:embedding:test-embed', async (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.DEV.EMBEDDING_TEST_EMBED, async (_e, payload: unknown) => {
     if (!isEmbeddingHostStarted()) {
       return { ok: false, error: 'embedding-host not started' };
     }

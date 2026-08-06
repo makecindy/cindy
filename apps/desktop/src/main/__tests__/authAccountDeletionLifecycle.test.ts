@@ -138,7 +138,7 @@ describe('desktop auth account-deletion lifecycle', () => {
     const body = source.slice(start, end);
 
     expect(body).toContain(
-      "broadcastToRenderers('auth:session-expired', { message: '', reason });",
+      "broadcastToRenderers(IPC_CHANNELS.AUTH.SESSION_EXPIRED, { message: '', reason });",
     );
   });
 

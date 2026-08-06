@@ -55,7 +55,11 @@ vi.mock('@/lib/composerDraftStore', () => ({
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import * as messageService from '@/lib/messageService';
-import { getIssueConfirmDraft, saveIssueConfirmDraft } from '@/lib/issueConfirmDraftStore';
+import {
+  getIssueConfirmDraft,
+  saveIssueConfirmDraft,
+} from '@/lib/issueConfirmDraftStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const TEST_OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
 type RemotePush = {
@@ -78,17 +82,17 @@ function makeFakeHost(deviceId: string) {
 
   const invoke = vi.fn(async (_d: string, channel: string, args: unknown[]) => {
     switch (channel) {
-      case 'maker:resolve-interaction':
+      case IPC_CHANNELS.MAKER_INVOKE.RESOLVE_INTERACTION:
         resolved.push({
           requestId: args[0] as string,
           decision: args[1] as Record<string, unknown>,
         });
         return null;
-      case 'maker:get-pending-interactions':
+      case IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS:
         return pending.get(args[0] as string) ?? [];
-      case 'local-db:messages:list':
+      case IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST:
         return [];
-      case 'local-db:sessions:get':
+      case IPC_CHANNELS.LOCAL_DB.SESSIONS_GET:
         return { agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false };
       default:
         return null;
@@ -115,7 +119,7 @@ function makeFakeHost(deviceId: string) {
     hostInteraction(sessionId: string, request: Record<string, unknown>, persistId?: string): void {
       pushCb?.({
         deviceId,
-        channel: 'maker:interaction-request',
+        channel: IPC_CHANNELS.MAKER_PUSH.INTERACTION_REQUEST,
         payload: { sessionId, request, persistId },
       });
     },
@@ -132,7 +136,7 @@ function makeFakeHost(deviceId: string) {
     ): void {
       pushCb?.({
         deviceId,
-        channel: 'maker:interaction-dismissed',
+        channel: IPC_CHANNELS.MAKER_PUSH.INTERACTION_DISMISSED,
         payload: { sessionId, requestId, reason, ...(decision !== undefined ? { decision } : {}) },
       });
     },
@@ -394,14 +398,14 @@ describe('device-link 远程 fastMode 持久化', () => {
     host.invoke.mockImplementationOnce(
       async (deviceId: string, channel: string, args: unknown[]) => {
         expect(deviceId).toBe(DEVICE_ID);
-        expect(channel).toBe('maker:set-fast-mode');
+        expect(channel).toBe(IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE);
         expect(args).toEqual([s, true]);
         throw err;
       },
     );
 
     await expect(makerChatStore.setFastMode(s, true)).rejects.toThrow('relay down');
-    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'maker:set-fast-mode', [s, true]);
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE, [s, true]);
     expect(makerChatStore.getSnapshot(s).fastMode).toBe(false);
   });
 
@@ -411,7 +415,7 @@ describe('device-link 远程 fastMode 持久化', () => {
 
     await makerChatStore.setFastMode(s, true, DEVICE_ID);
 
-    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'maker:set-fast-mode', [s, true]);
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE, [s, true]);
     expect(local.localSetFastMode).not.toHaveBeenCalled();
     expect(makerChatStore.getSnapshot(s).fastMode).toBe(true);
   });
@@ -691,7 +695,7 @@ describe('device-link 交互快照重建 — 窗口在交互挂起之后才打�
     makerChatStore.ensureInitialMessages(s);
     await flush();
     await flush();
-    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'maker:get-pending-interactions', [s]);
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS, [s]);
     expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('perm-mid');
   });
 
@@ -763,7 +767,7 @@ describe('device-link 交互快照重建 — 窗口在交互挂起之后才打�
     await flush();
     await flush();
     expect(local.localGetPendingInteractions).toHaveBeenCalledWith(s);
-    expect(host.invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'maker:get-pending-interactions', [s]);
+    expect(host.invoke).not.toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS, [s]);
   });
 });
 
@@ -775,8 +779,8 @@ describe('远程交互接线不变式', () => {
 
   it('makerChatStore 远程 push switch 消费 interaction-request / interaction-dismissed(否则远程卡片不显示)', () => {
     const src = read('lib/makerChatStore.ts');
-    expect(src).toContain("case 'maker:interaction-request':");
-    expect(src).toContain("case 'maker:interaction-dismissed':");
+    expect(src).toContain('case IPC_CHANNELS.MAKER_PUSH.INTERACTION_REQUEST:');
+    expect(src).toContain('case IPC_CHANNELS.MAKER_PUSH.INTERACTION_DISMISSED:');
   });
 
   it('makerChatStore 的 resolve 全经 makerApiFor 按来源路由,不直连本机 maker.resolveInteraction', () => {
@@ -931,7 +935,9 @@ describe('远程交互接线不变式', () => {
     expect(syncBody).toContain(
       'opts.remoteDeviceId ?? getSessionDeviceId(sessionId) ?? deviceLinkDeviceId',
     );
-    expect(syncBody).toContain(".invoke(remoteDeviceId, 'maker:apply-new-maker-draft-pref'");
+    expect(syncBody).toContain(
+      '.invoke(remoteDeviceId, IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF',
+    );
     expect(syncBody).not.toContain('patchVendorPrefs(vendor');
 
     const appSrc = read('App.tsx');
@@ -1197,7 +1203,7 @@ describe('远程交互接线不变式', () => {
   it('F2: fork IPC handler 广播 sessions:created(否则 fork 会话在被控端/其它控制端不出现)', () => {
     const src = mainSrc('maker-ipc/fork.ts');
     expect(src).toContain('broadcastSessionCreated(session.id)');
-    expect(src).toContain("tapWindowBroadcast('local-db:sessions:created'");
+    expect(src).toContain('tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED');
   });
 
   it('F3: schedule / project-automation 的 broadcast 补 tapWindowBroadcast(否则远程不回流)', () => {
