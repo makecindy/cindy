@@ -269,14 +269,14 @@ describe('pickConnectedModelForAgent — newSessionDefault 标记优先（步骤
     expect(pickId(providers, 'claude-code', 'claude-opus-5')).toBe('claude-opus-5');
   });
 
-  it('多来源都提供被标记模型时，按订阅优先取来源', () => {
+  it('标记只在 XD 条目上时，同 ID 来源仍按订阅优先', () => {
     const gateway = provider('xd', true, {
       'claude-code': [model('deepseek', { newSessionDefault: ['claude-code'] })],
     });
     const sub = provider(
       'anthropic',
       true,
-      { 'claude-code': [model('deepseek', { newSessionDefault: ['claude-code'] })] },
+      { 'claude-code': [model('deepseek')] },
       'subscription',
     );
     const picked = pickConnectedModelForAgent([gateway, sub], 'claude-code', 'seed');

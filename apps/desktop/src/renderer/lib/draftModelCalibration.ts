@@ -117,6 +117,7 @@ export function pickConnectedModelForAgent(
   // 0. 目录/服务端显式标记的新对话默认(newSessionDefault)优先。pi 不是 wire agent,按
   //    claude-code 口径判定(host 把含 claude-code 的模型投影进 pi tab,标记随之带上)。
   const flagAgent: 'claude-code' | 'codex' = agent === 'codex' ? 'codex' : 'claude-code';
+  let flaggedModelId: string | null = null;
   for (const provider of ranked) {
     const userProvider = provider.source === 'user';
     const flagged = (provider.models[agent] ?? [])
@@ -131,7 +132,23 @@ export function pickConnectedModelForAgent(
         (a, b) =>
           (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
       )[0];
-    if (flagged) return { model: flagged.id, providerId: provider.id };
+    if (flagged) {
+      flaggedModelId = flagged.id;
+      break;
+    }
+  }
+  if (flaggedModelId !== null) {
+    // 标记只存在于区域门控后的 XD 条目；来源选择仍必须独立遵守 ranked 的订阅优先。
+    // 同 ID 的订阅副本不会重复携带标记，但只要它可选且默认可见，就应先消耗用户已付费额度。
+    for (const provider of ranked) {
+      const matching = (provider.models[agent] ?? []).find(
+        (m) =>
+          m.id === flaggedModelId &&
+          m.defaultEnabled !== false &&
+          isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' }),
+      );
+      if (matching) return { model: flaggedModelId, providerId: provider.id };
+    }
   }
   for (const provider of ranked) {
     const preferred = (provider.models[agent] ?? []).find((m) => m.id === preferredModelId);
