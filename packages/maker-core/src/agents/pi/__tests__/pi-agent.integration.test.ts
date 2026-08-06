@@ -355,6 +355,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
+            // 网关图片门控(assertImageInputSupported)按目录能力放行;多模态用例
+            // 走的正是本模型,不标会在 send 前被 PiImageInputUnsupportedError 拒收。
             supportsImageInput: true,
           },
         ],
