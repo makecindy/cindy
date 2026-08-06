@@ -99,8 +99,7 @@ function memoryTerminalLedger(): HookRequestLedger & { records: HookTerminalReco
     },
     markSent(connectionId, requestId) {
       const record = records.findLast(
-        (candidate) =>
-          candidate.connectionId === connectionId && candidate.requestId === requestId,
+        (candidate) => candidate.connectionId === connectionId && candidate.requestId === requestId,
       );
       if (!record) return false;
       record.delivery = 'sent';
@@ -1230,6 +1229,138 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
+  it('首轮 replacement 未落库时显式带回 ACK sessionId: 复用同一任务并排队', async () => {
+    const dd = dialogueDep();
+    const fr = fakeRunner();
+    const externalKey = 'team-slack:C1:ack-replacement';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-first', externalKey, sessionId: 'ghost', workspace: null }),
+      c.send,
+    );
+    await tick();
+    const replacementSessionId = c.last('task.ack')?.payload.sessionId;
+    expect(replacementSessionId).toEqual(expect.any(String));
+    expect(fr.calls).toHaveLength(1);
+
+    // server 已接受首条 ACK，随后把 replacement id 当作显式目标带回；首轮仍在
+    // agent.startSession、尚未落库，所以 inspect 会返回 null。
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'replacement-follow-up',
+        externalKey,
+        sessionId: replacementSessionId,
+        workspace: null,
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls).toHaveLength(1);
+    expect(c.last('task.ack')?.payload).toMatchObject({
+      requestId: 'replacement-follow-up',
+      result: 'queued',
+      sessionId: replacementSessionId,
+    });
+
+    fr.finish({ finalText: 'first done' });
+    await tick();
+    expect(fr.calls).toHaveLength(2);
+    expect(fr.calls[1]?.sessionId).toBe(replacementSessionId);
+    fr.finish({ finalText: 'follow-up done' });
+  });
+
+  it('首轮 replacement 未落库但目录已撤权: 显式带回 ACK sessionId 仍拒绝', async () => {
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
+    const bindings = memoryBindings();
+    const fr = fakeRunner();
+    const externalKey = 'team-slack:C1:ack-replacement-revoked';
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-first', externalKey, sessionId: 'ghost' }),
+      c.send,
+    );
+    await tick();
+    const replacementSessionId = c.last('task.ack')?.payload.sessionId;
+    expect(replacementSessionId).toEqual(expect.any(String));
+    expect(fr.calls).toHaveLength(1);
+
+    config.workspaces = {};
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'replacement-revoked',
+        externalKey,
+        sessionId: replacementSessionId,
+        workspace: null,
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(c.last('task.ack')?.payload).toMatchObject({
+      requestId: 'replacement-revoked',
+      result: 'rejected',
+      reason: 'workspace_not_allowed',
+    });
+    expect(fr.calls).toHaveLength(1);
+    expect(bindings.get('conn-1', externalKey)).toBe(replacementSessionId);
+    fr.finish();
+  });
+
+  it('首轮 replacement 已落库且不可投递: 显式带回 ACK sessionId 时重新创建任务', async () => {
+    const dd = dialogueDep();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const externalKey = 'team-slack:C1:ack-replacement-unusable';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-first', externalKey, sessionId: 'ghost', workspace: null }),
+      c.send,
+    );
+    await tick();
+    const replacementSessionId = c.last('task.ack')?.payload.sessionId;
+    expect(replacementSessionId).toEqual(expect.any(String));
+    sessions[replacementSessionId!] = {
+      workingDir: path.join(DIALOGUE_ROOT, '2026-07-07', replacementSessionId!),
+      usable: false,
+    };
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'replacement-unusable',
+        externalKey,
+        sessionId: replacementSessionId,
+        workspace: null,
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls).toHaveLength(2);
+    expect(fr.calls[1]?.sessionId).not.toBe(replacementSessionId);
+    expect(fr.calls[1]).toMatchObject({ isNew: true });
+    expect(c.last('task.ack')?.payload).toMatchObject({
+      requestId: 'replacement-unusable',
+      result: 'accepted',
+      sessionId: fr.calls[1]?.sessionId,
+    });
+
+    fr.finish();
+    fr.finish();
+  });
+
   it('显式接管检查失败时拒绝且保留原 binding, 不静默创建替代任务', async () => {
     const dd = dialogueDep();
     const bindings = memoryBindings();
@@ -1676,11 +1807,7 @@ describe('dispatcher 核心语义', () => {
 
     const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
     const c = collector();
-    d.handleDispatch(
-      'conn-1',
-      dispatch({ requestId: 'pending-replay-fallback' }),
-      c.send,
-    );
+    d.handleDispatch('conn-1', dispatch({ requestId: 'pending-replay-fallback' }), c.send);
     await tick();
 
     expect(fr.calls).toHaveLength(0);

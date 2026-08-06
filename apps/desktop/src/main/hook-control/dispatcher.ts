@@ -69,7 +69,8 @@ export interface HookSessionRunner {
   /** 目标 session 是否正在跑 turn。 */
   isBusy(sessionId: string): boolean;
   /**
-   * 会话现状: null = 不存在; usable=false = 已归档/删除(不可投递);
+   * 会话现状: null = 不存在; usable=false = 不可投递(已归档/删除、SSH remote、
+   * Orca worker 等);
    * workingDir 用于接管/复用时的白名单校验。检查失败会 reject, 上层必须
    * fail closed 并保留既有 binding, 不能把暂时读不到当成失效任务。
    */
@@ -1501,6 +1502,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
     const laneKind = deriveLaneKind(payload.externalKey);
     const laneKey = bindingKey(connectionId, payload.externalKey);
+    const namespacedBound = bindings.get(connectionId, payload.externalKey);
     // v1 stored every mapping under the literal "slack" namespace.  A new
     // account/provider namespace may read it only as a candidate; it is moved
     // after current-account DB existence + workspace allowlist checks pass.
@@ -1510,6 +1512,42 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
+      if (info !== null) awaitingPersist.delete(payload.sessionId);
+      /**
+       * 首次失效接管的 ACK 会把 replacement sessionId 回给 server。若 server 在
+       * 首轮落库前就把这个新 id 显式带回来, inspect 仍会查不到；它不是第二个
+       * stale 目标, 而是当前消息线刚创建、正在执行的 replacement。只在当前
+       * namespaced binding + awaitingPersist + running/queued 三者同时命中、且
+       * inspect 确实还查不到时复用，并仍用当前映射重验目录，避免把落库窗口
+       * 变成撤权或 usable=false 的旁路。
+       */
+      const pendingDir = awaitingPersist.get(payload.sessionId) ?? null;
+      if (
+        info === null &&
+        payload.sessionId === namespacedBound &&
+        pendingDir !== null &&
+        (running.has(payload.sessionId) || (queues.get(payload.sessionId)?.length ?? 0) > 0)
+      ) {
+        if (!inWhitelistNow(pendingDir) && !inDialogueRoot(pendingDir)) {
+          return { reject: 'workspace_not_allowed' };
+        }
+        return {
+          run: {
+            sessionId: payload.sessionId,
+            isNew: false,
+            laneKind,
+            workingDir: pendingDir,
+            agentKind,
+            model,
+            effort,
+            permissionMode,
+            title: null,
+            prompt: payload.prompt,
+            attachments: payload.attachments,
+            origin,
+          },
+        };
+      }
       if (info?.usable) {
         if (!inWhitelistNow(info.workingDir) && !inDialogueRoot(info.workingDir)) {
           return { reject: 'workspace_not_allowed' };
@@ -1585,7 +1623,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         : undefined;
     if (!dir && !isChat) return { reject: 'unknown_workspace' };
 
-    const namespacedBound = bindings.get(connectionId, payload.externalKey);
     const legacyBound =
       namespacedBound === null && legacyNamespace !== null
         ? bindings.get(legacyNamespace, payload.externalKey)
