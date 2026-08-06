@@ -1484,6 +1484,7 @@ const search = await cindy.send({
   limit: 5,                       // 可选,1–10,缺省 5
   provider: 'cindy',
   callId: msg.callId,             // 搜索只由 tool-call 触发,必须透传
+  callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
 });
 // search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
 //   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素

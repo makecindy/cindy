@@ -77,6 +77,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   releaseDeposit: ReturnType<typeof vi.fn>;
   searchWeb: ReturnType<typeof vi.fn>;
   claimPipeCall: ReturnType<typeof vi.fn>;
+  settlePipeCallClaim: ReturnType<typeof vi.fn>;
 } {
   const generateImage = vi.fn(async () => ({
     buffer: new Uint8Array([1, 2, 3]),
@@ -158,6 +159,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     requestId: 'search-call-1',
   }));
   const claimPipeCall = vi.fn(() => true);
+  const settlePipeCallClaim = vi.fn(() => true);
   const slot = new GhostCindySlot({
     getGhost: () => fakeGhost(),
     getOwnerScopeKey: () => 'cloud:test-owner:1',
@@ -179,6 +181,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     releaseDeposit,
     searchWeb,
     claimPipeCall,
+    settlePipeCallClaim,
     ...overrides,
   } as CindySlotDeps);
   return {
@@ -199,6 +202,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     releaseDeposit,
     searchWeb,
     claimPipeCall,
+    settlePipeCallClaim,
   };
 }
 
@@ -314,6 +318,7 @@ describe('Cindy Web Search', () => {
     query: '  Cindy Web Search  ',
     provider: 'cindy',
     callId: 'call-search-1',
+    callerTool: 'research',
   };
 
   const searchGhost = () => fakeGhost({ model: { search: ['web'] } });
@@ -330,7 +335,7 @@ describe('Cindy Web Search', () => {
       ],
       requestId: 'litellm-call-1',
     }));
-    const { slot, claimPipeCall } = makeSlot({
+    const { slot, claimPipeCall, settlePipeCallClaim } = makeSlot({
       getGhost: searchGhost,
       searchWeb,
     });
@@ -341,7 +346,17 @@ describe('Cindy Web Search', () => {
     expect(claimPipeCall).toHaveBeenCalledWith(
       'art',
       'call-search-1',
+      'research',
       'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    );
+    expect(settlePipeCallClaim).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      false,
     );
     expect(result).toEqual({
       ok: true,
@@ -389,6 +404,7 @@ describe('Cindy Web Search', () => {
       { ...SEARCH_REQ, limit: 1.5 },
       { ...SEARCH_REQ, limit: 11 },
       { ...SEARCH_REQ, callId: '' },
+      { ...SEARCH_REQ, callerTool: '' },
     ]) {
       expect(await slot.handleModelRequest('art', request)).toMatchObject({
         ok: false,
@@ -408,6 +424,7 @@ describe('Cindy Web Search', () => {
       errorCode: 'NOT_CONFIGURED',
     });
     expect(notConfigured.claimPipeCall).not.toHaveBeenCalled();
+    expect(notConfigured.settlePipeCallClaim).not.toHaveBeenCalled();
 
     const rateLimited = makeSlot({
       getGhost: searchGhost,
@@ -418,6 +435,7 @@ describe('Cindy Web Search', () => {
       errorCode: 'RATE_LIMITED',
     });
     expect(rateLimited.claimPipeCall).not.toHaveBeenCalled();
+    expect(rateLimited.settlePipeCallClaim).not.toHaveBeenCalled();
 
     const switching = makeSlot({
       getGhost: searchGhost,
@@ -428,6 +446,7 @@ describe('Cindy Web Search', () => {
       errorCode: 'UPSTREAM_UNAVAILABLE',
     });
     expect(switching.claimPipeCall).not.toHaveBeenCalled();
+    expect(switching.settlePipeCallClaim).not.toHaveBeenCalled();
   });
 
   it('发起上游请求后保留主机搜索错误码并消费 binding', async () => {
@@ -446,6 +465,14 @@ describe('Cindy Web Search', () => {
     });
 
     expect(quota.claimPipeCall).toHaveBeenCalledTimes(1);
+    expect(quota.settlePipeCallClaim).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      true,
+    );
     expect(searchWeb).toHaveBeenCalledTimes(1);
   });
 });

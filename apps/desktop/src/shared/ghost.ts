@@ -5623,6 +5623,8 @@ export type GhostPipeCindyRequest =
       provider: 'cindy';
       /** 搜索只由 tool-call 触发，必须透传本次 callId 用于账单与日志归因。 */
       callId: string;
+      /** 必须透传本次 tool-call 的 msg.tool，供宿主与 callId 事实表配对验身。 */
+      callerTool: string;
     }
   | {
       type: 'cindy-request';

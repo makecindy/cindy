@@ -38,7 +38,7 @@
  * 依赖注入(规则 14):生成/落盘/记账/归属解析全部经 deps,单测直测。
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   GHOST_CINDY_DEPOSIT_BURST,
@@ -306,8 +306,23 @@ export interface CindySlotDeps {
    */
   holdPipeCall?(ghostId: string, callId: string, budgetMs: number): void;
   releasePipeCall?(ghostId: string, callId: string): void;
-  /** 一次性绑定真实在途 tool-call；缺依赖或配对失败必须 fail closed。 */
-  claimPipeCall?(ghostId: string, callId: string, binding: string): boolean;
+  /** 绑定真实在途 tool-call；同请求只允许一次受控重试。 */
+  claimPipeCall?(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+  ): boolean;
+  /** 收束能力尝试；allowRetry 只对首次明确暂态失败生效。 */
+  settlePipeCallClaim?(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+    allowRetry: boolean,
+  ): boolean;
   /**
    * 视频型号预期耗时(秒;video registry 登记值)。hold 预算与异步受理
    * 返回的 expectedSeconds 共用。未注入/查无该型号 → null(用缺省)。
@@ -578,6 +593,7 @@ export class GhostCindySlot {
       query?: unknown;
       limit?: unknown;
       provider?: unknown;
+      callerTool?: unknown;
     };
     if (p?.kind === 'query_job') {
       return this.handleQueryJob(ghostId, p);
@@ -1211,6 +1227,7 @@ export class GhostCindySlot {
       limit?: unknown;
       provider?: unknown;
       callId?: unknown;
+      callerTool?: unknown;
     };
     if (p.provider !== 'cindy') {
       return {
@@ -1255,6 +1272,17 @@ export class GhostCindySlot {
       };
     }
     const callId = p.callId;
+    if (
+      typeof p.callerTool !== 'string' ||
+      !/^[a-z][a-z0-9_-]{0,63}$/.test(p.callerTool)
+    ) {
+      return {
+        ok: false,
+        message: 'callerTool 不合法(必须透传本次 tool-call 的 msg.tool)',
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    const callerTool = p.callerTool;
     const searchWeb = this.deps.searchWeb;
     if (!searchWeb) {
       return {
@@ -1283,7 +1311,22 @@ export class GhostCindySlot {
           errorCode: 'UPSTREAM_UNAVAILABLE',
         };
       }
-      if (!this.deps.claimPipeCall?.(ghostId, callId, 'cindy.search.web')) {
+      const limit =
+        (p.limit as number | undefined) ?? GHOST_CINDY_SEARCH_DEFAULT_RESULTS;
+      const requestKey = createHash('sha256')
+        .update(query)
+        .update('\0')
+        .update(String(limit))
+        .digest('hex');
+      if (
+        !this.deps.claimPipeCall?.(
+          ghostId,
+          callId,
+          callerTool,
+          'cindy.search.web',
+          requestKey,
+        )
+      ) {
         return {
           ok: false,
           message: 'Cindy AI 搜索只允许由当前插件真实在途的工具调用触发',
@@ -1296,50 +1339,68 @@ export class GhostCindySlot {
         callId,
         logicalProvider: 'cindy',
       });
-      const outcome = await searchWeb({
-        query,
-        limit: (p.limit as number | undefined) ?? GHOST_CINDY_SEARCH_DEFAULT_RESULTS,
-      });
-      if (
-        this.deps.isOwnerBoundaryPending() ||
-        this.deps.getOwnerScopeKey() !== ownerScopeKey
-      ) {
-        return {
-          ok: false,
-          message: '搜索期间账号已切换，本次结果已丢弃',
-          errorCode: 'UPSTREAM_UNAVAILABLE',
-        };
-      }
-      if (!outcome.ok) {
-        this.deps.log?.warn('ghost cindy-request search_web failed', {
+      let allowRetry = true;
+      try {
+        const outcome = await searchWeb({ query, limit });
+        if (
+          this.deps.isOwnerBoundaryPending() ||
+          this.deps.getOwnerScopeKey() !== ownerScopeKey
+        ) {
+          allowRetry = false;
+          return {
+            ok: false,
+            message: '搜索期间账号已切换，本次结果已丢弃',
+            errorCode: 'UPSTREAM_UNAVAILABLE',
+          };
+        }
+        if (!outcome.ok) {
+          allowRetry = [
+            'NOT_CONFIGURED',
+            'QUOTA_EXHAUSTED',
+            'AUTH_REJECTED',
+            'RATE_LIMITED',
+            'UPSTREAM_UNAVAILABLE',
+          ].includes(outcome.errorCode);
+          this.deps.log?.warn('ghost cindy-request search_web failed', {
+            ghostId,
+            callId,
+            logicalProvider: 'cindy',
+            errorCode: outcome.errorCode,
+            ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+            ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
+          });
+          return {
+            ok: false,
+            message: outcome.message,
+            errorCode: outcome.errorCode,
+          };
+        }
+        allowRetry = false;
+        this.deps.log?.info('ghost cindy-request search_web done', {
           ghostId,
           callId,
           logicalProvider: 'cindy',
-          errorCode: outcome.errorCode,
-          ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+          resultCount: outcome.results.length,
+          ...(outcome.webSearchRequests !== undefined
+            ? { webSearchRequests: outcome.webSearchRequests }
+            : {}),
           ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
         });
         return {
-          ok: false,
-          message: outcome.message,
-          errorCode: outcome.errorCode,
+          ok: true,
+          provider: 'cindy',
+          results: outcome.results,
         };
+      } finally {
+        this.deps.settlePipeCallClaim?.(
+          ghostId,
+          callId,
+          callerTool,
+          'cindy.search.web',
+          requestKey,
+          allowRetry,
+        );
       }
-      this.deps.log?.info('ghost cindy-request search_web done', {
-        ghostId,
-        callId,
-        logicalProvider: 'cindy',
-        resultCount: outcome.results.length,
-        ...(outcome.webSearchRequests !== undefined
-          ? { webSearchRequests: outcome.webSearchRequests }
-          : {}),
-        ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
-      });
-      return {
-        ok: true,
-        provider: 'cindy',
-        results: outcome.results,
-      };
     } finally {
       this.releaseInflight(ghostId);
     }
