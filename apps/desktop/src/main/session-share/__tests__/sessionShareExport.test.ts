@@ -18,7 +18,8 @@ const workingDir = path.join(tmpRoot, 'proj');
 const sessionRowRef: { row: Record<string, unknown> | null } = { row: null };
 const messagesRef: { rows: Array<Record<string, unknown>> } = { rows: [] };
 // orca:active team / worker 列表 / worker 会话行与消息(按 SQL 分发)
-const teamRef: { row: Record<string, unknown> | null } = { row: null };
+const activeTeamRef: { row: Record<string, unknown> | null } = { row: null };
+const getActiveTeamByLeadMock = vi.fn(async () => activeTeamRef.row);
 const workerRowsRef: { rows: Array<Record<string, unknown>> } = { rows: [] };
 const workerSessionsById = new Map<string, Record<string, unknown>>();
 const workerMessagesBySession = new Map<string, Array<Record<string, unknown>>>();
@@ -28,8 +29,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
-    queryOne: async (sql: string, params: unknown[]) => {
-      if (typeof sql === 'string' && sql.includes('FROM orca_teams')) return teamRef.row;
+    queryOne: async (_sql: string, params: unknown[]) => {
       const id = params?.[0];
       if (typeof id === 'string' && id !== 'xdt-session-1') {
         return workerSessionsById.get(id) ?? null;
@@ -51,6 +51,9 @@ vi.mock('../../localDb/client/current.js', () => ({
     },
     exec: async () => undefined,
   }),
+}));
+vi.mock('../../localDb/orcaTeamStore.js', () => ({
+  getActiveTeamByLead: getActiveTeamByLeadMock,
 }));
 vi.mock('../../maker-host/claude-transcript-relocation.js', () => ({
   collectClaudeSdkSessionIds: async () => ({
@@ -157,7 +160,8 @@ describe('exportSessionShare', () => {
   beforeEach(async () => {
     sessionRowRef.row = baseSession();
     messagesRef.rows = baseMessages();
-    teamRef.row = null;
+    activeTeamRef.row = null;
+    getActiveTeamByLeadMock.mockClear();
     workerRowsRef.rows = [];
     workerSessionsById.clear();
     workerMessagesBySession.clear();
@@ -469,7 +473,7 @@ describe('exportSessionShare', () => {
 
   it('orca lead export bundles workers under prefixes with team graph, minReaderVersion 2', async () => {
     sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };
-    teamRef.row = { id: 'team-1', status: 'active' };
+    activeTeamRef.row = { id: 'team-1', status: 'active' };
     workerRowsRef.rows = [
       { sessionId: 'worker-s-1', status: 'done', label: 'dev-1', role: 'developer', focused: 1 },
       // 已归档 Worker 不在当前协同列表中,导出也应排除,避免导入后复活。
@@ -508,6 +512,7 @@ describe('exportSessionShare', () => {
     const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
     expect(outcome.status).toBe('ok');
     if (outcome.status !== 'ok') return;
+    expect(getActiveTeamByLeadMock).toHaveBeenCalledWith('xdt-session-1');
     expect(outcome.orcaWorkers).toBe(1);
     expect(outcome.fidelity).toBe('full');
 
@@ -547,7 +552,7 @@ describe('exportSessionShare', () => {
 
   it('orca lead export fails closed when an active team Worker session is missing or deleted', async () => {
     sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };
-    teamRef.row = { id: 'team-broken', status: 'active' };
+    activeTeamRef.row = { id: 'team-broken', status: 'active' };
     workerRowsRef.rows = [
       { sessionId: 'worker-missing', status: 'error', label: 'broken', role: 'reviewer', focused: 0 },
     ];

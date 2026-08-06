@@ -30,6 +30,7 @@ import JSZip from 'jszip';
 import { findClaudeSessionJsonl } from '@cindy/maker-core';
 
 import { getDbClient } from '../localDb/client/current.js';
+import { getActiveTeamByLead } from '../localDb/orcaTeamStore.js';
 import { createLogger } from '../logger.js';
 import { collectClaudeSdkSessionIds } from '../maker-host/claude-transcript-relocation.js';
 import {
@@ -386,10 +387,9 @@ async function readSessionPhaseB(a: SessionPhaseA): Promise<SessionPhaseB> {
 async function collectOrcaWorkerSources(
   leadSessionId: string,
 ): Promise<{ teamStatus: XdtshareOrcaManifest['teamStatus']; workers: OrcaWorkerSource[] } | null> {
-  const team = await getDbClient().queryOne<{ id: string; status: string }>(
-    `SELECT id, status FROM orca_teams WHERE lead_session_id = ? AND status = 'active' LIMIT 1`,
-    [leadSessionId],
-  );
+  // 与运行期使用同一个 active team 选择与去重入口。历史 migration / drift
+  // 可能留下多个 active team；直接 LIMIT 1 会导出用户当前看不到的旧 Worker 图。
+  const team = await getActiveTeamByLead(leadSessionId);
   if (!team) return null;
   const workerRows = await getDbClient().query<{
     sessionId: string;
