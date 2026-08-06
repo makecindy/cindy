@@ -345,7 +345,11 @@ export function buildShareImageGapMarker(): HTMLElement {
  * 但预先转掉能把「产物里 logo 空白」这类不确定性彻底消掉。
  */
 async function sameOriginToDataUrl(url: string): Promise<string> {
-  const blob = await (await fetch(url)).blob();
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`share image asset fetch failed (${response.status})`);
+  }
+  const blob = await response.blob();
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
@@ -447,14 +451,15 @@ export async function buildShareImageBlob({
     const node = document.querySelector<HTMLElement>(selector);
     if (node) sourceNodes.push(node);
   }
-  if (sourceNodes.length === 0) throw new ShareImageNoContentError();
   // 选中的消息里有克隆不到 DOM 的(被删除、或极端情况下已卸载):宁可整次失败,
   // 也不出一张静默缺内容的图 —— 用户不会知道少了哪一条。
   if (sourceNodes.length !== orderedSelectedIds.length) {
-    throw new Error(
-      `share image: ${orderedSelectedIds.length - sourceNodes.length} selected message(s) not mounted`,
-    );
+    log.warn('share image: selected message nodes are not mounted', {
+      missingCount: orderedSelectedIds.length - sourceNodes.length,
+    });
+    throw new ShareImageSelectionNotMountedError();
   }
+  if (sourceNodes.length === 0) throw new ShareImageNoContentError();
 
   // 实底色取自真实聊天流(天然跟随当前主题)。起点用消息的**父容器**而不是消息自身:
   // 搜索命中态的消息带高亮底色(--search-match-bg),从它起找会让整张图变成高亮色。
