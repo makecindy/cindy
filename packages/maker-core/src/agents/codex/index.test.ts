@@ -18232,6 +18232,80 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 
+  it('迟到的旧 turn collab 收口不重启新 turn idle 计时或注入前台状态', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-late-collab-terminal');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'start background child' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'inProgress',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish after the parent turn',
+          agentsStates: { 'child-thread': { status: 'running' } },
+        },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      } as never);
+
+      await handle.send({ type: 'user', content: 'new active turn' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+
+      const beforeLate = seen.length;
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish after the parent turn',
+          agentsStates: { 'child-thread': { status: 'completed' } },
+        },
+      } as never);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const lateEvents = seen.slice(beforeLate);
+      expect(lateEvents).toContainEqual(expect.objectContaining({
+        type: 'tool_result',
+        turnScope: 'background',
+      }));
+      expect(lateEvents).not.toContainEqual(expect.objectContaining({
+        type: 'status',
+        data: expect.objectContaining({ status: 'Generating...' }),
+      }));
+
+      // 新 turn 从启动起静默满原始额度就必须收口；旧 turn 的 completed
+      // 不能把已经消耗的一半 idle 配额重置成完整一轮。
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2 + 1);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('interrupt 两次都超时也要收干净本地 turn 状态,会话保持可发(review 第二轮)', async () => {
     // app-server 彻底哑火时 interruptTurnForPermissionTighten 会两次 ack 超时后放弃,
     // 而它按设计不动 isTurnInFlight —— 若 watchdog 只依赖它,会话 isTurnRunning() 恒 true,

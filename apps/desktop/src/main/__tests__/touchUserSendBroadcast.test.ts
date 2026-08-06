@@ -23,6 +23,7 @@ const h = vi.hoisted(() => {
   // 填进来（userSendAt/updatedAt = 本次 ts），模拟正常路径。
   // 需要非默认结果（no-op/MAX updatedAt）的测试先 push 目标行再调函数。
   const selectResults: Array<Array<Record<string, unknown>>> = [];
+  const updateErrors: unknown[] = [];
 
   const makeUpdateChain = () => {
     const chain: Record<string, unknown> = {};
@@ -35,7 +36,10 @@ const h = vi.hoisted(() => {
       }
       return chain;
     };
-    chain.where = () => Promise.resolve(undefined);
+    chain.where = () => {
+      const error = updateErrors.shift();
+      return error === undefined ? Promise.resolve(undefined) : Promise.reject(error);
+    };
     return chain;
   };
 
@@ -57,6 +61,7 @@ const h = vi.hoisted(() => {
     },
     updateSetCalls,
     selectResults,
+    updateErrors,
     fakeDb: {
       update: vi.fn(() => makeUpdateChain()),
       select: vi.fn(() => makeSelectChain()),
@@ -90,11 +95,16 @@ vi.mock('../agent-island/service.js', () => ({
 
 import { notifyAgentIslandSessionPatch } from '../localDb/agentIslandSessionPatch.js';
 import { clearSessionContextInDb, touchUserSendInDb, persistSessionFields } from '../localDb/ipc/sessions.js';
+import {
+  backgroundTurnPredatesSessionClear,
+  noteSessionClearBoundary,
+} from '../messagePersistBroadcaster.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.updateSetCalls.length = 0;
   h.selectResults.length = 0;
+  h.updateErrors.length = 0;
 });
 
 describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收敛)', () => {
@@ -188,6 +198,36 @@ describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收
       sessionId: 'sess-clear',
       patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso },
     });
+  });
+
+  it('把 DB 读回的有效 clear 边界登记给晚到 background 过滤器', async () => {
+    const sessionId = 'sess-clear-background-boundary';
+    const requestedAt = 1_700_000_123_000;
+    const effectiveAt = requestedAt + 5_000;
+    noteSessionClearBoundary(sessionId, null);
+    expect(backgroundTurnPredatesSessionClear(sessionId, effectiveAt - 1)).toBe(false);
+
+    // 并发的较新 clear 可能已经把 DB 边界推进到 requestedAt 之后；内存过滤器
+    // 必须采用 SELECT 读回的有效值，不能只记本次请求参数。
+    h.selectResults.push([{ clearedAt: effectiveAt, updatedAt: effectiveAt }]);
+    await clearSessionContextInDb(sessionId, requestedAt);
+
+    expect(backgroundTurnPredatesSessionClear(sessionId, effectiveAt - 1)).toBe(true);
+    expect(backgroundTurnPredatesSessionClear(sessionId, effectiveAt + 1)).toBe(false);
+    noteSessionClearBoundary(sessionId, null);
+  });
+
+  it('DB 落库失败时仍先登记 host-owned clear 边界', async () => {
+    const sessionId = 'sess-clear-background-boundary-db-failure';
+    const requestedAt = 1_700_000_456_000;
+    noteSessionClearBoundary(sessionId, null);
+    h.updateErrors.push(new Error('db unavailable'));
+
+    await expect(clearSessionContextInDb(sessionId, requestedAt)).rejects.toThrow('db unavailable');
+
+    expect(backgroundTurnPredatesSessionClear(sessionId, requestedAt - 1)).toBe(true);
+    expect(backgroundTurnPredatesSessionClear(sessionId, requestedAt + 1)).toBe(false);
+    noteSessionClearBoundary(sessionId, null);
   });
 });
 
