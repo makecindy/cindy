@@ -140,7 +140,7 @@ interface BuildComposerSuggestionEntriesInput {
   query: string;
   /** Ordered action list assembled by ChatInput (attach → goal → plan → collab → add-dir). */
   actions: readonly ComposerSuggestionAction[];
-  /** Scan resources. Caller prepends `AT_FILE_PICKER_RESOURCE` when enabled. */
+  /** Scanned mention resources (workspace/context/task/plugin resources). */
   resources: readonly AtResourceItem[];
   /** Installed plugins incl. unavailable ones (disabled rows, `+`-menu parity). */
   plugins: readonly ComposerPluginSuggestion[];
@@ -149,15 +149,14 @@ interface BuildComposerSuggestionEntriesInput {
 /**
  * Empty query — curated sections, in visual order:
  *   1. attach-files action
- *   2. file-picker resource ("reference files & folders…")
- *   3. remaining actions except add-extra-dir (goal / plan mode / collaboration)
- *   4. browser tabs (≤3), agents (≤3)
- *   5. all plugins (unavailable ones disabled)
- *   6. add-extra-dir action (rendered under the reference-dirs section)
+ *   2. remaining actions except add-extra-dir (goal / plan mode / collaboration)
+ *   3. browser tabs (≤3), agents (≤3)
+ *   4. all plugins (unavailable ones disabled)
+ *   5. add-extra-dir action (rendered under the reference-dirs section)
  *
  * Non-empty query — one flat pool ranked by the shared scorer, capped to
- * `AT_MENTION_SEARCH_RESULT_LIMIT`. Disabled plugins and the file-picker row
- * are excluded from search results (files themselves are searched directly).
+ * `AT_MENTION_SEARCH_RESULT_LIMIT`. Disabled plugins are excluded from search
+ * results; workspace files/directories are searched directly.
  */
 export function buildComposerSuggestionEntries(
   input: BuildComposerSuggestionEntriesInput,
@@ -167,8 +166,6 @@ export function buildComposerSuggestionEntries(
     const entries: ComposerSuggestionEntry[] = [];
     const attach = input.actions.find((a) => a.id === 'attach-files');
     if (attach) entries.push({ kind: 'action', action: attach });
-    const filePicker = input.resources.find((item) => item.type === 'file-picker');
-    if (filePicker) entries.push({ kind: 'resource', item: filePicker });
     for (const action of input.actions) {
       if (action.id === 'attach-files' || action.id === 'add-extra-dir') continue;
       entries.push({ kind: 'action', action });
@@ -202,7 +199,6 @@ export function buildComposerSuggestionEntries(
     if (s >= 0) scored.push({ entry: { kind: 'action', action }, score: s, label: action.label });
   }
   for (const item of input.resources) {
-    if (item.type === 'file-picker') continue;
     const s = scoreAtResourceItem(item, q);
     if (s >= 0) scored.push({ entry: { kind: 'resource', item }, score: s, label: item.name });
   }

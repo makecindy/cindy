@@ -6,14 +6,18 @@ const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
   'utf8',
 );
+const suggestionSource = readFileSync(
+  resolve(__dirname, '..', 'lib', 'composerSuggestion.ts'),
+  'utf8',
+);
 
-describe('@ native resource picker wiring', () => {
-  it('opens the native picker from the fixed resource row', () => {
-    expect(chatInputSource).toContain("selectedItem.type === 'file-picker'");
-    expect(chatInputSource).toContain('window.electronAPI.dialog.showOpenResource(');
-    expect(chatInputSource).toContain(
-      'filePickerEnabled={!!workingDir && localAttachmentPickerEnabled}',
-    );
+describe('@ / + file entry unification', () => {
+  it('keeps one attachment action instead of a duplicate native file-picker row', () => {
+    expect(chatInputSource).toContain("id: 'attach-files'");
+    expect(chatInputSource).toContain('suggestionFileInputRef.current?.click()');
+    expect(chatInputSource).not.toContain('AT_FILE_PICKER_RESOURCE');
+    expect(chatInputSource).not.toContain('window.electronAPI.dialog.showOpenResource(');
+    expect(suggestionSource).not.toContain("item.type === 'file-picker'");
   });
 
   it('does not fall back to the removed in-composer file browser scope', () => {
@@ -21,10 +25,8 @@ describe('@ native resource picker wiring', () => {
     expect(chatInputSource).not.toContain('setAtFileBrowserScopeFrom');
   });
 
-  it('drops a late picker result after the composer target changes', () => {
-    expect(chatInputSource).toContain('const originDoc = editor.state.doc;');
-    expect(chatInputSource).toContain('const originStorageKey = storageKey;');
-    expect(chatInputSource).toContain('isAtResourceInsertTargetCurrent(');
-    expect(chatInputSource).toContain('currentStorageKeyRef.current');
+  it('keeps directory mentions available through scanned resource selection', () => {
+    expect(chatInputSource).toContain('getAtDirectoryCompletionQuery(selectedItem)');
+    expect(chatInputSource).toContain("selectedItem.type === 'agent'");
   });
 });

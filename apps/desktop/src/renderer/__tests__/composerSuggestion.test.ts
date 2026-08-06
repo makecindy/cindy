@@ -38,7 +38,6 @@ describe('composerSuggestion', () => {
       query: '',
       actions,
       resources: [
-        { type: 'file-picker', name: '', relPath: 'cindy://file-picker' },
         { type: 'browser-tab', name: 'Docs', relPath: 'cindy://browser/docs' },
         { type: 'agent', name: 'reviewer', relPath: '.claude/agents/reviewer.md' },
       ],
@@ -58,7 +57,6 @@ describe('composerSuggestion', () => {
       entry.kind === 'action' ? entry.action.id : `${entry.item.type}:${entry.item.name}`,
     )).toEqual([
       'attach-files',
-      'file-picker:',
       'new-goal',
       'plan-mode',
       'browser-tab:Docs',
@@ -82,7 +80,6 @@ describe('composerSuggestion', () => {
       ],
       resources: [
         { type: 'file', name: 'plan.md', relPath: 'docs/plan.md' },
-        { type: 'file-picker', name: '', relPath: 'cindy://file-picker' },
       ],
       plugins: [],
     });
@@ -96,9 +93,6 @@ describe('composerSuggestion', () => {
     expect(
       entries.some((entry) => entry.kind === 'action' && entry.action.id === 'collaboration'),
     ).toBe(false);
-    expect(entries.some((entry) => entry.kind === 'resource' && entry.item.type === 'file-picker')).toBe(
-      false,
-    );
   });
 
   it('焦点移动会环绕并跳过 disabled 项', () => {

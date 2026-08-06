@@ -202,9 +202,7 @@ import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
 import {
-  AT_FILE_PICKER_RESOURCE,
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
-  createAtResourceFromNativePath,
   getAtDirectoryCompletionQuery,
   mergeAtResourceItems,
   scanAtResources,
@@ -221,7 +219,6 @@ import {
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
 import { MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
-import { isAtResourceInsertTargetCurrent } from '@/lib/atResourceInsertionGuard';
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -3637,12 +3634,10 @@ export function ChatInput({
     workingDir,
   ]);
 
-  const atResources = useMemo(() => {
-    const scannedItems = atState.kind === 'ready' ? atState.items : [];
-    return workingDir && localAttachmentPickerEnabled
-      ? [AT_FILE_PICKER_RESOURCE, ...scannedItems]
-      : scannedItems;
-  }, [atState, localAttachmentPickerEnabled, workingDir]);
+  const atResources = useMemo(
+    () => (atState.kind === 'ready' ? atState.items : []),
+    [atState],
+  );
 
   const filteredAt = useMemo(
     () =>
@@ -3913,46 +3908,14 @@ export function ChatInput({
   }, [editor, effectiveAt]);
 
   const insertAtResource = useCallback(
-    async (item: AtResourceItem) => {
+    (selectedItem: AtResourceItem) => {
       if (!editor || !effectiveAt) return;
       const range = resolveEffectiveAtRange();
       if (!range) return;
       const { from, to } = range;
-      let selectedItem = item;
-      let selectedByNativePicker = false;
-      if (selectedItem.type === 'file-picker') {
-        const originDoc = editor.state.doc;
-        const originStorageKey = storageKey;
-        try {
-          const picked = await window.electronAPI.dialog.showOpenResource(
-            workingDir ? { defaultPath: workingDir } : undefined,
-          );
-          if (!picked.success || !picked.path || !picked.kind) return;
-          if (!isAtResourceInsertTargetCurrent(
-            editor,
-            editorRef.current,
-            originDoc,
-            originStorageKey,
-            currentStorageKeyRef.current,
-          )) return;
-          const nativeResource = createAtResourceFromNativePath(
-            picked.path,
-            picked.kind,
-            workingDir,
-          );
-          if (!nativeResource) return;
-          selectedItem = nativeResource;
-          selectedByNativePicker = true;
-        } catch (error) {
-          log.warn(
-            'native @ file picker failed:',
-            error instanceof Error ? error.message : String(error),
-          );
-          return;
-        }
-      }
-      // The synthetic action must always resolve to a concrete file/directory
-      // before it can reach mention serialization.
+      // `file-picker` remains in the shared AtResourceItem protocol for
+      // compatibility, but the unified composer no longer assembles that
+      // duplicate row. Keep a defensive guard for exhaustive type narrowing.
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
@@ -3972,9 +3935,7 @@ export function ChatInput({
         closeAtPanel();
         return;
       }
-      const directoryQuery = selectedByNativePicker
-        ? null
-        : getAtDirectoryCompletionQuery(selectedItem);
+      const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
       if (directoryQuery) {
         editor
           .chain()
@@ -4035,8 +3996,6 @@ export function ChatInput({
       effectiveAt,
       resolveEffectiveAtRange,
       setSyntheticAtAnchor,
-      storageKey,
-      workingDir,
     ],
   );
 
