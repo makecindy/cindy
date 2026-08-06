@@ -74,7 +74,11 @@ export interface AgentTaskUpdateEventData {
   lastToolName?: string;
   taskType?: string;
   workflowName?: string;
-  model?: string;
+  /**
+   * 实际模型名；`null` 是子代理多 receiver 观测冲突/显式清除的合法值，
+   * 用于让下游清掉旧模型徽标，而不是回退到未经证明的旧值。
+   */
+  model?: string | null;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
   /**
