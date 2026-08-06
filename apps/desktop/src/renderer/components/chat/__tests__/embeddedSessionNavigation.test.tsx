@@ -390,6 +390,9 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(source).toContain(
       'if (forkOriginNavigationVersionRef.current !== navigationRequestVersion) return;',
     );
+    expect(source).toContain(
+      'if (forkOriginNavigationVersionRef.current !== forkStripNavigationVersion) return;',
+    );
     expect(source).toContain('[navigationMode, sessionId],');
   });
 

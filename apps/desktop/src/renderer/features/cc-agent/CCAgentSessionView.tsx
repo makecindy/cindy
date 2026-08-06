@@ -2818,6 +2818,7 @@ export function CCAgentSessionView({
       log.info('encrypted-session fork ignored by embedded sidebar view', { sessionId });
       return;
     }
+    const forkStripNavigationVersion = ++forkOriginNavigationVersionRef.current;
     setForkStripEncryptedRunning(true);
     try {
       const newSession = await sessionService.forkStripEncrypted(sessionId);
@@ -2825,6 +2826,7 @@ export function CCAgentSessionView({
       // 远程会话:新会话在被控端,先重拉该设备会话列表注册新 sessionId 再 navigate(否则 404)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
+      if (forkOriginNavigationVersionRef.current !== forkStripNavigationVersion) return;
       onSessionNavigate?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
