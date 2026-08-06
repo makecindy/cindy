@@ -191,30 +191,24 @@ export async function collectLogs(
     lookbackDays,
   };
   const all: ParsedRecord[] = [];
-  // 每个**文件**（按 天+流类型 分开，不按天合并）实际读到了什么，用于判定崩溃锚点是否被覆盖。
+  // 每个**文件**（按 天+流类型 分开，不按天合并）读取时的元信息：是否整份读到、读出多少条。
   // ⚠️ 必须分文件记(2026-08-04 review):崩溃现场的主体在 main 流,agent 只是补充上下文。
   // 按天合并会让一个「整份读到的小 agent 文件」把同一天「只读了靠前窗口的超大 main 文件」冒充
   // 成已覆盖,于是靠后那次崩溃的标记被误清。key = `${dateKey}|${kind}`。
-  const fileCoverage: FileCoverageMap = new Map();
-  const noteCoverage = (
+  // 覆盖判定不在这里定案：真正的 `fileCoverage` 在**锚点裁剪之后**按留下的记录重建
+  // （2026-08-06 review P1，见 collectLogs 末尾）。
+  const fileReadMeta = new Map<string, { whole: boolean; allCount: number }>();
+  const noteRead = (
     dateKey: string,
     kind: FilePlan['kind'],
     whole: boolean,
-    recs: ParsedRecord[],
+    count: number,
   ): void => {
     const key = `${dateKey}|${kind}`;
-    const prev = fileCoverage.get(key) ?? {
-      whole: false,
-      minTs: Number.POSITIVE_INFINITY,
-      maxTs: Number.NEGATIVE_INFINITY,
-    };
-    for (const r of recs) {
-      if (!Number.isFinite(r.tsMs)) continue;
-      if (r.tsMs < prev.minTs) prev.minTs = r.tsMs;
-      if (r.tsMs > prev.maxTs) prev.maxTs = r.tsMs;
-    }
+    const prev = fileReadMeta.get(key) ?? { whole: false, allCount: 0 };
     prev.whole = prev.whole || whole;
-    fileCoverage.set(key, prev);
+    prev.allCount += count;
+    fileReadMeta.set(key, prev);
   };
   let budget = MAX_BYTES_TOTAL;
   let sinceLastYield = 0;
@@ -282,11 +276,11 @@ export async function collectLogs(
         stats.droppedBySource += parsed.droppedBySource;
         if (parsed.stoppedAtFormatViolation) stats.mainFilesStoppedAtViolation += 1;
         // 命中未转义污染而提前停止时,停止点之后没读到 ⇒ 不能算整份覆盖。
-        noteCoverage(
+        noteRead(
           plan.dateKey,
           'main',
           wholeRead && !parsed.stoppedAtFormatViolation,
-          parsed.records,
+          parsed.records.length,
         );
         sinceLastYield += parsed.linesScanned;
       } else {
@@ -297,7 +291,7 @@ export async function collectLogs(
         all.push(...parsed.records);
         stats.linesScanned += parsed.linesScanned;
         stats.droppedBySource += parsed.droppedBySource;
-        noteCoverage(plan.dateKey, 'agent', wholeRead, parsed.records);
+        noteRead(plan.dateKey, 'agent', wholeRead, parsed.records.length);
         sinceLastYield += parsed.linesScanned;
       }
     } finally {
@@ -312,6 +306,12 @@ export async function collectLogs(
   const trimmed = trimByAnchors(all, trimAnchors);
   stats.droppedByCap = all.length - trimmed.length;
   stats.kept = trimmed.length;
+
+  // 覆盖判定以**裁剪后真正上报的记录**为准，不是读到的全部（2026-08-06 review P1）：
+  // 多崩溃补传里，某次崩溃附近的日志风暴可能占满 MAX_RECORDS，把另一次崩溃附近的记录整段挤掉；
+  // 上报仍非空、仍成功，但那次崩溃的现场其实没进上报。若仍按读到的全部判覆盖，就会把它的标记
+  // 误清、崩溃现场永久丢失（需求 §11 的既有教训）。保留的标记下次启动会以更聚焦的锚点集重试。
+  const fileCoverage = buildFileCoverage(trimmed, fileReadMeta);
 
   const coveredAnchors = computeCoveredAnchors(anchors, {
     coverage: fileCoverage,
@@ -361,6 +361,46 @@ export function computeCoveredAnchors(anchors: readonly number[], inputs: Covera
     if (hasMain) return fileCovers(inputs.coverage.get(`${dk}|main`), a);
     return fileCovers(inputs.coverage.get(`${dk}|agent`), a); // agent-only 兜底
   });
+}
+
+/**
+ * 从**锚点裁剪后留下的记录**重建每个文件（天+流类型）的覆盖范围（2026-08-06 review P1）。
+ *
+ * `whole` 只在「整份读到 **且** 这份文件的记录一条都没被 cap 裁掉」时才置位：此时上报里含这份
+ * 文件的全部内容，「锚点附近没有记录」是真的没有、重试也补不出更多，才可据此清标记。只要有记录
+ * 被 cap 裁掉，就退回按**留下记录**的时间跨度判定——被裁掉那次崩溃附近若已无记录留下，其锚点自然
+ * 落在跨度外、标记得以保留待下次补传，而不是被一次「非空但没含这次崩溃」的成功上报误清。
+ */
+function buildFileCoverage(
+  trimmed: readonly ParsedRecord[],
+  readMeta: ReadonlyMap<string, { whole: boolean; allCount: number }>,
+): FileCoverageMap {
+  const coverage: FileCoverageMap = new Map();
+  const survived = new Map<string, number>();
+  const touch = (key: string): FileCoverage => {
+    let cov = coverage.get(key);
+    if (!cov) {
+      cov = { whole: false, minTs: Number.POSITIVE_INFINITY, maxTs: Number.NEGATIVE_INFINITY };
+      coverage.set(key, cov);
+    }
+    return cov;
+  };
+  for (const r of trimmed) {
+    if (!Number.isFinite(r.tsMs)) continue;
+    // 文件键的 kind 与采集读侧一致：main-*.log ⇒ 'main'，agent-*.ndjson 的记录 src='proxy' ⇒ 'agent'。
+    const kind = r.src === 'main' ? 'main' : 'agent';
+    const key = `${dateKeyLocal(r.tsMs)}|${kind}`;
+    const cov = touch(key);
+    if (r.tsMs < cov.minTs) cov.minTs = r.tsMs;
+    if (r.tsMs > cov.maxTs) cov.maxTs = r.tsMs;
+    survived.set(key, (survived.get(key) ?? 0) + 1);
+  }
+  for (const [key, meta] of readMeta) {
+    if (meta.whole && (survived.get(key) ?? 0) === meta.allCount) {
+      touch(key).whole = true;
+    }
+  }
+  return coverage;
 }
 
 async function safeListDir(deps: CollectDeps): Promise<string[]> {

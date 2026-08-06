@@ -317,6 +317,36 @@ describe('崩溃锚点覆盖 coveredAnchors', () => {
     // 停止点之后没读到 ⇒ 崩溃锚点(在污染段)未被整份覆盖。
     expect(result.coveredAnchors).not.toContain(crashAt);
   });
+
+  it('⚠️ 同日两次崩溃：A1 附近日志风暴占满 MAX_RECORDS 挤掉 A2 的记录 ⇒ A2 不算覆盖', async () => {
+    // 2026-08-06 review P1：coveredAnchors 必须按**裁剪后真正上报的记录**判定，不能按读到的全部。
+    // 否则 A2 的记录被 cap 全裁掉、其崩溃现场没进上报，标记却被误清、永久丢失。
+    const today = dayKey(NOW);
+    const a1 = NOW - 3_000; // 近端崩溃：一大片日志风暴围着它
+    const a2 = NOW - 6 * 60 * 60 * 1000; // 同日更早一次崩溃(06:00)
+    const lines = [SENTINEL];
+    // A1 风暴：MAX_RECORDS+1 条都压在 A1 时刻(距离 0),稳定挤占所有名额。
+    for (let i = 0; i < MAX_RECORDS + 1; i += 1) {
+      lines.push(mainLine(a1, 'ERROR', 'lifecycle', `storm ${i}`));
+    }
+    // A2 的唯一一条现场记录：离 A2 有 5s(距离 > A1 风暴的 0),排序时排在风暴之后 ⇒ 必被裁掉。
+    lines.push(mainLine(a2 + 5_000, 'FATAL', 'process', 'uncaughtException: earlier crash'));
+    const { deps } = harness({
+      [path.join(logDir, `main-${today}.log`)]: lines.join('\n'),
+    });
+
+    const result = await collectLogs(deps, {
+      reason: 'crash-backfill',
+      anchors: [a1, a2],
+    });
+
+    expect(result.stats.droppedByCap).toBeGreaterThan(0);
+    // A1 的现场进了上报 ⇒ 覆盖;A2 的现场被整段裁掉 ⇒ **不**覆盖(修复前会因整份读到冒充成已覆盖)。
+    expect(result.coveredAnchors).toContain(a1);
+    expect(result.coveredAnchors).not.toContain(a2);
+    // A2 的记录确实没进上报(否则这条断言失去意义)。
+    expect(result.records.some((r) => r.msg.includes('earlier crash'))).toBe(false);
+  });
 });
 
 /**
