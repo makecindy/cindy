@@ -3398,9 +3398,7 @@ export function CCAgentSessionView({
                     backgroundActivity.active ? 0 : backgroundBash.tasks.length
                   }
                   backgroundStopping={backgroundActivity.stopping || backgroundBash.stopping}
-                  // 完整被控提示与计划作为一组居中时独占这一行，避免窄窗口下与左右
-                  // 运行元信息叠盖；点叉折叠后本条件解除，状态与 token 原位恢复。
-                  suppressContent={Boolean(pendingPlanReview || showExpandedControlledBanner)}
+                  suppressContent={Boolean(pendingPlanReview)}
                   onStopBackgroundTasks={() => {
                     if (backgroundActivity.active) void backgroundActivity.stopAll();
                     else void backgroundBash.stopAll();

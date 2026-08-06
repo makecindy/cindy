@@ -201,7 +201,7 @@ export function TodoListCard({
                 className="shrink-0 text-[var(--msg-tool-card-text)]"
               />
             ) : (
-              <ProgressRing progress={stepProgress} size={14} strokeWidth={1.75} />
+              <ProgressRing progress={stepProgress} size={16} strokeWidth={2} />
             )}
             <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
               {t('chat.planPill.step', { current: currentStep, total })}
