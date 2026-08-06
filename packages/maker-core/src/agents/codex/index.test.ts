@@ -1645,6 +1645,204 @@ describe('CodexAgent capability routing', () => {
     }
     await handle.close();
   });
+
+  it('inherits capability routing into descendant MCP items and clears it at child terminal', async () => {
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => method === Method.TurnStart
+        ? { turn: { id: 'root-capability-turn' } }
+        : undefined,
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-capability-routing',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '请用 $feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification || !handlers.mcpServerElicitation) {
+      throw new Error('expected descendant capability handlers');
+    }
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'root-capability-turn',
+      item: {
+        id: 'root-spawn-capability',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-capability-thread',
+      },
+    });
+    handlers.descendantNotification('child-capability-thread', 'item/started', {
+      threadId: 'child-capability-thread',
+      turnId: 'child-capability-turn',
+      item: {
+        id: 'child-routed-mcp',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+
+    const childRequest = {
+      threadId: 'child-capability-thread',
+      turnId: 'child-capability-turn',
+      serverName: 'cindy-routed-feishu-delegate',
+      mode: 'form' as const,
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_name: 'feishu_read_messages',
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    };
+    await expect(handlers.mcpServerElicitation(childRequest)).resolves.toEqual({
+      action: 'accept',
+      content: null,
+      _meta: null,
+    });
+
+    // The same inherited selector must reach a nested grandchild as well.
+    handlers.descendantNotification('child-capability-thread', 'item/started', {
+      threadId: 'child-capability-thread',
+      turnId: 'child-capability-turn',
+      item: {
+        id: 'nested-capability-spawn',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'grandchild-capability-thread',
+      },
+    });
+    handlers.descendantNotification('grandchild-capability-thread', 'item/started', {
+      threadId: 'grandchild-capability-thread',
+      turnId: 'grandchild-capability-turn',
+      item: {
+        id: 'grandchild-routed-mcp',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    await expect(
+      handlers.mcpServerElicitation({
+        ...childRequest,
+        threadId: 'grandchild-capability-thread',
+        turnId: 'grandchild-capability-turn',
+      }),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+    handlers.descendantNotification('child-capability-thread', 'turn/completed', {
+      threadId: 'child-capability-thread',
+      turn: { id: 'child-capability-turn', status: 'completed' },
+    });
+    await expect(handlers.mcpServerElicitation(childRequest)).resolves.toEqual({
+      action: 'decline',
+      content: null,
+      _meta: null,
+    });
+
+    await handle.close();
+  });
+
+  it('falls back to inherited thread selection when a child item predates turn binding', async () => {
+    const pendingTurnStart = deferred<{ turn: { id: string } }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => method === Method.TurnStart ? pendingTurnStart.promise : undefined,
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-capability-race',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const sendPromise = handle.send({
+      type: 'user',
+      content: '请用 $feishu-delegate:message-feishu-coworkers 查消息',
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.descendantThreadStarted || !handlers.descendantNotification || !handlers.mcpServerElicitation) {
+      throw new Error('expected descendant capability handlers');
+    }
+
+    // The child route is known before the root turn/start response binds the
+    // root selector. Its first item therefore cannot bind a child turn yet.
+    handlers.descendantThreadStarted({
+      thread: {
+        id: 'race-child-thread',
+        parentThreadId: 'start-thread-id',
+        model: 'gpt-5.4-mini',
+      },
+    });
+    handlers.descendantNotification('race-child-thread', 'item/started', {
+      threadId: 'race-child-thread',
+      turnId: 'race-child-turn',
+      item: {
+        id: 'race-child-routed-mcp',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+
+    // This is the authoritative root acceptance, but it arrives after the
+    // child item. The child turn map remains empty; the thread map is not.
+    handlers.turnStarted({
+      threadId: 'start-thread-id',
+      turn: { id: 'race-root-turn' },
+    });
+    await expect(
+      handlers.mcpServerElicitation({
+        threadId: 'race-child-thread',
+        turnId: 'race-child-turn',
+        serverName: 'cindy-routed-feishu-delegate',
+        mode: 'form',
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+          tool_name: 'feishu_read_messages',
+        },
+        message: 'Allow tool call',
+        requestedSchema: {},
+      }),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+    pendingTurnStart.resolve({ turn: { id: 'race-root-turn' } });
+    await sendPromise;
+    await handle.close();
+  });
 });
 
 describe('CodexAgent reference directories', () => {

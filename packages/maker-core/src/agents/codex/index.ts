@@ -2771,6 +2771,52 @@ export class CodexAgent extends BaseAgent {
     // carried it. A global "last send text" can be poisoned by a turn/start
     // that later fails, and can then unlock an unrelated surviving turn.
     const capabilitySelectionTextByTurnId = new Map<string, string>();
+    /**
+     * Descendant turns do not have their own user-facing selector. Their
+     * capability choice is inherited from the root turn that spawned them.
+     * Keep that choice by thread as well as by turn so a child can spawn a
+     * grandchild after the root turn has already completed.
+     */
+    const capabilitySelectionTextByThreadId = new Map<string, string>();
+    const descendantParentThreadByThreadId = new Map<string, string>();
+    /** A terminal child turn must not re-register tool provenance from late items. */
+    const terminalDescendantTurnIds = new Set<string>();
+
+    const propagateCapabilitySelectionToDescendants = (
+      parentThreadId: string,
+      visited = new Set<string>(),
+    ): void => {
+      if (visited.has(parentThreadId)) return;
+      visited.add(parentThreadId);
+      const selectionText = capabilitySelectionTextByThreadId.get(parentThreadId);
+      if (selectionText === undefined) return;
+      for (const [childThreadId, parent] of descendantParentThreadByThreadId) {
+        if (parent !== parentThreadId) continue;
+        // Descendants have no independent user selector. Keep their inherited
+        // view in sync when the root accepts a later steer as well as when a
+        // route is first registered.
+        capabilitySelectionTextByThreadId.set(childThreadId, selectionText);
+        propagateCapabilitySelectionToDescendants(childThreadId, visited);
+      }
+    };
+
+    const bindCapabilitySelectionToDescendantTurn = (
+      childThreadId: string,
+      turnId: string | undefined,
+    ): void => {
+      if (!turnId || terminalDescendantTurnIds.has(turnId)) return;
+      const selectionText = capabilitySelectionTextByThreadId.get(childThreadId);
+      if (selectionText !== undefined) {
+        capabilitySelectionTextByTurnId.set(turnId, selectionText);
+      }
+    };
+
+    const bindRootCapabilitySelection = (turnId: string, selectionText: string): void => {
+      capabilitySelectionTextByTurnId.set(turnId, selectionText);
+      capabilitySelectionTextByThreadId.set(threadId, selectionText);
+      propagateCapabilitySelectionToDescendants(threadId);
+    };
+
     type PendingCapabilitySteer = {
       completion: Promise<void>;
       resolve: () => void;
@@ -2801,6 +2847,13 @@ export class CodexAgent extends BaseAgent {
         return;
       }
       appendCapabilitySelectionText(turnId, selectionText);
+      if (currentTurnId === turnId) {
+        capabilitySelectionTextByThreadId.set(
+          threadId,
+          capabilitySelectionTextByTurnId.get(turnId) ?? '',
+        );
+        propagateCapabilitySelectionToDescendants(threadId);
+      }
     };
 
     const registerPendingCapabilitySteer = (
@@ -3360,6 +3413,18 @@ export class CodexAgent extends BaseAgent {
       if (!childThreadId || childThreadId === parentThreadId) return;
       // 测试用的 fake host 可能没有这个方法;真实 AppServerHost 恒有。
       host.registerDescendantLineage?.(childThreadId, parentThreadId);
+      descendantParentThreadByThreadId.set(childThreadId, parentThreadId);
+      const inheritedSelection = capabilitySelectionTextByThreadId.get(parentThreadId)
+        ?? (parentThreadId === threadId && currentTurnId
+          ? capabilitySelectionTextByTurnId.get(currentTurnId)
+          : undefined);
+      if (
+        inheritedSelection !== undefined
+        && !capabilitySelectionTextByThreadId.has(childThreadId)
+      ) {
+        capabilitySelectionTextByThreadId.set(childThreadId, inheritedSelection);
+        propagateCapabilitySelectionToDescendants(childThreadId);
+      }
       registerDescendantCodexMcpContext(childThreadId);
       this.deps.registerCodexChildThreadForParent?.({ parentThreadId, childThreadId });
     };
@@ -3424,12 +3489,31 @@ export class CodexAgent extends BaseAgent {
       method: string,
       params: unknown,
     ): void => {
+      const record = params && typeof params === 'object'
+        ? params as Record<string, unknown>
+        : null;
+      const turnId = typeof record?.turnId === 'string'
+        ? record.turnId
+        : record?.turn && typeof record.turn === 'object'
+          && typeof (record.turn as Record<string, unknown>).id === 'string'
+          ? (record.turn as Record<string, unknown>).id as string
+          : undefined;
+      const isItemNotification =
+        method === 'item/started' || method === 'item/updated' || method === 'item/completed';
+
+      if (method === 'turn/started') {
+        bindCapabilitySelectionToDescendantTurn(childThreadId, turnId);
+      } else if (isItemNotification && !terminalDescendantTurnIds.has(turnId ?? '')) {
+        bindCapabilitySelectionToDescendantTurn(childThreadId, turnId);
+        noteActiveToolContext(record?.item, turnId);
+      }
+
       // 嵌套子代理:孙线程的 spawn item 只出现在**子线程自己**的事件流里,主线程的
       // itemStarted 永远看不到。0.145 又没有 thread/started 可等,这里就是孙线程
       // 唯一的入卡(和 approval 路由)入口。
-      if (method === 'item/started' || method === 'item/updated' || method === 'item/completed') {
+      if (isItemNotification && !terminalDescendantTurnIds.has(turnId ?? '')) {
         const nested = readCodexSubagentSpawnRegistration(
-          (params as { item?: unknown } | null)?.item,
+          record?.item,
         );
         if (nested) {
           for (const grandChildThreadId of nested.childThreadIds) {
@@ -3446,6 +3530,21 @@ export class CodexAgent extends BaseAgent {
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
       if (update) emitSubagentCardUpdate(update);
+
+      if (method === 'turn/completed') {
+        const status = record?.turn && typeof record.turn === 'object'
+          ? (record.turn as Record<string, unknown>).status
+          : undefined;
+        if (turnId && status !== 'inProgress') {
+          terminalDescendantTurnIds.add(turnId);
+          capabilitySelectionTextByTurnId.delete(turnId);
+          clearActiveToolContextsForTurn(turnId);
+        }
+      } else if (method === 'error' && turnId && record?.willRetry !== true) {
+        terminalDescendantTurnIds.add(turnId);
+        capabilitySelectionTextByTurnId.delete(turnId);
+        clearActiveToolContextsForTurn(turnId);
+      }
     };
 
     /**
@@ -3473,6 +3572,11 @@ export class CodexAgent extends BaseAgent {
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      activeToolContexts.clear();
+      capabilitySelectionTextByTurnId.clear();
+      capabilitySelectionTextByThreadId.clear();
+      descendantParentThreadByThreadId.clear();
+      terminalDescendantTurnIds.clear();
       // 与 close() 同规:handle 被终止后子代理卡不会再有消费者。同样先收终态再清 ——
       // 这条路径(thread cleanup failure / 强制 retire)恰恰是最容易留下永久转圈卡的。
       for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
@@ -5447,8 +5551,10 @@ export class CodexAgent extends BaseAgent {
         !isCapabilityRouteInvocationAllowed(
           capabilityRoute,
           params.turnId
-            ? capabilitySelectionTextByTurnId.get(params.turnId) ?? ''
-            : '',
+            ? capabilitySelectionTextByTurnId.get(params.turnId)
+              ?? capabilitySelectionTextByThreadId.get(params.threadId)
+              ?? ''
+            : capabilitySelectionTextByThreadId.get(params.threadId) ?? '',
         )
       ) {
         log.warn('Codex MCP invocation blocked by host capability routing', {
@@ -6610,6 +6716,9 @@ export class CodexAgent extends BaseAgent {
       const completedCapabilitySelectionText =
         capabilitySelectionTextByTurnId.get(turn.id) ?? '';
       capabilitySelectionTextByTurnId.delete(turn.id);
+      if (currentTurnId === turn.id || currentTurnId === null) {
+        capabilitySelectionTextByThreadId.delete(threadId);
+      }
       const suppressTerminalUi = terminalErroredTurnIds.has(turn.id);
       deferredTerminalTurnCompletions.delete(turn.id);
       if (currentTurnId === turn.id || currentTurnId === null) {
@@ -7491,6 +7600,10 @@ export class CodexAgent extends BaseAgent {
         dismissAllPending('app_server_force_retired', 'deny');
         dismissAllPendingUserInput('transport_error');
         activeToolContexts.clear();
+        capabilitySelectionTextByTurnId.clear();
+        capabilitySelectionTextByThreadId.clear();
+        descendantParentThreadByThreadId.clear();
+        terminalDescendantTurnIds.clear();
         stopActiveRolloutPlanFallback();
         resetUpstreamIdleForTurnEnd();
         if (currentTurnId) terminalErroredTurnIds.add(currentTurnId);
@@ -7611,7 +7724,7 @@ export class CodexAgent extends BaseAgent {
           !startedOwner[1].quarantined &&
           !startedOwner[1].terminalSettled
         ) {
-          capabilitySelectionTextByTurnId.set(
+          bindRootCapabilitySelection(
             params.turn.id,
             startedOwner[1].capabilitySelectionText,
           );
@@ -7953,6 +8066,10 @@ export class CodexAgent extends BaseAgent {
           subagentLiveCards.clear();
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
+          capabilitySelectionTextByTurnId.clear();
+          capabilitySelectionTextByThreadId.clear();
+          descendantParentThreadByThreadId.clear();
+          terminalDescendantTurnIds.clear();
           submittedUserInputByTurn.clear();
           clearAllPendingUserInputInteractions();
         }
@@ -8234,6 +8351,11 @@ export class CodexAgent extends BaseAgent {
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      activeToolContexts.clear();
+      capabilitySelectionTextByTurnId.clear();
+      capabilitySelectionTextByThreadId.clear();
+      descendantParentThreadByThreadId.clear();
+      terminalDescendantTurnIds.clear();
       // 会话收口后子代理卡不再有消费者。清状态**之前**必须先把仍在跑的卡收成终态:
       // 之后后代通知永远不会再到,只清内部状态会让渲染端一直留着最后一帧 running,卡片
       // 永久转圈(review)。
@@ -8562,7 +8684,7 @@ export class CodexAgent extends BaseAgent {
               // The app-server has now acknowledged which turn owns this
               // input. Bind explicit source selection before buffered tool
               // requests are released, and never on a pre-accept failure.
-              capabilitySelectionTextByTurnId.set(
+              bindRootCapabilitySelection(
                 resp.turn.id,
                 capabilitySelectionText,
               );
