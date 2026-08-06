@@ -115,6 +115,10 @@ import { useLiveErrorSourceProvider } from '@/hooks/useLiveErrorSourceProvider';
 import { resolveFastSupported } from '@/lib/providerModels';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
 import {
+  createSessionScopedRequestGuard,
+  type SessionScopedRequestGuard,
+} from './sessionScopedRequestGuard';
+import {
   useDeviceLinkConnectionIssue,
   useRemoteSessionConnection,
 } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
@@ -2663,28 +2667,40 @@ export function CCAgentSessionView({
 
   const { confirm: confirmDialog } = useConfirmDialog();
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
-  // 多个 confirm,逐个确认就会发多次 compact 请求。in-flight 期间后续点击直接 no-op。
-  const compactRequestInFlightRef = useRef(false);
-  // 发起压缩时的会话锚点:pi 压缩(LLM 摘要)可长达数分钟,在途期间用户切换会话 /
-  // 登出后,迟到的旧响应不得在新会话弹 toast,也不得由旧 finally 覆盖新请求的
-  // in-flight 状态(#1933 review:并发收口)。
-  const compactScopeSessionIdRef = useRef<string | null>(null);
-  // render 阶段同步当前会话(与 lastRemoteSessionIdRef 同款):压缩在途期间切换会话,
-  // 锚点立即指向新会话,旧响应按新锚点判定丢弃,不会在新会话弹 toast。
-  if (compactScopeSessionIdRef.current !== sessionId) {
-    compactScopeSessionIdRef.current = sessionId ?? null;
+  // 多个 confirm,逐个确认就会发多次 compact 请求。锁按 sessionId 隔离:A 的长请求不
+  // 阻塞切换后的 B，A 的迟到 finally 也不能清掉 B 的锁。
+  const compactRequestGuardRef = useRef<SessionScopedRequestGuard | null>(null);
+  if (!compactRequestGuardRef.current) {
+    compactRequestGuardRef.current = createSessionScopedRequestGuard();
   }
+  const compactRequestGuard = compactRequestGuardRef.current;
+  // commit 阶段切换当前会话:中断 render 不应提前作废旧视图请求；layout effect 又早于用户
+  // 交互与异步回调。setup 也要重写 sessionId，确保 React StrictMode 的 setup→cleanup→setup
+  // 重放后不会停在 null。
+  useLayoutEffect(() => {
+    const committedSessionId = sessionId ?? null;
+    compactRequestGuard.setCurrentSession(committedSessionId);
+    return () => {
+      // session 变更 / 路由离开 / 登出后旧请求的确认结果与迟到响应立即失效。
+      if (committedSessionId && compactRequestGuard.isCurrent(committedSessionId)) {
+        compactRequestGuard.setCurrentSession(null);
+      }
+    };
+  }, [compactRequestGuard, sessionId]);
   const handleCompactRequest = useCallback(async () => {
-    if (!session) return;
-    if (!session.workingDir) return;
-    if (compactRequestInFlightRef.current) return;
-    compactRequestInFlightRef.current = true;
+    const sourceSession = session;
+    if (!sourceSession?.workingDir) return;
+    // 必须在第一个 await 前捕获 scope/channel。确认框打开期间路由切换时，旧闭包不得
+    // 从可变 ref 读取到新 sessionId 后把旧请求误认成当前请求。
+    const sourceSessionId = sourceSession.id;
+    const sourceCompactChannel = compactChannel;
+    if (!compactRequestGuard.tryBegin(sourceSessionId)) return;
     try {
       const contextWindow = resolveDisplayContextWindow({
         sdkContextWindow: agentStatus.contextWindow,
         modelContextWindow: getModelContextWindow(
-          session.model,
-          session.agentKind ?? 'cc',
+          sourceSession.model,
+          sourceSession.agentKind ?? 'cc',
           remoteDeviceId,
         ),
       });
@@ -2700,18 +2716,17 @@ export function CCAgentSessionView({
         confirmText: t('ccAgent.layout.contextRing.confirmAction'),
         cancelText: t('ccAgent.layout.contextRing.confirmCancel'),
       });
-      if (!ok) return;
-      if (compactChannel === 'compact-session') {
+      if (!ok || !compactRequestGuard.isCurrent(sourceSessionId)) return;
+      if (sourceCompactChannel === 'compact-session') {
         // capability-aware 通道(pi 原生 compact):本地 IPC / device-link 隧道均可路由。
         // 用粘滞归属(makerApiForSticky)——relay 瞬时重连清空 origin 的窗口内仍隧道到
         // 被控端,不退回控制端本机(本机无该 live 会话,固定调本机必 null 静默失败,
         // greptile P1)。claude-code 分支继续走 inputCoordinator,不在此通道内。
-        const scopeSessionId = compactScopeSessionIdRef.current;
-        const maker = makerApiForSticky(session.id);
+        const maker = makerApiForSticky(sourceSessionId);
         try {
-          const result = await maker.compactSession(session.id);
+          const result = await maker.compactSession(sourceSessionId);
           // 在途期间切换会话 / 登出:旧响应不得在新会话弹 toast。
-          if (compactScopeSessionIdRef.current !== scopeSessionId) return;
+          if (!compactRequestGuard.isCurrent(sourceSessionId)) return;
           if (result?.noop) {
             // 良性:上下文太小,无可压缩内容。信息性提示,不是失败。
             toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
@@ -2720,7 +2735,7 @@ export function CCAgentSessionView({
           }
           // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
         } catch (err) {
-          if (compactScopeSessionIdRef.current !== scopeSessionId) return;
+          if (!compactRequestGuard.isCurrent(sourceSessionId)) return;
           // 与 SessionContentHeader 的手动压缩一致:失败给可理解提示,不泄漏裸 IPC 错误。
           log.warn('context ring compact-session failed', err);
           toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
@@ -2728,19 +2743,21 @@ export function CCAgentSessionView({
         return;
       }
       // 真实 Claude Code:输入协调器的 maker:input:compact(旧行为不变)。
+      if (sourceCompactChannel !== 'claude-input') return;
       await compactSession(
-        session.model,
-        session.effort as Effort,
-        session.permissionMode as PermissionMode,
-        session.workingDir,
+        sourceSession.model,
+        sourceSession.effort as Effort,
+        sourceSession.permissionMode as PermissionMode,
+        sourceSession.workingDir,
       );
     } finally {
-      compactRequestInFlightRef.current = false;
+      compactRequestGuard.finish(sourceSessionId);
     }
   }, [
     agentStatus.contextTokens,
     agentStatus.contextWindow,
     compactChannel,
+    compactRequestGuard,
     compactSession,
     confirmDialog,
     remoteDeviceId,

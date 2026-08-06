@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { resolveManualCompactChannel } from '@/hooks/useAgentCapabilities';
+import { createSessionScopedRequestGuard } from '@/features/cc-agent/sessionScopedRequestGuard';
 
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
@@ -917,16 +918,20 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     // codex(无 manualCompact)→ compactChannel null → 不开放(纯展示)。
   });
 
-  it('compact-session 分支:粘滞路由 makerApiForSticky + scope 锚点 + 失败反馈', () => {
-    // 分流以 compactChannel 判定(不再 if (realAgentKind === 'pi'))。
-    expect(viewSource).toContain("if (compactChannel === 'compact-session') {");
+  it('compact-session 分支:粘滞路由 + 确认框前捕获 scope + 失败反馈', () => {
+    // 分流使用第一个 await 前捕获的 sourceCompactChannel，不能在确认框返回后读新会话值。
+    expect(viewSource).toContain("if (sourceCompactChannel === 'compact-session') {");
     // device-link 远程 pi:粘滞归属路由到被控端,relay 重连窗口内不退回本机(greptile P1)。
-    expect(viewSource).toContain('const maker = makerApiForSticky(session.id);');
-    expect(viewSource).toContain('await maker.compactSession(session.id)');
+    expect(viewSource).toContain('const sourceSessionId = sourceSession.id;');
+    expect(viewSource).toContain('const maker = makerApiForSticky(sourceSessionId);');
+    expect(viewSource).toContain('await maker.compactSession(sourceSessionId)');
     // 在途期间切换会话 / 登出:旧响应不得在新会话弹 toast(并发收口)。
-    // 锚点在 render 阶段随 sessionId 同步(与 lastRemoteSessionIdRef 同款模式)。
-    expect(viewSource).toContain('compactScopeSessionIdRef.current = sessionId ?? null');
-    expect(viewSource).toContain('if (compactScopeSessionIdRef.current !== scopeSessionId) return;');
+    expect(viewSource).toContain('const committedSessionId = sessionId ?? null;');
+    expect(viewSource).toContain('compactRequestGuard.setCurrentSession(committedSessionId)');
+    expect(viewSource).toContain(
+      'if (!ok || !compactRequestGuard.isCurrent(sourceSessionId)) return;',
+    );
+    expect(viewSource).toContain('compactRequestGuard.finish(sourceSessionId);');
     // 真实 reject 必须 catch 并显示 compactFailed(与 SessionContentHeader 一致)。
     expect(viewSource).toContain("toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'))");
   });
@@ -938,6 +943,35 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     const csEnd = viewSource.indexOf('return;', csStart);
     const csBranch = viewSource.slice(csStart, csEnd);
     expect(csBranch).not.toContain('await compactSession(');
+  });
+});
+
+describe('上下文环压缩请求按 sessionId 隔离(#1927 并发/生命周期回归)', () => {
+  it('A 在途时 B 可独立开始，A 的迟到 finally 不会清掉 B 的锁', () => {
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    expect(guard.tryBegin('A')).toBe(true);
+    expect(guard.tryBegin('A')).toBe(false);
+
+    guard.setCurrentSession('B');
+    expect(guard.isCurrent('A')).toBe(false);
+    expect(guard.tryBegin('B')).toBe(true);
+
+    guard.finish('A');
+    expect(guard.tryBegin('B')).toBe(false);
+    guard.finish('B');
+    expect(guard.tryBegin('B')).toBe(true);
+  });
+
+  it('切换会话或登出会让确认框/迟到响应的旧 scope 失效', () => {
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    expect(guard.tryBegin('A')).toBe(true);
+    guard.setCurrentSession('B');
+    expect(guard.isCurrent('A')).toBe(false);
+    expect(guard.isCurrent('B')).toBe(true);
+    guard.setCurrentSession(null);
+    expect(guard.isCurrent('B')).toBe(false);
   });
 });
 

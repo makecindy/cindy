@@ -119,6 +119,18 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(makerSpies.setEffort).not.toHaveBeenCalled();
   });
 
+  it('远程 compactSession 裁掉尾部 undefined，同时保留显式空 instructions', async () => {
+    const { invoke } = stubElectron();
+    const { makerApiForDevice } = await import('@/lib/makerTransport');
+    const api = makerApiForDevice('dev-wire');
+
+    await api.compactSession('rs');
+    await api.compactSession('rs', '');
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'dev-wire', 'maker:compact-session', ['rs']);
+    expect(invoke).toHaveBeenNthCalledWith(2, 'dev-wire', 'maker:compact-session', ['rs', '']);
+  });
+
   it('远程 setModel 压缩 JSON 可选参数,保留中间占位且裁掉尾部 null', async () => {
     const { invoke } = stubElectron();
     const { makerApiForDevice } = await import('@/lib/makerTransport');

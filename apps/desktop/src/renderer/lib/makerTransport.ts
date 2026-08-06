@@ -165,7 +165,12 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     getContextUsage: t('maker:get-context-usage') as FullMaker['getContextUsage'],
     setExtraDirs: t('maker:set-extra-dirs') as FullMaker['setExtraDirs'],
     closeSession: t('maker:close-session') as FullMaker['closeSession'],
-    compactSession: t('maker:compact-session') as FullMaker['compactSession'],
+    compactSession: ((sessionId, instructions) =>
+      invokeRemote(
+        deviceId,
+        'maker:compact-session',
+        instructions === undefined ? [sessionId] : [sessionId, instructions],
+      )) as FullMaker['compactSession'],
     enableOrca: t('maker:session:enable-orca') as FullMaker['enableOrca'],
     disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
     input: {
