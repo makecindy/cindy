@@ -62,7 +62,7 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
-import { fetchDeviceProviders } from '@/device-link/deviceProvidersCache';
+import { fetchDeviceProviders, getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { evictDeviceProviders, useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useDeviceApiKeyStatus, useDeviceModelPricing } from '@/device-link/useDeviceModelMeta';
 import {
@@ -145,6 +145,7 @@ import {
   resolveNewSessionAutoDefault,
   sessionFromCreateResult,
   reconcileEffortAfterFallback,
+  resolveGuardCatalog,
   resolveRecentModelAndProvider,
   validateNewSessionDraft,
   type NewSessionAgentKind,
@@ -303,6 +304,31 @@ const COMPOSER_RESIZE_CHROME_HEIGHT = 34;
 const COMPOSER_CARD_CHROME_HEIGHT = 78;
 // Android 的 SafeAreaView 已经包含状态栏顶部 inset，不能再叠加一档顶部留白。
 const NEW_SESSION_SCREEN_TOP_PADDING = Platform.OS === 'android' ? 0 : spacing.xl;
+
+/**
+ * 按设备 id 从持久缓存重建提交终检用的目录 rows(无缓存 → [])。
+ * 只供 resolveGuardCatalog 在 ready=false 时惰性调用——渲染期 rows 未绑定设备身份,
+ * 切设备/缓存驱逐的空窗里必须改信这份按设备隔离的缓存(Greptile/Codex review)。
+ * 选中行豁免(keepSelected)与渲染期口径一致:被被控端隐藏 override 的当前选中行
+ * 不得被过滤出终检 rows,否则手动选中的模型会被静默联合回退(独立 review P2)。
+ */
+function cachedCatalogRows(
+  deviceId: string,
+  agentKind: NewSessionAgentKind,
+  selected: { model: string; providerId: string | null },
+): ProviderModelRow[] {
+  const cached = getCachedDeviceProviders(deviceId);
+  if (!cached) return [];
+  return flattenProviderSections(
+    buildMobileModelSections({
+      providers: cached.providers,
+      agentKind,
+      visibilityOverrides: cached.modelVisibilityOverrides,
+      selectedModelId: selected.model,
+      selectedProviderId: selected.providerId,
+    }).sections,
+  );
+}
 
 export default function NewRemoteSessionScreen() {
   const styles = useThemedStyles(makeStyles);
@@ -2833,9 +2859,17 @@ export default function NewRemoteSessionScreen() {
       // 保守置 false(codex review P2)。
       // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
       {
-        // ㉔ 跨设备残留:对当前设备有任何目录知识(含缓存)即校验,只有一无所知才信任。
-        let rowsForGuard = modelRowsRef.current;
-        let catalogKnown = catalogReadyRef.current || rowsForGuard.length > 0;
+        // ㉔㉗ 目录取信按设备隔离:ready → modelRowsRef(当前设备已确认目录);否则改信
+        // 按设备 id 取的持久缓存——渲染期 rows 未绑定设备身份,切设备/驱逐空窗里的残留
+        // 行不得充当就绪目录;对当前设备一无所知才真正落入信任。
+        let { rows: rowsForGuard, catalogKnown } = resolveGuardCatalog(
+          catalogReadyRef.current,
+          modelRowsRef.current,
+          () => cachedCatalogRows(selectedDeviceId, effectiveDraft.agentKind, {
+            model: effectiveDraft.model,
+            providerId: effectiveDraft.providerId,
+          }),
+        );
         // ㉕ 本调用内发生过驱逐 → 等在途重拉,用新目录终检(缓存层 inflight 去重)。
         if (catalogEvictedThisCall) {
           try {
@@ -2844,9 +2878,12 @@ export default function NewRemoteSessionScreen() {
               providers: fresh.providers,
               agentKind: effectiveDraft.agentKind,
               visibilityOverrides: fresh.modelVisibilityOverrides,
+              // 选中行豁免与渲染期口径一致(同 cachedCatalogRows,独立 review P2)。
+              selectedModelId: effectiveDraft.model,
+              selectedProviderId: effectiveDraft.providerId,
             }).sections);
             catalogKnown = true;
-          } catch { /* 重拉失败:退回缓存目录 + 上述判定 */ }
+          } catch { /* 重拉失败:退回上面按设备取信的判定(无缓存即信任) */ }
         }
         const resolved = resolveRecentModelAndProvider(
           rowsForGuard,
@@ -3004,9 +3041,16 @@ export default function NewRemoteSessionScreen() {
       // 提交点联合终检(同 create()):守卫不依赖渲染后的清理 effect,来源失效时
       // model 随之一并回退并同步校准 effort、组合变化时 fastMode 保守置 false;
       // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
-      // ㉔㉕ 同 create():有任何目录知识即校验;本调用内发生过驱逐则等在途重拉。
-      let rowsForGuard = modelRowsRef.current;
-      let catalogKnown = catalogReadyRef.current || rowsForGuard.length > 0;
+      // ㉔㉕㉗ 同 create():目录取信按设备隔离(ready → modelRowsRef,否则按设备 id
+      // 取持久缓存,皆无才信任);本调用内发生过驱逐则等在途重拉。
+      let { rows: rowsForGuard, catalogKnown } = resolveGuardCatalog(
+        catalogReadyRef.current,
+        modelRowsRef.current,
+        () => cachedCatalogRows(selectedDeviceId, draft.agentKind, {
+          model: draft.model,
+          providerId: draft.providerId,
+        }),
+      );
       if (catalogEvictedThisCall) {
         try {
           const fresh = await fetchDeviceProviders(selectedDeviceId, () => maker.listProviders());
@@ -3014,9 +3058,12 @@ export default function NewRemoteSessionScreen() {
             providers: fresh.providers,
             agentKind: draft.agentKind,
             visibilityOverrides: fresh.modelVisibilityOverrides,
+            // 选中行豁免与渲染期口径一致(同 cachedCatalogRows,独立 review P2)。
+            selectedModelId: draft.model,
+            selectedProviderId: draft.providerId,
           }).sections);
           catalogKnown = true;
-        } catch { /* 重拉失败:退回缓存目录 + 上述判定 */ }
+        } catch { /* 重拉失败:退回上面按设备取信的判定(无缓存即信任) */ }
       }
       const resolved = resolveRecentModelAndProvider(
         rowsForGuard,

@@ -369,6 +369,25 @@ export function resolveRecentModelAndProvider(
 }
 
 /**
+ * 提交终检的目录取信口径(Greptile P1「旧设备目录通过终检」/ Codex P2「失效代际
+ * 残留行当作就绪目录」):渲染期 rows 未绑定设备身份——设备切换后的重渲染空窗、或
+ * 缓存被驱逐(同设备 provider:changed)后的重拉空窗里,渲染 rows 仍握着旧目录;若把
+ * 「任何非空 rows」都当就绪目录,失效来源会凭残留行通过终检。故:
+ * - ready=true → 渲染期 rows 即当前设备已确认目录(含 loaded-but-empty),直接采信;
+ * - ready=false → 只信按设备 id 从持久缓存重建的 rows(惰性求值,无缓存返回 []);
+ * - 两者皆无 → catalogKnown=false(对当前设备一无所知)→ 信任既有 (model, providerId)。
+ */
+export function resolveGuardCatalog(
+  ready: boolean,
+  renderedRows: readonly ProviderModelRow[],
+  getDeviceCachedRows: () => readonly ProviderModelRow[],
+): { rows: readonly ProviderModelRow[]; catalogKnown: boolean } {
+  if (ready) return { rows: renderedRows, catalogKnown: true };
+  const cachedRows = getDeviceCachedRows();
+  return { rows: cachedRows, catalogKnown: cachedRows.length > 0 };
+}
+
+/**
  * 联合回退后的 effort 校准:回退改变了 (model, providerId) 时,用新组合精确匹配行
  * reconcile 既有档位,旧档位不受新模型支持时降到其默认档(codex review P2:回退模型
  * 时同步校准 effort)。组合未变化时调用方不应调用本函数(原样保留即可)。
@@ -529,7 +548,13 @@ export function resolveNewSessionAutoDefault(input: {
       recent.agentKind,
       catalogReady && recent.agentKind === rowsAgentKind,
     );
-    const sectionModel = findSectionModelRow(modelRows, model, providerId)?.model;
+    // 跨 agent 跟随时 modelRows 按当前 agent 构建,其档位表对目标 agent 无权威——
+    // 命中同名模型行会把 recent.effort 错 reconcile 成当前 agent 的默认档(独立
+    // review P2)。此时直接用 recent.effort;渲染后目录按目标 agent 重建,由既有
+    // 就绪终检链路校准。同 agent 才按精确匹配行 reconcile(原有口径)。
+    const sectionModel = recent.agentKind === rowsAgentKind
+      ? findSectionModelRow(modelRows, model, providerId)?.model
+      : undefined;
     return {
       appliedDeviceId: selectedDeviceId,
       patch: {

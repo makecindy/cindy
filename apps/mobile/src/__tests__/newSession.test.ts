@@ -19,6 +19,7 @@ import {
   pickMostRecentSessionRuntime,
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
+  resolveGuardCatalog,
   sessionFromCreateResult,
   reconcileEffortAfterFallback,
   serializeNewSessionDeviceOptions,
@@ -174,6 +175,38 @@ describe('validateModelProviderId', () => {
     expect(validateModelProviderId([], 'deepseek', 'deepseek-v4-flash', true)).toBeNull();
     // provider 仍在但不再提供该模型 → 同样清空(不匹配 modelId)
     expect(validateModelProviderId(rows, 'prov-deepseek-v4-flash', 'other-model', true)).toBeNull();
+  });
+});
+
+describe('resolveGuardCatalog —— 提交终检的目录取信口径(Greptile P1 旧设备残留 / Codex P2 失效代际残留)', () => {
+  const rendered = [modelRow('m-rendered')];
+  const cached = [modelRow('m-cached')];
+
+  it('ready=true → 采信渲染期 rows(含 loaded-but-empty),catalogKnown 恒 true', () => {
+    expect(resolveGuardCatalog(true, rendered, () => cached))
+      .toEqual({ rows: rendered, catalogKnown: true });
+    // loaded-but-empty:渲染期空目录也是「已确认的目录」,不是「一无所知」
+    expect(resolveGuardCatalog(true, [], () => cached))
+      .toEqual({ rows: [], catalogKnown: true });
+  });
+
+  it('ready=true → 惰性求值:不触碰设备缓存重建', () => {
+    let called = false;
+    resolveGuardCatalog(true, rendered, () => { called = true; return cached; });
+    expect(called).toBe(false);
+  });
+
+  it('ready=false + 设备缓存有 rows → 只信缓存行,catalogKnown=true(渲染残留行被丢弃)', () => {
+    expect(resolveGuardCatalog(false, rendered, () => cached))
+      .toEqual({ rows: cached, catalogKnown: true });
+  });
+
+  it('ready=false + 设备无缓存 → catalogKnown=false(一无所知才信任),即使渲染期 rows 非空', () => {
+    // 核心回归:切设备/驱逐空窗里渲染期仍握着旧设备目录,非空也不得充当就绪目录
+    expect(resolveGuardCatalog(false, rendered, () => []))
+      .toEqual({ rows: [], catalogKnown: false });
+    expect(resolveGuardCatalog(false, [], () => []))
+      .toEqual({ rows: [], catalogKnown: false });
   });
 });
 
@@ -471,6 +504,38 @@ describe('resolveNewSessionAutoDefault', () => {
       effort: 'high',
       permissionMode: 'auto',
       providerId: null,
+    });
+  });
+
+  it('intent ①y: cross-agent follow keeps recent effort verbatim — rows belong to another agent and have no authority over its effort ladder (reviewer P2)', () => {
+    // 目录按 claude-code 构建,最近会话是 codex(gpt-5.4 + xhigh);cc 目录里恰好也有
+    // 同名 gpt-5.4 但档位表不含 xhigh —— 修复前命中该行,effort 被错 reconcile 成
+    // cc 默认档 'medium',随后渲染目录按 codex 重建而 effort 不再复核,错档一路带进创建。
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      rowsAgentKind: 'claude-code',
+      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', effort: 'xhigh', providerId: 'prov-codex-only', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'medium')],
+    });
+    expect(result?.patch).toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      effort: 'xhigh',
+      providerId: 'prov-codex-only',
+    });
+  });
+
+  it('intent ①r: same-agent follow still reconciles effort against the matched row ladder', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', effort: 'xhigh', providerId: 'prov-deepseek-v4-flash', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')],
+    });
+    expect(result?.patch).toMatchObject({
+      agentKind: 'claude-code',
+      model: 'deepseek-v4-flash',
+      effort: 'medium', // xhigh 不在该 agent 目录档位表 → reconcile 到模型默认档
+      providerId: 'prov-deepseek-v4-flash',
     });
   });
 
@@ -1483,5 +1548,30 @@ describe('new session worktree wiring (source locks)', () => {
       'utf8',
     );
     expect(timeoutsSource).toContain('INVOKE_TIMEOUT_OVERRIDES_MS[channel]');
+  });
+});
+
+describe('submit guard catalog wiring (source locks)', () => {
+  // 提交终检目录取信的接线不变量(纯函数测试覆盖不到的 new.tsx 接线):
+  //  - 两处守卫(create / createGoalSession)都必须走 resolveGuardCatalog 按设备取信,
+  //    不得回退到「任何非空 rows 即就绪」(Greptile P1 旧设备残留 / Codex P2 失效代际残留);
+  //  - 守卫内所有 buildMobileModelSections 重建(evict 重拉 + cachedCatalogRows)都必须
+  //    传 selectedModelId/selectedProviderId —— 缺了就没有 keepSelected 豁免,被被控端
+  //    隐藏 override 的选中行会被过滤出终检 rows,手动选中的模型被静默联合回退(独立 review P2)。
+  const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+
+  it('both submit guards resolve catalog trust via resolveGuardCatalog with device-tagged cache rebuild', () => {
+    const guardCalls = newSource.match(/resolveGuardCatalog\(\s*catalogReadyRef\.current,\s*modelRowsRef\.current,/g) ?? [];
+    expect(guardCalls.length).toBe(2);
+    expect(newSource).toContain('getCachedDeviceProviders(deviceId)');
+  });
+
+  it('every catalog rebuild in the guards passes the keepSelected exemption pair', () => {
+    // 渲染期(1 处)+ cachedCatalogRows(1 处)+ create() evict 重拉(1 处)
+    // + createGoalSession() evict 重拉(1 处)= 4 处全带豁免对。
+    const selectedModel = newSource.match(/selectedModelId: (effectiveDraft|draft|selected)\.model,/g) ?? [];
+    const selectedProvider = newSource.match(/selectedProviderId: (effectiveDraft|draft|selected)\.providerId,/g) ?? [];
+    expect(selectedModel.length).toBe(4);
+    expect(selectedProvider.length).toBe(4);
   });
 });
