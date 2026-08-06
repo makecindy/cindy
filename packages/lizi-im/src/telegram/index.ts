@@ -44,7 +44,7 @@ import {
 } from './api.js';
 import { chunkTelegramSource } from './chunk.js';
 import { decodeLaneUserId, decodeMessageId, encodeLaneUserId, encodeMessageId } from './codec.js';
-import { buildCardPayload, parseCallbackQuery } from './components.js';
+import { buildCardPayload, hasLiveCallbackToken, parseCallbackQuery } from './components.js';
 import {
   detectGroupTrigger,
   groupWindowEntryOf,
@@ -1426,7 +1426,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         text: this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE,
         show_alert: true,
       });
-      if (q.message) {
+      // 但**只有整张卡都失效**才清键盘: token 是逐个淘汰的, 同卡其它按钮可能还能用,
+      // 清掉等于把一次仍能完成的交互从用户手里拿走(pending 那头还在等它)。
+      if (q.message && !hasLiveCallbackToken(q.message)) {
         void api
           .call('editMessageReplyMarkup', {
             chat_id: q.message.chat.id,

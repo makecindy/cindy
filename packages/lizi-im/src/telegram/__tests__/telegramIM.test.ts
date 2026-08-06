@@ -2284,6 +2284,8 @@ describe('TelegramIM', () => {
       fromId: number;
       updateId: number;
       queryId?: string;
+      /** 该消息当前挂着的键盘(Telegram 会随 callback_query 一起送来)。 */
+      keyboard?: string[];
     }): TgUpdate {
       return {
         update_id: args.updateId,
@@ -2294,6 +2296,13 @@ describe('TelegramIM', () => {
             message_id: 55,
             chat: { id: args.fromId, type: 'private' },
             date: 1_753_000_000,
+            ...(args.keyboard
+              ? {
+                  reply_markup: {
+                    inline_keyboard: args.keyboard.map((d) => [{ callback_data: d }]),
+                  },
+                }
+              : {}),
           },
           data: args.data,
         },
@@ -2303,7 +2312,15 @@ describe('TelegramIM', () => {
     it('ref 失效: 唯一一次应答带过期 alert, 并清掉该消息的键盘', async () => {
       await connect();
       api.calls.length = 0;
-      api.pushUpdates([callbackUpdate({ data: 'cbr:gone-after-restart', fromId: 111, updateId: 9 })]);
+      // 重启后整卡 token 全丢 —— 键盘上每个按钮都解不开, 这才是该清键盘的情形。
+      api.pushUpdates([
+        callbackUpdate({
+          data: 'cbr:gone-after-restart',
+          fromId: 111,
+          updateId: 9,
+          keyboard: ['cbr:gone-after-restart'],
+        }),
+      ]);
 
       await vi.waitFor(() =>
         expect(api.calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(true),
@@ -2317,6 +2334,83 @@ describe('TelegramIM', () => {
         message_id: 55,
         reply_markup: { inline_keyboard: [] },
       });
+    });
+
+    it('同卡还有能解开的按钮时只提示、不清键盘(token 是逐个淘汰的)', async () => {
+      await connect();
+      const live = encodeCallbackData('deny', { requestId: 'req-multi' });
+      api.calls.length = 0;
+      // 被点的那个 token 已被淘汰, 但同卡的「拒绝」还在 —— 这次交互仍然能完成。
+      api.pushUpdates([
+        callbackUpdate({
+          data: 'cbr:evicted-one',
+          fromId: 111,
+          updateId: 12,
+          keyboard: ['cbr:evicted-one', live],
+        }),
+      ]);
+
+      await vi.waitFor(() =>
+        expect(api.calls.filter((c) => c.method === 'answerCallbackQuery')).toHaveLength(1),
+      );
+      expect(api.calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(false);
+    });
+
+    it('整卡的 token 都解不开才清键盘', async () => {
+      await connect();
+      api.calls.length = 0;
+      api.pushUpdates([
+        callbackUpdate({
+          data: 'cbr:evicted-a',
+          fromId: 111,
+          updateId: 13,
+          keyboard: ['cbr:evicted-a', 'cbr:evicted-b'],
+        }),
+      ]);
+
+      await vi.waitFor(() =>
+        expect(api.calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(true),
+      );
+      expect(api.calls.find((c) => c.method === 'editMessageReplyMarkup')!.params).toMatchObject({
+        reply_markup: { inline_keyboard: [] },
+      });
+    });
+
+    it('容量淘汰后同卡幸存按钮仍可用: 不清键盘且照常派发', async () => {
+      await connect();
+      // 真实触发容量淘汰: 先发的按钮被 512 个后来者挤出 callbackRefs, 后发的还在。
+      // (survivor 必须在填充**之后**创建 —— 否则它会和 evicted 一起被挤掉。)
+      const evicted = encodeCallbackData('allow', { requestId: 'req-old' });
+      for (let i = 0; i < 512; i += 1) encodeCallbackData('filler', { n: i });
+      const survivor = encodeCallbackData('deny', { requestId: 'req-old' });
+
+      const seen: IMCardActionEvent[] = [];
+      im.onCardAction((e) => void seen.push(e));
+      api.calls.length = 0;
+      // 被挤掉的那个先点: 只提示, 不能把幸存的「拒绝」一起清掉。
+      api.pushUpdates([
+        callbackUpdate({
+          data: evicted,
+          fromId: 111,
+          updateId: 14,
+          keyboard: [evicted, survivor],
+        }),
+      ]);
+      await vi.waitFor(() =>
+        expect(api.calls.filter((c) => c.method === 'answerCallbackQuery')).toHaveLength(1),
+      );
+      expect(api.calls.find((c) => c.method === 'answerCallbackQuery')!.params).toMatchObject({
+        text: NOTICE,
+        show_alert: true,
+      });
+      expect(api.calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(false);
+
+      // 幸存按钮照常派发, 这次交互仍然能被完成。
+      api.pushUpdates([
+        callbackUpdate({ data: survivor, fromId: 111, updateId: 15, keyboard: [evicted, survivor] }),
+      ]);
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      expect(seen[0]).toMatchObject({ buttonId: 'deny', payload: { requestId: 'req-old' } });
     });
 
     it('ref 有效: 应答一次(不带 alert)并派发给卡片处理器, 不动键盘', async () => {

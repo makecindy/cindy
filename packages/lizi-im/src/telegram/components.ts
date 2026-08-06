@@ -63,6 +63,28 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
 }
 
 /**
+ * 这条消息上是否还有能解开的按钮。
+ *
+ * callbackRefs 是**按 token** 淘汰的(容量满了就丢最早的那个), 而一张卡上每个
+ * 按钮各占一个 token。所以一次解不开只说明**被点的那个**没了, 同卡其它按钮
+ * 完全可能还有效 —— 此时把整张键盘清掉, 等于把一次仍然能完成的交互从用户手里
+ * 拿走, 而 desktop 那边的 pending 还在等它。
+ *
+ * 判据取自 callback_query 自带的 `message.reply_markup`(Telegram 会把消息当前
+ * 的键盘一起送来), 不需要我们自己记账, 也不改 callbackRefs 的存储与淘汰策略。
+ * 拿不到键盘信息时按「无法确认整卡失效」处理, 保守不清。
+ */
+export function hasLiveCallbackToken(message: TgCallbackQuery['message']): boolean {
+  const rows = message?.reply_markup?.inline_keyboard;
+  if (!rows) return true;
+  const tokens = rows.flat().map((b) => b?.callback_data);
+  const known = tokens.filter((data): data is string => typeof data === 'string');
+  // 键盘上没有一个 callback 按钮(全是 url 之类) → 没有"整卡失效"可言, 别清。
+  if (known.length === 0) return true;
+  return known.some((data) => decodeCallbackData(data) !== null);
+}
+
+/**
  * callback_query → IMCardActionEvent。senderId 语义与入站消息一致: 卡片在
  * 群聊里时用群 lane id(编排层按它路由回会话), 私聊时用按键者数字 id。
  * ref 失效(重启/淘汰)返回 null — 调用方负责回「已过期」。
