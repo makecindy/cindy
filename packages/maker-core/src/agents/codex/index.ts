@@ -2545,10 +2545,10 @@ export class CodexAgent extends BaseAgent {
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
     };
-    // A collab item can finish after its parent turn/completed notification. Keep
-    // those late terminal ids one-shot so the narrow carve-out below cannot replay
-    // tool results when the server retries the same item notification.
-    const lateCollabTerminalItemIds = new Set<string>();
+    // Collab terminal notifications are one-shot across the whole handle lifetime.
+    // The server can retry one after its parent turn/completed notification; remembering
+    // normal completions too keeps that retry from looking like a first late terminal.
+    const handledCollabTerminalItemIds = new Set<string>();
     const deferredTerminalTurnCompletions = new Map<string, TurnCompletedParams>();
     // 最近一次 thread/tokenUsage/updated 的 last 增量 + contextWindow,
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
@@ -6406,19 +6406,11 @@ export class CodexAgent extends BaseAgent {
       );
     };
 
-    const lateCollabTerminalItemKey = (
+    const collabTerminalItemKey = (
       turnId: string | null | undefined,
       item: unknown,
     ): string | undefined => {
-      // A non-transport terminal error can close the logical turn before the
-      // authoritative turn/completed arrives. Keep the same one-shot late
-      // collab carve-out open for that error tombstone, otherwise the stale
-      // guard would swallow the child's terminal item and leave its task card
-      // running forever.
-      if (
-        !turnId
-        || (!completedTurnIds.has(turnId) && !terminalErroredTurnIds.has(turnId))
-      ) return undefined;
+      if (!turnId) return undefined;
       if (!item || typeof item !== 'object') return undefined;
       const candidate = item as { id?: unknown; type?: unknown; status?: unknown };
       if (
@@ -8075,20 +8067,32 @@ export class CodexAgent extends BaseAgent {
           rememberPendingSpawnLineage(params.turnId, reservedChildThreadIds);
           return;
         }
+        const collabTerminalKey = collabTerminalItemKey(params.turnId, params.item);
+        if (collabTerminalKey && handledCollabTerminalItemIds.has(collabTerminalKey)) {
+          discardPendingSpawnLineageIds(reservedChildThreadIds);
+          return;
+        }
         let isLateCollabTerminal = false;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) {
-          const lateKey = lateCollabTerminalItemKey(params.turnId, params.item);
-          if (!lateKey || lateCollabTerminalItemIds.has(lateKey)) {
+          // A non-transport terminal error can close the logical turn before the
+          // authoritative turn/completed arrives. Keep the same one-shot late
+          // collab carve-out open for that error tombstone, otherwise the stale
+          // guard would swallow the child's terminal item and leave its task card
+          // running forever.
+          if (
+            !collabTerminalKey
+            || (!completedTurnIds.has(params.turnId) && !terminalErroredTurnIds.has(params.turnId))
+          ) {
             discardPendingSpawnLineageIds(reservedChildThreadIds);
             return;
           }
-          lateCollabTerminalItemIds.add(lateKey);
           isLateCollabTerminal = true;
         }
         if (interceptProposedPlanItem(params.item)) {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
+        if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         // This late item belongs to an already-terminal parent. The parent
