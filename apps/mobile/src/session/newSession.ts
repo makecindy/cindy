@@ -340,6 +340,34 @@ export function validateModelProviderId(
 }
 
 /**
+ * 联合解析「跟随最近会话」的 (model, providerId)(codex review P1:provider 失效时
+ * model 必须一起回退——只清 provider 保留裸模型 id 会回落默认网关,正是 #1898 的
+ * 400 Invalid model name):
+ *   1) 继承来源仍有效 → 原样跟随;
+ *   2) 失效但仍有其他已连接来源提供该模型 → 顶替为该来源(模型照用);
+ *   3) 没有任何来源提供该模型 → 落目录首项(连同其 provider);
+ *   4) 目录为空 → 该 agent 内置默认模型 + 默认路由;
+ * catalogReady=false 时不评判,维持信任语义(见 validateModelProviderId)。
+ */
+function resolveRecentModelAndProvider(
+  modelRows: readonly ProviderModelRow[],
+  recent: { model: string; providerId: string | null },
+  agentKind: NewSessionAgentKind,
+  catalogReady: boolean,
+): { model: string; providerId: string | null } {
+  if (!catalogReady) return { model: recent.model, providerId: recent.providerId };
+  // providerId 为 null = 该会话本来就走被控端默认路由(合法来源),不做失效回退。
+  if (!recent.providerId) return { model: recent.model, providerId: null };
+  const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
+  if (valid) return { model: recent.model, providerId: valid };
+  const alt = modelRows.find((row) => row.model.id === recent.model);
+  if (alt) return { model: recent.model, providerId: alt.provider.id };
+  const top = modelRows[0];
+  if (top) return { model: top.model.id, providerId: top.provider.id };
+  return { model: DEFAULT_MODELS[agentKind], providerId: null };
+}
+
+/**
  * 按 (providerId, modelId) 精确找 row;providerId 为空或无精确匹配时退回 modelId 首匹配。
  * 同一 modelId 可被多个 provider 提供(各自 effort 档位表可能不同)——reconcile effort
  * 必须用最终选中来源的那一行,否则会被错误降档/升档(Copilot review)。
@@ -423,8 +451,14 @@ export function pickAgentDefaultRuntime(args: {
   let model: string;
   let providerId: string | null;
   if (recent?.model) {
-    model = recent.model;
-    providerId = validateModelProviderId(modelRows, recent.providerId, recent.model, catalogReady);
+    // 联合解析:来源失效时 model 随之一并回退(顶替其他来源 / 首项 / 内置默认),
+    // 不留「裸模型 + 默认路由」的必 400 组合(codex review P1)。
+    ({ model, providerId } = resolveRecentModelAndProvider(
+      modelRows,
+      { model: recent.model, providerId: recent.providerId },
+      agentKind,
+      catalogReady,
+    ));
   } else if (catalogReady && modelRows[0]) {
     // 首项分支只在目录就绪时取——切到未缓存设备瞬间旧设备目录会短暂残留
     // (ready=false),抄它的首项会把别设备的来源写进草稿(codex review P1)。
@@ -470,18 +504,20 @@ export function resolveNewSessionAutoDefault(input: {
   if (appliedDeviceId === selectedDeviceId) return null;
   const recent = pickMostRecentSessionRuntime(sessions, { deviceId: selectedDeviceId });
   if (recent) {
-    const providerId = validateModelProviderId(
+    // 联合解析(口径同 pickAgentDefaultRuntime):来源失效时 model 随之一并回退
+    // (codex review P1);目录 agent 不一致时不评判、维持信任。
+    const { model, providerId } = resolveRecentModelAndProvider(
       modelRows,
-      recent.providerId,
-      recent.model,
+      { model: recent.model, providerId: recent.providerId },
+      recent.agentKind,
       catalogReady && recent.agentKind === rowsAgentKind,
     );
-    const sectionModel = findSectionModelRow(modelRows, recent.model, providerId)?.model;
+    const sectionModel = findSectionModelRow(modelRows, model, providerId)?.model;
     return {
       appliedDeviceId: selectedDeviceId,
       patch: {
         agentKind: recent.agentKind,
-        model: recent.model,
+        model,
         effort: sectionModel
           ? reconcileEffortForModel(sectionModel, recent.effort || currentEffort)
           : recent.effort || currentEffort,

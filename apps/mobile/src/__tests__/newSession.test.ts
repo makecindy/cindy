@@ -208,7 +208,7 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'deepseek-v4-flash', effort: 'medium', providerId: 'prov-deepseek-v4-flash' });
   });
 
-  it('clears the inherited providerId when the provider was deleted or no longer offers the model', () => {
+  it('reroutes to another connected provider offering the same model when the recent provider is gone (codex P1)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
       sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
@@ -216,7 +216,30 @@ describe('pickAgentDefaultRuntime', () => {
       currentEffort: 'medium',
       catalogReady: true,
     });
-    expect(runtime.providerId).toBeNull();
+    // 来源失效但仍有其他来源提供同模型 → 顶替为该来源,模型照用(不留裸模型回落默认网关)
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'deepseek-v4-flash', effort: 'medium', providerId: 'prov-deepseek-v4-flash' });
+  });
+
+  it('falls back to the catalog top row (with its provider) when no provider offers the recent model', () => {
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'delisted-model', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'low'), modelRow('claude-haiku', ['low'], 'low')],
+      currentEffort: 'high',
+      catalogReady: true,
+    });
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'medium', providerId: 'prov-claude-sonnet-4-6' });
+  });
+
+  it('falls back to DEFAULT_MODELS + default route when the catalog is ready but empty and the provider is gone', () => {
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'codex',
+      sessions: [remoteSession('ds', { agentKind: 'codex', model: 'delisted-model', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [],
+      currentEffort: 'medium',
+      catalogReady: true,
+    });
+    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
   });
 
   it('trusts the recent providerId while modelRows are still loading (empty)', () => {
@@ -230,7 +253,7 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime.providerId).toBe('deepseek');
   });
 
-  it('clears the recent providerId when the catalog is ready but empty (loaded ≠ loading, Greptile P1)', () => {
+  it('falls back the model together when the catalog is ready but empty (loaded ≠ loading, codex P1)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
       sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'deepseek', userSendAt: '2026-01-01T00:00:00.000Z' })],
@@ -238,7 +261,8 @@ describe('pickAgentDefaultRuntime', () => {
       currentEffort: 'medium',
       catalogReady: true,
     });
-    expect(runtime.providerId).toBeNull();
+    // 目录就绪但为空:来源失效且无人能提供该模型 → model 一并回退内置默认(不留裸模型)
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'medium', providerId: null });
   });
 
   it('reconciles effort with the exact (providerId, modelId) row when multiple providers offer the same model (Copilot)', () => {
@@ -378,13 +402,28 @@ describe('resolveNewSessionAutoDefault', () => {
     });
   });
 
-  it('intent ①-: clears the inherited providerId when the provider no longer offers the model', () => {
+  it('intent ①-: reroutes to another provider offering the same model when the recent provider is gone (codex P1)', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
       sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-gone', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium', 'high'], 'medium')],
     });
-    expect(result?.patch.providerId).toBeNull();
+    expect(result?.patch).toMatchObject({
+      model: 'deepseek-v4-flash',
+      providerId: 'prov-deepseek-v4-flash',
+    });
+  });
+
+  it('intent ①-fallback: falls back to the catalog top row when no provider offers the recent model', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'delisted-model', providerId: 'prov-gone', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'low')],
+    });
+    expect(result?.patch).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      providerId: 'prov-claude-sonnet-4-6',
+    });
   });
 
   it('intent ①x: trusts the recent providerId when it belongs to a different agent than the rows (codex P1)', () => {
