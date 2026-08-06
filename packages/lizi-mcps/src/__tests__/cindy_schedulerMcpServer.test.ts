@@ -100,16 +100,65 @@ class InMemoryStorage implements ScheduleStorage {
     return [];
   }
   async touchRunHeartbeats(): Promise<void> {}
-  async hasRunningRuns(scheduleId?: string): Promise<boolean> {
+  async hasRunningRuns(scheduleId?: string, opts?: { runId?: string }): Promise<boolean> {
     return [...this.runs.values()].some(
-      (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
+      (r) =>
+        r.status === 'running' &&
+        (scheduleId === undefined || r.scheduleId === scheduleId) &&
+        (opts?.runId === undefined || r.id === opts.runId),
     );
+  }
+  async listRunningRunIds(scheduleId: string): Promise<string[]> {
+    return [...this.runs.values()]
+      .filter((r) => r.status === 'running' && r.scheduleId === scheduleId)
+      .sort((a, b) => b.firedAt - a.firedAt)
+      .map((r) => r.id);
+  }
+  async rescheduleDeferredAutomaticClaim(
+    id: string,
+    claimRunId: string,
+    retryAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.activeClaimRunId !== claimRunId) return null;
+    ex.nextFireAt = retryAt;
+    ex.activeClaimRunId = undefined;
+    return { ...ex };
+  }
+  async resumeWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex) return null;
+    const liveClaim =
+      ex.activeClaimRunId !== undefined &&
+      await this.hasRunningRuns(id, { runId: ex.activeClaimRunId });
+    ex.status = 'active';
+    ex.updatedAt = updatedAt;
+    ex.nextFireAt = liveClaim ? undefined : nextFireAt;
+    if (!liveClaim) ex.activeClaimRunId = undefined;
+    return { ...ex };
   }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
+    return { ...ex };
+  }
+  async claimDueFireAndInsertRun(
+    id: string,
+    expectedNextFireAt: number,
+    run: ScheduleRun,
+  ): Promise<Schedule | null> {
+    if (run.scheduleId !== id) throw new Error('run.scheduleId must match scheduleId');
+    const ex = this.schedules.get(id);
+    if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
+    ex.nextFireAt = undefined;
+    ex.activeClaimRunId = run.id;
+    this.runs.set(run.id, { ...run });
     return { ...ex };
   }
 }

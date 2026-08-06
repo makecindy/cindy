@@ -42,6 +42,7 @@ import {
   removeQueuedSchedulerPrompt,
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
+import type { DbClient } from '../localDb/client/DbClient';
 import { ProjectAutomationLoader } from './project-automation-loader';
 import { MakerScheduleRunner } from './runner';
 import { buildForcedFailureRun } from './forcedFailureRun';
@@ -54,6 +55,7 @@ import { wecomGroupNotificationService } from '../wecomGroupNotification';
 export interface StartSchedulerDeps {
   maker: Maker;
   getDb: () => SchedulerDrizzleDb;
+  getDbClient?: () => Pick<DbClient, 'tx'>;
   getMainWindow: () => BrowserWindow | null;
   feishuIm: FeishuIM;
   logger: Logger;
@@ -68,7 +70,7 @@ let _loader: ProjectAutomationLoader | null = null;
 export async function startScheduler(deps: StartSchedulerDeps): Promise<Scheduler> {
   if (_scheduler) return _scheduler;
 
-  const storage = new DrizzleScheduleStorage(deps.getDb);
+  const storage = new DrizzleScheduleStorage(deps.getDb, deps.getDbClient);
   _storage = storage;
   const notifier = new DesktopNotifier({
     getMainWindow: deps.getMainWindow,

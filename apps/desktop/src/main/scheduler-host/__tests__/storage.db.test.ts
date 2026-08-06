@@ -158,6 +158,7 @@ const SCHEDULER_DDL = [
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       last_fired_at INTEGER,
+      active_claim_run_id TEXT,
       last_finished_at INTEGER,
       next_fire_at INTEGER,
       expire_at INTEGER
@@ -421,7 +422,152 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
-  it('claimDueFire: 经 DbClient drizzleProxy(worker RPC)也能拿到 changes 完成 CAS', async () => {
+  it('claimDueFireAndInsertRun: 同事务置空 next_fire_at、写 claim 标记并插入 running 行', async () => {
+    const harness = createStorageHarness();
+    const due = 1_700_000_060_000;
+    const firedAt = 1_700_000_061_000;
+    try {
+      await harness.storage.insert(baseSchedule({ id: 'sch-claim-run', nextFireAt: due }));
+
+      expect(
+        await harness.storage.claimDueFireAndInsertRun('sch-claim-run', due + 1, {
+          id: 'run-miss',
+          scheduleId: 'sch-claim-run',
+          firedAt,
+          status: 'running',
+          heartbeatAt: firedAt,
+        }),
+      ).toBeNull();
+      expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(0);
+      expect((await harness.storage.get('sch-claim-run'))?.nextFireAt).toBe(due);
+
+      await expect(
+        harness.storage.claimDueFireAndInsertRun('sch-claim-run', due, {
+          id: 'run-wrong-schedule',
+          scheduleId: 'sch-other',
+          firedAt,
+          status: 'running',
+          heartbeatAt: firedAt,
+        }),
+      ).rejects.toThrow('run.scheduleId must match scheduleId');
+      expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(0);
+      expect((await harness.storage.get('sch-claim-run'))?.nextFireAt).toBe(due);
+
+      const claimed = await harness.storage.claimDueFireAndInsertRun('sch-claim-run', due, {
+        id: 'run-hit',
+        scheduleId: 'sch-claim-run',
+        firedAt,
+        status: 'running',
+        heartbeatAt: firedAt,
+        costAttribution: 'unavailable',
+      });
+      expect(claimed?.nextFireAt).toBeUndefined();
+      expect(claimed?.lastFiredAt).toBeUndefined();
+      expect(claimed?.activeClaimRunId).toBe('run-hit');
+      expect(await harness.storage.hasRunningRuns('sch-claim-run', { runId: 'run-hit' })).toBe(true);
+      expect(await harness.storage.hasRunningRuns('sch-claim-run', { runId: 'run-missing' })).toBe(false);
+      expect(await harness.storage.listRunningRunIds('sch-claim-run')).toEqual(['run-hit']);
+      expect(await harness.storage.listRuns('sch-claim-run')).toEqual([
+        expect.objectContaining({
+          id: 'run-hit',
+          status: 'running',
+          firedAt,
+          heartbeatAt: firedAt,
+          costAttribution: 'unavailable',
+        }),
+      ]);
+
+      await expect(
+        harness.storage.claimDueFireAndInsertRun('sch-claim-run', due, {
+          id: 'run-duplicate',
+          scheduleId: 'sch-claim-run',
+          firedAt: firedAt + 1,
+          status: 'running',
+        }),
+      ).resolves.toBeNull();
+      expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(1);
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-preserve-manual',
+        nextFireAt: due,
+        lastFiredAt: firedAt + 10,
+      }));
+      const claimedAfterManual = await harness.storage.claimDueFireAndInsertRun('sch-preserve-manual', due, {
+        id: 'run-preserve-manual',
+        scheduleId: 'sch-preserve-manual',
+        firedAt,
+        status: 'running',
+      });
+      expect(claimedAfterManual?.lastFiredAt).toBe(firedAt + 10);
+      expect(claimedAfterManual?.activeClaimRunId).toBe('run-preserve-manual');
+
+      const deferred = await harness.storage.rescheduleDeferredAutomaticClaim(
+        'sch-preserve-manual',
+        'run-preserve-manual',
+        due + 60_000,
+      );
+      expect(deferred?.nextFireAt).toBe(due + 60_000);
+      expect(deferred?.lastFiredAt).toBe(firedAt + 10);
+      expect(deferred?.activeClaimRunId).toBeUndefined();
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('resumeWithLiveClaimGuard: 原子保留活 claim,清掉陈旧 claim', async () => {
+    const harness = createStorageHarness();
+    const now = 1_700_000_120_000;
+    const nextFireAt = now + 60_000;
+    try {
+      await harness.storage.insert(
+        baseSchedule({
+          id: 'sch-resume-live',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-resume-live',
+        }),
+      );
+      await harness.storage.insertRun({
+        id: 'run-resume-live',
+        scheduleId: 'sch-resume-live',
+        firedAt: now - 1_000,
+        status: 'running',
+        heartbeatAt: now - 500,
+      });
+
+      const live = await harness.storage.resumeWithLiveClaimGuard(
+        'sch-resume-live',
+        now,
+        nextFireAt,
+      );
+      expect(live?.status).toBe('active');
+      expect(live?.updatedAt).toBe(now);
+      expect(live?.nextFireAt).toBeUndefined();
+      expect(live?.activeClaimRunId).toBe('run-resume-live');
+
+      await harness.storage.insert(
+        baseSchedule({
+          id: 'sch-resume-stale',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-resume-stale',
+        }),
+      );
+      const stale = await harness.storage.resumeWithLiveClaimGuard(
+        'sch-resume-stale',
+        now,
+        nextFireAt,
+      );
+      expect(stale?.status).toBe('active');
+      expect(stale?.updatedAt).toBe(now);
+      expect(stale?.nextFireAt).toBe(nextFireAt);
+      expect(stale?.activeClaimRunId).toBeUndefined();
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('claimDueFire*: 经 DbClient drizzleProxy(worker RPC)也能完成 CAS / 原子 run 插入', async () => {
     // 回归测试 — 防退化:主进程生产链路的 db 是 drizzleProxy,不是直连
     // better-sqlite3 drizzle。代理对隐式 await 的写操作丢弃 { changes },
     // claimDueFire 曾因此每次认领都 throw"driver did not report changes count",
@@ -431,7 +577,10 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const due = 1_700_000_060_000;
     try {
       for (const statement of SCHEDULER_DDL) await client.exec(statement);
-      const storage = new DrizzleScheduleStorage(() => client.drizzle as SchedulerDrizzleDb);
+      const storage = new DrizzleScheduleStorage(
+        () => client.drizzle as SchedulerDrizzleDb,
+        () => client,
+      );
       await storage.insert(baseSchedule({ id: 'sch-proxy', nextFireAt: due }));
 
       // 期望值不匹配 → 判负返回 null(而不是 throw)
@@ -444,6 +593,99 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
       // 二次认领 → 判负
       expect(await storage.claimDueFire('sch-proxy', due)).toBeNull();
+
+      await storage.insert(baseSchedule({ id: 'sch-proxy-run', nextFireAt: due }));
+      const firedAt = due + 123;
+      const claimedWithRun = await storage.claimDueFireAndInsertRun('sch-proxy-run', due, {
+        id: 'run-proxy',
+        scheduleId: 'sch-proxy-run',
+        firedAt,
+        status: 'running',
+        heartbeatAt: firedAt,
+        costAttribution: 'unavailable',
+      });
+      expect(claimedWithRun?.id).toBe('sch-proxy-run');
+      expect(claimedWithRun?.nextFireAt).toBeUndefined();
+      expect(claimedWithRun?.lastFiredAt).toBeUndefined();
+      expect(claimedWithRun?.activeClaimRunId).toBe('run-proxy');
+      expect(await storage.hasRunningRuns('sch-proxy-run', { runId: 'run-proxy' })).toBe(true);
+      expect(await storage.listRunningRunIds('sch-proxy-run')).toEqual(['run-proxy']);
+      expect(await storage.listRuns('sch-proxy-run')).toEqual([
+        expect.objectContaining({ id: 'run-proxy', status: 'running', firedAt }),
+      ]);
+      await expect(
+        storage.claimDueFireAndInsertRun('sch-proxy-run', due, {
+          id: 'run-proxy-duplicate',
+          scheduleId: 'sch-proxy-run',
+          firedAt: firedAt + 1,
+          status: 'running',
+        }),
+      ).resolves.toBeNull();
+      expect(await storage.listRuns('sch-proxy-run')).toHaveLength(1);
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-preserve-manual',
+        nextFireAt: due,
+        lastFiredAt: firedAt + 10,
+      }));
+      const proxyAfterManual = await storage.claimDueFireAndInsertRun('sch-proxy-preserve-manual', due, {
+        id: 'run-proxy-preserve-manual',
+        scheduleId: 'sch-proxy-preserve-manual',
+        firedAt,
+        status: 'running',
+      });
+      expect(proxyAfterManual?.lastFiredAt).toBe(firedAt + 10);
+      expect(proxyAfterManual?.activeClaimRunId).toBe('run-proxy-preserve-manual');
+
+      const proxyDeferred = await storage.rescheduleDeferredAutomaticClaim(
+        'sch-proxy-preserve-manual',
+        'run-proxy-preserve-manual',
+        due + 60_000,
+      );
+      expect(proxyDeferred?.nextFireAt).toBe(due + 60_000);
+      expect(proxyDeferred?.lastFiredAt).toBe(firedAt + 10);
+      expect(proxyDeferred?.activeClaimRunId).toBeUndefined();
+
+      await storage.insert(
+        baseSchedule({
+          id: 'sch-proxy-resume-live',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-proxy-resume-live',
+        }),
+      );
+      await storage.insertRun({
+        id: 'run-proxy-resume-live',
+        scheduleId: 'sch-proxy-resume-live',
+        firedAt,
+        status: 'running',
+        heartbeatAt: firedAt,
+      });
+      const proxyResumeLive = await storage.resumeWithLiveClaimGuard(
+        'sch-proxy-resume-live',
+        due + 1_000,
+        due + 60_000,
+      );
+      expect(proxyResumeLive?.status).toBe('active');
+      expect(proxyResumeLive?.nextFireAt).toBeUndefined();
+      expect(proxyResumeLive?.activeClaimRunId).toBe('run-proxy-resume-live');
+
+      await storage.insert(
+        baseSchedule({
+          id: 'sch-proxy-resume-stale',
+          status: 'paused',
+          nextFireAt: undefined,
+          activeClaimRunId: 'run-proxy-resume-stale',
+        }),
+      );
+      const proxyResumeStale = await storage.resumeWithLiveClaimGuard(
+        'sch-proxy-resume-stale',
+        due + 1_000,
+        due + 60_000,
+      );
+      expect(proxyResumeStale?.status).toBe('active');
+      expect(proxyResumeStale?.nextFireAt).toBe(due + 60_000);
+      expect(proxyResumeStale?.activeClaimRunId).toBeUndefined();
     } finally {
       await client.dispose();
     }
