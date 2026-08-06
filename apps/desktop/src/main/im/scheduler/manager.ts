@@ -241,16 +241,17 @@ export class ImSchedulerManager {
       }
       await this.reconcileTail.catch(() => undefined);
     } finally {
-      this.discord.setSchedulerHooks(null);
-      this.schedulerHooksInstalled = false;
+      try {
+        this.discord.setSchedulerHooks(null);
+      } finally {
+        this.schedulerHooksInstalled = false;
+        // ImSchedulerManager is reused across Cindy account sessions. Keep the
+        // final runtime advertisement above visible to the old account's
+        // peers, then discard every account-scoped runtime marker before the
+        // next Device Link session can start advertising.
+        this.resetAccountScopedState();
+      }
     }
-    this.peers.clear();
-    this.confirmedPeers.clear();
-    this.pendingProbePeers.clear();
-    this.discoveryNonce = '';
-    this.desired = null;
-    this.desiredIdentity = null;
-    this.lastActivationAttemptAt = 0;
   }
 
   async reconcile(): Promise<void> {
@@ -476,6 +477,10 @@ export class ImSchedulerManager {
       // advertisement. Releasing the election first would briefly allow a
       // second device to connect while this client could still resume.
       await this.discord.enterSchedulerStandby();
+      if (!this.started || this.discoveryNonce !== discoveryNonce) {
+        this.withdrawingIdentity = null;
+        return;
+      }
       this.markLocalRuntimeDirty(identity);
       this.advertiseAll();
     } catch (error) {
@@ -749,6 +754,26 @@ export class ImSchedulerManager {
     this.activationCooldownUntil = 0;
     if (this.activationRetryTimer) clearTimeout(this.activationRetryTimer);
     this.activationRetryTimer = null;
+  }
+
+  private resetAccountScopedState(): void {
+    this.peers.clear();
+    this.confirmedPeers.clear();
+    this.pendingProbePeers.clear();
+    this.resolvedRuntimeGenerations.clear();
+    this.resolvedRuntimeGenerationOrder.length = 0;
+    this.localRuntime = null;
+    this.pendingCleanHandoff = null;
+    this.discoveryNonce = '';
+    this.discoveryDeadline = 0;
+    this.desired = null;
+    this.desiredIdentity = null;
+    this.lastActivationAttemptAt = 0;
+    this.activationCooldownUntil = 0;
+    this.connectedIdentity = null;
+    this.withdrawingIdentity = null;
+    this.reconnectWithdrawal = null;
+    this.reconcileTail = Promise.resolve();
   }
 
   private beginDiscoveryGrace(): void {

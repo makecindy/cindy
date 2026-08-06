@@ -570,6 +570,54 @@ describe('Discord scheduler manager', () => {
     );
   });
 
+  it('does not advertise the previous account runtime after the scheduler restarts', async () => {
+    harness.selfDeviceId = 'a';
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    let identity = '12345678901234567';
+    const discord = createDiscord();
+    discord.getSchedulerIdentity.mockImplementation(() => identity);
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('z', [{ channel: 'discord', identity }]);
+    await finishDiscovery(manager);
+    expect(discord.isSchedulerTransportActive()).toBe(true);
+
+    await manager.stop({ preserveTransportForDispose: true });
+    discord.emitStatus({ kind: 'idle' });
+    await manager.finishStop({ transportDisposed: true });
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual(
+      expect.objectContaining({
+        runtime: expect.objectContaining({ identity, state: 'clean' }),
+      }),
+    );
+
+    harness.sendPush.mockClear();
+    identity = '76543210987654321';
+    await manager.start();
+
+    expect(harness.sendPush).toHaveBeenCalled();
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channels: [{ channel: 'discord', identity: '76543210987654321' }],
+        }),
+      ]),
+    );
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).not.toContainEqual(
+      expect.objectContaining({
+        runtime: expect.objectContaining({ identity: '12345678901234567' }),
+      }),
+    );
+
+    await manager.stop();
+  });
+
   it('fails closed when Device Link has no stable self device id', async () => {
     harness.selfDeviceId = null;
     const discord = createDiscord();
