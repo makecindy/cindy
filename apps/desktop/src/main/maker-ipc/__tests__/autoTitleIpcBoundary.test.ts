@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
       recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
     }),
   ),
-  generateTitle: vi.fn(async () => '任务标题'),
+  generateTitle: vi.fn(async (_request: unknown) => '任务标题'),
   drainPersistQueue: vi.fn<() => Promise<void>>(async () => undefined),
 }));
 
@@ -62,6 +62,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 
 import { registerMakerTitleIpc } from '../title.js';
 import { getDbClient } from '../../localDb/client/current.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
 const EVENT = {} as Electron.IpcMainInvokeEvent;
 
@@ -71,10 +72,27 @@ function invoke(request: unknown): Promise<unknown> {
   return Promise.resolve(handler(EVENT, request));
 }
 
-function invokeRegenerate(sessionId: string): Promise<unknown> {
+function invokeGenerate(request: unknown): Promise<unknown> {
+  const handler = h.handlers.get('maker:generate-title');
+  if (!handler) throw new Error('generate-title handler not registered');
+  return Promise.resolve(handler(EVENT, request));
+}
+
+function invokeRegenerateRequest(request: unknown): Promise<unknown> {
   const handler = h.handlers.get('maker:regenerate-title');
   if (!handler) throw new Error('regenerate-title handler not registered');
-  return Promise.resolve(handler(EVENT, { sessionId }));
+  return Promise.resolve(handler(EVENT, request));
+}
+
+function invokeRegenerate(sessionId: string): Promise<unknown> {
+  return invokeRegenerateRequest({ sessionId });
+}
+
+function invokeFromDeviceLink(
+  channel: string,
+  invokeHandler: () => Promise<unknown>,
+): Promise<unknown> {
+  return runDeviceLinkInvokeContext({ controllerDeviceId: 'controller-1', channel }, invokeHandler);
 }
 
 beforeEach(() => {
@@ -211,6 +229,86 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
       expect.any(Number),
       expect.any(Function),
     );
+  });
+});
+
+describe('maker title IPC — 本机 / device-link 来源边界', () => {
+  it('非受信本机 Renderer 调用 generate / regenerate 均被拒且没有副作用', async () => {
+    h.trusted = false;
+
+    await expect(
+      invokeGenerate({ message: '排查远程标题', agentKind: 'codex', sessionId: 's1' }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    await expect(invokeRegenerate('s1')).rejects.toThrow(/PERMISSION_DENIED/);
+
+    expect(h.generateTitle).not.toHaveBeenCalled();
+    expect(h.drainPersistQueue).not.toHaveBeenCalled();
+  });
+
+  it('device-link 可信上下文允许合成 event 调用 generate / regenerate', async () => {
+    h.trusted = false;
+
+    await expect(
+      invokeFromDeviceLink('maker:generate-title', () =>
+        invokeGenerate({ message: '排查远程标题', agentKind: 'codex', sessionId: 's1' }),
+      ),
+    ).resolves.toEqual({ title: '任务标题' });
+    await expect(
+      invokeFromDeviceLink('maker:regenerate-title', () => invokeRegenerate('s1')),
+    ).resolves.toEqual({ title: '任务标题' });
+
+    expect(h.generateTitle).toHaveBeenCalledTimes(2);
+    expect(h.drainPersistQueue).toHaveBeenCalledOnce();
+  });
+
+  it('auto-title 不因 device-link 上下文放宽本机专属 sender 边界', async () => {
+    h.trusted = false;
+
+    await expect(
+      invokeFromDeviceLink('maker:auto-title', () =>
+        invoke({ sessionId: 's1', text: '排查远程标题', agentKind: 'codex' }),
+      ),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(h.run).not.toHaveBeenCalled();
+  });
+});
+
+describe('maker title IPC — payload 运行期校验', () => {
+  it.each([
+    ['非对象', null],
+    ['数组', []],
+    ['message 非字符串', { message: 1, agentKind: 'codex' }],
+    ['agentKind 非枚举值', { message: 'x', agentKind: 'gpt' }],
+    ['sessionId 空串', { message: 'x', agentKind: 'codex', sessionId: '' }],
+    ['sessionId 超长', { message: 'x', agentKind: 'codex', sessionId: 'a'.repeat(200) }],
+  ])('generate-title: %s → INVALID_PARAMS 且不调用模型', async (_label, payload) => {
+    await expect(invokeGenerate(payload)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(h.generateTitle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['非对象', null],
+    ['数组', []],
+    ['缺 sessionId', {}],
+    ['sessionId 非字符串', { sessionId: 1 }],
+    ['sessionId 空串', { sessionId: '' }],
+    ['sessionId 超长', { sessionId: 'a'.repeat(200) }],
+  ])('regenerate-title: %s → INVALID_PARAMS 且不读取素材', async (_label, payload) => {
+    await expect(invokeRegenerateRequest(payload)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(h.drainPersistQueue).not.toHaveBeenCalled();
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+  });
+
+  it('generate-title 截断超长正文，保留正常的空消息回落语义', async () => {
+    await invokeGenerate({ message: 'x'.repeat(9000), agentKind: 'claude-code' });
+    const forwarded = h.generateTitle.mock.calls[0]?.[0] as { prompt?: string } | undefined;
+    expect(forwarded?.prompt).toContain('x'.repeat(200));
+
+    h.generateTitle.mockClear();
+    await expect(invokeGenerate({ message: '', agentKind: 'codex' })).resolves.toEqual({
+      title: null,
+    });
+    expect(h.generateTitle).not.toHaveBeenCalled();
   });
 });
 

@@ -1834,6 +1834,196 @@ describe('GoalController', () => {
     expect(local.session.sends).toHaveLength(sendsBeforeResume + 1);
   });
 
+  it.each([
+    ['normal completion', 'blocked', 'done'],
+    ['terminal error', 'blocked', 'error'],
+    ['abort', 'paused', 'abort'],
+    ['provider close without a terminal event', 'paused', 'closed'],
+  ] as const)(
+    'honors one manual Resume for a %s turn while a %s goal waits for the old turn to settle',
+    async (_label, status, terminalKind) => {
+      let sessionInTurn = true;
+      const local = makeController({ isSessionInTurn: () => sessionInTurn });
+      await local.storage.set(seededGoal({ status, lastReason: 'waiting for old turn to settle' }));
+      await local.controller.pauseGoal('s1'); // Explicit Stop leaves a cancelled lifecycle boundary.
+      const sendsBeforeResume = local.session.sends.length;
+
+      await local.controller.resumeGoal('s1');
+      expect((await local.storage.get('s1'))?.status).toBe(status);
+      expect(local.session.sends).toHaveLength(sendsBeforeResume);
+
+      if (terminalKind === 'done') {
+        local.session.emitGoalTurn({});
+      } else if (terminalKind !== 'closed') {
+        local.session.emitErrorTurn({
+          message: terminalKind === 'abort' ? 'AbortError: interrupted' : 'old turn failed',
+        });
+      }
+      sessionInTurn = false;
+      // Production wires reconciliation, provider close, and every product-terminal event to
+      // this observer. A close/retry followed by a late terminal tail must still coalesce once.
+      await Promise.all([
+        local.controller.maybeContinueActiveGoal('s1'),
+        local.controller.maybeContinueActiveGoal('s1'),
+        local.controller.maybeContinueActiveGoal('s1'),
+      ]);
+      await tick();
+
+      expect((await local.storage.get('s1'))?.status).toBe('active');
+      expect(local.session.sends).toHaveLength(sendsBeforeResume + 1);
+    },
+  );
+
+  it('lets a later Stop cancel a deferred manual Resume', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'blocked', lastReason: 'waiting for input' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.pauseGoal('s1');
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('blocked');
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('lets session teardown cancel a deferred Resume timer before a reused id goes idle', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'paused', lastReason: 'old session settling' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.maybeContinueActiveGoal('s1'); // schedules the deferred retry timer
+    local.controller.cancelDeferredManualResume('s1');
+    local.controller.cancelDeferredManualResume('s1'); // repeated close/teardown is idempotent
+
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1'); // late idle from a reused session id
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('keeps the usage reset timer until a deferred manual Resume commits', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let sessionInTurn = true;
+    const local = makeController({
+      isSessionInTurn: () => sessionInTurn,
+      now: () => Date.now(),
+    });
+    try {
+      await local.storage.set(seededGoal({
+        status: 'usageLimited',
+        usageResetAt: 2_000,
+        lastReason: 'usage limit reached',
+      }));
+      await local.controller.resumeActiveGoals();
+
+      await local.controller.resumeGoal('s1');
+      expect((await local.storage.get('s1'))?.status).toBe('usageLimited');
+
+      sessionInTurn = false;
+      await local.controller.maybeContinueActiveGoal('s1');
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+
+      expect((await local.storage.get('s1'))?.status).toBe('active');
+      expect(local.session.sends).toHaveLength(1);
+      expect(local.notices).toEqual([]);
+
+      // active 已真正落库后，旧 quota-reset timer 必须被清掉，不能再启动第二轮。
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
+      expect(local.session.sends).toHaveLength(1);
+      expect(local.notices).toEqual([]);
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores quota auto-resume when teardown cancels a deferred Resume after resetAt', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let sessionInTurn = true;
+    const local = makeController({
+      isSessionInTurn: () => sessionInTurn,
+      now: () => Date.now(),
+    });
+    try {
+      await local.storage.set(seededGoal({
+        status: 'usageLimited',
+        usageResetAt: 2_000,
+        lastReason: 'usage limit reached',
+      }));
+      await local.controller.resumeActiveGoals();
+      await local.controller.resumeGoal('s1');
+
+      // resetAt 先到，但 deferred Resume 的 boundary 仍占着 turns；原 timer 会被消费。
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
+      expect((await local.storage.get('s1'))?.status).toBe('usageLimited');
+      expect(local.notices).toEqual([]);
+
+      sessionInTurn = false;
+      local.controller.cancelDeferredManualResume('s1', { restoreUsageResume: true });
+      local.controller.cancelDeferredManualResume('s1', { restoreUsageResume: true });
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+
+      expect((await local.storage.get('s1'))?.status).toBe('active');
+      expect(local.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
+      expect(local.session.sends).toHaveLength(1);
+
+      // 重复 close / terminal tail 不得再建一条 reset timer 或启动第二轮。
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(local.notices).toHaveLength(1);
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      local.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets clearGoal cancel a deferred manual Resume without reviving the old Goal', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'blocked', lastReason: 'waiting for input' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.clearGoal('s1');
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('lets dispose cancel a deferred manual Resume without starting a turn', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'paused', lastReason: 'waiting for input' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    local.controller.dispose();
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect(local.session.sends).toHaveLength(0);
+  });
+
   it('does not let an older Resume consume the fresh boundary from a later Stop', async () => {
     await startGoal(h);
     await h.controller.pauseGoal('s1');

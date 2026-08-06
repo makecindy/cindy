@@ -44,24 +44,55 @@ def host_capabilities() -> dict:
     return call_rpc("host.capabilities", {})
 
 
-def jira_issue_get(issue_key: str, fields: list[str] | None = None) -> dict:
+def jira_issue_get(
+    issue_key: str, fields: list[str] | None = None, out_file: str | None = None
+) -> dict:
+    """按 key 读单条 Jira issue。
+
+    out_file = 把整包结果落盘到任务工作目录下的相对路径(大结果防截断;
+    路径安全校验由宿主把关),返回值带 saved_to 相对路径,脚本从自己 cwd 读回。"""
     params: dict[str, Any] = {"issue_key": issue_key}
     if fields:
         params["fields"] = fields
+    if out_file is not None:
+        params["out_file"] = out_file
     return call_rpc("jira.get", params)
 
 
 def jira_issues_search_jql(
-    jql: str, fields: list[str], max_results: int, next_page_token: str | None = None
+    jql: str,
+    fields: list[str] | None = None,
+    max_results: int | None = None,
+    next_page_token: str | None = None,
+    out_file: str | None = None,
 ) -> dict:
-    params: dict[str, Any] = {"jql": jql, "fields": fields, "max_results": max_results}
+    """JQL 搜索。大结果集两条路:next_page_token 翻页,或 out_file 落盘
+    (任务工作目录内相对路径)后自己读回——宿主对单次响应有体积上限。"""
+    params: dict[str, Any] = {"jql": jql}
+    if fields:
+        params["fields"] = fields
+    if max_results is not None:
+        params["max_results"] = max_results
     if next_page_token:
         params["next_page_token"] = next_page_token
+    if out_file is not None:
+        params["out_file"] = out_file
     return call_rpc("jira.search_jql", params)
 
 
-def jira_issue_add_comment(issue_key: str, body_text: str) -> dict:
-    return call_rpc("jira.add_comment", {"issue_key": issue_key, "body_text": body_text})
+def jira_issue_add_comment(
+    issue_key: str,
+    body_text: str | None = None,
+    body_adf: dict | None = None,
+) -> dict:
+    """向 Jira issue 添加评论。body_text(纯文本)与 body_adf(ADF 文档对象,
+    支持真实 @mention)恰好二选一;两个都传或都不传宿主会拒收(INVALID_ARGS)。"""
+    params: dict[str, Any] = {"issue_key": issue_key}
+    if body_text is not None:
+        params["body_text"] = body_text
+    if body_adf is not None:
+        params["body_adf"] = body_adf
+    return call_rpc("jira.add_comment", params)
 
 
 def feishu_recent_chats(count: int = 20) -> dict:

@@ -383,7 +383,23 @@ function buildOverlay(markerNumber: number): OverlayState {
       border-radius: 50%;
       background: ${ACCENT};
       color: #fff;
-      font: 600 12px/22px -apple-system, "Segoe UI", sans-serif;
+      /* 原为 font: 600 12px/22px … shorthand。拆分成 longhand 后必须显式补回
+         shorthand 的隐式重置:本样式注入第三方页面的 Shadow DOM,下列字体属性
+         全部可从宿主 host 继承(italic / small-caps 改字形,variation 的 wght 轴
+         可整体改粗细,feature/kerning/size-adjust 改字宽与实际字号),shorthand
+         时代它们被隐式归回初始值,拆分后需逐项手动锁死(红队评审二轮补全)。 */
+      font-style: normal;
+      font-variant: normal;
+      font-stretch: normal;
+      font-kerning: auto;
+      font-feature-settings: normal;
+      font-variation-settings: normal;
+      font-optical-sizing: auto;
+      font-size-adjust: none;
+      font-weight: 600;
+      font-size: 12px;
+      line-height: 22px;
+      font-family: -apple-system, "Segoe UI", sans-serif;
       text-align: center;
       box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,0.35);
     }

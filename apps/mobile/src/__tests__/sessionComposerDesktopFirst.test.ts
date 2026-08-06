@@ -124,7 +124,24 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('<MobilePermissionPickerList');
     expect(source).toContain('hidePermissionTrigger');
     expect(source).toContain('setPermissionSheetOpen(false)');
-    expect(source).toContain('testID="session.composerModelButton"');
+    // 展开态 toolbar(spacer 右侧) / 收起态 leading 共用 renderComposerModelPill(testID)(#900)。
+    expect(source).toContain("renderComposerModelPill('session.composerModelButton')");
+    // 收起态封顶 200 + 输入区 minWidth 120:长/自定义 label 不得挤没 TextInput。
+    expect(source).toContain("renderComposerModelPill('session.composerCollapsedModelButton', 200)");
+    expect(source).toContain('const renderComposerModelPill = (testID: string, maxWidth?: number) => (');
+    expect(source).toContain('maxWidth?: number;');
+    expect(source).toContain('style={[styles.composerRuntimePill, maxWidth != null && { maxWidth }]}');
+    expect(source).toContain('const renderComposerCollapsedLeading = () => (');
+    expect(composerInputSource).toContain('leading={renderComposerCollapsedLeading()}');
+    expect(composerInputSource).not.toContain('leading={renderComposerCollapsedAttachmentBadge()}');
+    expect(composerInputSource).toContain('inputFrameMinWidth={composerCardActive ? undefined : 120}');
+    expect(sharedSource).toContain('inputFrameMinWidth?: number;');
+    expect(sharedSource).toContain('inputFrameMinWidth != null && { minWidth: inputFrameMinWidth }');
+    // 间距 hack(inputFrameStyle / marginLeft 负值)不进本 PR;徽标右边距交给 mainRow.gap。
+    expect(composerInputSource).not.toContain('inputFrameStyle=');
+    expect(sharedSource).not.toContain('inputFrameStyle?:');
+    expect(attachmentTraySource).toContain('collapsedBadge: {');
+    expect(attachmentTraySource).not.toContain('marginRight: spacing.sm');
     // 模型 + 权限浮窗:ContextSheet 同款独立 Modal(单 Modal 双 SheetSurface 叠层),
     // 不再是 composer 上方的 in-flow drop-up。
     expect(source).toContain('<ModelPickerSheet');

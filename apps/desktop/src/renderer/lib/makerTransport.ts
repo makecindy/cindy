@@ -20,7 +20,9 @@ import {
 } from '@/features/device-link/remoteProjectsStore';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
+  accountCounterAtRequestStart,
   invalidationAtRequestStart,
+  ownerTokenAtRequestStart,
   persistCachedMessages,
   sessionCacheInvalidationToken,
 } from '@/features/device-link/mirrorCacheClient';
@@ -116,9 +118,7 @@ function buildRemoteSetModelArgs(args: SetModelArgs): unknown[] {
     wireArgs.push(providerId === undefined ? null : providerId);
   }
   if (expectedAgentSwitchRevision !== undefined || selection !== undefined) {
-    wireArgs.push(
-      expectedAgentSwitchRevision === undefined ? null : expectedAgentSwitchRevision,
-    );
+    wireArgs.push(expectedAgentSwitchRevision === undefined ? null : expectedAgentSwitchRevision);
   }
   if (selection !== undefined) wireArgs.push(selection);
   return wireArgs;
@@ -134,7 +134,11 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     send: t('maker:send') as FullMaker['send'],
     setModel: (async (...args: SetModelArgs) =>
-      invokeRemote(deviceId, 'maker:set-model', buildRemoteSetModelArgs(args))) as FullMaker['setModel'],
+      invokeRemote(
+        deviceId,
+        'maker:set-model',
+        buildRemoteSetModelArgs(args),
+      )) as FullMaker['setModel'],
     switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
     getSessionAgentSwitchIntent: t(
       'maker:get-session-agent-switch-intent',
@@ -237,7 +241,7 @@ export function isRemoteSessionSticky(sessionId: string): boolean {
  * 老被控端无此 channel 时 invoke 以 CHANNEL_NOT_ALLOWED 拒绝,调用方按生成失败提示。
  */
 export function regenerateSessionTitleFor(sessionId: string): Promise<{ title: string | null }> {
-  const deviceId = getSessionDeviceId(sessionId);
+  const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.regenerateSessionTitle(sessionId);
   return invokeRemote(deviceId, 'maker:regenerate-title', [{ sessionId }]) as Promise<{
     title: string | null;
@@ -293,6 +297,13 @@ export function listMessagesFor(
     // 还没有已知值时**在这里**(与远端请求同时)补读一次 —— main 拒绝没带令牌的非空写入,
     // 而补读若拖到落盘前做,拿到的是清理之后的值,屏障就失效了(见 invalidationAtRequestStart)。
     const mainInvalidationAtStart = invalidationAtRequestStart(deviceId, sessionId);
+    // opaque owner token 只信任受保护读(readCachedMessages,经 main 原子复核)带回的值:有已知值同步
+    // 返回;有在途受保护读则等它完成(账号切换后首次打开会话时 hydrate 读在并行);都没有才
+    // undefined → 由 store fail-closed 丢弃。绝不单独 getMessages 补读,避免补读 IPC 在账号
+    // 切换后才被 main 处理、把新账号 token 当成本次请求的 owner 锚点(review: codex P1 + Greptile)。
+    const ownerTokenAtStart = ownerTokenAtRequestStart(sessionId);
+    // 账号代际计数同源:同一账号登出再登录时 token 不变,靠它区分登出前后的内容。
+    const accountCounterAtStart = accountCounterAtRequestStart(sessionId);
     void promise
       .then((rows) => {
         if (!Array.isArray(rows)) return;
@@ -306,7 +317,17 @@ export function listMessagesFor(
         if (getSessionDeviceId(sessionId) !== deviceId) return;
         // 把"我取到内容时 main 侧的会话级作废计数"一起交上去:main 会再比对一次,于是
         // **另一个窗口 / 另一个进程**的作废也能挡住这次写(renderer 令牌只在本进程内可见)。
-        persistCachedMessages(deviceId, sessionId, rows, mainInvalidationAtStart);
+        // opaque owner token 同理:它是「这份内容在哪个账号名下取的」的身份标记,账号切换后 main 靠
+        // 它丢弃上一个账号的在途响应(review: #1783)。accountCounter 再补「同账号登出再登录」。
+        // 两者取不到时(补读在途 / 失败)传 undefined,由 main 侧 fail-closed 判断。
+        persistCachedMessages(
+          deviceId,
+          sessionId,
+          rows,
+          mainInvalidationAtStart,
+          ownerTokenAtStart,
+          accountCounterAtStart,
+        );
       })
       // 拉取失败由调用方处理;这里只是不写缓存(旧缓存保留,离线时正好还能用)。
       .catch(() => undefined);

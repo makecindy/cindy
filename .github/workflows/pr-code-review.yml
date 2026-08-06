@@ -69,7 +69,7 @@ jobs:
     #
     # 已知残余风险(有意接受,不是疏漏):钉这一行锁住的是「跑哪份 workflow 文件、
     # 什么 prompt、什么权限声明、什么工具白名单」,锁不住「该文件在运行期拉取
-    # 并执行哪个版本的 action」。截至 0838103,被调用文件内部是两个浮动 tag——
+    # 并执行哪个版本的 action」。截至 2dd773f,被调用文件内部是两个浮动 tag——
     # actions/checkout@v6 与 anthropics/claude-code-action@v1——它们运行在持有
     # ANTHROPIC_API_KEY 与 pull-requests:write 的 job 里。
     # 接受的理由:这两个分别是 GitHub 与 Anthropic 的第一方 action,tag 被恶意
@@ -78,7 +78,7 @@ jobs:
     # 真正的修法在上游:让 krosdai/.github 把内部 action 钉到 SHA,本仓再 re-pin
     # 到新的上游 SHA。届时删掉本段注释。
     # 背景见 PR #985 与安全门 issue #999。
-    uses: krosdai/.github/.github/workflows/code-review.yml@0838103fffe7d4c38247050098defc8ae47b8355 # v1
+    uses: krosdai/.github/.github/workflows/code-review.yml@2dd773f8a3e85c10f09286053850e453de64bbe3 # v1
     with:
       pr_number: ${{ github.event.pull_request.number }}
       is_draft: ${{ github.event.pull_request.draft }}

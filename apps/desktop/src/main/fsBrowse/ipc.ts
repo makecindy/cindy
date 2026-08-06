@@ -41,6 +41,10 @@ export interface FsListDirResult {
 export interface FsStatResult {
   kind: 'dir' | 'file' | 'missing';
   resolvedPath: string;
+  /** 文件最后修改时间(unix ms);仅 kind==='file' 时有值。「本轮产出文件」卡用它做时间窗校验。 */
+  mtimeMs?: number;
+  /** 文件创建时间(unix ms);仅 kind==='file'。部分 Linux FS 不支持时为 0,调用方需判 >0。 */
+  birthtimeMs?: number;
 }
 export interface FsMkdirResult {
   resolvedPath: string;
@@ -97,7 +101,9 @@ export async function statPath(rawPath: string): Promise<FsStatResult> {
   const resolvedPath = expandHome(rawPath);
   try {
     const st = await fs.stat(resolvedPath);
-    return { kind: st.isDirectory() ? 'dir' : 'file', resolvedPath };
+    return st.isDirectory()
+      ? { kind: 'dir', resolvedPath }
+      : { kind: 'file', resolvedPath, mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs };
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
       return { kind: 'missing', resolvedPath };

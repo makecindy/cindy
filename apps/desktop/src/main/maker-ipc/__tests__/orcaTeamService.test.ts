@@ -262,6 +262,58 @@ describe('OrcaTeamService', () => {
     expect(leadMessages).toEqual(['[Auto-bridged: worker 完成但未调 send_to_lead]\n\n完成了']);
   });
 
+  it('resumes a stale running worker before dispatching the next task', async () => {
+    const { deps, service, setWorker } = createDeps();
+    setWorker(createWorker({
+      status: 'running',
+      session: {
+        title: 'Worker',
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        effort: 'medium',
+        permissionMode: 'auto',
+        fastMode: false,
+      },
+    }));
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: '继续任务',
+        dispatchMeta: { source: 'test-source', context: 'stale-running-worker' },
+      }),
+    ).resolves.toMatchObject({ dispatched: true });
+
+    expect(deps.resumeWorkerSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'running',
+        session: expect.objectContaining({ permissionMode: 'auto' }),
+      }),
+      expect.objectContaining({ workerSessionId: 'worker-session-1' }),
+    );
+    expect(vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.dispatchWorkerMessage).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('does not resume a running worker that still has a live session', async () => {
+    const { deps, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
+    });
+    setWorker(createWorker({ status: 'running' }));
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: '继续任务',
+        dispatchMeta: { source: 'test-source', context: 'live-running-worker' },
+      }),
+    ).resolves.toMatchObject({ dispatched: true });
+
+    expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledOnce();
+  });
+
   it('marks only a non-running worker session running on direct turn start', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'done' }));

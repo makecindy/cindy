@@ -16,6 +16,8 @@ const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts');
 const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const bootstrapSourcePath = resolve(__dirname, '..', 'bootstrap-electron.ts');
+const bootstrapSource = readFileSync(bootstrapSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts');
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
@@ -67,6 +69,81 @@ describe('maker:event hot path ordering', () => {
       expect(indices.every((index) => index > broadcastIndex), `${sideEffect} must be after EVENT broadcast`).toBe(true);
     }
     expect(wireSessionSource.slice(0, broadcastIndex)).not.toContain('handleAgentEvent(sessionMetaForIsland');
+  });
+
+  it('wakes deferred Goal resumes from the shared product-terminal idle boundary', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
+    const terminalIdleStart = wireSessionSource.indexOf(
+      'if (shouldMarkTurnTerminalIdleAfterBroadcast) {',
+      broadcastIndex,
+    );
+    const terminalIdleEnd = wireSessionSource.indexOf(
+      '} else if (shouldMarkTurnStatusIdleAfterBroadcast) {',
+      terminalIdleStart,
+    );
+    const terminalIdleBlock = wireSessionSource.slice(terminalIdleStart, terminalIdleEnd);
+
+    expect(terminalIdleStart).toBeGreaterThan(broadcastIndex);
+    expect(terminalIdleEnd).toBeGreaterThan(terminalIdleStart);
+    expectOrder(
+      terminalIdleBlock,
+      'sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);',
+      'notifyGoalIdleAfterTurnSettled(session.id);',
+    );
+    expect(
+      [...terminalIdleBlock.matchAll(/notifyGoalIdleAfterTurnSettled\(session\.id\);/g)],
+    ).toHaveLength(1);
+  });
+
+  it('wakes deferred Goal resumes after direct-abort and authoritative-idle reconciliation', () => {
+    const observerHelperStart = source.indexOf('function notifyGoalIdleAfterTurnSettled(');
+    const observerHelperEnd = source.indexOf('\n}\n', observerHelperStart) + 2;
+    const observerHelperSource = source.slice(observerHelperStart, observerHelperEnd);
+    const reconcileStart = source.indexOf('const reconcileSessionTurnIdle =');
+    const reconcileEnd = source.indexOf('\n\n  const readDirectAbortTurnId =', reconcileStart);
+    const reconcileSource = source.slice(reconcileStart, reconcileEnd);
+    const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
+    const directAbortEnd = source.indexOf(
+      '\n  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION',
+      directAbortStart,
+    );
+    const directAbortSource = source.slice(directAbortStart, directAbortEnd);
+    const coordinatorStart = source.indexOf('const inputCoordinator:');
+    const coordinatorEnd = source.indexOf(
+      '\n  agentInputCoordinatorHolder = inputCoordinator;',
+      coordinatorStart,
+    );
+    const coordinatorSource = source.slice(coordinatorStart, coordinatorEnd);
+
+    expect(observerHelperStart).toBeGreaterThanOrEqual(0);
+    expect(observerHelperEnd).toBeGreaterThan(observerHelperStart);
+    expect(observerHelperSource).toContain('goalIdleObserver?.(sessionId);');
+    expect([...source.matchAll(/goalIdleObserver\?\.\(sessionId\);/g)]).toHaveLength(1);
+
+    expect(reconcileStart).toBeGreaterThanOrEqual(0);
+    expect(reconcileEnd).toBeGreaterThan(reconcileStart);
+    expectOrder(
+      reconcileSource,
+      'sessionTurnActivityTracker.setSessionInTurn(sessionId, false);',
+      'notifyGoalIdleAfterTurnSettled(sessionId);',
+    );
+
+    // ABORT_SESSION reconciles from finally, so vendor abort rejection still reaches the
+    // shared idle wake-up once the exact Session/generation boundary proves idle.
+    expect(directAbortStart).toBeGreaterThanOrEqual(0);
+    expect(directAbortEnd).toBeGreaterThan(directAbortStart);
+    expect(directAbortSource).toMatch(
+      /finally \{[\s\S]*reconcileDirectAbortBoundary\(sessionId, directAbortBoundary, 'direct-abort'\);/,
+    );
+    expect(source).toContain('reconciledIdle = reconcileSessionTurnIdle(sessionId, source);');
+
+    // Coordinator NO_ACTIVE_TURN / settled-abort fallback shares the same reconciliation exit.
+    expect(coordinatorStart).toBeGreaterThanOrEqual(0);
+    expect(coordinatorEnd).toBeGreaterThan(coordinatorStart);
+    expect(coordinatorSource).toContain(
+      "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
+    );
   });
 
   it('defers remote auth island errors until the renderer reports retry failure', () => {
@@ -504,6 +581,9 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
+    const closeBoundaryStart = source.indexOf('function getDirectAbortBoundaryForClosingSession(');
+    const closeBoundaryEnd = source.indexOf('\n}\n', closeBoundaryStart) + 2;
+    const closeBoundarySource = source.slice(closeBoundaryStart, closeBoundaryEnd);
     const helperStart = source.indexOf('const readDirectAbortTurnId =');
     const helperEnd = source.indexOf('\n\n  const inputCoordinator:', helperStart);
     const helperSource = source.slice(helperStart, helperEnd);
@@ -512,11 +592,22 @@ describe('maker:event hot path ordering', () => {
 
     expect(source).toContain('const sessionTurnBoundaryGenerationById = new Map<string, number>();');
     expect(source).toContain('const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();');
+    expect(closeBoundaryStart).toBeGreaterThanOrEqual(0);
+    expect(closeBoundaryEnd).toBeGreaterThan(closeBoundaryStart);
+    expect(closeBoundarySource).toContain('boundary.session !== session');
+    expect(closeBoundarySource).toContain(
+      'currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation',
+    );
     expect(helperSource).toContain('wiredSessionsById.get(sessionId)?.session !== boundary.session');
     expect(helperSource).toContain('currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation');
     expect(helperSource).toContain('direct-abort-retry');
     expect(helperSource).toContain('cancelDirectAbortReconciliation(sessionId, boundary);');
     expect(wireSessionSource).toContain('if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);');
+    expectOrder(
+      closedBlock,
+      'const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(',
+      'cancelDirectAbortReconciliation(session.id);',
+    );
     expect(closedBlock).toContain('cancelDirectAbortReconciliation(session.id);');
     expectOrder(
       closedBlock,
@@ -524,6 +615,45 @@ describe('maker:event hot path ordering', () => {
       'pendingFailedTurnAssistantPersistId.delete(session.id);',
     );
     expect(closedBlock).toContain('sessionTurnBoundaryGenerationById.delete(session.id);');
+    expectOrder(
+      closedBlock,
+      'sessionTurnActivityTracker.deleteSession(session.id);',
+      'if (closedDirectAbortBoundary) {',
+    );
+    expect(closedBlock).toContain('notifyGoalIdleAfterTurnSettled(session.id);');
+    expect(
+      closedBlock.indexOf('notifyGoalIdleAfterTurnSettled(session.id);'),
+    ).toBeGreaterThan(closedBlock.indexOf('sessionTurnBoundaryGenerationById.delete(session.id);'));
+  });
+
+  it('cancels deferred Goal resumes when non-abort session teardown supersedes them', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const replacementStart = wireSessionSource.indexOf('if (existing) {');
+    const replacementEnd = wireSessionSource.indexOf(
+      '\n  }\n  advanceSessionTurnBoundaryGeneration',
+      replacementStart,
+    );
+    const replacementBlock = wireSessionSource.slice(replacementStart, replacementEnd);
+    const closedStart = wireSessionSource.indexOf("if (status === 'closed') {");
+    const closedBlock = wireSessionSource.slice(closedStart);
+
+    expect(source).toContain('let goalDeferredResumeCancelObserver:');
+    expect(source).toContain('export function setGoalDeferredResumeCancelObserver(');
+    expect(bootstrapSource).toContain('setGoalDeferredResumeCancelObserver((sid) => {');
+    expect(bootstrapSource).toContain(
+      'getGoalController()?.cancelDeferredManualResume(sid, { restoreUsageResume: true });',
+    );
+    expect(replacementStart).toBeGreaterThanOrEqual(0);
+    expect(replacementEnd).toBeGreaterThan(replacementStart);
+    expectOrder(
+      replacementBlock,
+      'cancelDirectAbortReconciliation(session.id);',
+      'goalDeferredResumeCancelObserver?.(session.id);',
+    );
+    expect(closedStart).toBeGreaterThanOrEqual(0);
+    expect(closedBlock).toMatch(
+      /if \(closedDirectAbortBoundary\) \{[\s\S]*notifyGoalIdleAfterTurnSettled\(session\.id\);[\s\S]*\} else \{[\s\S]*goalDeferredResumeCancelObserver\?\.\(session\.id\);/,
+    );
   });
 
   it('keeps Codex subscription value out of real session cost totals', () => {

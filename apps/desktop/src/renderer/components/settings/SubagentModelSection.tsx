@@ -213,7 +213,7 @@ export function SubagentModelSection() {
   // Codex 三元组 (model, providerId, effort) 原子落库;「不指定」三键同清,
   // 不给 effort 留孤儿(IPC 层有意不强清 effort,见 shared 契约注释)。
   const setCodexModel = useCallback(
-    async (model: string | null, providerId: string | null) => {
+    async (model: string | null, providerId: string | null, reconciledEffort?: string) => {
       const current = settingsRef.current;
       if (!current) return;
       if (model === null) {
@@ -229,10 +229,16 @@ export function SubagentModelSection() {
       const rememberedEffort = nextProviderId
         ? getProviderModelEffort('codex', nextProviderId, model)
         : undefined;
-      const nextEffort = resolveCodexEffort(
-        model,
-        isCodexSubagentEffort(rememberedEffort) ? rememberedEffort : current.codexEffort,
-      );
+      // ModelSelector 已按目标来源行的 catalog/记忆解析出统一选择结果；优先消费它，
+      // 只有旧调用方未提供第三参时才回落本地记忆/当前值。
+      const preferredEffort = reconciledEffort ?? rememberedEffort;
+      // 空串是共享选择器对“目标来源不支持 effort”的明确回传，不能被旧 effort 复活。
+      const nextEffort = reconciledEffort === ''
+        ? null
+        : resolveCodexEffort(
+          model,
+          isCodexSubagentEffort(preferredEffort) ? preferredEffort : current.codexEffort,
+        );
       if (
         model === current.codex &&
         nextProviderId === current.codexProviderId &&
@@ -536,10 +542,14 @@ export function SubagentModelSection() {
                   : () => navigate('/settings?tab=providers')
               }
               reselectEmitsChange
-              onProviderChange={(providerId, modelId) => {
+              onProviderChange={(providerId, modelId, reconciledEffort) => {
                 const nextModel = modelId ?? settings.codex;
                 if (!nextModel) return;
-                void setCodexModel(nextModel, resolveProviderId('codex', nextModel, providerId));
+                void setCodexModel(
+                  nextModel,
+                  resolveProviderId('codex', nextModel, providerId),
+                  reconciledEffort,
+                );
               }}
               switching={pending}
               disabled={providersLoading}

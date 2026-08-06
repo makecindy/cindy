@@ -1832,6 +1832,11 @@
         "confirm": "연동 해제",
         "cancel": "취소"
       },
+      "lifecycleAnnouncement": {
+        "label": "온라인/오프라인 알림",
+        "cellLabel": "메시지 알림",
+        "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Discord Bot이 알림 메시지를 보냅니다"
+      },
       "ownerNotice": {
         "linked": "✅ 연동됐어요. 준비되면 바로 말을 걸어 주세요.",
         "disconnected": "🔌 연동을 해제했어요. 필요할 때 다시 연결하면 됩니다.",
@@ -2412,6 +2417,7 @@
         "toggleHint": "이 시스템 전체 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "status": {
           "checking": "ADB 상태 확인 중…",
+          "disabled": "Android 자동화가 꺼져 있습니다. 켜면 ADB와 기기를 감지합니다.",
           "preparing": "ADB 준비 중…",
           "ready": "ADB 준비됨. 사용 가능한 기기: {{count}}. 기본값: {{device}}",
           "adbDetail": "{{version}} 위치: {{path}}",
@@ -3157,6 +3163,8 @@
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
         "installedSection": "설치됨",
+        "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
+        "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
         "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
         "updateAll": "모두 업데이트",
@@ -3196,13 +3204,21 @@
         },
         "install": "설치",
         "details": "상세",
+        "detailsAria": "{{name}} 상세 보기",
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
-        "conflict": "플러그인 ID 충돌",
+        "conflict": "사용할 수 없음",
+        "conflictAria": "{{name}}에 플러그인 ID 충돌이 있습니다",
+        "conflictDescription": "이 플러그인 ID는 이미 사용 중이어서 설치할 수 없습니다.",
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "removalNotice": {
+          "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
+          "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",
+          "multiple_other": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다."
+        },
         "errors": {
           "generic": "플러그인 마켓 작업에 실패했습니다. 다시 시도해 주세요.",
           "invalidRequest": "플러그인 요청이 올바르지 않습니다.",
@@ -3382,6 +3398,8 @@
         "cindyMediaDepositDetail": "플러그인에 붙여넣거나 끌어다 놓은 소재도 AI가 편집할 수 있게 하는 권한입니다. 저장된 항목은 이 플러그인 이름으로 기록되며 최대 {{quota}}까지 사용하고, 플러그인을 삭제하면 함께 정리됩니다.",
         "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
+        "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
+        "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
@@ -3503,7 +3521,8 @@
             "image.edit": "이미지 편집",
             "video.generate": "영상 생성",
             "video.edit": "이미지로 영상",
-            "text.oneshot": "빠른 답변(텍스트)"
+            "text.oneshot": "빠른 답변(텍스트)",
+            "embed.text": "텍스트 벡터 변환"
           },
           "defaultOption": "{{model}} (기본값)",
           "noModels": "사용 가능한 모델 없음"
@@ -4173,6 +4192,29 @@
       "latestTurnTitle": "최근 턴",
       "latestUserTurnTitle": "최근 사용자 턴 합계"
     }
+  },
+  "quotaCard": {
+    "fiveHourLabel": "5시간",
+    "weeklyLabel": "주간",
+    "modelWeeklyLabel": "{{model}} 주간",
+    "windowsRegionLabel": "할당량 구간 목록",
+    "usedPercent": "사용 {{percent}}%",
+    "resetAt": "{{at}} 재설정",
+    "noWindows": "할당량 구간 데이터가 없습니다",
+    "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
+    "limitWarning": "플랜 한도에 근접했습니다",
+    "extraUsageEnabled": "추가 사용량 활성화됨",
+    "costLine": "이번 메시지 비용: {{cost}}",
+    "valueLine": "이번 메시지 토큰 가치: {{cost}}",
+    "noBilledCost": "이번 메시지의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
+    "latestMessageTitle": "최근 메시지 합계",
+    "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
+    "cacheLabel": "캐시",
+    "modelLabel": "모델",
+    "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
+    "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
     "costLine": "이번 턴 비용: {{cost}}",
@@ -5151,9 +5193,7 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치",
-      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작합니다",
-      "exitWorktreeHint": "현재 브랜치를 선택하면 worktree를 해제하고 바로 시작합니다"
+      "sourceTooltip": "worktree 소스 브랜치"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",
@@ -5592,8 +5632,7 @@
       "turnCostEstimated": "이번 턴 토큰 가치(API 단가 환산)",
       "turnCostEstimatedValue": "가치 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "이번 사용자 턴 합계: {{cost}}",
-      "userTurnCostDetailsTitle": "마지막 SDK 세그먼트"
+      "userTurnCostDetailsTitle": "이번 요청 상세"
     },
     "errorBanner": {
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -5982,6 +6021,8 @@
       "duplicateFiles": "동일한 이름의 파일 {{count}}개를 찾았습니다. 절대 경로를 사용해 주세요",
       "copyFile": "복사",
       "copyFilePath": "파일 경로 복사",
+      "openWith": "앱으로 열기",
+      "openWithAppFailed": "선택한 앱으로 열 수 없습니다",
       "revealFile": "파일 위치 열기",
       "openInBrowser": "브라우저에서 열기",
       "fileCopied": "파일이 복사되었습니다",
@@ -6114,6 +6155,11 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
+    },
+    "generatedFiles": {
+      "title": "이번 턴에 생성된 파일",
+      "showMore": "{{count}}개 더 보기",
+      "showLess": "접기"
     },
     "agentActions": {
       "part": {
@@ -8393,6 +8439,7 @@
       "customRolePredefinedError": "사용자 지정 역할에는 기본 역할 이름을 사용할 수 없습니다",
       "agentLabel": "Agent",
       "modelLabel": "모델",
+      "permissionLabel": "권한 모드",
       "noAvailableModels": "사용 가능한 {{agent}} 모델이 없습니다. 설정에서 제공자 연결과 자격 증명을 확인하세요.",
       "effortLabel": "추론 강도",
       "initialTaskLabel": "초기 작업",

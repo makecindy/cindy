@@ -982,7 +982,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         providerId: resolved.providerId,
         effort: resolved.effort as MakerSessionCreateOpts['effort'],
         fastMode: resolved.fastMode,
-        permissionMode: 'bypassPermissions',
+        // All creation entry points converge here, so keep the new-Worker default explicit
+        // and independent from the Lead session's current permission mode.
+        permissionMode: 'auto',
         title: `Worker · ${role.value} · ${label.value}`,
         orcaRole: 'worker',
         vendorOptions: workerVendorOptions,

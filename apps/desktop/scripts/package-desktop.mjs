@@ -64,6 +64,9 @@ import {
   ensureLinuxRuntimeAssets,
   logLinuxPackagingRequirements,
   writeMacEntitlements,
+  macWebAuthnKeychainAccessGroup,
+  embedMacWebAuthnProvisioningProfile,
+  readMacBundleIdentifier,
   adhocSignMacApp,
   resolveAppleIdentity,
   signMacAppWithIdentity,
@@ -141,7 +144,7 @@ function cleanOutDir() {
   }
 }
 
-function runForgeMake({ platform, arch, region, version, noSign }) {
+function runForgeMake({ platform, arch, region, version, noSign, webAuthnAppleTeamId }) {
   console.log('==> Building remote bundles...');
   execSync('node scripts/build-remote-bundles.mjs', { cwd: DESKTOP_ROOT, stdio: 'inherit' });
 
@@ -155,6 +158,9 @@ function runForgeMake({ platform, arch, region, version, noSign }) {
     CINDY_AUTH_REGION: region,
     // forge.config.ts 注入 packagerConfig.appVersion;版本无关时为占位 0.0.0。
     APP_VERSION: version,
+    // 只给最终会做 Developer ID 签名的 macOS bundle 烘焙 Team ID。ad-hoc、
+    // dev 与其它平台显式置空，避免继承 shell 里的陈旧值后误启 Touch ID。
+    CINDY_WEBAUTHN_APPLE_TEAM_ID: webAuthnAppleTeamId ?? '',
   };
   // Git Bash(agent 常用 shell)会导出 NoDefaultCurrentDirectoryInExePath=1,
   // 使 cmd.exe 不再搜索当前目录——node-pty rebuild 时 winpty.gyp 的
@@ -325,7 +331,17 @@ async function finishWindows({ artifactDir, baseName, appName, versionless, allo
   return { files, signing: { installerSigned, internalExesSigned: Boolean(winSignCmd) } };
 }
 
-async function finishDarwin({ artifactDir, baseName, appName, arch, versionless, allowUnsigned, noSign }) {
+async function finishDarwin({
+  artifactDir,
+  baseName,
+  appName,
+  arch,
+  versionless,
+  allowUnsigned,
+  noSign,
+  macSigningIdentity,
+  webAuthnProvisioningProfile,
+}) {
   const packagedDir = path.join(DESKTOP_ROOT, 'out', `${appName}-darwin-${arch}`);
   const appPath = path.join(packagedDir, `${appName}.app`);
   if (!fs.existsSync(appPath)) {
@@ -336,8 +352,6 @@ async function finishDarwin({ artifactDir, baseName, appName, arch, versionless,
   fs.mkdirSync(RELEASE_DIR, { recursive: true });
   const helperEntitlementsPath = path.join(RELEASE_DIR, 'build-helper.entitlements');
   const mainEntitlementsPath = path.join(RELEASE_DIR, 'build-main.entitlements');
-  writeMacEntitlements(helperEntitlementsPath);
-  writeMacEntitlements(mainEntitlementsPath, { appleEvents: true });
 
   const applePassword = noSign ? undefined : process.env.APPLE_APP_PASSWORD;
   const wantsRealSigning = !versionless && !noSign;
@@ -351,9 +365,27 @@ async function finishDarwin({ artifactDir, baseName, appName, arch, versionless,
 
   const files = [];
   if (wantsRealSigning && applePassword) {
-    const identity = { ...resolveAppleIdentity(), applePassword };
+    const identity = macSigningIdentity ?? { ...resolveAppleIdentity(), applePassword };
+    const bundleId = readMacBundleIdentifier(appPath);
+    const keychainAccessGroup = webAuthnProvisioningProfile
+      ? macWebAuthnKeychainAccessGroup(identity.teamId, bundleId)
+      : undefined;
+    writeMacEntitlements(helperEntitlementsPath);
+    writeMacEntitlements(mainEntitlementsPath, {
+      appleEvents: true,
+      keychainAccessGroup,
+    });
+    if (keychainAccessGroup) {
+      embedMacWebAuthnProvisioningProfile(appPath, webAuthnProvisioningProfile, {
+        teamId: identity.teamId,
+        bundleId,
+        keychainAccessGroup,
+      });
+    }
     console.log('==> Signing (Developer ID)...');
-    signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity);
+    signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity, {
+      keychainAccessGroup,
+    });
     console.log('==> Notarizing...');
     notarizeMacApp(appPath, identity);
     signingMode = 'developer-id+notarized';
@@ -373,6 +405,8 @@ async function finishDarwin({ artifactDir, baseName, appName, arch, versionless,
     files.push(fileEntry('hotfix', hotfixZipPath));
   } else {
     // 版本无关(或显式放行)→ ad-hoc 签名,产出 .app 的 zip 供本机/内部试用。
+    writeMacEntitlements(helperEntitlementsPath);
+    writeMacEntitlements(mainEntitlementsPath, { appleEvents: true });
     adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath);
     const appZipPath = path.join(artifactDir, `${baseName}-${arch}.zip`);
     console.log('==> Creating app ZIP (ad-hoc signed)...');
@@ -429,6 +463,30 @@ async function main() {
   const { version, versionless } = await resolvePackageVersion(versionSpec, () =>
     fetchCdnBaselineVersion(platform === 'darwin' ? 'darwin-arm64' : `${platform}-${archs[0]}`, region),
   );
+  const applePassword =
+    platform === 'darwin' && !versionless && !noSign ? process.env.APPLE_APP_PASSWORD : undefined;
+  const macSigningIdentity = applePassword
+    ? { ...resolveAppleIdentity(), applePassword }
+    : undefined;
+  const webAuthnProfileValue =
+    macSigningIdentity && process.env.CINDY_MAC_WEBAUTHN_PROVISIONING_PROFILE?.trim();
+  const webAuthnProvisioningProfile = webAuthnProfileValue
+    ? path.resolve(DESKTOP_ROOT, webAuthnProfileValue)
+    : undefined;
+  if (
+    webAuthnProvisioningProfile &&
+    (!fs.existsSync(webAuthnProvisioningProfile) ||
+      !fs.statSync(webAuthnProvisioningProfile).isFile())
+  ) {
+    throw new Error(
+      `CINDY_MAC_WEBAUTHN_PROVISIONING_PROFILE is not a file: ${webAuthnProvisioningProfile}`,
+    );
+  }
+  if (macSigningIdentity && !webAuthnProvisioningProfile) {
+    console.warn(
+      'WARN: macOS Touch ID WebAuthn is disabled: set CINDY_MAC_WEBAUTHN_PROVISIONING_PROFILE to a Developer ID provisioning profile that authorizes keychain-access-groups.',
+    );
+  }
 
   console.log('='.repeat(60));
   console.log(`==> Package Cindy desktop`);
@@ -484,7 +542,14 @@ async function main() {
     fs.rmSync(artifactDir, { recursive: true, force: true });
 
     cleanOutDir();
-    runForgeMake({ platform, arch, region, version, noSign });
+    runForgeMake({
+      platform,
+      arch,
+      region,
+      version,
+      noSign,
+      webAuthnAppleTeamId: webAuthnProvisioningProfile ? macSigningIdentity?.teamId : undefined,
+    });
 
     // drizzle 资源校验(平台差异只在 packaged 内路径)。
     const drizzleOut =
@@ -520,6 +585,8 @@ async function main() {
         versionless,
         allowUnsigned,
         noSign,
+        macSigningIdentity,
+        webAuthnProvisioningProfile,
       }));
 
       const buildInfo = buildBuildInfo({

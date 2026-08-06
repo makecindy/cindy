@@ -54,3 +54,27 @@ describe('formToProjectConfig fastMode', () => {
     expect(formToProjectConfig(makeForm({ agentKind: 'claude-code', fastMode: true }), 'cc1').fastMode).toBeUndefined();
   });
 });
+
+describe('project automation providerId serialization', () => {
+  it('preserves an explicit provider from the form', () => {
+    expect(formToProjectConfig(makeForm({ providerId: 'openai' }), 'auto-provider').providerId).toBe(
+      'openai',
+    );
+    expect(formToProjectConfig(makeForm({ providerId: '' }), 'auto-default').providerId).toBeUndefined();
+  });
+
+  it('preserves an explicit provider when converting an existing schedule', async () => {
+    const { scheduleToProjectConfig } = await import('../projectAutomationConfig');
+    const config = scheduleToProjectConfig(
+      {
+        id: 's1',
+        name: 'n',
+        prompt: 'p',
+        cronExpr: '0 9 * * *',
+        providerId: 'openai',
+      } as never,
+      'auto-provider',
+    );
+    expect(config.providerId).toBe('openai');
+  });
+});

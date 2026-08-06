@@ -1832,6 +1832,11 @@
         "confirm": "解绑",
         "cancel": "取消"
       },
+      "lifecycleAnnouncement": {
+        "label": "上下线通知",
+        "cellLabel": "消息通知",
+        "hint": "上下线时由 Discord Bot 发送通知消息"
+      },
       "ownerNotice": {
         "linked": "✅ 关联好啦，直接开聊就行~",
         "disconnected": "🔌 已断开关联啦，需要时再连上就行~",
@@ -2412,6 +2417,7 @@
         "toggleHint": "这个全局开关只对之后新建的 Agent 会话生效；已在运行的 Agent 会话不受影响。",
         "status": {
           "checking": "正在检查 ADB 状态…",
+          "disabled": "Android 自动化未启用。启用后将检测 ADB 与设备。",
           "preparing": "正在准备 ADB…",
           "ready": "ADB 已就绪。可用设备：{{count}}。默认设备：{{device}}",
           "adbDetail": "{{version}}，路径 {{path}}",
@@ -3157,6 +3163,8 @@
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
         "installedSection": "已安装",
+        "installedExpand": "展开全部 {{count}} 个已安装插件",
+        "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
         "updatesAvailable": "{{count}} 个插件有可用更新",
         "updateAll": "全部更新",
@@ -3196,13 +3204,21 @@
         },
         "install": "安装",
         "details": "详情",
+        "detailsAria": "查看 {{name}} 的详情",
         "update": "从市场更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安装",
-        "conflict": "插件标识冲突",
+        "conflict": "暂不可用",
+        "conflictAria": "{{name}} 存在插件标识冲突",
+        "conflictDescription": "插件标识已被占用，当前无法安装",
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
+        "removalNotice": {
+          "single": "插件“{{name}}”已被组织移除，本机副本与数据已清理",
+          "multiple_one": "{{count}} 个插件已被组织移除，本机副本与数据已清理",
+          "multiple_other": "{{count}} 个插件已被组织移除，本机副本与数据已清理"
+        },
         "errors": {
           "generic": "插件市场操作失败，请重试。",
           "invalidRequest": "插件请求无效。",
@@ -3382,6 +3398,8 @@
         "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
         "cindyTextOneshot": "可向 Cindy 的快速通道提问并获得文字回答",
         "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
+        "cindyEmbedText": "可把文字送去算成向量（用于语义检索）",
+        "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
@@ -3503,7 +3521,8 @@
             "image.edit": "改图",
             "video.generate": "生成视频",
             "video.edit": "图生视频",
-            "text.oneshot": "快问快答(文字)"
+            "text.oneshot": "快问快答(文字)",
+            "embed.text": "文本转向量"
           },
           "defaultOption": "{{model}}(默认)",
           "noModels": "暂无可用模型"
@@ -4173,6 +4192,29 @@
       "latestTurnTitle": "最近一轮",
       "latestUserTurnTitle": "最近一轮用户请求累计"
     }
+  },
+  "quotaCard": {
+    "fiveHourLabel": "5 小时",
+    "weeklyLabel": "周限",
+    "modelWeeklyLabel": "{{model}} 周限",
+    "windowsRegionLabel": "配额窗口列表",
+    "usedPercent": "已用 {{percent}}%",
+    "resetAt": "{{at}} 重置",
+    "noWindows": "暂无配额窗口数据",
+    "limitRejected": "已触发套餐限额，请求可能被拒绝",
+    "limitWarning": "接近套餐限额",
+    "extraUsageEnabled": "额外用量已启用",
+    "costLine": "本轮消耗：{{cost}}",
+    "valueLine": "本轮 token 价值：{{cost}}",
+    "noBilledCost": "本轮费用暂不可用，仅显示用量",
+    "latestMessageTitle": "最近一轮用户请求累计",
+    "turnCostUnavailable": "本轮费用暂无法估算",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
+    "cacheLabel": "缓存",
+    "modelLabel": "模型",
+    "staleData": "数据更新于 {{minutes}} 分钟前",
+    "waiting": "Claude 订阅余量会在下一轮完成后更新。"
   },
   "usageDetails": {
     "costLine": "本轮消耗：{{cost}}",
@@ -5151,9 +5193,7 @@
       "loading": "加载分支中…",
       "loadFailed": "分支列表加载失败，点此重试",
       "currentTooltip": "当前分支",
-      "sourceTooltip": "worktree 源分支",
-      "worktreeHint": "选择其他分支将以 worktree 隔离启动",
-      "exitWorktreeHint": "选择当前分支将退出 worktree，直接在当前分支上启动"
+      "sourceTooltip": "worktree 源分支"
     },
     "folderPicker": {
       "selectFolder": "选择文件夹",
@@ -5592,8 +5632,7 @@
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "本轮累计：{{cost}}",
-      "userTurnCostDetailsTitle": "最后一个 SDK 分段"
+      "userTurnCostDetailsTitle": "本轮明细"
     },
     "errorBanner": {
       "retryTitle": "重新发送最后一条消息",
@@ -5982,6 +6021,8 @@
       "duplicateFiles": "找到 {{count}} 个同名文件，请改用绝对路径",
       "copyFile": "复制",
       "copyFilePath": "复制文件路径",
+      "openWith": "打开方式",
+      "openWithAppFailed": "无法用所选应用打开",
       "revealFile": "打开文件所在目录",
       "openInBrowser": "在浏览器中查看",
       "fileCopied": "文件已复制",
@@ -6114,6 +6155,11 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。"
+    },
+    "generatedFiles": {
+      "title": "本轮生成的文件",
+      "showMore": "再显示 {{count}} 个文件",
+      "showLess": "收起"
     },
     "agentActions": {
       "part": {
@@ -8393,6 +8439,7 @@
       "customRolePredefinedError": "自定义角色不能使用预设角色名",
       "agentLabel": "Agent",
       "modelLabel": "模型",
+      "permissionLabel": "权限模式",
       "noAvailableModels": "没有可用的 {{agent}} 模型，请在设置中检查供应商连接和凭证。",
       "effortLabel": "Effort",
       "initialTaskLabel": "初始任务",

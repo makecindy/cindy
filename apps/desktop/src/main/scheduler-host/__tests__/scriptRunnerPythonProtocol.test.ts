@@ -189,4 +189,58 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
     expect(stderrCapture).toContain('child noise');
     expect(stderrCapture).toContain('stray after rpc');
   }, 30_000);
+
+  it('jira wrappers forward body_adf / out_file unchanged, omit absent optional params', async () => {
+    // 跨语言验收:Python 封装构造的 params 原样进 broker 协议帧——body_adf 拼错
+    // 键名/漏传、可选参数缺省时误传,这里先红(broker 单测看不到 Python 侧)。
+    for (const file of ['protocol.py', 'maker_client.py']) {
+      cpSync(path.join(PYTHON_CLIENT_DIR, file), path.join(tmp, file));
+    }
+    writeFileSync(
+      path.join(tmp, 'adf_comment.py'),
+      [
+        'import maker_client',
+        'adf = {"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"mention","attrs":{"id":"acc-1"}}]}]}',
+        'maker_client.jira_issue_add_comment("DING-2", body_adf=adf)',
+        'maker_client.jira_issues_search_jql("project = DING", out_file="reports/jira.json")',
+        'maker_client.jira_issue_get("DING-3", out_file="issue.json")',
+        'maker_client.emit_complete("ok")',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const seen: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const broker: ScriptCapabilityBroker = {
+      async call(request) {
+        seen.push({ method: request.method, params: request.params });
+        return { ok: true };
+      },
+    };
+    const runner = new ScriptScheduleRunner({ broker, logger: {} });
+    const sched = schedule(`${PYTHON} adf_comment.py`);
+    sched.scriptConfig = {
+      command: `${PYTHON} adf_comment.py`,
+      capabilities: ['jira.read', 'jira.comment'],
+      timeoutMs: 30_000,
+    };
+    const ctx: FireContext = { runId: 'run-3', firedAt: Date.now(), signal: new AbortController().signal };
+    await runner.fire(sched, ctx);
+
+    // toEqual 精确锁键集合:body_adf 原样在、body_text 缺席;可选参数缺省时不出现在 params。
+    expect(seen).toEqual([
+      {
+        method: 'jira.add_comment',
+        params: {
+          issue_key: 'DING-2',
+          body_adf: {
+            type: 'doc',
+            version: 1,
+            content: [{ type: 'paragraph', content: [{ type: 'mention', attrs: { id: 'acc-1' } }] }],
+          },
+        },
+      },
+      { method: 'jira.search_jql', params: { jql: 'project = DING', out_file: 'reports/jira.json' } },
+      { method: 'jira.get', params: { issue_key: 'DING-3', out_file: 'issue.json' } },
+    ]);
+  }, 30_000);
 });

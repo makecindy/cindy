@@ -40,6 +40,13 @@ export interface PluginMarketSnapshot {
   customSourceNames: string[];
 }
 
+/** 服务端清理的一次性汇总提示：按 owner 缓存，consume 前跨多轮对账累加，consume 后即清。 */
+export interface PluginRemovalUserNotice {
+  count: number;
+  /** 累计单条且插件名经安全过滤后非空时为插件名；其余情况为 null，只展示数量。 */
+  name: string | null;
+}
+
 /** 详情额外携带经 Desktop 当前 runtime validator 验证过的完整清单。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;

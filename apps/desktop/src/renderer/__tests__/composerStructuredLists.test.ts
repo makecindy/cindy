@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor, Node } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
@@ -209,6 +211,29 @@ describe('composer structured list input rules', () => {
     expect(editor.state.doc.firstChild?.childCount).toBe(1);
     expect(editor.state.doc.lastChild?.type.name).toBe('orderedList');
     expect(editor.state.doc.lastChild?.attrs.start).toBe(3);
+  });
+
+  it('reserves the full-width CJK marker separately from the ordinal digits', () => {
+    const editor = makeEditor();
+
+    typeThroughInputRules(editor, '2、');
+
+    const list = editor.view.dom.querySelector('ol');
+    expect(list?.getAttribute('data-marker')).toBe('、');
+    expect(list?.getAttribute('data-marker-digits')).toBe('1');
+
+    const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+    const baseListRule = css.match(
+      /\[data-chat-input-root\]\s+\.ProseMirror\s+:is\(ul,\s*ol\)\s*\{([\s\S]*?)\r?\n\s*\}/,
+    )?.[1];
+    const cjkMarkerRule = css.match(
+      /\[data-chat-input-root\]\s+\.ProseMirror\s+ol\[data-marker='、'\]\s*\{([\s\S]*?)\r?\n\s*\}/,
+    )?.[1];
+    expect(baseListRule).toContain('--composer-list-marker-extra: 0em;');
+    expect(baseListRule).toContain(
+      'var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)',
+    );
+    expect(cjkMarkerRule).toContain('--composer-list-marker-extra: 0.7em;');
   });
 
   it('reserves enough marker width for long ordered-list numbers', () => {

@@ -283,7 +283,7 @@ export async function handleGhostOauthRequest(args: {
     const parsed = await readJsonBody();
     if (!parsed.ok) return { status: parsed.status };
     const rawScopes = parsed.body.scopes;
-    if (!Array.isArray(rawScopes) || rawScopes.length === 0 || rawScopes.length > 64) {
+    if (!Array.isArray(rawScopes) || rawScopes.length === 0 || rawScopes.length > 320) {
       return { status: 400 };
     }
     // 逐字属于声明面即形状合法(清单校验已保证声明 scope ≤200 字符、无空白),

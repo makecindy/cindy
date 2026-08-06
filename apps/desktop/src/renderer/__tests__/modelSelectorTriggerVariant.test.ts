@@ -1134,6 +1134,62 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  it('keeps the user scroll position when selection changes', () => {
+    const rect = (top: number, bottom: number): DOMRect =>
+      ({
+        top,
+        bottom,
+        left: 0,
+        right: 320,
+        width: 320,
+        height: bottom - top,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute('role') === 'listbox') return rect(0, 300);
+        if (this.getAttribute('data-model-selected') === 'true') return rect(120, 160);
+        return rect(0, 0);
+      });
+
+    try {
+      const view = render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+        }),
+      );
+      const list = screen.getByRole('listbox', { name: 'Model list' });
+      Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 80 });
+
+      view.rerender(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-sonnet-4-6',
+          effort: 'medium',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+        }),
+      );
+
+      expect(list.scrollTop).toBe(80);
+      view.unmount();
+    } finally {
+      rectSpy.mockRestore();
+      rafSpy.mockRestore();
+    }
+  });
+
   it('reuses the parent pricing snapshot when the model content opens', async () => {
     pricingRef.renderCalls = 0;
     render(
@@ -1979,12 +2035,37 @@ describe('ModelSelector trigger variants', () => {
     expect(within(information).queryByRole('option')).toBeNull();
   });
 
+  it('opens the selected model configuration when the caller opts into click access', () => {
+    const onEffortChange = vi.fn();
+    const onDismiss = vi.fn();
+
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange,
+        onDismiss,
+        vendorKey: 'cc',
+        selectedRowClickOpensConfiguration: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('option', { name: /Opus 4\.8/ }));
+
+    const options = screen.getByRole('group', { name: /Opus 4\.8/ });
+    fireEvent.click(within(options).getByRole('option', { name: 'low' }));
+
+    expect(onEffortChange).toHaveBeenCalledWith('low');
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
   it('selects an inactive provider row after its effort preset is clicked', () => {
     const onProviderChange = vi.fn();
     const onDismiss = vi.fn();
     const setEffort = vi.fn();
     const modelMemory = {
-      getEffort: vi.fn(),
+      getEffort: vi.fn(() => 'high'),
       setEffort,
       getFast: vi.fn(),
       setFast: vi.fn(),
@@ -2017,11 +2098,39 @@ describe('ModelSelector trigger variants', () => {
     fireEvent.click(within(options).getByRole('option', { name: 'high' }));
 
     expect(setEffort).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', 'high');
-    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6', 'high');
     expect(onDismiss).not.toHaveBeenCalled();
     expect(setEffort.mock.invocationCallOrder[0]).toBeLessThan(
       onProviderChange.mock.invocationCallOrder[0],
     );
+  });
+
+  it('lets provider-based callers choose inactive-row effort without a global memory store', () => {
+    const onProviderChange = vi.fn();
+    const onDismiss = vi.fn();
+
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: 'anthropic',
+        onProviderChange,
+        onDismiss,
+      }),
+    );
+
+    const sonnetRow = screen.getByRole('option', { name: /Sonnet 4\.6/ });
+    fireEvent.pointerEnter(sonnetRow);
+
+    const options = screen.getByRole('group', { name: /Sonnet 4\.6/ });
+    expect(within(options).getByRole('option', { name: 'high' })).toBeTruthy();
+    fireEvent.click(within(options).getByRole('option', { name: 'high' }));
+
+    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6', 'high');
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it('selects an inactive provider row after its Fast toggle is clicked', () => {
@@ -2074,7 +2183,7 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Fast Mode' }));
 
       expect(setFast).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', true);
-      expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+      expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6', 'medium');
       expect(onDismiss).not.toHaveBeenCalled();
       expect(setFast.mock.invocationCallOrder[0]).toBeLessThan(
         onProviderChange.mock.invocationCallOrder[0],

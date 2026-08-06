@@ -53,6 +53,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     color: var(--text); caret-color: var(--focus);
     font-size: ${COMPOSER_TEXT_FONT_SIZE}px; line-height: ${COMPOSER_TEXT_LINE_HEIGHT}px;
     min-height: ${COMPOSER_SINGLE_LINE_HEIGHT}px; max-height: var(--max-height);
+    width: 100%;
     overflow-y: auto; outline: none;
     padding: ${COMPOSER_TEXT_VERTICAL_PADDING}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px;
     white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text;

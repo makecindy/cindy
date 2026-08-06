@@ -136,7 +136,10 @@ function normalize(value: string): string {
 
 describe('theme-import 模板 · key 集合与既有 builtin 主题一致', () => {
   it('TEMPLATE_TOKEN_IDS 覆盖 github-dark，并仅追加导入主题专用的 Switch token', () => {
-    const builtinIds = Object.keys(githubDark.colors);
+    // switch-track-on 是移植主题文件专属 override:模板刻意不产出,导入主题回落
+    // registry 默认以保持升级前后外观不变(规则见 DESIGN.md 主题导入节,守卫见
+    // switchThemeContrast.test.ts)。
+    const builtinIds = Object.keys(githubDark.colors).filter((id) => id !== 'switch-track-on');
     expect(builtinIds.filter((id) => !TEMPLATE_TOKEN_IDS.includes(id))).toEqual([]);
     expect(TEMPLATE_TOKEN_IDS.filter((id) => !builtinIds.includes(id)).sort()).toEqual([
       'switch-thumb-off',

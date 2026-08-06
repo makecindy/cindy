@@ -3,7 +3,7 @@
  *
  * Channels(invoke):
  *   git-context:get             (workdir) → GitContextSnapshot
- *   git-context:get-for-session ({sessionId,workingDir,worktreePath}) → SessionGitDirResult
+ *   git-context:get-for-session ({sessionId,workingDir,worktreePath,remoteHostId}) → SessionGitDirResult
  *   git-context:watch           (workdir) → void(开始监听 HEAD,refcount)
  *   git-context:unwatch       (workdir) → void
  *   git-context:pr-refs:list  (sessionId) → SessionPrRef[]
@@ -20,14 +20,28 @@
 
 import { BrowserWindow, ipcMain } from 'electron';
 import { GithubClient } from '@cindy/github-client';
+import { eq } from 'drizzle-orm';
 
 import { createLogger } from '../logger.js';
-import { getCurrentDbClientUserId } from '../localDb/client/current';
+import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current';
+import { sessions } from '../localDb/schema.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
-import { requireString, throwIpcError } from '../utils/ipcValidate';
+import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { GitContextService } from './GitContextService.js';
-import { resolveSessionGitDirLive } from './sessionDirResolver.js';
+import {
+  getSessionGitTelemetryCandidateLive,
+  resolveSessionGitDirLive,
+} from './sessionDirResolver.js';
+import {
+  resolveAuthoritativeSessionGitTarget,
+  resolveReadyRemoteGitHost,
+  resolveRemoteSessionGitDir,
+} from './remoteSessionDirResolver.js';
+import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
   ensurePrRefsBackfill,
   listAllPrRefs,
@@ -35,6 +49,7 @@ import {
   setPrRefsChangedListener,
 } from './prRefsStore.js';
 import {
+  filterPrStatusQueriesForRefs,
   PrStatusService,
   type PrStatusQuery,
   type PrRemoteState,
@@ -143,17 +158,83 @@ export function registerGitContextIpc(): void {
   // 按 session 解析「对话真实工作目录」+ 其 HEAD + 来源:从 agent tool-call 遥测
   // 推断(Codex cwd / cc 编辑路径),拿不到才回退 worktree / working_dir。
   // renderer 用返回的 workdir 去 watch,用 source 决定分支信任度。
-  ipcMain.handle(GIT_CONTEXT_INVOKE.GET_FOR_SESSION, async (_e, payload: unknown) => {
+  ipcMain.handle(GIT_CONTEXT_INVOKE.GET_FOR_SESSION, async (event, payload: unknown) => {
     const obj = payload as {
       sessionId?: unknown;
       workingDir?: unknown;
       worktreePath?: unknown;
+      remoteHostId?: unknown;
     };
     const sessionId = requireString(obj?.sessionId, 'sessionId');
-    const fallbackWorkingDir =
+    let fallbackWorkingDir =
       typeof obj?.workingDir === 'string' && obj.workingDir !== '' ? obj.workingDir : null;
-    const fallbackWorktreePath =
+    let fallbackWorktreePath =
       typeof obj?.worktreePath === 'string' && obj.worktreePath !== '' ? obj.worktreePath : null;
+    const requestedRemoteHostId = optionalNullableString(obj?.remoteHostId) ?? null;
+    let remoteHostId = requestedRemoteHostId;
+
+    // Any remote SSH exec must be anchored to main-owned session state. The
+    // renderer cannot choose an arbitrary registered host/path, and a
+    // device-link controller cannot override the controlled device's paths or
+    // nested SSH host with a stale/forged projection.
+    const deviceLinkInvoke = isDeviceLinkInvoke();
+    // The SSH branch can hydrate a persisted host and execute a command on it;
+    // only Cindy's own top-level renderer may start that privileged path.
+    // device-link invokes are authorized by their existing async context.
+    if (requestedRemoteHostId !== null && !deviceLinkInvoke) {
+      assertTrustedAppRendererEvent(event);
+    }
+    if (deviceLinkInvoke || requestedRemoteHostId) {
+      try {
+        const db = getDbClient().drizzle;
+        const [row] = await db
+          .select({
+            workingDir: sessions.workingDir,
+            worktreePath: sessions.worktreePath,
+            remoteHostId: sessions.remoteHostId,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        if (!row) return { workdir: null, head: null, source: null };
+        const target = resolveAuthoritativeSessionGitTarget({
+          stored: row,
+          requestedRemoteHostId,
+          isDeviceLink: deviceLinkInvoke,
+          liveLocalWorktreePath: worktreeStore.get(sessionId)?.path ?? null,
+        });
+        if (!target) return { workdir: null, head: null, source: null };
+        fallbackWorkingDir = target.workingDir;
+        fallbackWorktreePath = target.worktreePath;
+        remoteHostId = target.remoteHostId;
+      } catch (err) {
+        log.warn('remote git context session lookup failed', {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return { workdir: null, head: null, source: null };
+      }
+    }
+    if (remoteHostId) {
+      const host = await resolveReadyRemoteGitHost(remoteHostId, {
+        ensureReady: ensureRemoteHostReady,
+        getHost: (hostId) => getRemoteSshPool().get(hostId),
+      });
+      if (!host) return { workdir: null, head: null, source: null };
+      const telemetryPath = await getSessionGitTelemetryCandidateLive(
+        sessionId,
+        // SSH sessions run through the bash-based remote runtime; a
+        // device-link session without nested SSH probes its controlled
+        // Desktop filesystem and must retain that process platform.
+        'linux',
+      );
+      return resolveRemoteSessionGitDir({
+        telemetryPath,
+        fallbackWorktreePath,
+        fallbackWorkingDir,
+        host,
+      });
+    }
     return resolveSessionGitDirLive({ sessionId, fallbackWorktreePath, fallbackWorkingDir });
   });
 
@@ -186,10 +267,17 @@ export function registerGitContextIpc(): void {
   });
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, async (_e, queries: unknown) => {
-    if (!Array.isArray(queries)) {
+    let rawQueries: unknown = queries;
+    let remoteSessionId: string | null = null;
+    if (isDeviceLinkInvoke()) {
+      const obj = queries as { sessionId?: unknown; queries?: unknown };
+      remoteSessionId = requireString(obj?.sessionId, 'sessionId');
+      rawQueries = obj?.queries;
+    }
+    if (!Array.isArray(rawQueries)) {
       throwIpcError('INVALID_PARAMS', 'queries 必须是数组');
     }
-    const parsed: PrStatusQuery[] = (queries as unknown[]).map((q) => {
+    let parsed: PrStatusQuery[] = (rawQueries as unknown[]).map((q) => {
       const obj = q as { owner?: unknown; repo?: unknown; prNumber?: unknown };
       const owner = requireString(obj?.owner, 'owner');
       const repo = requireString(obj?.repo, 'repo');
@@ -199,6 +287,25 @@ export function registerGitContextIpc(): void {
       }
       return { owner, repo, prNumber };
     });
+    if (remoteSessionId) {
+      // A remote controller may only ask for statuses of PRs already extracted
+      // from that session's messages. This blocks a bare status-channel call
+      // from querying an unrelated private repository with the controlled
+      // device's gh token; intentionally mentioning a PR in the task remains
+      // part of the existing remote-control product behavior.
+      try {
+        const refs = await listPrRefs(remoteSessionId);
+        parsed = filterPrStatusQueriesForRefs(parsed, refs);
+      } catch (err) {
+        // DB failures must not turn into an unfiltered token-bearing request;
+        // fail closed and let the remote renderer retry on its next refresh.
+        log.warn('remote PR refs lookup failed (fail closed)', {
+          sessionId: remoteSessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return [];
+      }
+    }
     return prStatusService!.getStatuses(parsed);
   });
 }

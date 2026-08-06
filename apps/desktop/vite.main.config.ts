@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => {
   // 非 VITE_* 的 main-only 变量（不暴露到 renderer/preload；编译期注入）
   const allEnv = loadEnv(mode, process.cwd(), '');
   const readMainEnv = (key: string): string => allEnv[key] || process.env[key] || '';
+  const readMainEnvPreservingEmpty = (key: string): string =>
+    Object.prototype.hasOwnProperty.call(process.env, key)
+      ? process.env[key] ?? ''
+      : allEnv[key] ?? '';
   return {
     resolve: {
       // 仅 fixtures 生产排除条件(v6.17 允许范围):production 构建把
@@ -53,6 +57,11 @@ export default defineConfig(({ mode }) => {
       ),
       'process.env.XDT_FILO_GOOGLE_CLIENT_SECRET': JSON.stringify(
         readMainEnv('XDT_FILO_GOOGLE_CLIENT_SECRET'),
+      ),
+      // macOS WebAuthn Touch ID 的 Team ID 是公开签名身份，不是凭证。正式打包入口
+      // 只在 Developer ID 签名路径注入；ad-hoc/dev 留空，runtime fail closed。
+      'process.env.CINDY_WEBAUTHN_APPLE_TEAM_ID': JSON.stringify(
+        readMainEnvPreservingEmpty('CINDY_WEBAUTHN_APPLE_TEAM_ID').trim(),
       ),
       'process.env.XDT_VOICE_INPUT_DICTIONARY_TEXT_DEBUG': JSON.stringify(
         readMainEnv('XDT_VOICE_INPUT_DICTIONARY_TEXT_DEBUG'),

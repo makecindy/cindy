@@ -426,49 +426,37 @@ export function ComputerUseSection({
       });
     void window.electronAPI.maker.plugins.getState(ANDROID_PLUGIN_ID)
       .then((state) => {
-        if (!cancelled) {
-          setAndroidEnabled(state.effectiveEnabled);
-          if (state.effectiveEnabled) {
-            setAndroidPreparePending(true);
-            void window.electronAPI.maker.android.prepareAdb()
-              .then(() => {
-                if (!cancelled) {
-                  return window.electronAPI.maker.android.status()
-                    .then((status) => {
-                      if (!cancelled) setAndroidStatus(status);
-                    });
-                }
-                return undefined;
-              })
-              .catch((err) => {
-                log.warn('android.prepareAdb failed', err);
-              })
-              .finally(() => {
-                if (!cancelled) setAndroidPreparePending(false);
-              });
-          }
+        if (cancelled) return;
+        setAndroidEnabled(state.effectiveEnabled);
+        // 插件禁用时 mount 不做任何 adb 探测:status() 会跑 `adb devices -l`,
+        // 5037 上没有 server 时会顺手 fork 一个 daemon(#1806)。禁用态只展示
+        // 提示文案;探测留到用户开启开关或手动点「刷新」时进行。
+        if (!state.effectiveEnabled) {
+          setAndroidStatusPending(false);
+          return;
         }
+        setAndroidPreparePending(true);
+        void window.electronAPI.maker.android.prepareAdb()
+          .then(() => (cancelled ? undefined : window.electronAPI.maker.android.status()))
+          .then((status) => {
+            if (!cancelled && status) setAndroidStatus(status);
+          })
+          .catch((err) => {
+            // 这个 catch 同时兜 prepareAdb 与后续 status 的失败,文案别写死单边。
+            log.warn('android adb probe (prepareAdb/status) failed', err);
+            if (!cancelled) setAndroidStatus(androidStatusFallback(err));
+          })
+          .finally(() => {
+            if (!cancelled) {
+              setAndroidPreparePending(false);
+              setAndroidStatusPending(false);
+            }
+          });
       })
       .catch((err) => {
         log.warn('plugins.getState(android) failed', err);
         if (!cancelled) {
           setAndroidEnabled(false);
-        }
-      });
-    void window.electronAPI.maker.android.status()
-      .then((status) => {
-        if (!cancelled) {
-          setAndroidStatus(status);
-        }
-      })
-      .catch((err) => {
-        log.warn('android.status failed', err);
-        if (!cancelled) {
-          setAndroidStatus(androidStatusFallback(err));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
           setAndroidStatusPending(false);
         }
       });
@@ -903,6 +891,10 @@ export function ComputerUseSection({
           setAndroidPreparePending(true);
           await window.electronAPI.maker.android.prepareAdb();
           await handleRefreshAndroidStatus(false);
+        } else {
+          // 关闭时清掉旧探测结果:状态区回到禁用提示,设备选择入口一并禁用,
+          // 不再展示已过时的就绪/设备状态(#1829 review)。
+          setAndroidStatus(null);
         }
         toast.success(
           next
@@ -1194,7 +1186,12 @@ export function ComputerUseSection({
     configuredDefaultAndroidDevice
     && !androidDevices.some((device) => device.device_serial === configuredDefaultAndroidDevice),
   );
-  const androidDeviceStatusText = describeAndroidDeviceStatus(androidStatus, t);
+  // 禁用且尚无任何探测结果时显示禁用提示,避免落在 describeAndroidDeviceStatus
+  // 的「正在检查…」上(禁用态 mount 不探测,#1806)。用户手动「刷新」拿到结果后
+  // 仍按真实 status 展示。
+  const androidDeviceStatusText = androidEnabled === false && !androidStatus
+    ? t('settings.computerUse.android.status.disabled')
+    : describeAndroidDeviceStatus(androidStatus, t);
   const androidConnectionGuideKind = getAndroidConnectionGuideKind(androidStatus);
   const androidAdbSource = androidStatus?.adb_path_source ?? androidStatus?.adb_preparation?.source ?? null;
   const androidAdbSourceText = androidPreparePending

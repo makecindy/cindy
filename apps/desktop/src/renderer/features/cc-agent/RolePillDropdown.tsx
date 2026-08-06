@@ -128,7 +128,7 @@ function WorkerErrorBadge({ className }: { className?: string }) {
     <span
       aria-label={t('orca.rolePill.errorBadgeAria')}
       className={cn(
-        'pointer-events-none inline-flex items-center rounded-full bg-[var(--error-fg)] px-1.5 text-[9px] font-bold uppercase leading-[1.5] tracking-[0.3px] text-[var(--error-bg)]',
+        'pointer-events-none inline-flex items-center rounded-full bg-[var(--error-fg)] px-1.5 text-[9px] font-semibold uppercase leading-[1.5] tracking-[0.3px] text-[var(--error-bg)]',
         className,
       )}
     >
