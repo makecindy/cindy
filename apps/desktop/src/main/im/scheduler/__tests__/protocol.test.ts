@@ -13,6 +13,12 @@ describe('Discord scheduler protocol', () => {
       kind: 'advertisement',
       sentAt: 1,
       channels: [],
+      runtime: {
+        identity: '12345678901234567',
+        generation: 'a'.repeat(32),
+        state: 'active',
+        predecessor: 'b'.repeat(32),
+      },
       inReplyTo: '1234567890abcdef',
     })).toBe(true);
     expect(isImSchedulerFrame({
@@ -41,6 +47,28 @@ describe('Discord scheduler protocol', () => {
       kind: 'advertisement',
       sentAt: 1,
       channels: [{ channel: 'discord', identity: '12345678901234567.secret' }],
+    })).toBe(false);
+    expect(isImSchedulerFrame({
+      kind: 'advertisement',
+      sentAt: 1,
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      runtime: {
+        identity: '12345678901234567',
+        generation: 'not-a-generation',
+        state: 'dirty',
+      },
+    })).toBe(false);
+    expect(isImSchedulerFrame({
+      kind: 'probe',
+      sentAt: 1,
+      nonce: '1234567890abcdef',
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      runtime: {
+        identity: '12345678901234567',
+        generation: 'a'.repeat(32),
+        state: 'clean',
+        predecessor: 'b'.repeat(32),
+      },
     })).toBe(false);
     expect(isImSchedulerFrame({
       kind: 'advertisement',

@@ -568,6 +568,74 @@ describe('DiscordIM inbound pipeline', () => {
     expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-new']);
   });
 
+  it('closes the Gateway and drains DMs accepted before a scheduler handoff', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const fetchStarted = deferred();
+    const releaseFetch = deferred();
+    const received: IMMessageEvent[] = [];
+    let transportAllowed = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        fetchStarted.resolve();
+        await releaseFetch.promise;
+        return {
+          ok: true,
+          arrayBuffer: async () => new Uint8Array([1]).buffer,
+        };
+      }),
+    );
+    im.setSchedulerHooks({
+      isTransportAllowed: () => transportAllowed,
+    });
+    im.onMessage((event) => received.push(event));
+
+    await im.init();
+    await gateway.emitDm(message({
+      id: 'msg-handoff',
+      content: 'accepted before handoff',
+      attachments: [{
+        id: 'att-1',
+        name: 'photo.png',
+        url: 'https://cdn.example/slow.png',
+        size: 1024,
+        contentType: 'image/png',
+      }],
+    }));
+    await fetchStarted.promise;
+
+    transportAllowed = false;
+    let handoffFinished = false;
+    const handoff = im.enterSchedulerStandby({ clearRuntimeActiveMarker: true }).then(() => {
+      handoffFinished = true;
+    });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).toHaveBeenCalledTimes(1);
+    expect(handoffFinished).toBe(false);
+    expect(received).toEqual([]);
+
+    releaseFetch.resolve();
+    await handoff;
+
+    expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-handoff']);
+
+    await gateway.emitDm(message({ id: 'msg-after-handoff', content: 'must not enter' }));
+    expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-handoff']);
+  });
+
   it('connects gateway when set-config receives a token', async () => {
     const gateway = makeGateway();
     const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;

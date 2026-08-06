@@ -100,6 +100,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private status: IMStatus = { kind: 'idle' };
   private ownerUserId = '';
   private configVersion = 0;
+  private inboundConfigVersion = 0;
   private dmResolverClient: unknown = null;
   private dmResolver: ((userId: string) => Promise<DMChannelLike>) | null = null;
   private readonly dmMessageQueues = new Map<string, Promise<void>>();
@@ -187,6 +188,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    this.inboundConfigVersion += 1;
     const noticeDeadline = Date.now() + RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS;
     await this.waitForRuntimeOnlineNotice(noticeDeadline);
     this.configVersion += 1;
@@ -240,6 +242,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         if (!nextOwnerUserId) this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
 
         this.configVersion += 1;
+        this.inboundConfigVersion += 1;
         const wasConnectedBeforeReconnect = this.status.kind === 'connected';
         await this.gateway.destroy();
         this.ownerUserId = nextOwnerUserId;
@@ -302,6 +305,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           return configResult();
         }
         this.configVersion += 1;
+        this.inboundConfigVersion += 1;
         this.ownerUserId = nextOwnerUserId;
       }
       return configResult();
@@ -334,6 +338,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     this.host.ipc.handle('discordBot:disconnect', async () => {
       this.configVersion += 1;
+      this.inboundConfigVersion += 1;
       const disconnectedNoticeConfigVersion = this.configVersion;
       const disconnectedOwnerUserId = this.ownerUserId;
       this.ownerUserId = '';
@@ -376,8 +381,24 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
     await this.gateway.destroy();
-    if (options.clearRuntimeActiveMarker) this.clearRuntimeActiveMarker();
+    // The Gateway is closed before draining so no second ingress can overlap,
+    // while DMs already accepted by this lease still reach the local task.
+    await this.drainAcceptedDmMessages();
+    if (options.clearRuntimeActiveMarker && !this.pendingOfflineNotice) {
+      this.clearRuntimeActiveMarker();
+    }
     this.setStatus({ kind: 'standby', appId: identity });
+  }
+
+  /** Preserve a cross-device unclean runtime fact until the next active lease can compensate it. */
+  markSchedulerOfflineGap(): void {
+    if (!this.readLifecycleAnnouncement()) return;
+    this.pendingOfflineNotice = true;
+    this.markRuntimeActive();
+  }
+
+  hasPendingSchedulerOfflineNotice(): boolean {
+    return this.pendingOfflineNotice;
   }
 
   private schedulerIdentityFromToken(token: string): string | null {
@@ -1044,16 +1065,16 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private async handleDmMessage(m: MessageLike): Promise<void> {
-    if (this.disposing) return;
+    if (this.disposing || !this.schedulerTransportAllowed()) return;
     const acceptedOwnerUserId = this.ownerUserId;
     if (m.author.id !== acceptedOwnerUserId) return;
 
     const acceptedContext = {
       appId: this.gateway.appId,
-      configVersion: this.configVersion,
+      inboundConfigVersion: this.inboundConfigVersion,
       ownerUserId: acceptedOwnerUserId,
     };
-    const queueKey = `${acceptedContext.configVersion}:${dmMessageQueueKey(m)}`;
+    const queueKey = `${acceptedContext.inboundConfigVersion}:${dmMessageQueueKey(m)}`;
     const previous = this.dmMessageQueues.get(queueKey) ?? Promise.resolve();
     const current = previous
       .catch(() => undefined)
@@ -1070,7 +1091,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   private async normalizeAndEmitDmMessage(
     m: MessageLike,
-    acceptedContext: { appId: string; configVersion: number; ownerUserId: string },
+    acceptedContext: { appId: string; inboundConfigVersion: number; ownerUserId: string },
   ): Promise<void> {
     try {
       const event = await normalizeDmMessage(m, {
@@ -1081,10 +1102,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       });
       if (
         this.disposing ||
-        this.configVersion !== acceptedContext.configVersion ||
+        this.inboundConfigVersion !== acceptedContext.inboundConfigVersion ||
         this.ownerUserId !== acceptedContext.ownerUserId ||
-        this.gateway.appId !== acceptedContext.appId ||
-        !this.schedulerTransportAllowed()
+        this.gateway.appId !== acceptedContext.appId
       ) {
         return;
       }
@@ -1098,6 +1118,12 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord inbound message failed: ${msg}`);
+    }
+  }
+
+  private async drainAcceptedDmMessages(): Promise<void> {
+    while (this.dmMessageQueues.size > 0) {
+      await Promise.allSettled([...this.dmMessageQueues.values()]);
     }
   }
 

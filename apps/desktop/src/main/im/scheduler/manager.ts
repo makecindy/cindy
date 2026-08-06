@@ -21,6 +21,7 @@ import {
   isImSchedulerFrame,
   isSchedulerChannelIdentity,
   type SchedulerAdvertisementFrame,
+  type SchedulerRuntimeFrame,
 } from './protocol';
 import { isDesktopSchedulerPlatform, selectIngressDevice } from './state';
 
@@ -36,6 +37,7 @@ interface PeerAdvertisement {
   sentAt: number;
   lastSeenAt: number;
   channels: SchedulerAdvertisementFrame['channels'];
+  runtime?: SchedulerRuntimeFrame;
 }
 
 export class ImSchedulerManager {
@@ -61,6 +63,9 @@ export class ImSchedulerManager {
   private discoveryNonce = '';
   private readonly confirmedPeers = new Set<string>();
   private readonly pendingProbePeers = new Set<string>();
+  private readonly resolvedRuntimeGenerations = new Set<string>();
+  private readonly resolvedRuntimeGenerationOrder: string[] = [];
+  private localRuntime: SchedulerRuntimeFrame | null = null;
   private started = false;
   private deviceLinkReady = false;
   private schedulerHooksInstalled = false;
@@ -78,13 +83,14 @@ export class ImSchedulerManager {
     this.schedulerHooksInstalled = true;
     if (this.discord.getStatus().kind === 'connected') {
       this.connectedIdentity = this.discord.getSchedulerIdentity();
+      if (this.connectedIdentity) this.beginLocalRuntime(this.connectedIdentity);
     }
     this.offDiscordStatus = this.discord.onStatusChange((status) => {
       this.handleDiscordStatusChanged(status);
     });
     this.offPresence = onDeviceLinkPresenceChanged((snapshot) => {
       if (!snapshot.online || !isDesktopSchedulerPlatform(snapshot.platform)) {
-        this.peers.delete(snapshot.deviceId);
+        this.removePeer(snapshot.deviceId);
         this.confirmedPeers.delete(snapshot.deviceId);
         this.pendingProbePeers.delete(snapshot.deviceId);
       } else {
@@ -96,6 +102,7 @@ export class ImSchedulerManager {
     this.offStatus = onDeviceLinkStatusChanged((status) => {
       this.deviceLinkReady = status === 'online';
       if (!this.deviceLinkReady) {
+        this.adoptActiveRuntimeFromAllPeers();
         this.peers.clear();
         void this.ensureStandby();
       } else {
@@ -109,11 +116,13 @@ export class ImSchedulerManager {
       if (payload.kind === 'probe') {
         this.confirmedPeers.add(source);
         this.pendingProbePeers.delete(source);
+        this.observePeerRuntime(payload.runtime);
         this.peers.set(source, {
           deviceId: source,
           sentAt: payload.sentAt,
           lastSeenAt: Date.now(),
           channels: payload.channels,
+          runtime: payload.runtime,
         });
         this.advertise(source, payload.nonce);
         void this.reconcile();
@@ -127,11 +136,13 @@ export class ImSchedulerManager {
       }
       const previous = this.peers.get(source);
       if (previous && payload.sentAt < previous.sentAt) return;
+      this.observePeerRuntime(payload.runtime);
       this.peers.set(source, {
         deviceId: source,
         sentAt: payload.sentAt,
         lastSeenAt: Date.now(),
         channels: payload.channels,
+        runtime: payload.runtime,
       });
       void this.reconcile();
     });
@@ -201,6 +212,12 @@ export class ImSchedulerManager {
           log.warn('discord scheduler stop standby failed', error);
         }
       }
+      if (this.localRuntime && !this.discord.isSchedulerTransportActive()) {
+        this.finishLocalRuntime(this.localRuntime.identity, options.transportDisposed === true);
+        // Device Link is intentionally still online during ordered shutdown,
+        // so peers can distinguish a clean close from a crashed active lease.
+        this.advertiseAll();
+      }
       await this.reconcileTail.catch(() => undefined);
     } finally {
       this.discord.setSchedulerHooks(null);
@@ -241,8 +258,18 @@ export class ImSchedulerManager {
         await this.ensureStandby(identity);
         return;
       }
-      if (this.isLocalIngress(identity, devices)) await this.ensureActive(identity);
-      else await this.ensureStandby(identity, this.hasRemoteCandidate(identity));
+      if (this.isLocalIngress(identity, devices)) {
+        // A newly winning Desktop waits for the previous active runtime to
+        // publish a clean handoff. If that peer disappears, removePeer()
+        // converts its generation into a dirty compensation responsibility.
+        if (!this.discord.isSchedulerTransportActive() && this.hasRemoteActiveRuntime(identity)) {
+          await this.ensureStandby(identity);
+          return;
+        }
+        await this.ensureActive(identity);
+      } else {
+        await this.ensureStandby(identity, this.hasRemoteCandidate(identity));
+      }
     });
     this.reconcileTail = current.catch(() => undefined);
     await current;
@@ -305,13 +332,19 @@ export class ImSchedulerManager {
     if (this.discord.isSchedulerTransportActive()) return;
     if (sameIntent && Date.now() - this.lastActivationAttemptAt < ACTIVATION_RETRY_MS) return;
     this.lastActivationAttemptAt = Date.now();
+    const predecessor = this.localRuntime?.identity === identity && this.localRuntime.state === 'dirty'
+      ? this.localRuntime.generation
+      : undefined;
+    if (predecessor) this.discord.markSchedulerOfflineGap();
     try {
       await this.discord.init();
       if (!this.discord.isSchedulerTransportActive()) {
         this.markActivationFailure(identity);
         return;
       }
+      this.beginLocalRuntime(identity, predecessor);
       this.clearActivationFailure();
+      this.advertiseAll();
       if (!this.isLocalIngress(identity) && this.discord.isSchedulerTransportActive()) {
         await this.ensureStandby(identity);
       }
@@ -331,6 +364,8 @@ export class ImSchedulerManager {
     if (!this.discord.isSchedulerTransportActive()) return;
     try {
       await this.discord.enterSchedulerStandby({ clearRuntimeActiveMarker: clearRuntimeMarker });
+      this.finishLocalRuntime(identity, clearRuntimeMarker);
+      this.advertiseAll();
     } catch (error) {
       log.warn('discord scheduler standby failed', error);
     }
@@ -342,6 +377,7 @@ export class ImSchedulerManager {
     // had a full round trip to advertise and confirm the binding. Reset the
     // grace window before reconciling so two Desktops configured at the same
     // time cannot both treat the previous empty advertisement as final.
+    this.finishLocalRuntime(this.localRuntime?.identity ?? 'discord', true);
     this.peers.clear();
     this.confirmedPeers.clear();
     this.connectedIdentity = null;
@@ -380,6 +416,7 @@ export class ImSchedulerManager {
     // A terminal provider error after a successful activation must release the
     // deterministic winner. Otherwise the stale winner keeps advertising its
     // identity forever and prevents a healthy standby from taking over.
+    this.markLocalRuntimeDirty(identity);
     this.markActivationFailure(identity);
     void this.reconcile();
   }
@@ -398,6 +435,8 @@ export class ImSchedulerManager {
       // advertisement. Releasing the election first would briefly allow a
       // second device to connect while this client could still resume.
       await this.discord.enterSchedulerStandby();
+      this.markLocalRuntimeDirty(identity);
+      this.advertiseAll();
     } catch (error) {
       this.withdrawingIdentity = null;
       log.warn('discord scheduler reconnect timeout standby failed', error);
@@ -441,6 +480,7 @@ export class ImSchedulerManager {
       kind: 'advertisement',
       sentAt: Date.now(),
       channels: this.advertisedChannels(),
+      ...(this.localRuntime ? { runtime: this.localRuntime } : {}),
       ...(inReplyTo ? { inReplyTo } : {}),
     };
     sendDeviceLinkPush(deviceId, IM_SCHEDULER_PUSH_CHANNEL, frame);
@@ -458,6 +498,7 @@ export class ImSchedulerManager {
       sentAt: Date.now(),
       nonce: this.discoveryNonce,
       channels: this.advertisedChannels(),
+      ...(this.localRuntime ? { runtime: this.localRuntime } : {}),
     });
   }
 
@@ -473,7 +514,7 @@ export class ImSchedulerManager {
   private dropStalePeers(now: number): void {
     for (const [deviceId, peer] of this.peers) {
       if (now - peer.lastSeenAt <= PEER_STALE_MS) continue;
-      this.peers.delete(deviceId);
+      this.removePeer(deviceId);
       this.confirmedPeers.delete(deviceId);
       this.pendingProbePeers.delete(deviceId);
       if (this.started) this.probe(deviceId);
@@ -521,6 +562,107 @@ export class ImSchedulerManager {
     });
   }
 
+  private hasRemoteActiveRuntime(identity: string): boolean {
+    const now = Date.now();
+    return listOnlineDesktopDevices().some((peer) => {
+      if (!this.confirmedPeers.has(peer.deviceId)) return false;
+      const advertisement = this.peers.get(peer.deviceId);
+      return Boolean(
+        advertisement
+        && now - advertisement.lastSeenAt <= PEER_STALE_MS
+        && advertisement.runtime?.identity === identity
+        && advertisement.runtime.state === 'active',
+      );
+    });
+  }
+
+  private observePeerRuntime(runtime: SchedulerRuntimeFrame | undefined): void {
+    if (!runtime) return;
+    if (runtime.predecessor) this.resolveRuntimeGeneration(runtime.predecessor);
+    if (runtime.state === 'clean') {
+      this.resolveRuntimeGeneration(runtime.generation);
+      return;
+    }
+    if (runtime.state === 'active') {
+      if (
+        this.localRuntime?.state === 'dirty'
+        && this.localRuntime.generation === runtime.generation
+      ) {
+        this.localRuntime = null;
+      }
+      return;
+    }
+    this.adoptRuntimeGap(runtime);
+  }
+
+  private removePeer(deviceId: string): void {
+    const runtime = this.peers.get(deviceId)?.runtime;
+    if (runtime?.state === 'active') this.adoptRuntimeGap(runtime);
+    this.peers.delete(deviceId);
+  }
+
+  private adoptActiveRuntimeFromAllPeers(): void {
+    for (const peer of this.peers.values()) {
+      if (peer.runtime?.state === 'active') this.adoptRuntimeGap(peer.runtime);
+    }
+  }
+
+  private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
+    if (this.resolvedRuntimeGenerations.has(runtime.generation)) return;
+    if (this.localRuntime?.state === 'active') return;
+    if (
+      this.localRuntime?.state === 'dirty'
+      && this.localRuntime.generation <= runtime.generation
+    ) return;
+    this.localRuntime = {
+      identity: runtime.identity,
+      generation: runtime.generation,
+      state: 'dirty',
+    };
+  }
+
+  private beginLocalRuntime(identity: string, predecessor?: string): void {
+    if (predecessor) this.resolveRuntimeGeneration(predecessor);
+    this.localRuntime = {
+      identity,
+      generation: randomUUID().replaceAll('-', ''),
+      state: 'active',
+      ...(predecessor ? { predecessor } : {}),
+    };
+  }
+
+  private finishLocalRuntime(identity: string, clean: boolean): void {
+    if (!this.localRuntime || this.localRuntime.identity !== identity) return;
+    if (this.localRuntime.state === 'clean') return;
+    const runtimeClean = clean && !this.discord.hasPendingSchedulerOfflineNotice();
+    this.localRuntime = {
+      identity,
+      generation: this.localRuntime.generation,
+      state: runtimeClean ? 'clean' : 'dirty',
+    };
+    if (runtimeClean) this.resolveRuntimeGeneration(this.localRuntime.generation);
+  }
+
+  private markLocalRuntimeDirty(identity: string): void {
+    this.finishLocalRuntime(identity, false);
+  }
+
+  private resolveRuntimeGeneration(generation: string): void {
+    if (this.resolvedRuntimeGenerations.has(generation)) return;
+    this.resolvedRuntimeGenerations.add(generation);
+    this.resolvedRuntimeGenerationOrder.push(generation);
+    if (this.resolvedRuntimeGenerationOrder.length > 32) {
+      const oldest = this.resolvedRuntimeGenerationOrder.shift();
+      if (oldest) this.resolvedRuntimeGenerations.delete(oldest);
+    }
+    if (
+      this.localRuntime?.state === 'dirty'
+      && this.localRuntime.generation === generation
+    ) {
+      this.localRuntime = null;
+    }
+  }
+
   private clearActivationFailure(): void {
     this.activationCooldownUntil = 0;
     if (this.activationRetryTimer) clearTimeout(this.activationRetryTimer);
@@ -528,6 +670,7 @@ export class ImSchedulerManager {
   }
 
   private beginDiscoveryGrace(): void {
+    this.adoptActiveRuntimeFromAllPeers();
     this.discoveryNonce = randomUUID().replaceAll('-', '');
     this.confirmedPeers.clear();
     this.pendingProbePeers.clear();
