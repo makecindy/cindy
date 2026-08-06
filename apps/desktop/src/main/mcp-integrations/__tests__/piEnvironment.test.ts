@@ -197,6 +197,7 @@ describe('piEnvironment per-session identity', () => {
     const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(21) });
     expect(initResp.status).toBe(200);
     const mcpSessionId = initResp.headers.get('mcp-session-id');
+    expect(mcpSessionId).toBeTruthy();
     await initResp.text();
 
     // 对应 start_team 成功后的 MakerSession.setVendorOptions 原地更新。
@@ -207,7 +208,7 @@ describe('piEnvironment per-session identity', () => {
     });
     const callResp = await fetch(server.url, {
       method: 'POST',
-      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      headers: { ...headers, 'mcp-session-id': mcpSessionId! },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 22,
