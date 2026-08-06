@@ -17,6 +17,7 @@ import {
   getCachedDeviceProviders,
   getDeviceProvidersGen,
   subscribeDeviceProviders,
+  subscribeDeviceProvidersGen,
   type DeviceProvidersPayload,
 } from './deviceProvidersCache';
 import { useMobileMakerTransport } from './useMobileMakerTransport';
@@ -79,6 +80,13 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setReadyFor(deviceId);
       setReadyGen(getDeviceProvidersGen(deviceId));
     });
+    // 代际变更(evict/clearAll)主动推送:模块级 Map 变化不触发渲染,光靠渲染期
+    // 代际比对,ready 失效要等下一次碰巧渲染(codex review P2)——收到通知立即失效,
+    // 重拉完成经上面的 payload 订阅恢复。
+    const unsubscribeGen = subscribeDeviceProvidersGen(deviceId, () => {
+      if (cancelled) return;
+      setReadyFor(null);
+    });
     const cached = getCachedDeviceProviders(deviceId);
     if (cached) {
       setPayload(cached);
@@ -107,6 +115,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeGen();
     };
   }, [deviceId, maker]);
 

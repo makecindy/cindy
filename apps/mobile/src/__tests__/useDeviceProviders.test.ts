@@ -191,4 +191,35 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 3);
     expect(mod.getDeviceProvidersGen('dev-2')).toBe(gen2);
   });
+
+  it('subscribeDeviceProvidersGen:evict/clearAll 主动通知,fetch 完成不通知(codex P2)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    const dev1 = vi.fn();
+    const dev2 = vi.fn();
+    const off1 = mod.subscribeDeviceProvidersGen('dev-1', dev1);
+    const off2 = mod.subscribeDeviceProvidersGen('dev-2', dev2);
+
+    // fetch 完成(写缓存 + payload 通知)不触发代际通知
+    await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
+    expect(dev1).not.toHaveBeenCalled();
+
+    // evict 触发对应设备的代际通知,不影响其他设备
+    mod.evictDeviceProviders('dev-1');
+    expect(dev1).toHaveBeenCalledTimes(1);
+    expect(dev2).not.toHaveBeenCalled();
+
+    // clearAll 通知代际表内所有设备
+    mod.evictDeviceProviders('dev-2');
+    dev1.mockClear();
+    dev2.mockClear();
+    mod.clearAllDeviceProviders();
+    expect(dev1).toHaveBeenCalledTimes(1);
+    expect(dev2).toHaveBeenCalledTimes(1);
+
+    // 退订后不再通知
+    off1();
+    off2();
+    mod.evictDeviceProviders('dev-1');
+    expect(dev1).toHaveBeenCalledTimes(1);
+  });
 });

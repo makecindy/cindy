@@ -93,6 +93,7 @@ export function evictDeviceProviders(deviceId: string): void {
   cache.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
+  notifyDeviceProvidersGen(deviceId);
 }
 
 /**
@@ -102,6 +103,27 @@ export function evictDeviceProviders(deviceId: string): void {
  */
 export function getDeviceProvidersGen(deviceId: string): number {
   return deviceGen.get(deviceId) ?? 0;
+}
+
+// ── 代际变更订阅 ────────────────────────────────────────────────────────────
+// evict/clearAll 只改模块级 Map,不通知 payload 订阅者,React 不会重渲染 ——
+// 单靠渲染期的代际比对,ready 的失效要等下一次碰巧渲染(codex review P2)。
+// 这里给代际变化一条主动推送通道,hook 收到即立即使 ready 失效。
+const genListeners = new Map<string, Set<() => void>>();
+
+/** 订阅某设备的缓存代际变更(evict/clearAll 时触发);返回退订函数。 */
+export function subscribeDeviceProvidersGen(deviceId: string, listener: () => void): () => void {
+  const bucket = genListeners.get(deviceId) ?? new Set<() => void>();
+  bucket.add(listener);
+  genListeners.set(deviceId, bucket);
+  return () => {
+    bucket.delete(listener);
+    if (bucket.size === 0) genListeners.delete(deviceId);
+  };
+}
+
+function notifyDeviceProvidersGen(deviceId: string): void {
+  for (const listener of genListeners.get(deviceId) ?? []) listener();
 }
 
 /**
@@ -116,6 +138,7 @@ export function clearAllDeviceProviders(): void {
   const ids = new Set<string>([...cache.keys(), ...inflight.keys(), ...deviceGen.keys()]);
   for (const id of ids) {
     deviceGen.set(id, (deviceGen.get(id) ?? 0) + 1);
+    notifyDeviceProvidersGen(id);
   }
   cache.clear();
   inflight.clear();
