@@ -13,6 +13,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { parseMarketSource } from './sources/parse.js';
 import { PluginMarketPackagePermissionReviewBridge } from './packagePermissionReviewBridge.js';
+import { isPluginManifestIncompatibilityError } from './protocolErrors.js';
 import { PluginMarketService } from './service.js';
 
 const log = createLogger('plugin-market-ipc');
@@ -68,6 +69,9 @@ async function invokePluginMarket<T>(operation: () => Promise<T>): Promise<T> {
     return await operation();
   } catch (error) {
     if (isIpcError(error)) throw error;
+    if (isPluginManifestIncompatibilityError(error)) {
+      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+    }
     log.warn('plugin market IPC failed', {
       error: error instanceof Error ? error.message : String(error),
     });
