@@ -6344,7 +6344,15 @@ export class CodexAgent extends BaseAgent {
       turnId: string | null | undefined,
       item: unknown,
     ): string | undefined => {
-      if (!turnId || !completedTurnIds.has(turnId)) return undefined;
+      // A non-transport terminal error can close the logical turn before the
+      // authoritative turn/completed arrives. Keep the same one-shot late
+      // collab carve-out open for that error tombstone, otherwise the stale
+      // guard would swallow the child's terminal item and leave its task card
+      // running forever.
+      if (
+        !turnId
+        || (!completedTurnIds.has(turnId) && !terminalErroredTurnIds.has(turnId))
+      ) return undefined;
       if (!item || typeof item !== 'object') return undefined;
       const candidate = item as { id?: unknown; type?: unknown; status?: unknown };
       if (

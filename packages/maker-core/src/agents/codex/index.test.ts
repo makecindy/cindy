@@ -16310,6 +16310,95 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('REPRO: preserves a late collab-agent terminal update after a terminal error', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-terminal-error-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.error?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      willRetry: false,
+      error: { message: 'terminal error' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-1', fullText: 'child-thread: completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-1'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-1', status: 'completed' },
+    });
+
+    // The terminal notification still performs the normal authoritative cleanup.
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'failed', error: { message: 'terminal error' } },
+    });
+    await handle.close();
+  });
+
   it('REPRO: reasserts the live running state for a late V1 spawn completion', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
