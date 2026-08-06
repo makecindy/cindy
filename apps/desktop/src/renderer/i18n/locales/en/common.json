@@ -4371,6 +4371,7 @@
         "terminal": "Terminal",
         "review": "Review",
         "backgroundTasks": "Background tasks",
+        "resourceUsage": "Resource usage",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel"
@@ -4772,6 +4773,26 @@
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
       "noProgress": "No progress details yet"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent processes",
+        "app": "App processes"
+      },
+      "kinds": {
+        "main": "Main process",
+        "renderer": "UI process",
+        "gpu": "GPU process",
+        "utility": "Service process"
+      },
+      "processCount_one": "{{count}} process",
+      "processCount_other": "{{count}} processes",
+      "agentsEmpty": "No agent processes are running. Start a task and its usage will show up here.",
+      "terminate": "Stop process",
+      "terminateConfirmTitle": "Stop {{name}} process?",
+      "terminateConfirmDescription": "This force-stops the agent process and all of its child processes. Work in progress will be interrupted; send another message in the task to start the agent again.",
+      "terminated": "Stopped the {{name}} process",
+      "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample."
     }
   },
   "update": {

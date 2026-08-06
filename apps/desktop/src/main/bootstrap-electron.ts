@@ -315,6 +315,7 @@ import {
 } from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
+import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
@@ -1369,6 +1370,11 @@ registerBrowserBackendIpc();
 // ipcMain.handle 在 app ready 前注册也有效。
 registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
+
+// ── 资源用量面板 IPC ─────────────────────────────────────────────────
+// 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
+// 本产品 spawn 的 agent 根进程。见 main/process-monitor/。
+registerProcessMonitorIpc();
 
 // ── 主界面布局树存储 IPC──────────────────────────────────────────────
 // renderer 首帧 sendSync 拉布局(规则 7 无跳变)、set/reset 写路径、changed

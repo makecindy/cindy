@@ -4369,6 +4369,7 @@
         "terminal": "终端",
         "review": "审查",
         "backgroundTasks": "后台任务",
+        "resourceUsage": "资源用量",
         "collaboration": "协同",
         "unknown": "未知标签页",
         "ghostPanel": "插件面板"
@@ -4770,6 +4771,26 @@
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
       "noProgress": "暂无进度详情"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent 进程",
+        "app": "应用进程"
+      },
+      "kinds": {
+        "main": "主进程",
+        "renderer": "界面进程",
+        "gpu": "GPU 进程",
+        "utility": "服务进程"
+      },
+      "processCount_one": "{{count}} 个进程",
+      "processCount_other": "{{count}} 个进程",
+      "agentsEmpty": "当前没有运行中的 Agent 进程，启动任务后会在这里展示占用",
+      "terminate": "终止进程",
+      "terminateConfirmTitle": "终止 {{name}} 进程？",
+      "terminateConfirmDescription": "将强制终止该 Agent 进程及其全部子进程，正在进行的工作会中断；在对应任务里继续发消息即可重新启动 Agent。",
+      "terminated": "已终止 {{name}} 进程",
+      "terminateFailed": "无法终止该进程，它可能已自行退出；列表会随下一次采样自动更新"
     }
   },
   "update": {

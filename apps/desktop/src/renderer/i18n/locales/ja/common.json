@@ -4369,6 +4369,7 @@
         "terminal": "ターミナル",
         "review": "レビュー",
         "backgroundTasks": "バックグラウンドタスク",
+        "resourceUsage": "リソース使用量",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
         "ghostPanel": "プラグインパネル"
@@ -4770,6 +4771,26 @@
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
       "noProgress": "進行状況の詳細はまだありません"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent プロセス",
+        "app": "アプリプロセス"
+      },
+      "kinds": {
+        "main": "メインプロセス",
+        "renderer": "UI プロセス",
+        "gpu": "GPU プロセス",
+        "utility": "サービスプロセス"
+      },
+      "processCount_one": "{{count}} 個のプロセス",
+      "processCount_other": "{{count}} 個のプロセス",
+      "agentsEmpty": "実行中の Agent プロセスはありません。タスクを開始するとここに表示されます",
+      "terminate": "プロセスを終了",
+      "terminateConfirmTitle": "{{name}} プロセスを終了しますか？",
+      "terminateConfirmDescription": "この Agent プロセスとすべての子プロセスを強制終了します。進行中の作業は中断されます。対応するタスクでメッセージを送信すると Agent を再起動できます。",
+      "terminated": "{{name}} プロセスを終了しました",
+      "terminateFailed": "プロセスを終了できませんでした。すでに終了している可能性があります。リストは次回のサンプリングで自動的に更新されます"
     }
   },
   "update": {

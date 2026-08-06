@@ -4369,6 +4369,7 @@
         "terminal": "터미널",
         "review": "리뷰",
         "backgroundTasks": "백그라운드 작업",
+        "resourceUsage": "리소스 사용량",
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
         "ghostPanel": "플러그인 패널"
@@ -4770,6 +4771,26 @@
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
       "noProgress": "진행 상황 정보가 아직 없습니다"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent 프로세스",
+        "app": "앱 프로세스"
+      },
+      "kinds": {
+        "main": "메인 프로세스",
+        "renderer": "UI 프로세스",
+        "gpu": "GPU 프로세스",
+        "utility": "서비스 프로세스"
+      },
+      "processCount_one": "프로세스 {{count}}개",
+      "processCount_other": "프로세스 {{count}}개",
+      "agentsEmpty": "실행 중인 Agent 프로세스가 없습니다. 작업을 시작하면 여기에 표시됩니다.",
+      "terminate": "프로세스 종료",
+      "terminateConfirmTitle": "{{name}} 프로세스를 종료할까요?",
+      "terminateConfirmDescription": "이 Agent 프로세스와 모든 하위 프로세스를 강제 종료합니다. 진행 중인 작업이 중단되며, 해당 작업에서 메시지를 보내면 Agent를 다시 시작할 수 있습니다.",
+      "terminated": "{{name}} 프로세스를 종료했습니다",
+      "terminateFailed": "프로세스를 종료하지 못했습니다. 이미 종료되었을 수 있습니다. 목록은 다음 샘플링 때 자동으로 업데이트됩니다."
     }
   },
   "update": {

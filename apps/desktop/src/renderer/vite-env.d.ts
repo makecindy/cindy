@@ -4346,6 +4346,21 @@ interface ElectronAPI {
   };
 
   /**
+   * 资源用量面板(process-monitor):订阅期间 main 才采样;terminate 只对
+   * 本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
+   */
+  processMonitor: {
+    subscribe: () => Promise<void>;
+    unsubscribe: () => Promise<void>;
+    terminate: (
+      pid: number,
+    ) => Promise<import('../shared/processMonitor').TerminateAgentProcessResult>;
+    onSample: (
+      cb: (sample: import('../shared/processMonitor').ProcessMonitorSample) => void,
+    ) => () => void;
+  };
+
+  /**
    * Browser backend toggle: 切换 MCP `browser` 工具实际控制的浏览器。
    * - `external`: vendored Playwright + 独立 Chrome(**系统默认**)
    * - `rsb-webview`: 右侧栏内置 webview tab
