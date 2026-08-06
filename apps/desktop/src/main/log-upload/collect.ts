@@ -337,43 +337,40 @@ export interface CoverageInputs {
 }
 
 /**
- * 判定「锚点附近是否有记录留下」的邻域半径。取采集定位用的预卷窗口 `ANCHOR_PRE_ROLL_MS`——那正是
- * 我们围绕崩溃有意采集的时间范围；留下的记录若落在这个半径内，就说明这次崩溃的现场确进了上报。
- */
-const COVER_WINDOW_MS = ANCHOR_PRE_ROLL_MS;
-
-/**
  * 单个文件的覆盖是否包住锚点 A。整份读到且一条没被 cap 裁掉 ⇒ 覆盖（见 buildFileCoverage 的
- * `whole`）。否则要**同时**满足两条，缺一不可：
+ * `whole`）。否则要求**留下的记录里至少有一条「归属」A**——即它离 A 比离任何其它锚点都近
+ * （并列也算）。这正是 `trimByAnchors` 分配记录的同一把尺子：trim 按「离任一锚点最近」保留记录，
+ * 所以「有一条归 A 的记录活下来」就等价于「A 的现场进了上报」。
  *
- *  1. **A 落在留下记录的时间跨度内**（`min ≤ A ≤ max`）：说明读取确实推进到 A 两侧、把 A 的现场读
- *     进来过。命中未转义污染而提前停止时,停止点在 A 之前 ⇒ A 落在 max 之后 ⇒ 判未覆盖（保留待补传）。
- *  2. **A 的崩溃邻域内至少有一条记录留下**（`±COVER_WINDOW_MS`）：说明 A 自己的现场没被 cap 裁光。
- *
- * ⚠️ 只看跨度会漏（2026-08-06 review 的「架桥」）：同日多次崩溃时,cap 若只留住最早与最晚崩溃附近
- * 的记录、把**中间**那次的记录全裁掉,中间锚点仍落在 min~max 之间(被两端架桥),却没有它自己的现场
- * 进上报。加第 2 条邻域判定,中间那次就不会被误判已覆盖。
- * ⚠️ 只看邻域也会漏:污染停止时 A 前方 30s 的一条无关记录落在 ±窗口内、却并非 A 的现场。第 1 条
- * 跨度判定(A 在 max 之后)把它挡住。两条合起来才既挡住架桥、又挡住「读到一半停下」。
+ * ⚠️ 为什么用**最近锚点归属**而不是固定邻域窗 / `[min,max]` 跨度（2026-08-06 review 迭代）：
+ *  - 固定 `[min,max]`：同日多次崩溃时，cap 只留最早与最晚崩溃的记录、把**中间**那次全裁掉，中间
+ *    锚点仍落在 min~max 间（被两端「架桥」）→ 误判覆盖、标记误清、现场丢失。
+ *  - `a ≤ max` 之类的跨度端点判定：崩溃锚点由 `beginShutdown` 写日志**之后**才 `Date.now()` 生成，
+ *    锚点必然略晚于最后一条日志；部分读取的超大 main 里「最后一条 surviving record < 锚点」是常态，
+ *    `a ≤ max` 会对**真崩溃**误判未覆盖 → 标记清不掉、每次启动重复上传（greptile P1）。
+ *  - 固定邻域窗（如 ±2min）：两次崩溃相隔 90s 时，A 的日志风暴占满 cap、把 B 的记录全裁掉，B 的
+ *    最近 surviving record（其实是 A 的）落在 90s < 窗内 → 误判 B 覆盖、B 现场丢失。
+ * 最近锚点归属对以上三种都对：记录归它「本就最近」的那次崩溃，A 只有拿到「归自己」的记录才算覆盖。
  */
-function fileCovers(cov: FileCoverage | undefined, a: number): boolean {
+function fileCovers(cov: FileCoverage | undefined, a: number, anchors: readonly number[]): boolean {
   if (!cov) return false; // 文件在但没读到(预算耗尽 / 整份跳过 / 命中污染停止)⇒ 未覆盖
   if (cov.whole) return true;
-  let min = Number.POSITIVE_INFINITY;
-  let max = Number.NEGATIVE_INFINITY;
-  let hasNearby = false;
-  for (const ts of cov.survivorTs) {
-    if (ts < min) min = ts;
-    if (ts > max) max = ts;
-    if (Math.abs(ts - a) <= COVER_WINDOW_MS) hasNearby = true;
+  return cov.survivorTs.some((ts) => anchorOwns(ts, a, anchors));
+}
+
+/** 记录 `ts` 是否「归属」锚点 A：没有任何其它锚点比 A 离它更近（并列算归属，覆盖判定宁可偏保守）。 */
+function anchorOwns(ts: number, a: number, anchors: readonly number[]): boolean {
+  const distA = Math.abs(ts - a);
+  for (const other of anchors) {
+    if (Math.abs(ts - other) < distA) return false;
   }
-  return a >= min && a <= max && hasNearby;
+  return true;
 }
 
 /**
  * 崩溃锚点覆盖判定（供上报侧决定清哪些标记）。锚点 A 视为已覆盖当且仅当：
  *   - A 那天既没有 main 也没有 agent 文件（没东西可补，重试无益）⇒ 让上报侧放心清掉；或
- *   - **main 文件**覆盖了 A（整份读过且没裁 / A 的崩溃邻域内有 main 记录留下）。
+ *   - **main 文件**覆盖了 A（整份读过且没裁 / main 里有一条「归属」A 的记录留下）。
  *
  * ⚠️ 覆盖判定以 **main** 为准（2026-08-04 review）：崩溃现场的主体（FATAL/process、收尾序列）
  * 在 main 流；agent 只是补充上下文。一个整份读到的小 agent 文件**不能**替一个只读了靠前窗口
@@ -386,8 +383,8 @@ export function computeCoveredAnchors(anchors: readonly number[], inputs: Covera
     const hasMain = inputs.hasMain(dk);
     const hasAgent = inputs.hasAgent(dk);
     if (!hasMain && !hasAgent) return true; // 没东西可补
-    if (hasMain) return fileCovers(inputs.coverage.get(`${dk}|main`), a);
-    return fileCovers(inputs.coverage.get(`${dk}|agent`), a); // agent-only 兜底
+    if (hasMain) return fileCovers(inputs.coverage.get(`${dk}|main`), a, anchors);
+    return fileCovers(inputs.coverage.get(`${dk}|agent`), a, anchors); // agent-only 兜底
   });
 }
 

@@ -171,14 +171,18 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
         'code=' + statusToCode(result.status),
       );
     } else {
-      log.warn(
+      // logLabel 表示 path 里带身份;上游 `msg` 同样可能回显身份(如「skill <name> not found」),
+      // 设了 logLabel 就一并不记 msg。注意这只影响**日志**;抛给调用方的 ServerApiError 仍带真实
+      // code/message(SkillHub 依赖 err.code 做 VERSION_RACE 等分支,不能动)。
+      const fields = [
         'serverApiFetch.not_ok',
         'path=' + (opts.logLabel ?? apiPath),
         'method=' + (opts.method ?? 'GET'),
         'status=' + result.status,
         'code=' + errCode,
-        'msg=' + errMsg,
-      );
+      ];
+      if (!opts.logLabel) fields.push('msg=' + errMsg);
+      log.warn(...fields);
     }
     throw new ServerApiError(
       opts.redactErrorDetails && !opts.allowedRedactedErrorCodes?.includes(errCode)

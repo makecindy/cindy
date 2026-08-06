@@ -317,22 +317,26 @@ describe('serverApiFetch', () => {
     );
   });
 
-  it('logLabel 在非 redact 分支也代替真实 path（不遗漏 not_ok 原始路径）', async () => {
+  it('logLabel 在非 redact 分支也代替真实 path 且省掉 msg（上游 msg 可能回显身份）', async () => {
     mocks.getAccessToken.mockReturnValue('token-a');
     mocks.netFetch.mockResolvedValueOnce({
       ok: false,
-      status: 500,
-      json: async () => ({ error: { code: 'X', message: 'boom' } }),
+      status: 404,
+      json: async () => ({
+        error: { code: 'SKILL_NOT_FOUND', message: 'skill secret-skill-name not found' },
+      }),
     });
     await expect(
-      serverApiFetch('/api/plugins/secret-plugin-id', {
-        baseUrl: 'https://plugins.example.com',
-        logLabel: '/api/plugins',
+      serverApiFetch('/api/skills-hub/skills/secret-skill-name', {
+        baseUrl: 'https://skills.example.com',
+        logLabel: '/api/skills-hub',
       }),
-    ).rejects.toBeTruthy();
+    ).rejects.toMatchObject({ code: 'SKILL_NOT_FOUND' }); // 抛出的 code 不受影响,业务分支仍可用
     const logged = JSON.stringify(mocks.logger.warn.mock.calls);
-    expect(logged).not.toContain('secret-plugin-id');
-    expect(logged).toContain('path=/api/plugins');
+    expect(logged).not.toContain('secret-skill-name'); // path 与 msg 都不外泄身份
+    expect(logged).not.toContain('msg=');
+    expect(logged).toContain('path=/api/skills-hub');
+    expect(logged).toContain('code=SKILL_NOT_FOUND'); // 业务 code 仍记(它不是身份)
   });
 
   it('surfaces only explicitly allowed business codes on redacted requests', async () => {

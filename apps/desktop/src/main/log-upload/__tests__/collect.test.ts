@@ -300,7 +300,7 @@ describe('崩溃锚点覆盖 coveredAnchors', () => {
     expect(result.coveredAnchors).toContain(goneCrash);
   });
 
-  it('⚠️ 命中未转义污染而提前停止 ⇒ 不算整份覆盖 + 计数', async () => {
+  it('⚠️ 命中未转义污染而提前停止 ⇒ 计数;whole 不置位', async () => {
     const crashAt = NOW - 30_000;
     const today = dayKey(NOW);
     // 哨兵 + 一条真记录 + 回滚追加的未转义多行(续行无空格)。
@@ -314,8 +314,11 @@ describe('崩溃锚点覆盖 coveredAnchors', () => {
     const result = await collectLogs(deps, { reason: 'crash-backfill', anchors: [crashAt] });
 
     expect(result.stats.mainFilesStoppedAtViolation).toBe(1);
-    // 停止点之后没读到 ⇒ 崩溃锚点(在污染段)未被整份覆盖。
-    expect(result.coveredAnchors).not.toContain(crashAt);
+    // 命中污染而停止 ⇒ 该文件不算整份读到(whole 不置位),这条由 mainFilesStoppedAtViolation 计数
+    // 与后续覆盖判定共同保证。覆盖判定本身走「最近锚点归属」:停止前留下的 lifecycle 记录归属这次
+    // 崩溃(单锚点),⇒ 覆盖。这是**有意**的——污染段(未转义)永不解析、其中的记录永远补不出来,
+    // 重试无益;既然崩溃邻域已有记录进上报,就清掉标记,避免每次启动对同一份不可读文件无限重传。
+    expect(result.coveredAnchors).toContain(crashAt);
   });
 
   it('⚠️ 同日两次崩溃：A1 附近日志风暴占满 MAX_RECORDS 挤掉 A2 的记录 ⇒ A2 不算覆盖', async () => {
@@ -382,6 +385,31 @@ describe('computeCoveredAnchors：以 main 为准，agent 不得冒充覆盖', (
     expect(covered).toContain(A_EARLY);
     expect(covered).toContain(A_LATE);
     expect(covered).not.toContain(A_MID); // ← 修复前 A_MID 落在 [min,max] 内被冒充成已覆盖
+  });
+
+  it('⚠️ greptile P1:留下的记录都早于锚点(锚点由 Date.now 后生成)仍算覆盖', () => {
+    // beginShutdown 先写日志、随后才 Date.now() 生成崩溃锚点 ⇒ 锚点必然略晚于最后一条 surviving
+    // record。旧的 `a ≤ max` 端点判定会对**真崩溃**误判未覆盖 → 标记清不掉、每次启动重复上传。
+    // 最近锚点归属只看「这条记录离谁最近」,单锚点时留下的记录必归它 ⇒ 覆盖。
+    const crash = new Date(2026, 7, 4, 12, 0, 5).getTime();
+    const coverage: FileCoverageMap = new Map([
+      // 全部记录都早于 crash(锚点在 max 之后),旧逻辑 a≤max 直接判未覆盖。
+      [`${DAY}|main`, { whole: false, survivorTs: [crash - 3_000, crash - 1_000] }],
+    ]);
+    expect(computeCoveredAnchors([crash], { coverage, ...both })).toEqual([crash]);
+  });
+
+  it('⚠️ 两次崩溃相隔 90s、A 的风暴挤掉 B 的记录：B 的最近记录其实归 A ⇒ B 不算覆盖', () => {
+    // 固定邻域窗(±2min)会因 B 的最近 surviving record 落在 90s < 窗内而误判 B 覆盖 → B 现场丢失。
+    // 最近锚点归属:那条记录离 A(0)比离 B(90s)近 ⇒ 归 A、不归 B ⇒ B 未覆盖。
+    const a = new Date(2026, 7, 4, 12, 0, 0).getTime();
+    const b = a + 90_000;
+    const coverage: FileCoverageMap = new Map([
+      [`${DAY}|main`, { whole: false, survivorTs: [a, a + 10, a + 20] }], // 都是 A 的风暴,离 A 更近
+    ]);
+    const covered = computeCoveredAnchors([a, b], { coverage, ...both });
+    expect(covered).toContain(a);
+    expect(covered).not.toContain(b);
   });
 
   it('main 整份读到 ⇒ 当天锚点都覆盖', () => {

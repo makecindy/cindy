@@ -56,9 +56,11 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
   // `createLogger('manifestIO')` 是 SkillHub 注册表存储(skillhub/registry/manifestIO.ts),
   // 它会打 `skillhub/manifests/<skill>.json` 这类清单路径 / 文件名 = 用户装的插件身份,
   // 与 `skillhub` 同属用户/第三方内容(2026-08-04 review)。见 NOTABLE_DENIED_ROOTS。
-  // 平台 API 调用的状态码与耗时。⚠️ 4xx/5xx 会打 `path=`:路径里带**用户/第三方身份**的调用方
-  // (如 plugin-market 的 `/api/plugins/<pluginId>`)必须传 `logLabel` 路由模板 + `redactErrorDetails`,
-  // 否则插件 ID 会随这个根放行的 scope 外泄(2026-08-06 review;见 serverApiClient.ts 的 logLabel)。
+  // 平台 API 调用的状态码与耗时。⚠️ 4xx/5xx 会打 `path=`(和 `msg=`):路径/消息里带**用户/第三方
+  // 身份**的调用方——plugin-market 的 `/api/plugins/<pluginId>`、SkillHub 的
+  // `/api/skills-hub/skills/<name>`——必须传 `logLabel` 路由模板(设了 logLabel 的调用日志会用模板
+  // 代替真实 path、并连 `msg` 一起省掉),否则插件/skill 身份会随这个根放行的 scope 外泄
+  // (2026-08-06 review;见 serverApiClient.ts 的 logLabel)。
   'serverApiClient', //      平台 API 调用的状态码与耗时
   'heartbeat', //            在线心跳(网络可达性的连续信号)
 
