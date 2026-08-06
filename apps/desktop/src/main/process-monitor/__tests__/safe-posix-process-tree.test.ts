@@ -147,8 +147,32 @@ describe('terminateSafePosixProcessTree', () => {
     ]);
   });
 
-  it('子进程在暂停前退出时跳过该分支，不触碰可能已 reparent 的后代', () => {
+  it('子进程在暂停前退出且仍有已知后代时失败关闭并恢复根进程', () => {
     const scan = vi.fn(() => snapshot([row(100, 10, 'T'), row(101, 100, 'S'), row(102, 101, 'S')]));
+    const signal = vi.fn((pid: number, processSignal: NodeJS.Signals) => {
+      if (pid === 101 && processSignal === 'SIGSTOP') throw errno('ESRCH');
+    });
+
+    expect(() =>
+      terminateSafePosixProcessTree({
+        rootPid: 100,
+        rootStartIdentity: 'start:100',
+        rootStateBeforeStop: 'S',
+        scan,
+        signal,
+        isExpectedRoot: () => true,
+      }),
+    ).toThrow('process exited before its descendants could be frozen: 101');
+    expect(signal.mock.calls).toEqual([
+      [100, 'SIGSTOP'],
+      [101, 'SIGSTOP'],
+      [100, 'SIGCONT'],
+    ]);
+    expect(scan).toHaveBeenCalledTimes(1);
+  });
+
+  it('没有已知后代的子进程在暂停前退出时可安全跳过', () => {
+    const scan = vi.fn(() => snapshot([row(100, 10, 'T'), row(101, 100, 'S')]));
     const signal = vi.fn((pid: number, processSignal: NodeJS.Signals) => {
       if (pid === 101 && processSignal === 'SIGSTOP') throw errno('ESRCH');
     });

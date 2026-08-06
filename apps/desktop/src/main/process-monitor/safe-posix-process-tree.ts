@@ -118,9 +118,17 @@ export function terminateSafePosixProcessTree(
           try {
             signal(childPid, 'SIGSTOP');
           } catch (error) {
-            // 父进程已经暂停；ESRCH 表示子进程已退出，其 PID 仍不会被该父进程
-            // reap/reuse。无需把它加入待 kill 集合。
-            if (isMissingProcess(error)) continue;
+            if (isMissingProcess(error)) {
+              // 子进程消失后，其已知后代可能仍存活并被 reparent。父链已经失效，
+              // 不能继续凭旧快照里的 PID 盲目 SIGKILL；同时也不能静默返回成功。
+              // 失败关闭会由外层恢复已冻结进程，用户可在新鲜归属快照下重试。
+              if ((snapshot.childrenByParent.get(childPid)?.length ?? 0) > 0) {
+                throw new Error(
+                  `process exited before its descendants could be frozen: ${childPid}`,
+                );
+              }
+              continue;
+            }
             throw error;
           }
 
