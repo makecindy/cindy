@@ -14,16 +14,15 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowUp,
-  Check,
   ChevronDown,
-  ChevronRight,
+  Link,
+  MessageCircle,
   Plus,
   Sparkles,
   Store,
@@ -54,7 +53,6 @@ import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
 import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
-import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -1267,27 +1265,6 @@ export function GhostPluginPage() {
     if (!marketDetail) return;
     await runMarketInstallFlow(marketDetail);
   }, [marketDetail, runMarketInstallFlow]);
-  /** 推荐卡片上的直接「安装」:先取详情,再走与详情页相同的确认+安装流。 */
-  const handleInstallMarketItem = useCallback(
-    async (pluginId: string) => {
-      const marketBusyLease = acquireMarketBusy(pluginId);
-      if (!marketBusyLease) return;
-      let detail: PluginMarketDetail;
-      try {
-        detail = await window.electronAPI.pluginMarket.detail(pluginId);
-      } catch (error) {
-        if (isMarketBusyLeaseActive(marketBusyLease)) {
-          toast.error(t(pluginMarketErrorKey(error)));
-        }
-        releaseMarketBusy(marketBusyLease);
-        return;
-      }
-      releaseMarketBusy(marketBusyLease);
-      await runMarketInstallFlow(detail);
-    },
-    [acquireMarketBusy, isMarketBusyLeaseActive, releaseMarketBusy, runMarketInstallFlow, t],
-  );
-
   // 面板收束:aside 只挂在插件页语境里(列表/详情/市场详情共用),
   // 路由离开本页组件整体卸载 → webview 一并回收,绝不残留到别的界面。
   const panelAside = openPanelGhost ? (
@@ -1486,10 +1463,10 @@ export function GhostPluginPage() {
                           item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                         }
                         effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
-                        onToggle={(enabled) => void handleToggle(item.id, enabled, item.name)}
                         onOpenDetail={() => setSelectedId(item.id)}
+                        onConfigure={() => openGhostConfiguration(item.id)}
+                        onChat={() => handlePrimaryAction(item)}
                         onIconLoadError={handleMarketIconLoadError}
-                        toggleDisabled={scopeDir !== null && !item.enabled}
                       />
                     ))}
                   </div>
@@ -1515,10 +1492,10 @@ export function GhostPluginPage() {
                               item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                             }
                             effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
-                            onToggle={(enabled) => void handleToggle(item.id, enabled, item.name)}
                             onOpenDetail={() => setSelectedId(item.id)}
+                            onConfigure={() => openGhostConfiguration(item.id)}
+                            onChat={() => handlePrimaryAction(item)}
                             onIconLoadError={handleMarketIconLoadError}
-                            toggleDisabled={scopeDir !== null && !item.enabled}
                           />
                         ))}
                       </div>
@@ -1635,7 +1612,6 @@ export function GhostPluginPage() {
                                 item={item}
                                 busy={marketBusyId !== null}
                                 onSelect={() => void handleSelectMarket(item.pluginId)}
-                                onInstall={() => void handleInstallMarketItem(item.pluginId)}
                                 onIconLoadError={handleMarketIconLoadError}
                               />
                             ))}
@@ -1651,7 +1627,6 @@ export function GhostPluginPage() {
                           item={item}
                           busy={marketBusyId !== null}
                           onSelect={() => void handleSelectMarket(item.pluginId)}
-                          onInstall={() => void handleInstallMarketItem(item.pluginId)}
                           onIconLoadError={handleMarketIconLoadError}
                         />
                       ))}
@@ -1740,14 +1715,11 @@ export function MarketPluginCard({
   item,
   busy,
   onSelect,
-  onInstall,
   onIconLoadError,
 }: {
   item: PluginMarketItem;
   busy: boolean;
   onSelect: () => void;
-  /** 卡片直接安装；卡片正文、右侧空白与右上角箭头都进入详情。 */
-  onInstall?: () => void;
   onIconLoadError: () => void;
 }) {
   const { t } = useTranslation();
@@ -1822,7 +1794,8 @@ export function MarketPluginCard({
           </span>
         </span>
       </button>
-      <div className="relative flex min-h-[76px] min-w-8 shrink-0 flex-col items-end justify-end self-stretch">
+      {/* 右侧:Plus 图标 → 进入详情;冲突态额外显示冲突标记。 */}
+      <div className="flex shrink-0 flex-col items-end justify-center self-stretch">
         <button
           type="button"
           onClick={onSelect}
@@ -1835,44 +1808,20 @@ export function MarketPluginCard({
           )}
           aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
           className={cn(
-            'group/market-details absolute inset-0 flex items-start justify-end rounded-xl text-[var(--text-tertiary)]',
+            'grid size-8 place-items-center rounded-full text-[var(--text-tertiary)]',
+            'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
           )}
         >
-          <span
-            className={cn(
-              'grid size-8 shrink-0 place-items-center rounded-full',
-              'transition-[background-color,color,transform] duration-150 group-hover/market-details:bg-[var(--surface-hover-soft)] group-hover/market-details:text-[var(--text-primary)] group-active/market-details:scale-[0.96]',
-            )}
-          >
-            <ChevronRight size={16} aria-hidden="true" />
-          </span>
+          <Plus size={16} aria-hidden="true" />
         </button>
         {item.installState === 'conflict' ? (
           <span
             role="status"
-            className="relative z-[1] inline-flex h-8 shrink-0 select-none items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-11 font-medium text-[var(--text-secondary)]"
+            className="inline-flex h-8 shrink-0 select-none items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-11 font-medium text-[var(--text-secondary)]"
           >
             {t('settings.ghosts.market.conflict')}
           </span>
-        ) : onInstall ? (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onInstall();
-            }}
-            disabled={unavailable}
-            aria-label={t('settings.ghosts.page.installAria', { name: item.name })}
-            aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
-            className={cn(
-              'relative z-[1] inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
-              'transition-[background-color,border-color,transform,opacity] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
-            )}
-          >
-            {t('settings.ghosts.market.install')}
-          </button>
         ) : null}
       </div>
     </article>
@@ -1969,9 +1918,9 @@ function GhostPluginActions({
 /**
  * 已安装插件卡片(设计定稿 2026-08-06):
  * - 整卡可点 → 进入插件详情;
- * - 右上角:更新胶囊 + 启用开关(开关颜色按 setupState 走语义 token);
- * - 无设置按钮、无对话按钮(这些交互统一收进详情页);
- * - 开关颜色按授权状态区分:已就绪=默认开关色,未配置=--warning-fg,过期/失败=--error-fg。
+ * - 左下角:更新角标(ArrowUp + 版本号,取代右上更新胶囊);
+ * - 右侧中间:动作图标——需要连接时显示 Link(进入配置页),就绪时显示 MessageCircle(发起对话),停用不显示;
+ * - 不使用开关;启停与设置统一收进详情页。
  */
 export function GhostPluginCard({
   item,
@@ -1980,10 +1929,10 @@ export function GhostPluginCard({
   updateBusy = false,
   onUpdate,
   effectiveEnabled,
-  onToggle,
   onOpenDetail,
+  onConfigure,
+  onChat,
   onIconLoadError,
-  toggleDisabled = false,
 }: {
   item: GhostPluginListItem;
   sourceLabel?: string;
@@ -1992,30 +1941,22 @@ export function GhostPluginCard({
   updateBusy?: boolean;
   onUpdate?: () => void;
   effectiveEnabled?: boolean;
-  onToggle: (enabled: boolean) => void;
   onOpenDetail: () => void;
+  /** 需要配置的插件:点击进入详情并滚动到配置区。 */
+  onConfigure: () => void;
+  /** 就绪插件:点击发起主动作(对话/面板/详情)。 */
+  onChat: () => void;
   onIconLoadError?: () => void;
-  /** 全局禁用且当前在项目域时禁用开关:项目域只能清 per-workdir override,改不了全局 flag。 */
-  toggleDisabled?: boolean;
 }) {
   const { t } = useTranslation();
   const enabled = effectiveEnabled ?? item.enabled;
-  // 未读(badge 槽):单条卡片走**呼吸**点(AttentionDot 形态规范——聚合入口
-  // 静态、单条呼吸)。有摘要时顶替静态描述:用户扫一眼就知道新内容是什么。
   const unread = useGhostUnread(item.id);
   const unreadSummary = useGhostUnreadSummary(item.id);
 
-  // 开关颜色判定(已启用时),全部走设计系统语义 token:
-  // - 已就绪/无需授权 → 不覆盖(走 Switch 默认 --switch-track-on)
-  // - 声明了需求但未配置 → --warning-fg(琥珀/橙色)
-  // - 已配置但授权过期/失败 → --error-fg(语义红)
-  const toggleTrackColor: string | undefined = (() => {
-    if (!enabled) return undefined;
-    if (!item.hasSetupRequirements) return undefined;
-    if (item.setupState === 'missing') return 'var(--warning-fg)';
-    if (item.setupState === 'failed') return 'var(--error-fg)';
-    return undefined; // ready: 不覆盖,用 Switch 默认色
-  })();
+  // 右侧图标与动作:停用不显示图标;未配置显示 Link→配置,就绪显示 MessageCircle→对话。
+  const needsAttention = item.hasSetupRequirements && !item.setupReady;
+  const rightAction = needsAttention ? onConfigure : onChat;
+  const showRightIcon = enabled;
 
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -2031,7 +1972,7 @@ return (
       onKeyDown={handleCardKeyDown}
       aria-label={item.name}
       className={cn(
-        'group flex min-h-[108px] w-full cursor-pointer select-none items-start gap-4 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-left',
+        'group relative flex min-h-[108px] w-full cursor-pointer select-none items-start gap-4 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-left',
         'transition-[background-color,border-color] duration-150 ease-out',
         'hover:bg-[var(--surface-hover-soft)]',
         'motion-reduce:transition-none',
@@ -2039,6 +1980,31 @@ return (
         !enabled && 'opacity-60',
       )}
     >
+      {/* 左下角更新角标:有市场新版本时渲染。 */}
+      {updateVersion && onUpdate ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onUpdate();
+          }}
+          disabled={updateBusy}
+          aria-label={t('settings.ghosts.page.updateAria', {
+            name: item.name,
+            version: updateVersion,
+          })}
+          className={cn(
+            'absolute bottom-0 left-0 z-10 inline-flex items-center gap-0.5 rounded-br-lg rounded-tl-xl bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-primary)]',
+            'transition-colors duration-150 hover:bg-[var(--surface-hover)]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            'disabled:cursor-wait disabled:opacity-40',
+          )}
+        >
+          <ArrowUp size={11} aria-hidden="true" />
+          v{updateVersion}
+        </button>
+      ) : null}
+
       <GhostPluginIcon
         iconDataUrl={item.iconDataUrl}
         iconId={item.id}
@@ -2054,18 +2020,8 @@ return (
         </span>
         <span className="mt-1 block min-w-0 truncate text-11 text-[var(--text-tertiary)]">
           {sourceLabel ? `${sourceLabel} · ` : ''}v{item.version}
-          {!updateVersion ? (
-            <span className="inline-flex items-center gap-1">
-              {' · '}
-              <Check size={11} className="inline" aria-hidden="true" />
-              {t('settings.ghosts.page.upToDate')}
-            </span>
-          ) : null}
           {!enabled ? ` · ${t('settings.ghosts.disabledTag')}` : ''}
         </span>
-        {/* 未读摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻
-            的信息。摘要文字提到 primary 档以区别于常态描述(不另加色,颜色语义
-            留给那颗点)。 */}
         <span
           className={cn(
             'mt-1.5 line-clamp-2 text-13 leading-5',
@@ -2075,46 +2031,35 @@ return (
           {unreadSummary || item.description || item.id}
         </span>
       </span>
-      {/* 右列控制区:更新按钮 + 启用开关;自行消费点击,不冒泡到整卡。 */}
-      <span
-        className="flex shrink-0 flex-col items-end justify-start gap-2 self-stretch"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-      >
-        <span className="flex items-center gap-1.5">
-          {updateVersion && onUpdate ? (
-            <button
-              type="button"
-              onClick={onUpdate}
-              disabled={updateBusy}
-              aria-label={t('settings.ghosts.page.updateAria', {
-                name: item.name,
-                version: updateVersion,
-              })}
-              className={cn(
-                'inline-flex h-7 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 text-11 font-medium text-[var(--text-primary)]',
-                'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                'disabled:cursor-wait disabled:opacity-40',
-              )}
-            >
-              <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
-              {t('settings.ghosts.page.updateTo', { version: updateVersion })}
-            </button>
-          ) : null}
-          <Switch
-            checked={enabled}
-            onCheckedChange={onToggle}
-            disabled={toggleDisabled}
-            aria-label={t('settings.ghosts.enableAria', { name: item.name })}
-            style={
-              toggleTrackColor
-                ? ({ '--switch-track-on': toggleTrackColor } as CSSProperties)
-                : undefined
+      {/* 右侧中部动作图标:停用不显示,启用时展示 Link(未配置)或 MessageCircle(就绪)。 */}
+      {showRightIcon ? (
+        <span
+          className="flex shrink-0 flex-col items-end justify-center self-stretch"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={rightAction}
+            aria-label={
+              needsAttention
+                ? t('settings.ghosts.page.manageAria', { name: item.name })
+                : t('settings.ghosts.page.chatAria', { name: item.name })
             }
-          />
+            className={cn(
+              'grid size-8 place-items-center rounded-full transition-colors duration-150',
+              'text-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            )}
+          >
+            {needsAttention ? (
+              <Link size={16} aria-hidden="true" />
+            ) : (
+              <MessageCircle size={16} aria-hidden="true" />
+            )}
+          </button>
         </span>
-      </span>
+      ) : null}
     </article>
   );
 }
