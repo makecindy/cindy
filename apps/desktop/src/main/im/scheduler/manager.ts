@@ -335,8 +335,6 @@ export class ImSchedulerManager {
       if (
         identity
         && this.connectedIdentity === identity
-        && this.desired === 'active'
-        && this.desiredIdentity === identity
         && !this.reconnectGraceTimer
       ) {
         const discoveryNonce = this.discoveryNonce;
