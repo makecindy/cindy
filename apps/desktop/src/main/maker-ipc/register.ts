@@ -3544,7 +3544,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 连续失败计数归零；人工介入周期的硬总上限不归零，保证始终有限。
       // 刻意只认这两类事件:thinking / status / 空消息都不算产出;guard 侧是 O(1)、
       // 无 IO、无日志,放在热路径安全。
-      if (isSubstantiveProgressEvent(event)) {
+      // 晚到 background 事件仍需广播和持久化,但不能给当前中断回合充值。
+      if (event.turnScope !== 'background' && isSubstantiveProgressEvent(event)) {
         const progressAttemptToken = event.turnAttemptToken;
         const accepted = interruptedTurnAutoResumeGuard.noteProgress(
           session.id,

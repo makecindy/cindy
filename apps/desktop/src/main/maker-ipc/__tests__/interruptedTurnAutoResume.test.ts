@@ -304,6 +304,35 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     });
   });
 
+  it('does not recharge exhausted retry budget from a late background tool event', () => {
+    const g = createGuard();
+    for (let i = 0; i < INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; i += 1) {
+      const decision = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+      expect(decision.action).toBe('resume');
+      if (decision.action !== 'resume') return;
+      g.guard.noteAttemptEvent(SID, decision.attemptToken);
+      g.guard.noteAttemptSettled(SID, decision.attemptToken);
+    }
+    expect(g.guard.onInterruptedTurn(SID, g.now()).action).toBe('exhausted');
+
+    // This models the state-machine side of the listener guard; the source
+    // contract test separately locks that register.ts uses the same condition.
+    const lateBackgroundToolUse = { type: 'tool_use', turnScope: 'background' };
+    if (
+      lateBackgroundToolUse.turnScope !== 'background' &&
+      isSubstantiveProgressEvent(lateBackgroundToolUse)
+    ) {
+      g.guard.noteProgress(SID);
+    }
+
+    expect(g.guard.onInterruptedTurn(SID, g.now() + 1)).toEqual({
+      action: 'exhausted',
+      reason: 'consecutive',
+      consecutiveAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+    });
+  });
+
   it('model output resets the consecutive counter (但会话累计只增)', () => {
     const g = createGuard();
     let lastAttemptToken = 0;
