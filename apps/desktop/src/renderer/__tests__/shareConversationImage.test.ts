@@ -57,13 +57,16 @@ describe('stripCloneAnchors', () => {
     const el = document.createElement('div');
     el.setAttribute(SHARE_SESSION_ATTR, 's1');
     el.setAttribute(SHARE_MESSAGE_ATTR, 'm1');
-    el.innerHTML = `<div data-user-msg-id="m1"><span ${SHARE_MESSAGE_ATTR}="m2">x</span></div>`;
+    el.setAttribute('data-message-client-id', 'client-root');
+    el.innerHTML = `<div data-user-msg-id="m1" data-message-client-ids="client-a client-b"><span ${SHARE_MESSAGE_ATTR}="m2">x</span></div>`;
 
     stripCloneAnchors(el);
 
     expect(el.hasAttribute(SHARE_SESSION_ATTR)).toBe(false);
     expect(el.hasAttribute(SHARE_MESSAGE_ATTR)).toBe(false);
+    expect(el.hasAttribute('data-message-client-id')).toBe(false);
     expect(el.querySelectorAll('[data-user-msg-id]')).toHaveLength(0);
+    expect(el.querySelectorAll('[data-message-client-ids]')).toHaveLength(0);
     expect(el.querySelectorAll(`[${SHARE_MESSAGE_ATTR}]`)).toHaveLength(0);
   });
 

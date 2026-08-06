@@ -44,11 +44,18 @@ export function shareSiteHostForRegion(region: CindyRegion): string {
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
- * 全局 querySelector(PrevMessageJumpChip 的 data-user-msg-id、本模块自己的
- * 定位属性)命中克隆节点,干扰真实聊天流的滚动/跳转逻辑。
+ * 全局 querySelector(PrevMessageJumpChip 的 data-user-msg-id、消息导航的
+ * data-message-client-id(s)、本模块自己的定位属性)命中克隆节点,干扰真实
+ * 聊天流的滚动/跳转逻辑。
  * 注意**不清 `id`** —— mermaid / KaTeX 产物内部有 `url(#…)` 自引用,清掉会破图。
  */
-const CLONE_STRIPPED_ATTRS = ['data-user-msg-id', SHARE_SESSION_ATTR, SHARE_MESSAGE_ATTR] as const;
+const CLONE_STRIPPED_ATTRS = [
+  'data-user-msg-id',
+  'data-message-client-id',
+  'data-message-client-ids',
+  SHARE_SESSION_ATTR,
+  SHARE_MESSAGE_ATTR,
+] as const;
 
 export interface BuildShareImageOptions {
   /** 会话 id —— 与 sessionId 一起定位,避免命中内嵌的第二个 MessageStream。 */

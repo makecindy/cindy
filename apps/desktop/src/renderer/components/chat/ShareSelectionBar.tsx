@@ -152,6 +152,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented) return;
       if (isEditableKeyboardTarget(e.target)) return;
       if (busy) return;
       if (e.key === 'Escape') {
