@@ -273,6 +273,35 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
   });
 
+  it('cancels pending handoff navigation after the source pane unmounts', async () => {
+    const pendingRoute = deferred<string>();
+    mocks.resolveSessionRoute.mockReturnValueOnce(pendingRoute.promise);
+    const onSessionNavigate = vi.fn();
+    const view = render(
+      splitPane(
+        <SessionHandoffCard
+          sessionId="session-target"
+          title="Session target"
+          wake="resumed"
+          lastActive={null}
+        />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target');
+    view.unmount();
+
+    await act(async () => {
+      pendingRoute.resolve('/cc-agent/session-target');
+      await pendingRoute.promise;
+    });
+
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
   it('renders automation origins as static content without scheduling navigation', () => {
     render(
       embedded(

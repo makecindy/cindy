@@ -1,4 +1,5 @@
 import { ArrowUpRight, CornerDownRight, History } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -34,6 +35,7 @@ export function SessionHandoffCard({
   const navigate = useNavigate();
   const navigationMode = useSessionNavigationMode();
   const reportSessionNavigation = useSessionNavigationIntent();
+  const navigationRequestVersionRef = useRef(0);
   const { t } = useTranslation();
   const displayTitle = title?.trim() || t('ccAgent.handoff.card.unnamedSession');
   // created / resumed 用实心强调样式(新建或被唤醒,值得注意);already-active 用描边弱样式。
@@ -44,6 +46,13 @@ export function SessionHandoffCard({
       : wake === 'resumed'
         ? t('ccAgent.handoff.card.wake.resumed')
         : t('ccAgent.handoff.card.wake.alreadyActive');
+
+  useEffect(
+    () => () => {
+      navigationRequestVersionRef.current += 1;
+    },
+    [sessionId, navigationMode],
+  );
 
   const formatLastActive = (value: string): string => {
     const ms = new Date(value).getTime();
@@ -66,7 +75,9 @@ export function SessionHandoffCard({
   };
 
   const handleClick = () => {
+    const navigationRequestVersion = ++navigationRequestVersionRef.current;
     void resolveSessionRoute(sessionId).then((target) => {
+      if (navigationRequestVersionRef.current !== navigationRequestVersion) return;
       reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(target) ?? sessionId);
       navigate(target, {
         state: dispatcherSessionId
