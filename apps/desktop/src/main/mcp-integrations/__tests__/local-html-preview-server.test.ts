@@ -75,6 +75,9 @@ describe('local-html-preview-server', () => {
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("form-action 'none'");
     expect(csp).toContain('sandbox allow-scripts allow-same-origin');
+    // DNS prefetch is not constrained by connect-src/CSP — the header must
+    // close the dns-prefetch exfiltration channel (codex-connector P1, round 16).
+    expect(res.headers.get('x-dns-prefetch-control')).toBe('off');
     // navigate-to is NOT relied on: Chromium does not implement it, so it
     // must not appear pretending to be a control that does not exist.
     expect(csp).not.toContain('navigate-to');
@@ -193,6 +196,24 @@ describe('local-html-preview-server', () => {
       return;
     }
     expect((await get(`${base}/link.html`)).status).toBe(404);
+  });
+
+  it('rejects a symlink with an ordinary name that resolves into a hidden directory (Greptile P1, round 16)', async () => {
+    // `assets -> .private` passes the request-path hidden-segment check
+    // ("assets" is not hidden), but realpath resolves into `.private` — the
+    // REAL path must be re-checked for hidden segments.
+    const { url } = await createUrl();
+    const base = url.slice(0, url.lastIndexOf('/'));
+    await mkdir(nodePath.join(workingDir, 'dist', '.private'), { recursive: true });
+    await writeFile(nodePath.join(workingDir, 'dist', '.private', 'secret.json'), '{"hidden":true}');
+    const linkPath = nodePath.join(workingDir, 'dist', 'assets');
+    try {
+      await symlink('.private', linkPath, 'dir');
+    } catch {
+      // Platform without symlink permission: nothing to assert.
+      return;
+    }
+    expect((await get(`${base}/assets/secret.json`)).status).toBe(404);
   });
 
   it('rejects hidden directory segments even when the file extension is whitelisted', async () => {

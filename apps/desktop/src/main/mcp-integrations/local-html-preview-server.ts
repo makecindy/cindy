@@ -152,6 +152,11 @@ const CSP =
 const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Cache-Control': 'no-store',
+  // DNS prefetch is NOT constrained by connect-src, the CSP or the
+  // navigation guard: an untrusted preview script could encode DOM/CSSOM
+  // data into dns-prefetch lookups to attacker-controlled names. The
+  // server-side header is authoritative (codex-connector P1, round 16).
+  'X-DNS-Prefetch-Control': 'off',
   'Content-Security-Policy': CSP,
 };
 
@@ -301,6 +306,14 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       // open below cannot redirect the read outside the root.
       const real = await fs.realpath(target);
       await assertInsideRoot(root, real);
+      // Re-check hidden segments on the REAL path (round 16): a symlink with
+      // an ordinary name (e.g. `assets -> .private`) passes the request-path
+      // check but resolves into a hidden directory — hidden-directory content
+      // must stay unreadable through ANY path form (Greptile P1).
+      const realRel = nodePath.relative(root, real);
+      if (realRel.split(nodePath.sep).some((s) => s.length > 0 && s.startsWith('.'))) {
+        return null;
+      }
       return real;
     } catch (err) {
       if (err instanceof LocalPreviewError && err.code === 'PATH_NOT_ALLOWED') return null;

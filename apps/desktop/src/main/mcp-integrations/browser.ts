@@ -468,24 +468,31 @@ export async function openBrowserForLogin(): Promise<void> {
  * host closes the tabs: the guard dies with the tab, closing the window.
  */
 async function closePreviewTabs(): Promise<void> {
-  try {
-    const tabsRes = await vendoredRuntime.call({ action: 'tabs' });
-    const tabs = (
-      tabsRes.data as
-        | { tabs?: Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> }
-        | undefined
-    )?.tabs;
-    if (!Array.isArray(tabs)) return;
-    for (const tab of tabs) {
-      if (!isPreviewUrl(tab.url ?? '')) continue;
-      const targetId = tab.suggestedTargetId ?? tab.targetId;
-      if (targetId) {
-        await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
+  // Skip the vendored tabs probe entirely when the runtime was never used:
+  // a bare `tabs` call would BOOT the browser control service during quit —
+  // the exact startup quit-time teardown exists to avoid (codex-connector
+  // P2, round 16). The RSB registry sweep below stays unconditional (it
+  // boots nothing).
+  if (vendoredRuntime.everCalled()) {
+    try {
+      const tabsRes = await vendoredRuntime.call({ action: 'tabs' });
+      const tabs = (
+        tabsRes.data as
+          | { tabs?: Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> }
+          | undefined
+      )?.tabs;
+      if (!Array.isArray(tabs)) return;
+      for (const tab of tabs) {
+        if (!isPreviewUrl(tab.url ?? '')) continue;
+        const targetId = tab.suggestedTargetId ?? tab.targetId;
+        if (targetId) {
+          await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
+        }
       }
+    } catch {
+      /* best-effort: the origin grant is already revoked; stale-lock recovery
+         on next launch covers orphaned Chrome state */
     }
-  } catch {
-    /* best-effort: the origin grant is already revoked; stale-lock recovery
-       on next launch covers orphaned Chrome state */
   }
   // RSB webview tabs (round 15): revocation must cover BOTH backends — an
   // RSB preview tab surviving revocation would reload its old URL on a
