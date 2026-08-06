@@ -90,11 +90,10 @@ export class MemoryFts {
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
     if (!query || query.trim().length === 0) return [];
     const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
-    // MATCH 全量拉取 (量级小, 无 LIMIT): top = bm25 最佳 limit 条;
-    // 全量集合用作 seen, 保证 fallback 里只剩 MATCH 永远命不中的 true LIKE-only
-    const matched = this.searchMatch(query, opts);
-    const top = matched.slice(0, limit);
-    const seen = new Set(matched.map((h) => h.filename));
+    // top = bm25 最佳 limit 条 (完整列); seen 用轻量查询取全部 MATCH 命中
+    // filename, 保证 fallback 里只剩 MATCH 永远命不中的 true LIKE-only
+    const top = this.searchMatch(query, opts, limit);
+    const seen = new Set(this.searchMatchFilenames(query, opts));
     const fallback = this.searchLike(query, opts).filter((h) => !seen.has(h.filename));
     if (limit > 1 && top.length >= limit && fallback.length > 0) {
       // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免中文子串结果
@@ -105,7 +104,7 @@ export class MemoryFts {
   }
 
   /** FTS5 MATCH 路径; query 语法错静默返空(让 LIKE 兜底接管) */
-  private searchMatch(query: string, opts: SearchOptions): SearchHit[] {
+  private searchMatch(query: string, opts: SearchOptions, limit: number): SearchHit[] {
     const escapedQuery = escapeFtsQuery(query);
 
     let sql = `SELECT filename, type, title,
@@ -118,7 +117,8 @@ export class MemoryFts {
       sql += ` AND type = ?`;
       params.push(opts.type);
     }
-    sql += ` ORDER BY score`;
+    sql += ` ORDER BY score LIMIT ?`;
+    params.push(limit);
 
     try {
       const rows = this.db.prepare(sql).all(...params) as Array<{
@@ -146,6 +146,28 @@ export class MemoryFts {
   }
 
   /**
+   * 轻量查询: 只取全部 MATCH 命中的 filename (不计算 snippet/bm25) —
+   * 用于构建 seen 集合, 让 LIKE 兜底只剩 true LIKE-only 候选。
+   */
+  private searchMatchFilenames(query: string, opts: SearchOptions): string[] {
+    const escapedQuery = escapeFtsQuery(query);
+    let sql = `SELECT filename FROM ${TABLE} WHERE ${TABLE} MATCH ?`;
+    const params: unknown[] = [escapedQuery];
+    if (opts.type) {
+      sql += ` AND type = ?`;
+      params.push(opts.type);
+    }
+    try {
+      const rows = this.db.prepare(sql).all(...params) as Array<{ filename: string }>;
+      return rows.map((r) => r.filename);
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg.includes('syntax error') || msg.includes('malformed MATCH expression')) return [];
+      throw new MemoryError('io-error', `fts match-filenames failed: ${msg}`);
+    }
+  }
+
+  /**
    * LIKE 子串兜底: 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确), 无 bm25/snippet。
    * 不做 SQL LIMIT — 由调用方去重后再截断: 否则 LIKE-only 命中排在 MATCH 双命中行
    * 之后时会被先截掉, 预留名额失效 (memory 量级小, 全扫可接受)。
@@ -160,6 +182,7 @@ export class MemoryFts {
       sql += ` AND type = ?`;
       params.push(opts.type);
     }
+    sql += ` ORDER BY filename`;
 
     try {
       const rows = this.db.prepare(sql).all(...params) as Array<{
