@@ -1305,6 +1305,12 @@ export function CCAgentSessionView({
     () => resolveManualCompactChannel(realAgentKind, realSessionCaps),
     [realAgentKind, realSessionCaps],
   );
+  // 最新 channel 的可变镜像:useCallback 闭包在创建后固定捕获 compactChannel,确认框
+  // await 期间同会话切换 agent(跨窗口/远程,sessionId 不变)会产生新 render 但旧 async
+  // 闭包还在跑——从闭包读到的还是旧 channel(greptile review)。ref 每次 render 同步,
+  // 异步执行中读 ref.current 才能拿到切换后的最新通道,且无需重建回调。
+  const compactChannelRef = useRef(compactChannel);
+  compactChannelRef.current = compactChannel;
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
@@ -2722,9 +2728,11 @@ export function CCAgentSessionView({
       });
       if (!ok || !compactRequestGuard.isCurrent(sourceSessionId)) return;
       // 确认框打开期间，同一会话可能已在其它窗口 / 远程控制器被切换 agent(sessionId
-      // 不变):捕获的 sourceCompactChannel 已过期,必须按当前 render 的 channel 重新分流,
-      // 否则 Pi→Claude 会静默 null、Claude→Pi 会误走 claude 专用通道(codex P1)。
-      const channelNow = compactChannel;
+      // 不变):捕获的 sourceCompactChannel 已过期。必须读**最新** channel —— 从
+      // compactChannelRef.current 取(useCallback 闭包固定捕获旧值,重新 render 也不影响
+      // 正在 await 的旧 async 函数;ref 每次 render 同步,这里拿到的是切换后的通道)。
+      // 否则 Pi→Claude 会静默 null、Claude→Pi 会误走 claude 专用通道(codex P1 / greptile)。
+      const channelNow = compactChannelRef.current;
       if (channelNow === null) return;
       if (channelNow === 'compact-session') {
         // capability-aware 通道(pi 原生 compact):本地 IPC / device-link 隧道均可路由。

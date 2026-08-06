@@ -950,7 +950,11 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     const csBranch = viewSource.slice(csStart, csEnd);
     expect(csBranch).not.toContain('await compactSession(');
     // 确认框返回后若 channel 已消失(能力被撤/agent 切换)则放弃,不静默误调。
-    expect(viewSource).toContain('const channelNow = compactChannel;');
+    // 关键:重分流必须读 compactChannelRef.current(useCallback 闭包固定捕获旧值,
+    // 旧 async 函数 await 期间重新 render 也不会更新闭包——greptile review)。
+    expect(viewSource).toContain('const compactChannelRef = useRef(compactChannel);');
+    expect(viewSource).toContain('compactChannelRef.current = compactChannel;');
+    expect(viewSource).toContain('const channelNow = compactChannelRef.current;');
     expect(viewSource).toContain('if (channelNow === null) return;');
     // claude 通道执行前才校验 workingDir(输入协调器硬前提)。
     expect(viewSource).toContain("if (channelNow !== 'claude-input') return;");
