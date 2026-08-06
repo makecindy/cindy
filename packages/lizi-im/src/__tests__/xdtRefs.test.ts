@@ -88,6 +88,35 @@ describe('linear managed-media parser', () => {
     expect(collectXdtImageUrls(text)).toEqual([BLOB]);
     expect(stripXdtImageLinks(text)).toBe('broken [ prefix ');
   });
+
+  it('未闭合 file 引用在前不吞后续合法 image(#1856 review P2 回归)', () => {
+    // 畸形候选一路扫到 image 的右括号, 修复前 good 图整段被吞:
+    // 收集为 0、transform 把含合法引用的整段错误改写。
+    const text = `[bad](xdt-file://unterminated ![good](${BLOB}) 尾巴`;
+
+    expect(collectXdtImageUrls(text)).toEqual([BLOB]);
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(stripXdtImageLinks(text)).toBe('[bad](xdt-file://unterminated  尾巴');
+    expect(transformXdtRefs(text, { image: ({ alt }) => `<${alt}>` })).toBe(
+      '[bad](xdt-file://unterminated <good> 尾巴',
+    );
+  });
+
+  it('未闭合 image 引用在前不吞后续合法 file(同根因对称面)', () => {
+    const file = 'xdt-file:///tmp/r.txt';
+    const text = `![bad](xdt-image://unterminated [report](${file})`;
+
+    expect(collectXdtImageUrls(text)).toEqual([]);
+    expect(collectXdtFileLinks(text)).toEqual([{ alt: 'report', absPath: '/tmp/r.txt' }]);
+    expect(stripXdtFileLinks(text)).toBe('![bad](xdt-image://unterminated ');
+  });
+
+  it('URL 含 "[" 的引用按畸形放弃(恢复扫描的代价, 方括号文件名需 %5B 编码)', () => {
+    expect(collectXdtFileLinks('[f](xdt-file:///tmp/a[1].txt)')).toEqual([]);
+    expect(collectXdtFileLinks('[f](xdt-file:///tmp/a%5B1%5D.txt)')).toEqual([
+      { alt: 'f', absPath: '/tmp/a[1].txt' },
+    ]);
+  });
 });
 
 describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {

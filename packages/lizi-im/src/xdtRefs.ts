@@ -75,6 +75,17 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
 
     const endParen = text.indexOf(')', urlStart + scheme.length);
     if (endParen === -1) break;
+    // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
+    // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
+    // 把整段错误改写。判据: URL 段里出现 '[' 即视为吞进了新引用起点(合法
+    // xdt/cindy-media URL 不含 '[', 文件名确需方括号时用 %5B 编码), 放弃本
+    // 候选并从那个 '[' 恢复前向扫描。cursor 严格前进(nextBracket ≥ urlStart
+    // + scheme.length > openBracket), 无死循环。
+    const nextBracket = text.indexOf('[', urlStart + scheme.length);
+    if (nextBracket !== -1 && nextBracket < endParen) {
+      cursor = nextBracket;
+      continue;
+    }
     if (endParen > urlStart + scheme.length) {
       refs.push({
         kind: image ? 'image' : 'file',
