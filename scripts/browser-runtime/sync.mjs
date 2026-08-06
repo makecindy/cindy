@@ -95,7 +95,8 @@ function shHide(cmd) {
   const sh = resolvePosixShell('sh');
   if (!sh) {
     throw new Error(
-      'sync: 找不到可用的 sh（未检测到 Git for Windows）。请安装 Git for Windows 后重试。',
+      'sync: could not locate a usable sh (Git for Windows not detected). ' +
+        'Install Git for Windows and retry.',
     );
   }
   if (process.platform !== 'win32') {
