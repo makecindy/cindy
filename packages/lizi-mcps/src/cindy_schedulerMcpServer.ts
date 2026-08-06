@@ -26,6 +26,7 @@ import { jsonObjectArg } from './json-object-arg.js';
 
 import { SchedulerToolRegistry } from './cindy_schedulerToolRegistry.js';
 import {
+  registerCodexAutomationTools,
   registerScheduleCreateTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
@@ -180,6 +181,7 @@ export function createSchedulerMcpServer(
   registerScheduleListTool(registry, deps);
   registerScheduleGetTool(registry, deps);
   registerScheduleListRunsTool(registry, deps);
+  registerCodexAutomationTools(registry, deps);
   // create / update 都注入 ctx:bindToCurrentSession 据 sessionId 自动填 targetSessionId,
   // 免去 agent 自己查 / 抄 session id(同 silence,避免绑错会话)。
   registerScheduleCreateTool(registry, deps, getSessionContext);

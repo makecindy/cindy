@@ -18,6 +18,7 @@ export { registerScheduleListRunsTool } from './listRuns.js';
 export { registerScheduleSilenceCurrentRunTool } from './silenceCurrentRun.js';
 export { registerScheduleNotifyCurrentRunTool } from './notifyCurrentRun.js';
 export { registerScheduleSetPreRunHookTool } from './setPreRunHook.js';
+export { registerCodexAutomationTools } from './codexAutomation.js';
 
 export { classifySchedulerError } from './errors.js';
 export type { SchedulerToolError, SchedulerToolErrorCode } from './errors.js';
