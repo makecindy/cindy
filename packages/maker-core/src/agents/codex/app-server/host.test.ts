@@ -795,6 +795,78 @@ describe('AppServerHost descendant thread routing', () => {
     await host.shutdown();
   });
 
+  it('registers provisional descendant request brokers before replaying resolved notifications', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const order: string[] = [];
+    const subscription = host.subscribeThread('root-thread', {
+      requestUserInput: vi.fn(async (_params, meta) => {
+        order.push(`request:${String(meta.requestId)}`);
+        return { answers: {} };
+      }),
+      dynamicToolCall: vi.fn(async (_params, meta) => {
+        order.push(`request:${String(meta.requestId)}`);
+        return { contentItems: [], success: false };
+      }),
+      descendantNotification: (_threadId, method, params) => {
+        if (method !== 'serverRequest/resolved') return;
+        order.push(`resolved:${String((params as { requestId: string }).requestId)}`);
+      },
+    });
+
+    host.reserveDescendantLineage('child-thread', 'root-thread');
+    transport.emit({
+      id: 'pending-input',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'child-thread',
+        turnId: 'child-turn',
+        itemId: 'input',
+        questions: [{ id: 'q1', header: 'Q', question: 'Continue?', options: [] }],
+      },
+    });
+    transport.emit({
+      id: 'pending-tool',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'child-thread',
+        turnId: 'child-turn',
+        callId: 'tool',
+        namespace: null,
+        tool: 'ask_user',
+        arguments: {},
+      },
+    });
+    transport.emit({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'child-thread', requestId: 'pending-input' },
+    });
+    transport.emit({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'child-thread', requestId: 'pending-tool' },
+    });
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+
+    await vi.waitFor(() => {
+      expect(order).toEqual([
+        'request:pending-input',
+        'request:pending-tool',
+        'resolved:pending-input',
+        'resolved:pending-tool',
+      ]);
+    });
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
   it('declines an MCP elicitation whose lineage stays unknown for the bounded window', async () => {
     const transport = new NotificationTransport();
     const host = new AppServerHost({

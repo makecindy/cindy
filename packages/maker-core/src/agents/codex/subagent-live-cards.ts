@@ -253,10 +253,7 @@ export function createSubagentLiveCardTracker(opts: {
     return 'completed';
   };
 
-  const snapshot = (card: TrackedCard): SubagentLiveCardUpdate => {
-    let totalTokens = 0;
-    for (const thread of card.threads.values()) totalTokens += thread.totalTokens;
-    const status = aggregateStatus(card);
+  const aggregateModel = (card: TrackedCard): string | null | undefined => {
     const observedModels = new Set<string>();
     let threadsWithModel = 0;
     for (const thread of card.threads.values()) {
@@ -270,11 +267,18 @@ export function createSubagentLiveCardTracker(opts: {
     // all values agree — partial observation must not be projected onto the
     // whole card (codex review). With zero reports, use Cindy's explicit
     // configured fallback.
-    const model = threadsWithModel === 0
+    return threadsWithModel === 0
       ? subagentModelFallback
       : threadsWithModel === card.threads.size && observedModels.size === 1
         ? observedModels.values().next().value
         : null;
+  };
+
+  const snapshot = (card: TrackedCard): SubagentLiveCardUpdate => {
+    let totalTokens = 0;
+    for (const thread of card.threads.values()) totalTokens += thread.totalTokens;
+    const status = aggregateStatus(card);
+    const model = aggregateModel(card);
     // 这里**不能**因为收口就清 countedItemIds:app-server 允许 turn/completed 先发、后台
     // 收尾的 item/completed 随后才到(codex/index.ts 的终态墓碑注释写明了这个顺序)。清掉
     // 之后那条迟到的 completed 会被当成一个新工具再加一次,卡片最终工具数虚高(review)。
@@ -592,9 +596,14 @@ export function createSubagentLiveCardTracker(opts: {
       // 已并入同一张卡:幂等,不重置计数。
       // 新线程并入会改变聚合状态(比如把已显示完成的卡拉回 running —— 孙线程还在跑,卡片就
       // 不该说完成),所以发帧条件不只看有没有重放内容,还看聚合状态是否因此改变。
-      const before = aggregateStatus(card);
+      const beforeStatus = aggregateStatus(card);
+      const beforeModel = aggregateModel(card);
       const replayed = attachThread(card, childThreadId, new Set<string>(), model, spawnFailed);
-      return replayed || aggregateStatus(card) !== before ? snapshot(card) : null;
+      return replayed
+        || aggregateStatus(card) !== beforeStatus
+        || aggregateModel(card) !== beforeModel
+        ? snapshot(card)
+        : null;
     },
 
     handleDescendantNotification(

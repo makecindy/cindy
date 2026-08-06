@@ -160,6 +160,22 @@ describe('createSubagentLiveCardTracker', () => {
     expect(conflicting?.model).toBeNull();
   });
 
+  it('clears an observed model when a quiet descendant joins the card', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent'));
+    expect(
+      tracker.noteDescendantThread('t-parent', 'root-thread', 'codex/gpt-5.5'),
+    ).toMatchObject({ model: 'codex/gpt-5.5' });
+
+    // 孙线程已加入但尚未报告模型,且之后可能没有任何通知。入卡这一刻就必须
+    // 发 model:null 清掉旧徽标,不能继续把父线程的模型投影到整张卡。
+    expect(tracker.noteDescendantThread('t-grandchild', 't-parent')).toMatchObject({
+      taskId: 'card-parent',
+      status: 'running',
+      model: null,
+    });
+  });
+
   it('counts a tool item once even when both phases arrive', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));

@@ -1047,7 +1047,12 @@ export class AppServerHost {
   private establishDescendantLineage(
     childThreadId: string,
     parentThreadId: string,
-  ): { rootThreadId: string; handlers: ThreadEventHandlers; establishedNewEdge: boolean } | null {
+  ): {
+    rootThreadId: string;
+    handlers: ThreadEventHandlers;
+    establishedNewEdge: boolean;
+    releasedRequestWaiters: boolean;
+  } | null {
     if (!childThreadId || !parentThreadId || parentThreadId === childThreadId) return null;
     const rootThreadId = this.lineageRoots.get(parentThreadId)
       ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
@@ -1057,12 +1062,17 @@ export class AppServerHost {
     if (!handlers) return null;
 
     if (this.lineageRoots.get(childThreadId) === rootThreadId) {
-      return { rootThreadId, handlers, establishedNewEdge: false };
+      return {
+        rootThreadId,
+        handlers,
+        establishedNewEdge: false,
+        releasedRequestWaiters: false,
+      };
     }
 
     this.lineageRoots.set(childThreadId, rootThreadId);
-    this.notifyThreadHandlerWaiters(childThreadId);
-    return { rootThreadId, handlers, establishedNewEdge: true };
+    const releasedRequestWaiters = this.notifyThreadHandlerWaiters(childThreadId);
+    return { rootThreadId, handlers, establishedNewEdge: true, releasedRequestWaiters };
   }
 
   /**
@@ -1142,15 +1152,23 @@ export class AppServerHost {
       return;
     }
     if (!established.establishedNewEdge) return;
-    // `thread/started` may already be buffered under this child id when the
-    // root subscription replays a spawn item and establishes lineage late.
-    // Preserve and forward that metadata (notably thread.model) before the
-    // ordinary descendant drain deletes the whole buffer and skips starts.
-    this.replayBufferedThreadStarts(childThreadId);
-    // 子线程在登记前已到达的通知缓存在它自己的 id 下,补投进 descendant 通道;
-    // 它名下若已缓冲了孙线程的 thread/started,一并重建整条血缘链。
-    this.drainBufferedDescendantNotifications(childThreadId, established.rootThreadId, established.handlers);
-    this.replayBufferedDescendantThreadStarts(established.rootThreadId);
+    const replayBufferedNotifications = (): void => {
+      // `thread/started` may already be buffered under this child id when the
+      // root subscription replays a spawn item and establishes lineage late.
+      // Preserve and forward that metadata (notably thread.model) before the
+      // ordinary descendant drain deletes the whole buffer and skips starts.
+      this.replayBufferedThreadStarts(childThreadId);
+      // 子线程在登记前已到达的通知缓存在它自己的 id 下,补投进 descendant 通道;
+      // 它名下若已缓冲了孙线程的 thread/started,一并重建整条血缘链。
+      this.drainBufferedDescendantNotifications(childThreadId, established.rootThreadId, established.handlers);
+      this.replayBufferedDescendantThreadStarts(established.rootThreadId);
+    };
+    // Resolving a lineage waiter schedules the server-request handler's await
+    // continuation. Let that continuation register its broker entry before a
+    // buffered serverRequest/resolved notification is replayed; otherwise the
+    // cancellation is lost and a request the server already closed reaches UI.
+    if (established.releasedRequestWaiters) queueMicrotask(replayBufferedNotifications);
+    else replayBufferedNotifications();
   }
 
   /**
@@ -1196,8 +1214,10 @@ export class AppServerHost {
     });
   }
 
-  private notifyThreadHandlerWaiters(threadId: string): void {
-    for (const finish of [...(this.threadHandlerWaiters.get(threadId) ?? [])]) finish();
+  private notifyThreadHandlerWaiters(threadId: string): boolean {
+    const waiters = [...(this.threadHandlerWaiters.get(threadId) ?? [])];
+    for (const finish of waiters) finish();
+    return waiters.length > 0;
   }
 
   private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {
@@ -1209,7 +1229,7 @@ export class AppServerHost {
     if (this.pendingLineage.has(childThreadId)) return;
     const established = this.establishDescendantLineage(childThreadId, parentThreadId);
     if (!established) return;
-    const { rootThreadId, handlers, establishedNewEdge } = established;
+    const { rootThreadId, handlers, establishedNewEdge, releasedRequestWaiters } = established;
     // 血缘重复(spawn 路径已建边)也要转发:thread/started 是 thread.model 等实际
     // 元数据的唯一载体,吞掉它会让「实际线程模型优先」永远等不到观测值(codex review)。
     if (handlers.descendantThreadStarted) {
@@ -1226,16 +1246,20 @@ export class AppServerHost {
     }
     // 重复建边只补元数据转发:缓冲早已在首次建边时排空,重放在这里只会空转。
     if (!establishedNewEdge) return;
-    // 血缘刚建立:该子线程在此之前到达的 item / tokenUsage / turn 通知都缓存在**它自己的
-    // id** 下(那时既不是 subscriber 也没有 lineage)。root 侧的 drain 只排空 root id 的队列,
-    // 这些永远排不到 → 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在
-    // running(codex review)。这里按到达顺序补投进 descendant 通道。
-    this.drainBufferedDescendantNotifications(childThreadId, rootThreadId, handlers);
-    // 本次血缘建立可能解锁**孙**线程:孙的 thread/started 缓存在它自己的 id 下,上面的 drain
-    // 只排空 childThreadId 的队列,而且它按契约会跳过 thread/started —— 不再扫一遍,孙线程的
-    // 血缘永远建不起来,它的 tool / token / 终态通知会一直烂在缓冲区直到过期(卡片漏计,并
-    // 可能一直显示运行中或提前完成)(review)。复用 root 订阅时那套迭代重建。
-    this.replayBufferedDescendantThreadStarts(rootThreadId);
+    const replayBufferedNotifications = (): void => {
+      // 血缘刚建立:该子线程在此之前到达的 item / tokenUsage / turn 通知都缓存在**它自己的
+      // id** 下(那时既不是 subscriber 也没有 lineage)。root 侧的 drain 只排空 root id 的队列,
+      // 这些永远排不到 → 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在
+      // running(codex review)。这里按到达顺序补投进 descendant 通道。
+      this.drainBufferedDescendantNotifications(childThreadId, rootThreadId, handlers);
+      // 本次血缘建立可能解锁**孙**线程:孙的 thread/started 缓存在它自己的 id 下,上面的 drain
+      // 只排空 childThreadId 的队列,而且它按契约会跳过 thread/started —— 不再扫一遍,孙线程的
+      // 血缘永远建不起来,它的 tool / token / 终态通知会一直烂在缓冲区直到过期(卡片漏计,并
+      // 可能一直显示运行中或提前完成)(review)。复用 root 订阅时那套迭代重建。
+      this.replayBufferedDescendantThreadStarts(rootThreadId);
+    };
+    if (releasedRequestWaiters) queueMicrotask(replayBufferedNotifications);
+    else replayBufferedNotifications();
   }
 
   /**
