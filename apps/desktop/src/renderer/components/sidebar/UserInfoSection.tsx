@@ -95,7 +95,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
       aria-label={t('sidebar.user.downloadMobile')}
       className={cn(
         'mobile-download-btn',
-        'flex h-9 w-9 shrink-0 items-center justify-center',
+        'flex shrink-0 items-center justify-center',
+        isCollapsed ? 'h-8 w-8' : 'h-9 w-9',
         'text-[var(--sidebar-user-card-text)] transition-colors hover:bg-sidebar-item-hover',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
       )}
@@ -107,7 +108,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   if (isCollapsed) {
     return (
       <>
-        <div className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3">
+        <div className="mt-auto flex h-[72px] flex-col items-center justify-center gap-1 px-3">
           <button
             onClick={handleClick}
             role="link"
@@ -171,7 +172,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     <div className="mt-auto pt-1">
       {/* 胶囊整体承载 hover(方案 D):玻璃底色加深一档;悬停右侧操作按钮时用
         :has() 把胶囊底色还原,只让当前按钮高亮,避免双层叠色。
-        横向填满容器、向下填满、圆角矩形(不用直角)。 */}
+        横向填满容器、向下填满、直角矩形(去掉圆角)。 */}
       <div
         className={cn(
           'flex h-12 items-center border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',

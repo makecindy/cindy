@@ -102,12 +102,12 @@ describe('UserInfoSection — 未登录态头像兜底', () => {
     // 取首字会渲染成「未」/「N」这类无意义字符,所以这里必须走图标分支。
     expect(source).toContain('const showNotSignedInGlyph = !user && isLocal;');
     // 折叠 rail(36px 圆)与展开胶囊(40px 圆)两处兜底都要接上
-    expect(source).toMatch(
-      /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{18\}/,
-    );
-    expect(source).toMatch(
-      /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{18\}/,
-    );
+    const matchCount = (
+      source.match(
+        /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{18\}/g,
+      ) ?? []
+    ).length;
+    expect(matchCount).toBe(2);
   });
 
   it('已登录用户仍使用姓名首字兜底', () => {
@@ -123,7 +123,7 @@ describe('UserInfoSection — mobile download entry', () => {
     expect(source).toContain(
       "import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';",
     );
-    expect(source).toMatch(/'mobile-download-btn',\s*\n\s*'flex h-9 w-9/);
+    expect(source).toMatch(/mobile-download-btn',\s*\n\s*'flex shrink-0.*\n.*isCollapsed \? 'h-8 w-8' : 'h-9 w-9'/);
     expect(source).toContain('<Smartphone className="h-5 w-5" aria-hidden="true" />');
   });
 
@@ -143,7 +143,7 @@ describe('UserInfoSection — mobile download entry', () => {
 
   it('keeps the same entry and dialog available in the collapsed sidebar', () => {
     expect(source).toContain(
-      'className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3"',
+      'className="mt-auto flex h-[72px] flex-col items-center justify-center gap-1 px-3"',
     );
     expect(source).toContain('{mobileDownloadEntry}');
   });
