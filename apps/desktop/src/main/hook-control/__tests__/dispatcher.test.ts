@@ -1230,6 +1230,50 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
+  it('同一消息线切换到另一个失效 sessionId 时创建新的替代 session', async () => {
+    const dd = dialogueDep();
+    const fr = fakeRunner();
+    const externalKey = 'team-slack:C1:different-stale';
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-a', externalKey, sessionId: 'ghost-a', workspace: null }),
+      c.send,
+    );
+    await tick();
+    const firstSessionId = fr.calls[0]?.sessionId;
+    expect(firstSessionId).toBeTruthy();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-b', externalKey, sessionId: 'ghost-b', workspace: null }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls).toHaveLength(2);
+    const secondSessionId = fr.calls[1]?.sessionId;
+    expect(secondSessionId).toBeTruthy();
+    expect(secondSessionId).not.toBe(firstSessionId);
+    expect(c.ofType('task.ack').map((message) => message.payload)).toEqual([
+      expect.objectContaining({
+        requestId: 'stale-a',
+        result: 'accepted',
+        sessionId: firstSessionId,
+      }),
+      expect.objectContaining({
+        requestId: 'stale-b',
+        result: 'accepted',
+        sessionId: secondSessionId,
+      }),
+    ]);
+
+    fr.finish();
+    fr.finish();
+  });
+
   it('显式目标不存在且无可用提示时静默新建 chat，并替换当前及旧版 binding', async () => {
     const dd = dialogueDep();
     const bindings = memoryBindings();

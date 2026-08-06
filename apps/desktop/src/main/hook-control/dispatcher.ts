@@ -648,11 +648,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
    */
   const awaitingPersist = new Map<string, string>();
   /**
-   * 当前 externalKey 最近一次由失效显式接管替换出的 session。显式 stale 请求
+   * 当前 externalKey 最近一次失效显式接管的目标与 replacement。显式 stale 请求
    * 必须跳过进场时的无关旧 binding, 但同一消息线随后再次携带同一个 stale id
-   * 时要认出刚创建的 replacement, 否则会在串行等待后再拆出一个新 session。
+   * 时要认出刚创建的 replacement；换了 stale id 则必须重新创建任务。
+   * 关联随 binding 被替换或归档而删除，生命周期不超过当前 binding。
    */
-  const staleTakeoverReplacements = new Map<string, string>();
+  const staleTakeoverReplacements = new Map<
+    string,
+    { staleSessionId: string; replacementSessionId: string }
+  >();
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
@@ -1511,6 +1515,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         }
         // 接管路径刚校验过白名单, 授权来源恒为 workspace(远端不能凭接管把会话
         // 带出映射 —— 越界的 sessionId 在上面就被 workspace_not_allowed 打回)
+        staleTakeoverReplacements.delete(laneKey);
         bindings.set(connectionId, payload.externalKey, payload.sessionId);
         return {
           run: {
@@ -1586,7 +1591,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         : null;
     const bound = namespacedBound ?? legacyBound;
     const trackedReplacement = staleTakeoverReplacements.get(laneKey);
-    if (trackedReplacement !== undefined && trackedReplacement !== bound) {
+    const reusesTrackedReplacement =
+      forceNew &&
+      payload.sessionId !== null &&
+      trackedReplacement?.staleSessionId === payload.sessionId &&
+      trackedReplacement.replacementSessionId === bound;
+    if (
+      trackedReplacement !== undefined &&
+      (trackedReplacement.replacementSessionId !== bound ||
+        (forceNew && trackedReplacement.staleSessionId !== payload.sessionId))
+    ) {
       staleTakeoverReplacements.delete(laneKey);
     }
     const migrateLegacyBinding = (): void => {
@@ -1594,7 +1608,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       bindings.set(connectionId, payload.externalKey, legacyBound);
       bindings.remove(legacyNamespace, payload.externalKey);
     };
-    if ((!forceNew || trackedReplacement === bound) && bound) {
+    if ((!forceNew || reusesTrackedReplacement) && bound) {
       const info = await runner.inspect(bound);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
@@ -1744,8 +1758,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
     // 新建会话跑在别名目录(或对话根)里, 是否还能复用每次现场按映射判定
     bindings.set(connectionId, payload.externalKey, sessionId);
-    if (forceNew) {
-      staleTakeoverReplacements.set(laneKey, sessionId);
+    if (forceNew && payload.sessionId !== null) {
+      staleTakeoverReplacements.set(laneKey, {
+        staleSessionId: payload.sessionId,
+        replacementSessionId: sessionId,
+      });
     } else {
       staleTakeoverReplacements.delete(laneKey);
     }
@@ -2067,6 +2084,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 归档并发穿插 —— 归档排在其后, 能看到刚落下的绑定。
       serializeByKey(`${connectionId} ${externalKey}`, async () => {
         if (!isCurrentGeneration(admittedGeneration)) return;
+        staleTakeoverReplacements.delete(bindingKey(connectionId, externalKey));
         /**
          * 这个会话此刻还归远端管吗 —— 归档同样要过工作目录映射这道边界。
          * 会话已被移出映射(或映射被改/删)时, 远端的 `/new` 不该还能归档它并
