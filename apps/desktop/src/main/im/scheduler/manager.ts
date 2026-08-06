@@ -178,7 +178,22 @@ export class ImSchedulerManager {
     this.offStatus = null;
     this.offDiscordStatus = null;
     this.deviceLinkReady = false;
-    this.discord.setSchedulerHooks(null);
+
+    // Keep the fail-closed scheduler hooks installed until any activation
+    // already queued in reconcileTail has finished. Destroying the Gateway
+    // first aborts an in-flight login; its pending-credential rollback then
+    // still observes started=false and cannot reconnect the previous account's
+    // Bot while logout/account replacement is disposing the IM aggregate.
+    try {
+      try {
+        await this.discord.enterSchedulerStandby();
+      } catch (error) {
+        log.warn('discord scheduler stop standby failed', error);
+      }
+      await this.reconcileTail.catch(() => undefined);
+    } finally {
+      this.discord.setSchedulerHooks(null);
+    }
     this.peers.clear();
     this.confirmedPeers.clear();
     this.pendingProbePeers.clear();

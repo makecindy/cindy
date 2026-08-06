@@ -711,6 +711,40 @@ describe('DiscordIM inbound pipeline', () => {
     expect(onConfigurationChanged).toHaveBeenCalledTimes(2);
   });
 
+  it('does not reconnect the previous account while a pending activation is being disposed', async () => {
+    const gateway = makeGateway();
+    const activation = deferred<void>();
+    const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+    const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+    gateway.connect.mockImplementationOnce(() => activation.promise);
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', previousToken],
+        ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-token-pending', candidateToken],
+        ['discord-owner-user-id-pending', 'user-2'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    im.setSchedulerHooks({ isTransportAllowed: () => true });
+
+    const initializing = im.init();
+    await vi.waitFor(() => expect(gateway.connect).toHaveBeenCalledWith(candidateToken));
+    const disposing = im.dispose();
+    activation.reject(Object.assign(new Error('login aborted'), { code: 'TokenInvalid' }));
+
+    await initializing;
+    await disposing;
+
+    expect(gateway.connect).toHaveBeenCalledTimes(1);
+    expect(gateway.connect).not.toHaveBeenCalledWith(previousToken);
+  });
+
   it('sends the owner a fixed notice after a successful link', async () => {
     const channel = makeChannel('dm-1');
     const gateway = makeGateway({ client: makeClient(channel) });

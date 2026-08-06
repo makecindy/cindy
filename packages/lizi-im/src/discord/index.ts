@@ -707,10 +707,14 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private async reconnectPreviousGateway(previousToken: string | null): Promise<void> {
     const token = previousToken?.trim() ?? '';
     const identity = this.schedulerIdentityFromToken(token);
-    if (!token || (identity && !this.schedulerTransportAllowed(identity))) return;
+    if (this.disposing || !token || (identity && !this.schedulerTransportAllowed(identity))) return;
 
     try {
       await this.gateway.connect(token);
+      if (this.disposing) {
+        await this.gateway.destroy();
+        return;
+      }
       if (identity && !this.schedulerTransportAllowed(identity)) {
         await this.enterSchedulerStandby();
       }

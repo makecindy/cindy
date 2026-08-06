@@ -229,6 +229,31 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('keeps the scheduler fail-closed until an in-flight activation settles during stop', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    let releaseActivation!: () => void;
+    discord.init.mockImplementation(async () => {
+      await new Promise<void>((resolve) => { releaseActivation = resolve; });
+      expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+    });
+    discord.enterSchedulerStandby.mockImplementation(async () => {
+      releaseActivation();
+    });
+    const manager = createManager(discord);
+
+    await manager.start();
+    await vi.advanceTimersByTimeAsync(3_500);
+    const activation = manager.reconcile();
+    await vi.waitFor(() => expect(discord.init).toHaveBeenCalledTimes(1));
+
+    await manager.stop();
+    await activation;
+
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
+    expect(harness.hooks).toBeNull();
+  });
+
   it('fails closed when Device Link has no stable self device id', async () => {
     harness.selfDeviceId = null;
     const discord = createDiscord();
