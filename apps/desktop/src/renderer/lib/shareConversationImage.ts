@@ -314,14 +314,18 @@ export function assertShareImageReadableSize(root: HTMLElement): void {
  */
 export function expandScrollableBlocks(root: HTMLElement): void {
   for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
+    const overflowsX = el.scrollWidth > el.clientWidth;
+    const overflowsY = el.scrollHeight > el.clientHeight;
+    if (!overflowsX && !overflowsY) continue;
+
     const style = window.getComputedStyle(el);
-    if (style.overflowX === 'auto' || style.overflowX === 'scroll') {
+    if (overflowsX && (style.overflowX === 'auto' || style.overflowX === 'scroll')) {
       el.style.overflowX = 'visible';
       // 只解除 overflow 不够:容器仍被父级宽度约束,内容照旧在边界处截断。
       el.style.width = 'max-content';
       el.style.maxWidth = 'none';
     }
-    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+    if (overflowsY && (style.overflowY === 'auto' || style.overflowY === 'scroll')) {
       el.style.overflowY = 'visible';
       el.style.maxHeight = 'none';
     }
@@ -582,8 +586,9 @@ export async function buildShareImageBlob({
  * 但选择器拼接一律走转义 —— 不给未来的 id 格式变更留注入面。
  */
 function cssAttrValue(value: string): string {
-  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-    return CSS.escape(value);
-  }
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return value.replace(/[\0-\x1f\x7f"\\]/g, (character) => {
+    if (character === '\0') return '\uFFFD';
+    if (character === '"' || character === '\\') return `\\${character}`;
+    return `\\${character.codePointAt(0)?.toString(16) ?? ''} `;
+  });
 }

@@ -17,6 +17,7 @@ const {
   ShareImageTooLargeError,
   assertShareImageReadableSize,
   buildShareImageFooter,
+  expandScrollableBlocks,
   inlineCloneImages,
   queryShareableMessageIds,
   redactTextNodes,
@@ -197,6 +198,42 @@ describe('assertShareImageReadableSize', () => {
   });
 });
 
+describe('expandScrollableBlocks', () => {
+  it('只对实际溢出的候选读取样式并展开', () => {
+    const el = root('<div class="fits"></div><div class="wide"></div>');
+    const fits = el.querySelector<HTMLElement>('.fits')!;
+    const wide = el.querySelector<HTMLElement>('.wide')!;
+    Object.defineProperties(fits, {
+      scrollWidth: { value: 100 },
+      clientWidth: { value: 100 },
+      scrollHeight: { value: 20 },
+      clientHeight: { value: 20 },
+    });
+    Object.defineProperties(wide, {
+      scrollWidth: { value: 200 },
+      clientWidth: { value: 100 },
+      scrollHeight: { value: 20 },
+      clientHeight: { value: 20 },
+    });
+    const getComputedStyle = vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      overflowX: 'auto',
+      overflowY: 'visible',
+    } as CSSStyleDeclaration);
+
+    try {
+      expandScrollableBlocks(el);
+      expect(getComputedStyle).toHaveBeenCalledTimes(1);
+    } finally {
+      getComputedStyle.mockRestore();
+    }
+
+    expect(fits.style.overflowX).toBe('');
+    expect(wide.style.overflowX).toBe('visible');
+    expect(wide.style.width).toBe('max-content');
+    expect(wide.style.maxWidth).toBe('none');
+  });
+});
+
 describe('queryShareableMessageIds', () => {
   it('按文档顺序返回本会话已渲染的可选消息 id', () => {
     document.body.innerHTML = `
@@ -218,6 +255,16 @@ describe('queryShareableMessageIds', () => {
 
   it('没有已渲染消息时返回空数组', () => {
     expect(queryShareableMessageIds('s1')).toEqual([]);
+  });
+
+  it('完整转义引号、反斜杠与控制字符', () => {
+    const sessionId = 's"\\\n\r\f\u0001';
+    const message = document.createElement('div');
+    message.setAttribute(SHARE_SESSION_ATTR, sessionId);
+    message.setAttribute(SHARE_MESSAGE_ATTR, 'escaped');
+    document.body.appendChild(message);
+
+    expect(queryShareableMessageIds(sessionId)).toEqual(['escaped']);
   });
 });
 

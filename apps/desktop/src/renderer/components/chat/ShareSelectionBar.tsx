@@ -57,6 +57,8 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
   const selectionBeforeSelectAllRef = useRef<string[] | null>(null);
   // 页脚使用产品指定的 Cindy 主视觉；wordmark 仍跟随当前主题。
   const logoSrc = useBrandLogo();
+  // 不缓存:render-window 会随滚动变化,缓存会让按钮状态与当前可选消息错位;
+  // 导出 / 全选动作仍会当场复查 DOM,这里仅派生当前复选框显示状态。
   const shareableMessageIds = queryShareableMessageIds(sessionId);
   const selectedVisibleCount =
     shareSelectionStore.getSelectedIdsInOrder(shareableMessageIds).length;
@@ -188,7 +190,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
         type="button"
         role="checkbox"
         aria-checked={allSelected}
-        aria-label={allSelected ? t('chat.shareImage.clearAll') : t('chat.shareImage.selectAll')}
+        aria-label={t('chat.shareImage.selectAll')}
         onClick={toggleAll}
         disabled={busy !== null || shareableMessageIds.length === 0}
         className={cn(
