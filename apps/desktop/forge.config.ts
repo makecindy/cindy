@@ -1397,6 +1397,14 @@ const config: ForgeConfig = {
           config: 'vite.ghost-preload.config.ts',
           target: 'preload',
         },
+        {
+          // BROWSER_PARTITION session 级 preload（setPreloads 注入）：全量
+          // 禁用 WebRTC（CSP 管不住 RTCPeerConnection 的 ICE/STUN/TURN 流量，
+          // 预览页可经 TURN 凭据外带数据——codex-connector P1, round 7）。
+          entry: 'src/preload/browserPreviewGuard.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
       ],
       renderer: [
         {

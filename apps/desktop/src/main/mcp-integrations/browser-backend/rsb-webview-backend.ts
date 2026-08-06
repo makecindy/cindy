@@ -250,7 +250,7 @@ const previewGuardedContents = new WeakSet<WebContents>();
  * shape check alone would let a preview page jump to another loopback
  * service whose path happens to match /preview/<token>/.
  */
-function guardPreviewPageNavigation(wc: WebContents): void {
+export function guardPreviewPageNavigation(wc: WebContents): void {
   if (previewGuardedContents.has(wc)) return;
   previewGuardedContents.add(wc);
   wc.on('will-navigate', (event, url) => {
@@ -595,7 +595,6 @@ export class RsbWebviewBackend implements BrowserBackend {
       this.automation.forgetTab(tabId);
       await this.tryObservePageSignals(resolved.wc, tabId);
       this.assertActive();
-      guardPreviewPageNavigation(resolved.wc);
       await loadUrlWithTimeout(
         resolved.wc,
         url,
@@ -1111,10 +1110,9 @@ export class RsbWebviewBackend implements BrowserBackend {
         if (this.disposing) return;
         const wc = this.opts.registry.getWebContentsByTabId(tabId);
         if (wc) {
-          // previewLocalHtml without targetId opens via `open` — attach the
-          // preview navigation guard here too (round-6 review: it used to be
-          // navigate-only, leaving freshly opened previews unguarded).
-          guardPreviewPageNavigation(wc);
+          // The preview navigation guard is attached at did-attach-webview
+          // time (webview-security.ts) — strictly earlier than any page
+          // script — so nothing more is needed here.
           await this.tryObservePageSignals(wc, tabId);
           return;
         }

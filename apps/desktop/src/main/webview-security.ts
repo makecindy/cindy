@@ -40,7 +40,10 @@ import {
   resolveGhostWebviewAttach,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
-import { isPreviewUrl } from './mcp-integrations/browser-backend/rsb-webview-backend.js';
+import {
+  guardPreviewPageNavigation,
+  isPreviewUrl,
+} from './mcp-integrations/browser-backend/rsb-webview-backend.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
 import {
   attributeRsbNativePopupSurface,
@@ -710,6 +713,14 @@ export function installWebviewHardener(): void {
       );
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
+      // Preview navigation guard at ATTACH time — before any page script
+      // runs. The open path (previewLocalHtml without targetId) loads the
+      // page to dom-ready BEFORE main gets the WebContents, so attaching
+      // here (instead of lazily in the backend) closes the window where an
+      // entry HTML's synchronous script could location.href away
+      // (Greptile + codex-connector P1, round 8). No-op for non-preview
+      // pages (the guard keys off the current URL).
+      guardPreviewPageNavigation(guestContents);
       if (pendingGhostAttach) {
         const ghostId = pendingGhostAttach.id;
         pendingGhostAttach = null;

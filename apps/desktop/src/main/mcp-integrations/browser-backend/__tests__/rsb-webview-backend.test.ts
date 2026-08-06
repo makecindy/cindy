@@ -20,7 +20,7 @@ import type {
   RsbBrowserBridgeTabOpResult,
 } from '../../../../shared/rsbBrowserBridge.js';
 import * as rendererBridge from '../../../rsb-browser-bridge/renderer-bridge.js';
-import { RsbWebviewBackend } from '../rsb-webview-backend.js';
+import { guardPreviewPageNavigation, RsbWebviewBackend } from '../rsb-webview-backend.js';
 
 // Build a minimal fake TabRegistry — we only call a handful of methods.
 // pinHistory captures the pin/unpin call order so tests can assert that a
@@ -374,6 +374,56 @@ describe('RsbWebviewBackend — open / focus / close (renderer bridge)', () => {
   });
 });
 
+/**
+ * The preview navigation guard is attached at did-attach-webview time
+ * (webview-security.ts) — strictly before any page script runs, which
+ * closes the open-path race (round 8). These tests exercise the guard
+ * function directly.
+ */
+describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
+  const PREVIEW_URL =
+    'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+
+  it('blocks page-initiated navigation away from a preview page, allows same-origin', () => {
+    const wc = fakeWc({ url: PREVIEW_URL });
+    guardPreviewPageNavigation(wc);
+    const listener = wc.willNavigateListeners[0];
+    expect(listener).toBeTruthy();
+
+    // page-initiated navigation to an external origin → prevented
+    let prevented = false;
+    listener({ preventDefault: () => { prevented = true; } }, 'https://evil.example/?exfil=1');
+    expect(prevented).toBe(true);
+
+    // navigation within the preview origin (reload / sibling resource) → allowed
+    prevented = false;
+    listener(
+      { preventDefault: () => { prevented = true; } },
+      'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/other.html',
+    );
+    expect(prevented).toBe(false);
+
+    // SAME path shape on a DIFFERENT loopback port → blocked (exact-origin
+    // enforcement: a port-agnostic shape check would let a preview page
+    // reach another local service).
+    prevented = false;
+    listener(
+      { preventDefault: () => { prevented = true; } },
+      'http://127.0.0.1:9999/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html',
+    );
+    expect(prevented).toBe(true);
+  });
+
+  it('does not block navigation when the current page is not a preview', () => {
+    const wc = fakeWc({ url: 'https://example.com' });
+    guardPreviewPageNavigation(wc);
+    const listener = wc.willNavigateListeners[0];
+    let prevented = false;
+    listener({ preventDefault: () => { prevented = true; } }, 'https://yet-another.test/');
+    expect(prevented).toBe(false);
+  });
+});
+
 describe('RsbWebviewBackend — direct WebContents actions', () => {
   it('navigate calls wc.loadURL', async () => {
     const wc = fakeWc();
@@ -396,90 +446,6 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
 
     expect(wc.loadURLMock).toHaveBeenCalledWith('https://destination.test');
     expect(res.ok).toBe(true);
-  });
-
-  it('navigate guards preview pages against page-initiated navigation and popups', async () => {
-    const PREVIEW_URL = 'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
-    const wc = fakeWc();
-    const registry = fakeRegistry(
-      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
-      new Map([['t1', wc]]),
-    );
-    const backend = new RsbWebviewBackend({
-      registry,
-      getActiveSessionId: () => 's1',
-      bridge: { getHostWebContents: () => null, logger: logger() },
-      logger: logger(),
-    });
-
-    const res = await backend.call({
-      action: 'navigate',
-      targetId: 't1',
-      url: PREVIEW_URL,
-    } as never);
-    expect(res.ok).toBe(true);
-    expect(wc.loadURLMock).toHaveBeenCalledWith(PREVIEW_URL);
-    // guard attached: will-navigate listener registered
-    expect(wc.willNavigateListeners.length).toBeGreaterThan(0);
-  });
-
-  it('blocks page-initiated navigation away from a preview page, allows same-origin', async () => {
-    const PREVIEW_URL = 'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
-    const wc = fakeWc({ url: PREVIEW_URL });
-    const registry = fakeRegistry(
-      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
-      new Map([['t1', wc]]),
-    );
-    const backend = new RsbWebviewBackend({
-      registry,
-      getActiveSessionId: () => 's1',
-      bridge: { getHostWebContents: () => null, logger: logger() },
-      logger: logger(),
-    });
-    await backend.call({ action: 'navigate', targetId: 't1', url: PREVIEW_URL } as never);
-
-    // page-initiated navigation to an external origin → prevented
-    let prevented = false;
-    const listener = wc.willNavigateListeners[0];
-    listener({ preventDefault: () => { prevented = true; } }, 'https://evil.example/?exfil=1');
-    expect(prevented).toBe(true);
-
-    // navigation within the preview origin (reload / sibling resource) → allowed
-    prevented = false;
-    listener({ preventDefault: () => { prevented = true; } }, 'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/other.html');
-    expect(prevented).toBe(false);
-
-    // SAME path shape on a DIFFERENT loopback port → blocked (exact-origin
-    // enforcement, round-6 review: a port-agnostic shape check would let a
-    // preview page reach another local service).
-    prevented = false;
-    listener({ preventDefault: () => { prevented = true; } }, 'http://127.0.0.1:9999/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html');
-    expect(prevented).toBe(true);
-
-    // public origin → blocked
-    prevented = false;
-    listener({ preventDefault: () => { prevented = true; } }, 'https://evil.example/?exfil=1');
-    expect(prevented).toBe(true);
-  });
-
-  it('does not block navigation when the current page is not a preview', async () => {
-    const wc = fakeWc({ url: 'https://example.com' });
-    const registry = fakeRegistry(
-      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
-      new Map([['t1', wc]]),
-    );
-    const backend = new RsbWebviewBackend({
-      registry,
-      getActiveSessionId: () => 's1',
-      bridge: { getHostWebContents: () => null, logger: logger() },
-      logger: logger(),
-    });
-    await backend.call({ action: 'navigate', targetId: 't1', url: 'https://other.test' } as never);
-
-    let prevented = false;
-    const listener = wc.willNavigateListeners[0];
-    listener({ preventDefault: () => { prevented = true; } }, 'https://yet-another.test/');
-    expect(prevented).toBe(false);
   });
 
   it('navigate fails clearly when targetId missing', async () => {
