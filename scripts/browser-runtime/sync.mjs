@@ -499,6 +499,7 @@ const LOCAL_PATCHES = {
         '  // navigates to a normal WebRTC-dependent site afterwards keeps\n' +
         '  // RTCPeerConnection.\n' +
         '  if (previewOrigin !== null) {\n' +
+        '    try {\n' +
         '    await opts.page\n' +
         '      .addInitScript(() => {\n' +
         '        try {\n' +
@@ -520,10 +521,16 @@ const LOCAL_PATCHES = {
         '          /* ignore */\n' +
         '        }\n' +
         '      });\n' +
-        '      // Fail-closed (round 13): a failed addInitScript (CDP / target\n' +
-        '      // error) must REFUSE the preview navigation — matches the RSB\n' +
-        '      // backend; an unguarded preview would reopen the WebRTC\n' +
-        '      // exfiltration channel.\n' +
+        '    } catch (err) {\n' +
+        '      // Fail-closed (round 13) + cleanup (round 15): a failed\n' +
+        '      // addInitScript (CDP / target error) must REFUSE the preview\n' +
+        '      // navigation — and the route guard installed above must be\n' +
+        '      // removed so a normal page is not left with a preview-only\n' +
+        '      // route that aborts its own navigations.\n' +
+        '      await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '      previewRouteGuards.delete(opts.page);\n' +
+        '      throw err;\n' +
+        '    }\n' +
         '  }',
     }
   ],

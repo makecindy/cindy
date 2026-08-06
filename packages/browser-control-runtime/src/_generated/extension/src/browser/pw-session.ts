@@ -1449,6 +1449,7 @@ export async function gotoPageWithNavigationGuard(
   // navigates to a normal WebRTC-dependent site afterwards keeps
   // RTCPeerConnection.
   if (previewOrigin !== null) {
+    try {
     await opts.page
       .addInitScript(() => {
         try {
@@ -1470,10 +1471,16 @@ export async function gotoPageWithNavigationGuard(
           /* ignore */
         }
       });
-      // Fail-closed (round 13): a failed addInitScript (CDP / target
-      // error) must REFUSE the preview navigation — matches the RSB
-      // backend; an unguarded preview would reopen the WebRTC
-      // exfiltration channel.
+    } catch (err) {
+      // Fail-closed (round 13) + cleanup (round 15): a failed
+      // addInitScript (CDP / target error) must REFUSE the preview
+      // navigation — and the route guard installed above must be
+      // removed so a normal page is not left with a preview-only
+      // route that aborts its own navigations.
+      await opts.page.unroute("**", handler).catch(() => {});
+      previewRouteGuards.delete(opts.page);
+      throw err;
+    }
   }
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });

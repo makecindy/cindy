@@ -487,6 +487,28 @@ async function closePreviewTabs(): Promise<void> {
     /* best-effort: the origin grant is already revoked; stale-lock recovery
        on next launch covers orphaned Chrome state */
   }
+  // RSB webview tabs (round 15): revocation must cover BOTH backends — an
+  // RSB preview tab surviving revocation would reload its old URL on a
+  // seized port without the preview server's CSP, and the shape-matching
+  // guard would still let it through. Destroying the guest WebContents
+  // releases the registry record via its destroyed listener.
+  try {
+    const registry = getRsbBrowserBridge();
+    for (const record of registry.listAll()) {
+      const wc = registry.getWebContentsByTabId(record.tabId);
+      if (!wc || wc.isDestroyed()) continue;
+      let url = '';
+      try {
+        url = wc.getURL?.() ?? '';
+      } catch {
+        continue;
+      }
+      if (!isPreviewUrl(url)) continue;
+      wc.close();
+    }
+  } catch {
+    /* best-effort */
+  }
 }
 
 export function disposeBrowserRuntime(): Promise<void> {

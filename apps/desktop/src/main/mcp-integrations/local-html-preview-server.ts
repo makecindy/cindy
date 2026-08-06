@@ -365,6 +365,15 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     // with an outside symlink for fs.open, then restore it before the
     // realpath recheck) would defeat a pathname-only recheck while the fd
     // still references the outside file (codex-connector P1, round 6).
+    // Pre-open lstat (round 15): reject symlinks outright — the swap vector
+    // is a symlink/junction, and lstat reveals it even when stat/realpath
+    // would resolve through it. The opened fd's identity must then match
+    // this lstat snapshot: a swap AFTER the lstat but BEFORE open would
+    // change the inode under the path, and the dev/ino comparison below
+    // would refuse. This binds the handle to one stable path inspection
+    // (codex-connector P1).
+    const preLstat = await fs.lstat(abs, { bigint: true }).catch(() => null);
+    if (!preLstat?.isFile() || preLstat.nlink > 1n) return refuse(res);
     const preStat = await fs.stat(abs, { bigint: true }).catch(() => null);
     if (!preStat?.isFile()) return refuse(res);
     // Reject hard links (nlink > 1): a link inside the root pointing at an
@@ -415,7 +424,11 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       stat.dev !== postStat.dev ||
       stat.ino !== postStat.ino ||
       // Hard-link count must also match the post-open path snapshot (round 12).
-      stat.nlink !== postStat.nlink
+      stat.nlink !== postStat.nlink ||
+      // The fd must ALSO match the pre-open lstat identity: a swap between
+      // the lstat and open would change the inode under the path (round 15).
+      stat.dev !== preLstat.dev ||
+      stat.ino !== preLstat.ino
     ) {
       await fd.close().catch(() => {});
       return refuse(res);
