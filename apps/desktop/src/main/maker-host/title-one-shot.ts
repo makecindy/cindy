@@ -149,6 +149,11 @@ function titleRouteUnavailableReason(
  * 网关清单变化不再导致标题通道硬失败。
  */
 function pickXdTitleModel(provider: Provider): CatalogModel | null {
+  // 用户显式停用(disable override store)优先于清单排序:active catalog 的 xd
+  // 模型不带 buildRegistry 烘焙的 disabled 字段(那在 rail 的 ProviderView 上),
+  // 只查目录会选中已停用模型,派发前 routeUnavailableNow 再中止整个 one-shot,
+  // 标题退回落启发式而非次便宜可用模型(Codex review round 2)。
+  const disableOverrides = readModelDisableOverrides();
   const candidates: CatalogModel[] = [];
   for (const agent of provider.agents) {
     for (const model of provider.models[agent] ?? []) {
@@ -160,6 +165,7 @@ function pickXdTitleModel(provider: Provider): CatalogModel | null {
       // 被网关拒收(Greptile review P2,2026-08-06)。mode 缺省(网关旧条目)按 chat
       // 处理,由 isModelSelectableForNewRoute 的 id 分类兜底。
       if (model.mode === 'responses') continue;
+      if (isModelDisabled(disableOverrides, provider.id, model.id)) continue;
       candidates.push(model);
     }
   }

@@ -14,12 +14,18 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-const { mockGetAppCapabilities } = vi.hoisted(() => ({
+const { mockGetAppCapabilities, mockReadModelDisableOverrides } = vi.hoisted(() => ({
   mockGetAppCapabilities: vi.fn(() => ({ canUseCindyGateway: true })),
+  mockReadModelDisableOverrides: vi.fn(() => ({})),
 }));
 
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: mockGetAppCapabilities,
+}));
+
+// 用户停用覆盖(disable override store)在测试里可控;默认空 = 无停用。
+vi.mock('../model-disable-store.js', () => ({
+  readModelDisableOverrides: mockReadModelDisableOverrides,
 }));
 
 // xd 网关上游运行期来自 model-access server 下发(effectiveXdGatewayBaseUrl),
@@ -418,6 +424,38 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('xd 清单只有 responses 模型 → null(无可用 chat 模型,不发请求)', () => {
     setXdGatewayModels([{ id: 'qwen/qwen3.8-max', mode: 'responses' }]);
+    try {
+      expect(buildTitleTarget('xd')).toBeNull();
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('用户停用清单中最便宜的模型 → 选次便宜可用模型(Codex round 2)', () => {
+    setXdGatewayModels([
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat', inputCostPerToken: 0.1, outputCostPerToken: 0.2 },
+      { id: 'moonshotai/kimi-k3', mode: 'chat', inputCostPerToken: 1, outputCostPerToken: 2 },
+    ]);
+    mockReadModelDisableOverrides.mockReturnValueOnce({
+      disabledModels: { 'xd:deepseek/deepseek-v4-flash': true },
+    });
+    try {
+      // 最便宜的 deepseek 被用户停用 → 应跳过,选 kimi-k3
+      expect(buildTitleTarget('xd')?.model).toBe('moonshotai/kimi-k3');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('清单中全部 chat 模型都被用户停用 → null', () => {
+    setXdGatewayModels([
+      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+      { id: 'moonshotai/kimi-k3', mode: 'chat' },
+    ]);
+    mockReadModelDisableOverrides.mockReturnValueOnce({
+      disabledModels: {
+        'xd:deepseek/deepseek-v4-flash': true,
+        'xd:moonshotai/kimi-k3': true,
+      },
+    });
     try {
       expect(buildTitleTarget('xd')).toBeNull();
     } finally {
