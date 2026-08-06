@@ -8,8 +8,9 @@
  * 职责链(对应协议语义):
  *   1. 幂等: (connectionId, requestId) 去重 —— 重投只回放上次 ack, 不重跑;
  *   2. 会话定位:
- *      - 带 sessionId(接管): session 必须存在且其工作目录落在本连接注册的
+ *      - 带 sessionId(接管): 可用 session 的工作目录必须落在本连接注册的
  *        别名路径内(白名单不因接管放松), 通过后把 externalKey 重绑到它;
+ *        session 已失效时从受管目录静默新建任务并重绑;
  *      - 不带(默认): 别名解析(映射即白名单)-> binding 查 externalKey ->
  *        复用或新建并落绑定。复用与否**每条消息现场重算**, 唯一依据是会话
  *        当前的工作目录是否仍落在工作目录映射(或内置对话根)内 —— 映射是
@@ -1478,56 +1479,98 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     /** app 托管对话目录(dialogues 根)内的路径 —— chat 伪目录会话的白名单等价物。 */
     const inDialogueRoot = (dir: string | null): boolean =>
       dir !== null && dialogue !== undefined && isPathWithin(dialogue.rootDir(), dir);
-    // 保留别名「对话」: 不查 config.workspaces, 解析成 app 托管对话目录
-    const isChat = payload.workspace === HOOK_CHAT_WORKSPACE_ALIAS && dialogue !== undefined;
+    // 显式接管的目标失效时会从旧目录 / 本次别名提示里挑一个安全落点, 然后
+    // 复用下方的新建路径。普通派发仍原样使用 payload.workspace。
+    let effectiveWorkspace = payload.workspace;
+    let effectiveWorkspaces = config.workspaces;
+    let forceNew = false;
     /** 旧绑定作废、本次不得不新建会话时, 随 turn.end 回给渠道的说明。 */
     let recreatedNotice: string | null = null;
 
     const laneKind = deriveLaneKind(payload.externalKey);
+    // v1 stored every mapping under the literal "slack" namespace.  A new
+    // account/provider namespace may read it only as a candidate; it is moved
+    // after current-account DB existence + workspace allowlist checks pass.
+    const legacyNamespace = connectionId.endsWith(':slack') ? 'slack' : null;
 
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
-      if (!info || !info.usable) return { reject: 'session_not_found' };
-      if (!inWhitelist(info.workingDir) && !inDialogueRoot(info.workingDir)) {
-        return { reject: 'workspace_not_allowed' };
+      if (info?.usable) {
+        if (!inWhitelist(info.workingDir) && !inDialogueRoot(info.workingDir)) {
+          return { reject: 'workspace_not_allowed' };
+        }
+        // 接管路径刚校验过白名单, 授权来源恒为 workspace(远端不能凭接管把会话
+        // 带出映射 —— 越界的 sessionId 在上面就被 workspace_not_allowed 打回)
+        bindings.set(connectionId, payload.externalKey, payload.sessionId);
+        return {
+          run: {
+            sessionId: payload.sessionId,
+            isNew: false,
+            laneKind,
+            workingDir: info.workingDir as string,
+            agentKind,
+            model,
+            effort,
+            permissionMode,
+            title: null,
+            prompt: payload.prompt,
+            attachments: payload.attachments,
+            origin,
+          },
+        };
       }
-      // 接管路径刚校验过白名单, 授权来源恒为 workspace(远端不能凭接管把会话
-      // 带出映射 —— 越界的 sessionId 在上面就被 workspace_not_allowed 打回)
-      bindings.set(connectionId, payload.externalKey, payload.sessionId);
-      return {
-        run: {
-          sessionId: payload.sessionId,
-          isNew: false,
-          laneKind,
-          workingDir: info.workingDir as string,
-          agentKind,
-          model,
-          effort,
-          permissionMode,
-          title: null,
-          prompt: payload.prompt,
-          attachments: payload.attachments,
-          origin,
-        },
-      };
+
+      // 目标不存在、被归档或不可投递: 用户已经明确发来一条新消息, 因而静默
+      // 新建任务并重绑这条外部消息线。旧 workingDir 只能帮助找回逻辑工作区,
+      // 绝不能直接拿来运行 —— 归档任务的专属 worktree 可能早已被删除。
+      effectiveWorkspaces = getConnection(connectionId)?.workspaces ?? config.workspaces;
+      const oldWorkingDir = info?.workingDir ?? null;
+      const inferredWorkspace =
+        oldWorkingDir === null
+          ? null
+          : (Object.entries(effectiveWorkspaces)
+              .filter(([, root]) => isPathWithin(root, oldWorkingDir))
+              .sort(
+                ([, left], [, right]) => path.resolve(right).length - path.resolve(left).length,
+              )[0]?.[0] ?? null);
+      if (inDialogueRoot(oldWorkingDir)) {
+        effectiveWorkspace = HOOK_CHAT_WORKSPACE_ALIAS;
+      } else if (inferredWorkspace !== null) {
+        effectiveWorkspace = inferredWorkspace;
+      } else if (payload.workspace === HOOK_CHAT_WORKSPACE_ALIAS && dialogue !== undefined) {
+        effectiveWorkspace = HOOK_CHAT_WORKSPACE_ALIAS;
+      } else if (
+        payload.workspace !== null &&
+        Object.hasOwn(effectiveWorkspaces, payload.workspace)
+      ) {
+        effectiveWorkspace = payload.workspace;
+      } else if (dialogue !== undefined) {
+        effectiveWorkspace = HOOK_CHAT_WORKSPACE_ALIAS;
+      } else {
+        // 兼容未注入内置对话目录的旧宿主 / 单测: 没有任何可验证的安全落点时
+        // 仍保留旧拒绝语义, 避免凭空选择一个工作目录。
+        return { reject: 'session_not_found' };
+      }
+      forceNew = true;
+      log.info(
+        `hook takeover target ${payload.sessionId} is gone or archived; creating a fresh session in ${effectiveWorkspace}`,
+      );
     }
 
     // 默认路径: 别名解析(映射即白名单); chat 伪目录不走映射, 目录建会话时分配
+    // 保留别名「对话」: 不查 workspaces, 解析成 app 托管对话目录
+    const isChat = effectiveWorkspace === HOOK_CHAT_WORKSPACE_ALIAS && dialogue !== undefined;
     const dir = isChat
       ? undefined
-      : payload.workspace
-        ? Object.hasOwn(config.workspaces, payload.workspace)
-          ? config.workspaces[payload.workspace]
+      : effectiveWorkspace
+        ? Object.hasOwn(effectiveWorkspaces, effectiveWorkspace)
+          ? effectiveWorkspaces[effectiveWorkspace]
           : undefined
         : undefined;
     if (!dir && !isChat) return { reject: 'unknown_workspace' };
 
-    // v1 stored every mapping under the literal "slack" namespace.  A new
-    // account/provider namespace may read it only as a candidate; it is moved
-    // after current-account DB existence + workspace allowlist checks pass.
-    const legacyNamespace = connectionId.endsWith(':slack') ? 'slack' : null;
     const namespacedBound = bindings.get(connectionId, payload.externalKey);
     const legacyBound =
       namespacedBound === null && legacyNamespace !== null
@@ -1539,7 +1582,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       bindings.set(connectionId, payload.externalKey, legacyBound);
       bindings.remove(legacyNamespace, payload.externalKey);
     };
-    if (bound) {
+    if (!forceNew && bound) {
       const info = await runner.inspect(bound);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
@@ -1687,6 +1730,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
     // 新建会话跑在别名目录(或对话根)里, 是否还能复用每次现场按映射判定
     bindings.set(connectionId, payload.externalKey, sessionId);
+    // 显式接管失效时 forceNew 已跳过旧 binding 复用；等新目录准备成功后才覆盖
+    // 当前 binding 并清理旧版 namespace，避免分配失败 / 账号切换时无谓解绑。
+    if (forceNew && legacyNamespace) bindings.remove(legacyNamespace, payload.externalKey);
     // 落库前的免检窗口从这里开始(见 awaitingPersist 声明处): 此刻这个 session
     // 必定建在映射内, inspect 还查不到它, 同 key 的后续消息要能认出它。记下它
     // 建在哪 —— 免检时要拿这个目录跟当时的映射再比一次。
@@ -1714,7 +1760,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         effort,
         permissionMode,
         ...(isChat ? { workspaceKind: 'dialogue' as const } : {}),
-        ...(payload.workspace ? { workspaceAlias: payload.workspace } : {}),
+        ...(effectiveWorkspace ? { workspaceAlias: effectiveWorkspace } : {}),
         title: buildHookSessionTitle(
           providerName,
           titleText,

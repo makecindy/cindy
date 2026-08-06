@@ -34,6 +34,7 @@ import type { HookConnectionConfig } from '../store';
 const noopLog = { info: () => {}, warn: () => {} };
 
 const WS_DIR = path.resolve('/repos/xdmaker');
+const DIALOGUE_ROOT = path.resolve('/userdata/dialogues');
 
 const CONFIG: HookConnectionConfig = {
   id: 'conn-1',
@@ -43,6 +44,21 @@ const CONFIG: HookConnectionConfig = {
   workspaces: { xdmaker: WS_DIR },
   createdAt: 0,
 };
+
+function dialogueDep() {
+  const allocated: string[] = [];
+  return {
+    allocated,
+    dep: {
+      rootDir: () => DIALOGUE_ROOT,
+      allocateDir: async (sessionId: string) => {
+        const dir = path.join(DIALOGUE_ROOT, '2026-07-07', sessionId);
+        allocated.push(dir);
+        return dir;
+      },
+    },
+  };
+}
 
 /** 内存 binding(与文件实现同语义: 只存 externalKey -> sessionId)。 */
 function memoryBindings(): HookBindingStore {
@@ -1109,12 +1125,11 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
-  it('接管: session 存在且在白名单内 -> 复用并重绑; 不存在/越界分别拒绝', async () => {
+  it('接管: 可用 session 在白名单内则复用并重绑, 越界仍拒绝', async () => {
     const fr = fakeRunner({
       sessions: {
         'sess-in': { workingDir: path.join(WS_DIR, 'sub'), usable: true },
         'sess-out': { workingDir: path.resolve('/private/dir'), usable: true },
-        'sess-dead': { workingDir: WS_DIR, usable: false },
       },
     });
     const bindings = memoryBindings();
@@ -1137,10 +1152,181 @@ describe('dispatcher 核心语义', () => {
       result: 'rejected',
       reason: 'workspace_not_allowed',
     });
+  });
+
+  it('显式目标不存在且无可用提示时静默新建 chat，并替换当前及旧版 binding', async () => {
+    const dd = dialogueDep();
+    const bindings = memoryBindings();
+    const externalKey = 'team-slack:C1:fresh';
+    bindings.set('slack:account-one:slack', externalKey, 'unrelated-current');
+    bindings.set('slack', externalKey, 'unrelated-legacy');
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, dialogue: dd.dep });
+    const c = collector();
 
     d.handleDispatch(
-      'conn-1',
-      dispatch({ requestId: 'r3', sessionId: 'ghost', workspace: null }),
+      'slack:account-one:slack',
+      dispatch({ externalKey, sessionId: 'ghost', workspace: null }),
+      c.send,
+    );
+    await tick();
+    const ack = c.last('task.ack')!.payload;
+    expect(ack.result).toBe('accepted');
+    expect(ack.sessionId).not.toBe('ghost');
+    expect(ack.sessionId).not.toBe('unrelated-current');
+    expect(bindings.get('slack:account-one:slack', externalKey)).toBe(ack.sessionId);
+    expect(bindings.get('slack', externalKey)).toBeNull();
+    expect(fr.calls[0]).toMatchObject({
+      sessionId: ack.sessionId,
+      isNew: true,
+      workspaceKind: 'dialogue',
+      workspaceAlias: 'chat',
+    });
+    expect(dd.allocated).toEqual([fr.calls[0].workingDir]);
+
+    fr.finish({ finalText: 'fresh result' });
+    await tick();
+    expect(c.last('turn.end')?.payload.finalText).toBe('fresh result');
+  });
+
+  it('已归档项目任务只沿旧路径推断工作区，并从映射根创建新 worktree', async () => {
+    const nestedRoot = path.join(WS_DIR, 'nested-project');
+    const staleWorktree = path.join(nestedRoot, '.xdt-worktrees', 'archived-session');
+    const freshWorktree = path.join(nestedRoot, '.xdt-worktrees', 'fresh-session');
+    const config = {
+      ...CONFIG,
+      workspaces: { broad: WS_DIR, nested: nestedRoot },
+    };
+    const fr = fakeRunner({
+      sessions: {
+        'sess-dead': { workingDir: staleWorktree, usable: false },
+      },
+    });
+    const prepareWorktree = vi.fn(async (dir: string): Promise<PrepareWorktreeResult> => ({
+      ok: true,
+      sessionId: 'fresh-session',
+      path: path.join(dir, '.xdt-worktrees', 'fresh-session'),
+      cleanup: async () => {},
+    }));
+    const { d } = makeDispatcher({ runner: fr.runner, config, prepareWorktree });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ sessionId: 'sess-dead', workspace: null }), c.send);
+    await tick();
+    expect(prepareWorktree).toHaveBeenCalledWith(nestedRoot);
+    expect(c.last('task.ack')?.payload).toMatchObject({
+      result: 'accepted',
+      sessionId: 'fresh-session',
+    });
+    expect(fr.calls[0]).toMatchObject({
+      isNew: true,
+      workingDir: freshWorktree,
+      workspaceAlias: 'nested',
+    });
+    expect(fr.calls[0].workingDir).not.toBe(staleWorktree);
+    fr.finish();
+  });
+
+  it('已归档 dialogue 任务分配新的对话目录', async () => {
+    const dd = dialogueDep();
+    const staleDir = path.join(DIALOGUE_ROOT, '2026-07-01', 'sess-dead');
+    const fr = fakeRunner({
+      sessions: {
+        'sess-dead': { workingDir: staleDir, usable: false },
+      },
+    });
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ sessionId: 'sess-dead', workspace: 'xdmaker' }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({
+      isNew: true,
+      workspaceKind: 'dialogue',
+      workspaceAlias: 'chat',
+    });
+    expect(fr.calls[0].workingDir).not.toBe(staleDir);
+    expect(dd.allocated).toEqual([fr.calls[0].workingDir]);
+    fr.finish();
+  });
+
+  it('显式目标不存在时可使用仍有效的 workspace 提示新建任务', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ sessionId: 'ghost', workspace: 'xdmaker' }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({
+      isNew: true,
+      workingDir: WS_DIR,
+      workspaceAlias: 'xdmaker',
+    });
+    fr.finish();
+  });
+
+  it('显式目标不存在且 workspace 提示无效时安全回退 chat', async () => {
+    const dd = dialogueDep();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ sessionId: 'ghost', workspace: 'nope' }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({
+      isNew: true,
+      workspaceKind: 'dialogue',
+      workspaceAlias: 'chat',
+    });
+    expect(isPathWithin(DIALOGUE_ROOT, fr.calls[0].workingDir)).toBe(true);
+    fr.finish();
+  });
+
+  it('不可用目标在映射外时只回退受管 chat，绝不运行旧路径', async () => {
+    const dd = dialogueDep();
+    const staleDir = path.resolve('/private/archived-worktree');
+    const fr = fakeRunner({
+      sessions: {
+        'sess-dead': { workingDir: staleDir, usable: false },
+      },
+    });
+    const prepareWorktree = vi.fn();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      dialogue: dd.dep,
+      prepareWorktree,
+    });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ sessionId: 'sess-dead', workspace: 'nope' }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({
+      isNew: true,
+      workspaceKind: 'dialogue',
+      workspaceAlias: 'chat',
+    });
+    expect(fr.calls[0].workingDir).not.toBe(staleDir);
+    expect(isPathWithin(DIALOGUE_ROOT, fr.calls[0].workingDir)).toBe(true);
+    expect(prepareWorktree).not.toHaveBeenCalled();
+    fr.finish();
+  });
+
+  it('旧宿主没有 dialogue 且无安全落点时保留 session_not_found 与原 binding', async () => {
+    const bindings = memoryBindings();
+    const externalKey = 'team-slack:C1:legacy-host';
+    bindings.set('slack:account-one:slack', externalKey, 'unrelated-current');
+    bindings.set('slack', externalKey, 'unrelated-legacy');
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
+
+    d.handleDispatch(
+      'slack:account-one:slack',
+      dispatch({ externalKey, sessionId: 'ghost', workspace: null }),
       c.send,
     );
     await tick();
@@ -1148,17 +1334,8 @@ describe('dispatcher 核心语义', () => {
       result: 'rejected',
       reason: 'session_not_found',
     });
-
-    d.handleDispatch(
-      'conn-1',
-      dispatch({ requestId: 'r4', sessionId: 'sess-dead', workspace: null }),
-      c.send,
-    );
-    await tick();
-    expect(c.last('task.ack')?.payload).toMatchObject({
-      result: 'rejected',
-      reason: 'session_not_found',
-    });
+    expect(bindings.get('slack:account-one:slack', externalKey)).toBe('unrelated-current');
+    expect(bindings.get('slack', externalKey)).toBe('unrelated-legacy');
   });
 
   it('busy 排队: 第二条 queued(位置0), 第一条收口后自动 drain, FIFO', async () => {
@@ -2546,22 +2723,6 @@ describe('interaction.decision 路由', () => {
 });
 
 describe('内置「对话」伪目录(chat 保留别名)', () => {
-  const DIALOGUE_ROOT = path.resolve('/userdata/dialogues');
-  function dialogueDep() {
-    const allocated: string[] = [];
-    return {
-      allocated,
-      dep: {
-        rootDir: () => DIALOGUE_ROOT,
-        allocateDir: async (sessionId: string) => {
-          const dir = path.join(DIALOGUE_ROOT, '2026-07-07', sessionId);
-          allocated.push(dir);
-          return dir;
-        },
-      },
-    };
-  }
-
   it('chat 新建: 分配对话目录、不做 worktree、workspaceKind=dialogue、ack accepted', async () => {
     const dd = dialogueDep();
     const prepareWorktree = vi.fn();
