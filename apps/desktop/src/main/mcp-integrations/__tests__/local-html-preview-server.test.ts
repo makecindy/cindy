@@ -248,4 +248,29 @@ describe('local-html-preview-server', () => {
     expect((await get(url)).status).toBe(404); // token expired
     ttlServer.dispose();
   });
+
+  it('refuses an ENTRY inside a hidden directory (Greptile P1, round 12)', async () => {
+    // The serving root IS the entry's directory, so request-stage
+    // hidden-segment checks can never see a hidden root — the entry path
+    // itself must be rejected up front.
+    await mkdir(nodePath.join(workingDir, '.private'), { recursive: true });
+    await writeFile(nodePath.join(workingDir, '.private', 'index.html'), '<p>hidden</p>');
+    await expect(createUrl('.private/index.html')).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    // nested hidden segment inside a normal tree is rejected too
+    await mkdir(nodePath.join(workingDir, 'dist', '.private'), { recursive: true });
+    await writeFile(nodePath.join(workingDir, 'dist', '.private', 'index.html'), '<p>hidden</p>');
+    await expect(createUrl('dist/.private/index.html')).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it('refuses a hard-linked resource pointing outside the root (codex-connector P1, round 12)', async () => {
+    // realpath returns the link's own in-root name and dev/ino trivially
+    // match the same inode — only nlink > 1 exposes the outside hard link.
+    const outside = nodePath.join(tmpRoot, 'outside-secrets.json');
+    await writeFile(outside, '{"secret":true}');
+    const link = nodePath.join(workingDir, 'dist', 'data.json');
+    await fsPromises.link(outside, link);
+    const { url } = await createUrl();
+    const base = url.slice(0, url.lastIndexOf('/'));
+    expect((await get(`${base}/data.json`)).status).toBe(404);
+  });
 });

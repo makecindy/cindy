@@ -367,6 +367,12 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     // still references the outside file (codex-connector P1, round 6).
     const preStat = await fs.stat(abs, { bigint: true }).catch(() => null);
     if (!preStat?.isFile()) return refuse(res);
+    // Reject hard links (nlink > 1): a link inside the root pointing at an
+    // outside inode defeats realpath + dev/ino identity checks — realpath
+    // returns the link's own in-root name and dev/ino trivially match the
+    // same inode, so outside content would be served (codex-connector P1,
+    // round 12).
+    if (preStat.nlink > 1n) return refuse(res);
     // Open by file descriptor: closes the TOCTOU window between containment
     // checks and the actual read. Immediately after opening, re-verify the
     // path still resolves to the vetted real path AND the handle's identity
@@ -395,7 +401,11 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       // on an outside file (same size/timestamps) would still be served
       // (Greptile P1, round 10).
       stat.dev !== preStat.dev ||
-      stat.ino !== preStat.ino
+      stat.ino !== preStat.ino ||
+      // Hard-link count must also match the pre-open snapshot: a swap to a
+      // hard-linked outside inode between the two stats keeps dev/ino equal
+      // while changing the file under the same path (round 12).
+      stat.nlink !== preStat.nlink
     ) {
       await fd.close().catch(() => {});
       return refuse(res);
@@ -433,6 +443,15 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       ? nodePath.resolve(input.localPath)
       : nodePath.resolve(rootAbs, input.localPath);
     await assertInsideRoot(rootAbs, targetAbs);
+    // Reject hidden-segment ENTRY paths (e.g. `.private/index.html`): the
+    // serving root IS the entry's directory, so the request-stage
+    // hidden-segment checks in resolveServedPath can never see the hidden
+    // root — the page would be served from hidden-directory content
+    // (Greptile P1, round 12).
+    const relToRoot = nodePath.relative(rootAbs, targetAbs);
+    if (relToRoot.split(nodePath.sep).some((s) => s.length > 0 && s.startsWith('.'))) {
+      throw new LocalPreviewError('PATH_NOT_ALLOWED', '入口不能位于隐藏目录内');
+    }
     const ext = nodePath.extname(targetAbs).toLowerCase();
     if (!ENTRY_EXTENSIONS.has(ext)) {
       throw new LocalPreviewError(

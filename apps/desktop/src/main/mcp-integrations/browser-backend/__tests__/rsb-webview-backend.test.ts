@@ -20,7 +20,8 @@ import type {
   RsbBrowserBridgeTabOpResult,
 } from '../../../../shared/rsbBrowserBridge.js';
 import * as rendererBridge from '../../../rsb-browser-bridge/renderer-bridge.js';
-import { guardPreviewPageNavigation, RsbWebviewBackend } from '../rsb-webview-backend.js';
+import { RsbWebviewBackend } from '../rsb-webview-backend.js';
+import { guardPreviewPageNavigation } from '../preview-guard.js';
 
 // Build a minimal fake TabRegistry — we only call a handful of methods.
 // pinHistory captures the pin/unpin call order so tests can assert that a
@@ -68,6 +69,7 @@ function fakeRegistry(rows: TabRecord[], wcMap: Map<string, WebContents>): FakeR
 
 function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
   loadURLMock: ReturnType<typeof vi.fn>;
+  stopMock: ReturnType<typeof vi.fn>;
   capturePageMock: ReturnType<typeof vi.fn>;
   printToPDFMock: ReturnType<typeof vi.fn>;
   consoleListeners: Array<(...args: unknown[]) => void>;
@@ -102,6 +104,7 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     getTitle: () => opts?.title ?? 'Example',
     isDestroyed: () => false,
     loadURL: vi.fn(async () => undefined),
+    stop: vi.fn(),
     capturePage: vi.fn(async () => ({
       toPNG: () => Buffer.from('PNGDATA'),
       toJPEG: (quality: number) => Buffer.from(`JPEGDATA-${quality}`),
@@ -130,6 +133,7 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
   // Expose mocks on the cast object so tests can assert on them.
   const result = wc as unknown as WebContents & {
     loadURLMock: typeof wc.loadURL;
+    stopMock: typeof wc.stop;
     capturePageMock: typeof wc.capturePage;
     printToPDFMock: typeof wc.printToPDF;
     consoleListeners: typeof wc.consoleListeners;
@@ -141,6 +145,7 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
   // The mock vi.fn references go through; alias them for readability.
   Object.assign(result, {
     loadURLMock: wc.loadURL,
+    stopMock: wc.stop,
     capturePageMock: wc.capturePage,
     printToPDFMock: wc.printToPDF,
     didStartNavigationListeners: wc.didStartNavigationListeners,
@@ -416,7 +421,7 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
   const PREVIEW_URL =
     'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
 
-  it('blocks page-initiated navigation away from a preview page, allows same-origin', () => {
+  it('blocks page-initiated navigation away from a preview page, allows same-origin', async () => {
     const wc = fakeWc({ url: PREVIEW_URL });
     guardPreviewPageNavigation(wc);
     const listener = wc.willNavigateListeners[0];
@@ -428,11 +433,15 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
     expect(prevented).toBe(true);
 
     // EVERY navigation — including renderer/loadURL, which does NOT emit
-    // will-navigate (round 10) — fires did-start-navigation: the main-world
-    // WebRTC kill script is installed before the document is created
+    // will-navigate (round 10) — fires did-start-navigation. A FIRST preview
+    // navigation is stopped and replayed via loadURL only AFTER the
+    // main-world WebRTC kill-script is installed, so the document is never
+    // created before the kill-script (round 12 stop-and-replay).
     const startNav = wc.didStartNavigationListeners[0];
     expect(startNav).toBeTruthy();
     startNav({}, PREVIEW_URL, false, true);
+    expect(wc.stopMock).toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 0)); // settle install + replay
     expect(wc.debuggerMock.attachMock).toHaveBeenCalled();
     const addScript = wc.debuggerMock.commands.find(
       (c) => c.method === 'Page.addScriptToEvaluateOnNewDocument',
@@ -441,6 +450,8 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
     expect((addScript?.params as { source?: string })?.source ?? '').toContain('RTCPeerConnection');
     // the injected script is scoped to the preview origin (round-10 P2)
     expect((addScript?.params as { source?: string })?.source ?? '').toContain('location.href');
+    // the navigation is re-issued via loadURL once the kill-script is in place
+    expect(wc.loadURLMock).toHaveBeenCalledWith(PREVIEW_URL);
 
     // navigation within the preview origin (reload / sibling resource) → allowed
     prevented = false;
@@ -468,6 +479,19 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
     let prevented = false;
     listener({ preventDefault: () => { prevented = true; } }, 'https://yet-another.test/');
     expect(prevented).toBe(false);
+  });
+
+  it('parks a preview navigation on about:blank when the kill-script install fails (fail-closed, round 12)', async () => {
+    const wc = fakeWc({ url: PREVIEW_URL });
+    wc.debuggerMock.sendCommandMock.mockRejectedValue(new Error('debugger busy'));
+    guardPreviewPageNavigation(wc);
+    const startNav = wc.didStartNavigationListeners[0];
+    startNav({}, PREVIEW_URL, false, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(wc.stopMock).toHaveBeenCalled();
+    // the preview navigation is NOT replayed — parked on about:blank instead
+    expect(wc.loadURLMock).toHaveBeenCalledWith('about:blank');
+    expect(wc.loadURLMock).not.toHaveBeenCalledWith(PREVIEW_URL);
   });
 });
 
@@ -532,6 +556,33 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
     expect(wc.debuggerMock.sendCommandMock.mock.invocationCallOrder[0]).toBeLessThan(
       wc.loadURLMock.mock.invocationCallOrder[0],
     );
+  });
+
+  it('refuses a preview navigation when the kill-script install fails (fail-closed, codex-connector P1, round 12)', async () => {
+    const PREVIEW_URL =
+      'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+    const wc = fakeWc();
+    wc.debuggerMock.sendCommandMock.mockRejectedValue(new Error('debugger busy'));
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+
+    const res = await backend.call({
+      action: 'navigate',
+      targetId: 't1',
+      url: PREVIEW_URL,
+    } as never);
+
+    expect(res.ok).toBe(false);
+    expect(res.message).toContain('preview WebRTC guard install failed');
+    expect(wc.loadURLMock).not.toHaveBeenCalled();
   });
 
   it('navigate fails clearly when targetId missing', async () => {

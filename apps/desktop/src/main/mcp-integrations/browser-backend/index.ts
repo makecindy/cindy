@@ -16,4 +16,4 @@ export { BackendRouter } from './router.js';
 export { BrowserBackendController, type BrowserBackendControllerOptions } from './controller.js';
 export { BrowserBackendHealthService } from './health-service.js';
 export { RsbWebviewBackend, type RsbWebviewBackendOptions } from './rsb-webview-backend.js';
-export { guardPreviewPageNavigation, isPreviewUrl } from './rsb-webview-backend.js';
+export { guardPreviewPageNavigation, isPreviewUrl } from './preview-guard.js';

@@ -40,10 +40,14 @@ import {
   resolveGhostWebviewAttach,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
+// Preview guard must NOT come from rsb-webview-backend: importing it there
+// would eagerly load @cindy/browser-control-runtime before browser.ts
+// initializes the runtime environment, freezing CONFIG_DIR to the default
+// path and breaking managed-Chrome profiles (codex-connector P1, round 12).
 import {
   guardPreviewPageNavigation,
   isPreviewUrl,
-} from './mcp-integrations/browser-backend/rsb-webview-backend.js';
+} from './mcp-integrations/browser-backend/preview-guard.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
 import {
   attributeRsbNativePopupSurface,

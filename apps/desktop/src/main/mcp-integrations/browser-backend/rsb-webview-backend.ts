@@ -25,6 +25,7 @@ import type {
   BrowserControlResult,
 } from '@cindy/browser-control-runtime';
 import { isPublicHttpResourceUrl } from '@cindy/browser-control-runtime';
+import { isPreviewUrl, killPreviewWebRtc } from './preview-guard.js';
 import type { WebContents } from 'electron';
 
 import type { TabRegistry } from '../../rsb-browser-bridge/registry.js';
@@ -174,13 +175,16 @@ async function loadUrlWithTimeout(
   // `will-navigate`, so the main-world WebRTC kill-script must be installed
   // BEFORE loadURL — the entry HTML's first script must never reach
   // RTCPeerConnection (Greptile P1, round 10). Idempotent per WebContents.
-  // Bounded: a stuck CDP install must not block the navigation itself
-  // (Worker review #2).
+  // Fail-closed: a stuck/failed CDP install REFUSES the preview navigation
+  // instead of loading it unguarded (codex-connector P1, round 12).
   if (isPreviewUrl(url)) {
-    await Promise.race([
+    const installed = await Promise.race([
       killPreviewWebRtc(wc),
-      new Promise((resolve) => setTimeout(resolve, 3000)),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 3000)),
     ]);
+    if (!installed) {
+      throw new Error('preview WebRTC guard install failed — refusing preview navigation');
+    }
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopNavigation = () => {
@@ -215,127 +219,11 @@ async function loadUrlWithTimeout(
   }
 }
 
-/** True when `u` is a sandboxed preview URL issued by the local preview server. */
-export function isPreviewUrl(u: string): boolean {
-  try {
-    const parsed = new URL(u);
-    return (
-      parsed.protocol === 'http:' &&
-      parsed.hostname === '127.0.0.1' &&
-      /^\/preview\/[a-f0-9]{64}\//.test(parsed.pathname)
-    );
-  } catch {
-    return false;
-  }
-}
+// Preview-page guard state lives in preview-guard.ts (round-12 split): this
+// module must stay free of the preview guard so webview-security.ts can
+// attach it WITHOUT loading @cindy/browser-control-runtime early.
 
-function currentUrlOf(wc: WebContents): string {
-  try {
-    return wc.getURL?.() ?? '';
-  } catch {
-    return '';
-  }
-}
 
-function originOf(u: string): string | null {
-  try {
-    return new URL(u).origin;
-  } catch {
-    return null;
-  }
-}
-
-/** WebContents that already have the preview-page navigation guard attached. */
-const previewGuardedContents = new WeakSet<WebContents>();
-
-/** Minimal structural shape of the webContents debugger transport. */
-interface PreviewDebuggerTransport {
-  isAttached(): boolean;
-  attach(protocolVersion?: string): void;
-  sendCommand(method: string, commandParams?: Record<string, unknown>): Promise<unknown>;
-}
-
-/** WebContents whose main-world WebRTC kill-script is installed. */
-const previewWebRtcKilled = new WeakSet<WebContents>();
-
-/**
- * Kill WebRTC in the PAGE MAIN WORLD via CDP `Page.addScriptToEvaluateOnNewDocument`.
- * Runs before ANY page script on every navigation, including the first —
- * required because Electron's contextIsolation puts session preloads in an
- * isolated world where shadowing `window.RTCPeerConnection` does NOT affect
- * the page (codex-connector P1, round 9). The debugger stays attached;
- * RsbWebviewAutomation.withDebugger leases externally-owned attachments and
- * reuses them without detaching, so snapshot/act keep working.
- *
- * Resolves after the CDP install command completes: the caller that is about
- * to loadURL a preview page (which does NOT emit `will-navigate`) awaits this
- * so the kill-script is in place BEFORE the first page script runs
- * (Greptile P1, round 10).
- */
-async function killPreviewWebRtc(wc: WebContents): Promise<void> {
-  if (previewWebRtcKilled.has(wc)) return;
-  try {
-    const transport = (wc as unknown as { debugger?: PreviewDebuggerTransport }).debugger;
-    if (!transport) return;
-    if (!transport.isAttached()) transport.attach('1.3');
-    await transport.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
-      // Scoped to the preview origin (round-10 P2): the script runs on EVERY
-      // navigation of this target, so non-preview pages (e.g. after the tab
-      // was navigated to a WebRTC-dependent site) must keep RTCPeerConnection.
-      source:
-        'try {' +
-        "if (/^http:\\/\\/127\\.0\\.0\\.1:\\d+\\/preview\\/[a-f0-9]{64}\\//.test(location.href)) {" +
-        "Object.defineProperty(window, 'RTCPeerConnection', { value: undefined, configurable: true });" +
-        "Object.defineProperty(window, 'webkitRTCPeerConnection', { value: undefined, configurable: true });" +
-        '}' +
-        '} catch (e) { /* best-effort */ }',
-    });
-    // Mark ONLY after the install succeeded: a failed install (attach /
-    // sendCommand throw) must retry on the next preview navigation instead
-    // of being permanently skipped as "already killed" (Worker review #1).
-    previewWebRtcKilled.add(wc);
-  } catch {
-    /* best-effort: retried on the next preview navigation */
-  }
-}
-
-/**
- * Parity with the vendored persistent route guard used for external Chrome
- * (LOCAL PATCH in pw-session.ts): once a tab is on a sandboxed preview page,
- * forbid PAGE-INITIATED navigation away from the preview ORIGIN and deny
- * popups, so a previewed page cannot exfiltrate its DOM/CSSOM content or
- * probe other loopback services via location.href / window.open. The agent's
- * own navigate action uses wc.loadURL, which does NOT emit `will-navigate`,
- * so driving the tab normally stays unaffected.
- *
- * Exact-origin comparison (round-6 review): the target must share the
- * CURRENT page's origin AND keep the preview path shape — a port-agnostic
- * shape check alone would let a preview page jump to another loopback
- * service whose path happens to match /preview/<token>/.
- */
-export function guardPreviewPageNavigation(wc: WebContents): void {
-  if (previewGuardedContents.has(wc)) return;
-  previewGuardedContents.add(wc);
-  wc.on('will-navigate', (event, url) => {
-    const current = currentUrlOf(wc);
-    if (!isPreviewUrl(current)) return; // not a preview page — leave it alone
-    const currentOrigin = originOf(current);
-    if (!currentOrigin || originOf(url) !== currentOrigin || !isPreviewUrl(url)) {
-      event.preventDefault();
-    }
-  });
-  // did-start-navigation fires for EVERY navigation — including renderer
-  // / webContents.loadURL, which does NOT emit will-navigate (round 10).
-  // Attach here covers the open path (previewLocalHtml without targetId,
-  // where the renderer loads the URL) and reuse-existing-tab navigations:
-  // the kill-script is registered before the document is created. The
-  // handleNavigate path awaits the install up front too (idempotent).
-  wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
-    if (isMainFrame && isPreviewUrl(url)) {
-      void killPreviewWebRtc(wc);
-    }
-  });
-}
 
 export class RsbWebviewBackend implements BrowserBackend {
   readonly kind = 'rsb-webview' as const;
