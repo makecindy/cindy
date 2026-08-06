@@ -175,7 +175,14 @@ class DiscordJsGateway implements DiscordGateway {
     });
     client.on(Events.ShardDisconnect, (event) => {
       if (this.#client !== client) return;
-      this.ev.onStatus(mapDiscordCloseCodeToStatus(event.code));
+      const status = mapDiscordCloseCodeToStatus(event.code);
+      if (status.kind === 'error') {
+        this.#client = null;
+        this.#appId = '';
+        this.#botTag = '';
+        client.destroy();
+      }
+      this.ev.onStatus(status);
     });
     client.on(Events.ShardReconnecting, () => {
       if (this.#client !== client) return;

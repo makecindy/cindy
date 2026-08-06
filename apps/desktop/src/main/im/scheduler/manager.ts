@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import type { DiscordIM } from '@cindy/im';
+import type { DiscordIM, IMStatus } from '@cindy/im';
 
 import {
   getSelfDeviceId,
@@ -47,6 +47,7 @@ export class ImSchedulerManager {
   private offPush: (() => void) | null = null;
   private offOwnership: (() => void) | null = null;
   private offStatus: (() => void) | null = null;
+  private offDiscordStatus: (() => void) | null = null;
   private advertisementTimer: ReturnType<typeof setInterval> | null = null;
   private discoveryDeadline = 0;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
@@ -67,6 +68,9 @@ export class ImSchedulerManager {
     this.discord.setSchedulerHooks({
       isTransportAllowed: (identity) => this.isLocalIngress(identity),
       onConfigurationChanged: () => this.notifyLocalConfigurationChanged(),
+    });
+    this.offDiscordStatus = this.discord.onStatusChange((status) => {
+      this.handleDiscordStatusChanged(status);
     });
     this.offPresence = onDeviceLinkPresenceChanged((snapshot) => {
       if (!snapshot.online || !isDesktopSchedulerPlatform(snapshot.platform)) {
@@ -154,10 +158,12 @@ export class ImSchedulerManager {
     this.offPush?.();
     this.offOwnership?.();
     this.offStatus?.();
+    this.offDiscordStatus?.();
     this.offPresence = null;
     this.offPush = null;
     this.offOwnership = null;
     this.offStatus = null;
+    this.offDiscordStatus = null;
     this.deviceLinkReady = false;
     this.discord.setSchedulerHooks(null);
     this.peers.clear();
@@ -296,6 +302,18 @@ export class ImSchedulerManager {
     this.clearActivationFailure();
     this.beginDiscoveryGrace();
     this.advertiseAll();
+    void this.reconcile();
+  }
+
+  private handleDiscordStatusChanged(status: IMStatus): void {
+    if (!this.started || status.kind !== 'error') return;
+    const identity = this.discord.getSchedulerIdentity();
+    if (!identity || this.desired !== 'active' || this.desiredIdentity !== identity) return;
+
+    // A terminal provider error after a successful activation must release the
+    // deterministic winner. Otherwise the stale winner keeps advertising its
+    // identity forever and prevents a healthy standby from taking over.
+    this.markActivationFailure(identity);
     void this.reconcile();
   }
 

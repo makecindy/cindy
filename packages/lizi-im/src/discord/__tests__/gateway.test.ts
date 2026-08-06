@@ -207,6 +207,25 @@ describe('discord gateway pure logic', () => {
     await gateway.destroy();
   });
 
+  it('releases the client after a terminal runtime disconnect', async () => {
+    const { gateway, statuses } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    emitReady(client, 'helper#0000');
+
+    client.emit('shardDisconnect', { code: 4004 });
+
+    expect(gateway.client).toBeNull();
+    expect(gateway.appId).toBe('');
+    expect(gateway.botTag).toBe('');
+    expect(client.destroy).toHaveBeenCalledOnce();
+    expect(statuses.at(-1)).toEqual({
+      kind: 'error',
+      reason: 'Discord authentication failed: invalid bot token',
+    });
+  });
+
   it('does not throw from discord error handlers when status callbacks fail', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     let rejectStatus = false;

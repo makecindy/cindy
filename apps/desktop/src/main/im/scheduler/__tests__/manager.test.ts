@@ -60,10 +60,12 @@ vi.mock('../../../logger', () => ({
 import { ImSchedulerManager } from '../manager';
 
 interface FakeDiscord {
+  emitStatus: (status: { kind: 'error'; reason: string }) => void;
   init: ReturnType<typeof vi.fn>;
   enterSchedulerStandby: ReturnType<typeof vi.fn>;
   getSchedulerIdentity: ReturnType<typeof vi.fn>;
   isSchedulerTransportActive: ReturnType<typeof vi.fn>;
+  onStatusChange: ReturnType<typeof vi.fn>;
   setSchedulerHooks: ReturnType<typeof vi.fn>;
 }
 
@@ -72,11 +74,20 @@ function createDiscord(
   options: { activateOnInit?: boolean } = {},
 ): FakeDiscord {
   let active = false;
+  let statusHandler: ((status: { kind: 'error'; reason: string }) => void) | null = null;
   return {
+    emitStatus: (status) => {
+      active = false;
+      statusHandler?.(status);
+    },
     init: vi.fn(async () => { active = options.activateOnInit !== false; }),
     enterSchedulerStandby: vi.fn(async () => { active = false; }),
     getSchedulerIdentity: vi.fn(() => identity),
     isSchedulerTransportActive: vi.fn(() => active),
+    onStatusChange: vi.fn((handler) => {
+      statusHandler = handler;
+      return () => { statusHandler = null; };
+    }),
     setSchedulerHooks: vi.fn((hooks) => { harness.hooks = hooks; }),
   };
 }
@@ -365,6 +376,41 @@ describe('Discord scheduler manager', () => {
     await manager.reconcile();
 
     expect(discord.init).toHaveBeenCalledTimes(2);
+    await manager.stop();
+  });
+
+  it('withdraws a winner after a terminal runtime Discord disconnect', async () => {
+    harness.selfDeviceId = 'a';
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('z', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledTimes(1);
+
+    discord.emitStatus({
+      kind: 'error',
+      reason: 'Discord authentication failed: invalid bot token',
+    });
+    await manager.reconcile();
+
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual({
+      kind: 'advertisement',
+      sentAt: expect.any(Number),
+      channels: [],
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await manager.reconcile();
+    expect(discord.init).toHaveBeenCalledTimes(1);
     await manager.stop();
   });
 });
