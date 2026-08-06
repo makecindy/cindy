@@ -384,14 +384,14 @@ describe('buildOneShotTarget(锁定 catalog titleModel 配置)', () => {
       { id: 'voyage/voyage-4', mode: 'embedding' },
     ]);
     try {
-      expect(buildTitleTarget('xd')).toBeNull();
+      expect(buildOneShotTarget('xd')).toBeNull();
     } finally {
       setXdGatewayModels([]);
     }
   });
   it('xd 清单为空 → null(网关清单即权威,不回落静态 titleModel)', () => {
     setXdGatewayModels([]);
-    expect(buildTitleTarget('xd')).toBeNull();
+    expect(buildOneShotTarget('xd')).toBeNull();
   });
   it('xd 清单只有 chat + 图像混合 → 只选 chat,模式权威过滤', () => {
     setXdGatewayModels([
@@ -400,7 +400,7 @@ describe('buildOneShotTarget(锁定 catalog titleModel 配置)', () => {
       { id: 'moonshotai/kimi-k3', mode: 'chat' },
     ]);
     try {
-      const target = buildTitleTarget('xd');
+      const target = buildOneShotTarget('xd');
       // 两个 chat 模型无 cost 信息 → 都保持可用,选中任意一个 chat 模型(非图像)
       expect(['deepseek/deepseek-v4-flash', 'moonshotai/kimi-k3']).toContain(target?.model);
       expect(target?.model).not.toBe('gpt-image-2');
@@ -416,7 +416,7 @@ describe('buildOneShotTarget(锁定 catalog titleModel 配置)', () => {
       { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
     ]);
     try {
-      const target = buildTitleTarget('xd');
+      const target = buildOneShotTarget('xd');
       expect(target?.model).toBe('deepseek/deepseek-v4-flash');
     } finally {
       setXdGatewayModels([]);
@@ -425,7 +425,7 @@ describe('buildOneShotTarget(锁定 catalog titleModel 配置)', () => {
   it('xd 清单只有 responses 模型 → null(无可用 chat 模型,不发请求)', () => {
     setXdGatewayModels([{ id: 'qwen/qwen3.8-max', mode: 'responses' }]);
     try {
-      expect(buildTitleTarget('xd')).toBeNull();
+      expect(buildOneShotTarget('xd')).toBeNull();
     } finally {
       setXdGatewayModels([]);
     }
@@ -440,7 +440,7 @@ describe('buildOneShotTarget(锁定 catalog titleModel 配置)', () => {
     });
     try {
       // 最便宜的 deepseek 被用户停用 → 应跳过,选 kimi-k3
-      expect(buildTitleTarget('xd')?.model).toBe('moonshotai/kimi-k3');
+      expect(buildOneShotTarget('xd')?.model).toBe('moonshotai/kimi-k3');
     } finally {
       setXdGatewayModels([]);
     }
@@ -457,7 +457,7 @@ describe('buildOneShotTarget(锁定 catalog titleModel 配置)', () => {
       },
     });
     try {
-      expect(buildTitleTarget('xd')).toBeNull();
+      expect(buildOneShotTarget('xd')).toBeNull();
     } finally {
       setXdGatewayModels([]);
     }
