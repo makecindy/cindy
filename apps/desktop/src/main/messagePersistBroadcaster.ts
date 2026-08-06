@@ -657,10 +657,42 @@ export function onToolUseEvent(
   sessionId: string,
   data: { toolUseId?: unknown; toolName?: unknown; input?: unknown },
   agentMeta: AgentMeta | null,
+  scope: 'turn' | 'background' = 'turn',
 ): string {
   const createdAt = Date.now();
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
+
+  if (scope === 'background') {
+    // A late completed-only collab item has no live-turn tool_use to snapshot.
+    // Give its background result an isolated context instead of touching the
+    // next turn's maps, metadata, or adjacent-message dedup state.
+    if (toolUseId) {
+      const state: BackgroundTurnPersistState = {
+        agentMeta,
+        knownToolUseIds: new Set([toolUseId]),
+        pendingToolUseIds: new Set([toolUseId]),
+        toolUseCreatedAt: new Map([[toolUseId, createdAt]]),
+        toolResultIdByToolUseId: new Map(),
+        pendingFullTextByToolUseId: new Map(),
+        toolResultContentByClientId: new Map(),
+      };
+      const snapshots = backgroundTurnPersistStatesBySession.get(sessionId) ?? [];
+      snapshots.push(state);
+      backgroundTurnPersistStatesBySession.set(sessionId, snapshots);
+    }
+    const persistId = createId();
+    enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
+      clientId: persistId,
+      role: 'tool_use',
+      content: { toolUseId, toolName, input: data.input },
+      toolUseId: toolUseId || undefined,
+      agentMeta,
+      createdAt,
+    });
+    return persistId;
+  }
+
   if (toolUseId) {
     rememberToolUseId(sessionId, toolUseId, createdAt);
     getOrCreateSessionMap(toolUseInfoBySession, sessionId).set(toolUseId, {

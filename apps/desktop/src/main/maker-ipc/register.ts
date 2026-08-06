@@ -3563,11 +3563,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       } else if (event.type === 'tool_use') {
         // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
         // 落库),再落 tool_use 本身,拿回 persistId 盖进 payload。两者都只入队、不阻塞。
-        flushAssistantBlock(session.id, eventAgentMeta);
+        if (event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
         persistId = onToolUseEvent(
           session.id,
           event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown },
           eventAgentMeta,
+          event.turnScope === 'background' ? 'background' : 'turn',
         );
       } else if (event.type === 'tool_result') {
         const r = onToolResultEvent(

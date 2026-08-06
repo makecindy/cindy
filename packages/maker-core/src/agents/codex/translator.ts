@@ -1544,6 +1544,18 @@ function handleCollabAgentToolCall(
   }
 
   // completed
+  // Some app-server versions omit item/started and send only the terminal
+  // collab snapshot. Reconstruct the tool-use boundary before the result so
+  // the late background item still has a renderer/persistence anchor.
+  const hadToolUse = ctx.rt.emittedToolUse.has(item.id);
+  if (!hadToolUse) {
+    ctx.rt.emittedToolUse.add(item.id);
+    queue.push({
+      type: 'tool_use',
+      data: { toolUseId: item.id, toolName, input },
+      source: 'codex',
+    });
+  }
   ctx.rt.emittedToolUse.delete(item.id);
   const isError = item.status === 'failed';
   const fullText = formatCodexAgentStatesSummary(item.agentsStates) ?? (isError ? 'failed' : item.status);

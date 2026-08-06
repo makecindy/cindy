@@ -381,6 +381,58 @@ describe('tool_result 顺序:先 tool_result(摘要)后 tool_result_full(全文)
 });
 
 describe('background tool_result persistence', () => {
+  it('reconstructs a completed-only background collab tool context', async () => {
+    const lateMeta = { uuid: 'late-completed-only-turn' };
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      lateMeta,
+      'background',
+    );
+
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-child'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: toolUsePersistId,
+        role: 'tool_use',
+        toolUseId: 'late-completed-only-child',
+        agentMeta: lateMeta,
+      }),
+      broadcastGuard(),
+    );
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: FULL,
+        toolUseId: 'late-completed-only-child',
+        agentMeta: lateMeta,
+      }),
+      broadcastGuard(),
+    );
+  });
+
   it('keeps the completed turn context after the next turn resets live state', async () => {
     const oldMeta = { uuid: 'old-turn' };
     const nextMeta = { uuid: 'new-turn' };
