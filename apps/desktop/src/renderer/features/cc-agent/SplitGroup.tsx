@@ -95,6 +95,18 @@ export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
   const paneCount = getSplitPanes(group.root).length;
   const staleRecoveryActiveSessionIdRef = useRef(activeSessionId);
   const staleRecoverySequenceRef = useRef(0);
+  // SplitGroupActive 卸载于 `/cc-agent/new`，但外层 layout 仍然常驻。保留最近一次
+  // 真正位于分屏树中的路由 owner，避免新任务创建后重新挂载时退回替换 panes[0]。
+  const lastActiveSessionIdRef = useRef(activeSessionId);
+
+  useLayoutEffect(() => {
+    if (
+      activeSessionId &&
+      getSplitPanes(group.root).some((pane) => pane.sessionId === activeSessionId)
+    ) {
+      lastActiveSessionIdRef.current = activeSessionId;
+    }
+  }, [activeSessionId, group.root]);
 
   useLayoutEffect(() => {
     if (staleRecoveryActiveSessionIdRef.current !== activeSessionId) {
@@ -142,6 +154,7 @@ export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
     <SplitGroupActive
       activeSessionId={activeSessionId}
       root={group.root}
+      previousActiveSessionId={lastActiveSessionIdRef.current}
       staleRecoverySequenceRef={staleRecoverySequenceRef}
     />
   );
@@ -149,12 +162,14 @@ export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
 
 interface SplitGroupActiveProps {
   activeSessionId: string;
+  previousActiveSessionId?: string;
   root: SplitNode;
   staleRecoverySequenceRef: { current: number };
 }
 
 function SplitGroupActive({
   activeSessionId,
+  previousActiveSessionId,
   root,
   staleRecoverySequenceRef,
 }: SplitGroupActiveProps) {
@@ -183,7 +198,7 @@ function SplitGroupActive({
     remoteBootstrapLoadingDeviceIds.size === 0 &&
     remoteBootstrapFailedDeviceIds.size === 0;
 
-  const previousActiveSessionIdRef = useRef(activeSessionId);
+  const previousActiveSessionIdRef = useRef(previousActiveSessionId ?? activeSessionId);
   const observedActiveSessionIdRef = useRef(activeSessionId);
   const pendingFocusSessionIdRef = useRef<string | null>(null);
   const focusRequestSequenceRef = useRef(0);

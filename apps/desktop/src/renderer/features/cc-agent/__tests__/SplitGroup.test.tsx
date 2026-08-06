@@ -457,6 +457,40 @@ describe('SplitGroup', () => {
     );
   });
 
+  it('从非首个 owner 进入新建页再创建任务时保留原 owner pane', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-b');
+
+    // `/cc-agent/new` 没有 activeSessionId，SplitGroupActive 会暂时卸载，但外层
+    // layout 仍在；新任务创建后路由会直接变成 session-c。
+    act(() => {
+      view.rerender(
+        <MemoryRouter>
+          <SplitGroup>
+            <div data-testid="route-outlet" />
+          </SplitGroup>
+        </MemoryRouter>,
+      );
+    });
+
+    act(() => {
+      view.rerender(
+        <MemoryRouter>
+          <SplitGroup activeSessionId="session-c">
+            <div data-testid="route-outlet" />
+          </SplitGroup>
+        </MemoryRouter>,
+      );
+    });
+
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-a', 'session-c'],
+    );
+    expect(screen.getByTestId('session-view-session-c').dataset.routeOwner).toBe('true');
+  });
+
   it('键盘焦点进入非活动 pane 时切换该 pane 的路由主权', async () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
