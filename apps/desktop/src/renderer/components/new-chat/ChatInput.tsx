@@ -3453,6 +3453,13 @@ export function ChatInput({
       // 必须优先用 prop,否则 @ 扫描落到控制端本机 FS(扫到同名目录的错文件),插进首条远程消息的 mention 不可用。
       const remoteDeviceId =
         deviceLinkDeviceId ?? (sessionId ? getSessionDeviceId(sessionId) : undefined);
+      // device-link 纯远程草稿尚未选 workspace 时不能把空路径发给被控端扫描。
+      // 仅清空资源区，统一面板中的动作与插件条目仍可正常使用。
+      if (remoteDeviceId && !workingDir?.trim()) {
+        atScanSeqRef.current += 1;
+        setAtState({ kind: 'ready', items: [], truncated: false });
+        return;
+      }
       const seq = reservedSeq ?? ++atScanSeqRef.current;
       if (atScanSeqRef.current !== seq) return;
       const normalizedQuery = query?.trim() ?? '';
