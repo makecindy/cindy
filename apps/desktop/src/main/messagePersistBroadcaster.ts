@@ -592,7 +592,9 @@ export function onToolUseEvent(
  * plan visible forever even though the turn completed successfully.
  *
  * The turn id is the ownership boundary: only `plan:<raw.id>` may be updated.
- * Failed, interrupted, or unrelated turns never infer completion.
+ * Failed, interrupted, or unrelated turns never infer completion. A matching
+ * failed turn still stamps `turnCompleted: false` on its plan row because the
+ * turn may have ended before any assistant row existed to carry that seal.
  */
 export function persistCodexPlanOnDone(
   sessionId: string,
@@ -616,14 +618,13 @@ export function persistCodexPlanOnDone(
   if (!input || !Array.isArray(input.plan)) return false;
 
   const isSuccessfulTerminal = isSuccessfulCodexDoneEventData(data);
-  const nextPlan = resolveCodexPlanSnapshotOnDone(input.plan, data?.plan, isSuccessfulTerminal);
+  const nextPlan =
+    resolveCodexPlanSnapshotOnDone(input.plan, data?.plan, isSuccessfulTerminal) ??
+    (isSuccessfulTerminal ? null : input.plan);
   if (!nextPlan) return false;
-  const planChanged = JSON.stringify(input.plan) !== JSON.stringify(nextPlan);
   // Even when Codex already emitted the exact completed/empty plan, stamp the
   // durable row at done. Renderer must distinguish this authoritative write
   // from an older ordinary DB echo that merely happens to look completed.
-  if (!planChanged && !isSuccessfulTerminal) return false;
-
   const nextInput = { ...input, plan: nextPlan };
   infoMap?.set(toolUseId, { ...info, input: nextInput });
   enqueueWrite(`codex_plan_done:${sessionId}:${persistId}`, async (ownerScope) => {
@@ -631,7 +632,9 @@ export function persistCodexPlanOnDone(
       toolUseId,
       toolName: 'update_plan',
       input: nextInput,
-      ...(isSuccessfulTerminal ? { terminalPlanSnapshot: true } : {}),
+      ...(isSuccessfulTerminal
+        ? { terminalPlanSnapshot: true }
+        : { turnCompleted: false }),
     });
     // Reuse the existing upsert-style row broadcast so a renderer that mounts
     // between `done` and this queued write, plus remote mirrors, receives the

@@ -755,6 +755,31 @@ describe('makerChatStore text delta batching', () => {
     });
   });
 
+  it('restores a failed turn boundary from its persisted plan row', () => {
+    const [mapped] = makerChatStore.__mapServerMessagesForTest([
+      serverMessage({
+        id: 'plan-row-interrupted',
+        clientId: 'plan-message-interrupted',
+        sessionId: SESSION_ID,
+        role: 'tool_use',
+        content: {
+          toolUseId: 'plan:turn-interrupted',
+          toolName: 'update_plan',
+          turnCompleted: false,
+          input: { plan: [{ step: 'Wait for user', status: 'in_progress' }] },
+        },
+        createdAt: '2026-08-05T00:00:00.000Z',
+      }),
+    ]);
+
+    expect(mapped).toMatchObject({
+      clientId: 'plan-message-interrupted',
+      role: 'tool_use',
+      toolName: 'update_plan',
+      turnCompleted: false,
+    });
+  });
+
   it('does not let an unmarked completed-plan echo replace newer live work', () => {
     onEvent?.({
       sessionId: SESSION_ID,

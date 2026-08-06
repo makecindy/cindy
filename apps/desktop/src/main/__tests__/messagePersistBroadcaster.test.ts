@@ -269,8 +269,8 @@ describe('update_plan tool_use persistence', () => {
     );
   });
 
-  it('does not persist inferred completion for interrupted or unrelated turns', async () => {
-    onToolUseEvent(
+  it('persists non-success boundaries without inferring completion or touching unrelated turns', async () => {
+    const persistId = onToolUseEvent(
       SESSION,
       {
         toolUseId: 'plan:turn-1',
@@ -282,17 +282,26 @@ describe('update_plan tool_use persistence', () => {
 
     expect(persistCodexPlanOnDone(SESSION, {
       raw: { id: 'turn-1', status: 'interrupted' },
-    })).toBe(false);
+    })).toBe(true);
     expect(persistCodexPlanOnDone(SESSION, {
       cancelled: true,
       raw: { id: 'turn-1', status: 'completed' },
-    })).toBe(false);
+    })).toBe(true);
     expect(persistCodexPlanOnDone(SESSION, {
       raw: { id: 'turn-2', status: 'completed' },
     })).toBe(false);
 
     await flushWrites();
-    expect(updateMessageContent).not.toHaveBeenCalled();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Wait for user', status: 'in_progress' }] },
+        turnCompleted: false,
+      },
+    );
   });
 
   it('does not dedupe ordinary repeated tool_use ids', async () => {

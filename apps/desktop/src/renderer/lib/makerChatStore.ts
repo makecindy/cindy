@@ -378,8 +378,9 @@ export interface ChatMessage {
    */
   model?: string;
   /**
-   * Host 在 SDK `done` 边界写入的持久化 turn seal。一个真实用户请求可能因后台任务
-   * 完成而自动续跑多个 SDK turn；每个 seal 都代表一条应保留在「已工作」外的正式回复。
+   * Host 在 SDK `done` 边界写入的持久化 turn seal。通常位于最后一条 assistant；
+   * 无 assistant 文本的 Codex 失败轮会把 false 写在所属 update_plan 行，防止后续轮次
+   * 的成功边界误收口旧计划。
    */
   turnCompleted?: boolean;
   /**
@@ -14158,6 +14159,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolInput,
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? { terminalPlanSnapshot: true }
+          : {}),
+        ...(toolName === 'update_plan' && c.turnCompleted === false
+          ? { turnCompleted: false }
           : {}),
         isStreaming: false,
         // subagent-model-chip: 从持久化 agentMeta 复原 model / parentUuid,

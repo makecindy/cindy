@@ -17,7 +17,7 @@ export interface MessageRenderSourceMessageLike {
   toolInput?: unknown;
   /** SDK tool-use id — used to link a Task/collab tool-call to its live `agent_task_update`. */
   toolUseId?: string | null;
-  /** Host-persisted successful SDK turn boundary on the final assistant message. */
+  /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
   /** User messages sent mid-turn do not start a new plan ownership window. */
   delivery?: 'turn' | 'steer';
@@ -535,6 +535,10 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   const persistedCodexCompletionBoundary =
     insertionBelongsToLatestEvent &&
     latest?.source === 'codex' &&
+    // A Codex turn can be interrupted before it emits any assistant text. Main
+    // stamps that failed boundary on the owning plan row so a later steer turn
+    // cannot lend its successful assistant seal to this unfinished plan.
+    latestPlanMessage?.turnCompleted !== false &&
     latest.todos.some((todo) => todo.status !== 'completed')
       ? findPersistedCodexCompletionBoundary(messages, latestPlanIndex)
       : null;

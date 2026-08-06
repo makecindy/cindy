@@ -954,6 +954,33 @@ describe('message render todo grouping', () => {
     });
   });
 
+  it('does not let a later successful turn close a failed plan with no assistant row', () => {
+    const plan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Wait for user', status: 'in_progress' }],
+      }),
+      turnCompleted: false,
+    };
+    const continuedAsSteer: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-2',
+      content: 'Continue',
+      createdAt: at(7),
+      delivery: 'steer',
+    };
+    const laterBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-2',
+      content: 'The later turn is done.',
+      createdAt: at(8),
+      turnCompleted: true,
+    };
+
+    expect(findLatestMessageTodoInsertion([plan, continuedAsSteer, laterBoundary])).toMatchObject({
+      todos: [{ content: 'Wait for user', status: 'in_progress' }],
+    });
+  });
+
   it('keeps a steer inside a still-running Codex plan ownership window', () => {
     const plan = tool('plan1', 'update_plan', {
       plan: [{ step: 'Apply the requested adjustment', status: 'in_progress' }],
