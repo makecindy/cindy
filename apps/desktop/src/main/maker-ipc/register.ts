@@ -309,6 +309,7 @@ import {
   flushOrphanToolResults,
   getLastAssistantTranscriptUuid,
   getSessionDbAgentKind,
+  isSuccessfulCodexDoneEventData,
   markAssistantTurnCompleted,
   markAssistantTurnFailed,
   noteAgentMeta,
@@ -318,6 +319,7 @@ import {
   onAssistantTextEvent,
   onInteractionMessage,
   onInteractionResolved,
+  persistCodexPlanOnDone,
   onThinkingEvent,
   onToolResultEvent,
   onToolResultFullEvent,
@@ -3675,7 +3677,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
           // 更新后的完整行。失败轮的 paired done 只复用 id 做 usage 记账，不能把
           // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
-          if (event.type !== 'done') {
+          // Codex 的 interrupted / failed 同样以 done 收尾；即使没有配套 error，也必须
+          // 写 false，避免历史计划兼容逻辑把用户主动停止的半截计划推成全部完成。
+          const isSuccessfulDone =
+            event.type === 'done' &&
+            (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data));
+          if (!isSuccessfulDone) {
             void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
           } else if (!isPairedFailedTurnDone) {
             void markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId);
@@ -3742,6 +3749,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // A claim-bearing done seals this SDK segment, but the product turn is
         // still running and may emit another continuation segment. Reset the
         // per-SDK-turn persistence maps while deferring the logical turn marker.
+        if (!isContinuationBoundary && event.source === 'codex' && event.type === 'done') {
+          // Renderer applies this terminal snapshot immediately. Persist the
+          // same state before sealing the persist queue and clearing the
+          // turn-owned lookup maps. The drain barrier below must include this
+          // write, otherwise app exit can still leave an in-progress plan.
+          persistCodexPlanOnDone(
+            session.id,
+            event.data as
+              | {
+                  plan?: unknown;
+                  raw?: { id?: unknown; status?: unknown };
+                }
+              | null
+              | undefined,
+          );
+        }
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
         }
@@ -5144,7 +5167,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     removeOAuthCredentials: (providerId) => removeGenericOAuthCredentialsReversibly(providerId),
   });
 
-  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新两个 agent 的 mcpProviders 数组
+  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
     refreshProviders: () => refreshCustomMcpProviders(),

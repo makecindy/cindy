@@ -4,7 +4,10 @@ import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   type SubagentModelSettings,
 } from '../../../shared/subagentModelSettings';
-import { buildCodexSubagentSpawnArgs } from '../codex-subagent-config';
+import {
+  buildCodexSubagentSpawnArgs,
+  resolveCodexSubagentModelFallback,
+} from '../codex-subagent-config';
 
 function settings(partial: Partial<SubagentModelSettings> = {}): SubagentModelSettings {
   return { ...SUBAGENT_MODEL_SETTINGS_DEFAULTS, ...partial };
@@ -151,5 +154,30 @@ describe('buildCodexSubagentSpawnArgs', () => {
         buildCodexSubagentSpawnArgs(settings({ codex: 'weird"model\\id' })),
       ),
     ).toEqual(['-c', 'agents.default_subagent_model="weird\\"model\\\\id"']);
+  });
+});
+
+describe('resolveCodexSubagentModelFallback', () => {
+  it('returns the configured model for the local app-server', () => {
+    expect(resolveCodexSubagentModelFallback(settings({ codex: 'codex/gpt-5.5' }))).toBe(
+      'codex/gpt-5.5',
+    );
+  });
+
+  it('does not project a local model setting onto an SSH remote daemon', () => {
+    expect(
+      resolveCodexSubagentModelFallback(
+        settings({ codex: 'codex/gpt-5.5' }),
+        'remote-host-1',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('returns no fallback when Codex subagents are disabled', () => {
+    expect(
+      resolveCodexSubagentModelFallback(
+        settings({ codexSubagentsEnabled: false, codex: 'codex/gpt-5.5' }),
+      ),
+    ).toBeUndefined();
   });
 });

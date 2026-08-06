@@ -23,6 +23,7 @@ const captured = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
   proxyRegistration: null as { sessionId: string; token: string } | null,
+  mcpVendorOptions: undefined as Record<string, unknown> | undefined,
   failSetModel: false,
   rejectSetModel: false,
   onAfterSetModel: null as null | (() => void),
@@ -97,6 +98,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.requests = [];
     captured.sent = [];
     captured.proxyRegistration = null;
+    captured.mcpVendorOptions = undefined;
     captured.failSetModel = false;
     captured.rejectSetModel = false;
     captured.onAfterSetModel = null;
@@ -137,16 +139,19 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
       ...(mcp?.serverNames
         ? {
-          preparePiExtraSpawnConfig: async () => ({
-            mcpBridge: {
-              token: 'bridge-token',
-              servers: mcp.serverNames!.map((name) => ({
-                name,
-                url: `http://127.0.0.1:1/${name}`,
-              })),
-            },
-            mcpEnv: {},
-          }),
+          preparePiExtraSpawnConfig: async (_providers, context) => {
+            captured.mcpVendorOptions = context.vendorOptions;
+            return {
+              mcpBridge: {
+                token: 'bridge-token',
+                servers: mcp.serverNames!.map((name) => ({
+                  name,
+                  url: `http://127.0.0.1:1/${name}`,
+                })),
+              },
+              mcpEnv: {},
+            };
+          },
         }
         : {}),
       auth: {
@@ -677,6 +682,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(review).not.toHaveBeenCalled();
     expect(resolverCalls).toBe(0);
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r20', confirmed: true });
+
+    // start_team 获批后 host 会把当前 session 切成 Lead。Pi 必须支持运行时原地合并，
+    // 并让启动时交给 MCP bridge 的同一 vendorOptions 引用立即看到新身份；否则
+    // MakerSession.setVendorOptions 抛 not-implemented，或后续 create_worker 仍读到旧 ctx。
+    expect(handle.setVendorOptions).toBeTypeOf('function');
+    await handle.setVendorOptions?.({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 's1',
+    });
+    expect(captured.mcpVendorOptions).toMatchObject({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 's1',
+    });
   });
 
   it('still asks the user for MCP servers the host policy does not trust', async () => {

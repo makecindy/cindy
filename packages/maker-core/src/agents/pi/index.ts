@@ -787,6 +787,10 @@ export class PiAgent extends BaseAgent {
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode = normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    // 与 Claude / Codex 一致，运行期 Orca 身份更新必须原地落在同一个对象上。
+    // Desktop Pi MCP bridge 在 startSession 时持有这个引用；start_team 成功后 host
+    // 调 setVendorOptions，后续 create_worker 等工具才能立即读到最新 Lead 身份。
+    const mutableVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
     type PermissionSnapshot = {
       mode: 'ask' | 'auto' | 'bypassPermissions';
       readOnlyRoots: string[];
@@ -933,7 +937,7 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
-          vendorOptions: opts.vendorOptions,
+          vendorOptions: mutableVendorOptions,
         });
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
@@ -1790,6 +1794,11 @@ export class PiAgent extends BaseAgent {
           ...requestedPermissionSnapshot,
           readOnlyRoots: [...dirs],
         });
+      },
+
+      async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
+        Object.assign(mutableVendorOptions, patch);
+        deps.logger.debug('pi setVendorOptions', { patchKeys: Object.keys(patch) });
       },
 
       isTurnRunning(): boolean {

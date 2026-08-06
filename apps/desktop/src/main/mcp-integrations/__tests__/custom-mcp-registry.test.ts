@@ -61,6 +61,21 @@ describe('refreshCustomMcpProviders', () => {
     expect(arr.map((p) => p.name)).toEqual(['cindy_browser', 'mytools']);
   });
 
+  it('refreshes every registered agent array with one duplicate-free custom provider batch', async () => {
+    const claude: McpProvider[] = [builtin('cindy_browser')];
+    const codex: McpProvider[] = [builtin('cindy_browser')];
+    const pi: McpProvider[] = [builtin('cindy_browser')];
+    registerCustomMcpArrays(claude, codex, pi);
+    storeMock.listCustomMcpServers.mockResolvedValue([config('one'), config('two')]);
+
+    await refreshCustomMcpProviders();
+    await refreshCustomMcpProviders();
+
+    for (const arr of [claude, codex, pi]) {
+      expect(arr.map((p) => p.name)).toEqual(['cindy_browser', 'one', 'two']);
+    }
+  });
+
   it('skips a custom MCP whose id collides with a builtin server name', async () => {
     const arr: McpProvider[] = [builtin('cindy_browser'), builtin('cindy_helper')];
     registerCustomMcpArrays(arr);

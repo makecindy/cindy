@@ -159,6 +159,7 @@ import {
   type CindyCapabilityKind,
   type CindyMediaCatalogConfig,
 } from './cindyMediaCatalog.js';
+import { isXdGatewayProviderReady } from './cindyGatewayReadiness.js';
 import {
   GhostCindySlot,
   type CindyImageCapabilities,
@@ -2397,12 +2398,12 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
       // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
       // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
       // (2026-07 review:与图像的就绪语义对齐)。
-      // 向量与视频同口径:通道只有 xd 一家、不经 registry,但要求网关能力在场
-      // (本地模式没有网关 key,embedSync 必然 AUTH_FAILED —— 那种型号不该出现在
-      // 清单里让用户钉选)。
+      // 向量与视频同口径:通道只有 xd 一家、不经 registry,但要求账号网关能力与
+      // model-access 随凭据成对下发的 endpoint 同时在场。登录同步完成前 / 存量
+      // 手填 key 没有配套 endpoint 时,那种型号不该出现在清单里让用户钉选。
       kind === 'image'
         ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
-        : (providerId) => providerId !== 'xd' || getAppCapabilities().canUseCindyGateway,
+        : isXdGatewayProviderReady,
       // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
       // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
       kind === 'image' ? (providerId) => getImageChannelRegistry().isProviderEditReady(providerId) : undefined,

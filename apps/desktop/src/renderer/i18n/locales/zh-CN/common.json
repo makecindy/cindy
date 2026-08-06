@@ -3891,6 +3891,8 @@
     "controlledTooltip": "另一台登录同账号的设备正在远程控制本机。你可以撤销其访问权限。",
     "revokeAccess": "撤销权限",
     "viewControllers": "查看",
+    "collapseControlledNotice": "收起被控提示",
+    "expandControlledNotice": "展开被控提示：{{label}}",
     "versionMismatch": "对方版本不一致，部分功能可能受限"
   },
   "accountDeletion": {
@@ -5587,7 +5589,7 @@
       "outputFile": "输出：{{path}}"
     },
     "planPill": {
-      "step": "步骤 {{current}} / {{total}}"
+      "step": "第 {{current}} / {{total}} 步"
     },
     "forkOrigin": {
       "label": "基于原任务创建"

@@ -129,6 +129,34 @@ describe('collectOutboundAttachments', () => {
     expect(r.skipped).toBe(0);
   });
 
+  it('未闭合 file 引用在前仍收集后续合法图片(#1856 review P2:共享解析器畸形恢复)', async () => {
+    // 修复前: 畸形候选把 good.png 的右括号当自己的结尾, 图整个不收集,
+    // 正文变换还会把含合法引用的整段错误改写成失败文件标签。
+    const text = '[bad](xdt-file://unterminated ![good](xdt-image://good.png) 完事';
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/cache/good.png': Buffer.from('png-good') }),
+    );
+    expect(r.attachments.map((a) => a.name)).toEqual(['good.png']);
+    expect(r.text).toContain('🖼️ _good(已作为附件发送)_');
+    expect(r.text).toContain('[bad](xdt-file://unterminated');
+    expect(r.text).not.toContain('xdt-image://');
+    expect(r.skipped).toBe(0);
+  });
+
+  it('方括号文件名附件走全流程被收集(#1856 review P1:畸形恢复判据不能误伤合法 URL)', async () => {
+    const text = '详见 [报告](xdt-file:///out/report[final].pdf) 收工';
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/out/report[final].pdf': Buffer.from('%PDF-1.4') }, { allowedFileRoots: ['/out'] }),
+    );
+    expect(r.attachments.map((a) => a.name)).toEqual(['report[final].pdf']);
+    expect(r.text).not.toContain('xdt-file://');
+    expect(r.skipped).toBe(0);
+  });
+
   it('cindy-media 图片引用同样收集(媒体总仓双协议;只认 xdt-image 会让 hook Slack 拿不到生成图)', async () => {
     const hash = 'b'.repeat(64);
     const text = `画好了 ![猫](cindy-media://blobs/${hash}.png)`;

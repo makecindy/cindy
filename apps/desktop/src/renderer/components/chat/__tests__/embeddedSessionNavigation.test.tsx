@@ -386,6 +386,11 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(source).toContain(
       'canNavigateSession && session?.parentSessionId && session.forkedAtMessageId',
     );
+    expect(source).toContain('const forkOriginNavigationVersionRef = useRef(0);');
+    expect(source).toContain(
+      'if (forkOriginNavigationVersionRef.current !== navigationRequestVersion) return;',
+    );
+    expect(source).toContain('[navigationMode, sessionId],');
   });
 
   it('keeps route-owner session links interactive', async () => {
