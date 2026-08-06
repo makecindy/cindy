@@ -1550,7 +1550,9 @@ export function getMaker(): Maker {
       hasCodexLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
       hasCodexModels: () =>
         (getActiveCatalog().providers.find((p) => p.id === 'openai')?.models.codex?.length ?? 0) > 0,
-      refreshLive: () => makerRef.refreshAgentLocalModels('codex'),
+      refreshLive: () => makerRef.refreshAgentLocalModels('codex', {
+        credentialMode: 'oauth-bearer',
+      }),
       onApplied: () => refreshSelectableModelsAndBroadcast({}),
       log: desktopMakerLogger,
     });

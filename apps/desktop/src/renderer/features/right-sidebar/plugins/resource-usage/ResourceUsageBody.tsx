@@ -11,6 +11,7 @@ import {
   Cog,
   Cpu,
   PanelsTopLeft,
+  ServerOff,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -211,12 +212,11 @@ function EntryRow({
   );
 }
 
-export function ResourceUsageBody({
+function LocalResourceUsageBody({
   active,
   shellVisible,
 }: {
   state: ResourceUsageState;
-  ctx: TabKindHostContext;
   active?: boolean;
   shellVisible?: boolean;
 }) {
@@ -404,4 +404,34 @@ export function ResourceUsageBody({
       />
     </div>
   );
+}
+
+export function ResourceUsageBody({
+  ctx,
+  ...props
+}: {
+  state: ResourceUsageState;
+  ctx: TabKindHostContext;
+  active?: boolean;
+  shellVisible?: boolean;
+}) {
+  const { t } = useTranslation();
+
+  if (ctx.remoteHostId) {
+    return (
+      <div className="resource-usage-unavailable">
+        <ServerOff aria-hidden size={18} strokeWidth={1.6} />
+        <div className="resource-usage-unavailable-copy">
+          <div className="resource-usage-unavailable-title">
+            {t('rightSidebar.resourceUsage.remoteUnavailableTitle')}
+          </div>
+          <div className="resource-usage-unavailable-description">
+            {t('rightSidebar.resourceUsage.remoteUnavailableDescription')}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <LocalResourceUsageBody {...props} />;
 }

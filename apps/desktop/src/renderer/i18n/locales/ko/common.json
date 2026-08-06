@@ -4810,6 +4810,8 @@
       "tableLabel": "프로세스별 리소스 사용량",
       "sortBy": "{{column}} 기준 정렬",
       "loading": "리소스 사용량을 불러오는 중…",
+      "remoteUnavailableTitle": "SSH 작업에서는 사용할 수 없음",
+      "remoteUnavailableDescription": "이 패널은 이 기기의 프로세스만 읽습니다. 이 작업의 Agent는 원격 호스트에서 실행됩니다.",
       "selectHint": "프로세스 선택",
       "readOnlyHint": "작업용 Agent 프로세스만 종료할 수 있습니다",
       "terminate": "프로세스 종료",

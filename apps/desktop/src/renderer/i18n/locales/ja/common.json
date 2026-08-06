@@ -4810,6 +4810,8 @@
       "tableLabel": "プロセス別のリソース使用量",
       "sortBy": "{{column}}で並べ替え",
       "loading": "リソース使用量を読み込んでいます…",
+      "remoteUnavailableTitle": "SSH タスクでは利用できません",
+      "remoteUnavailableDescription": "このパネルはこのデバイス上のプロセスだけを読み取ります。このタスクの Agent はリモートホストで実行されています。",
       "selectHint": "プロセスを選択",
       "readOnlyHint": "終了できるのはタスク用の Agent プロセスだけです",
       "terminate": "プロセスを終了",

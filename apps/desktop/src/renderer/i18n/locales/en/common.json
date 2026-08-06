@@ -4812,6 +4812,8 @@
       "tableLabel": "Resource Usage by Process",
       "sortBy": "Sort by {{column}}",
       "loading": "Reading resource usage…",
+      "remoteUnavailableTitle": "Unavailable for SSH Tasks",
+      "remoteUnavailableDescription": "This panel reads processes on this device. The Agent for this task runs on the remote host.",
       "selectHint": "Select a process",
       "readOnlyHint": "Only Agent processes used for tasks can be stopped",
       "terminate": "Stop Process",
