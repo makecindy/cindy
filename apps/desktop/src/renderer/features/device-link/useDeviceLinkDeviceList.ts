@@ -121,7 +121,16 @@ function normalizePlatform(value: string | null | undefined): string {
 export function shouldRefreshForPresence(
   current: readonly DeviceLinkDeviceView[] | null,
   snap: DeviceLinkPresenceSnapshot,
+  requestStatus: DeviceLinkDeviceListStatus,
 ): boolean {
+  // 上一次拉取失败(且此前已有快照 → `devices` 仍非空、状态停在 'error')时**一律放行**:
+  // 这条链路 push 驱动、没有轮询兜底,若此时还按「字段没变」把 presence 滤掉,一次瞬时 REST
+  // 失败就会把侧栏钉在错误 / 陈旧目录上,直到 status / control-target 事件或用户手动重试
+  // (review: codex P1)。presence 是这段时间里唯一稳定到达的信号,必须当成重试机会。
+  //
+  // 'loading' 不放行:那说明已有一笔在飞,`loadGeneration` 会让后到的结果胜出,再叠一次
+  // refresh 只是徒增请求;它若失败会落到 'error',下一条 presence 自然接管重试。
+  if (requestStatus === 'error') return true;
   // 还没有首份目录 → 照常拉(这条 presence 可能正是「终于连上了」的信号)。
   if (current === null) return true;
   const row = current.find((d) => d.deviceId === snap.deviceId);
@@ -283,7 +292,7 @@ function ensureStarted(): void {
   // 只有相关 presence 才重拉目录(见 shouldRefreshForPresence):本机 busy 自回声与对端的
   // busy / lastSeenAt 心跳都不改变切换栏内容,却各触发一次全量 listDevices(issue #1726)。
   window.electronAPI.deviceLink.onPresenceChanged((snap) => {
-    if (!shouldRefreshForPresence(devices, snap)) return;
+    if (!shouldRefreshForPresence(devices, snap, requestState.status)) return;
     refresh();
   });
   window.electronAPI.deviceLink.onStatusChanged((p) => {
