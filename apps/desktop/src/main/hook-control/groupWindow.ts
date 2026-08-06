@@ -161,9 +161,10 @@ export async function buildGroupContextPrefix(
     // 值 = reply root), 那些发言因此进了一个个 reply-root 桶 —— 2026-08-03 实机: 172 条在
     // 主群流、另有若干 reply-root 桶(如 52449 桶 7 条), agent 在群里答"我看不到群里的历史
     // 消息"。判据只能在 server 修(客户端拿不到 is_forum / is_topic_message), 这里按"宁可多
-    // 读同群发言、不可漏读"兜住存量与老 server。**只作兜底, 不与主群流争预算也不推游标越过
-    // 主群流未读**: forum 群的 General 也走 group lane, 否则该群其它 topic 的突发流量会把
-    // General 的发言挤出窗口并被游标永久跳过(bot 复审 P1)。server 修复部署后新数据不再分桶,
+    // 读同群发言、不可漏读"兜住存量与老 server。兜底读取排在主群流之后, 但两者共享同一个
+    // 4000 字预算和单值游标; commit 会推进本次两集合读取到的最大行 id, 因而保持既有行为而
+    // 不把兜底误认为独立预算/游标。forum 群的 General 也走 group lane, 否则该群其它 topic
+    // 的突发流量会把 General 的发言挤出窗口并被游标永久跳过(bot 复审 P1)。server 修复部署后新数据不再分桶,
     // 这条兜底最终只服务存量行。topic lane 不读兜底集(topic 之间严格隔离)。
     fallbackThreadFilter: lane.threadId === '' ? ne(hookGroupMessages.threadId, '') : undefined,
     neutralize: neutralizeFenceTags,
