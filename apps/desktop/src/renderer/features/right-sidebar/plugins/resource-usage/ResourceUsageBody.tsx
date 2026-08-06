@@ -417,7 +417,11 @@ export function ResourceUsageBody({
 }) {
   const { t } = useTranslation();
 
-  if (ctx.remoteHostId) {
+  // processMonitor only samples this Desktop instance. device-link tasks run on
+  // another device, while undefined means ownership is still resolving; both
+  // must fail closed instead of briefly exposing this device's processes.
+  const isLocalSession = ctx.remoteHostId === null && ctx.deviceLinkDeviceId === null;
+  if (!isLocalSession) {
     return (
       <div className="resource-usage-unavailable">
         <ServerOff aria-hidden size={18} strokeWidth={1.6} />
