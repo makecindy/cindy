@@ -96,6 +96,7 @@ import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { isSplitGroupDragSource, writeSplitGroupSessionDragData } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { OpenInSplitMenu } from './OpenInSplitMenu';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -604,6 +605,13 @@ export const SessionItem = memo(function SessionItem({
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
+  const openInSplitMenu = (
+    <OpenInSplitMenu
+      sessionId={session.id}
+      orcaRole={session.orcaRole}
+      onOpenSession={() => onClick(session.id)}
+    />
+  );
 
   const canMoveToProject =
     Boolean(onMoveSession) &&
@@ -1015,6 +1023,7 @@ export const SessionItem = memo(function SessionItem({
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
+                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1035,6 +1044,7 @@ export const SessionItem = memo(function SessionItem({
                 >
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
+                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1066,6 +1076,7 @@ export const SessionItem = memo(function SessionItem({
                 </DropdownMenuItem>
                 {moveToProjectSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}

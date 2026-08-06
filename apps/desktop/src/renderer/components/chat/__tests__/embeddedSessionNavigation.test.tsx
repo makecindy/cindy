@@ -176,7 +176,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
-  it('shows the persisted reference range summary without changing the link label', () => {
+  it('shows the persisted reference range summary without changing the link label', async () => {
     render(
       embedded(
         <SessionLinkChip
@@ -192,6 +192,9 @@ describe('sidebar-embedded session navigation boundary', () => {
         />,
       ),
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(screen.getByText('Session A')).toBeTruthy();
     expect(
@@ -201,7 +204,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     ).toBeTruthy();
   });
 
-  it('keeps the anchored pill and its range summary on a single line', () => {
+  it('keeps the anchored pill and its range summary on a single line', async () => {
     const { container } = render(
       <SessionLinkChip
         href="cindy://session/session-a?message=message-1"
@@ -215,6 +218,9 @@ describe('sidebar-embedded session navigation boundary', () => {
         }}
       />,
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     // 宽度上限必须留在 pill 一侧:加回外层会让 pill 与 summary 抢同一份 240px,
     // summary 被压成逐字竖排、pill 被 stretch 拉成大椭圆。

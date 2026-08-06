@@ -6,13 +6,13 @@
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -32,6 +32,7 @@ import {
 import { ApiError } from '@/lib/httpClient';
 import { getSessionFor } from '@/lib/makerTransport';
 import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
@@ -43,10 +44,12 @@ import {
 } from './splitGroupDnd';
 import {
   getSplitPanes,
+  MAX_SPLIT_PANES,
   MIN_SPLIT_CHILD_FRACTION,
   splitGroupStore,
   useSplitGroup,
   type DropSide,
+  type SplitGroupAddBlockReason,
   type SplitBranchNode,
   type SplitNode,
   type SplitPaneNode,
@@ -54,10 +57,29 @@ import {
 
 const GUTTER_PX = 6;
 const KEYBOARD_RESIZE_STEP = 0.05;
+const MIN_SPLIT_PANE_WIDTH_PX = 280;
+const MIN_SPLIT_PANE_HEIGHT_PX = 220;
+const DEFAULT_SPLIT_VIEWPORT_WIDTH_PX = 800;
+const DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX = 600;
 
 function isSplitPaneNoFocusTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
   return Boolean(element?.closest('[data-split-pane-no-focus], [data-split-pane-route-action]'));
+}
+
+function showSplitAddBlocked(
+  t: ReturnType<typeof useTranslation>['t'],
+  reason: SplitGroupAddBlockReason | null,
+): void {
+  if (reason === 'limit-reached') {
+    toast.warning(t('splitGroup.limitReached', { count: MAX_SPLIT_PANES }));
+    return;
+  }
+  if (reason === 'duplicate') {
+    toast.warning(t('splitGroup.alreadyOpen'));
+    return;
+  }
+  toast.warning(t('splitGroup.addUnavailable'));
 }
 
 interface SplitGroupProps {
@@ -67,9 +89,26 @@ interface SplitGroupProps {
 }
 
 export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
+  const { t } = useTranslation();
   const group = useSplitGroup();
   const navigate = useNavigate();
   const paneCount = getSplitPanes(group.root).length;
+  const staleRecoveryActiveSessionIdRef = useRef(activeSessionId);
+  const staleRecoverySequenceRef = useRef(0);
+
+  useLayoutEffect(() => {
+    if (staleRecoveryActiveSessionIdRef.current !== activeSessionId) {
+      staleRecoveryActiveSessionIdRef.current = activeSessionId;
+      staleRecoverySequenceRef.current += 1;
+    }
+  }, [activeSessionId]);
+
+  useEffect(
+    () => () => {
+      staleRecoverySequenceRef.current += 1;
+    },
+    [],
+  );
 
   const focusSession = useCallback(
     (sessionId: string) => {
@@ -89,6 +128,8 @@ export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
         onSessionDropped={(sessionId, side) => {
           if (splitGroupStore.addSession(sessionId, activeSessionId, side)) {
             focusSession(sessionId);
+          } else {
+            showSplitAddBlocked(t, splitGroupStore.getAddBlockReason(sessionId, activeSessionId));
           }
         }}
       >
@@ -97,15 +138,26 @@ export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
     );
   }
 
-  return <SplitGroupActive activeSessionId={activeSessionId} root={group.root} />;
+  return (
+    <SplitGroupActive
+      activeSessionId={activeSessionId}
+      root={group.root}
+      staleRecoverySequenceRef={staleRecoverySequenceRef}
+    />
+  );
 }
 
 interface SplitGroupActiveProps {
   activeSessionId: string;
   root: SplitNode;
+  staleRecoverySequenceRef: { current: number };
 }
 
-function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
+function SplitGroupActive({
+  activeSessionId,
+  root,
+  staleRecoverySequenceRef,
+}: SplitGroupActiveProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const {
@@ -135,6 +187,8 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   const observedActiveSessionIdRef = useRef(activeSessionId);
   const pendingFocusSessionIdRef = useRef<string | null>(null);
   const focusRequestSequenceRef = useRef(0);
+  const resolvedRouteOwnersRef = useRef(new Map<number, string>());
+  const confirmedStaleRouteOwnerRef = useRef<string | null>(null);
   const pendingOwnerCloseRef = useRef<{
     sourceSessionId: string;
     targetSessionId: string;
@@ -174,23 +228,46 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       }),
     ).then((staleSessionIds) => {
       if (cancelled) return;
-      for (const sessionId of staleSessionIds) {
-        if (sessionId && !sessionsById.has(sessionId)) {
-          splitGroupStore.removeSession(sessionId);
+      const confirmedStaleSessionIds = staleSessionIds.filter((sessionId): sessionId is string =>
+        Boolean(sessionId && !sessionsById.has(sessionId)),
+      );
+      if (confirmedStaleSessionIds.includes(activeSessionId)) {
+        confirmedStaleRouteOwnerRef.current = activeSessionId;
+        const survivor = panes.find((pane) => !confirmedStaleSessionIds.includes(pane.sessionId));
+        if (survivor) {
+          const recoverySequence = staleRecoverySequenceRef.current;
+          void resolveSessionRoute(survivor.sessionId, sessionsById.get(survivor.sessionId) ?? null)
+            .then((route) => {
+              if (staleRecoverySequenceRef.current === recoverySequence) {
+                navigate(route, { replace: true });
+              }
+            })
+            .catch(() => {
+              if (staleRecoverySequenceRef.current === recoverySequence) {
+                navigate('/cc-agent', { replace: true });
+              }
+            });
+        } else {
+          navigate('/cc-agent', { replace: true });
         }
+      }
+      for (const sessionId of confirmedStaleSessionIds) {
+        splitGroupStore.removeSession(sessionId);
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [panes, sessionsById, sessionsCatalogReady]);
+  }, [activeSessionId, navigate, panes, sessionsById, sessionsCatalogReady]);
 
   useEffect(
     () => () => {
       focusRequestSequenceRef.current += 1;
       pendingFocusSessionIdRef.current = null;
       pendingOwnerCloseRef.current = null;
+      resolvedRouteOwnersRef.current.clear();
+      confirmedStaleRouteOwnerRef.current = null;
     },
     [],
   );
@@ -212,9 +289,10 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       void resolveSessionRoute(sessionId, session)
         .then((route) => {
           if (focusRequestSequenceRef.current !== requestSequence) return;
+          const routeOwnerSessionId = getSessionRouteOwnerId(route) ?? sessionId;
+          resolvedRouteOwnersRef.current.set(requestSequence, routeOwnerSessionId);
           if (pendingOwnerCloseRef.current?.requestSequence === requestSequence) {
-            pendingOwnerCloseRef.current.routeOwnerSessionId =
-              getSessionRouteOwnerId(route) ?? sessionId;
+            pendingOwnerCloseRef.current.routeOwnerSessionId = routeOwnerSessionId;
           }
           navigate(route);
         })
@@ -232,18 +310,43 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   );
 
   useLayoutEffect(() => {
+    if (
+      confirmedStaleRouteOwnerRef.current &&
+      confirmedStaleRouteOwnerRef.current !== activeSessionId
+    ) {
+      confirmedStaleRouteOwnerRef.current = null;
+    }
     const pendingFocusSessionId = pendingFocusSessionIdRef.current;
     const activeSessionChanged = observedActiveSessionIdRef.current !== activeSessionId;
     observedActiveSessionIdRef.current = activeSessionId;
     const pendingOwnerClose = pendingOwnerCloseRef.current;
+    const matchingResolvedSequences = [...resolvedRouteOwnersRef.current.entries()]
+      .filter(([, routeOwnerSessionId]) => routeOwnerSessionId === activeSessionId)
+      .map(([requestSequence]) => requestSequence);
+    const latestMatchingResolvedSequence =
+      matchingResolvedSequences.length > 0 ? Math.max(...matchingResolvedSequences) : null;
     const pendingFocusReachedRouteOwner =
       pendingOwnerClose?.requestSequence === focusRequestSequenceRef.current &&
       pendingOwnerClose.routeOwnerSessionId === activeSessionId;
-    if (pendingFocusSessionId === activeSessionId || pendingFocusReachedRouteOwner) {
+    const currentFocusReachedRouteOwner =
+      latestMatchingResolvedSequence === focusRequestSequenceRef.current;
+    if (
+      pendingFocusSessionId === activeSessionId ||
+      pendingFocusReachedRouteOwner ||
+      currentFocusReachedRouteOwner
+    ) {
       pendingFocusSessionIdRef.current = null;
     } else if (pendingFocusSessionId && activeSessionChanged) {
-      pendingFocusSessionIdRef.current = null;
-      focusRequestSequenceRef.current += 1;
+      const isOlderFocusCommit =
+        latestMatchingResolvedSequence !== null &&
+        latestMatchingResolvedSequence < focusRequestSequenceRef.current;
+      if (!isOlderFocusCommit) {
+        pendingFocusSessionIdRef.current = null;
+        focusRequestSequenceRef.current += 1;
+      }
+    }
+    for (const requestSequence of matchingResolvedSequences) {
+      resolvedRouteOwnersRef.current.delete(requestSequence);
     }
 
     if (
@@ -273,6 +376,8 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       }
       return;
     }
+
+    if (confirmedStaleRouteOwnerRef.current === activeSessionId) return;
 
     const pendingPaneNavigation = pendingPaneNavigationRef.current;
     pendingPaneNavigationRef.current = null;
@@ -339,6 +444,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
             sourceSessionId: pane.sessionId,
             targetSessionId: targetPane.sessionId,
             requestSequence,
+            routeOwnerSessionId: resolvedRouteOwnersRef.current.get(requestSequence),
           };
           return;
         }
@@ -355,9 +461,9 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       className="flex min-h-0 flex-1 flex-col overflow-hidden bg-content-area"
     >
       <SplitGroupToolbar root={root} />
-      <div className="min-h-0 flex-1">
-        <SplitNodeView
-          node={root}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <SplitGroupCanvas
+          root={root}
           activeSessionId={activeSessionId}
           ownerPaneKey={ownerPaneKey}
           sessionsById={sessionsById}
@@ -372,8 +478,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   );
 }
 
-interface SplitNodeViewProps {
-  node: SplitNode;
+interface SplitPaneSharedProps {
   activeSessionId: string;
   ownerPaneKey?: string;
   sessionsById: Map<string, ReturnType<typeof useCCSessions>['sessions'][number]>;
@@ -388,24 +493,194 @@ interface SplitNodeViewProps {
   loadingTitle: string;
 }
 
-function SplitNodeView({ node, ...childProps }: SplitNodeViewProps) {
-  if (node.type === 'pane') return <SplitPaneView {...childProps} pane={node} />;
-  return <SplitBranchView {...childProps} branch={node} />;
+interface SplitLayoutRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
-function SplitBranchView({
-  branch,
-  ...childProps
-}: Omit<SplitNodeViewProps, 'node'> & {
+interface SplitPaneLayout {
+  pane: SplitPaneNode;
+  rect: SplitLayoutRect;
+}
+
+interface SplitBranchLayout {
   branch: SplitBranchNode;
+  rect: SplitLayoutRect;
+  firstAxisSize: number;
+  displayedFraction: number;
+}
+
+interface SplitRequiredSize {
+  width: number;
+  height: number;
+}
+
+function getSplitRequiredSize(node: SplitNode): SplitRequiredSize {
+  if (node.type === 'pane') {
+    return { width: MIN_SPLIT_PANE_WIDTH_PX, height: MIN_SPLIT_PANE_HEIGHT_PX };
+  }
+  const first = getSplitRequiredSize(node.first);
+  const second = getSplitRequiredSize(node.second);
+  return node.direction === 'row'
+    ? {
+        width: first.width + GUTTER_PX + second.width,
+        height: Math.max(first.height, second.height),
+      }
+    : {
+        width: Math.max(first.width, second.width),
+        height: first.height + GUTTER_PX + second.height,
+      };
+}
+
+function resolveSplitLayout(
+  node: SplitNode,
+  rect: SplitLayoutRect,
+  liveResize: { splitKey: string; fraction: number } | null,
+  paneLayouts: SplitPaneLayout[],
+  branchLayouts: SplitBranchLayout[],
+): void {
+  if (node.type === 'pane') {
+    paneLayouts.push({ pane: node, rect });
+    return;
+  }
+
+  const isRow = node.direction === 'row';
+  const axisSize = Math.max(0, (isRow ? rect.width : rect.height) - GUTTER_PX);
+  const firstRequired = getSplitRequiredSize(node.first);
+  const secondRequired = getSplitRequiredSize(node.second);
+  const firstMinimum = isRow ? firstRequired.width : firstRequired.height;
+  const secondMinimum = isRow ? secondRequired.width : secondRequired.height;
+  const requestedFraction = liveResize?.splitKey === node.key ? liveResize.fraction : node.fraction;
+  const requestedFirstSize = axisSize * requestedFraction;
+  const maximumFirstSize = Math.max(firstMinimum, axisSize - secondMinimum);
+  const firstAxisSize = Math.min(maximumFirstSize, Math.max(firstMinimum, requestedFirstSize));
+  const normalizedFirstAxisSize = Math.max(0, Math.min(axisSize, firstAxisSize));
+  const displayedFraction = axisSize > 0 ? normalizedFirstAxisSize / axisSize : requestedFraction;
+  branchLayouts.push({
+    branch: node,
+    rect,
+    firstAxisSize: normalizedFirstAxisSize,
+    displayedFraction,
+  });
+
+  const firstRect: SplitLayoutRect = isRow
+    ? { ...rect, width: normalizedFirstAxisSize }
+    : { ...rect, height: normalizedFirstAxisSize };
+  const secondRect: SplitLayoutRect = isRow
+    ? {
+        ...rect,
+        left: rect.left + normalizedFirstAxisSize + GUTTER_PX,
+        width: Math.max(0, axisSize - normalizedFirstAxisSize),
+      }
+    : {
+        ...rect,
+        top: rect.top + normalizedFirstAxisSize + GUTTER_PX,
+        height: Math.max(0, axisSize - normalizedFirstAxisSize),
+      };
+  resolveSplitLayout(node.first, firstRect, liveResize, paneLayouts, branchLayouts);
+  resolveSplitLayout(node.second, secondRect, liveResize, paneLayouts, branchLayouts);
+}
+
+function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root: SplitNode }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewportSize, setViewportSize] = useState({
+    width: DEFAULT_SPLIT_VIEWPORT_WIDTH_PX,
+    height: DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX,
+  });
+  const [liveResize, setLiveResize] = useState<{
+    splitKey: string;
+    fraction: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const updateSize = () => {
+      const rect = viewport.getBoundingClientRect();
+      const width = Math.max(0, viewport.clientWidth || rect.width);
+      const height = Math.max(0, viewport.clientHeight || rect.height);
+      if (width === 0 || height === 0) return;
+      setViewportSize((current) =>
+        current.width === width && current.height === height ? current : { width, height },
+      );
+    };
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  const requiredSize = useMemo(() => getSplitRequiredSize(root), [root]);
+  const canvasSize = {
+    width: Math.max(viewportSize.width, requiredSize.width),
+    height: Math.max(viewportSize.height, requiredSize.height),
+  };
+  const { paneLayouts, branchLayouts } = useMemo(() => {
+    const nextPaneLayouts: SplitPaneLayout[] = [];
+    const nextBranchLayouts: SplitBranchLayout[] = [];
+    resolveSplitLayout(
+      root,
+      { left: 0, top: 0, width: canvasSize.width, height: canvasSize.height },
+      liveResize,
+      nextPaneLayouts,
+      nextBranchLayouts,
+    );
+    return { paneLayouts: nextPaneLayouts, branchLayouts: nextBranchLayouts };
+  }, [canvasSize.height, canvasSize.width, liveResize, root]);
+
+  useEffect(() => {
+    if (liveResize && !branchLayouts.some((layout) => layout.branch.key === liveResize.splitKey)) {
+      setLiveResize(null);
+    }
+  }, [branchLayouts, liveResize]);
+
+  return (
+    <div ref={viewportRef} className="h-full min-h-0 w-full min-w-0 overflow-auto">
+      <div
+        data-split-canvas
+        className="relative"
+        style={{ width: canvasSize.width, height: canvasSize.height }}
+      >
+        {paneLayouts.map(({ pane, rect }) => (
+          <div key={pane.key} className="absolute overflow-hidden" style={rect}>
+            <SplitPaneView {...paneProps} pane={pane} />
+          </div>
+        ))}
+        {branchLayouts.map((layout) => (
+          <SplitGutter
+            key={layout.branch.key}
+            {...layout}
+            onLiveFraction={(fraction) => setLiveResize({ splitKey: layout.branch.key, fraction })}
+            onCommit={(fraction) => {
+              setLiveResize(null);
+              splitGroupStore.setSplitFraction(layout.branch.key, fraction);
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SplitGutter({
+  branch,
+  rect,
+  firstAxisSize,
+  displayedFraction,
+  onLiveFraction,
+  onCommit,
+}: SplitBranchLayout & {
+  onLiveFraction: (fraction: number) => void;
+  onCommit: (fraction: number) => void;
 }) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const liveFractionRef = useRef<number | null>(null);
-  const [liveFraction, setLiveFraction] = useState<number | null>(null);
   const isRow = branch.direction === 'row';
-  const fraction = liveFraction ?? branch.fraction;
 
   useEffect(
     () => () => {
@@ -427,7 +702,7 @@ function SplitBranchView({
 
       resizeCleanupRef.current?.();
       const startPosition = isRow ? event.clientX : event.clientY;
-      const baseFraction = branch.fraction;
+      const baseFraction = displayedFraction;
       document.body.classList.add('resizing-pane');
 
       const handlePointerMove = (pointerEvent: PointerEvent) => {
@@ -438,7 +713,7 @@ function SplitBranchView({
           Math.max(MIN_SPLIT_CHILD_FRACTION, raw),
         );
         liveFractionRef.current = clamped;
-        setLiveFraction(clamped);
+        onLiveFraction(clamped);
       };
 
       const finishResize = () => {
@@ -452,8 +727,7 @@ function SplitBranchView({
         resizeCleanupRef.current = null;
         const finalFraction = liveFractionRef.current;
         liveFractionRef.current = null;
-        setLiveFraction(null);
-        if (finalFraction !== null) splitGroupStore.setSplitFraction(branch.key, finalFraction);
+        if (finalFraction !== null) onCommit(finalFraction);
       };
 
       const handleVisibilityChange = () => {
@@ -467,7 +741,7 @@ function SplitBranchView({
       document.addEventListener('visibilitychange', handleVisibilityChange);
       window.addEventListener('blur', finishResize);
     },
-    [branch.fraction, branch.key, isRow],
+    [displayedFraction, isRow, onCommit, onLiveFraction],
   );
 
   const handleGutterKeyDown = useCallback(
@@ -475,34 +749,25 @@ function SplitBranchView({
       const decreaseKey = isRow ? 'ArrowLeft' : 'ArrowUp';
       const increaseKey = isRow ? 'ArrowRight' : 'ArrowDown';
       let nextFraction: number | null = null;
-      if (event.key === decreaseKey) nextFraction = branch.fraction - KEYBOARD_RESIZE_STEP;
-      else if (event.key === increaseKey) nextFraction = branch.fraction + KEYBOARD_RESIZE_STEP;
+      if (event.key === decreaseKey) nextFraction = displayedFraction - KEYBOARD_RESIZE_STEP;
+      else if (event.key === increaseKey) nextFraction = displayedFraction + KEYBOARD_RESIZE_STEP;
       else if (event.key === 'Home') nextFraction = 0;
       else if (event.key === 'End') nextFraction = 1;
       if (nextFraction === null) return;
       event.preventDefault();
-      splitGroupStore.setSplitFraction(branch.key, nextFraction);
+      onCommit(nextFraction);
     },
-    [branch.fraction, branch.key, isRow],
+    [displayedFraction, isRow, onCommit],
   );
-
-  const firstStyle: CSSProperties = { flexBasis: 0, flexGrow: fraction, flexShrink: 1 };
-  const secondStyle: CSSProperties = {
-    flexBasis: 0,
-    flexGrow: 1 - fraction,
-    flexShrink: 1,
-  };
 
   return (
     <div
       ref={containerRef}
       data-split-branch={branch.key}
       data-split-direction={branch.direction}
-      className={cn('flex h-full min-h-0 w-full min-w-0', isRow ? 'flex-row' : 'flex-col')}
+      className="pointer-events-none absolute"
+      style={rect}
     >
-      <div className="min-h-0 min-w-0 overflow-hidden" style={firstStyle}>
-        <SplitNodeView node={branch.first} {...childProps} />
-      </div>
       <div
         role="separator"
         tabIndex={0}
@@ -510,26 +775,26 @@ function SplitBranchView({
         aria-label={t('splitGroup.resizeAria')}
         aria-valuemin={Math.round(MIN_SPLIT_CHILD_FRACTION * 100)}
         aria-valuemax={Math.round((1 - MIN_SPLIT_CHILD_FRACTION) * 100)}
-        aria-valuenow={Math.round(fraction * 100)}
+        aria-valuenow={Math.round(displayedFraction * 100)}
         onPointerDown={handleGutterPointerDown}
         onKeyDown={handleGutterKeyDown}
         className={cn(
-          'shrink-0 bg-border/50 transition-colors hover:bg-foreground/20',
-          'focus-visible:bg-foreground/30 focus-visible:outline-none',
+          'pointer-events-auto absolute shrink-0 bg-border/50 transition-colors hover:bg-foreground/20',
+          'focus-visible:bg-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
           isRow ? 'cursor-col-resize' : 'cursor-row-resize',
         )}
-        style={isRow ? { width: GUTTER_PX } : { height: GUTTER_PX }}
+        style={
+          isRow
+            ? { left: firstAxisSize, top: 0, width: GUTTER_PX, height: rect.height }
+            : { left: 0, top: firstAxisSize, width: rect.width, height: GUTTER_PX }
+        }
       />
-      <div className="min-h-0 min-w-0 overflow-hidden" style={secondStyle}>
-        <SplitNodeView node={branch.second} {...childProps} />
-      </div>
     </div>
   );
 }
 
-function SplitPaneView({
+const SplitPaneView = memo(function SplitPaneView({
   pane,
-  activeSessionId,
   ownerPaneKey,
   sessionsById,
   focusSession,
@@ -537,10 +802,10 @@ function SplitPaneView({
   onClosePane,
   unnamedTitle,
   loadingTitle,
-}: Omit<SplitNodeViewProps, 'node'> & { pane: SplitPaneNode }) {
+}: SplitPaneSharedProps & { pane: SplitPaneNode }) {
   const { t } = useTranslation();
   const isOwner = pane.key === ownerPaneKey;
-  const viewSessionId = isOwner ? activeSessionId : pane.sessionId;
+  const viewSessionId = pane.sessionId;
   const session = sessionsById.get(viewSessionId) ?? null;
   const title = session ? getSessionDisplayTitle(session, unnamedTitle) : loadingTitle;
 
@@ -552,6 +817,8 @@ function SplitPaneView({
       onSessionDropped={(sessionId, side) => {
         if (splitGroupStore.addSession(sessionId, pane.sessionId, side)) {
           focusSession(sessionId);
+        } else {
+          showSplitAddBlocked(t, splitGroupStore.getAddBlockReason(sessionId, pane.sessionId));
         }
       }}
     >
@@ -593,6 +860,7 @@ function SplitPaneView({
               isOwner
                 ? 'font-medium text-foreground'
                 : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
             )}
             title={title}
           >
@@ -604,7 +872,7 @@ function SplitPaneView({
             aria-label={t('splitGroup.closeAria', { title })}
             title={t('splitGroup.closeAria', { title })}
             onClick={() => onClosePane(pane, isOwner)}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
             <X size={12} />
           </button>
@@ -627,7 +895,7 @@ function SplitPaneView({
       </div>
     </SplitDropTarget>
   );
-}
+});
 
 function SplitGroupToolbar({ root }: { root: SplitNode }) {
   const { t } = useTranslation();
@@ -642,7 +910,7 @@ function SplitGroupToolbar({ root }: { root: SplitNode }) {
         aria-label={t('splitGroup.toggleDirection')}
         title={t('splitGroup.toggleDirection')}
         onClick={() => splitGroupStore.toggleRootDirection()}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+        className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
       >
         {direction === 'row' ? <Rows2 size={13} /> : <Columns2 size={13} />}
       </button>
@@ -651,7 +919,7 @@ function SplitGroupToolbar({ root }: { root: SplitNode }) {
         aria-label={t('splitGroup.closeAll')}
         title={t('splitGroup.closeAll')}
         onClick={() => splitGroupStore.clear()}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+        className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
       >
         <X size={13} />
       </button>
@@ -743,11 +1011,11 @@ function DropHighlight({ side, label }: { side: DropSide; label: string }) {
       data-split-drop-side={side}
       className={cn(
         'pointer-events-none absolute z-40 flex items-center justify-center',
-        'border-2 border-foreground/30 bg-foreground/5 backdrop-blur-[1px]',
+        'border border-foreground/30 bg-foreground/5',
         positionClass,
       )}
     >
-      <span className="rounded-lg border border-border bg-content-area/95 px-2 py-1 text-xs text-foreground">
+      <span className="rounded-full border border-border bg-content-area px-2 py-1 text-xs text-foreground">
         {label}
       </span>
     </div>

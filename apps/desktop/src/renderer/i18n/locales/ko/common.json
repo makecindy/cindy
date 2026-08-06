@@ -8476,10 +8476,20 @@
     "closeAria": "‘{{title}}’ 분할 창 닫기",
     "closeAll": "분할 닫기",
     "toggleDirection": "상하 / 좌우 분할 전환",
-    "sessionMissing": "세션을 찾을 수 없거나 삭제됨",
     "dropHint": "여기에 세션을 놓아 열기",
     "loadingTask": "세션 불러오는 중…",
-    "resizeAria": "세션 분할 창 크기 조절"
+    "resizeAria": "세션 분할 창 크기 조절",
+    "openInSplit": "분할로 열기",
+    "openSide": {
+      "left": "세션을 왼쪽에 열기",
+      "right": "세션을 오른쪽에 열기",
+      "top": "세션을 위쪽에 열기",
+      "bottom": "세션을 아래쪽에 열기"
+    },
+    "alreadyOpen": "이 세션은 이미 분할 창에 열려 있습니다. 다른 세션을 선택하세요.",
+    "limitReached": "한 분할 창에는 세션을 최대 {{count}}개까지 열 수 있습니다. 분할 창 하나를 닫고 다시 시도하세요.",
+    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요.",
+    "workerUnavailable": "Worker는 별도의 분할 창에서 열 수 없습니다. 소속 Lead 세션을 대신 여세요."
   },
   "extraDirs": {
     "menuAria": "작업 메뉴",

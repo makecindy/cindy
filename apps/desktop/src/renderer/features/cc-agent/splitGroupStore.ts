@@ -11,6 +11,7 @@ import { isSecondaryWindow } from '@/lib/secondaryWindow';
 
 export type SplitDirection = 'row' | 'column';
 export type DropSide = 'left' | 'right' | 'top' | 'bottom';
+export type SplitGroupAddBlockReason = 'invalid' | 'duplicate' | 'limit-reached' | 'missing-anchor';
 
 export interface SplitPaneNode {
   type: 'pane';
@@ -308,15 +309,29 @@ export const splitGroupStore = {
     return getSplitPanes(state.root).length >= 2;
   },
 
+  getAddBlockReason(
+    sessionIdInput: string,
+    anchorSessionIdInput: string,
+  ): SplitGroupAddBlockReason | null {
+    ensureHydrated();
+    const sessionId = normalizeSessionId(sessionIdInput);
+    const anchorSessionId = normalizeSessionId(anchorSessionIdInput);
+    if (!sessionId || !anchorSessionId) return 'invalid';
+    if (sessionId === anchorSessionId) return 'duplicate';
+    const panes = getSplitPanes(state.root);
+    if (panes.some((pane) => pane.sessionId === sessionId)) return 'duplicate';
+    if (panes.length >= MAX_SPLIT_PANES) return 'limit-reached';
+    if (state.root && !panes.some((pane) => pane.sessionId === anchorSessionId)) {
+      return 'missing-anchor';
+    }
+    return null;
+  },
+
   addSession(sessionIdInput: string, anchorSessionIdInput: string, side: DropSide): boolean {
     ensureHydrated();
     const sessionId = normalizeSessionId(sessionIdInput);
     const anchorSessionId = normalizeSessionId(anchorSessionIdInput);
-    if (!sessionId || !anchorSessionId || sessionId === anchorSessionId) return false;
-    const panes = getSplitPanes(state.root);
-    if (panes.some((pane) => pane.sessionId === sessionId) || panes.length >= MAX_SPLIT_PANES) {
-      return false;
-    }
+    if (this.getAddBlockReason(sessionId, anchorSessionId)) return false;
 
     const existingKeys = new Set<string>();
     if (state.root) collectNodeKeys(state.root, existingKeys);
@@ -344,7 +359,6 @@ export const splitGroupStore = {
       emit({ root: makeSplit(anchorPane) });
       return true;
     }
-    if (!panes.some((pane) => pane.sessionId === anchorSessionId)) return false;
     emit({
       root: replaceNode(
         state.root,

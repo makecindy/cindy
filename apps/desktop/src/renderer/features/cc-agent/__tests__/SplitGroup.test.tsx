@@ -15,6 +15,7 @@ const {
   resolveSessionRouteMock,
   routeActionMock,
   sessionGetMock,
+  sessionViewRenderMock,
   useCCSessionsMock,
 } = vi.hoisted(() => ({
   deferredRouteActionMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   routeActionMock: vi.fn(),
   sessionGetMock: vi.fn(),
+  sessionViewRenderMock: vi.fn(),
   useCCSessionsMock: vi.fn(),
 }));
 
@@ -68,55 +70,58 @@ vi.mock('../CCAgentSessionView', () => ({
     sidebarTargetSessionId: string;
     onSessionNavigate?: (targetSessionId: string, routeOwnerSessionId?: string) => void;
     disableAutofocus?: boolean;
-  }) => (
-    <div
-      data-testid={`session-view-${sessionIdProp}`}
-      data-session-id={sessionIdProp}
-      data-route-owner={routeOwner ? 'true' : 'false'}
-      data-sidebar-target-session-id={sidebarTargetSessionId}
-      data-disable-autofocus={disableAutofocus ? 'true' : 'false'}
-      onDragOver={(event) => event.stopPropagation()}
-      onDrop={(event) => event.stopPropagation()}
-    >
-      <button
-        type="button"
-        data-testid={`route-action-${sessionIdProp}`}
-        data-split-pane-route-action=""
-        onClick={() => {
-          onSessionNavigate?.('session-c', 'session-c');
-          routeActionMock();
-        }}
+  }) => {
+    sessionViewRenderMock(sessionIdProp);
+    return (
+      <div
+        data-testid={`session-view-${sessionIdProp}`}
+        data-session-id={sessionIdProp}
+        data-route-owner={routeOwner ? 'true' : 'false'}
+        data-sidebar-target-session-id={sidebarTargetSessionId}
+        data-disable-autofocus={disableAutofocus ? 'true' : 'false'}
+        onDragOver={(event) => event.stopPropagation()}
+        onDrop={(event) => event.stopPropagation()}
       >
-        Route action
-      </button>
-      <button
-        type="button"
-        data-testid={`worker-route-action-${sessionIdProp}`}
-        data-split-pane-route-action=""
-        onClick={() => {
-          onSessionNavigate?.('worker-c', 'lead-c');
-          routeActionMock();
-        }}
-      >
-        Worker route action
-      </button>
-      <button
-        type="button"
-        data-testid={`deferred-route-action-${sessionIdProp}`}
-        data-split-pane-route-action=""
-        onClick={() => deferredRouteActionMock(onSessionNavigate)}
-      >
-        Deferred route action
-      </button>
-      <button
-        type="button"
-        data-testid={`composer-action-${sessionIdProp}`}
-        onContextMenu={routeActionMock}
-      >
-        Composer action
-      </button>
-    </div>
-  ),
+        <button
+          type="button"
+          data-testid={`route-action-${sessionIdProp}`}
+          data-split-pane-route-action=""
+          onClick={() => {
+            onSessionNavigate?.('session-c', 'session-c');
+            routeActionMock();
+          }}
+        >
+          Route action
+        </button>
+        <button
+          type="button"
+          data-testid={`worker-route-action-${sessionIdProp}`}
+          data-split-pane-route-action=""
+          onClick={() => {
+            onSessionNavigate?.('worker-c', 'lead-c');
+            routeActionMock();
+          }}
+        >
+          Worker route action
+        </button>
+        <button
+          type="button"
+          data-testid={`deferred-route-action-${sessionIdProp}`}
+          data-split-pane-route-action=""
+          onClick={() => deferredRouteActionMock(onSessionNavigate)}
+        >
+          Deferred route action
+        </button>
+        <button
+          type="button"
+          data-testid={`composer-action-${sessionIdProp}`}
+          onContextMenu={routeActionMock}
+        >
+          Composer action
+        </button>
+      </div>
+    );
+  },
 }));
 
 function renderSplitGroup(activeSessionId: string) {
@@ -137,6 +142,7 @@ describe('SplitGroup', () => {
     resolveSessionRouteMock.mockClear();
     routeActionMock.mockClear();
     sessionGetMock.mockReset();
+    sessionViewRenderMock.mockClear();
     useCCSessionsMock.mockReset();
     useCCSessionsMock.mockReturnValue({ sessions: [], isLoading: true, error: null });
     splitGroupStore.__resetForTest();
@@ -240,6 +246,141 @@ describe('SplitGroup', () => {
 
     await waitFor(() => expect(splitGroupStore.getSnapshot().root).toBeNull());
     expect(screen.getByTestId('route-outlet')).toBeTruthy();
+  });
+
+  it('当前路由 owner 已失效时先切到存活 pane，并且不会把死 pane 回填', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [
+        { id: 'session-b', title: 'Session B', status: 'active' },
+        { id: 'session-c', title: 'Session C', status: 'active' },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockResolvedValue({ id: 'session-a', status: 'deleted' });
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+
+    renderSplitGroup('session-a');
+
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith('/cc-agent/session-b', { replace: true }),
+    );
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-b', 'session-c'],
+    );
+    expect(screen.queryByTestId('session-view-session-a')).toBeNull();
+    expect(sessionGetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('失效 owner 的恢复路由晚到时不会覆盖用户刚切换的 pane', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [
+        { id: 'session-b', title: 'Session B', status: 'active' },
+        { id: 'session-c', title: 'Session C', status: 'active' },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockResolvedValue({ id: 'session-a', status: 'deleted' });
+    let resolveStaleOwnerRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveStaleOwnerRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+
+    await waitFor(() =>
+      expect(resolveSessionRouteMock).toHaveBeenCalledWith(
+        'session-b',
+        expect.objectContaining({ id: 'session-b' }),
+      ),
+    );
+    view.rerender(
+      <MemoryRouter>
+        <SplitGroup activeSessionId="session-c">
+          <div data-testid="route-outlet" />
+        </SplitGroup>
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      resolveStaleOwnerRoute?.('/cc-agent/session-b');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).not.toHaveBeenCalledWith('/cc-agent/session-b', { replace: true });
+  });
+
+  it('清理失效 owner 后仍会完成延迟返回的存活 pane 路由恢复', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [
+        { id: 'session-b', title: 'Session B', status: 'active' },
+        { id: 'session-c', title: 'Session C', status: 'active' },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockResolvedValue({ id: 'session-a', status: 'deleted' });
+    let resolveStaleOwnerRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveStaleOwnerRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    renderSplitGroup('session-a');
+
+    await waitFor(() =>
+      expect(
+        getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId),
+      ).toEqual(['session-b', 'session-c']),
+    );
+    await act(async () => {
+      resolveStaleOwnerRoute?.('/cc-agent/session-b');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('/cc-agent/session-b', { replace: true });
+  });
+
+  it('两窗格因清理失效 owner 折叠后仍会完成延迟路由恢复', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [{ id: 'session-b', title: 'Session B', status: 'active' }],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockResolvedValue({ id: 'session-a', status: 'deleted' });
+    let resolveStaleOwnerRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveStaleOwnerRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    renderSplitGroup('session-a');
+
+    await waitFor(() => expect(splitGroupStore.getSnapshot().root).toBeNull());
+    await act(async () => {
+      resolveStaleOwnerRoute?.('/cc-agent/session-b');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('/cc-agent/session-b', { replace: true });
   });
 
   it('活动 pane 接管路由主权，切换活动任务不会重建 pane 视图', () => {
@@ -435,6 +576,44 @@ describe('SplitGroup', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it('较早的路由提交不会取消更晚的 pane 聚焦请求', async () => {
+    let resolveLatestRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockResolvedValueOnce('/cc-agent/session-b').mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveLatestRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-b'), { button: 0 });
+      await Promise.resolve();
+    });
+    expect(navigateMock).toHaveBeenCalledWith('/cc-agent/session-b');
+
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-c'), { button: 0 });
+      view.rerender(
+        <MemoryRouter>
+          <SplitGroup activeSessionId="session-b">
+            <div data-testid="route-outlet" />
+          </SplitGroup>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {
+      resolveLatestRoute?.('/cc-agent/session-c');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenLastCalledWith('/cc-agent/session-c');
+  });
+
   it('分屏卸载后会取消仍在解析的 pane 焦点请求', async () => {
     let resolveStaleRoute: ((route: string) => void) | undefined;
     resolveSessionRouteMock.mockImplementationOnce(
@@ -554,6 +733,38 @@ describe('SplitGroup', () => {
     );
     expect(remainingPanes.find((pane) => pane.sessionId === 'session-c')?.key).toBe(
       originalKeys.get('session-c'),
+    );
+  });
+
+  it('目标导航已发出后再关闭 owner，仍会在目标提交时完成关闭', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-b'), { button: 0 });
+      await Promise.resolve();
+    });
+    expect(navigateMock).toHaveBeenCalledWith('/cc-agent/session-b');
+
+    const sessionAPane = view.container.querySelector('[data-split-pane-session-id="session-a"]');
+    const closeButton = sessionAPane?.querySelector('button[aria-label="splitGroup.closeAria"]');
+    if (!(closeButton instanceof HTMLElement)) throw new Error('session-a close button missing');
+    act(() => {
+      fireEvent.click(closeButton);
+      view.rerender(
+        <MemoryRouter>
+          <SplitGroup activeSessionId="session-b">
+            <div data-testid="route-outlet" />
+          </SplitGroup>
+        </MemoryRouter>,
+      );
+    });
+
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-b', 'session-c'],
     );
   });
 
@@ -902,6 +1113,26 @@ describe('SplitGroup', () => {
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(4);
   });
 
+  it('关闭分支后提升 sibling 时保留其它 pane 的已挂载视图', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-b');
+    const sessionBView = screen.getByTestId('session-view-session-b');
+    const sessionCView = screen.getByTestId('session-view-session-c');
+    const sessionAPane = view.container.querySelector('[data-split-pane-session-id="session-a"]');
+    const closeButton = sessionAPane?.querySelector('button[aria-label="splitGroup.closeAria"]');
+    if (!(closeButton instanceof HTMLElement)) throw new Error('session-a close button missing');
+
+    act(() => {
+      fireEvent.click(closeButton);
+    });
+
+    expect(screen.getByTestId('session-view-session-b')).toBe(sessionBView);
+    expect(screen.getByTestId('session-view-session-c')).toBe(sessionCView);
+  });
+
   it('分割线可聚焦，方向键与 Home/End 调整比例并同步 ARIA 值', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
@@ -985,6 +1216,36 @@ describe('SplitGroup', () => {
       fireEvent.pointerMove(document, { clientX: 800 });
     });
     expect(setFractionSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('拖动分割线时不重渲染重型 session 视图', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const separator = view.container.querySelector('[role="separator"]') as HTMLElement;
+    const branch = separator.closest('[data-split-branch]') as HTMLElement;
+    vi.spyOn(branch, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1006,
+      top: 0,
+      bottom: 500,
+      width: 1006,
+      height: 500,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    sessionViewRenderMock.mockClear();
+
+    act(() => {
+      fireEvent.pointerDown(separator, { button: 0, clientX: 500 });
+      fireEvent.pointerMove(document, { clientX: 550 });
+      fireEvent.pointerMove(document, { clientX: 600 });
+    });
+
+    expect(sessionViewRenderMock).not.toHaveBeenCalled();
+    act(() => fireEvent.pointerUp(document));
   });
 
   it('页面隐藏后连续收到其它终止事件时只提交一次 resize', () => {

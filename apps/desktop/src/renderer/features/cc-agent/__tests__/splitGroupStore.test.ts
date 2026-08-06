@@ -109,12 +109,7 @@ describe('splitGroupStore', () => {
         second: { type: 'pane', sessionId: 'session-c' },
       },
     });
-    expect(getSplitSessionIds(root)).toEqual([
-      'session-a',
-      'session-d',
-      'session-b',
-      'session-c',
-    ]);
+    expect(getSplitSessionIds(root)).toEqual(['session-a', 'session-d', 'session-b', 'session-c']);
   });
 
   it('重复任务、非法 anchor 与上限不会修改状态', async () => {
@@ -124,6 +119,8 @@ describe('splitGroupStore', () => {
 
     expect(splitGroupStore.addSession('session-b', 'session-a', 'left')).toBe(false);
     expect(splitGroupStore.addSession('session-c', 'missing', 'right')).toBe(false);
+    expect(splitGroupStore.getAddBlockReason('session-b', 'session-a')).toBe('duplicate');
+    expect(splitGroupStore.getAddBlockReason('session-c', 'missing')).toBe('missing-anchor');
     expect(splitGroupStore.getSnapshot()).toBe(initial);
 
     for (let index = 3; index <= MAX_SPLIT_PANES; index += 1) {
@@ -131,6 +128,9 @@ describe('splitGroupStore', () => {
     }
     expect(getSplitPanes(splitGroupStore.getSnapshot().root)).toHaveLength(MAX_SPLIT_PANES);
     const atLimit = splitGroupStore.getSnapshot();
+    expect(splitGroupStore.getAddBlockReason('session-over-limit', 'session-b')).toBe(
+      'limit-reached',
+    );
     expect(splitGroupStore.addSession('session-over-limit', 'session-b', 'right')).toBe(false);
     expect(splitGroupStore.getSnapshot()).toBe(atLimit);
   });
@@ -288,7 +288,9 @@ describe('splitGroupStore', () => {
       },
     });
     module = await loadStore();
-    expect(() => module.splitGroupStore.addSession('session-b', 'session-a', 'right')).not.toThrow();
+    expect(() =>
+      module.splitGroupStore.addSession('session-b', 'session-a', 'right'),
+    ).not.toThrow();
     expect(module.getSplitPanes(module.splitGroupStore.getSnapshot().root)).toHaveLength(2);
   });
 });

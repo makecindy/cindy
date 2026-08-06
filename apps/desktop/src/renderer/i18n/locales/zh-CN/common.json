@@ -8476,10 +8476,20 @@
     "closeAria": "关闭任务“{{title}}”的分栏",
     "closeAll": "关闭分栏",
     "toggleDirection": "切换上下 / 左右分栏",
-    "sessionMissing": "任务不存在或已删除",
     "dropHint": "松开以在此分栏打开任务",
     "loadingTask": "正在加载任务…",
-    "resizeAria": "调整任务分栏大小"
+    "resizeAria": "调整任务分栏大小",
+    "openInSplit": "在分栏中打开",
+    "openSide": {
+      "left": "在左侧打开任务",
+      "right": "在右侧打开任务",
+      "top": "在上方打开任务",
+      "bottom": "在下方打开任务"
+    },
+    "alreadyOpen": "该任务已在当前分栏中打开，请选择其他任务",
+    "limitReached": "一个分栏最多可打开 {{count}} 个任务，请先关闭一个任务分栏再重试",
+    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试",
+    "workerUnavailable": "Worker 任务不能单独在分栏中打开，请改为打开所属 Lead 任务"
   },
   "extraDirs": {
     "menuAria": "操作菜单",
