@@ -99,9 +99,12 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
   it('warns when Pi is selected on a turn-policy channel (wechat)', async () => {
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    expect(
-      await screen.findByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
-    ).toBeTruthy();
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toContain(
+      'settings.imBot.defaults.agentUnsupportedOnChannelHint',
+    );
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.getAttribute('aria-atomic')).toBe('true');
   });
 
   it('does not warn for a supported agent on wechat', async () => {

@@ -358,7 +358,9 @@ export function ImDefaultSettingsSection({
 
       {agentUnsupportedOnChannel && (
         <div
-          role="note"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
           className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2"
         >
           <AlertTriangle
