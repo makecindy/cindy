@@ -91,6 +91,12 @@ function classifyHttpFailure(
   body: string,
 ): { errorCode: CindyProxySearchErrorCode; message: string } {
   const normalized = body.slice(0, 1024).toLowerCase();
+  if (status === 401 || status === 403) {
+    return {
+      errorCode: 'AUTH_REJECTED',
+      message: 'Cindy AI 搜索鉴权失败，请重新登录或稍后再试',
+    };
+  }
   const looksLikeQuota =
     status === 402 ||
     /(?:quota|credit|balance|insufficient|exhausted|spend limit)/.test(normalized);
@@ -98,12 +104,6 @@ function classifyHttpFailure(
     return {
       errorCode: 'QUOTA_EXHAUSTED',
       message: 'Cindy AI 搜索额度不足，请稍后再试或在插件设置中改用自己的搜索渠道',
-    };
-  }
-  if (status === 401 || status === 403) {
-    return {
-      errorCode: 'AUTH_REJECTED',
-      message: 'Cindy AI 搜索鉴权失败，请重新登录或稍后再试',
     };
   }
   if (status === 404) {

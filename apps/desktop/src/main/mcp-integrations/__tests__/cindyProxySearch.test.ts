@@ -155,8 +155,10 @@ describe('cindyProxySearch', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('归一化额度、限流、服务不可用和非法响应错误', async () => {
+  it('归一化鉴权、额度、限流、服务不可用和非法响应错误', async () => {
     const cases = [
+      { status: 401, body: { error: 'insufficient scope' }, code: 'AUTH_REJECTED' },
+      { status: 403, body: { error: 'insufficient permissions' }, code: 'AUTH_REJECTED' },
       { status: 402, body: { error: 'insufficient balance' }, code: 'QUOTA_EXHAUSTED' },
       { status: 429, body: { error: 'rate limit' }, code: 'RATE_LIMITED' },
       { status: 503, body: { error: 'unavailable' }, code: 'UPSTREAM_UNAVAILABLE' },
