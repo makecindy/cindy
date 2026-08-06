@@ -1726,6 +1726,12 @@
         "cellLabel": "消息通知",
         "hint": "上下线时向 Bot 发送通知消息"
       },
+      "sessionNotification": {
+        "label": "任务完成通知",
+        "cellLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
+        "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
+        "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
+      },
       "bind": "绑定"
     },
     "wechatBot": {

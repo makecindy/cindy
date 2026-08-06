@@ -1727,6 +1727,12 @@
         "cellLabel": "Message notification",
         "hint": "Send a notification message to the Bot on connect/disconnect"
       },
+      "sessionNotification": {
+        "label": "Session notifications",
+        "cellLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
+        "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
+        "disabledHint": "First set up the bot and DM it once to complete binding."
+      },
       "bind": "Bind"
     },
     "wechatBot": {
