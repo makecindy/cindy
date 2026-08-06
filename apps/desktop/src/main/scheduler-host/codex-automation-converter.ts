@@ -133,6 +133,11 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
   let dayOfMonth = '*';
   let dayOfWeek = '*';
   if (frequency === 'WEEKLY') {
+    if (values.has('BYMONTHDAY')) {
+      diagnostics.push(
+        'RRULE WEEKLY cannot combine BYDAY with BYMONTHDAY for Cindy cron conversion',
+      );
+    }
     const byDay = values.get('BYDAY');
     if (!byDay) {
       diagnostics.push('RRULE WEEKLY is missing BYDAY');
@@ -145,6 +150,11 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
       }
     }
   } else if (frequency === 'MONTHLY') {
+    if (values.has('BYDAY')) {
+      diagnostics.push(
+        'RRULE MONTHLY BYDAY is not supported; use BYMONTHDAY for Cindy cron conversion',
+      );
+    }
     const monthDay = singleInteger(values, 'BYMONTHDAY', 1, 31, diagnostics);
     if (monthDay !== undefined) dayOfMonth = String(monthDay);
   } else if (values.has('BYDAY') || values.has('BYMONTHDAY')) {

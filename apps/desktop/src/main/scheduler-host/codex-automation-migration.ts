@@ -90,8 +90,18 @@ export function findDuplicateSchedule(
       schedule.intervalMs === input.intervalMs &&
       schedule.agentKind === input.agentKind &&
       normalized(schedule.model) === normalized(input.model) &&
+      normalized(schedule.providerId) === normalized(input.providerId) &&
       normalized(schedule.effort) === normalized(input.effort) &&
-      normalized(schedule.workingDir) === normalized(input.workingDir)
+      (schedule.fastMode ?? false) === (input.fastMode ?? false) &&
+      schedule.workspaceKind === (input.workspaceKind ?? 'project') &&
+      normalized(schedule.workingDir) === normalized(input.workingDir) &&
+      schedule.useWorktree === input.useWorktree &&
+      (schedule.executionMode ?? 'agent') === (input.executionMode ?? 'agent') &&
+      (schedule.persistentSession ?? false) === (input.persistentSession ?? false) &&
+      (schedule.silentWhenIdle ?? false) === (input.silentWhenIdle ?? false) &&
+      schedule.notify.desktop === input.notify.desktop &&
+      schedule.notify.feishu === input.notify.feishu &&
+      (schedule.notify.wecomGroup ?? false) === (input.notify.wecomGroup ?? false)
     );
   });
 }
@@ -101,7 +111,7 @@ function toPreviewItem(
   converted: CodexAutomationConversionResult,
   duplicateScheduleId?: string,
 ): CodexAutomationMigrationPreviewItem {
-  const diagnostics = [...detail.diagnostics, ...converted.diagnostics];
+  const diagnostics = [...new Set([...detail.diagnostics, ...converted.diagnostics])];
   const canImport = converted.canImport && converted.input !== undefined;
   const selectedByDefault = canImport && duplicateScheduleId === undefined;
   return {

@@ -64,7 +64,7 @@ Main 侧通过 `SchedulerMcpDeps` 注入 reader；MCP 包不直接访问 Electro
 | `prompt` | `prompt` | 原样保留 |
 | `model` | `model` | 原样保留，`agentKind = 'codex'` |
 | `reasoning_effort` | `effort` | 原样保留 |
-| `cwds[0]` | `workingDir` | 只接受绝对路径；当前项目路径之外仍可预览但不能越权写入 |
+| `cwds[0]` | `workingDir` | 仅在恰好一个绝对 cwd 时导入；多个 cwd 直接标记为需手工调整，避免丢失执行范围 |
 | `execution_environment = 'local'` | `workspaceKind = 'project'` | 其它值标记不支持 |
 | `status = 'ACTIVE'` | active | `PAUSED/DISABLED/INACTIVE` 创建后保持 paused；未知状态不可迁移 |
 | `rrule` | `cronExpr` | 仅写入可精确表达的五字段 cron；不支持的规则阻止导入 |
