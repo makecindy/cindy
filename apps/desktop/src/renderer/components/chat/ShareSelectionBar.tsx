@@ -53,6 +53,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
   const { t } = useTranslation();
   const count = useShareSelectionCount();
   const [busy, setBusy] = useState<BusyKind | null>(null);
+  const mountedRef = useRef(true);
   const selectionBeforeSelectAllRef = useRef<string[] | null>(null);
   // 页脚使用产品指定的 Cindy 主视觉；wordmark 仍跟随当前主题。
   const logoSrc = useBrandLogo();
@@ -63,6 +64,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
     shareableMessageIds.length > 0 &&
     selectedVisibleCount === shareableMessageIds.length &&
     selectedVisibleCount === count;
+  const compactLayout = barWidth < 640;
 
   // 全选与产物顺序都以「已渲染的消息」为准(见 queryShareableMessageIds 注释:
   // render-window 外的消息克隆不到,按 messages 全集全选会静默丢内容)。
@@ -135,11 +137,18 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
               : t('chat.shareImage.failed'),
         );
       } finally {
-        setBusy(null);
+        if (mountedRef.current) setBusy(null);
       }
     },
     [buildBlob, busy, count, sessionId, t],
   );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -165,7 +174,12 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
     <div
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
       style={{ width: barWidth }}
-      className="flex items-center gap-3 border-t border-[var(--border-default)] pt-3"
+      className={cn(
+        'border-t border-[var(--border-default)] pt-3',
+        compactLayout
+          ? 'grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2'
+          : 'flex items-center gap-3',
+      )}
     >
       {/* 部分勾选不等于全选:按钮仍显示未选中,点击后临时补齐全部；只有当前
           可选项全部勾上时才显示选中态,再次点击恢复全选前的用户选择。 */}
@@ -205,7 +219,12 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2">
+      <div
+        className={cn(
+          'flex items-center gap-2',
+          compactLayout ? 'col-span-2 flex-wrap justify-end' : 'shrink-0',
+        )}
+      >
         <button
           type="button"
           onClick={() => shareSelectionStore.exit()}

@@ -201,7 +201,7 @@ function projectRedactedText(nodes: readonly Text[], redactedText: string): void
     }
 
     if (change.removed) {
-      originalOffset += change.count;
+      originalOffset += change.value.length;
       continue;
     }
 
@@ -214,7 +214,7 @@ function projectRedactedText(nodes: readonly Text[], redactedText: string): void
       projected[index] += change.value.slice(valueOffset, valueOffset + chunkLength);
       valueOffset += chunkLength;
     }
-    originalOffset += change.count;
+    originalOffset += change.value.length;
   }
 
   nodes.forEach((node, index) => {

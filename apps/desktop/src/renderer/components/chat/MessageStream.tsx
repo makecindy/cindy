@@ -31,10 +31,7 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import {
-  isAgentPlanToolName,
-  isDeliveryProseText,
-} from '@cindy/maker-shared/message-render';
+import { isAgentPlanToolName, isDeliveryProseText } from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -3621,7 +3618,14 @@ export function MessageStream({
     }
     const id = window.setTimeout(run, 300);
     return () => window.clearTimeout(id);
-  }, [sessionId, navRailEnabled, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
+  }, [
+    sessionId,
+    navRailEnabled,
+    navRailEntries.length,
+    hasMoreMessages,
+    isLoadingMore,
+    onLoadMore,
+  ]);
 
   const railJumpSeqRef = useRef(0);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
@@ -3788,7 +3792,7 @@ export function MessageStream({
                     // 容器上(不是逐条消息),工具卡等不可选的 item 也跟着移,
                     // 左边缘保持对齐。
                     shareSelectionActive && 'pl-10',
-                    'transition-[padding] duration-200 ease-out',
+                    'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
                   )}
                 >
                   {visibleRenderItems.map((item) => {
