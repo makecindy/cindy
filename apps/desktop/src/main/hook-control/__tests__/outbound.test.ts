@@ -145,6 +145,18 @@ describe('collectOutboundAttachments', () => {
     expect(r.skipped).toBe(0);
   });
 
+  it('方括号文件名附件走全流程被收集(#1856 review P1:畸形恢复判据不能误伤合法 URL)', async () => {
+    const text = '详见 [报告](xdt-file:///out/report[final].pdf) 收工';
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/out/report[final].pdf': Buffer.from('%PDF-1.4') }, { allowedFileRoots: ['/out'] }),
+    );
+    expect(r.attachments.map((a) => a.name)).toEqual(['report[final].pdf']);
+    expect(r.text).not.toContain('xdt-file://');
+    expect(r.skipped).toBe(0);
+  });
+
   it('cindy-media 图片引用同样收集(媒体总仓双协议;只认 xdt-image 会让 hook Slack 拿不到生成图)', async () => {
     const hash = 'b'.repeat(64);
     const text = `画好了 ![猫](cindy-media://blobs/${hash}.png)`;

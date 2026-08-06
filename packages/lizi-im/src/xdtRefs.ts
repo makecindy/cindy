@@ -26,6 +26,32 @@ interface ParsedXdtRef extends XdtImageRef {
 }
 
 /**
+ * 判定 text[openBracket] 处是否**直接**开始一个 managed-media 引用。判据与
+ * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 扫描遇 '[' 即
+ * 放弃、']( ' 收尾、按 image 与否认 scheme), 只读、无副作用。
+ *
+ * "直接"很关键: alt 里再出现 '[' 时返回 false —— 那个更内层的 '[' 才可能是
+ * 起点, 外层的恢复循环会继续迭代到它。
+ */
+function refStartsAt(text: string, openBracket: number): boolean {
+  const image = openBracket > 0 && text[openBracket - 1] === '!';
+  let altEnd = openBracket + 1;
+  while (
+    altEnd < text.length &&
+    text[altEnd] !== '[' &&
+    !(text[altEnd] === ']' && text[altEnd + 1] === '(')
+  ) {
+    altEnd += 1;
+  }
+  if (altEnd >= text.length || text[altEnd] === '[') return false;
+
+  const urlStart = altEnd + 2;
+  return image
+    ? text.startsWith('xdt-image://', urlStart) || text.startsWith('cindy-media://', urlStart)
+    : text.startsWith('xdt-file://', urlStart);
+}
+
+/**
  * Parse managed-media Markdown in one forward pass. Model output is
  * uncontrolled input, so this deliberately avoids the former global regexes:
  * repeated near-matches could make the regex engine rescan a long suffix.
@@ -77,13 +103,30 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     if (endParen === -1) break;
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
-    // 把整段错误改写。判据: URL 段里出现 '[' 即视为吞进了新引用起点(合法
-    // xdt/cindy-media URL 不含 '[', 文件名确需方括号时用 %5B 编码), 放弃本
-    // 候选并从那个 '[' 恢复前向扫描。cursor 严格前进(nextBracket ≥ urlStart
-    // + scheme.length > openBracket), 无死循环。
-    const nextBracket = text.indexOf('[', urlStart + scheme.length);
-    if (nextBracket !== -1 && nextBracket < endParen) {
-      cursor = nextBracket;
+    // 把整段错误改写。判据是 URL 段里出现**构成引用起点**的 '['(#1856 review
+    // P1 收窄: 早先"出现任意 '[' 就放弃"过宽, 把合法方括号文件名如
+    // `[f](xdt-file:///tmp/report[final].pdf)` 静默丢掉 —— 旧正则实现与收敛前
+    // 的解析器都接受这类 URL)。命中即放弃本候选、从那个 '[' 恢复前向扫描;
+    // 一个都不命中就照常收下, URL 里的 '['/']' 原样保留。
+    //
+    // cursor 仍严格前进: recovery ≥ urlStart + scheme.length > openBracket。
+    // 仍是线性(本解析器防 ReDoS/防回扫的前提): refStartsAt 的 alt 扫描天然停在
+    // 下一个 '[', 一段里相邻 '[' 的间距之和 ≤ 段长, 故单个候选的整轮判定是线性;
+    // 且恢复点是本段第一个引用起点, 下一候选的 URL 段从它之后才开始, 因此各候选
+    // 判定扫过的区间互不重叠, 合计仍是线性, 无平方级最坏情况。
+    let recovery = -1;
+    for (
+      let bracket = text.indexOf('[', urlStart + scheme.length);
+      bracket !== -1 && bracket < endParen;
+      bracket = text.indexOf('[', bracket + 1)
+    ) {
+      if (refStartsAt(text, bracket)) {
+        recovery = bracket;
+        break;
+      }
+    }
+    if (recovery !== -1) {
+      cursor = recovery;
       continue;
     }
     if (endParen > urlStart + scheme.length) {

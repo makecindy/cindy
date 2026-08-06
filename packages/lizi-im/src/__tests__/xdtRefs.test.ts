@@ -111,11 +111,34 @@ describe('linear managed-media parser', () => {
     expect(stripXdtFileLinks(text)).toBe('![bad](xdt-image://unterminated ');
   });
 
-  it('URL 含 "[" 的引用按畸形放弃(恢复扫描的代价, 方括号文件名需 %5B 编码)', () => {
-    expect(collectXdtFileLinks('[f](xdt-file:///tmp/a[1].txt)')).toEqual([]);
+  it('URL 里的方括号文件名保留(#1856 review P1: 畸形恢复判据收窄到"真引用起点")', () => {
+    // 早先"URL 段出现任意 '[' 即放弃"过宽, 把这类合法文件名静默丢掉。
+    expect(collectXdtFileLinks('[f](xdt-file:///tmp/a[1].txt)')).toEqual([
+      { alt: 'f', absPath: '/tmp/a[1].txt' },
+    ]);
+    // %5B 编码写法继续可用。
     expect(collectXdtFileLinks('[f](xdt-file:///tmp/a%5B1%5D.txt)')).toEqual([
       { alt: 'f', absPath: '/tmp/a[1].txt' },
     ]);
+  });
+
+  it('方括号文件名的中文 alt 引用同样收集(Codex 原例)', () => {
+    expect(collectXdtFileLinks('[报告](xdt-file:///tmp/report[final].pdf)')).toEqual([
+      { alt: '报告', absPath: '/tmp/report[final].pdf' },
+    ]);
+  });
+
+  it('image URL 含方括号也保留(两类引用同一判据)', () => {
+    expect(collectXdtImageUrls('![a](xdt-image://x[1].png)')).toEqual(['xdt-image://x[1].png']);
+  });
+
+  it('URL 段先出现非起点方括号、后跟真引用: 仍在真起点处恢复', () => {
+    // 两类边界不互相回归: 非起点的 '[note]' 不触发放弃, 真引用起点仍要救回来。
+    const text = `[bad](xdt-file://unterminated [note] ![good](${BLOB})`;
+
+    expect(collectXdtImageUrls(text)).toEqual([BLOB]);
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(stripXdtImageLinks(text)).toBe('[bad](xdt-file://unterminated [note] ');
   });
 });
 
