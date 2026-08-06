@@ -78,6 +78,11 @@ export const ui = {
     agentUnsupported:
       '⚠️ 当前 Agent 不支持个人微信的逐条权限确认，消息无法启动。\n' +
       '请在 desktop 设置里把微信渠道的 Agent 换成 Claude Code 或 Codex，再在微信发送 /new，然后重试。',
+    // 换 Agent 后仍可能不兼容的权限模式(Claude Code / Codex 的
+    // unsupportedPermissionModes 并集:bypassPermissions / acceptEdits):
+    // 仅换 Agent 会在新 Agent 上再次命中权限模式错误,补一条 /permission 提示。
+    agentSwitchAlsoCheckPermissionMode:
+      '若新的 Agent 仍提示权限模式问题，请在微信发送 /permission 调整权限模式后重试。',
     permissionModeUnsupported:
       '⚠️ 当前 Agent 无法在个人微信中安全使用此权限模式。\n' +
       '请在 desktop 设置里调整权限模式（或发 /permission），再重试。',

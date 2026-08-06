@@ -1904,6 +1904,12 @@ function safeMachineCode(value: string): string {
  */
 export function wechatPreDispatchFailureText(reason: string): string {
   if (reason.includes(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent`)) {
+    // 当前权限模式若是换 Agent 后仍不兼容的档位(bypassPermissions / acceptEdits),
+    // 仅换 Agent 会在新 Agent 上再次命中权限模式错误,补一条 /permission 提示。
+    const mode = reason.split(':').pop() ?? '';
+    if (mode === 'bypassPermissions' || mode === 'acceptEdits') {
+      return `${ui.error.agentUnsupported}\n${ui.error.agentSwitchAlsoCheckPermissionMode}`;
+    }
     return ui.error.agentUnsupported;
   }
   if (

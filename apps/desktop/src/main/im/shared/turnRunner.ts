@@ -1043,7 +1043,7 @@ export function createTurnRunner(
       return null;
     }
     const failureKind =
-      state.makerSession.capabilities.turnPermissionPolicy?.supported.supported === true
+      state.makerSession.capabilities.turnPermissionPolicy?.supported?.supported === true
         ? 'mode'
         : 'agent';
     return `${error.code}:${failureKind}:${error.permissionMode}`;
