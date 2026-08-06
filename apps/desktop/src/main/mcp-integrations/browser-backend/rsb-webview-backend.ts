@@ -236,6 +236,48 @@ function originOf(u: string): string | null {
 /** WebContents that already have the preview-page navigation guard attached. */
 const previewGuardedContents = new WeakSet<WebContents>();
 
+/** Minimal structural shape of the webContents debugger transport. */
+interface PreviewDebuggerTransport {
+  isAttached(): boolean;
+  attach(protocolVersion?: string): void;
+  sendCommand(method: string, commandParams?: Record<string, unknown>): Promise<unknown>;
+}
+
+/** WebContents whose main-world WebRTC kill-script is installed. */
+const previewWebRtcKilled = new WeakSet<WebContents>();
+
+/**
+ * Kill WebRTC in the PAGE MAIN WORLD via CDP `Page.addScriptToEvaluateOnNewDocument`.
+ * Runs before ANY page script on every navigation, including the first —
+ * required because Electron's contextIsolation puts session preloads in an
+ * isolated world where shadowing `window.RTCPeerConnection` does NOT affect
+ * the page (codex-connector P1, round 9). The debugger stays attached;
+ * RsbWebviewAutomation.withDebugger leases externally-owned attachments and
+ * reuses them without detaching, so snapshot/act keep working.
+ */
+function killPreviewWebRtc(wc: WebContents): void {
+  if (previewWebRtcKilled.has(wc)) return;
+  previewWebRtcKilled.add(wc);
+  try {
+    const transport = (wc as unknown as { debugger?: PreviewDebuggerTransport }).debugger;
+    if (!transport) return;
+    if (!transport.isAttached()) transport.attach('1.3');
+    void transport
+      .sendCommand('Page.addScriptToEvaluateOnNewDocument', {
+        source:
+          'try {' +
+          "Object.defineProperty(window, 'RTCPeerConnection', { value: undefined, configurable: true });" +
+          "Object.defineProperty(window, 'webkitRTCPeerConnection', { value: undefined, configurable: true });" +
+          '} catch (e) { /* best-effort */ }',
+      })
+      .catch(() => {
+        /* best-effort: navigation guard + CSP still apply */
+      });
+  } catch {
+    /* best-effort */
+  }
+}
+
 /**
  * Parity with the vendored persistent route guard used for external Chrome
  * (LOCAL PATCH in pw-session.ts): once a tab is on a sandboxed preview page,
@@ -254,6 +296,12 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   if (previewGuardedContents.has(wc)) return;
   previewGuardedContents.add(wc);
   wc.on('will-navigate', (event, url) => {
+    if (isPreviewUrl(url)) {
+      // The target is a preview page: install the main-world WebRTC
+      // kill-script BEFORE the document is created (round 9: preload
+      // worlds are isolated, shadowing there is ineffective). Idempotent.
+      killPreviewWebRtc(wc);
+    }
     const current = currentUrlOf(wc);
     if (!isPreviewUrl(current)) return; // not a preview page — leave it alone
     const currentOrigin = originOf(current);

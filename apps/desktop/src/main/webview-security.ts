@@ -24,7 +24,7 @@
 
 import path from 'node:path';
 
-import { app, session, type BrowserWindow, type WebContents } from 'electron';
+import { app, type BrowserWindow, type WebContents } from 'electron';
 
 import { BROWSER_PARTITION } from '../shared/webviewPartition';
 import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
@@ -61,23 +61,6 @@ import {
  */
 export function getBrowserCommentPreloadPath(): string {
   return path.join(__dirname, 'browserCommentPreload.js');
-}
-
-/**
- * Install the session-level preview guard preload on the RSB browser
- * partition: every webview page in BROWSER_PARTITION has WebRTC disabled
- * (RTCPeerConnection shadowed to undefined) BEFORE any page script runs.
- * CSP cannot constrain WebRTC ICE/STUN/TURN traffic, so previewed pages
- * could otherwise exfiltrate data chunked into TURN credentials
- * (codex-connector P1, round 7). The partition is agent-only (never the
- * user's daily browser) and the guard is fail-closed by being unconditional.
- * Must run before the first RSB webview is created (safe pre-ready; webview
- * creation always happens after ready).
- */
-export function installBrowserPreviewWebRtcGuard(): void {
-  session.fromPartition(BROWSER_PARTITION).setPreloads([
-    path.join(__dirname, 'browserPreviewGuard.js'),
-  ]);
 }
 
 /**

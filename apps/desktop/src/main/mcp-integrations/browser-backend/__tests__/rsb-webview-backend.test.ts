@@ -73,7 +73,29 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
   consoleListeners: Array<(...args: unknown[]) => void>;
   willNavigateListeners: Array<(event: { preventDefault: () => void }, url: string) => void>;
   windowOpenHandler: ((details: { url: string }) => { action: string }) | null;
+  debuggerMock: {
+    isAttachedMock: ReturnType<typeof vi.fn>;
+    attachMock: ReturnType<typeof vi.fn>;
+    sendCommandMock: ReturnType<typeof vi.fn>;
+    commands: Array<{ method: string; params?: Record<string, unknown> }>;
+  };
 } {
+  const debuggerMock = {
+    isAttachedMock: vi.fn(() => false),
+    attachMock: vi.fn(),
+    sendCommandMock: vi.fn(async (_method: string, _params?: Record<string, unknown>) => ({})),
+    commands: [] as Array<{ method: string; params?: Record<string, unknown> }>,
+    isAttached: () => debuggerMock.isAttachedMock(),
+    attach: (protocolVersion?: string) => debuggerMock.attachMock(protocolVersion),
+    sendCommand: async (method: string, params?: Record<string, unknown>) =>
+      debuggerMock.sendCommandMock(method, params),
+  };
+  debuggerMock.sendCommandMock.mockImplementation(
+    async (method: string, params?: Record<string, unknown>) => {
+      debuggerMock.commands.push({ method, params });
+      return {};
+    },
+  );
   const wc = {
     getURL: () => opts?.url ?? 'https://example.com',
     getTitle: () => opts?.title ?? 'Example',
@@ -86,6 +108,7 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     printToPDF: vi.fn(async () => Buffer.from('PDFDATA')),
     on: vi.fn(),
     setWindowOpenHandler: vi.fn(),
+    debugger: debuggerMock,
     consoleListeners: [] as Array<(...args: unknown[]) => void>,
     willNavigateListeners: [] as Array<(event: { preventDefault: () => void }, url: string) => void>,
     windowOpenHandler: null as ((details: { url: string }) => { action: string }) | null,
@@ -107,12 +130,14 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     consoleListeners: typeof wc.consoleListeners;
     willNavigateListeners: typeof wc.willNavigateListeners;
     windowOpenHandler: typeof wc.windowOpenHandler;
+    debuggerMock: typeof debuggerMock;
   };
   // The mock vi.fn references go through; alias them for readability.
   Object.assign(result, {
     loadURLMock: wc.loadURL,
     capturePageMock: wc.capturePage,
     printToPDFMock: wc.printToPDF,
+    debuggerMock,
   });
   return result;
 }
@@ -394,6 +419,17 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
     let prevented = false;
     listener({ preventDefault: () => { prevented = true; } }, 'https://evil.example/?exfil=1');
     expect(prevented).toBe(true);
+
+    // navigating TO a preview URL installs the main-world WebRTC kill
+    // script via CDP (addScriptToEvaluateOnNewDocument) — before the
+    // document is created (round 9: preload worlds are isolated)
+    listener({ preventDefault: () => { prevented = true; } }, PREVIEW_URL);
+    expect(wc.debuggerMock.attachMock).toHaveBeenCalled();
+    const addScript = wc.debuggerMock.commands.find(
+      (c) => c.method === 'Page.addScriptToEvaluateOnNewDocument',
+    );
+    expect(addScript).toBeTruthy();
+    expect((addScript?.params as { source?: string })?.source ?? '').toContain('RTCPeerConnection');
 
     // navigation within the preview origin (reload / sibling resource) → allowed
     prevented = false;

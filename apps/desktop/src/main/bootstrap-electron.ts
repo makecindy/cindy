@@ -172,7 +172,6 @@ import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
-  installBrowserPreviewWebRtcGuard,
   installWebviewHardener,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
@@ -5849,13 +5848,6 @@ app.on('ready', async () => {
     appName: app.getName(),
     isPackaged: app.isPackaged,
   });
-
-  // 预览页 WebRTC 禁用（codex-connector P1, round 7）：CSP 管不住
-  // RTCPeerConnection 的 ICE/STUN/TURN 流量，经 session 级 preload 在
-  // BROWSER_PARTITION 全量禁用（agent 专用浏览器，无 WebRTC 需求）。
-  // 必须在 app ready 之后调用——session.fromPartition() 在 ready 前会抛错
-  // （round-8 review）；也必须在首个 RSB webview 创建之前。
-  installBrowserPreviewWebRtcGuard();
 
   // 客户端端点清单:启动第一步、先于一切更新检查,**阻断式**解析(packaged 走
   // 烘焙 hotfix CDN 基址;dev 默认读仓内 config/endpoint.json,--endpoints-cdn
