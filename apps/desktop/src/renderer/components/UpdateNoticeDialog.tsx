@@ -500,7 +500,9 @@ function AutoBody({
           const v = (entry.target as HTMLElement).dataset.version;
           if (!v) continue;
           const top = entry.boundingClientRect.top;
-          if (best === null || top < best.top) best = { v, top };
+          // Pick the entry whose top is closest to the container top
+          // (largest top = nearest to 0, i.e. the version the user is reading).
+          if (best === null || top > best.top) best = { v, top };
         }
         if (best) onStickyChange(best.v);
       },
@@ -510,8 +512,25 @@ function AutoBody({
     return () => observer.disconnect();
   }, [releaseNotes, onStickyChange]);
 
+  // Fallback: when scrolled to the bottom, pick the last version so the header
+  // badge updates even if the last version is too short to reach the observation
+  // zone at the top.
+  const lastVersion = releaseNotes[releaseNotes.length - 1]?.version;
+  const handleAutoScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !lastVersion) return;
+    // 1px tolerance for sub-pixel rounding in HiDPI.
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
+      onStickyChange(lastVersion);
+    }
+  }, [lastVersion, onStickyChange]);
+
   return (
-    <div ref={scrollRef} className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
+    <div
+      ref={scrollRef}
+      onScroll={handleAutoScroll}
+      className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text"
+    >
       {releaseNotes.map((notes, i) => (
         <div
           key={notes.version}
@@ -650,16 +669,15 @@ function ManualBody({
     // that band is by definition the topmost currently-scrolled-to element.
     const observer = new IntersectionObserver(
       (entries) => {
-        // Pick the most-recently-crossed intersecting entry. Multiple can
-        // report in a single callback during fast scrolls; take the one with
-        // the smallest positive `top` for stability.
+        // Pick the entry whose top is closest to the container top
+        // (largest top = nearest to 0, i.e. the version the user is reading).
         let best: { v: string; top: number } | null = null;
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           const v = (entry.target as HTMLElement).dataset.version;
           if (!v) continue;
           const top = entry.boundingClientRect.top;
-          if (best === null || top < best.top) best = { v, top };
+          if (best === null || top > best.top) best = { v, top };
         }
         if (best) onStickyChange(best.v);
       },
@@ -668,6 +686,19 @@ function ManualBody({
     for (const el of blockRefs.current.values()) observer.observe(el);
     return () => observer.disconnect();
   }, [allVersions, onStickyChange]);
+
+  // Fallback: when scrolled to the bottom, pick the last version so the header
+  // badge updates even if the last version is too short to reach the top
+  // observation zone.
+  const lastVersion = allVersions[allVersions.length - 1];
+  const handleManualScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !lastVersion) return;
+    // 1px tolerance for sub-pixel rounding in HiDPI.
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
+      onStickyChange(lastVersion);
+    }
+  }, [lastVersion, onStickyChange]);
 
   // Programmatic jump handler exposed to parent (header dropdown).
   useEffect(() => {
@@ -682,7 +713,11 @@ function ManualBody({
   }, [registerJump, startLoad]);
 
   return (
-    <div ref={scrollRef} className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
+    <div
+      ref={scrollRef}
+      onScroll={handleManualScroll}
+      className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text"
+    >
       {allVersions.map((v, i) => {
         const notes = notesMap.get(v);
         const state = stateMap.get(v) ?? 'idle';
