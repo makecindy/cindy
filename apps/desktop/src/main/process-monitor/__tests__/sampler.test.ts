@@ -17,6 +17,7 @@ function osRow(partial: Partial<OsProcessRow> & { pid: number; ppid: number }): 
     memoryKb: 0,
     cpuPercent: 0,
     cpuTimeMs: null,
+    startIdentity: `start:${partial.pid}`,
     ...partial,
   };
 }
@@ -110,6 +111,7 @@ describe('createProcessMonitorSampler', () => {
       memoryKb: 600,
       processCount: 3,
       terminable: true,
+      processInstanceId: 'start:501',
     });
     expect(entryByPid(sample, 601)).toBeUndefined();
   });
@@ -147,6 +149,24 @@ describe('createProcessMonitorSampler', () => {
       kind: 'agent-codex',
       terminable: false,
     });
+  });
+
+  it('OS 未提供出生身份时即使归属明确也不可终止', async () => {
+    const { sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({
+          pid: 704,
+          ppid: SELF_PID,
+          cmdLineLower: 'claude-marker unknown-start',
+          startIdentity: null,
+        }),
+      ]),
+    });
+    expect(entryByPid(await sampler.sample(), 704)).toMatchObject({
+      kind: 'agent-claude',
+      terminable: false,
+    });
+    expect(entryByPid(await sampler.sample(), 704)?.processInstanceId).toBeUndefined();
   });
 
   it('Windows conhost 不计入可见进程数，但资源仍计入整棵树', async () => {
@@ -204,6 +224,35 @@ describe('createProcessMonitorSampler', () => {
     const second = await sampler.sample();
     // Δcpu 1500ms / Δwall 5000ms = 30%
     expect(entryByPid(second, 700)?.cpuPercent).toBe(30);
+  });
+
+  it('Windows 同一 pid 的出生身份变化时重置 CPU 差分基线', async () => {
+    const { state, sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({
+          pid: 710,
+          ppid: SELF_PID,
+          cmdLineLower: 'claude-marker',
+          cpuPercent: null,
+          cpuTimeMs: 8_000,
+          startIdentity: 'start:old',
+        }),
+      ]),
+    });
+    await sampler.sample();
+
+    state.nowMs += 5_000;
+    state.snapshot = snapshotOf([
+      osRow({
+        pid: 710,
+        ppid: SELF_PID,
+        cmdLineLower: 'claude-marker',
+        cpuPercent: null,
+        cpuTimeMs: 500,
+        startIdentity: 'start:new',
+      }),
+    ]);
+    expect(entryByPid(await sampler.sample(), 710)?.cpuPercent).toBe(0);
   });
 
   it('OS 扫描失败降级为无 agent 条目,Chromium 部分照常且失败被记录', async () => {

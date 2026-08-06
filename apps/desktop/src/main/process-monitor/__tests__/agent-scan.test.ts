@@ -6,6 +6,7 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion.js';
 import {
   buildChildrenByParent,
   buildPiPathMarkers,
+  buildPosixProcessScanEnv,
   classifyMonitoredAgentCommandLine,
   collectDescendantPids,
   parsePosixProcessTable,
@@ -13,13 +14,23 @@ import {
   registerPiUserDataMarkers,
 } from '../agent-scan.js';
 
+describe('buildPosixProcessScanEnv', () => {
+  it('固定英文输出与 UTC，消除 lstart 的 locale / DST 歧义', () => {
+    expect(buildPosixProcessScanEnv({ LANG: 'zh_CN.UTF-8', TZ: 'Asia/Shanghai' })).toEqual({
+      LANG: 'zh_CN.UTF-8',
+      LC_ALL: 'C',
+      TZ: 'UTC0',
+    });
+  });
+});
+
 describe('parsePosixProcessTable', () => {
-  it('解析 pid/ppid/%cpu/rss/command,容忍空行与非法行', () => {
+  it('解析 pid/ppid/%cpu/rss/lstart/command,容忍空行与非法行', () => {
     const out = [
-      '  101   100  12.5  20480 /usr/bin/node server.js',
+      '  101   100  12.5  20480 Wed Aug  6 12:34:56 2026 /usr/bin/node server.js',
       '',
       'garbage line without numbers',
-      '  102   101   0.0    512 bash -c "sleep 1"',
+      '  102   101   0.0    512 Wed Aug  6 12:35:01 2026 bash -c "sleep 1"',
     ].join('\n');
     const rows = parsePosixProcessTable(out);
     expect(rows).toHaveLength(2);
@@ -29,6 +40,7 @@ describe('parsePosixProcessTable', () => {
       cpuPercent: 12.5,
       memoryKb: 20480,
       cpuTimeMs: null,
+      startIdentity: 'Wed Aug 6 12:34:56 2026',
     });
     expect(rows[0].cmdLineLower).toBe('/usr/bin/node server.js');
     expect(rows[1].cmdLineLower).toContain('sleep 1');
@@ -36,9 +48,9 @@ describe('parsePosixProcessTable', () => {
 });
 
 describe('parseWindowsProcessTable', () => {
-  it('解析 pid|ppid|workingSet|cpuTime|cmd,命令行含管道符不截断', () => {
+  it('解析 pid|ppid|workingSet|cpuTime|creationTicks|cmd,命令行含管道符不截断', () => {
     const out = [
-      '4321|100|104857600|1500000|C:\\bin\\claude.exe run | tee log',
+      '4321|100|104857600|1500000|638901092960000000|C:\\bin\\claude.exe run | tee log',
       'not|a|row',
       '',
     ].join('\r\n');
@@ -50,6 +62,7 @@ describe('parseWindowsProcessTable', () => {
       memoryKb: 102400, // 100MB → KB
       cpuTimeMs: 150, // 1_500_000 * 100ns = 150ms
       cpuPercent: null,
+      startIdentity: '638901092960000000',
     });
     expect(rows[0].cmdLineLower).toBe('c:\\bin\\claude.exe run | tee log');
   });
@@ -103,7 +116,9 @@ describe('buildChildrenByParent / collectDescendantPids', () => {
       { pid: 2, ppid: 1 },
       { pid: 3, ppid: 2 },
       { pid: 4, ppid: 9 }, // 无关分支
-    ].map((r) => ({ ...r, cmdLineLower: '', memoryKb: 0, cpuPercent: 0, cpuTimeMs: null }));
+    ].map((r) => ({
+      ...r, cmdLineLower: '', memoryKb: 0, cpuPercent: 0, cpuTimeMs: null, startIdentity: null,
+    }));
     const map = buildChildrenByParent(rows);
     // 人为制造环:3 → 1
     map.set(3, [1]);

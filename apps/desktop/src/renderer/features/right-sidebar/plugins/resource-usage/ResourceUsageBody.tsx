@@ -274,10 +274,13 @@ export function ResourceUsageBody({
   };
 
   const handleConfirmTerminate = async () => {
-    if (!pendingKill || killing) return;
+    if (!pendingKill?.processInstanceId || killing) return;
     setKilling(true);
     try {
-      await window.electronAPI.processMonitor.terminate(pendingKill.pid);
+      await window.electronAPI.processMonitor.terminate({
+        pid: pendingKill.pid,
+        processInstanceId: pendingKill.processInstanceId,
+      });
       toast.success(t('rightSidebar.resourceUsage.terminated', { name: confirmTarget }));
     } catch {
       toast.error(t('rightSidebar.resourceUsage.terminateFailed'));

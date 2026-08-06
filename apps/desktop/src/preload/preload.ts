@@ -43,6 +43,7 @@ import {
   PROCESS_MONITOR_TERMINATE_CHANNEL,
   PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL,
   type ProcessMonitorSample,
+  type TerminateAgentProcessRequest,
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
@@ -4669,8 +4670,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   processMonitor: {
     subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),
     unsubscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL),
-    terminate: (pid: number): Promise<TerminateAgentProcessResult> =>
-      ipcRenderer.invoke(PROCESS_MONITOR_TERMINATE_CHANNEL, pid),
+    terminate: (request: TerminateAgentProcessRequest): Promise<TerminateAgentProcessResult> =>
+      ipcRenderer.invoke(PROCESS_MONITOR_TERMINATE_CHANNEL, request),
     onSample: (cb: (sample: ProcessMonitorSample) => void) =>
       fanOutProcessMonitorSample(cb as IpcCallback),
   },

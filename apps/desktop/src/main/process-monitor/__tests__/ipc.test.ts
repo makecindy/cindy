@@ -36,7 +36,18 @@ import { _resetProcessMonitorIpcForTests, registerProcessMonitorIpc } from '../i
 const SELF_PID = 4242;
 
 function osRow(partial: Partial<OsProcessRow> & { pid: number; ppid: number }): OsProcessRow {
-  return { cmdLineLower: '', memoryKb: 0, cpuPercent: 0, cpuTimeMs: null, ...partial };
+  return {
+    cmdLineLower: '',
+    memoryKb: 0,
+    cpuPercent: 0,
+    cpuTimeMs: null,
+    startIdentity: `start:${partial.pid}`,
+    ...partial,
+  };
+}
+
+function terminateRequest(pid: number, processInstanceId = `start:${pid}`) {
+  return { pid, processInstanceId };
 }
 
 function handlerFor(channel: string) {
@@ -58,7 +69,7 @@ function fakeSender(): FakeWebContents {
 function register(overrides: Parameters<typeof registerProcessMonitorIpc>[0] = {}) {
   registerProcessMonitorIpc({
     sampler: { sample: vi.fn().mockResolvedValue({ capturedAtMs: 1, entries: [] }) },
-    scanOsProcesses: vi.fn().mockResolvedValue({ rows: [], childrenByParent: new Map() }),
+    scanOsProcessesSync: vi.fn().mockReturnValue({ rows: [], childrenByParent: new Map() }),
     classify: () => null,
     resolveCodexProcessRole: () => null,
     killProcessTree: vi.fn().mockReturnValue(true),
@@ -84,9 +95,9 @@ describe('process monitor IPC authorization', () => {
     mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
       throw new Error('[PERMISSION_DENIED] nope');
     });
-    await expect(
-      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(event, 1),
-    ).rejects.toThrow('PERMISSION_DENIED');
+    expect(() => handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(event, terminateRequest(1))).toThrow(
+      'PERMISSION_DENIED',
+    );
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalledTimes(3);
   });
 
@@ -119,7 +130,7 @@ describe('terminate ownership validation', () => {
 
   function registerWithRows(killProcessTree = vi.fn().mockReturnValue(true)) {
     register({
-      scanOsProcesses: vi.fn().mockResolvedValue({
+      scanOsProcessesSync: vi.fn().mockReturnValue({
         rows: ownedRows,
         childrenByParent: buildChildrenByParent(ownedRows),
       }),
@@ -129,11 +140,11 @@ describe('terminate ownership validation', () => {
     return killProcessTree;
   }
 
-  it('杀掉归属校验通过的 agent 根进程,连同子树', async () => {
+  it('在同一同步调用栈内校验并杀掉 agent 根进程及子树', () => {
     const kill = registerWithRows();
-    const result = await handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+    const result = handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
       { sender: fakeSender() },
-      900,
+      terminateRequest(900),
     );
     expect(result).toEqual({ pid: 900, kind: 'claude' });
     expect(kill).toHaveBeenCalledWith(900, expect.any(Map));
@@ -147,44 +158,58 @@ describe('terminate ownership validation', () => {
     ['进程根本不存在', 12345],
   ])('拒绝:%s', async (_desc, pid) => {
     const kill = registerWithRows();
-    await expect(
-      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, pid),
-    ).rejects.toThrow('NOT_FOUND');
+    expect(() =>
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(pid),
+      ),
+    ).toThrow('NOT_FOUND');
     expect(kill).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['负数', -1],
-    ['非整数', 1.5],
-    ['字符串', '900'],
-    ['自身 pid', SELF_PID],
+    ['负数', terminateRequest(-1)],
+    ['非整数', terminateRequest(1.5)],
+    ['字符串 pid', { pid: '900', processInstanceId: 'start:900' }],
+    ['缺少出生身份', { pid: 900 }],
+    ['空出生身份', { pid: 900, processInstanceId: '' }],
+    ['旧版裸 pid', 900],
+    ['自身 pid', terminateRequest(SELF_PID)],
   ])('拒绝非法参数:%s', async (_desc, raw) => {
     const kill = registerWithRows();
-    await expect(
+    expect(() =>
       handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, raw),
-    ).rejects.toThrow('INVALID_PARAMS');
+    ).toThrow('INVALID_PARAMS');
     expect(kill).not.toHaveBeenCalled();
   });
 
   it('杀树失败返回 INTERNAL', async () => {
     registerWithRows(vi.fn().mockReturnValue(false));
-    await expect(
-      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, 900),
-    ).rejects.toThrow('INTERNAL');
+    expect(() =>
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(900),
+      ),
+    ).toThrow('INTERNAL');
   });
 
   it('归属扫描失败时包装为 IPC INTERNAL 且不泄露原始错误', async () => {
     const kill = vi.fn().mockReturnValue(true);
     const log = { info: vi.fn(), warn: vi.fn() };
     register({
-      scanOsProcesses: vi.fn().mockRejectedValue(new Error('private powershell details')),
+      scanOsProcessesSync: vi.fn().mockImplementation(() => {
+        throw new Error('private powershell details');
+      }),
       classify,
       killProcessTree: kill,
       log,
     });
-    await expect(
-      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, 900),
-    ).rejects.toThrow('INTERNAL');
+    expect(() =>
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(900),
+      ),
+    ).toThrow('INTERNAL');
     expect(kill).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       'process monitor ownership scan failed',
@@ -201,7 +226,7 @@ describe('terminate ownership validation', () => {
     ];
     const kill = vi.fn().mockReturnValue(true);
     register({
-      scanOsProcesses: vi.fn().mockResolvedValue({
+      scanOsProcessesSync: vi.fn().mockReturnValue({
         rows,
         childrenByParent: buildChildrenByParent(rows),
       }),
@@ -209,9 +234,40 @@ describe('terminate ownership validation', () => {
       resolveCodexProcessRole: () => role,
       killProcessTree: kill,
     });
-    await expect(
-      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, 970),
-    ).rejects.toThrow('NOT_FOUND');
+    expect(() =>
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(970),
+      ),
+    ).toThrow('NOT_FOUND');
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('同一 pid 已被新进程复用时拒绝旧出生身份', async () => {
+    const reusedRows = [
+      osRow({
+        pid: 900,
+        ppid: SELF_PID,
+        cmdLineLower: 'claude-marker replacement',
+        startIdentity: 'start:new',
+      }),
+    ];
+    const kill = vi.fn().mockReturnValue(true);
+    register({
+      scanOsProcessesSync: vi.fn().mockReturnValue({
+        rows: reusedRows,
+        childrenByParent: buildChildrenByParent(reusedRows),
+      }),
+      classify,
+      killProcessTree: kill,
+    });
+
+    expect(() =>
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(900, 'start:old'),
+      ),
+    ).toThrow('NOT_FOUND');
     expect(kill).not.toHaveBeenCalled();
   });
 });

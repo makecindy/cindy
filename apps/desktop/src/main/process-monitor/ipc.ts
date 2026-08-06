@@ -30,11 +30,17 @@ import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererWindow,
 } from '../security/trustedAppRenderer.js';
-import { requireNonNegativeInt, throwIpcError } from '../utils/ipcValidate.js';
+import {
+  requireNonNegativeInt,
+  requireObject,
+  requireString,
+  throwIpcError,
+} from '../utils/ipcValidate.js';
 import {
   classifyMonitoredAgentCommandLine,
   registerPiUserDataMarkers,
   scanOsProcesses,
+  scanOsProcessesSync,
   type MonitoredAgentKind,
   type OsProcessSnapshot,
 } from './agent-scan.js';
@@ -56,6 +62,8 @@ interface IpcLogger {
 export interface ProcessMonitorIpcOptions {
   sampler?: ProcessMonitorSampler;
   /** terminate 校验用的**新鲜**扫描(不走 sampler 缓存)。 */
+  scanOsProcessesSync?: () => OsProcessSnapshot;
+  /** sampler 的异步 OS 扫描。 */
   scanOsProcesses?: () => Promise<OsProcessSnapshot>;
   classify?: (cmdLineLower: string) => MonitoredAgentKind | null;
   resolveCodexProcessRole?: (pid: number) => 'task-host' | 'control-plane-service' | null;
@@ -75,7 +83,8 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
   const selfPid = opts.selfPid ?? process.pid;
   const classify = opts.classify ?? classifyMonitoredAgentCommandLine;
   const resolveCodexRole = opts.resolveCodexProcessRole ?? resolveCodexProcessRole;
-  const freshScan = opts.scanOsProcesses ?? scanOsProcesses;
+  const sampleScan = opts.scanOsProcesses ?? scanOsProcesses;
+  const ownershipScanSync = opts.scanOsProcessesSync ?? scanOsProcessesSync;
   const killTree = opts.killProcessTree ?? killProcessTree;
   const sampleIntervalMs = opts.sampleIntervalMs ?? SAMPLE_INTERVAL_MS;
 
@@ -97,7 +106,7 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     opts.sampler ??
     createProcessMonitorSampler({
       getMetrics: () => app.getAppMetrics(),
-      scanOsProcesses: freshScan,
+      scanOsProcesses: sampleScan,
       describeRendererProcess: describeRendererProcessByPid,
       classify,
       resolveCodexProcessRole: resolveCodexRole,
@@ -165,16 +174,18 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     dropSubscriber(event.sender);
   });
 
-  ipcMain.handle(PROCESS_MONITOR_TERMINATE_CHANNEL, async (event, rawPid: unknown) => {
+  ipcMain.handle(PROCESS_MONITOR_TERMINATE_CHANNEL, (event, rawRequest: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const pid = requireNonNegativeInt(rawPid, 'pid');
+    const request = requireObject(rawRequest, 'request');
+    const pid = requireNonNegativeInt(request.pid, 'pid');
+    const processInstanceId = requireString(request.processInstanceId, 'processInstanceId');
     if (pid === selfPid || pid === 0) {
       throwIpcError('INVALID_PARAMS', 'pid is not a terminable process');
     }
     // 归属校验用新鲜扫描:renderer 手里的快照可能已过期(进程退出、pid 复用)。
     let snapshot: OsProcessSnapshot;
     try {
-      snapshot = await freshScan();
+      snapshot = ownershipScanSync();
     } catch (err) {
       log.warn('process monitor ownership scan failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -183,7 +194,7 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     }
     const row = snapshot.rows.find((r) => r.pid === pid);
     const kind = row && row.ppid === selfPid ? classify(row.cmdLineLower) : null;
-    if (!row || row.ppid !== selfPid || !kind) {
+    if (!row || row.ppid !== selfPid || row.startIdentity !== processInstanceId || !kind) {
       throwIpcError('NOT_FOUND', 'process is not an agent process owned by this app');
     }
     // registry 只收紧动作范围，不扩大授权；新鲜扫描 + PPID + marker 仍是首要边界。
@@ -191,6 +202,8 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     if (kind === 'codex' && resolveCodexRole(pid) !== 'task-host') {
       throwIpcError('NOT_FOUND', 'process is not a terminable Codex task host');
     }
+    // 从同步扫描开始到 kill 完成之间不能 await/让出事件循环。根进程是 main 的直属
+    // 子进程；main 未处理退出/关闭句柄前，已校验的根 pid 不会被系统复用。
     if (!killTree(pid, snapshot.childrenByParent)) {
       throwIpcError('INTERNAL', 'failed to terminate the agent process tree');
     }

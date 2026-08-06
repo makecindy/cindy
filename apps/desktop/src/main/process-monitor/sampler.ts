@@ -83,7 +83,10 @@ export function createProcessMonitorSampler(
   let cachedAtMs = Number.NEGATIVE_INFINITY;
   let scanInFlight: Promise<void> | null = null;
   /** Windows CPU 差分账本:pid → 上一次**扫描**的累计 CPU 时间与时刻。 */
-  const prevCpuTimes = new Map<number, { cpuTimeMs: number; atMs: number }>();
+  const prevCpuTimes = new Map<
+    number,
+    { cpuTimeMs: number; atMs: number; startIdentity: string | null }
+  >();
   /**
    * 扫描刷新时一次算好的 CPU%(仅 Windows 差分路径)。差分必须在扫描粒度做:
    * 若放在每个快 tick 上,复用缓存快照时会拿扫描周期(5s)的 CPU 增量去除以
@@ -99,9 +102,16 @@ export function createProcessMonitorSampler(
       alive.add(row.pid);
       if (row.cpuTimeMs == null) continue;
       const prev = prevCpuTimes.get(row.pid);
-      prevCpuTimes.set(row.pid, { cpuTimeMs: row.cpuTimeMs, atMs });
+      prevCpuTimes.set(row.pid, {
+        cpuTimeMs: row.cpuTimeMs,
+        atMs,
+        startIdentity: row.startIdentity,
+      });
       const percent =
-        prev && atMs > prev.atMs && row.cpuTimeMs > prev.cpuTimeMs
+        prev &&
+        prev.startIdentity === row.startIdentity &&
+        atMs > prev.atMs &&
+        row.cpuTimeMs > prev.cpuTimeMs
           ? ((row.cpuTimeMs - prev.cpuTimeMs) / (atMs - prev.atMs)) * 100
           : 0;
       computedCpuPercentByPid.set(row.pid, percent);
@@ -168,6 +178,8 @@ export function createProcessMonitorSampler(
         memoryKb += member.memoryKb;
         if (!isOsHelperProcess(member)) processCount += 1;
       }
+      const terminable =
+        row.startIdentity != null && (kind === 'codex' ? agentRole === 'task-host' : true);
       entries.push({
         pid: row.pid,
         kind: AGENT_KIND_TO_USAGE_KIND[kind],
@@ -176,7 +188,8 @@ export function createProcessMonitorSampler(
         memoryKb,
         processCount,
         // Codex 只有明确登记为任务宿主才允许终止；registry 未命中时 fail closed。
-        terminable: kind === 'codex' ? agentRole === 'task-host' : true,
+        terminable,
+        ...(terminable && row.startIdentity ? { processInstanceId: row.startIdentity } : {}),
         ...(agentRole ? { agentRole } : {}),
       });
     }

@@ -49,6 +49,11 @@ export interface ProcessUsageEntry {
   processCount: number;
   /** true = 可被「结束进程」终止(仅本产品 spawn 的 agent 根进程)。 */
   terminable: boolean;
+  /**
+   * OS 提供的进程出生身份。仅可终止的 agent 根进程携带；renderer 原样回传，
+   * main 用它拒绝已经退出并被复用的旧 pid。它不包含路径或命令行。
+   */
+  processInstanceId?: string;
   /** 仅 Codex 条目可有；普通任务共享宿主与账户/模型控制面服务据此消歧。 */
   agentRole?: AgentProcessRole;
 }
@@ -56,6 +61,12 @@ export interface ProcessUsageEntry {
 export interface ProcessMonitorSample {
   capturedAtMs: number;
   entries: ProcessUsageEntry[];
+}
+
+/** renderer → main 的终止候选；两个字段都只是候选，main 会同步重新校验归属。 */
+export interface TerminateAgentProcessRequest {
+  pid: number;
+  processInstanceId: string;
 }
 
 /** terminate 成功返回(失败一律走 IPC 错误协议 throwIpcError)。 */
