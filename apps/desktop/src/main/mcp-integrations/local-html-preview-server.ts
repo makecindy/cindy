@@ -359,12 +359,20 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const baseName = nodePath.basename(abs);
     if (baseName.startsWith('.') || !ALLOWED_EXTENSIONS.has(ext)) return refuse(res);
 
-    // Open by file descriptor and re-verify the HANDLE, not the path: closes
-    // the TOCTOU window between containment checks and the actual read (a
-    // concurrent directory swap cannot redirect a handle that is already open
-    // on the vetted real path).
+    // Open by file descriptor: closes the TOCTOU window between containment
+    // checks and the actual read. Immediately after opening, re-verify the
+    // path still resolves to the vetted real path — if the file or an
+    // ancestor directory was swapped (symlink/junction) in the window
+    // between validation and open, realpath now resolves the NEW target and
+    // differs from `abs`; the handle is closed and nothing is served from
+    // the replaced object (codex-connector P1, round 5).
     const fd = await fs.open(abs, 'r').catch(() => null);
     if (!fd) return refuse(res);
+    const recheck = await fs.realpath(abs).catch(() => null);
+    if (!recheck || recheck !== abs) {
+      await fd.close().catch(() => {});
+      return refuse(res);
+    }
     let stat;
     try {
       stat = await fd.stat();
@@ -420,7 +428,19 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     if (!stat?.isFile()) {
       throw new LocalPreviewError('NOT_FOUND', '入口文件不存在或不是普通文件');
     }
-    return targetAbs;
+    // Resolve the working dir + entry to their REAL paths and re-assert the
+    // boundary against those identities: a concurrent rename-and-swap of the
+    // entry directory (into a symlink/junction pointing outside the
+    // workspace) between the checks above and token issuance must not become
+    // the serving root (codex-connector P1, round 5).
+    const workingDirReal = await fs.realpath(rootAbs).catch(() => {
+      throw new LocalPreviewError('PATH_NOT_ALLOWED', `工作区不可解析: ${rootAbs}`);
+    });
+    const entryReal = await fs.realpath(targetAbs).catch(() => {
+      throw new LocalPreviewError('NOT_FOUND', '入口文件不可解析');
+    });
+    await assertInsideRoot(workingDirReal, entryReal);
+    return entryReal;
   }
 
   async function createPreviewUrl(input: CreatePreviewInput): Promise<{ url: string }> {
@@ -431,9 +451,16 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const base = await ensureStarted();
     // Serving root = the entry's directory: relative resources work, but the
     // page can never reach sibling workspace content outside that directory.
-    // Normalize to the REAL path (e.g. resolves 8.3 short names on win32) so
-    // every later request-side comparison uses the same path form.
-    const root = await fs.realpath(nodePath.dirname(entryAbs));
+    // `entryAbs` is already the REAL path (resolved + re-asserted above);
+    // re-verify the root's physical identity right before pinning it into
+    // the token, so a directory swap between validation and issuance cannot
+    // pin an external directory as the serving root (codex-connector P1,
+    // round 5).
+    const root = nodePath.dirname(entryAbs);
+    const rootNow = await fs.realpath(root).catch(() => null);
+    if (!rootNow || rootNow !== root) {
+      throw new LocalPreviewError('PATH_NOT_ALLOWED', '入口目录身份在发放前发生变化');
+    }
     const token = crypto.randomBytes(32).toString('hex'); // 256-bit, unguessable
     if (tokens.size >= MAX_PREVIEWS) {
       const oldest = tokens.keys().next().value;

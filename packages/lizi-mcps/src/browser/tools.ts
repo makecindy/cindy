@@ -257,7 +257,7 @@ async function handlePreviewLocalHtml(
   if (typeof localPath !== 'string' || localPath.trim() === '') {
     return errorResult(
       'previewLocalHtml',
-      'localPath 必填: 要预览的本地 HTML 文件(相对当前会话 workingDir)',
+      'localPath 必填: 要预览的本地 HTML 文件(相对当前会话 workingDir, 或工作区内绝对路径)',
     );
   }
   const session = deps.getSessionContext?.();

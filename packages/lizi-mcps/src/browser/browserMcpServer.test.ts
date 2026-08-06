@@ -711,11 +711,13 @@ describe('createBrowserMcpServer', () => {
 });
 
 describe('previewLocalHtml', () => {
-  const SESSION = { workingDir: 'C:/work', sessionId: 'session-1' };
+  const SESSION = { agentKind: 'claude', workingDir: 'C:/work', sessionId: 'session-1' };
   const PREVIEW_URL = 'http://127.0.0.1:49152/preview/<token>/index.html';
 
-  function resultOf(res: { content: Array<{ text: string }> }) {
-    return JSON.parse(res.content[0].text) as {
+  function resultOf(res: unknown) {
+    const content = (res as { content?: unknown[] }).content;
+    const first = content?.[0] as { text?: string } | undefined;
+    return JSON.parse(first?.text ?? '{}') as {
       ok: boolean;
       errorCode?: string;
       url?: string;

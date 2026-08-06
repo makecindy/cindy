@@ -71,6 +71,8 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
   capturePageMock: ReturnType<typeof vi.fn>;
   printToPDFMock: ReturnType<typeof vi.fn>;
   consoleListeners: Array<(...args: unknown[]) => void>;
+  willNavigateListeners: Array<(event: { preventDefault: () => void }, url: string) => void>;
+  windowOpenHandler: ((details: { url: string }) => { action: string }) | null;
 } {
   const wc = {
     getURL: () => opts?.url ?? 'https://example.com',
@@ -80,17 +82,28 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from('PNGDATA') })),
     printToPDF: vi.fn(async () => Buffer.from('PDFDATA')),
     on: vi.fn(),
+    setWindowOpenHandler: vi.fn(),
     consoleListeners: [] as Array<(...args: unknown[]) => void>,
+    willNavigateListeners: [] as Array<(event: { preventDefault: () => void }, url: string) => void>,
+    windowOpenHandler: null as ((details: { url: string }) => { action: string }) | null,
   };
   wc.on.mockImplementation((event: string, fn: (...args: unknown[]) => void) => {
     if (event === 'console-message') wc.consoleListeners.push(fn);
+    if (event === 'will-navigate') wc.willNavigateListeners.push(fn as never);
   });
+  wc.setWindowOpenHandler.mockImplementation(
+    (fn: (details: { url: string }) => { action: string }) => {
+      wc.windowOpenHandler = fn;
+    },
+  );
   // Expose mocks on the cast object so tests can assert on them.
   const result = wc as unknown as WebContents & {
     loadURLMock: typeof wc.loadURL;
     capturePageMock: typeof wc.capturePage;
     printToPDFMock: typeof wc.printToPDF;
     consoleListeners: typeof wc.consoleListeners;
+    willNavigateListeners: typeof wc.willNavigateListeners;
+    windowOpenHandler: typeof wc.windowOpenHandler;
   };
   // The mock vi.fn references go through; alias them for readability.
   Object.assign(result, {
@@ -380,6 +393,85 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
 
     expect(wc.loadURLMock).toHaveBeenCalledWith('https://destination.test');
     expect(res.ok).toBe(true);
+  });
+
+  it('navigate guards preview pages against page-initiated navigation and popups', async () => {
+    const PREVIEW_URL = 'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+    const wc = fakeWc();
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+
+    const res = await backend.call({
+      action: 'navigate',
+      targetId: 't1',
+      url: PREVIEW_URL,
+    } as never);
+    expect(res.ok).toBe(true);
+    expect(wc.loadURLMock).toHaveBeenCalledWith(PREVIEW_URL);
+    // guard attached: will-navigate listener registered + window-open handler set
+    expect(wc.willNavigateListeners.length).toBeGreaterThan(0);
+    expect(wc.windowOpenHandler).toBeTruthy();
+  });
+
+  it('blocks page-initiated navigation away from a preview page, allows same-origin', async () => {
+    const PREVIEW_URL = 'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+    const wc = fakeWc({ url: PREVIEW_URL });
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+    await backend.call({ action: 'navigate', targetId: 't1', url: PREVIEW_URL } as never);
+
+    // page-initiated navigation to an external origin → prevented
+    let prevented = false;
+    const listener = wc.willNavigateListeners[0];
+    listener({ preventDefault: () => { prevented = true; } }, 'https://evil.example/?exfil=1');
+    expect(prevented).toBe(true);
+
+    // navigation within the preview origin (reload / sibling resource) → allowed
+    prevented = false;
+    listener({ preventDefault: () => { prevented = true; } }, 'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/other.html');
+    expect(prevented).toBe(false);
+
+    // popup from a preview page → denied; after the tab navigated to a
+    // normal page (same webContents, current URL changed) → allowed
+    expect(wc.windowOpenHandler?.({ url: 'https://evil.example/' })).toEqual({ action: 'deny' });
+    wc.getURL = () => 'https://example.com';
+    expect(wc.windowOpenHandler?.({ url: 'https://other.example/' })).toEqual({ action: 'allow' });
+  });
+
+  it('does not block navigation when the current page is not a preview', async () => {
+    const wc = fakeWc({ url: 'https://example.com' });
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+    await backend.call({ action: 'navigate', targetId: 't1', url: 'https://other.test' } as never);
+
+    let prevented = false;
+    const listener = wc.willNavigateListeners[0];
+    listener({ preventDefault: () => { prevented = true; } }, 'https://yet-another.test/');
+    expect(prevented).toBe(false);
   });
 
   it('navigate fails clearly when targetId missing', async () => {
@@ -1945,6 +2037,8 @@ describe('RsbWebviewBackend — unsupported actions', () => {
       getTitle: () => '',
       isDestroyed: () => false,
       loadURL: vi.fn().mockRejectedValueOnce(new Error('net::ERR_FAIL')),
+      on: vi.fn(),
+      setWindowOpenHandler: vi.fn(),
     } as unknown as WebContents;
     const registry = fakeRegistry(
       [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],

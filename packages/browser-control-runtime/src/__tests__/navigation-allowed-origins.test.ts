@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveSsrFPolicyForUrl } from '../_generated/leaf/src/infra/net/ssrf.js';
 import { assertBrowserNavigationAllowed } from '../_generated/extension/src/browser/navigation-guard.js';
+import { gotoPageWithNavigationGuard } from '../_generated/extension/src/browser/pw-session.js';
 import type { LookupFn } from '../_generated/leaf/src/infra/net/ssrf.js';
 
 const PREVIEW_ORIGIN = 'http://127.0.0.1:49152';
@@ -73,5 +74,54 @@ describe('exact-origin preview allowlist (navigation level)', () => {
         lookupFn: loopbackLookup,
       }),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * Persistent navigation guard (LOCAL PATCH, via sync.mjs): a page whose URL
+ * sits on an exact-origin allowlist entry (the sandboxed local HTML preview
+ * origin) keeps its route guard alive after the initial goto, so
+ * page-initiated navigations to other origins / loopback services stay
+ * blocked for the page's whole lifetime. Other pages keep the upstream
+ * short-lived guard (removed right after goto).
+ */
+describe('persistent navigation guard (preview origin)', () => {
+  function fakePage() {
+    const unrouteCalls: string[] = [];
+    const page = {
+      route: async () => {},
+      unroute: async (pattern: string) => {
+        unrouteCalls.push(pattern);
+      },
+      goto: async () => null,
+    };
+    return {
+      unrouteCalls,
+      page: page as unknown as Parameters<typeof gotoPageWithNavigationGuard>[0]['page'],
+    };
+  }
+
+  it('keeps the route guard alive for a preview-origin page', async () => {
+    const { unrouteCalls, page } = fakePage();
+    await gotoPageWithNavigationGuard({
+      cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+      page,
+      url: `${PREVIEW_ORIGIN}/preview/<token>/index.html`,
+      timeoutMs: 1000,
+      ssrfPolicy: POLICY,
+    });
+    expect(unrouteCalls).toEqual([]); // guard must NOT be removed
+  });
+
+  it('still removes the guard for non-preview pages (upstream behavior)', async () => {
+    const { unrouteCalls, page } = fakePage();
+    await gotoPageWithNavigationGuard({
+      cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+      page,
+      url: 'https://example.com/',
+      timeoutMs: 1000,
+      ssrfPolicy: POLICY,
+    });
+    expect(unrouteCalls).toEqual(['**']); // guard removed after goto
   });
 });

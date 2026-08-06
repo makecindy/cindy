@@ -203,6 +203,54 @@ async function loadUrlWithTimeout(
   }
 }
 
+/** True when `u` is a sandboxed preview URL issued by the local preview server. */
+function isPreviewUrl(u: string): boolean {
+  try {
+    const parsed = new URL(u);
+    return (
+      parsed.protocol === 'http:' &&
+      parsed.hostname === '127.0.0.1' &&
+      /^\/preview\/[a-f0-9]{64}\//.test(parsed.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function currentUrlOf(wc: WebContents): string {
+  try {
+    return wc.getURL?.() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** WebContents that already have the preview-page navigation guard attached. */
+const previewGuardedContents = new WeakSet<WebContents>();
+
+/**
+ * Parity with the vendored persistent route guard used for external Chrome
+ * (LOCAL PATCH in pw-session.ts): once a tab is on a sandboxed preview page,
+ * forbid PAGE-INITIATED navigation away from the preview origin and deny
+ * popups, so a previewed page cannot exfiltrate its DOM/CSSOM content or
+ * probe loopback services via location.href / window.open. The agent's own
+ * navigate action uses wc.loadURL, which does NOT emit `will-navigate`, so
+ * driving the tab normally stays unaffected.
+ */
+function guardPreviewPageNavigation(wc: WebContents): void {
+  if (previewGuardedContents.has(wc)) return;
+  previewGuardedContents.add(wc);
+  wc.on('will-navigate', (event, url) => {
+    if (isPreviewUrl(currentUrlOf(wc)) && !isPreviewUrl(url)) {
+      event.preventDefault();
+    }
+  });
+  wc.setWindowOpenHandler?.(({ url }) => {
+    if (isPreviewUrl(currentUrlOf(wc))) return { action: 'deny' };
+    return { action: 'allow' };
+  });
+}
+
 export class RsbWebviewBackend implements BrowserBackend {
   readonly kind = 'rsb-webview' as const;
   private readonly automation: RsbWebviewAutomation;
@@ -535,6 +583,7 @@ export class RsbWebviewBackend implements BrowserBackend {
       this.automation.forgetTab(tabId);
       await this.tryObservePageSignals(resolved.wc, tabId);
       this.assertActive();
+      guardPreviewPageNavigation(resolved.wc);
       await loadUrlWithTimeout(
         resolved.wc,
         url,

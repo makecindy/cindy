@@ -364,6 +364,35 @@ const LOCAL_PATCHES = {
         '  if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {',
     },
   ],
+  'extension/src/browser/pw-session.ts': [
+    {
+      desc: 'keep the navigation route guard alive for exact-origin preview pages (sandboxed local HTML preview) so page-initiated navigations stay blocked after the initial goto',
+      find:
+        '  } finally {\n' +
+        '    await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '    if (blockedError) {',
+      replace:
+        '  } finally {\n' +
+        '    // LOCAL PATCH (Cindy, via sync.mjs): keep the navigation guard alive\n' +
+        '    // for pages on an exact-origin allowlist entry (the sandboxed local\n' +
+        '    // HTML preview origin). Without this, page-initiated navigations\n' +
+        '    // after the initial goto — location.href / window.location to an\n' +
+        '    // external origin or to other loopback services — would run\n' +
+        '    // unchecked, letting a previewed page exfiltrate its DOM/CSSOM\n' +
+        '    // content or probe local services. The guard lives for the page\n' +
+        '    // lifetime and is torn down with the page (Playwright removes\n' +
+        '    // routes when the page closes).\n' +
+        '    const keepGuard =\n' +
+        '      opts.url !== undefined &&\n' +
+        '      opts.ssrfPolicy?.allowedOrigins?.some(\n' +
+        '        (origin) => new URL(opts.url).origin === origin,\n' +
+        '      ) === true;\n' +
+        '    if (!keepGuard) {\n' +
+        '      await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '    }\n' +
+        '    if (blockedError) {',
+    },
+  ],
   'extension/src/infra/net/ssrf.ts': [
     {
       desc: 're-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)',

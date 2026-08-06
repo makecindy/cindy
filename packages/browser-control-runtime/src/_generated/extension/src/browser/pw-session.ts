@@ -1404,7 +1404,23 @@ export async function gotoPageWithNavigationGuard(
     }
     throw err;
   } finally {
-    await opts.page.unroute("**", handler).catch(() => {});
+    // LOCAL PATCH (Cindy, via sync.mjs): keep the navigation guard alive
+    // for pages on an exact-origin allowlist entry (the sandboxed local
+    // HTML preview origin). Without this, page-initiated navigations
+    // after the initial goto — location.href / window.location to an
+    // external origin or to other loopback services — would run
+    // unchecked, letting a previewed page exfiltrate its DOM/CSSOM
+    // content or probe local services. The guard lives for the page
+    // lifetime and is torn down with the page (Playwright removes
+    // routes when the page closes).
+    const keepGuard =
+      opts.url !== undefined &&
+      opts.ssrfPolicy?.allowedOrigins?.some(
+        (origin) => new URL(opts.url).origin === origin,
+      ) === true;
+    if (!keepGuard) {
+      await opts.page.unroute("**", handler).catch(() => {});
+    }
     if (blockedError) {
       await closeBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,
