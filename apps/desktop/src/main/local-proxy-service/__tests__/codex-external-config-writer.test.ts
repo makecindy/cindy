@@ -97,6 +97,45 @@ describe('codex-external-config-writer — preview', () => {
     writeFileSync(configPath(), `model_provider = "cindy_external"\n`, 'utf8');
     expect(previewCodexConfig(URL, TOKEN).conflicts).toEqual([]);
   });
+
+  // Finding G:proposedToml 只回 Cindy 会改动的两处片段,绝不把用户既有的其它 provider / MCP
+  // 凭证 merge 进去回给 renderer。受注入的渲染进程只要调预览就能读走整份配置里的密文。
+  it('proposedToml 不含用户既有的其它 provider 块及其密文(只含 cindy_external)', () => {
+    const OTHER_PROVIDER_SECRET = 'sk-other-provider-secret-key';
+    writeFileSync(
+      configPath(),
+      [
+        'model_provider = "other"',
+        '',
+        '[model_providers.other]',
+        'name = "Other"',
+        'base_url = "https://other.example/v1"',
+        `api_key = "${OTHER_PROVIDER_SECRET}"`,
+        '',
+        '[mcp_servers.secret_tool]',
+        'auth_token = "mcp-secret-token-xyz"',
+      ].join('\n'),
+      'utf8',
+    );
+    const preview = previewCodexConfig(URL, TOKEN);
+    // 既有密文绝不出现在预览里。
+    expect(preview.proposedToml).not.toContain(OTHER_PROVIDER_SECRET);
+    expect(preview.proposedToml).not.toContain('mcp-secret-token-xyz');
+    expect(preview.proposedToml).not.toContain('model_providers.other');
+    expect(preview.proposedToml).not.toContain('mcp_servers');
+    // 只含 Cindy 会写的那两处。
+    const parsed = parseToml(preview.proposedToml) as Record<string, unknown>;
+    expect(parsed.model_provider).toBe('cindy_external');
+    const providers = parsed.model_providers as Record<string, unknown>;
+    expect(Object.keys(providers)).toEqual(['cindy_external']);
+    expect(parsed.mcp_servers).toBeUndefined();
+    // 冲突项仍照常暴露(供用户判断会覆盖什么),但那是 Cindy 自己块的键,非其它 provider 密文。
+    expect(preview.conflicts).toContainEqual({
+      key: 'model_provider',
+      current: 'other',
+      next: 'cindy_external',
+    });
+  });
 });
 
 describe('codex-external-config-writer — write（非破坏性 merge）', () => {
@@ -204,5 +243,21 @@ describe('codex-external-config-writer — write（非破坏性 merge）', () =>
   posixIt('新建文件默认收紧到 0600', () => {
     expect(writeCodexConfig(URL).success).toBe(true);
     expect(statSync(configPath()).mode & 0o777).toBe(0o600);
+  });
+
+  // Finding I:temp 必须**在写入任何密文前**就以 0600 创建 —— 若先按默认 mode(umask 022 → 0644)
+  // 建 temp 再 chmod,那一瞬间 merge 后含用户既有 provider/MCP 凭证的密文就是世界可读的。
+  it('writeFileSync 建 temp 时即带 mode:0600(不是先建 0644 再 chmod)', async () => {
+    const fsModule = await import('node:fs');
+    const spy = vi.spyOn(fsModule.default, 'writeFileSync');
+    try {
+      expect(writeCodexConfig(URL).success).toBe(true);
+      const tempWrite = spy.mock.calls.find(([p]) => String(p).endsWith('.tmp'));
+      expect(tempWrite).toBeDefined();
+      const options = tempWrite?.[2];
+      expect(options).toMatchObject({ mode: 0o600 });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

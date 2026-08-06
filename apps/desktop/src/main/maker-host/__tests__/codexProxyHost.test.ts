@@ -4201,6 +4201,38 @@ describe('createModelRoutingTransform 有界拒绝 (P1: 匿名客户端不得白
     expect(body?.error?.code).toBe('external_token_required');
   });
 
+  it('对外开启 + provider-oauth + GET /models + 伪造 Bearer(无 model/无 thread-id)→ 401,不注入 Cindy 供应商 OAuth token(#1666 二轮 Finding H)', async () => {
+    const host = await freshCodexProxyHost();
+    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+    externalAuthMock.codexEnabled = true;
+    // provider-oauth 控制面桶③ 会经 resolveProviderOAuthControlRouteDecision 注入真实供应商 OAuth token。
+    // 若放行伪造 Bearer 的匿名 GET /models,未鉴权者就借 Cindy 的 xAI 凭证打 /models,对外 token 形同虚设。
+    setProviderOAuthTokenReader((providerId, agent) =>
+      providerId === 'xai' && agent === 'codex' ? 'xai-live-token-must-not-leak' : null,
+    );
+    host.setCodexProxyAuthInjection('provider-oauth');
+
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        undefined,
+        {
+          reqId: 1,
+          method: 'GET',
+          url: '/models',
+          headers: { authorization: 'Bearer anything-forged' },
+        } as never,
+      ),
+    );
+
+    // 绝不返回注入 xai token 的 headerOverride 决策;必须是 401 有界拒绝的 localHandler。
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+    expect(JSON.stringify(decision)).not.toContain('xai-live-token-must-not-leak');
+
+    setProviderOAuthTokenReader(() => null);
+  });
+
   it('对外关闭时不启用闸:匿名无会话请求按内部默认路由,字节级不变', async () => {
     const host = await freshCodexProxyHost();
     externalAuthMock.codexEnabled = false;

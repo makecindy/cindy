@@ -11,7 +11,7 @@ import type {
   LocalProxyCodexConfigPreview,
   LocalProxyConfigPreview,
 } from '../../../shared/localProxyService';
-import { maskAnthropicPreview, maskCodexPreview } from '../preview-masking';
+import { MASK_FALLBACK, maskAnthropicPreview, maskCodexPreview } from '../preview-masking';
 
 const TOKEN = 'cindy-local-supersecret-abcdef0123456789';
 const MASKED = 'cindy-local-••••';
@@ -34,7 +34,8 @@ describe('maskAnthropicPreview — 写 ~/.claude 预览掩码 token', () => {
     expect(JSON.stringify(masked)).not.toContain(TOKEN);
   });
 
-  it('冲突项里等于 token 的 next 被掩码;其它冲突值原样保留', () => {
+  it('冲突项:next(=token)掩成 token 掩码,current(用户既有真 key)兜底掩掉,非密文段保留', () => {
+    const EXISTING_USER_KEY = 'sk-old-user-key';
     const preview: LocalProxyConfigPreview = {
       path: '/home/u/.claude/settings.json',
       exists: true,
@@ -43,18 +44,21 @@ describe('maskAnthropicPreview — 写 ~/.claude 预览掩码 token', () => {
         ANTHROPIC_API_KEY: TOKEN,
       },
       conflicts: [
-        { key: 'ANTHROPIC_API_KEY', current: 'sk-old-user-key', next: TOKEN },
+        { key: 'ANTHROPIC_API_KEY', current: EXISTING_USER_KEY, next: TOKEN },
         { key: 'ANTHROPIC_BASE_URL', current: 'https://old', next: 'http://127.0.0.1:51888' },
       ],
     };
     const masked = maskAnthropicPreview(preview, TOKEN, MASKED);
     const apiKeyConflict = masked.conflicts.find((c) => c.key === 'ANTHROPIC_API_KEY');
-    // next(= 我们的 token)被掩;current(用户旧值,非我们 token)保留。
+    // next(= 我们的 token)→ token 掩码;current(用户既有真 key,Finding F)→ 通用占位,绝不原样过 IPC。
     expect(apiKeyConflict?.next).toBe(MASKED);
-    expect(apiKeyConflict?.current).toBe('sk-old-user-key');
+    expect(apiKeyConflict?.current).toBe(MASK_FALLBACK);
     const baseUrlConflict = masked.conflicts.find((c) => c.key === 'ANTHROPIC_BASE_URL');
+    expect(baseUrlConflict?.current).toBe('https://old');
     expect(baseUrlConflict?.next).toBe('http://127.0.0.1:51888');
+    // 我们的 token 与用户既有真 key 都不得出现在序列化后的预览里。
     expect(JSON.stringify(masked)).not.toContain(TOKEN);
+    expect(JSON.stringify(masked)).not.toContain(EXISTING_USER_KEY);
   });
 });
 

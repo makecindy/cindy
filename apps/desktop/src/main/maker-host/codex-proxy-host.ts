@@ -2526,23 +2526,32 @@ export function createModelRoutingTransform(
     // 内部身份信号:任何 Cindy 自家 codex 子进程的请求都带 thread-id / x-client-request-id 头
     //(缺失才是 'unknown'),即便 threadToSession 还没在注册时序窗口内把它绑上 session 也带着它。
     // 这与 anthropic 侧靠 x-claude-code-session-id 区分内外同构 —— 光「带了个 bearer」不算内部身份。
+    // 注:collab spawn(x-openai-subagent=collab-spawn)也带 thread-id,故 hasInternalCodexIdentity 为真,
+    // 会跳过下方 401 闸,落到再下方的 collab-spawn 分支 —— 内部协同 spawn 不受对外闸影响。
     const hasInternalCodexIdentity = threadId !== 'unknown';
     // 有界拒绝(P1):对外访问开启时,这个 codex loopback 端口被公布给外部 CLI。走到这里的请求上面
-    // 既没命中本族对外 token、又不带 `cindy-local-` 前缀(否则已 401)、又解析不出会话、又不带内部
-    // thread-id 身份头 —— 它不是 Cindy 自家 codex 子进程,而是本机某个直接打对外端口的客户端。
-    //   · 带 model:放行会经下方 decideCodexRoute(oauth-bearer + codex/* + gatewayKey)白嫖 Cindy 的
-    //     网关 key —— 这是 #1666 review 指出的真实泄漏点,故一律 401。⚠ 关键修复:不再把「带了个
-    //     bearer」当内部豁免;伪造一个非本族 `Bearer anything` 既不能冒充内部,也不能让对外 token 变可选。
-    //   · 无 model:控制面请求(如 codex models-manager 的 `GET /models` 轮询)。带 bearer 的它经 ③ 段
-    //     只 override 上游、透传其自带 bearer(不注入 Cindy 网关 key/凭证),不泄漏,故仅在「连 bearer
-    //     都没有」的纯匿名态才拦,避免误伤无 thread-id 头的内部轮询。
+    // 既没命中本族对外 token(否则已在 ⓪ 段被 routeExternalCodexClient 接走)、又不带 `cindy-local-`
+    // 前缀(否则已 401)、又解析不出会话、又不带内部 thread-id / x-client-request-id 身份头 —— 它不是
+    // Cindy 自家 codex 子进程,而是本机某个直接打对外端口的客户端。一律 401(带不带 model、带不带
+    // 伪造 bearer 都拦):
+    //   · 带 model:放行会经下方 decideCodexRoute(oauth-bearer + codex/* + gatewayKey)白嫖 Cindy 网关 key。
+    //   · 无 model(控制面,如 codex models-manager 的 `GET /models` 轮询):放行会经下方桶③,在
+    //     provider-oauth 态经 resolveProviderOAuthControlRouteDecision 把 Cindy 的供应商 OAuth token 注入
+    //     上游 —— 未鉴权者借 Cindy 凭证打供应商 /models,使对外 token 形同虚设(#1666 review 二轮 Finding H)。
+    // ⚠ 关键:内部身份只认 thread-id / x-client-request-id 头,绝不把「带了个 bearer」当豁免 —— 伪造一个
+    //   非本族 `Bearer anything` 既冒充不了内部,也不能让对外 token 变可选。合法外部客户端的 /models 由
+    //   ⓪ 段 routeExternalCodexClient 用本族 token 命中后从 Cindy catalog 返回,根本不依赖桶③,故这里
+    //   收紧不影响它。代价:对外开启期间,内部无 thread-id 的控制面轮询也一并被拦(与本就被拦的匿名
+    //   轮询同权衡;Cindy 自有 catalog,退化有界)。
     // ⚠ 残留:存心伪造一个假 thread-id 身份头的本机进程仍能溜过(loopback 非鉴权边界,与 anthropic 侧
-    //   伪造会话头同权衡);彻底隔离需把对外监听与内部子进程代理拆到不同端口。未开启对外时不启用此闸。
+    //   伪造会话头同权衡);彻底隔离需把对外监听与内部子进程代理拆到不同端口。未开启对外时不启用此闸,
+    //   内部无 thread-id 的控制面轮询照旧走桶③。
+    // 置于 collab-spawn 分支之前:合法 collab spawn 必带 thread-id(hasInternalCodexIdentity 为真)会跳过
+    // 本闸;而伪造 collab-spawn 头却不带 thread-id 的对外客户端会被这里 401,不至于蹭到下方 collab 分支。
     if (
       isCodexExternalAccessEnabled()
       && !sessionId
       && !hasInternalCodexIdentity
-      && (Boolean(model) || !externalToken)
     ) {
       return externalOpenAIError(401, 'external_token_required', 'Cindy 对外模型代理需要有效的访问 token。');
     }

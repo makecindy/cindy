@@ -134,15 +134,32 @@ function collectConflicts(
   return conflicts;
 }
 
-/** 生成写入预览:目标路径、是否存在、完整 merge 后 TOML、冲突项、需自设的 token env 行。 */
+/**
+ * 只含 Cindy 会**写入/改动**的两处(root `model_provider` + `[model_providers.cindy_external]` 块)的
+ * TOML 片段 —— 绝不含用户既有的其它 provider / mcp / profile 凭证。预览专用。
+ */
+function buildProposedFragment(codexUrl: string): string {
+  return stringifyToml({
+    model_provider: CINDY_PROVIDER_ID,
+    model_providers: { [CINDY_PROVIDER_ID]: buildProviderBlock(codexUrl) },
+  });
+}
+
+/**
+ * 生成写入预览:目标路径、是否存在、**仅 Cindy 改动处**的 TOML 片段、冲突项、需自设的 token env 行。
+ *
+ * ⚠ 安全(#1666 二轮 Finding G):`proposedToml` 只回 Cindy 会写的那两处片段,**绝不**把整份 merge 后
+ * 配置回给 renderer —— 整份 config.toml 常含用户既有的 provider key / MCP token 等密文,受注入的渲染
+ * 进程只要调预览通道就能在用户确认前把它们读走。真实的整份 merge 只在 `writeCodexConfig`(main 侧)落文件。
+ * 非破坏性 merge 的保证仍在 `mergeConfig`:除这两处外其余字段原样保留。
+ */
 export function previewCodexConfig(codexUrl: string, token: string): LocalProxyCodexConfigPreview {
   const filePath = resolveCodexConfigPath();
   const { exists, root } = readExistingConfig(filePath);
-  const proposedToml = stringifyToml(mergeConfig(root, codexUrl));
   return {
     path: filePath,
     exists,
-    proposedToml,
+    proposedToml: buildProposedFragment(codexUrl),
     conflicts: collectConflicts(root, codexUrl),
     tokenExportLine: buildTokenExportLine(token),
   };
@@ -171,7 +188,11 @@ export function writeCodexConfig(
     } catch { /* 文件不存在 → 用默认 0600 */ }
     const tmpPath = `${filePath}.${process.pid}-${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(tmpPath, `${stringifyToml(nextRoot)}\n`, 'utf8');
+      // ⚠ temp 必须**在写入任何密文前**就以 0600 创建。merge 后的 TOML 会含用户既有的 provider /
+      // MCP 凭证;若先按 Node 默认 mode(022 umask → 0644)建 temp 再 chmod,那一瞬间同机其它
+      // 用户/监视者就能读到密文(#1666 二轮 Finding I)。故 writeFileSync 直接带 mode:0600 建文件,
+      // 再 chmod 到 targetMode(已存在文件沿用其原 mode,不放宽也不额外收紧)。
+      fs.writeFileSync(tmpPath, `${stringifyToml(nextRoot)}\n`, { encoding: 'utf8', mode: 0o600 });
       if (process.platform !== 'win32') {
         fs.chmodSync(tmpPath, targetMode);
       }
