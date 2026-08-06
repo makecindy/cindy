@@ -291,6 +291,19 @@ describe('pickAgentDefaultRuntime', () => {
     })).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'high', providerId: null });
   });
 
+  it('skips the top-row branch while the catalog is not ready (stale rows from the previous device, codex P1)', () => {
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'codex',
+      sessions: [],
+      modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
+      currentEffort: 'medium',
+      catalogReady: false,
+    });
+    // 目录未就绪 → 不抄残留目录的首项,落内置默认 + 默认路由
+    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
+    expect(runtime.providerId).toBeNull();
+  });
+
   it('scopes the recent lookup to the selected device', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
@@ -416,6 +429,15 @@ describe('resolveNewSessionAutoDefault', () => {
       patch: { model: 'claude-sonnet-4-6', effort: 'low', providerId: 'prov-claude-sonnet-4-6' },
     });
     expect(result?.patch).not.toHaveProperty('agentKind');
+  });
+
+  it('intent ②-wait: catalog not ready → do not copy the (stale) top row, wait for the real catalog (codex P1)', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      catalogReady: false,
+      modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'low')],
+    });
+    expect(result).toBeNull();
   });
 
   it('intent ③: switching device (not manually touched) recomputes for the new device', () => {

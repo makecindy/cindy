@@ -556,6 +556,10 @@ export default function NewRemoteSessionScreen() {
   // (Greptile review P1:异步切换写入旧设备来源)。
   const selectedDeviceRef = useRef(selectedDeviceId);
   selectedDeviceRef.current = selectedDeviceId;
+  // 运行配置操作的代际计数:switchAgent / 恢复 agent / 手动选行每次触发 +1,
+  // 异步回调(权限确认 .then)提交前比对触发时捕获的代际,不等即放弃写入 ——
+  // 同一设备上的连续操作也是最新者胜(Greptile review P1:旧确认回调覆盖新选择)。
+  const runtimeActionSeqRef = useRef(0);
   const runtimeOptions = useMemo(
     () => buildSessionRuntimeOptions(draft, capabilities),
     [capabilities, draft.model],
@@ -689,6 +693,7 @@ export default function NewRemoteSessionScreen() {
       defaultPermissionModeForNewSessionAgent(storedAgentKind);
     let cancelled = false;
     const deviceAtTrigger = selectedDeviceId;
+    const seqAtTrigger = ++runtimeActionSeqRef.current;
     void (async () => {
       const confirmed = await confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
         restoringRememberedChoice: storedPermissionMode !== undefined,
@@ -696,6 +701,8 @@ export default function NewRemoteSessionScreen() {
       if (cancelled) return;
       // 确认期间设备已切换 → 放弃本次写入,新设备自己的恢复/自动默认 effect 会接管。
       if (deviceAtTrigger !== selectedDeviceRef.current) return;
+      // 确认期间用户又切了 agent / 手动选了模型 → 旧回调不得覆盖新选择。
+      if (seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => {
         const next = pickAgentDefaultRuntime({
           agentKind: storedAgentKind,
@@ -1496,6 +1503,7 @@ export default function NewRemoteSessionScreen() {
   // 同模型换来源不沿用当前档;fast 按 (来源, 模型) 记忆恢复,fastEditable 门控)。
   const selectProviderModelRow = useCallback((row: ProviderModelRow) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
+    runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
     setDraft((current) => {
       const next = resolveRowSelection({
         row,
@@ -1523,6 +1531,7 @@ export default function NewRemoteSessionScreen() {
   // 扁平回退(被控端 0 供应商):只落 model、清来源(默认路由),effort 跟随 capabilities reconcile。
   const selectFlatModel = useCallback((option: MobileModelOption) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
+    runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
     explicitProviderModelSelectionRef.current = null;
     setDraft((current) =>
       reconcileRuntimeDraftWithCapabilities({ ...current, model: option.id, providerId: null }, capabilities));
@@ -2263,6 +2272,7 @@ export default function NewRemoteSessionScreen() {
     if (draft.agentKind === nextKind) return;
     userTouchedRuntimeRef.current = true;
     explicitProviderModelSelectionRef.current = null;
+    const seqAtTrigger = ++runtimeActionSeqRef.current;
     void saveNewSessionPreferences({ agentKind: nextKind });
     // 取目标 agent 自己的模型列表(providers 已加载时同步可得),用于"列表最上面"兜底 + effort reconcile。
     const rows = flattenProviderSections(
@@ -2281,6 +2291,8 @@ export default function NewRemoteSessionScreen() {
     }).then((confirmed) => {
       // 确认期间设备已切换 → 放弃本次写入,新设备自己的 effect 会接管(Greptile P1)。
       if (selectedDeviceId !== selectedDeviceRef.current) return;
+      // 确认期间用户又切了 agent / 手动选了模型 → 旧回调不得覆盖新选择(Greptile P1)。
+      if (seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => {
         const next = pickAgentDefaultRuntime({
           agentKind: nextKind,

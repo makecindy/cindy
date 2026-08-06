@@ -362,7 +362,7 @@ function findSectionModelRow(
  * 过滤:排除 status==='deleted'、无 model;可选 `deviceId`(只看该设备——模型列表 per-device,跨设备 model 可能
  * 在目标设备不存在,来源同理——同设备过滤保证继承的来源在目标设备存在);可选 `agentKind`(只看该 agent)。
  * 排序:按活动时间(userSendAt ?? updatedAt ?? createdAt)降序取第一条。
- * 映射 `RemoteSession.agentKind`('cc'|'codex') → NewSessionDraft 的 'claude-code'|'codex'。无匹配→null。
+ * 映射 `RemoteSession.agentKind`:'codex'|'pi' 原样保留,其余(含 'cc')归一为 'claude-code'。无匹配→null。
  * deviceId 过滤口径对齐 buildRecentWorkspaceOptions:仅当 session 带了 deviceLinkDeviceId 且与目标不符才排除。
  */
 export function pickMostRecentSessionRuntime(
@@ -425,7 +425,9 @@ export function pickAgentDefaultRuntime(args: {
   if (recent?.model) {
     model = recent.model;
     providerId = validateModelProviderId(modelRows, recent.providerId, recent.model, catalogReady);
-  } else if (modelRows[0]) {
+  } else if (catalogReady && modelRows[0]) {
+    // 首项分支只在目录就绪时取——切到未缓存设备瞬间旧设备目录会短暂残留
+    // (ready=false),抄它的首项会把别设备的来源写进草稿(codex review P1)。
     model = modelRows[0].model.id;
     providerId = modelRows[0].provider.id;
   } else {
@@ -488,9 +490,10 @@ export function resolveNewSessionAutoDefault(input: {
       },
     };
   }
-  // 无最近会话 → 列表最上面那个(与 UI 渲染第一项一致);列表未就绪则不动,等下次触发。
+  // 无最近会话 → 列表最上面那个(与 UI 渲染第一项一致);目录未就绪(加载中/切设备间隙
+  // 残留旧设备目录,ready=false)则不动,等就绪后 effect 重算(codex review P1)。
   const top = modelRows[0];
-  if (!top) return null;
+  if (!top || !catalogReady) return null;
   return {
     appliedDeviceId: selectedDeviceId,
     patch: {
