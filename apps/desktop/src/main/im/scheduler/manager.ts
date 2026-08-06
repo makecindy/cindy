@@ -460,7 +460,11 @@ export class ImSchedulerManager {
 
   private dropStalePeers(now: number): void {
     for (const [deviceId, peer] of this.peers) {
-      if (now - peer.lastSeenAt > PEER_STALE_MS) this.peers.delete(deviceId);
+      if (now - peer.lastSeenAt <= PEER_STALE_MS) continue;
+      this.peers.delete(deviceId);
+      this.confirmedPeers.delete(deviceId);
+      this.pendingProbePeers.delete(deviceId);
+      if (this.started) this.probe(deviceId);
     }
   }
 

@@ -343,6 +343,43 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('re-probes a peer after its advertisement expires despite a wall-clock rollback', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: 9_999_999_999,
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      inReplyTo: latestProbeNonce('a'),
+    });
+    await finishDiscovery(manager);
+    const probesBeforeExpiry = harness.sendPush.mock.calls.filter(([, , payload]) => (
+      typeof payload === 'object'
+      && payload !== null
+      && (payload as { kind?: unknown }).kind === 'probe'
+    )).length;
+
+    await vi.advanceTimersByTimeAsync(8_001);
+    await manager.reconcile();
+
+    const probesAfterExpiry = harness.sendPush.mock.calls.filter(([, , payload]) => (
+      typeof payload === 'object'
+      && payload !== null
+      && (payload as { kind?: unknown }).kind === 'probe'
+    )).length;
+    expect(probesAfterExpiry).toBeGreaterThan(probesBeforeExpiry);
+    await manager.stop();
+  });
+
   it('invalidates an active lease when the peer starts a new discovery generation', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [{
