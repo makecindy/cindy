@@ -237,8 +237,8 @@ export interface HookDispatcherDeps {
    * 可选: 为派发组装本地群上下文前缀(group-relay-v1 窗口, 生产为
    * groupWindow.buildGroupContextPrefix)。只影响发给 agent 的 prompt,
    * 不影响会话标题与 UI 渲染(二者用 source.userText / 原始 prompt);
-   * 失败或空装配 = 无前缀, 绝不因上下文拒单。commit 在任务被受理
-   * (accepted/queued)后由本模块调用, 拒单不推进窗口游标。
+   * 失败或空装配 = 无前缀, 绝不因上下文拒单。accepted 任务在 ACK 前提交；
+   * queued 任务把 commit 延迟到真正开始执行, 拒单/取消/清队列都不推进窗口游标。
    */
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
@@ -498,6 +498,13 @@ export function buildHookSessionTitle(
   return `[${contextTag}${displayProvider}${dmTag}] ${snippet}`;
 }
 
+type ContextCursorCommit = (
+  guard?: () => boolean | Promise<boolean>,
+) =>
+  | void
+  | { rollback(): void | Promise<void> }
+  | Promise<void | { rollback(): void | Promise<void> }>;
+
 /** 待执行任务(定位已完成, 排队即执行参数就绪)。 */
 interface PendingTask {
   connectionId: string;
@@ -507,10 +514,8 @@ interface PendingTask {
   externalKey: string;
   run: HookRunRequest;
   accountGeneration: number;
-  /** 群上下文已提交但尚未真正开始执行时的补偿句柄。 */
-  cursorCommit?: { rollback(): void | Promise<void> };
-  /** 仅用于账号边界按提交逆序回滚排队中的游标。 */
-  cursorCommitOrder?: number;
+  /** 群上下文游标提交回调;排队任务仅在真正开始执行前调用。 */
+  commitContextCursor?: ContextCursorCommit;
   /** 会话定位阶段产生的一次性说明, 前置到本次 turn.end 的 finalText。 */
   notice?: string;
   /**
@@ -699,11 +704,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   >();
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
-  /** 排队任务的游标提交序号，用于边界回滚时保持 LIFO。 */
-  let queuedCursorCommitOrder = 0;
-  /** 已提交游标但尚未开始的任务，覆盖 queue 与 queued-cancel 的窗口。 */
-  const pendingCursorTasks = new Map<number, PendingTask>();
-  const cursorRollbackPromises = new Map<PendingTask, Promise<void>>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
   const runningByRequest = new Map<string, { sessionId: string; connectionId: string }>();
   /** 已请求取消的 connectionId + requestId(execute 收口时据此把结果改写为 cancelled)。 */
@@ -1322,6 +1322,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       running.delete(sessionId);
       return;
     }
+    if (!(await commitTaskContextCursor(task))) {
+      running.delete(sessionId);
+      return;
+    }
     // 这条消息线交给新任务了: 撤掉上一轮失败留下的续跑观察与记账。连接还在, 所以要
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
@@ -1471,32 +1475,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
   }
 
-  async function rollbackQueuedCursor(task: PendingTask): Promise<void> {
-    if (!task.cursorCommit) return;
-    try {
-      await task.cursorCommit.rollback();
-    } catch (error) {
-      log.warn(
-        `queued group context cursor rollback failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  function scheduleQueuedCursorRollback(task: PendingTask): void {
-    if (task.cursorCommit === undefined || task.cursorCommitOrder === undefined) return;
-    if (cursorRollbackPromises.has(task)) return;
-    const rollback = rollbackQueuedCursor(task);
-    cursorRollbackPromises.set(task, rollback);
-    void rollback.finally(() => {
-      cursorRollbackPromises.delete(task);
-      if (pendingCursorTasks.get(task.cursorCommitOrder!) === task) {
-        pendingCursorTasks.delete(task.cursorCommitOrder!);
-      }
-    });
-  }
-
   /**
    * 这个目录**此刻**还落在该连接的工作目录映射(或内置对话根)内吗。
    *
@@ -1515,10 +1493,41 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   }
 
   function startExecution(task: PendingTask): void {
-    if (task.cursorCommitOrder !== undefined) pendingCursorTasks.delete(task.cursorCommitOrder);
     const promise = execute(task);
     executing.add(promise);
     void promise.finally(() => executing.delete(promise));
+  }
+
+  /**
+   * 排队任务只有在真正开始执行时才推进群上下文游标。账号代次若在提交
+   * await 期间失效，补偿本次提交并静默丢弃这条尚未开始的任务。
+   */
+  async function commitTaskContextCursor(task: PendingTask): Promise<boolean> {
+    if (!task.commitContextCursor) return true;
+    let receipt: { rollback(): void | Promise<void> } | void;
+    try {
+      receipt = await task.commitContextCursor(() => isCurrentGeneration(task.accountGeneration));
+    } catch (error) {
+      // The production group-window commit keeps persistence failures non-fatal;
+      // retain the same queue liveness for injected/legacy callbacks.
+      log.warn(
+        `queued group context cursor commit failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return true;
+    }
+    if (isCurrentGeneration(task.accountGeneration)) return true;
+    try {
+      await receipt?.rollback();
+    } catch (error) {
+      log.warn(
+        `queued group context cursor rollback failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return false;
   }
 
   /**
@@ -1999,12 +2008,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
-        let commitContextCursor: (
-          guard?: () => boolean | Promise<boolean>,
-        ) =>
-          | void
-          | { rollback(): void | Promise<void> }
-          | Promise<void | { rollback(): void | Promise<void> }> = () => undefined;
+        let commitContextCursor: ContextCursorCommit | undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
@@ -2056,16 +2060,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             return;
           }
 
-          // 代次守卫覆盖写库前后；账号边界若在 await 期间失效，commit 会回滚
-          // 自己的 durable cursor，下面也不会留下 queue/running/ACK 副作用。
-          const cursorCommit = await commitContextCursor(() =>
-            isCurrentGeneration(admittedGeneration),
-          );
-          if (!isCurrentGeneration(admittedGeneration)) {
-            await cursorCommit?.rollback();
-            return;
-          }
-
+          // 排队任务只保存 commit 回调；它尚未受理，不得提前推进 durable cursor。
           const queue = queues.get(sessionId) ?? [];
           if (running.has(sessionId) || runner.isBusy(sessionId) || queue.length > 0) {
             const ack: TaskAckPayload = {
@@ -2078,22 +2073,24 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             const task: PendingTask = {
               ...taskBase,
               ack,
-              ...(cursorCommit
-                ? {
-                    cursorCommit,
-                    cursorCommitOrder: ++queuedCursorCommitOrder,
-                  }
-                : {}),
+              ...(commitContextCursor ? { commitContextCursor } : {}),
             };
-            if (task.cursorCommitOrder !== undefined) {
-              pendingCursorTasks.set(task.cursorCommitOrder, task);
-            }
             queue.push(task);
             queues.set(sessionId, queue);
             reply(connectionId, send, ack);
             // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
             // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
             if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
+            return;
+          }
+
+          // Preserve the direct accepted path's pre-ACK guard: a generation
+          // boundary racing the durable write must roll back and emit no ACK.
+          const cursorCommit = await commitContextCursor?.(() =>
+            isCurrentGeneration(admittedGeneration),
+          );
+          if (!isCurrentGeneration(admittedGeneration)) {
+            await cursorCommit?.rollback();
             return;
           }
 
@@ -2168,12 +2165,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
       for (const timer of drainPolls.values()) clearTimeout(timer);
       drainPolls.clear();
-      const queuedTasks = [...pendingCursorTasks.values()]
-        .sort(
-          (a, b) =>
-            (b.cursorCommitOrder ?? Number.NEGATIVE_INFINITY) -
-            (a.cursorCommitOrder ?? Number.NEGATIVE_INFINITY),
-        );
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
@@ -2189,14 +2180,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       pendingReopens.clear();
 
       const drain = (async (): Promise<void> => {
-        // Queued tasks have not started yet, so their context was not
-        // consumed. Roll back in reverse commit order: if several queued
-        // entries share a cursor key, each receipt can restore the preceding
-        // value without a later receipt being overwritten by an older one.
-        for (const task of queuedTasks) {
-          scheduleQueuedCursorRollback(task);
-          await cursorRollbackPromises.get(task);
-        }
         const aborts: Promise<void>[] = [];
         if (abortSession) {
           for (const { sessionId } of runningByRequest.values()) {
@@ -2366,9 +2349,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             errorMessage: null,
             usage: { durationMs: null },
           };
-          // A queued task has not started, so cancelling it must release the
-          // context cursor just like an account-boundary queue drop.
-          scheduleQueuedCursorRollback(task);
           sendOrBuffer(connectionId, makeTurnEnd(turnEnd), {
             connectionId,
             requestId: task.requestId,

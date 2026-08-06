@@ -1017,18 +1017,23 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.reactToMessage.mockImplementation(async (messageId: string) => `reaction-${messageId}`);
     const h = setupSession(async () => ({ accepted: true }));
     const firstComplete = vi.fn();
+    const firstRouteResolved = vi.fn();
     await runDefaultTurn(firstComplete, {
       userMessageId: 'msg-first',
       text: 'first user message',
+      onRouteResolved: firstRouteResolved,
     });
 
     expect(firstComplete).not.toHaveBeenCalled();
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(firstRouteResolved).toHaveBeenCalledTimes(1);
 
     const secondComplete = vi.fn();
+    const secondRouteResolved = vi.fn();
     await runDefaultTurn(secondComplete, {
       userMessageId: 'msg-second',
       text: 'second user message',
+      onRouteResolved: secondRouteResolved,
     });
     await flushMicrotasks();
 
@@ -1038,6 +1043,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
     expect(secondComplete).not.toHaveBeenCalled();
+    expect(secondRouteResolved).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
 
     h.emit({
@@ -1057,6 +1063,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
 
     expect(firstComplete).toHaveBeenCalledTimes(1);
+    expect(secondRouteResolved).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-first', 'reaction-msg-first');
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(2);
     // assistant 落库收口在 messagePersistBroadcaster(经 wireSessionToIpcExternal),
@@ -1943,10 +1950,22 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       async (messageId: string) => `reaction-${messageId}`,
     );
     const h = setupSession(async () => ({ accepted: true }));
-    await runDefaultTurn(vi.fn(), { userMessageId: 'msg-first', text: 'first user message' });
-    await runDefaultTurn(vi.fn(), { userMessageId: 'msg-second', text: 'second user message' });
+    const firstRouteResolved = vi.fn();
+    await runDefaultTurn(vi.fn(), {
+      userMessageId: 'msg-first',
+      text: 'first user message',
+      onRouteResolved: firstRouteResolved,
+    });
+    const secondRouteResolved = vi.fn();
+    await runDefaultTurn(vi.fn(), {
+      userMessageId: 'msg-second',
+      text: 'second user message',
+      onRouteResolved: secondRouteResolved,
+    });
     await flushMicrotasks();
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(firstRouteResolved).toHaveBeenCalledTimes(1);
+    expect(secondRouteResolved).not.toHaveBeenCalled();
 
     const result = await getRunner().stopActiveTurn({
       botContextId: 'cli_test_bot',
@@ -1962,6 +1981,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         'reaction-msg-second',
       );
     });
+    expect(secondRouteResolved).not.toHaveBeenCalled();
 
     // abort 触发的 done 不得把已丢弃的排队消息派发出去
     h.emit({ type: 'done', data: {} });

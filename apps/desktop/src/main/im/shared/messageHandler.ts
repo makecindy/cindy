@@ -215,8 +215,8 @@ export function createMessageHandler(
         ...(prepared ? { agentText: prepared.agentText } : {}),
         ...(prepared?.commit
           ? {
-              // turnRunner 只在消息完成鉴权、wiring 且确定派发/排队后调用；
-              // 受理前失败不推进, 上下文批次下次仍进 prompt。
+              // turnRunner 只在 provider 真正接受消息后调用；排队、停止与
+              // teardown 都不推进游标, 受理前失败时上下文批次下次仍进 prompt。
               onRouteResolved: async () => {
                 await prepared?.commit?.();
               },

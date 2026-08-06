@@ -10,6 +10,8 @@ export const GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS = 500;
 const CONTEXT_READ_LIMIT = 500;
 const CONTEXT_MAX_CHARS = 4_000;
 const CURSOR_MAX_KEYS = 1000;
+const CURSOR_ROLLBACK_MAX_ATTEMPTS = 3;
+const CURSOR_ROLLBACK_RETRY_DELAY_MS = 25;
 
 export type GroupWindowRetentionPolicy = { keepPerKey: number; keepPerNamespace: number };
 
@@ -325,25 +327,40 @@ export async function assembleGroupWindowContext(args: {
             const receipt: GroupContextCommitReceipt = {
               rollback: async (): Promise<void> => {
                 if (rolledBack) return;
-                rolledBack = true;
-                try {
-                  const restoredDurableCursor = await rollbackPersistedCursor(
-                    args.provider,
-                    args.cursorKey,
-                    maxId,
-                    previousDurableCursor,
-                  );
-                  const latest = args.cursors.get(args.cursorKey) ?? 0;
-                  if (latest <= maxId) {
-                    rememberCursor(
-                      args.cursors,
+                let lastError: unknown;
+                for (let attempt = 0; attempt < CURSOR_ROLLBACK_MAX_ATTEMPTS; attempt += 1) {
+                  try {
+                    const restoredDurableCursor = await rollbackPersistedCursor(
+                      args.provider,
                       args.cursorKey,
-                      Math.max(current, restoredDurableCursor),
+                      maxId,
+                      previousDurableCursor,
                     );
+                    const latest = args.cursors.get(args.cursorKey) ?? 0;
+                    if (latest <= maxId) {
+                      rememberCursor(
+                        args.cursors,
+                        args.cursorKey,
+                        Math.max(current, restoredDurableCursor),
+                      );
+                    }
+                    // Keep the receipt live until the durable restore has
+                    // completed. A transient SQLite failure must leave the
+                    // caller able to retry the compensation instead of
+                    // silently turning a failed rollback into a permanent
+                    // cursor advance.
+                    rolledBack = true;
+                    return;
+                  } catch (error) {
+                    lastError = error;
+                    if (attempt + 1 < CURSOR_ROLLBACK_MAX_ATTEMPTS) {
+                      await new Promise<void>((resolve) =>
+                        setTimeout(resolve, CURSOR_ROLLBACK_RETRY_DELAY_MS * (attempt + 1)),
+                      );
+                    }
                   }
-                } catch (error) {
-                  args.log.warn(`group context cursor rollback failed: ${String(error)}`);
                 }
+                args.log.warn(`group context cursor rollback failed: ${String(lastError)}`);
               },
             };
             if (guard !== undefined && !(await guard())) {

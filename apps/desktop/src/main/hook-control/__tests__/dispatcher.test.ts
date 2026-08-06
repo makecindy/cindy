@@ -423,7 +423,7 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
-  it('切账号清排队时按提交逆序回滚未开始任务的群游标', async () => {
+  it('切账号清排队时不提交未开始任务的群游标', async () => {
     const fr = fakeRunner();
     const rollbacks: string[] = [];
     let commitCount = 0;
@@ -461,7 +461,8 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '旧账号任务' });
     await draining;
 
-    expect(rollbacks).toEqual(['commit-3', 'commit-2']);
+    expect(commitCount).toBe(1);
+    expect(rollbacks).toEqual([]);
   });
 
   it('收口期间的重新激活会被后到的关闭请求作废', async () => {
@@ -1695,6 +1696,47 @@ describe('dispatcher 核心语义', () => {
       ['a', 'A'],
       ['b', 'B'],
       ['c', 'C'],
+    ]);
+  });
+
+  it('排队任务只在真正开始时 commit, 取消队列前项不丢后项上下文', async () => {
+    const fr = fakeRunner();
+    const committed: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async (payload) => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit: () => {
+          committed.push(payload.requestId);
+        },
+      }),
+    });
+    const c = collector();
+    const externalKey = 'telegram:group:bot:-900:9:g0';
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-a', externalKey }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-b', externalKey }), c.send);
+    await tick();
+
+    expect(committed).toEqual(['running']);
+    d.cancel('conn-1', 'queued-a');
+    await tick();
+    expect(committed).toEqual(['running']);
+
+    fr.finish({ finalText: 'running done' });
+    await tick();
+    expect(fr.calls).toHaveLength(2);
+    expect(committed).toEqual(['running', 'queued-b']);
+
+    fr.finish({ finalText: 'queued b done' });
+    await tick();
+    expect(c.ofType('turn.end').map((m) => m.payload.requestId)).toEqual([
+      'queued-a',
+      'running',
+      'queued-b',
     ]);
   });
 

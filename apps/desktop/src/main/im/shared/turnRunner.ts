@@ -225,6 +225,8 @@ interface QueuedSend {
   notified: boolean;
   queueMode: 'internal' | 'external';
   beforeProviderStart?: () => Promise<void>;
+  /** Durable route side effects run only after provider acceptance, never on enqueue. */
+  onRouteResolved?: (sessionId: string) => void | Promise<void>;
   turnPermissionPolicy?: TurnPermissionPolicy;
 }
 
@@ -324,7 +326,7 @@ export interface ImRunAgentTurnArgs {
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
-  /** Reports the concrete session only after this message is accepted or queued for dispatch. */
+  /** Reports the concrete session only after the provider accepts this message. */
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   /** Keep fire-and-forget work inside the ingress account's drain boundary. */
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
@@ -738,6 +740,7 @@ export function createTurnRunner(
       notified: false,
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
+      ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
     };
 
@@ -754,9 +757,6 @@ export function createTurnRunner(
         return { kind: 'busy', reason: 'session_running' };
       }
       state.sendQueue.push(item);
-      // wiring 已成功且消息已可靠入队；此刻才推进群窗口游标，避免
-      // credential-mode switch 等 pre-dispatch 失败跳过未受理上下文。
-      await args.onRouteResolved?.(row.id);
       log.info(`queued message for session=${row.id.slice(-8)} position=${state.sendQueue.length}`);
       // 本渠道没有未收口的 turn(纯 desktop turn 在跑) → 派发只能靠它的 stray
       // done/error 触发;若该事件在 enqueue 前已送达(isTurnRunning 释放略晚于
@@ -770,13 +770,6 @@ export function createTurnRunner(
     }
 
     const dispatch = await dispatchQueuedSend(state, userId, item);
-    if (
-      dispatch.kind === 'accepted' ||
-      (dispatch.kind === 'busy' && dispatch.reason === 'queued_internally')
-    ) {
-      // accepted 或 SESSION_RUNNING 竞态下已可靠回队首，均已确定会执行。
-      await args.onRouteResolved?.(row.id);
-    }
     if (dispatch.kind !== 'accepted') return dispatch;
     return {
       kind: 'accepted',
@@ -927,6 +920,18 @@ export function createTurnRunner(
           context: outcome.context,
         });
         return { kind: 'rejected', reason: outcome.reason };
+      }
+      // Route side effects include the durable group cursor commit. The
+      // provider has accepted this send now; invoking the callback here keeps
+      // queued teardown and SESSION_RUNNING requeue paths from advancing it.
+      try {
+        await item.onRouteResolved?.(rowId);
+      } catch (err) {
+        log.warn(
+          `route-resolved callback failed for session=${rowId.slice(-8)}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       }
       return { kind: 'accepted', acceptedAt: acceptedAt || Date.now() };
     } catch (err) {
