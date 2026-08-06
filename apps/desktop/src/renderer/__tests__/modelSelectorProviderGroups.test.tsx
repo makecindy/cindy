@@ -282,6 +282,15 @@ async function openDropdown(): Promise<void> {
   });
 }
 
+async function hoverModelRowWithIntent(row: HTMLElement): Promise<void> {
+  await act(async () => {
+    // MorphPopover requires a real pointer delta before revealing row options. Model that
+    // contract explicitly instead of depending on jsdom's synthetic `isTrusted` value.
+    fireEvent.pointerMove(row, { screenX: 0, screenY: 0 });
+    fireEvent.pointerMove(row, { screenX: 8, screenY: 0 });
+  });
+}
+
 describe('ModelSelector provider groups', () => {
   it('renders a group heading for each provider', async () => {
     renderSelector();
@@ -312,11 +321,9 @@ describe('ModelSelector provider groups', () => {
 
     const modelList = screen.getByRole('listbox', { name: 'Model list' });
     const row = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
-    await act(async () => {
-      fireEvent.pointerEnter(row);
-    });
+    await hoverModelRowWithIntent(row);
 
-    const secondaryPanel = screen.getByTestId('model-options-floating-panel');
+    const secondaryPanel = await screen.findByTestId('model-options-floating-panel');
     const positioner = secondaryPanel.closest<HTMLElement>('[data-radix-popper-content-wrapper]');
     expect(positioner).not.toBeNull();
     expect(positioner?.parentElement).toBe(document.body);
@@ -408,9 +415,8 @@ describe('ModelSelector provider groups', () => {
 
     const modelList = screen.getByRole('listbox', { name: 'Model list' });
     const originalRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
-    await act(async () => {
-      fireEvent.pointerEnter(originalRow);
-    });
+    await hoverModelRowWithIntent(originalRow);
+    await screen.findByTestId('model-options-floating-panel');
 
     const originalFloatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
       elements: { reference: HTMLElement };
@@ -434,9 +440,8 @@ describe('ModelSelector provider groups', () => {
     expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
     expect(floatingUiMocks.useFloating).toHaveBeenCalledTimes(floatingCallCountAfterFilter);
 
-    await act(async () => {
-      fireEvent.pointerEnter(restoredRow);
-    });
+    await hoverModelRowWithIntent(restoredRow);
+    await screen.findByTestId('model-options-floating-panel');
 
     const restoredFloatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
       elements: { reference: HTMLElement };
