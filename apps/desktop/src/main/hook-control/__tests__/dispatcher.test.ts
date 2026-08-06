@@ -1230,6 +1230,37 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
+  it('显式接管检查失败时拒绝且保留原 binding, 不静默创建替代任务', async () => {
+    const dd = dialogueDep();
+    const bindings = memoryBindings();
+    const externalKey = 'team-slack:C1:inspect-error';
+    bindings.set('conn-1', externalKey, 'existing-binding');
+    const fr = fakeRunner();
+    const runner: HookSessionRunner = {
+      ...fr.runner,
+      inspect: async () => {
+        throw new Error('database unavailable');
+      },
+    };
+    const { d } = makeDispatcher({ runner, bindings, dialogue: dd.dep });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'inspect-error', externalKey, sessionId: 'ghost', workspace: null }),
+      c.send,
+    );
+    await tick();
+
+    expect(c.last('task.ack')?.payload).toMatchObject({
+      requestId: 'inspect-error',
+      result: 'rejected',
+      reason: 'invalid',
+    });
+    expect(bindings.get('conn-1', externalKey)).toBe('existing-binding');
+    expect(fr.calls).toHaveLength(0);
+  });
+
   it('同一消息线切换到另一个失效 sessionId 时创建新的替代 session', async () => {
     const dd = dialogueDep();
     const fr = fakeRunner();

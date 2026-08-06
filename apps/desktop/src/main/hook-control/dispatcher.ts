@@ -70,7 +70,8 @@ export interface HookSessionRunner {
   isBusy(sessionId: string): boolean;
   /**
    * 会话现状: null = 不存在; usable=false = 已归档/删除(不可投递);
-   * workingDir 用于接管/复用时的白名单校验。
+   * workingDir 用于接管/复用时的白名单校验。检查失败会 reject, 上层必须
+   * fail closed 并保留既有 binding, 不能把暂时读不到当成失效任务。
    */
   inspect(sessionId: string): Promise<{ workingDir: string | null; usable: boolean } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
