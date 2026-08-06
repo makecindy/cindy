@@ -1520,7 +1520,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       drainLanePendingPrefs(lane);
       drainLanePendingBehavior(lane);
       if (lane.config.provider === 'telegram') {
-        resetGroupContextCursors();
+        void resetGroupContextCursors();
         resetTelegramSpeakerRegistrationCache();
       }
     }
@@ -3095,7 +3095,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane.serverFeatures = [];
           lane.serverWelcomeReceived = false;
         }
-        resetGroupContextCursors();
+        await resetGroupContextCursors();
         resetTelegramSpeakerRegistrationCache();
         notifySlackToolProviderEnabledIfChanged();
         notifyStatus(toView());

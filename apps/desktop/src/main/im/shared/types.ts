@@ -156,7 +156,7 @@ export interface ImChannelAdapter {
    */
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
-    commit?: () => void;
+    commit?: () => void | Promise<void>;
   } | null>;
   /**
    * 按入站事件给该轮挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用

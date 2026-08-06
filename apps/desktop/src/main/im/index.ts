@@ -567,7 +567,7 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
       bindingStore.resetRuntime();
       // 群上下文游标是账号内存态 — 登出/换号必须清零, 防止新账号复用旧游标
       // 造成上下文窗口被静默跳过。
-      resetTelegramGroupContextCursors();
+      await resetTelegramGroupContextCursors();
     }
   },
   onStartError: (err) => {

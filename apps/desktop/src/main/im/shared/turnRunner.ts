@@ -325,7 +325,7 @@ export interface ImRunAgentTurnArgs {
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
   /** Reports the concrete channel/default or attached Desktop session before provider startup. */
-  onRouteResolved?: (sessionId: string) => void;
+  onRouteResolved?: (sessionId: string) => void | Promise<void>;
   /** Keep fire-and-forget work inside the ingress account's drain boundary. */
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
@@ -600,7 +600,8 @@ export function createTurnRunner(
     // onRouteResolved 必须在鉴权通过之后才算"路由解析成功" —— 群窗口游标的
     // commit 挂在它上面, 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标
     // 永久跳过(prepareAgentTurnText 的契约: 路由失败不推进游标)。
-    args.onRouteResolved?.(row.id);
+    const routeResolvedResult = args.onRouteResolved?.(row.id);
+    if (routeResolvedResult instanceof Promise) await routeResolvedResult;
     // ── thread 名片卡(threadScoped 新 thread 会话)─────────────────────────
     // 在 bot 第一条回复之前发进 thread, 让用户第一眼理解"这个 thread = 一条
     // 独立会话";首条消息的 oneshot 标题生成完成后, 名片原地升级为正式标题

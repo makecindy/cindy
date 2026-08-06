@@ -242,7 +242,7 @@ export interface HookDispatcherDeps {
    */
   buildContextPrefix?: (
     payload: TaskDispatchPayload,
-  ) => Promise<{ prefix: string; commit: () => void }>;
+  ) => Promise<{ prefix: string; commit: () => void | Promise<void> }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
    * dispatch 时解析当前 data owner 的 app 托管目录根，allocateDir 为新会话
@@ -1929,7 +1929,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
-        let commitContextCursor: () => void = () => undefined;
+        let commitContextCursor: () => void | Promise<void> = () => undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
@@ -1988,7 +1988,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           const task: PendingTask = { ...taskBase, ack };
           queue.push(task);
           queues.set(sessionId, queue);
-          commitContextCursor();
+          const commitResult = commitContextCursor();
+          if (commitResult instanceof Promise) await commitResult;
           reply(connectionId, send, ack);
           // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
           // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
@@ -1997,7 +1998,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         }
 
         running.add(sessionId);
-        commitContextCursor();
+        const commitResult = commitContextCursor();
+        if (commitResult instanceof Promise) await commitResult;
         const ack: TaskAckPayload = {
           requestId: payload.requestId,
           result: 'accepted',

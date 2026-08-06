@@ -1,7 +1,7 @@
 /**
  * groupWindow(group-relay-v1 本地群窗口)单测: 入窗幂等、永久留存、lane 解析、
  * 上下文拼装(trigger 剔重 / 游标增量 / 字符预算)。DB 用内存 better-sqlite3
- * 直接执行 0083 migration SQL, 经 drizzle 同步 driver 假装成 DbClient。
+ * 直接执行 0083 + 0086 migration SQL, 经 drizzle 同步 driver 假装成 DbClient。
  */
 
 import fs from 'node:fs';
@@ -17,6 +17,7 @@ const holder = vi.hoisted(() => ({ drizzle: null as unknown }));
 
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({ drizzle: holder.drizzle }),
+  tryGetDbClient: () => ({ drizzle: holder.drizzle }),
 }));
 
 import {
@@ -39,9 +40,14 @@ function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../drizzle');
-  const file = fs.readdirSync(dir).find((name) => name.startsWith('0083_'));
-  if (!file) throw new Error('0083 migration not found');
-  return fs.readFileSync(path.join(dir, file), 'utf8').replaceAll('--> statement-breakpoint', ';');
+  return ['0083_', '0086_']
+    .map((prefix) => {
+      const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
+      if (!file) throw new Error(`${prefix} migration not found`);
+      return fs.readFileSync(path.join(dir, file), 'utf8');
+    })
+    .join('\n')
+    .replaceAll('--> statement-breakpoint', ';');
 }
 
 function frame(overrides: Partial<GroupMessagePayload> = {}): GroupMessagePayload {
@@ -60,11 +66,11 @@ function frame(overrides: Partial<GroupMessagePayload> = {}): GroupMessagePayloa
 
 let sqlite: InstanceType<typeof Database>;
 
-beforeEach(() => {
+beforeEach(async () => {
   sqlite = new Database(':memory:');
   sqlite.exec(migrationSql());
   holder.drizzle = drizzle(sqlite);
-  resetGroupContextCursors();
+  await resetGroupContextCursors();
 });
 
 afterEach(() => {
@@ -131,6 +137,57 @@ describe('recordGroupMessage', () => {
       n: number;
     };
     expect(rows.n).toBe(1);
+  });
+
+  it('正文全文入库, 但拼 prompt 仍按 500 字符截断', async () => {
+    const text = 'x'.repeat(700);
+    await recordGroupMessage(frame({ messageId: 'long', text }));
+    const row = sqlite
+      .prepare('SELECT text FROM hook_group_messages WHERE message_id = ?')
+      .get('long') as { text: string };
+    expect(row.text).toBe(text);
+
+    const prefix = (
+      await buildGroupContextPrefix({
+        requestId: 'long-context',
+        externalKey: 'telegram:group:1:-900:9:g1',
+        workspace: 'chat',
+        sessionId: null,
+        prompt: 'q',
+      })
+    ).prefix;
+    expect(prefix).toContain('x'.repeat(500));
+    expect(prefix).not.toContain('x'.repeat(501));
+  });
+
+  it('重置只删除官方 provider 的持久游标', async () => {
+    await recordGroupMessage(frame({ messageId: 'cursor-reset' }));
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'cursor-reset-context',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    await assembly.commit();
+    sqlite
+      .prepare(
+        `INSERT INTO hook_group_context_cursors
+          (provider, cursor_key, cursor_id, updated_at) VALUES (?, ?, ?, ?)`,
+      )
+      .run('telegram-personal:bot-1', 'bot-1:-900:', 99, Date.now());
+
+    await resetGroupContextCursors();
+    expect(
+      sqlite
+        .prepare('SELECT 1 FROM hook_group_context_cursors WHERE provider = ?')
+        .get('telegram:9'),
+    ).toBeUndefined();
+    expect(
+      sqlite
+        .prepare('SELECT cursor_id FROM hook_group_context_cursors WHERE provider = ?')
+        .get('telegram-personal:bot-1') as { cursor_id: number },
+    ).toEqual({ cursor_id: 99 });
   });
 
   it('群历史不按时间过期，但每个 principal + 群/topic 只保留最近 500 条', async () => {
@@ -345,7 +402,26 @@ describe('buildGroupContextPrefix', () => {
       source: { im: 'telegram', triggerMessageId: '3' },
     });
     expect(replay.prefix).toContain('部署失败了');
-    firstAssembly.commit();
+    await firstAssembly.commit();
+    expect(
+      sqlite
+        .prepare(
+          'SELECT cursor_id FROM hook_group_context_cursors WHERE provider = ? AND cursor_key = ?',
+        )
+        .get('telegram:9', 'telegram:group:1:-900:42:9') as { cursor_id: number },
+    ).toEqual({ cursor_id: 3 });
+
+    // 模拟进程重启: 清掉内存态但保留 DB, 恢复后不重复已提交消息。
+    await resetGroupContextCursors({ clearPersisted: false });
+    const restored = await buildGroupContextPrefix({
+      requestId: 'r3-restart',
+      externalKey,
+      workspace: 'chat',
+      sessionId: null,
+      prompt: '怎么回事?',
+      source: { im: 'telegram', triggerMessageId: '3' },
+    });
+    expect(restored.prefix).toBe('');
 
     await recordGroupMessage(
       frame({ messageId: '4', text: '重启后恢复了', author: { name: '@user303' } }),
