@@ -559,7 +559,8 @@ export default function NewRemoteSessionScreen() {
   // 运行配置操作的代际计数:switchAgent / 恢复 agent / 手动选行每次触发 +1,
   // 异步回调(权限确认 .then)提交前比对触发时捕获的代际,不等即放弃写入 ——
   // 同一设备上的连续操作也是最新者胜(Greptile review P1:旧确认回调覆盖新选择)。
-  const runtimeActionSeqRef = useRef(0);  const runtimeOptions = useMemo(
+  const runtimeActionSeqRef = useRef(0);
+  const runtimeOptions = useMemo(
     () => buildSessionRuntimeOptions(draft, capabilities),
     [capabilities, draft.model],
   );
@@ -808,7 +809,7 @@ export default function NewRemoteSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [draft.effort, draft.permissionMode, draft.agentKind, modelRows, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
+  }, [draft.effort, draft.permissionMode, draft.agentKind, modelRows, deviceProviders.ready, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
 
   // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
   // (provider 被删/断开/模型下架),就绪后必须复核——联合回退整对 (model, providerId)
