@@ -63,6 +63,20 @@ function makeHarness(overrides: HarnessOverrides = {}) {
       if (cmd.includes('pi-marker')) return 'pi';
       return null;
     },
+    resolveAgentProcessRegistration: (pid) => {
+      const row = state.snapshot.rows.find((candidate) => candidate.pid === pid);
+      if (!row) return null;
+      const kind = row.cmdLineLower.includes('claude-marker')
+        ? 'claude'
+        : row.cmdLineLower.includes('codex-marker')
+          ? 'codex'
+          : row.cmdLineLower.includes('pi-marker')
+            ? 'pi'
+            : null;
+      return kind
+        ? { kind, role: 'task-host', instanceId: `start:${pid}` }
+        : null;
+    },
     selfPid: SELF_PID,
     log,
     osScanIntervalMs: 5_000,
@@ -124,8 +138,11 @@ describe('createProcessMonitorSampler', () => {
         osRow({ pid: 702, ppid: SELF_PID, cmdLineLower: 'codex-marker service' }),
       ]),
       deps: {
-        resolveCodexProcessRole: (pid) =>
-          pid === 701 ? 'task-host' : 'control-plane-service',
+        resolveAgentProcessRegistration: (pid) => ({
+          kind: 'codex',
+          role: pid === 701 ? 'task-host' : 'control-plane-service',
+          instanceId: `instance:${pid}`,
+        }),
       },
     });
     const sample = await sampler.sample();
@@ -144,7 +161,7 @@ describe('createProcessMonitorSampler', () => {
       snapshot: snapshotOf([
         osRow({ pid: 703, ppid: SELF_PID, cmdLineLower: 'codex-marker unknown' }),
       ]),
-      deps: { resolveCodexProcessRole: () => null },
+      deps: { resolveAgentProcessRegistration: () => null },
     });
     expect(entryByPid(await sampler.sample(), 703)).toMatchObject({
       kind: 'agent-codex',

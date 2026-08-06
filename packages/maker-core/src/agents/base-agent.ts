@@ -246,6 +246,12 @@ export interface CodexAppServerProcessRegistration {
   role: CodexAppServerProcessRole;
 }
 
+export interface LocalAgentProcessRegistration {
+  pid: number;
+  kind: 'claude' | 'pi';
+  role: 'task-host' | 'control-plane-service';
+}
+
 export interface CodexLocalCredentialModeSwitchContext {
   fromMode?: AgentCredentialMode;
   /**
@@ -493,6 +499,14 @@ export interface AgentDeps {
    */
   registerLocalCodexAppServerProcess?: (
     info: CodexAppServerProcessRegistration,
+  ) => void | (() => void);
+
+  /**
+   * Register a locally spawned Claude/Pi root process with the host. The returned
+   * disposer follows that exact process generation; remote transports never call it.
+   */
+  registerLocalAgentProcess?: (
+    info: LocalAgentProcessRegistration,
   ) => void | (() => void);
 
   /**

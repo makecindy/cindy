@@ -17,7 +17,6 @@
  */
 
 import type {
-  AgentProcessRole,
   ProcessMonitorSample,
   ProcessUsageEntry,
   ProcessUsageKind,
@@ -28,6 +27,7 @@ import {
   type OsProcessRow,
   type OsProcessSnapshot,
 } from './agent-scan.js';
+import type { AgentProcessRegistration } from './codex-process-registry.js';
 
 /** app.getAppMetrics() 返回项的最小子集。memory.workingSetSize 单位是 KB。 */
 export interface ChromiumProcessMetric {
@@ -50,8 +50,8 @@ export interface ProcessMonitorSamplerDeps {
   /** pid → renderer 展示标签(webContents 标题);查不到返回 null。 */
   describeRendererProcess(pid: number): string | null;
   classify(cmdLineLower: string): MonitoredAgentKind | null;
-  /** 仅本地 Codex 根进程有角色；未知时返回 null，并按不可终止处理。 */
-  resolveCodexProcessRole?(pid: number): AgentProcessRole | null;
+  /** 本地根进程的 spawn-generation 登记；未知时返回 null，并按不可终止处理。 */
+  resolveAgentProcessRegistration?(pid: number): AgentProcessRegistration | null;
   selfPid: number;
   log: SamplerLogger;
   /** OS 扫描的最小间隔;快 tick 之间复用缓存。 */
@@ -167,7 +167,10 @@ export function createProcessMonitorSampler(
       if (row.ppid !== deps.selfPid) continue;
       const kind = deps.classify(row.cmdLineLower);
       if (!kind) continue;
-      const agentRole = kind === 'codex' ? deps.resolveCodexProcessRole?.(row.pid) ?? null : null;
+      const registration = deps.resolveAgentProcessRegistration?.(row.pid) ?? null;
+      const registrationMatchesKind = registration?.kind === kind;
+      const registeredRole = registrationMatchesKind ? registration.role : null;
+      const agentRole = kind === 'codex' ? registeredRole : null;
       let cpuPercent = 0;
       let memoryKb = 0;
       let processCount = 0;
@@ -179,7 +182,7 @@ export function createProcessMonitorSampler(
         if (!isOsHelperProcess(member)) processCount += 1;
       }
       const terminable =
-        row.startIdentity != null && (kind === 'codex' ? agentRole === 'task-host' : true);
+        row.startIdentity != null && registrationMatchesKind && registeredRole === 'task-host';
       entries.push({
         pid: row.pid,
         kind: AGENT_KIND_TO_USAGE_KIND[kind],
@@ -187,9 +190,9 @@ export function createProcessMonitorSampler(
         cpuPercent,
         memoryKb,
         processCount,
-        // Codex 只有明确登记为任务宿主才允许终止；registry 未命中时 fail closed。
+        // 终止授权使用每次实际 spawn 的随机 generation，而不是秒级 POSIX lstart。
         terminable,
-        ...(terminable && row.startIdentity ? { processInstanceId: row.startIdentity } : {}),
+        ...(terminable && registration ? { processInstanceId: registration.instanceId } : {}),
         ...(agentRole ? { agentRole } : {}),
       });
     }

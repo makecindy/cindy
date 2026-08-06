@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   _resetCodexProcessRegistryForTests,
+  registerAgentProcess,
   registerCodexProcessRole,
+  resolveAgentProcessRegistration,
   resolveCodexProcessRole,
 } from '../codex-process-registry.js';
 
@@ -26,5 +28,21 @@ describe('codex process registry', () => {
     expect(resolveCodexProcessRole(101)).toBe('control-plane-service');
     disposeNew();
     expect(resolveCodexProcessRole(101)).toBeNull();
+  });
+
+  it('同一 PID 的每次实际 spawn 都获得不同 generation，旧 disposer 不影响新实例', () => {
+    const disposeOld = registerAgentProcess(202, 'claude', 'task-host');
+    const oldRegistration = resolveAgentProcessRegistration(202);
+    const disposeNew = registerAgentProcess(202, 'claude', 'task-host');
+    const newRegistration = resolveAgentProcessRegistration(202);
+
+    expect(oldRegistration).toMatchObject({ kind: 'claude', role: 'task-host' });
+    expect(newRegistration).toMatchObject({ kind: 'claude', role: 'task-host' });
+    expect(newRegistration?.instanceId).not.toBe(oldRegistration?.instanceId);
+
+    disposeOld();
+    expect(resolveAgentProcessRegistration(202)).toEqual(newRegistration);
+    disposeNew();
+    expect(resolveAgentProcessRegistration(202)).toBeNull();
   });
 });

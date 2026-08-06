@@ -6,18 +6,33 @@
  * 枚举，不会看到内部 host key、URL 或启动参数。
  */
 
+import { randomUUID } from 'node:crypto';
+
 import type { AgentProcessRole } from '../../shared/processMonitor.js';
+import type { MonitoredAgentKind } from './agent-scan.js';
 
 interface Registration {
+  kind: MonitoredAgentKind;
   role: AgentProcessRole;
+  instanceId: string;
   identity: symbol;
 }
 
 const registrations = new Map<number, Registration>();
 
-export function registerCodexProcessRole(pid: number, role: AgentProcessRole): () => void {
-  const identity = Symbol(`codex-process-${pid}`);
-  registrations.set(pid, { role, identity });
+export interface AgentProcessRegistration {
+  kind: MonitoredAgentKind;
+  role: AgentProcessRole;
+  instanceId: string;
+}
+
+export function registerAgentProcess(
+  pid: number,
+  kind: MonitoredAgentKind,
+  role: AgentProcessRole,
+): () => void {
+  const identity = Symbol(`${kind}-process-${pid}`);
+  registrations.set(pid, { kind, role, instanceId: randomUUID(), identity });
   let disposed = false;
   return () => {
     if (disposed) return;
@@ -27,8 +42,23 @@ export function registerCodexProcessRole(pid: number, role: AgentProcessRole): (
   };
 }
 
+export function registerCodexProcessRole(pid: number, role: AgentProcessRole): () => void {
+  return registerAgentProcess(pid, 'codex', role);
+}
+
+export function resolveAgentProcessRegistration(pid: number): AgentProcessRegistration | null {
+  const registration = registrations.get(pid);
+  if (!registration) return null;
+  return {
+    kind: registration.kind,
+    role: registration.role,
+    instanceId: registration.instanceId,
+  };
+}
+
 export function resolveCodexProcessRole(pid: number): AgentProcessRole | null {
-  return registrations.get(pid)?.role ?? null;
+  const registration = registrations.get(pid);
+  return registration?.kind === 'codex' ? registration.role : null;
 }
 
 /** 仅测试用。 */

@@ -39,7 +39,10 @@ export interface OsProcessRow {
   cpuPercent: number | null;
   /** Windows:UserModeTime+KernelModeTime 累计(ms);POSIX 为 null。 */
   cpuTimeMs: number | null;
-  /** OS 进程出生身份；Windows 为 CreationDate ticks，POSIX 为 lstart。 */
+  /**
+   * OS 进程出生提示；Windows 为 CreationDate ticks，POSIX lstart 仅精确到秒。
+   * 只用于同步扫描内的树冻结复核/CPU 差分，不得作为 renderer 终止授权 token。
+   */
   startIdentity: string | null;
 }
 

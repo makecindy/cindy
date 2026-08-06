@@ -78,7 +78,11 @@ function register(overrides: Parameters<typeof registerProcessMonitorIpc>[0] = {
     sampler: { sample: vi.fn().mockResolvedValue({ capturedAtMs: 1, entries: [] }) },
     scanOsProcessesSync: vi.fn().mockReturnValue({ rows: [], childrenByParent: new Map() }),
     classify: () => null,
-    resolveCodexProcessRole: () => null,
+    resolveAgentProcessRegistration: (pid) => ({
+      kind: 'claude',
+      role: 'task-host',
+      instanceId: `start:${pid}`,
+    }),
     killProcessTree: vi.fn().mockReturnValue(true),
     signalProcess: vi.fn(),
     platform: 'linux',
@@ -379,7 +383,8 @@ describe('terminate ownership validation', () => {
         childrenByParent: buildChildrenByParent(rows),
       }),
       classify: () => 'codex',
-      resolveCodexProcessRole: () => role,
+      resolveAgentProcessRegistration: () =>
+        role ? { kind: 'codex', role, instanceId: 'start:970' } : null,
       killProcessTree: kill,
     });
     expect(() =>
@@ -391,13 +396,14 @@ describe('terminate ownership validation', () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it('同一 pid 已被新进程复用时拒绝旧出生身份', async () => {
+  it('同秒复用 pid 时按 spawn generation 拒绝旧终止授权', async () => {
     const reusedRows = [
       osRow({
         pid: 900,
         ppid: SELF_PID,
         cmdLineLower: 'claude-marker replacement',
-        startIdentity: 'start:new',
+        // POSIX lstart 只有秒级；故意与旧进程保持相同，证明它不再承担授权身份。
+        startIdentity: 'same-second-lstart',
       }),
     ];
     const kill = vi.fn().mockReturnValue(true);
@@ -407,13 +413,18 @@ describe('terminate ownership validation', () => {
         childrenByParent: buildChildrenByParent(reusedRows),
       }),
       classify,
+      resolveAgentProcessRegistration: () => ({
+        kind: 'claude',
+        role: 'task-host',
+        instanceId: 'spawn:new',
+      }),
       killProcessTree: kill,
     });
 
     expect(() =>
       handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
         { sender: fakeSender() },
-        terminateRequest(900, 'start:old'),
+        terminateRequest(900, 'spawn:old'),
       ),
     ).toThrow('NOT_FOUND');
     expect(kill).not.toHaveBeenCalled();

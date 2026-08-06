@@ -44,7 +44,10 @@ import {
   type MonitoredAgentKind,
   type OsProcessSnapshot,
 } from './agent-scan.js';
-import { resolveCodexProcessRole } from './codex-process-registry.js';
+import {
+  resolveAgentProcessRegistration,
+  type AgentProcessRegistration,
+} from './codex-process-registry.js';
 import { terminateSafePosixProcessTree } from './safe-posix-process-tree.js';
 import {
   createProcessMonitorSampler,
@@ -67,7 +70,7 @@ export interface ProcessMonitorIpcOptions {
   /** sampler 的异步 OS 扫描。 */
   scanOsProcesses?: () => Promise<OsProcessSnapshot>;
   classify?: (cmdLineLower: string) => MonitoredAgentKind | null;
-  resolveCodexProcessRole?: (pid: number) => 'task-host' | 'control-plane-service' | null;
+  resolveAgentProcessRegistration?: (pid: number) => AgentProcessRegistration | null;
   killProcessTree?: (pid: number, childrenByParent: Map<number, number[]>) => boolean;
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
   /** 仅用于显式分流 Windows taskkill 与 POSIX 冻结终止；测试可注入。 */
@@ -86,7 +89,8 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
   const log = opts.log ?? createLogger('process-monitor');
   const selfPid = opts.selfPid ?? process.pid;
   const classify = opts.classify ?? classifyMonitoredAgentCommandLine;
-  const resolveCodexRole = opts.resolveCodexProcessRole ?? resolveCodexProcessRole;
+  const resolveAgentRegistration =
+    opts.resolveAgentProcessRegistration ?? resolveAgentProcessRegistration;
   const sampleScan = opts.scanOsProcesses ?? scanOsProcesses;
   const ownershipScanSync = opts.scanOsProcessesSync ?? scanOsProcessesSync;
   const killTree = opts.killProcessTree ?? killProcessTree;
@@ -119,7 +123,7 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
       scanOsProcesses: sampleScan,
       describeRendererProcess: describeRendererProcessByPid,
       classify,
-      resolveCodexProcessRole: resolveCodexRole,
+      resolveAgentProcessRegistration: resolveAgentRegistration,
       selfPid,
       log,
     });
@@ -215,14 +219,20 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     }
     const row = snapshot.rows.find((r) => r.pid === pid);
     const kind = row && row.ppid === selfPid ? classify(row.cmdLineLower) : null;
-    if (!row || row.ppid !== selfPid || row.startIdentity !== processInstanceId || !kind) {
+    const registration = row ? resolveAgentRegistration(row.pid) : null;
+    if (
+      !row ||
+      row.ppid !== selfPid ||
+      !row.startIdentity ||
+      !kind ||
+      registration?.kind !== kind ||
+      registration.role !== 'task-host' ||
+      registration.instanceId !== processInstanceId
+    ) {
       throwIpcError('NOT_FOUND', 'process is not an agent process owned by this app');
     }
     // registry 只收紧动作范围，不扩大授权；新鲜扫描 + PPID + marker 仍是首要边界。
-    // Codex 角色未登记时也拒绝，避免观察器异常/生命周期竞争导致控制面被误杀。
-    if (kind === 'codex' && resolveCodexRole(pid) !== 'task-host') {
-      throwIpcError('NOT_FOUND', 'process is not a terminable Codex task host');
-    }
+    // 随机 instanceId 绑定一次真实 spawn，消除 POSIX lstart 秒级碰撞导致的陈旧授权。
     // 从同步扫描开始到终止完成之间不能 await/让出事件循环。Windows taskkill /T 由
     // OS 展开当前树；POSIX 先暂停根，再逐层暂停后代。父进程暂停期间无法 reap 已退出
     // 子进程，因此已枚举的 PID 不会被复用为无关进程。
@@ -235,13 +245,13 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
       try {
         terminationResult = terminateSafePosixProcessTree({
           rootPid: pid,
-          rootStartIdentity: processInstanceId,
+          rootStartIdentity: row.startIdentity,
           rootStateBeforeStop: row.state,
           scan: ownershipScanSync,
           signal: signalProcess,
           isExpectedRoot: (candidate) =>
             candidate.ppid === selfPid &&
-            candidate.startIdentity === processInstanceId &&
+            candidate.startIdentity === row.startIdentity &&
             classify(candidate.cmdLineLower) === kind,
         });
       } catch (err) {
