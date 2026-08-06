@@ -15,6 +15,7 @@ import {
   GHOST_CINDY_DEPOSIT_MAX_BYTES,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   GHOST_CINDY_EMBED_TIMEOUT_MS,
+  GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
 } from '../../../shared/ghost';
 import type { InstalledGhost } from '../../../shared/ghost';
 
@@ -1743,14 +1744,14 @@ describe('快问快答(oneshot_text)', () => {
     });
   });
 
-  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens 不设默认上限', async () => {
+  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens 用够大的默认上限(81920)', async () => {
     const oneshotText = vi.fn(async () => ({ ok: true as const, text: '答案', model: 'chain/mini' }));
     const { slot } = withText({ oneshotText });
     const r = await slot.handleModelRequest('art', ONESHOT);
     expect(r).toMatchObject({ ok: true, text: '答案', model: 'chain/mini' });
     expect(oneshotText).toHaveBeenCalledWith({
       prompt: '总结一下',
-      maxTokens: undefined,
+      maxTokens: GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
       timeoutMs: 60_000,
     });
   });
