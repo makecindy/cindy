@@ -88,6 +88,34 @@ describe('ChatInput steer shortcut contract', () => {
     );
   });
 
+  it('uses the normal empty-composer Enter shortcut to steer only the first eligible queued message', () => {
+    const queueHeadSteerBlock = extractBetween(
+      chatInputSource,
+      'const steerFirstPendingQueueMessageRef = useRef<() => boolean>(() => false);',
+      '// F-QUEUE-DEFER: when the queue panel is expanded',
+    );
+    const editorEnterBlock = extractBetween(
+      chatInputSource,
+      '// Resolve the configurable send shortcut after structured list handling.',
+      'return false;\n      },\n    },',
+    );
+
+    expect(queueHeadSteerBlock).toContain('const firstPendingMessage = pendingQueueRef.current?.[0];');
+    expect(queueHeadSteerBlock).toContain('getPendingQueueRowPresentation(firstPendingMessage).canSteer');
+    expect(queueHeadSteerBlock).toContain('void steer(firstPendingMessage.clientId);');
+    expect(editorEnterBlock).toContain("voiceInputStateRef.current === 'listening'");
+    expect(editorEnterBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
+    expect(editorEnterBlock).toContain('const hasSendableComposerInput =');
+    expect(editorEnterBlock).toContain('!composerDocIsEmpty(view.state.doc)');
+    expect(editorEnterBlock).toContain('latestAttachmentsRef.current.length > 0');
+    expect(editorEnterBlock).toContain('browserCommentsRef.current.length > 0');
+    expect(editorEnterBlock).toContain('steerFirstPendingQueueMessageRef.current()');
+    expect(editorEnterBlock).toContain('if (!hasSendableComposerInput) {');
+    expect(editorEnterBlock.indexOf('void voiceInputStopAndSendRef.current(enterIntent);')).toBeLessThan(
+      editorEnterBlock.indexOf('steerFirstPendingQueueMessageRef.current()'),
+    );
+  });
+
   it('keeps mode A queue and running-turn steer semantics on the Tiptap path', () => {
     expect(
       resolveComposerEnterIntent(makeEnterEvent(), 'enter', {
