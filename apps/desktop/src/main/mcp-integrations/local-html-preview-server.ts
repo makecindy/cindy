@@ -452,6 +452,15 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const targetAbs = nodePath.isAbsolute(input.localPath)
       ? nodePath.resolve(input.localPath)
       : nodePath.resolve(rootAbs, input.localPath);
+    // Anchor the root identity at the FIRST boundary check (round 14): a
+    // concurrent rename-and-swap of workingDir itself (into a symlink/
+    // junction pointing outside) between this check and the realpaths below
+    // would make workingDirReal AND entryReal both resolve outside and pass
+    // the comparison. The anchor is taken at the same instant as the first
+    // check, so any later deviation from it is refused.
+    const rootAnchor = await fs.realpath(rootAbs).catch(() => {
+      throw new LocalPreviewError('PATH_NOT_ALLOWED', `工作区不可解析: ${rootAbs}`);
+    });
     await assertInsideRoot(rootAbs, targetAbs);
     // Reject hidden-segment ENTRY paths (e.g. `.private/index.html`): the
     // serving root IS the entry's directory, so the request-stage
@@ -477,14 +486,20 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     // boundary against those identities: a concurrent rename-and-swap of the
     // entry directory (into a symlink/junction pointing outside the
     // workspace) between the checks above and token issuance must not become
-    // the serving root (codex-connector P1, round 5).
+    // the serving root (codex-connector P1, round 5). The root must also
+    // still BE the identity anchored at the first check — a swapped root
+    // (symlink/junction to an outside directory) would otherwise make both
+    // realpaths resolve outside and pass the comparison (round 14).
     const workingDirReal = await fs.realpath(rootAbs).catch(() => {
       throw new LocalPreviewError('PATH_NOT_ALLOWED', `工作区不可解析: ${rootAbs}`);
     });
+    if (workingDirReal !== rootAnchor) {
+      throw new LocalPreviewError('PATH_NOT_ALLOWED', '工作区根在边界校验后被替换');
+    }
     const entryReal = await fs.realpath(targetAbs).catch(() => {
       throw new LocalPreviewError('NOT_FOUND', '入口文件不可解析');
     });
-    await assertInsideRoot(workingDirReal, entryReal);
+    await assertInsideRoot(rootAnchor, entryReal);
     return entryReal;
   }
 
