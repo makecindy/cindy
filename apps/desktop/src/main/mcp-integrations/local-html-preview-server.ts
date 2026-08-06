@@ -15,7 +15,8 @@
  *    `packages/lizi-mcps/src/shared/assertInsidePath.ts`), rejects dotfiles,
  *    `..`/backslash/encoded traversal and non-whitelisted extensions;
  *  - GET/HEAD only; `nosniff` + `no-store` + a page-level CSP
- *    (`connect-src 'self'; form-action 'none'`) on every response;
+ *    (connect-src 'none' + sandbox; no remote subresources) on EVERY
+ *    response, error/refusal paths included;
  *  - on listener error/close the origin grant is revoked immediately so a
  *    freed port can never be taken over while the SSRF policy still trusts it.
  *
@@ -111,10 +112,22 @@ const MIME: Record<string, string> = {
  * Page-level hardening for previewed pages: NO remote subresources at all
  * (no https: in any directive), same-origin + inline + data: only. Without
  * this, a preview page could load a third-party script which reads
- * same-origin files (fetch is allowed to 'self') and then exfiltrates them
- * via img/location — closing remote loads removes that injection surface.
- * Pages that legitimately need CDN assets must vendor them locally first
- * (documented in browser-workflow.md).
+ * same-origin files and then exfiltrates them — closing remote loads
+ * removes that injection surface. Pages that legitimately need CDN assets
+ * must vendor them locally first (documented in browser-workflow.md).
+ *
+ * Exfiltration containment (verified against real Chrome, 2026-08-06):
+ *  - `connect-src 'none'`: the page can never fetch/XHR/WS ANYTHING, not
+ *    even same-origin files — so a script has no channel to read file
+ *    contents it could carry away. (The preview page is a static render
+ *    verification target; it does not legitimately need fetch.)
+ *  - `sandbox allow-scripts allow-same-origin`: blocks window.open /
+ *    popups and sandboxed top-level navigation where Chromium enforces it.
+ *    NOTE: `navigate-to` is NOT used — Chromium/Electron do not implement
+ *    that directive and silently ignore it (probed: location.href to an
+ *    external origin still navigates). With fetch closed and every
+ *    subresource directive same-origin-only, a successful self-navigation
+ *    carries nothing but the page's own rendered DOM.
  */
 const CSP =
   "default-src 'none'; " +
@@ -123,12 +136,24 @@ const CSP =
   "img-src 'self' data:; " +
   "font-src 'self' data:; " +
   "media-src 'self' data:; " +
-  "connect-src 'self'; " +
+  "connect-src 'none'; " +
   "form-action 'none'; " +
-  "navigate-to 'self'; " +
   "base-uri 'none'; " +
   "object-src 'none'; " +
-  "frame-src 'none'";
+  "frame-src 'none'; " +
+  "sandbox allow-scripts allow-same-origin";
+
+/**
+ * Headers applied to EVERY response (200 and all error/refusal paths). A
+ * refusal must not be served without CSP/no-store: a page without CSP on
+ * this origin would give a script an unprotected execution context to
+ * probe the tokenized URLs from (Copilot review, round 4).
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': CSP,
+};
 
 // ── path boundary (same semantics as lizi-mcps shared/assertInsidePath) ─────
 
@@ -209,7 +234,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
         handleRequest(req, res).catch((err) => {
           logger?.error?.(`[local-preview] request error: ${String(err)}`);
           try {
-            res.writeHead(500, { 'X-Content-Type-Options': 'nosniff' });
+            res.writeHead(500, SECURITY_HEADERS);
             res.end();
           } catch {
             res.destroy();
@@ -287,7 +312,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET, HEAD', 'X-Content-Type-Options': 'nosniff' });
+      res.writeHead(405, { Allow: 'GET, HEAD', ...SECURITY_HEADERS });
       res.end();
       return;
     }
@@ -295,7 +320,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     try {
       url = new URL(req.url ?? '/', origin ?? 'http://127.0.0.1');
     } catch {
-      res.writeHead(400, { 'X-Content-Type-Options': 'nosniff' });
+      res.writeHead(400, SECURITY_HEADERS);
       res.end();
       return;
     }
@@ -309,6 +334,13 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       tokens.delete(token);
       return refuse(res);
     }
+    // Root identity pinning: the serving root's canonical path must not have
+    // changed since the token was issued. A rename-and-swap of the entry dir
+    // (replaced by a symlink/junction pointing outside the workspace) would
+    // otherwise make both realpaths here resolve to the new target while
+    // staying mutually "inside" (codex-connector P1, round 4).
+    const currentRoot = await fs.realpath(entry.root).catch(() => null);
+    if (!currentRoot || currentRoot !== entry.root) return refuse(res);
 
     let relPath: string;
     try {
@@ -348,9 +380,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
       'Content-Length': stat.size,
-      'X-Content-Type-Options': 'nosniff',
-      'Cache-Control': 'no-store',
-      'Content-Security-Policy': CSP,
+      ...SECURITY_HEADERS,
     });
     if (req.method === 'HEAD') {
       await fd.close().catch(() => {});
@@ -365,7 +395,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   }
 
   function refuse(res: ServerResponse, status = 404): void {
-    res.writeHead(status, { 'X-Content-Type-Options': 'nosniff' });
+    res.writeHead(status, SECURITY_HEADERS);
     res.end();
   }
 
@@ -394,8 +424,11 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   }
 
   async function createPreviewUrl(input: CreatePreviewInput): Promise<{ url: string }> {
-    const base = await ensureStarted();
+    // Validate the entry FIRST: an invalid request (out-of-workspace, missing,
+    // non-HTML) must never start the listener or grant an origin
+    // (Copilot review, round 4).
     const entryAbs = await resolveEntryPath(input);
+    const base = await ensureStarted();
     // Serving root = the entry's directory: relative resources work, but the
     // page can never reach sibling workspace content outside that directory.
     // Normalize to the REAL path (e.g. resolves 8.3 short names on win32) so

@@ -70,12 +70,47 @@ describe('local-html-preview-server', () => {
     expect(res.headers.get('content-type')).toMatch(/^text\/html/);
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('cache-control')).toBe('no-store');
-    expect(res.headers.get('content-security-policy')).toContain("connect-src 'self'");
-    expect(res.headers.get('content-security-policy')).toContain("form-action 'none'");
-    expect(res.headers.get('content-security-policy')).toContain("navigate-to 'self'");
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("form-action 'none'");
+    expect(csp).toContain('sandbox allow-scripts allow-same-origin');
+    // navigate-to is NOT relied on: Chromium does not implement it, so it
+    // must not appear pretending to be a control that does not exist.
+    expect(csp).not.toContain('navigate-to');
     // no remote subresources: https: must appear in NO directive
-    expect(res.headers.get('content-security-policy')).not.toContain('https:');
+    expect(csp).not.toContain('https:');
     await res.arrayBuffer();
+  });
+
+  it('applies the same security headers to error/refusal responses', async () => {
+    const { url } = await createUrl();
+    const base = url.slice(0, url.lastIndexOf('/'));
+    const res404 = await get(`${base}/../secret.json`); // traversal refusal
+    expect(res404.status).toBe(404);
+    expect(res404.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res404.headers.get('cache-control')).toBe('no-store');
+    expect(res404.headers.get('content-security-policy')).toContain('connect-src');
+    const res405 = await get(url, 'POST');
+    expect(res405.status).toBe(405);
+    expect(res405.headers.get('cache-control')).toBe('no-store');
+    expect(res405.headers.get('content-security-policy')).toContain('sandbox');
+    const res400 = await get(`${base}/%zz`); // undecodable → 400
+    expect(res400.status).toBe(400);
+    expect(res400.headers.get('cache-control')).toBe('no-store');
+    expect(res400.headers.get('content-security-policy')).toContain('sandbox');
+  });
+
+  it('refuses requests after the serving root is renamed (root identity pinned)', async () => {
+    const { url } = await createUrl();
+    expect((await get(url)).status).toBe(200);
+    // Rename the entry dir away and put nothing in its place: the pinned root
+    // no longer resolves to the same canonical path → refuse (fail-closed).
+    const entryDir = nodePath.join(workingDir, 'dist');
+    const renamed = nodePath.join(workingDir, 'dist-renamed');
+    await import('node:fs/promises').then(({ rename }) => rename(entryDir, renamed));
+    expect((await get(url)).status).toBe(404);
+    // cleanup so afterEach dispose doesn't hit a stale path
+    await import('node:fs/promises').then(({ rename }) => rename(renamed, entryDir));
   });
 
   it('serves relative CSS/JS resources from the entry directory', async () => {
