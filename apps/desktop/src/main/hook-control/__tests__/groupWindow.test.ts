@@ -303,6 +303,48 @@ describe('recordGroupMessage', () => {
     expect(replay.prefix).toContain('待补偿消息');
   });
 
+  it('游标 UPSERT 成功后不依赖写后回读，仍返回回滚凭据', async () => {
+    await recordGroupMessage(frame({ messageId: 'post-write-read-failure' }));
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'post-write-read-failure-context',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+
+    const baseDrizzle = holder.drizzle as object;
+    let selectCalls = 0;
+    holder.drizzle = new Proxy(baseDrizzle, {
+      get(target, property, receiver) {
+        if (property === 'select') {
+          const select = Reflect.get(target, property, target) as (...args: unknown[]) => unknown;
+          return (...args: unknown[]) => {
+            selectCalls += 1;
+            if (selectCalls > 1) throw new Error('post-write read failed');
+            return Reflect.apply(select, target, args);
+          };
+        }
+        return Reflect.get(target, property, target);
+      },
+    });
+
+    try {
+      const receipt = await assembly.commit();
+      expect(receipt).toBeDefined();
+      expect(selectCalls).toBe(1);
+      expect(
+        sqlite
+          .prepare(
+            'SELECT cursor_id FROM hook_group_context_cursors WHERE provider = ? AND cursor_key = ?',
+          )
+          .get('telegram:9', 'telegram:group:1:-900:9'),
+      ).toEqual({ cursor_id: 1 });
+    } finally {
+      holder.drizzle = drizzle(sqlite);
+    }
+  });
+
   it('群历史不按时间过期，但每个 principal + 群/topic 只保留最近 500 条', async () => {
     for (let i = 0; i < 502; i += 1) {
       await recordGroupMessage(frame({ messageId: `m${i}`, text: `msg ${i}` }));

@@ -507,6 +507,10 @@ interface PendingTask {
   externalKey: string;
   run: HookRunRequest;
   accountGeneration: number;
+  /** 群上下文已提交但尚未真正开始执行时的补偿句柄。 */
+  cursorCommit?: { rollback(): void | Promise<void> };
+  /** 仅用于账号边界按提交逆序回滚排队中的游标。 */
+  cursorCommitOrder?: number;
   /** 会话定位阶段产生的一次性说明, 前置到本次 turn.end 的 finalText。 */
   notice?: string;
   /**
@@ -695,6 +699,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   >();
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
+  /** 排队任务的游标提交序号，用于边界回滚时保持 LIFO。 */
+  let queuedCursorCommitOrder = 0;
+  /** 已提交游标但尚未开始的任务，覆盖 queue 与 queued-cancel 的窗口。 */
+  const pendingCursorTasks = new Map<number, PendingTask>();
+  const cursorRollbackPromises = new Map<PendingTask, Promise<void>>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
   const runningByRequest = new Map<string, { sessionId: string; connectionId: string }>();
   /** 已请求取消的 connectionId + requestId(execute 收口时据此把结果改写为 cancelled)。 */
@@ -1462,6 +1471,32 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
   }
 
+  async function rollbackQueuedCursor(task: PendingTask): Promise<void> {
+    if (!task.cursorCommit) return;
+    try {
+      await task.cursorCommit.rollback();
+    } catch (error) {
+      log.warn(
+        `queued group context cursor rollback failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  function scheduleQueuedCursorRollback(task: PendingTask): void {
+    if (task.cursorCommit === undefined || task.cursorCommitOrder === undefined) return;
+    if (cursorRollbackPromises.has(task)) return;
+    const rollback = rollbackQueuedCursor(task);
+    cursorRollbackPromises.set(task, rollback);
+    void rollback.finally(() => {
+      cursorRollbackPromises.delete(task);
+      if (pendingCursorTasks.get(task.cursorCommitOrder!) === task) {
+        pendingCursorTasks.delete(task.cursorCommitOrder!);
+      }
+    });
+  }
+
   /**
    * 这个目录**此刻**还落在该连接的工作目录映射(或内置对话根)内吗。
    *
@@ -1480,6 +1515,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   }
 
   function startExecution(task: PendingTask): void {
+    if (task.cursorCommitOrder !== undefined) pendingCursorTasks.delete(task.cursorCommitOrder);
     const promise = execute(task);
     executing.add(promise);
     void promise.finally(() => executing.delete(promise));
@@ -2039,7 +2075,19 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
               sessionId,
               queuePosition: queue.length,
             };
-            const task: PendingTask = { ...taskBase, ack };
+            const task: PendingTask = {
+              ...taskBase,
+              ack,
+              ...(cursorCommit
+                ? {
+                    cursorCommit,
+                    cursorCommitOrder: ++queuedCursorCommitOrder,
+                  }
+                : {}),
+            };
+            if (task.cursorCommitOrder !== undefined) {
+              pendingCursorTasks.set(task.cursorCommitOrder, task);
+            }
             queue.push(task);
             queues.set(sessionId, queue);
             reply(connectionId, send, ack);
@@ -2120,6 +2168,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
       for (const timer of drainPolls.values()) clearTimeout(timer);
       drainPolls.clear();
+      const queuedTasks = [...pendingCursorTasks.values()]
+        .sort(
+          (a, b) =>
+            (b.cursorCommitOrder ?? Number.NEGATIVE_INFINITY) -
+            (a.cursorCommitOrder ?? Number.NEGATIVE_INFINITY),
+        );
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
@@ -2135,6 +2189,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       pendingReopens.clear();
 
       const drain = (async (): Promise<void> => {
+        // Queued tasks have not started yet, so their context was not
+        // consumed. Roll back in reverse commit order: if several queued
+        // entries share a cursor key, each receipt can restore the preceding
+        // value without a later receipt being overwritten by an older one.
+        for (const task of queuedTasks) {
+          scheduleQueuedCursorRollback(task);
+          await cursorRollbackPromises.get(task);
+        }
         const aborts: Promise<void>[] = [];
         if (abortSession) {
           for (const { sessionId } of runningByRequest.values()) {
@@ -2304,6 +2366,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             errorMessage: null,
             usage: { durationMs: null },
           };
+          // A queued task has not started, so cancelling it must release the
+          // context cursor just like an account-boundary queue drop.
+          scheduleQueuedCursorRollback(task);
           sendOrBuffer(connectionId, makeTurnEnd(turnEnd), {
             connectionId,
             requestId: task.requestId,

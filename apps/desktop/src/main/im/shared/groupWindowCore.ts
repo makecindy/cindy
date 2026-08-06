@@ -138,7 +138,12 @@ async function readPersistedCursor(provider: string, cursorKey: string): Promise
   return rows[0]?.cursorId ?? 0;
 }
 
-async function persistCursor(provider: string, cursorKey: string, cursorId: number): Promise<number> {
+async function persistCursor(
+  provider: string,
+  cursorKey: string,
+  cursorId: number,
+  previousCursor: number,
+): Promise<number> {
   const now = Date.now();
   await getDbClient()
     .drizzle.insert(hookGroupContextCursors)
@@ -152,7 +157,11 @@ async function persistCursor(provider: string, cursorKey: string, cursorId: numb
         updatedAt: now,
       },
     });
-  return readPersistedCursor(provider, cursorKey);
+  // The UPSERT is the durable write boundary. Do not read the row back here:
+  // a successful write must still leave the caller with a rollback receipt if
+  // a subsequent read happens to fail. The in-memory value is monotonic, and
+  // a concurrent higher commit is protected by the update/rollback guards.
+  return Math.max(previousCursor, cursorId);
 }
 
 /**
@@ -306,7 +315,12 @@ export async function assembleGroupWindowContext(args: {
           if (guard !== undefined && !(await guard())) return;
           try {
             const previousDurableCursor = await readPersistedCursor(args.provider, args.cursorKey);
-            const durableCursor = await persistCursor(args.provider, args.cursorKey, maxId);
+            const durableCursor = await persistCursor(
+              args.provider,
+              args.cursorKey,
+              maxId,
+              previousDurableCursor,
+            );
             let rolledBack = false;
             const receipt: GroupContextCommitReceipt = {
               rollback: async (): Promise<void> => {

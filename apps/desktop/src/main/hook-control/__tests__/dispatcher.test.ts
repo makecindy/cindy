@@ -423,6 +423,47 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
+  it('切账号清排队时按提交逆序回滚未开始任务的群游标', async () => {
+    const fr = fakeRunner();
+    const rollbacks: string[] = [];
+    let commitCount = 0;
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit: async () => {
+          commitCount += 1;
+          const label = `commit-${commitCount}`;
+          return {
+            rollback: async () => {
+              rollbacks.push(label);
+            },
+          };
+        },
+      }),
+    });
+    const c = collector();
+    const externalKey = 'team-slack:C1:1.1';
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-1', externalKey }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-2', externalKey }), c.send);
+    await tick();
+
+    expect(c.ofType('task.ack').map((message) => message.payload.result)).toEqual([
+      'accepted',
+      'queued',
+      'queued',
+    ]);
+    const draining = d.deactivateAccount();
+    fr.finish({ finalText: '旧账号任务' });
+    await draining;
+
+    expect(rollbacks).toEqual(['commit-3', 'commit-2']);
+  });
+
   it('收口期间的重新激活会被后到的关闭请求作废', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
