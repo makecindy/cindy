@@ -63,6 +63,7 @@ export class ImSchedulerManager {
   private readonly pendingProbePeers = new Set<string>();
   private started = false;
   private deviceLinkReady = false;
+  private schedulerHooksInstalled = false;
 
   constructor(private readonly discord: DiscordIM) {}
 
@@ -74,6 +75,7 @@ export class ImSchedulerManager {
       isTransportAllowed: (identity) => this.isLocalIngress(identity),
       onConfigurationChanged: () => this.notifyLocalConfigurationChanged(),
     });
+    this.schedulerHooksInstalled = true;
     if (this.discord.getStatus().kind === 'connected') {
       this.connectedIdentity = this.discord.getSchedulerIdentity();
     }
@@ -152,7 +154,7 @@ export class ImSchedulerManager {
     await this.reconcile();
   }
 
-  async stop(): Promise<void> {
+  async stop(options: { preserveTransportForDispose?: boolean } = {}): Promise<void> {
     if (!this.started) return;
     this.started = false;
     if (this.advertisementTimer) clearInterval(this.advertisementTimer);
@@ -179,20 +181,30 @@ export class ImSchedulerManager {
     this.offDiscordStatus = null;
     this.deviceLinkReady = false;
 
+    if (options.preserveTransportForDispose) return;
+
     // Keep the fail-closed scheduler hooks installed until any activation
     // already queued in reconcileTail has finished. Destroying the Gateway
     // first aborts an in-flight login; its pending-credential rollback then
     // still observes started=false and cannot reconnect the previous account's
     // Bot while logout/account replacement is disposing the IM aggregate.
+    await this.finishStop();
+  }
+
+  async finishStop(options: { transportDisposed?: boolean } = {}): Promise<void> {
+    if (!this.schedulerHooksInstalled) return;
     try {
-      try {
-        await this.discord.enterSchedulerStandby();
-      } catch (error) {
-        log.warn('discord scheduler stop standby failed', error);
+      if (!options.transportDisposed || this.discord.isSchedulerTransportActive()) {
+        try {
+          await this.discord.enterSchedulerStandby();
+        } catch (error) {
+          log.warn('discord scheduler stop standby failed', error);
+        }
       }
       await this.reconcileTail.catch(() => undefined);
     } finally {
       this.discord.setSchedulerHooks(null);
+      this.schedulerHooksInstalled = false;
     }
     this.peers.clear();
     this.confirmedPeers.clear();

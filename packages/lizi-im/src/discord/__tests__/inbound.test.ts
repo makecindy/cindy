@@ -633,6 +633,30 @@ describe('DiscordIM inbound pipeline', () => {
     expect(gateway.connect).not.toHaveBeenCalled();
   });
 
+  it('handles a rejected Gateway destroy while enforcing scheduler standby', async () => {
+    const gateway = makeGateway();
+    gateway.destroy.mockRejectedValueOnce(new Error('destroy failed'));
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    im.setSchedulerHooks({ isTransportAllowed: () => false });
+
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
   it('promotes a pending candidate only after its first successful connection', async () => {
     const gateway = makeGateway();
     const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;

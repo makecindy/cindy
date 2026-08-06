@@ -559,14 +559,20 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
     // Transports stop first so no new message can enter while account-scoped
     // orchestrator and binding caches are being discarded.
     try {
-      await imScheduler.stop();
-    } finally {
+      // Close scheduler ingress synchronously but keep its fail-closed hooks
+      // installed while Discord performs the normal offline announcement and
+      // runtime-marker cleanup. Clearing/destroying the Gateway before
+      // im.dispose() would turn a clean exit into a false dirty-runtime notice.
+      await imScheduler.stop({ preserveTransportForDispose: true });
       try {
         await im.dispose();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`IM aggregate dispose failed: ${msg}`);
+      } finally {
+        await imScheduler.finishStop({ transportDisposed: true });
       }
+    } finally {
       for (const orchestrator of listImOrchestrators()) {
         try {
           await orchestrator.disposeAllSessions();

@@ -254,6 +254,27 @@ describe('Discord scheduler manager', () => {
     expect(harness.hooks).toBeNull();
   });
 
+  it('preserves the active Gateway for normal dispose while scheduler hooks stay fail-closed', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.isSchedulerTransportActive()).toBe(true);
+
+    await manager.stop({ preserveTransportForDispose: true });
+
+    expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+
+    discord.emitStatus({ kind: 'idle' });
+    await manager.finishStop({ transportDisposed: true });
+
+    expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
+    expect(harness.hooks).toBeNull();
+  });
+
   it('fails closed when Device Link has no stable self device id', async () => {
     harness.selfDeviceId = null;
     const discord = createDiscord();

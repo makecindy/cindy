@@ -738,7 +738,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           /* swallow */
         }
       }
-      void this.gateway.destroy();
+      void this.gateway.destroy().catch((error) => {
+        this.log.warn(`discord scheduler standby destroy failed: ${String(error)}`);
+      });
       return;
     }
     const previous = this.status;
