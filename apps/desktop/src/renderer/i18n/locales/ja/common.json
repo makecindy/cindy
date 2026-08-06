@@ -7826,7 +7826,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "{{appName}} にフィードバックを送りたいです。質の高い GitHub issue にまとめるのを手伝ってください:まずフィードバックの種類(バグか機能要望か)を確認し、必要な詳細(現象、再現手順または利用シーン、期待する動作)を質問してください。情報が揃ったら cindy_helper の call_tool で submit_github_issue ツールを呼び出して提出してください(category=feedback。先に list_tools でパラメータを確認できます。提出前に確認カードが表示されます)。提出に失敗した場合は、理由をそのまま教えてください。{{details}}",
+      "instruction": "{{appName}} にフィードバックを送りたいです。質の高い GitHub issue にまとめるのを手伝ってください:まずフィードバックの種類(バグか機能要望か)を確認し、必要な詳細(現象、再現手順または利用シーン、期待する動作)を質問してください。情報が揃ったら cindy_helper の call_tool で submit_github_issue ツールを呼び出して提出してください(category=feedback。先に list_tools でパラメータを確認できます。提出前に確認カードが表示されます)。GitHub プラグインやアカウントの設定は不要です。既定では Cindy 公式 Bot が送信し、利用可能な GitHub アカウントがある場合のみ確認カードに追加の送信元として表示されます。提出に失敗した場合は、理由をそのまま教えてください。{{details}}",
       "detailsPrefix": "\n最初の説明:{{details}}"
     },
     "confirm": {
@@ -7835,11 +7835,11 @@
       "typeFeature": "機能要望",
       "titleLabel": "タイトル",
       "bodyLabel": "本文(Markdown)",
-      "submissionMethodLabel": "公開方法",
-      "identityGithubUser": "GitHub アカウント @{{login}} から直接公開",
+      "submissionMethodLabel": "送信元",
+      "identityGithubUser": "自分の GitHub アカウント @{{login}}",
       "identityGithubUserHint": "GitHub 上の Issue 作成者となり、自分で編集またはクローズできます",
-      "identityPlatform": "Cindy が代理で公開(GitHub App {{login}})",
-      "identityPlatformHint": "GitHub 上の Issue 作成者にはならず、自分で編集またはクローズできません",
+      "identityPlatform": "Cindy 公式 Bot @{{login}}（既定）",
+      "identityPlatformHint": "GitHub アカウントの設定は不要です。Issue は公式 Bot が作成し、本文に公開署名を付けられます",
       "publicNameLabel": "公開署名",
       "publicNameHint": "この署名は Issue 本文に公開表示されます",
       "anonymous": "匿名",

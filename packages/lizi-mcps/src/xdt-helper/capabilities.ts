@@ -116,6 +116,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '用户输入 /issue(可带初始描述)或直接说"帮我提个 issue",agent 先追问澄清细节,',
       '整理出结构化标题与正文后调用 submit_github_issue(cindy_helper 的 feedback 类目)。',
       '提交前 App 内弹系统确认卡片,用户可编辑标题/正文、确认或取消;',
+      '不需要安装或配置 GitHub 插件:默认由 Cindy 官方 Bot 提交;当前已配置且可用的 GitHub 账号只作为确认卡里的额外身份选项。',
       `客户端版本 / OS / 界面语言由系统自动附加,最终创建到 ${BRAND_NAME} 官方 GitHub 仓库。`,
     ].join(' '),
   },
