@@ -22,6 +22,8 @@ function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
         efforts: [],
         defaultEffort: null,
         supportsFastMode: false,
+        sortOrder: 10,
+        newSessionDefault: ['claude-code'],
       },
     ],
     hasFastMode: true,
@@ -72,6 +74,57 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     });
     expect(sel.model).toBe('claude-opus-4-8');
     expect(sel.effort).toBe('high'); // 'low' 不被 Opus 支持 → defaultEffort
+  });
+
+  it('被控端明确未选过模型 → 初始 seed 优先采用其区域目录默认', () => {
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(),
+      {
+        model: 'claude-opus-4-8',
+        modelChosenByUser: false,
+        effort: 'xhigh',
+        fastMode: true,
+      },
+      undefined,
+      'claude-code',
+    );
+    expect(sel.model).toBe('claude-haiku-4-5');
+    expect(sel.fastMode).toBe(false);
+  });
+
+  it('显式选择或旧端未知选择状态 → 保留被控端当前模型', () => {
+    expect(
+      resolveDeviceLinkDraftDefaults(
+        caps(),
+        { model: 'claude-opus-4-8', modelChosenByUser: true },
+        undefined,
+        'claude-code',
+      ).model,
+    ).toBe('claude-opus-4-8');
+    expect(
+      resolveDeviceLinkDraftDefaults(caps(), { model: 'claude-opus-4-8' }, undefined, 'claude-code')
+        .model,
+    ).toBe('claude-opus-4-8');
+  });
+
+  it('控制端本次显式 targetModel 优先于远端未选择标记', () => {
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(),
+      { model: 'claude-opus-4-8', modelChosenByUser: false },
+      'claude-opus-4-8',
+      'claude-code',
+    );
+    expect(sel.model).toBe('claude-opus-4-8');
+  });
+
+  it('Pi 的远程新任务默认沿用 claude-code wire 标记', () => {
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(),
+      { model: 'claude-opus-4-8', modelChosenByUser: false },
+      undefined,
+      'pi',
+    );
+    expect(sel.model).toBe('claude-haiku-4-5');
   });
 
   it('effort 不被目标模型支持 → 落该模型 defaultEffort', () => {

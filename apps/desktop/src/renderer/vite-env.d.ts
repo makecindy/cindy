@@ -2094,6 +2094,8 @@ interface ElectronAPI {
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
+    /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */

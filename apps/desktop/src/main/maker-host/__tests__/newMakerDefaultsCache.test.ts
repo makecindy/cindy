@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   getRemoteNewMakerDefaults,
+  getRemoteNewMakerDefaultsByVendor,
   getWorkerDefaultsFromNewMaker,
   setNewMakerDraftCache,
   setProviderModelMemoryCache,
@@ -75,6 +76,43 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     seed({ lastByVendor: {}, fastModeByModel: {}, effortByModel: {}, worktreeEnabled: true });
     expect(getRemoteNewMakerDefaults('claude-code')).toEqual({ worktreeEnabled: true });
     expect(getRemoteNewMakerDefaults('codex')).toEqual({ worktreeEnabled: true });
+  });
+
+  it('镜像每个 vendor 的显式模型选择状态，供控制端决定是否应用区域默认', () => {
+    seed({
+      lastByVendor: {
+        cc: { model: 'claude-opus-4-8' },
+        pi: { model: 'claude-sonnet-4-6' },
+      },
+      modelChosenByVendor: { cc: false, pi: true },
+      fastModeByModel: {},
+      effortByModel: {},
+    });
+
+    expect(getRemoteNewMakerDefaults('claude-code')).toMatchObject({
+      model: 'claude-opus-4-8',
+      modelChosenByUser: false,
+    });
+    expect(getRemoteNewMakerDefaults('pi')).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      modelChosenByUser: true,
+    });
+  });
+
+  it('草稿变更广播快照始终包含 claude-code、codex、pi 三个槽', () => {
+    seed({
+      lastByVendor: { pi: { model: 'claude-sonnet-4-6' } },
+      modelChosenByVendor: { pi: false },
+      fastModeByModel: {},
+      effortByModel: {},
+    });
+
+    const snapshot = getRemoteNewMakerDefaultsByVendor();
+    expect(Object.keys(snapshot)).toEqual(['claudeCode', 'codex', 'pi']);
+    expect(snapshot.pi).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      modelChosenByUser: false,
+    });
   });
 
   it('providerModelMemory 镜像就绪时随返回(device-link 草稿列表行的真实读源)', () => {

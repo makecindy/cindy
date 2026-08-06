@@ -21,6 +21,8 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 /** 被控端当前草稿的原始值(maker:get-new-maker-defaults 隧道返回;字段全可选)。 */
 export interface RemoteDraftDefaults {
   model?: string;
+  /** false = 被控端明确未在 New Maker picker 选过模型；undefined = 旧端未知。 */
+  modelChosenByUser?: boolean;
   effort?: string;
   fastMode?: boolean;
   permissionMode?: string;
@@ -82,8 +84,29 @@ export function resolveDeviceLinkDraftDefaults(
   const providerId = remoteDraft?.providerId ?? null;
   const permissionMode = pickPermissionMode(capabilities, remoteDraft?.permissionMode);
 
-  // 要解析哪个模型:显式 targetModel(切模型)优先;否则被控端当前选中模型(初始 seed)。
-  const wantedModelId = targetModel ?? remoteDraft?.model;
+  // 要解析哪个模型:控制端本次显式 targetModel(切模型)永远优先。初始 seed 只有在**新端明确
+  // 回传未选过模型**时才采用区域目录默认；旧端缺字段时保守保留 remoteDraft.model，避免
+  // 把无法识别的历史显式选择覆盖掉。pi 与本地默认口径一致，映射到 claude-code wire 标记。
+  const wireAgent = agentKind === 'codex' ? 'codex' : 'claude-code';
+  const markedDefault = agentKind
+    ? models
+        .map((model, index) => ({ model, index }))
+        .filter(
+          ({ model }) =>
+            model.defaultEnabled !== false &&
+            (model.newSessionDefault?.includes(wireAgent) ?? false),
+        )
+        .sort(
+          (a, b) =>
+            (a.model.sortOrder ?? Number.MAX_SAFE_INTEGER) -
+              (b.model.sortOrder ?? Number.MAX_SAFE_INTEGER) || a.index - b.index,
+        )[0]?.model.id
+    : undefined;
+  const wantedModelId =
+    targetModel ??
+    (remoteDraft?.modelChosenByUser === false
+      ? (markedDefault ?? remoteDraft.model)
+      : remoteDraft?.model);
 
   if (models.length === 0) {
     return {
