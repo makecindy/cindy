@@ -268,6 +268,8 @@ export interface AppServerHostOptions {
   remoteCompactionProviderId?: string;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
+  /** Cindy-side fallback used only when a subagent's actual model is not reported. */
+  subagentModelFallback?: string;
 }
 
 interface BufferedNotification {
@@ -289,6 +291,16 @@ export class AppServerHost {
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
+  /**
+   * 父 turn 尚在对账时的 provisional child claim。
+   *
+   * reserve 只保活 child 缓冲与 server request waiter，不安装 root 路由；
+   * 父 turn 被接受后由 registerDescendantLineage commit，判成孤儿则 discard。
+   */
+  private readonly pendingLineage = new Map<
+    string,
+    { parentThreadId: string; rootThreadId: string }
+  >();
   /** Server request may race the child thread/started notification that establishes lineage. */
   private readonly threadHandlerWaiters = new Map<string, Set<() => void>>();
   /** One post-start MCP inventory probe per server/tool for this concrete process. */
@@ -413,6 +425,11 @@ export class AppServerHost {
     return this.opts.buildSessionMcpConfig(sessionInstanceId);
   }
 
+  /** Display metadata only; observed thread model always wins. */
+  getSubagentModelFallback(): string | undefined {
+    return this.opts.subagentModelFallback;
+  }
+
   getConnectionId(): string {
     return this.connectionId;
   }
@@ -491,7 +508,10 @@ export class AppServerHost {
     // 防 server 在握手过程中就发出 approval (虽然实际不会, 但 defensive)。
     client.setRequestHandler(Method.CommandExecutionRequestApproval, async (rawParams) => {
       const params = rawParams as CommandExecutionRequestApprovalParams;
-      const handlers = this.handlersForThread(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.commandExecutionApproval) {
         this.logger.warn('commandExecution approval without subscriber → decline', {
           threadId: params.threadId,
@@ -512,7 +532,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.FileChangeRequestApproval, async (rawParams) => {
       const params = rawParams as FileChangeRequestApprovalParams;
-      const handlers = this.handlersForThread(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.fileChangeApproval) {
         this.logger.warn('fileChange approval without subscriber → decline', {
           threadId: params.threadId,
@@ -533,11 +556,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams) => {
       const params = rawParams as McpServerElicitationRequestParams;
-      const handlers =
-        this.handlersForThread(params.threadId)
-        ?? (this.subscribers.size > 0
-          ? await this.waitForThreadHandlers(params.threadId)
-          : undefined);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.mcpServerElicitation) {
         this.logger.warn('MCP server elicitation without subscriber -> decline', {
           threadId: params.threadId,
@@ -559,7 +581,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.PermissionsRequestApproval, async (rawParams) => {
       const params = rawParams as PermissionsRequestApprovalParams;
-      const handlers = this.handlersForThread(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.permissionsApproval) {
         this.logger.warn('permissions approval without subscriber → decline', {
           threadId: params.threadId,
@@ -579,7 +604,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.ToolRequestUserInput, async (rawParams, meta) => {
       const params = rawParams as ToolRequestUserInputParams;
-      const handlers = this.handlersForThread(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.requestUserInput) {
         this.logger.warn('requestUserInput without subscriber -> empty response', {
           threadId: params.threadId,
@@ -601,7 +629,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.DynamicToolCall, async (rawParams, meta) => {
       const params = rawParams as DynamicToolCallParams;
-      const handlers = this.handlersForThread(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.dynamicToolCall) {
         this.logger.warn('dynamicToolCall without subscriber -> failed result', {
           threadId: params.threadId,
@@ -729,6 +760,7 @@ export class AppServerHost {
     this.mcpToolAvailability.clear();
     this.subscribers.clear();
     this.lineageRoots.clear();
+    this.pendingLineage.clear();
     this.buffered.clear();
     for (const threadId of this.threadHandlerWaiters.keys()) {
       this.notifyThreadHandlerWaiters(threadId);
@@ -991,6 +1023,154 @@ export class AppServerHost {
     return rootThreadId ? this.subscribers.get(rootThreadId) : undefined;
   }
 
+  private resolveRequestHandlers(
+    threadId: string,
+  ): ThreadEventHandlers | Promise<ThreadEventHandlers | undefined> | undefined {
+    const current = this.handlersForThread(threadId);
+    // Keep known root/descendant dispatch synchronous. requestUserInput and
+    // dynamicToolCall register their broker entry in the first synchronous
+    // statements; yielding here would let a same-turn serverRequest/resolved
+    // notification cancel the request before that registration (Codex P1).
+    if (current || this.subscribers.size === 0) return current;
+    return this.waitForThreadHandlers(threadId);
+  }
+
+  /**
+   * 血缘边登记的共享核心:解析 root、幂等去重、写入 lineageRoots。
+   * null = 无法归属(参数非法 / root 不在 / handlers 已释放)。能归属时一定返回
+   * root 与 handlers;`establishedNewEdge` 区分本次是否真的落了新边——重复登记
+   * (spawn 路径已建边后新版 codex 补发 thread/started)不再落表,但调用方仍拿得到
+   * handlers 去转发 thread 元数据(model 等),不能把重复当成完全的 no-op 吞掉。
+   * 新边落表后唤醒该子线程上等待血缘的 server request(见 waitForThreadHandlers):
+   * spawn 登记与 thread/started 两条路径都可能是 waiter 等的那次解析。
+   */
+  private establishDescendantLineage(
+    childThreadId: string,
+    parentThreadId: string,
+  ): {
+    rootThreadId: string;
+    handlers: ThreadEventHandlers;
+    establishedNewEdge: boolean;
+    releasedRequestWaiters: boolean;
+  } | null {
+    if (!childThreadId || !parentThreadId || parentThreadId === childThreadId) return null;
+    const rootThreadId = this.lineageRoots.get(parentThreadId)
+      ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
+    if (!rootThreadId || childThreadId === rootThreadId) return null;
+
+    const handlers = this.subscribers.get(rootThreadId);
+    if (!handlers) return null;
+
+    if (this.lineageRoots.get(childThreadId) === rootThreadId) {
+      return {
+        rootThreadId,
+        handlers,
+        establishedNewEdge: false,
+        releasedRequestWaiters: false,
+      };
+    }
+
+    this.lineageRoots.set(childThreadId, rootThreadId);
+    const releasedRequestWaiters = this.notifyThreadHandlerWaiters(childThreadId);
+    return { rootThreadId, handlers, establishedNewEdge: true, releasedRequestWaiters };
+  }
+
+  /**
+   * 保留一条待确认的 spawn 血缘，但不安装 root 路由。
+   *
+   * 这是 turn reconciliation 之前的 provisional 状态：child notification 会继续
+   * 留在 child 自己的缓冲里，child server request 会等待；只有父 turn 被确认后，
+   * registerDescendantLineage 才会把它变成 live route。重复 reserve 幂等。
+   */
+  reserveDescendantLineage(childThreadId: string, parentThreadId: string): void {
+    if (!childThreadId || !parentThreadId || childThreadId === parentThreadId) return;
+    if (this.lineageRoots.has(childThreadId)) return;
+    const rootThreadId = this.lineageRoots.get(parentThreadId)
+      ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
+    if (!rootThreadId || !this.subscribers.has(rootThreadId)) return;
+    const existing = this.pendingLineage.get(childThreadId);
+    if (existing) {
+      if (existing.parentThreadId !== parentThreadId || existing.rootThreadId !== rootThreadId) {
+        this.logger.warn('ignoring conflicting pending descendant lineage', {
+          childThreadId,
+          parentThreadId,
+          existing,
+        });
+      }
+      return;
+    }
+    this.pendingLineage.set(childThreadId, { parentThreadId, rootThreadId });
+  }
+
+  /**
+   * 丢弃尚未 commit 的 spawn 血缘：清掉 child 缓冲并唤醒请求 waiter 走 fail-closed。
+   * parentThreadId 可选，用于防止迟到/重复的旧 turn 清掉新 claim。
+   */
+  discardPendingDescendantLineage(childThreadId: string, parentThreadId?: string): void {
+    const pending = this.pendingLineage.get(childThreadId);
+    if (!pending || (parentThreadId && pending.parentThreadId !== parentThreadId)) return;
+    this.pendingLineage.delete(childThreadId);
+    this.buffered.delete(childThreadId);
+    this.notifyThreadHandlerWaiters(childThreadId);
+  }
+
+  /**
+   * Cindy 侧主动登记「子线程 → 父线程」血缘(spawn item 是唯一可靠来源)。
+   *
+   * codex 0.145 会把 spawn 出的子线程自动 attach 到本连接并转发它的
+   * item / tokenUsage / turn 通知,但 `thread/started` 只在显式 thread/start /
+   * fork RPC 时发,**内部 spawn 的子线程从来不发**(codex-rs
+   * `thread_processor.rs` 仅两处 emit)。只等 thread/started 建血缘,子线程的全部
+   * 通知都会在 TTL 缓冲里静默过期:子代理卡没有任何实时数据、终态永远不到,
+   * 卡片停在 spawn 时的 running 帧永久转圈;子线程的 approval 请求也会因
+   * handlersForThread 查不到 root 而被自动 decline(2026-08-04 生产实测)。
+   *
+   * 调用方(codex session)从 spawn item 的 agentThreadId / receiverThreadIds
+   * 拿到子线程 id 后立即登记。幂等:更新版 codex 若补发 thread/started,
+   * routeDescendantThreadStarted 只跳过重复建边与缓冲重放,thread 元数据
+   * (model 等)仍会照常转发给订阅者。
+   */
+  registerDescendantLineage(childThreadId: string, parentThreadId: string): void {
+    const pending = this.pendingLineage.get(childThreadId);
+    if (pending && pending.parentThreadId !== parentThreadId) {
+      this.logger.warn('ignoring descendant lineage commit for a conflicting pending claim', {
+        childThreadId,
+        parentThreadId,
+        pending,
+      });
+      return;
+    }
+    if (pending && pending.parentThreadId === parentThreadId) {
+      this.pendingLineage.delete(childThreadId);
+    }
+    const established = this.establishDescendantLineage(childThreadId, parentThreadId);
+    if (!established) {
+      if (pending?.parentThreadId === parentThreadId) {
+        this.buffered.delete(childThreadId);
+        this.notifyThreadHandlerWaiters(childThreadId);
+      }
+      return;
+    }
+    if (!established.establishedNewEdge) return;
+    const replayBufferedNotifications = (): void => {
+      // `thread/started` may already be buffered under this child id when the
+      // root subscription replays a spawn item and establishes lineage late.
+      // Preserve and forward that metadata (notably thread.model) before the
+      // ordinary descendant drain deletes the whole buffer and skips starts.
+      this.replayBufferedThreadStarts(childThreadId);
+      // 子线程在登记前已到达的通知缓存在它自己的 id 下,补投进 descendant 通道;
+      // 它名下若已缓冲了孙线程的 thread/started,一并重建整条血缘链。
+      this.drainBufferedDescendantNotifications(childThreadId, established.rootThreadId, established.handlers);
+      this.replayBufferedDescendantThreadStarts(established.rootThreadId);
+    };
+    // Resolving a lineage waiter schedules the server-request handler's await
+    // continuation. Let that continuation register its broker entry before a
+    // buffered serverRequest/resolved notification is replayed; otherwise the
+    // cancellation is lost and a request the server already closed reaches UI.
+    if (established.releasedRequestWaiters) queueMicrotask(replayBufferedNotifications);
+    else replayBufferedNotifications();
+  }
+
   /**
    * Give an already-owned descendant a short window for its thread/started
    * notification to establish lineage. This closes an observed ordering race
@@ -1003,20 +1183,30 @@ export class AppServerHost {
     if (current) return Promise.resolve(current);
     return new Promise((resolve) => {
       let settled = false;
+      let timer: NodeJS.Timeout | null = null;
       const finish = (): void => {
         if (settled) return;
+        const handlers = this.handlersForThread(threadId);
+        // A reserved spawn may legitimately outlive the normal notification TTL while
+        // the parent turn is being reconciled. Keep waiting until commit/discard settles
+        // it; unknown threads still use the bounded fail-closed window below.
+        if (!handlers && this.pendingLineage.has(threadId) && !this.shuttingDown) {
+          timer = setTimeout(finish, this.bufferTtlMs);
+          timer.unref?.();
+          return;
+        }
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         const waiters = this.threadHandlerWaiters.get(threadId);
         waiters?.delete(finish);
         if (waiters?.size === 0) this.threadHandlerWaiters.delete(threadId);
-        resolve(this.handlersForThread(threadId));
+        resolve(handlers);
       };
       // Use the same bounded lineage window as early thread notifications.
       // Both races are caused by thread/started crossing the subscribe/request
       // boundary, so they should expire together instead of using a shorter
       // empirical timeout that can fail only under load.
-      const timer = setTimeout(finish, this.bufferTtlMs);
+      timer = setTimeout(finish, this.bufferTtlMs);
       timer.unref?.();
       const waiters = this.threadHandlerWaiters.get(threadId) ?? new Set<() => void>();
       waiters.add(finish);
@@ -1024,25 +1214,24 @@ export class AppServerHost {
     });
   }
 
-  private notifyThreadHandlerWaiters(threadId: string): void {
-    for (const finish of [...(this.threadHandlerWaiters.get(threadId) ?? [])]) finish();
+  private notifyThreadHandlerWaiters(threadId: string): boolean {
+    const waiters = [...(this.threadHandlerWaiters.get(threadId) ?? [])];
+    for (const finish of waiters) finish();
+    return waiters.length > 0;
   }
 
   private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {
     const childThreadId = params.thread.id;
     const parentThreadId = params.thread.parentThreadId;
-    if (!parentThreadId || parentThreadId === childThreadId) return;
-
-    const rootThreadId = this.lineageRoots.get(parentThreadId)
-      ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
-    if (!rootThreadId) return;
-    if (this.lineageRoots.get(childThreadId) === rootThreadId) return;
-
-    const handlers = this.subscribers.get(rootThreadId);
-    if (!handlers) return;
-
-    this.lineageRoots.set(childThreadId, rootThreadId);
-    this.notifyThreadHandlerWaiters(childThreadId);
+    if (!parentThreadId) return;
+    // A provisional spawn claim owns this child until parent turn reconciliation. Do not let
+    // an early thread/started install a live root route for a turn that may later be orphaned.
+    if (this.pendingLineage.has(childThreadId)) return;
+    const established = this.establishDescendantLineage(childThreadId, parentThreadId);
+    if (!established) return;
+    const { rootThreadId, handlers, establishedNewEdge, releasedRequestWaiters } = established;
+    // 血缘重复(spawn 路径已建边)也要转发:thread/started 是 thread.model 等实际
+    // 元数据的唯一载体,吞掉它会让「实际线程模型优先」永远等不到观测值(codex review)。
     if (handlers.descendantThreadStarted) {
       try {
         handlers.descendantThreadStarted(params);
@@ -1055,16 +1244,22 @@ export class AppServerHost {
         });
       }
     }
-    // 血缘刚建立:该子线程在此之前到达的 item / tokenUsage / turn 通知都缓存在**它自己的
-    // id** 下(那时既不是 subscriber 也没有 lineage)。root 侧的 drain 只排空 root id 的队列,
-    // 这些永远排不到 → 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在
-    // running(codex review)。这里按到达顺序补投进 descendant 通道。
-    this.drainBufferedDescendantNotifications(childThreadId, rootThreadId, handlers);
-    // 本次血缘建立可能解锁**孙**线程:孙的 thread/started 缓存在它自己的 id 下,上面的 drain
-    // 只排空 childThreadId 的队列,而且它按契约会跳过 thread/started —— 不再扫一遍,孙线程的
-    // 血缘永远建不起来,它的 tool / token / 终态通知会一直烂在缓冲区直到过期(卡片漏计,并
-    // 可能一直显示运行中或提前完成)(review)。复用 root 订阅时那套迭代重建。
-    this.replayBufferedDescendantThreadStarts(rootThreadId);
+    // 重复建边只补元数据转发:缓冲早已在首次建边时排空,重放在这里只会空转。
+    if (!establishedNewEdge) return;
+    const replayBufferedNotifications = (): void => {
+      // 血缘刚建立:该子线程在此之前到达的 item / tokenUsage / turn 通知都缓存在**它自己的
+      // id** 下(那时既不是 subscriber 也没有 lineage)。root 侧的 drain 只排空 root id 的队列,
+      // 这些永远排不到 → 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在
+      // running(codex review)。这里按到达顺序补投进 descendant 通道。
+      this.drainBufferedDescendantNotifications(childThreadId, rootThreadId, handlers);
+      // 本次血缘建立可能解锁**孙**线程:孙的 thread/started 缓存在它自己的 id 下,上面的 drain
+      // 只排空 childThreadId 的队列,而且它按契约会跳过 thread/started —— 不再扫一遍,孙线程的
+      // 血缘永远建不起来,它的 tool / token / 终态通知会一直烂在缓冲区直到过期(卡片漏计,并
+      // 可能一直显示运行中或提前完成)(review)。复用 root 订阅时那套迭代重建。
+      this.replayBufferedDescendantThreadStarts(rootThreadId);
+    };
+    if (releasedRequestWaiters) queueMicrotask(replayBufferedNotifications);
+    else replayBufferedNotifications();
   }
 
   /**
@@ -1094,6 +1289,20 @@ export class AppServerHost {
           message: (e as Error).message,
         });
       }
+    }
+  }
+
+  /**
+   * Forward buffered starts for one thread without consuming its buffer.
+   * The following ordinary drain owns deletion and skips these entries, so
+   * starts are delivered exactly once and ahead of item/usage/turn replay.
+   */
+  private replayBufferedThreadStarts(threadId: string): void {
+    const buffered = this.buffered.get(threadId);
+    if (!buffered) return;
+    for (const item of buffered) {
+      if (item.method !== 'thread/started') continue;
+      this.routeDescendantThreadStarted(item.params as ThreadStartedNotification['params']);
     }
   }
 
@@ -1147,6 +1356,13 @@ export class AppServerHost {
         this.lineageRoots.delete(threadId);
       }
     }
+    for (const [threadId, pending] of this.pendingLineage) {
+      if (pending.rootThreadId === rootThreadId) {
+        this.pendingLineage.delete(threadId);
+        this.buffered.delete(threadId);
+        this.notifyThreadHandlerWaiters(threadId);
+      }
+    }
   }
 
   private dispatchToHandlers(handlers: ThreadEventHandlers, method: string, params: unknown): void {
@@ -1190,6 +1406,10 @@ export class AppServerHost {
     setTimeout(() => {
       const cur = this.buffered.get(threadId);
       if (!cur) return;
+      // A provisional spawn claim owns this buffer until parent turn reconciliation;
+      // do not expire the child lifecycle/terminal events just because the normal TTL elapsed.
+      // commit/discard removes it explicitly.
+      if (this.pendingLineage.has(threadId)) return;
       const cutoff = Date.now() - this.bufferTtlMs;
       const remaining = cur.filter((x) => x.ts > cutoff);
       if (remaining.length === 0) {

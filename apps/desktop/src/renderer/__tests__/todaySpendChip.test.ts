@@ -10,10 +10,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'status', 'TodaySpendChip.tsx');
+const quotaHoverCardPath = resolve(__dirname, '..', 'components', 'status', 'QuotaHoverCard.tsx');
 const preloadPath = resolve(__dirname, '..', '..', 'preload', 'preload.ts');
 const rendererTypesPath = resolve(__dirname, '..', 'vite-env.d.ts');
 // Windows CRLF 检出下 \n 字面量断言会失配,统一归一化成 LF 再断言。
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
+const quotaHoverCardSource = readFileSync(quotaHoverCardPath, 'utf8').replace(/\r\n/g, '\n');
 const preloadSource = readFileSync(preloadPath, 'utf8').replace(/\r\n/g, '\n');
 const rendererTypesSource = readFileSync(rendererTypesPath, 'utf8').replace(/\r\n/g, '\n');
 const localeSources = ['en', 'zh-CN', 'ja', 'ko'].map((locale) =>
@@ -24,16 +26,19 @@ const localeSources = ['en', 'zh-CN', 'ja', 'ko'].map((locale) =>
 );
 
 describe('TodaySpendChip dashboard routing', () => {
-  it('separates the latest user-round total from final-segment token details', () => {
+  it('keeps the latest user-round total separate while aggregating token/model details', () => {
     expect(source).toContain('message.userTurnMoney?.amount');
     expect(source).toContain('const userTurnCostUsd = typeof message.userTurnCostUsd');
     expect(source).toContain('? { money: userTurnMoney }');
     expect(source).toContain('isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null)');
     expect(source).toContain("'todaySpend.tooltip.latestUserTurnTitle'");
-    expect(source).toContain('segmentMoney: message.turnMoney');
-    expect(source).toContain('segmentCostUsd: message.turnCostUsd');
-    expect(source).toContain('money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money');
-    expect(source).toContain("'chat.messageActionBar.userTurnCostDetailsTitle'");
+    expect(source).toContain('aggregateAssistantTurnUsageDetails(messages, message.clientId)');
+    expect(source).toContain('Amount and token/model detail now describe the same visible user turn');
+    expect(source).toContain('money: summary.money');
+    expect(source).not.toContain('segmentMoney: message.turnMoney');
+    expect(source).not.toContain('segmentCostUsd: message.turnCostUsd');
+    expect(source).toContain('inputTokensText: formatCompactTokens(details.inputTokens)');
+    expect(source).toContain('outputTokensText: formatCompactTokens(details.outputTokens)');
   });
 
   it('routes Codex/CC/Pi subscription providers to their account usage pages and keeps gateway routes local', () => {
@@ -218,6 +223,7 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('keeps Claude subscription details in the chip and tooltip (plan B: follows current model)', () => {
+    // 2026-08 结构化卡片替换纯文本 tooltip(上游 issue 1261),断言迁移至新契约。
     // 方案 B: 第二栏跟随当前模型的 weekly_scoped 窗口, 匹配不到回退总周限
     expect(source).toContain('function getClaudeChipWindows(');
     expect(source).toContain('function resolveClaudeWeeklyWindow(');
@@ -225,30 +231,48 @@ describe('TodaySpendChip dashboard routing', () => {
     // bridge 模型形态优先(不消耗 Claude 订阅额度),订阅余量 hook 对 bridge 会话关闭;
     // device-link 远程会话同样不读本机订阅余量
     expect(source).toContain('isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote');
-    expect(source).toContain('tooltipNode = buildClaudeSubscriptionTooltipNode(');
+    expect(source).toContain(
+      'const usesClaudeSubscriptionPopover = isClaudeSubscription && !isSubscriptionBridge;',
+    );
+    expect(source).toContain('open={quotaPopoverOpen}');
+    expect(source).toContain('onMouseEnter={handleQuotaPopoverTriggerMouseEnter}');
+    expect(source).toContain('onMouseLeave={handleQuotaPopoverMouseLeave}');
+    expect(source).toContain(
+      'if (quotaPopoverPointerInsideRef.current || quotaPopoverFocusInsideRef.current) return;',
+    );
+    expect(source).toContain('<QuotaHoverCard');
+    expect(source).toContain('snapshot={claudeSubscriptionUsage}');
+    expect(source).toContain('sessionUsage={quotaCardSessionUsage}');
+    expect(source).toContain('turnUsage={quotaCardTurnUsage}');
     expect(source).toContain("'todaySpend.claude.windowSegment'");
     expect(source).toContain("t('todaySpend.claude.modelWeeklyLabel'");
     expect(source).toContain('todaySpend.claude.weeklyLabel');
-    expect(source).toContain('todaySpend.claude.windowLine');
-    expect(source).toContain('todaySpend.claude.resetAt');
+    // 窗口详情 / reset 文案已由结构化卡片负责;组件行为另有
+    // src/renderer/components/status/__tests__/QuotaHoverCard.test.tsx 直接单测。
+    expect(quotaHoverCardSource).toContain("t('quotaCard.usedPercent'");
+    expect(quotaHoverCardSource).toContain("t('quotaCard.resetAt'");
     // chip 周限段: scoped 命中时倒计时前带模型名标注口径 (「Fable 7天 剩余 78%」)
     expect(source).toContain('weekly.modelDisplayName ? `${weekly.modelDisplayName} ${countdown}` : countdown');
     expect(source).toContain('if (sessionSegment) chipSegments.push(sessionSegment);');
-    expect(source).toContain('todaySpend.claude.planLine');
+    expect(quotaHoverCardSource).toContain('const planLabel = formatPlanType(snapshot?.subscriptionType);');
+    expect(quotaHoverCardSource).toContain('data-testid="quota-plan-badge"');
     // 告警判定是纯数据判定, 统一收在 shared/claudeSubscriptionUsage.ts (有直接单测:
     // main/usage/__tests__/claudeSubscriptionUsage.test.ts), 组件只消费, 不再本地重写。
     expect(source).toContain('isClaudeSubscriptionAlerting,');
-    expect(source).toContain('hasAlertingClaudeSessionWindow,');
+    // rateLimitStatus 可能来自脏快照;卡片先做字符串类型守卫再归一化。
+    expect(quotaHoverCardSource).toContain(
+      "typeof rawRateLimitStatus === 'string' ? rawRateLimitStatus.trim().toLowerCase() : undefined",
+    );
     expect(source).not.toContain('function isClaudeSubscriptionAlerting(');
     expect(source).not.toContain('function hasAlertingClaudeSessionWindow(');
     // chip 变红只看当前会话真受限 (rejected / 影响本会话的窗口告警); headers 的
     // allowed_warning 综合了其它模型的分模型周限, 不得单独染红 —— 否则跑 Opus 的
     // 会话会因 Fable 周限吃紧变红, 而 chip 上根本没有那一段。
     expect(source).not.toContain("status === 'rejected' || status === 'allowed_warning'");
-    // tooltip 比 chip 宽一档: allowed_warning 仍提示 (紧邻全量窗口列表, 有上下文)
-    expect(source).toContain(
-      "status === 'allowed_warning' || hasAlertingClaudeSessionWindow(snapshot, modelId)",
-    );
+    // 卡片比 chip 宽一档:完整 snapshot 把 rateLimitStatus 交给卡片,
+    // allowed_warning 仍在全量窗口列表旁以 warning 状态展示。
+    expect(quotaHoverCardSource).toContain("normalizedStatus === 'allowed_warning'");
+    expect(quotaHoverCardSource).toContain("{ key: 'quotaCard.limitWarning', tone: 'warn' as const }");
     // Claude 订阅 / bridge 订阅不读 gateway quota (不反映订阅花费); 默认路由 key reconcile
     // 完成前形态未定, 同样不放行网关 quota 读 (避免形态闪切)。这些前置条件收敛到
     // isClaudeGateway 里, 由 usesGatewayQuota 统一放行 quota 读取。
@@ -272,7 +296,10 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('(gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null))');
     // extra_usage credits 单位未验证,不得假设 cents 并渲染美元金额
     expect(source).not.toContain('formatExtraUsageCredits');
-    expect(source).toContain('不能假设 cents 并渲染美元金额');
+    expect(quotaHoverCardSource).toContain('const showExtraUsage = snapshot?.extraUsage?.isEnabled === true;');
+    expect(quotaHoverCardSource).toContain("t('quotaCard.extraUsageEnabled')");
+    expect(quotaHoverCardSource).not.toContain('usedCredits');
+    expect(quotaHoverCardSource).not.toContain('monthlyLimit');
   });
 
   it('labels the Codex chip windows by time until reset while tooltip keeps the window name', () => {

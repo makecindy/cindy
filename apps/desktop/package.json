@@ -192,7 +192,7 @@
     "autoprefixer": "^10.4.20",
     "cross-env": "^7.0.3",
     "drizzle-kit": "^0.31.10",
-    "electron": "41.2.0",
+    "electron": "41.10.3",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^9.1.0",
     "jsdom": "^29.1.1",

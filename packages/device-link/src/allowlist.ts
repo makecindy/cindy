@@ -228,6 +228,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
+  // 会话标题旁的 Git / GitHub 上下文(分支、PR 引用与实时状态)必须在被控端查询,
+  // 因为控制端本地没有远端 session 的 DB、工作目录或 gh 登录态。
+  'git-context:get-for-session',
+  'git-context:pr-refs:list',
+  'git-context:pr-status',
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',

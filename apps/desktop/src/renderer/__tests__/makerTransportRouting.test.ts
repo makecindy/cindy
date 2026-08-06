@@ -24,6 +24,7 @@ function stubElectron() {
     closeSession: vi.fn(),
     enableOrca: vi.fn(),
     disableOrca: vi.fn(),
+    regenerateSessionTitle: vi.fn().mockResolvedValue({ title: 'local title' }),
     plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
     input: { clearSession: vi.fn(), compact: vi.fn() },
   };
@@ -181,6 +182,34 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await getSessionFor('rs');
 
     expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:get', ['rs']);
+  });
+
+  it('regenerateSessionTitleFor:镜像清空期间仍在被控端自动起名，不回落控制端本机', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    invoke.mockResolvedValue({ title: 'remote title' });
+    const { regenerateSessionTitleFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+    await regenerateSessionTitleFor('rs');
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:regenerate-title', [{ sessionId: 'rs' }]);
+
+    invoke.mockClear();
+    remoteProjectsStore.clear();
+    await regenerateSessionTitleFor('rs');
+
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:regenerate-title', [{ sessionId: 'rs' }]);
+    expect(makerSpies.regenerateSessionTitle).not.toHaveBeenCalled();
+  });
+
+  it('regenerateSessionTitleFor:从未有远程归属的会话仍走本机', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    const { regenerateSessionTitleFor } = await import('@/lib/makerTransport');
+
+    await regenerateSessionTitleFor('local-only');
+
+    expect(makerSpies.regenerateSessionTitle).toHaveBeenCalledWith('local-only');
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('远程会话 patchMeta(删/归档/改名/置顶)经隧道 local-db:sessions:patch-meta', async () => {

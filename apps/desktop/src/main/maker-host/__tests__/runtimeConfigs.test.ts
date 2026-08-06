@@ -106,4 +106,21 @@ describe('runtime-configs', () => {
       expect(prompt).not.toMatch(/\$[\w:-]+|\/(?:Users|home)\/|[A-Z]:\\/u);
     }
   });
+
+  it('asks Claude and Codex to write user-facing plans in plain language', async () => {
+    vi.doMock('../memory-settings-store.js', () => ({
+      readMemorySettings: () => memorySettings,
+    }));
+
+    const { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } = await import(
+      '../runtime-configs.js'
+    );
+    const claudeConfig = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234');
+
+    for (const prompt of [claudeConfig.systemPrompt, desktopCodexRuntimeConfig.systemPrompt]) {
+      expect(prompt).toContain('## User-facing plans');
+      expect(prompt).toContain('Write for a general user, not as internal engineering notes.');
+      expect(prompt).toContain('Name the real action and visible result instead.');
+    }
+  });
 });

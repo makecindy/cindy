@@ -14,9 +14,30 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('@/components/ui/tooltip', () => ({
-  Tip: ({ children }: { children: ReactNode }) => <>{children}</>,
-}));
+// 预览卡内容不在本文件的覆盖范围(Content 直接丢掉,与原先 Tip stub 只透传
+// children 等价)。Provider 记**挂载中的实例数**而不是渲染次数:组件会因
+// 测量 setState 反复重渲,计渲染次数是脆的;挂载数对重渲染免疫。
+const tooltipMocks = vi.hoisted(() => ({ mountedProviders: { value: 0 } }));
+
+vi.mock('@/components/ui/tooltip', async () => {
+  const { useEffect } = await import('react');
+  return {
+    Tooltip: {
+      Provider: ({ children }: { children: ReactNode }) => {
+        useEffect(() => {
+          tooltipMocks.mountedProviders.value += 1;
+          return () => {
+            tooltipMocks.mountedProviders.value -= 1;
+          };
+        }, []);
+        return <>{children}</>;
+      },
+      Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+      Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+      Content: () => null,
+    },
+  };
+});
 
 import { MessageNavRail } from '../MessageNavRail';
 import { NAV_RAIL_ACTIVE_FUDGE_PX, type NavRailEntry } from '../messageNavRailModel';
@@ -71,6 +92,7 @@ const ENTRIES: NavRailEntry[] = [
 describe('MessageNavRail', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
+    tooltipMocks.mountedProviders.value = 0;
     vi.stubGlobal('ResizeObserver', ResizeObserverStub);
     // jsdom 没有 CSS.escape(真实渲染器 Chromium 提供);测试 id 都是安全字符。
     vi.stubGlobal('CSS', { escape: (s: string) => s });
@@ -103,6 +125,34 @@ describe('MessageNavRail', () => {
     expect(buttons[1].getAttribute('aria-current')).toBe('true');
     expect(buttons[0].getAttribute('aria-current')).toBeNull();
     expect(buttons[2].getAttribute('aria-current')).toBeNull();
+  });
+
+  it('整条导轨只挂一个 TooltipProvider(而不是每根刻度一个)', async () => {
+    // skipDelayDuration 是 Provider 级状态:每根刻度各自一个 Provider 时,
+    // 相邻刻度之间跨 Provider,新 Provider 没有"刚刚开过"的记忆,鼠标竖着
+    // 划过去会看到预览卡反复消失再冒出(刻度纵距只有 9px)。这条守的就是
+    // 「别退回每刻度一个 Provider」——闪断本身依赖 Radix 真实计时,在 jsdom
+    // 里测不稳,所以断言结构不断言时序。
+    const root = buildScrollContainer(1000, [
+      { id: 'u1', top: -400 },
+      { id: 'u2', top: 50 },
+      { id: 'u3', top: 400 },
+      { id: 'u4', top: 600 },
+      { id: 'u5', top: 900 },
+    ]);
+    render(
+      <MessageNavRail
+        entries={ENTRIES}
+        scrollRef={{ current: root }}
+        contentMaxWidth={880}
+        bottomOffset={200}
+        onJump={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByRole('button')).toHaveLength(5);
+    });
+    expect(tooltipMocks.mountedProviders.value).toBe(1);
   });
 
   it('点击刻度回调 onJump(clientId),且点击项乐观标记为当前项', async () => {

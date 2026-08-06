@@ -712,6 +712,27 @@
       "logsDirLabel": "ログディレクトリ",
       "openLogsDir": "開く",
       "openLogsDirTooltip": "システムのファイルマネージャーでログディレクトリを開く",
+      "logUpload": {
+        "crashAutoLabel": "クラッシュ時にログを自動アップロード",
+        "crashAutoDescription": "有効にすると、Cindy がクラッシュした際にその前後の動作記録を自動でバックエンドに送信するため、手動でアップロードする必要がなくなります。既定はオフで、いつでもオフにできます。オフにすると、アップロード待ちのクラッシュ記録は直ちに削除されます。",
+        "crashAutoEnabledToast": "クラッシュ時のログ自動アップロードを有効にしました",
+        "crashAutoDisabledToast": "クラッシュ時のログ自動アップロードを無効にしました",
+        "saveFailed": "ログアップロードの設定を保存できませんでした",
+        "uploadLabel": "ログをアップロード",
+        "uploadButton": "アップロード",
+        "uploading": "アップロード中",
+        "uploadTooltip": "最近の動作記録をバックエンドにアップロードし、問い合わせ時に使えるアップロード番号を取得します",
+        "uploadDescription": "問題が起きたときにここを押すと、最近の動作記録がバックエンドに送信されます。完了後にアップロード番号が表示されるので、不具合の報告時にその番号を伝えてください。ファイルを自分で探す必要はありません。",
+        "scopeDescription": "アップロードする内容:Cindy 自体の動作記録(起動と終了、クラッシュ、ネットワーク、アップデート、データベース、ログイン)とデバイス環境情報(OS バージョン、アプリバージョン、デバイス識別子)、ログイン後はアカウント ID も含みます。アップロードしない内容:会話内容、ファイル内容、プロンプト、作業ディレクトリのパス。認証情報とメールアドレスはアップロード前に自動で除去されます。",
+        "successToast": "ログをアップロードしました。アップロード番号 {{code}}(コピー済み。報告時にお知らせください)",
+        "errorUnavailable": "このビルドではログアップロードが設定されておらず、現在利用できません",
+        "errorConsentRequired": "ログをアップロードするには、先に「プライバシーポリシー」に同意する必要があります",
+        "errorEmpty": "アップロードできる動作記録がありません",
+        "errorBusy": "すでにアップロードが進行中です。しばらくお待ちください",
+        "errorFailed": "ログのアップロードに失敗しました。ネットワークを確認して再試行してください",
+        "unavailableNotConfigured": "このビルドではログアップロードが設定されていません。",
+        "unavailableNoConsent": "先に「プライバシーポリシー」への同意が必要です。"
+      },
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
       "autoUpdateDescription": "更新のダウンロード完了後、このコンピューターが 10 分間操作されず、実行中のタスクがない場合に、アプリを自動的に再起動してインストールします。",
@@ -1832,6 +1853,11 @@
         "confirm": "連携解除",
         "cancel": "キャンセル"
       },
+      "lifecycleAnnouncement": {
+        "label": "オンライン・オフライン通知",
+        "cellLabel": "メッセージ通知",
+        "hint": "このデバイスのオンライン・オフライン時に Discord Bot から通知メッセージを送信します"
+      },
       "ownerNotice": {
         "linked": "✅ 連携できました。準備できたらそのまま話しかけてください。",
         "disconnected": "🔌 連携を解除しました。必要になったらまたつないでください。",
@@ -2412,6 +2438,7 @@
         "toggleHint": "このマシン全体の切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
         "status": {
           "checking": "ADB の状態を確認しています…",
+          "disabled": "Android 自動操作はオフです。オンにすると ADB とデバイスを検出します。",
           "preparing": "ADB を準備しています…",
           "ready": "ADB は準備できています。利用可能なデバイス: {{count}}。デフォルト: {{device}}",
           "adbDetail": "{{version}}（{{path}}）",
@@ -3157,6 +3184,8 @@
         "addPlugin": "プラグインを追加",
         "addPluginAria": "プラグイン追加オプション",
         "installedSection": "インストール済み",
+        "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
+        "installedCollapse": "追加のインストール済みプラグインを隠す",
         "recommendedSection": "おすすめ",
         "updatesAvailable": "{{count}} 件のプラグイン更新があります",
         "updateAll": "すべて更新",
@@ -3196,13 +3225,21 @@
         },
         "install": "インストール",
         "details": "詳細",
+        "detailsAria": "{{name}} の詳細を表示",
         "update": "マーケットから更新",
         "updateTo": "v{{version}} に更新",
         "installed": "インストール済み",
-        "conflict": "プラグイン ID の競合",
+        "conflict": "利用不可",
+        "conflictAria": "{{name}} にプラグイン ID の競合があります",
+        "conflictDescription": "このプラグイン ID は使用中のため、インストールできません。",
         "unavailable": "プラグインマーケットを一時的に利用できません。インストール済みプラグインは引き続き利用できます。",
         "authenticationRequired": "プラグインマーケットを表示するには Cindy にログインしてください。",
         "notConfigured": "この環境ではプラグインマーケットが設定されていません。インストール済みプラグインは引き続き利用できます。",
+        "removalNotice": {
+          "single": "プラグイン「{{name}}」は組織によって削除され、このデバイス上のローカルコピーとデータはクリーンアップされました。",
+          "multiple_one": "{{count}} 件のプラグインが組織によって削除され、このデバイス上のローカルコピーとデータはクリーンアップされました。",
+          "multiple_other": "{{count}} 件のプラグインが組織によって削除され、このデバイス上のローカルコピーとデータはクリーンアップされました。"
+        },
         "errors": {
           "generic": "プラグインマーケットの操作に失敗しました。もう一度お試しください。",
           "invalidRequest": "プラグインのリクエストが無効です。",
@@ -3236,6 +3273,9 @@
           "listTitle": "追加済みのマーケット",
           "pluginCount": "{{count}} 個のプラグイン",
           "sourceError": "読み込み失敗",
+          "empty": "このマーケットにはプラグイン項目がありません",
+          "skippedEntries": "無効なプラグイン項目 {{count}} 件をスキップしました",
+          "unreadableEntries": "プラグイン項目 {{count}} 件を一時的に読み込めません。更新して再試行してください",
           "localBadge": "ローカル",
           "defaultRef": "デフォルトブランチ",
           "neverSynced": "未同期",
@@ -3382,6 +3422,8 @@
         "cindyMediaDepositDetail": "プラグイン内で貼り付け・ドロップした素材も AI で加工できるようにするための権限です。保存内容はこのプラグイン名義で記録され、最大 {{quota}} まで使用し、アンインストール時に併せて削除されます。",
         "cindyTextOneshot": "Cindy のクイックチャンネルに質問してテキスト回答を受け取れます",
         "cindyTextOneshotDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。",
+        "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
+        "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
@@ -3503,7 +3545,8 @@
             "image.edit": "画像編集",
             "video.generate": "動画生成",
             "video.edit": "画像から動画",
-            "text.oneshot": "クイック回答(テキスト)"
+            "text.oneshot": "クイック回答(テキスト)",
+            "embed.text": "テキストのベクトル化"
           },
           "defaultOption": "{{model}}(既定)",
           "noModels": "利用可能なモデルなし"
@@ -3872,6 +3915,8 @@
     "controlledTooltip": "同じアカウントでログイン中の別のデバイスがこの端末をリモート操作しています。アクセス権限を撤回できます。",
     "revokeAccess": "権限を撤回",
     "viewControllers": "表示",
+    "collapseControlledNotice": "リモート操作の通知を折りたたむ",
+    "expandControlledNotice": "リモート操作の通知を展開: {{label}}",
     "versionMismatch": "相手のバージョンが異なります。一部機能が制限される場合があります"
   },
   "accountDeletion": {
@@ -4174,6 +4219,29 @@
       "latestUserTurnTitle": "直近のユーザーターン合計"
     }
   },
+  "quotaCard": {
+    "fiveHourLabel": "5 時間",
+    "weeklyLabel": "週間",
+    "modelWeeklyLabel": "{{model}} 週間",
+    "windowsRegionLabel": "クォータ期間の一覧",
+    "usedPercent": "使用済み {{percent}}%",
+    "resetAt": "{{at}} にリセット",
+    "noWindows": "クォータ期間のデータはありません",
+    "limitRejected": "プランの上限に到達しました。リクエストが拒否される可能性があります",
+    "limitWarning": "プランの上限に近づいています",
+    "extraUsageEnabled": "追加使用量が有効です",
+    "costLine": "このメッセージの消費: {{cost}}",
+    "valueLine": "このメッセージの token 価値: {{cost}}",
+    "noBilledCost": "このメッセージの料金は現在取得できないため、使用量のみ表示しています",
+    "latestMessageTitle": "直近のメッセージ合計",
+    "turnCostUnavailable": "このメッセージの料金は現在見積もれません",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
+    "cacheLabel": "キャッシュ",
+    "modelLabel": "モデル",
+    "staleData": "データは {{minutes}} 分前に更新されました",
+    "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
+  },
   "usageDetails": {
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
@@ -4224,6 +4292,7 @@
     "maximize": "最大化",
     "close": "閉じる",
     "menuItems": {
+      "settings": "設定",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
@@ -4990,6 +5059,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
+      "hidden": "非表示",
       "subscriptionDirectDisabled": {
         "chatgpt": "サブスクリプション直結の GPT モデルは SSH リモートセッションに未対応です",
         "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",
@@ -5151,9 +5221,7 @@
       "loading": "ブランチを読み込み中…",
       "loadFailed": "ブランチの読み込みに失敗しました。タップして再試行",
       "currentTooltip": "現在のブランチ",
-      "sourceTooltip": "worktree のソースブランチ",
-      "worktreeHint": "別のブランチを選ぶと worktree 分離で開始します",
-      "exitWorktreeHint": "現在のブランチを選ぶと worktree を解除し、そのまま開始します"
+      "sourceTooltip": "worktree のソースブランチ"
     },
     "folderPicker": {
       "selectFolder": "フォルダを選択",
@@ -5592,8 +5660,7 @@
       "turnCostEstimated": "このターンの token 価値(API 単価換算)",
       "turnCostEstimatedValue": "価値 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "このユーザーターンの合計: {{cost}}",
-      "userTurnCostDetailsTitle": "最終 SDK セグメント"
+      "userTurnCostDetailsTitle": "リクエストの明細"
     },
     "errorBanner": {
       "retryTitle": "最後のメッセージを再送信",
@@ -5982,6 +6049,8 @@
       "duplicateFiles": "同名のファイルが {{count}} 件見つかりました。絶対パスを使用してください",
       "copyFile": "コピー",
       "copyFilePath": "ファイルパスをコピー",
+      "openWith": "アプリで開く",
+      "openWithAppFailed": "選択したアプリで開けませんでした",
       "revealFile": "ファイルの場所を開く",
       "openInBrowser": "ブラウザで開く",
       "fileCopied": "ファイルをコピーしました",
@@ -6114,6 +6183,11 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
+    },
+    "generatedFiles": {
+      "title": "このターンで生成されたファイル",
+      "showMore": "さらに {{count}} 件を表示",
+      "showLess": "折りたたむ"
     },
     "agentActions": {
       "part": {
@@ -8393,6 +8467,7 @@
       "customRolePredefinedError": "カスタムロールには既定ロール名を使用できません",
       "agentLabel": "Agent",
       "modelLabel": "モデル",
+      "permissionLabel": "権限モード",
       "noAvailableModels": "利用可能な {{agent}} モデルがありません。設定でプロバイダーの接続と認証情報を確認してください。",
       "effortLabel": "推論強度",
       "initialTaskLabel": "初期タスク",

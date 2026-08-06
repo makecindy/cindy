@@ -299,6 +299,45 @@ function reasoningText(value: unknown): string {
   return '';
 }
 
+function agentMessageText(item: Record<string, unknown>, itemIndex: number): string {
+  const normalizedAuthor = typeof item.author === 'string'
+    ? item.author.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+    : '';
+  const author = normalizedAuthor || 'agent';
+  let body = '';
+  let omittedEncryptedContent = false;
+  if (typeof item.content === 'string') {
+    body = item.content;
+  } else if (Array.isArray(item.content)) {
+    const parts: string[] = [];
+    for (const part of item.content) {
+      if (!isPlainObject(part) || typeof part.type !== 'string') {
+        throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+      }
+      if (part.type === 'encrypted_content') {
+        omittedEncryptedContent = true;
+        continue;
+      }
+      if (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') {
+        if (typeof part.text !== 'string') {
+          throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
+        }
+        parts.push(part.text);
+        continue;
+      }
+      throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
+    }
+    body = parts.join('\n');
+  } else {
+    throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+  }
+  return body.trim()
+    ? `[collab ${author}]\n${body}`
+    : omittedEncryptedContent
+      ? `[collab message from ${author}; encrypted payload omitted]`
+      : `[collab message from ${author}; empty content]`;
+}
+
 interface TranslateInputOptions {
   developerRole: ChatDeveloperRole;
   mediaCapabilities: ChatMediaCapabilities;
@@ -551,6 +590,19 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
           }
           pushBarrier({ role, content });
         }
+      }
+      continue;
+    }
+
+    if (item.type === 'agent_message') {
+      const content = agentMessageText(record, index);
+      if ((assistant?.tool_calls?.length ?? 0) > 0 || pendingToolCalls.length > 0) {
+        pushBarrier({ role: 'assistant', content });
+      } else {
+        assistant ??= { role: 'assistant', content: null };
+        assistant.content = assistant.content ? `${assistant.content}\n${content}` : content;
+        const nextItem = input[index + 1];
+        if (!isPlainObject(nextItem) || nextItem.type !== 'agent_message') flushAssistant();
       }
       continue;
     }

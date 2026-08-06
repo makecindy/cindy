@@ -26,6 +26,7 @@
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import * as Dialog from '@radix-ui/react-dialog';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
@@ -151,6 +152,50 @@ describe('AgentSelect', () => {
 
     render(<AgentSelect value="cc" onChange={() => {}} side="bottom" />);
     expect(screen.getByTestId('agent-select-popover').getAttribute('data-side')).toBe('bottom');
+  });
+
+  it('Radix 模式: 高层级 Dialog 内保持展开并可选择', async () => {
+    const onChange = vi.fn();
+    render(
+      <AgentSelect
+        value="cc"
+        onChange={onChange}
+        useMorphPopover={false}
+        overlayContentClassName="z-[10010]"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+    const listbox = await screen.findByRole('listbox', { name: '引擎' });
+    expect(listbox.parentElement?.className).toContain('z-[10010]');
+
+    fireEvent.click(screen.getByTestId('agent-select-option-codex'));
+    expect(onChange).toHaveBeenCalledWith('codex');
+  });
+
+  it('Radix 模式: 嵌套自动化 Dialog 内不会因焦点陷阱快速收起', async () => {
+    const onChange = vi.fn();
+    render(
+      <Dialog.Root open>
+        <Dialog.Portal>
+          <Dialog.Overlay />
+          <Dialog.Content>
+            <Dialog.Title>Automation</Dialog.Title>
+            <AgentSelect
+              value="cc"
+              onChange={onChange}
+              useMorphPopover={false}
+              overlayContentClassName="z-[10010]"
+            />
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+    await waitFor(() => expect(screen.getByRole('listbox', { name: '引擎' })).toBeTruthy());
+    fireEvent.click(screen.getByTestId('agent-select-option-codex'));
+    expect(onChange).toHaveBeenCalledWith('codex');
   });
 
   it('field 形态: 面板宽度绑定 trigger 实测宽度, 不再用固定 196px', () => {

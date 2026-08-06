@@ -44,6 +44,16 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     }
   });
 
+  it('允许远程会话读取被控端 Git / GitHub 上下文', () => {
+    for (const ch of [
+      'git-context:get-for-session',
+      'git-context:pr-refs:list',
+      'git-context:pr-status',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
+    }
+  });
+
   it('放行订阅价值历史汇总只读聚合(远程会话底部 $ chip 的历史初值查被控端)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:messages:estimatedSessionValue')).toBe(true);
   });

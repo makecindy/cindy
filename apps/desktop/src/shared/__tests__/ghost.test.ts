@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+  GHOST_CINDY_EMBED_MAX_TEXTS,
   GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
@@ -16,7 +17,6 @@ import {
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
-  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
@@ -123,38 +123,6 @@ describe('ghost · id 规则', () => {
 });
 
 describe('ghost · 清单校验', () => {
-  it('更新保留已安装清单中已批准的权限，即使发布元数据遗漏这些权限', () => {
-    const makeToolManifest = (tools: Array<{ name: string; description: string }>) => {
-      const raw = { ...goodManifest(), slots: ['tool'], tools } as Record<string, unknown>;
-      delete raw.panel;
-      const result = validateGhostManifest(raw);
-      if (!result.ok) throw new Error(result.reason);
-      return result.manifest;
-    };
-    const installed = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const reviewed = makeToolManifest([{ name: 'gen_image', description: 'Projected description' }]);
-    const samePackage = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const expandedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'Generate images' },
-      { name: 'edit_image', description: 'Edit images' },
-    ]);
-    const changedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'A third, unreviewed description' },
-    ]);
-
-    expect(unreviewedGhostPermissionItems(reviewed, installed, samePackage)).toEqual([]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, expandedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:edit_image',
-    ]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, changedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:gen_image',
-    ]);
-  });
-
   it('全字段合法清单通过,并按已知字段收窄输出', () => {
     const v = validateGhostManifest({ ...goodManifest(), unknownField: 'ignored' });
     expect(v.ok).toBe(true);
@@ -1473,11 +1441,45 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
     );
   });
 
-  it('text 类目未知动作 / 空数组 → 拒;四类目可同时声明', () => {
+  // 2026-08-04 文本转向量:embed 类目独立落位(同 #784 的落位纪律),权限清单
+  // 单独成行,说明里插值单次条数上限(常量单源,四份 locale 自动跟随)。
+  it('embed 类目落进 cindy.embed,并生成带条数上限的 cindy:embed.text 权限行', () => {
+    const v = validateGhostManifest(chipWithModel({ embed: ['text'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ embed: ['text'] });
+    expect(v.manifest.cindy?.text).toBeUndefined();
+    expect(v.manifest.cindy?.image).toBeUndefined();
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:embed.text',
+          kind: 'cindy',
+          labelKey: 'cindyEmbedText',
+          detailKey: 'cindyEmbedTextDetail',
+          detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) },
+        }),
+      ]),
+    );
+  });
+
+  it('embed 类目未知动作 / 空数组 → 拒', () => {
+    expect(validateGhostManifest(chipWithModel({ embed: ['image'] })).ok).toBe(false);
+    expect(validateGhostManifest(chipWithModel({ embed: ['vector'] })).ok).toBe(false);
+    expect(validateGhostManifest(chipWithModel({ embed: [] })).ok).toBe(false);
+  });
+
+  it('text 类目未知动作 / 空数组 → 拒;五类目可同时声明', () => {
     expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(false);
     expect(validateGhostManifest(chipWithModel({ text: [] })).ok).toBe(false);
     const v = validateGhostManifest(
-      chipWithModel({ image: ['generate'], video: ['edit'], media: ['deposit'], text: ['oneshot'] }),
+      chipWithModel({
+        image: ['generate'],
+        video: ['edit'],
+        media: ['deposit'],
+        text: ['oneshot'],
+        embed: ['text'],
+      }),
     );
     expect(v.ok, JSON.stringify(v)).toBe(true);
     expect(v.ok && v.manifest.cindy).toEqual({
@@ -1485,6 +1487,7 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       video: ['edit'],
       media: ['deposit'],
       text: ['oneshot'],
+      embed: ['text'],
     });
   });
 });

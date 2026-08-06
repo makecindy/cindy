@@ -104,8 +104,23 @@ describe('Markdown target rendering contract', () => {
     expect(markdownRenderer).toContain('WINDOWS_ABSOLUTE_HREF_RE.test(url)');
   });
 
+  it('restores raw local link hrefs mangled by hast URL serialization (#1629)', () => {
+    // mdast→hast 会把反斜杠 percent-encode 成 %5C,`C:\...` 链接因此漏出
+    // trustedUrlTransform 白名单、href 被清空退化纯文本。a 渲染器必须优先消费
+    // remarkPreserveRawLocalDestinations 存的原始值(与 img 同构),且仅限受信任内容。
+    expect(markdownRenderer).toContain('RAW_LOCAL_LINK_HREF_PROP');
+    expect(markdownRenderer).toContain(
+      "allowPrivilegedLinks && typeof rawLocalHref === 'string' ? rawLocalHref : href",
+    );
+    // preserve 插件必须排在两份插件链的**链尾**(remarkLocalPathLinks 之后),
+    // 正文裸路径切出的 link 节点才拿得到原始值。
+    expect(
+      markdownRenderer.match(/remarkLocalPathLinks,\n  remarkPreserveRawLocalDestinations,\n\]/g),
+    ).toHaveLength(2);
+  });
+
   it('passes already-rewritten remote media image URLs through normalization', () => {
-    expect(markdownRenderer).toContain('remarkPreserveLocalImagePaths');
+    expect(markdownRenderer).toContain('remarkPreserveRawLocalDestinations');
     expect(markdownRenderer).toContain('normalizeMarkdownImageSrc(');
     const normalizeBlock = localPathResolver.match(
       /export function normalizeMarkdownImageSrc[\s\S]*?return toLocalFileUrl/,

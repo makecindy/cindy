@@ -364,17 +364,11 @@ export function MessageActionBar({
   const turnCostTooltipNode =
     displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
       <span className="whitespace-pre-line">
-        {isUserTurnTotal &&
-          `${t('chat.messageActionBar.userTurnCostTotalLine', {
-            cost: formatTurnCostMoney(displayedMoney),
-          })}\n`}
         {buildTurnUsageTooltipLines({
           details: turnUsageDetails,
           t,
-          // Token / model detail is currently scoped to this final SDK segment;
-          // never pair it with the user-turn cumulative total above.
-          money: isUserTurnTotal ? effectiveTurnMoney : displayedMoney,
-          isEstimate: isUserTurnTotal ? turnCostIsEstimate : displayedCostIsEstimate,
+          money: displayedMoney,
+          isEstimate: displayedCostIsEstimate,
           ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
         }).join('\n')}
       </span>

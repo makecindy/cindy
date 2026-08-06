@@ -39,6 +39,8 @@ export interface SubagentLiveCardUpdate {
   taskId: string;
   status: SubagentLiveCardStatus;
   agentPath?: string;
+  /** Observed child-thread model, or Cindy's explicit display fallback. `null` clears a stale badge. */
+  model?: string | null;
   /** 本卡全部子线程的累计 token 之和;未知为 0。 */
   totalTokens: number;
   /** 本卡全部子线程内的工具类 item 数;未知为 0。 */
@@ -71,7 +73,12 @@ export interface SubagentLiveCardTracker {
    * 返回聚合快照 = 有早到通知被重放出状态,**或**新线程并入改变了聚合状态(例如已显示完成的
    * 卡因为孙线程仍在跑而必须回到 running);否则 null。
    */
-  noteDescendantThread(childThreadId: string, parentThreadId: string): SubagentLiveCardUpdate | null;
+  noteDescendantThread(
+    childThreadId: string,
+    parentThreadId: string,
+    model?: string,
+    spawnFailed?: boolean,
+  ): SubagentLiveCardUpdate | null;
   /**
    * 消费一条子线程通知。返回聚合快照表示卡片需要刷新;返回 null = 与子代理卡无关
    * (不关心的 method、无效载荷),或该子线程尚未登记(已缓冲,等 spawn 到达后重放)。
@@ -138,6 +145,8 @@ const MAX_PENDING_PER_THREAD = 64;
 /** 未归属血缘边的缓冲上限(父线程数 × 每父线程子线程数),同样防无界堆积。 */
 const MAX_PENDING_LINEAGE_PARENTS = 32;
 const MAX_PENDING_LINEAGE_CHILDREN = 32;
+/** Observed models can arrive before lineage; keep this side buffer bounded too. */
+const MAX_PENDING_THREAD_MODELS = MAX_PENDING_LINEAGE_PARENTS * MAX_PENDING_LINEAGE_CHILDREN;
 /**
  * 单卡工具 item 去重登记的条数上限。去重登记必须活到卡片淘汰(turn/completed 可能早于
  * 后台 item/completed,提前清会让迟到的 completed 重复计数),所以只能按条数封顶。
@@ -148,6 +157,10 @@ interface ThreadState {
   status: SubagentLiveCardStatus;
   /** 该子线程最新的**累计** token(tokenUsage.total 是快照,按线程覆盖而非相加)。 */
   totalTokens: number;
+  /** Model observed from thread metadata or a spawn item. */
+  model?: string;
+  /** A failed nested spawn remains terminal despite late lifecycle events. */
+  spawnFailed: boolean;
 }
 
 interface TrackedCard {
@@ -174,9 +187,13 @@ interface PendingNotification {
 export function createSubagentLiveCardTracker(opts: {
   now?: () => number;
   maxTrackedCards?: number;
+  subagentModelFallback?: string;
 } = {}): SubagentLiveCardTracker {
   const now = opts.now ?? (() => Date.now());
   const maxTrackedCards = opts.maxTrackedCards ?? DEFAULT_MAX_TRACKED_CARDS;
+  const subagentModelFallback = typeof opts.subagentModelFallback === 'string' && opts.subagentModelFallback.trim()
+    ? opts.subagentModelFallback.trim()
+    : undefined;
   const cards = new Map<string, TrackedCard>();
   const taskIdByThread = new Map<string, string>();
   const pending = new Map<string, PendingNotification[]>();
@@ -189,6 +206,10 @@ export function createSubagentLiveCardTracker(opts: {
    * 显示完成(review)。这里先记下,父线程一归属就**递归**补绑整条血缘链。
    */
   const pendingLineage = new Map<string, Set<string>>();
+  /** Model observed on thread/started before its parent spawn is registered. */
+  const pendingThreadModels = new Map<string, string>();
+  /** Failed nested spawns can be observed before their parent card is attached. */
+  const pendingFailedThreads = new Set<string>();
   /**
    * 子线程**第一次被看见**的时刻(第一条缓冲通知或第一条未归属血缘边)。
    *
@@ -232,10 +253,32 @@ export function createSubagentLiveCardTracker(opts: {
     return 'completed';
   };
 
+  const aggregateModel = (card: TrackedCard): string | null | undefined => {
+    const observedModels = new Set<string>();
+    let threadsWithModel = 0;
+    for (const thread of card.threads.values()) {
+      if (thread.model) {
+        threadsWithModel += 1;
+        observedModels.add(thread.model);
+      }
+    }
+    // V1 can aggregate multiple receiver threads into one card. A singular
+    // model label is truthful only when **every** thread has reported one and
+    // all values agree — partial observation must not be projected onto the
+    // whole card (codex review). With zero reports, use Cindy's explicit
+    // configured fallback.
+    return threadsWithModel === 0
+      ? subagentModelFallback
+      : threadsWithModel === card.threads.size && observedModels.size === 1
+        ? observedModels.values().next().value
+        : null;
+  };
+
   const snapshot = (card: TrackedCard): SubagentLiveCardUpdate => {
     let totalTokens = 0;
     for (const thread of card.threads.values()) totalTokens += thread.totalTokens;
     const status = aggregateStatus(card);
+    const model = aggregateModel(card);
     // 这里**不能**因为收口就清 countedItemIds:app-server 允许 turn/completed 先发、后台
     // 收尾的 item/completed 随后才到(codex/index.ts 的终态墓碑注释写明了这个顺序)。清掉
     // 之后那条迟到的 completed 会被当成一个新工具再加一次,卡片最终工具数虚高(review)。
@@ -244,6 +287,7 @@ export function createSubagentLiveCardTracker(opts: {
       taskId: card.taskId,
       status,
       ...(card.agentPath ? { agentPath: card.agentPath } : {}),
+      ...(model !== undefined ? { model } : {}),
       totalTokens,
       toolUses: card.toolUses,
       durationMs: Math.max(0, now() - card.startedAt),
@@ -353,9 +397,11 @@ export function createSubagentLiveCardTracker(opts: {
         return true;
       }
       case 'turn/started':
+        if (thread.spawnFailed) return false;
         thread.status = 'running';
         return true;
       case 'turn/completed': {
+        if (thread.spawnFailed) return false;
         const turnStatus = (params as { turn?: { status?: unknown } } | null)?.turn?.status;
         thread.status = turnStatus === 'failed'
           ? 'failed'
@@ -378,29 +424,50 @@ export function createSubagentLiveCardTracker(opts: {
    * itemStarted 钩子永远看不到,所以除了这条路径没有别的机会把孙线程并进卡。
    *
    * `visited` 防环:血缘理论上是树,但通知来自外部进程,不能假定它一定是树。
-   * 返回是否有内容被重放(调用方据此判断要不要发帧)。
+   * 返回是否有可见快照变化:早到通知被重放,或实际模型在本次绑定时首次落到线程上。
    */
-  const attachThread = (card: TrackedCard, childThreadId: string, visited: Set<string>): boolean => {
+  const attachThread = (
+    card: TrackedCard,
+    childThreadId: string,
+    visited: Set<string>,
+    spawnModel?: string,
+    spawnFailed = false,
+  ): boolean => {
     if (visited.has(childThreadId)) return false;
     visited.add(childThreadId);
 
     if (taskIdByThread.get(childThreadId) !== card.taskId) unbindThread(childThreadId);
+    const failedBeforeAttachment = pendingFailedThreads.delete(childThreadId);
+    const latchSpawnFailure = spawnFailed || failedBeforeAttachment;
+    let changed = false;
     if (!card.threads.has(childThreadId)) {
+      const observedModel = pendingThreadModels.get(childThreadId);
+      pendingThreadModels.delete(childThreadId);
+      const initialModel = observedModel ?? spawnModel;
+      changed = Boolean(initialModel);
       // 已上终态闩的卡,新并入的线程直接算失败,别让它把卡拉回 running。
       card.threads.set(childThreadId, {
-        status: card.spawnFailed ? 'failed' : 'running',
+        status: card.spawnFailed || latchSpawnFailure ? 'failed' : 'running',
         totalTokens: 0,
+        ...(initialModel ? { model: initialModel } : {}),
+        spawnFailed: latchSpawnFailure,
       });
+    } else if (spawnModel && !card.threads.get(childThreadId)?.model) {
+      card.threads.get(childThreadId)!.model = spawnModel;
+      changed = true;
     }
     taskIdByThread.set(childThreadId, card.taskId);
     const thread = card.threads.get(childThreadId)!;
+    if (latchSpawnFailure) {
+      thread.spawnFailed = true;
+      thread.status = 'failed';
+    }
 
-    let replayed = false;
     const queued = pending.get(childThreadId);
     if (queued) {
       pending.delete(childThreadId);
       for (const entry of queued) {
-        if (applyNotification(card, thread, entry.method, entry.params)) replayed = true;
+        if (applyNotification(card, thread, entry.method, entry.params)) changed = true;
       }
     }
 
@@ -408,10 +475,10 @@ export function createSubagentLiveCardTracker(opts: {
     if (descendants) {
       pendingLineage.delete(childThreadId);
       for (const grandChildId of descendants) {
-        if (attachThread(card, grandChildId, visited)) replayed = true;
+        if (attachThread(card, grandChildId, visited)) changed = true;
       }
     }
-    return replayed;
+    return changed;
   };
 
   return {
@@ -444,7 +511,7 @@ export function createSubagentLiveCardTracker(opts: {
         const visited = new Set<string>();
         let replayedOnFailure = false;
         for (const childThreadId of registration.childThreadIds) {
-          if (attachThread(card, childThreadId, visited)) replayedOnFailure = true;
+          if (attachThread(card, childThreadId, visited, registration.model)) replayedOnFailure = true;
           const thread = card.threads.get(childThreadId);
           if (thread) thread.status = 'failed';
         }
@@ -452,13 +519,15 @@ export function createSubagentLiveCardTracker(opts: {
         // 重放出来;若此后再无通知,无条件返回 null 就意味着这些用量永远不显示 —— 而 translator
         // 的 failed 帧本身不带 usage(review)。有了 spawnFailed 闩,snapshot() 恒为 failed,
         // 补发这一帧不会重现"把失败盖回运行中"的老问题。
-        return replayedOnFailure ? snapshot(card) : null;
+        return replayedOnFailure || registration.model || subagentModelFallback
+          ? snapshot(card)
+          : null;
       }
 
       const visited = new Set<string>();
       let replayed = false;
       for (const childThreadId of registration.childThreadIds) {
-        if (attachThread(card, childThreadId, visited)) replayed = true;
+        if (attachThread(card, childThreadId, visited, registration.model)) replayed = true;
       }
 
       // 已登记过的 spawn(同一 collabAgentToolCall 的 started/completed 两个 phase 都会到
@@ -468,11 +537,53 @@ export function createSubagentLiveCardTracker(opts: {
       // 跑的子线程会被提前标成完成,先到的 failed/stopped 也会被抹掉。
       // (attachThread 幂等:已在卡上的线程不会被重置计数。)
       if (existing) return snapshot(card);
-      return replayed ? snapshot(card) : null;
+      return replayed || registration.model || subagentModelFallback
+        ? snapshot(card)
+        : null;
     },
 
-    noteDescendantThread(childThreadId: string, parentThreadId: string): SubagentLiveCardUpdate | null {
+    noteDescendantThread(
+      childThreadId: string,
+      parentThreadId: string,
+      model?: string,
+      spawnFailed = false,
+    ): SubagentLiveCardUpdate | null {
       if (!childThreadId || !parentThreadId || childThreadId === parentThreadId) return null;
+      const directTaskId = taskIdByThread.get(childThreadId);
+      if (directTaskId !== undefined) {
+        pendingThreadModels.delete(childThreadId);
+        pendingFailedThreads.delete(childThreadId);
+        const directCard = cards.get(directTaskId);
+        const directThread = directCard?.threads.get(childThreadId);
+        if (directCard && directThread) {
+          let changed = false;
+          if (model && directThread.model !== model) {
+            directThread.model = model;
+            changed = true;
+          }
+          if (spawnFailed && !directThread.spawnFailed) {
+            directThread.spawnFailed = true;
+            directThread.status = 'failed';
+            changed = true;
+          }
+          if (changed) return snapshot(directCard);
+        }
+        return null;
+      }
+      if (model) {
+        if (!pendingThreadModels.has(childThreadId) && pendingThreadModels.size >= MAX_PENDING_THREAD_MODELS) {
+          const oldest = pendingThreadModels.keys().next();
+          if (!oldest.done) pendingThreadModels.delete(oldest.value);
+        }
+        pendingThreadModels.set(childThreadId, model);
+      }
+      if (spawnFailed) {
+        if (!pendingFailedThreads.has(childThreadId) && pendingFailedThreads.size >= MAX_PENDING_THREAD_MODELS) {
+          const oldest = pendingFailedThreads.values().next();
+          if (!oldest.done) pendingFailedThreads.delete(oldest.value);
+        }
+        pendingFailedThreads.add(childThreadId);
+      }
       const taskId = taskIdByThread.get(parentThreadId);
       if (taskId === undefined) {
         // 父线程还没归属:**不能丢**。它可能只是 spawn item 尚未到达(乱序),而本次血缘正是
@@ -483,13 +594,16 @@ export function createSubagentLiveCardTracker(opts: {
       const card = cards.get(taskId);
       if (!card) return null;
       // 已并入同一张卡:幂等,不重置计数。
-      if (taskIdByThread.get(childThreadId) === taskId && card.threads.has(childThreadId)) return null;
-
       // 新线程并入会改变聚合状态(比如把已显示完成的卡拉回 running —— 孙线程还在跑,卡片就
       // 不该说完成),所以发帧条件不只看有没有重放内容,还看聚合状态是否因此改变。
-      const before = aggregateStatus(card);
-      const replayed = attachThread(card, childThreadId, new Set<string>());
-      return replayed || aggregateStatus(card) !== before ? snapshot(card) : null;
+      const beforeStatus = aggregateStatus(card);
+      const beforeModel = aggregateModel(card);
+      const replayed = attachThread(card, childThreadId, new Set<string>(), model, spawnFailed);
+      return replayed
+        || aggregateStatus(card) !== beforeStatus
+        || aggregateModel(card) !== beforeModel
+        ? snapshot(card)
+        : null;
     },
 
     handleDescendantNotification(
@@ -523,7 +637,7 @@ export function createSubagentLiveCardTracker(opts: {
         if (card.threads.size === 0) {
           // 一个线程都还没登记上的卡(spawn 刚认出、子线程尚未 started):补一个占位线程,
           // 否则 aggregateStatus 对空集合返回 running,这张卡还是会留在转圈状态。
-          card.threads.set('__shutdown__', { status: 'stopped', totalTokens: 0 });
+          card.threads.set('__shutdown__', { status: 'stopped', totalTokens: 0, spawnFailed: false });
         }
         out.push(snapshot(card));
       }
@@ -535,6 +649,8 @@ export function createSubagentLiveCardTracker(opts: {
       taskIdByThread.clear();
       pending.clear();
       pendingLineage.clear();
+      pendingThreadModels.clear();
+      pendingFailedThreads.clear();
       firstSeenAt.clear();
     },
 

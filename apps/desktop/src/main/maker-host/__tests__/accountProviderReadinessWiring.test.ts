@@ -81,6 +81,23 @@ describe('account provider readiness wiring', () => {
     expect(piShutdown).toBeGreaterThan(providerRefresh);
   });
 
+  it('registers every agent MCP provider array before the initial custom MCP refresh', () => {
+    const piProviders = makerHostSource.indexOf('const piMcpProviders = [');
+    const registerArrays = makerHostSource.indexOf('registerCustomMcpArrays(');
+    const initialRefresh = makerHostSource.indexOf(
+      '_initialCustomMcpRefresh = refreshCustomMcpProviders()',
+      registerArrays,
+    );
+    const registration = makerHostSource.slice(registerArrays, initialRefresh);
+
+    expect(piProviders).toBeGreaterThanOrEqual(0);
+    expect(registerArrays).toBeGreaterThan(piProviders);
+    expect(registration).toContain('claudeMcpProviders');
+    expect(registration).toContain('codexMcpProviders');
+    expect(registration).toContain('piMcpProviders');
+    expect(initialRefresh).toBeGreaterThan(registerArrays);
+  });
+
   it('gates route resolution and the final Maker start hook', () => {
     const bootstrapSession = makerIpcSource.indexOf('async function bootstrapSession');
     const routeGate = makerIpcSource.indexOf(

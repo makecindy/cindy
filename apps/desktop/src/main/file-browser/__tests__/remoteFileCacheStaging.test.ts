@@ -22,11 +22,9 @@ vi.mock('../../logger.js', () => ({
 
 const {
   cleanupOwnedUnpersistedStagedChatAttachments,
-  cleanupStagedChatAttachments,
   getChatAttachmentCacheRoot,
   getChatAttachmentOwnerCacheRoot,
   getRemoteFileCacheRoot,
-  removeStagedChatAttachment,
   stageLocalFileToCache,
   sweepCacheOnStartup,
   sweepStagedChatAttachmentsOnStartup,
@@ -116,26 +114,6 @@ describe('chat attachment staging cache', () => {
     await expect(fs.stat(otherOwnerPath)).resolves.toBeDefined();
   });
 
-  it('removes only controlled .bin files', async () => {
-    const root = getChatAttachmentCacheRoot();
-    await fs.mkdir(root, { recursive: true });
-    const stagedPath = path.join(root, 'staged.bin');
-    const safeNamePath = path.join(root, 'staged.exe');
-    const directoryPath = path.join(root, 'directory.bin');
-    const outsidePath = path.join(userDataDir, 'outside.bin');
-    await fs.writeFile(stagedPath, 'staged');
-    await fs.writeFile(safeNamePath, 'safe');
-    await fs.mkdir(directoryPath);
-    await fs.writeFile(outsidePath, 'outside');
-
-    await cleanupStagedChatAttachments([stagedPath, safeNamePath, directoryPath, outsidePath]);
-
-    await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(safeNamePath)).resolves.toBeDefined();
-    await expect(fs.stat(directoryPath)).resolves.toBeDefined();
-    await expect(fs.stat(outsidePath)).resolves.toBeDefined();
-  });
-
   it('renderer cleanup removes only current-owner files not retained by messages', async () => {
     const ownerId = 'owner-a';
     const ownerRoot = getChatAttachmentOwnerCacheRoot(ownerId);
@@ -181,11 +159,5 @@ describe('chat attachment staging cache', () => {
     });
 
     await expect(fs.stat(draftPath)).resolves.toBeDefined();
-  });
-
-  it('is idempotent when the staged file is already gone', async () => {
-    await expect(removeStagedChatAttachment(path.join(getChatAttachmentCacheRoot(), 'gone.bin'))).resolves.toBe(
-      false,
-    );
   });
 });

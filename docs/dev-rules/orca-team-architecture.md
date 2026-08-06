@@ -81,7 +81,7 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 | 服务 | 文件 | 责任 |
 |---|---|---|
 | `OrcaLifecycleService` | `apps/desktop/src/main/maker-ipc/orcaLifecycleService.ts` | `start_team`、开启协同 `enableTeam`、创建 team、设置 Lead `orcaRole`、首个 worker 创建补偿 |
-| `OrcaWorkerCreationService` | `apps/desktop/src/main/maker-ipc/orcaWorkerCreationService.ts` | 既有 team 下创建 worker，统一 role/label/model/effort/fast 校验与默认值，创建 worker session 并写 `orca_workers` |
+| `OrcaWorkerCreationService` | `apps/desktop/src/main/maker-ipc/orcaWorkerCreationService.ts` | 既有 team 下创建 worker，统一 role/label/model/effort/fast 校验与默认值；新 Worker 的 `permissionMode` 固定为 `auto`，不继承 Lead 当前模式；创建 worker session 并写 `orca_workers` |
 | `OrcaTeamService` | `apps/desktop/src/main/maker-ipc/orcaTeamService.ts` | 给既有 worker 派活、resume、idle、archive、terminal turn 处理与 auto-bridge |
 | `OrcaInterAgentDispatcher` | `apps/desktop/src/main/maker-ipc/orcaInterAgentDispatcher.ts` | Lead/Worker 之间的消息直发或排队、accepted callback、rollback/settle 语义 |
 
@@ -261,7 +261,7 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 - Worktree：toggle off/on、非 git/已在 worktree 只 disable worktree toggle、不阻断 send；Lead close 后清 worktree。
 - 重启后 Lead↔Worker 互访(resume)回归矩阵：覆盖开启路径 `enableTeam` 自动首 worker / MCP `start_team` + `create_worker` / renderer `requestEnableCollab` → `SESSION_ENABLE_ORCA` → `enableTeam`，以及重启时机“对话中途”和“初始化完毕但未对话”；验收动作至少包含 `list_workers` 可见 worker、Lead 侧 `send_to_worker` 可投递或排队、Worker 侧 `send_to_lead` 可回传、focused / idle worker 可 resume。
 - 重启矩阵 / 场景 1「lead worker 正常初始化」：创建协同后应同时写出 Lead `orca_role='lead'`、worker session `orca_role='worker'`、`orca_workers` link 与 focused/list projection，renderer split view 和 MCP `list_workers` 都能看到同一 worker。
-- 重启矩阵 / 场景 2「协同进行到一半，重启 maker，lead worker 能正常互相访问」：已有 Lead↔Worker 对话历史和可能的 running/done 状态时，重启后依赖 `sessions.orca_role` + `orca_workers/orca_teams` 懒合成 vendorOptions / worker link，`send_to_worker` 与 worker `send_to_lead` 仍能恢复投递。
+- 重启矩阵 / 场景 2「协同进行到一半，重启 maker，lead worker 能正常互相访问」：已有 Lead↔Worker 对话历史和可能的 running/done 状态时，重启后依赖 `sessions.orca_role` + `orca_workers/orca_teams` 懒合成 vendorOptions / worker link，`send_to_worker` 与 worker `send_to_lead` 仍能恢复投递；恢复 Worker runtime 必须保留 `sessions.permission_mode`，不得静默升级权限。
 - 重启矩阵 / 场景 3「刚开启协同，初始化完毕后，不进行任何对话，重启 maker，lead worker 能正常互相访问」：空 worker 不能只停留在 DB link；ready placeholder 必须让 worker agent 侧写出可 resume 的历史，尤其防止 Codex rollout 缺失。
 - 重启矩阵 / 场景 4「先开单会话，进行到一半的时候，通过提示词开启协同，看到 lead worker 正常初始化，然后立刻重启 maker 后，lead worker 能正常互相访问」：提示词路径必须走 MCP `start_team` + `create_worker` 与 shared lifecycle service，不能绕开 worker link、role 标记、vendorOptions rehydrate 和 resume 约束。
 - 重启矩阵 / 场景 5「先开单会话，进行到一半的时候，通过协同按钮开启协同，看到 lead worker 正常初始化，然后立刻重启 maker 后，lead worker 能正常互相访问」：按钮路径必须从 `requestEnableCollab` 进入 `SESSION_ENABLE_ORCA` / `enableTeam`，并满足与 MCP 路径相同的重启恢复与互访能力。

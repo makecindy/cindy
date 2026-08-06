@@ -109,7 +109,7 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
     .notice {
       margin-bottom: 8px;
       font-size: 12px;
-      font-weight: 700;
+      font-weight: 600;
       color: ${textTertiary};
       text-transform: uppercase;
     }

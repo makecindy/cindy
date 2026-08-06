@@ -309,6 +309,7 @@ import {
   flushOrphanToolResults,
   getLastAssistantTranscriptUuid,
   getSessionDbAgentKind,
+  isSuccessfulCodexDoneEventData,
   markAssistantTurnCompleted,
   markAssistantTurnFailed,
   noteAgentMeta,
@@ -318,6 +319,7 @@ import {
   onAssistantTextEvent,
   onInteractionMessage,
   onInteractionResolved,
+  persistCodexPlanOnDone,
   onThinkingEvent,
   onToolResultEvent,
   onToolResultFullEvent,
@@ -2153,6 +2155,21 @@ function cancelDirectAbortReconciliation(
 }
 
 /**
+ * Capture only the exact direct-abort owner that a provider-driven close is
+ * about to tear down. Ordinary closes and stale owner/turn generations must
+ * not wake a paused Goal after their routing identity has been discarded.
+ */
+function getDirectAbortBoundaryForClosingSession(
+  sessionId: string,
+  session: WiredSession,
+): DirectAbortReconcileBoundary | null {
+  const boundary = directAbortReconcileBoundaries.get(sessionId);
+  if (!boundary || boundary.session !== session) return null;
+  if (currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation) return null;
+  return boundary;
+}
+
+/**
  * SDK result 事件的 total_cost_usd 是 session 累计 (不是 per-turn) ——
  * 老 vendor/claude/usageExtractor.ts:72-74 也确认过。要算"这一 turn 花了多少"
  * 就要拿这次累计减上次累计。这里 per-session 记一下上次报上来的累计值。
@@ -2908,9 +2925,11 @@ export function anySessionInTurn(maker?: Pick<Maker, 'listActiveSessions'> | nul
  * /goal 生命周期旁路(setter 注入避免 register↔goal-host 环):
  *  - goalClearObserver:clear-context(INPUT_CLEAR_SESSION)时清除该会话目标(上下文已抹,目标失去依据)。
  *  - goalIdleObserver:会话 turn 收尾(idle)时让 controller 兜底续跑 active 目标(#9,race-free,见 controller.maybeContinueActiveGoal)。
+ *  - goalDeferredResumeCancelObserver:非 abort 的 session close/replacement 取消一次性 Resume，
+ *    防止同 sessionId 的后续实例被迟到 idle 误唤醒。
  *  - goalStopObserver:用户 Stop 当前 turn(ABORT_SESSION)时把 active 目标暂停。调用 observer
  *    会同步 detach 监听/续跑资格；paused 持久化与 vendor abort 并行，回执等落盘收口。
- * bootstrap 在启动期接上 getGoalController()?.clearGoal / maybeContinueActiveGoal / pauseGoal。
+ * bootstrap 在启动期接上对应 GoalController API。
  */
 let goalClearObserver: ((sessionId: string) => void) | null = null;
 export function setGoalClearObserver(observer: ((sessionId: string) => void) | null): void {
@@ -2920,6 +2939,23 @@ let goalIdleObserver: ((sessionId: string) => void) | null = null;
 export function setGoalIdleObserver(observer: ((sessionId: string) => void) | null): void {
   goalIdleObserver = observer;
 }
+
+let goalDeferredResumeCancelObserver: ((sessionId: string) => void) | null = null;
+export function setGoalDeferredResumeCancelObserver(
+  observer: ((sessionId: string) => void) | null,
+): void {
+  goalDeferredResumeCancelObserver = observer;
+}
+
+/**
+ * Shared Goal wake-up boundary after the desktop turn tracker is idle.
+ * Normal terminal events and authoritative reconciliation both pass through
+ * here; the Goal controller coalesces duplicate or late terminal tails.
+ */
+function notifyGoalIdleAfterTurnSettled(sessionId: string): void {
+  goalIdleObserver?.(sessionId);
+}
+
 let goalStopObserver: ((sessionId: string) => void | Promise<void>) | null = null;
 export function setGoalStopObserver(
   observer: ((sessionId: string) => void | Promise<void>) | null,
@@ -3204,6 +3240,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     // A runtime replacement invalidates any delayed direct-abort callback that
     // still belongs to the old Session instance.
     cancelDirectAbortReconciliation(session.id);
+    goalDeferredResumeCancelObserver?.(session.id);
     for (const dispose of existing.disposers) dispose();
     existing.session.setInteractionListener(null);
   }
@@ -3402,8 +3439,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 还没进入 renderer 时就重新被 Chromium 节流。
           shouldMarkTurnTerminalIdleAfterBroadcast = true;
           agentInputCoordinatorHolder?.onTurnEvent(session.id, 'done');
-          // #9 idle 兜底:turn 收尾后让 goal controller 决定是否补一轮(无 goal/非 active 时 no-op)。
-          goalIdleObserver?.(session.id);
         } else {
           // silent-stop 自动续跑:translator 判定本 turn 被上游空内容消息静默收尾时在
           // done.data 附加 silentStop 标记(见 maker-core translator)。延迟一拍再决策,
@@ -3575,6 +3610,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       handleAgentIslandEventAfterBroadcast(session, broadcastEvent);
       if (shouldMarkTurnTerminalIdleAfterBroadcast) {
         sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);
+        // #9 idle 兜底:正常 done、终止型 error（含 abort）统一在 tracker 已置 idle 后
+        // 唤醒 Goal controller。无 goal / 非 active / 已取消的 deferred Resume 均为 no-op。
+        notifyGoalIdleAfterTurnSettled(session.id);
         // 后台活动检测:done / 终止型 error = 逻辑 turn 结束,记录结束时刻。
         // 此后若该会话进程仍有 API 流量(后台子 agent),record 路径会点亮横幅。
         noteClaudeSessionTurnState(session.id, false);
@@ -3639,7 +3677,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
           // 更新后的完整行。失败轮的 paired done 只复用 id 做 usage 记账，不能把
           // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
-          if (event.type !== 'done') {
+          // Codex 的 interrupted / failed 同样以 done 收尾；即使没有配套 error，也必须
+          // 写 false，避免历史计划兼容逻辑把用户主动停止的半截计划推成全部完成。
+          const isSuccessfulDone =
+            event.type === 'done' &&
+            (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data));
+          if (!isSuccessfulDone) {
             void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
           } else if (!isPairedFailedTurnDone) {
             void markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId);
@@ -3706,6 +3749,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // A claim-bearing done seals this SDK segment, but the product turn is
         // still running and may emit another continuation segment. Reset the
         // per-SDK-turn persistence maps while deferring the logical turn marker.
+        if (!isContinuationBoundary && event.source === 'codex' && event.type === 'done') {
+          // Renderer applies this terminal snapshot immediately. Persist the
+          // same state before sealing the persist queue and clearing the
+          // turn-owned lookup maps. The drain barrier below must include this
+          // write, otherwise app exit can still leave an in-progress plan.
+          persistCodexPlanOnDone(
+            session.id,
+            event.data as
+              | {
+                  plan?: unknown;
+                  raw?: { id?: unknown; status?: unknown };
+                }
+              | null
+              | undefined,
+          );
+        }
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
         }
@@ -4475,6 +4534,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         });
       }
       if (status === 'closed') {
+        const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(
+          session.id,
+          session,
+        );
         try {
           cleanupPendingInteractionsForSession(session.id, 'session_closed');
           // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
@@ -4537,6 +4600,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           sessionTurnActivityTracker.deleteSession(session.id);
           sessionTurnBoundaryGenerationById.delete(session.id);
           markSessionTurnEnded(session.id);
+          if (closedDirectAbortBoundary) {
+            // Provider close is authoritative that this exact abort-owned turn
+            // is idle. Its reconciliation chain was cancelled by teardown, so
+            // preserve the shared terminal wake-up before the intent is orphaned.
+            notifyGoalIdleAfterTurnSettled(session.id);
+          } else {
+            // A close that did not settle this exact abort generation supersedes
+            // any Resume intent keyed by the reusable session id. Cancel it and
+            // its retry timer so a later Session instance cannot revive the Goal.
+            goalDeferredResumeCancelObserver?.(session.id);
+          }
         }
       }
     }),
@@ -5093,7 +5167,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     removeOAuthCredentials: (providerId) => removeGenericOAuthCredentialsReversibly(providerId),
   });
 
-  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新两个 agent 的 mcpProviders 数组
+  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
     refreshProviders: () => refreshCustomMcpProviders(),
@@ -5736,7 +5810,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       model: row.model,
       effort: row.effort as CreateOpts['effort'],
       fastMode: !!row.fastMode,
-      permissionMode: row.permissionMode as CreateOpts['permissionMode'],
+      permissionMode: permissionModeOrAsk(row.permissionMode),
       title: row.title,
       resumeSessionId: row.sdkSessionId ?? undefined,
       orcaRole: row.orcaRole as 'worker' | null,
@@ -8857,6 +8931,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     }
     sessionTurnActivityTracker.setSessionInTurn(sessionId, false);
+    // 与正常 product-terminal 事件共享同一条 Goal idle 唤醒语义。direct abort
+    // 与 coordinator 的 authoritative-idle 都从本 reconciliation 成功出口经过；
+    // 迟到终态或重复尾巴由 Goal controller 的 deferred intent 防抖幂等收敛。
+    notifyGoalIdleAfterTurnSettled(sessionId);
     try {
       // The marker write is best-effort and ordered behind pending message
       // persistence. It may retry/settle after an owner boundary is available.

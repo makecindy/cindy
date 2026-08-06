@@ -23,6 +23,16 @@ const XD: CindyMediaProviderSlice = {
     { id: 'seedance-pro', name: 'Seedance Pro' },
   ],
   videoDefaults: { standard: 'seedance-fast', best: 'seedance-pro' },
+  embeddingModels: [
+    { id: 'voyage/voyage-4', name: 'Voyage 4' },
+    { id: 'voyage/voyage-4-large', name: 'Voyage 4 Large' },
+    { id: 'text-embedding-3-small', name: 'OpenAI Embedding 3 Small' },
+  ],
+  embeddingDefaults: {
+    standard: 'voyage/voyage-4',
+    draft: 'text-embedding-3-small',
+    best: 'voyage/voyage-4-large',
+  },
 };
 
 describe('deriveCindyMediaConfig — 正常目录', () => {
@@ -225,5 +235,139 @@ describe('deriveCindyMediaConfig — supportsEdit(仅生成来源,2026-07)', () 
     expect(cfg.models.map((m) => m.id)).toContain('xai/aurora');
     expect(cfg.models.find((m) => m.id === 'xai/aurora')?.supportsEdit).toBe(false);
     expect(cfg.models.find((m) => m.id === 'gpt-image-2')?.supportsEdit).toBe(true);
+  });
+});
+
+describe('deriveCindyMediaConfig — 向量类目(embed)', () => {
+  it('读 embeddingModels / embeddingDefaults,与 image / video 同一套派生规则', () => {
+    const cfg = deriveCindyMediaConfig([XD], 'embed');
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4',
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+    expect(cfg.defaults).toEqual({
+      standard: 'voyage/voyage-4',
+      draft: 'text-embedding-3-small',
+      best: 'voyage/voyage-4-large',
+    });
+  });
+
+  it('目录没声明向量段 → 空清单 + defaults null(能力暂不可用,不落回别的类目)', () => {
+    const imageOnly: CindyMediaProviderSlice = {
+      id: 'xd',
+      imageModels: [{ id: 'gpt-image-2', name: 'GPT Image 2' }],
+      imageDefaults: { standard: 'gpt-image-2' },
+    };
+    expect(deriveCindyMediaConfig([imageOnly], 'embed')).toEqual({ models: [], defaults: null });
+  });
+
+  it('停用过滤:被停用的型号不进清单,目录默认指向它时回落清单首项', () => {
+    const cfg = deriveCindyMediaConfig(
+      [XD],
+      'embed',
+      (_providerId, modelId) => modelId === 'voyage/voyage-4',
+    );
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+    expect(cfg.defaults?.standard).toBe('voyage/voyage-4-large');
+  });
+
+  it('供应商未就绪(本地模式无网关)→ 整段跳过,能力暂不可用', () => {
+    expect(deriveCindyMediaConfig([XD], 'embed', undefined, () => false)).toEqual({
+      models: [],
+      defaults: null,
+    });
+  });
+});
+
+describe('deriveCindyMediaConfig — 向量只认 XD(派单还不是 provider-aware)', () => {
+  /**
+   * 图像已经是多来源(imageChannelRegistry 按 providerId 取执行通道),向量还没有
+   * 对应的分流层:执行端是单例 EmbeddingService,只握着 XD Gateway 一个 baseUrl +
+   * 一把 key。远端目录能给**任何** provider 加 embeddingModels,一旦放进白名单,
+   * 用户会看到"可选"的型号、以为用的是自己填的 key,实际拿 XD 的凭证去计费
+   * (PR #1707 review)。
+   */
+  const GEMINI: CindyMediaProviderSlice = {
+    id: 'gemini',
+    embeddingModels: [{ id: 'gemini-embedding-2-preview', name: 'Gemini Embedding 2' }],
+    embeddingDefaults: { standard: 'gemini-embedding-2-preview' },
+  };
+
+  it('非 XD 供应商声明的向量清单不进白名单', () => {
+    expect(deriveCindyMediaConfig([GEMINI], 'embed')).toEqual({ models: [], defaults: null });
+  });
+
+  it('非 XD 的向量默认段也不生效(不能顶掉 XD 的默认)', () => {
+    const cfg = deriveCindyMediaConfig([GEMINI, XD], 'embed');
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4',
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+    expect(cfg.defaults?.standard).toBe('voyage/voyage-4');
+  });
+
+  it('图像 / 视频不受此限(它们本来就是多来源)', () => {
+    const gemImage: CindyMediaProviderSlice = {
+      id: 'gemini',
+      imageModels: [{ id: 'gemini-own-image', name: 'Gemini 自有图像' }],
+    };
+    expect(deriveCindyMediaConfig([gemImage], 'image').models.map((m) => m.id)).toEqual([
+      'gemini-own-image',
+    ]);
+  });
+});
+
+describe('deriveCindyMediaConfig — 客户端不认识的向量型号不进清单', () => {
+  /**
+   * 目录是热更的,可能给出比 EmbeddingModelId 这个静态联合更新的型号 id。不滤掉的话
+   * 它会照常展示、可被钉选、甚至成为目录默认,而执行侧的纵深防御会把每一次请求变成
+   * INTERNAL —— UI 先宣称可用、下单才失败(PR #1707 review)。
+   *
+   * 过滤复用的是 isModelDisabled 那个"别进清单"钩子,所以既有的降级语义照旧:
+   * 被滤条目不占 first-wins,目录默认指向它时回落清单首项。
+   */
+  const KNOWN = new Set(['voyage/voyage-4', 'voyage/voyage-4-large', 'text-embedding-3-small']);
+  const notKnown = (_p: string, modelId: string): boolean => !KNOWN.has(modelId);
+
+  it('未知型号被滤掉,已知的照常在册', () => {
+    const withFuture: CindyMediaProviderSlice = {
+      ...XD,
+      embeddingModels: [
+        { id: 'voyage/voyage-99-future', name: '客户端还不认识的型号' },
+        ...XD.embeddingModels!,
+      ],
+    };
+    const cfg = deriveCindyMediaConfig([withFuture], 'embed', notKnown);
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4',
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+  });
+
+  it('目录默认指向未知型号 → 回落清单首项,而不是钉一个必失败的默认', () => {
+    const badDefault: CindyMediaProviderSlice = {
+      ...XD,
+      embeddingDefaults: { standard: 'voyage/voyage-99-future' },
+    };
+    const cfg = deriveCindyMediaConfig([badDefault], 'embed', notKnown);
+    expect(cfg.defaults?.standard).toBe('voyage/voyage-4');
+  });
+
+  it('整份清单都不认识 → 空清单(能力不可用,而非逐单 INTERNAL)', () => {
+    const allFuture: CindyMediaProviderSlice = {
+      ...XD,
+      embeddingModels: [{ id: 'voyage/voyage-99-future', name: '未来型号' }],
+      embeddingDefaults: { standard: 'voyage/voyage-99-future' },
+    };
+    expect(deriveCindyMediaConfig([allFuture], 'embed', notKnown)).toEqual({
+      models: [],
+      defaults: null,
+    });
   });
 });

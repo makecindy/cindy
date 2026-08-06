@@ -50,6 +50,15 @@ describe('authManager 注入点(静态源码断言)', () => {
     expect(viteMainConfigSource).toContain("find: '@cindy/auth-client/fixtures'");
     expect(viteMainConfigSource).toContain('loginScenarios.production-stub.ts');
   });
+
+  it('vite.main.config 保留显式空 Team ID,不让 .env 旧值重新启用 Touch ID', () => {
+    expect(viteMainConfigSource).toContain(
+      "Object.prototype.hasOwnProperty.call(process.env, key)",
+    );
+    expect(viteMainConfigSource).toContain(
+      "readMainEnvPreservingEmpty('CINDY_WEBAUTHN_APPLE_TEAM_ID').trim()",
+    );
+  });
 });
 
 describe('guard 行为(production-mode 断言)', () => {

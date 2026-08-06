@@ -60,7 +60,7 @@ export interface WorkspaceSlotDeps {
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
   showDirectoryDialog(params: { ghostName: string; purpose: string | null }): Promise<string | null>;
-  /** 在途 ghost_call 反查(cardService.callInfoOf):查无/过期返回 null。 */
+  /** 在途 ghost_call 反查(cardService.inFlightCallInfoOf):查无/过期返回 null。 */
   resolveCallContext(callId: string): { ghostId: string; sessionId: string | null } | null;
   /** 会话目录快照(localDb);查无会话返回 null。 */
   getSessionDirInfo(
