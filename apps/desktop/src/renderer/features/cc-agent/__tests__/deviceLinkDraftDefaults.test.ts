@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveDeviceLinkDraftDefaults } from '../deviceLinkDraftDefaults';
+import {
+  resolveDeviceLinkDraftDefaults,
+  shouldReseedDeviceLinkDraftDefaults,
+} from '../deviceLinkDraftDefaults';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 
 // 最小被控端 capabilities:两模型(Opus 支持 fast + 多 effort 档;Haiku 无 effort/fast)。
@@ -105,6 +108,21 @@ describe('resolveDeviceLinkDraftDefaults', () => {
       resolveDeviceLinkDraftDefaults(caps(), { model: 'claude-opus-4-8' }, undefined, 'claude-code')
         .model,
     ).toBe('claude-opus-4-8');
+  });
+
+  it('被控端已有来源偏好时不应用可能丢失该来源的区域默认', () => {
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(),
+      {
+        model: 'claude-opus-4-8',
+        modelChosenByUser: false,
+        providerId: 'anthropic',
+      },
+      undefined,
+      'claude-code',
+    );
+    expect(sel.model).toBe('claude-opus-4-8');
+    expect(sel.providerId).toBe('anthropic');
   });
 
   it('控制端本次显式 targetModel 优先于远端未选择标记', () => {
@@ -221,5 +239,107 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     );
     expect(sel.effort).toBe('xhigh');
     expect(sel.fastMode).toBe(true);
+  });
+});
+
+describe('shouldReseedDeviceLinkDraftDefaults', () => {
+  it('recalibrates the same untouched target when the remote explicitly has no model choice', () => {
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:claude-code',
+        nextSeedKey: 'device-a:claude-code',
+        capabilitiesChanged: true,
+        controllerTouched: false,
+        remoteModelChosenByUser: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('preserves controller edits and remote explicit or legacy-unknown choices', () => {
+    const base = {
+      currentSeedKey: 'device-a:claude-code',
+      nextSeedKey: 'device-a:claude-code',
+    };
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        ...base,
+        capabilitiesChanged: true,
+        controllerTouched: true,
+        remoteModelChosenByUser: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        ...base,
+        capabilitiesChanged: true,
+        controllerTouched: false,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        ...base,
+        capabilitiesChanged: true,
+        controllerTouched: false,
+        remoteModelChosenByUser: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        ...base,
+        capabilitiesChanged: false,
+        controllerTouched: false,
+        remoteModelChosenByUser: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('always seeds a new device or agent target', () => {
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:claude-code',
+        nextSeedKey: 'device-b:codex',
+        capabilitiesChanged: false,
+        controllerTouched: true,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('capabilities refresh clamp contract', () => {
+  it('保留仍合法的控制端选择，但会夹紧已失效的模型与运行参数', () => {
+    const refreshed = caps();
+    refreshed.availableModels = [
+      {
+        id: 'claude-haiku-4-5',
+        label: 'Haiku',
+        efforts: ['low'],
+        defaultEffort: 'low',
+        supportsFastMode: false,
+      },
+    ];
+    refreshed.permissionModes = [{ id: 'default', label: 'Default' }];
+
+    expect(
+      resolveDeviceLinkDraftDefaults(
+        refreshed,
+        {
+          model: 'removed-model',
+          modelChosenByUser: true,
+          effort: 'high',
+          fastMode: true,
+          permissionMode: 'bypassPermissions',
+          providerId: 'anthropic',
+        },
+        'removed-model',
+      ),
+    ).toEqual({
+      model: 'claude-haiku-4-5',
+      effort: 'low',
+      fastMode: false,
+      permissionMode: undefined,
+      providerId: 'anthropic',
+    });
   });
 });

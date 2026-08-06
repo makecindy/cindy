@@ -6,9 +6,9 @@
  * 一个没有任何已连接来源的模型上，Send 被禁用、只能弹「当前模型没有已连接的来源」，用户还没
  * 开始用就先撞墙。这里负责把默认落到**真正可用**的模型上。
  *
- * 这里只校准**用户从没显式选过**的默认值（`modelChosenByVendor` 区分「真选过」与
- * 「默认回填」）。用户自己选的模型一律不动：他选了什么就该看到什么，静默改写比撞墙更糟
- * ——那会让「我明明选了 Codex」变成无法自查的错觉。
+ * 这里只校准**用户从没显式选过模型**的默认值（`modelChosenByVendor` 区分「真选过」与
+ * 「默认回填」）。已有来源偏好时，校准候选收窄到该来源，保证模型与来源成对变化；用户自己
+ * 选过模型则一律不动。静默改写比撞墙更糟——那会让「我明明选了 Anthropic」变成无法自查。
  */
 
 import {
@@ -83,6 +83,31 @@ export interface PickedConnectedModel {
   providerId: string;
 }
 
+/** 按正常来源优先级找出区域 / 目录明确标记的新对话默认模型。 */
+function markedDefaultModelIdForAgent(
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+): string | null {
+  const flagAgent: 'claude-code' | 'codex' = agent === 'codex' ? 'codex' : 'claude-code';
+  for (const provider of providersByPreference(providers, agent)) {
+    const userProvider = provider.source === 'user';
+    const flagged = (provider.models[agent] ?? [])
+      .filter(
+        (model) =>
+          model.defaultEnabled !== false &&
+          (model.newSessionDefault?.includes(flagAgent) ?? false) &&
+          isModelSelectableForNewRoute(model, { userProvider }),
+      )
+      .slice()
+      .sort(
+        (a, b) =>
+          (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
+      )[0];
+    if (flagged) return flagged.id;
+  }
+  return null;
+}
+
 /**
  * 在该 agent 的已连接来源里挑 (模型, 来源)：
  *   0. 目录/服务端**显式标记**为新对话默认（`newSessionDefault`）、且可用且默认可见的模型
@@ -116,27 +141,7 @@ export function pickConnectedModelForAgent(
   if (ranked.length === 0) return null;
   // 0. 目录/服务端显式标记的新对话默认(newSessionDefault)优先。pi 不是 wire agent,按
   //    claude-code 口径判定(host 把含 claude-code 的模型投影进 pi tab,标记随之带上)。
-  const flagAgent: 'claude-code' | 'codex' = agent === 'codex' ? 'codex' : 'claude-code';
-  let flaggedModelId: string | null = null;
-  for (const provider of ranked) {
-    const userProvider = provider.source === 'user';
-    const flagged = (provider.models[agent] ?? [])
-      .filter(
-        (m) =>
-          m.defaultEnabled !== false &&
-          (m.newSessionDefault?.includes(flagAgent) ?? false) &&
-          isModelSelectableForNewRoute(m, { userProvider }),
-      )
-      .slice()
-      .sort(
-        (a, b) =>
-          (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
-      )[0];
-    if (flagged) {
-      flaggedModelId = flagged.id;
-      break;
-    }
-  }
+  const flaggedModelId = markedDefaultModelIdForAgent(ranked, agent);
   if (flaggedModelId !== null) {
     // 标记只存在于区域门控后的 XD 条目；来源选择仍必须独立遵守 ranked 的订阅优先。
     // 同 ID 的订阅副本不会重复携带标记，但只要它可选且默认可见，就应先消耗用户已付费额度。
@@ -181,6 +186,8 @@ export interface DraftModelCalibrationInput {
   model: string;
   /** 用户是否在选择器里显式选过该 vendor 的模型。 */
   chosenByUser: boolean;
+  /** 当前来源偏好；仍是有效连接来源时把自动模型候选限制在它内部，避免校准后静默丢来源。 */
+  preferredProviderId?: string | null;
   /** 供应商清单是否仍在加载：加载期不校准，避免首帧把默认模型闪成别的。 */
   providersLoading: boolean;
 }
@@ -202,10 +209,35 @@ export function calibrateDraftModel({
   agent,
   model,
   chosenByUser,
+  preferredProviderId,
   providersLoading,
 }: DraftModelCalibrationInput): DraftModelCalibrationResult {
   if (chosenByUser || providersLoading) return { model, providerId: null };
-  const picked = pickConnectedModelForAgent(providers, agent, model);
+  const connectedPreferred = preferredProviderId
+    ? connectedProvidersForAgent([...providers], agent).find(
+        (provider) => provider.id === preferredProviderId,
+      )
+    : undefined;
+  if (connectedPreferred) {
+    // marker 只需由策略来源声明一次（当前为 XD），用户选定的来源若也提供同一 ID，仍应由
+    // 该来源承接；不能因它自己的目录副本没重复 marker 就退回旧模型或偷偷改走 XD。
+    const markedModelId = markedDefaultModelIdForAgent(providers, agent);
+    const matchingMarkedModel = markedModelId
+      ? (connectedPreferred.models[agent] ?? []).find(
+          (candidate) =>
+            candidate.id === markedModelId &&
+            candidate.defaultEnabled !== false &&
+            isModelSelectableForNewRoute(candidate, {
+              userProvider: connectedPreferred.source === 'user',
+            }),
+        )
+      : undefined;
+    if (matchingMarkedModel) {
+      return { model: matchingMarkedModel.id, providerId: connectedPreferred.id };
+    }
+  }
+  const candidates = connectedPreferred ? [connectedPreferred] : providers;
+  const picked = pickConnectedModelForAgent(candidates, agent, model);
   return picked ?? { model, providerId: null };
 }
 

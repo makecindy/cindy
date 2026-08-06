@@ -328,6 +328,79 @@ describe('pickConnectedModelForAgent — newSessionDefault 标记优先（步骤
       }),
     ).toBe('my-pick');
   });
+
+  it('当前来源有偏好时，区域默认只在该来源内部校准，不会静默丢来源', () => {
+    const providers = [
+      provider(
+        'anthropic',
+        true,
+        {
+          'claude-code': [model('my-pick')],
+        },
+        'subscription',
+      ),
+      provider('xd', true, {
+        'claude-code': [model('deepseek', { newSessionDefault: ['claude-code'] })],
+      }),
+    ];
+    expect(
+      calibrateDraftModel({
+        providers,
+        agent: 'claude-code',
+        model: 'my-pick',
+        chosenByUser: false,
+        preferredProviderId: 'anthropic',
+        providersLoading: false,
+      }),
+    ).toEqual({ model: 'my-pick', providerId: 'anthropic' });
+  });
+
+  it('区域 marker 只在 XD 声明时，选定来源仍可承接其提供的同 ID 模型', () => {
+    const providers = [
+      provider(
+        'anthropic',
+        true,
+        {
+          'claude-code': [model('deepseek')],
+        },
+        'subscription',
+      ),
+      provider('xd', true, {
+        'claude-code': [
+          model('deepseek', { newSessionDefault: ['claude-code'] }),
+          model('old-default'),
+        ],
+      }),
+    ];
+    expect(
+      calibrateDraftModel({
+        providers,
+        agent: 'claude-code',
+        model: 'old-default',
+        chosenByUser: false,
+        preferredProviderId: 'anthropic',
+        providersLoading: false,
+      }),
+    ).toEqual({ model: 'deepseek', providerId: 'anthropic' });
+  });
+
+  it('陈旧的来源偏好不阻塞区域默认，回退完整的已连接候选', () => {
+    const providers = [
+      provider('xd', true, {
+        'claude-code': [model('deepseek', { newSessionDefault: ['claude-code'] })],
+      }),
+    ];
+    expect(
+      calibrateDraftModel({
+        providers,
+        agent: 'claude-code',
+        model: 'old-model',
+        chosenByUser: false,
+        preferredProviderId: 'disconnected-provider',
+        providersLoading: false,
+      }),
+    ).toEqual({ model: 'deepseek', providerId: 'xd' });
+  });
 });
 
 describe('calibrateDraftModel', () => {
