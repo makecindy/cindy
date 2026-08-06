@@ -4814,7 +4814,7 @@
       "readOnlyHint": "終了できるのはタスク用の Agent プロセスだけです",
       "terminate": "プロセスを終了",
       "terminateConfirmTitle": "{{name}} プロセスを終了しますか？",
-      "terminateConfirmDescription": "この Agent プロセスとすべての子プロセスを強制終了します。このプロセスを使用しているすべてのタスクが中断されます。影響を受けたタスクでメッセージを送信すると、必要に応じて Agent を再起動できます。",
+      "terminateConfirmDescription": "この Agent プロセスを強制終了します。このプロセスを使用しているすべてのタスクが中断されます。影響を受けたタスクでメッセージを送信すると、必要に応じて Agent を再起動できます。",
       "terminated": "{{name}} プロセスを終了しました",
       "terminateFailed": "プロセスを終了できませんでした。すでに終了している可能性があります。リストは次回のサンプリングで自動的に更新されます"
     }

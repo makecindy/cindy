@@ -4814,7 +4814,7 @@
       "readOnlyHint": "작업용 Agent 프로세스만 종료할 수 있습니다",
       "terminate": "프로세스 종료",
       "terminateConfirmTitle": "{{name}} 프로세스를 종료할까요?",
-      "terminateConfirmDescription": "이 Agent 프로세스와 모든 하위 프로세스를 강제 종료합니다. 이 프로세스를 사용하는 모든 작업이 중단되며, 영향을 받은 작업에서 메시지를 보내면 필요할 때 Agent를 다시 시작할 수 있습니다.",
+      "terminateConfirmDescription": "이 Agent 프로세스를 강제 종료합니다. 이 프로세스를 사용하는 모든 작업이 중단되며, 영향을 받은 작업에서 메시지를 보내면 필요할 때 Agent를 다시 시작할 수 있습니다.",
       "terminated": "{{name}} 프로세스를 종료했습니다",
       "terminateFailed": "프로세스를 종료하지 못했습니다. 이미 종료되었을 수 있습니다. 목록은 다음 샘플링 때 자동으로 업데이트됩니다."
     }

@@ -170,16 +170,16 @@ describe('terminate ownership validation', () => {
     return killProcessTree;
   }
 
-  it('在同一同步调用栈内校验并杀掉 agent 根进程及子树', () => {
+  it('在同一同步调用栈内校验根进程，且不把可复用的后代 PID 快照交给杀树器', () => {
     const kill = registerWithRows();
     const result = handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
       { sender: fakeSender() },
       terminateRequest(900),
     );
     expect(result).toEqual({ pid: 900, kind: 'claude' });
-    expect(kill).toHaveBeenCalledWith(900, expect.any(Map));
+    expect(kill).toHaveBeenCalledWith(900, new Map());
     const map = kill.mock.calls[0][1] as Map<number, number[]>;
-    expect(map.get(900)).toEqual([901]);
+    expect(map.size).toBe(0);
   });
 
   it.each([

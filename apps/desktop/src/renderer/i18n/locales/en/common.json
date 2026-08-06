@@ -4816,7 +4816,7 @@
       "readOnlyHint": "Only Agent processes used for tasks can be stopped",
       "terminate": "Stop Process",
       "terminateConfirmTitle": "Stop {{name}} process?",
-      "terminateConfirmDescription": "This force-stops the agent process and all of its child processes. Every task using this process will be interrupted; send another message in an affected task to start an agent again.",
+      "terminateConfirmDescription": "This force-stops the Agent process. Every task using this process will be interrupted; send another message in an affected task to start an Agent again.",
       "terminated": "Stopped the {{name}} process",
       "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample."
     }

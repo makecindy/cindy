@@ -215,10 +215,12 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     }
     // 从同步扫描开始到 kill 完成之间不能 await/让出事件循环。根进程是 main 的直属
     // 子进程；main 未处理退出/关闭句柄前，已校验的根 pid 不会被系统复用。
-    if (!killTree(pid, snapshot.childrenByParent)) {
-      throwIpcError('INTERNAL', 'failed to terminate the agent process tree');
+    // Windows taskkill /T 由 OS 从当前根进程展开树，不消费这个 map；POSIX 则只杀已
+    // 校验出生身份的根进程，绝不把扫描快照里的后代 PID 交给 kill（后代可能已退出并复用）。
+    if (!killTree(pid, new Map())) {
+      throwIpcError('INTERNAL', 'failed to terminate the agent process');
     }
-    log.info('agent process tree terminated from resource usage panel', { pid, kind });
+    log.info('agent process terminated from resource usage panel', { pid, kind });
     const result: TerminateAgentProcessResult = { pid, kind };
     return result;
   });

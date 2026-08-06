@@ -4814,7 +4814,7 @@
       "readOnlyHint": "只有用于任务的 Agent 进程可以终止",
       "terminate": "终止进程",
       "terminateConfirmTitle": "终止 {{name}} 进程？",
-      "terminateConfirmDescription": "将强制终止该 Agent 进程及其全部子进程，使用该进程的所有任务都会中断；之后在任一受影响任务里继续发消息，即可按需重新启动 Agent。",
+      "terminateConfirmDescription": "将强制终止该 Agent 进程，使用该进程的所有任务都会中断；之后在任一受影响任务里继续发消息，即可按需重新启动 Agent。",
       "terminated": "已终止 {{name}} 进程",
       "terminateFailed": "无法终止该进程，它可能已自行退出；列表会随下一次采样自动更新"
     }
