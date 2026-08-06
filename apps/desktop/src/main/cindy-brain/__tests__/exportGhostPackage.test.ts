@@ -37,8 +37,6 @@ const canSymlink = (() => {
 let workDir: string;
 let ghostDir: string;
 
-// locales 目录 + ghost.json/main.js/locales/en.json 三个文件。
-const BASIC_FIXTURE_ENTRY_COUNT = 4;
 const FILE_WRITE_BATCH_SIZE = 16;
 
 beforeEach(async () => {
@@ -235,8 +233,9 @@ describe('exportGhostPackage', () => {
   it('目录内容超过装入侧条目上限:如实 too_large', async () => {
     // 普通(非 Node)插件装入上限 256 条目;运行期写入的杂散文件可能
     // 把目录撑过上限,导出不能成功却装不回。
-    const extraEntryCount = MAX_BASIC_ZIP_ENTRIES - BASIC_FIXTURE_ENTRY_COUNT + 1;
-    await writeCacheFiles(extraEntryCount);
+    ghostDir = path.join(workDir, 'too-many-entries');
+    await fs.promises.mkdir(ghostDir);
+    await writeCacheFiles(MAX_BASIC_ZIP_ENTRIES + 1);
     const result = await exportGhostPackage('hello', makeDeps());
     expect(result).toEqual({ status: 'error', code: 'too_large' });
   });
