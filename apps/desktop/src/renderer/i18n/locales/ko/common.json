@@ -5032,6 +5032,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "이 모델은 설정에서 API key를 구성해야 사용할 수 있습니다",
+      "hidden": "숨김",
       "subscriptionDirectDisabled": {
         "chatgpt": "구독 직결 GPT 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
         "xai": "구독 직결 Grok 모델은 SSH 원격 세션을 아직 지원하지 않습니다",

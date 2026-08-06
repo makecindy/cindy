@@ -5032,6 +5032,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在设置里配置 API key 才能使用",
+      "hidden": "已隐藏",
       "subscriptionDirectDisabled": {
         "chatgpt": "订阅直连的 GPT 模型协议暂不支持 SSH 远程会话",
         "xai": "订阅直连的 Grok 模型协议暂不支持 SSH 远程会话",

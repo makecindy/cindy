@@ -32,6 +32,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
+        'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
         'newChat.modelSelector.remoteLoading': '正在从远程设备读取模型…',
@@ -297,6 +298,7 @@ const deviceProvidersRef = vi.hoisted(() => ({
   loading: false,
   error: null as string | null,
   unsupported: false,
+  modelVisibilityOverrides: undefined as Record<string, boolean> | undefined,
   prefetch: vi.fn(async () => {}),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
@@ -308,6 +310,7 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     loading: deviceProvidersRef.loading,
     error: deviceProvidersRef.error,
     unsupported: deviceProvidersRef.unsupported,
+    modelVisibilityOverrides: deviceProvidersRef.modelVisibilityOverrides,
   }),
 }));
 
@@ -331,6 +334,15 @@ vi.mock('@/lib/providerModels', () => ({
   // #245 新增:ModelSelector 渲染路径直接调用;fixture providers 无 routing,按不过滤透传。
   isChatBridgedCodexProvider: () => false,
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
+  isDeviceModelVisible: (
+    overrides: Record<string, boolean> | undefined,
+    agent: string,
+    providerId: string,
+    model: { id: string; defaultEnabled?: boolean },
+  ) =>
+    overrides === undefined
+      ? true
+      : (overrides[`${agent}:${providerId}:${model.id}`] ?? model.defaultEnabled !== false),
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) =>
     agentKind ?? 'claude-code',
   selectVisibleModels: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) => {
@@ -403,6 +415,7 @@ import {
   ModelSelectorContent,
   modelEffortLabel,
   modelListMaxHeightForRows,
+  modelTagDensityForWidth,
   resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
 } from '@/components/new-chat/ModelSelector';
@@ -412,12 +425,14 @@ const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const 
 
 beforeEach(() => {
   requestProviderModelsAutoRefresh.mockClear();
+  modelVisibilityRef.isEnabled = () => true;
   providersRef.providerOrder = [];
   agentCapabilitiesRef.loading = false;
   agentCapabilitiesRef.error = null;
   deviceProvidersRef.loading = false;
   deviceProvidersRef.error = null;
   deviceProvidersRef.unsupported = false;
+  deviceProvidersRef.modelVisibilityOverrides = undefined;
   deviceProvidersRef.prefetch.mockReset();
   deviceProvidersRef.prefetch.mockResolvedValue(undefined);
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -501,6 +516,16 @@ describe('resolveRemoteModelListStatus', () => {
 });
 
 describe('ModelSelector trigger variants', () => {
+  it('keeps required model status tags as the fluid picker narrows', () => {
+    expect(modelTagDensityForWidth(null)).toBe('full');
+    // 320px pane 还要扣掉图标、effort、勾选和左右 padding；英文 Subscription
+    // 会把模型名压成 GPT-...，所以此时只保留当前模型的已隐藏标识。
+    expect(modelTagDensityForWidth(320)).toBe('hidden');
+    expect(modelTagDensityForWidth(370)).toBe('subscription');
+    expect(modelTagDensityForWidth(449)).toBe('subscription');
+    expect(modelTagDensityForWidth(450)).toBe('full');
+  });
+
   // 打开选择器既发起刷新、又把「发现在途」状态推给内容区(见 useModelDiscoveryPending),
   // 所以点击要走 act:那次刷新 resolve 后还有一次 setPending(false) 落在微任务里。
   const clickTrigger = async (): Promise<void> => {
@@ -1372,6 +1397,7 @@ describe('ModelSelector trigger variants', () => {
       expect(row.textContent).not.toContain('¥12 / ¥36');
       expect(row.textContent).not.toContain('¥6 / ¥18');
       expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
+      expect(row.querySelector('[data-model-hidden-label]')).toBeNull();
 
       fireEvent.pointerEnter(row);
       expect(
@@ -1854,10 +1880,122 @@ describe('ModelSelector trigger variants', () => {
       expect(
         within(tags as HTMLElement).getByText('settings.providers.models.subscription'),
       ).toBeTruthy();
+      expect(row.querySelector('[data-model-hidden-label]')).toBeNull();
       expect(row.textContent).not.toContain('$3 / $15');
       expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('renders selected hidden status before its subscription label', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    modelVisibilityRef.isEnabled = () => false;
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+          fluidWidth: true,
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      const tags = row.querySelector('[data-model-tags]');
+      expect(tags).not.toBeNull();
+      const hidden = within(tags as HTMLElement).getByText('已隐藏');
+      const subscription = within(tags as HTMLElement).getByText(
+        'settings.providers.models.subscription',
+      );
+      expect(
+        hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(row.querySelector('[data-model-hidden-label]')).toBe(hidden);
+      expect(screen.queryByRole('option', { name: /Sonnet 4\.6/ })).toBeNull();
+    } finally {
+      modelVisibilityRef.isEnabled = () => true;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('prioritizes the full selected model name in the fixed 320px picker', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    modelVisibilityRef.isEnabled = (_agent: string, _providerId: string, model: { id: string }) =>
+      model.id !== 'claude-opus-4-8';
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const selected = screen.getByRole('option', { name: /Opus 4\.8/ });
+      expect(selected.querySelector('[data-model-hidden-label]')?.textContent).toBe('已隐藏');
+      expect(selected.textContent).not.toContain('settings.providers.models.subscription');
+      expect(
+        within(screen.getByRole('option', { name: /Sonnet 4\.6/ })).getByText(
+          'settings.providers.models.subscription',
+        ),
+      ).toBeTruthy();
+    } finally {
+      modelVisibilityRef.isEnabled = () => true;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('uses the remote visibility snapshot for the selected hidden status', () => {
+    deviceProvidersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    deviceProvidersRef.modelVisibilityOverrides = {
+      'claude-code:anthropic:claude-opus-4-8': false,
+    };
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'remote-device',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      expect(row.querySelector('[data-model-hidden-label]')?.textContent).toBe('已隐藏');
+    } finally {
+      deviceProvidersRef.providers = [];
+      deviceProvidersRef.modelVisibilityOverrides = undefined;
     }
   });
 

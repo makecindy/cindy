@@ -93,6 +93,20 @@ import { buildProviderSections } from './sourceSwitch';
 // 300ms 门槛也与仓库其它本地/远程混合 loading 提示一致；真正的秒级发现仍会明确反馈。
 const MODEL_DISCOVERY_INDICATOR_DELAY_MS = 300;
 
+/**
+ * 标签降级按选择器 pane 宽度生效。这里的 width 是整个 pane 宽度，不是模型名
+ * 实际可用宽度；行还要扣掉左右 padding、来源图标、effort 和选中勾选。因此不能把
+ * 300px 当成“能放下全部标签”的阈值，否则英文 Subscription 会先把模型名压成省略号。
+ * 模型名优先：促销标签先收起，订阅标签随后收起，只保留「已隐藏」和选中勾选。
+ */
+export type ModelTagDensity = 'full' | 'subscription' | 'hidden';
+
+export function modelTagDensityForWidth(width: number | null): ModelTagDensity {
+  if (width === null || width >= 450) return 'full';
+  if (width >= 370) return 'subscription';
+  return 'hidden';
+}
+
 // 厂商分类 / 分组标题 key 表的纯逻辑在 ./sourceSwitch。这里 re-export 给 ChatInput
 // (它从 './ModelSelector' import categorize / CATEGORY_LABEL_KEY / ModelCategory 做跨厂商确认弹窗)。
 export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwitch';
@@ -689,6 +703,24 @@ function ModelSelectorContentView({
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t } = useTranslation();
   const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const [paneWidth, setPaneWidth] = useState<number | null>(null);
+  useEffect(() => {
+    if (!paneRef.current || typeof ResizeObserver === 'undefined') {
+      setPaneWidth(null);
+      return;
+    }
+    const paneElement = paneRef.current;
+    const updateWidth = () => setPaneWidth(paneElement.getBoundingClientRect().width);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(paneElement);
+    return () => observer.disconnect();
+  }, [fluidWidth]);
+  // 非 fluid 选择器的契约宽度就是 320px。此前这里直接传 null，导致固定宽度的聊天
+  // 选择器永远处于 full 密度，英文 Subscription 会把当前模型名挤成 GPT-...。
+  // ResizeObserver 可用时仍以实际宽度为准；测试/首帧则用契约宽度避免标签闪现。
+  const modelTagDensity = modelTagDensityForWidth(paneWidth ?? (fluidWidth ? null : 320));
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
   const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex' | 'pi'>(
@@ -1606,6 +1638,23 @@ function ModelSelectorContentView({
     const providerId = provider?.id ?? null;
     const isSelected = isSelectedRow(providerId, model.id);
     const isSubscriptionModel = provider?.access?.kind === 'subscription';
+    const selectedCatalogModel =
+      provider && currentAgentKind ? getModel(provider, model.id, currentAgentKind) : undefined;
+    const isHiddenSelectedModel =
+      isSelected &&
+      !!provider &&
+      !!currentAgentKind &&
+      (deviceId
+        ? !isDeviceModelVisible(
+            remoteProviders.modelVisibilityOverrides,
+            currentAgentKind,
+            provider.id,
+            { id: model.id, defaultEnabled: selectedCatalogModel?.defaultEnabled },
+          )
+        : !isModelEnabled(currentAgentKind, provider.id, {
+            id: model.id,
+            defaultEnabled: selectedCatalogModel?.defaultEnabled,
+          }));
     const disabled = interactionDisabled || modelDisabledOf(provider, model.id);
     const disabledReason = subscriptionDirectDisabledReason(model.id);
     const rowEffort = rowEffortOf(providerId, model);
@@ -1620,6 +1669,12 @@ function ModelSelectorContentView({
               modelPriceDiscountLabelValues(rowPrice.discount),
             )
           : null;
+    // 普通模型沿用订阅标识；只有“当前模型已隐藏”这一额外状态与订阅标签争抢空间时，
+    // 才按宽度收起订阅标签，确保模型名、已隐藏状态和选中勾选都完整可见。
+    const showSubscriptionTag =
+      isSubscriptionModel && (!isHiddenSelectedModel || modelTagDensity !== 'hidden');
+    const showPromotionTag =
+      !!rowPromotionLabel && (!isHiddenSelectedModel || modelTagDensity === 'full');
     // 信息面板对所有可用模型开放;能否编辑 effort / Fast 在面板内部另行判定。
     // session-agent-switch 浏览目标引擎态同样开放:选模型前正需要看描述/上下文/价格/来源;
     // 面板内配置写的是**目标引擎**的 per-(来源,模型) 全局预设(currentAgentKind 已随浏览态
@@ -1734,14 +1789,22 @@ function ModelSelectorContentView({
                     />
                   )}
                 </span>
-                {(isSubscriptionModel || rowPromotionLabel) && (
+                {(isHiddenSelectedModel || showSubscriptionTag || showPromotionTag) && (
                   <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {isSubscriptionModel && (
+                    {isHiddenSelectedModel && (
+                      <span
+                        data-model-hidden-label
+                        className="shrink-0 select-none text-11 font-normal text-[var(--text-tertiary)]"
+                      >
+                        {t('newChat.modelSelector.hidden')}
+                      </span>
+                    )}
+                    {showSubscriptionTag && (
                       <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
                         {t('settings.providers.models.subscription')}
                       </span>
                     )}
-                    {rowPromotionLabel && (
+                    {showPromotionTag && rowPromotionLabel && (
                       <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
                     )}
                   </span>
@@ -1838,6 +1901,8 @@ function ModelSelectorContentView({
   //    portal 到 body,hover 时主菜单完全不重排 ─────
   const pane = (
     <div
+      ref={paneRef}
+      data-model-tag-density={modelTagDensity}
       className={cn(
         'flex shrink-0 flex-col gap-1.5 p-2',
         fluidWidth ? 'w-full min-w-0' : 'w-[320px]',
