@@ -155,8 +155,8 @@ function isOptionalBoolean(value: unknown): boolean {
 /** CapabilityStatus 形状校验(与 maker-core types/capabilities.ts 对齐)。 */
 function isCapabilityStatus(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (value.supported === true) return true;
-  if (value.supported !== false) return false;
+  // supported 必须是布尔;两种分支下可选字段统一只接受 string(undefined 允许)。
+  if (typeof value.supported !== 'boolean') return false;
   return (
     (value.reason === undefined || typeof value.reason === 'string') &&
     (value.upstreamRef === undefined || typeof value.upstreamRef === 'string') &&

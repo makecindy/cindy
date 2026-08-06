@@ -776,7 +776,10 @@ export function createMobileMakerTransport({
       removeSchedule: (input) => call('maker:project-automation:remove-schedule', [input]),
     },
     compactSession: (sessionId, instructions) =>
-      call('maker:compact-session', instructions ? [sessionId, instructions] : [sessionId]),
+      call(
+        'maker:compact-session',
+        instructions === undefined ? [sessionId] : [sessionId, instructions],
+      ),
     input: {
       getProjection: (sessionId) => call('maker:input:get-projection', [sessionId]),
       enqueue: (sessionId, item, opts) => call('maker:input:enqueue', [sessionId, item, opts]),
