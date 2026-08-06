@@ -712,6 +712,27 @@
       "logsDirLabel": "ログディレクトリ",
       "openLogsDir": "開く",
       "openLogsDirTooltip": "システムのファイルマネージャーでログディレクトリを開く",
+      "logUpload": {
+        "crashAutoLabel": "クラッシュ時にログを自動アップロード",
+        "crashAutoDescription": "有効にすると、Cindy がクラッシュした際にその前後の動作記録を自動でバックエンドに送信するため、手動でアップロードする必要がなくなります。既定はオフで、いつでもオフにできます。オフにすると、アップロード待ちのクラッシュ記録は直ちに削除されます。",
+        "crashAutoEnabledToast": "クラッシュ時のログ自動アップロードを有効にしました",
+        "crashAutoDisabledToast": "クラッシュ時のログ自動アップロードを無効にしました",
+        "saveFailed": "ログアップロードの設定を保存できませんでした",
+        "uploadLabel": "ログをアップロード",
+        "uploadButton": "アップロード",
+        "uploading": "アップロード中",
+        "uploadTooltip": "最近の動作記録をバックエンドにアップロードし、問い合わせ時に使えるアップロード番号を取得します",
+        "uploadDescription": "問題が起きたときにここを押すと、最近の動作記録がバックエンドに送信されます。完了後にアップロード番号が表示されるので、不具合の報告時にその番号を伝えてください。ファイルを自分で探す必要はありません。",
+        "scopeDescription": "アップロードする内容:Cindy 自体の動作記録(起動と終了、クラッシュ、ネットワーク、アップデート、データベース、ログイン)とデバイス環境情報(OS バージョン、アプリバージョン、デバイス識別子)、ログイン後はアカウント ID も含みます。アップロードしない内容:会話内容、ファイル内容、プロンプト、作業ディレクトリのパス。認証情報とメールアドレスはアップロード前に自動で除去されます。",
+        "successToast": "ログをアップロードしました。アップロード番号 {{code}}(コピー済み。報告時にお知らせください)",
+        "errorUnavailable": "このビルドではログアップロードが設定されておらず、現在利用できません",
+        "errorConsentRequired": "ログをアップロードするには、先に「プライバシーポリシー」に同意する必要があります",
+        "errorEmpty": "アップロードできる動作記録がありません",
+        "errorBusy": "すでにアップロードが進行中です。しばらくお待ちください",
+        "errorFailed": "ログのアップロードに失敗しました。ネットワークを確認して再試行してください",
+        "unavailableNotConfigured": "このビルドではログアップロードが設定されていません。",
+        "unavailableNoConsent": "先に「プライバシーポリシー」への同意が必要です。"
+      },
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
       "autoUpdateDescription": "更新のダウンロード完了後、このコンピューターが 10 分間操作されず、実行中のタスクがない場合に、アプリを自動的に再起動してインストールします。",
@@ -3252,6 +3273,9 @@
           "listTitle": "追加済みのマーケット",
           "pluginCount": "{{count}} 個のプラグイン",
           "sourceError": "読み込み失敗",
+          "empty": "このマーケットにはプラグイン項目がありません",
+          "skippedEntries": "無効なプラグイン項目 {{count}} 件をスキップしました",
+          "unreadableEntries": "プラグイン項目 {{count}} 件を一時的に読み込めません。更新して再試行してください",
           "localBadge": "ローカル",
           "defaultRef": "デフォルトブランチ",
           "neverSynced": "未同期",
@@ -3400,6 +3424,8 @@
         "cindyTextOneshotDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。",
         "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
         "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
+        "cindySearchWeb": "Cindy AI で公開ウェブを検索できます",
+        "cindySearchWebDetail": "検索では公開ウェブにアクセスし、Cindy AI の利用枠を消費する場合があります。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
@@ -3891,6 +3917,8 @@
     "controlledTooltip": "同じアカウントでログイン中の別のデバイスがこの端末をリモート操作しています。アクセス権限を撤回できます。",
     "revokeAccess": "権限を撤回",
     "viewControllers": "表示",
+    "collapseControlledNotice": "リモート操作の通知を折りたたむ",
+    "expandControlledNotice": "リモート操作の通知を展開: {{label}}",
     "versionMismatch": "相手のバージョンが異なります。一部機能が制限される場合があります"
   },
   "accountDeletion": {
@@ -4266,6 +4294,7 @@
     "maximize": "最大化",
     "close": "閉じる",
     "menuItems": {
+      "settings": "設定",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
@@ -5032,6 +5061,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
+      "hidden": "非表示",
       "subscriptionDirectDisabled": {
         "chatgpt": "サブスクリプション直結の GPT モデルは SSH リモートセッションに未対応です",
         "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",

@@ -15,6 +15,7 @@ import {
   GHOST_MANIFEST_FILE,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
+  diffGhostPermissionItems,
   ghostPermissionBaselineKey,
   unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
@@ -33,7 +34,7 @@ import {
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
-import type { PluginMarketPackageReview } from '../../shared/pluginMarket.js';
+import type { PluginMarketPackageReviewFacts } from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   activeOwnerScopeKey,
@@ -159,6 +160,7 @@ import {
   type CindyCapabilityKind,
   type CindyMediaCatalogConfig,
 } from './cindyMediaCatalog.js';
+import { isXdGatewayProviderReady } from './cindyGatewayReadiness.js';
 import {
   GhostCindySlot,
   type CindyImageCapabilities,
@@ -263,6 +265,7 @@ import {
 } from './ghostRecentUsageStore.js';
 import { createXaiImageChannel } from './xaiImageClient.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
+import { getCindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
@@ -2397,12 +2400,12 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
       // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
       // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
       // (2026-07 review:与图像的就绪语义对齐)。
-      // 向量与视频同口径:通道只有 xd 一家、不经 registry,但要求网关能力在场
-      // (本地模式没有网关 key,embedSync 必然 AUTH_FAILED —— 那种型号不该出现在
-      // 清单里让用户钉选)。
+      // 向量与视频同口径:通道只有 xd 一家、不经 registry,但要求账号网关能力与
+      // model-access 随凭据成对下发的 endpoint 同时在场。登录同步完成前 / 存量
+      // 手填 key 没有配套 endpoint 时,那种型号不该出现在清单里让用户钉选。
       kind === 'image'
         ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
-        : (providerId) => providerId !== 'xd' || getAppCapabilities().canUseCindyGateway,
+        : isXdGatewayProviderReady,
       // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
       // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
       kind === 'image' ? (providerId) => getImageChannelRegistry().isProviderEditReady(providerId) : undefined,
@@ -2793,6 +2796,10 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 在途并发上限:用户级隐藏配置(ghost-cindy-prefs.json 的 inflightLimits),
       // 缺省 null = 不限并发;每单现读,改配置即生效。
       getInflightLimit: (ghostId) => readGhostCindyInflightLimit(ghostId),
+      // Web Search:固定走主机托管的 LiteLLM /v1/messages。endpoint/key 与
+      // model-access 下发值同源，模型别名和 Claude 原生 Web Search 工具定义
+      // 留在主机侧，意识只拿规范化结果。
+      searchWeb: (params) => getCindyProxySearchService().search(params),
       // 快问快答(text.oneshot):走轻量任务模型链(与会话起标题/任务摘要
       // 同一条,用户在设置里配置)。动态 import:utility-model 的传递依赖在
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
@@ -2832,6 +2839,30 @@ export function getGhostCindySlot(): GhostCindySlot {
       // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。
       holdPipeCall: (ghostId, callId, budgetMs) => getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
       releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
+      claimPipeCall: (ghostId, callId, callerTool, binding, requestKey) =>
+        getGhostPipeDispatcher().claimPendingCall(
+          ghostId,
+          callId,
+          callerTool,
+          binding,
+          requestKey,
+        ),
+      settlePipeCallClaim: (
+        ghostId,
+        callId,
+        callerTool,
+        binding,
+        requestKey,
+        allowRetry,
+      ) =>
+        getGhostPipeDispatcher().settlePendingCallClaim(
+          ghostId,
+          callId,
+          callerTool,
+          binding,
+          requestKey,
+          allowRetry,
+        ),
       // 视频型号预期耗时(registry 登记值;hold 预算与异步受理返回共用)。
       // registry 缺席/型号查无 → null,cindySlot 用自己的缺省。
       videoExpectedSeconds: (model) => {
@@ -3513,16 +3544,12 @@ export async function installOrUpdateMarketGhostPackage(
     ghostId: string;
     version: string;
     /**
-     * 装入确认框实际展示给用户的那份 manifest(来源方给的)。给了就逐项比对:
-     * 包里多出来的权限会暂停落位并交由上层复核。两条市场路径都必须给;
-     * 本地 `.cindy` 装入不经此出口,确认框读的就是包本身,没有这层漂移。
+     * 安装前实际展示给用户的 manifest。真实包若声明了未展示权限，会在
+     * 落盘前暂停并把同一份已验证包交给上层复核。
      */
     reviewedManifest?: GhostManifest;
-    /**
-     * 经市场账本摘要认证的旧版已安装清单。历史详情投影漏掉、但用户此前
-     * 已批准的权限可继续作为基线；未被该基线覆盖的真实包权限仍走复核。
-     */
-    previouslyInstalledManifest?: GhostManifest;
+    /** 经来源账本摘要认证的已装清单；缺失时不得回退到可变运行时清单。 */
+    permissionBaselineManifest?: GhostManifest;
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
@@ -3542,7 +3569,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     ghostId: string;
     version: string;
     reviewedManifest?: GhostManifest;
-    previouslyInstalledManifest?: GhostManifest;
+    permissionBaselineManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
   },
@@ -3563,28 +3590,13 @@ async function installOrUpdateMarketGhostPackageLocked(
       );
     }
     requireGhostAvailableForActiveSession(expected.ghostId);
-    /**
-     * 「审阅过的」与「真要装的」权限必须一致(2026-08-03,codex review P1)。
-     *
-     * 装入确认框渲染的是**来源方给的 manifest**(服务端市场 = release manifest,
-     * 自定义市场 = 抓到的 ghost.json),而真正落地的是 `.cindy` 包里的 ghost.json。
-     * 两者本该同一份,但来源方的投影层可能与客户端的清单契约漂移——`cindy-protocol`
-     * 那份平行校验器就已经缺了 `confirm` 槽;新登记的槽(如 `badge`)在它眼里是
-     * 未知槽名,投影时会被丢掉或整份拒绝。结果:确认框漏列该项权限,包却原样带着
-     * 它装进来,用户**从没审过就多出一个常驻能力面**。
-     *
-     * 这里按权限项逐项比对。包里多出来的权限先暂停落位,由 Renderer 按真实包
-     * 重新展示；用户批准后携带包 SHA 和已装权限基线重试。
-     * 卡点落在 inspect 之后、任何落地动作之前,所以等待复核时磁盘上什么都没动。
-     */
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     if (expected.reviewedManifest) {
-      const installedBaseline = installed
-        ? ghostPermissionBaselineKey(installed.manifest)
+      const baselineManifest = expected.permissionBaselineManifest ?? null;
+      const installedBaseline = baselineManifest
+        ? ghostPermissionBaselineKey(baselineManifest)
         : null;
-      // 真实包复核的批准必须始终绑定当时那份包与已装权限面，不能只在
-      // 当前仍存在来源清单差异时才校验。否则两次请求间包字节发生变化、
-      // 新包恰好不再多权限时，会绕过旧批准的 SHA/基线绑定直接落位。
+      // 批准始终绑定 Main 实际检查过的包 SHA 与本地已装权限基线。
       if (
         expected.approvedPackageSha256 !== undefined &&
         (expected.approvedPackageSha256 !== inspected.packageSha256 ||
@@ -3595,21 +3607,24 @@ async function installOrUpdateMarketGhostPackageLocked(
           'Downloaded Plugin package changed after permission review',
         );
       }
-      const added = unreviewedGhostPermissionItems(
+      const unreviewed = unreviewedGhostPermissionItems(
         expected.reviewedManifest,
-        expected.previouslyInstalledManifest,
+        baselineManifest ?? undefined,
         inspected.canonicalManifest,
       );
-      if (added.length > 0) {
-        const review: PluginMarketPackageReview = {
+      if (unreviewed.length > 0) {
+        const review: PluginMarketPackageReviewFacts = {
           manifest: inspected.manifest,
+          permissionDiff: baselineManifest
+            ? diffGhostPermissionItems(baselineManifest, inspected.canonicalManifest)
+            : null,
           packageSha256: inspected.packageSha256,
           installedBaseline,
         };
         if (expected.approvedPackageSha256 === undefined) {
-          log.warn('market package declares unreviewed permissions', {
+          log.info('market package requires permission review', {
             ghostId: expected.ghostId,
-            keys: added.map((item) => item.key),
+            keys: unreviewed.map((item) => item.key),
           });
           throw new GhostPackagePermissionReviewRequiredError(review);
         }

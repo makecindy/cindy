@@ -33,6 +33,11 @@
  * writer (with scope prefixed `r:`) so the right stream holds the full picture
  * (`r:maker*` 也归入 agent 流)。
  *
+ * ⚠️ 安全不变量: main-*.log 的**记录边界**(行首 `[ts] [LEVEL] [scope] `)是日志上报判断
+ * 「这条记录来自哪个来源、要不要放行」的依据。写侧因此必须保证除记录首行外没有行以该特征
+ * 开头 —— emit() 对 msg 走 escapeMainLogContinuationLines(), 且每次打开 main 当天文件写一行
+ * 格式哨兵。正文与理由见 shared/mainLogRecordFormat.ts; 放宽任一侧都是隐私变更。
+ *
  * Rotation: main-*.log / agent-*.ndjson / sessions/<id>/*.ndjson 统一按天切 + 保留 30 天
  * (30 天没活动的 session 目录整个删)。例外: cc-debug.raw.log (cc 外部进程写的中转文件,
  * 没法按天) 启动期砍头保尾 (keepRecentSync)。
@@ -42,6 +47,13 @@ import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import util from 'node:util';
+
+import { LOG_RETENTION_DAYS } from '../shared/logRetention';
+import {
+  escapeMainLogContinuationLines,
+  RECORD_FORMAT_SENTINEL_MSG,
+  RECORD_FORMAT_SENTINEL_SCOPE,
+} from '../shared/mainLogRecordFormat';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -67,7 +79,6 @@ let initialized = false;
 // ── 落盘 slot + 按天 rotate ───────────────────────────────────────────────────
 // 所有最终日志统一按天: main 与 agent 各一个 DailySlot, 跨天开新文件 + 只保留最近
 // LOG_RETENTION_DAYS 天 (cleanupOldDailyLogs)。main 写纯文本行, agent 写结构化 NDJSON。
-const LOG_RETENTION_DAYS = 30;
 const AGENT_LOG_EXT = '.ndjson';
 
 // cc-debug.raw.log 例外: cc 子进程自己 fopen 写的中转文件, 没法按天切, 仍用启动期
@@ -519,6 +530,27 @@ function purgeLegacyAgentLogs(dir: string): void {
   }
 }
 
+/**
+ * 往 main 当天文件写一行「记录格式哨兵」。
+ *
+ * 上报侧只采**第 0 字节就是哨兵**的文件(整份可信), 否则整份不采: 本模块引入续行转义之前
+ * 写下的日志没有转义, 其中可能含伪造的记录头 (见 shared/mainLogRecordFormat.ts)。
+ * 注意判据是「第 0 字节」而不是「出现过」—— 哨兵行的形状正文可以逐字构造, 见
+ * log-upload/mainLogReader.startsWithFormatSentinel。所以这里对**追加**到存量文件的那一次
+ * 写入只是留个人工可读的标记, 不会让那份文件变成可采的。
+ *
+ * 故意**绕过 emit 的等级过滤**直接写流: 走 emit 的话, `LOG_LEVEL=warn` 这类配置会让
+ * 哨兵不落地, 上报侧于是跳过整个文件、一条也采不到 —— 一个日志等级配置不该把上报能力
+ * 静默关掉。
+ */
+function writeRecordFormatSentinel(slot: DailySlot): void {
+  if (!slot.stream) return;
+  const line =
+    `[${localTimestamp(new Date())}] [${LEVEL_TAG.info}] ` +
+    `[${RECORD_FORMAT_SENTINEL_SCOPE}] ${RECORD_FORMAT_SENTINEL_MSG}\n`;
+  try { slot.stream.write(line); } catch { /* stream broken — silent */ }
+}
+
 // 按天切换: dateKey 变了就关旧 stream、开当天文件, 并触发保留清理。main / agent 共用。
 function ensureDailySlot(slot: DailySlot, now: Date): void {
   if (!slot.dir) return; // 未 init
@@ -535,6 +567,9 @@ function ensureDailySlot(slot: DailySlot, now: Date): void {
     origStderr(`[logger] failed to open ${slot.prefix}${key}${slot.ext}: ${(err as Error).message}\n`);
     slot.stream = null;
   }
+  // 只有 main 流是纯文本按行解析的, 需要哨兵; agent / session 流是 NDJSON, 记录边界由
+  // JSON 行本身保证, 不存在伪造记录头的问题。
+  if (slot === mainSlot) writeRecordFormatSentinel(slot);
   void cleanupOldDailyLogs(slot.dir, slot.prefix, slot.ext);
 }
 
@@ -665,7 +700,10 @@ function emit(level: LogLevel, scope: string, args: unknown[]): void {
     return;
   }
 
-  const line = `[${ts}] [${LEVEL_TAG[level]}] [${scope}] ${msg}\n`;
+  // 续行转义是**安全不变量**, 不是排版: 上报侧按行首特征切记录并据此放行来源,
+  // 续行若能伪装成放行来源的记录头, 被封禁来源的多行内容就能把用户内容送出去。
+  // 详见 shared/mainLogRecordFormat.ts。
+  const line = `[${ts}] [${LEVEL_TAG[level]}] [${scope}] ${escapeMainLogContinuationLines(msg)}\n`;
   writeMainLine(line);
   if (isDevMode) {
     // dev 额外双写终端,实时观察用

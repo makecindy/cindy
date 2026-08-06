@@ -243,7 +243,6 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
  * launched, so there is no in-flight agent turn / schedule / active session to
  * interrupt. We therefore relaunch into the updater as soon as a patch is ready,
  * gating only on the essentials:
- *   - `disabled`     — user turned the auto-update relaunch switch off; respect it.
  *   - `dev`          — the native updater replaces the *installed* app; it can't
  *                      sanely update a dev / electron-forge instance, so never
  *                      auto-launch it there.
@@ -255,7 +254,6 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
  * full policy via getAutoRelaunchBlockReasonForCurrentState.)
  */
 async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason | null> {
-  if (!readAutoUpdateSettings().autoRelaunchOnIdle) return 'disabled';
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
@@ -265,7 +263,7 @@ async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason 
 /**
  * Startup update checks apply a staged patch as soon as it is ready (the historic
  * behavior), gated only by the lightweight startup policy above. Whenever that
- * policy blocks (auto-update off / dev / not ready / already relaunching) the
+ * policy blocks (dev / not ready / relaunching) the
  * patch stays staged and the app enters normally, surfacing the UpdateBanner.
  */
 async function buildStartupReadyReply(version: string | undefined): Promise<{

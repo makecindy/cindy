@@ -171,7 +171,10 @@ import {
   readDisabledBuiltinPluginIds,
 } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
-import { buildCodexSubagentSpawnArgs } from './codex-subagent-config.js';
+import {
+  buildCodexSubagentSpawnArgs,
+  resolveCodexSubagentModelFallback,
+} from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
@@ -1185,16 +1188,22 @@ export function getMaker(): Maker {
         const endpoint = isControlPlane
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
+        const subagentModelSettings = readSubagentModelSettings();
+        const subagentModelFallback = resolveCodexSubagentModelFallback(
+          subagentModelSettings,
+          ctx.remoteHostId,
+        );
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
           // model/list 无影响,不加 hostPurpose 分支。
           extraArgs: [
             ...mcpExtraArgs,
-            ...buildCodexSubagentSpawnArgs(readSubagentModelSettings()),
+            ...buildCodexSubagentSpawnArgs(subagentModelSettings),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
+          ...(subagentModelFallback ? { subagentModelFallback } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
@@ -1292,13 +1301,6 @@ export function getMaker(): Maker {
     // 模块级回填 codexAgent 引用 —— restartCodexAfterAuthModeChange() 需要它在
     // API 模式切换 / api_key 变更时 dispose 重建 app-server (单例进程, 配置 spawn 冻入)。
     _codexAgent = codexAgent;
-
-    // 用户自定义 MCP:把两个 agent 的 mcpProviders 数组注册进 registry，并立即尝试一次 refresh。
-    // localDb onReady 可能在 Maker 构造前就已触发（此时 registry 无数组，refresh 空跑）；
-    // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
-    // 此后每次 CRUD（mcpHandlers.afterChange）也会 refresh。
-    registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders);
-    _initialCustomMcpRefresh = refreshCustomMcpProviders();
 
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     attachAgentsToMakerMemory(makerMemoryManager, {
@@ -1414,6 +1416,13 @@ export function getMaker(): Maker {
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
       orcaWorkerBridgeProvider,
     ];
+    // 用户自定义 MCP:三个 agent 都必须注册其实际持有的数组引用，再统一做初始 refresh。
+    // localDb onReady 可能在 Maker 构造前就已触发（此时 registry 无数组，refresh 空跑）；
+    // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
+    // 此后每次 CRUD（mcpHandlers.afterChange）也会原地刷新三份数组；运行中会话保持启动快照。
+    registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
+    _initialCustomMcpRefresh = refreshCustomMcpProviders();
+
     const piAgent = buildPiAgent({
       logger: desktopMakerLogger,
       reviewAutoPermissionAction,

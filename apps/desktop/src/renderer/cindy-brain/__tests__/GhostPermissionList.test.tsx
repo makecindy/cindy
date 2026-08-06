@@ -121,6 +121,16 @@ describe('GhostPermissionList(装入全量清单)', () => {
     expect(screen.queryByText('settings.ghosts.perm.codeDetail')).toBeNull();
   });
 
+  it('Cindy Web Search 能力在安装权限清单中单独披露', () => {
+    const search: GhostManifest = {
+      ...chip(),
+      cindy: { search: ['web'] },
+    };
+    render(<GhostPermissionList items={ghostPermissionItems(search)} />);
+    expect(screen.getByText('settings.ghosts.perm.cindySearchWeb')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.cindySearchWebDetail')).toBeTruthy();
+  });
+
   it('Node 持久凭证单独披露明文注入范围', () => {
     const node: GhostManifest = {
       ...chip(),

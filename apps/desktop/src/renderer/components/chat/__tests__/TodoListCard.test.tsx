@@ -20,16 +20,45 @@ const TODOS = [
 afterEach(cleanup);
 
 describe('TodoListCard flyout interaction', () => {
-  it('uses the pending icon when no step is currently in progress', () => {
+  it('uses a compact 28px pill inside the 32px plan slot', () => {
+    render(<TodoListCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    expect(trigger.classList.contains('py-[6px]')).toBe(true);
+    expect(trigger.classList.contains('py-[8px]')).toBe(false);
+  });
+
+  it('shrinks to the plan pill width when it shares the centered row', () => {
+    const { container } = render(<TodoListCard todos={TODOS} />);
+
+    expect(container.firstElementChild?.classList.contains('w-auto')).toBe(true);
+    expect(container.firstElementChild?.classList.contains('shrink-0')).toBe(true);
+    expect(container.firstElementChild?.classList.contains('w-full')).toBe(false);
+  });
+
+  it('uses a static grayscale progress ring without spin or pulse', () => {
     const { container } = render(
       <TodoListCard todos={[{ content: 'Queued step', status: 'pending' }]} animated />,
     );
 
     const trigger = screen.getByRole('button', { name: 'Step 1 / 1' });
 
-    expect(trigger.querySelector('svg.lucide-circle')).not.toBeNull();
-    expect(trigger.querySelector('svg.lucide-circle-dashed')).toBeNull();
-    expect(container.querySelector('svg.lucide-circle-dashed')).toBeNull();
+    expect(container.firstElementChild?.classList.contains('pointer-events-none')).toBe(true);
+    expect(trigger.parentElement?.classList.contains('pointer-events-auto')).toBe(true);
+    expect(trigger.querySelector('svg[data-plan-progress-ring="true"]')).not.toBeNull();
+    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+  });
+
+  it('keeps the active row static when the flyout is open', () => {
+    const { container } = render(<TodoListCard todos={TODOS} animated />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.mouseEnter(trigger.parentElement as HTMLElement);
+
+    expect(container.querySelector('svg.lucide-circle-dashed')).not.toBeNull();
+    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
   it('opens transiently on hover and closes when the pointer leaves', () => {
@@ -119,6 +148,22 @@ describe('TodoListCard flyout interaction', () => {
     expect(positioner.className).not.toContain('animate-float-');
     expect(animatedContent.classList.contains('animate-float-in')).toBe(true);
     expect(animatedContent.classList.contains('-translate-x-1/2')).toBe(false);
+  });
+
+  it('positions the flyout outside the shifted plan pill anchor', () => {
+    render(<TodoListCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    const pillAnchor = trigger.closest('[data-plan-pill-anchor="true"]') as HTMLElement;
+    fireEvent.mouseEnter(pillAnchor);
+
+    const flyoutId = trigger.getAttribute('aria-controls') as string;
+    const positioner = document.getElementById(flyoutId) as HTMLElement;
+
+    expect(positioner.dataset.planFlyoutPositioner).toBe('composer');
+    expect(positioner.parentElement).toBe(pillAnchor.parentElement);
+    expect(positioner.parentElement).not.toBe(pillAnchor);
+    expect(pillAnchor.querySelector('.h-3')).not.toBeNull();
   });
 
   it('hides the flyout from assistive technology while its exit animation remains mounted', () => {

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { BrowserWebviewPool } from '@/components/layout/BrowserWebviewPool';
 import { ChromeActions } from '@/components/layout/ChromeActions';
+import { shouldReserveLeftChromeActions } from '@/components/layout/chromeActionsLayout';
 import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
 import { rightSidebarOwnsRailChromeActions as resolveRightSidebarRailChromeActionsOwner } from '@/components/layout/railChromeActions';
 import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
@@ -1328,7 +1329,11 @@ export function MainLayout() {
                   onCloseSidebar={isMac ? undefined : handleToggleRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
-                  reserveLeftChromeActions={isRightSidebarMaximized && isSidebarCollapsed}
+                  reserveLeftChromeActions={shouldReserveLeftChromeActions({
+                    isSidebarCollapsed,
+                    rightSidebarSide,
+                    isRightSidebarMaximized,
+                  })}
                   railChromeActionsHitHole={rightSidebarOwnsRailChromeActions}
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}

@@ -49,6 +49,12 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_ENDPOINT_MANIFEST_PEER_BASE_URL': JSON.stringify(
         readViteEnv('VITE_ENDPOINT_MANIFEST_PEER_BASE_URL'),
       ),
+      // 日志上报目标(main-only,不暴露到 renderer)。真值不进仓,由 package-desktop.mjs 经
+      // scripts/shared/log-upload-build-env.mjs 从 config/log-upload.json 读出**本区域那一个**
+      // 目标后注入。dev server / 未注入 ⇒ 空串 ⇒ 运行时判「未配置」、功能整体关闭。
+      // ⚠️ main 侧必须写成完整的 `process.env.XDT_LOG_UPLOAD_TARGET` 才能被本 define 文本替换,
+      // 见 main/log-upload/logUploadTarget.ts 的 injectedRaw()。
+      'process.env.XDT_LOG_UPLOAD_TARGET': JSON.stringify(readMainEnv('XDT_LOG_UPLOAD_TARGET')),
       // Triage bot token (dev only — production 留空，BotTokenStore 走 safeStorage)
       'process.env.TRIAGE_BOT_TOKEN': JSON.stringify(readMainEnv('TRIAGE_BOT_TOKEN')),
       // Filo Google OAuth desktop client（main-only，仓库不保存实际值）。

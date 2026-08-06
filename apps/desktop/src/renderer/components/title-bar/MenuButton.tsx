@@ -1,6 +1,6 @@
 import { Menu } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
@@ -17,6 +17,7 @@ import {
 export function MenuButton() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -40,6 +41,24 @@ export function MenuButton() {
         align="start"
         className="bg-titlebar border-titlebar-border"
       >
+        {/* 设置入口:Windows / Linux 没有原生应用菜单(installApplicationMenu 非
+            darwin 直接置 null),macOS「设置…」菜单项在这些平台不可见;侧栏底部
+            用户卡片虽可进设置但无可见「设置」标识,可发现性不足(#1881)。此处
+            常驻应用内左上角菜单,与 MainLayout 'open-settings' 命令同一判定
+            (pathname + search,见 MainLayout currentPathRef):已在设置默认页时
+            不重复导航;在 /settings?tab=xxx 子页时回到设置默认页,与 macOS 原生
+            菜单「设置…」行为一致。 */}
+        <DropdownMenuItem
+          className="focus:bg-titlebar-button-hover"
+          onSelect={() => {
+            log.info('Settings clicked');
+            if (`${location.pathname}${location.search}` !== '/settings') {
+              navigate('/settings');
+            }
+          }}
+        >
+          {t('titleBar.menuItems.settings')}
+        </DropdownMenuItem>
         <DropdownMenuItem
           className="focus:bg-titlebar-button-hover"
           onSelect={() => {

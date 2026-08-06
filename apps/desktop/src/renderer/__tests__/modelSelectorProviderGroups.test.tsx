@@ -34,6 +34,38 @@ vi.mock('react-i18next', async (importOriginal) => ({
   }),
 }));
 
+const floatingUiMocks = vi.hoisted(() => {
+  const limitShiftResult = { fn: () => ({ x: 0, y: 0 }), options: {} };
+  return {
+    autoUpdate: vi.fn(() => () => {}),
+    flip: vi.fn((options: unknown) => ({ name: 'flip', options })),
+    limitShift: vi.fn(() => limitShiftResult),
+    limitShiftResult,
+    offset: vi.fn((options: unknown) => ({ name: 'offset', options })),
+    shift: vi.fn((options: unknown) => ({ name: 'shift', options })),
+    size: vi.fn((options: unknown) => ({ name: 'size', options })),
+    useFloating: vi.fn(),
+  };
+});
+
+vi.mock('@floating-ui/react-dom', () => ({
+  autoUpdate: floatingUiMocks.autoUpdate,
+  flip: floatingUiMocks.flip,
+  limitShift: floatingUiMocks.limitShift,
+  offset: floatingUiMocks.offset,
+  shift: floatingUiMocks.shift,
+  size: floatingUiMocks.size,
+  useFloating: (options: unknown) => {
+    floatingUiMocks.useFloating(options);
+    return {
+      refs: { setFloating: () => {} },
+      floatingStyles: { position: 'fixed', left: 120, top: 24 },
+      isPositioned: true,
+      placement: 'left',
+    };
+  },
+}));
+
 vi.mock('@/components/ui/popover', async () => {
   const React = await import('react');
   const OpenContext = React.createContext<{
@@ -66,12 +98,37 @@ vi.mock('@/components/ui/popover', async () => {
       });
     },
     PopoverAnchor: ({ children }: { children: React.ReactNode }) => children,
-    PopoverContent: ({ children }: { children: React.ReactNode }) => {
+    PopoverContent: React.forwardRef<
+      HTMLDivElement,
+      {
+        children: React.ReactNode;
+        className?: string;
+        collisionPadding?:
+          | number
+          | {
+              top?: number;
+              right?: number;
+              bottom?: number;
+              left?: number;
+            };
+      }
+    >(({ children, className, collisionPadding }, ref) => {
       const state = React.useContext(OpenContext);
+      const collisionPaddingTop =
+        typeof collisionPadding === 'number' ? collisionPadding : collisionPadding?.top;
       return state.open
-        ? React.createElement('div', { 'data-testid': 'model-options-popover' }, children)
+        ? React.createElement(
+            'div',
+            {
+              ref,
+              'data-testid': 'model-options-popover',
+              'data-collision-padding-top': collisionPaddingTop,
+              className,
+            },
+            children,
+          )
         : null;
-    },
+    }),
   };
 });
 
@@ -191,6 +248,13 @@ const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const 
 
 beforeEach(() => {
   requestProviderModelsAutoRefresh.mockClear();
+  floatingUiMocks.autoUpdate.mockClear();
+  floatingUiMocks.flip.mockClear();
+  floatingUiMocks.limitShift.mockClear();
+  floatingUiMocks.offset.mockClear();
+  floatingUiMocks.shift.mockClear();
+  floatingUiMocks.size.mockClear();
+  floatingUiMocks.useFloating.mockClear();
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
@@ -218,6 +282,15 @@ async function openDropdown(): Promise<void> {
   });
 }
 
+async function hoverModelRowWithIntent(row: HTMLElement): Promise<void> {
+  await act(async () => {
+    // MorphPopover requires a real pointer delta before revealing row options. Model that
+    // contract explicitly instead of depending on jsdom's synthetic `isTrusted` value.
+    fireEvent.pointerMove(row, { screenX: 0, screenY: 0 });
+    fireEvent.pointerMove(row, { screenX: 8, screenY: 0 });
+  });
+}
+
 describe('ModelSelector provider groups', () => {
   it('renders a group heading for each provider', async () => {
     renderSelector();
@@ -240,6 +313,157 @@ describe('ModelSelector provider groups', () => {
     expect(within(anthropicGroup).getByText('Sonnet 4.6')).toBeTruthy();
     expect(within(dashscopeGroup).getByText('qwen3.7-plus')).toBeTruthy();
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
+  });
+
+  it('keeps the create-agent secondary panel at the original left/center position with layout coordinates', async () => {
+    renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
+    await openDropdown();
+
+    const modelList = screen.getByRole('listbox', { name: 'Model list' });
+    const row = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
+    await hoverModelRowWithIntent(row);
+
+    const secondaryPanel = await screen.findByTestId('model-options-floating-panel');
+    const positioner = secondaryPanel.closest<HTMLElement>('[data-radix-popper-content-wrapper]');
+    expect(positioner).not.toBeNull();
+    expect(positioner?.parentElement).toBe(document.body);
+    expect(positioner?.style.position).toBe('fixed');
+    expect(positioner?.style.left).toBe('120px');
+    expect(positioner?.style.top).toBe('24px');
+    expect(positioner?.style.transform).toBe('');
+    expect(
+      (positioner?.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
+    ).toBe('no-drag');
+    expect(secondaryPanel.className).toContain('overflow-hidden');
+    expect(secondaryPanel.className).not.toContain('max-h-[');
+    expect(secondaryPanel.className).not.toContain('overflow-y-auto');
+
+    const floatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
+      strategy: string;
+      placement: string;
+      transform: boolean;
+      open: boolean;
+      elements: { reference: HTMLElement };
+      whileElementsMounted: (
+        reference: HTMLElement,
+        floating: HTMLElement,
+        update: () => void,
+      ) => () => void;
+    };
+    expect(floatingOptions).toMatchObject({
+      strategy: 'fixed',
+      placement: 'left',
+      transform: false,
+      open: true,
+    });
+    expect(floatingOptions.elements.reference).toBe(row);
+    const floatingElement = document.createElement('div');
+    const cleanup = floatingOptions.whileElementsMounted(row, floatingElement, vi.fn());
+    expect(floatingUiMocks.autoUpdate).toHaveBeenCalledWith(
+      row,
+      floatingElement,
+      expect.any(Function),
+      { animationFrame: false },
+    );
+    cleanup();
+
+    expect(floatingUiMocks.offset).toHaveBeenLastCalledWith({
+      mainAxis: 8,
+      alignmentAxis: 0,
+    });
+    expect(floatingUiMocks.shift).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mainAxis: true,
+        crossAxis: false,
+        limiter: floatingUiMocks.limitShiftResult,
+        padding: 8,
+        boundary: [],
+        altBoundary: false,
+      }),
+    );
+    expect(floatingUiMocks.flip).toHaveBeenLastCalledWith({
+      padding: 8,
+      boundary: [],
+      altBoundary: false,
+    });
+    const sizeOptions = floatingUiMocks.size.mock.calls.at(-1)?.[0] as {
+      apply: (args: { elements: { floating: HTMLElement }; availableHeight: number }) => void;
+    };
+    sizeOptions.apply({ elements: { floating: floatingElement }, availableHeight: 180 });
+    expect(floatingElement.style.getPropertyValue('--radix-popover-content-available-height')).toBe(
+      '180px',
+    );
+
+    const panelOptions = within(secondaryPanel).getAllByRole('option');
+    const firstPanelOption = panelOptions[0];
+    const lastPanelOption = panelOptions.at(-1);
+    expect(lastPanelOption).toBeDefined();
+    lastPanelOption?.focus();
+    fireEvent.keyDown(lastPanelOption as HTMLElement, { key: 'Tab' });
+    expect(document.activeElement).toBe(firstPanelOption);
+    fireEvent.keyDown(firstPanelOption, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(lastPanelOption);
+
+    fireEvent.keyDown(row, { key: 'Escape' });
+    expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
+    expect(screen.getByRole('listbox', { name: 'Model list' })).toBeTruthy();
+  });
+
+  it('refreshes the create-agent floating anchor after search remounts the active model row', async () => {
+    renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
+    await openDropdown();
+
+    const modelList = screen.getByRole('listbox', { name: 'Model list' });
+    const originalRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
+    await hoverModelRowWithIntent(originalRow);
+    await screen.findByTestId('model-options-floating-panel');
+
+    const originalFloatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
+      elements: { reference: HTMLElement };
+    };
+    expect(originalFloatingOptions.elements.reference).toBe(originalRow);
+
+    const searchInput = screen.getByRole('textbox');
+    await act(async () => {
+      fireEvent.change(searchInput, { target: { value: 'qwen' } });
+    });
+    expect(originalRow.isConnected).toBe(false);
+    expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
+    const floatingCallCountAfterFilter = floatingUiMocks.useFloating.mock.calls.length;
+
+    await act(async () => {
+      fireEvent.change(searchInput, { target: { value: '' } });
+    });
+    const restoredRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
+    expect(restoredRow).not.toBe(originalRow);
+    expect(restoredRow.getAttribute('data-model-options-active')).toBeNull();
+    expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
+    expect(floatingUiMocks.useFloating).toHaveBeenCalledTimes(floatingCallCountAfterFilter);
+
+    await hoverModelRowWithIntent(restoredRow);
+    await screen.findByTestId('model-options-floating-panel');
+
+    const restoredFloatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
+      elements: { reference: HTMLElement };
+    };
+    expect(restoredFloatingOptions.elements.reference).toBe(restoredRow);
+    expect(restoredFloatingOptions.elements.reference.isConnected).toBe(true);
+  });
+
+  it('keeps the existing Radix secondary popover outside the create-agent variant', async () => {
+    renderSelector();
+    await openDropdown();
+
+    const popover = screen.getByTestId('model-options-popover');
+    const row = within(popover).getByRole('option', { name: /Opus 4\.8/ });
+    await act(async () => {
+      fireEvent.pointerEnter(row);
+    });
+
+    const details = screen.getByRole('group', { name: /Opus 4\.8/ });
+    const secondaryPanel = details.closest('[data-testid="model-options-popover"]');
+    expect(secondaryPanel?.getAttribute('data-collision-padding-top')).toBe('8');
+    expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
   });
 
   it('reselects the connected fallback source when the stored source is disconnected', async () => {

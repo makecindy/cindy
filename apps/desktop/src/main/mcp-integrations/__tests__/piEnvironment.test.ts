@@ -70,6 +70,12 @@ function createTestServer(name: string): McpServer {
       text: getLiziMcpSessionContext()?.sessionInstanceId ?? 'no-instance',
     }],
   }));
+  server.tool('current_vendor_options', 'Return the active lizi MCP vendor options.', {}, async () => ({
+    content: [{
+      type: 'text' as const,
+      text: JSON.stringify(getLiziMcpSessionContext()?.vendorOptions ?? {}),
+    }],
+  }));
   return server;
 }
 
@@ -173,6 +179,54 @@ describe('piEnvironment per-session identity', () => {
     const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(4) });
     expect(after.status).toBe(401);
     await after.text();
+  });
+
+  it('keeps the registered Pi MCP vendorOptions live for start_team Lead activation', async () => {
+    const vendorOptions: Record<string, unknown> = { source: 'draft' };
+    const config = await getPiExtraSpawnConfig([makeProvider('custom_probe')], noopLogger(), {
+      sessionId: 'pi-runtime-lead',
+      workingDir: '/repo',
+      vendorOptions,
+    });
+    const server = config!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${config!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(21) });
+    expect(initResp.status).toBe(200);
+    const mcpSessionId = initResp.headers.get('mcp-session-id');
+    expect(mcpSessionId).toBeTruthy();
+    await initResp.text();
+
+    // 对应 start_team 成功后的 MakerSession.setVendorOptions 原地更新。
+    Object.assign(vendorOptions, {
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'pi-runtime-lead',
+    });
+    const callResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId! },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 22,
+        method: 'tools/call',
+        params: { name: 'current_vendor_options', arguments: {} },
+      }),
+    });
+    expect(callResp.status).toBe(200);
+    const result = await readRpcText(callResp) as {
+      result?: { content?: Array<{ text?: string }> };
+    };
+    expect(JSON.parse(result.result?.content?.[0]?.text ?? '{}')).toMatchObject({
+      source: 'draft',
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'pi-runtime-lead',
+    });
+    config!.disposeSessionCtx!();
   });
 
   it('rejects a stale pi instance route after the same business session is rebound', async () => {

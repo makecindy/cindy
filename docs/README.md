@@ -24,6 +24,7 @@
 | [plugin-security-and-authoring.md](./dev-rules/plugin-security-and-authoring.md) | 插件安全规则 | authoritative | 插件（`.cindy`）运行时沙箱、权限 slot、网络/凭证/资源交接、存量插件向下兼容与无感升级、作者契约与编写手册同步 | — |
 | [cindy-updater.md](./dev-rules/cindy-updater.md) | 更新器规则 | authoritative | 客户端自动更新链路（`cindy-updater` + Electron 更新服务）的 owner 确认门禁 | — |
 | [engineering-conventions.md](./dev-rules/engineering-conventions.md) | 通用工程规范 | authoritative | Desktop 日志、IPC 错误协议、main 侧测试、跨平台双端兼容与 UI 文案 i18n | — |
+| [log-upload-and-redaction.md](./dev-rules/log-upload-and-redaction.md) | 日志上报规则 | authoritative | 客户端日志采集/脱敏/上报：记录边界不变量、来源白名单方向、标记代次与原子清除、区域绑定与崩溃时序 | — |
 | [protocol-and-submodules.md](./dev-rules/protocol-and-submodules.md) | 协议/submodule 规则 | authoritative | `cindy-protocol` 权威源、device-link relay 层、内建插件来源与 wire protocol 兼容 | — |
 | [architecture-invariants.md](./dev-rules/architecture-invariants.md) | 架构不变量 | authoritative | package 解耦、main 静态依赖、主界面布局树（`layoutTree`/`LayoutStore`/panel registry） | — |
 | [configuration-and-overrides.md](./dev-rules/configuration-and-overrides.md) | 配置契约 | authoritative | 配置可见性分层、默认值+override 分离、迁移与恢复默认语义 | — |
@@ -32,5 +33,7 @@
 | [plugin-setup-runtime.md](./plugin-setup-runtime.md) | 技术设计 | 参考 | `ghost_list` / `ghost_call` 插件配置前置检查、Ask-shell Setup 卡片、配置变更回调与原调用恢复 | — |
 | [desktop-login-hosted-callback.md](./desktop-login-hosted-callback.md) | 跨仓契约 | 参考 | Desktop 系统浏览器登录的托管回调链路：auth-server 路由契约、结果页模板交付、灰度开关与回滚 | — |
 | [auth-realm-routing.md](./auth-realm-routing.md) | 跨仓契约 | 参考 | 组织 SSO 双区域发现、会话区域持久化与 token 消费端点路由 | — |
+| [client-log-upload-requirements.md](./client-log-upload-requirements.md) | 需求文档 | 参考 | Desktop 客户端日志上报（手动 + 崩溃自动）的目标、数据边界、同意闸与可靠性要求 | — |
+| [client-log-upload-implementation-plan.md](./client-log-upload-implementation-plan.md) | 实现方案 | 参考 | 上述需求的落地方案：模块布局、四层收窄管道、定位读取与锚点裁剪、标记代次、分期 | — |
 | [legal/README.md](./legal/README.md) | 法律/合规索引 | authoritative | 法律合规资料归档边界与固定路径例外 | — |
 | [legal/notices/README.md](./legal/notices/README.md) | 第三方许可/SBOM | generated | `pnpm licenses:generate`、Desktop/Mobile 随包声明 | — |

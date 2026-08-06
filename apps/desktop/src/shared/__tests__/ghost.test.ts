@@ -17,7 +17,6 @@ import {
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
-  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
@@ -124,38 +123,6 @@ describe('ghost · id 规则', () => {
 });
 
 describe('ghost · 清单校验', () => {
-  it('更新保留已安装清单中已批准的权限，即使发布元数据遗漏这些权限', () => {
-    const makeToolManifest = (tools: Array<{ name: string; description: string }>) => {
-      const raw = { ...goodManifest(), slots: ['tool'], tools } as Record<string, unknown>;
-      delete raw.panel;
-      const result = validateGhostManifest(raw);
-      if (!result.ok) throw new Error(result.reason);
-      return result.manifest;
-    };
-    const installed = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const reviewed = makeToolManifest([{ name: 'gen_image', description: 'Projected description' }]);
-    const samePackage = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const expandedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'Generate images' },
-      { name: 'edit_image', description: 'Edit images' },
-    ]);
-    const changedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'A third, unreviewed description' },
-    ]);
-
-    expect(unreviewedGhostPermissionItems(reviewed, installed, samePackage)).toEqual([]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, expandedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:edit_image',
-    ]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, changedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:gen_image',
-    ]);
-  });
-
   it('全字段合法清单通过,并按已知字段收窄输出', () => {
     const v = validateGhostManifest({ ...goodManifest(), unknownField: 'ignored' });
     expect(v.ok).toBe(true);
@@ -1426,6 +1393,8 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       'image',
       { media: ['upload'] }, // media 类目只有 deposit
       { media: [] },
+      { search: ['deep'] },
+      { search: [] },
     ]) {
       const v = validateGhostManifest(chipWithModel(bad));
       expect(v.ok, JSON.stringify(bad)).toBe(false);
@@ -1522,6 +1491,32 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       text: ['oneshot'],
       embed: ['text'],
     });
+  });
+
+  it('search 类目落进 cindy.search，并生成独立的 Web Search 权限行', () => {
+    const manifest = chipWithModel({ search: ['web'] });
+    manifest.slots = ['panel', 'cindy', 'tool'];
+    manifest.tools = [{ name: 'research', description: '查询资料' }];
+    const v = validateGhostManifest(manifest);
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ search: ['web'] });
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:search.web',
+          kind: 'cindy',
+          labelKey: 'cindySearchWeb',
+          detailKey: 'cindySearchWebDetail',
+        }),
+      ]),
+    );
+  });
+
+  it('search.web 缺少 tool 槽或工具声明时拒装', () => {
+    const withoutTool = validateGhostManifest(chipWithModel({ search: ['web'] }));
+    expect(withoutTool.ok).toBe(false);
+    expect(!withoutTool.ok && withoutTool.reason).toContain('tool');
   });
 });
 

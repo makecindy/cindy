@@ -48,9 +48,19 @@ export interface PipeDispatcherDeps {
   };
 }
 
+interface PendingBindingClaim {
+  callerTool: string;
+  requestKey: string;
+  attempts: number;
+  active: boolean;
+  consumed: boolean;
+}
+
 interface PendingCall {
   ghostId: string;
   tool: string;
+  /** 宿主能力按用途绑定，允许同请求一次受控重试，禁止换参或无限消费。 */
+  claimedBindings: Map<string, PendingBindingClaim>;
   resolve: (result: GhostToolCallResult) => void;
   timer: ReturnType<typeof setTimeout> | undefined;
   /** 派发时刻(续命天花板从这里起算)。 */
@@ -167,6 +177,7 @@ export class GhostPipeDispatcher {
       const entry: PendingCall = {
         ghostId,
         tool,
+        claimedBindings: new Map(),
         resolve,
         timer: undefined,
         startedAt,
@@ -183,6 +194,73 @@ export class GhostPipeDispatcher {
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
       }
     });
+  }
+
+  /**
+   * 认领真实在途 tool-call 的宿主能力绑定。
+   *
+   * callerTool 必须与派发器事实表逐字匹配；同一 binding 只允许同 requestKey
+   * 在暂态失败后重试一次，禁止换查询借用同一 callId 或无限消费付费通道。
+   */
+  claimPendingCall(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+  ): boolean {
+    const entry = this.pending.get(callId);
+    if (!entry || entry.ghostId !== ghostId || entry.tool !== callerTool) return false;
+    const existing = entry.claimedBindings.get(binding);
+    if (!existing) {
+      entry.claimedBindings.set(binding, {
+        callerTool,
+        requestKey,
+        attempts: 1,
+        active: true,
+        consumed: false,
+      });
+      return true;
+    }
+    if (
+      existing.callerTool !== callerTool ||
+      existing.requestKey !== requestKey ||
+      existing.active ||
+      existing.consumed ||
+      existing.attempts >= 2
+    ) {
+      return false;
+    }
+    existing.attempts += 1;
+    existing.active = true;
+    return true;
+  }
+
+  /** 收束一次能力尝试；仅首次暂态失败可重新认领同一请求。 */
+  settlePendingCallClaim(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+    allowRetry: boolean,
+  ): boolean {
+    const entry = this.pending.get(callId);
+    const claim = entry?.claimedBindings.get(binding);
+    if (
+      !entry ||
+      entry.ghostId !== ghostId ||
+      entry.tool !== callerTool ||
+      !claim ||
+      claim.callerTool !== callerTool ||
+      claim.requestKey !== requestKey ||
+      !claim.active
+    ) {
+      return false;
+    }
+    claim.active = false;
+    if (!allowRetry || claim.attempts >= 2) claim.consumed = true;
+    return true;
   }
 
   /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */

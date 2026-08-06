@@ -369,6 +369,8 @@ export interface ChatMessage {
    * rewritten because it also participates in message ordering.
    */
   planUpdatedAtMs?: number;
+  /** Main stamped this persisted Codex plan at the successful done boundary. */
+  terminalPlanSnapshot?: boolean;
   /**
    * 产生这条消息的模型 raw id(读自 agentMeta.model)。对 subagent 子消息而言
    * 即子代理实际跑的模型(如 'claude-haiku-4-5-20251001')。仅 SDK 带 model 的
@@ -376,8 +378,9 @@ export interface ChatMessage {
    */
   model?: string;
   /**
-   * Host 在 SDK `done` 边界写入的持久化 turn seal。一个真实用户请求可能因后台任务
-   * 完成而自动续跑多个 SDK turn；每个 seal 都代表一条应保留在「已工作」外的正式回复。
+   * Host 在 SDK `done` 边界写入的持久化 turn seal。通常位于最后一条 assistant；
+   * 无 assistant 文本的 Codex 失败轮会把 false 写在所属 update_plan 行，防止后续轮次
+   * 的成功边界误收口旧计划。
    */
   turnCompleted?: boolean;
   /**
@@ -585,7 +588,8 @@ export interface AgentTaskUpdate {
   lastToolName?: string;
   taskType?: string;
   workflowName?: string;
-  model?: string;
+  /** `null` is an explicit live-update instruction to clear a stale model badge. */
+  model?: string | null;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
   /**
@@ -3878,7 +3882,11 @@ function hydratePersistedMessage(
     typeof persisted.toolInput === 'object' &&
     persisted.toolInput !== null &&
     Array.isArray((existing.toolInput as { plan?: unknown }).plan) &&
-    Array.isArray((persisted.toolInput as { plan?: unknown }).plan)
+    Array.isArray((persisted.toolInput as { plan?: unknown }).plan) &&
+    // Ordinary DB echoes can lag behind the live Codex event, including rows
+    // whose old payload happens to be fully completed or empty. Only Main's
+    // explicit done-boundary stamp may close a newer in-memory plan.
+    persisted.terminalPlanSnapshot !== true
   ) {
     hydrated.toolInput = existing.toolInput;
     hydrated.content = existing.content;
@@ -4118,7 +4126,11 @@ function normalizeAgentTaskUpdate(
     ...(typeof raw.workflowName === 'string' && raw.workflowName
       ? { workflowName: raw.workflowName }
       : {}),
-    ...(typeof raw.model === 'string' && raw.model ? { model: raw.model } : {}),
+    ...(raw.model === null
+      ? { model: null }
+      : typeof raw.model === 'string' && raw.model
+        ? { model: raw.model }
+        : {}),
     ...(typeof raw.reasoningEffort === 'string' && raw.reasoningEffort
       ? { reasoningEffort: raw.reasoningEffort }
       : {}),
@@ -4152,6 +4164,7 @@ function mergeAgentTaskUpdate(
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
+    model: next.model === null ? null : next.model ?? prev.model,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
 }
@@ -4639,7 +4652,9 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
-          ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
+          ...(toolName === 'update_plan'
+            ? { planUpdatedAtMs: Date.now(), terminalPlanSnapshot: false }
+            : {}),
         };
         return {
           ...finalized,
@@ -14148,6 +14163,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
+          ? { terminalPlanSnapshot: true }
+          : {}),
+        ...(toolName === 'update_plan' && c.turnCompleted === false
+          ? { turnCompleted: false }
+          : {}),
         isStreaming: false,
         // subagent-model-chip: 从持久化 agentMeta 复原 model / parentUuid,
         // 让历史重载后 Agent/Task 行也能显示子代理模型 chip(透传点 B)。
@@ -14476,6 +14497,16 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
           }
         : {};
+    // 新数据的显式 turn seal 权威高于旧历史兜底：失败/中断轮也可能带 usage 或费用，
+    // `false` 不能因此被重新推成成功。只有 seal 缺失的存量行才用收尾费用/明细补 true。
+    const persistedTurnCompleted =
+      m.role !== 'assistant'
+        ? undefined
+        : typeof agentMeta?.turnCompleted === 'boolean'
+          ? agentMeta.turnCompleted
+          : (persistedTurnMoney?.amount ?? 0) > 0 || turnUsageDetails !== undefined
+            ? true
+            : undefined;
     return {
       clientId: m.clientId,
       role: m.role,
@@ -14484,16 +14515,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(m.role === 'tool_result' && typeof m.toolUseId === 'string' && m.toolUseId.length > 0
         ? { toolUseId: m.toolUseId }
         : {}),
-      // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
-      // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
-      // turnUsageDetails 同样是 turn 结束才 patch 的字段(无报价轮只落它),因此
-      // 也是等价的收尾信号 —— 少了它,无金额轮重开会话就挂不出 action bar。
-      ...(m.role === 'assistant' &&
-      (agentMeta?.turnCompleted === true ||
-        (persistedTurnMoney?.amount ?? 0) > 0 ||
-        turnUsageDetails !== undefined)
-        ? { turnCompleted: true }
-        : {}),
+      // SDK done turn seal；存量会话 seal 缺失时才用 turn 费用/明细补成功边界。
+      ...(persistedTurnCompleted !== undefined ? { turnCompleted: persistedTurnCompleted } : {}),
       // 本轮 token 明细独立于金额挂载:Pi/新模型算不出报价的轮次只有它，
       // UI 据此退回显示 token，历史加载不能把它绑在 money 分支。
       ...(m.role === 'assistant' && turnUsageDetails ? { turnUsageDetails } : {}),
