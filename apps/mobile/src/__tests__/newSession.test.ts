@@ -20,6 +20,7 @@ import {
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   sessionFromCreateResult,
+  reconcileEffortAfterFallback,
   serializeNewSessionDeviceOptions,
   summarizeNewSessionDraft,
   validateModelProviderId,
@@ -135,8 +136,23 @@ describe('pickMostRecentSessionRuntime', () => {
   });
 });
 
-describe('validateModelProviderId', () => {
-  const rows = [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')];
+describe('reconcileEffortAfterFallback', () => {
+  it('keeps the base effort when the fallback model supports it', () => {
+    const rows = [modelRow('claude-sonnet-4-6', ['low', 'medium', 'high'], 'medium')];
+    expect(reconcileEffortAfterFallback(rows, { model: 'claude-sonnet-4-6', providerId: 'prov-claude-sonnet-4-6' }, 'high')).toBe('high');
+  });
+
+  it('drops to the fallback model default when the base effort is unsupported (codex P2)', () => {
+    const rows = [modelRow('claude-haiku', ['low'], 'low')];
+    expect(reconcileEffortAfterFallback(rows, { model: 'claude-haiku', providerId: 'prov-claude-haiku' }, 'xhigh')).toBe('low');
+  });
+
+  it('keeps the base effort when no catalog row matches (cannot reconcile)', () => {
+    expect(reconcileEffortAfterFallback([], { model: 'claude-sonnet-4-6', providerId: null }, 'high')).toBe('high');
+  });
+});
+
+describe('validateModelProviderId', () => {  const rows = [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')];
 
   it('null / undefined providerId → null', () => {
     expect(validateModelProviderId(rows, null, 'deepseek-v4-flash', true)).toBeNull();

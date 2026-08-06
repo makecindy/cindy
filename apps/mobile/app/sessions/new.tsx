@@ -143,6 +143,7 @@ import {
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   sessionFromCreateResult,
+  reconcileEffortAfterFallback,
   resolveRecentModelAndProvider,
   validateNewSessionDraft,
   type NewSessionAgentKind,
@@ -825,9 +826,16 @@ export default function NewRemoteSessionScreen() {
         current.agentKind,
         true,
       );
-      return (resolved.model === current.model && resolved.providerId === current.providerId)
-        ? current
-        : { ...current, model: resolved.model, providerId: resolved.providerId };
+      const pairChanged = resolved.model !== current.model || resolved.providerId !== current.providerId;
+      if (!pairChanged) return current;
+      // 组合变化时同步校准 effort(codex review P2)、fastMode 保守置 false(可手动重开)。
+      return {
+        ...current,
+        model: resolved.model,
+        providerId: resolved.providerId,
+        effort: reconcileEffortAfterFallback(modelRows, resolved, current.effort),
+        ...(current.fastMode ? { fastMode: false } : {}),
+      };
     });
   }, [deviceProviders.ready, modelRows]);
 
@@ -2792,17 +2800,26 @@ export default function NewRemoteSessionScreen() {
       }
       // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
       // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并
-      // 回退(其他来源顶替 / 首项 / 内置默认),不留裸模型回落默认网关。
+      // 回退(其他来源顶替 / 首项 / 内置默认),并同步校准 effort、组合变化时 fastMode
+      // 保守置 false(codex review P2)。
       // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
-      effectiveDraft = {
-        ...effectiveDraft,
-        ...resolveRecentModelAndProvider(
+      {
+        const resolved = resolveRecentModelAndProvider(
           modelRowsRef.current,
           { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
           effectiveDraft.agentKind,
           catalogReadyRef.current,
-        ),
-      };
+        );
+        const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
+        effectiveDraft = {
+          ...effectiveDraft,
+          ...resolved,
+          ...(pairChanged ? {
+            effort: reconcileEffortAfterFallback(modelRowsRef.current, resolved, effectiveDraft.effort),
+            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+          } : {}),
+        };
+      }
       const agentKindSnapshot = effectiveDraft.agentKind;
       const deviceIdSnapshot = selectedDeviceId;
       // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
@@ -2939,15 +2956,22 @@ export default function NewRemoteSessionScreen() {
         },
       });
       // 提交点联合终检(同 create()):守卫不依赖渲染后的清理 effect,来源失效时
-      // model 随之一并回退;modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
+      // model 随之一并回退并同步校准 effort、组合变化时 fastMode 保守置 false;
+      // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
+      const resolved = resolveRecentModelAndProvider(
+        modelRowsRef.current,
+        { model: draft.model, providerId: draft.providerId },
+        draft.agentKind,
+        catalogReadyRef.current,
+      );
+      const pairChanged = resolved.model !== draft.model || resolved.providerId !== draft.providerId;
       const finalDraft = {
         ...draft,
-        ...resolveRecentModelAndProvider(
-          modelRowsRef.current,
-          { model: draft.model, providerId: draft.providerId },
-          draft.agentKind,
-          catalogReadyRef.current,
-        ),
+        ...resolved,
+        ...(pairChanged ? {
+          effort: reconcileEffortAfterFallback(modelRowsRef.current, resolved, draft.effort),
+          ...(draft.fastMode ? { fastMode: false } : {}),
+        } : {}),
       };
       const createOpts = buildRemoteCreateSessionOptions(finalDraft);
       await withTransientRemoteRetry(async () => {

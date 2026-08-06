@@ -369,6 +369,22 @@ export function resolveRecentModelAndProvider(
 }
 
 /**
+ * 联合回退后的 effort 校准:回退改变了 (model, providerId) 时,用新组合精确匹配行
+ * reconcile 既有档位,旧档位不受新模型支持时降到其默认档(codex review P2:回退模型
+ * 时同步校准 effort)。组合未变化时调用方不应调用本函数(原样保留即可)。
+ * 配套约定:组合变化时调用方还应把 fastMode 保守置 false(fast 能力 per-(provider,
+ * model, agent),新组合是否支持无法本地判定,关闭最安全,用户可手动重开)。
+ */
+export function reconcileEffortAfterFallback(
+  modelRows: readonly ProviderModelRow[],
+  next: { model: string; providerId: string | null },
+  baseEffort: string,
+): string {
+  const sectionModel = findSectionModelRow(modelRows, next.model, next.providerId)?.model;
+  return sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : baseEffort;
+}
+
+/**
  * 按 (providerId, modelId) 精确找 row;providerId 为空或无精确匹配时退回 modelId 首匹配。
  * 同一 modelId 可被多个 provider 提供(各自 effort 档位表可能不同)——reconcile effort
  * 必须用最终选中来源的那一行,否则会被错误降档/升档(Copilot review)。
