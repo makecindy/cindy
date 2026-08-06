@@ -36,15 +36,25 @@ describe('createCodexMcpThreadContextStore', () => {
     expect(store.getContextForThreadId('thread-1')).toBeUndefined();
   });
 
-  it('resolves one host-owned session instance and fail-closes duplicate claims', () => {
+  it('resolves cloned contexts for one host-owned session instance', () => {
     const store = createCodexMcpThreadContextStore();
     const first = { ...ctx('session-1'), sessionInstanceId: 'instance-1' };
-    const duplicate = { ...ctx('session-2'), sessionInstanceId: 'instance-1' };
+    const alias = { ...first, vendorOptions: { ...first.vendorOptions } };
 
     store.registerThreadContext('thread-1', first);
     expect(store.getContextForSessionInstanceId('instance-1')).toBe(first);
     expect(store.getContextForSessionInstanceId('unknown')).toBeUndefined();
 
+    store.registerThreadContext('thread-2', alias);
+    expect(store.getContextForSessionInstanceId('instance-1')).toBe(first);
+  });
+
+  it('fail-closes duplicate claims with different stable identity', () => {
+    const store = createCodexMcpThreadContextStore();
+    const first = { ...ctx('session-1'), sessionInstanceId: 'instance-1' };
+    const duplicate = { ...ctx('session-2'), sessionInstanceId: 'instance-1' };
+
+    store.registerThreadContext('thread-1', first);
     store.registerThreadContext('thread-2', duplicate);
     expect(store.getContextForSessionInstanceId('instance-1')).toBeUndefined();
     store.unregisterThreadContext('thread-2');

@@ -10,6 +10,19 @@ export interface CodexMcpThreadContextStore {
   registeredThreadCount(): number;
 }
 
+function sameSessionInstanceContext(
+  left: LiziMcpSessionContext,
+  right: LiziMcpSessionContext,
+): boolean {
+  return (
+    left.sessionInstanceId === right.sessionInstanceId &&
+    left.sessionId === right.sessionId &&
+    left.agentKind === right.agentKind &&
+    left.workingDir === right.workingDir &&
+    left.remoteHostId === right.remoteHostId
+  );
+}
+
 export function createCodexMcpThreadContextStore(): CodexMcpThreadContextStore {
   const contextsByThread = new Map<string, LiziMcpSessionContext>();
 
@@ -38,10 +51,12 @@ export function createCodexMcpThreadContextStore(): CodexMcpThreadContextStore {
       let match: LiziMcpSessionContext | undefined;
       for (const context of contextsByThread.values()) {
         if (context.sessionInstanceId !== sessionInstanceId) continue;
-        // 同一个 context 可能暂时挂在多个 thread alias 上；不同 context 却
-        // 声称同一 instance 时无法安全判断，按歧义 fail closed。
-        if (match && match !== context) return undefined;
-        match = context;
+        // 同一个 session instance 可能暂时挂在多个 thread alias 上；注册流程
+        // 会为每个 alias 展开出新的对象，因此不能用引用相等判断是否同一实例。
+        // 稳定的 host-owned identity 一致时复用第一个 context；其余冲突继续
+        // fail closed，避免把不同会话实例串到同一个 opaque route 上。
+        if (match && !sameSessionInstanceContext(match, context)) return undefined;
+        match ??= context;
       }
       return match;
     },

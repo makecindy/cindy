@@ -258,6 +258,9 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
         )}
       />
+      <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+        {t('issueAgent.confirm.privacyHint')}
+      </p>
 
       {/*
         新版 Main:平台 Bot 默认 + 可选 GitHub 用户。旧版 Main 可能已固定为 GitHub
