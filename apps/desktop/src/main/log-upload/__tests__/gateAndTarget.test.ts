@@ -222,7 +222,13 @@ describe('resolveLogUploadTarget（构建期注入）', () => {
     ['带协议', 'https://cn-shanghai.log.aliyuncs.com'],
     ['带路径', 'cn-shanghai.log.aliyuncs.com/logstores'],
     ['带 project 前缀', 'cindy-sh-prod.cn-shanghai.log.aliyuncs.com'],
-  ])('endpointHost %s ⇒ null（会让 logSink 拼出错误 URL，而那种错误是静默的）', (_case, host) => {
+    // ⚠️ 2026-08-04 review P1:合法形状的**任意域名**必须也判 null,否则绕过 loadLogUploadTargets
+    // 的注入(dev .env / 异常打包)能把日志改投他人域(buildTrackUrl → https://<project>.<域>/)。
+    ['任意域名 evil.com', 'evil.com'],
+    ['SLS 域名后缀攻击', 'cn-shanghai.log.aliyuncs.com.evil.com'],
+    ['近似域名', 'cn-shanghai.log.aliyuncs.net'],
+    ['多一级子域伪装', 'cn-shanghai.log.aliyuncs.com.'],
+  ])('endpointHost %s ⇒ null（非 SLS 接入域名一律 fail closed）', (_case, host) => {
     const payload = JSON.stringify({
       region: 'cn',
       project: 'cindy-sh-prod',
@@ -230,6 +236,18 @@ describe('resolveLogUploadTarget（构建期注入）', () => {
       endpointHost: host,
     });
     expect(resolveLogUploadTarget({ region: 'cn', raw: payload })).toBeNull();
+  });
+
+  it('合法 SLS 接入域名放行（区域代号 + .log.aliyuncs.com）', () => {
+    for (const host of ['cn-shanghai.log.aliyuncs.com', 'ap-southeast-1.log.aliyuncs.com']) {
+      const payload = JSON.stringify({
+        region: 'cn',
+        project: 'p',
+        logstore: 'l',
+        endpointHost: host,
+      });
+      expect(resolveLogUploadTarget({ region: 'cn', raw: payload })?.endpointHost).toBe(host);
+    }
   });
 
   it('未注入时（vitest / dev server 的真实情形）默认读环境变量并判未配置', () => {

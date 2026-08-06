@@ -50,6 +50,17 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 /**
+ * SLS 接入域名的形状：`<区域代号>.log.aliyuncs.com`。与构建脚本 `slsEndpointHost()` 的产物
+ * 逐字对应，区域代号同 `SLS_REGION_RE`（`/^[a-z0-9][a-z0-9-]*$/`）。
+ *
+ * 运行期用它把 endpointHost 钉死在 SLS 域内：注入是文本替换，若有 dev `.env` 或异常打包链路
+ * 绕过 `loadLogUploadTargets` 塞进一个任意域名（如 `evil.com`），`buildTrackUrl` 会把用户日志
+ * 免签 POST 到 `https://<project>.<那个域>/` —— 直接改投他人域（2026-08-04 review P1）。这个形状
+ * 也顺带挡掉带协议 / 带路径 / 带 project 前缀（多一个 label）的畸形值。
+ */
+const SLS_ENDPOINT_HOST_RE = /^[a-z0-9][a-z0-9-]*\.log\.aliyuncs\.com$/;
+
+/**
  * 解析注入串。任何不合法形态都返回 null（不抛）——调用点在启动路径上，
  * 一个配置问题不该让 App 起不来。
  */
@@ -71,12 +82,11 @@ export function parseInjectedTarget(raw: string): InjectedTarget | null {
   ) {
     return null;
   }
-  // endpointHost 必须是纯主机名:带协议或带 project 前缀都会让 logSink 拼出错误 URL,
-  // 而那种错误的表现是静默的(请求发出去拿个 404)。构建脚本已经校验过一遍,这里是
-  // 第二道 —— 注入是文本替换,链路上任何一环出错都该在这里被判成"未配置"而不是照用。
+  // endpointHost 必须是 SLS 接入域名形状(见 SLS_ENDPOINT_HOST_RE)。构建脚本已按 slsRegion
+  // 拼过一遍,这里是运行期第二道 —— 注入是文本替换,链路任何一环出错(或被绕过塞进任意域名)
+  // 都该在这里判成"未配置"而不是照用,免得把用户日志改投他人域。
   const endpointHost = r.endpointHost.trim();
-  if (endpointHost.includes('://') || endpointHost.includes('/')) return null;
-  if (endpointHost.startsWith(`${r.project.trim()}.`)) return null;
+  if (!SLS_ENDPOINT_HOST_RE.test(endpointHost)) return null;
 
   return {
     region: r.region.trim() as CindyRegion,
