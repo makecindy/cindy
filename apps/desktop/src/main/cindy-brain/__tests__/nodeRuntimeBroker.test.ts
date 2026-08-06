@@ -117,6 +117,7 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'secret');
     vi.stubEnv('USERPROFILE', 'C:\\Users\\demo');
     vi.stubEnv('APPDATA', 'C:\\Users\\demo\\AppData\\Roaming');
+    vi.stubEnv('GH_CONFIG_DIR', 'D:\\gh-config');
     const child = new FakeUtilityProcess();
     const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
       void modulePath;
@@ -152,6 +153,7 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     // 登录配置，裁掉会让 worker 里的 gh 误报“未登录”（keyring 登录读不到）。
     expect(forkOptions.env.USERPROFILE).toBe('C:\\Users\\demo');
     expect(forkOptions.env.APPDATA).toBe('C:\\Users\\demo\\AppData\\Roaming');
+    expect(forkOptions.env.GH_CONFIG_DIR).toBe('D:\\gh-config');
 
     const spawned = vi.fn();
     worker.once('spawn', spawned);

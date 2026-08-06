@@ -273,6 +273,8 @@ export function createUtilityNodeWorkerProcess(
     'LOCALAPPDATA',
     'HOMEDRIVE',
     'HOMEPATH',
+    // gh 允许用 GH_CONFIG_DIR 指定自定义配置目录；同属路径类变量，不含秘密。
+    'GH_CONFIG_DIR',
   ] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,
