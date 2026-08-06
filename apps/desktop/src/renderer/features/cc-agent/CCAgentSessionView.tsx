@@ -1288,6 +1288,9 @@ export function CCAgentSessionView({
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
   const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
+  // 真实会话 agentKind(pending switch intent 不影响)——压缩分流必须用它,
+  // 否则 intent 乐观切到 pi 但真实会话仍在跑 claude-code 时会错调 compact-session(#1933 review)。
+  const realAgentKind = dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
@@ -2682,7 +2685,7 @@ export function CCAgentSessionView({
       if (!ok) return;
       // 按 agent 能力分流(#1927):pi 走 capability-aware 的 maker:compact-session
       // (原生已支持手动压缩),claude-code 走输入协调器的 maker:input:compact。
-      if (displayAgentKind === 'pi') {
+      if (realAgentKind === 'pi') {
         try {
           const result = await window.electronAPI.maker.compactSession(session.id);
           if (result?.noop) {
@@ -2713,7 +2716,7 @@ export function CCAgentSessionView({
     agentStatus.contextWindow,
     compactSession,
     confirmDialog,
-    displayAgentKind,
+    realAgentKind,
     remoteDeviceId,
     session,
     t,
@@ -3995,8 +3998,8 @@ export function CCAgentSessionView({
                       // 按 agent 能力分流(#1927):pi(原生支持,仅本地)与 claude-code 开放手动
                       // 压缩入口;远程 pi 会话暂无路由通道(与 SessionContentHeader 一致,压缩
                       // 菜单仅本地开放);codex 无手动 compact(上游自动压缩)保持纯展示。
-                      (displayAgentKind === 'claude-code'
-                        || (displayAgentKind === 'pi' && !remoteDeviceId))
+                      (realAgentKind === 'claude-code'
+                        || (realAgentKind === 'pi' && !remoteDeviceId))
                         && session != null && agentStatus.contextTokens > 0
                         ? handleCompactRequest
                         : undefined

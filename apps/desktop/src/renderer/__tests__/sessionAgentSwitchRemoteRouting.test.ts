@@ -910,17 +910,17 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
   it('pi 与 claude-code 开放入口(pi 仅本地),codex 不开放', () => {
     // onCompact 绑定:claude-code 恒开放;pi 仅本地会话(!remoteDeviceId)开放(远程无路由通道,
     // 与 SessionContentHeader 压缩菜单仅本地一致);codex 保持纯展示(无手动 compact)
-    expect(viewSource).toContain("(displayAgentKind === 'claude-code'");
-    expect(viewSource).toContain("(displayAgentKind === 'pi' && !remoteDeviceId)");
+    expect(viewSource).toContain("(realAgentKind === 'claude-code'");
+    expect(viewSource).toContain("(realAgentKind === 'pi' && !remoteDeviceId)");
   });
 
   it('pi 走 capability-aware 的 maker:compact-session,不碰 claude-code 专用通道', () => {
     // handleCompactRequest 内:pi 分支调用 compactSession(session.id)(即 maker:compact-session),
     // claude-code 分支才走 inputCoordinator 的 maker:input:compact(compactSession(model, effort...))
-    expect(viewSource).toContain("if (displayAgentKind === 'pi') {");
+    expect(viewSource).toContain("if (realAgentKind === 'pi') {");
     expect(viewSource).toContain('window.electronAPI.maker.compactSession(session.id)');
     // 确认 pi 分支不调用旧通道:pi 分支以 return 结束,return 之前只有 window.electronAPI 通道
-    const piStart = viewSource.indexOf("if (displayAgentKind === 'pi')");
+    const piStart = viewSource.indexOf("if (realAgentKind === 'pi')");
     const piEnd = viewSource.indexOf('return;', piStart);
     const piBranch = viewSource.slice(piStart, piEnd);
     expect(piBranch).not.toContain('await compactSession(');
