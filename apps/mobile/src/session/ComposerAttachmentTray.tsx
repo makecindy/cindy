@@ -375,8 +375,7 @@ function makeTrayStyles(colors: ThemeColors) {
       borderRadius: radius.container,
       borderWidth: StyleSheet.hairlineWidth,
       height: COLLAPSED_BADGE_SIZE,
-      // 与 leading 兄弟的间距交给 MobileComposerInputRow.mainRow 的 gap,避免
-      // marginRight 再叠一层,收起态附件徽标与 placeholder 之间出现多余空白。
+      marginRight: spacing.sm,
       overflow: 'hidden' as const,
       width: COLLAPSED_BADGE_SIZE,
     },

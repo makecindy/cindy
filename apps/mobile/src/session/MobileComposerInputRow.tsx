@@ -114,11 +114,6 @@ export interface MobileComposerInputRowProps {
    * hitSlop 解决不了——RN 的命中区不会越过父视图边界，必须让父容器本身够高。
    */
   inputFrameMinHeight?: number;
-  /**
-   * 输入区（inputFrame）的最小宽度。收起态 leading 放长模型 pill 时用来给 TextInput
-   * 留出可点/可见宽度；不设则保持 `minWidth: 0`（flex 子项默认可被压扁）。
-   */
-  inputFrameMinWidth?: number;
   /** Rich composer replacement for the plain TextInput. */
   inputElement?: ReactNode;
   inputOverlay?: ReactNode;
@@ -193,7 +188,6 @@ export function MobileComposerInputRow({
   floatingVoiceButtonStyle,
   inputFrameHeight,
   inputFrameMinHeight,
-  inputFrameMinWidth,
   inputElement,
   inputOverlay,
   inputRef,
@@ -299,7 +293,6 @@ export function MobileComposerInputRow({
           style={[
             styles.inputFrame,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
-            inputFrameMinWidth != null && { minWidth: inputFrameMinWidth },
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
           ]}
         >
