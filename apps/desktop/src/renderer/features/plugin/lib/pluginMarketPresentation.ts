@@ -44,6 +44,21 @@ export function pluginUpdateForInstalledVersion(
 }
 
 /**
+ * Only `installed` / `update-available` mean the market ledger owns the local
+ * install. A `not-installed` item is just a catalog listing with the same
+ * ghost id (including an adoptable same-bytes projection of a file install);
+ * routing mutations like uninstall through it hits the market ledger, which
+ * has no record and fails with NOT_FOUND.
+ */
+export function pluginMarketOwnedInstall(
+  item: PluginMarketItem | null | undefined,
+): PluginMarketItem | null {
+  return item?.installState === 'installed' || item?.installState === 'update-available'
+    ? item
+    : null;
+}
+
+/**
  * Keeps the complete catalog in server order while rendering an installed card
  * for market records already owned by this client. Local-only installs have no
  * server position, so they remain visible after the ordered market catalog.

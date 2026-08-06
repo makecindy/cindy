@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PluginMarketItem } from '../../../../../shared/pluginMarket';
 import {
   orderPluginCatalogItems,
+  pluginMarketOwnedInstall,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
 } from '../pluginMarketPresentation';
@@ -81,6 +82,26 @@ describe('pluginUpdateForInstalledVersion', () => {
     const legacy = marketItem('plugin-legacy', 'legacy', 'update-available');
 
     expect(pluginUpdateForInstalledVersion(legacy)).toBe(legacy);
+  });
+});
+
+describe('pluginMarketOwnedInstall', () => {
+  it.each([
+    ['ledger-owned install', marketItem('plugin-installed', 'installed', 'installed')],
+    ['pending update', marketItem('plugin-update', 'update', 'update-available')],
+  ] as const)('keeps a %s on the market mutation path', (_label, item) => {
+    expect(pluginMarketOwnedInstall(item)).toBe(item);
+  });
+
+  it.each([
+    // 文件装的插件撞上市场同 id 可装项(含内容一致的可收养投影)时,
+    // 卸载必须走本地路径;走市场账本会 NOT_FOUND,插件永远卸不掉。
+    ['adoptable catalog listing', marketItem('plugin-catalog', 'catalog', 'not-installed')],
+    ['source conflict', marketItem('plugin-conflict', 'conflict', 'conflict')],
+    ['missing market record', null],
+    ['undefined market record', undefined],
+  ] as const)('keeps a %s off the market mutation path', (_label, item) => {
+    expect(pluginMarketOwnedInstall(item)).toBeNull();
   });
 });
 
