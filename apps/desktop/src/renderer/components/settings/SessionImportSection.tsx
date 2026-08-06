@@ -432,7 +432,7 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
   const projectCount = scan.candidates.filter((item) => item.sidebarBucket === 'project').length;
   const dialogueCount = scan.candidates.length - projectCount;
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
       <SummaryCell
         label={t('settings.sessionImport.summary.total')}
         value={scan.candidates.length}
