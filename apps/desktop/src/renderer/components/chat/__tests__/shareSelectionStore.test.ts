@@ -36,6 +36,16 @@ describe('isShareableMessage', () => {
       false,
     );
   });
+
+  it('默认折叠的 Orca communication 用户卡不可选', () => {
+    expect(
+      isShareableMessage({
+        role: 'user',
+        clientId: 'x',
+        content: JSON.stringify({ orcaSource: 'lead', content: '分派任务' }),
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('shareSelectionStore', () => {

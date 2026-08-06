@@ -21,7 +21,7 @@ import { diffChars } from 'diff';
 
 import { isImageBytesReachable, loadImageSourceBase64 } from '@/lib/annotationBurnIn';
 import { createLogger } from '@/lib/logger';
-import { domToPngBlob, resolveExportBackground } from '@/lib/rasterizeToImage';
+import { computeExportScale, domToPngBlob, resolveExportBackground } from '@/lib/rasterizeToImage';
 
 const log = createLogger('ShareConversationImage');
 
@@ -78,6 +78,14 @@ export class ShareImageSelectionNotMountedError extends Error {
   constructor() {
     super('one or more selected message nodes are not mounted');
     this.name = 'ShareImageSelectionNotMountedError';
+  }
+}
+
+/** 选区过长或过宽、只能缩成低于 1x 的不可读缩略图时抛这个。 */
+export class ShareImageTooLargeError extends Error {
+  constructor() {
+    super('selected content exceeds the readable share image size');
+    this.name = 'ShareImageTooLargeError';
   }
 }
 
@@ -255,11 +263,6 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         img.remove();
         return;
       }
-      // 已是 data URL:直接可用,只需解除 lazy(离屏容器里 lazy 图不会加载)。
-      if (src.startsWith('data:')) {
-        img.setAttribute('loading', 'eager');
-        return;
-      }
       if (!isImageBytesReachable(src)) {
         log.warn('share image: unreachable image source, dropping', {
           scheme: src.slice(0, 16),
@@ -280,6 +283,16 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
       }
     }),
   );
+}
+
+/**
+ * 分享图至少保留 1x CSS 像素密度。共享光栅化层的 4096 单边上限是内存硬边界，
+ * 继续缩小虽能成功导出，但正文会退化成不可读缩略图；这里宁可明确拒绝。
+ */
+export function assertShareImageReadableSize(root: HTMLElement): void {
+  if (computeExportScale(root.scrollWidth, root.scrollHeight, 2) < 1) {
+    throw new ShareImageTooLargeError();
+  }
 }
 
 /**
@@ -549,6 +562,7 @@ export async function buildShareImageBlob({
     await Promise.all(
       Array.from(stage.querySelectorAll('img')).map((img) => img.decode().catch(() => undefined)),
     );
+    assertShareImageReadableSize(stage);
 
     return await domToPngBlob(stage, { background });
   } finally {

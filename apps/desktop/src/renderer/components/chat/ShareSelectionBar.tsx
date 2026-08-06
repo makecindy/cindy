@@ -27,6 +27,7 @@ import {
   queryShareableMessageIds,
   SHARE_EXCLUDE_ATTR,
   ShareImageSelectionNotMountedError,
+  ShareImageTooLargeError,
   shareSiteHostForRegion,
 } from '@/lib/shareConversationImage';
 import { toast } from '@/lib/toast';
@@ -87,11 +88,14 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
       try {
         const blob = await buildBlob();
         if (kind === 'copy') {
+          if (!shareSelectionStore.isActive(sessionId)) return;
           await copyPngBlobToClipboard(blob);
           toast.success(t('chat.shareImage.copied'));
         } else {
+          const url = await blobToDataUrl(blob);
+          if (!shareSelectionStore.isActive(sessionId)) return;
           const res = await window.electronAPI.saveMediaAs({
-            url: await blobToDataUrl(blob),
+            url,
           });
           // 用户在原生对话框里取消:不是失败,不 toast、不退出选择模式。
           if (res.canceled) return;
@@ -103,21 +107,25 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
           kind,
           error: err instanceof Error ? err.message : String(err),
         });
+        if (!shareSelectionStore.isActive(sessionId)) return;
         toast.error(
           err instanceof ShareImageSelectionNotMountedError
             ? t('chat.shareImage.notMounted')
+            : err instanceof ShareImageTooLargeError
+              ? t('chat.shareImage.tooLarge')
             : t('chat.shareImage.failed'),
         );
       } finally {
         setBusy(null);
       }
     },
-    [buildBlob, busy, count, t],
+    [buildBlob, busy, count, sessionId, t],
   );
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (isEditableKeyboardTarget(e.target)) return;
+      if (busy) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         shareSelectionStore.exit();
@@ -130,7 +138,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [toggleAll]);
+  }, [busy, toggleAll]);
 
   const modifierLabel = window.electronAPI?.platform === 'darwin' ? '⌘A' : 'Ctrl+A';
   const disabled = count === 0 || busy !== null;
@@ -176,11 +184,13 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
         <button
           type="button"
           onClick={() => shareSelectionStore.exit()}
+          disabled={busy !== null}
           className={cn(
             'rounded-full px-6 py-2.5 text-[13px] font-medium transition-colors',
             'bg-[var(--surface-chip)] text-[var(--text-primary)]',
             'hover:bg-[var(--surface-hover)]',
             'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            busy && 'cursor-default opacity-50 hover:bg-[var(--surface-chip)]',
           )}
         >
           {t('chat.shareImage.cancel')}

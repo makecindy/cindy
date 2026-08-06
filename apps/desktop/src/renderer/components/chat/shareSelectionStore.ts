@@ -16,11 +16,13 @@
  */
 
 import { useSyncExternalStore } from 'react';
+import { parseOrcaCommunicationContent } from './userMessageDisplayText';
 
 /** 参与选择的消息最小结构 —— 只取判据用到的字段,不耦合完整 ChatMessage。 */
 interface ShareableMessageLike {
   role: string;
   clientId?: string | undefined;
+  content?: string | undefined;
   systemCardType?: unknown;
   isSyntheticTrigger?: boolean | undefined;
 }
@@ -30,7 +32,8 @@ interface ShareableMessageLike {
  *   - role 只认 user / assistant;
  *   - 带 systemCardType 的行渲染成 SystemCard(自愈记录、分隔线),不是正文;
  *   - isSyntheticTrigger 行根本不渲染气泡。
- * 三者任一不满足就没有可克隆的正文 DOM。
+ *   - Orca communication user 行渲染成默认折叠的任务卡,不是正文气泡。
+ * 任一不满足就没有可克隆的正文 DOM。
  *
  * 「当前可选的全集」不在这里派生 —— 它以已渲染的 DOM 为准
  * (见 shareConversationImage.queryShareableMessageIds)。
@@ -39,6 +42,7 @@ export function isShareableMessage(message: ShareableMessageLike): boolean {
   if (message.role !== 'user' && message.role !== 'assistant') return false;
   if (message.systemCardType) return false;
   if (message.isSyntheticTrigger) return false;
+  if (message.role === 'user' && parseOrcaCommunicationContent(message.content ?? '')) return false;
   return true;
 }
 

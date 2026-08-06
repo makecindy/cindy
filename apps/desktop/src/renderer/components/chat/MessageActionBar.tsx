@@ -295,7 +295,7 @@ export function MessageActionBar({
           disabled={inFlight}
           className={cn(
             'group flex h-[24px] w-[24px] items-center justify-center',
-            'rounded-[4px] border-none bg-transparent outline-none cursor-pointer',
+            'rounded-full border-none bg-transparent outline-none cursor-pointer',
             'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
           )}
           aria-label={t('chat.shareImage.entry')}

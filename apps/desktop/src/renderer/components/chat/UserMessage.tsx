@@ -1266,6 +1266,17 @@ export function UserMessage({
   // 重渲都重建,连带"等待停止接力" effect 无谓重跑(bot review 指出)。
   const exitEditing = useCallback(() => setEditing(false), []);
 
+  // 分享选择模式只克隆已发送消息的只读 DOM。仅在本条实际处于编辑态时订阅
+  // share store,避免让所有 user 消息都因选择模式切换而重渲染。
+  useEffect(() => {
+    if (!editing || !sessionId) return;
+    const exitWhenSharing = () => {
+      if (shareSelectionStore.isActive(sessionId)) exitEditing();
+    };
+    exitWhenSharing();
+    return shareSelectionStore.subscribe(exitWhenSharing);
+  }, [editing, exitEditing, sessionId]);
+
   // 编辑期间会话来了新消息(自动化任务注入等) → 本条不再是最后一条,继续
   // 发送会把那条新消息一起回退掉。直接退出编辑态(文本是从原消息预填的,
   // 退出无内容损失风险 —— 用户改到一半的文本被放弃,但这是极罕见路径,

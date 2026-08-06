@@ -14,6 +14,8 @@ const {
   SHARE_EXCLUDE_ATTR,
   SHARE_MESSAGE_ATTR,
   SHARE_SESSION_ATTR,
+  ShareImageTooLargeError,
+  assertShareImageReadableSize,
   buildShareImageFooter,
   inlineCloneImages,
   queryShareableMessageIds,
@@ -126,12 +128,25 @@ describe('inlineCloneImages', () => {
     expect(img?.hasAttribute('srcset')).toBe(false);
   });
 
-  it('已是 data URL 的图只解除 lazy,不重复取字节', async () => {
+  it('已是 data URL 的图也走统一字节层,执行大小限制并归一化', async () => {
+    isImageBytesReachable.mockReturnValue(true);
+    loadImageSourceBase64.mockResolvedValue({ base64: 'BBBB', mimeType: 'image/png' });
     const el = root('<img src="data:image/png;base64,BBBB" loading="lazy" />');
     await inlineCloneImages(el);
 
-    expect(loadImageSourceBase64).not.toHaveBeenCalled();
+    expect(loadImageSourceBase64).toHaveBeenCalledWith('data:image/png;base64,BBBB');
+    expect(el.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,BBBB');
     expect(el.querySelector('img')?.getAttribute('loading')).toBe('eager');
+  });
+
+  it('data URL 超出统一字节层上限时移除,不进入 decode / 光栅化', async () => {
+    isImageBytesReachable.mockReturnValue(true);
+    loadImageSourceBase64.mockRejectedValue(new Error('图片过大'));
+    const el = root('<img src="data:image/png;base64,TOO-LARGE" />');
+
+    await inlineCloneImages(el);
+
+    expect(el.querySelector('img')).toBeNull();
   });
 
   it('字节不可达的图直接移除(留着会渲染成 broken 图标)', async () => {
@@ -156,6 +171,26 @@ describe('inlineCloneImages', () => {
     const el = root('<img alt="" />');
     await inlineCloneImages(el);
     expect(el.querySelector('img')).toBeNull();
+  });
+});
+
+describe('assertShareImageReadableSize', () => {
+  it('保留至少 1x 的可读导出尺寸', () => {
+    const el = root('');
+    Object.defineProperties(el, {
+      scrollWidth: { value: 800 },
+      scrollHeight: { value: 4096 },
+    });
+    expect(() => assertShareImageReadableSize(el)).not.toThrow();
+  });
+
+  it('需要缩到 1x 以下时拒绝生成不可读缩略图', () => {
+    const el = root('');
+    Object.defineProperties(el, {
+      scrollWidth: { value: 800 },
+      scrollHeight: { value: 4097 },
+    });
+    expect(() => assertShareImageReadableSize(el)).toThrow(ShareImageTooLargeError);
   });
 });
 
