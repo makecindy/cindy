@@ -8,15 +8,18 @@ const source = readFileSync(
 ).replace(/\r\n/g, '\n');
 
 describe('composer synthetic suggestion open contract', () => {
-  it('device-link 远程草稿没有工作目录时不发起资源扫描', () => {
+  it('device-link 远程草稿没有工作目录时仅为空查询跳过资源扫描', () => {
     const start = source.indexOf('const runAtScan = useCallback');
     const end = source.indexOf('const syntheticAtQuery', start);
     const scanner = source.slice(start, end);
-    const guard = 'if (remoteDeviceId && !workingDir?.trim()) {';
+    const normalizedQuery = "const normalizedQuery = query?.trim() ?? '';";
+    const guard = 'if (remoteDeviceId && !workingDir?.trim() && !normalizedQuery) {';
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
+    expect(scanner).toContain(normalizedQuery);
     expect(scanner).toContain(guard);
+    expect(scanner.indexOf(normalizedQuery)).toBeLessThan(scanner.indexOf(guard));
     expect(scanner.indexOf(guard)).toBeLessThan(scanner.indexOf('scanAtResources('));
     expect(scanner).toContain("setAtState({ kind: 'ready', items: [], truncated: false });");
   });
