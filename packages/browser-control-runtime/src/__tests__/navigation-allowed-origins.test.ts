@@ -87,16 +87,17 @@ describe('exact-origin preview allowlist (navigation level)', () => {
  */
 describe('persistent navigation guard (preview origin)', () => {
   function fakePage() {
-    const unrouteCalls: string[] = [];
+    const unrouteCalls: Array<{ pattern: string; handler: unknown }> = [];
     const page = {
       route: async () => {},
-      unroute: async (pattern: string) => {
-        unrouteCalls.push(pattern);
+      unroute: async (pattern: string, handler: unknown) => {
+        unrouteCalls.push({ pattern, handler });
       },
       goto: async () => null,
     };
     return {
       unrouteCalls,
+      patterns: () => unrouteCalls.map((c) => c.pattern),
       page: page as unknown as Parameters<typeof gotoPageWithNavigationGuard>[0]['page'],
     };
   }
@@ -114,7 +115,7 @@ describe('persistent navigation guard (preview origin)', () => {
   });
 
   it('still removes the guard for non-preview pages (upstream behavior)', async () => {
-    const { unrouteCalls, page } = fakePage();
+    const { patterns, page } = fakePage();
     await gotoPageWithNavigationGuard({
       cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
       page,
@@ -122,6 +123,31 @@ describe('persistent navigation guard (preview origin)', () => {
       timeoutMs: 1000,
       ssrfPolicy: POLICY,
     });
-    expect(unrouteCalls).toEqual(['**']); // guard removed after goto
+    expect(patterns()).toEqual(['**']); // guard removed after goto
+  });
+
+  it('a later navigation takes over a previously kept preview guard (no stale guard)', async () => {
+    const { unrouteCalls, patterns, page } = fakePage();
+    // 1) preview navigation keeps its persistent guard
+    await gotoPageWithNavigationGuard({
+      cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+      page,
+      url: `${PREVIEW_ORIGIN}/preview/<token>/index.html`,
+      timeoutMs: 1000,
+      ssrfPolicy: POLICY,
+    });
+    expect(unrouteCalls).toEqual([]);
+    // 2) a later NORMAL navigation on the same page must unroute the stale
+    // preview guard first (playwright's route.continue() does not fall back
+    // to older matching handlers), then remove its own guard
+    await gotoPageWithNavigationGuard({
+      cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+      page,
+      url: 'https://example.com/',
+      timeoutMs: 1000,
+      ssrfPolicy: POLICY,
+    });
+    expect(patterns()).toEqual(['**', '**']);
+    expect(unrouteCalls[0].handler).not.toBe(unrouteCalls[1].handler);
   });
 });

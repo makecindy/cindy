@@ -55,6 +55,14 @@
       "desc": "keep the navigation route guard alive for exact-origin preview pages (sandboxed local HTML preview) so page-initiated navigations stay blocked after the initial goto"
     },
     {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "track + hand over the installed route guard per page: a newer navigation must unroute the previous guard, otherwise a stale preview guard keeps blocking every later page-initiated navigation on that tab (playwright route.continue() does not fall back to older matching handlers)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "unroute the previous guard before installing the new one, and record the new handler for the next takeover"
+    },
+    {
       "file": "extension/src/infra/net/ssrf.ts",
       "desc": "re-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)"
     },
@@ -64,7 +72,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "7f63d303331a712c4a2b0358c879299983d0e2557a533ba4065cf163024fc930",
+  "contentHash": "8911516363e4e83d367f7ff2fb99ae29d47c62f7659e3cd989e14e4181a6d7f5",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

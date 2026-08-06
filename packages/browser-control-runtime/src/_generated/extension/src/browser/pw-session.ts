@@ -1347,6 +1347,11 @@ async function continueRouteSafely(route: Route): Promise<void> {
 }
 
 /** Navigate a page while guarding requested URL and redirect chain. */
+const previewRouteGuards = new WeakMap<
+  Page,
+  (route: Route, request: Request) => Promise<void>
+>();
+
 export async function gotoPageWithNavigationGuard(
   opts: {
     cdpUrl: string;
@@ -1424,6 +1429,15 @@ export async function gotoPageWithNavigationGuard(
     await continueRouteSafely(route);
   };
 
+  // LOCAL PATCH (Cindy, via sync.mjs): take over any route guard this
+  // function previously installed for the same page. A stale preview
+  // guard would otherwise keep aborting every later page-initiated
+  // navigation on that tab once it was navigated to a normal site.
+  const previousGuard = previewRouteGuards.get(opts.page);
+  if (previousGuard) {
+    await opts.page.unroute("**", previousGuard).catch(() => {});
+  }
+  previewRouteGuards.set(opts.page, handler);
   await opts.page.route("**", handler);
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
@@ -1444,6 +1458,7 @@ export async function gotoPageWithNavigationGuard(
     // down with the page (Playwright removes routes on close).
     if (previewOrigin === null) {
       await opts.page.unroute("**", handler).catch(() => {});
+      previewRouteGuards.delete(opts.page);
     }
     if (blockedError) {
       await closeBlockedNavigationTarget({

@@ -439,8 +439,39 @@ const LOCAL_PATCHES = {
         '    // down with the page (Playwright removes routes on close).\n' +
         '    if (previewOrigin === null) {\n' +
         '      await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '      previewRouteGuards.delete(opts.page);\n' +
         '    }\n' +
         '    if (blockedError) {',
+    },
+    {
+      desc: 'track + hand over the installed route guard per page: a newer navigation must unroute the previous guard, otherwise a stale preview guard keeps blocking every later page-initiated navigation on that tab (playwright route.continue() does not fall back to older matching handlers)',
+      find:
+        'export async function gotoPageWithNavigationGuard(\n' +
+        '  opts: {',
+      replace:
+        'const previewRouteGuards = new WeakMap<\n' +
+        '  Page,\n' +
+        '  (route: Route, request: Request) => Promise<void>\n' +
+        '>();\n' +
+        '\n' +
+        'export async function gotoPageWithNavigationGuard(\n' +
+        '  opts: {',
+    },
+    {
+      desc: 'unroute the previous guard before installing the new one, and record the new handler for the next takeover',
+      find:
+        '  await opts.page.route("**", handler);',
+      replace:
+        '  // LOCAL PATCH (Cindy, via sync.mjs): take over any route guard this\n' +
+        '  // function previously installed for the same page. A stale preview\n' +
+        '  // guard would otherwise keep aborting every later page-initiated\n' +
+        '  // navigation on that tab once it was navigated to a normal site.\n' +
+        '  const previousGuard = previewRouteGuards.get(opts.page);\n' +
+        '  if (previousGuard) {\n' +
+        '    await opts.page.unroute("**", previousGuard).catch(() => {});\n' +
+        '  }\n' +
+        '  previewRouteGuards.set(opts.page, handler);\n' +
+        '  await opts.page.route("**", handler);',
     },
   ],
   'extension/src/infra/net/ssrf.ts': [
