@@ -1154,8 +1154,18 @@ describe('clearDevice / clearAll', () => {
     const c = rawCache();
     const rows = [row('m1', '2026-01-01T00:00:00.000Z')];
     // 模拟并发:写入发起后、落盘前发生了登出清理。令牌取清理前计数(请求发起时捕获)。
-    const token = (await c.readMessagesWithInvalidation('dev-1', 'sess-1')).invalidation;
-    const inFlight = c.writeMessages('dev-1', 'sess-1', rows, token);
+    // 非空写入需同时提供 invalidation / ownerRoot / accountCounter,否则 canCommitNonEmpty
+    // 会 fail-closed 拒写,测试就不再真正验证「清理前发起的在途写入被代际闸作废」(
+    // review: Copilot)。
+    const cap = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    const inFlight = c.writeMessages(
+      'dev-1',
+      'sess-1',
+      rows,
+      cap.invalidation,
+      cap.ownerRoot,
+      cap.accountCounter,
+    );
     await c.clearAll();
     await inFlight;
 
@@ -1188,8 +1198,15 @@ describe('clearDevice / clearAll', () => {
     // 发起时捕获 invalidationAtRequestStart),避免 withAutoToken 在清理后补读拿到
     // 新计数、把清理前旧数据的写入误放行。
     const c = rawCache();
-    const token = (await c.readMessagesWithInvalidation('dev-1', 'sess-1')).invalidation;
-    const inFlight = c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')], token);
+    const cap = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    const inFlight = c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      cap.invalidation,
+      cap.ownerRoot,
+      cap.accountCounter,
+    );
     await c.clearDevice('dev-1');
     await inFlight;
     expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
