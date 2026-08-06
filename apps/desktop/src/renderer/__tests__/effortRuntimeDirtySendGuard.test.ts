@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 const chatInputSource = readFileSync(
   resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 describe('effort runtime send guard', () => {
   it('only locks composer mutations during the bounded effort preflight', () => {
