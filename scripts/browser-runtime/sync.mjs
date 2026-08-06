@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolvePosixShell } from '../lib/posix-shell.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
@@ -77,8 +78,18 @@ function shHide(cmd) {
   // Windows paths are converted to /c/... and tar gets --wildcards. On POSIX
   // (incl. macOS BSD/libarchive tar) the command runs UNCHANGED — no
   // GNU-only flags are injected, so other platforms keep upstream behavior.
+  // Locate a real sh up front: on win32 the PATH may only contain Git\cmd
+  // (without Git\bin), so a bare `sh` would ENOENT — the repo resolver finds
+  // the Git-bundled sh.exe in standard install locations (codex-connector
+  // P1, round 3). Non-win32 callers keep using their normal PATH ('sh').
+  const sh = resolvePosixShell('sh');
+  if (!sh) {
+    throw new Error(
+      'sync: 找不到可用的 sh（未检测到 Git for Windows）。请安装 Git for Windows 后重试。',
+    );
+  }
   if (process.platform !== 'win32') {
-    execFileSync('sh', ['-c', cmd], { stdio: ['ignore', 'ignore', 'inherit'] });
+    execFileSync(sh, ['-c', cmd], { stdio: ['ignore', 'ignore', 'inherit'] });
     return;
   }
   // Inject --wildcards ONLY when the resolved tar is actually GNU tar: on
@@ -97,7 +108,7 @@ function shHide(cmd) {
   const posix = cmd
     .replace(/"((?:[A-Za-z]:)?[^"]*)"/g, (m, p) => JSON.stringify(toMsys(p)))
     .replace(/(^|\s)tar(\s)/g, `$1tar${wildcards}$2`);
-  execFileSync('sh', ['-c', posix], { stdio: ['ignore', 'ignore', 'inherit'] });
+  execFileSync(sh, ['-c', posix], { stdio: ['ignore', 'ignore', 'inherit'] });
 }
 
 /**
