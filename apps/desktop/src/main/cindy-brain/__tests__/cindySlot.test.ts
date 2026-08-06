@@ -1726,6 +1726,13 @@ describe('快问快答(oneshot_text)', () => {
       await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 0 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 81921 }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    // 上限与缺省同量级(81920):显式传 81920 合法,插件不能靠省略参数绕过上限。
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 81920 }),
+    ).toMatchObject({ ok: true });
+    expect(
       await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 99999 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     expect(

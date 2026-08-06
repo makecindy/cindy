@@ -5502,7 +5502,9 @@ export const GHOST_CINDY_DEPOSIT_REFILL_MS = 1000;
  * 边界;81920 对思考链+正文绰绰有余,单次问答成本也封顶。
  */
 export const GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS = 32_768;
-export const GHOST_ONESHOT_TEXT_MAX_TOKENS = 4096;
+/** 插件显式传 maxTokens 的合法上限。与缺省值同量级(81920):若显式上限远小于
+ *  缺省值,插件省略参数反而拿到更大预算,形成绕过路径(Greptile 2026-08-06)。 */
+export const GHOST_ONESHOT_TEXT_MAX_TOKENS = 81_920;
 /** 插件省略 maxTokens 时的缺省输出上限(够思考链+正文,又封顶单次成本)。 */
 export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 81_920;
 /** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */

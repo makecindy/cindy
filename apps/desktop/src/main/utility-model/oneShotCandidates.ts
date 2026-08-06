@@ -952,7 +952,9 @@ async function requestProviderHttpText(input: {
       : input.wire === 'anthropic-messages'
         ? {
           model: input.model,
-          max_tokens: input.maxTokens ?? 4096,
+          // Anthropic API 协议必填 max_tokens;缺省与快问快答默认输出上限同量级
+          // (81920,思考链+正文够用,与其它 wire 的缺省一致)。
+          max_tokens: input.maxTokens ?? 81_920,
           messages: [{ role: 'user', content: input.prompt }],
         }
         : {
