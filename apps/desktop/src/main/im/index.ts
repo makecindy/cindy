@@ -550,7 +550,7 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
 
 const connectionLifecycle = createSerializedConnectionLifecycle({
   startConnection: initializeImConnection,
-  stopConnection: async () => {
+  stopConnection: async (reason) => {
     // Transports stop first so no new message can enter while account-scoped
     // orchestrator and binding caches are being discarded.
     try {
@@ -565,9 +565,9 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
         }
       }
       bindingStore.resetRuntime();
-      // 群上下文游标是账号内存态 — 登出/换号必须清零, 防止新账号复用旧游标
-      // 造成上下文窗口被静默跳过。
-      await resetTelegramGroupContextCursors();
+      // 登出/换号是明确的账号边界, 清掉旧账号的持久游标；普通退出只清内存
+      // 热缓存, 保留本地 DB 游标让下一次启动继续增量语义。
+      await resetTelegramGroupContextCursors({ clearPersisted: reason !== 'quit' });
     }
   },
   onStartError: (err) => {
@@ -651,5 +651,5 @@ export async function stopImConnection(reason: string): Promise<void> {
     // are released, so old-account work cannot resume against a new account.
     await waitForImAccountGenerationIdle(closingGeneration);
   }
-  await connectionLifecycle.stop();
+  await connectionLifecycle.stop(reason);
 }

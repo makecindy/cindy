@@ -185,6 +185,15 @@ export function resetGroupContextCursors(options?: {
   });
 }
 
+/** 同步生命周期入口使用的安全收口: 异步清理失败只记日志, 不产生 unhandled rejection。 */
+export function resetGroupContextCursorsSafely(options?: {
+  clearPersisted?: boolean;
+}): void {
+  void resetGroupContextCursors(options).catch((error: unknown) => {
+    log.warn(`group context cursor reset failed: ${String(error)}`);
+  });
+}
+
 /** 设置卡数据源：官方群窗口里出现过的群，按最近活跃排序。 */
 export async function listTelegramKnownGroups(
   principalId: string,

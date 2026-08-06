@@ -94,6 +94,7 @@ import {
   groupLaneOf,
   recordGroupMessage,
   resetGroupContextCursors,
+  resetGroupContextCursorsSafely,
   sweepGroupWindowExpired,
 } from './groupWindow.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
@@ -1520,7 +1521,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       drainLanePendingPrefs(lane);
       drainLanePendingBehavior(lane);
       if (lane.config.provider === 'telegram') {
-        void resetGroupContextCursors();
+        resetGroupContextCursorsSafely();
         resetTelegramSpeakerRegistrationCache();
       }
     }

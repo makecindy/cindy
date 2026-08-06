@@ -5,7 +5,7 @@
  */
 export interface SerializedConnectionLifecycle {
   start(): void;
-  stop(): Promise<void>;
+  stop(reason?: string): Promise<void>;
   runWhileStarted<T>(operation: () => Promise<T>): Promise<T>;
   isStarted(): boolean;
 }
@@ -13,7 +13,7 @@ export interface SerializedConnectionLifecycle {
 /** Dependencies are injected so lifecycle ordering stays unit-testable. */
 export interface SerializedConnectionLifecycleDeps {
   startConnection(): Promise<void>;
-  stopConnection(): Promise<void>;
+  stopConnection(reason?: string): Promise<void>;
   onStartError(error: unknown): void;
 }
 
@@ -55,14 +55,14 @@ export function createSerializedConnectionLifecycle(
       });
     },
 
-    async stop(): Promise<void> {
+    async stop(reason?: string): Promise<void> {
       const shouldStopConnection = needsStop;
       started = false;
       needsStop = false;
       generation += 1;
       await enqueue(async () => {
         if (!shouldStopConnection) return;
-        await deps.stopConnection();
+        await deps.stopConnection(reason);
       });
     },
 

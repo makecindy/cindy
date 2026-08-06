@@ -1988,8 +1988,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           const task: PendingTask = { ...taskBase, ack };
           queue.push(task);
           queues.set(sessionId, queue);
-          const commitResult = commitContextCursor();
-          if (commitResult instanceof Promise) await commitResult;
+          const queuedCommit = commitContextCursor();
+          if (queuedCommit !== undefined && typeof queuedCommit.then === 'function') {
+            await queuedCommit;
+          }
           reply(connectionId, send, ack);
           // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
           // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
@@ -1998,8 +2000,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         }
 
         running.add(sessionId);
-        const commitResult = commitContextCursor();
-        if (commitResult instanceof Promise) await commitResult;
+        const acceptedCommit = commitContextCursor();
+        if (acceptedCommit !== undefined && typeof acceptedCommit.then === 'function') {
+          await acceptedCommit;
+        }
         const ack: TaskAckPayload = {
           requestId: payload.requestId,
           result: 'accepted',
