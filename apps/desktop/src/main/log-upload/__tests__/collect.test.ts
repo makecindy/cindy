@@ -361,19 +361,32 @@ describe('computeCoveredAnchors：以 main 为准，agent 不得冒充覆盖', (
   const both = { hasMain: () => true, hasAgent: () => true };
 
   it('⚠️ main 只覆盖靠前窗口、agent 整份读到：靠后的崩溃仍判未覆盖', () => {
-    // main 窗口只读到 [A_EARLY-preroll, 稍后],没够到 A_LATE;agent 整份(whole)覆盖全天。
+    // main 只有 A_EARLY 附近的记录留下,没够到 A_LATE;agent 整份(whole)覆盖全天。
     const coverage: FileCoverageMap = new Map([
-      [`${DAY}|main`, { whole: false, minTs: A_EARLY - 60_000, maxTs: A_EARLY + 60_000 }],
-      [`${DAY}|agent`, { whole: true, minTs: 0, maxTs: 0 }],
+      [`${DAY}|main`, { whole: false, survivorTs: [A_EARLY] }],
+      [`${DAY}|agent`, { whole: true, survivorTs: [] }],
     ]);
     const covered = computeCoveredAnchors([A_EARLY, A_LATE], { coverage, ...both });
     expect(covered).toContain(A_EARLY);
     expect(covered).not.toContain(A_LATE); // ← 修复前会被 agent 的 whole 冒充成已覆盖
   });
 
+  it('⚠️ 同日早/晚崩溃都留下记录、中间那次被裁光：中间锚点不算覆盖（不被两端架桥）', () => {
+    // 2026-08-06 review P1：min/max 跨度会把 A_MID 判成已覆盖(它落在 early~late 之间),
+    // 但 A_MID 附近一条记录都没留下 —— 逐条按邻域判就不会误清它的标记。
+    const A_MID = new Date(2026, 7, 4, 12, 0, 0).getTime();
+    const coverage: FileCoverageMap = new Map([
+      [`${DAY}|main`, { whole: false, survivorTs: [A_EARLY, A_LATE] }],
+    ]);
+    const covered = computeCoveredAnchors([A_EARLY, A_MID, A_LATE], { coverage, ...both });
+    expect(covered).toContain(A_EARLY);
+    expect(covered).toContain(A_LATE);
+    expect(covered).not.toContain(A_MID); // ← 修复前 A_MID 落在 [min,max] 内被冒充成已覆盖
+  });
+
   it('main 整份读到 ⇒ 当天锚点都覆盖', () => {
     const coverage: FileCoverageMap = new Map([
-      [`${DAY}|main`, { whole: true, minTs: 0, maxTs: 0 }],
+      [`${DAY}|main`, { whole: true, survivorTs: [] }],
     ]);
     expect(computeCoveredAnchors([A_EARLY, A_LATE], { coverage, ...both })).toEqual([
       A_EARLY,
@@ -398,7 +411,7 @@ describe('computeCoveredAnchors：以 main 为准，agent 不得冒充覆盖', (
 
   it('agent-only（没有 main）时退回用 agent 覆盖判定', () => {
     const coverage: FileCoverageMap = new Map([
-      [`${DAY}|agent`, { whole: true, minTs: 0, maxTs: 0 }],
+      [`${DAY}|agent`, { whole: true, survivorTs: [] }],
     ]);
     const covered = computeCoveredAnchors([A_EARLY], {
       coverage,

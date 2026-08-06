@@ -249,9 +249,14 @@ describe('会打路径的来源被挡在外', () => {
     expect(isAllowedScope('legacy-xdmaker-migration/x')).toBe(false);
   });
 
-  it('未被点名的迁移 scope 仍放行（只拒确有路径的那个）', () => {
+  it('⚠️ ownerNamespaceMigration 整个 scope 不放行（遗留 ghost 恢复打 id:legacy.id = 插件身份 + fs 路径）', () => {
+    // 2026-08-06 review：混着 path-free 迁移状态与插件专属恢复数据,整体拒。
+    expect(isAllowedScope('ownerNamespaceMigration')).toBe(false);
+    expect(isAllowedScope('ownerNamespaceMigration/x')).toBe(false);
+  });
+
+  it('未被点名的迁移 scope 仍放行（只拒确有路径/身份的那两个）', () => {
     expect(isAllowedScope('legacyUserDataMigration')).toBe(true);
-    expect(isAllowedScope('ownerNamespaceMigration')).toBe(true);
   });
 
   it('⚠️ manifestIO 不放行（实为 SkillHub 注册表，打 skillhub/manifests/<skill>.json）', () => {

@@ -81,10 +81,12 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
   'safe-storage', //         safeStorage 可用性与钥匙串降级(不含密文本身)
 
   // ── 配置与存量迁移基础设施 ────────────────────────────────────────────────
-  // 注意:`legacy-xdmaker-migration` **不在这里** —— 它每条记录都带 `rootDir`(解析后的项目
-  // 工作目录),脱敏只抹家目录段、项目目录名仍会外泄(2026-08-04 review)。见 NOTABLE_DENIED_ROOTS。
+  // 注意:`legacy-xdmaker-migration` 与 `ownerNamespaceMigration` **都不在这里**:
+  //  - `legacy-xdmaker-migration` 每条记录都带 `rootDir`(解析后的项目工作目录)。
+  //  - `ownerNamespaceMigration` 的遗留 ghost 恢复诊断会打 `id: legacy.id`(= 用户已装的第三方
+  //    插件目录名/身份)与 fs 移动失败的绝对路径(2026-08-06 review)。
+  // 两者都见 NOTABLE_DENIED_ROOTS。
   'legacyUserDataMigration', // userData 目录迁移(只记有无 legacy 目录 + 标记,不带工作目录)
-  'ownerNamespaceMigration', //  归属命名空间迁移
   'analytics-settings', //       同意状态与开关的读写(不含用户内容)
   'sidebar-settings', //         侧栏偏好读写
   'canaryFlagStore', //          灰度开关
@@ -166,6 +168,9 @@ const DENIED_SUB_SCOPES: readonly string[] = [
  *    只抹家目录段、项目目录名仍外泄；设置页文案承诺不上传工作目录路径（2026-08-04 review）。
  *  - `manifestIO`：名字像端点清单 IO，实为 SkillHub 注册表存储，打 `skillhub/manifests/<skill>.json`
  *    清单路径/文件名 = 用户装的插件身份，与 `skillhub` 同属用户/第三方内容（2026-08-04 review）。
+ *  - `ownerNamespaceMigration`：归属命名空间迁移。名字像纯基础设施，但遗留 ghost 恢复诊断会打
+ *    `id: legacy.id`（= 用户已装的第三方插件目录名/身份）与 fs 移动失败的绝对路径。混着 path-free
+ *    的迁移状态与插件专属恢复数据，整体拒（2026-08-06 review）。需要时另拆一个不带 id/路径的子 scope。
  */
 const NOTABLE_DENIED_ROOTS: readonly string[] = [
   'console',
@@ -184,6 +189,7 @@ const NOTABLE_DENIED_ROOTS: readonly string[] = [
   'learn-host',
   'legacy-xdmaker-migration',
   'manifestIO',
+  'ownerNamespaceMigration',
 ];
 
 /** scope 是否落在某个根下（精确相等，或 `<root>/` / `<root>:` 前缀）。 */
