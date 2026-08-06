@@ -21,6 +21,8 @@ const piSessionsRoot = path.join(tmpRoot, 'pi-agent-home', 'sessions', 'shared')
 
 const dbMock = vi.hoisted(() => ({
   conflictRow: null as { id: string; status?: string } | null,
+  /** 只对指定 resume id 命中冲突(协同包按 Worker 定向测冲突)。 */
+  conflictForResumeId: null as string | null,
   queryCalls: [] as Array<{ sql: string; params: unknown[] }>,
   txCalls: [] as Array<{ name: string; args: unknown }>,
   txError: null as Error | null,
@@ -49,6 +51,11 @@ vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
     queryOne: async (sql: string, params: unknown[]) => {
       dbMock.queryCalls.push({ sql, params });
+      if (dbMock.conflictForResumeId != null) {
+        return params?.[1] === dbMock.conflictForResumeId
+          ? { id: 'existing-worker-session', status: 'active' }
+          : undefined;
+      }
       return dbMock.conflictRow ?? undefined;
     },
     tx: async (name: string, args: unknown) => {
@@ -201,7 +208,11 @@ interface BundleOverrides {
   looseAudio?: { bytes: Buffer };
   /** v1 旧包没有逐消息 agentKind。 */
   omitMessageAgentKind?: boolean;
+  /** 协同包:附带一个 Worker(cc 或 codex),manifest 升到 v2 + orca 段。 */
+  orcaWorker?: { agentKind: 'cc' | 'codex'; status?: 'idle' | 'running' | 'done' | 'error' };
 }
+
+const WORKER_SID = 'bbbbbbbb-1111-2222-3333-555555555555';
 
 async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
   const agentKind = overrides.agentKind ?? 'cc';
@@ -293,9 +304,61 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
     });
   }
   zip.file('media-map.json', JSON.stringify({ entries: mediaEntries }));
+  let orcaSection: Record<string, unknown> | null = null;
+  if (overrides.orcaWorker) {
+    const workerAgent = overrides.orcaWorker.agentKind;
+    const workerTranscriptPath =
+      workerAgent === 'cc'
+        ? `orca/workers/0/transcripts/claude/${WORKER_SID}.jsonl`
+        : `orca/workers/0/transcripts/codex/rollout-w-${WORKER_SID}.jsonl`;
+    zip.file(
+      'orca/workers/0/session.json',
+      JSON.stringify({ title: 'Worker 快照', createdAt: 1700000001000, userSendAt: 1700000001100, totalTokenUsage: 42 }),
+    );
+    zip.file(
+      'orca/workers/0/messages.jsonl',
+      JSON.stringify({
+        id: 'wm1',
+        clientId: 'wc1',
+        role: 'user',
+        content: JSON.stringify([{ type: 'text', text: `派活,同图 ${IMAGE_URL}` }]),
+        toolUseId: null,
+        agentMeta: null,
+        agentKind: workerAgent,
+        createdAt: 1700000001200,
+        rewindAt: null,
+      }),
+    );
+    zip.file(workerTranscriptPath, '{"worker-line":1}\n');
+    if (workerAgent === 'codex') {
+      zip.file(
+        'orca/workers/0/codex-state/thread.json',
+        JSON.stringify({ threads: [{ id: WORKER_SID }], threadDynamicTools: [], threadSpawnEdges: [] }),
+      );
+    }
+    orcaSection = {
+      teamStatus: 'active',
+      workers: [
+        {
+          index: 0,
+          agentKind: workerAgent,
+          title: 'Worker 1',
+          role: 'developer',
+          label: 'dev-1',
+          status: overrides.orcaWorker.status ?? 'running',
+          focused: true,
+          sdkSessionIds: [WORKER_SID],
+          activeSdkSessionId: WORKER_SID,
+          counts: { messages: 1 },
+          transcripts: [{ sdkSessionId: WORKER_SID, path: workerTranscriptPath }],
+        },
+      ],
+    };
+  }
   const manifest = {
-    formatVersion: 1,
-    minReaderVersion: 1,
+    formatVersion: orcaSection ? 2 : 1,
+    minReaderVersion: orcaSection ? 2 : 1,
+    ...(orcaSection ? { orca: orcaSection } : {}),
     appVersion: '9.9.9',
     platform: 'darwin',
     exportedAt: '2026-07-04T00:00:00.000Z',
@@ -325,6 +388,7 @@ async function writeBundleFile(bytes: Buffer, password?: string): Promise<string
 describe('sessionShareImport', () => {
   beforeEach(async () => {
     dbMock.conflictRow = null;
+    dbMock.conflictForResumeId = null;
     dbMock.queryCalls = [];
     dbMock.txCalls = [];
     dbMock.txError = null;
@@ -1101,5 +1165,166 @@ describe('sessionShareImport', () => {
     expect(session.model).toBe('ok-model');
     expect(session.effort).toBe('high');
     expect(session.permissionMode).toBe('auto');
+  });
+
+  interface OrcaTxArgs {
+    session: Record<string, unknown>;
+    messages: Array<{ content: string }>;
+    orca?: {
+      team: Record<string, unknown>;
+      workers: Array<{
+        record: Record<string, unknown>;
+        session: Record<string, unknown>;
+        messages: Array<{ content: string }>;
+      }>;
+    };
+  }
+
+  it('orca bundle: lead + codex Worker + team graph land in one tx, running→idle', async () => {
+    const filePath = await writeBundleFile(
+      await buildBundle({ orcaWorker: { agentKind: 'codex', status: 'running' } }),
+    );
+    const inspect = await inspectShareFile(filePath);
+    expect(inspect.encrypted).toBe(false);
+    if (inspect.encrypted) return;
+    expect(inspect.preview.orcaWorkerCount).toBe(1);
+
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+      draftPrefs: { model: 'lead-model', effort: 'high', permissionMode: 'ask' },
+    });
+    expect(result.orcaWorkers).toBe(1);
+    expect(result.fidelity).toBe('full');
+
+    // lead cc 转录照常落位
+    const key = newWorkdir.replace(/[^a-zA-Z0-9]/g, '-');
+    expect(fs.existsSync(path.join(projectsRoot, key, `${SID}.jsonl`))).toBe(true);
+    // Worker codex thread 独立落位(threadId 是 Worker 自己的)
+    const codexCall = codexMock.importCalls.find(
+      (c) => (c as { threadId: string }).threadId === WORKER_SID,
+    ) as { newCwd: string; title: string } | undefined;
+    expect(codexCall).toBeDefined();
+    expect(codexCall!.newCwd).toBe(newWorkdir);
+    expect(codexCall!.title).toBe('Worker 1');
+
+    expect(dbMock.txCalls).toHaveLength(1);
+    const txArgs = dbMock.txCalls[0].args as OrcaTxArgs;
+    expect(txArgs.session.orcaRole).toBe('lead');
+    expect(txArgs.orca).toBeDefined();
+    expect(txArgs.orca!.team.leadSessionId).toBe(txArgs.session.id);
+    expect(txArgs.orca!.team.status).toBe('active');
+    const worker = txArgs.orca!.workers[0];
+    // running 归一 idle;role/label/focused 照搬
+    expect(worker.record.status).toBe('idle');
+    expect(worker.record.role).toBe('developer');
+    expect(worker.record.label).toBe('dev-1');
+    expect(worker.record.focused).toBe(true);
+    expect(worker.record.sessionId).toBe(worker.session.id);
+    expect(worker.record.teamId).toBe(txArgs.orca!.team.id);
+    // Worker 行:orcaRole/permissionMode/agentKind/workdir;跨 vendor 不吃 lead 的
+    // draft 模型,落 codex 内置兜底
+    expect(worker.session.orcaRole).toBe('worker');
+    expect(worker.session.permissionMode).toBe('auto');
+    expect(worker.session.agentKind).toBe('codex');
+    expect(worker.session.workingDir).toBe(newWorkdir);
+    expect(worker.session.sdkSessionId).toBe(WORKER_SID);
+    expect(worker.session.model).not.toBe('lead-model');
+    expect(txArgs.session.model).toBe('lead-model');
+    // Worker 消息同样过媒体 URL 重写(共享同一张图,重写到同一 blob 地址)
+    expect(worker.messages[0].content).toContain(blobUrlOf(IMG1_BYTES));
+    expect(worker.messages[0].content).not.toContain('xdt-image://');
+  });
+
+  it('orca bundle: worker resume id conflict → SHARE_CONFLICT; overwrite soft-deletes it', async () => {
+    dbMock.conflictForResumeId = WORKER_SID;
+    const filePath = await writeBundleFile(
+      await buildBundle({ orcaWorker: { agentKind: 'codex' } }),
+    );
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    await expect(
+      commitShareImport({
+        draftId: inspect.draftId,
+        workingDir: newWorkdir,
+        projectsRootOverride: projectsRoot,
+        sharedMediaRootOverride: sharedMediaRoot,
+      }),
+    ).rejects.toMatchObject({ code: 'SHARE_CONFLICT' });
+    expect(dbMock.txCalls).toHaveLength(0);
+
+    // 覆盖导入:命中的旧 Worker 会话被软删后整包落库
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+      overwrite: true,
+    });
+    expect(result.orcaWorkers).toBe(1);
+    expect(patchMock.calls).toContainEqual({
+      sessionId: 'existing-worker-session',
+      patch: { status: 'deleted' },
+    });
+    expect(dbMock.txCalls).toHaveLength(1);
+  });
+
+  it('orca bundle: cc Worker transcripts land beside lead in the same re-sanitized dir', async () => {
+    const filePath = await writeBundleFile(await buildBundle({ orcaWorker: { agentKind: 'cc', status: 'done' } }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+    });
+    expect(result.fidelity).toBe('full');
+    const key = newWorkdir.replace(/[^a-zA-Z0-9]/g, '-');
+    expect(fs.existsSync(path.join(projectsRoot, key, `${SID}.jsonl`))).toBe(true);
+    expect(fs.existsSync(path.join(projectsRoot, key, `${WORKER_SID}.jsonl`))).toBe(true);
+    const txArgs = dbMock.txCalls[0].args as OrcaTxArgs;
+    expect(txArgs.orca!.workers[0].record.status).toBe('done');
+  });
+
+  it('orca bundle: unsafe worker sdkSessionId rejects the whole bundle', async () => {
+    const filePath = await writeBundleFile(
+      await buildBundle({
+        orcaWorker: { agentKind: 'cc' },
+        manifest: {
+          orca: {
+            teamStatus: 'active',
+            workers: [
+              {
+                index: 0,
+                agentKind: 'cc',
+                title: 'Worker 1',
+                role: 'developer',
+                label: 'dev-1',
+                status: 'done',
+                focused: false,
+                sdkSessionIds: ['../../evil'],
+                activeSdkSessionId: null,
+                counts: { messages: 1 },
+                transcripts: [{ sdkSessionId: '../../evil', path: 'orca/workers/0/transcripts/claude/x.jsonl' }],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    await expect(
+      commitShareImport({
+        draftId: inspect.draftId,
+        workingDir: newWorkdir,
+        projectsRootOverride: projectsRoot,
+        sharedMediaRootOverride: sharedMediaRoot,
+      }),
+    ).rejects.toMatchObject({ code: 'SHARE_FILE_INVALID' });
+    expect(dbMock.txCalls).toHaveLength(0);
   });
 });
