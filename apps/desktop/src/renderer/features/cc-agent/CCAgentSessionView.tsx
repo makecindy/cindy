@@ -2683,11 +2683,19 @@ export function CCAgentSessionView({
       // 按 agent 能力分流(#1927):pi 走 capability-aware 的 maker:compact-session
       // (原生已支持手动压缩),claude-code 走输入协调器的 maker:input:compact。
       if (displayAgentKind === 'pi') {
-        const result = await window.electronAPI.maker.compactSession(session.id);
-        if (result?.noop) {
-          toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
-        } else if (result) {
-          toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+        try {
+          const result = await window.electronAPI.maker.compactSession(session.id);
+          if (result?.noop) {
+            // 良性:上下文太小,无可压缩内容。信息性提示,不是失败。
+            toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
+          } else if (result) {
+            toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+          }
+          // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
+        } catch (err) {
+          // 与 SessionContentHeader 的手动压缩一致:失败给可理解提示,不泄漏裸 IPC 错误。
+          log.warn('context ring pi compact failed', err);
+          toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
         }
         return;
       }
@@ -3984,9 +3992,11 @@ export function CCAgentSessionView({
                     sdkContextWindow={agentStatus.contextWindow}
                     deviceId={remoteDeviceId}
                     onCompact={
-                      // 按 agent 能力分流(#1927):pi(原生支持)与 claude-code 开放手动压缩入口,
-                      // codex 无手动 compact(上游自动压缩)保持纯展示。
-                      (displayAgentKind === 'claude-code' || displayAgentKind === 'pi')
+                      // 按 agent 能力分流(#1927):pi(原生支持,仅本地)与 claude-code 开放手动
+                      // 压缩入口;远程 pi 会话暂无路由通道(与 SessionContentHeader 一致,压缩
+                      // 菜单仅本地开放);codex 无手动 compact(上游自动压缩)保持纯展示。
+                      (displayAgentKind === 'claude-code'
+                        || (displayAgentKind === 'pi' && !remoteDeviceId))
                         && session != null && agentStatus.contextTokens > 0
                         ? handleCompactRequest
                         : undefined

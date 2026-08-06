@@ -907,9 +907,11 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     'utf8',
   ).replace(/\r\n/g, '\n');
 
-  it('pi 与 claude-code 开放入口,codex 不开放', () => {
-    // onCompact 绑定:pi 与 claude-code 可点,codex 保持纯展示(无手动 compact)
-    expect(viewSource).toContain("(displayAgentKind === 'claude-code' || displayAgentKind === 'pi')");
+  it('pi 与 claude-code 开放入口(pi 仅本地),codex 不开放', () => {
+    // onCompact 绑定:claude-code 恒开放;pi 仅本地会话(!remoteDeviceId)开放(远程无路由通道,
+    // 与 SessionContentHeader 压缩菜单仅本地一致);codex 保持纯展示(无手动 compact)
+    expect(viewSource).toContain("(displayAgentKind === 'claude-code'");
+    expect(viewSource).toContain("(displayAgentKind === 'pi' && !remoteDeviceId)");
   });
 
   it('pi 走 capability-aware 的 maker:compact-session,不碰 claude-code 专用通道', () => {
@@ -922,5 +924,7 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     const piEnd = viewSource.indexOf('return;', piStart);
     const piBranch = viewSource.slice(piStart, piEnd);
     expect(piBranch).not.toContain('await compactSession(');
+    // pi 分支失败需有反馈(与 SessionContentHeader 一致):catch + compactFailed 提示
+    expect(piBranch).toContain("toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'))");
   });
 });
