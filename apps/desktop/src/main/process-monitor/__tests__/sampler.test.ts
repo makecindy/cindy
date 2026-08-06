@@ -13,6 +13,7 @@ const SELF_PID = 100;
 
 function osRow(partial: Partial<OsProcessRow> & { pid: number; ppid: number }): OsProcessRow {
   return {
+    state: null,
     cmdLineLower: '',
     memoryKb: 0,
     cpuPercent: 0,

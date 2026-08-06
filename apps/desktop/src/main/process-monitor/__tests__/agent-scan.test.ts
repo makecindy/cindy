@@ -25,18 +25,19 @@ describe('buildPosixProcessScanEnv', () => {
 });
 
 describe('parsePosixProcessTable', () => {
-  it('解析 pid/ppid/%cpu/rss/lstart/command,容忍空行与非法行', () => {
+  it('解析 pid/ppid/stat/%cpu/rss/lstart/command,容忍空行与非法行', () => {
     const out = [
-      '  101   100  12.5  20480 Wed Aug  6 12:34:56 2026 /usr/bin/node server.js',
+      '  101   100  S+  12.5  20480 Wed Aug  6 12:34:56 2026 /usr/bin/node server.js',
       '',
       'garbage line without numbers',
-      '  102   101   0.0    512 Wed Aug  6 12:35:01 2026 bash -c "sleep 1"',
+      '  102   101  T    0.0    512 Wed Aug  6 12:35:01 2026 bash -c "sleep 1"',
     ].join('\n');
     const rows = parsePosixProcessTable(out);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       pid: 101,
       ppid: 100,
+      state: 'S+',
       cpuPercent: 12.5,
       memoryKb: 20480,
       cpuTimeMs: null,
@@ -44,6 +45,7 @@ describe('parsePosixProcessTable', () => {
     });
     expect(rows[0].cmdLineLower).toBe('/usr/bin/node server.js');
     expect(rows[1].cmdLineLower).toContain('sleep 1');
+    expect(rows[1].state).toBe('T');
   });
 });
 
@@ -59,6 +61,7 @@ describe('parseWindowsProcessTable', () => {
     expect(rows[0]).toMatchObject({
       pid: 4321,
       ppid: 100,
+      state: null,
       memoryKb: 102400, // 100MB → KB
       cpuTimeMs: 150, // 1_500_000 * 100ns = 150ms
       cpuPercent: null,
@@ -118,7 +121,13 @@ describe('buildChildrenByParent / collectDescendantPids', () => {
       { pid: 3, ppid: 2 },
       { pid: 4, ppid: 9 }, // 无关分支
     ].map((r) => ({
-      ...r, cmdLineLower: '', memoryKb: 0, cpuPercent: 0, cpuTimeMs: null, startIdentity: null,
+      ...r,
+      state: null,
+      cmdLineLower: '',
+      memoryKb: 0,
+      cpuPercent: 0,
+      cpuTimeMs: null,
+      startIdentity: null,
     }));
     const map = buildChildrenByParent(rows);
     // 人为制造环:3 → 1

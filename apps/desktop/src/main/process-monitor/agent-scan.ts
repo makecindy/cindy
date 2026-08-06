@@ -8,7 +8,7 @@
  * 一致:只认「ppid == 本进程 且命令行命中本产品二进制路径 marker」的进程。
  *
  * 平台差异:
- *  - POSIX:一次 `ps -Awwo pid,ppid,%cpu,rss,lstart,command`。%cpu 是 ps 的近期均值
+ *  - POSIX:一次 `ps -Awwo pid,ppid,stat,%cpu,rss,lstart,command`。%cpu 是 ps 的近期均值
  *    (macOS 为衰减平均),rss 单位 KB。
  *  - Windows:一次 Win32_Process 全表。WorkingSetSize 单位字节;CPU 没有现成
  *    百分比,取 UserModeTime+KernelModeTime(100ns)累计值,由 sampler 用两次
@@ -30,6 +30,8 @@ export type MonitoredAgentKind = 'claude' | 'codex' | 'pi';
 export interface OsProcessRow {
   pid: number;
   ppid: number;
+  /** POSIX ps stat（如 R/S/T/Z）；Windows 为 null。 */
+  state: string | null;
   /** 小写命令行(仅 main 内部用于 marker 匹配,绝不出 IPC)。 */
   cmdLineLower: string;
   memoryKb: number;
@@ -103,12 +105,12 @@ export function classifyMonitoredAgentCommandLine(
   return null;
 }
 
-// ps 行:pid ppid %cpu rss lstart command(command 可含空格,贪婪吃尾)。
+// ps 行:pid ppid stat %cpu rss lstart command(command 可含空格,贪婪吃尾)。
 // LC_ALL=C 把 lstart 固定为 "Mon Aug  6 12:34:56 2026" 一类格式。
 const POSIX_PS_ROW_RE =
-  /^(\d+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/;
+  /^(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/;
 
-const POSIX_PS_ARGS = ['-Aww', '-o', 'pid=,ppid=,%cpu=,rss=,lstart=,command='];
+const POSIX_PS_ARGS = ['-Aww', '-o', 'pid=,ppid=,stat=,%cpu=,rss=,lstart=,command='];
 
 const WINDOWS_PROCESS_SCAN_SCRIPT = [
   'Get-CimInstance Win32_Process |',
@@ -133,17 +135,18 @@ export function parsePosixProcessTable(psOutput: string): OsProcessRow[] {
     if (!match) continue;
     const pid = Number.parseInt(match[1], 10);
     const ppid = Number.parseInt(match[2], 10);
-    const cpuPercent = Number.parseFloat(match[3]);
-    const rssKb = Number.parseInt(match[4], 10);
+    const cpuPercent = Number.parseFloat(match[4]);
+    const rssKb = Number.parseInt(match[5], 10);
     if (!Number.isFinite(pid) || !Number.isFinite(ppid)) continue;
     rows.push({
       pid,
       ppid,
-      cmdLineLower: match[6].toLowerCase(),
+      state: match[3],
+      cmdLineLower: match[7].toLowerCase(),
       memoryKb: Number.isFinite(rssKb) ? rssKb : 0,
       cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : 0,
       cpuTimeMs: null,
-      startIdentity: match[5].replace(/\s+/g, ' '),
+      startIdentity: match[6].replace(/\s+/g, ' '),
     });
   }
   return rows;
@@ -165,6 +168,7 @@ export function parseWindowsProcessTable(stdout: string): OsProcessRow[] {
     rows.push({
       pid,
       ppid,
+      state: null,
       cmdLineLower: parts.slice(5).join('|').toLowerCase(),
       memoryKb: Number.isFinite(workingSetBytes) ? Math.round(workingSetBytes / 1024) : 0,
       cpuPercent: null,

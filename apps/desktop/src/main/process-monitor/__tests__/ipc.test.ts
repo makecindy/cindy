@@ -37,6 +37,7 @@ const SELF_PID = 4242;
 
 function osRow(partial: Partial<OsProcessRow> & { pid: number; ppid: number }): OsProcessRow {
   return {
+    state: 'S',
     cmdLineLower: '',
     memoryKb: 0,
     cpuPercent: 0,
@@ -79,6 +80,8 @@ function register(overrides: Parameters<typeof registerProcessMonitorIpc>[0] = {
     classify: () => null,
     resolveCodexProcessRole: () => null,
     killProcessTree: vi.fn().mockReturnValue(true),
+    signalProcess: vi.fn(),
+    platform: 'linux',
     selfPid: SELF_PID,
     log: { info: vi.fn(), warn: vi.fn() },
     ...overrides,
@@ -153,33 +156,142 @@ describe('terminate ownership validation', () => {
   const ownedRows = [
     osRow({ pid: 900, ppid: SELF_PID, cmdLineLower: 'claude-marker main' }),
     osRow({ pid: 901, ppid: 900, cmdLineLower: 'bash child' }),
+    osRow({ pid: 902, ppid: 901, cmdLineLower: 'node tool child' }),
     osRow({ pid: 950, ppid: 1, cmdLineLower: 'claude-marker orphan' }),
     osRow({ pid: 960, ppid: SELF_PID, cmdLineLower: 'not-an-agent' }),
   ];
   const classify = (cmd: string) => (cmd.includes('claude-marker') ? ('claude' as const) : null);
 
-  function registerWithRows(killProcessTree = vi.fn().mockReturnValue(true)) {
+  function registerWithRows(
+    killProcessTree = vi.fn().mockReturnValue(true),
+    signalProcess = vi.fn(),
+  ) {
+    let scanCount = 0;
     register({
-      scanOsProcessesSync: vi.fn().mockReturnValue({
-        rows: ownedRows,
-        childrenByParent: buildChildrenByParent(ownedRows),
+      scanOsProcessesSync: vi.fn(() => {
+        scanCount += 1;
+        const rows =
+          scanCount === 1 ? ownedRows : ownedRows.map((candidate) => ({ ...candidate, state: 'T' }));
+        return { rows, childrenByParent: buildChildrenByParent(rows) };
       }),
       classify,
       killProcessTree,
+      signalProcess,
     });
     return killProcessTree;
   }
 
-  it('在同一同步调用栈内校验根进程，且不把可复用的后代 PID 快照交给杀树器', () => {
-    const kill = registerWithRows();
+  it('POSIX 暂停根后逐层冻结并终止多级后代', () => {
+    const signal = vi.fn();
+    const kill = registerWithRows(undefined, signal);
     const result = handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
       { sender: fakeSender() },
       terminateRequest(900),
     );
     expect(result).toEqual({ pid: 900, kind: 'claude' });
+    expect(kill).not.toHaveBeenCalled();
+    expect(signal.mock.calls).toEqual([
+      [900, 'SIGSTOP'],
+      [901, 'SIGSTOP'],
+      [902, 'SIGSTOP'],
+      [902, 'SIGKILL'],
+      [901, 'SIGKILL'],
+      [900, 'SIGKILL'],
+    ]);
+  });
+
+  it('Windows 仍由 taskkill /T 展开树，只扫描和校验一次', () => {
+    const snapshot = {
+      rows: ownedRows,
+      childrenByParent: buildChildrenByParent(ownedRows),
+    };
+    const scan = vi.fn().mockReturnValue(snapshot);
+    const kill = vi.fn().mockReturnValue(true);
+    register({
+      platform: 'win32',
+      scanOsProcessesSync: scan,
+      classify,
+      killProcessTree: kill,
+    });
+
+    expect(
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(900),
+      ),
+    ).toEqual({ pid: 900, kind: 'claude' });
+    expect(scan).toHaveBeenCalledTimes(1);
     expect(kill).toHaveBeenCalledWith(900, new Map());
-    const map = kill.mock.calls[0][1] as Map<number, number[]>;
-    expect(map.size).toBe(0);
+  });
+
+  it.each([
+    [
+      '出生身份改变',
+      osRow({
+        pid: 900,
+        ppid: SELF_PID,
+        cmdLineLower: 'claude-marker main',
+        startIdentity: 'start:new',
+      }),
+    ],
+    ['父进程改变', osRow({ pid: 900, ppid: 1, cmdLineLower: 'claude-marker main' })],
+    ['marker 消失', osRow({ pid: 900, ppid: SELF_PID, cmdLineLower: 'replacement process' })],
+  ])('POSIX 暂停后复核发现根进程%s时拒绝终止', (_description, recheckedRoot) => {
+    const first = { rows: ownedRows, childrenByParent: buildChildrenByParent(ownedRows) };
+    const secondRows = [recheckedRoot, ...ownedRows.filter((row) => row.pid !== 900)];
+    const second = { rows: secondRows, childrenByParent: buildChildrenByParent(secondRows) };
+    const scan = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const kill = vi.fn().mockReturnValue(true);
+    const signal = vi.fn();
+    register({ scanOsProcessesSync: scan, classify, killProcessTree: kill, signalProcess: signal });
+
+    expect(() =>
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(900),
+      ),
+    ).toThrow('NOT_FOUND');
+    expect(kill).not.toHaveBeenCalled();
+    expect(signal.mock.calls).toEqual([
+      [900, 'SIGSTOP'],
+      [900, 'SIGCONT'],
+    ]);
+  });
+
+  it('POSIX 暂停后的扫描失败时恢复根进程并返回 INTERNAL', () => {
+    const snapshot = { rows: ownedRows, childrenByParent: buildChildrenByParent(ownedRows) };
+    const scan = vi
+      .fn()
+      .mockReturnValueOnce(snapshot)
+      .mockImplementationOnce(() => {
+        throw new Error('second ps failed');
+      });
+    const kill = vi.fn().mockReturnValue(true);
+    const signal = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    register({
+      scanOsProcessesSync: scan,
+      classify,
+      killProcessTree: kill,
+      signalProcess: signal,
+      log,
+    });
+
+    expect(() =>
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
+        { sender: fakeSender() },
+        terminateRequest(900),
+      ),
+    ).toThrow('INTERNAL');
+    expect(kill).not.toHaveBeenCalled();
+    expect(signal.mock.calls).toEqual([
+      [900, 'SIGSTOP'],
+      [900, 'SIGCONT'],
+    ]);
+    expect(log.warn).toHaveBeenCalledWith(
+      'process monitor POSIX tree termination failed',
+      expect.objectContaining({ error: 'second ps failed' }),
+    );
   });
 
   it.each([
@@ -213,8 +325,14 @@ describe('terminate ownership validation', () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it('杀树失败返回 INTERNAL', async () => {
-    registerWithRows(vi.fn().mockReturnValue(false));
+  it('Windows taskkill 失败返回 INTERNAL', async () => {
+    const snapshot = { rows: ownedRows, childrenByParent: buildChildrenByParent(ownedRows) };
+    register({
+      platform: 'win32',
+      scanOsProcessesSync: vi.fn().mockReturnValue(snapshot),
+      classify,
+      killProcessTree: vi.fn().mockReturnValue(false),
+    });
     expect(() =>
       handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)(
         { sender: fakeSender() },

@@ -45,6 +45,7 @@ import {
   type OsProcessSnapshot,
 } from './agent-scan.js';
 import { resolveCodexProcessRole } from './codex-process-registry.js';
+import { terminateSafePosixProcessTree } from './safe-posix-process-tree.js';
 import {
   createProcessMonitorSampler,
   type ProcessMonitorSampler,
@@ -68,6 +69,9 @@ export interface ProcessMonitorIpcOptions {
   classify?: (cmdLineLower: string) => MonitoredAgentKind | null;
   resolveCodexProcessRole?: (pid: number) => 'task-host' | 'control-plane-service' | null;
   killProcessTree?: (pid: number, childrenByParent: Map<number, number[]>) => boolean;
+  signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  /** 仅用于显式分流 Windows taskkill 与 POSIX 冻结终止；测试可注入。 */
+  platform?: NodeJS.Platform;
   selfPid?: number;
   sampleIntervalMs?: number;
   log?: IpcLogger;
@@ -86,6 +90,12 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
   const sampleScan = opts.scanOsProcesses ?? scanOsProcesses;
   const ownershipScanSync = opts.scanOsProcessesSync ?? scanOsProcessesSync;
   const killTree = opts.killProcessTree ?? killProcessTree;
+  const signalProcess =
+    opts.signalProcess ??
+    ((pid: number, signal: NodeJS.Signals) => {
+      process.kill(pid, signal);
+    });
+  const platform = opts.platform ?? process.platform;
   const sampleIntervalMs = opts.sampleIntervalMs ?? SAMPLE_INTERVAL_MS;
 
   if (!opts.sampler) {
@@ -213,14 +223,37 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
     if (kind === 'codex' && resolveCodexRole(pid) !== 'task-host') {
       throwIpcError('NOT_FOUND', 'process is not a terminable Codex task host');
     }
-    // 从同步扫描开始到 kill 完成之间不能 await/让出事件循环。根进程是 main 的直属
-    // 子进程；main 未处理退出/关闭句柄前，已校验的根 pid 不会被系统复用。
-    // Windows taskkill /T 由 OS 从当前根进程展开树，不消费这个 map；POSIX 则只杀已
-    // 校验出生身份的根进程，绝不把扫描快照里的后代 PID 交给 kill（后代可能已退出并复用）。
-    if (!killTree(pid, new Map())) {
-      throwIpcError('INTERNAL', 'failed to terminate the agent process');
+    // 从同步扫描开始到终止完成之间不能 await/让出事件循环。Windows taskkill /T 由
+    // OS 展开当前树；POSIX 先暂停根，再逐层暂停后代。父进程暂停期间无法 reap 已退出
+    // 子进程，因此已枚举的 PID 不会被复用为无关进程。
+    if (platform === 'win32') {
+      if (!killTree(pid, new Map())) {
+        throwIpcError('INTERNAL', 'failed to terminate the agent process tree');
+      }
+    } else {
+      let terminationResult: ReturnType<typeof terminateSafePosixProcessTree>;
+      try {
+        terminationResult = terminateSafePosixProcessTree({
+          rootPid: pid,
+          rootStateBeforeStop: row.state,
+          scan: ownershipScanSync,
+          signal: signalProcess,
+          isExpectedRoot: (candidate) =>
+            candidate.ppid === selfPid &&
+            candidate.startIdentity === processInstanceId &&
+            classify(candidate.cmdLineLower) === kind,
+        });
+      } catch (err) {
+        log.warn('process monitor POSIX tree termination failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to terminate the agent process tree');
+      }
+      if (terminationResult === 'root-not-found') {
+        throwIpcError('NOT_FOUND', 'process is no longer an agent process owned by this app');
+      }
     }
-    log.info('agent process terminated from resource usage panel', { pid, kind });
+    log.info('agent process tree terminated from resource usage panel', { pid, kind });
     const result: TerminateAgentProcessResult = { pid, kind };
     return result;
   });
