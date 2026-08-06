@@ -37,6 +37,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan,
         signal,
@@ -60,6 +61,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: vi.fn(),
         signal: missingSignal,
@@ -71,6 +73,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: () => snapshot([row(100, 999, 'T')]),
         signal: changedSignal,
@@ -83,11 +86,33 @@ describe('terminateSafePosixProcessTree', () => {
     ]);
   });
 
+  it('旧根原本已暂停但 PID 被新实例复用时仍恢复替代进程', () => {
+    const replacement = row(100, 10, 'T');
+    replacement.startIdentity = 'start:replacement';
+    const signal = vi.fn();
+
+    expect(
+      terminateSafePosixProcessTree({
+        rootPid: 100,
+        rootStartIdentity: 'start:original',
+        rootStateBeforeStop: 'T',
+        scan: () => snapshot([replacement]),
+        signal,
+        isExpectedRoot: (candidate) => candidate.startIdentity === 'start:original',
+      }),
+    ).toBe('root-not-found');
+    expect(signal.mock.calls).toEqual([
+      [100, 'SIGSTOP'],
+      [100, 'SIGCONT'],
+    ]);
+  });
+
   it('SIGSTOP 后根或子进程仍在运行时拒绝枚举/终止并恢复已暂停节点', () => {
     const rootSignal = vi.fn();
     expect(() =>
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: () => snapshot([row(100, 10, 'R'), row(101, 100, 'S')]),
         signal: rootSignal,
@@ -107,6 +132,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(() =>
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: () => childScans.shift()!,
         signal: childSignal,
@@ -130,6 +156,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan,
         signal,
@@ -150,6 +177,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(() =>
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: () => {
           throw scanError;
@@ -173,6 +201,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(() =>
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: () => scans.shift()!,
         signal: killSignal,
@@ -199,6 +228,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(() =>
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'T',
         scan: () => scans.shift()!,
         signal,
@@ -221,6 +251,7 @@ describe('terminateSafePosixProcessTree', () => {
     try {
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: () => snapshot([row(100, 999, 'T')]),
         signal,
@@ -248,6 +279,7 @@ describe('terminateSafePosixProcessTree', () => {
     expect(
       terminateSafePosixProcessTree({
         rootPid: 100,
+        rootStartIdentity: 'start:100',
         rootStateBeforeStop: 'S',
         scan: () => scans.shift()!,
         signal,

@@ -235,6 +235,7 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
       try {
         terminationResult = terminateSafePosixProcessTree({
           rootPid: pid,
+          rootStartIdentity: processInstanceId,
           rootStateBeforeStop: row.state,
           scan: ownershipScanSync,
           signal: signalProcess,

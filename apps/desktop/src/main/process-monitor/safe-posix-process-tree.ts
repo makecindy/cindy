@@ -14,6 +14,8 @@ export type SafePosixTreeTerminationResult = 'terminated' | 'root-not-found';
 
 export interface SafePosixTreeTerminationOptions {
   rootPid: number;
+  /** 终止请求重新扫描时确认的根进程出生身份。 */
+  rootStartIdentity: string;
   rootStateBeforeStop: string | null;
   scan(): OsProcessSnapshot;
   signal(pid: number, signal: NodeJS.Signals): void;
@@ -53,7 +55,7 @@ interface FrozenProcessIdentity {
 export function terminateSafePosixProcessTree(
   opts: SafePosixTreeTerminationOptions,
 ): SafePosixTreeTerminationResult {
-  const { rootPid, rootStateBeforeStop, scan, signal, isExpectedRoot } = opts;
+  const { rootPid, rootStartIdentity, rootStateBeforeStop, scan, signal, isExpectedRoot } = opts;
   const stoppedPids: number[] = [];
   const resumeOnFailurePids: number[] = [];
   const seen = new Set<number>([rootPid]);
@@ -73,7 +75,7 @@ export function terminateSafePosixProcessTree(
     if (!isPosixStoppedOrZombie(rootStateBeforeStop)) resumeOnFailurePids.push(rootPid);
 
     let frontier: FrozenProcessIdentity[] = [
-      { pid: rootPid, ppid: -1, startIdentity: '', root: true },
+      { pid: rootPid, ppid: -1, startIdentity: rootStartIdentity, root: true },
     ];
     while (frontier.length > 0) {
       const snapshot = scan();
@@ -83,6 +85,16 @@ export function terminateSafePosixProcessTree(
       for (const expected of frontier) {
         const current = rowsByPid.get(expected.pid);
         if (expected.root && (!current || !isExpectedRoot(current))) {
+          // SIGSTOP 与复核之间若根 PID 已被另一实例复用，rootStateBeforeStop 属于旧
+          // Agent，不能据此判断替代进程原本是否暂停。只要替代实例仍存在，就必须
+          // SIGCONT 撤销我们刚发出的 SIGSTOP，避免把未授权进程永久冻结。
+          if (
+            current &&
+            current.startIdentity !== expected.startIdentity &&
+            !resumeOnFailurePids.includes(rootPid)
+          ) {
+            resumeOnFailurePids.push(rootPid);
+          }
           return 'root-not-found';
         }
         if (
