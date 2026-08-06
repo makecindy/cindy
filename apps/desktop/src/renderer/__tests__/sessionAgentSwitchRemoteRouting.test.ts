@@ -930,13 +930,14 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     expect(viewSource).toContain('const sourceSessionId = sourceSession.id;');
     expect(viewSource).toContain('const maker = makerApiForSticky(sourceSessionId);');
     expect(viewSource).toContain('await maker.compactSession(sourceSessionId)');
-    // 在途期间切换会话 / 登出:旧响应不得在新会话弹 toast(并发收口)。
+    // 在途期间切换会话 / 登出 / 切回(换代):旧响应不得在当前视图弹 toast(并发收口)。
     expect(viewSource).toContain('const committedSessionId = sessionId ?? null;');
     expect(viewSource).toContain('compactRequestGuard.setCurrentSession(committedSessionId)');
-    expect(viewSource).toContain(
-      'if (!ok || !compactRequestGuard.isCurrent(sourceSessionId)) return;',
-    );
-    expect(viewSource).toContain('compactRequestGuard.finish(sourceSessionId);');
+    // 代校验:sessionId 当前 + 请求代一致;finally 里 release(不再按 sessionId finish)。
+    expect(viewSource).toContain('const begun = compactRequestGuard.tryBegin(sourceSessionId);');
+    expect(viewSource).toContain('if (!begun) return;');
+    expect(viewSource).toContain('compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)');
+    expect(viewSource).toContain('begun.release();');
     // 真实 reject 必须 catch 并显示 compactFailed(与 SessionContentHeader 一致)。
     expect(viewSource).toContain("toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'))");
   });
@@ -969,28 +970,55 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
 });
 
 describe('上下文环压缩请求按 sessionId 隔离(#1927 并发/生命周期回归)', () => {
-  it('A 在途时 B 可独立开始，A 的迟到 finally 不会清掉 B 的锁', () => {
+  it('A 在途时 B 可独立开始，A 的迟到 release 不会清掉 B 的锁', () => {
     const guard = createSessionScopedRequestGuard();
     guard.setCurrentSession('A');
-    expect(guard.tryBegin('A')).toBe(true);
-    expect(guard.tryBegin('A')).toBe(false);
+    const beginA = guard.tryBegin('A');
+    expect(beginA).not.toBeNull();
+    expect(guard.tryBegin('A')).toBeNull(); // 同代同会话防重
 
     guard.setCurrentSession('B');
     expect(guard.isCurrent('A')).toBe(false);
-    expect(guard.tryBegin('B')).toBe(true);
+    const beginB = guard.tryBegin('B');
+    expect(beginB).not.toBeNull();
 
-    guard.finish('A');
-    expect(guard.tryBegin('B')).toBe(false);
-    guard.finish('B');
-    expect(guard.tryBegin('B')).toBe(true);
+    beginA!.release();
+    expect(guard.tryBegin('B')).toBeNull(); // B 的锁还在
+    beginB!.release();
+    expect(guard.tryBegin('B')).not.toBeNull();
+  });
+
+  it('A 在途切 B 再切回 A(换代):旧请求失效,且新点击不被旧锁挡住', () => {
+    // greptile P1:守卫只按 sessionId 判断时,切回 A 后旧 A 请求会重新通过 isCurrent
+    // (迟到 toast),旧锁还会让新点击被静默丢弃。代(epoch)语义修复两者。
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    const oldA = guard.tryBegin('A');
+    expect(oldA).not.toBeNull();
+    const oldEpoch = oldA!.epoch;
+
+    guard.setCurrentSession('B');
+    guard.setCurrentSession('A'); // 切回 A → 换代
+
+    // 旧 A 请求:sessionId 当前但代不匹配 → 失效(不弹迟到 toast)。
+    expect(guard.isCurrent('A', oldEpoch)).toBe(false);
+    expect(guard.isCurrent('A')).toBe(true); // 无代校验时仍视为当前展示会话
+    // 新点击:同会话但新代 → 不被旧锁挡住,可独立开始。
+    const newA = guard.tryBegin('A');
+    expect(newA).not.toBeNull();
+    expect(newA!.epoch).not.toBe(oldEpoch);
+    newA!.release();
+    oldA!.release();
   });
 
   it('切换会话或登出会让确认框/迟到响应的旧 scope 失效', () => {
     const guard = createSessionScopedRequestGuard();
     guard.setCurrentSession('A');
-    expect(guard.tryBegin('A')).toBe(true);
+    const beginA = guard.tryBegin('A');
+    expect(beginA).not.toBeNull();
+    const epochA = beginA!.epoch;
     guard.setCurrentSession('B');
-    expect(guard.isCurrent('A')).toBe(false);
+    expect(guard.isCurrent('A', epochA)).toBe(false);
     expect(guard.isCurrent('B')).toBe(true);
     guard.setCurrentSession(null);
     expect(guard.isCurrent('B')).toBe(false);

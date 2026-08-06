@@ -2710,7 +2710,8 @@ export function CCAgentSessionView({
     // compact-session(pi 原生压缩)不依赖 workingDir,不能被它挡掉(copilot review)。
     if (sourceCompactChannel === null) return;
     if (sourceCompactChannel === 'claude-input' && !sourceSession.workingDir) return;
-    if (!compactRequestGuard.tryBegin(sourceSessionId)) return;
+    const begun = compactRequestGuard.tryBegin(sourceSessionId);
+    if (!begun) return;
     try {
       const contextWindow = resolveDisplayContextWindow({
         sdkContextWindow: agentStatus.contextWindow,
@@ -2732,7 +2733,9 @@ export function CCAgentSessionView({
         confirmText: t('ccAgent.layout.contextRing.confirmAction'),
         cancelText: t('ccAgent.layout.contextRing.confirmCancel'),
       });
-      if (!ok || !compactRequestGuard.isCurrent(sourceSessionId)) return;
+      // 代校验:sessionId 当前 + 请求代一致——切走再切回(换代)后旧请求不再生效
+      // (greptile P1:否则旧确认结果/迟到 toast 会在重新进入的视图里弹)。
+      if (!ok || !compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
       // 确认框打开期间，同一会话可能已在其它窗口 / 远程控制器被切换 agent(sessionId
       // 不变):捕获的 sourceCompactChannel 已过期。必须读**最新** channel —— 从
       // compactChannelRef.current 取(useCallback 闭包固定捕获旧值,重新 render 也不影响
@@ -2749,8 +2752,8 @@ export function CCAgentSessionView({
         const maker = makerApiForSticky(sourceSessionId);
         try {
           const result = await maker.compactSession(sourceSessionId);
-          // 在途期间切换会话 / 登出:旧响应不得在新会话弹 toast。
-          if (!compactRequestGuard.isCurrent(sourceSessionId)) return;
+          // 在途期间切换会话 / 登出 / 切回(换代):旧响应不得在当前视图弹 toast。
+          if (!compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
           if (result?.noop) {
             // 良性:上下文太小,无可压缩内容。信息性提示,不是失败。
             toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
@@ -2759,7 +2762,7 @@ export function CCAgentSessionView({
           }
           // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
         } catch (err) {
-          if (!compactRequestGuard.isCurrent(sourceSessionId)) return;
+          if (!compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
           // 与 SessionContentHeader 的手动压缩一致:失败给可理解提示,不泄漏裸 IPC 错误。
           log.warn('context ring compact-session failed', err);
           toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
@@ -2780,7 +2783,7 @@ export function CCAgentSessionView({
         sessionNow.workingDir,
       );
     } finally {
-      compactRequestGuard.finish(sourceSessionId);
+      begun.release();
     }
   }, [
     agentStatus.contextTokens,
