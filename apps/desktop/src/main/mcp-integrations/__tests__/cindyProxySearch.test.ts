@@ -157,6 +157,7 @@ describe('cindyProxySearch', () => {
       await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
         ok: false,
         errorCode: 'NOT_CONFIGURED',
+        requestStarted: false,
       });
     }
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -182,6 +183,7 @@ describe('cindyProxySearch', () => {
       await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
         ok: false,
         errorCode: testCase.code,
+        requestStarted: true,
         status: testCase.status,
       });
     }
@@ -285,6 +287,7 @@ describe('cindyProxySearch', () => {
     await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
       ok: false,
       errorCode: 'UPSTREAM_UNAVAILABLE',
+      requestStarted: true,
       status: 200,
       requestId: 'request-body-failed',
     });

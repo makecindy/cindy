@@ -449,11 +449,33 @@ describe('Cindy Web Search', () => {
     expect(switching.settlePipeCallClaim).not.toHaveBeenCalled();
   });
 
-  it('发起上游请求后保留主机搜索错误码并消费 binding', async () => {
+  it('仅明确未出网的失败允许重试；已出网错误保留错误码并消费 binding', async () => {
+    const notStartedSearch = vi.fn(async () => ({
+      ok: false as const,
+      errorCode: 'NOT_CONFIGURED' as const,
+      message: '搜索尚未配置',
+      requestStarted: false,
+    }));
+    const notStarted = makeSlot({ getGhost: searchGhost, searchWeb: notStartedSearch });
+    expect(await notStarted.slot.handleModelRequest('art', SEARCH_REQ)).toEqual({
+      ok: false,
+      errorCode: 'NOT_CONFIGURED',
+      message: '搜索尚未配置',
+    });
+    expect(notStarted.settlePipeCallClaim).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      true,
+    );
+
     const searchWeb = vi.fn(async () => ({
       ok: false as const,
       errorCode: 'QUOTA_EXHAUSTED' as const,
       message: 'Cindy AI 搜索额度不足',
+      requestStarted: true,
       status: 402,
       requestId: 'litellm-call-2',
     }));
@@ -471,7 +493,7 @@ describe('Cindy Web Search', () => {
       'research',
       'cindy.search.web',
       expect.stringMatching(/^[a-f0-9]{64}$/),
-      true,
+      false,
     );
     expect(searchWeb).toHaveBeenCalledTimes(1);
   });

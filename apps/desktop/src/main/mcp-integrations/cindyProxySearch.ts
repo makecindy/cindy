@@ -63,6 +63,8 @@ export type CindyProxySearchOutcome =
       ok: false;
       errorCode: CindyProxySearchErrorCode;
       message: string;
+      /** true 表示已进入 fetch，不能证明本次请求未消耗上游配额。 */
+      requestStarted: boolean;
       status?: number;
       requestId?: string;
     };
@@ -317,6 +319,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           ok: false,
           errorCode: 'NOT_CONFIGURED',
           message: 'Cindy AI 搜索尚未就绪，请重新登录或在插件设置中改用自己的搜索渠道',
+          requestStarted: false,
         };
       }
 
@@ -361,6 +364,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           ok: false,
           errorCode: 'UPSTREAM_UNAVAILABLE',
           message: 'Cindy AI 搜索服务连接失败，请稍后再试',
+          requestStarted: true,
         };
       }
 
@@ -383,6 +387,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           ok: false,
           errorCode: 'UPSTREAM_UNAVAILABLE',
           message: 'Cindy AI 搜索响应传输中断，请稍后再试',
+          requestStarted: true,
           status: response.status,
           ...(requestId ? { requestId } : {}),
         };
@@ -402,6 +407,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
         return {
           ok: false,
           ...failure,
+          requestStarted: true,
           status: response.status,
           ...(requestId ? { requestId } : {}),
         };
@@ -429,6 +435,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           ok: false,
           errorCode: parsed.errorCode,
           message: parsed.message,
+          requestStarted: true,
           status: response.status,
           ...(requestId ? { requestId } : {}),
         };

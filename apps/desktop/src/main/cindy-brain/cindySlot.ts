@@ -1339,7 +1339,7 @@ export class GhostCindySlot {
         callId,
         logicalProvider: 'cindy',
       });
-      let allowRetry = true;
+      let allowRetry = false;
       try {
         const outcome = await searchWeb({ query, limit });
         if (
@@ -1354,13 +1354,7 @@ export class GhostCindySlot {
           };
         }
         if (!outcome.ok) {
-          allowRetry = [
-            'NOT_CONFIGURED',
-            'QUOTA_EXHAUSTED',
-            'AUTH_REJECTED',
-            'RATE_LIMITED',
-            'UPSTREAM_UNAVAILABLE',
-          ].includes(outcome.errorCode);
+          allowRetry = outcome.requestStarted === false;
           this.deps.log?.warn('ghost cindy-request search_web failed', {
             ghostId,
             callId,
