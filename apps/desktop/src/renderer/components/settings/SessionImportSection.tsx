@@ -427,7 +427,7 @@ function buildImportListItems(candidates: ImportCandidate[]): ImportListItem[] {
   return listItems.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 }
 
-/** 构造「无法读取」hint:基础文案 + Claude 拒绝原因明细(非零项)。 */
+/** 构造「无法读取」hint:基础文案 + Claude 拒绝原因明细(非零项)。括号/分隔符走 i18n,不硬编码。 */
 function buildFilteredHint(
   rejected: ScanResult['rejected'],
   t: ReturnType<typeof useTranslation>['t'],
@@ -441,7 +441,13 @@ function buildFilteredHint(
   if (reasons.windowLimit > 0) parts.push(`${t('settings.sessionImport.summary.reasonWindowLimit')} ${reasons.windowLimit}`);
   if (reasons.invalidId > 0) parts.push(`${t('settings.sessionImport.summary.reasonInvalidId')} ${reasons.invalidId}`);
   if (reasons.unreadable > 0) parts.push(`${t('settings.sessionImport.summary.reasonUnreadable')} ${reasons.unreadable}`);
-  return parts.length > 0 ? `${base}（${parts.join(' · ')}）` : base;
+  if (parts.length === 0) return base;
+  // 括号与分隔符本地化:中英日韩的样式不同,不能硬编码全角括号。
+  return (
+    `${base}${t('settings.sessionImport.summary.reasonListOpen')}`
+    + parts.join(t('settings.sessionImport.summary.reasonListSep'))
+    + t('settings.sessionImport.summary.reasonListClose')
+  );
 }
 
 function ScanSummary({ scan }: { scan: ScanResult }) {
