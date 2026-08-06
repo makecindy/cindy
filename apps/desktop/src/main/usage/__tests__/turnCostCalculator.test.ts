@@ -530,6 +530,39 @@ describe('resolveTurnCost', () => {
     expect(result.money?.amount).toBeCloseTo(0.00173275, 10);
   });
 
+  it('keeps the DeepSeek SDK cost when token deltas are unavailable', () => {
+    const result = resolveTurnCost({
+      rawModel: 'deepseek-v4-pro',
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 0.052635,
+      pricing: catalog(
+        quote('deepseek-v4-pro', 0.435, 0.87, {
+          providerId: 'deepseek',
+          cacheReadPerMtok: 0.003625,
+          source: 'provider-reference',
+          approximate: true,
+        }),
+      ),
+      context: { providerId: 'deepseek', billingRoute: 'provider-api', region: 'global' },
+    });
+
+    expect(result).toEqual({
+      model: 'deepseek-v4-pro',
+      source: 'sdk',
+      money: {
+        amount: 0.052635,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+    });
+  });
+
   it('uses a provider reference or user override estimate when the SDK reports no cost', () => {
     const result = resolveTurnCost({
       rawModel: 'custom-model',
