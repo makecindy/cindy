@@ -373,7 +373,7 @@ export function WecomBotSection({
               onClick={() => {
                 void wecomGroup
                   .saveAndTest(
-                    webhookUrl,
+                    webhookUrl.trim(),
                     t('settings.notifications.wecomGroupTestMessage'),
                   )
                   .then(() => {
