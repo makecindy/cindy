@@ -138,7 +138,9 @@ export class MemoryFts {
     } catch (e) {
       // FTS5 query 语法错 (用户传了非法 token) 直接返空, 不抛 — 让 LLM 改写 query 重试。
       const msg = (e as Error).message;
-      if (msg.includes('fts5') || msg.includes('syntax error')) return [];
+      // 只吞明确的 MATCH 语法错误; 其他 FTS5 运行时错误 (snippet/bm25/索引损坏) 抛 io-error
+      // 避免真实故障被静默吞掉、search 退化到 LIKE-only 而难以定位 (Copilot review 反馈)
+      if (msg.includes('syntax error') || msg.includes('malformed MATCH expression')) return [];
       throw new MemoryError('io-error', `fts search failed: ${msg}`);
     }
   }
