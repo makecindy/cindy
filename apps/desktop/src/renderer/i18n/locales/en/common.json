@@ -1109,7 +1109,12 @@
         "managedDialogue": "Internal chat",
         "managedDialogueHint": "Orphan/internal dialogs under Cindy-managed dirs — not shown or imported",
         "filtered": "Unreadable",
-        "filteredHint": "Internal agent sessions, invalid files, or beyond scan window — not shown or imported"
+        "filteredHint": "Internal agent sessions, invalid files, or beyond scan window — not shown or imported",
+        "reasonInternal": "Internal",
+        "reasonNoEvents": "No events",
+        "reasonWindowLimit": "Scan window",
+        "reasonInvalidId": "Invalid ID",
+        "reasonUnreadable": "Unreadable"
       },
       "filters": {
         "source": "Source",

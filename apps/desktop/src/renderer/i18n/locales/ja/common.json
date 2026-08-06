@@ -1109,7 +1109,12 @@
         "managedDialogue": "内部ダイアログ",
         "managedDialogueHint": "Cindy 管理ディレクトリ下の孤立/内部ダイアログ — 表示もインポートもされません",
         "filtered": "読み取り不可",
-        "filteredHint": "内部エージェントセッション、無効なファイル、またはスキャンウィンドウ外 — 表示もインポートもされません"
+        "filteredHint": "内部エージェントセッション、無効なファイル、またはスキャンウィンドウ外 — 表示もインポートもされません",
+        "reasonInternal": "内部セッション",
+        "reasonNoEvents": "有効な内容なし",
+        "reasonWindowLimit": "スキャンウィンドウ外",
+        "reasonInvalidId": "ID 形式が無効",
+        "reasonUnreadable": "ファイルを読み取り不可"
       },
       "filters": {
         "source": "ソース",

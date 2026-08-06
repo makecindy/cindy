@@ -427,6 +427,23 @@ function buildImportListItems(candidates: ImportCandidate[]): ImportListItem[] {
   return listItems.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 }
 
+/** 构造「无法读取」hint:基础文案 + Claude 拒绝原因明细(非零项)。 */
+function buildFilteredHint(
+  rejected: ScanResult['rejected'],
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  const base = t('settings.sessionImport.summary.filteredHint');
+  const reasons = rejected.claudeReasons;
+  if (!reasons) return base;
+  const parts: string[] = [];
+  if (reasons.internal > 0) parts.push(`${t('settings.sessionImport.summary.reasonInternal')} ${reasons.internal}`);
+  if (reasons.noEvents > 0) parts.push(`${t('settings.sessionImport.summary.reasonNoEvents')} ${reasons.noEvents}`);
+  if (reasons.windowLimit > 0) parts.push(`${t('settings.sessionImport.summary.reasonWindowLimit')} ${reasons.windowLimit}`);
+  if (reasons.invalidId > 0) parts.push(`${t('settings.sessionImport.summary.reasonInvalidId')} ${reasons.invalidId}`);
+  if (reasons.unreadable > 0) parts.push(`${t('settings.sessionImport.summary.reasonUnreadable')} ${reasons.unreadable}`);
+  return parts.length > 0 ? `${base}（${parts.join(' · ')}）` : base;
+}
+
 function ScanSummary({ scan }: { scan: ScanResult }) {
   const { t } = useTranslation();
   const projectCount = scan.candidates.filter((item) => item.sidebarBucket === 'project').length;
@@ -461,7 +478,7 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
       <SummaryCell
         label={t('settings.sessionImport.summary.filtered')}
         value={scan.rejected.codex + scan.rejected.claude}
-        hint={t('settings.sessionImport.summary.filteredHint')}
+        hint={buildFilteredHint(scan.rejected, t)}
       />
     </div>
   );

@@ -1109,7 +1109,12 @@
         "managedDialogue": "내부 대화",
         "managedDialogueHint": "Cindy 관리 디렉터리의 고아/내부 대화 — 표시하거나 가져오지 않음",
         "filtered": "읽을 수 없음",
-        "filteredHint": "내부 에이전트 세션, 잘못된 파일 또는 스캔 범위 밖 — 표시하거나 가져오지 않음"
+        "filteredHint": "내부 에이전트 세션, 잘못된 파일 또는 스캔 범위 밖 — 표시하거나 가져오지 않음",
+        "reasonInternal": "내부 세션",
+        "reasonNoEvents": "유효한 내용 없음",
+        "reasonWindowLimit": "스캔 범위 밖",
+        "reasonInvalidId": "ID 형식이 잘못됨",
+        "reasonUnreadable": "파일을 읽을 수 없음"
       },
       "filters": {
         "source": "소스",
