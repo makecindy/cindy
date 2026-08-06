@@ -719,7 +719,7 @@ export default function NewRemoteSessionScreen() {
           deviceId: selectedDeviceId || undefined,
           modelRows: rows,
           currentEffort: current.effort,
-          catalogReady: deviceProviders.ready,
+          catalogReady: catalogReadyRef.current,
         });
         return {
           ...current,
@@ -729,6 +729,11 @@ export default function NewRemoteSessionScreen() {
           // 上次明确选择过的权限直接沿用；内置默认若升级到 Full access 仍需确认。
           permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
           providerId: next.providerId,
+          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false——新组合未必支持旧
+          // fastMode(codex review P2);语义与手动选行(resolveRowSelection)一致。
+          fastMode: next.providerId
+            ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
+            : false,
         };
       });
     })();
@@ -2324,7 +2329,7 @@ export default function NewRemoteSessionScreen() {
           deviceId: selectedDeviceId || undefined,
           modelRows: rows,
           currentEffort: current.effort,
-          catalogReady: deviceProviders.ready,
+          catalogReady: catalogReadyRef.current,
         });
         return {
           ...current,
@@ -2334,6 +2339,11 @@ export default function NewRemoteSessionScreen() {
           // 切到该 agent 时沿用其上次明确选择；无记忆的内置默认仍按升级规则确认。
           permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
           providerId: next.providerId,
+          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false——新组合未必支持旧
+          // fastMode(codex review P2);语义与手动选行(resolveRowSelection)一致。
+          fastMode: next.providerId
+            ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
+            : false,
         };
       });
     });

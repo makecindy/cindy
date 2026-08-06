@@ -152,7 +152,8 @@ describe('reconcileEffortAfterFallback', () => {
   });
 });
 
-describe('validateModelProviderId', () => {  const rows = [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')];
+describe('validateModelProviderId', () => {
+  const rows = [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')];
 
   it('null / undefined providerId → null', () => {
     expect(validateModelProviderId(rows, null, 'deepseek-v4-flash', true)).toBeNull();
