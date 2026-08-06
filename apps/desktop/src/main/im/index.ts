@@ -565,9 +565,10 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
         }
       }
       bindingStore.resetRuntime();
-      // 登出/换号是明确的账号边界, 清掉旧账号的持久游标；普通退出只清内存
-      // 热缓存, 保留本地 DB 游标让下一次启动继续增量语义。
-      await resetTelegramGroupContextCursors({ clearPersisted: reason !== 'quit' });
+      // 普通退出、登出、换账号与模式切换都只清内存热缓存, 保留本地 DB 游标；
+      // 只有明确删除账号数据时才清持久表。Telegram bot 解绑由 hook-control 的
+      // binding identity reset 单独处理, 不把 auth logout 误当成数据删除。
+      await resetTelegramGroupContextCursors({ clearPersisted: reason === 'account-deletion' });
     }
   },
   onStartError: (err) => {
