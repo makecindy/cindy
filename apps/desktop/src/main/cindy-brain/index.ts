@@ -4985,11 +4985,12 @@ export function registerGhostIpc(): void {
     }),
   );
 
-  // ── 插件列表授权状态批量查询(插件页卡片颜色 + 账号名展示)──────────
+  // ── 插件列表授权状态批量查询(卡片开关颜色)────────────────────────
   // 接受已装插件 id 数组,返回 id → GhostSetupProfile 的映射。
   // 判定复用 setup-status 的同一套探针真身(同步毫秒级),不加缓存。
   // 未知 id 静默跳过(不报错——列表渲染时的竞态窗口里可能已卸载)。
-  ipcMain.handle('ghosts:setup-profiles', (_event, ids: unknown) => {
+  ipcMain.handle('ghosts:setup-profiles', (event, ids: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (!Array.isArray(ids) || !ids.every((id): id is string => typeof id === 'string')) {
       throwIpcError('INVALID_PARAMS', 'ids must be a string array');
     }
@@ -5015,6 +5016,8 @@ export function registerGhostIpc(): void {
         nodeSecrets.length > 0;
 
       // 判定就绪度:复用 evaluateGhostSetup 的纯函数(与单个 setup-status 同口径)。
+      // kv 与单次 setup-status 同策略:同插件同次判定内最多读一次磁盘。
+      let kvSnapshot: Record<string, unknown> | null = null;
       const status = evaluateGhostSetup(runtimeManifest, {
         secretSaved: (key) => ghostSecretSaved(ghostId, key),
         oauthStatus: (key) => {
@@ -5027,13 +5030,17 @@ export function registerGhostIpc(): void {
           };
         },
         connectionCount: (key) => getGhostConnectionManager().list(ghostId, key).length,
-        kvValue: () => undefined,
+        kvValue: (key) => {
+          if (kvSnapshot === null) kvSnapshot = ghostKv.readStrict(ghostId);
+          return kvSnapshot[key];
+        },
       });
 
       // 授权细分状态:区分「未配置」与「已配置但过期/失败」。
+      // 过期授权优先于缺失——同时存在 reauth 和 missingGroups 时应显示红色。
       const setupState: GhostSetupProfile['setupState'] = status.ready
         ? 'ready'
-        : status.missingGroups.length === 0 && status.reauth.length > 0
+        : status.reauth.length > 0
           ? 'failed'
           : 'missing';
 

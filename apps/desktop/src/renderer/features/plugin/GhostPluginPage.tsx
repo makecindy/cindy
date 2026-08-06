@@ -435,7 +435,7 @@ export function GhostPluginPage() {
       }),
     [],
   );
-  // ── 插件列表授权状态批量查询(卡片开关颜色 + 账号名展示) ──
+  // ── 插件列表授权状态批量查询(卡片开关颜色与就绪度) ──
   const [setupProfiles, setSetupProfiles] = useState<Record<string, GhostSetupProfile>>({});
   useEffect(() => {
     let cancelled = false;
@@ -1967,9 +1967,9 @@ function GhostPluginActions({
 /**
  * 已安装插件卡片(设计定稿 2026-08-06):
  * - 整卡可点 → 进入插件详情;
- * - 右上角:更新胶囊 + 启用开关(开关颜色:已授权/无需授权 = 绿色,未授权 = 红色);
+ * - 右上角:更新胶囊 + 启用开关(开关颜色按 setupState 走语义 token);
  * - 无设置按钮、无对话按钮(这些交互统一收进详情页);
- * - 开关颜色按授权状态区分:已就绪=默认色,未配置=--warning-fg,过期/失败=--error-fg。
+ * - 开关颜色按授权状态区分:已就绪=默认开关色,未配置=--warning-fg,过期/失败=--error-fg。
  */
 export function GhostPluginCard({
   item,
