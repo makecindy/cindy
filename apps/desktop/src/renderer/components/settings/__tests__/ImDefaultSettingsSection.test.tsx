@@ -8,6 +8,10 @@ import { ImDefaultSettingsSection } from '../ImDefaultSettingsSection';
 const capabilityMockState = vi.hoisted(() => ({
   loadingAgent: null as string | null,
   errorAgent: null as string | null,
+  piTurnPermissionPolicy: null as {
+    supported: { supported: true };
+    unsupportedPermissionModes: string[];
+  } | null,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -27,11 +31,6 @@ vi.mock('@/hooks/useAgentCapabilities', () => {
     loading: false,
     error: null,
   };
-  const unsupported = {
-    capabilities: { availableModels: [] },
-    loading: false,
-    error: null,
-  };
   return {
     useAgentCapabilities: (agentKind: string) => {
       if (capabilityMockState.loadingAgent === agentKind) {
@@ -40,7 +39,18 @@ vi.mock('@/hooks/useAgentCapabilities', () => {
       if (capabilityMockState.errorAgent === agentKind) {
         return { capabilities: null, loading: false, error: 'capabilities unavailable' };
       }
-      return agentKind === 'pi' ? unsupported : supported;
+      return agentKind === 'pi'
+        ? {
+            capabilities: {
+              availableModels: [],
+              ...(capabilityMockState.piTurnPermissionPolicy
+                ? { turnPermissionPolicy: capabilityMockState.piTurnPermissionPolicy }
+                : {}),
+            },
+            loading: false,
+            error: null,
+          }
+        : supported;
     },
   };
 });
@@ -84,6 +94,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
   beforeEach(() => {
     capabilityMockState.loadingAgent = null;
     capabilityMockState.errorAgent = null;
+    capabilityMockState.piTurnPermissionPolicy = null;
     window.electronAPI = {
       maker: {
         imDefaultSettingsGet: vi.fn(async () => defaults('pi')),
@@ -130,6 +141,41 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     const status = await screen.findByRole('status');
     expect(status.textContent).not.toContain(
       'settings.imBot.defaults.agentUnsupportedOnChannelModeHint',
+    );
+  });
+
+  it('does not warn for Pi ask/auto once its turn policy capability supports those modes', async () => {
+    capabilityMockState.piTurnPermissionPolicy = {
+      supported: { supported: true },
+      unsupportedPermissionModes: ['bypassPermissions'],
+    };
+    render(<ImDefaultSettingsSection channel="wechat" />);
+
+    await screen.findByText('settings.imBot.defaults.agentLabel');
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('warns to change permission mode when Pi supports turn policy but not Full Access', async () => {
+    capabilityMockState.piTurnPermissionPolicy = {
+      supported: { supported: true },
+      unsupportedPermissionModes: ['bypassPermissions'],
+    };
+    window.electronAPI = {
+      maker: {
+        imDefaultSettingsGet: vi.fn(async () => ({
+          ...defaults('pi'),
+          permissionMode: 'bypassPermissions',
+        })),
+      },
+    } as unknown as typeof window.electronAPI;
+    render(<ImDefaultSettingsSection channel="wechat" />);
+
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toContain(
+      'settings.imBot.defaults.permissionModeUnsupportedOnChannelHint',
+    );
+    expect(status.textContent).not.toContain(
+      'settings.imBot.defaults.agentUnsupportedOnChannelHint',
     );
   });
 

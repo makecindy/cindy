@@ -3035,6 +3035,7 @@
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent はこのチャンネルでメッセージごとの権限確認に対応していないため、メッセージを処理できません。Claude Code または Codex に切り替えてください。",
         "agentUnsupportedOnChannelModeHint": "Agent を切り替えて /new を送信した後、新しい Agent でも権限モードの問題が表示される場合は、/permission を送信して権限モードを調整してください。",
+        "permissionModeUnsupportedOnChannelHint": "現在の Agent はこの権限モードではこのチャンネルを利用できないため、メッセージを処理できません。/permission を送信して対応する権限モードに変更してください。",
         "modelLabel": "モデル設定",
         "loading": "新規会話設定を読み込み中…",
         "loadFailed": "新規会話設定を読み込めませんでした",
