@@ -444,6 +444,31 @@ const LOCAL_PATCHES = {
         '    if (blockedError) {',
     },
     {
+      desc: 'remove the preview route guard when goto fails — the page did NOT land on the preview origin, so keeping the preview-only route would block the tab\'s normal navigations (codex-connector P1, round 18)',
+      find:
+        '  } catch (err) {\n' +
+        '    if (blockedError) {\n' +
+        '      throw toLintErrorObject(blockedError, "Non-Error thrown");\n' +
+        '    }\n' +
+        '    throw err;\n' +
+        '  } finally {',
+      replace:
+        '  } catch (err) {\n' +
+        '    // LOCAL PATCH (Cindy, via sync.mjs): goto failed — the page did\n' +
+        '    // NOT land on the preview origin, so the preview-only route\n' +
+        '    // guard must be removed; otherwise the tab\'s normal navigations\n' +
+        '    // stay blocked by a stale guard (codex-connector P1, round 18).\n' +
+        '    if (previewOrigin !== null) {\n' +
+        '      await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '      previewRouteGuards.delete(opts.page);\n' +
+        '    }\n' +
+        '    if (blockedError) {\n' +
+        '      throw toLintErrorObject(blockedError, "Non-Error thrown");\n' +
+        '    }\n' +
+        '    throw err;\n' +
+        '  } finally {',
+    },
+    {
       desc: 'track + hand over the installed route guard per page: a newer navigation must unroute the previous guard, otherwise a stale preview guard keeps blocking every later page-initiated navigation on that tab (playwright route.continue() does not fall back to older matching handlers)',
       find:
         'export async function gotoPageWithNavigationGuard(\n' +

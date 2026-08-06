@@ -1489,6 +1489,14 @@ export async function gotoPageWithNavigationGuard(
     }
     return response;
   } catch (err) {
+    // LOCAL PATCH (Cindy, via sync.mjs): goto failed — the page did
+    // NOT land on the preview origin, so the preview-only route
+    // guard must be removed; otherwise the tab's normal navigations
+    // stay blocked by a stale guard (codex-connector P1, round 18).
+    if (previewOrigin !== null) {
+      await opts.page.unroute("**", handler).catch(() => {});
+      previewRouteGuards.delete(opts.page);
+    }
     if (blockedError) {
       throw toLintErrorObject(blockedError, "Non-Error thrown");
     }

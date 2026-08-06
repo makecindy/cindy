@@ -27,8 +27,11 @@ export interface PreviewTabCloserDeps {
   /** Enumerate RSB registry rows with a live WebContents handle. */
   listRsbTabs(): Array<{
     tabId: string;
-    wc: { getURL?(): string; isDestroyed(): boolean; close(): void };
+    sessionId: string;
+    wc: { getURL?(): string; isDestroyed(): boolean };
   }>;
+  /** Close an RSB tab through the renderer bridge (removes the persistent store row). */
+  closeRsbTab(sessionId: string, tabId: string): Promise<void>;
   isPreviewUrl(u: string): boolean;
 }
 
@@ -59,8 +62,10 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
   // RSB webview tabs (round 15): revocation must cover BOTH backends — an
   // RSB preview tab surviving revocation would reload its old URL on a
   // seized port without the preview server's CSP, and the shape-matching
-  // guard would still let it through. Closing the guest WebContents
-  // releases the registry record via its destroyed listener.
+  // guard would still let it through. Closing through the renderer bridge
+  // (round 18) also removes the PERSISTENT tab store row — wc.close() alone
+  // only drops the in-memory registry record, and the tab would be
+  // recreated with the stale loopback URL on hydrate/restart.
   try {
     for (const row of deps.listRsbTabs()) {
       const wc = row.wc;
@@ -72,7 +77,7 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
         continue;
       }
       if (!deps.isPreviewUrl(url)) continue;
-      wc.close();
+      await deps.closeRsbTab(row.sessionId, row.tabId);
     }
   } catch {
     /* best-effort */

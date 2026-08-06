@@ -21,6 +21,7 @@ import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recip
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
 import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
 import { closePreviewTabs as closePreviewTabsImpl } from './browser-preview-tabs.js';
+import { dispatchTabOp } from '../rsb-browser-bridge/renderer-bridge.js';
 import {
   BrowserBackendController,
   BrowserBackendHealthService,
@@ -488,17 +489,26 @@ async function closePreviewTabs(): Promise<void> {
         .listAll()
         .map((record) => ({
           tabId: record.tabId,
+          sessionId: record.sessionId,
           wc: registry.getWebContentsByTabId(record.tabId),
         }))
-        .filter((row): row is { tabId: string; wc: NonNullable<typeof row.wc> } => row.wc !== null)
+        .filter((row): row is { tabId: string; sessionId: string; wc: NonNullable<typeof row.wc> } => row.wc !== null)
         .map((row) => ({
           tabId: row.tabId,
+          sessionId: row.sessionId,
           wc: {
             getURL: () => row.wc.getURL?.(),
             isDestroyed: () => row.wc.isDestroyed(),
-            close: () => row.wc.close(),
           },
         }));
+    },
+    closeRsbTab: async (sessionId, tabId) => {
+      // Close through the renderer bridge so the PERSISTENT tab store row
+      // is removed too (round 18) — see browser-preview-tabs.ts.
+      await dispatchTabOp(
+        { op: 'close', sessionId, tabId },
+        { getHostWebContents: () => readMainWindowForBackend(), logger },
+      ).catch(() => {});
     },
     isPreviewUrl,
   });

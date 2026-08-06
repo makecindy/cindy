@@ -56,6 +56,10 @@
     },
     {
       "file": "extension/src/browser/pw-session.ts",
+      "desc": "remove the preview route guard when goto fails — the page did NOT land on the preview origin, so keeping the preview-only route would block the tab's normal navigations (codex-connector P1, round 18)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
       "desc": "track + hand over the installed route guard per page: a newer navigation must unroute the previous guard, otherwise a stale preview guard keeps blocking every later page-initiated navigation on that tab (playwright route.continue() does not fall back to older matching handlers)"
     },
     {
@@ -76,7 +80,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "4e3ceab91c9789693a55ee717a9182627320aeb44bfc8efe072bfb4d200321a0",
+  "contentHash": "14043f6364697f0f87fc3a7398ba24031de8018869b10aba43e5e6a5a6607c43",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"
