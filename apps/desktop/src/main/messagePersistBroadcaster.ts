@@ -596,7 +596,10 @@ export function onToolUseEvent(
  */
 export function persistCodexPlanOnDone(
   sessionId: string,
-  data: { plan?: unknown; raw?: { id?: unknown; status?: unknown } } | null | undefined,
+  data:
+    | { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+    | null
+    | undefined,
 ): boolean {
   const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
   if (!turnId) return false;
@@ -612,12 +615,14 @@ export function persistCodexPlanOnDone(
     : null;
   if (!input || !Array.isArray(input.plan)) return false;
 
-  const nextPlan = resolveCodexPlanSnapshotOnDone(
-    input.plan,
-    data?.plan,
-    data?.raw?.status === 'completed',
-  );
-  if (!nextPlan || JSON.stringify(input.plan) === JSON.stringify(nextPlan)) return false;
+  const isSuccessfulTerminal = isSuccessfulCodexDoneEventData(data);
+  const nextPlan = resolveCodexPlanSnapshotOnDone(input.plan, data?.plan, isSuccessfulTerminal);
+  if (!nextPlan) return false;
+  const planChanged = JSON.stringify(input.plan) !== JSON.stringify(nextPlan);
+  // Even when Codex already emitted the exact completed/empty plan, stamp the
+  // durable row at done. Renderer must distinguish this authoritative write
+  // from an older ordinary DB echo that merely happens to look completed.
+  if (!planChanged && !isSuccessfulTerminal) return false;
 
   const nextInput = { ...input, plan: nextPlan };
   infoMap?.set(toolUseId, { ...info, input: nextInput });
@@ -626,6 +631,7 @@ export function persistCodexPlanOnDone(
       toolUseId,
       toolName: 'update_plan',
       input: nextInput,
+      ...(isSuccessfulTerminal ? { terminalPlanSnapshot: true } : {}),
     });
     // Reuse the existing upsert-style row broadcast so a renderer that mounts
     // between `done` and this queued write, plus remote mirrors, receives the

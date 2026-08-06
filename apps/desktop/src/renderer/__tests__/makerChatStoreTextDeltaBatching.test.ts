@@ -694,6 +694,7 @@ describe('makerChatStore text delta batching', () => {
         content: {
           toolUseId: 'plan:turn-1',
           toolName: 'update_plan',
+          terminalPlanSnapshot: true,
           input: {
             plan: [
               { step: 'Inspect', status: 'completed' },
@@ -741,6 +742,7 @@ describe('makerChatStore text delta batching', () => {
         content: {
           toolUseId: 'plan:turn-clear',
           toolName: 'update_plan',
+          terminalPlanSnapshot: true,
           input: { plan: [] },
         },
         createdAt: '2026-08-05T00:00:00.000Z',
@@ -750,6 +752,114 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
       clientId: 'plan-message-clear',
       toolInput: { plan: [] },
+    });
+  });
+
+  it('does not let an unmarked completed-plan echo replace newer live work', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan:turn-race',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Initial work', status: 'completed' }] },
+        },
+      },
+      persistId: 'plan-message-race',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan:turn-race',
+          toolName: 'update_plan',
+          input: {
+            plan: [
+              { step: 'Initial work', status: 'completed' },
+              { step: 'Follow-up work', status: 'in_progress' },
+            ],
+          },
+        },
+      },
+      persistId: 'plan-message-race',
+    });
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: serverMessage({
+        id: 'plan-row-race',
+        clientId: 'plan-message-race',
+        sessionId: SESSION_ID,
+        role: 'tool_use',
+        content: {
+          toolUseId: 'plan:turn-race',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Initial work', status: 'completed' }] },
+        },
+        createdAt: '2026-08-05T00:00:00.000Z',
+      }),
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
+      toolInput: {
+        plan: [
+          { step: 'Initial work', status: 'completed' },
+          { step: 'Follow-up work', status: 'in_progress' },
+        ],
+      },
+    });
+  });
+
+  it('does not let an unmarked empty-plan echo replace newer live work', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan:turn-empty-race',
+          toolName: 'update_plan',
+          input: { plan: [] },
+        },
+      },
+      persistId: 'plan-message-empty-race',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan:turn-empty-race',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'New work', status: 'in_progress' }] },
+        },
+      },
+      persistId: 'plan-message-empty-race',
+    });
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: serverMessage({
+        id: 'plan-row-empty-race',
+        clientId: 'plan-message-empty-race',
+        sessionId: SESSION_ID,
+        role: 'tool_use',
+        content: {
+          toolUseId: 'plan:turn-empty-race',
+          toolName: 'update_plan',
+          input: { plan: [] },
+        },
+        createdAt: '2026-08-05T00:00:00.000Z',
+      }),
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
+      toolInput: { plan: [{ step: 'New work', status: 'in_progress' }] },
     });
   });
 

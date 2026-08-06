@@ -225,6 +225,41 @@ describe('update_plan tool_use persistence', () => {
             { step: 'Start dev', status: 'completed' },
           ],
         },
+        terminalPlanSnapshot: true,
+      },
+    );
+    expect(broadcastMessageRow).toHaveBeenCalledWith(
+      SESSION,
+      expect.any(Object),
+      ownerScopeState.scope,
+    );
+  });
+
+  it('stamps an already-completed plan as terminal at the successful done boundary', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-complete',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-complete', status: 'completed' },
+      plan: [{ step: 'Ship', status: 'completed' }],
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      {
+        toolUseId: 'plan:turn-complete',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+        terminalPlanSnapshot: true,
       },
     );
     expect(broadcastMessageRow).toHaveBeenCalledWith(
@@ -247,6 +282,10 @@ describe('update_plan tool_use persistence', () => {
 
     expect(persistCodexPlanOnDone(SESSION, {
       raw: { id: 'turn-1', status: 'interrupted' },
+    })).toBe(false);
+    expect(persistCodexPlanOnDone(SESSION, {
+      cancelled: true,
+      raw: { id: 'turn-1', status: 'completed' },
     })).toBe(false);
     expect(persistCodexPlanOnDone(SESSION, {
       raw: { id: 'turn-2', status: 'completed' },

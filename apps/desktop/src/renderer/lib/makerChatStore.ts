@@ -369,6 +369,8 @@ export interface ChatMessage {
    * rewritten because it also participates in message ordering.
    */
   planUpdatedAtMs?: number;
+  /** Main stamped this persisted Codex plan at the successful done boundary. */
+  terminalPlanSnapshot?: boolean;
   /**
    * 产生这条消息的模型 raw id(读自 agentMeta.model)。对 subagent 子消息而言
    * 即子代理实际跑的模型(如 'claude-haiku-4-5-20251001')。仅 SDK 带 model 的
@@ -3855,17 +3857,6 @@ type HydratePersistedMessageOptions = {
   preserveExistingCodexPlanContent?: boolean;
 };
 
-function isTerminalCodexPlanSnapshot(value: unknown): boolean {
-  if (!Array.isArray(value)) return false;
-  return value.every(
-    (item) =>
-      item !== null &&
-      typeof item === 'object' &&
-      !Array.isArray(item) &&
-      (item as { status?: unknown }).status === 'completed',
-  );
-}
-
 function hydratePersistedMessage(
   existing: ChatMessage,
   persisted: ChatMessage,
@@ -3890,11 +3881,10 @@ function hydratePersistedMessage(
     persisted.toolInput !== null &&
     Array.isArray((existing.toolInput as { plan?: unknown }).plan) &&
     Array.isArray((persisted.toolInput as { plan?: unknown }).plan) &&
-    // Ordinary DB echoes can lag behind the live Codex event, so keep the
-    // newer in-memory plan. A fully completed persisted snapshot is different:
-    // it is Main's terminal convergence and must close a stale plan hydrated
-    // by a renderer that mounted between `done` and the queued DB write.
-    !isTerminalCodexPlanSnapshot((persisted.toolInput as { plan?: unknown }).plan)
+    // Ordinary DB echoes can lag behind the live Codex event, including rows
+    // whose old payload happens to be fully completed or empty. Only Main's
+    // explicit done-boundary stamp may close a newer in-memory plan.
+    persisted.terminalPlanSnapshot !== true
   ) {
     hydrated.toolInput = existing.toolInput;
     hydrated.content = existing.content;
@@ -4655,7 +4645,9 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
-          ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
+          ...(toolName === 'update_plan'
+            ? { planUpdatedAtMs: Date.now(), terminalPlanSnapshot: false }
+            : {}),
         };
         return {
           ...finalized,
@@ -14164,6 +14156,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
+          ? { terminalPlanSnapshot: true }
+          : {}),
         isStreaming: false,
         // subagent-model-chip: 从持久化 agentMeta 复原 model / parentUuid,
         // 让历史重载后 Agent/Task 行也能显示子代理模型 chip(透传点 B)。
