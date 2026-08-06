@@ -38,7 +38,9 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain(
       '{(!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed)) && (',
     );
-    expect(sessionViewSource).toContain('suppressContent={Boolean(pendingPlanReview)}');
+    expect(sessionViewSource).toContain(
+      'suppressContent={Boolean(pendingPlanReview || showExpandedControlledBanner)}',
+    );
     expect(sessionViewSource).toContain(
       'const isHidden = suppressContent || (!showContent && !visible);',
     );
@@ -102,6 +104,9 @@ describe('controlled banner placement', () => {
     );
     expect(sessionViewSource).toContain('className="col-start-1 row-start-1"');
     expect(sessionViewSource).toContain('data-composer-center-group="true"');
+    expect(sessionViewSource).toContain(
+      'suppressContent={Boolean(pendingPlanReview || showExpandedControlledBanner)}',
+    );
     expect(sessionViewSource).toContain(
       'className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"',
     );
