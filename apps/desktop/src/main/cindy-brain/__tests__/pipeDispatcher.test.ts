@@ -298,16 +298,15 @@ describe('配对交卷', () => {
 });
 
 describe('tool-call 宿主能力绑定', () => {
-  it('按 ghostId + callId + tool 验身，且同一 binding 只能认领一次', async () => {
+  it('按 ghostId + callId 验身，且不限制调用方工具名、同一 binding 只能认领一次', async () => {
     const h = makeHarness();
     const pending = h.dispatcher.callGhostTool(CALL);
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
     const callId = h.sent[0].callId;
 
-    expect(h.dispatcher.claimPendingCall('evil-ghost', callId, 'gen_image', 'cindy.search.web')).toBe(false);
-    expect(h.dispatcher.claimPendingCall('art', callId, 'other_tool', 'cindy.search.web')).toBe(false);
-    expect(h.dispatcher.claimPendingCall('art', callId, 'gen_image', 'cindy.search.web')).toBe(true);
-    expect(h.dispatcher.claimPendingCall('art', callId, 'gen_image', 'cindy.search.web')).toBe(false);
+    expect(h.dispatcher.claimPendingCall('evil-ghost', callId, 'cindy.search.web')).toBe(false);
+    expect(h.dispatcher.claimPendingCall('art', callId, 'cindy.search.web')).toBe(true);
+    expect(h.dispatcher.claimPendingCall('art', callId, 'cindy.search.web')).toBe(false);
 
     h.dispatcher.handleToolResult('art', {
       type: 'tool-result',

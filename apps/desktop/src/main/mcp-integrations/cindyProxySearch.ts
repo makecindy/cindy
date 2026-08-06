@@ -18,10 +18,12 @@ export function buildCindySearchUrl(baseUrl: string): string {
   try {
     const url = new URL(normalizedBaseUrl);
     const pathname = url.pathname.replace(/\/+$/, '');
-    if (pathname === '/v1/messages' || pathname.endsWith('/v1/messages')) {
+    const lowerPathname = pathname.toLowerCase();
+    if (lowerPathname === '/v1/messages' || lowerPathname.endsWith('/v1/messages')) {
       url.pathname = pathname || '/v1/messages';
     } else {
-      const suffix = pathname === '/v1' || pathname.endsWith('/v1') ? '/messages' : '/v1/messages';
+      const suffix =
+        lowerPathname === '/v1' || lowerPathname.endsWith('/v1') ? '/messages' : '/v1/messages';
       url.pathname = `${pathname}${suffix}` || '/v1/messages';
     }
     url.hash = '';
@@ -325,6 +327,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
+            'x-api-key': apiKey,
             'Content-Type': 'application/json',
             'anthropic-version': '2023-06-01',
           },

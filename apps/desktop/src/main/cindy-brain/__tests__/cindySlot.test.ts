@@ -341,7 +341,6 @@ describe('Cindy Web Search', () => {
     expect(claimPipeCall).toHaveBeenCalledWith(
       'art',
       'call-search-1',
-      'search_web',
       'cindy.search.web',
     );
     expect(result).toEqual({
@@ -399,7 +398,39 @@ describe('Cindy Web Search', () => {
     expect(searchWeb).not.toHaveBeenCalled();
   });
 
-  it('保留主机搜索错误码；账号切换期间 fail closed', async () => {
+  it('能力未接线、并发受限和账号切换等前置失败不消费 binding', async () => {
+    const notConfigured = makeSlot({
+      getGhost: searchGhost,
+      searchWeb: undefined,
+    });
+    expect(await notConfigured.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'NOT_CONFIGURED',
+    });
+    expect(notConfigured.claimPipeCall).not.toHaveBeenCalled();
+
+    const rateLimited = makeSlot({
+      getGhost: searchGhost,
+      getInflightLimit: () => 0,
+    });
+    expect(await rateLimited.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'RATE_LIMITED',
+    });
+    expect(rateLimited.claimPipeCall).not.toHaveBeenCalled();
+
+    const switching = makeSlot({
+      getGhost: searchGhost,
+      isOwnerBoundaryPending: () => true,
+    });
+    expect(await switching.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+    });
+    expect(switching.claimPipeCall).not.toHaveBeenCalled();
+  });
+
+  it('发起上游请求后保留主机搜索错误码并消费 binding', async () => {
     const searchWeb = vi.fn(async () => ({
       ok: false as const,
       errorCode: 'QUOTA_EXHAUSTED' as const,
@@ -414,15 +445,7 @@ describe('Cindy Web Search', () => {
       message: 'Cindy AI 搜索额度不足',
     });
 
-    const switching = makeSlot({
-      getGhost: searchGhost,
-      searchWeb,
-      isOwnerBoundaryPending: () => true,
-    });
-    expect(await switching.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
-      ok: false,
-      errorCode: 'UPSTREAM_UNAVAILABLE',
-    });
+    expect(quota.claimPipeCall).toHaveBeenCalledTimes(1);
     expect(searchWeb).toHaveBeenCalledTimes(1);
   });
 });

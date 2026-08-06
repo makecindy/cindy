@@ -25,6 +25,12 @@ describe('cindyProxySearch', () => {
     expect(buildCindySearchUrl('https://gateway.example.test/v1/messages')).toBe(
       'https://gateway.example.test/v1/messages',
     );
+    expect(buildCindySearchUrl('https://gateway.example.test/V1/')).toBe(
+      'https://gateway.example.test/V1/messages',
+    );
+    expect(buildCindySearchUrl('https://gateway.example.test/V1/Messages')).toBe(
+      'https://gateway.example.test/V1/Messages',
+    );
     expect(
       buildCindySearchUrl('https://gateway.example.test/api/v1?tenant=alpha&mode=fast#local'),
     ).toBe('https://gateway.example.test/api/v1/messages?tenant=alpha&mode=fast');
@@ -96,6 +102,7 @@ describe('cindyProxySearch', () => {
       method: 'POST',
       headers: {
         Authorization: 'Bearer test-key',
+        'x-api-key': 'test-key',
         'Content-Type': 'application/json',
         'anthropic-version': '2023-06-01',
       },

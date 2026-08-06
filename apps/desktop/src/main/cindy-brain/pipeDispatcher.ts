@@ -191,12 +191,12 @@ export class GhostPipeDispatcher {
   /**
    * 一次性认领真实在途 tool-call 的宿主能力绑定。
    *
-   * callId、ghostId、tool 三者都来自派发器事实表；binding 同一卷只能认领一次。
+   * callId 与 ghostId 来自派发器事实表；binding 同一卷只能认领一次。
    * 不删除 pending entry，插件仍需用原 callId 正常交卷。
    */
-  claimPendingCall(ghostId: string, callId: string, tool: string, binding: string): boolean {
+  claimPendingCall(ghostId: string, callId: string, binding: string): boolean {
     const entry = this.pending.get(callId);
-    if (!entry || entry.ghostId !== ghostId || entry.tool !== tool) return false;
+    if (!entry || entry.ghostId !== ghostId) return false;
     if (entry.claimedBindings.has(binding)) return false;
     entry.claimedBindings.add(binding);
     return true;
