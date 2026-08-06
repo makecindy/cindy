@@ -225,6 +225,8 @@ registerColor('warning-accent', {
   light: '#EA6B17',
   dark: '#EA6B17',
 }, 'Thinking orange / warning accent — running 状态色,设计定稿 2026-07-17(取代 #FF6600 冻结红线);全局同值,9 主题无 override 自动跟随');
+// DESIGN.md §2 / §10 窄范围例外：仅资源用量表的 14px 进程类别 glyph 使用，
+// 不表示健康/状态，也不得扩散到行背景、文字或其它进程 UI。
 registerColor('process-agent-task-icon', {
   light: '#2563EB',
   dark: '#60A5FA',
