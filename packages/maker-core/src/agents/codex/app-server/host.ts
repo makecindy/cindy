@@ -508,7 +508,10 @@ export class AppServerHost {
     // 防 server 在握手过程中就发出 approval (虽然实际不会, 但 defensive)。
     client.setRequestHandler(Method.CommandExecutionRequestApproval, async (rawParams) => {
       const params = rawParams as CommandExecutionRequestApprovalParams;
-      const handlers = await this.resolveRequestHandlers(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.commandExecutionApproval) {
         this.logger.warn('commandExecution approval without subscriber → decline', {
           threadId: params.threadId,
@@ -529,7 +532,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.FileChangeRequestApproval, async (rawParams) => {
       const params = rawParams as FileChangeRequestApprovalParams;
-      const handlers = await this.resolveRequestHandlers(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.fileChangeApproval) {
         this.logger.warn('fileChange approval without subscriber → decline', {
           threadId: params.threadId,
@@ -550,7 +556,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams) => {
       const params = rawParams as McpServerElicitationRequestParams;
-      const handlers = await this.resolveRequestHandlers(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.mcpServerElicitation) {
         this.logger.warn('MCP server elicitation without subscriber -> decline', {
           threadId: params.threadId,
@@ -572,7 +581,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.PermissionsRequestApproval, async (rawParams) => {
       const params = rawParams as PermissionsRequestApprovalParams;
-      const handlers = await this.resolveRequestHandlers(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.permissionsApproval) {
         this.logger.warn('permissions approval without subscriber → decline', {
           threadId: params.threadId,
@@ -592,7 +604,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.ToolRequestUserInput, async (rawParams, meta) => {
       const params = rawParams as ToolRequestUserInputParams;
-      const handlers = await this.resolveRequestHandlers(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.requestUserInput) {
         this.logger.warn('requestUserInput without subscriber -> empty response', {
           threadId: params.threadId,
@@ -614,7 +629,10 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.DynamicToolCall, async (rawParams, meta) => {
       const params = rawParams as DynamicToolCallParams;
-      const handlers = await this.resolveRequestHandlers(params.threadId);
+      const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
+      const handlers = resolvedHandlers instanceof Promise
+        ? await resolvedHandlers
+        : resolvedHandlers;
       if (!handlers?.dynamicToolCall) {
         this.logger.warn('dynamicToolCall without subscriber -> failed result', {
           threadId: params.threadId,
@@ -1005,8 +1023,14 @@ export class AppServerHost {
     return rootThreadId ? this.subscribers.get(rootThreadId) : undefined;
   }
 
-  private async resolveRequestHandlers(threadId: string): Promise<ThreadEventHandlers | undefined> {
+  private resolveRequestHandlers(
+    threadId: string,
+  ): ThreadEventHandlers | Promise<ThreadEventHandlers | undefined> | undefined {
     const current = this.handlersForThread(threadId);
+    // Keep known root/descendant dispatch synchronous. requestUserInput and
+    // dynamicToolCall register their broker entry in the first synchronous
+    // statements; yielding here would let a same-turn serverRequest/resolved
+    // notification cancel the request before that registration (Codex P1).
     if (current || this.subscribers.size === 0) return current;
     return this.waitForThreadHandlers(threadId);
   }

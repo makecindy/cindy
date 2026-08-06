@@ -753,6 +753,48 @@ describe('AppServerHost descendant thread routing', () => {
     await host.shutdown();
   });
 
+  it('keeps known descendant request dispatch synchronous before a resolved notification', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const order: string[] = [];
+    const subscription = host.subscribeThread('root-thread', {
+      requestUserInput: vi.fn(async () => {
+        order.push('request');
+        return { answers: {} };
+      }),
+      serverRequestResolved: vi.fn(() => {
+        order.push('resolved');
+      }),
+    });
+    transport.emit({
+      id: 'known-request',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'root-thread',
+        turnId: 'root-turn',
+        itemId: 'input',
+        questions: [{ id: 'q1', header: 'Q', question: 'Continue?', options: [] }],
+      },
+    });
+    transport.emit({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'root-thread', requestId: 'known-request' },
+    });
+
+    await vi.waitFor(() => {
+      expect(order).toEqual(['request', 'resolved']);
+    });
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
   it('declines an MCP elicitation whose lineage stays unknown for the bounded window', async () => {
     const transport = new NotificationTransport();
     const host = new AppServerHost({
