@@ -38,12 +38,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  groupModelsForDisplay,
-  groupOf,
-  CATEGORY_LABEL_KEY,
-  type ModelCategory,
-} from '@/components/new-chat/sourceSwitch';
+import { CATEGORY_LABEL_KEY } from '@/components/new-chat/sourceSwitch';
 import {
   isModelEnabled,
   setManyVisibility,
@@ -52,8 +47,16 @@ import {
 } from '@/state/modelVisibilityPrefs';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 
-import { isAgentSelectableModel } from '@cindy/model-providers';
-import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import {
+  formatContextWindow,
+  groupModelsForDisplay,
+  groupOf,
+  isAgentSelectableModel,
+  type AgentKind,
+  type CatalogModel,
+  type ModelCategory,
+  type ProviderView,
+} from '@cindy/model-providers';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -91,18 +94,6 @@ function loadCollapsedMap(): Record<string, boolean> {
   } catch {
     return {};
   }
-}
-
-function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000) {
-    const m = tokens / 1_000_000;
-    return `${Number.isInteger(m) ? m : Number(m.toFixed(1))}M`;
-  }
-  if (tokens >= 1000) {
-    const k = tokens / 1000;
-    return `${Number.isInteger(k) ? k : Number(k.toFixed(0))}K`;
-  }
-  return String(tokens);
 }
 
 /** 并集行:同一模型跨 agent 合并;byAgent 保留各 agent 的目录条目(id / 元数据可能不同)。 */

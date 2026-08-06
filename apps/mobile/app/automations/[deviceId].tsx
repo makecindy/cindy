@@ -65,6 +65,7 @@ import {
   createTemplateParamDefaults,
   deriveMobileScheduleSessionMode,
   hasMobileScheduleRealBinding,
+  MOBILE_SCHEDULE_MODEL_DEFAULTS,
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
@@ -312,6 +313,7 @@ export default function AutomationsScreen() {
     setTemplateParamValues({});
     setTemplatePromptDirty(false);
     setFormDraft(createMobileScheduleDraft(null, {
+      modelDefaults: MOBILE_SCHEDULE_MODEL_DEFAULTS,
       fallbackWorkingDir: selectedSchedule?.workingDir ?? null,
     }));
     void loadTemplates();
@@ -324,7 +326,7 @@ export default function AutomationsScreen() {
     setSelectedTemplate(null);
     setTemplateParamValues({});
     setTemplatePromptDirty(false);
-    setFormDraft(createMobileScheduleDraft(schedule));
+    setFormDraft(createMobileScheduleDraft(schedule, { modelDefaults: MOBILE_SCHEDULE_MODEL_DEFAULTS }));
   }, []);
 
   const closeScheduleForm = useCallback(() => {
@@ -345,13 +347,24 @@ export default function AutomationsScreen() {
     setFormError(null);
     setFormDraft((prev) => {
       const base = prev ?? createMobileScheduleDraft(null, {
+        modelDefaults: MOBILE_SCHEDULE_MODEL_DEFAULTS,
         fallbackWorkingDir: selectedSchedule?.workingDir ?? null,
       });
       try {
-        return applyTemplateToMobileScheduleDraft(base, template, defaults);
+        return applyTemplateToMobileScheduleDraft(
+          base,
+          template,
+          defaults,
+          MOBILE_SCHEDULE_MODEL_DEFAULTS,
+        );
       } catch {
         return {
-          ...applyTemplateToMobileScheduleDraft(base, { ...template, prompt: '' }, defaults),
+          ...applyTemplateToMobileScheduleDraft(
+            base,
+            { ...template, prompt: '' },
+            defaults,
+            MOBILE_SCHEDULE_MODEL_DEFAULTS,
+          ),
           prompt: template.prompt ?? '',
         };
       }
@@ -1305,14 +1318,14 @@ function ScheduleFormCard({
             active={draft.agentKind === 'claude-code'}
             disabled={busy || hasRealBinding}
             label="Claude"
-            onPress={() => onChange(updateDraftAgentKind(draft, 'claude-code'))}
+            onPress={() => onChange(updateDraftAgentKind(draft, 'claude-code', MOBILE_SCHEDULE_MODEL_DEFAULTS))}
             testID="automations.form.agentClaude"
           />
           <SegmentButton
             active={draft.agentKind === 'codex'}
             disabled={busy || hasRealBinding}
             label="Codex"
-            onPress={() => onChange(updateDraftAgentKind(draft, 'codex'))}
+            onPress={() => onChange(updateDraftAgentKind(draft, 'codex', MOBILE_SCHEDULE_MODEL_DEFAULTS))}
             testID="automations.form.agentCodex"
           />
           <SegmentButton

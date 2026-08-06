@@ -58,6 +58,7 @@ import {
   refreshAnthropicModelsFromHttp,
   getAnthropicModelDiscoveryFailure,
   setAnthropicDiscoveryFailureListener,
+  setAnthropicModelsAppliedListener,
   clearAnthropicDiscoveredModels,
   resetAnthropicDiscoveryForTest,
   waitForAnthropicDiscoveryIdleForTest,
@@ -500,6 +501,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
   });
 
   afterEach(async () => {
+    setAnthropicModelsAppliedListener(null);
     await clearAnthropicDiscoveredModels();
     await waitForAnthropicDiscoveryIdleForTest();
     resetAnthropicDiscoveryForTest();
@@ -521,6 +523,26 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       { value: 'claude-opus-4-8', displayName: 'Opus 4.8', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] },
     ]);
     expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+  });
+
+  it.each([
+    ['同步抛错', () => { throw new Error('listener sync boom'); }],
+    ['异步拒绝', () => Promise.reject(new Error('listener async boom'))],
+  ])('清单生效监听器%s不打断 active catalog 与缓存持久化', async (_label, listener) => {
+    setAnthropicModelsAppliedListener(listener);
+
+    noteAnthropicSdkSupportedModels([
+      { value: 'claude-opus-4-8', displayName: 'Opus 4.8' },
+    ]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    await Promise.resolve();
+
+    expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    const persisted = JSON.parse(await fsp.readFile(cache, 'utf-8')) as {
+      models?: Array<{ id?: string }>;
+    };
+    expect(persisted.models?.map((model) => model.id)).toContain('claude-opus-4-8');
   });
 
   it('直接换号边界先清旧账号清单与缓存,新账号发现失败也不继承(review P1 回归)', async () => {

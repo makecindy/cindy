@@ -8,11 +8,16 @@
  */
 
 import type { AuthMembership } from '@cindy/auth-client';
+import { BUNDLED_CATALOG, resolveDefaultModel } from '@cindy/model-providers';
 
 import type { MobileUser } from './AuthContext';
 
 export const DEFAULT_MODEL = 'claude-sonnet-4-6';
 export const DEFAULT_EFFORT = 'medium';
+
+export function defaultMobileProfileModel(catalog = BUNDLED_CATALOG): string {
+  return resolveDefaultModel(catalog, 'claude-code', 'session', DEFAULT_MODEL);
+}
 
 export function mapMembershipToMobileUser(
   membership: AuthMembership,
@@ -24,7 +29,7 @@ export function mapMembershipToMobileUser(
     // auth-server 自助头像(PATCH /api/me/profile);null = 未设置(首字母兜底)。
     avatar: membership.avatarUrl ?? null,
     email: membership.email,
-    defaultModel: DEFAULT_MODEL,
+    defaultModel: defaultMobileProfileModel(),
     defaultEffort: DEFAULT_EFFORT,
     membershipKind: membership.kind,
     membershipRole: membership.role,

@@ -7,6 +7,7 @@ import {
   createTemplateParamDefaults,
   deriveMobileScheduleSessionMode,
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
+  MOBILE_SCHEDULE_MODEL_DEFAULTS,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
   updateDraftSessionMode,
@@ -37,6 +38,24 @@ function schedule(patch: Partial<RemoteSchedule> = {}): RemoteSchedule {
 }
 
 describe('mobile schedule form model', () => {
+  it('leaves model defaults to the controlled Desktop active catalog', () => {
+    const claude = createMobileScheduleDraft(null, {
+      modelDefaults: MOBILE_SCHEDULE_MODEL_DEFAULTS,
+    });
+    const codex = updateDraftAgentKind(
+      claude,
+      'codex',
+      MOBILE_SCHEDULE_MODEL_DEFAULTS,
+    );
+
+    expect(claude.model).toBe('');
+    expect(codex.model).toBe('');
+    expect(buildMobileScheduleInput({ ...claude, name: 'Claude', prompt: 'run' }))
+      .not.toHaveProperty('model');
+    expect(buildMobileScheduleInput({ ...codex, name: 'Codex', prompt: 'run' }))
+      .not.toHaveProperty('model');
+  });
+
   it('builds a desktop-compatible create input for recurring project schedules', () => {
     const draft = createMobileScheduleDraft(null, { fallbackWorkingDir: '/repo/xdt-maker' });
     const input = buildMobileScheduleInput({
@@ -86,11 +105,19 @@ describe('mobile schedule form model', () => {
   });
 
   it('keeps codex fast mode explicit and clears it when switching back to Claude', () => {
-    const draft = updateDraftAgentKind(createMobileScheduleDraft(null), 'codex');
+    const draft = updateDraftAgentKind(
+      createMobileScheduleDraft(null, { modelDefaults: MOBILE_SCHEDULE_MODEL_DEFAULTS }),
+      'codex',
+      MOBILE_SCHEDULE_MODEL_DEFAULTS,
+    );
     expect(buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true }))
-      .toMatchObject({ agentKind: 'codex', model: 'gpt-5.5', fastMode: true });
+      .toMatchObject({ agentKind: 'codex', fastMode: true });
 
-    const claude = updateDraftAgentKind({ ...draft, fastMode: true }, 'claude-code');
+    const claude = updateDraftAgentKind(
+      { ...draft, fastMode: true },
+      'claude-code',
+      MOBILE_SCHEDULE_MODEL_DEFAULTS,
+    );
     expect(buildMobileScheduleInput({ ...claude, name: 'Claude', prompt: 'run' })).not.toHaveProperty('fastMode');
   });
 
@@ -188,7 +215,12 @@ describe('mobile schedule form model', () => {
       ],
     };
     const defaults = createTemplateParamDefaults(template);
-    const draft = applyTemplateToMobileScheduleDraft(createMobileScheduleDraft(null), template, defaults);
+    const draft = applyTemplateToMobileScheduleDraft(
+      createMobileScheduleDraft(null, { modelDefaults: MOBILE_SCHEDULE_MODEL_DEFAULTS }),
+      template,
+      defaults,
+      MOBILE_SCHEDULE_MODEL_DEFAULTS,
+    );
 
     expect(defaults).toEqual({ project: 'XDMaker', scope: 'today' });
     expect(draft).toMatchObject({

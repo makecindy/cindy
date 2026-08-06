@@ -229,6 +229,17 @@ export interface ProviderHandlerDeps {
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** Resolve form metadata and publish it without delaying the current IPC result. */
+  resolveFetchedModels?(
+    spec: ProviderModelsFetchSpec,
+    result: ProviderModelsFetchResult,
+  ): void;
+  /**
+   * 自定义供应商保存(创建/更新)成功后,对其配置里的生效模型异步 resolve 并把补全
+   * overlay 写进 active-catalog —— 预设/手填添加的 provider 不必再手动点刷新即可富化。
+   * fire-and-forget,受 XDT_DISABLE_MODEL_CATALOG_RESOLVE 门控,失败静默降级。
+   */
+  resolveSavedProviderModels?(providerId: string): void | Promise<void>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
@@ -440,6 +451,10 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     )
   ) return null;
   if (spec.apiKey !== undefined && spec.apiKey !== null && typeof spec.apiKey !== 'string') return null;
+  if (spec.requestId !== undefined && (
+    typeof spec.requestId !== 'string'
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(spec.requestId)
+  )) return null;
   if (spec.wireProtocol !== undefined) {
     const allowed = spec.agent === 'claude-code'
       ? ['anthropic-messages']
@@ -453,14 +468,18 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   if (spec.savedProviderId !== undefined) {
     if (typeof spec.savedProviderId !== 'string' || !/^[a-z0-9_-]+$/.test(spec.savedProviderId)) return null;
   }
+  if (spec.deferResolve !== undefined && typeof spec.deferResolve !== 'boolean') return null;
+  if (spec.deferResolve === true && typeof spec.savedProviderId !== 'string') return null;
   return {
     agent: spec.agent as AgentKind,
     baseUrl: spec.baseUrl,
     authMethod: spec.authMethod as ProviderModelsFetchSpec['authMethod'],
     modelsUrl: (spec.modelsUrl as string | null | undefined) ?? null,
+    requestId: spec.requestId as string | undefined,
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
     ...(typeof spec.savedProviderId === 'string' ? { savedProviderId: spec.savedProviderId } : {}),
+    ...(spec.deferResolve === true ? { deferResolve: true } : {}),
     ...(typeof spec.wireProtocol === 'string'
       ? { wireProtocol: spec.wireProtocol as ProviderModelsFetchSpec['wireProtocol'] }
       : {}),
@@ -928,6 +947,41 @@ export function registerProviderHandlers(
     deps.broadcastChanged();
   }
 
+  function resolveSavedProviderModelsInBackground(providerId: string): void {
+    if (!deps.resolveSavedProviderModels) return;
+    try {
+      void Promise.resolve(deps.resolveSavedProviderModels(providerId)).catch((err) => {
+        log.warn('saved provider model resolve failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    } catch (err) {
+      log.warn('saved provider model resolve failed', {
+        providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function resolveFetchedModelsInBackground(
+    spec: ProviderModelsFetchSpec,
+    result: ProviderModelsFetchResult,
+  ): void {
+    if (!deps.resolveFetchedModels) return;
+    try {
+      deps.resolveFetchedModels(spec, result);
+    } catch (err) {
+      // 模型发现是主结果，resolve 只是异步富化。装配错误或请求构造异常不得反向
+      // 把已经成功的模型清单变成 IPC 失败；后续仍可在保存/手动刷新时重试。
+      log.warn('fetched provider model resolve failed', {
+        providerId: spec.savedProviderId ?? 'unsaved',
+        agent: spec.agent,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   function assertTrustedProviderMutationSender(event: unknown): void {
     if (!deps.assertTrustedSender) {
       throwIpcError('PERMISSION_DENIED', 'sender trust guard unavailable');
@@ -1301,6 +1355,8 @@ export function registerProviderHandlers(
       assertProviderMutationOwner(ownerAtIngress);
       await afterChange();
       assertProviderMutationOwner(ownerAtIngress);
+      // 保存即 resolve:预设/手填模型也走一遍补全,不必依赖用户事后点刷新。
+      resolveSavedProviderModelsInBackground(config.id);
       return { ok: true };
     });
   });
@@ -1382,6 +1438,8 @@ export function registerProviderHandlers(
         assertProviderMutationOwner(ownerAtIngress);
         await afterChange();
         assertProviderMutationOwner(ownerAtIngress);
+        // 保存即 resolve(同 CREATE):编辑后模型也走补全,与刷新按钮语义一致。
+        resolveSavedProviderModelsInBackground(config.id);
         return { ok: true };
       } finally {
         if (generation !== null) finishOAuthMutation(config.id, generation);
@@ -1499,6 +1557,7 @@ export function registerProviderHandlers(
     // 与重新发现一样，必须先确认调用方是 Cindy 自有顶层页面，避免 WebView / 子 frame
     // 把 Main 变成可向任意 http(s) 地址发凭证请求的代理。
     assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
     const parsed = parseModelsFetchInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid models-fetch input');
     // 已保存供应商:main 侧按 (id, agent) 并入 main-only 鉴权请求头,无需 renderer 回读
@@ -1529,7 +1588,30 @@ export function registerProviderHandlers(
         }
       }
     }
-    return deps.fetchModels(parsed);
+    const result = await deps.fetchModels(parsed);
+    assertProviderMutationOwner(ownerAtIngress);
+    if (result.ok && result.models && result.models.length > 0 && !parsed.deferResolve) {
+      resolveFetchedModelsInBackground(parsed, result);
+    }
+    return result;
+  });
+
+  // 手动刷新先完成各 runtime 的上游 fetch，再通过这里把已保存配置中的全部 agent
+  // 一次交给 entries[] resolve。查询会更新本地 resolve cache / active-catalog overlay，
+  // 仍只允许 Cindy 自有顶层页面触发；provider id 做有界格式校验，缺接线 fail closed。
+  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_RESOLVE_SAVED, async (event, providerId: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (typeof providerId !== 'string' || !/^[a-z0-9_-]+$/.test(providerId)) {
+      throwIpcError('INVALID_PARAMS', 'invalid saved provider id');
+    }
+    if (!deps.resolveSavedProviderModels) {
+      throwIpcError('INTERNAL', 'saved provider model resolve is not wired');
+    }
+    assertProviderMutationOwner(ownerAtIngress);
+    await deps.resolveSavedProviderModels(providerId);
+    assertProviderMutationOwner(ownerAtIngress);
+    return { ok: true };
   });
 
   // 本机 CLI 扫描：查询型；任何失败降级空数组（检测建议是增强,不是功能依赖,
@@ -1610,14 +1692,18 @@ export function registerProviderHandlers(
     if (providerConfigMutationCounts.has(id)) {
       return { ok: false, reason: 'provider_update_in_progress' };
     }
+    const ownerAtIngress = captureProviderOwnerSession();
     const generation = beginOAuthMutation(id);
+    const isCurrent = (): boolean =>
+      isOAuthMutationCurrent(id, generation)
+      && providerMutationOwnerMatches(ownerAtIngress);
     let owner: ProviderOAuthOwner | null = null;
     try {
       if (ownerId && sender) {
         owner = registerProviderOAuthOwner(id, generation, sender, ownerId);
       }
-      const result = await deps.oauthLogin(id, () => isOAuthMutationCurrent(id, generation));
-      if (isOAuthMutationCurrent(id, generation)) {
+      const result = await deps.oauthLogin(id, isCurrent);
+      if (isCurrent()) {
         return { ok: result.ok, ...(result.reason ? { reason: result.reason } : {}) };
       }
       if (result.ok && result.rollbackCredentials && !result.rollbackCredentials()) {
@@ -1634,6 +1720,7 @@ export function registerProviderHandlers(
   });
   registry.handle(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, async (_event, providerId: unknown) => {
     const id = requireProviderId(providerId);
+    const ownerAtIngress = captureProviderOwnerSession();
     const generation = beginOAuthMutation(id);
     // Invalidate and stop an active flow immediately, then serialize credential deletion with
     // config CRUD so a failed earlier update cannot restore a token after this explicit logout.
@@ -1641,8 +1728,11 @@ export function registerProviderHandlers(
     try {
       return await withProviderConfigMutation(id, async () => {
         try {
+          assertProviderMutationOwner(ownerAtIngress);
           await deps.oauthLogout(id);
+          assertProviderMutationOwner(ownerAtIngress);
           await afterChange();
+          assertProviderMutationOwner(ownerAtIngress);
           return { ok: true };
         } catch (err) {
           throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));

@@ -20,9 +20,8 @@ import {
  * 两个只取 model id 的薄壳 —— 校准现在同时给出 (模型, 来源)，而绝大多数用例只关心挑中了
  * 哪个模型。来源那一维由本文件末尾的「校准结果要带上供应商」一组用例直接断言原函数。
  */
-const pickId = (
-  ...args: Parameters<typeof pickConnectedModelForAgent>
-): string | null => pickConnectedModelForAgent(...args)?.model ?? null;
+const pickId = (...args: Parameters<typeof pickConnectedModelForAgent>): string | null =>
+  pickConnectedModelForAgent(...args)?.model ?? null;
 const calibratedId = (input: DraftModelCalibrationInput): string =>
   calibrateDraftModel(input).model;
 
@@ -57,10 +56,7 @@ function provider(
     models,
     // Provider availability now requires an enabled runtime, not only an entry in `agents`.
     routing: Object.fromEntries(
-      agents.map((agent) => [
-        agent,
-        { upstream: 'https://provider.test', authStrategy: 'none' },
-      ]),
+      agents.map((agent) => [agent, { upstream: 'https://provider.test', authStrategy: 'none' }]),
     ),
     auth: { method: 'oauth' },
     access: access === 'subscription' ? { kind: 'subscription', product: id } : { kind: access },
@@ -80,39 +76,25 @@ const connectedButEmpty = provider('anthropic', true, { 'claude-code': [] });
 describe('pickConnectedModelForAgent', () => {
   it('默认模型本身可用时原样保留,不无谓换模型', () => {
     const providers = [provider('xd', true, { 'claude-code': [model('claude-opus-4-8')] })];
-    expect(pickId(providers, 'claude-code', 'claude-opus-4-8')).toBe(
-      'claude-opus-4-8',
-    );
+    expect(pickId(providers, 'claude-code', 'claude-opus-4-8')).toBe('claude-opus-4-8');
   });
 
   it('默认模型没有已连接来源时落到已连接来源的第一个模型', () => {
     expect(
-      pickId(
-        [gatewayWithoutOpus, disconnectedAnthropic],
-        'claude-code',
-        'claude-opus-4-8',
-      ),
+      pickId([gatewayWithoutOpus, disconnectedAnthropic], 'claude-code', 'claude-opus-4-8'),
     ).toBe('claude-sonnet-5');
   });
 
   it('已连接但零模型的来源不算数(动态发现失败的 anthropic)', () => {
-    expect(
-      pickId([connectedButEmpty], 'claude-code', 'claude-opus-4-8'),
-    ).toBeNull();
+    expect(pickId([connectedButEmpty], 'claude-code', 'claude-opus-4-8')).toBeNull();
     // 同时存在一个真有模型的来源时,挑那个。
-    expect(
-      pickId(
-        [connectedButEmpty, gatewayWithoutOpus],
-        'claude-code',
-        'claude-opus-4-8',
-      ),
-    ).toBe('claude-sonnet-5');
+    expect(pickId([connectedButEmpty, gatewayWithoutOpus], 'claude-code', 'claude-opus-4-8')).toBe(
+      'claude-sonnet-5',
+    );
   });
 
   it('一个已连接来源都没有时返回 null,交给零来源空态', () => {
-    expect(
-      pickId([disconnectedAnthropic], 'claude-code', 'claude-opus-4-8'),
-    ).toBeNull();
+    expect(pickId([disconnectedAnthropic], 'claude-code', 'claude-opus-4-8')).toBeNull();
   });
 
   it('跳过非聊天模型(issue #882 第 3 点,2026-07 review):唯一调用方已预先过滤,但本函数是导出的公共工具,自己也要防', () => {
@@ -150,9 +132,7 @@ describe('pickConnectedModelForAgent', () => {
         model('claude-sonnet-5', { sortOrder: 6 }),
       ],
     });
-    expect(pickId([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
-      'claude-opus-5',
-    );
+    expect(pickId([gateway], 'claude-code', 'claude-opus-4-8')).toBe('claude-opus-5');
   });
 
   it('供应商优先订阅的 —— 网关折扣路由排得再靠前也不当默认', () => {
@@ -161,16 +141,16 @@ describe('pickConnectedModelForAgent', () => {
     const subscription = provider(
       'openai',
       true,
-      { codex: [model('gpt-5.6-sol', { sortOrder: 18 }), model('gpt-5.6-luna', { sortOrder: 17 })] },
+      {
+        codex: [model('gpt-5.6-sol', { sortOrder: 18 }), model('gpt-5.6-luna', { sortOrder: 17 })],
+      },
       'subscription',
     );
     const gateway = provider('xd', true, {
       codex: [model('codex/gpt-5.6-sol', { sortOrder: 8, group: 'gpt-budget' })],
     });
 
-    expect(pickId([gateway, subscription], 'codex', 'gpt-nonexistent')).toBe(
-      'gpt-5.6-luna',
-    );
+    expect(pickId([gateway, subscription], 'codex', 'gpt-nonexistent')).toBe('gpt-5.6-luna');
   });
 
   it('多个订阅供应商时按目录序 —— Claude 订阅在场时 cc tab 落 Claude 系', () => {
@@ -188,18 +168,17 @@ describe('pickConnectedModelForAgent', () => {
     );
 
     // 目录序 anthropic → openai，两家都是订阅 → 取 anthropic。
-    expect(
-      pickId([anthropic, openai], 'claude-code', 'claude-opus-4-8'),
-    ).toBe('claude-opus-5');
+    expect(pickId([anthropic, openai], 'claude-code', 'claude-opus-4-8')).toBe('claude-opus-5');
   });
 
   it('没有订阅供应商时才落到网关等非订阅来源', () => {
     const gateway = provider('xd', true, {
-      codex: [model('codex/gpt-5.6-sol', { sortOrder: 8 }), model('gpt-5.6-sol', { sortOrder: 18 })],
+      codex: [
+        model('codex/gpt-5.6-sol', { sortOrder: 8 }),
+        model('gpt-5.6-sol', { sortOrder: 18 }),
+      ],
     });
-    expect(pickId([gateway], 'codex', 'gpt-nonexistent')).toBe(
-      'codex/gpt-5.6-sol',
-    );
+    expect(pickId([gateway], 'codex', 'gpt-nonexistent')).toBe('codex/gpt-5.6-sol');
   });
 
   it('默认收起的模型不当默认 —— 用户在清单里看不到它', () => {
@@ -232,9 +211,7 @@ describe('pickConnectedModelForAgent', () => {
         model('claude-opus-5', { sortOrder: 0 }),
       ],
     });
-    expect(pickId([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
-      'claude-opus-4-8',
-    );
+    expect(pickId([gateway], 'claude-code', 'claude-opus-4-8')).toBe('claude-opus-4-8');
   });
 
   it('不修改传入 provider 的清单顺序（排序必须走副本）', () => {
@@ -269,9 +246,9 @@ describe('calibrateDraftModel', () => {
   });
 
   it('没有任何可用来源时原样返回,不返回空', () => {
-    expect(
-      calibratedId({ ...base, providers: [disconnectedAnthropic], chosenByUser: false }),
-    ).toBe('claude-opus-4-8');
+    expect(calibratedId({ ...base, providers: [disconnectedAnthropic], chosenByUser: false })).toBe(
+      'claude-opus-4-8',
+    );
   });
 
   it('候选来源由调用方先过滤 —— SSH 草稿不该被推荐仅本地可桥接的来源', () => {
@@ -537,12 +514,7 @@ describe('resolveDraftSessionProviderId', () => {
   });
 
   it('Codex 折扣模型只由 XD 提供时显式保留 XD,锁定既有实际落点', () => {
-    const openai = provider(
-      'openai',
-      true,
-      { codex: [model('gpt-5.6-sol')] },
-      'subscription',
-    );
+    const openai = provider('openai', true, { codex: [model('gpt-5.6-sol')] }, 'subscription');
     const gateway = provider('xd', true, {
       codex: [model('codex/gpt-5.6-sol')],
     });
@@ -572,5 +544,142 @@ describe('resolveDraftSessionProviderId', () => {
         effectiveProviderId: 'xd',
       }),
     ).toBe('xd');
+  });
+});
+
+describe('pickConnectedModelForAgent — newSessionDefault 覆盖未显式选择的旧 seed', () => {
+  it('旧 seed 仍可用时 marker 仍优先,并把来源切到 marker 所在供应商', () => {
+    const anthropic = provider(
+      'anthropic',
+      true,
+      { 'claude-code': [model('claude-opus-5', { sortOrder: 0 })] },
+      'subscription',
+    );
+    const gateway = provider('xd', true, {
+      'claude-code': [
+        model('deepseek/deepseek-v4-pro', {
+          sortOrder: 44,
+          newSessionDefault: ['claude-code'],
+        }),
+      ],
+    });
+
+    expect(
+      pickConnectedModelForAgent([anthropic, gateway], 'claude-code', 'claude-opus-5'),
+    ).toEqual({ model: 'deepseek/deepseek-v4-pro', providerId: 'xd' });
+  });
+
+  it('用户显式选择始终覆盖 marker', () => {
+    const gateway = provider('xd', true, {
+      'claude-code': [
+        model('claude-opus-5', { sortOrder: 0 }),
+        model('deepseek/deepseek-v4-pro', {
+          sortOrder: 44,
+          newSessionDefault: ['claude-code'],
+        }),
+      ],
+    });
+
+    expect(
+      calibrateDraftModel({
+        providers: [gateway],
+        agent: 'claude-code',
+        model: 'claude-opus-5',
+        chosenByUser: true,
+        providersLoading: false,
+      }),
+    ).toEqual({ model: 'claude-opus-5', providerId: null });
+  });
+
+  it('种子不可用回退时同样优先取被标记(命中当前 agent)的模型,即使 sortOrder 更高', () => {
+    const gateway = provider('xd', true, {
+      'claude-code': [
+        model('claude-opus-5', { sortOrder: 0 }),
+        model('deepseek/deepseek-v4-pro', {
+          sortOrder: 44,
+          newSessionDefault: ['claude-code'],
+        }),
+      ],
+    });
+    expect(pickId([gateway], 'claude-code', 'unavailable-seed')).toBe('deepseek/deepseek-v4-pro');
+  });
+
+  it('标记只命中其它 agent 时不影响本 agent(codex 标记不改 cc 默认)', () => {
+    const gateway = provider('xd', true, {
+      'claude-code': [
+        model('claude-opus-5', { sortOrder: 0 }),
+        model('deepseek/deepseek-v4-pro', { sortOrder: 44, newSessionDefault: ['codex'] }),
+      ],
+    });
+    expect(pickId([gateway], 'claude-code', 'unavailable-seed')).toBe('claude-opus-5');
+  });
+
+  it('默认收起、非聊天、发现失败、断开连接的 marker 都不参与自动默认', () => {
+    const usable = provider('anthropic', true, {
+      'claude-code': [model('claude-opus-5', { sortOrder: 0 })],
+    });
+    const hidden = provider('hidden', true, {
+      'claude-code': [
+        model('hidden-marker', {
+          defaultEnabled: false,
+          newSessionDefault: ['claude-code'],
+        }),
+      ],
+    });
+    const nonChat = provider('non-chat', true, {
+      'claude-code': [
+        model('image-marker', {
+          group: undefined,
+          mode: 'image_generation',
+          newSessionDefault: ['claude-code'],
+        }),
+      ],
+    });
+    const disconnected = provider('disconnected', false, {
+      'claude-code': [model('offline-marker', { newSessionDefault: ['claude-code'] })],
+    });
+    const failed = {
+      ...provider('failed', true, {
+        'claude-code': [model('failed-marker', { newSessionDefault: ['claude-code'] })],
+      }),
+      modelDiscoveryFailure: { kind: 'unauthorized' as const, at: '2026-08-05T00:00:00.000Z' },
+    };
+
+    expect(
+      pickId([hidden, nonChat, failed, disconnected, usable], 'claude-code', 'claude-opus-5'),
+    ).toBe('claude-opus-5');
+  });
+
+  it('多个 marker 先按供应商偏好,供应商内再按 sortOrder 与目录稳定顺序', () => {
+    const managed = provider('xd', true, {
+      codex: [model('managed-marker', { sortOrder: 0, newSessionDefault: ['codex'] })],
+    });
+    const subscription = provider(
+      'openai',
+      true,
+      {
+        codex: [
+          model('subscription-tie-first', { sortOrder: 8, newSessionDefault: ['codex'] }),
+          model('subscription-tie-second', { sortOrder: 8, newSessionDefault: ['codex'] }),
+          model('subscription-later', { sortOrder: 9, newSessionDefault: ['codex'] }),
+        ],
+      },
+      'subscription',
+    );
+
+    expect(pickConnectedModelForAgent([managed, subscription], 'codex', 'old-seed')).toEqual({
+      model: 'subscription-tie-first',
+      providerId: 'openai',
+    });
+  });
+
+  it('无任何标记时仍按 sortOrder 取最低(回归)', () => {
+    const gateway = provider('xd', true, {
+      'claude-code': [
+        model('claude-opus-5', { sortOrder: 0 }),
+        model('deepseek/deepseek-v4-pro', { sortOrder: 44 }),
+      ],
+    });
+    expect(pickId([gateway], 'claude-code', 'unavailable-seed')).toBe('claude-opus-5');
   });
 });

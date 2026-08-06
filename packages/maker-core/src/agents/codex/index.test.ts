@@ -439,6 +439,178 @@ async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEven
   return result.value;
 }
 
+describe('CodexAgent runtime model catalog sync', () => {
+  it('synchronizes local ModelInfo before thread/start', async () => {
+    const calls: string[] = [];
+    const ensureCodexModelCatalogFresh = vi.fn(async ({ refresh }: { refresh: () => Promise<void> }) => {
+      calls.push('sync');
+      await refresh();
+    });
+    const agent = new CodexAgent(createDeps({}, { ensureCodexModelCatalogFresh }));
+    const host = installFakeHost(agent, (method) => {
+      calls.push(method);
+      if (method === Method.ModelList) return { data: [], nextCursor: null };
+      return undefined;
+    }, { codexHome: '/tmp/mock-codex-home' });
+
+    await agent.startSession({
+      sessionId: 'session-model-sync',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+
+    expect(ensureCodexModelCatalogFresh).toHaveBeenCalledOnce();
+    expect(calls.slice(0, 3)).toEqual(['sync', Method.ModelList, Method.ThreadStart]);
+    expect(host.request).toHaveBeenCalledWith(
+      Method.ModelList,
+      { cursor: null, limit: 1, includeHidden: false },
+      expect.any(Object),
+    );
+  });
+
+  it('does not run the local catalog synchronizer for remote Codex sessions', async () => {
+    const ensureCodexModelCatalogFresh = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { ensureCodexModelCatalogFresh }));
+    installFakeHost(agent, undefined, { codexHome: '/remote/codex-home' });
+
+    await agent.startSession({
+      sessionId: 'session-remote-model-sync',
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      remoteHostId: 'remote-a',
+    });
+
+    expect(ensureCodexModelCatalogFresh).not.toHaveBeenCalled();
+  });
+
+  it('continues a provider-owned session when native catalog synchronization fails', async () => {
+    const ensureCodexModelCatalogFresh = vi.fn(async () => {
+      throw new Error('native model/list unavailable');
+    });
+    const agent = new CodexAgent(createDeps({}, { ensureCodexModelCatalogFresh }));
+    const host = installFakeHost(agent, undefined, { codexHome: '/tmp/mock-codex-home' });
+
+    await expect(agent.startSession({
+      sessionId: 'session-provider-model-sync-fallback',
+      model: 'local/custom-model',
+      providerId: 'custom-local',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    })).resolves.toBeDefined();
+
+    expect(ensureCodexModelCatalogFresh).toHaveBeenCalledOnce();
+    expect(host.request).toHaveBeenCalledWith(
+      Method.ThreadStart,
+      expect.objectContaining({ model: 'local/custom-model' }),
+      expect.any(Object),
+    );
+  });
+
+  it('still fails closed when native catalog synchronization fails on a gateway route', async () => {
+    const ensureCodexModelCatalogFresh = vi.fn(async () => {
+      throw new Error('native model/list unavailable');
+    });
+    const agent = new CodexAgent(createDeps({}, { ensureCodexModelCatalogFresh }));
+    const host = installFakeHost(agent, undefined, { codexHome: '/tmp/mock-codex-home' });
+
+    await expect(agent.startSession({
+      sessionId: 'session-gateway-model-sync-failure',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    })).rejects.toThrow('native model/list unavailable');
+
+    expect(host.request).not.toHaveBeenCalledWith(
+      Method.ThreadStart,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('continues a provider-owned turn when the per-turn catalog synchronization fails', async () => {
+    let syncAttempt = 0;
+    const ensureCodexModelCatalogFresh = vi.fn(
+      async ({ refresh }: { refresh: () => Promise<void> }) => {
+        syncAttempt += 1;
+        if (syncAttempt === 1) {
+          await refresh();
+          return;
+        }
+        throw new Error('native model/list unavailable on turn');
+      },
+    );
+    const agent = new CodexAgent(createDeps({}, { ensureCodexModelCatalogFresh }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ModelList) return { data: [], nextCursor: null };
+      if (method === Method.TurnStart) return { turn: { id: 'provider-turn' } };
+      return undefined;
+    }, { codexHome: '/tmp/mock-codex-home' });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-turn-model-sync-fallback',
+      model: 'local/custom-model',
+      providerId: 'custom-local',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+    host.request.mockClear();
+
+    await expect(
+      handle.send({ type: 'user', content: 'continue with the provider model' }),
+    ).resolves.toBeUndefined();
+
+    expect(ensureCodexModelCatalogFresh).toHaveBeenCalledTimes(2);
+    expect(host.request).toHaveBeenCalledWith(
+      Method.TurnStart,
+      expect.objectContaining({ model: 'local/custom-model' }),
+      expect.any(Object),
+    );
+  });
+
+  it('still fails closed when the per-turn catalog synchronization fails on a gateway route', async () => {
+    let syncAttempt = 0;
+    const ensureCodexModelCatalogFresh = vi.fn(
+      async ({ refresh }: { refresh: () => Promise<void> }) => {
+        syncAttempt += 1;
+        if (syncAttempt === 1) {
+          await refresh();
+          return;
+        }
+        throw new Error('native model/list unavailable on gateway turn');
+      },
+    );
+    const agent = new CodexAgent(createDeps({}, { ensureCodexModelCatalogFresh }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ModelList) return { data: [], nextCursor: null };
+      if (method === Method.TurnStart) return { turn: { id: 'gateway-turn' } };
+      return undefined;
+    }, { codexHome: '/tmp/mock-codex-home' });
+    const handle = await agent.startSession({
+      sessionId: 'session-gateway-turn-model-sync-failure',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+    host.request.mockClear();
+
+    await expect(
+      handle.send({ type: 'user', content: 'continue with the gateway model' }),
+    ).rejects.toThrow('native model/list unavailable on gateway turn');
+
+    expect(ensureCodexModelCatalogFresh).toHaveBeenCalledTimes(2);
+    expect(host.request).not.toHaveBeenCalledWith(
+      Method.TurnStart,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+});
+
 describe('CodexAgent permissions', () => {
   it('advertises distinct Ask, Auto, and Full access modes', () => {
     const agent = new CodexAgent(createDeps());

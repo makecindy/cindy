@@ -6,6 +6,8 @@
  * (mobile i18n 化后由 models.json catalog 供文案,在使用点求值 i18n.t)。组件只做渲染,
  * 这里可 node 单测。
  */
+import { formatContextWindow, isBudgetModel } from '@cindy/model-providers';
+export { formatContextWindow } from '@cindy/model-providers';
 import { modelSupportsFastMode, type ProviderView } from '@cindy/model-providers/registry';
 import type { SectionModel } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
@@ -34,19 +36,6 @@ export interface PickerRowModel {
   defaultEffort: string | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
-}
-
-/** 上下文窗口 tokens → 紧凑展示("1M" / "272K" / "8192")。移植桌面 formatContextWindow。 */
-export function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000) {
-    const m = tokens / 1_000_000;
-    return `${Number.isInteger(m) ? m : Number(m.toFixed(1))}M`;
-  }
-  if (tokens >= 1000) {
-    const k = tokens / 1000;
-    return `${Number.isInteger(k) ? k : Number(k.toFixed(0))}K`;
-  }
-  return String(tokens);
 }
 
 // 供应商完整展示名:三个内置 id 对齐桌面 zh-CN settings.providers.<id>.title,
@@ -180,9 +169,13 @@ export function rowFastOn(args: {
 
 /**
  * budget 档置灰判定(桌面 budgetDisabledOf 同口径,key 判定换成被控端 presence 探测):
- * `codex/` 前缀 且 被控端明确无 key 才置灰;'unknown'(旧被控端 / 拉取失败)不置灰,
- * 宁可放行到被控端请求期报错也不误伤。
+ * 目录 category/group 判定为 budget 且被控端明确无 key 才置灰;'unknown'(旧被控端 / 拉取失败)不置灰,
+ * 字段缺失时保留 `codex/` 前缀兜底,宁可放行到被控端请求期报错也不误伤。
  */
-export function budgetRowDisabled(modelId: string, keyStatus: DeviceApiKeyStatus): boolean {
-  return modelId.startsWith('codex/') && keyStatus === 'absent';
+export function budgetRowDisabled(
+  model: string | { id: string; category?: string; group?: string },
+  keyStatus: DeviceApiKeyStatus,
+): boolean {
+  const entry = typeof model === 'string' ? { id: model } : model;
+  return isBudgetModel(entry) && keyStatus === 'absent';
 }

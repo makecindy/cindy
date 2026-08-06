@@ -97,6 +97,9 @@ importers:
       '@cindy/mcps':
         specifier: workspace:*
         version: link:../../packages/lizi-mcps
+      '@cindy/model-access-protocol':
+        specifier: workspace:*
+        version: link:../../cindy-protocol/packages/model-access-protocol
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers

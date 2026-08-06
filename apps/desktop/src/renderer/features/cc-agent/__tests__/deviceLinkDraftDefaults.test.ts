@@ -38,6 +38,12 @@ function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
 }
 
 describe('resolveDeviceLinkDraftDefaults', () => {
+  it('空 capabilities + agent context reads bundled defaults; missing agent retains empty fallback', () => {
+    expect(resolveDeviceLinkDraftDefaults(caps({ availableModels: [] }), null, undefined, 'codex').model)
+      .toBe('gpt-5.5');
+    expect(resolveDeviceLinkDraftDefaults(caps({ availableModels: [] }), null).model).toBe('');
+  });
+
   it('被控端草稿值在清单内 → 原样镜像(model/effort/fast/permission/source)', () => {
     const sel = resolveDeviceLinkDraftDefaults(caps(), {
       model: 'claude-opus-4-8',

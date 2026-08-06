@@ -71,6 +71,7 @@ const FIELD_RENAME_TO_CLAUDE: Record<string, string> = Object.fromEntries(
 /** Model 不允许参与术语替换:rewriteFields 跳过它,由 mapModel 显式翻译。 */
 const MODEL_FIELD = 'model';
 
+// TODO(unified-model-catalog): keep cross-runtime model mapping here until crossRuntimeMapping metadata lands.
 /**
  * Claude → Codex model mapping.
  * 取自 packages/maker-core/src/agents/claude-code/index.ts (CLAUDE_MODELS)

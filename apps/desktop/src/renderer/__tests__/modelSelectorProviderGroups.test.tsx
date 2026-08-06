@@ -169,7 +169,34 @@ vi.mock('@/lib/providerModels', () => ({
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: string | null }) =>
     agentKind ?? 'claude-code',
-  selectVisibleModels: () => [],
+  selectVisibleModels: ({
+    agentKind,
+    providers,
+  }: {
+    agentKind: 'claude-code' | 'codex' | 'pi' | null;
+    providers: Array<{
+      models: Record<
+        string,
+        Array<{
+          id: string;
+          name: string;
+          contextWindow: number;
+          efforts: string[];
+          defaultEffort: string | null;
+        }>
+      >;
+    }>;
+  }) => {
+    if (!agentKind) return [];
+    const seen = new Set<string>();
+    return providers.flatMap((provider) =>
+      (provider.models[agentKind] ?? []).flatMap((model) => {
+        if (seen.has(model.id)) return [];
+        seen.add(model.id);
+        return [{ ...model, displayName: model.name }];
+      }),
+    );
+  },
 }));
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
@@ -240,6 +267,63 @@ describe('ModelSelector provider groups', () => {
     expect(within(anthropicGroup).getByText('Sonnet 4.6')).toBeTruthy();
     expect(within(dashscopeGroup).getByText('qwen3.7-plus')).toBeTruthy();
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
+  });
+
+  it('trigger reads the descriptor from the active provider when the same id differs by source', () => {
+    const modelId = 'deepseek/deepseek-v4-pro';
+    providersRef.providers = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'oauth' },
+        routing: { codex: {} },
+        connected: true,
+        models: {
+          codex: [
+            {
+              id: modelId,
+              name: 'DeepSeek V4 Pro (OpenRouter)',
+              contextWindow: 272000,
+              efforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'api-key' },
+        routing: { codex: {} },
+        connected: true,
+        models: {
+          codex: [
+            {
+              id: modelId,
+              name: 'DeepSeek V4 Pro',
+              contextWindow: 1050000,
+              efforts: ['high', 'max'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ] as unknown[];
+
+    renderSelector({
+      modelId,
+      effort: 'max',
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+    });
+
+    expect(screen.getByTitle('DeepSeek V4 Pro')).toBeTruthy();
+    expect(screen.queryByTitle('DeepSeek V4 Pro (OpenRouter)')).toBeNull();
+    expect(screen.getByRole('button', { name: /effort:/ })).toBeTruthy();
   });
 
   it('reselects the connected fallback source when the stored source is disconnected', async () => {

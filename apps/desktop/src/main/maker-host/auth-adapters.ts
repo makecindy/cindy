@@ -36,6 +36,7 @@ import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
+import { CODEX_CINDY_MODEL_CATALOG_STATE_FILE } from './codex-model-catalog.js';
 import { relinkSharedCodexAuth } from './codex-auth-link.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
@@ -326,15 +327,21 @@ function detectFinalizedCodexLoginCredentialScope(
 
 /** 删除 Cindy 自管且无法按账号归属的 Codex 模型 cache。 */
 async function removeDesktopCodexModelsCache(codexHome: string): Promise<boolean> {
-  const cachePath = path.join(codexHome, 'models_cache.json');
-  try {
-    await fsp.rm(cachePath, { force: true });
-  } catch (err) {
-    log.warn('remove stale Codex models_cache.json failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+  const paths = [
+    path.join(codexHome, 'models_cache.json'),
+    path.join(codexHome, CODEX_CINDY_MODEL_CATALOG_STATE_FILE),
+  ];
+  for (const filePath of paths) {
+    try {
+      await fsp.rm(filePath, { force: true });
+    } catch (err) {
+      log.warn('remove stale Codex model catalog cache failed', {
+        file: path.basename(filePath),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
-  return !existsSync(cachePath);
+  return paths.every((filePath) => !existsSync(filePath));
 }
 
 /**

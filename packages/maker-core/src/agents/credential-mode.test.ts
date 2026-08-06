@@ -41,6 +41,31 @@ describe('resolveAgentCredentialMode', () => {
     })).toBe('provider-oauth');
   });
 
+  it('prefers recognized routing authStrategy and falls back unchanged for missing or unknown fields', () => {
+    expect(resolveAgentCredentialMode({
+      agentKind: 'codex',
+      providerId: 'openai',
+      model: 'gpt-5.5',
+      authStrategy: 'gateway-key',
+    })).toBe('gateway-key');
+    expect(resolveAgentCredentialMode({
+      agentKind: 'claude-code',
+      providerId: 'anthropic',
+      model: 'claude-opus-4-8',
+      authStrategy: 'api-key-header',
+    })).toBe('provider-oauth');
+    expect(resolveAgentCredentialMode({
+      agentKind: 'codex',
+      providerId: 'openai',
+      model: 'gpt-5.5',
+    })).toBe('oauth-bearer');
+    expect(resolveAgentCredentialMode({
+      agentKind: 'codex',
+      providerId: 'openai',
+      model: 'gpt-5.5',
+      authStrategy: 'future-strategy',
+    })).toBe('oauth-bearer');
+  });
   it('uses host-injected auth for explicit third-party providers on either runtime', () => {
     expect(resolveAgentCredentialMode({
       agentKind: 'claude-code',

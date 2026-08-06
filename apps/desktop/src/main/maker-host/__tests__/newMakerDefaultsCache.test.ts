@@ -91,6 +91,7 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
   it('collab worker 默认读取会保留 model/effort/fast/provider 路由组合', () => {
     seed({
       lastByVendor: { cc: { model: 'claude-opus-4-8', effort: 'high', permissionMode: 'acceptEdits', providerId: 'xd' } },
+      modelChosenByVendor: { cc: true },
       fastModeByModel: { 'claude-opus-4-8': true },
       effortByModel: {},
     });
@@ -99,6 +100,37 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
       effort: 'high',
       fastMode: true,
       providerId: 'xd',
+    });
+  });
+
+  it('未显式选择的 New Maker 种子不覆盖 registry/catalog Worker 默认', () => {
+    seed({
+      lastByVendor: { codex: { model: 'gpt-5.5', effort: 'high' } },
+      modelChosenByVendor: { codex: false },
+      fastModeByModel: {},
+      effortByModel: {},
+    });
+    expect(getWorkerDefaultsFromNewMaker('codex')).toEqual({});
+  });
+
+  it('Pi 显式 New Maker 选择会同步成 Worker 默认', () => {
+    seed({
+      lastByVendor: {
+        pi: {
+          model: 'custom-pi-model',
+          effort: 'high',
+          providerId: 'custom-pi',
+        },
+      },
+      modelChosenByVendor: { pi: true },
+      fastModeByModel: { 'custom-pi-model': true },
+      effortByModel: {},
+    });
+    expect(getWorkerDefaultsFromNewMaker('pi')).toEqual({
+      model: 'custom-pi-model',
+      effort: 'high',
+      fastMode: true,
+      providerId: 'custom-pi',
     });
   });
 });

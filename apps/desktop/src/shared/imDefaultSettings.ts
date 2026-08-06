@@ -46,6 +46,9 @@ export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
     },
     codex: {
       providerId: null,
+      // 有意的场景默认(2026-08-01 产品定案,非漂移):IM 高频异步场景用骨折价
+      // `codex/` 路由控成本;全局目录默认 `gpt-5.5` 是官方价路由,两者计费来源
+      // 不同,IM 保留场景专属默认,不随目录 defaults 统一。
       model: 'codex/gpt-5.5',
       effort: 'high',
     },

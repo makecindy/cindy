@@ -73,9 +73,17 @@ const DEFAULT_TIMEZONE = 'Asia/Shanghai';
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 
+export type MobileScheduleModelDefaults = Partial<Record<RemoteScheduleAgentKind, string>>;
+
+export interface MobileScheduleDraftOptions {
+  fallbackWorkingDir?: string | null;
+  /** Host-provided catalog defaults; maker-shared intentionally has no model-providers dependency. */
+  modelDefaults?: MobileScheduleModelDefaults;
+}
+
 export function createMobileScheduleDraft(
   schedule?: RemoteSchedule | null,
-  opts: { fallbackWorkingDir?: string | null } = {},
+  opts: MobileScheduleDraftOptions = {},
 ): MobileScheduleDraft {
   if (!schedule) {
     const workingDir = opts.fallbackWorkingDir?.trim() ?? '';
@@ -88,7 +96,7 @@ export function createMobileScheduleDraft(
       timezone: DEFAULT_TIMEZONE,
       intervalMinutes: '',
       agentKind: 'claude-code',
-      model: DEFAULT_CLAUDE_MODEL,
+      model: defaultModelFor('claude-code', opts.modelDefaults),
       providerId: '',
       effort: '',
       fastMode: false,
@@ -114,7 +122,7 @@ export function createMobileScheduleDraft(
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
     agentKind: schedule.agentKind ?? 'claude-code',
-    model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
+    model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code', opts.modelDefaults),
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: !!schedule.fastMode,
@@ -144,6 +152,7 @@ export function applyTemplateToMobileScheduleDraft(
   draft: MobileScheduleDraft,
   template: RemoteScheduleTemplate,
   paramValues: Record<string, string> = {},
+  modelDefaults?: MobileScheduleModelDefaults,
 ): MobileScheduleDraft {
   const agentKind = template.agentKind ?? draft.agentKind;
   return {
@@ -157,7 +166,7 @@ export function applyTemplateToMobileScheduleDraft(
     intervalMinutes: '',
     intervalMinutesTouched: true,
     agentKind,
-    model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
+    model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind, modelDefaults)),
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
     providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
@@ -360,12 +369,13 @@ export function applyScheduleWireCompat(
 export function updateDraftAgentKind(
   draft: MobileScheduleDraft,
   agentKind: RemoteScheduleAgentKind,
+  modelDefaults?: MobileScheduleModelDefaults,
 ): MobileScheduleDraft {
   if (draft.agentKind === agentKind) return draft;
   return {
     ...draft,
     agentKind,
-    model: defaultModelFor(agentKind),
+    model: defaultModelFor(agentKind, modelDefaults),
     providerId: '',
     effort: '',
     fastMode: false,
@@ -505,12 +515,16 @@ function hasTemplateParam(params: Record<string, string>, key: string): boolean 
   return Object.prototype.hasOwnProperty.call(params, key) && params[key] !== '';
 }
 
-function defaultModelFor(agentKind: RemoteScheduleAgentKind): string {
-  if (agentKind === 'codex') return DEFAULT_CODEX_MODEL;
-  // Pi 模型来自动态 BYOM 供应商目录,没有固定默认 id;留空 → 序列化时省略 → host 解析
-  // 该 Pi agent 的当前默认模型(用户仍可在自由文本模型框里显式指定)。
-  if (agentKind === 'pi') return '';
-  return DEFAULT_CLAUDE_MODEL;
+function defaultModelFor(
+  agentKind: RemoteScheduleAgentKind,
+  modelDefaults?: MobileScheduleModelDefaults,
+): string {
+  // Pi 模型来自动态 BYOM 供应商目录,没有固定默认 id;调用方(被控端解析出的
+  // modelDefaults)给了才用,否则留空 → 序列化时省略 → host 解析该 Pi agent 的
+  // 当前默认模型(用户仍可在自由文本模型框里显式指定)。
+  if (agentKind === 'pi') return modelDefaults?.pi ?? '';
+  return modelDefaults?.[agentKind]
+    ?? (agentKind === 'codex' ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL);
 }
 
 function validateIntervalMinutes(value: string): string | null {

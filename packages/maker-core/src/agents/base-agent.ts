@@ -389,6 +389,14 @@ export interface AgentDeps {
    * product policy.
    */
   capabilityRouting?: CapabilityRoutingPolicy;
+  /**
+   * Resolve the exact provider route auth strategy for credential-family selection. The host owns
+   * provider identity; missing/unknown results make agents retain their legacy provider/id fallback.
+   */
+  resolveAuthStrategy?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => string | null;
 
   /**
    * Resolve capability arbitration once for a new session. Use this for
@@ -477,6 +485,16 @@ export interface AgentDeps {
   onCodexLocalModelsListed?: (
     models: readonly CodexModelListItem[],
   ) => void | Promise<void>;
+
+  /**
+   * Before a local Codex thread starts, synchronize the long-lived app-server's
+   * ModelInfo catalog with the host-owned catalog revision. The host owns local
+   * cache invalidation; maker-core only supplies the official model/list refresh
+   * callback and waits for the bounded result. Remote hosts are excluded.
+   */
+  ensureCodexModelCatalogFresh?: (ctx: {
+    refresh: () => Promise<void>;
+  }) => Promise<void>;
 
   /**
    * Host-owned lightweight reviewer for routes without a healthy vendor-native

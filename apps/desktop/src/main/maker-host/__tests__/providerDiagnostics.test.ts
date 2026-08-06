@@ -27,6 +27,7 @@ import { setCustomProviders } from '../active-catalog.js';
 afterEach(() => {
   setCustomProviders([]);
   setDiagnosticsKeyReader(() => null);
+  setDiagnosticsOAuthTokenReader(() => null);
 });
 
 describe('classifyProviderError', () => {
@@ -520,7 +521,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     };
     setCustomProviders([buildUserProvider(oauthConfig)]);
     setDiagnosticsKeyReader(() => 'sk-should-not-be-used');
-    setDiagnosticsOAuthTokenReader((id) => (id === 'my-sub' ? 'at-77' : null));
+    setDiagnosticsOAuthTokenReader((provider) => (provider.id === 'my-sub' ? 'at-77' : null));
 
     const spec = resolveSavedProbeSpec('my-sub', 'claude-code');
     expect(spec.apiKey).toBeNull();

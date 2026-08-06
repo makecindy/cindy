@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMobileModelSwitchConfirmation,
   buildSessionRuntimeOptions,
+  categorizeMobileModel,
   normalizeMobileAgentCapabilities,
   reconcileRuntimeDraftWithCapabilities,
 } from '../agentCapabilities';
@@ -182,6 +183,11 @@ describe('agent capabilities shared model', () => {
     });
   });
 
+  it('prefers category/group metadata before the legacy id fallback', () => {
+    expect(categorizeMobileModel({ id: 'gpt-5.5', category: 'anthropic', group: 'gpt' })).toBe('anthropic');
+    expect(categorizeMobileModel({ id: 'claude-opus-5', group: 'gpt-budget' })).toBe('gpt-budget');
+    expect(categorizeMobileModel('codex/gpt-5.5')).toBe('gpt-budget');
+  });
   it('requires confirmation only for history-incompatible model category switches', () => {
     expect(buildMobileModelSwitchConfirmation({
       currentModelId: 'claude-sonnet-4-6',

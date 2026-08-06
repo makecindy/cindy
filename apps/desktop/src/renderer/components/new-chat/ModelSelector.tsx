@@ -38,6 +38,7 @@ import {
   prefetchDeviceCapabilities,
   useAgentCapabilities,
   type AgentKind,
+  type ModelDescriptor,
 } from '@/hooks/useAgentCapabilities';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
@@ -73,7 +74,9 @@ import {
   connectedProvidersForAgent,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
+  formatContextWindow,
   getModel,
+  isBudgetModel as isCatalogBudgetModel,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -248,19 +251,6 @@ export function ModelIconMark({
       dense={dense}
     />
   );
-}
-
-// 上下文窗口 tokens → 紧凑展示("1M" / "272K" / "8192")。
-function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000) {
-    const m = tokens / 1_000_000;
-    return `${Number.isInteger(m) ? m : Number(m.toFixed(1))}M`;
-  }
-  if (tokens >= 1000) {
-    const k = tokens / 1000;
-    return `${Number.isInteger(k) ? k : Number(k.toFixed(0))}K`;
-  }
-  return String(tokens);
 }
 
 // 单栏列表里每行 / Edit 配置列消费的最小模型形状(SectionModel 与 renderer ModelDescriptor 都满足)。
@@ -1013,12 +1003,14 @@ function ModelSelectorContentView({
   const modelDisabledOf = (provider: ProviderView | null, id: string): boolean => {
     if (!deviceId) {
       if (subscriptionDirectDisabledReason(id)) return true;
-      // codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
-      // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
-      // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
-      // 为 null,无供应商概念)与内置来源保持原前缀判定。
+      // codex/ 的本机 key gate 只属于内置 XD 网关预算路由。自定义(user)供应商即使
+      // 使用同前缀，也由自身路由注入凭证，不依赖 Cindy 登录或网关 key。
       if (provider?.source === 'user') return false;
-      return id.startsWith('codex/') && !hasSavedKey;
+      const model =
+        currentAgentKind === 'codex'
+          ? codex.capabilities?.availableModels.find((entry) => entry.id === id)
+          : cc.capabilities?.availableModels.find((entry) => entry.id === id);
+      return isCatalogBudgetModel(model ?? { id }) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
     if (remoteProviders.error) return remoteProviders.unsupported ? false : true;
@@ -1282,23 +1274,15 @@ function ModelSelectorContentView({
         !!selectedModel &&
         (selectedModel.efforts.length > 0 || fastEditable(providerId, selectedModel));
       const opensConfiguration =
-        selectedRowClickOpensConfiguration &&
-        configurationEnabled &&
-        selectedModelHasConfiguration;
+        selectedRowClickOpensConfiguration && configurationEnabled && selectedModelHasConfiguration;
       // A selected row can be the effective fallback for a stale explicit
       // provider.  Repair that route before opening its configuration, but do
       // not persist the row's derived/default effort just by opening the card.
       if (reselectEmitsChange) {
         if (sections && providerId) {
-          const needsProviderRepair =
-            !!currentProviderId &&
-            currentProviderId !== providerId;
+          const needsProviderRepair = !!currentProviderId && currentProviderId !== providerId;
           if (!opensConfiguration || needsProviderRepair) {
-            onProviderChange?.(
-              providerId,
-              id,
-              opensConfiguration ? undefined : reconciledEffort,
-            );
+            onProviderChange?.(providerId, id, opensConfiguration ? undefined : reconciledEffort);
           }
         } else if (!opensConfiguration) {
           onModelChange(id);
@@ -2195,7 +2179,62 @@ export function ModelSelector({
     ],
   );
 
-  const currentModel = visibleModels.find((m) => m.id === modelId);
+  const flattenedCurrentModel = visibleModels.find((m) => m.id === modelId);
+
+  const currentAgentKind: AgentKind | null = useMemo(() => {
+    if (agentKind) return agentKind;
+    if (!flattenedCurrentModel) return null;
+    if (providers.some((p) => providerOffersModel(p, flattenedCurrentModel.id, 'claude-code'))) {
+      return 'claude-code';
+    }
+    if (providers.some((p) => providerOffersModel(p, flattenedCurrentModel.id, 'codex'))) {
+      return 'codex';
+    }
+    return null;
+  }, [flattenedCurrentModel, providers, agentKind]);
+
+  // trigger 必须显示**实际生效来源**的模型描述符。同一 model id 可同时来自订阅、XD 与
+  // BYOM，名称、窗口、effort/fast 都可能不同；直接读跨来源 first-wins 的 visibleModels
+  // 会出现「XD 路由 + OpenRouter 名称/档位」的错源组合。device-link 老端没有 provider
+  // 快照时仍回退拍平 capabilities，保持原有兼容行为。
+  const activeSourceId = useMemo<string | null>(
+    () =>
+      currentAgentKind
+        ? (actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel)(
+            providers,
+            currentProviderId,
+            modelId,
+            currentAgentKind,
+          )
+        : null,
+    [providers, currentAgentKind, currentProviderId, modelId, actualRoute],
+  );
+  const currentModel = useMemo<ModelDescriptor | undefined>(() => {
+    if (!activeSourceId || !currentAgentKind) return flattenedCurrentModel;
+    const provider = providers.find((candidate) => candidate.id === activeSourceId);
+    const model = provider ? getModel(provider, modelId, currentAgentKind) : undefined;
+    if (!model) return flattenedCurrentModel;
+    const descriptor: ModelDescriptor = {
+      id: model.id,
+      displayName: model.name,
+      contextWindow: model.contextWindow,
+      efforts: model.efforts,
+      defaultEffort: model.defaultEffort,
+    };
+    if (model.category !== undefined) descriptor.category = model.category;
+    if (model.group !== undefined) descriptor.group = model.group;
+    if (model.mode !== undefined) descriptor.mode = model.mode;
+    if (model.description !== undefined) descriptor.description = model.description;
+    if (model.effortDisplayNames !== undefined) {
+      descriptor.effortDisplayNames = model.effortDisplayNames;
+    }
+    if (model.supportsFastMode !== undefined) descriptor.supportsFastMode = model.supportsFastMode;
+    if (model.sortOrder !== undefined) descriptor.sortOrder = model.sortOrder;
+    if (model.defaultEnabled !== undefined) descriptor.defaultEnabled = model.defaultEnabled;
+    if (model.newSessionDefault?.includes(currentAgentKind)) descriptor.newSessionDefault = true;
+    return descriptor;
+  }, [activeSourceId, currentAgentKind, flattenedCurrentModel, modelId, providers]);
+
   // 已保存的模型不在可见清单里(被隐藏 / 供应商断开 / 目录下架)时,默认落到「选择模型」
   // 占位符 —— 对会话是对的(没选过),但对「展示一条已持久化偏好」的调用方是信息丢失:
   // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
@@ -2236,18 +2275,6 @@ export function ModelSelector({
     : baseDisplayIdentityLabel;
   const efforts = currentModel?.efforts ?? [];
 
-  const currentAgentKind: AgentKind | null = useMemo(() => {
-    if (agentKind) return agentKind;
-    if (!currentModel) return null;
-    if (providers.some((p) => providerOffersModel(p, currentModel.id, 'claude-code'))) {
-      return 'claude-code';
-    }
-    if (providers.some((p) => providerOffersModel(p, currentModel.id, 'codex'))) {
-      return 'codex';
-    }
-    return null;
-  }, [currentModel, providers, agentKind]);
-
   const effortMeta = useMemo(() => {
     const levels =
       currentAgentKind === 'claude-code'
@@ -2264,20 +2291,6 @@ export function ModelSelector({
   const { hasConnectedSource, loading: providersLoading } = useConnectedSource(
     currentAgentKind,
     modelId,
-  );
-  // trigger 左侧来源 icon 必须是当前模型真正可路由的来源，不能拿“支持该 agent 但不提供
-  // 此模型”的供应商作兜底。
-  const activeSourceId = useMemo<string | null>(
-    () =>
-      currentAgentKind
-        ? (actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel)(
-            providers,
-            currentProviderId,
-            modelId,
-            currentAgentKind,
-          )
-        : null,
-    [providers, currentAgentKind, currentProviderId, modelId, actualRoute],
   );
   // 空態:当前模型一个已连接来源都没有 → trigger 改「连接来源」CTA。
   // device-link 远程会话不走此 CTA(控制端无法替被控端连来源;hasConnectedSource 是本机口径)。
@@ -2344,7 +2357,7 @@ export function ModelSelector({
   const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayIdentityLabel;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
-  const isBudget = modelId.startsWith('codex/');
+  const isBudget = isCatalogBudgetModel(currentModel ?? { id: modelId });
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
   // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。

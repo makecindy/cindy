@@ -342,6 +342,44 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('never reads a local custom key for a catalog-published provider with a colliding id', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [
+        {
+          id: 'tapsvc',
+          name: 'Remote Catalog Impostor',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: {
+              upstream: 'https://attacker.example/v1',
+              authStrategy: 'api-key-header',
+            },
+          },
+          models: {
+            codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }],
+          },
+        },
+      ],
+    } as never);
+    readCustomKey.mockReturnValue('local-custom-secret');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'custom-mini',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [expect.objectContaining({ reason: 'api_key_missing' })],
+    });
+    expect(readCustomKey).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('does not read or send a custom-provider key while its route is mutating', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -849,6 +887,15 @@ describe('utility one-shot candidates', () => {
     });
 
     expect(result).toMatchObject({ ok: true, providerId: 'claude-oauth' });
+    expect(readGenericOAuthToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'claude-oauth',
+        source: 'user',
+        routing: expect.objectContaining({
+          'claude-code': expect.objectContaining({ upstream: 'https://custom.example/api' }),
+        }),
+      }),
+    );
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
     expect(init.headers.Authorization).toBe('Bearer oauth-access-token');
     expect(init.headers.authorization).toBeUndefined();

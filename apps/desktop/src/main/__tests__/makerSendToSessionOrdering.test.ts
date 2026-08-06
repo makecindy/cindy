@@ -625,7 +625,14 @@ describe('sendToSession ordering', () => {
     expect(ipcCreateBlock).toContain('const label = normalizeOrcaWorkerLabel(b.label);');
     expect(ipcCreateBlock).toContain("if (!label.ok) throwIpcError('INVALID_PARAMS', label.message);");
     expect(ipcCreateBlock).toContain('label: label.value,');
-    expect(orcaWorkerCreationServiceSource).toContain('budgetModelRequiresApiKey(params.agent, resolved.model, deps.readClaudeApiKey() != null)');
+    // 预算闸改为字段优先(category/group=gpt-budget)+ 前缀兜底,入口是 catalog 包装函数;
+    // 路由快照的 budgetModels 必须真的传进去,否则永久退回前缀判定。
+    expect(orcaWorkerCreationServiceSource).toContain('catalogBudgetModelRequiresApiKey(');
+    expect(orcaWorkerCreationServiceSource).toContain('routeProvider?.budgetModels,');
+    expect(orcaWorkerCreationServiceSource).toContain('budgetModelRequiresApiKey(agent, model, hasApiKey)');
+    // **生产者必须存在**:字段是 optional,消费者用 `?.` 读,所以生产者被删掉时
+    // typecheck 与单测都不会报错,只会静默退回 `codex/` 前缀判定 —— 只能靠这条守。
+    expect(source).toContain('budgetModels: models.filter(isBudgetModel).map((model) => model.id),');
     expect(orcaWorkerCreationServiceSource).toContain(
       'agentConsumesExplicitFast(input.agent) && input.fast !== undefined',
     );

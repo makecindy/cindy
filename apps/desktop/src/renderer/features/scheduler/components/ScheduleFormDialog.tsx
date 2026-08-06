@@ -24,7 +24,7 @@ import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 
 import {
   getScheduleAgentPrefs,
-  getScheduleDefaultModel,
+  getScheduleRememberedModel,
   rememberScheduleFormPrefs,
   useScheduleForm,
   deriveRunMode,
@@ -440,18 +440,6 @@ export function ScheduleFormDialog({
       fallbackEfforts: currentModel?.efforts,
     });
   }, [currentModel, form.agentKind, form.model, form.providerId, providers]);
-
-  // form.model 为空时回填默认模型（三级回退,所见即所存）。
-  // 覆盖历史遗留的空 model 任务（编辑打开时回填）；若不回填,提交后落库是
-  // 空字符串,runner 走自己 hardcode 的兜底 —— 两边一旦漂移就会出现
-  // "任务里看着选了 Opus 4.8、实际每次跑 4.7"（2026-06 实际踩坑）。
-  // ⚠️ heartbeat 形态(targetSessionId 非空,含 '__pending__')必须跳过:
-  // 空 model = "跟随会话"是有效语义,回填会把 MCP 建的跟随任务静默落成
-  // 显式模型,下次 fire runner setModel 反向改掉绑定会话的模型。
-  useEffect(() => {
-    if (form.targetSessionId.trim()) return;
-    if (!form.model) setField('model', getScheduleDefaultModel(form.agentKind));
-  }, [form.model, form.agentKind, form.targetSessionId, setField]);
 
   useEffect(() => {
     if (!currentModelEfforts || !form.effort) return;
@@ -1411,8 +1399,9 @@ export function ScheduleFormDialog({
                       onChange={(v) => {
                         const prefs = getScheduleAgentPrefs(v);
                         setField('agentKind', v);
-                        // model 走三级回退（含 prefs.model）,保证切 agent 后也是显式值
-                        setField('model', getScheduleDefaultModel(v));
+                        // 先恢复目标 agent 的用户记忆；无记忆时保持空值/“默认”语义，
+                        // 保存时由 Main 写入边界按 active catalog 物化。
+                        setField('model', getScheduleRememberedModel(v));
                         // providerId 沿用该 agent 的任务记忆;新 agent 未连同一来源时
                         // ModelSelectorContent 会回落到其原生默认(activeSourceId),不会错路由。
                         setField('providerId', prefs.providerId);

@@ -475,6 +475,36 @@ export function resolveLocalBridgeExclusions(
   return out;
 }
 
+/**
+ * 该 (provider, model, agent) 被本地**显式写过**的字段名集合。
+ *
+ * 给 resolve 富化层用:resolve 刻意排在 local override 之后(为了让 snapshot key 能守住
+ * membership/顺序),但它是 `{ ...model, ...replacement }` 逐字段盖 —— 不排除这些字段的话
+ * 「local 永远最高」在 resolve 一到就失效。addition 是整条胜出,视为全字段锁定。
+ */
+export function locallyPinnedFields(
+  overrides: ModelCatalogOverrides,
+  providerId: string,
+  modelId: string,
+  agent: RootAgentKind,
+): ReadonlySet<string> {
+  const key = `${providerId}:${modelId}`;
+  const addition = overrides.additions[key];
+  if (addition && entryRootAgents(addition, providerId).includes(agent)) {
+    // 整条 addition 压过 remote/discovery,resolve 同样不得改写它的任何字段。
+    return new Set([
+      ...Object.keys(addition.base ?? {}),
+      ...Object.keys(addition.perAgent?.[agent] ?? {}),
+    ]);
+  }
+  const patch = overrides.patches[key];
+  if (!patch || !entryRootAgents(patch, providerId).includes(agent)) return new Set();
+  return new Set([
+    ...Object.keys(patch.base ?? {}),
+    ...Object.keys(patch.perAgent?.[agent] ?? {}),
+  ]);
+}
+
 /** 该 key 是否存在完整 local addition(active-catalog 用它豁免 retired 压标)。 */
 export function hasLocalAddition(
   overrides: ModelCatalogOverrides,

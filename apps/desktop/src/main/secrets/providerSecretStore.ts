@@ -761,7 +761,104 @@ export function removeGhostSecrets(ghostId: string): void {
   }
 }
 
+interface GenericOAuthSecretStorageView {
+  read(providerId: string): string | null;
+  readStrict(providerId: string): string | null;
+  write(providerId: string, value: string): boolean;
+  remove(providerId: string): boolean;
+  capture?(): GenericOAuthSecretStorageView;
+}
+
+/**
+ * OAuth 登录会跨多个 await。这里把后续写入和取消回滚固定到登录开始时的 owner，
+ * 防止账号切换后误读/误删新 owner 的同名凭证，或把旧 owner 的 token 留在磁盘。
+ */
+function createOwnerBoundGenericOAuthSecretIo(
+  ownerId: string | null,
+): GenericOAuthSecretStorageView {
+  const resolveScopedKey = (providerId: string): string | null => {
+    const logicalKey = providerOAuthStorageKey(providerId);
+    return ownerId ? `${ownerStoragePrefix(ownerId)}${logicalKey}` : null;
+  };
+
+  return {
+    read(providerId) {
+      try {
+        const scopedKey = resolveScopedKey(providerId);
+        return scopedKey ? readPhysical(scopedKey) : null;
+      } catch (err) {
+        log.warn(
+          { providerId, err: err instanceof Error ? err.message : String(err) },
+          'read owner-bound generic oauth blob failed',
+        );
+        return null;
+      }
+    },
+    readStrict(providerId) {
+      const scopedKey = resolveScopedKey(providerId);
+      if (!scopedKey) throw new Error('provider secret owner is unavailable');
+      let encoded: string;
+      try {
+        encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+      } catch (err) {
+        if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return null;
+        }
+        log.warn(
+          { providerId, err: err instanceof Error ? err.message : String(err) },
+          'read owner-bound generic oauth blob snapshot failed',
+        );
+        throw new Error('existing OAuth credential is unreadable');
+      }
+      if (!safeStorage.isEncryptionAvailable()) {
+        throw new Error('provider credential encryption is unavailable');
+      }
+      try {
+        return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+      } catch (err) {
+        log.warn(
+          { providerId, err: err instanceof Error ? err.message : String(err) },
+          'decrypt owner-bound generic oauth blob snapshot failed',
+        );
+        throw new Error('existing OAuth credential is unreadable');
+      }
+    },
+    write(providerId, value) {
+      try {
+        const scopedKey = resolveScopedKey(providerId);
+        return scopedKey ? writePhysical(scopedKey, value) : false;
+      } catch (err) {
+        log.warn(
+          { providerId, err: err instanceof Error ? err.message : String(err) },
+          'write owner-bound generic oauth blob failed',
+        );
+        return false;
+      }
+    },
+    remove(providerId) {
+      try {
+        const scopedKey = resolveScopedKey(providerId);
+        if (!scopedKey) return false;
+        fs.unlinkSync(path.join(secretDir(), `${scopedKey}.enc`));
+        return true;
+      } catch (err) {
+        if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return true;
+        }
+        log.warn(
+          { providerId, err: err instanceof Error ? err.message : String(err) },
+          'remove owner-bound generic oauth blob failed',
+        );
+        return false;
+      }
+    },
+  };
+}
+
 export const genericOAuthSecretIo = {
+  capture(): GenericOAuthSecretStorageView {
+    return createOwnerBoundGenericOAuthSecretIo(getActiveAppSession().dataOwnerId);
+  },
   read(providerId: string): string | null {
     try {
       return electronSecretIo.read(providerOAuthStorageKey(providerId));

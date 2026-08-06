@@ -13,6 +13,8 @@ export type {
   CodexCompatibilityWireProtocol,
   Effort,
   ProviderSource,
+  ProviderDefaults,
+  CatalogDefaults,
   AuthMethod,
   ProviderAccess,
   AuthStrategy,
@@ -33,6 +35,8 @@ export type {
 } from './types.js';
 
 export { PI_REASONING_EFFORTS } from './types.js';
+export { resolveDefaultModel } from './defaults.js';
+export type { DefaultModelScenario, DefaultsCatalogView } from './defaults.js';
 
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
@@ -158,8 +162,10 @@ export {
   isBudgetModel,
   modelBadges,
   formatContextWindow,
+  type ModelCategory,
+  type DisplayModel,
+  type ModelBadges,
 } from './classification.js';
-export type { ModelCategory, DisplayModel, ModelBadges } from './classification.js';
 
 export { resolveModelInvocation } from './invocation.js';
 export type {

@@ -462,11 +462,17 @@ async function requestExplicitProviderText(
   }
   const isOAuth = authStrategy === 'oauth-token';
   const noAuth = authStrategy === 'none';
-  const credential = isOAuth
-    ? readCachedGenericOAuthAccessToken(provider.id, provider.auth.oauth)
-    : noAuth
-      ? null
-      : readCustomProviderKey(provider.id, agentKind);
+  // API-key secrets belong exclusively to locally constructed user providers. A published
+  // catalog identity must never be able to reuse a colliding local id to read safeStorage and
+  // send that key to its own upstream. Generic OAuth remains descriptor-driven for both local
+  // and catalog providers; its token lifecycle is explicitly initiated by the user.
+  const credential = noAuth
+    ? null
+    : isOAuth
+      ? readCachedGenericOAuthAccessToken(provider)
+      : provider.source === 'user'
+        ? readCustomProviderKey(provider.id, agentKind)
+        : null;
   const hasLegacyHeaderCredential = (
     authStrategy === 'api-key-header'
     && Object.entries(routing.headerOverride ?? {}).some(([key, value]) => {
@@ -1081,7 +1087,10 @@ function parseCodexResponseText(raw: string): string {
   // shape) or a buffered JSON response in test/dev deployments.
   if (raw.trimStart().startsWith('{')) {
     try {
-      const json = JSON.parse(raw) as { output_text?: unknown; output?: Array<{ content?: Array<{ text?: unknown }> }> };
+      const json = JSON.parse(raw) as {
+        output_text?: unknown;
+        output?: Array<{ content?: Array<{ text?: unknown }> }>;
+      };
       if (typeof json.output_text === 'string') return json.output_text.trim();
       return (json.output ?? [])
         .flatMap((item) => item.content ?? [])
@@ -1102,7 +1111,10 @@ function parseCodexResponseText(raw: string): string {
       const event = JSON.parse(payload) as {
         type?: string;
         delta?: string;
-        response?: { output_text?: unknown; output?: Array<{ content?: Array<{ text?: unknown }> }> };
+        response?: {
+          output_text?: unknown;
+          output?: Array<{ content?: Array<{ text?: unknown }> }>;
+        };
       };
       if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') delta += event.delta;
       if (event.type === 'response.completed' && event.response) {

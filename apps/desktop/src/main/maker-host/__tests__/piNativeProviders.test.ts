@@ -131,7 +131,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
           runtimes: {
             pi: piRuntime({
               headers: { 'x-org': 'acme', authorization: 'Bearer header-secret' },
-              models: [{ id: 'm1', name: 'M1', contextWindow: 8000 }],
+              models: [{ id: 'm1', name: 'M1', contextWindow: 8000, maxOutput: 4096 }],
             }),
           },
         },
@@ -143,7 +143,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0].headers?.authorization).toMatch(/^\$CINDY_PI_KEY_/);
     expect(Object.values(providers[0].headers ?? {})).not.toContain('Bearer header-secret');
     expect(Object.values(env)).toEqual(expect.arrayContaining(['acme', 'Bearer header-secret']));
-    expect(providers[0].models[0]).toMatchObject({ id: 'm1', name: 'M1', contextWindow: 8000 });
+    expect(providers[0].models[0]).toMatchObject({
+      id: 'm1',
+      name: 'M1',
+      contextWindow: 8000,
+      maxTokens: 4096,
+    });
   });
 
   it('maps an explicit custom-model image capability into the Pi native model spec', () => {

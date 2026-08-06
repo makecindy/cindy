@@ -47,11 +47,9 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import {
-  appendDiscoveredCustomProviderModels,
   deleteCustomProvider,
   providerViewToCustomProviderConfig,
-  readCustomProviderKey,
-  updateCustomProvider,
+  refreshCustomProviderModels,
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
 import { PROVIDER_SECRET_IDS, type ProviderSecretId } from '../../../shared/providerSecrets';
@@ -2034,39 +2032,13 @@ export function ProvidersSection() {
     async (p: ProviderView) => {
       if (!beginProviderRefresh(p.id)) return;
       try {
-        const config = providerViewToCustomProviderConfig(p);
-        let added = 0;
-        let anyOk = false;
-        for (const agent of p.agents) {
-          const rt = config.runtimes[agent];
-          if (!rt?.baseUrl) continue;
-          const authMethod =
-            p.auth.method === 'none' ? 'none' : p.auth.method === 'oauth' ? 'oauth' : 'apiKey';
-          const apiKey = authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
-          // 鉴权请求头是 main-only 密文,renderer 不回读;交由 main 按 savedProviderId
-          // 注入已存请求头(否则仅靠请求头鉴权的端点刷新会因缺头 401,codex review)。
-          const r = await window.electronAPI.maker.fetchProviderModels({
-            agent,
-            baseUrl: rt.baseUrl,
-            authMethod,
-            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
-            modelsUrl: rt.modelsUrl ?? null,
-            apiKey,
-            savedProviderId: p.id,
-          });
-          if (!r.ok || !r.models) continue;
-          anyOk = true;
-          const merged = appendDiscoveredCustomProviderModels(rt.models, r.models);
-          rt.models = merged.models;
-          added += merged.addedIds.length;
-        }
-        if (!anyOk) {
+        const result = await refreshCustomProviderModels(p);
+        if (!result.ok) {
           toast.error(t('settings.providers.models.refreshFailed'));
           return;
         }
-        if (added > 0) {
-          await updateCustomProvider(config, {});
-          toast.success(t('settings.providers.models.refreshAdded', { count: added }));
+        if (result.added > 0) {
+          toast.success(t('settings.providers.models.refreshAdded', { count: result.added }));
         } else {
           toast.success(t('settings.providers.models.refreshNoNew'));
         }

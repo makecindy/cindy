@@ -119,6 +119,23 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.models.codex?.[0].defaultEnabled).toBe(false);
   });
 
+  it('projects persisted provider mode into the catalog', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: {
+          ...codexOnly.runtimes.codex!,
+          models: [{ id: 'embedding-model', name: 'Embedding', mode: 'embedding' }],
+        },
+      },
+    });
+    expect(p.models.codex?.[0]).toMatchObject({
+      id: 'embedding-model',
+      mode: 'embedding',
+      group: 'custom:openrouter',
+    });
+  });
+
   it('uses explicit runtime model contextWindow and defaults only when absent', () => {
     const p = buildUserProvider({
       ...codexOnly,
@@ -166,6 +183,25 @@ describe('buildUserProvider (per-runtime)', () => {
       contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
       contextWindowVerified: true,
       contextWindowExplicit: true,
+    });
+  });
+
+  it('projects a provider-reported maxOutput into the catalog for Pi runtime limits', () => {
+    const p = buildUserProvider({
+      id: 'limited-pi',
+      name: 'Limited Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://example.test/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'small-output', name: 'Small Output', maxOutput: 8_192 }],
+        },
+      },
+    });
+
+    expect(p.models.pi?.[0]).toMatchObject({
+      id: 'small-output',
+      maxOutput: 8_192,
     });
   });
 

@@ -13,6 +13,7 @@ export interface ProviderAccessContext {
   canUseCindyGateway?: boolean;
 }
 
+// TODO(unified-model-catalog): region/provider allowlists stay product policy until a server field explicitly carries them.
 const CINDY_AI_PROVIDER_ID = 'xd';
 const MAINLAND_VIDEO_MODEL_IDS: ReadonlySet<string> = new Set([
   'seedance-fast',

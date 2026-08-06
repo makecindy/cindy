@@ -1205,6 +1205,49 @@ describe('provider:custom:* CRUD handlers', () => {
     );
   });
 
+  it('triggers save-time resolve after a successful create', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const resolveSavedProviderModels = vi.fn(() => {});
+    const deps = makeDeps({ resolveSavedProviderModels });
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    expect(resolveSavedProviderModels).toHaveBeenCalledWith('openrouter');
+  });
+
+  it('triggers save-time resolve after a successful update', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const resolveSavedProviderModels = vi.fn(() => {});
+    const deps = makeDeps({ resolveSavedProviderModels });
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    resolveSavedProviderModels.mockClear();
+    const upd = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...validConfig,
+      name: 'OpenRouter Renamed',
+    });
+    expect(upd).toEqual({ ok: true });
+    expect(resolveSavedProviderModels).toHaveBeenCalledWith('openrouter');
+  });
+
+  it('does not trigger save-time resolve when create fails (duplicate id)', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const resolveSavedProviderModels = vi.fn(() => {});
+    const deps = makeDeps({ resolveSavedProviderModels });
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    resolveSavedProviderModels.mockClear();
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig),
+    ).rejects.toThrow(/ALREADY_EXISTS/);
+    expect(resolveSavedProviderModels).not.toHaveBeenCalled();
+  });
+
   it('rolls back partial create keys before any provider config is committed', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -2244,6 +2287,147 @@ describe('provider:models-fetch handler', () => {
     });
   });
 
+  it('returns provider models immediately while dispatching async resolve', async () => {
+    const harness = new IpcHarness();
+    const resolveFetchedModels = vi.fn(() => undefined);
+    registerProviderHandlers(harness, makeDeps({ resolveFetchedModels }));
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      requestId: 'form_request_1',
+      agent: 'codex',
+      baseUrl: 'https://models.example/v1',
+      authMethod: 'apiKey',
+    })).resolves.toEqual({ ok: true, models: [{ id: 'm1', name: 'M1' }] });
+    expect(resolveFetchedModels).toHaveBeenCalledOnce();
+  });
+
+  it('drops a fetched model list when the owner changes before resolve dispatch', async () => {
+    const harness = new IpcHarness();
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+    let finishFetch!: (result: { ok: true; models: Array<{ id: string; name: string }> }) => void;
+    const fetchModels = vi.fn(
+      () => new Promise<{ ok: true; models: Array<{ id: string; name: string }> }>((resolve) => {
+        finishFetch = resolve;
+      }),
+    );
+    const resolveFetchedModels = vi.fn();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        currentOwnerSession: () => ownerSession,
+        fetchModels,
+        resolveFetchedModels,
+      }),
+    );
+
+    const fetchResult = harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      requestId: 'owner-a-models',
+      agent: 'codex',
+      baseUrl: 'https://owner-a.example/v1',
+      authMethod: 'apiKey',
+    });
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalledOnce());
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+    finishFetch({ ok: true, models: [{ id: 'private-owner-a', name: 'Private A' }] });
+
+    await expect(fetchResult).rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(resolveFetchedModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps a successful provider model fetch when resolve dispatch throws synchronously', async () => {
+    const harness = new IpcHarness();
+    const resolveFetchedModels = vi.fn(() => {
+      throw new Error('resolve dispatch boom');
+    });
+    registerProviderHandlers(harness, makeDeps({ resolveFetchedModels }));
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      requestId: 'form_request_sync_throw',
+      agent: 'codex',
+      baseUrl: 'https://models.example/v1',
+      authMethod: 'apiKey',
+    })).resolves.toEqual({ ok: true, models: [{ id: 'm1', name: 'M1' }] });
+    expect(resolveFetchedModels).toHaveBeenCalledOnce();
+  });
+
+  it('defers saved-provider resolve while a multi-agent manual refresh is still fetching', async () => {
+    const harness = new IpcHarness();
+    const resolveFetchedModels = vi.fn(() => undefined);
+    const fetchModels = vi.fn(async () => ({
+      ok: true as const,
+      models: [{ id: 'm1', name: 'M1' }],
+    }));
+    registerProviderHandlers(harness, makeDeps({ fetchModels, resolveFetchedModels }));
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex',
+      baseUrl: 'https://models.example/v1',
+      authMethod: 'apiKey',
+      savedProviderId: 'openrouter',
+      deferResolve: true,
+    })).resolves.toMatchObject({ ok: true });
+    expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'codex',
+      savedProviderId: 'openrouter',
+      deferResolve: true,
+    }));
+    expect(resolveFetchedModels).not.toHaveBeenCalled();
+  });
+
+  it('rejects deferred resolve for an unsaved form discovery request', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex',
+      baseUrl: 'https://models.example/v1',
+      authMethod: 'apiKey',
+      deferResolve: true,
+    })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+  });
+
+  it('runs one explicit saved-provider resolve batch and awaits completion', async () => {
+    const harness = new IpcHarness();
+    const resolveSavedProviderModels = vi.fn(async () => undefined);
+    registerProviderHandlers(harness, makeDeps({ resolveSavedProviderModels }));
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_RESOLVE_SAVED, 'openrouter'),
+    ).resolves.toEqual({ ok: true });
+    expect(resolveSavedProviderModels).toHaveBeenCalledOnce();
+    expect(resolveSavedProviderModels).toHaveBeenCalledWith('openrouter');
+  });
+
+  it('rejects a saved-provider resolve that finishes after the owner changes', async () => {
+    const harness = new IpcHarness();
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+    let finishResolve!: () => void;
+    const resolveSavedProviderModels = vi.fn(
+      () => new Promise<void>((resolve) => {
+        finishResolve = resolve;
+      }),
+    );
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        currentOwnerSession: () => ownerSession,
+        resolveSavedProviderModels,
+      }),
+    );
+
+    const resolveResult = harness.invoke(
+      MAKER_INVOKE.PROVIDER_MODELS_RESOLVE_SAVED,
+      'openrouter',
+    );
+    await vi.waitFor(() => expect(resolveSavedProviderModels).toHaveBeenCalledOnce());
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+    finishResolve();
+
+    await expect(resolveResult).rejects.toMatchObject({ code: 'INTERNAL' });
+  });
+
   it('preserves the Codex Anthropic Messages wire protocol for API-key discovery', async () => {
     const harness = new IpcHarness();
     const fetchModels = vi.fn(async () => ({ ok: true as const, models: [] }));
@@ -2397,6 +2581,48 @@ describe('provider:oauth mutation ordering', () => {
     pending[1].finish({ ok: false });
     await expect(first).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
     await expect(second).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+  });
+
+  it('invalidates a generic OAuth login after an A→B→A owner generation change', async () => {
+    const harness = new IpcHarness();
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+    let isCurrent!: () => boolean;
+    let finishLogin!: (result: {
+      ok: boolean;
+      rollbackCredentials?: () => boolean;
+    }) => void;
+    const oauthLogin = vi.fn(
+      async (
+        _providerId: string,
+        checkCurrent: () => boolean,
+      ): Promise<{ ok: boolean; rollbackCredentials?: () => boolean }> => {
+        isCurrent = checkCurrent;
+        return new Promise((resolve) => {
+          finishLogin = resolve;
+        });
+      },
+    );
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        oauthLogin,
+        currentOwnerSession: () => ownerSession,
+      }),
+    );
+
+    const login = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(oauthLogin).toHaveBeenCalledOnce());
+    expect(isCurrent()).toBe(true);
+
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+    expect(isCurrent()).toBe(false);
+    ownerSession = { dataOwnerId: 'owner-a', generation: 3 };
+    expect(isCurrent()).toBe(false);
+
+    const rollbackCredentials = vi.fn(() => true);
+    finishLogin({ ok: true, rollbackCredentials });
+    await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+    expect(rollbackCredentials).toHaveBeenCalledOnce();
   });
 
   it('cancels the current owned generic OAuth operation when its window is destroyed', async () => {
@@ -2581,6 +2807,46 @@ describe('provider:oauth mutation ordering', () => {
     await expect(update).resolves.toEqual({ ok: true });
     await expect(logout).resolves.toEqual({ ok: true });
     expect(oauthLogout).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a queued logout after an A→B→A owner round trip without deleting credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+    let finishRefresh!: () => void;
+    const blockedRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const refreshCatalog = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockReturnValueOnce(blockedRefresh);
+    const oauthLogout = vi.fn().mockResolvedValue(undefined);
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        currentOwnerSession: () => ownerSession,
+        refreshCatalog,
+        oauthLogout,
+      }),
+    );
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+
+    const update = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...validConfig,
+      name: 'Update holding provider queue',
+    });
+    await vi.waitFor(() => expect(refreshCatalog).toHaveBeenCalledTimes(2));
+    const logout = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, validConfig.id);
+    await Promise.resolve();
+    expect(oauthLogout).not.toHaveBeenCalled();
+
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+    ownerSession = { dataOwnerId: 'owner-a', generation: 3 };
+    finishRefresh();
+
+    await expect(update).rejects.toMatchObject({ code: 'INTERNAL' });
+    await expect(logout).rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(oauthLogout).not.toHaveBeenCalled();
   });
 
   it('cleans mutation entries without reviving an older login generation', async () => {

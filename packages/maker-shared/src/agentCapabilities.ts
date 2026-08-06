@@ -6,6 +6,9 @@ export interface MobileModelOption {
   effortDisplayNames: Record<string, string>;
   defaultEffort: string | null;
   supportsFastMode: boolean;
+  /** Catalog classification metadata, if provided by the remote host. */
+  category?: string;
+  group?: string;
 }
 
 export interface MobileChoiceOption {
@@ -195,11 +198,27 @@ export function reconcileRuntimeDraftWithCapabilities<T extends MobileRuntimeDra
   };
 }
 
-export function categorizeMobileModel(id: string): MobileModelCategory {
-  if (id.startsWith('claude-')) return 'anthropic';
-  if (id.startsWith('gpt-')) return 'gpt';
-  if (id.startsWith('codex/')) return 'gpt-budget';
-  if (id.startsWith('gemini-')) return 'google';
+export function categorizeMobileModel(
+  model: string | { id: string; category?: string; group?: string },
+): MobileModelCategory {
+  const entry = typeof model === 'string' ? { id: model } : model;
+  // maker-shared stays dependency-free: mirror only the mobile category projection here. The
+  // authoritative full classifier is @cindy/model-providers/classification; these id checks are
+  // retained solely for old device-link capability payloads without category/group metadata.
+  const declared = entry.category ?? entry.group;
+  if (
+    declared === 'anthropic' ||
+    declared === 'gpt' ||
+    declared === 'gpt-budget' ||
+    declared === 'google' ||
+    declared === 'china'
+  ) {
+    return declared;
+  }
+  if (entry.id.startsWith('claude-')) return 'anthropic';
+  if (entry.id.startsWith('gpt-')) return 'gpt';
+  if (entry.id.startsWith('codex/')) return 'gpt-budget';
+  if (entry.id.startsWith('gemini-')) return 'google';
   return 'china';
 }
 
@@ -215,18 +234,22 @@ export function isMobileHistoryCompatibleModelSwitch(
 
 export function buildMobileModelSwitchConfirmation({
   currentModelId,
+  currentModel,
   messageCount,
   targetModelId,
+  targetModel,
 }: {
   currentModelId: string;
+  currentModel?: { id: string; category?: string; group?: string };
   messageCount: number;
   targetModelId: string;
+  targetModel?: { id: string; category?: string; group?: string };
 }): MobileModelSwitchConfirmation | null {
   if (!currentModelId || !targetModelId || currentModelId === targetModelId || messageCount <= 0) {
     return null;
   }
-  const fromCategory = categorizeMobileModel(currentModelId);
-  const toCategory = categorizeMobileModel(targetModelId);
+  const fromCategory = categorizeMobileModel(currentModel ?? currentModelId);
+  const toCategory = categorizeMobileModel(targetModel ?? targetModelId);
   if (fromCategory === toCategory || isMobileHistoryCompatibleModelSwitch(fromCategory, toCategory)) {
     return null;
   }
@@ -252,6 +275,8 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
       typeof entry[1] === 'string',
     ))
     : {};
+  const category = readString(value.category);
+  const group = readString(value.group);
   return {
     id,
     label: readString(value.displayName) ?? id,
@@ -262,6 +287,8 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
     effortDisplayNames,
     defaultEffort: readString(value.defaultEffort),
     supportsFastMode: value.supportsFastMode === true,
+    ...(category ? { category } : {}),
+    ...(group ? { group } : {}),
   };
 }
 

@@ -5,6 +5,27 @@ export interface ResolveAgentCredentialModeOptions {
   agentKind: AgentKind;
   providerId?: string | null;
   model?: string | null;
+  /**
+   * Provider routing authStrategy when the host can resolve the exact route. Unknown values are
+   * intentionally ignored so older/newer catalogs retain the legacy provider/id fallback.
+   */
+  authStrategy?: string | null;
+}
+
+function credentialModeForKnownAuthStrategy(
+  authStrategy: string | null | undefined,
+): AgentCredentialMode | undefined {
+  if (authStrategy === 'gateway-key') return 'gateway-key';
+  if (authStrategy === 'oauth-passthrough') return 'oauth-bearer';
+  if (
+    authStrategy === 'provider-oauth-header' ||
+    authStrategy === 'oauth-token' ||
+    authStrategy === 'api-key-header' ||
+    authStrategy === 'none'
+  ) {
+    return 'provider-oauth';
+  }
+  return undefined;
 }
 
 /**
@@ -20,6 +41,9 @@ export interface ResolveAgentCredentialModeOptions {
 export function resolveAgentCredentialMode(
   options: ResolveAgentCredentialModeOptions,
 ): AgentCredentialMode | undefined {
+  const routedMode = credentialModeForKnownAuthStrategy(options.authStrategy);
+  if (routedMode) return routedMode;
+
   const providerId = options.providerId?.trim() || null;
   if (providerId === 'xd') return 'gateway-key';
   if (options.agentKind === 'claude-code' && providerId === 'anthropic') return 'oauth-bearer';

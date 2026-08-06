@@ -118,7 +118,10 @@ import { canAccessBillingSettings } from '@/components/settings/billingVisibilit
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useLiveErrorSourceProvider } from '@/hooks/useLiveErrorSourceProvider';
-import { resolveFastSupported } from '@/lib/providerModels';
+import {
+  resolveFastSupported,
+  resolveSessionModelCatalogMetadata,
+} from '@/lib/providerModels';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
 import {
   useDeviceLinkConnectionIssue,
@@ -1322,6 +1325,23 @@ export function CCAgentSessionView({
   );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
+  const spendModelId = agentSwitchIntent?.model ?? session?.model ?? null;
+  const spendProviderId = agentSwitchIntent
+    ? agentSwitchIntent.providerId
+    : (session?.providerId ?? null);
+  const spendModelMetadata = useMemo(
+    () => (
+      spendModelId
+        ? resolveSessionModelCatalogMetadata({
+            providers,
+            providerId: spendProviderId,
+            modelId: spendModelId,
+            agentKind: displayAgentKind,
+          })
+        : undefined
+    ),
+    [displayAgentKind, providers, spendModelId, spendProviderId],
+  );
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
   // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
   // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
@@ -3926,12 +3946,9 @@ export function CCAgentSessionView({
                   )}
                   <TodaySpendChip
                     vendorKey={normalizeDbAgentKind(displayAgentKind)}
-                    modelId={agentSwitchIntent?.model ?? session?.model ?? null}
-                    providerId={
-                      agentSwitchIntent
-                        ? agentSwitchIntent.providerId
-                        : (session?.providerId ?? null)
-                    }
+                    modelId={spendModelId}
+                    providerId={spendProviderId}
+                    modelMetadata={spendModelMetadata}
                     sessionId={sessionId}
                     sessionInitialMoney={session?.totalMoney ?? null}
                     sessionInitialCostUsd={session?.totalCostUsd ?? null}

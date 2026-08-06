@@ -65,6 +65,15 @@ vi.mock('../../localDb/dialogueWorkspace.js', () => ({
     return dir;
   },
 }));
+const activeCatalogMock = vi.hoisted(() => ({
+  catalog: null as import('@cindy/model-providers').Catalog | null,
+}));
+vi.mock('../../maker-host/active-catalog.js', async () => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  return {
+    getActiveCatalog: () => activeCatalogMock.catalog ?? BUNDLED_CATALOG,
+  };
+});
 vi.mock('../../maker-host/codex-local-sessions.js', () => ({
   importSharedCodexThread: async (params: unknown) => {
     codexMock.importCalls.push(params);
@@ -324,6 +333,7 @@ async function writeBundleFile(bytes: Buffer, password?: string): Promise<string
 
 describe('sessionShareImport', () => {
   beforeEach(async () => {
+    activeCatalogMock.catalog = null;
     dbMock.conflictRow = null;
     dbMock.queryCalls = [];
     dbMock.txCalls = [];
@@ -871,6 +881,25 @@ describe('sessionShareImport', () => {
     expect(session.planModeEnabled).toBe(false);
   });
 
+  it('missing draftPrefs follows active catalog defaults when present', async () => {
+    activeCatalogMock.catalog = {
+      version: '3',
+      providers: [],
+      defaults: { 'claude-code': { sessionModel: 'catalog-import-model' } },
+    };
+    const filePath = await writeBundleFile(await buildBundle({ session: exporterSessionConfig }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+    });
+    const session = (dbMock.txCalls[0].args as { session: Record<string, unknown> }).session;
+    expect(session.model).toBe('catalog-import-model');
+  });
+
   it('codex bundle without draftPrefs falls back to codex default model', async () => {
     const filePath = await writeBundleFile(
       await buildBundle({
@@ -887,8 +916,33 @@ describe('sessionShareImport', () => {
       sharedMediaRootOverride: sharedMediaRoot,
     });
     const session = (dbMock.txCalls[0].args as { session: Record<string, unknown> }).session;
-    expect(session.model).toBe('gpt-5.4');
+    expect(session.model).toBe('gpt-5.5');
     expect(session.codexHistoryHasProductPrompt).toBe(false);
+  });
+
+  it('pi bundle without draftPrefs 用 pi 自己的兜底,不落成 cc 模型', async () => {
+    // pi 没有跨来源合法的静态默认,也不进目录 resolver;若按 claude-code 解析,
+    // 导入的 pi 会话会拿到 claude-sonnet-4-6 —— 一条假 Claude 路由。
+    activeCatalogMock.catalog = {
+      version: '3',
+      providers: [],
+      defaults: { 'claude-code': { sessionModel: 'catalog-cc-model' } },
+    };
+    const filePath = await writeBundleFile(
+      await buildBundle({ agentKind: 'pi', session: exporterSessionConfig }),
+    );
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+    });
+    const session = (dbMock.txCalls[0].args as { session: Record<string, unknown> }).session;
+    expect(session.model).toBe('gpt-5.4');
+    expect(session.model).not.toBe('claude-sonnet-4-6');
+    expect(session.model).not.toBe('catalog-cc-model');
   });
 
   it('pi bundle restores transcript and rewrites portable ids to the local absolute path', async () => {

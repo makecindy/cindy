@@ -166,9 +166,9 @@ export interface OrcaMcpDeps {
   /** 列出 agent 可用 model 清单。 */
   listAvailableModels: (params: { agent?: ControlWorkerAgent }) => Promise<
     ControlResult<{
-      codex?: Array<{ id: string; label: string }>;
-      claude_code?: Array<{ id: string; label: string }>;
-      pi?: Array<{ id: string; label: string }>;
+      codex?: Array<{ id: string; label: string; category?: string; group?: string }>;
+      claude_code?: Array<{ id: string; label: string; category?: string; group?: string }>;
+      pi?: Array<{ id: string; label: string; category?: string; group?: string }>;
     }>
   >;
   /** 只读诊断：列出当前 Orca workflow 与 worker sessions。 */

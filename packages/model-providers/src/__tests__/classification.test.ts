@@ -37,6 +37,20 @@ describe('isModelSelectableForNewRoute', () => {
         { userProvider: true },
       ),
     ).toBe(true);
+    expect(
+      isModelSelectableForNewRoute(
+        { id: 'opaque', group: 'custom:mine', mode: 'embedding' },
+        { userProvider: true },
+      ),
+    ).toBe(false);
+    for (const mode of ['chat', 'responses']) {
+      expect(
+        isModelSelectableForNewRoute(
+          { id: 'opaque', group: 'custom:mine', mode },
+          { userProvider: true },
+        ),
+      ).toBe(true);
+    }
   });
 });
 
@@ -220,6 +234,10 @@ describe('categorize', () => {
 });
 
 describe('groupOf — 数据优先,前缀兜底', () => {
+  it('合法 category 优先于 legacy group 与 id 前缀', () => {
+    expect(groupOf({ id: 'gpt-weird', category: 'image', group: 'china' })).toBe('image');
+    expect(groupOf({ id: 'gpt-5.5', category: 'future-capability' })).toBe('other');
+  });
   it('合法 group 字段优先于 id 前缀', () => {
     // id 看着像 gpt,但目录把它归到 china → 以 group 为准
     expect(groupOf({ id: 'gpt-weird', group: 'china' })).toBe('china');
@@ -273,6 +291,18 @@ describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', ()
       expect(classifyModel({ id, mode })).toBe(category);
     },
   );
+
+  it('category 字段优先于 mode/id；mode 优先于展示 group', () => {
+    expect(classifyModel({ id: 'gpt-5.5', category: 'embedding', mode: 'chat' })).toBe('embedding');
+    expect(classifyModel({ id: 'gpt-image-2', group: 'gpt', mode: 'image_generation' })).toBe('image');
+    expect(classifyModel({ id: 'gpt-5.5', category: 'future-capability' })).toBe('other');
+  });
+
+  it('category 字段直接决定聊天准入，group 仍不参与能力判定', () => {
+    expect(isChatEligible({ id: 'gpt-5.5', category: 'embedding', mode: 'chat' })).toBe(false);
+    expect(isChatEligible({ id: 'gpt-image-2', category: 'gpt' })).toBe(true);
+    expect(isChatEligible({ id: 'gpt-5.5', category: 'future-capability' })).toBe(false);
+  });
 
   it('未识别的 mode 值不静默丢弃,落 other(issue #882 第 5 点:无损保留新类型)', () => {
     expect(classifyModel({ id: 'ai-gateway-doc', mode: 'doc_rerank' })).toBe('other');

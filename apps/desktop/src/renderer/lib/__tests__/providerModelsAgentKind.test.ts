@@ -2,7 +2,7 @@ import type { AgentKind, ProviderView } from '@cindy/model-providers';
 import { describe, expect, it } from 'vitest';
 
 import type { ModelDescriptor } from '@/hooks/useAgentCapabilities';
-import { resolveVisibleModelAgentKind } from '../providerModels';
+import { resolveSessionModelCatalogMetadata, resolveVisibleModelAgentKind } from '../providerModels';
 
 const model = (id: string): ModelDescriptor => ({
   id,
@@ -74,5 +74,67 @@ describe('resolveVisibleModelAgentKind', () => {
         providers: [],
       }),
     ).toBe('codex');
+  });
+});
+
+
+describe('resolveSessionModelCatalogMetadata', () => {
+  it('returns exact-route access/group metadata and leaves missing snapshots to legacy callers', () => {
+    const routed = provider('codex', [model('codex/opaque')]);
+    routed.id = 'xd';
+    routed.agents = ['codex'];
+    routed.routing = {
+      codex: { upstream: 'https://example.test', authStrategy: 'gateway-key' },
+    };
+    routed.access = { kind: 'managed' };
+    routed.models.codex![0] = {
+      ...routed.models.codex![0],
+      group: 'gpt-budget',
+    };
+
+    expect(resolveSessionModelCatalogMetadata({
+      providers: [routed],
+      providerId: 'xd',
+      modelId: 'codex/opaque',
+      agentKind: 'codex',
+    })).toEqual({ sourceAccess: { kind: 'managed' }, group: 'gpt-budget' });
+    expect(resolveSessionModelCatalogMetadata({
+      providers: [],
+      providerId: 'xd',
+      modelId: 'codex/opaque',
+      agentKind: 'codex',
+    })).toBeUndefined();
+  });
+
+  it('does not borrow metadata from a fallback source for a stale explicit provider', () => {
+    const fallback = provider('codex', [model('codex/opaque')]);
+    fallback.id = 'xd';
+    fallback.agents = ['codex'];
+    fallback.routing = {
+      codex: { upstream: 'https://example.test', authStrategy: 'gateway-key' },
+    };
+    fallback.access = { kind: 'managed' };
+    fallback.models.codex![0] = {
+      ...fallback.models.codex![0],
+      group: 'gpt-budget',
+      category: 'gpt-budget',
+    };
+
+    expect(resolveSessionModelCatalogMetadata({
+      providers: [fallback],
+      providerId: 'deleted-provider',
+      modelId: 'codex/opaque',
+      agentKind: 'codex',
+    })).toBeUndefined();
+    expect(resolveSessionModelCatalogMetadata({
+      providers: [fallback],
+      providerId: null,
+      modelId: 'codex/opaque',
+      agentKind: 'codex',
+    })).toEqual({
+      sourceAccess: { kind: 'managed' },
+      group: 'gpt-budget',
+      category: 'gpt-budget',
+    });
   });
 });

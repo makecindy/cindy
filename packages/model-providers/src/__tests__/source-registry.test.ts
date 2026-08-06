@@ -9,7 +9,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
 
-import { BUNDLED_CATALOG } from '../catalog.js';
+import { BUNDLED_CATALOG, parseCatalog } from '../catalog.js';
 import {
   loadCatalog,
   loadCatalogWithSource,
@@ -332,6 +332,133 @@ describe('mergeWithBundled', () => {
         (p) => p.id === 'openai',
       )?.imageModels,
     ).toBeUndefined();
+  });
+
+  it('v3 top-level and provider defaults override bundled fields without erasing siblings', () => {
+    const primary: Catalog = {
+      version: '3',
+      defaults: { codex: { sessionModel: 'remote-codex' } },
+      providers: [{
+        id: 'anthropic',
+        defaults: {
+          'claude-code': { sessionModel: 'remote-claude' },
+        },
+      } as Catalog['providers'][number]],
+    };
+
+    const merged = mergeWithBundled(primary);
+    expect(merged.defaults).toEqual({
+      'claude-code': { sessionModel: 'claude-sonnet-4-6' },
+      codex: { sessionModel: 'remote-codex' },
+    });
+    expect(merged.providers.find((p) => p.id === 'anthropic')?.defaults?.['claude-code'])
+      .toEqual({
+        sessionModel: 'remote-claude',
+        oneShotModel: 'claude-haiku-4-5',
+        titleModel: 'claude-haiku-4-5',
+      });
+  });
+
+  it('v3 non-credential routing deltas preserve bundled route siblings', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
+    const merged = mergeWithBundled({
+      version: '3',
+      providers: [{
+        id: 'xai',
+        routing: {
+          codex: { disabled: true },
+        },
+      } as Catalog['providers'][number]],
+    });
+
+    expect(merged.providers.find((provider) => provider.id === 'xai')?.routing.codex).toEqual({
+      ...bundledXai.routing.codex,
+      disabled: true,
+    });
+  });
+
+  it('v3 marks materialized static windows verified while preserving an explicit opt-out', () => {
+    const parsed = parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'xai',
+        models: {
+          codex: [
+            model('xai/v3-known', { contextWindow: 262_144 }),
+            model('xai/v3-opted-out', {
+              contextWindow: 272_000,
+              contextWindowVerified: false,
+            }),
+          ],
+        },
+      }],
+    });
+
+    const models = mergeWithBundled(parsed).providers
+      .find((provider) => provider.id === 'xai')!
+      .models.codex!;
+    expect(models.find((entry) => entry.id === 'xai/v3-known')?.contextWindowVerified).toBe(true);
+    expect(
+      models.find((entry) => entry.id === 'xai/v3-opted-out')?.contextWindowVerified,
+    ).toBe(false);
+  });
+
+  it('v3 validates duplicate model metadata after materializing bundled provider deltas', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
+    const xaiModel = bundledXai.models.codex?.[0];
+    if (!xaiModel) throw new Error('missing bundled xAI Codex model');
+
+    expect(() => mergeWithBundled({
+      version: '3',
+      providers: [{
+        id: 'openai',
+        titleModel: xaiModel.id,
+        models: {
+          codex: [{ ...xaiModel, contextWindow: xaiModel.contextWindow + 1 }],
+        },
+      } as Catalog['providers'][number]],
+    })).toThrow(/inconsistent metadata across providers/);
+  });
+
+  it('v3 rejects maxOutput divergence after materializing duplicate model routes', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
+    const xaiModel = bundledXai.models.codex?.[0];
+    if (!xaiModel) throw new Error('missing bundled xAI Codex model');
+
+    expect(() => mergeWithBundled({
+      version: '3',
+      providers: [
+        {
+          id: 'xai',
+          models: {
+            codex: [{ ...xaiModel, maxOutput: 8_192 }],
+          },
+        },
+        {
+          id: 'openai',
+          titleModel: xaiModel.id,
+          models: {
+            codex: [{ ...xaiModel, maxOutput: 16_384 }],
+          },
+        },
+      ] as Catalog['providers'],
+    })).toThrow(/inconsistent metadata across providers/);
+  });
+
+  it('v3 validates each provider after materializing bundled deltas', () => {
+    const bundledOpenai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'openai')!;
+    const replacementModels = Object.fromEntries(
+      bundledOpenai.agents.map((agent) => [
+        agent,
+        [model(`replacement-${agent}`, { name: `Replacement ${agent}` })],
+      ]),
+    );
+
+    const parsed = parseCatalog({
+      version: '3',
+      providers: [{ id: 'openai', models: replacementModels }],
+    });
+    expect(() => mergeWithBundled(parsed)).toThrow(/titleModel.*not found/);
   });
 
   it('does not infer bundled billing when a same-id primary changes auth or upstream', () => {
@@ -951,6 +1078,28 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
     expect(effectiveSourceIdForModel(views, 'custom-p', 'flux-image-x', 'claude-code')).toBe(
       'custom-p',
     );
+  });
+
+  it('用户自定义来源的显式非聊天 mode 优先于 custom group 放行', () => {
+    const catalog: Catalog = {
+      version: 'test',
+      providers: [{
+        id: 'custom-p',
+        name: 'Custom',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: { upstream: 'https://custom.test', authStrategy: 'api-key-header' },
+        },
+        models: {
+          codex: [model('ambiguous-id', { group: 'custom:custom-p', mode: 'embedding' })],
+        },
+      }],
+    };
+    const views = buildRegistry(catalog, { 'custom-p': true });
+    expect(chatEligibleSourcesForModel(views, 'ambiguous-id', 'codex')).toEqual([]);
+    expect(effectiveSourceIdForModel(views, 'custom-p', 'ambiguous-id', 'codex')).toBeNull();
   });
 });
 

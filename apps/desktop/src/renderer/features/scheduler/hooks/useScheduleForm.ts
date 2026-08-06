@@ -10,6 +10,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
+import { BUNDLED_CATALOG, resolveDefaultModel } from '@cindy/model-providers';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
 import type { Session } from '@/lib/ccAgent.types';
 import {
@@ -149,13 +150,24 @@ export function getScheduleAgentPrefs(agentKind: ScheduleFormState['agentKind'])
  * 调度任务的冷启动兜底模型 —— 故意**不**跟对话的 Opus 默认
  * (modelDefinitions.ts getDefaultModelForVendor):自动化是无人值守反复执行的
  * 场景,默认不该是最贵的模型,要 Opus 的用户会显式选。
- * ⚠️ 必须与 scheduler-host/runner.ts defaultModelFor 保持一致
- * (runner 对 MCP 建的 / 历史遗留空 model 任务兜同一个值,UI 显示 ≠ 实际运行
- * 的事故见 2026-06 踩坑:任务里看着选了 Opus 4.8,实际每次跑 4.7)。
+ * ⚠️ 只用于显式兼容回退；空 model 的权威物化已收口到 Main schedule create/update
+ * 边界，由 scheduler-host/defaultModelFor 读取 active catalog，Renderer 不再抢先写值。
  */
 export function schedulerFallbackModel(agentKind: ScheduleFormState['agentKind']): string {
-  // Pi 的来源/模型来自动态连接目录；没有能与 providerId 解耦的静态默认。
-  return agentKind === 'codex' ? 'gpt-5.5' : agentKind === 'pi' ? '' : 'claude-sonnet-4-6';
+  // Pi 的来源/模型来自动态连接目录；没有能与 providerId 解耦的静态默认,目录默认同样不适用。
+  if (agentKind === 'pi') return '';
+  const fallback = agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6';
+  return resolveDefaultModel(BUNDLED_CATALOG, agentKind, 'session', fallback);
+}
+
+/** 只读取用户显式/持久化选择，不提前物化任何目录 fallback。 */
+export function getScheduleRememberedModel(agentKind: ScheduleFormState['agentKind']): string {
+  const prefs = getScheduleAgentPrefs(agentKind);
+  if (prefs.model.trim()) return prefs.model;
+  const chatLast = getPersistedVendorModel(
+    agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc',
+  );
+  return chatLast.trim() ? chatLast : '';
 }
 
 /**
@@ -166,11 +178,7 @@ export function schedulerFallbackModel(agentKind: ScheduleFormState['agentKind']
  *   3. 成本保守冷启动兜底(schedulerFallbackModel)
  */
 export function getScheduleDefaultModel(agentKind: ScheduleFormState['agentKind']): string {
-  const prefs = getScheduleAgentPrefs(agentKind);
-  if (prefs.model.trim()) return prefs.model;
-  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc');
-  if (chatLast.trim()) return chatLast;
-  return schedulerFallbackModel(agentKind);
+  return getScheduleRememberedModel(agentKind) || schedulerFallbackModel(agentKind);
 }
 
 export function rememberScheduleFormPrefs(form: ScheduleFormState): void {
@@ -199,9 +207,9 @@ function makeDefaultForm(): ScheduleFormState {
   return {
     ...DEFAULT_FORM,
     agentKind: prefs.agentKind,
-    // 三级回退:任务上次选择 → 对话上次选择 → 成本保守兜底,保证新任务
-    // 表单的 model 永远是显式值(所见即所存,不再依赖 chip 的显示回退)。
-    model: getScheduleDefaultModel(prefs.agentKind),
+    // 先只物化用户记忆。没有记忆时保持空值/“默认”语义，保存时由 Main 写入边界
+    // 用 active catalog 物化，避免 Renderer 缓存抢先变成错误的显式模型。
+    model: getScheduleRememberedModel(prefs.agentKind),
     // providerId 空 = 跟随原生默认来源（no-break）。沿用任务维度记忆;UI 显示时
     // 用 form.providerId || nativeDefaultSourceId(agentKind) 算高亮来源。
     providerId: agentPrefs.providerId,
@@ -288,8 +296,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   const [form, setForm] = useState<ScheduleFormState>(() => makeFormFromSchedule(initial));
   // "记住的真实绑定"快照:三态来回切换(bound → fresh/persistent → bound)时
   // 不丢用户已选/任务已有的绑定 —— 表单切换是非破坏性的,只有保存才落库。
-  // 快照含 model/effort 等关联字段:切到 fresh 后空 model 会被回填 effect 填成
-  // 显式值,只记 id 还原会把该显式值 patch 给"跟随会话"任务(review 逃逸路径)。
+  // 快照含 model/effort 等关联字段：用户可能在 fresh 态显式选择模型，若只记 id，
+  // 切回 bound 会把该显式值 patch 给“跟随会话”任务(review 逃逸路径)。
   const lastBindingRef = useRef<RememberedBinding | null>(null);
   if (lastBindingRef.current === null) {
     lastBindingRef.current = captureBinding(form);
@@ -312,7 +320,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     setForm((f) => ({
       ...f,
       ...resolveTemplateAgentFields(f, template, {
-        getDefaultModel: getScheduleDefaultModel,
+        // 跨 agent 模板先只恢复目标 agent 的用户记忆；无记忆时保持空值，交给
+        // Main schedule 写入边界按 active catalog 物化。
+        getDefaultModel: getScheduleRememberedModel,
         getAgentPrefs: getScheduleAgentPrefs,
       }),
     }));

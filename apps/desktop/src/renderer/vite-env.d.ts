@@ -2066,6 +2066,7 @@ interface ElectronAPI {
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
+    modelChosenByVendor?: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
@@ -4398,6 +4399,7 @@ interface ElectronAPI {
     }>;
     /** 供应商「获取模型列表」—— 表单值透传，结构化结果（code 走 providerError.* i18n）。 */
     fetchProviderModels: (input: {
+      requestId?: string;
       agent: 'claude-code' | 'codex' | 'pi';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
@@ -4407,13 +4409,32 @@ interface ElectronAPI {
       headers?: Record<string, string>;
       /** 已保存供应商 id:main 侧据此并入 main-only 鉴权请求头(renderer 不回读明文头)。 */
       savedProviderId?: string;
+      /** 已保存供应商手动刷新时延后 resolve，待全部 agent fetch 完成后统一批处理。 */
+      deferResolve?: boolean;
     }) => Promise<{
       ok: boolean;
-      models?: { id: string; name: string; contextWindow?: number }[];
+      models?: Array<{
+        id: string;
+        name: string;
+        providerReported?: import('../main/maker-host/generic-oauth').ProviderReportedModelHints;
+        contextWindow?: number;
+        maxOutput?: number;
+        description?: string;
+        family?: string;
+        group?: string;
+        category?: string;
+        mode?: string;
+        sortOrder?: number;
+        efforts?: import('@cindy/model-providers').Effort[];
+        defaultEffort?: import('@cindy/model-providers').Effort | null;
+        supportsFastMode?: boolean;
+      }>;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
     }>;
+    /** 把一个已保存供应商的全部 Claude Code / Codex runtime 合并成一次 entries[] resolve。 */
+    resolveSavedProviderModels: (providerId: string) => Promise<{ ok: true }>;
     /**
      * 本机 agent CLI 安装 / 登录态扫描（设置「检测建议」用）。只 stat 不读凭证内容;
      * 失败降级空数组。
@@ -4432,6 +4453,27 @@ interface ElectronAPI {
     }>;
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: (cb: () => void) => () => void;
+    /** 表单模型 resolve 完成后的异步元数据回填（返回 off）。 */
+    onProviderModelsResolved: (cb: (payload: {
+      requestId: string;
+      models: Array<{
+        id: string;
+        name: string;
+        contextWindow?: number;
+        maxOutput?: number;
+        description?: string;
+        family?: string;
+        group?: string;
+        category?: string;
+        mode?: string;
+        sortOrder?: number;
+        modalities?: { input: string[]; output: string[] };
+        capabilities?: import('@cindy/model-access-protocol').ResolvedModelCapabilities;
+        efforts?: import('@cindy/model-providers').Effort[];
+        defaultEffort?: import('@cindy/model-providers').Effort | null;
+        supportsFastMode?: boolean;
+      }>;
+    }) => void) => () => void;
 
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: () => Promise<{

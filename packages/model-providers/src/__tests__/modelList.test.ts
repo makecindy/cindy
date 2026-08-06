@@ -61,6 +61,8 @@ function legacyBuildProviderSections(args: {
         contextWindow: m.contextWindow,
       };
       if (m.description !== undefined) sm.description = m.description;
+      if (m.category !== undefined) sm.category = m.category;
+      if (m.group !== undefined) sm.group = m.group;
       if (m.effortDisplayNames !== undefined) sm.effortDisplayNames = m.effortDisplayNames;
       if (m.supportsFastMode !== undefined) sm.supportsFastMode = m.supportsFastMode;
       if (m.icon !== undefined) sm.icon = m.icon;
@@ -354,6 +356,43 @@ describe('溯源字段键集锁(visibleModelUnion 薄壳的 wire 安全前提)',
     );
     const extraKeys = Object.keys(withAccess).filter((k) => !catalogKeys.has(k));
     expect(extraKeys.sort()).toEqual(['sourceAccess', 'sourceConnected', 'sourceProviderId']);
+  });
+});
+
+describe('C5 source markers are behaviorally inert', () => {
+  it('source and knowledgeRevision do not change derived model-list output semantics', () => {
+    const baseline = fixtureProviders();
+    const marked = structuredClone(baseline);
+    const target = marked[0].models['claude-code']![0];
+    target.source = 'resolved';
+    target.knowledgeRevision = 'knowledge-r1';
+
+    const withoutMarkers = deriveModelList({
+      providers: baseline,
+      agent: 'claude-code',
+      providerScope: 'connected-for-agent',
+    });
+    const withMarkers = deriveModelList({
+      providers: marked,
+      agent: 'claude-code',
+      providerScope: 'connected-for-agent',
+    });
+    const strip = (rows: typeof withMarkers) => rows.map(({ source: _source,
+      knowledgeRevision: _knowledgeRevision, ...row }) => row);
+    expect(strip(withMarkers)).toEqual(strip(withoutMarkers));
+  });
+
+  it('production code has no logic branch on C5 marker values', async () => {
+    const fs = await import('node:fs/promises');
+    const source = await fs.readFile(new URL('../modelList.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/\bm\.source\b|\[['"]source['"]\]/);
+    expect(source).not.toContain('knowledgeRevision');
+
+    const activeCatalog = await fs.readFile(
+      new URL('../../../../apps/desktop/src/main/maker-host/active-catalog.ts', import.meta.url),
+      'utf8',
+    );
+    expect(activeCatalog).not.toMatch(/\.source\s*===\s*['"](?:resolved|fallback)['"]/);
   });
 });
 

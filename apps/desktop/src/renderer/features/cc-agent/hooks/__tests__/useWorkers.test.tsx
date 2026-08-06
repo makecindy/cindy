@@ -145,6 +145,23 @@ describe('useWorkers / worker projection store', () => {
     expect(mocks.listWorkersByLead).not.toHaveBeenCalled();
   });
 
+  it('uses the Pi-specific fallback when a worker record omits its model', async () => {
+    const piWorker = {
+      ...workerRecord('worker-pi', 'session-pi', true),
+      session: { agentKind: 'pi', effort: 'high' },
+    };
+    mocks.listWorkersByLeads.mockResolvedValue({ 'lead-pi': [piWorker] });
+
+    const hook = renderHook(() => useWorkers('lead-pi'));
+
+    await waitFor(() => {
+      expect(hook.result.current.workers[0]).toMatchObject({
+        agent: 'pi',
+        model: 'gpt-5.4',
+      });
+    });
+  });
+
   it('keeps projection owners when the lead collection is only reordered', async () => {
     vi.useFakeTimers();
     const hook = renderHook(({ sessions }) => useOrcaLeadWorkerMap(sessions), {

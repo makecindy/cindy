@@ -19,6 +19,7 @@ import {
   isAgentSelectableModel,
   isLoopbackProviderUrl,
   type AgentKind,
+  type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
@@ -339,7 +340,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // `x-api-key: <token>`,而真实 oauth-token 路由明确删除 x-api-key;优先按 x-api-key
   // 鉴权的端点会把 access_token 当 API key 校验得到 401,探测结论就与真实会话相反了。
   if (routing.authStrategy === 'oauth-token') {
-    const oauthToken = oauthProbeTokenReader(providerId);
+    const oauthToken = oauthProbeTokenReader(provider);
     return {
       agent,
       baseUrl: routing.upstream,
@@ -384,7 +385,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
 }
 
 // OAuth 探测 token 读取器（注入，同 keyReader 模式；生产 = readCachedGenericOAuthAccessToken）。
-type OAuthProbeTokenReader = (providerId: string) => string | null;
+type OAuthProbeTokenReader = (provider: Provider) => string | null;
 let oauthProbeTokenReader: OAuthProbeTokenReader = () => null;
 
 /** host 启动期接通 generic-oauth 的同步 token 缓存读取（探测用）。 */

@@ -41,6 +41,8 @@ import {
   type ProviderConfig,
   type SocialProvider,
 } from '@cindy/auth-client';
+import { defaultAuthModel } from './authDefaultModel.js';
+import { getActiveCatalog } from './maker-host/active-catalog.js';
 import { closeDb as closeLocalDb } from './localDb';
 import { readReloginFlag, clearReloginFlag } from './updateService';
 import * as canaryFlagStore from './canaryFlagStore';
@@ -141,7 +143,6 @@ const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
 const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
 const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
 const LEGACY_REFRESH_TOKEN_KEY = 'refresh_token';
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_EFFORT = 'medium';
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -767,7 +768,7 @@ function mapMembershipToAuthUser(membership: AuthMembership, passportId?: string
     // 产品资料头像回落已随 /api/user/me 退役(2026-07)。
     avatar: membership.avatarUrl ?? null,
     email: membership.email,
-    defaultModel: DEFAULT_MODEL,
+    defaultModel: defaultAuthModel(getActiveCatalog()),
     defaultEffort: DEFAULT_EFFORT,
     membershipKind: membership.kind,
     membershipRole: membership.role,

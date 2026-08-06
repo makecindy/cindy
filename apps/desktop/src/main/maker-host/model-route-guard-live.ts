@@ -245,12 +245,20 @@ export async function resolveRouteCopyCapabilities(
  * 默认模型上:只查来源级 suspended 会漏掉「恰好停用了这一个模型」的 override
  * (PR #744 review 第十五轮)。
  */
-const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
+const FALLBACK_ONESHOT_MODEL: Record<AgentKind, string> = {
   'claude-code': 'claude-haiku-4-5',
   codex: 'gpt-5.4-mini',
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
   pi: 'claude-haiku-4-5',
 };
+
+export function defaultOneShotModel(agent: AgentKind): string {
+  // This guard is used only when callers omit opts.model. The actual Claude/Codex agents then use
+  // the same fixed defaults below; consulting catalog defaults here would let the guard inspect one
+  // model while the one-shot request sends another. Catalog-aware callers must resolve a model and
+  // pass it explicitly to both the guard and oneShot.
+  return FALLBACK_ONESHOT_MODEL[agent];
+}
 
 /**
  * agent one-shot 兜底(help / 会话摘要 / 快照标签)是否被停用轴挡住。
@@ -267,7 +275,7 @@ export async function isAgentOneShotRouteDisabled(
     // 被停用的隐式默认来源上 —— 只有 pass 才允许(PR #744 review 第五轮)。
     return (await verdictForModelRoute(agent, model, null)).kind !== 'pass';
   }
-  if ((await verdictForModelRoute(agent, DEFAULT_ONESHOT_MODEL[agent], null)).kind !== 'pass') {
+  if ((await verdictForModelRoute(agent, defaultOneShotModel(agent), null)).kind !== 'pass') {
     return true;
   }
   let views: ProviderView[];

@@ -24,6 +24,8 @@ export interface ModelDefinition {
   sortOrder?: number;
   /** 选择器里默认是否可见;缺省 ⇒ 可见(见 getDefaultModelForVendor)。 */
   defaultEnabled?: boolean;
+  /** 被标记为本 vendor 的新会话默认 seed;种子选择优先取它(见 firstByCatalogOrder)。 */
+  newSessionDefault?: boolean;
 }
 
 function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi'): ModelDefinition {
@@ -38,6 +40,7 @@ function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi'): ModelDe
     supportsFastMode: m.supportsFastMode,
     sortOrder: m.sortOrder,
     defaultEnabled: m.defaultEnabled,
+    newSessionDefault: m.newSessionDefault,
   };
 }
 
@@ -48,8 +51,8 @@ function allCachedModels(deviceId?: string): ModelDefinition[] {
   const cc = getCachedCapabilities('claude-code', deviceId);
   const codex = getCachedCapabilities('codex', deviceId);
   return [
-    ...((cc?.availableModels ?? []).map((m) => toLegacy(m, 'cc'))),
-    ...((codex?.availableModels ?? []).map((m) => toLegacy(m, 'codex'))),
+    ...(cc?.availableModels ?? []).map((m) => toLegacy(m, 'cc')),
+    ...(codex?.availableModels ?? []).map((m) => toLegacy(m, 'codex')),
   ];
 }
 
@@ -118,7 +121,10 @@ function firstByCatalogOrder(models: readonly ModelDefinition[]): ModelDefinitio
   const visible = models.filter((m) => m.defaultEnabled !== false);
   // slice() 后再 sort：sort 原地改数组，直接排会打乱调用方（capabilities 缓存）的清单顺序。
   const pool = visible.length > 0 ? visible : models;
-  return pool.slice().sort(byOrder)[0];
+  // 显式「新会话默认」标记只在默认可见模型中生效;多个标记时仍按 sortOrder 取最低者。
+  // 整份清单都默认收起时退回纯排序,避免误配 marker 把默认落到用户找不到的模型。
+  const marked = visible.filter((m) => m.newSessionDefault === true);
+  return (marked.length > 0 ? marked : pool).slice().sort(byOrder)[0];
 }
 
 /**
@@ -135,7 +141,10 @@ function firstByCatalogOrder(models: readonly ModelDefinition[]): ModelDefinitio
  * 自动化任务（scheduler）的默认**故意不同**：无人值守场景成本保守，走 useScheduleForm.ts
  * getScheduleDefaultModel 三级回退（冷启动 Sonnet），不要把这里的默认接到 scheduler 上。
  */
-export function getDefaultModelForVendor(vendorKey: 'cc' | 'codex' | 'pi', deviceId?: string): ModelDefinition {
+export function getDefaultModelForVendor(
+  vendorKey: 'cc' | 'codex' | 'pi',
+  deviceId?: string,
+): ModelDefinition {
   const list = getModelsForVendor(vendorKey, deviceId);
   // capabilities 还没拉到时退化到一个静态 placeholder, 让调用方拿到非 undefined。
   // 调用方真正需要值时通常已经在 useEffect 后, capabilities 已就绪。
@@ -157,6 +166,9 @@ export function getDefaultModelForVendor(vendorKey: 'cc' | 'codex' | 'pi', devic
  * 影子：必须与 bundled 目录里「排序第一且默认可见」的那个一致（订阅口径，即不取网关折扣组），
  * 否则冷启动首帧会闪一个随后被换掉的模型名。由 modelDefinitionsDefaults 测试锁住。
  */
+// 有意的场景分档(2026-08-01 产品定案,非漂移):交互主会话首帧种子推旗舰档,
+// 与 authManager/调度/worker 的均衡档全局默认(目录 defaults)是不同场景的
+// 有意差异,不随目录 defaults 统一。
 const COLD_START_CC_MODEL_ID = 'claude-opus-5';
 const COLD_START_CODEX_MODEL_ID = 'gpt-5.6-sol';
 

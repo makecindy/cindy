@@ -20,6 +20,7 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
+  isBudgetModel,
   nativeDefaultSourceId,
 } from '@cindy/model-providers';
 import * as sessionService from '@/lib/sessionService';
@@ -41,7 +42,7 @@ import {
   DEFAULT_CONFIG,
   type CodexScheduleConfig,
 } from '../lib/cronCodexPreset';
-import { getScheduleDefaultModel, type EffortValue } from '../hooks/useScheduleForm';
+import type { EffortValue } from '../hooks/useScheduleForm';
 import {
   isFollowingSessionSelection,
   PENDING_SESSION_ID,
@@ -1064,8 +1065,8 @@ export function ModelEffortChip({
   disabled?: boolean;
   /**
    * heartbeat(绑定会话)形态:下拉顶部加"跟随会话"行(= model 空值),
-   * model 空时显示"跟随会话"而非默认回退模型。false/缺省路径行为零变化
-   * (空值回退默认模型的"所见即所存"逻辑保持原样,防 2026-06 显示≠运行事故复发)。
+   * model 空时显示"跟随会话"而非默认。false/缺省时空 model 显示"默认"，
+   * 具体模型由 Main 按 active catalog 物化，Renderer 不猜测。
    */
   followSession?: boolean;
   /** 显式选定来源(供应商)id;'' = 跟随该 agent 原生默认来源(no-break)。 */
@@ -1104,7 +1105,7 @@ export function ModelEffortChip({
     [disabled, discovery],
   );
   const caps = useAgentCapabilities(agentKind);
-  // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
+  // 触发器(trigger)展示用:仍按目录 budget 分组(旧快照回退 codex/ 前缀)的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
   // 过滤 + 分组),这里只为 trigger 文案保留最小化 model 解析。
   const { providers } = useProviders();
@@ -1113,13 +1114,13 @@ export function ModelEffortChip({
   const models = useMemo(
     () =>
       (availableModels ?? []).filter(
-        (m) => agentKind !== 'codex' || xdConnected || !m.id.startsWith('codex/'),
+        (m) => agentKind !== 'codex' || xdConnected || !isBudgetModel(m),
       ),
     [availableModels, agentKind, xdConnected],
   );
   // 只有 model/provider/effort 都为空时才显示「跟随会话」;混合覆盖态必须显式暴露，
-  // 不能把来源或强度覆盖伪装成完整继承。非 followSession 维持原逻辑:空值回退跟实际
-  // 运行语义同源(三级回退默认),绝不回退 models[0]。
+  // 不能把来源或强度覆盖伪装成完整继承。非 followSession 的空值只展示“默认”，
+  // 绝不拿 Renderer 快照或 models[0] 猜一个具体模型。
   const isFollowingSession = isFollowingSessionSelection({
     followSession,
     model: modelValue,
@@ -1127,7 +1128,9 @@ export function ModelEffortChip({
     effort: effortValue,
   });
   const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
-  const effectiveId = followsSessionModel ? '' : modelValue || getScheduleDefaultModel(agentKind);
+  // 历史/MCP 空 model 由 Main runner 在执行时按 active catalog 解析。Renderer 没有
+  // freshness 足够强的目录快照时只显示“默认”，不猜一个可能已陈旧的具体模型。
+  const effectiveId = followsSessionModel ? '' : modelValue;
   const current = models.find((m) => m.id === effectiveId);
   const allowedEfforts = (current?.efforts ?? []) as readonly EffortValue[];
   const fallbackEffort = (current?.defaultEffort ?? 'high') as EffortValue;

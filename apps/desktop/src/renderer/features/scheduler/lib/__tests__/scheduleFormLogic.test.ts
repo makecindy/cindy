@@ -549,7 +549,7 @@ describe('applyRunMode', () => {
   });
 
   it('还原快照时 model/effort/fastMode/agentKind 整组恢复(防"跟随会话"被回填模型污染,PR #103 review)', () => {
-    // 跟随会话任务(model 空)→ 切 fresh → 空 model 回填 effect 把 model 填成显式默认值
+    // 跟随会话任务(model 空)→ 切 fresh → 用户显式选了一个模型
     const bound = makeForm({ targetSessionId: 'sess-1', model: '', effort: '', agentKind: 'claude-code' });
     const snapshot = captureBinding(bound);
     const cleared = applyRunMode(bound, 'fresh');

@@ -253,7 +253,8 @@ describe('Scheduler template entry', () => {
     expect(screen.getByDisplayValue('Check open pull requests')).toBeTruthy();
     expect(screen.getByTestId('cron-expr').textContent).toBe('30 10 * * 1');
     expect(screen.getByTestId('agent-kind').textContent).toBe('claude-code');
-    expect(screen.getByTestId('model-value').textContent).toBe('claude-sonnet-4-6');
+    // 无用户记忆时 Renderer 保持“默认”语义，不用 bundled catalog 猜具体模型。
+    expect(screen.getByTestId('model-value').textContent).toBe('');
 
     fireEvent.click(
       screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }),
@@ -268,10 +269,11 @@ describe('Scheduler template entry', () => {
         timezone: 'Asia/Shanghai',
         recurring: true,
         agentKind: 'claude-code',
-        model: 'claude-sonnet-4-6',
         notify: { desktop: true, feishu: false, wecomGroup: false },
       }),
     );
+    // Preload wire 保持空；Main 的 maker:schedule:create 边界再按 active catalog 物化。
+    expect(createSchedule.mock.calls[0]?.[0]).not.toHaveProperty('model');
   });
 
   it('opens a usage-limit recovery Automation for confirmation without creating it', async () => {
@@ -393,16 +395,14 @@ describe('Scheduler template entry', () => {
   });
 
   /**
-   * review #1715 的回归:**所见即所存**。
+   * review #1715 的回归：用户已记住的显式模型不能被插件预填清空。
    *
    * 插件请求的任务是「用户不改模型、直接点保存」的高频路径(插件把内容都预填好了,
    * 用户只是确认一下),所以模型默认值这条链路对它尤其值得钉死:一旦"显示的模型"与
    * "落库的模型"漂移,用户就会以为在用 A、实际每次跑 B(2026-06 真踩过)。
    *
-   * 本用例钉的是**端到端结果**而非某条实现路径:当前由 ScheduleFormDialog 的
-   * "form.model 为空时回填默认模型" effect 保证;将来若有人改成从 intent 直接给值,
-   * 或反过来删掉那个 effect,只要最终"显示 === 落库"成立就仍然通过 —— 用户可见的
-   * 正确性才是契约。
+   * 本用例钉的是显式用户记忆路径：插件只预填任务内容，不覆盖表单的模型记忆；
+   * 若用户没有记忆，则另走空 model → Main active catalog 物化的默认路径。
    *
    * 这里刻意把「记忆的模型」设成**不同于 fallback**(claude-sonnet-4-6)的值,
    * 否则两者恰好相等时这个 bug 根本测不出来。

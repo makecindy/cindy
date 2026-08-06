@@ -148,7 +148,7 @@ export function App() {
       });
       // main 缓存两用途:① collab worker spawn 读 model/effort/fastMode;② device-link 远程
       // 草稿镜像读全量(model/effort/fast/permission/source)。故 lastByVendor 每项带上
-      // permissionMode + providerId(worker spawn 不消费这两项,远程草稿镜像才用)。仅 cc/codex,
+      // permissionMode + providerId(worker spawn 不消费这两项,远程草稿镜像才用)。仅 cc/codex/pi,
       // 不带 orca。fire-and-forget。
       window.electronAPI.syncNewMakerDraft({
         lastByVendor: {
@@ -164,6 +164,19 @@ export function App() {
             permissionMode: draft.lastByVendor.codex.permissionMode,
             providerId: draft.lastByVendor.codex.providerId ?? null,
           },
+          pi: {
+            model: draft.lastByVendor.pi.model,
+            effort: draft.lastByVendor.pi.effort,
+            permissionMode: draft.lastByVendor.pi.permissionMode,
+            providerId: draft.lastByVendor.pi.providerId ?? null,
+          },
+        },
+        // lastByVendor 永远带 sanitize 种子；只有显式选择标记为 true 的 vendor 才能在
+        // Main 的 Worker/MCP 默认解析里覆盖 registry/catalog 产品默认。
+        modelChosenByVendor: {
+          cc: draft.modelChosenByVendor.cc === true,
+          codex: draft.modelChosenByVendor.codex === true,
+          pi: draft.modelChosenByVendor.pi === true,
         },
         fastModeByModel: draft.fastModeByModel,
         effortByModel: draft.effortByModel,

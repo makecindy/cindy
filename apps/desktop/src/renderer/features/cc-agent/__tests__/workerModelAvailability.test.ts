@@ -2,7 +2,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentCapabilities, ModelDescriptor } from '@/hooks/useAgentCapabilities';
-import { selectWorkerModels } from '../workerModelAvailability';
+import { selectWorkerDefaultModel, selectWorkerModels } from '../workerModelAvailability';
 
 const model = (id: string): ModelDescriptor => ({
   id,
@@ -231,5 +231,58 @@ describe('selectWorkerModels', () => {
         excludeChatBridgedCodex: true,
       }).map((entry) => entry.id),
     ).toEqual(['claude-opus-4-8']);
+  });
+});
+
+describe('selectWorkerDefaultModel', () => {
+  it('prefers the Main active-catalog session default over bundled/catalog ordering', () => {
+    expect(
+      selectWorkerDefaultModel(
+        [
+          { ...model('codex/gpt-5.5'), sortOrder: 1 },
+          { ...model('deepseek/deepseek-v4-pro'), sortOrder: 44 },
+        ],
+        'deepseek/deepseek-v4-pro',
+      )?.id,
+    ).toBe('deepseek/deepseek-v4-pro');
+  });
+
+  it('keeps the registry product marker above a stale catalog session default', () => {
+    expect(
+      selectWorkerDefaultModel(
+        [
+          { ...model('codex/gpt-5.5'), sortOrder: 1 },
+          {
+            ...model('deepseek/deepseek-v4-pro'),
+            sortOrder: 44,
+            newSessionDefault: true,
+          },
+        ],
+        'codex/gpt-5.5',
+      )?.id,
+    ).toBe('deepseek/deepseek-v4-pro');
+  });
+
+  it('prefers a visible new-session marker even when an older bundled model remains available', () => {
+    const oldBundled = { ...model('codex/gpt-5.5'), sortOrder: 1 };
+    const liveDefault = {
+      ...model('deepseek/deepseek-v4-pro'),
+      sortOrder: 44,
+      newSessionDefault: true,
+    };
+
+    expect(selectWorkerDefaultModel([oldBundled, liveDefault])?.id).toBe(
+      'deepseek/deepseek-v4-pro',
+    );
+  });
+
+  it('ignores hidden markers and otherwise follows catalog sort order', () => {
+    expect(
+      selectWorkerDefaultModel([
+        { ...model('hidden-marker'), sortOrder: 0, defaultEnabled: false, newSessionDefault: true },
+        { ...model('later'), sortOrder: 20 },
+        { ...model('first'), sortOrder: 10 },
+      ])?.id,
+    ).toBe('first');
   });
 });

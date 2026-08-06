@@ -87,7 +87,7 @@ export function isProviderRouteMutationInProgress(providerId: string): boolean {
  * generic-oauth 侧在读取时后台单飞触发，不阻塞本次路由。返回 null = 未登录 / 无 token
  * → 路由仍指向该供应商上游但置哑 token（上游预期 401；绝不回落默认路由防凭证泄漏）。
  */
-type OAuthTokenReader = (providerId: string) => string | null;
+type OAuthTokenReader = (provider: Provider) => string | null;
 let oauthTokenReader: OAuthTokenReader = () => null;
 
 /** host 启动期接通 generic-oauth 的同步 token 缓存读取。 */
@@ -579,14 +579,14 @@ export interface ResolvedProviderRouteDecision {
  * 自定义 key、两种 OAuth 策略的读取器与容错)是同一份逻辑,分写会漂移。
  */
 async function readProviderRouteCredentials(
-  provider: { id: string; source: 'builtin' | 'user' },
+  provider: Provider,
   routing: RoutingDescriptor,
   agent: AgentKind,
 ): Promise<{ apiKey: string | null; oauthToken: string | null }> {
   const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
-    oauthToken = oauthTokenReader(provider.id);
+    oauthToken = oauthTokenReader(provider);
   } else if (routing.authStrategy === 'provider-oauth-header') {
     try {
       oauthToken = await providerOAuthTokenReader(provider.id, agent);
@@ -638,12 +638,13 @@ export function resolveSessionRouteDecision(
   }
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  if (!provider) return null;
+  const routing = providerRoutingForModel(provider, agent, wireModel);
   if (!routing) return null;
   if (routing.disabled) return disabledProviderRouteDecision(providerId);
   if (!routingServesWireModel(routing, wireModel)) return null;
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
-  const apiKey = provider?.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
+  const apiKey = provider.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
@@ -652,7 +653,7 @@ export function resolveSessionRouteDecision(
   // （临期刷新在后台单飞，不阻塞路由热路径，规则 10）。
   if (routing.authStrategy === 'oauth-token') {
     return withRequestPath(
-      buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthTokenReader(providerId)),
+      buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthTokenReader(provider)),
     );
   }
   if (routing.authStrategy !== 'provider-oauth-header') {

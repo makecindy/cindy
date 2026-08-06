@@ -12,6 +12,7 @@
  */
 
 import {
+  actualSourceIdForModel,
   getModel,
   isModelSelectableForNewRoute,
   isModelVisible,
@@ -26,7 +27,6 @@ import {
 // 用 renderer 自己的 ModelDescriptor（Effort=string，宽松）—— 与 capabilities.availableModels
 // 同型，picker 现有代码（effortDisplayNames 按 string 索引等）零改动即可消费。
 import type { AgentCapabilities, ModelDescriptor } from '@/hooks/useAgentCapabilities';
-import { isSubscriptionDirectModel } from '../../shared/subscriptionModels';
 
 /**
  * 按目标 `(provider, agent, model)` 读取 effort 能力。
@@ -63,6 +63,42 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
   if (m.mode !== undefined) d.mode = m.mode;
   return d;
+}
+
+export interface SessionModelCatalogMetadata {
+  sourceAccess?: ProviderView['access'];
+  group?: string;
+  category?: string;
+}
+
+/**
+ * Resolve metadata from the exact session route. Missing provider snapshots preserve callers' legacy
+ * id-based behavior; an explicit but stale source never borrows metadata from a different provider.
+ */
+export function resolveSessionModelCatalogMetadata(params: {
+  providers: ProviderView[];
+  providerId: string | null | undefined;
+  modelId: string;
+  agentKind: AgentKind;
+}): SessionModelCatalogMetadata | undefined {
+  const { providers, providerId, modelId, agentKind } = params;
+  if (providers.length === 0) return undefined;
+  // Metadata must describe the persisted route, not a usable replacement route. An explicit
+  // provider that was deleted or no longer offers this model is therefore unresolved; only an
+  // implicit route may select the agent's native default source.
+  const sourceId = providerId
+    ? providerId
+    : actualSourceIdForModel(providers, null, modelId, agentKind);
+  if (!sourceId) return undefined;
+  const provider = providers.find((candidate) => candidate.id === sourceId);
+  if (!provider) return undefined;
+  const model = getModel(provider, modelId, agentKind);
+  if (!model) return undefined;
+  return {
+    ...(provider.access !== undefined ? { sourceAccess: provider.access } : {}),
+    ...(model.group !== undefined ? { group: model.group } : {}),
+    ...(model.category !== undefined ? { category: model.category } : {}),
+  };
 }
 
 /**
@@ -235,7 +271,6 @@ export function selectVisibleModels(params: {
     deviceCcModels,
     deviceCodexModels,
     devicePiModels = [],
-    excludeSubscriptionDirect,
     excludeChatBridgedCodex,
   } = params;
   // excludeSubscriptionDirect 不再过滤(见参数文档):行保留,准入由调用方按

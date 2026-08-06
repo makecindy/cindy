@@ -90,6 +90,7 @@
     "@cindy/maker-remote-ssh": "workspace:*",
     "@cindy/maker-scheduler": "workspace:*",
     "@cindy/maker-shared": "workspace:*",
+    "@cindy/model-access-protocol": "workspace:*",
     "@cindy/model-providers": "workspace:*",
     "@cindy/remote-file-service": "workspace:*",
     "@cindy/voice-input-core": "workspace:*",

@@ -137,6 +137,26 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     ) {
       return invalid(`runtime '${agent}' model.contextWindow must be a positive number`);
     }
+    if (
+      mm.maxOutput !== undefined
+      && (
+        typeof mm.maxOutput !== 'number'
+        || !Number.isFinite(mm.maxOutput)
+        || mm.maxOutput <= 0
+      )
+    ) {
+      return invalid(`runtime '${agent}' model.maxOutput must be a positive number`);
+    }
+    if (
+      mm.mode !== undefined
+      && (
+        typeof mm.mode !== 'string'
+        || mm.mode.trim().length === 0
+        || mm.mode.trim().length > 128
+      )
+    ) {
+      return invalid(`runtime '${agent}' model.mode must be a non-empty string up to 128 characters`);
+    }
     if (mm.defaultEnabled !== undefined && typeof mm.defaultEnabled !== 'boolean') {
       return invalid(`runtime '${agent}' model.defaultEnabled must be a boolean`);
     }
@@ -366,6 +386,39 @@ export function validateCustomProviderConfig(config: unknown): ValidationResult 
   );
 }
 
+/**
+ * 清洗厂商自报的 modalities（读回坏数据 / renderer 传入都走这里,防注入）。仅保留字符串
+ * 数组;input/output 皆空视为无有效模态返回 undefined(不写空对象污染配置)。
+ */
+function sanitizeModelModalities(v: unknown): { input: string[]; output: string[] } | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as { input?: unknown; output?: unknown };
+  const toStrArr = (x: unknown): string[] =>
+    Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string') : [];
+  const input = toStrArr(o.input);
+  const output = toStrArr(o.output);
+  if (input.length === 0 && output.length === 0) return undefined;
+  return { input, output };
+}
+
+/** 已知能力键(对齐 CatalogModel.capabilities);只吃 boolean,其余忽略。全空返回 undefined。 */
+const MODEL_CAPABILITY_KEYS = ['reasoning', 'toolCall', 'attachment', 'temperature'] as const;
+function sanitizeModelCapabilities(v: unknown): ProviderRuntimeModelConfig['capabilities'] | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const out: NonNullable<ProviderRuntimeModelConfig['capabilities']> = {};
+  for (const k of MODEL_CAPABILITY_KEYS) {
+    if (typeof o[k] === 'boolean') out[k] = o[k] as boolean;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sanitizeModelMode(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const mode = v.trim();
+  return mode.length > 0 && mode.length <= 128 ? mode : undefined;
+}
+
 /** 规整单个 runtime（trim baseUrl、去重 models、裁 headers）。 */
 function normalizeRuntime(
   agent: AgentKind,
@@ -373,16 +426,26 @@ function normalizeRuntime(
 ): CustomProviderRuntimeConfig {
   const seen = new Set<string>();
   const models = rt.models
-    .map((m) => ({
-      id: m.id.trim(),
-      name: m.name.trim(),
-      ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-      ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-      ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-      ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
-        ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-        : {}),
-    }))
+    .map((m) => {
+      const mode = sanitizeModelMode(m.mode);
+      const modalities = sanitizeModelModalities(m.modalities);
+      const capabilities = sanitizeModelCapabilities(m.capabilities);
+      return {
+        id: m.id.trim(),
+        name: m.name.trim(),
+        ...(mode !== undefined ? { mode } : {}),
+        ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+        ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
+        // 厂商自报能力随配置持久化(未命中知识库的第三方模型也保留真实能力)。
+        ...(modalities ? { modalities } : {}),
+        ...(capabilities ? { capabilities } : {}),
+        ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+        ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+        ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
+          ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+          : {}),
+      };
+    })
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
       seen.add(m.id);
@@ -441,36 +504,125 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
 
 /**
  * 把授权后自动发现的模型 additions-only 合并进自定义供应商配置的指定 runtime（纯函数）。
- * 已有 id first-wins（用户手填 / 上次发现的条目不被覆盖）；无新增返回 null（调用方免写库）。
- * 持久化发现结果是自定义 OAuth 供应商「重启后模型仍在」的保证——内存 augment 会随进程消失。
+ * 已有 id first-wins（用户手填 / 上次发现的条目不被覆盖）；持久化发现结果是自定义 OAuth
+ * 供应商「重启后模型仍在」的保证——内存 augment 会随进程消失。
+ *
+ * 除追加新模型外,还会更新存量模型的分类/能力事实。mode 没有手工编辑入口,最新有效上报
+ * 覆盖旧值；maxOutput 作为硬上限只收紧，contextWindow / modalities / capabilities 只
+ * gap-fill、不覆盖既有值。老 provider
+ * 首次在新版发现时才能拿到厂商真实能力,重启后 boot 的 config-resolve 不再退回保守默认。
+ * 无新增且无回填时返回 null(调用方免写库)。
  */
 export function mergeDiscoveredModelsIntoConfig(
   config: CustomProviderConfig,
   agent: AgentKind,
-  discovered: { id: string; name: string; contextWindow?: number }[],
+  // 能力字段可选携带:发现/上游自报的真实窗口与模态能力持久化进配置(离线/重启保留,并供
+  // 保存即 resolve 作为 providerReported 上传);未命中知识库也不落保守默认。
+  discovered: {
+    id: string;
+    name: string;
+    mode?: string;
+    contextWindow?: number;
+    maxOutput?: number;
+    modalities?: ProviderRuntimeModelConfig['modalities'];
+    capabilities?: ProviderRuntimeModelConfig['capabilities'];
+  }[],
 ): CustomProviderConfig | null {
   const rt = config.runtimes[agent];
   if (!rt) return null;
+  // 厂商这次上报的能力字段按 id 索引(首次出现胜出),供新增写入 + 存量回填共用。
+  const reported = new Map<string, {
+    mode?: string;
+    contextWindow?: number;
+    maxOutput?: number;
+    modalities?: ProviderRuntimeModelConfig['modalities'];
+    capabilities?: ProviderRuntimeModelConfig['capabilities'];
+  }>();
+  for (const m of discovered) {
+    if (!m.id || reported.has(m.id)) continue;
+    const entry: {
+      mode?: string;
+      contextWindow?: number;
+      maxOutput?: number;
+      modalities?: ProviderRuntimeModelConfig['modalities'];
+      capabilities?: ProviderRuntimeModelConfig['capabilities'];
+    } = {};
+    const mode = sanitizeModelMode(m.mode);
+    if (mode !== undefined) entry.mode = mode;
+    if (typeof m.contextWindow === 'number' && Number.isFinite(m.contextWindow) && m.contextWindow > 0) {
+      entry.contextWindow = m.contextWindow;
+    }
+    if (typeof m.maxOutput === 'number' && Number.isFinite(m.maxOutput) && m.maxOutput > 0) {
+      entry.maxOutput = m.maxOutput;
+    }
+    if (m.modalities) entry.modalities = m.modalities;
+    if (m.capabilities) entry.capabilities = m.capabilities;
+    if (
+      entry.mode !== undefined ||
+      entry.contextWindow !== undefined ||
+      entry.maxOutput !== undefined ||
+      entry.modalities !== undefined ||
+      entry.capabilities !== undefined
+    ) {
+      reported.set(m.id, entry);
+    }
+  }
+  let changed = false;
+  // mode 取最新有效厂商事实；maxOutput 是上游硬上限，取新旧较小值；其余字段只在
+  // 缺失时 gap-fill(不覆盖用户配置)。
+  const backfilled = rt.models.map((m) => {
+    const r = reported.get(m.id);
+    if (!r) return m;
+    let next = m;
+    if (r.mode !== undefined && next.mode !== r.mode) {
+      next = { ...next, mode: r.mode };
+      changed = true;
+    }
+    if (next.contextWindow === undefined && r.contextWindow !== undefined) {
+      next = { ...next, contextWindow: r.contextWindow };
+      changed = true;
+    }
+    const maxOutput = next.maxOutput === undefined
+      ? r.maxOutput
+      : r.maxOutput === undefined
+        ? next.maxOutput
+        : Math.min(next.maxOutput, r.maxOutput);
+    if (maxOutput !== undefined && maxOutput !== next.maxOutput) {
+      next = { ...next, maxOutput };
+      changed = true;
+    }
+    if (next.modalities === undefined && r.modalities !== undefined) {
+      next = { ...next, modalities: r.modalities };
+      changed = true;
+    }
+    if (next.capabilities === undefined && r.capabilities !== undefined) {
+      next = { ...next, capabilities: r.capabilities };
+      changed = true;
+    }
+    return next;
+  });
   const existing = new Set(rt.models.map((m) => m.id));
   const fresh = discovered.filter((m) => m.id && m.name && !existing.has(m.id));
-  if (fresh.length === 0) return null;
+  if (fresh.length > 0) changed = true;
+  if (!changed) return null;
   return {
     ...config,
     runtimes: {
       ...config.runtimes,
       [agent]: {
         ...rt,
-        models: [
-          ...rt.models,
-          // 端点声明了上下文长度就随发现落盘,缺省则回落保守默认(#386)。
-          ...fresh.map((m) => ({
+        models: [...backfilled, ...fresh.map((m) => {
+          const r = reported.get(m.id);
+          return {
             id: m.id,
             name: m.name,
-            ...(typeof m.contextWindow === 'number' && Number.isFinite(m.contextWindow) && m.contextWindow > 0
-              ? { contextWindow: Math.floor(m.contextWindow) }
-              : {}),
-          })),
-        ],
+            ...(r?.mode !== undefined ? { mode: r.mode } : {}),
+            ...(r?.contextWindow !== undefined ? { contextWindow: r.contextWindow } : {}),
+            ...(r?.maxOutput !== undefined ? { maxOutput: r.maxOutput } : {}),
+            ...(r?.modalities !== undefined ? { modalities: r.modalities } : {}),
+            ...(r?.capabilities !== undefined ? { capabilities: r.capabilities } : {}),
+          };
+        })],
       },
     },
   };
@@ -512,18 +664,33 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
           .filter((m): m is Record<string, unknown> =>
             !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
           )
-          .map((m) => ({
-            id: String(m.id),
-            name: String(m.name ?? ''),
-            ...(typeof m.contextWindow === 'number'
-              && Number.isFinite(m.contextWindow)
-              && m.contextWindow > 0
-              ? { contextWindow: m.contextWindow }
-              : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-            ...parseStoredPiReasoningCapability(agent, m),
-          }))
+          .map((m) => {
+            const mode = sanitizeModelMode(m.mode);
+            const modalities = sanitizeModelModalities(m.modalities);
+            const capabilities = sanitizeModelCapabilities(m.capabilities);
+            return {
+              id: String(m.id),
+              name: String(m.name ?? ''),
+              ...(mode !== undefined ? { mode } : {}),
+              ...(typeof m.contextWindow === 'number'
+                && Number.isFinite(m.contextWindow)
+                && m.contextWindow > 0
+                ? { contextWindow: m.contextWindow }
+                : {}),
+              ...(typeof m.maxOutput === 'number'
+                && Number.isFinite(m.maxOutput)
+                && m.maxOutput > 0
+                ? { maxOutput: m.maxOutput }
+                : {}),
+              // 与 normalizeRuntime 同口径:读回保留厂商自报能力,round-trip 稳定
+              // (updateCustomProviderIfUnchanged 靠 JSON 比较,读写不一致会误判 stale)。
+              ...(modalities ? { modalities } : {}),
+              ...(capabilities ? { capabilities } : {}),
+              ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...parseStoredPiReasoningCapability(agent, m),
+            };
+          })
       : [];
     const entry: CustomProviderRuntimeConfig = {
       baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : '',

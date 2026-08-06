@@ -13,6 +13,7 @@
     "./branding": "./src/providerBranding.ts",
     "./registry": "./src/registry.ts",
     "./types": "./src/types.ts",
+    "./defaults": "./src/defaults.ts",
     "./effort-resolution": "./src/effortResolution.ts",
     "./model-list": "./src/modelList.ts",
     "./classification": "./src/classification.ts",

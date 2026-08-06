@@ -557,7 +557,9 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   findModelRegistryRoute,
+  isBudgetModel,
   isModelSelectableForNewRoute,
+  type Effort,
   type ProviderView,
 } from '@cindy/model-providers';
 import {
@@ -566,10 +568,26 @@ import {
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
-import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import {
+  getActiveCatalog,
+  setDiscoveredProviderModels,
+  setResolvedProviderModels,
+} from '../maker-host/active-catalog.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
-import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
+import {
+  isLatestModelResolveResult,
+  releaseModelResolveApplyResult,
+  resolveProviderModelEntries,
+  resolveProviderModels,
+  toModelResolveRequestModels,
+  type ModelResolveInput,
+} from '../model-access/modelResolve.js';
+import {
+  buildModelsFetchRequest,
+  fetchProviderModels,
+} from '../maker-host/provider-model-fetch.js';
 import { beginProviderRouteMutation, isUserProviderSession } from '../maker-host/provider-route.js';
+import { withSessionDefaultModel } from './agentCapabilitiesResponse.js';
 import {
   getAnthropicModelDiscoveryFailure,
   refreshAnthropicModelsFromHttp,
@@ -588,7 +606,8 @@ import {
 import {
   cancelGenericOAuthLogin,
   deriveModelsDiscoveryUrl,
-  discoverGenericOAuthModels,
+  discoverGenericOAuthModelsDetailed,
+  genericOAuthCredentialRealm,
   logoutGenericOAuth,
   removeGenericOAuthCredentialsReversibly,
   runGenericOAuthLogin,
@@ -1483,14 +1502,12 @@ interface OrcaCollabService {
   }) => Promise<
     { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string }
   >;
-  listAvailableModels: (params: {
-    agent?: AgentKind;
-  }) => Promise<
+  listAvailableModels: (params: { agent?: AgentKind }) => Promise<
     | {
         ok: true;
-        codex?: Array<{ id: string; label: string }>;
-        claude_code?: Array<{ id: string; label: string }>;
-        pi?: Array<{ id: string; label: string }>;
+        codex?: Array<{ id: string; label: string; category?: string; group?: string }>;
+        claude_code?: Array<{ id: string; label: string; category?: string; group?: string }>;
+        pi?: Array<{ id: string; label: string; category?: string; group?: string }>;
       }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -2067,9 +2084,7 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
  * 给 feishu /ctr 接管 in-turn session 用 —— attached=true 路径里 setInteractionListener
  * 覆盖之前调一次, 把 desktop 卡片"原地搬到飞书"。
  */
-export function takePendingInteractionsForSession(
-  sessionId: string,
-): Array<{
+export function takePendingInteractionsForSession(sessionId: string): Array<{
   requestId: string;
   request: InteractionRequest;
   resolve: (decision: InteractionDecision) => void;
@@ -3865,10 +3880,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         }
         if (turnAssistantPersistId && modelUsageDeltas && modelUsageDeltas.length > 0) {
           const mismatchClientId = turnAssistantPersistId;
-          const actualEntries = modelUsageDeltas.map((d) => ({
-            model: d.model,
-            outputTokens: d.outputTokensDelta,
-          }));
+          const actualEntries = modelUsageDeltas.map((d) => {
+            const family = getActiveCatalog()
+              .providers.flatMap((provider) => provider.models['claude-code'] ?? [])
+              .find((model) => model.id === d.model)?.family;
+            return {
+              model: d.model,
+              ...(family !== undefined ? { family } : {}),
+              outputTokens: d.outputTokensDelta,
+            };
+          });
           void modelPromise
             .then((selectedModel) => {
               const mismatch = detectClaudeModelMismatch(selectedModel, actualEntries);
@@ -4676,6 +4697,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return;
     setNewMakerDraftCache({
       lastByVendor: p.lastByVendor,
+      modelChosenByVendor: {
+        ...(p.modelChosenByVendor?.cc === true ? { cc: true } : {}),
+        ...(p.modelChosenByVendor?.codex === true ? { codex: true } : {}),
+        ...(p.modelChosenByVendor?.pi === true ? { pi: true } : {}),
+      },
       fastModeByModel: p.fastModeByModel,
       effortByModel: p.effortByModel,
       // worktree 勾选记忆(vendor 无关根字段):旧 renderer 不推此字段 → false 兜底。
@@ -4807,8 +4833,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
 
   ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES, (_e, agentKind: unknown) => {
+    const agent = requireAgentKind(agentKind);
     return {
-      ...maker.getCapabilities(requireAgentKind(agentKind)),
+      ...withSessionDefaultModel(
+        maker.getCapabilities(agent),
+        getActiveCatalog(),
+        agent,
+      ),
       // host 级 optional 能力；旧 desktop 缺省为 false。两个 agent 查询都带回，
       // 手机读取当前 agent 快照即可决定是否展示切换入口。
       supportsSessionAgentSwitch: true,
@@ -4985,6 +5016,156 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   options.onProviderModelAutoRefreshConfigured();
 
+  /**
+   * 添加向导里尚未保存的供应商在 resolve 请求上用的占位 provider id。
+   *
+   * 服务端按**模型 id** 匹配知识库(见 knowledgeProviderId);请求里的 providerId 只用来
+   * 额外追加 `<provider>/<model>` 作用域候选键。因此占位符既能拿到与已保存供应商同样的
+   * 知识库补全,又不会借用任何真实 provider 的 override 作用域。含 `/` 保证不与真实
+   * provider id(`^[a-z0-9_-]+$`)撞名。
+   */
+  const UNSAVED_FORM_RESOLVE_PROVIDER_ID = 'unsaved/form';
+
+  // 自定义供应商保存后:对配置里的生效模型异步 resolve + 把补全 overlay 写进
+  // active-catalog。与「获取模型列表 / 刷新」的 fetch→resolve 语义一致,但这里模型
+  // 直接取自已持久化的配置(预设/手填),不再发现——覆盖「预设添加后从不点刷新」的盲点。
+  // fire-and-forget、flag 门控、失败静默降级;overlay 字段映射与 OAuth 发现路径一致。
+  async function resolveSavedCustomProviderModels(providerId: string): Promise<void> {
+    if (process.env.XDT_DISABLE_MODEL_CATALOG_RESOLVE === '1') return;
+    const ownerAtStart = getActiveAppSession();
+    const cfg = await getCustomProvider(providerId);
+    const ownerAfterRead = getActiveAppSession();
+    if (
+      ownerAfterRead.dataOwnerId !== ownerAtStart.dataOwnerId
+      || ownerAfterRead.generation !== ownerAtStart.generation
+    ) return;
+    if (!cfg) return;
+    // 同一 provider 的支持 runtime 合并成一次 entries[] resolve；结果仍按 agent 顺序应用，
+    // 并累积把 modalities/capabilities gap-fill 回 config，末尾只写一次，避免并发写同一配置。
+    const pending: Array<{
+      agent: 'claude-code' | 'codex';
+      uploadedIds: string[];
+      input: ModelResolveInput;
+    }> = [];
+    for (const agent of Object.keys(cfg.runtimes) as AgentKind[]) {
+      // resolve 契约(MODEL_ACCESS_AGENTS)只覆盖 claude-code/codex;pi 无知识库通道,
+      // 配置里的模型原样保留(与 resolveFetchedModels 的同一条门一致)。
+      if (agent !== 'claude-code' && agent !== 'codex') continue;
+      const runtime = cfg.runtimes[agent];
+      if (!runtime || runtime.models.length === 0) continue;
+      const modelsUrl = buildModelsFetchRequest({
+        agent,
+        baseUrl: runtime.baseUrl,
+        wireProtocol: runtime.wireProtocol,
+        modelsUrl: runtime.modelsUrl,
+      }).url;
+      const resolveModels = toModelResolveRequestModels(
+        runtime.models.map((m) => {
+          // 持久化配置里的厂商自报事实全部随 resolve 上传；显式非聊天 mode 会由统一
+          // wire 投影过滤，避免 embedding/image 等在服务端被重新解释成聊天模型。
+          const providerReported = {
+            ...(m.mode !== undefined ? { mode: m.mode } : {}),
+            ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+            ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
+            ...(m.modalities ? { modalities: m.modalities } : {}),
+            ...(m.capabilities ? { capabilities: m.capabilities } : {}),
+          };
+          return {
+            id: m.id,
+            name: m.name,
+            ...(Object.keys(providerReported).length > 0 ? { providerReported } : {}),
+          };
+        }),
+      );
+      if (resolveModels.length === 0) continue;
+      pending.push({
+        agent,
+        // 全量 membership guard 仍包含显式非聊天模型；只有 resolve wire payload 过滤它们。
+        uploadedIds: runtime.models.map((m) => m.id),
+        input: {
+          providerId,
+          agent,
+          ...(runtime.wireProtocol ? { wireProtocol: runtime.wireProtocol } : {}),
+          sourceIdentity: {
+            kind: 'provider-runtime',
+            upstream: runtime.baseUrl,
+            ...(runtime.requestPath ? { requestPath: runtime.requestPath } : {}),
+            modelsUrl,
+          },
+          models: resolveModels,
+        },
+      });
+    }
+    if (pending.length === 0) return;
+    let resolvedEntries: Array<Awaited<ReturnType<typeof resolveProviderModels>>> = pending.map(
+      () => null,
+    );
+    try {
+      resolvedEntries = await resolveProviderModelEntries(pending.map(({ input }) => input));
+    } catch {
+      // Resolve is best-effort; keep the pre-resolve provider config untouched.
+    }
+
+    let nextCfg = cfg;
+    for (const [index, { agent, uploadedIds }] of pending.entries()) {
+      const resolved = resolvedEntries[index] ?? null;
+      if (!resolved || !isLatestModelResolveResult(resolved)) continue;
+      // in-session:补全 overlay 落 active-catalog(含 modalities/capabilities,供路由/桥接读)。
+      const overlay = resolved.entry.models.map((m) => ({
+        id: m.id,
+        name: m.name,
+        contextWindow: m.contextWindow,
+        maxOutput: m.maxOutput,
+        description: m.description,
+        family: m.family,
+        group: m.group ?? `custom:${providerId}`,
+        category: m.category,
+        mode: m.mode,
+        sortOrder: m.sortOrder,
+        efforts: m.efforts,
+        defaultEffort: m.defaultEffort,
+        supportsFastMode: m.supportsFastMode,
+        defaultEnabled: m.defaultEnabled,
+        ...(m.modalities ? { modalities: m.modalities } : {}),
+        ...(m.capabilities && Object.keys(m.capabilities).length > 0
+          ? { capabilities: m.capabilities }
+          : {}),
+      }));
+      setResolvedProviderModels(
+        providerId,
+        agent,
+        resolved.entry.models.map((m) => m.id),
+        overlay,
+        resolved.knowledgeRevision,
+        uploadedIds,
+      );
+      // durability:把 resolve 补全的 maxOutput/modalities/capabilities 写回 config；其中
+      // maxOutput 按硬上限取新旧较小值，其余字段 gap-fill。服务端这些字段只来自 provider/KB；capabilities
+      // 为空对象时跳过。contextWindow 走原有厂商自报/预设路径,不在此写(避免固化 200K 保守默认)。
+      const gapFilled = mergeDiscoveredModelsIntoConfig(
+        nextCfg,
+        agent,
+        resolved.entry.models.map((m) => ({
+          id: m.id,
+          name: m.name,
+          ...(m.mode ? { mode: m.mode } : {}),
+          ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
+          ...(m.modalities ? { modalities: m.modalities } : {}),
+          ...(m.capabilities && Object.keys(m.capabilities).length > 0
+            ? { capabilities: m.capabilities }
+            : {}),
+        })),
+      );
+      if (gapFilled) nextCfg = gapFilled;
+    }
+    // 末尾单次写库:直调 store（不经 IPC UPDATE handler → 不再触发 resolveSavedProviderModels,
+    // 避免循环);乐观锁——cfg 期间被其它写改动则 no-op,下次保存/刷新再补。gap-fill 幂等,
+    // 第二轮无可补即不再变更、不再写。
+    if (nextCfg !== cfg) {
+      await updateCustomProviderIfUnchanged(providerId, cfg, nextCfg).catch(() => undefined);
+    }
+  }
+
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
@@ -4997,6 +5178,137 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listPresets: () => getActiveCatalog().presets ?? [],
     testConnection: (input) => testProviderConnection(input),
     fetchModels: (spec) => fetchProviderModels(spec),
+    resolveSavedProviderModels: resolveSavedCustomProviderModels,
+    resolveFetchedModels: (spec, result) => {
+      if (
+        process.env.XDT_DISABLE_MODEL_CATALOG_RESOLVE === '1' ||
+        !result.models ||
+        // 两个消费方:requestId → 表单预填广播(含添加向导里尚未保存的新供应商);
+        // savedProviderId → 把完整 hints 补全 overlay 落 active-catalog(刷新路径)。
+        // 都没有则无人消费,免打 resolve。
+        (!spec.requestId && !spec.savedProviderId) ||
+        // resolve 契约(MODEL_ACCESS_AGENTS)只覆盖 claude-code/codex;pi 无知识库通道,
+        // 保持发现结果原样展示,不发起 resolve。
+        (spec.agent !== 'claude-code' && spec.agent !== 'codex')
+      )
+        return;
+      const models = result.models;
+      const resolveModels = toModelResolveRequestModels(models);
+      if (resolveModels.length === 0) return;
+      // 未保存的表单没有正式 provider 身份,**绝不**从主机名推导一个:那既可能与真实
+      // provider id 撞名而借用它的 override 作用域,也不是知识库的匹配键。服务端按
+      // 模型 id 匹配知识库(providerId 只额外追加 `<provider>/<model>` 作用域候选键),
+      // 所以用一个不可能撞名的占位符即可拿到与已保存供应商同样的 KB 补全;
+      // overlay 写回目录仍只在 savedProviderId 存在时执行(见下方)。
+      const resolveProviderId = spec.savedProviderId ?? UNSAVED_FORM_RESOLVE_PROVIDER_ID;
+      const modelsUrl = buildModelsFetchRequest(spec).url;
+      const savedRoute = spec.savedProviderId
+        ? getActiveCatalog().providers.find((provider) => provider.id === spec.savedProviderId)
+            ?.routing[spec.agent]
+        : undefined;
+      void resolveProviderModels({
+        providerId: resolveProviderId,
+        agent: spec.agent,
+        // 服务端继续只看到固定的非真实 providerId；本地 apply token 按表单 requestId
+        // 隔离，避免两个并发“未保存供应商”互相把结果判成 stale。
+        ...(spec.requestId && !spec.savedProviderId
+          ? { localApplyScope: spec.requestId }
+          : {}),
+        wireProtocol: spec.wireProtocol,
+        sourceIdentity: {
+          kind: 'provider-runtime',
+          upstream: spec.baseUrl,
+          ...(savedRoute?.requestPath ? { requestPath: savedRoute.requestPath } : {}),
+          modelsUrl,
+        },
+        models: resolveModels,
+      })
+        .then(async (resolved) => {
+          // Resolver 在 fulfill 前会检查 owner generation；消费回调排队期间仍可能切号，
+          // 因此广播未保存表单和落已保存 overlay 前都要在消费点再次检查 apply token。
+          if (!resolved || !isLatestModelResolveResult(resolved)) return;
+          // 表单预填(仅当有 requestId)。
+          if (spec.requestId) {
+            try {
+              const byId = new Map(resolved.entry.models.map((model) => [model.id, model]));
+              broadcastToAllWindows(MAKER_PUSH.PROVIDER_MODELS_RESOLVED, {
+                requestId: spec.requestId,
+                models: models.map((model) => {
+                  const metadata = byId.get(model.id);
+                  return metadata ? { ...model, ...metadata, id: model.id } : model;
+                }),
+              });
+            } finally {
+              if (!spec.savedProviderId) releaseModelResolveApplyResult(resolved);
+            }
+          }
+          if (!spec.savedProviderId) return;
+          // 已保存 provider:完整 hints 补全 overlay 落目录,未命中知识库的模型也保留
+          // 厂商上报的 contextWindow/maxOutput/modalities/capabilities(字段映射同 OAuth 路径)。
+          if (spec.savedProviderId) {
+            const overlay = resolved.entry.models.map((m) => ({
+              id: m.id,
+              name: m.name,
+              contextWindow: m.contextWindow,
+              maxOutput: m.maxOutput,
+              description: m.description,
+              family: m.family,
+              group: m.group ?? `custom:${spec.savedProviderId}`,
+              category: m.category,
+              mode: m.mode,
+              sortOrder: m.sortOrder,
+              efforts: m.efforts,
+              defaultEffort: m.defaultEffort,
+              supportsFastMode: m.supportsFastMode,
+              defaultEnabled: m.defaultEnabled,
+              ...(m.modalities ? { modalities: m.modalities } : {}),
+              ...(m.capabilities && Object.keys(m.capabilities).length > 0
+                ? { capabilities: m.capabilities }
+                : {}),
+            }));
+            setResolvedProviderModels(
+              spec.savedProviderId,
+              spec.agent,
+              resolved.entry.models.map((m) => m.id),
+              overlay,
+              resolved.knowledgeRevision,
+              models.map((m) => m.id),
+            );
+            // durability:把 resolve 补全的 maxOutput/modalities/capabilities 写回 config；maxOutput
+            // 按硬上限取新旧较小值，其余字段 gap-fill。刷新不自报
+            // 厂商(如 Kimi/DeepSeek)时 path 1(save-resolve)常因配置无变化不触发,这里兜住;走
+            // store 直写不经 IPC handler → 不触发 resolve、无循环。乐观锁 + gap-fill 幂等,失败静默
+            // (overlay 已保证本 session 生效)。
+            try {
+              const cfg = await getCustomProvider(spec.savedProviderId);
+              // 读取配置跨了 await；期间账号仍可能切换，禁止把旧身份 metadata 合并到
+              // 新身份下恰好同 id 的 provider 配置。
+              if (!isLatestModelResolveResult(resolved)) return;
+              if (cfg) {
+                const nextCfg = mergeDiscoveredModelsIntoConfig(
+                  cfg,
+                  spec.agent,
+                  resolved.entry.models.map((m) => ({
+                    id: m.id,
+                    name: m.name,
+                    ...(m.mode ? { mode: m.mode } : {}),
+                    ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
+                    ...(m.modalities ? { modalities: m.modalities } : {}),
+                    ...(m.capabilities && Object.keys(m.capabilities).length > 0
+                      ? { capabilities: m.capabilities }
+                      : {}),
+                  })),
+                );
+                if (nextCfg)
+                  await updateCustomProviderIfUnchanged(spec.savedProviderId, cfg, nextCfg);
+              }
+            } catch {
+              /* 持久化失败静默降级 */
+            }
+          }
+        })
+        .catch(() => undefined);
+    },
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
@@ -5052,8 +5364,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
       const oauth = provider?.auth.oauth;
       if (!provider || !oauth) throw new Error(`provider '${providerId}' has no oauth descriptor`);
+      const loginRealm = genericOAuthCredentialRealm(provider);
+      const isOAuthRealmCurrent = (): boolean => {
+        if (!isCurrent()) return false;
+        const current = getActiveCatalog().providers.find(
+          (candidate) => candidate.id === providerId,
+        );
+        return current !== undefined && genericOAuthCredentialRealm(current) === loginRealm;
+      };
       let rollbackCredentials: (() => boolean) | undefined;
-      const result = await runGenericOAuthLogin({ id: provider.id, name: provider.name }, oauth, {
+      const rollbackCancelledCredentials = (): void => {
+        if (!rollbackCredentials || !rollbackCredentials()) {
+          throwIpcError('INTERNAL', 'failed to remove credentials from cancelled OAuth login');
+        }
+      };
+      const result = await runGenericOAuthLogin(provider, {
+        isCurrent: isOAuthRealmCurrent,
         onProgress: (progress) =>
           broadcastToAllWindows(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
             providerId,
@@ -5063,7 +5389,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           rollbackCredentials = rollback;
         },
       });
-      if (result.ok && isCurrent()) {
+      if (result.ok && !isOAuthRealmCurrent()) {
+        rollbackCancelledCredentials();
+        return { ok: false, reason: 'login_cancelled' };
+      }
+      if (result.ok && isOAuthRealmCurrent()) {
         // 授权成功后按 agent 自动发现模型（与内置订阅体验统一,用户不必手填模型）:
         // 发现端点 = 描述符显式声明 ?? 由该 runtime 的 baseUrl 推导（…/v1/models）。
         // 自定义供应商的发现结果 additions-only 持久化进配置（重启后仍在）;内置供应商走
@@ -5071,61 +5401,201 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         try {
           const fetched = new Map<
             string,
-            { id: string; name: string; contextWindow?: number }[] | null
+            Awaited<ReturnType<typeof discoverGenericOAuthModelsDetailed>>
           >();
+          const pendingResolves: Array<{
+            agent: 'claude-code' | 'codex';
+            discoveredModelIds: string[];
+            input: ModelResolveInput;
+          }> = [];
           let customChanged = false;
           for (const agent of provider.agents) {
-            if (!isCurrent()) break;
-            const upstream = provider.routing[agent]?.upstream;
+            if (!isOAuthRealmCurrent()) break;
+            const route = provider.routing[agent];
+            const upstream = route?.upstream;
             const url =
               oauth.modelsDiscoveryUrl ?? (upstream ? deriveModelsDiscoveryUrl(upstream) : null);
             if (!url) continue;
             // 去重键含 agent:发现请求头按 wire 分派(cc 带 anthropic-version),同 URL 不同 wire 不能共用响应。
             const key = `${agent}\n${url}`;
             if (!fetched.has(key))
-              fetched.set(key, await discoverGenericOAuthModels(providerId, oauth, url, agent));
-            if (!isCurrent()) break;
+              fetched.set(
+                key,
+                await discoverGenericOAuthModelsDetailed(provider, agent),
+              );
+            if (!isOAuthRealmCurrent()) break;
             const models = fetched.get(key);
             if (!models || models.length === 0) continue;
+            if (
+              process.env.XDT_DISABLE_MODEL_CATALOG_RESOLVE !== '1' &&
+              (agent === 'claude-code' || agent === 'codex')
+            ) {
+              const resolveModels = toModelResolveRequestModels(models);
+              if (resolveModels.length > 0) {
+                pendingResolves.push({
+                  agent,
+                  discoveredModelIds: models.map((model) => model.id),
+                  input: {
+                    providerId,
+                    agent,
+                    wireProtocol: route?.wireProtocol,
+                    sourceIdentity: {
+                      kind: 'provider-runtime',
+                      upstream: route?.upstream ?? url,
+                      ...(route?.requestPath ? { requestPath: route.requestPath } : {}),
+                      modelsUrl: url,
+                    },
+                    models: resolveModels,
+                  },
+                });
+              }
+            }
+            const effectiveModels: Array<{
+              id: string;
+              name: string;
+              contextWindow: number;
+              contextWindowVerified?: boolean;
+              maxOutput?: number;
+              description?: string;
+              family?: string;
+              group: string;
+              category?: string;
+              mode?: string;
+              modalities?: { input: string[]; output: string[] };
+              capabilities?: Record<string, unknown>;
+              sortOrder?: number;
+              efforts: Effort[];
+              defaultEffort: Effort | null;
+              supportsFastMode?: boolean;
+              defaultEnabled?: boolean;
+            }> = models.map((model) => {
+              const reported = model.providerReported;
+              return {
+                id: model.id,
+                name: model.name,
+                // 端点上报的窗口值优先,缺省才落 200K 保守默认(review P1):
+                // 之前无条件写死 200K,发现的 1M 模型仍会显示并按 200K 压缩。
+                contextWindow: reported?.contextWindow ?? 200_000,
+                ...(reported?.contextWindow !== undefined ? { contextWindowVerified: true } : {}),
+                ...(reported?.maxOutput !== undefined ? { maxOutput: reported.maxOutput } : {}),
+                ...(reported?.modalities ? { modalities: reported.modalities } : {}),
+                ...(reported?.capabilities ? { capabilities: reported.capabilities } : {}),
+                ...(reported?.mode ? { mode: reported.mode } : {}),
+                efforts: [],
+                defaultEffort: null,
+                group: `custom:${providerId}`,
+                defaultEnabled: false,
+              };
+            });
+            if (!isOAuthRealmCurrent()) break;
             if (provider.source === 'user') {
               const cfg = await getCustomProvider(providerId);
-              if (!isCurrent()) break;
+              if (!isOAuthRealmCurrent()) break;
               if (cfg) {
-                const nextCfg = mergeDiscoveredModelsIntoConfig(cfg, agent, models);
+                // 只把厂商真实上报的 contextWindow 持久化进配置,不写 effectiveModels 的
+                // 200K 兜底(那是缺省显示值,不是真实窗口)。
+                const nextCfg = mergeDiscoveredModelsIntoConfig(
+                  cfg,
+                  agent,
+                  models.map((m) => ({
+                    id: m.id,
+                    name: m.name,
+                    // 厂商自报的分类/窗口/模态/能力全部持久化(未命中知识库也不落默认)。
+                    ...(m.providerReported?.mode
+                      ? { mode: m.providerReported.mode }
+                      : {}),
+                    ...(m.providerReported?.contextWindow
+                      ? { contextWindow: m.providerReported.contextWindow }
+                      : {}),
+                    ...(m.providerReported?.maxOutput
+                      ? { maxOutput: m.providerReported.maxOutput }
+                      : {}),
+                    ...(m.providerReported?.modalities
+                      ? { modalities: m.providerReported.modalities }
+                      : {}),
+                    ...(m.providerReported?.capabilities
+                      ? { capabilities: m.providerReported.capabilities }
+                      : {}),
+                  })),
+                );
                 if (nextCfg) {
                   const applied = await updateCustomProviderIfUnchanged(providerId, cfg, nextCfg);
-                  if (!isCurrent()) break;
+                  if (!isOAuthRealmCurrent()) break;
                   if (applied) customChanged = true;
                 }
               }
             } else {
-              if (!isCurrent()) break;
-              setDiscoveredProviderModels(
+              if (!isOAuthRealmCurrent()) break;
+              const additions = effectiveModels.map((m) => ({
+                id: m.id,
+                name: m.name,
+                contextWindow: m.contextWindow,
+                contextWindowVerified: m.contextWindowVerified,
+                maxOutput: m.maxOutput,
+                description: m.description,
+                family: m.family,
+                group: m.group ?? `custom:${providerId}`,
+                category: m.category,
+                mode: m.mode,
+                sortOrder: m.sortOrder,
+                efforts: m.efforts,
+                defaultEffort: m.defaultEffort,
+                supportsFastMode: m.supportsFastMode,
+                defaultEnabled: m.defaultEnabled,
+                ...(m.modalities ? { modalities: m.modalities } : {}),
+                ...(m.capabilities && Object.keys(m.capabilities).length > 0
+                  ? { capabilities: m.capabilities }
+                  : {}),
+              }));
+              setDiscoveredProviderModels(providerId, agent, additions);
+            }
+          }
+          if (pendingResolves.length > 0) {
+            const resolvedEntries = await resolveProviderModelEntries(
+              pendingResolves.map(({ input }) => input),
+            );
+            for (const [index, { agent, discoveredModelIds }] of pendingResolves.entries()) {
+              const metadata = resolvedEntries[index];
+              if (!metadata || !isOAuthRealmCurrent() || !isLatestModelResolveResult(metadata)) continue;
+              const overlay = metadata.entry.models.map((m) => ({
+                id: m.id,
+                name: m.name,
+                contextWindow: m.contextWindow,
+                maxOutput: m.maxOutput,
+                description: m.description,
+                family: m.family,
+                group: m.group ?? `custom:${providerId}`,
+                category: m.category,
+                mode: m.mode,
+                sortOrder: m.sortOrder,
+                efforts: m.efforts,
+                defaultEffort: m.defaultEffort,
+                supportsFastMode: m.supportsFastMode,
+                defaultEnabled: m.defaultEnabled,
+                ...(m.modalities ? { modalities: m.modalities } : {}),
+                ...(m.capabilities && Object.keys(m.capabilities).length > 0
+                  ? { capabilities: m.capabilities }
+                  : {}),
+              }));
+              setResolvedProviderModels(
                 providerId,
                 agent,
-                models.map((m) => ({
-                  id: m.id,
-                  name: m.name,
-                  // 端点上报的窗口值优先,缺省才落 200K 保守默认(review P1):
-                  // 之前无条件写死 200K,发现的 1M 模型仍会显示并按 200K 压缩。
-                  contextWindow: m.contextWindow ?? 200_000,
-                  // 只有端点真给了才算已核实,可以拿去收敛运行期上报窗口;落 200K
-                  // 兜底的不标记 —— 否则 resolveVerifiedContextWindow 会拒收缺失
-                  // 标记的条目,inflate 的运行期值压不下来(review P1)。
-                  ...(m.contextWindow !== undefined ? { contextWindowVerified: true } : {}),
-                  efforts: [],
-                  defaultEffort: null,
-                  group: `custom:${providerId}`,
-                  defaultEnabled: false,
-                })),
+                metadata.entry.models.map((model) => model.id),
+                overlay,
+                metadata.knowledgeRevision,
+                discoveredModelIds,
               );
             }
           }
-          if (customChanged && isCurrent()) await refreshCustomProvidersIntoCatalog();
+          if (customChanged && isOAuthRealmCurrent()) await refreshCustomProvidersIntoCatalog();
         } catch {
           /* 发现失败保持纯静态目录，不影响登录结果 */
         }
-        if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        if (!isOAuthRealmCurrent()) {
+          rollbackCancelledCredentials();
+          return { ok: false, reason: 'login_cancelled' };
+        }
+        broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
       }
       return {
         ...result,
@@ -7946,6 +8416,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 { efforts: model.efforts, defaultEffort: model.defaultEffort },
               ]),
             ),
+            // 折扣版预算闸的字段优先输入:按 category/group 判定,不靠 `codex/` 前缀。
+            // 缺了它,catalogBudgetModelRequiresApiKey 会永久退回前缀兜底,裸 id 的
+            // gpt-budget 模型就绕过 BUDGET_MODEL_REQUIRES_API_MODE 预检。
+            budgetModels: models.filter(isBudgetModel).map((model) => model.id),
             requiresExplicitRoute: providerRouteRequiresExplicitSelection(
               provider.routing[agent]?.authStrategy,
             ),
@@ -8378,12 +8852,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listAvailableModels: async ({ agent }) => {
       try {
         const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
-        const result: Record<string, Array<{ id: string; label: string }>> = {};
+        const result: Record<
+          string,
+          Array<{ id: string; label: string; category?: string; group?: string }>
+        > = {};
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
           // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
           const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code';
-          result[key] = caps.availableModels.map((m) => ({ id: m.id, label: m.displayName }));
+          // category / group 一并下发:下游(Orca 派活选型)的折扣版判定要字段优先,
+          // 只给 id 的话又会退回 `codex/` 前缀启发式。
+          result[key] = caps.availableModels.map((m) => ({
+            id: m.id,
+            label: m.displayName,
+            ...(m.category !== undefined ? { category: m.category } : {}),
+            ...(m.group !== undefined ? { group: m.group } : {}),
+          }));
         }
         return { ok: true, ...result };
       } catch (err) {
@@ -10533,11 +11017,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (isKnownSteerDuplicate()) {
           await materialized.cleanupBeforeAcceptance?.();
           if (attachmentOwnerId) {
-            await discardSpecificQueuedAttachmentOwnership(
-              sid,
-              parsed.clientId,
-              attachmentOwnerId,
-            );
+            await discardSpecificQueuedAttachmentOwnership(sid, parsed.clientId, attachmentOwnerId);
           }
           return true;
         }
@@ -11852,7 +12332,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return refreshCodexMcpEnvironment({
       restartCodex: restartCodexAfterAuthModeChange,
       shutdownCodexEnvironment,
-      onDeferred: () => deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'),
+      onDeferred: () =>
+        deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'),
       logger: log,
     });
   });
@@ -11871,7 +12352,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return refreshCodexMcpEnvironment({
       restartCodex: restartCodexAfterAuthModeChange,
       shutdownCodexEnvironment,
-      onDeferred: () => deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'),
+      onDeferred: () =>
+        deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'),
       logger: log,
     });
   });

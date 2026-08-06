@@ -87,18 +87,15 @@ function systemTimeZone(): string {
 /**
  * intent → 表单预填。
  *
- * 刻意留空的两项:
- * - `model` / `providerId` / `effort` 全空 = **用默认模型**。插件不该替用户选模型,
- *   用户在面板上想改就改(Chris 定案:"用户选模型或者默认模型")。
+ * 模型与路由字段:
+ * - 不提供 `model` override：保留新建表单里的用户显式记忆；没有记忆时仍为空，
+ *   表示**用默认模型**。插件本身不替用户选模型(Chris 定案:"用户选模型或者默认模型")。
  *
- *   ⚠️ 留空**不会**让"显示的模型"与"实际执行的模型"漂移(review #1715 曾按此判为
- *   缺陷,实测不成立):ScheduleFormDialog 有一个专门的 effect —— `form.model` 为空
- *   且非 heartbeat 形态时,立即回填 `getScheduleDefaultModel(agentKind)` 的三级回退
- *   显式值(见该文件"form.model 为空时回填默认模型"那段,它正是为 2026-06 那次
- *   "看着选了 Opus 4.8、实际每次跑 4.7"加的)。本 intent 的 `targetSessionId: ''`
- *   满足回填条件,所以表单打开那一刻 model 就已是显式值,保存时不会被省略。
- *   端到端行为由 schedulerTemplateEntry 的「所见即所存」用例钉住。
- *   `providerId` / `effort` / `fastMode` 留空则本就是**合法语义**(跟随原生默认来源 /
+ *   ⚠️ 留空**不会**让"显示的模型"与"实际执行的模型"漂移:Renderer 只显示准确的
+ *   「默认」语义；保存时 Main 的 schedule create/update 边界用与 runner 相同的
+ *   `defaultModelFor(active catalog)` 物化显式 model。这样既不依赖可能陈旧的 Renderer
+ *   缓存，也不会让保存后的任务继续携带空 model。
+ *   `providerId` / `effort` / `fastMode` 明确留空则本就是**合法语义**(跟随原生默认来源 /
  *   用模型默认思考强度 / 不开 Fast),不是缺失值。
  * - `cronExpr` 保留表单默认值:intervalMs 有值时引擎按 interval 语义走,cronExpr
  *   只是占位(见 Schedule.intervalMs 注释);没给建议频率时就用面板默认。
@@ -117,7 +114,6 @@ export function buildPluginScheduleFormOverrides(
     timezone: systemTimeZone(),
     recurring: true,
     manual: false,
-    model: '',
     providerId: '',
     effort: '',
     fastMode: false,

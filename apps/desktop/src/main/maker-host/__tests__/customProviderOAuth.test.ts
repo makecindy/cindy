@@ -156,6 +156,24 @@ describe('validateCustomProviderConfig auth 段', () => {
     };
     expect(validateCustomProviderConfig(noModels).ok).toBe(true);
   });
+
+  it('accepts positive finite maxOutput and rejects invalid runtime limits', () => {
+    const withMaxOutput = (maxOutput: unknown) => ({
+      ...BASE,
+      runtimes: {
+        'claude-code': {
+          ...BASE.runtimes['claude-code']!,
+          models: [{ id: 'm1', name: 'M1', maxOutput }],
+        },
+      },
+    });
+
+    expect(validateCustomProviderConfig(withMaxOutput(8_192) as CustomProviderConfig).ok).toBe(true);
+    expect(validateCustomProviderConfig(withMaxOutput(0) as CustomProviderConfig).ok).toBe(false);
+    expect(
+      validateCustomProviderConfig(withMaxOutput(Number.POSITIVE_INFINITY) as CustomProviderConfig).ok,
+    ).toBe(false);
+  });
 });
 
 describe('mergeDiscoveredModelsIntoConfig（发现结果持久化的 additions-only 合并）', () => {
@@ -176,6 +194,103 @@ describe('mergeDiscoveredModelsIntoConfig（发现结果持久化的 additions-o
     expect(mergeDiscoveredModelsIntoConfig(BASE, 'codex', [{ id: 'x', name: 'X' }])).toBeNull();
   });
 
+  it('回填存量模型缺失的 contextWindow(gap-fill);仅回填、无新增也返回非空以便落盘', () => {
+    // 存量 m1 无 contextWindow;厂商这次上报了真实窗口 → 回填,即使没有任何新增模型。
+    const merged = mergeDiscoveredModelsIntoConfig(BASE, 'claude-code', [
+      { id: 'm1', name: 'M1', contextWindow: 1_000_000 },
+    ]);
+    expect(merged?.runtimes['claude-code']?.models).toEqual([
+      { id: 'm1', name: 'M1', contextWindow: 1_000_000 },
+    ]);
+    // 原配置不就地修改（纯函数）。
+    expect(BASE.runtimes['claude-code']?.models).toEqual([{ id: 'm1', name: 'M1' }]);
+  });
+
+  it('存量模型已有 contextWindow 时不被厂商上报覆盖（无新增无回填 → null）', () => {
+    const withCtx: CustomProviderConfig = {
+      ...BASE,
+      runtimes: {
+        'claude-code': {
+          baseUrl: BASE.runtimes['claude-code']!.baseUrl,
+          models: [{ id: 'm1', name: 'M1', contextWindow: 128_000 }],
+        },
+      },
+    };
+    expect(
+      mergeDiscoveredModelsIntoConfig(withCtx, 'claude-code', [
+        { id: 'm1', name: 'M1', contextWindow: 999_999 },
+      ]),
+    ).toBeNull();
+  });
+
+  it('持久化厂商上报的 modalities/capabilities:新增写入 + 存量逐字段回填', () => {
+    const merged = mergeDiscoveredModelsIntoConfig(BASE, 'claude-code', [
+      // 存量 m1:缺 mod/cap → 回填(gap-fill)。
+      {
+        id: 'm1',
+        name: 'M1',
+        modalities: { input: ['text'], output: ['text'] },
+        capabilities: { reasoning: true, toolCall: true },
+      },
+      // 新增 m2:带完整能力事实。
+      {
+        id: 'm2',
+        name: 'M2',
+        contextWindow: 262_144,
+        modalities: { input: ['text', 'image'], output: ['text'] },
+        capabilities: { attachment: true },
+      },
+    ]);
+    expect(merged?.runtimes['claude-code']?.models).toEqual([
+      {
+        id: 'm1',
+        name: 'M1',
+        modalities: { input: ['text'], output: ['text'] },
+        capabilities: { reasoning: true, toolCall: true },
+      },
+      {
+        id: 'm2',
+        name: 'M2',
+        contextWindow: 262_144,
+        modalities: { input: ['text', 'image'], output: ['text'] },
+        capabilities: { attachment: true },
+      },
+    ]);
+    // 原配置不就地修改（纯函数）。
+    expect(BASE.runtimes['claude-code']?.models).toEqual([{ id: 'm1', name: 'M1' }]);
+  });
+
+  it('持久化 maxOutput，允许供应商降限但不自动抬高已有上限', () => {
+    const withExisting: CustomProviderConfig = {
+      ...BASE,
+      runtimes: {
+        'claude-code': {
+          ...BASE.runtimes['claude-code']!,
+          models: [
+            { id: 'm1', name: 'M1', maxOutput: 4_096 },
+            { id: 'lowered', name: 'Lowered', maxOutput: 16_384 },
+            { id: 'gap', name: 'Gap' },
+          ],
+        },
+      },
+    };
+    const merged = mergeDiscoveredModelsIntoConfig(withExisting, 'claude-code', [
+      { id: 'm1', name: 'M1', maxOutput: 16_384 },
+      { id: 'lowered', name: 'Lowered', maxOutput: 8_192 },
+      { id: 'gap', name: 'Gap', maxOutput: 8_192 },
+      { id: 'new', name: 'New', maxOutput: 32_768 },
+      { id: 'invalid', name: 'Invalid', maxOutput: Number.NaN },
+    ]);
+
+    expect(merged?.runtimes['claude-code']?.models).toEqual([
+      { id: 'm1', name: 'M1', maxOutput: 4_096 },
+      { id: 'lowered', name: 'Lowered', maxOutput: 8_192 },
+      { id: 'gap', name: 'Gap', maxOutput: 8_192 },
+      { id: 'new', name: 'New', maxOutput: 32_768 },
+      { id: 'invalid', name: 'Invalid' },
+    ]);
+  });
+
   it('端点声明的 contextWindow 随发现落盘,非法值丢弃回落默认(#386)', () => {
     const merged = mergeDiscoveredModelsIntoConfig(BASE, 'claude-code', [
       { id: 'big', name: 'Big', contextWindow: 1_000_000 },
@@ -185,6 +300,36 @@ describe('mergeDiscoveredModelsIntoConfig（发现结果持久化的 additions-o
       { id: 'm1', name: 'M1' },
       { id: 'big', name: 'Big', contextWindow: 1_000_000 },
       { id: 'bogus', name: 'Bogus' },
+    ]);
+  });
+
+  it('持久化并回填厂商上报的 mode，重启后仍保留非聊天分类', () => {
+    const withModes: CustomProviderConfig = {
+      ...BASE,
+      runtimes: {
+        'claude-code': {
+          ...BASE.runtimes['claude-code']!,
+          models: [
+            { id: 'm1', name: 'M1', mode: 'chat' },
+            { id: 'old-embedding', name: 'Old Embedding', mode: 'embedding' },
+          ],
+        },
+      },
+    };
+    const merged = mergeDiscoveredModelsIntoConfig(withModes, 'claude-code', [
+      { id: 'm1', name: 'M1', mode: 'embedding' },
+      { id: 'old-embedding', name: 'Old Embedding', mode: 'chat' },
+      { id: 'new-responses', name: 'New Responses', mode: 'responses' },
+    ]);
+    expect(merged?.runtimes['claude-code']?.models).toEqual([
+      { id: 'm1', name: 'M1', mode: 'embedding' },
+      { id: 'old-embedding', name: 'Old Embedding', mode: 'chat' },
+      { id: 'new-responses', name: 'New Responses', mode: 'responses' },
+    ]);
+    expect(buildUserProvider(merged!).models['claude-code']).toEqual([
+      expect.objectContaining({ id: 'm1', mode: 'embedding' }),
+      expect.objectContaining({ id: 'old-embedding', mode: 'chat' }),
+      expect.objectContaining({ id: 'new-responses', mode: 'responses' }),
     ]);
   });
 });
@@ -239,7 +384,7 @@ describe('provider-service 连接态', () => {
     const svc = createProviderService({
       getCatalog: () => catalog,
       connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
-      genericOAuthConnected: (id) => id === 'acme-sub',
+      genericOAuthConnected: (provider) => provider.id === 'acme-sub',
     });
     const views = await svc.listProviders();
     expect(views.find((v) => v.id === 'acme-sub')?.connected).toBe(true);

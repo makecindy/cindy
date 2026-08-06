@@ -92,6 +92,18 @@ const ANTHROPIC_PROVIDER: Provider = {
   auth: { method: 'oauth' },
   access: { kind: 'subscription', product: 'Claude.ai' },
   titleModel: 'claude-haiku-4-5',
+  defaults: {
+    'claude-code': {
+      sessionModel: 'claude-sonnet-4-6',
+      oneShotModel: 'claude-haiku-4-5',
+      titleModel: 'claude-haiku-4-5',
+    },
+    codex: {
+      sessionModel: 'claude-sonnet-4-6',
+      oneShotModel: 'claude-haiku-4-5',
+      titleModel: 'claude-haiku-4-5',
+    },
+  },
   routing: {
     'claude-code': {
       upstream: 'https://api.anthropic.com',
@@ -133,6 +145,18 @@ const OPENAI_PROVIDER: Provider = {
   // image_generation tool;用户另配 `openai-images` Platform key 时优先走 public
   // Images API。id 带 openai/ 前缀(跨供应商数据契约,防 first-wins 归属漂移);
   // 不声明 imageDefaults(xd 默认地位不动)。
+  defaults: {
+    codex: {
+      sessionModel: 'gpt-5.5',
+      oneShotModel: 'gpt-5.4-mini',
+      titleModel: 'gpt-5.4-mini',
+    },
+    'claude-code': {
+      sessionModel: 'gpt-5.5',
+      oneShotModel: 'gpt-5.4-mini',
+      titleModel: 'gpt-5.4-mini',
+    },
+  },
   imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }],
   routing: {
     codex: {
@@ -162,6 +186,18 @@ const XD_PROVIDER: Provider = {
   auth: { method: 'managed' },
   access: { kind: 'managed' },
   titleModel: 'gpt-5.4-mini',
+  defaults: {
+    'claude-code': {
+      sessionModel: 'gpt-5.5',
+      oneShotModel: 'gpt-5.4-mini',
+      titleModel: 'gpt-5.4-mini',
+    },
+    codex: {
+      sessionModel: 'gpt-5.5',
+      oneShotModel: 'gpt-5.4-mini',
+      titleModel: 'gpt-5.4-mini',
+    },
+  },
   imageModels: [
     { id: 'gpt-image-2', name: 'GPT Image 2' },
     { id: 'gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
@@ -260,5 +296,9 @@ export const BUNDLED_CATALOG: Catalog = {
   version: catalogFile.version,
   providers: BUILTIN_PROVIDERS,
   modelRegistry: bundledModelRegistry,
+  defaults: {
+    'claude-code': { sessionModel: 'claude-sonnet-4-6' },
+    codex: { sessionModel: 'gpt-5.5' },
+  },
   ...(catalogFile.presets && catalogFile.presets.length > 0 ? { presets: catalogFile.presets } : {}),
 };

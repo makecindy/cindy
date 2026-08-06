@@ -5,9 +5,9 @@
  *   1. 上次建自动化任务时选的模型(scheduleFormPrefs.lastByAgent)优先
  *   2. 没有 → 跟随对话上次选择(newMakerDraft localStorage **真实持久化值**,
  *      不吃 sanitize 的默认回填 —— 全新用户不能被对话侧的 Opus 默认顶掉)
- *   3. 都没有 → 成本保守冷启动兜底:cc → claude-sonnet-4-6, codex → gpt-5.5
- *      (与 scheduler-host/runner.ts defaultModelFor 同步,两边漂移会复现
- *      "UI 显示 X 实际跑 Y" 的 2026-06 事故)
+ *   3. 兼容 helper 无记忆时仍保留 bundled 历史回退；实际新表单保持空 model，
+ *      保存时由 Main 的 scheduler-host/defaultModelFor(active catalog)物化
+ *      （避免“UI 显示 X、实际跑 Y”的 2026-06 事故）。
  *
  * 项目 vitest env=node,无 window。与 newMakerDraft.test.ts 同款:
  * vi.stubGlobal 注入最小 localStorage,避免新增 jsdom 依赖。
@@ -94,27 +94,27 @@ describe('getScheduleDefaultModel 三级回退', () => {
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-opus-4-8');
   });
 
-  it('三级:全新用户(无任何持久化)冷启动兜底 Sonnet,不被对话侧 Opus 默认顶掉', async () => {
+  it('兼容 helper:全新用户回落 bundled Sonnet,不被对话侧 Opus 种子顶掉', async () => {
     const { getScheduleDefaultModel } = await loadModule();
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-6');
   });
 
-  it('三级:对话 draft 存在但 model 字段缺失(老 schema)→ 仍走 Sonnet 兜底', async () => {
+  it('兼容 helper:对话 draft 缺 model(老 schema)时回落 bundled', async () => {
     seedChatDraft(undefined);
     const { getScheduleDefaultModel } = await loadModule();
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-6');
   });
 
-  it('三级:对话 draft 持久化了种子默认 model 但用户从未显式选过(无 modelChosenByVendor 标记)→ 不算上次选择,落 Sonnet', async () => {
+  it('兼容 helper:对话 draft 的未选择种子不算用户记忆', async () => {
     // lastByVendor 整个快照随任意 draft 写入落盘:只改过 workingDir / 只用过
     // Codex 的用户,持久化里也躺着 cc 的种子默认(Opus)。没有显式选择标记时
-    // 必须忽略,否则成本保守兜底被对话侧 Opus 默认顶掉。
+    // 必须忽略,否则真正的 Main 默认会被对话侧 Opus 种子顶掉。
     seedChatDraft('claude-opus-4-8', { chosen: false });
     const { getScheduleDefaultModel } = await loadModule();
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-6');
   });
 
-  it('三级:已有会话同步 New Maker 草稿默认不打显式选择标记 → 调度仍走 Sonnet 兜底', async () => {
+  it('兼容 helper:会话同步草稿不打显式选择标记', async () => {
     const draft = await import('@/state/newMakerDraft');
     draft.patchVendorPrefsPreservingModelChoice('cc', {
       model: 'claude-opus-4-8',
@@ -157,7 +157,7 @@ describe('getScheduleDefaultModel 三级回退', () => {
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-opus-4-8');
   });
 
-  it('codex 冷启动兜底 gpt-5.5', async () => {
+  it('兼容 helper:codex 回落 bundled gpt-5.5', async () => {
     const { getScheduleDefaultModel } = await loadModule();
     expect(getScheduleDefaultModel('codex')).toBe('gpt-5.5');
   });
@@ -169,11 +169,20 @@ describe('getScheduleDefaultModel 三级回退', () => {
     expect(getScheduleDefaultModel('claude-code')).toBe('claude-sonnet-4-6');
   });
 
-  it('schedulerFallbackModel 与 runner defaultModelFor 的约定值一致(防漂移锚点)', async () => {
+  it('schedulerFallbackModel 保留 bundled 兼容值', async () => {
     const { schedulerFallbackModel } = await loadModule();
-    // scheduler-host/runner.ts defaultModelFor 必须返回同样的值;
-    // runner 侧的等价断言见 runnerModelSelection.test.ts。
     expect(schedulerFallbackModel('claude-code')).toBe('claude-sonnet-4-6');
     expect(schedulerFallbackModel('codex')).toBe('gpt-5.5');
+  });
+
+  it('新表单无用户记忆时初始化保持空，交给 Main 写入边界物化', async () => {
+    const { makeFormFromSchedule } = await loadModule();
+    expect(makeFormFromSchedule(null).model).toBe('');
+  });
+
+  it('新表单仍立即物化用户明确记住的模型', async () => {
+    seedSchedulePrefs('remembered-schedule-model');
+    const { makeFormFromSchedule } = await loadModule();
+    expect(makeFormFromSchedule(null).model).toBe('remembered-schedule-model');
   });
 });

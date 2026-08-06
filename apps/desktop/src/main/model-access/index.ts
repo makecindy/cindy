@@ -1,4 +1,8 @@
 import { BrowserWindow, ipcMain } from 'electron';
+import {
+  isStrictlyResolvedGatewayModels,
+  normalizeGatewayModelsPayload,
+} from './modelsResponse.js';
 
 import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
@@ -11,7 +15,15 @@ import {
   finalizeCodexAfterAuthModeChange,
   cancelCodexAuthModeChange,
 } from '../maker-host/index.js';
-import { setXdGatewayModels } from '../maker-host/active-catalog.js';
+import {
+  invalidateAccountDerivedProviderModelDiscovery,
+  reloadAccountDerivedProviderModelDiscovery,
+} from '../maker-host/createDesktopProviderService.js';
+import {
+  clearAccountDerivedProviderModels,
+  setModelResolveApplySlotsInvalidator,
+  setXdGatewayModels,
+} from '../maker-host/active-catalog.js';
 import { replaceGatewayModelPricing, trackGatewayModelPricingSync } from '../usage/modelPricing.js';
 import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -34,7 +46,12 @@ import {
   waitForModelsSyncRefresh,
 } from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { createAccountDiscoveryReloadTracker } from './accountDiscoveryReload.js';
 import { hasAuthSessionIdentityChanged } from './authSessionIdentity.js';
+import {
+  invalidateModelResolveApplySlots,
+  invalidateModelResolveApplyState,
+} from './modelResolve.js';
 export { isModelAccessReady } from './readiness.js';
 
 const log = createLogger('modelAccess');
@@ -144,11 +161,9 @@ let modelsSyncRerunQueued = false;
 let authGeneration = 0;
 let lastAuthUserId: string | null = null;
 let lastAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
+const accountDiscoveryReloadTracker = createAccountDiscoveryReloadTracker();
 
-function applyGatewayModels(
-  models: ModelAccessGatewayModel[],
-  authenticatedUserId?: string,
-): void {
+function applyGatewayModels(models: ModelAccessGatewayModel[], authenticatedUserId?: string): void {
   // 同一次 /models 响应建立 XD 模型与价格投影。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
   const pricing = replaceGatewayModelPricing(models, authenticatedUserId);
@@ -166,8 +181,14 @@ function applyGatewayModels(
   // contextLength / supportedEndpoints / reasoning / supportsServiceTier / architecture
   // 一次归一化成 contextWindow / agents / efforts / supportsFastMode / modalities,
   // 同一含义只下发一个字段。这里直接用下发值，唯一事实源在服务端。
+  // 整包严格通过 resolve 校验时为每个条目打 source='resolved' 来源标记，
+  // 供下游（UI/诊断）区分“服务端已补全”与“透传原始网关数据”。
+  const resolvedSource = isStrictlyResolvedGatewayModels(models);
+  const effective = resolvedSource
+    ? models.map((model) => ({ ...model, source: 'resolved' as const }))
+    : models;
   // active-catalog 统一收口会原地刷新 Maker capabilities，再广播同一 revision。
-  setXdGatewayModels(models);
+  setXdGatewayModels(effective);
 }
 
 async function runModelsSync(
@@ -175,16 +196,11 @@ async function runModelsSync(
   authenticatedUserId: string,
   myAttempt: number,
 ): Promise<void> {
-  let payload: { models: ModelAccessGatewayModel[] };
+  let payload: unknown;
   try {
-    const request = buildModelsSyncRequest(() =>
-      getClientEndpoint('modelAccessApiBaseUrl'),
-    );
+    const request = buildModelsSyncRequest(() => getClientEndpoint('modelAccessApiBaseUrl'));
     payload = await withModelsSyncOverallDeadline(
-      serverApiFetch<{ models: ModelAccessGatewayModel[] }>(
-        request.path,
-        request.options,
-      ),
+      serverApiFetch<unknown>(request.path, request.options),
     );
   } catch (err) {
     log.warn('xd gateway models fetch failed (keeping last valid list)', {
@@ -193,8 +209,11 @@ async function runModelsSync(
     return;
   }
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
-  const models = (payload.models ?? [])
-    .filter((m) => typeof m?.id === 'string' && m.id);
+  const models = normalizeGatewayModelsPayload(payload);
+  if (models === null) {
+    log.warn('xd gateway models response invalid; keeping last valid list');
+    return;
+  }
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([], authenticatedUserId);
@@ -345,6 +364,10 @@ function mapServerError(err: unknown): never {
  * 三条入口(authManager.notifyAuthListeners 的全部触发点),无需插桩 authManager。
  */
 export function initModelAccess(): void {
+  // Keep active-catalog a pure state holder: the composition root supplies the model-access
+  // generation invalidator used when a custom provider runtime changes underneath an in-flight
+  // resolve. This is installed before provider discovery starts during app ready.
+  setModelResolveApplySlotsInvalidator(invalidateModelResolveApplySlots);
   const sync = getSync();
 
   const noteAuthState = (
@@ -352,21 +375,43 @@ export function initModelAccess(): void {
     userId: string | null,
     realm: ReturnType<typeof authManager.getActiveAuthRealm> | null,
   ) => {
+    const identityChanged = hasAuthSessionIdentityChanged(
+      { userId: lastAuthUserId, realm: lastAuthRealm },
+      { userId, realm },
+    );
+    const shouldReloadAccountDiscovery = accountDiscoveryReloadTracker.noteAuthState({
+      isAuthenticated,
+      identityChanged,
+    });
     // 认证世代:登出、换号或同账号跨区均自增,作废旧身份在途的目录请求。
-    if (
-      !isAuthenticated ||
-      hasAuthSessionIdentityChanged(
-        { userId: lastAuthUserId, realm: lastAuthRealm },
-        { userId, realm },
-      )
-    ) {
+    if (!isAuthenticated || identityChanged) {
       authGeneration++;
-      // 旧身份模型清单不能跨账号/区域继续显示;新身份拉取成功后再注入。
+      // 旧身份模型清单与 resolve metadata 都不能跨账号/区域继续显示。
+      // 先同步作废旧身份已发出的结果并清内存，再清 overlay。持久化 LKG 物理落在
+      // ownerScopedUserDataPath 下，新身份无法读取；旧回包也有 owner generation 闸。
+      invalidateAccountDerivedProviderModelDiscovery();
+      invalidateModelResolveApplyState();
+      clearAccountDerivedProviderModels();
       applyGatewayModels([]);
     }
     lastAuthUserId = isAuthenticated ? (userId ?? lastAuthUserId) : null;
     lastAuthRealm = isAuthenticated ? (realm ?? lastAuthRealm) : null;
     sync.handleAuthChange({ isAuthenticated, userId, realm });
+    if (shouldReloadAccountDiscovery) {
+      const expectedGeneration = authGeneration;
+      const expectedUserId = lastAuthUserId;
+      const expectedRealm = lastAuthRealm;
+      void reloadAccountDerivedProviderModelDiscovery(
+        () =>
+          authGeneration === expectedGeneration
+          && lastAuthUserId === expectedUserId
+          && lastAuthRealm === expectedRealm,
+      ).catch((err) => {
+        log.warn('native provider model discovery reload after auth boundary failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   };
 
   authManager.onAuthStateChange((state) => {
@@ -413,5 +458,6 @@ export function resetModelAccessForTest(): void {
   authGeneration = 0;
   lastAuthUserId = null;
   lastAuthRealm = null;
+  accountDiscoveryReloadTracker.reset();
   applyGatewayModels([]);
 }

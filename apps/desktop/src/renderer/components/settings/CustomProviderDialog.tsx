@@ -20,6 +20,7 @@ import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from '
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { subscribeToProviderModelsResolved } from '@/lib/providerModelsResolvedSubscription';
 import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
@@ -28,6 +29,11 @@ import { PiMark } from '@/components/icons/PiMark';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomProvider,
+  customProviderModelConfigForSave,
+  fillCustomProviderModelMetadata,
+  fillCustomProviderModelsMetadata,
+  fillMatchingCustomProviderPickerModels,
+  mergeCustomProviderPickerSelection,
   readCustomProviderKey,
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
@@ -97,6 +103,9 @@ const TAB_META: Record<DialogAgentKind, { Mark: typeof ClaudeMark; labelKey: str
 
 /** pi 默认 wire protocol:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。 */
 const PI_DEFAULT_WIRE: ProviderWireProtocol = 'openai-chat';
+
+/** Main 的 resolve 请求超时为 10s；额外留出 token 刷新与 IPC 投递余量后强制释放监听。 */
+const PROVIDER_MODELS_RESOLVE_LISTENER_TIMEOUT_MS = 30_000;
 
 /** 某 agent runtime 的默认 wire protocol。 */
 function defaultWireFor(agent: DialogAgentKind): ProviderWireProtocol {
@@ -356,8 +365,19 @@ export function CustomProviderDialog({
     codex: false,
     pi: false,
   });
+  // Fetch 成功不代表后台 resolve 一定会发 push（禁用/超时/网络失败均可能无事件）。同一
+  // 弹窗只保留最新请求的一个 listener，并在卸载时确定性释放，避免重复打开/拉取后累积。
+  const pendingModelsResolvedStopRef = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      pendingModelsResolvedStopRef.current?.();
+      pendingModelsResolvedStopRef.current = null;
+    },
+    [],
+  );
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [picker, setPicker] = useState<{
+    requestId: string;
     agent: DialogAgentKind;
     models: ModelRow[];
     selected: Set<string>;
@@ -639,9 +659,37 @@ export function CustomProviderDialog({
     const reuseSaved = Boolean(
       initial?.id && savedBaseline && modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
     );
+    const requestId = `custom_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    pendingModelsResolvedStopRef.current?.();
+    pendingModelsResolvedStopRef.current = null;
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
+    // Resolve cache 命中时 push 可能早于 fetch IPC 返回；先保存在本次请求闭包里，创建
+    // picker 时再 replay。晚到的 push 仍走下面的 setPicker 增量回填。
+    let resolvedModels: Parameters<typeof fillCustomProviderModelsMetadata>[1];
     try {
+      pendingModelsResolvedStopRef.current = subscribeToProviderModelsResolved({
+        requestId,
+        timeoutMs: PROVIDER_MODELS_RESOLVE_LISTENER_TIMEOUT_MS,
+        subscribe: window.electronAPI.maker.onProviderModelsResolved,
+        onResolved: (payload) => {
+          if (
+            providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !==
+            requestSig
+          )
+            return;
+          resolvedModels = payload.models;
+          setPicker((currentPicker) =>
+            fillMatchingCustomProviderPickerModels(
+              currentPicker,
+              requestId,
+              agent,
+              payload.models,
+            ),
+          );
+        },
+      });
       const result = await window.electronAPI.maker.fetchProviderModels({
+        requestId,
         agent,
         baseUrl,
         authMethod: authMode,
@@ -653,21 +701,15 @@ export function CustomProviderDialog({
       });
       if (
         providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig
-      )
+      ) {
+        pendingModelsResolvedStopRef.current?.();
+        pendingModelsResolvedStopRef.current = null;
         return; // 过期响应，静默丢弃
+      }
       if (result.ok && result.models && result.models.length > 0) {
         // 用**响应到达时**的最新表单行构建弹层（rtRef），不是请求发出时的 rf 快照。
         const current = rtRef.current[agent].models
-          .map((m) => ({
-            id: m.id.trim(),
-            name: m.name.trim(),
-            ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-            ...(m.reasoning === true && m.reasoningEfforts?.length
-              ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-              : {}),
-          }))
+          .map(customProviderModelConfigForSave)
           .filter((m) => m.id.length > 0);
         const currentById = new Map(current.map((m) => [m.id, m]));
         const fetchedIds = new Set(result.models.map((m) => m.id));
@@ -682,26 +724,50 @@ export function CustomProviderDialog({
             // (cur 存在但无值时不得被发现值回填,review P1);只有表单没见过的
             // 新模型才带上端点声明的发现值(否则保存后回落 200K,review P1)。
             const contextWindow = cur ? cur.contextWindow : m.contextWindow;
-            return {
+            const row: ModelRow = {
               id: m.id,
               name: cur?.name || m.name,
+              ...(cur?.mode !== undefined ? { mode: cur.mode } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(cur?.maxOutput !== undefined ? { maxOutput: cur.maxOutput } : {}),
+              ...(cur?.modalities !== undefined ? { modalities: cur.modalities } : {}),
+              ...(cur?.capabilities !== undefined ? { capabilities: cur.capabilities } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(cur?.reasoning === true && cur.reasoningEfforts?.length
                 ? { reasoning: true, reasoningEfforts: [...cur.reasoningEfforts] }
                 : {}),
             };
+            // mode 没有手工编辑入口,最新有效上报是权威事实；contextWindow 允许用户显式
+            // 清空，所以已有行不回填；modalities/capabilities 是隐藏厂商事实，缺失时吸收；
+            // maxOutput 是硬上限，由 helper 取新旧较小值以吸收供应商降限。
+            return fillCustomProviderModelMetadata(row, {
+              mode: m.providerReported?.mode,
+              ...(cur ? {} : { contextWindow: m.providerReported?.contextWindow }),
+              maxOutput: m.providerReported?.maxOutput,
+              modalities: m.providerReported?.modalities,
+              capabilities: m.providerReported?.capabilities,
+            });
           }),
         ];
-        setPicker({ agent, models: rows, selected: new Set(currentById.keys()), query: '' });
+        setPicker({
+          requestId,
+          agent,
+          models: fillCustomProviderModelsMetadata(rows, resolvedModels),
+          selected: new Set(currentById.keys()),
+          query: '',
+        });
         // 弹层锁定所属 runtime：把背景 Tab 同步切回请求的 runtime（标题也带 runtime 名），
         // 请求期间切过 Tab 也不会在错误上下文里确认。
         setActiveTab(agent);
       } else {
+        pendingModelsResolvedStopRef.current?.();
+        pendingModelsResolvedStopRef.current = null;
         toast.error(t(`providerError.${result.code ?? 'UNKNOWN'}`));
       }
     } catch (e) {
+      pendingModelsResolvedStopRef.current?.();
+      pendingModelsResolvedStopRef.current = null;
       if (
         providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig
       )
@@ -724,7 +790,6 @@ export function CustomProviderDialog({
     if (!picker) return;
     const chosen = picker.models.filter((m) => picker.selected.has(m.id));
     if (chosen.length === 0) return;
-    const pickerIds = new Set(picker.models.map((m) => m.id));
     // 重映射靠 id 而不是行号:picker 确认会任意增删/重排该 runtime 的行,旧行号
     // 不能直接套到新数组。合并结果必须同步算出一份普通数组,同时喂给状态更新和
     // 草稿重映射——不能指望 patch() 调用后立即读 rtRef 拿到刚提交的值:rtRef 只
@@ -733,44 +798,11 @@ export function CustomProviderDialog({
     // 已有排队工作时,这次读到的可能仍是 previousModels,导致草稿按旧下标错配到
     // 一个已经不存在的行上(review P1)。
     const previousModels = rtRef.current[picker.agent].models;
-    const latestById = new Map<string, ModelRow>();
-    for (const pm of previousModels) {
-      const id = pm.id.trim();
-      if (id && !latestById.has(id)) latestById.set(id, pm);
-    }
-    const merged: ModelRow[] = chosen.map((m) => {
-      const latest = latestById.get(m.id);
-      const contextWindow = latest?.contextWindow ?? m.contextWindow;
-      const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
-      const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
-      const reasoning = latest ? latest.reasoning : m.reasoning;
-      const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
-      return {
-        id: m.id,
-        name: latest?.name.trim() ? latest.name.trim() : m.name,
-        ...(contextWindow !== undefined ? { contextWindow } : {}),
-        ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
-        ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
-        ...(reasoning === true && reasoningEfforts?.length
-          ? { reasoning: true, reasoningEfforts: [...reasoningEfforts] }
-          : {}),
-      };
-    });
-    for (const m of previousModels) {
-      const id = m.id.trim();
-      if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
-        merged.push({
-          id,
-          name: m.name.trim() || id,
-          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-          ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-            : {}),
-        });
-      }
-    }
+    const merged = mergeCustomProviderPickerSelection(
+      previousModels,
+      picker.models,
+      picker.selected,
+    );
     patch(picker.agent, (x) => ({ ...x, models: merged }));
     const oldIndexToId = new Map(previousModels.map((m, i) => [i, m.id.trim()]));
     const newIndexById = new Map<string, number>();
@@ -864,16 +896,7 @@ export function CustomProviderDialog({
         return;
       }
       const models = rf.models
-        .map((m) => ({
-          id: m.id.trim(),
-          name: m.name.trim(),
-          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-          ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-            : {}),
-        }))
+        .map(customProviderModelConfigForSave)
         .filter((m) => m.id && m.name);
       const requestPath = rf.requestPath.trim();
       if (requestPath && !isProviderRequestPath(requestPath)) {
@@ -1773,8 +1796,15 @@ function ModelPickerOverlay({
   onConfirm,
   onClose,
 }: {
-  picker: { agent: DialogAgentKind; models: ModelRow[]; selected: Set<string>; query: string };
+  picker: {
+    requestId: string;
+    agent: DialogAgentKind;
+    models: ModelRow[];
+    selected: Set<string>;
+    query: string;
+  };
   onChange: (next: {
+    requestId: string;
     agent: DialogAgentKind;
     models: ModelRow[];
     selected: Set<string>;

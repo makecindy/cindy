@@ -19,8 +19,10 @@ import {
 } from '@cindy/maker-core';
 import {
   getActiveCatalog,
+  getActiveCatalogRevision,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
+  setResolvedProviderModels,
 } from './active-catalog.js';
 import {
   createCodexModelBackfillCoordinator,
@@ -56,6 +58,7 @@ import {
   desktopCodexAuthAdapter,
   getCodexHome,
   readClaudeApiKey,
+  readCodexOneShotCreds,
 } from './auth-adapters.js';
 import {
   desktopSessionStorage,
@@ -66,6 +69,14 @@ import { desktopMakerLogger } from './logger-adapter.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
+import { CodexModelCatalogSync } from './codex-model-catalog-sync.js';
+import {
+  isCodexNativeDiscoverySlug,
+} from './codex-model-catalog.js';
+import {
+  readNativeCodexModelsFromCache,
+  writeCodexModelCatalogCache,
+} from './codex-model-catalog-cache.js';
 import { getRemoteSshPool } from '../remote-ssh/index.js';
 import {
   getRemoteAgentProxyEnv,
@@ -97,6 +108,7 @@ import {
 import {
   clearAnthropicDiscoveredModels,
   setAnthropicDiscoveryFailureListener,
+  setAnthropicModelsAppliedListener,
 } from './model-discovery/anthropic.js';
 import {
   buildDesktopClaudeRuntimeConfig,
@@ -120,8 +132,13 @@ import {
   getCodexThreadUpstreamOrigin,
   isCodexControlPlaneProxyHandleReady,
   isCodexProxyHandleReady,
+  readCodexNativeModelsSnapshot,
+  resetCodexNativeModelsSnapshots,
   setCodexProxyAuthInjection,
   setCodexProxyGatewayKeyReader,
+  setCodexProxyOAuthCredentialsReader,
+  setCodexNativeModelsReader,
+  setCodexSelectableCatalogReader,
   registerComposed as registerCodexProxyComposed,
   registerChildThread as registerCodexProxyChildThread,
   unregister as unregisterCodexProxyPrompt,
@@ -189,6 +206,10 @@ import {
   getDesktopMcpToolApprovalPolicy,
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
+import {
+  isLatestModelResolveResult,
+  resolveProviderModelEntries,
+} from '../model-access/modelResolve.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
 import {
   buildDesktopCapabilityRoutingPolicy,
@@ -229,6 +250,22 @@ const reviewAutoPermissionAction = createAutoPermissionReviewer({
  * null = maker 尚未构造:那时既没有 agent 也没有会话,没有任何东西在等模型清单。
  */
 let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
+const codexModelCatalogSync = new CodexModelCatalogSync({
+  revision: getActiveCatalogRevision,
+  writeModelsCache: (revision, isCurrent) => writeCodexModelCatalogCache({
+    codexHome: getCodexHome(),
+    catalog: getDesktopSelectableCatalog(),
+    revision,
+    nativeModels: readCodexNativeModelsSnapshot(),
+    isCurrent,
+  }),
+  logger: desktopMakerLogger,
+});
+
+function resetCodexModelCatalogBoundary(): void {
+  codexModelCatalogSync.reset();
+  resetCodexNativeModelsSnapshots();
+}
 
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
@@ -267,6 +304,52 @@ setActiveCatalogChangedListener((revision) => {
  * **之前**就取走了 provider 快照(15s 超时那条路径尤其明显)。不主动通知,设置页会一直
  * 停在「正在发现」而不是讲明失败理由(PR #548 review)。
  */
+setAnthropicModelsAppliedListener((models) => {
+  if (process.env.XDT_DISABLE_MODEL_CATALOG_RESOLVE === '1' || models.length === 0) return;
+  const ids = models.map((model) => model.id);
+  const requestModels = models.map((model) => ({
+    id: model.id,
+    name: model.name,
+    ...(model.contextWindowVerified ? { providerReported: { contextWindow: model.contextWindow } } : {}),
+  }));
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === 'anthropic');
+  const discoveryUpstream =
+    provider?.routing['claude-code']?.upstream ?? 'https://api.anthropic.com';
+  const modelsUrl = `${discoveryUpstream.replace(/\/+$/, '')}/v1/models?limit=1000`;
+  const agents = ['claude-code', 'codex'] as const;
+  void resolveProviderModelEntries(agents.map((agent) => {
+    const route = provider?.routing[agent];
+    return {
+      providerId: 'anthropic',
+      agent,
+      wireProtocol: agent === 'codex' ? 'anthropic-messages' : route?.wireProtocol,
+      sourceIdentity: {
+        kind: 'provider-runtime' as const,
+        upstream: route?.upstream ?? discoveryUpstream,
+        ...(route?.requestPath ? { requestPath: route.requestPath } : {}),
+        modelsUrl,
+      },
+      models: requestModels,
+    };
+  })).then((resolvedEntries) => {
+    for (const [index, agent] of agents.entries()) {
+      const resolved = resolvedEntries[index];
+      if (!resolved || !isLatestModelResolveResult(resolved)) continue;
+      setResolvedProviderModels(
+        'anthropic',
+        agent,
+        resolved.entry.models.map((model) => model.id),
+        resolved.entry.models.map((model) => ({
+          ...model,
+          ...(agent === 'codex' ? { supportsFastMode: false } : {}),
+        })),
+        resolved.knowledgeRevision,
+        ids,
+      );
+    }
+  }).catch(() => undefined);
+});
+
 setAnthropicDiscoveryFailureListener(() => {
   try {
     // 复用既有的「刷 capabilities + 广播」收口:清单确实没变,这一步只是把 provider
@@ -768,6 +851,15 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
+      resolveAuthStrategy: (providerId, modelId) => {
+        if (!providerId) return null;
+        const provider = getDesktopSelectableCatalog().providers.find(
+          (candidate) => candidate.id === providerId,
+        );
+        return provider?.models['claude-code']?.some((model) => model.id === modelId)
+          ? (provider.routing['claude-code']?.authStrategy ?? null)
+          : null;
+      },
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //
@@ -1044,13 +1136,61 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
       },
+      resolveAuthStrategy: (providerId, modelId) => {
+        if (!providerId) return null;
+        const provider = getDesktopSelectableCatalog().providers.find(
+          (candidate) => candidate.id === providerId,
+        );
+        return provider?.models.codex?.some((model) => model.id === modelId)
+          ? (provider.routing.codex?.authStrategy ?? null)
+          : null;
+      },
       // 把 app-server 上报的上下文窗口收敛到该**路由**真实上限。每次调用读 live 目录:
       // 模型发现 / 切账号 / 自定义 provider 增删改都要即时反映。按 providerId 定夺而不是
       // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
+      ensureCodexModelCatalogFresh: ({ refresh }) =>
+        codexModelCatalogSync.ensureFresh(refresh),
       onCodexLocalModelsListed: (models) => {
-        setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
+        const catalog = getDesktopSelectableCatalog();
+        const nativeModels = models.filter((model) =>
+          isCodexNativeDiscoverySlug(catalog, model.model || model.id),
+        );
+        const discovered = mapCodexAppServerModelsToCatalog(nativeModels);
+        setDiscoveredCodexModels(discovered);
+        if (process.env.XDT_DISABLE_MODEL_CATALOG_RESOLVE !== '1' && discovered.length > 0) {
+          const ids = discovered.map((model) => model.id);
+          const requestModels = discovered.map((model) => ({ id: model.id, name: model.name }));
+          const agents = ['codex', 'claude-code'] as const;
+          void resolveProviderModelEntries(agents.map((agent) => ({
+            providerId: 'openai',
+            agent,
+            sourceIdentity: { kind: 'native' as const, id: 'openai:codex-app-server-model-list' },
+            models: requestModels,
+          }))).then((resolvedEntries) => {
+            for (const [index, agent] of agents.entries()) {
+              const resolved = resolvedEntries[index];
+              if (!resolved || !isLatestModelResolveResult(resolved)) continue;
+              const models = resolved.entry.models.map((model) => ({
+                ...model,
+                ...(agent === 'claude-code'
+                  ? { id: `chatgpt/${model.id}`, supportsFastMode: false }
+                  : {}),
+              }));
+              const resolvedIds = models.map((model) => model.id);
+              const allIds = agent === 'claude-code' ? ids.map((id) => `chatgpt/${id}`) : ids;
+              setResolvedProviderModels(
+                'openai',
+                agent,
+                resolvedIds,
+                models,
+                resolved.knowledgeRevision,
+                allIds,
+              );
+            }
+          }).catch(() => undefined);
+        }
       },
       // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
       // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。
@@ -1160,6 +1300,9 @@ export function getMaker(): Maker {
           await broadcastCodexRuntimeRoute();
         }
         setCodexProxyGatewayKeyReader(readClaudeApiKey);
+        setCodexProxyOAuthCredentialsReader(readCodexOneShotCreds);
+        setCodexSelectableCatalogReader(getDesktopSelectableCatalog);
+        setCodexNativeModelsReader(() => readNativeCodexModelsFromCache(getCodexHome()));
 
         // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
         // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
@@ -1318,6 +1461,7 @@ export function getMaker(): Maker {
       resetProviderModelAutoRefreshCooldowns('openai');
       // auth 边界变了:「清单已在场」和「试过几次」都不再适用于下一个账号。
       resetCodexModelBackfillState();
+      resetCodexModelCatalogBoundary();
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
@@ -1329,6 +1473,7 @@ export function getMaker(): Maker {
     desktopCodexAuthAdapter.setOnLoginSuccess(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
       resetCodexModelBackfillState();
+      resetCodexModelCatalogBoundary();
       // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
       // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
       clearChatgptBridgeCredentialCache();
@@ -1343,6 +1488,7 @@ export function getMaker(): Maker {
     // 才由 auto-refresh 兜住 —— 这正是首启 Codex tab 只剩少数模型的直接原因。
     desktopCodexAuthAdapter.setOnOAuthBindingClaimed(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
+      resetCodexModelCatalogBoundary();
       await requestCodexModelBackfill();
     });
     // codex CLI 在 stderr 报 refresh_token 失效时, agent 会调 auth.invalidate() →
@@ -1352,6 +1498,7 @@ export function getMaker(): Maker {
     desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason, credentialScope) => {
       resetProviderModelAutoRefreshCooldowns('openai');
       resetCodexModelBackfillState();
+      resetCodexModelCatalogBoundary();
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
       // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
       try {
@@ -1580,6 +1727,7 @@ export function resetMaker(): void {
   // coordinator 闭包捕获了刚作废的那个 maker —— 不清掉的话,换账号窗口期内到达的 auth
   // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。
   _codexModelBackfill = null;
+  resetCodexModelCatalogBoundary();
   _initialCustomMcpRefresh = undefined;
   resetPluginRegistry();
   resetCustomMcpRegistry();
@@ -1661,6 +1809,7 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
   const guard = _codexCredentialChangeGuard;
   _codexCredentialChangeGuard = null;
   const agent = _codexAgent;
+  resetCodexModelCatalogBoundary();
   if (guard || agent) {
     try {
       if (guard) {

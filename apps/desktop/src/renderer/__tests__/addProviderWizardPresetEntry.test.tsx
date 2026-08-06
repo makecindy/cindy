@@ -139,6 +139,7 @@ const piReasoningPreset = {
         {
           id: 'reasoning-model',
           name: 'Reasoning Model',
+          maxOutput: 8_192,
           reasoning: true,
           reasoningEfforts: ['low', 'high'] as const,
         },
@@ -338,6 +339,7 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi?.models).toEqual([
       expect.objectContaining({
         id: 'reasoning-model',
+        maxOutput: 8_192,
         reasoning: true,
         reasoningEfforts: ['low', 'high'],
       }),
@@ -460,12 +462,16 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(config.runtimes.codex?.models.map((model) => model.id)).toEqual(['glm-5.2']);
   });
 
-  it('拉取新增模型带端点上报的 contextWindow 入库(Codex P1 回归)', async () => {
+  it('拉取新增模型带端点上报的 contextWindow/maxOutput 入库(Codex P1 回归)', async () => {
     // 预设未收录的发现模型没有预设窗口可回填:丢弃端点上报值会让它落 200K
     // 默认,显示与压缩阈值双错——完成创建必须把发现值写进配置。
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
       ok: true,
-      models: [{ id: 'deepseek-v4', name: 'DeepSeek V4', contextWindow: 262_144 }],
+      models: [{
+        id: 'deepseek-v4',
+        name: 'DeepSeek V4',
+        providerReported: { contextWindow: 262_144, maxOutput: 8_192 },
+      }],
     });
     renderWizard('deepseek');
 
@@ -481,9 +487,53 @@ describe('AddProviderWizard — preset 直达', () => {
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
     const config = vi.mocked(createCustomProvider).mock.calls[0][0];
     expect(config.runtimes['claude-code']?.models).toEqual([
-      expect.objectContaining({ id: 'deepseek-v4', contextWindow: 262_144 }),
+      expect.objectContaining({
+        id: 'deepseek-v4',
+        contextWindow: 262_144,
+        maxOutput: 8_192,
+      }),
     ]);
   });
+
+  it.each([
+    { presetMaxOutput: 16_384, reportedMaxOutput: 8_192, expected: 8_192 },
+    { presetMaxOutput: 8_192, reportedMaxOutput: 16_384, expected: 8_192 },
+  ])(
+    '预设 $presetMaxOutput 与端点 $reportedMaxOutput 同时存在时保守保存 $expected',
+    async ({ presetMaxOutput, reportedMaxOutput, expected }) => {
+      const preset = {
+        id: 'max-output-limit',
+        name: 'Max Output Limit',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://limit.example/v1',
+            models: [{ id: 'limited-model', name: 'Limited Model', maxOutput: presetMaxOutput }],
+          },
+        },
+      };
+      vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+      vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+        ok: true,
+        models: [{
+          id: 'limited-model',
+          name: 'Limited Model',
+          providerReported: { maxOutput: reportedMaxOutput },
+        }],
+      });
+
+      renderWizard('max-output-limit');
+      await waitFor(() => expect(screen.getByDisplayValue('Max Output Limit')).not.toBeNull());
+      fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+      fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+      await waitFor(() => expect(screen.getByText('Limited Model')).not.toBeNull());
+      fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi?.models).toEqual([
+        expect.objectContaining({ id: 'limited-model', maxOutput: expected }),
+      ]);
+    },
+  );
 
   it('双 runtime 各自端点发现同一模型不同窗口时按 runtime 分别入库(Codex P1 回归)', async () => {
     // 同一 model id 在两端窗口可以不同(如 cc=1M / codex=272K):共享一个发现值
@@ -495,7 +545,10 @@ describe('AddProviderWizard — preset 直达', () => {
           {
             id: 'shared-model',
             name: 'Shared Model',
-            contextWindow: agent === 'claude-code' ? 1_000_000 : 272_000,
+            providerReported: {
+              contextWindow: agent === 'claude-code' ? 1_000_000 : 272_000,
+              maxOutput: agent === 'claude-code' ? 64_000 : 32_000,
+            },
           },
         ],
       }),
@@ -513,10 +566,18 @@ describe('AddProviderWizard — preset 直达', () => {
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
     const config = vi.mocked(createCustomProvider).mock.calls[0][0];
     expect(config.runtimes['claude-code']?.models).toEqual([
-      expect.objectContaining({ id: 'shared-model', contextWindow: 1_000_000 }),
+      expect.objectContaining({
+        id: 'shared-model',
+        contextWindow: 1_000_000,
+        maxOutput: 64_000,
+      }),
     ]);
     expect(config.runtimes.codex?.models).toEqual([
-      expect.objectContaining({ id: 'shared-model', contextWindow: 272_000 }),
+      expect.objectContaining({
+        id: 'shared-model',
+        contextWindow: 272_000,
+        maxOutput: 32_000,
+      }),
     ]);
   });
 

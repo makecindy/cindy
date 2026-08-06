@@ -41,6 +41,7 @@ export function xaiSupportsServerSideSearch(model: string): boolean {
  * 某个 xAI model 恒定附加的服务端工具列表(不支持的模型返回空数组)。
  * 每次返回新对象,调用方可以安全地并入自己的 tools 数组而不共享引用。
  */
+// TODO(unified-model-catalog): replace the model-name blacklist only after a typed serverSideTools field lands; keep this fallback intact.
 export function xaiServerSideTools(model: string): ResponsesServerTool[] {
   return xaiSupportsServerSideSearch(model) ? [{ type: XAI_X_SEARCH_TOOL_TYPE }] : [];
 }

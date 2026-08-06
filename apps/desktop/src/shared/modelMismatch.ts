@@ -28,6 +28,8 @@ export interface ModelMismatchInfo {
 /** detectClaudeModelMismatch 的实际模型入参:模型 id + 该模型本轮输出 token 数。 */
 export interface ActualModelEntry {
   model: string;
+  /** Catalog family when the caller can resolve it; id canonicalization remains the fallback. */
+  family?: string;
   /** 本轮该模型的输出 token 增量;用于在多模型时挑「主要承接者」。缺省按 0。 */
   outputTokens?: number;
 }
@@ -51,6 +53,12 @@ export function canonicalModelFamilyKey(modelId: string | null | undefined): str
   return id;
 }
 
+/** family 字段存在时优先；缺失时才从 raw id 规范化，保留旧安全判定。 */
+function modelFamilyKey(entry: Pick<ActualModelEntry, 'model' | 'family'>): string {
+  const family = entry.family?.trim();
+  return family ? canonicalModelFamilyKey(family) : canonicalModelFamilyKey(entry.model);
+}
+
 /** canonical key 是否属于 Anthropic 家族(claude- 前缀已剥,按家族词判)。 */
 function isAnthropicFamilyKey(key: string): boolean {
   return /^(opus|sonnet|haiku|fable)(-|$)/.test(key);
@@ -71,10 +79,10 @@ export function detectClaudeModelMismatch(
   if (!selectedKey || selectedKey === 'unknown' || !isAnthropicFamilyKey(selectedKey)) return null;
 
   const anthropicEntries = actualEntries.filter((e) =>
-    isAnthropicFamilyKey(canonicalModelFamilyKey(e.model)),
+    isAnthropicFamilyKey(modelFamilyKey(e)),
   );
   if (anthropicEntries.length === 0) return null;
-  if (anthropicEntries.some((e) => canonicalModelFamilyKey(e.model) === selectedKey)) return null;
+  if (anthropicEntries.some((e) => modelFamilyKey(e) === selectedKey)) return null;
 
   // 所选家族整轮缺席 → 主线被替换。挑输出 token 最多的条目当「实际承接者」
   // (subagent 输出通常远小于主线,取 max 基本就是主线实际模型)。

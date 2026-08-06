@@ -13,17 +13,23 @@
  * 保证包可独立单测，也保证跨平台路径 / CORS 等细节留在 host。
  */
 
-import { BUNDLED_CATALOG, parseCatalog } from './catalog.js';
+import {
+  BUNDLED_CATALOG,
+  parseCatalog,
+  validateModelConsistency,
+  validatePublishedProvider,
+} from "./catalog.js";
+import { withVerifiedStaticWindows } from "./builtin.js";
 import {
   compareModelRegistryRevisions,
   decideModelRegistrySnapshot,
-} from './modelRegistry.js';
-import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
+} from "./modelRegistry.js";
+import type { AgentKind, Catalog, Provider, ProviderPreset } from "./types.js";
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
-export const CATALOG_API_PATH = '/api/model-catalog/catalog';
+export const CATALOG_API_PATH = "/api/model-catalog/catalog";
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
-export const CATALOG_CFG_PATH = '/cfg/providers.json';
+export const CATALOG_CFG_PATH = "/cfg/providers.json";
 
 /** 整条远端 Catalog fallback 链共享的默认启动等待预算。 */
 export const DEFAULT_REMOTE_CATALOG_BUDGET_MS = 15_000;
@@ -58,10 +64,14 @@ export interface CatalogIO {
    */
   writeCache?: (scope: string, text: string) => Promise<string | void>;
   /** 诊断日志（可选）。 */
-  log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
+  log?: (
+    level: "info" | "warn" | "error",
+    msg: string,
+    meta?: Record<string, unknown>,
+  ) => void;
 }
 
-export type CatalogLoadSource = 'local' | 'remote' | 'cache' | 'bundled';
+export type CatalogLoadSource = "local" | "remote" | "cache" | "bundled";
 
 export interface CatalogLoadResult {
   catalog: Catalog;
@@ -85,7 +95,9 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
 }
 
 /** 解析迁移期旧 OSS 回退 URL。 */
-export function resolveFallbackCatalogUrl(cfg: CatalogSourceConfig): string | null {
+export function resolveFallbackCatalogUrl(
+  cfg: CatalogSourceConfig,
+): string | null {
   if (!cfg.fallbackBaseUrl?.trim()) return null;
   return trimTrailingSlashes(cfg.fallbackBaseUrl.trim()) + CATALOG_CFG_PATH;
 }
@@ -95,16 +107,20 @@ export function resolveFallbackCatalogUrl(cfg: CatalogSourceConfig): string | nu
  * catalog. Strip that one retired block only at the legacy source boundary; canonical
  * API, local dev files, and parseCatalog itself remain strict about unknown fields.
  */
-function parseRemoteCatalog(input: string, allowLegacyModelMeta: boolean): Catalog {
+function parseRemoteCatalog(
+  input: string,
+  allowLegacyModelMeta: boolean,
+): Catalog {
   if (!allowLegacyModelMeta) return parseCatalog(input);
   const raw: unknown = JSON.parse(input);
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return parseCatalog(raw);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    return parseCatalog(raw);
   // Keep every unknown field so parseCatalog can reject it; only the retired legacy block is
   // exempt. A null-prototype destination makes special JSON keys such as `__proto__` ordinary
   // own properties instead of invoking an inherited setter during the compatibility copy.
   const migrated = Object.create(null) as Record<string, unknown>;
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (key !== 'cindyModelMeta') migrated[key] = value;
+    if (key !== "cindyModelMeta") migrated[key] = value;
   }
   return parseCatalog(migrated);
 }
@@ -113,24 +129,33 @@ function parseRemoteCatalog(input: string, allowLegacyModelMeta: boolean): Catal
 function catalogUrlForLog(value: string): string {
   try {
     const parsed = new URL(value);
-    parsed.username = '';
-    parsed.password = '';
-    parsed.search = '';
-    parsed.hash = '';
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
     return parsed.toString();
   } catch {
-    return '[redacted invalid catalog URL]';
+    return "[redacted invalid catalog URL]";
   }
 }
 
-function remoteErrorForLog(error: unknown, remoteUrl: string, logUrl: string): string {
+function remoteErrorForLog(
+  error: unknown,
+  remoteUrl: string,
+  logUrl: string,
+): string {
   return String(error).split(remoteUrl).join(logUrl);
 }
 
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
-function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access'] {
+function legacyAccessFor(
+  primary: Provider,
+  bundled: Provider,
+): Provider["access"] {
   if (primary.auth.method !== bundled.auth.method) return undefined;
-  const sharedAgents = primary.agents.filter((agent) => bundled.agents.includes(agent));
+  const sharedAgents = primary.agents.filter((agent) =>
+    bundled.agents.includes(agent),
+  );
   if (sharedAgents.length === 0) return undefined;
   const sameRoutes = sharedAgents.every((agent) => {
     const current = primary.routing[agent];
@@ -147,49 +172,107 @@ function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access
 
 /** 图片能力只可沿用到未声明 access，或仍明确属于同一 bundled 订阅的旧条目。 */
 function allowsBundledImageInheritance(
-  primaryAccess: Provider['access'],
-  bundledAccess: Provider['access'],
+  primaryAccess: Provider["access"],
+  bundledAccess: Provider["access"],
 ): boolean {
   if (primaryAccess === undefined) return true;
-  if (bundledAccess === undefined || primaryAccess.kind !== bundledAccess.kind) return false;
+  if (bundledAccess === undefined || primaryAccess.kind !== bundledAccess.kind)
+    return false;
   return (
-    primaryAccess.kind !== 'subscription' ||
-    (bundledAccess.kind === 'subscription' && primaryAccess.product === bundledAccess.product)
+    primaryAccess.kind !== "subscription" ||
+    (bundledAccess.kind === "subscription" &&
+      primaryAccess.product === bundledAccess.product)
   );
 }
 
 /**
  * 同 id preset 仍以远端为主；bundled 只给远端仍保留的同 runtime / 同 model
- * 回填缺失的 contextWindow。这样旧远端不会把已核实的长上下文元数据降级，同时远端
- * 仍可通过移除 runtime / model 停止新建，或用显式窗口覆盖 bundled。
+ * 回填缺失的 contextWindow / maxOutput。这样旧远端不会把新版客户端已核实的模型
+ * 限额降级，同时远端仍可通过移除 runtime / model 停止新建，或用显式值覆盖 bundled。
  */
-function backfillPresetContextWindows(
+function backfillPresetModelLimits(
   primary: ProviderPreset,
   bundled: ProviderPreset,
 ): ProviderPreset {
   let changed = false;
-  const runtimes: ProviderPreset['runtimes'] = {};
+  const runtimes: ProviderPreset["runtimes"] = {};
   for (const [agent, runtime] of Object.entries(primary.runtimes) as [
     AgentKind,
-    NonNullable<ProviderPreset['runtimes'][AgentKind]>,
+    NonNullable<ProviderPreset["runtimes"][AgentKind]>,
   ][]) {
     const bundledRuntime = bundled.runtimes[agent];
     if (!bundledRuntime) {
       runtimes[agent] = runtime;
       continue;
     }
-    const bundledModels = new Map(bundledRuntime.models.map((model) => [model.id, model]));
+    const bundledModels = new Map(
+      bundledRuntime.models.map((model) => [model.id, model]),
+    );
     let runtimeChanged = false;
     const models = runtime.models.map((model) => {
-      const bundledContextWindow = bundledModels.get(model.id)?.contextWindow;
-      if (model.contextWindow !== undefined || bundledContextWindow === undefined) return model;
+      const bundledModel = bundledModels.get(model.id);
+      const shouldBackfillContextWindow =
+        model.contextWindow === undefined && bundledModel?.contextWindow !== undefined;
+      const shouldBackfillMaxOutput =
+        model.maxOutput === undefined && bundledModel?.maxOutput !== undefined;
+      if (!shouldBackfillContextWindow && !shouldBackfillMaxOutput) return model;
       runtimeChanged = true;
       changed = true;
-      return { ...model, contextWindow: bundledContextWindow };
+      return {
+        ...model,
+        ...(shouldBackfillContextWindow
+          ? { contextWindow: bundledModel?.contextWindow }
+          : {}),
+        ...(shouldBackfillMaxOutput
+          ? { maxOutput: bundledModel?.maxOutput }
+          : {}),
+      };
     });
     runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
   }
   return changed ? { ...primary, runtimes } : primary;
+}
+
+/**
+ * Registry v3 providers are deltas over the bundled provider identity cards. Keep this
+ * compatibility merge deliberately narrow: upstream's Catalog/LKG and modelRegistry remain the
+ * authoritative load path, while a v3 snapshot may still omit sibling runtime fields. Explicit
+ * empty arrays/objects are preserved as intentional values.
+ */
+function mergeV3Provider(
+  bundled: Provider,
+  delta: Partial<Provider>,
+): Provider {
+  const merged: Provider = { ...bundled, ...delta };
+  if (delta.routing !== undefined) {
+    const routing: Provider['routing'] = { ...bundled.routing };
+    for (const agent of Object.keys(delta.routing) as AgentKind[]) {
+      const routeDelta = delta.routing[agent];
+      if (routeDelta === undefined) continue;
+      routing[agent] = { ...bundled.routing[agent], ...routeDelta };
+    }
+    merged.routing = routing;
+  }
+  if (delta.models !== undefined) {
+    merged.models = { ...bundled.models, ...delta.models };
+  }
+  if (delta.fallbackModels !== undefined) {
+    merged.fallbackModels = {
+      ...bundled.fallbackModels,
+      ...delta.fallbackModels,
+    };
+  }
+  if (delta.defaults !== undefined) {
+    const defaults: NonNullable<Provider["defaults"]> = { ...bundled.defaults };
+    for (const agent of Object.keys(delta.defaults) as AgentKind[]) {
+      defaults[agent] = {
+        ...bundled.defaults?.[agent],
+        ...delta.defaults[agent],
+      };
+    }
+    merged.defaults = defaults;
+  }
+  return merged;
 }
 
 /**
@@ -205,14 +288,20 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   const bundledById = new Map(BUNDLED_CATALOG.providers.map((p) => [p.id, p]));
   const withBundledMetadata = primary.providers.map((p) => {
     const bundled = bundledById.get(p.id);
-    const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
+    const mergedProvider =
+      primary.version === "3" && bundled
+        ? mergeV3Provider(bundled, p as Partial<Provider>)
+        : p;
+    const bundledAccess = bundled
+      ? legacyAccessFor(mergedProvider, bundled)
+      : undefined;
     if (!bundled) return p;
     const inheritImage =
-      p.id === 'xai' &&
-      p.imageModels === undefined &&
+      mergedProvider.id === "xai" &&
+      mergedProvider.imageModels === undefined &&
       bundled.imageModels !== undefined &&
       bundledAccess !== undefined &&
-      allowsBundledImageInheritance(p.access, bundledAccess);
+      allowsBundledImageInheritance(mergedProvider.access, bundledAccess);
     // 向量清单与 xai 的图像清单同一个道理(PR #1707 review):xd 段的向量能力是
     // 客户端新增的 bundled 元数据,而远端 / 本地目录里同 id 的 xd 可能还是升级前
     // 的结构、根本没有 embeddingModels 这个字段。primary 整体优先的规则会让那份
@@ -222,25 +311,28 @@ export function mergeWithBundled(primary: Catalog): Catalog {
     // 只在字段**缺席**时补,显式 `[]` 仍然是"这个供应商不提供向量"的停用语义,
     // 与图像清单的既有契约一致。
     const inheritEmbedding =
-      p.id === 'xd' &&
-      p.embeddingModels === undefined &&
+      mergedProvider.id === "xd" &&
+      mergedProvider.embeddingModels === undefined &&
       bundled.embeddingModels !== undefined &&
       bundledAccess !== undefined &&
-      allowsBundledImageInheritance(p.access, bundledAccess);
+      allowsBundledImageInheritance(mergedProvider.access, bundledAccess);
     if (
-      !(p.access === undefined && bundledAccess !== undefined) &&
+      !(mergedProvider.access === undefined && bundledAccess !== undefined) &&
       !inheritImage &&
       !inheritEmbedding
     ) {
-      return p;
+      return mergedProvider;
     }
     return {
-      ...p,
-      ...(p.access === undefined && bundledAccess !== undefined ? { access: bundledAccess } : {}),
+      ...mergedProvider,
+      ...(mergedProvider.access === undefined && bundledAccess !== undefined
+        ? { access: bundledAccess }
+        : {}),
       ...(inheritImage
         ? {
             imageModels: bundled.imageModels,
-            ...(p.imageDefaults === undefined && bundled.imageDefaults !== undefined
+            ...(mergedProvider.imageDefaults === undefined &&
+            bundled.imageDefaults !== undefined
               ? { imageDefaults: bundled.imageDefaults }
               : {}),
           }
@@ -248,7 +340,8 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       ...(inheritEmbedding
         ? {
             embeddingModels: bundled.embeddingModels,
-            ...(p.embeddingDefaults === undefined && bundled.embeddingDefaults !== undefined
+            ...(mergedProvider.embeddingDefaults === undefined &&
+            bundled.embeddingDefaults !== undefined
               ? { embeddingDefaults: bundled.embeddingDefaults }
               : {}),
           }
@@ -267,11 +360,13 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // 远端独有项按远端原序追加。避免旧远端的非空 presets 整段遮掉新版客户端内置条目。
   const primaryPresets = primary.presets ?? [];
   const bundledPresets = BUNDLED_CATALOG.presets ?? [];
-  const primaryPresetsById = new Map(primaryPresets.map((preset) => [preset.id, preset]));
+  const primaryPresetsById = new Map(
+    primaryPresets.map((preset) => [preset.id, preset]),
+  );
   const bundledPresetIds = new Set(bundledPresets.map((preset) => preset.id));
   const presets = bundledPresets.map((bundled) => {
     const remote = primaryPresetsById.get(bundled.id);
-    return remote ? backfillPresetContextWindows(remote, bundled) : bundled;
+    return remote ? backfillPresetModelLimits(remote, bundled) : bundled;
   });
   for (const preset of primaryPresets) {
     if (!bundledPresetIds.has(preset.id)) presets.push(preset);
@@ -283,20 +378,60 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // xAI is the only provider whose model list is a static part of this Catalog snapshot. When
   // bundled wins the registry revision guard, keep its xAI provider with that same snapshot
   // instead of combining a new registry with an older remote/LKG list.
-  const providers = selectedRegistry.fromFallback && primary.modelRegistry !== undefined
-    ? merged.map((provider) =>
-        provider.id === 'xai' ? (bundledById.get('xai') ?? provider) : provider,
-      )
-    : merged;
-  return {
+  const selectedProviders =
+    selectedRegistry.fromFallback && primary.modelRegistry !== undefined
+      ? merged.map((provider) =>
+          provider.id === "xai"
+            ? (bundledById.get("xai") ?? provider)
+            : provider,
+        )
+      : merged;
+  // v1/v2 get this provenance marker in parseCatalog(). A v3 bundled-provider entry is only a
+  // partial delta there, so normalize after identity-card materialization and registry revision
+  // selection instead. Static catalog windows are trusted unless the entry explicitly opts out;
+  // runtime discovery never enters this merge path.
+  const providers = primary.version === "3"
+    ? selectedProviders.map(withVerifiedStaticWindows)
+    : selectedProviders;
+  const defaults: Catalog["defaults"] =
+    primary.version === "3"
+      ? { ...BUNDLED_CATALOG.defaults }
+      : (primary.defaults ?? BUNDLED_CATALOG.defaults);
+  if (primary.version === "3" && primary.defaults && defaults) {
+    for (const agent of Object.keys(primary.defaults) as AgentKind[]) {
+      defaults[agent] = {
+        ...BUNDLED_CATALOG.defaults?.[agent],
+        ...primary.defaults[agent],
+      };
+    }
+  }
+  const catalog: Catalog = {
     version: primary.version,
     providers,
+    ...(defaults ? { defaults } : {}),
     ...(presets && presets.length > 0 ? { presets } : {}),
-    ...(selectedRegistry.modelRegistry ? { modelRegistry: selectedRegistry.modelRegistry } : {}),
+    ...(selectedRegistry.modelRegistry
+      ? { modelRegistry: selectedRegistry.modelRegistry }
+      : {}),
   };
+  // v3 provider entries may be partial deltas, so both per-provider invariants and cross-provider
+  // model invariants can only be checked after every bundled identity card has been materialized.
+  // Without this final pass, a syntactically valid delta can leave the merged agents/routing/models
+  // inconsistent or make first-wins projection pair a route with another provider's metadata.
+  if (primary.version === "3") {
+    for (const provider of catalog.providers)
+      validatePublishedProvider(provider);
+    validateModelConsistency(catalog);
+  }
+  return catalog;
 }
 
-function log(io: CatalogIO, level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>): void {
+function log(
+  io: CatalogIO,
+  level: "info" | "warn" | "error",
+  msg: string,
+  meta?: Record<string, unknown>,
+): void {
   io.log?.(level, `[model-providers] ${msg}`, meta);
 }
 
@@ -310,10 +445,17 @@ function registryUpdatedAt(catalog: Catalog): number | null {
 function selectNewerModelRegistry(
   primary: Catalog,
   fallback: Catalog,
-): { modelRegistry: Catalog['modelRegistry']; fromFallback: boolean } {
+): { modelRegistry: Catalog["modelRegistry"]; fromFallback: boolean } {
   if (primary.modelRegistry && fallback.modelRegistry) {
-    const relation = compareModelRegistryRevisions(primary.modelRegistry, fallback.modelRegistry);
-    if (relation === 'older' || relation === 'conflict' || relation === 'invalid-incoming') {
+    const relation = compareModelRegistryRevisions(
+      primary.modelRegistry,
+      fallback.modelRegistry,
+    );
+    if (
+      relation === "older" ||
+      relation === "conflict" ||
+      relation === "invalid-incoming"
+    ) {
       // 同 revision 异内容是非法重发；fallback 是已经随客户端发布/缓存验证过的
       // LKG，启动期也必须保它，不能只在在线 refresh 路径防守。
       return { modelRegistry: fallback.modelRegistry, fromFallback: true };
@@ -323,7 +465,10 @@ function selectNewerModelRegistry(
   if (primary.modelRegistry) {
     return { modelRegistry: primary.modelRegistry, fromFallback: false };
   }
-  return { modelRegistry: fallback.modelRegistry, fromFallback: fallback.modelRegistry !== undefined };
+  return {
+    modelRegistry: fallback.modelRegistry,
+    fromFallback: fallback.modelRegistry !== undefined,
+  };
 }
 
 /**
@@ -340,11 +485,14 @@ function preserveNewerCachedCatalog(
   remote: Catalog,
   cached: Catalog,
 ): { catalog: Catalog; tieConflict: boolean } {
-  const decision = decideModelRegistrySnapshot(remote.modelRegistry, cached.modelRegistry);
-  if (decision === 'preserve-current-conflict') {
+  const decision = decideModelRegistrySnapshot(
+    remote.modelRegistry,
+    cached.modelRegistry,
+  );
+  if (decision === "preserve-current-conflict") {
     return { catalog: cached, tieConflict: true };
   }
-  if (decision === 'preserve-current') {
+  if (decision === "preserve-current") {
     return { catalog: cached, tieConflict: false };
   }
   return { catalog: remote, tieConflict: false };
@@ -370,11 +518,15 @@ export async function loadCatalogWithSource(
       const text = await io.readFile(cfg.localPath);
       if (text != null) {
         const parsed = parseCatalog(text);
-        log(io, 'info', 'loaded catalog from local path', { path: cfg.localPath });
-        return { catalog: mergeWithBundled(parsed), source: 'local' };
+        log(io, "info", "loaded catalog from local path", {
+          path: cfg.localPath,
+        });
+        return { catalog: mergeWithBundled(parsed), source: "local" };
       }
     } catch (err) {
-      log(io, 'warn', 'local catalog read/parse failed, falling back', { err: String(err) });
+      log(io, "warn", "local catalog read/parse failed, falling back", {
+        err: String(err),
+      });
     }
   }
 
@@ -388,11 +540,16 @@ export async function loadCatalogWithSource(
         : []
       : [
           ...(url ? [{ url, allowLegacyModelMeta: false }] : []),
-          ...(fallbackUrl ? [{ url: fallbackUrl, allowLegacyModelMeta: true }] : []),
+          ...(fallbackUrl
+            ? [{ url: fallbackUrl, allowLegacyModelMeta: true }]
+            : []),
         ];
     const now = cfg.now ?? Date.now;
-    const configuredBudget = cfg.remoteBudgetMs ?? DEFAULT_REMOTE_CATALOG_BUDGET_MS;
-    const budgetMs = Number.isFinite(configuredBudget) ? Math.max(0, configuredBudget) : 0;
+    const configuredBudget =
+      cfg.remoteBudgetMs ?? DEFAULT_REMOTE_CATALOG_BUDGET_MS;
+    const budgetMs = Number.isFinite(configuredBudget)
+      ? Math.max(0, configuredBudget)
+      : 0;
     const deadline = now() + budgetMs;
     for (const { url: remoteUrl, allowLegacyModelMeta } of remoteSources) {
       const logUrl = catalogUrlForLog(remoteUrl);
@@ -408,17 +565,20 @@ export async function loadCatalogWithSource(
             try {
               const cachedText = await io.readCache(remoteUrl);
               if (cachedText !== null) {
-                const cached = parseRemoteCatalog(cachedText, allowLegacyModelMeta);
+                const cached = parseRemoteCatalog(
+                  cachedText,
+                  allowLegacyModelMeta,
+                );
                 const selected = preserveNewerCachedCatalog(parsed, cached);
                 if (selected.catalog !== parsed) {
                   parsed = selected.catalog;
                   cacheText = JSON.stringify(selected.catalog);
                   log(
                     io,
-                    'warn',
+                    "warn",
                     selected.tieConflict
-                      ? 'remote registry republished the same updatedAt with different content; keeping LKG'
-                      : 'remote catalog registry is older than LKG; preserving complete newer snapshot',
+                      ? "remote registry republished the same updatedAt with different content; keeping LKG"
+                      : "remote catalog registry is older than LKG; preserving complete newer snapshot",
                     {
                       url: logUrl,
                       remoteUpdatedAt: remoteRegistryUpdatedAt,
@@ -428,57 +588,85 @@ export async function loadCatalogWithSource(
                 }
               }
             } catch (err) {
-              log(io, 'warn', 'cached catalog could not be compared with remote snapshot', {
-                url: logUrl,
-                err: remoteErrorForLog(err, remoteUrl, logUrl),
-              });
+              log(
+                io,
+                "warn",
+                "cached catalog could not be compared with remote snapshot",
+                {
+                  url: logUrl,
+                  err: remoteErrorForLog(err, remoteUrl, logUrl),
+                },
+              );
             }
           }
           if (io.writeCache) {
             try {
               const committedText = await io.writeCache(remoteUrl, cacheText);
-              if (typeof committedText === 'string') {
-                const committed = parseRemoteCatalog(committedText, allowLegacyModelMeta);
-                const selected = preserveNewerCachedCatalog(parsed, committed).catalog;
+              if (typeof committedText === "string") {
+                const committed = parseRemoteCatalog(
+                  committedText,
+                  allowLegacyModelMeta,
+                );
+                const selected = preserveNewerCachedCatalog(
+                  parsed,
+                  committed,
+                ).catalog;
                 if (selected !== parsed) {
                   parsed = selected;
-                  log(io, 'warn', 'serialized LKG commit preserved a newer catalog snapshot', {
-                    url: logUrl,
-                    remoteUpdatedAt: remoteRegistryUpdatedAt,
-                    committedUpdatedAt: registryUpdatedAt(committed),
-                  });
+                  log(
+                    io,
+                    "warn",
+                    "serialized LKG commit preserved a newer catalog snapshot",
+                    {
+                      url: logUrl,
+                      remoteUpdatedAt: remoteRegistryUpdatedAt,
+                      committedUpdatedAt: registryUpdatedAt(committed),
+                    },
+                  );
                 }
               }
             } catch (err) {
-              log(io, 'warn', 'valid remote catalog loaded but LKG write failed', {
-                url: logUrl,
-                err: remoteErrorForLog(err, remoteUrl, logUrl),
-              });
+              log(
+                io,
+                "warn",
+                "valid remote catalog loaded but LKG write failed",
+                {
+                  url: logUrl,
+                  err: remoteErrorForLog(err, remoteUrl, logUrl),
+                },
+              );
             }
           }
-          log(io, 'info', 'loaded catalog from remote', { url: logUrl });
-          return { catalog: mergeWithBundled(parsed), source: 'remote' };
+          log(io, "info", "loaded catalog from remote", { url: logUrl });
+          return { catalog: mergeWithBundled(parsed), source: "remote" };
         } catch (err) {
-          log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
+          log(io, "warn", "remote catalog read/parse failed, trying fallback", {
             url: logUrl,
             err: remoteErrorForLog(err, remoteUrl, logUrl),
           });
         }
       } else {
-        log(io, 'warn', 'remote catalog fallback budget exhausted, trying cache', {
-          url: logUrl,
-        });
+        log(
+          io,
+          "warn",
+          "remote catalog fallback budget exhausted, trying cache",
+          {
+            url: logUrl,
+          },
+        );
       }
       if (io.readCache) {
         try {
           const cached = await io.readCache(remoteUrl);
           if (cached !== null) {
             const parsed = parseRemoteCatalog(cached, allowLegacyModelMeta);
-            log(io, 'info', 'loaded last-known-good catalog snapshot', { url: logUrl });
-            return { catalog: mergeWithBundled(parsed), source: 'cache' };
+            log(io, "info", "loaded last-known-good catalog snapshot", {
+              url: logUrl,
+            });
+            return { catalog: mergeWithBundled(parsed), source: "cache" };
           }
         } catch (err) {
-          log(io, 'warn', 'cached catalog read/parse failed, trying fallback', {
+          log(io, "warn", "cached catalog read/parse failed, trying fallback", {
             url: logUrl,
             err: remoteErrorForLog(err, remoteUrl, logUrl),
           });
@@ -488,11 +676,14 @@ export async function loadCatalogWithSource(
   }
 
   // 3) 兜底：内置 bundled。
-  log(io, 'info', 'using bundled catalog');
-  return { catalog: BUNDLED_CATALOG, source: 'bundled' };
+  log(io, "info", "using bundled catalog");
+  return { catalog: BUNDLED_CATALOG, source: "bundled" };
 }
 
 /** 启动期兼容入口：接受最终 bundled fallback，只返回目录快照。 */
-export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Promise<Catalog> {
+export async function loadCatalog(
+  cfg: CatalogSourceConfig,
+  io: CatalogIO,
+): Promise<Catalog> {
   return (await loadCatalogWithSource(cfg, io)).catalog;
 }

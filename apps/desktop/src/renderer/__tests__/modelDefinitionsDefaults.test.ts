@@ -23,6 +23,7 @@ interface StubModel {
   defaultEffort: string;
   sortOrder?: number;
   defaultEnabled?: boolean;
+  newSessionDefault?: boolean;
 }
 
 function model(id: string, over: Partial<StubModel> = {}): StubModel {
@@ -57,7 +58,10 @@ async function loadWith(byAgent: Record<'claude-code' | 'codex', StubModel[]>) {
 describe('getDefaultModelForVendor', () => {
   it('取 sortOrder 最小的模型，而不是清单里排前面的', async () => {
     const md = await loadWith({
-      'claude-code': [model('first-in-list', { sortOrder: 30 }), model('flagship', { sortOrder: 0 })],
+      'claude-code': [
+        model('first-in-list', { sortOrder: 30 }),
+        model('flagship', { sortOrder: 0 }),
+      ],
       codex: [model('gpt-old', { sortOrder: 20 }), model('gpt-new', { sortOrder: 17 })],
     });
 
@@ -77,10 +81,22 @@ describe('getDefaultModelForVendor', () => {
     expect(md.getDefaultModelForVendor('cc').id).toBe('visible');
   });
 
+  it('默认可见的 newSessionDefault marker 优先于更低 sortOrder', async () => {
+    const md = await loadWith({
+      'claude-code': [
+        model('claude-opus-5', { sortOrder: 0 }),
+        model('deepseek/deepseek-v4-pro', { sortOrder: 44, newSessionDefault: true }),
+      ],
+      codex: [],
+    });
+
+    expect(md.getDefaultModelForVendor('cc').id).toBe('deepseek/deepseek-v4-pro');
+  });
+
   it('整份清单都默认收起时退回纯排序第一，不返回空', async () => {
     const md = await loadWith({
       'claude-code': [
-        model('hidden-b', { sortOrder: 9, defaultEnabled: false }),
+        model('hidden-b', { sortOrder: 9, defaultEnabled: false, newSessionDefault: true }),
         model('hidden-a', { sortOrder: 2, defaultEnabled: false }),
       ],
       codex: [],

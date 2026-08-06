@@ -46,6 +46,25 @@ describe('detectClaudeModelMismatch', () => {
     expect(r).toEqual({ selected: 'claude-fable-5', actual: 'claude-opus-4-8' });
   });
 
+  it('family 字段优先于 raw id，缺失时仍保留 regex 兜底', () => {
+    expect(
+      detectClaudeModelMismatch('claude-fable-5', [
+        { model: 'opaque-a', family: 'fable-5', outputTokens: 100 },
+        { model: 'opaque-b', family: 'opus-4-8', outputTokens: 10 },
+      ]),
+    ).toBeNull();
+    expect(
+      detectClaudeModelMismatch('claude-fable-5', [
+        { model: 'opaque-a', family: 'opus-4-8', outputTokens: 100 },
+      ]),
+    ).toEqual({ selected: 'claude-fable-5', actual: 'opaque-a' });
+    expect(
+      detectClaudeModelMismatch('claude-fable-5', [
+        { model: 'claude-opus-4-8', outputTokens: 100 },
+      ]),
+    ).toEqual({ selected: 'claude-fable-5', actual: 'claude-opus-4-8' });
+  });
+
   it('所选串带 [1m] / 日期,与裸 id 视为同家族', () => {
     expect(
       detectClaudeModelMismatch('claude-fable-5[1m]', [

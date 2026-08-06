@@ -29,6 +29,8 @@ const ALL_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 export interface ModelDescriptor {
   id: string;
   displayName: string;
+  /** 服务端能力分类；存在时优先于 legacy group / id 启发式。 */
+  category?: string;
   /** 目录分组 id(如 'gpt-budget'): 折扣版与官方版 displayName 同名, 靠它区分。 */
   group?: string;
   /**
@@ -50,6 +52,12 @@ export interface ModelDescriptor {
    * 消费点见 modelDefinitions.getDefaultModelForVendor:种子默认只从默认可见的模型里取。
    */
   defaultEnabled?: boolean;
+  /**
+   * 该模型是否被标记为**本 agent** 的新会话默认 seed(由 CatalogModel.newSessionDefault
+   * 按 agent 求值而来;descriptor 已按 agent 分组,故此处是 per-agent 布尔)。
+   * getDefaultModelForVendor 对被标记且默认可见的模型优先取用,否则回退 sortOrder。
+   */
+  newSessionDefault?: boolean;
 }
 
 export interface EffortDescriptor {
@@ -79,6 +87,8 @@ export type CapabilityStatus =
 
 export interface AgentCapabilities {
   availableModels: ModelDescriptor[];
+  /** Main 从当前 active catalog 解析出的 session 默认模型；旧端缺省时由调用方回退。 */
+  sessionDefaultModel?: string;
   /** Agent 是否实现 Fast Mode 运行时能力。 */
   hasFastMode: boolean;
   effortLevels: EffortDescriptor[];
@@ -148,13 +158,15 @@ function isModelDescriptor(value: unknown): value is ModelDescriptor {
     isStringArray(efforts) &&
     (defaultEffort === null ||
       (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
+    isOptionalString(value.category) &&
     isOptionalString(value.group) &&
     isOptionalString(value.mode) &&
     isOptionalString(value.description) &&
     isOptionalStringRecord(value.effortDisplayNames) &&
     isOptionalBoolean(value.supportsFastMode) &&
     isOptionalFiniteNumber(value.sortOrder) &&
-    isOptionalBoolean(value.defaultEnabled)
+    isOptionalBoolean(value.defaultEnabled) &&
+    isOptionalBoolean(value.newSessionDefault)
   );
 }
 
@@ -181,6 +193,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !value.effortLevels.every(isNamedDescriptor) ||
     !Array.isArray(value.permissionModes) ||
     !value.permissionModes.every(isNamedDescriptor) ||
+    !isOptionalString(value.sessionDefaultModel) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas)
   ) {

@@ -37,6 +37,7 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { getActiveCatalog } from './active-catalog.js';
 
 const log = createMakerLogger('cc-bridge');
 
@@ -272,6 +273,20 @@ function codexProviderConfig(): BridgeProviderConfig {
   };
 }
 
+/** xAI reasoning metadata is authoritative when explicit; missing entries retain the full blacklist. */
+export function xaiModelSupportsReasoning(model: string): boolean {
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === 'xai');
+  const matches = [
+    ...(provider?.models['claude-code'] ?? []),
+    ...(provider?.models.codex ?? []),
+  ].filter((candidate) => candidate.id === `${XAI_MODEL_PREFIX}${model}`);
+  const declared = matches
+    .map((candidate) => candidate.capabilities?.reasoning)
+    .filter((value): value is boolean => typeof value === 'boolean');
+  if (declared.length > 0 && declared.every((value) => value === declared[0])) return declared[0];
+  return !(model.startsWith('grok-code') || model.startsWith('grok-build'));
+}
+
 /** xAI(SuperGrok 订阅)provider 配置:xai/ 前缀 → api.x.ai/v1,注入 Grok OAuth Bearer。 */
 function xaiProviderConfig(): BridgeProviderConfig {
   return {
@@ -281,7 +296,7 @@ function xaiProviderConfig(): BridgeProviderConfig {
     // api.x.ai 是标准 Responses 实现,支持 max_output_tokens(codex 不支持)。
     maxOutputTokensSupported: true,
     // grok-code-fast / grok-build 系列不支持 reasoningEffort(实测 400),其余 grok 模型支持。
-    supportsReasoning: (model) => !(model.startsWith('grok-code') || model.startsWith('grok-build')),
+    supportsReasoning: xaiModelSupportsReasoning,
     // Grok 的 X 实时视野来自 xAI 服务端工具 x_search:不声明就搜不了 X(见 xai-server-side-tools.ts)。
     serverSideTools: xaiServerSideTools,
     buildHeaders: async () => ({

@@ -109,6 +109,14 @@ let httpRetryAttempt = 0;
  * 尤其明显),不主动通知的话它会一直显示「正在发现」,直到用户手动切页重取。
  */
 let failureChangedListener: (() => void) | null = null;
+/**
+ * 清单实际生效的收口(desktop host 注入 = 拿新清单去 resolve 补元数据)。
+ *
+ * 只在清单**变过**时触发:resolve 是网络请求,发现链每次轮询都打一次既浪费也会把
+ * knowledgeRevision 抖成噪声。内置订阅供应商没有别的入口 —— 自定义供应商的 resolve
+ * 挂在「保存 / 重新发现」那条 IPC 上,anthropic 订阅直连的清单只从这里出。
+ */
+let modelsAppliedListener: ((models: readonly CatalogModel[]) => void | Promise<void>) | null = null;
 /** 缓存写入 / 删除严格串行,保证授权边界后的删除一定排在旧世代写入之后。 */
 let cacheMutationQueue: Promise<void> = Promise.resolve();
 let cacheTempSequence = 0;
@@ -510,7 +518,10 @@ async function applyModels(
   for (const id of normalizedExplicitEffortIds) explicitEffortModelIds.add(id);
   explicitFastModeModelIds.clear();
   for (const id of normalizedExplicitFastModeIds) explicitFastModeModelIds.add(id);
-  if (modelsChanged) setAnthropicDiscoveredModels(models);
+  if (modelsChanged) {
+    setAnthropicDiscoveredModels(models);
+    notifyModelsApplied(models);
+  }
   if (persist) {
     const payload = JSON.stringify(
       {
@@ -929,6 +940,26 @@ function clearDiscoveryFailure(): void {
  */
 export function setAnthropicDiscoveryFailureListener(listener: (() => void) | null): void {
   failureChangedListener = listener;
+}
+
+/**
+ * 注册「清单已生效」的收口(desktop host 装配时接 resolve 补全;传 null 解绑)。
+ * 同 failure 监听器:不得抛,resolve 失败不该反过来打断发现流程。
+ */
+export function setAnthropicModelsAppliedListener(
+  listener: ((models: readonly CatalogModel[]) => void | Promise<void>) | null,
+): void {
+  modelsAppliedListener = listener;
+}
+
+function notifyModelsApplied(models: readonly CatalogModel[]): void {
+  try {
+    void Promise.resolve(modelsAppliedListener?.(models)).catch((err) => {
+      log.warn('anthropic models-applied listener failed', { error: String(err) });
+    });
+  } catch (err) {
+    log.warn('anthropic models-applied listener failed', { error: String(err) });
+  }
 }
 
 function notifyFailureChanged(): void {

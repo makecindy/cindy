@@ -113,7 +113,7 @@ describe('checkModelRoute', () => {
     // 老控制端可经 allowlisted 通道直接点名图像模型当对话模型 —— 选择器的硬排除
     // 帮不上,必须在同一边界拒绝(PR #744 review 第四轮)。
     const catalog = {
-      providers: [provider('xd', [model('seedream-5', { group: 'image' })])],
+      providers: [provider('xd', [model('seedream-5', { category: 'image', group: 'gpt' })])],
     } as Catalog;
     const v = buildRegistry(catalog, { xd: true }, {});
     expect(checkModelRoute(v, 'claude-code', 'seedream-5', null)).toEqual({
@@ -231,7 +231,7 @@ describe('checkModelRoute', () => {
     // 实际路由永远不会落到未连接拷贝,隐式与点名 xd 都必须拒(PR #744 review 第六轮)。
     const catalog = {
       providers: [
-        provider('xd', [model('gpt-image-2', { group: 'image' })]),
+        provider('xd', [model('gpt-image-2', { category: 'image', group: 'gpt' })]),
         provider('mycorp', [model('gpt-image-2', { group: 'custom:mycorp' })], 'user'),
       ],
     } as Catalog;
@@ -249,7 +249,7 @@ describe('checkModelRoute', () => {
   it('混源同 id 双连接:分类按选中来源 —— 显式选用户家对话拷贝放行,点名 XD 家能力拷贝拒,隐式默认改道到对话拷贝', () => {
     const catalog = {
       providers: [
-        provider('xd', [model('gpt-image-2', { group: 'image' })]),
+        provider('xd', [model('gpt-image-2', { category: 'image', group: 'gpt' })]),
         provider('mycorp', [model('gpt-image-2', { group: 'custom:mycorp' })], 'user'),
       ],
     } as Catalog;

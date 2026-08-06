@@ -2,6 +2,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  budgetModelRequiresApiKey,
   buildNoProviderMessage,
   createOrcaWorkerCreationService,
   providerRouteRequiresExplicitSelection,
@@ -33,6 +34,14 @@ describe('buildNoProviderMessage (pi first-class)', () => {
       pi: [snap('Cindy AI')],
     });
     expect(msg).toContain('Pi(已连接:Cindy AI)');
+  });
+});
+
+describe('budgetModelRequiresApiKey', () => {
+  it('keeps the legacy codex/ prefix and API-key contract', () => {
+    expect(budgetModelRequiresApiKey('codex', 'codex/legacy', false)).toBe(true);
+    expect(budgetModelRequiresApiKey('codex', 'opaque-model', false)).toBe(false);
+    expect(budgetModelRequiresApiKey('codex', 'codex/legacy', true)).toBe(false);
   });
 });
 
@@ -1349,6 +1358,111 @@ describe('OrcaWorkerCreationService', () => {
       model: 'gpt-5.4-mini',
       effort: 'medium',
     }));
+  });
+
+  it('uses the first connected Pi model when the flat catalog starts with a disconnected model', async () => {
+    const { deps, service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) =>
+        agent === 'pi'
+          ? [
+              {
+                id: 'disconnected-pi-model',
+                efforts: ['high'],
+                defaultEffort: 'high',
+              },
+              {
+                id: 'custom-pi-model',
+                efforts: ['low', 'medium', 'high'],
+                defaultEffort: 'high',
+              },
+            ]
+          : [],
+      ),
+      getProviderRoutingContext: vi.fn(async () =>
+        providerRoutingContext({
+          pi: [{ id: 'custom-pi', name: 'Custom Pi', models: ['custom-pi-model'] }],
+        }),
+      ),
+    });
+
+    await expect(
+      service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'pi',
+        label: 'pi-reviewer',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      resolved: {
+        model: 'custom-pi-model',
+      },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: 'pi', model: 'custom-pi-model' }),
+    );
+  });
+
+  it('uses a routable registry new-session marker before stale catalog and Lead defaults', async () => {
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: 'C:\\repo',
+        model: 'claude-sonnet-4-6',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'xd',
+        remoteHostId: null,
+      })),
+      getAvailableModels: vi.fn((agent: AgentKind) =>
+        agent === 'codex'
+          ? [
+              {
+                id: 'gpt-5.5',
+                efforts: ['high'],
+                defaultEffort: 'high',
+              },
+              {
+                id: 'deepseek/deepseek-v4-pro',
+                efforts: ['high'],
+                defaultEffort: 'high',
+                sortOrder: 44,
+                newSessionDefault: true,
+              },
+            ]
+          : [],
+      ),
+      getWorkerDefaults: vi.fn(() => ({})),
+      getProviderRoutingContext: vi.fn(async () =>
+        providerRoutingContext({
+          codex: [
+            {
+              id: 'xd',
+              name: 'Cindy AI',
+              models: ['gpt-5.5', 'deepseek/deepseek-v4-pro'],
+            },
+          ],
+        }),
+      ),
+    });
+
+    await expect(
+      service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'codex',
+        label: 'marker-reviewer',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      resolved: { model: 'deepseek/deepseek-v4-pro' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'deepseek/deepseek-v4-pro' }),
+    );
   });
 
   it('creates a worker with resolved defaults without dispatching or broadcasting from the creation boundary', async () => {

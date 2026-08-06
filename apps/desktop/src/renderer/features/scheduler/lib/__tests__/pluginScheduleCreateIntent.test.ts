@@ -64,9 +64,9 @@ describe('buildPluginScheduleFormOverrides', () => {
     expect(overrides).not.toHaveProperty('pluginConfig');
   });
 
-  it('模型/来源/思考强度一律留空 = 用默认模型,由用户在面板上自己选', () => {
+  it('不覆盖表单模型记忆；来源/思考强度保持默认语义', () => {
     const overrides = buildPluginScheduleFormOverrides(intent);
-    expect(overrides.model).toBe('');
+    expect(overrides).not.toHaveProperty('model');
     expect(overrides.providerId).toBe('');
     expect(overrides.effort).toBe('');
     expect(overrides.fastMode).toBe(false);

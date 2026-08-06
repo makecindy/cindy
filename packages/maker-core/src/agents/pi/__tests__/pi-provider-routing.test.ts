@@ -93,7 +93,7 @@ describe('Pi provider-aware model routing', () => {
       resolvePiAgentHome: () => agentHome,
       resolvePiNativeProviders: async () => ({
         providers: [
-          { id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions', models: [{ id: 'shared-model' }] },
+          { id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions', models: [{ id: 'shared-model', maxTokens: 8_192 }] },
           { id: 'native-b', name: 'Native B', baseUrl: 'http://b.test', api: 'openai-completions', models: [{ id: 'shared-model' }] },
         ],
         env: {},
@@ -116,10 +116,13 @@ describe('Pi provider-aware model routing', () => {
     const models = JSON.parse(
       readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
     ) as {
-      providers: Record<string, { models: Array<{ id: string }> }>;
+      providers: Record<string, { models: Array<{ id: string; maxTokens: number }> }>;
     };
     expect(models.providers.cindy?.models.some((model) => model.id === 'shared-model')).toBe(true);
     expect(models.providers['native-a']?.models.some((model) => model.id === 'shared-model')).toBe(true);
+    expect(models.providers['native-a']?.models.find((model) => model.id === 'shared-model')).toMatchObject({
+      maxTokens: 8_192,
+    });
     expect(models.providers['native-b']?.models.some((model) => model.id === 'shared-model')).toBe(true);
 
     await handle.setModel!('shared-model', { providerId: 'native-b' });

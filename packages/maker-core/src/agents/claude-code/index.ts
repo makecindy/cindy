@@ -483,6 +483,7 @@ const WAKE_BACKGROUND_TASK_TYPES: ReadonlySet<string> = new Set(['local_agent', 
 // availableModels 起始为空,由 host 从 BUNDLED_CATALOG 派生后经 capabilityAdditions 注入
 // (见 apps/desktop/src/main/maker-host/catalog-to-descriptors.ts)。
 
+// TODO(unified-model-catalog): keep CLAUDE_EFFORTS until the server-backed capability contract replaces the agent-level list.
 const CLAUDE_EFFORTS: EffortDescriptor[] = [
   { id: 'low',    displayName: 'Low',        description: 'Most efficient, with lower token use' },
   { id: 'medium', displayName: 'Medium',     description: 'Balanced capability and token use' },
@@ -854,6 +855,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             agentKind: 'claude-code',
             providerId: opts.providerId,
             model: opts.model,
+            authStrategy: this.deps.resolveAuthStrategy?.(opts.providerId, opts.model),
           });
     const authOptions = credentialMode ? { credentialMode } : undefined;
     const authState = await this.deps.auth.getState(authOptions);

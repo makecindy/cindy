@@ -17,11 +17,8 @@ import {
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 
-import {
-  classifyProviderError,
-  type ProviderErrorCode,
-} from '../../shared/providerErrors.js';
-import { deriveModelsDiscoveryUrl, parseModelsListResponse } from './generic-oauth.js';
+import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
+import { deriveModelsDiscoveryUrl, parseModelsListResponseDetailed } from './generic-oauth.js';
 import { outboundFetch } from './outbound-fetch.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
@@ -32,6 +29,8 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024;
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
   agent: AgentKind;
+  /** Opaque renderer request identity used only for asynchronous metadata prefill. */
+  requestId?: string;
   /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
   wireProtocol?: ProviderWireProtocol;
   baseUrl: string;
@@ -49,13 +48,34 @@ export interface ProviderModelsFetchSpec {
    * isRendererAccessibleSafeStorageKey）。仅用于“刷新模型”复用已存请求头鉴权的端点。
    */
   savedProviderId?: string;
+  /**
+   * Manual multi-agent refresh fetches every runtime first, then resolves the saved provider once
+   * through an entries[] batch. Only valid with savedProviderId; form discovery keeps immediate
+   * per-request resolve so metadata prefill behavior is unchanged.
+   */
+  deferResolve?: boolean;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
 export interface ProviderModelsFetchResult {
   ok: boolean;
-  /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
-  models?: { id: string; name: string; contextWindow?: number }[];
+  /** 拉到的模型清单（ok=true 时给出；已按 id 去重）。 */
+  models?: Array<{
+    id: string;
+    name: string;
+    providerReported?: import('./generic-oauth.js').ProviderReportedModelHints;
+    contextWindow?: number;
+    maxOutput?: number;
+    description?: string;
+    family?: string;
+    group?: string;
+    category?: string;
+    mode?: string;
+    sortOrder?: number;
+    efforts?: import('@cindy/model-providers').Effort[];
+    defaultEffort?: import('@cindy/model-providers').Effort | null;
+    supportsFastMode?: boolean;
+  }>;
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -93,15 +113,18 @@ function normalizedHeaders(headers: Record<string, string> | undefined): Record<
 }
 
 /** 构造列模型请求（纯函数，单测直断言）。鉴权头组合与 buildProbeRequest 同口径。 */
-export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: string; init: RequestInit } {
+export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
+  url: string;
+  init: RequestInit;
+} {
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
     ? withoutCredentialHeaders(spec.headers)
     : normalizedHeaders(spec.headers);
   const anthropicMessages =
-    spec.wireProtocol === 'anthropic-messages'
-    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+    spec.wireProtocol === 'anthropic-messages' ||
+    (spec.wireProtocol === undefined && spec.agent === 'claude-code');
   if (anthropicMessages) {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
@@ -118,7 +141,10 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
   // 防止用户改了 baseUrl 后，key 仍被发往快照里的旧主机 / 被降级成明文（现有预设全部同源）。
   const explicit = spec.modelsUrl?.trim();
   return {
-    url: explicit && sameOrigin(explicit, spec.baseUrl) ? explicit : deriveModelsDiscoveryUrl(spec.baseUrl),
+    url:
+      explicit && sameOrigin(explicit, spec.baseUrl)
+        ? explicit
+        : deriveModelsDiscoveryUrl(spec.baseUrl),
     init: { method: 'GET', headers },
   };
 }
@@ -140,11 +166,9 @@ export async function fetchProviderModels(
   fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderModelsFetchResult> {
   if (
-    spec.authMethod === 'none'
-    && (
-      !isLoopbackProviderUrl(spec.baseUrl)
-      || (!!spec.modelsUrl?.trim() && !isLoopbackProviderUrl(spec.modelsUrl.trim()))
-    )
+    spec.authMethod === 'none' &&
+    (!isLoopbackProviderUrl(spec.baseUrl) ||
+      (!!spec.modelsUrl?.trim() && !isLoopbackProviderUrl(spec.modelsUrl.trim())))
   ) {
     return {
       ok: false,
@@ -174,12 +198,22 @@ export async function fetchProviderModels(
   try {
     json = await res.json();
   } catch {
-    return { ok: false, code: 'UNKNOWN', status: res.status, detail: 'models response is not JSON' };
+    return {
+      ok: false,
+      code: 'UNKNOWN',
+      status: res.status,
+      detail: 'models response is not JSON',
+    };
   }
-  const models = parseModelsListResponse(json);
+  const models = parseModelsListResponseDetailed(json);
   if (!models || models.length === 0) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
-    return { ok: false, code: 'UNKNOWN', status: res.status, detail: 'no models found in response' };
+    return {
+      ok: false,
+      code: 'UNKNOWN',
+      status: res.status,
+      detail: 'no models found in response',
+    };
   }
   return { ok: true, models };
 }

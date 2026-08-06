@@ -53,6 +53,31 @@ function providersByPreference(
  * 供应商显式配置的模型(未知 group)是合法聊天模型,id 撞上能力启发式(如 flux-image-x)
  * 不该被误杀(2026-07 review 第 25 轮)。
  */
+function byCatalogOrder(a: CatalogModel, b: CatalogModel): number {
+  return (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER);
+}
+
+/**
+ * 该供应商里显式标记为本 agent 新会话默认、默认可见且可用于新对话的模型。
+ *
+ * marker 是后端对「未显式选择过模型」用户的产品默认裁决，所以它必须在旧 seed 仍可用时
+ * 也生效；但不能绕过选择器可见性或聊天准入。整组都默认收起时也不放宽 marker —— 否则
+ * 后端误配会把用户默认落到一个选择器里找不到的模型上。
+ */
+function markedModelByOrder(provider: ProviderView, agent: AgentKind): CatalogModel | undefined {
+  if (provider.modelDiscoveryFailure) return undefined;
+  const userProvider = provider.source === 'user';
+  return (provider.models[agent] ?? [])
+    .filter(
+      (model) =>
+        model.newSessionDefault?.includes(agent) === true &&
+        model.defaultEnabled !== false &&
+        isModelSelectableForNewRoute(model, { userProvider }),
+    )
+    .slice()
+    .sort(byCatalogOrder)[0];
+}
+
 function firstModelByOrder(provider: ProviderView, agent: AgentKind): CatalogModel | undefined {
   const userProvider = provider.source === 'user';
   const chatModels = (provider.models[agent] ?? []).filter((m) =>
@@ -62,12 +87,7 @@ function firstModelByOrder(provider: ProviderView, agent: AgentKind): CatalogMod
   const visible = chatModels.filter((m) => m.defaultEnabled !== false);
   const pool = visible.length > 0 ? visible : chatModels;
   // slice() 再 sort：sort 原地改数组，直接排会打乱传入的 ProviderView 的清单顺序。
-  return pool
-    .slice()
-    .sort(
-      (a, b) =>
-        (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
-    )[0];
+  return pool.slice().sort(byCatalogOrder)[0];
 }
 
 /** 校准挑中的 (模型, 来源)。`providerId` 是按订阅优先顺序命中的那家。 */
@@ -86,11 +106,13 @@ export interface PickedConnectedModel {
 
 /**
  * 在该 agent 的已连接来源里挑 (模型, 来源)：
- *   1. `preferredModelId` 本身可用**且默认可见** —— 默认值能用就绝不动它，避免首屏莫名换
- *      模型；来源仍按订阅优先顺序取「第一家提供它的」，让默认值也享受订阅优先；
- *   2. 否则按「订阅优先」的供应商序取第一家，返回它排序第一的默认可见模型
+ *   1. 若存在命中当前 agent 的 `newSessionDefault`，按「订阅优先」供应商序、再按供应商内
+ *      sortOrder 选择；marker 只参与默认可见且可聊天的候选；
+ *   2. 否则 `preferredModelId` 本身可用**且默认可见**时原样保留；来源仍按订阅优先顺序取
+ *      「第一家提供它的」，让默认值也享受订阅优先；
+ *   3. 否则按「订阅优先」的供应商序取第一家，返回它排序第一的默认可见模型
  *      （见 providersByPreference / firstModelByOrder）；
- *   3. 一个已连接来源都没有（或都没有模型）→ null，交给既有的「零来源」空态引导去连接供应商。
+ *   4. 一个已连接来源都没有（或都没有模型）→ null，交给既有的「零来源」空态引导去连接供应商。
  *
  * 第 1 步为什么要卡「默认可见」：存量用户的草稿里持久化着**旧代码写死的**种子默认
  * （`gpt-5.4` / `gpt-5.5`），而这两个 id 在目录里都是 `defaultEnabled: false`。它们的
@@ -110,6 +132,10 @@ export function pickConnectedModelForAgent(
 ): PickedConnectedModel | null {
   const ranked = providersByPreference(providers, agent);
   if (ranked.length === 0) return null;
+  for (const provider of ranked) {
+    const marked = markedModelByOrder(provider, agent);
+    if (marked) return { model: marked.id, providerId: provider.id };
+  }
   for (const provider of ranked) {
     const preferred = (provider.models[agent] ?? []).find((m) => m.id === preferredModelId);
     if (
@@ -197,12 +223,7 @@ export function resolveDraftSessionProviderId({
     return explicitProviderId;
   }
   if (!effectiveProviderId) return null;
-  const modelDefaultProviderId = effectiveSourceIdForModel(
-    [...providers],
-    null,
-    model,
-    agent,
-  );
+  const modelDefaultProviderId = effectiveSourceIdForModel([...providers], null, model, agent);
   // main 收到 providerId=null 后按 agent 的原生来源选择启动链路，而不是只在“提供当前
   // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含
   // claude-opus-5。modelDefault 是 anthropic，但 agentDefault 仍是 xd；若只比较前者

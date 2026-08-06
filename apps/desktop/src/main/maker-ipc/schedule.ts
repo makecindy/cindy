@@ -58,6 +58,10 @@ import {
 
 import { createLogger } from '../logger.js';
 import type { DrizzleScheduleStorage } from '../scheduler-host/storage.js';
+import {
+  materializeScheduleDefaultForCreate,
+  materializeScheduleDefaultForUpdate,
+} from '../scheduler-host/model-defaults.js';
 import { executePreRunHook } from '../scheduler-host/pre-run-hook.js';
 import {
   HookScriptUtilityModelError,
@@ -338,7 +342,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
         hookPathDeps,
       );
-      return scheduler.create(normalized);
+      return scheduler.create(materializeScheduleDefaultForCreate(normalized));
     });
   });
 
@@ -346,8 +350,8 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     const scheduleId = requireString(id, 'id');
     requireObject(patch, 'patch');
     return withScheduler(({ scheduler }) =>
-      scheduler.updateFromCurrent(scheduleId, (existing) =>
-        stabilizePreRunHookForUpdate(
+      scheduler.updateFromCurrent(scheduleId, async (existing) => {
+        const stabilized = await stabilizePreRunHookForUpdate(
           existing,
           normalizeLegacyDeviceLinkIntervalClear(
             normalizeNullableIntervalMs(
@@ -356,8 +360,9 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
             isDeviceLinkInvoke(),
           ),
           hookPathDeps,
-        ),
-      ),
+        );
+        return materializeScheduleDefaultForUpdate(existing, stabilized);
+      }),
     );
   });
 
@@ -644,7 +649,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         paramValues,
         template.parameters,
       );
-      return scheduler.create(buildCreateScheduleInput(template, prompt, overrides));
+      return scheduler.create(
+        materializeScheduleDefaultForCreate(
+          buildCreateScheduleInput(template, prompt, overrides),
+        ),
+      );
     });
   });
 

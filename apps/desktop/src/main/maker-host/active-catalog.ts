@@ -38,6 +38,7 @@ import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
   hasLocalAddition,
+  locallyPinnedFields,
   EMPTY_MODEL_CATALOG_OVERRIDES,
   resolveLocalBridgeExclusions,
   type ModelCatalogOverrides,
@@ -45,6 +46,7 @@ import {
 import {
   applyRegistryConsumerOverlay,
   applyRootRegistryPlan,
+  MODEL_PLANE_POLICIES,
   planRegistryRoots,
   toChatgptBridgeModel,
   rootPlanKey,
@@ -69,6 +71,21 @@ let discoveredCodex: CatalogModel[] = [];
  * 空/坏数据绝不抹掉静态兜底。由 generic-oauth 的 models 发现流程写入。
  */
 const discoveredByProvider = new Map<string, Partial<Record<AgentKind, CatalogModel[]>>>();
+/**
+ * Resolve metadata overlay, keyed independently from additions-only discovery membership.
+ * A successful resolve may enrich existing entries, but it is never allowed to add, remove, or
+ * reorder the provider/agent membership snapshot it was generated from.
+ */
+type ResolvedProviderModels = {
+  knowledgeRevision: string;
+  modelIdsKey: string;
+  allModelIdsKey?: string;
+  models: CatalogModel[];
+};
+const resolvedByProvider = new Map<
+  string,
+  Partial<Record<AgentKind, ResolvedProviderModels>>
+>();
 /** 单 tab 能力覆盖块(shared/modelAccess ModelAccessAgentOverride 同形)。 */
 export interface XdGatewayAgentOverride {
   contextWindow?: number;
@@ -103,6 +120,8 @@ export interface XdGatewayModelInfo {
   name?: string;
   group?: string;
   description?: string;
+  family?: string;
+  category?: string;
   contextWindow?: number;
   maxOutputTokens?: number;
   efforts?: string[];
@@ -114,7 +133,16 @@ export interface XdGatewayModelInfo {
   defaultEnabled?: boolean;
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
+  /** Resolved metadata is view-only and carries the server knowledge revision. */
+  source?: 'resolved';
+  knowledgeRevision?: string;
+  cost?: CatalogModel['cost'];
+  capabilities?: CatalogModel['capabilities'];
+  releaseDate?: string;
+  status?: CatalogModel['status'];
   modalities?: { input: string[]; output: string[] };
+  /** 新会话默认 seed 的 agent 列表(服务端由 registry newSessionDefault 投影,已按 route 求交)。 */
+  newSessionDefault?: readonly AgentKind[];
   /** per-tab 能力覆盖。 */
   perAgent?: Partial<Record<AgentKind, XdGatewayAgentOverride>>;
 }
@@ -249,11 +277,198 @@ let revision = 0;
 /** Electron 相关副作用由 desktop host 注入，本模块继续保持纯状态容器。 */
 let changedListener: ((nextRevision: number) => void) | null = null;
 
+export interface ModelResolveApplySlot {
+  providerId: string;
+  agent: Extract<AgentKind, 'claude-code' | 'codex'>;
+}
+
+/** Resolve 请求世代由 model-access host 注入，避免本纯状态模块反向依赖 Electron 链。 */
+let modelResolveApplySlotsInvalidator:
+  | ((slots: readonly ModelResolveApplySlot[]) => void)
+  | null = null;
+
+export function setModelResolveApplySlotsInvalidator(
+  invalidator: ((slots: readonly ModelResolveApplySlot[]) => void) | null,
+): void {
+  modelResolveApplySlotsInvalidator = invalidator;
+}
+
 function markChanged(): void {
   merged = null;
   effectiveRegistryMetaIndex = null;
   revision += 1;
   changedListener?.(revision);
+}
+
+/**
+ * Resolve overlay only needs to prove that it still targets the same membership snapshot.
+ * Ordering is owned by the live catalog and the overlay never changes it, so an additions-only
+ * merge that keeps pre-existing user models at the front must not invalidate otherwise identical
+ * metadata returned in upstream discovery order.
+ */
+function modelIdMembershipKey(modelIds: readonly string[]): string {
+  return JSON.stringify([...modelIds].sort());
+}
+
+function providerResolveInputKey(
+  provider: Provider | undefined,
+  agent: AgentKind,
+): string | null {
+  const route = provider?.routing[agent];
+  if (!route) return null;
+  return JSON.stringify({
+    auth: provider.auth,
+    route,
+    models: provider.models[agent] ?? [],
+  });
+}
+
+function providerCredentialRealmKey(provider: Provider | undefined): string | null {
+  if (!provider) return null;
+  return JSON.stringify({
+    source: provider.source,
+    auth: provider.auth,
+    routing: provider.routing,
+  });
+}
+
+function deleteProviderAgentSnapshot<T>(
+  snapshots: Map<string, Partial<Record<AgentKind, T>>>,
+  providerId: string,
+  agent: AgentKind,
+): void {
+  const byAgent = snapshots.get(providerId);
+  if (!byAgent) return;
+  delete byAgent[agent];
+  if (Object.values(byAgent).every((value) => value === undefined)) {
+    snapshots.delete(providerId);
+  }
+}
+
+/**
+ * Discovery membership and resolve metadata are derived from a provider credential realm.
+ * Invalidate them before swapping a provider descriptor so a reused id cannot inherit models or
+ * capabilities from a previous endpoint/account. Resolve also depends on configured membership,
+ * while discovery survives harmless display/model metadata changes within the same realm.
+ */
+function invalidateChangedProviderOverlays(
+  previousProviders: readonly Provider[],
+  nextProviders: readonly Provider[],
+  shouldInspect: (previous: Provider | undefined, next: Provider | undefined) => boolean,
+): void {
+  const previousById = new Map(previousProviders.map((provider) => [provider.id, provider]));
+  const nextById = new Map(nextProviders.map((provider) => [provider.id, provider]));
+  const providerIds = new Set([...previousById.keys(), ...nextById.keys()]);
+  const changedResolveSlots: Array<{ providerId: string; agent: AgentKind }> = [];
+  for (const providerId of providerIds) {
+    const previous = previousById.get(providerId);
+    const next = nextById.get(providerId);
+    if (!shouldInspect(previous, next)) continue;
+    const realmChanged =
+      providerCredentialRealmKey(previous) !== providerCredentialRealmKey(next);
+    const agents = new Set<AgentKind>([
+      ...(previous?.agents ?? []),
+      ...(next?.agents ?? []),
+      ...Object.keys(discoveredByProvider.get(providerId) ?? {}) as AgentKind[],
+      ...Object.keys(resolvedByProvider.get(providerId) ?? {}) as AgentKind[],
+    ]);
+    for (const agent of agents) {
+      if (realmChanged) {
+        deleteProviderAgentSnapshot(discoveredByProvider, providerId, agent);
+      }
+      if (
+        providerResolveInputKey(previous, agent)
+        !== providerResolveInputKey(next, agent)
+      ) {
+        changedResolveSlots.push({ providerId, agent });
+        deleteProviderAgentSnapshot(resolvedByProvider, providerId, agent);
+      }
+    }
+  }
+  const applicableResolveSlots = changedResolveSlots.filter(
+    (slot): slot is ModelResolveApplySlot => slot.agent !== 'pi',
+  );
+  if (applicableResolveSlots.length > 0) {
+    modelResolveApplySlotsInvalidator?.(applicableResolveSlots);
+  }
+}
+
+function invalidateChangedCustomProviderOverlays(nextProviders: readonly Provider[]): void {
+  invalidateChangedProviderOverlays(
+    custom,
+    nextProviders,
+    (previous, next) => previous?.source === 'user' || next?.source === 'user',
+  );
+}
+
+function invalidateChangedBaseProviderOverlays(nextProviders: readonly Provider[]): void {
+  const bundledIds = new Set(BUNDLED_CATALOG.providers.map((provider) => provider.id));
+  const locallyShadowedIds = new Set(
+    custom
+      .filter((provider) => provider.source === 'user' && !bundledIds.has(provider.id))
+      .map((provider) => provider.id),
+  );
+  invalidateChangedProviderOverlays(
+    (base ?? BUNDLED_CATALOG).providers,
+    nextProviders,
+    (previous, next) => !locallyShadowedIds.has(previous?.id ?? next?.id ?? ''),
+  );
+}
+
+function applyResolvedOverlay(
+  p: Provider,
+  agent: AgentKind,
+  resolved: ResolvedProviderModels,
+): Provider {
+  const existing = p.models[agent] ?? [];
+  const existingIds = existing.map((model) => model.id);
+  if (
+    resolved.allModelIdsKey !== undefined
+    && modelIdMembershipKey(existingIds) !== resolved.allModelIdsKey
+  ) {
+    return p;
+  }
+  const resolvedIds = new Set(resolved.models.map((model) => model.id));
+  if (
+    modelIdMembershipKey(existingIds.filter((id) => resolvedIds.has(id)))
+      !== resolved.modelIdsKey
+  ) {
+    return p;
+  }
+  const overlay = new Map(resolved.models.map((model) => [model.id, model]));
+  // pi 不是 root:它按 provider 的 policy.piRoot 派生,override key 也挂在那个 root 上。
+  const rootAgent: RootAgentKind | null =
+    agent === 'claude-code' || agent === 'codex'
+      ? agent
+      : MODEL_PLANE_POLICIES.get(p.id)?.piRoot ?? null;
+  let changed = false;
+  const models = existing.map((model) => {
+    const replacement = overlay.get(model.id);
+    if (!replacement) return model;
+    // 「local 永远最高」:resolve 排在 local override 之后(为了让 snapshot key 守住
+    // membership/顺序),所以必须在这里显式剔掉用户已经钉住的字段 —— 否则本地改动会
+    // 在下一次 resolve 回来时被静默盖掉(localOverrideVsResolve.test.ts 锁此不变量)。
+    const pinned = rootAgent
+      ? locallyPinnedFields(localOverrides, p.id, model.id, rootAgent)
+      : new Set<string>();
+    // Resolve metadata is a patch: an omitted wire field can be materialized as an own
+    // `undefined` property by local projectors, but that must never delete an existing catalog
+    // fact (for example `defaultEnabled: false`). Explicit null remains meaningful and is kept.
+    const enrichment = Object.fromEntries(
+      Object.entries(replacement).filter(
+        ([field, value]) => value !== undefined && !pinned.has(field),
+      ),
+    );
+    changed = true;
+    return {
+      ...model,
+      ...enrichment,
+      id: model.id,
+      source: 'resolved' as const,
+      knowledgeRevision: resolved.knowledgeRevision,
+    };
+  });
+  return changed ? { ...p, models: { ...p.models, [agent]: models } } : p;
 }
 
 /** additions-only:静态同 id first-wins；Codex 投影可显式要求按 sortOrder 稳定重排。 */
@@ -530,8 +745,18 @@ function computeMerged(): Catalog {
   }
 
   // 自定义供应商先追加、再做通用发现 augment——顺序反了的话,自定义 OAuth 供应商
-  // 的发现模型永远合不进目录(map 只扫过内置列表)。
-  if (custom.length > 0) providers = [...providers, ...custom];
+  // 的发现模型永远合不进目录(map 只扫过内置列表)。远端后续新增的完整 Provider 若与
+  // 已存在的本地 custom id 冲突，本地身份卡是唯一可信的凭证归属，必须替换远端条目；
+  // 随客户端发布的 builtin id 仍为保留名，不能被历史/损坏的本地配置覆盖。
+  if (custom.length > 0) {
+    const bundledIds = new Set(BUNDLED_CATALOG.providers.map((provider) => provider.id));
+    const effectiveCustom = custom.filter((provider) => !bundledIds.has(provider.id));
+    const customIds = new Set(effectiveCustom.map((provider) => provider.id));
+    providers = [
+      ...providers.filter((provider) => !customIds.has(provider.id)),
+      ...effectiveCustom,
+    ];
+  }
 
   // 通用 OAuth 供应商的发现模型(additions-only,per provider × agent;内置与自定义同待遇)。
   if (discoveredByProvider.size > 0) {
@@ -686,7 +911,19 @@ function computeMerged(): Catalog {
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
+          ...(gm.family !== undefined ? { family: gm.family } : {}),
+          ...(gm.category !== undefined ? { category: gm.category } : {}),
+          ...(gm.capabilities !== undefined ? { capabilities: gm.capabilities } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
+          ...(gm.newSessionDefault !== undefined
+            ? { newSessionDefault: gm.newSessionDefault }
+            : {}),
+          ...(gm.releaseDate !== undefined ? { releaseDate: gm.releaseDate } : {}),
+          ...(gm.status !== undefined ? { status: gm.status } : {}),
+          ...(gm.source !== undefined ? { source: gm.source } : {}),
+          ...(gm.knowledgeRevision !== undefined
+            ? { knowledgeRevision: gm.knowledgeRevision }
+            : {}),
         };
         models[agent]!.push(merged);
       }
@@ -718,6 +955,24 @@ function computeMerged(): Catalog {
     }
     return { ...p, models };
   });
+
+  // Resolve is an enrichment pass only. It is deliberately applied after the upstream model
+  // plane has finished membership, local override, bridge, Pi, and XD projection decisions;
+  // snapshot keys prevent a stale response from changing membership or ordering.
+  if (process.env.XDT_DISABLE_MODEL_CATALOG_RESOLVE !== '1' && resolvedByProvider.size > 0) {
+    providers = providers.map((p) => {
+      const byAgent = resolvedByProvider.get(p.id);
+      if (!byAgent) return p;
+      let next = p;
+      for (const [agent, resolved] of Object.entries(byAgent) as [
+        AgentKind,
+        ResolvedProviderModels,
+      ][]) {
+        if (resolved) next = applyResolvedOverlay(next, agent, resolved);
+      }
+      return next;
+    });
+  }
 
   if (providers === b.providers) return b; // 无 augment、无 custom → 原样返回
   return { ...b, providers }; // spread 保留 presets 等目录顶层字段
@@ -758,6 +1013,7 @@ export function getCatalogModelContextWindow(
 
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
 export function setActiveCatalog(catalog: Catalog): void {
+  invalidateChangedBaseProviderOverlays(catalog.providers);
   base = catalog;
   markChanged();
 }
@@ -779,11 +1035,13 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
           provider.id === 'xai' ? { ...provider, models: incomingXai.models } : provider,
         )
       : current.providers;
-  base = {
+  const nextBase = {
     ...current,
     providers,
     ...(catalog.modelRegistry ? { modelRegistry: catalog.modelRegistry } : {}),
   };
+  invalidateChangedBaseProviderOverlays(nextBase.providers);
+  base = nextBase;
   markChanged();
 }
 
@@ -806,6 +1064,11 @@ export function getModelPlaneWarnings(): readonly ModelPlaneWarning[] {
  * 传入的是已 `buildUserProvider` 展开的标准 `Provider[]`(**不含 API key**)。
  */
 export function setCustomProviders(providers: Provider[]): void {
+  // Resolve metadata is scoped to the endpoint/runtime that supplied the model list. A save may
+  // keep the same provider id and model ids while changing that source; clear only the affected
+  // per-agent overlays before the best-effort re-resolve starts, so a failed refresh cannot leave
+  // the previous endpoint's capabilities active. Deletion also removes the old runtime snapshot.
+  invalidateChangedCustomProviderOverlays(providers);
   custom = [...providers];
   markChanged();
 }
@@ -831,6 +1094,51 @@ export function setDiscoveredProviderModels(
   const byAgent = discoveredByProvider.get(providerId) ?? {};
   byAgent[agent] = [...models];
   discoveredByProvider.set(providerId, byAgent);
+  markChanged();
+}
+
+/**
+ * Overlay resolved metadata onto existing membership. The setter is deliberately incapable of
+ * changing the model id list; computeMerged only applies matching ids after the model plane.
+ */
+export function setResolvedProviderModels(
+  providerId: string,
+  agent: AgentKind,
+  modelIds: readonly string[],
+  models: CatalogModel[],
+  knowledgeRevision: string,
+  allModelIds?: readonly string[],
+): void {
+  const byAgent = resolvedByProvider.get(providerId) ?? {};
+  byAgent[agent] = {
+    models: [...models],
+    modelIdsKey: modelIdMembershipKey(modelIds),
+    ...(allModelIds ? { allModelIdsKey: modelIdMembershipKey(allModelIds) } : {}),
+    knowledgeRevision,
+  };
+  resolvedByProvider.set(providerId, byAgent);
+  markChanged();
+}
+
+/** Drop every account-derived resolve overlay without touching live discovery membership. */
+export function clearResolvedProviderModels(): void {
+  if (resolvedByProvider.size === 0) return;
+  resolvedByProvider.clear();
+  markChanged();
+}
+
+/** Drop every account/credential-derived discovery and resolve snapshot atomically. */
+export function clearAccountDerivedProviderModels(): void {
+  if (
+    discoveredCodex.length === 0
+    && anthropicModels.length === 0
+    && discoveredByProvider.size === 0
+    && resolvedByProvider.size === 0
+  ) return;
+  discoveredCodex = [];
+  anthropicModels = [];
+  discoveredByProvider.clear();
+  resolvedByProvider.clear();
   markChanged();
 }
 

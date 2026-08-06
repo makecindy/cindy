@@ -101,6 +101,19 @@ function isValidEditablePresetBaseUrl(value: string): boolean {
 }
 
 /**
+ * `maxOutput` 是供应商硬上限。预设与端点同时给出时只能维持或收紧，不能因为任一
+ * 数据源较大就自动放宽。
+ */
+function conservativeMaxOutput(
+  preset: number | undefined,
+  reported: number | undefined,
+): number | undefined {
+  if (preset === undefined) return reported;
+  if (reported === undefined) return preset;
+  return Math.min(preset, reported);
+}
+
+/**
  * bespoke OAuth 渠道的官方 API 预设——授权步「改用 API Key 接入」的替代路径
  * (API 用户没有订阅,OAuth 授权对其是错误路径)。
  *
@@ -311,6 +324,8 @@ export function AddProviderWizard({
         /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
          *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,预设值优先、本值兜底。 */
         contextWindows?: Partial<Record<AgentKind, number>>;
+        /** 列模型端点上报的最大输出 token 数；同样按 runtime 分槽。 */
+        maxOutputs?: Partial<Record<AgentKind, number>>;
       }
     >
   >(new Map());
@@ -555,6 +570,7 @@ export function AddProviderWizard({
         recommended: boolean;
         agents: AgentKind[];
         contextWindows?: Partial<Record<AgentKind, number>>;
+        maxOutputs?: Partial<Record<AgentKind, number>>;
       }
     >();
     for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
@@ -606,7 +622,13 @@ export function AddProviderWizard({
           return {
             agent,
             ok: false,
-            models: [] as { id: string; name: string; contextWindow?: number }[],
+            models: [] as Array<{
+              id: string;
+              name: string;
+              contextWindow?: number;
+              maxOutput?: number;
+              providerReported?: { contextWindow?: number; maxOutput?: number };
+            }>,
           };
         }
         try {
@@ -624,7 +646,13 @@ export function AddProviderWizard({
           return {
             agent,
             ok: false,
-            models: [] as { id: string; name: string; contextWindow?: number }[],
+            models: [] as Array<{
+              id: string;
+              name: string;
+              contextWindow?: number;
+              maxOutput?: number;
+              providerReported?: { contextWindow?: number; maxOutput?: number };
+            }>,
           };
         }
       }),
@@ -646,25 +674,37 @@ export function AddProviderWizard({
             // 端点上报的窗口按 agent 分槽、只补该槽的空(同一 id 双端窗口可以不同,
             // 不能共享一个值;预设推荐模型的窗口在完成创建时以预设为准,这里补的是
             // 「预设没写窗口」的兜底)。
+            const reportedContextWindow = m.providerReported?.contextWindow ?? m.contextWindow;
+            const reportedMaxOutput = m.providerReported?.maxOutput ?? m.maxOutput;
             const backfillWindow =
-              existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
-            if (mergedAgents !== existing.agents || backfillWindow) {
+              existing.contextWindows?.[agent] === undefined && reportedContextWindow !== undefined;
+            const backfillMaxOutput =
+              existing.maxOutputs?.[agent] === undefined && reportedMaxOutput !== undefined;
+            if (mergedAgents !== existing.agents || backfillWindow || backfillMaxOutput) {
               next.set(m.id, {
                 ...existing,
                 agents: mergedAgents,
                 ...(backfillWindow
-                  ? { contextWindows: { ...existing.contextWindows, [agent]: m.contextWindow } }
+                  ? { contextWindows: { ...existing.contextWindows, [agent]: reportedContextWindow } }
+                  : {}),
+                ...(backfillMaxOutput
+                  ? { maxOutputs: { ...existing.maxOutputs, [agent]: reportedMaxOutput } }
                   : {}),
               });
             }
           } else if (!preservePresetOwnership) {
+            const reportedContextWindow = m.providerReported?.contextWindow ?? m.contextWindow;
+            const reportedMaxOutput = m.providerReported?.maxOutput ?? m.maxOutput;
             next.set(m.id, {
               name: m.name,
               checked: false,
               recommended: false,
               agents: [agent],
-              ...(m.contextWindow !== undefined
-                ? { contextWindows: { [agent]: m.contextWindow } }
+              ...(reportedContextWindow !== undefined
+                ? { contextWindows: { [agent]: reportedContextWindow } }
+                : {}),
+              ...(reportedMaxOutput !== undefined
+                ? { maxOutputs: { [agent]: reportedMaxOutput } }
                 : {}),
             });
           }
@@ -752,7 +792,13 @@ export function AddProviderWizard({
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, v]) => v.checked)
-      .map(([id, v]) => ({ id, name: v.name, agents: v.agents, contextWindows: v.contextWindows }));
+      .map(([id, v]) => ({
+        id,
+        name: v.name,
+        agents: v.agents,
+        contextWindows: v.contextWindows,
+        maxOutputs: v.maxOutputs,
+      }));
     if (selected.length === 0) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
@@ -778,10 +824,15 @@ export function AddProviderWizard({
             // 预设策展值优先;拉取新增模型没有预设条目,落**该 runtime 端点**上报的
             // 发现值(按 agent 分槽,双端窗口可不同),不再无窗口入库退回 200K 默认。
             const contextWindow = presetModel?.contextWindow ?? m.contextWindows?.[agent];
+            const maxOutput = conservativeMaxOutput(
+              presetModel?.maxOutput,
+              m.maxOutputs?.[agent],
+            );
             return {
               id: m.id,
               name: m.name,
               ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(maxOutput !== undefined ? { maxOutput } : {}),
               ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length
                 ? {

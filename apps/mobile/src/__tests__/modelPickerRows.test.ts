@@ -183,7 +183,10 @@ describe('rowFastEditable / rowFastOn(严格 per-(供应商, 模型))', () => {
 });
 
 describe('budgetRowDisabled(折扣版置灰三态)', () => {
-  it("只有 codex/ 前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
+  it('group/category 字段优先，缺失时保留 codex/ 前缀兜底', () => {
+    expect(budgetRowDisabled({ id: 'plain-id', group: 'gpt-budget' }, 'absent')).toBe(true);
+    expect(budgetRowDisabled({ id: 'codex/gpt-5.5', group: 'gpt' }, 'absent')).toBe(false);
+    expect(budgetRowDisabled({ id: 'plain-id', category: 'gpt-budget', group: 'gpt' }, 'absent')).toBe(true);
     expect(budgetRowDisabled('codex/gpt-5.5', 'absent')).toBe(true);
     expect(budgetRowDisabled('codex/gpt-5.5', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'unknown')).toBe(false);

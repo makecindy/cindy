@@ -231,25 +231,27 @@ export function categorize(rawId: string): ModelCategory {
 const KNOWN_CATEGORIES = new Set<string>(CATEGORY_ORDER);
 
 /**
- * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `group` 就用它,
- * 否则回退到 id 前缀归类(categorize)。未知的 group 值(渲染层没有对应标签)也回退,
- * 避免出现没有 i18n 标签的空分组。不感知 `mode`——mode 优先分类见 classifyModel。
+ * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `category` 就用它（服务端能力分类
+ * 优先于 legacy `group`），否则使用合法 `group`，最后回退到 id 前缀归类(categorize)。未知值
+ * (渲染层没有对应标签)也回退,避免出现没有 i18n 标签的空分组。不感知 `mode`——mode 优先分类见 classifyModel。
  */
-export function groupOf(model: { id: string; group?: string }): ModelCategory {
+export function groupOf(model: { id: string; category?: string; group?: string }): ModelCategory {
+  if (model.category !== undefined) {
+    return KNOWN_CATEGORIES.has(model.category) ? (model.category as ModelCategory) : 'other';
+  }
   if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group as ModelCategory;
   return categorize(model.id);
 }
 
 /**
- * 分类的**权威入口**(issue #882):`mode` 存在且不是聊天可用取值
- * (CHAT_CAPABLE_MODES)时直接按 MODE_TO_CATEGORY 权威判定,忽略 id/group——
- * 网关明确说了这不是聊天模型,不该再让 id 正则有机会猜错(如 gpt-realtime-2
- * 猜成 gpt、x-ai/grok-4.5 猜成 china)。`mode` 缺省或落在 CHAT_CAPABLE_MODES
- * (chat/responses)时,回退 groupOf(数据 group 优先 / id 正则兜底)——
- * "是不是聊天模型"与"聊天模型属于哪个厂商分组"是两层判断,mode 只回答第一层,
- * 第二层仍需 id/group。
+ * 分类的**权威入口**:服务端 `category` 存在时直接采用(未知值落 other);缺失时保留
+ * 既有 `mode` 权威语义,非聊天 mode 通过 MODE_TO_CATEGORY 映射;chat/responses mode
+ * 只确认能聊天,最终展示厂商组回落 groupOf(group 字段 / id 启发式)。
  */
-export function classifyModel(model: { id: string; group?: string; mode?: string }): ModelCategory {
+export function classifyModel(model: { id: string; category?: string; group?: string; mode?: string }): ModelCategory {
+  if (model.category !== undefined) {
+    return KNOWN_CATEGORIES.has(model.category) ? (model.category as ModelCategory) : 'other';
+  }
   if (model.mode !== undefined && !CHAT_CAPABLE_MODES.has(model.mode)) {
     return MODE_TO_CATEGORY[model.mode] ?? 'other';
   }
@@ -258,30 +260,17 @@ export function classifyModel(model: { id: string; group?: string; mode?: string
 
 /**
  * 该模型能不能进 Agent `availableModels` / 新对话模型选择器(issue #882 第 3 点)。
- * `mode` 存在时只信 CHAT_CAPABLE_MODES(chat / responses——Codex 走 Responses
- * API 的语言模型,不是非聊天端点,2026-07 review 第 16 轮)。
- *
- * `mode` 缺省时,`group` 只在**声明已知的非聊天分类**(image/video/tts/stt/
- * realtime/embedding/compression/other)时才采信、直接拒——这个方向上 group
- * 比 id 更可信(PR #744:自定义/网关供应商显式打的能力标签,seedream-5 这类
- * id 本身不含任何类型关键词的合成模型只能靠这个信号判定)。`group` 声明的是
- * 聊天厂商分组(anthropic/gpt/.../china)时**不采信**,仍按 id 正则判——那只是
- * 展示分组/品牌,网关的展示元数据完全可能把 `gpt-image-2` 这类图像模型的
- * `group` 标成 'gpt'(品牌上归类到 GPT 家族,方便浏览),这里若信了会把非聊天
- * 模型误判为可用(2026-07 review)。两种 group 取值的可信方向不对称,不能
- * 一并处理。落进厂商聊天组只用于兜底判断,保证"mode 还没覆盖到、但已经在
- * 正常工作的网关聊天模型"不会因为这次改动突然从 availableModels 消失
- * (见 classification.test.ts 的回归锁)。
+ * `category` 存在时直接决定准入(未知值 fail closed);缺失时有 `mode` 就只信
+ * CHAT_CAPABLE_MODES(chat / responses——Codex 走 Responses API 的语言模型,不是非聊天端点,
+ * 2026-07 review 第 16 轮);再缺失才回落 id 启发式。`group` 只是展示品牌,绝不参与能力准入。
  */
-export function isChatEligible(model: { id: string; group?: string; mode?: string }): boolean {
-  if (model.mode !== undefined) return CHAT_CAPABLE_MODES.has(model.mode);
-  if (
-    model.group &&
-    KNOWN_CATEGORIES.has(model.group) &&
-    !CHAT_VENDOR_CATEGORIES.has(model.group as ModelCategory)
-  ) {
-    return false;
+export function isChatEligible(model: { id: string; category?: string; group?: string; mode?: string }): boolean {
+  if (model.category !== undefined) {
+    return KNOWN_CATEGORIES.has(model.category)
+      ? CHAT_VENDOR_CATEGORIES.has(model.category as ModelCategory)
+      : false;
   }
+  if (model.mode !== undefined) return CHAT_CAPABLE_MODES.has(model.mode);
   return CHAT_VENDOR_CATEGORIES.has(categorize(model.id));
 }
 
@@ -300,12 +289,15 @@ export function isChatEligible(model: { id: string; group?: string; mode?: strin
  * 例外**只限用户供应商**:网关条目缺 group 时 active-catalog 会补 `custom:xd`
  * (active-catalog.ts),若无条件放行未知组,无分组下发的网关图像/音频/向量模型会
  * 绕过能力分类、重新漏进对话清单 —— 正是本过滤要堵的洞(PR #744 review 第二轮)。
- * 非用户供应商一律走 isChatEligible(mode 权威、id 正则兜底)。
+ * 非用户供应商一律走 isChatEligible(category 权威,mode/id 启发式兜底;group 不参与能力)。
  */
 export function isAgentSelectableModel(
-  model: { id: string; group?: string; mode?: string },
+  model: { id: string; category?: string; group?: string; mode?: string },
   opts?: { userProvider?: boolean },
 ): boolean {
+  // Server category / provider-reported mode are capability facts and must both win over the
+  // user-provider custom-group fallback. That fallback is only for genuinely unclassified models.
+  if (model.category !== undefined || model.mode !== undefined) return isChatEligible(model);
   if (opts?.userProvider === true && model.group && !KNOWN_CATEGORIES.has(model.group)) {
     return true;
   }
@@ -337,6 +329,7 @@ export function isModelSelectableForNewRoute(
 /** groupModelsForDisplay 的最小模型形状(id + 可选 group / mode / sortOrder)。 */
 export interface DisplayModel {
   id: string;
+  category?: string;
   group?: string;
   mode?: string;
   sortOrder?: number;
@@ -345,7 +338,7 @@ export interface DisplayModel {
 /**
  * 选择器右栏的「分组 + 排序」纯逻辑 —— **完全由目录数据驱动**:
  *   1. 先按 `sortOrder` 升序稳定排序(缺省排末尾,相等时保持入参顺序);
- *   2. 按 `classifyModel`(mode 优先 / group 字段次之 / id 前缀兜底)分桶;
+ *   2. 按 `classifyModel`(category 优先 / mode 权威 / groupOf 展示兜底)分桶;
  *   3. 桶的先后 = 桶内首个模型在已排序列表里的出现序(= 该桶最小 sortOrder)。
  * 返回有序的 { category, models } 列表;不依赖写死的 CATEGORY_ORDER 决定展示顺序。
  */
@@ -368,12 +361,12 @@ export function groupModelsForDisplay<T extends DisplayModel>(
 
 /**
  * 骨折版(网关 85% off 低价路由)判定 —— 与 groupOf 同一「数据优先」契约:目录带**合法**
- * `group` 时徽章完全跟 group 走(显式非 budget 分组不再被 `codex/` 前缀 override,否则会
- * 出现「显示 budget 徽章却归入非 budget 分组」的自相矛盾,2026-07 Greptile review);
- * group 缺失/未知时才用前缀兜底(网关旧数据可能没标 group)。替代 4 处独立的前缀判断。
+ * `category` / `group` 时徽章完全跟字段走(category 优先);字段缺失/未知时才用前缀兜底。
+ * 替代消费方独立的前缀判断。
  */
-export function isBudgetModel(model: { id: string; group?: string }): boolean {
-  if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group === 'gpt-budget';
+export function isBudgetModel(model: { id: string; category?: string; group?: string }): boolean {
+  const declared = model.category ?? model.group;
+  if (declared && KNOWN_CATEGORIES.has(declared)) return declared === 'gpt-budget';
   return model.id.startsWith('codex/');
 }
 
@@ -393,7 +386,7 @@ export interface ModelBadges {
  * 拍平 capabilities)→ false,诚实降级不猜。
  */
 export function modelBadges(
-  model: { id: string; group?: string } & Partial<Pick<ModelSourceMeta, 'sourceAccess'>>,
+  model: { id: string; category?: string; group?: string } & Partial<Pick<ModelSourceMeta, 'sourceAccess'>>,
   provider?: { access?: ProviderAccess } | null,
 ): ModelBadges {
   // 传了 provider(分段模式)就**只看**该段的 access —— 段供应商无 access 元数据时不得

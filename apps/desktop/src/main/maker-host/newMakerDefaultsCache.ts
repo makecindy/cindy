@@ -27,6 +27,8 @@ interface VendorPrefsSnapshot {
 
 export interface NewMakerDraftSnapshot {
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
+  /** 只有用户在 New Maker 显式选过模型时才允许该 vendor 覆盖目录产品默认。 */
+  modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
   fastModeByModel: Record<string, boolean>;
   effortByModel: Record<string, string>;
   /**
@@ -77,6 +79,7 @@ export function getWorkerDefaultsFromNewMaker(
 ): WorkerDefaultsFromNewMaker {
   if (!cache) return {};
   const vendor: VendorKey = workerAgent === 'claude-code' ? 'cc' : workerAgent === 'pi' ? 'pi' : 'codex';
+  if (cache.modelChosenByVendor?.[vendor] !== true) return {};
   const prefs = cache.lastByVendor[vendor];
   if (!prefs?.model) return {};
   const model = prefs.model;

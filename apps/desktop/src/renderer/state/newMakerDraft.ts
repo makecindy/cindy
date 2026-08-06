@@ -152,9 +152,9 @@ export interface NewMakerDraft {
 }
 
 /**
- * 种子默认偏好。模型 id **一律经 getDefaultModelForVendor 从目录推荐位取**,不在这里写死:
- * 这里曾写死 codex → 'gpt-5.4',与 modelDefinitions 里写死的 'gpt-5.5' 漂移成两个值,而两者
- * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
+ * 种子默认偏好。模型 id **一律经 getDefaultModelForVendor 从目录排序占位取**,不在这里写死:
+ * 这里的 Opus 5 / GPT-5.6-Sol 与全局目录 session defaults(Sonnet 4.6 / GPT-5.5)
+ * 有意不同；本批保持原行为，待产品明确拍板后再接统一 defaults resolver。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
   if (vendor === 'pi') {

@@ -69,13 +69,14 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
 
 /**
  * resolveSourceSwitch 的最小模型形状:id + 该模型支持的 effort 档,外加可选的
- * `group`/`mode`——reconcile 候选过滤要靠 classifyModel 做 mode 优先判定
+ * `category`/`group`/`mode`——reconcile 候选过滤要靠 classifyModel 做字段优先判定
  * (issue #882 review:只传 id 时 mode 信号会丢,可能把非聊天模型选成 reconcile
  * 目标,见下方 resolveSourceSwitch 用法),不传时行为与历史一致(回退 id 正则)。
  */
 export interface SwitchModel {
   id: string;
   efforts: readonly Effort[];
+  category?: string;
   group?: string;
   mode?: string;
 }

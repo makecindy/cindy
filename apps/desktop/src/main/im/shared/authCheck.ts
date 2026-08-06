@@ -56,6 +56,21 @@ async function checkImRouteAuthWithResolution(
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
   if (resolution.kind === 'provider') {
+    if (resolution.provider.routing[row.agentKind]?.disabled === true) {
+      return { ok: false, missing: 'provider-disconnected' };
+    }
+    const authStrategy = resolution.provider.routing[row.agentKind]?.authStrategy;
+    if (authStrategy !== undefined && ![
+      'gateway-key',
+      'oauth-passthrough',
+      'provider-oauth-header',
+      'api-key-header',
+      'oauth-token',
+      'none',
+    ].includes(authStrategy)) {
+      deps.warn(`unknown auth strategy for provider=${resolution.provider.id}`);
+      return { ok: false, missing: 'provider-disconnected' };
+    }
     const routing = resolution.provider.routing[row.agentKind];
     if (routing?.authStrategy === 'gateway-key') {
       return deps.readXdGatewayApiKey()

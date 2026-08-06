@@ -312,6 +312,403 @@ describe('titleModel 契约(动态供应商豁免静态存在性校验)', () => 
     expect(provider('xd').titleModel).toBe('gpt-5.4-mini');
   });
 
+  it('builtin providers configure independent one-shot defaults', () => {
+    expect(provider('anthropic').defaults?.['claude-code']?.oneShotModel).toBe('claude-haiku-4-5');
+    expect(provider('anthropic').defaults?.codex?.oneShotModel).toBe('claude-haiku-4-5');
+    expect(provider('openai').defaults?.['claude-code']?.oneShotModel).toBe('gpt-5.4-mini');
+    expect(provider('openai').defaults?.codex?.oneShotModel).toBe('gpt-5.4-mini');
+    expect(provider('xd').defaults?.['claude-code']?.oneShotModel).toBe('gpt-5.4-mini');
+    expect(provider('xd').defaults?.codex?.oneShotModel).toBe('gpt-5.4-mini');
+  });
+
+  it('bundled catalog declares global cold-start session defaults', () => {
+    expect(BUNDLED_CATALOG.defaults).toEqual({
+      'claude-code': { sessionModel: 'claude-sonnet-4-6' },
+      codex: { sessionModel: 'gpt-5.5' },
+    });
+  });
+
+  it('parseCatalog validates top-level defaults independently from provider defaults', () => {
+    expect(parseCatalog({
+      version: '3',
+      providers: [],
+      defaults: { codex: { sessionModel: 'remote-codex' } },
+    }).defaults?.codex?.sessionModel).toBe('remote-codex');
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [],
+      defaults: { codex: { sessionModel: '' } },
+    })).toThrow(/catalog\.defaults\.codex\.sessionModel/);
+  });
+
+  it('v3 accepts partial deltas only for bundled provider identity cards', () => {
+    expect(parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'xai',
+        routing: { codex: { disabled: true } },
+      }],
+    }).providers[0]).toMatchObject({
+      id: 'xai',
+      routing: { codex: { disabled: true } },
+    });
+
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'future-provider',
+        routing: { codex: { upstream: 'https://future.example.test/v1' } },
+      }],
+    })).toThrow(/provider\.name missing/);
+  });
+
+  it('v3 validates newSessionDefault as a non-empty unique agent list', () => {
+    const withMarker = (newSessionDefault: unknown) => ({
+      version: '3',
+      providers: [{
+        id: 'xai',
+        models: {
+          codex: [{
+            ...model('xai/default-marker'),
+            newSessionDefault,
+          }],
+        },
+      }],
+    });
+
+    expect(
+      parseCatalog(withMarker(['claude-code', 'codex'])).providers[0]?.models?.codex?.[0]
+        ?.newSessionDefault,
+    ).toEqual(['claude-code', 'codex']);
+    for (const invalid of [{ codex: true }, [], ['codex', 'codex'], ['other']]) {
+      expect(() => parseCatalog(withMarker(invalid))).toThrow(/newSessionDefault/);
+    }
+  });
+
+  it('v3 validates optional runtime model metadata without closing future capabilities', () => {
+    const withMetadata = (metadata: Record<string, unknown>) => ({
+      version: '3',
+      providers: [{
+        id: 'xai',
+        models: {
+          codex: [{ ...model('xai/runtime-metadata'), ...metadata }],
+        },
+      }],
+    });
+
+    expect(() => parseCatalog(withMetadata({
+      maxOutput: 8_192,
+      modalities: { input: ['text', 'image'], output: ['text'] },
+      capabilities: { reasoning: true, toolCall: false, futureCapability: 'additive' },
+    }))).not.toThrow();
+
+    const invalidCases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ maxOutput: '8192' }, /maxOutput/],
+      [{ maxOutput: 0 }, /maxOutput/],
+      [{ maxOutput: -1 }, /maxOutput/],
+      [{ maxOutput: Number.POSITIVE_INFINITY }, /maxOutput/],
+      [{ modalities: [] }, /modalities/],
+      [{ modalities: { output: ['text'] } }, /modalities\.input/],
+      [{ modalities: { input: ['text'] } }, /modalities\.output/],
+      [{ modalities: { input: {}, output: ['text'] } }, /modalities\.input/],
+      [{ modalities: { input: ['text', 1], output: ['text'] } }, /modalities\.input/],
+      [{ capabilities: [] }, /capabilities/],
+      [{ capabilities: { reasoning: 'yes' } }, /capabilities\.reasoning/],
+    ];
+    for (const [metadata, expected] of invalidCases) {
+      expect(() => parseCatalog(withMetadata(metadata))).toThrow(expected);
+    }
+  });
+
+  it('v3 bundled deltas cannot change an embedded provider into a user provider', () => {
+    expect(parseCatalog({
+      version: '3',
+      providers: [{ id: 'xai', source: 'builtin' }],
+    }).providers[0]?.source).toBe('builtin');
+
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{ id: 'xai', source: 'user' }],
+    })).toThrow(/bundled delta cannot override source/);
+  });
+
+  it('published catalogs reserve source=user for providers constructed from the local store', () => {
+    const remoteUserProvider = {
+      id: 'custom-collision',
+      name: 'Remote User Impostor',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          upstream: 'https://attacker.example/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [model('stolen-route')] },
+    };
+
+    for (const version of ['2', '3']) {
+      expect(() =>
+        parseCatalog({
+          version,
+          providers: [remoteUserProvider],
+        }),
+      ).toThrow(/source must be builtin; user providers are local-only/);
+    }
+  });
+
+  it('v3 bundled deltas cannot override an embedded provider auth contract', () => {
+    const openai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'openai')!;
+    expect(parseCatalog({
+      version: '3',
+      providers: [{ id: 'openai', auth: JSON.parse(JSON.stringify(openai.auth)) }],
+    }).providers[0]?.auth).toEqual(openai.auth);
+
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{ id: 'openai', auth: { method: 'none' } }],
+    })).toThrow(/bundled delta cannot override auth/);
+
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'openai',
+        auth: {
+          ...openai.auth,
+          oauth: openai.auth.oauth
+            ? { ...openai.auth.oauth, tokenUrl: 'https://attacker.example/token' }
+            : undefined,
+        },
+      }],
+    })).toThrow(/bundled delta cannot override auth/);
+  });
+
+  it('v3 bundled deltas cannot override the client-owned agent runtime set', () => {
+    const openai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'openai')!;
+    expect(parseCatalog({
+      version: '3',
+      providers: [{ id: 'openai' }],
+    }).providers[0]?.agents).toBeUndefined();
+    expect(parseCatalog({
+      version: '3',
+      providers: [{ id: 'openai', agents: [...openai.agents].reverse() }],
+    }).providers[0]?.agents).toEqual([...openai.agents].reverse());
+
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{ id: 'openai', agents: [] }],
+    })).toThrow(/bundled delta cannot override agents/);
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{ id: 'openai', agents: openai.agents.slice(0, 1) }],
+    })).toThrow(/bundled delta cannot override agents/);
+  });
+
+  it.each([
+    ['authStrategy', 'bogus'],
+    ['requestPath', 'https://other.example/v1'],
+    ['disabled', 'yes'],
+    ['modelIdRewrite', { stripPrefix: 42 }],
+    ['headerDelete', { authorization: true }],
+    ['headerOverride', { 'x-test': 42 }],
+    ['adapter', []],
+    ['modelsUrl', 'file:///tmp/models'],
+    ['modelPrefixes', 'xai/'],
+    ['modelPrefixes', ['xai']],
+  ])('v3 rejects malformed bundled routing delta field %s', (field, value) => {
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'xai',
+        routing: { codex: { [field]: value } },
+      }],
+    })).toThrow(new RegExp(String(field)));
+  });
+
+  it('v3 accepts well-shaped optional routing fields for a published provider', () => {
+    expect(parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'remote-routing-provider',
+        name: 'Remote Routing Provider',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'https://routing.example/v1',
+            authStrategy: 'none',
+            requestPath: '/v1/responses?tenant=acme',
+            disabled: false,
+            modelIdRewrite: { stripPrefix: 'xai/' },
+            headerDelete: ['authorization'],
+            headerOverride: { 'x-provider': 'remote' },
+            adapter: 'openai-responses',
+            modelsUrl: 'https://api.x.ai/v1/models',
+            modelPrefixes: ['xai/'],
+          },
+        },
+        models: { codex: [model('xai/remote-model')] },
+      }],
+    }).providers[0]?.routing.codex).toMatchObject({
+      requestPath: '/v1/responses?tenant=acme',
+      headerDelete: ['authorization'],
+      headerOverride: { 'x-provider': 'remote' },
+      adapter: 'openai-responses',
+      modelPrefixes: ['xai/'],
+    });
+  });
+
+  it('v3 bundled deltas may update non-credential routing fields', () => {
+    expect(parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'xai',
+        routing: {
+          codex: {
+            disabled: true,
+            modelIdRewrite: { stripPrefix: 'xai/' },
+            modelsUrl: 'https://api.x.ai/v1/models',
+            modelPrefixes: ['xai/'],
+          },
+        },
+      }],
+    }).providers[0]?.routing.codex).toMatchObject({
+      disabled: true,
+      modelPrefixes: ['xai/'],
+    });
+  });
+
+  it('published catalogs cannot redirect client-owned credentials', () => {
+    expect(() =>
+      parseCatalog({
+        version: '3',
+        providers: [
+          {
+            id: 'xai',
+            routing: { codex: { upstream: 'https://attacker.example/v1' } },
+          },
+        ],
+      }),
+    ).toThrow(/cannot override the client-owned credential destination/);
+
+    for (const authStrategy of [
+      'oauth-passthrough',
+      'provider-oauth-header',
+      'gateway-key',
+    ]) {
+      expect(() =>
+        parseCatalog({
+          version: '3',
+          providers: [
+            {
+              id: `remote-${authStrategy}`,
+              name: 'Remote Provider',
+              source: 'builtin',
+              agents: ['codex'],
+              auth: { method: 'oauth' },
+              routing: {
+                codex: {
+                  upstream: 'https://attacker.example/v1',
+                  authStrategy,
+                },
+              },
+              models: { codex: [model('remote/model')] },
+            },
+          ],
+        }),
+      ).toThrow(/is reserved for client-owned providers/);
+    }
+
+    const legacy = JSON.parse(JSON.stringify(provider('xai'))) as Catalog['providers'][number];
+    legacy.routing.codex!.upstream = 'https://attacker.example/v1';
+    expect(() => parseCatalog({ version: '2', providers: [legacy] })).toThrow(
+      /cannot override the client-owned credential destination/,
+    );
+  });
+
+  const mediaDeltaCases = [
+    ['imageModels', 'imageDefaults', 'gpt-image-2'],
+    ['videoModels', 'videoDefaults', 'seedance-fast'],
+    ['embeddingModels', 'embeddingDefaults', 'voyage/voyage-4'],
+  ] as const;
+
+  it.each(mediaDeltaCases)(
+    'v3 rejects malformed bundled %s and %s delta shapes',
+    (modelsField, defaultsField) => {
+      expect(() => parseCatalog({
+        version: '3',
+        providers: [{ id: 'xd', [modelsField]: {} }],
+      })).toThrow(new RegExp(modelsField));
+      expect(() => parseCatalog({
+        version: '3',
+        providers: [{ id: 'xd', [defaultsField]: null }],
+      })).toThrow(new RegExp(defaultsField));
+    },
+  );
+
+  it.each(mediaDeltaCases)(
+    'v3 validates bundled %s and %s as one effective pair',
+    (modelsField, defaultsField, bundledDefault) => {
+      // defaults-only delta legitimately reuses the bundled model list.
+      expect(parseCatalog({
+        version: '3',
+        providers: [{ id: 'xd', [defaultsField]: { standard: bundledDefault } }],
+      }).providers[0]?.[defaultsField]).toEqual({ standard: bundledDefault });
+
+      // models-only replacement still inherits bundled defaults, so removing their targets is invalid.
+      expect(() => parseCatalog({
+        version: '3',
+        providers: [{ id: 'xd', [modelsField]: [{ id: 'replacement', name: 'Replacement' }] }],
+      })).toThrow(new RegExp(defaultsField));
+
+      // Replacing both halves with a self-consistent pair is valid.
+      expect(parseCatalog({
+        version: '3',
+        providers: [{
+          id: 'xd',
+          [modelsField]: [{ id: 'replacement', name: 'Replacement' }],
+          [defaultsField]: { standard: 'replacement' },
+        }],
+      }).providers[0]).toMatchObject({
+        [modelsField]: [{ id: 'replacement', name: 'Replacement' }],
+        [defaultsField]: { standard: 'replacement' },
+      });
+
+      expect(() => parseCatalog({
+        version: '3',
+        providers: [{ id: 'xd', [defaultsField]: { standard: 'missing-model' } }],
+      })).toThrow(new RegExp(defaultsField));
+    },
+  );
+
+  it('v3 accepts a fully specified provider that is not bundled in the client', () => {
+    const parsed = parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'future-provider',
+        name: 'Future Provider',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'https://future.example.test/v1',
+            authStrategy: 'none',
+            wireProtocol: 'openai-responses',
+          },
+        },
+        models: { codex: [model('future/model')] },
+      }],
+    });
+
+    expect(parsed.providers[0]).toMatchObject({
+      id: 'future-provider',
+      models: { codex: [{ id: 'future/model' }] },
+    });
+  });
+
   it('parseCatalog allows titleModel on a dynamic-list provider (all models empty)', () => {
     // bundled 的 anthropic/openai/xd 正是这种形态,上面的 parse 测试已覆盖;这里显式守语义。
     expect(() => parseCatalog(BUNDLED_CATALOG)).not.toThrow();
@@ -395,10 +792,27 @@ describe('routing wireProtocol per-agent 契约', () => {
   });
 
   it('parseCatalog 允许 codex 使用 anthropic-messages(由本地 Responses→Anthropic bridge 接管)', () => {
-    const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-    const xai = bad.providers.find((p) => p.id === 'xai')!;
-    xai.routing.codex = { ...xai.routing.codex!, wireProtocol: 'anthropic-messages' };
-    expect(parseCatalog(bad).providers.find((p) => p.id === 'xai')?.routing.codex?.wireProtocol)
+    const catalog: Catalog = {
+      version: '3',
+      providers: [
+        {
+          id: 'anthropic-wire-provider',
+          name: 'Anthropic Wire Provider',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'none' },
+          routing: {
+            codex: {
+              upstream: 'https://wire.example.test',
+              authStrategy: 'none',
+              wireProtocol: 'anthropic-messages',
+            },
+          },
+          models: { codex: [model('wire/model')] },
+        },
+      ],
+    };
+    expect(parseCatalog(catalog).providers[0]?.routing.codex?.wireProtocol)
       .toBe('anthropic-messages');
   });
 });
@@ -453,14 +867,14 @@ describe('fast-mode per-provider resolution (model-level SSoT)', () => {
       providers: [
         {
           id: 'p-fast', name: 'P-Fast', source: 'builtin', agents: ['claude-code'],
-          auth: { method: 'managed' },
-          routing: { 'claude-code': { upstream: 'https://a', authStrategy: 'gateway-key' } },
+          auth: { method: 'none' },
+          routing: { 'claude-code': { upstream: 'https://a', authStrategy: 'none' } },
           models: { 'claude-code': [model('m1', { name: 'M1', supportsFastMode: true })] },
         },
         {
           id: 'p-slow', name: 'P-Slow', source: 'builtin', agents: ['claude-code'],
-          auth: { method: 'managed' },
-          routing: { 'claude-code': { upstream: 'https://b', authStrategy: 'gateway-key' } },
+          auth: { method: 'none' },
+          routing: { 'claude-code': { upstream: 'https://b', authStrategy: 'none' } },
           models: { 'claude-code': [model('m1', { name: 'M1', supportsFastMode: false })] },
         },
       ],
@@ -663,16 +1077,20 @@ describe('媒体清单跨供应商契约(2026-07 图像多来源)', () => {
   });
 
   it('只声明向量清单的供应商可以没有 agents(媒体-only 同理)', () => {
-    const cat = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-    const xd = cat.providers.find((p) => p.id === 'xd')!;
-    xd.agents = [];
-    xd.models = {};
-    xd.routing = {};
-    delete xd.imageModels;
-    delete xd.imageDefaults;
-    delete xd.videoModels;
-    delete xd.videoDefaults;
-    expect(() => parseCatalog(cat)).not.toThrow();
+    expect(() => parseCatalog({
+      version: '3',
+      providers: [{
+        id: 'media-only',
+        name: 'Media Only',
+        source: 'builtin',
+        agents: [],
+        auth: { method: 'apiKey' },
+        routing: {},
+        models: {},
+        embeddingModels: [{ id: 'media-only/embed', name: 'Media Embed' }],
+        embeddingDefaults: { standard: 'media-only/embed' },
+      }],
+    })).not.toThrow();
   });
 
   it('非 xd 内置供应商的媒体模型 id 必须带 "<providerId>/" 前缀(防 first-wins 归属漂移)', () => {

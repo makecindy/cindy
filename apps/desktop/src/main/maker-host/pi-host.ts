@@ -239,6 +239,7 @@ export function buildPiNativeProvidersFromConfigs(
           id: string;
           name?: string;
           contextWindow?: number;
+          maxOutput?: number;
           supportsImageInput?: boolean;
           reasoning?: boolean;
           reasoningEfforts?: PiReasoningEffort[];
@@ -311,6 +312,7 @@ export function buildPiNativeProvidersFromConfigs(
           id: m.id,
           name: m.name,
           contextWindow: m.contextWindow,
+          ...(m.maxOutput !== undefined ? { maxTokens: m.maxOutput } : {}),
           ...(m.supportsImageInput === true
             ? { input: ['text', 'image'] as Array<'text' | 'image'> }
             : {}),

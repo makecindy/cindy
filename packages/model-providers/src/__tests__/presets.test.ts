@@ -45,6 +45,46 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('accepts positive finite maxOutput and rejects invalid output limits', () => {
+    const withMaxOutput = (maxOutput: unknown) => ({
+      ...VALID_PRESET,
+      runtimes: {
+        'claude-code': {
+          ...VALID_PRESET.runtimes['claude-code'],
+          models: [{ id: 'a', name: 'A', maxOutput }],
+        },
+      },
+    });
+    expect(sanitizePresets([withMaxOutput(8_192) as never])).toHaveLength(1);
+    for (const maxOutput of ['8192', Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+      expect(sanitizePresets([withMaxOutput(maxOutput) as never])).toEqual([]);
+    }
+  });
+
+  it('accepts bounded model modes and rejects blank or oversized values', () => {
+    const withMode = {
+      ...VALID_PRESET,
+      runtimes: {
+        'claude-code': {
+          ...VALID_PRESET.runtimes['claude-code'],
+          models: [{ id: 'a', name: 'A', mode: 'responses' }],
+        },
+      },
+    };
+    expect(sanitizePresets([withMode])).toEqual([withMode]);
+    for (const mode of ['   ', 'x'.repeat(129)]) {
+      expect(sanitizePresets([{
+        ...withMode,
+        runtimes: {
+          'claude-code': {
+            ...withMode.runtimes['claude-code'],
+            models: [{ id: 'a', name: 'A', mode }],
+          },
+        },
+      }])).toEqual([]);
+    }
+  });
+
   it('accepts explicit Pi reasoning metadata and rejects ambiguous capability declarations', () => {
     const piReasoning = {
       ...VALID_PRESET,
@@ -250,7 +290,14 @@ describe('mergeWithBundled presets 兜底', () => {
     expect(merged.presets?.at(-1)).toEqual(remoteOnly);
   });
 
-  it('同 id 远端保留 runtime/model 时回填 bundled contextWindow，不复活被移除的 runtime/model', () => {
+  it('同 id 远端保留 runtime/model 时回填 bundled 模型限额，不复活被移除的 runtime/model', () => {
+    const bundledModel = BUNDLED_CATALOG.presets
+      ?.find((candidate) => candidate.id === 'minimax-global')
+      ?.runtimes['claude-code']
+      ?.models.find((model) => model.id === 'MiniMax-M3');
+    expect(bundledModel).toBeDefined();
+    const previousMaxOutput = bundledModel?.maxOutput;
+    if (bundledModel) bundledModel.maxOutput = 128_000;
     const remoteMiniMax = {
       id: 'minimax-global',
       name: 'Remote MiniMax',
@@ -261,18 +308,30 @@ describe('mergeWithBundled presets 兜底', () => {
         },
       },
     };
-    const merged = mergeWithBundled(minimalCatalog({ presets: [remoteMiniMax] }));
-    const preset = merged.presets?.find((candidate) => candidate.id === 'minimax-global');
-    expect(preset).toEqual({
-      ...remoteMiniMax,
-      runtimes: {
-        'claude-code': {
-          ...remoteMiniMax.runtimes['claude-code'],
-          models: [{ id: 'MiniMax-M3', name: 'Remote M3', contextWindow: 1_000_000 }],
+    try {
+      const merged = mergeWithBundled(minimalCatalog({ presets: [remoteMiniMax] }));
+      const preset = merged.presets?.find((candidate) => candidate.id === 'minimax-global');
+      expect(preset).toEqual({
+        ...remoteMiniMax,
+        runtimes: {
+          'claude-code': {
+            ...remoteMiniMax.runtimes['claude-code'],
+            models: [{
+              id: 'MiniMax-M3',
+              name: 'Remote M3',
+              contextWindow: 1_000_000,
+              maxOutput: 128_000,
+            }],
+          },
         },
-      },
-    });
-    expect(preset?.runtimes.codex).toBeUndefined();
+      });
+      expect(preset?.runtimes.codex).toBeUndefined();
+    } finally {
+      if (bundledModel) {
+        if (previousMaxOutput === undefined) delete bundledModel.maxOutput;
+        else bundledModel.maxOutput = previousMaxOutput;
+      }
+    }
   });
 
   it('远端显式 contextWindow 优先于 bundled', () => {

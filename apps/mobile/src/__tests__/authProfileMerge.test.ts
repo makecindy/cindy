@@ -8,8 +8,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AuthMembership } from '@cindy/auth-client';
+import type { Catalog } from '@cindy/model-providers';
 
 import {
+  defaultMobileProfileModel,
   mapMembershipToMobileUser,
   mergeMembershipWithExisting,
 } from '@/auth/profileMerge';
@@ -30,6 +32,16 @@ function membership(avatarUrl: string | null): AuthMembership {
 const CUSTOM = 'https://oss.example.invalid/cindy/public/avatar/m1/custom.png';
 
 describe('profileMerge(身份即 auth-server membership)', () => {
+  it('default model reads catalog metadata and retains the historical fallback', () => {
+    const catalog = {
+      version: '3',
+      providers: [],
+      defaults: { 'claude-code': { sessionModel: 'catalog-mobile-model' } },
+    } satisfies Catalog;
+    expect(defaultMobileProfileModel(catalog)).toBe('catalog-mobile-model');
+    expect(defaultMobileProfileModel({ version: '3', providers: [] })).toBe('claude-sonnet-4-6');
+  });
+
   it('membership 映射:displayName / 自助头像 / email;头像未设置 = null(首字母兜底)', () => {
     const user = mapMembershipToMobileUser(membership(CUSTOM), 'pp-1');
     expect(user.name).toBe('Lizi');

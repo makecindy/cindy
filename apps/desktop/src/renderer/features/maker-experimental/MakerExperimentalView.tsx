@@ -11,11 +11,18 @@
 
 import { useState, useEffect, type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
+import { BUNDLED_CATALOG, resolveDefaultModel } from '@cindy/model-providers';
 
 import { useMakerSession } from '@/hooks/useMakerSession';
 
-const CLAUDE_MODELS = ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'];
-const CODEX_MODELS = ['gpt-5'];
+function fallbackModel(agentKind: 'claude-code' | 'codex'): string {
+  return resolveDefaultModel(
+    BUNDLED_CATALOG,
+    agentKind,
+    'session',
+    agentKind === 'codex' ? 'gpt-5' : 'claude-opus-4-8',
+  );
+}
 
 type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 type PermissionMode = 'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
@@ -23,6 +30,7 @@ type PermissionMode = 'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'byp
 interface EffortDescriptorShape { id: Effort; displayName: string }
 interface PermissionModeDescriptorShape { id: PermissionMode; displayName: string }
 interface AgentCapabilitiesShape {
+  availableModels?: Array<{ id: string }>;
   effortLevels?: EffortDescriptorShape[];
   permissionModes?: PermissionModeDescriptorShape[];
   // 其他字段实验页用不到
@@ -33,7 +41,7 @@ export function MakerExperimentalView(): ReactElement {
   const m = useMakerSession();
   const [agentKind, setAgentKind] = useState<'claude-code' | 'codex'>('claude-code');
   const [workingDir, setWorkingDir] = useState('');
-  const [model, setModel] = useState(CLAUDE_MODELS[0]);
+  const [model, setModel] = useState(() => fallbackModel('claude-code'));
   const [effort, setEffort] = useState<Effort>('medium');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto');
   const [inputText, setInputText] = useState('');
@@ -52,6 +60,12 @@ export function MakerExperimentalView(): ReactElement {
     void api.getCapabilities(agentKind).then((caps) => {
       if (cancelled) return;
       setCapabilities(caps);
+      const availableModels = caps.availableModels?.map((entry) => entry.id).filter(Boolean) ?? [];
+      setModel((current) =>
+        availableModels.includes(current)
+          ? current
+          : (availableModels[0] ?? fallbackModel(agentKind)),
+      );
       // 切 agent 后如果当前 effort/permission 不在新 list 里，回退到两边都支持的安全默认
       setEffort((current) =>
         caps.effortLevels && !caps.effortLevels.some((e) => e.id === current)
@@ -78,7 +92,7 @@ export function MakerExperimentalView(): ReactElement {
 
   const handleAgentChange = (k: 'claude-code' | 'codex') => {
     setAgentKind(k);
-    setModel(k === 'claude-code' ? CLAUDE_MODELS[0] : CODEX_MODELS[0]);
+    setModel(fallbackModel(k));
   };
 
   const handleCreate = async () => {
@@ -120,7 +134,8 @@ export function MakerExperimentalView(): ReactElement {
     }
   };
 
-  const models = agentKind === 'claude-code' ? CLAUDE_MODELS : CODEX_MODELS;
+  const models = capabilities?.availableModels?.map((entry) => entry.id).filter(Boolean)
+    ?? [fallbackModel(agentKind)];
   const displayError = sendError ?? m.error;
 
   return (

@@ -3,8 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendDiscoveredCustomProviderModels,
   createCustomProvider,
+  customProviderModelConfigForSave,
   customProviderModelConfigFromCatalogModel,
+  fillCustomProviderModelMetadata,
+  fillCustomProviderModelsMetadata,
+  fillMatchingCustomProviderPickerModels,
+  mergeCustomProviderPickerSelection,
   providerViewToCustomProviderConfig,
+  refreshCustomProviderModels,
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
   setCustomProviderModelReasoningEffort,
@@ -16,6 +22,11 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderView,
 } from '@cindy/model-providers';
+
+type FetchProviderModelsInput = Parameters<
+  typeof window.electronAPI.maker.fetchProviderModels
+>[0];
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -172,6 +183,179 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       name: 'Reasoner',
     });
   });
+
+  it('preserves provider modalities/capabilities through the edit round trip', () => {
+    expect(customProviderModelConfigFromCatalogModel({
+      id: 'vlm',
+      name: 'VLM',
+      contextWindow: 1_048_576,
+      modalities: { input: ['text', 'image'], output: ['text'] },
+      capabilities: { reasoning: true, toolCall: true },
+    })).toEqual({
+      id: 'vlm',
+      name: 'VLM',
+      contextWindow: 1_048_576,
+      modalities: { input: ['text', 'image'], output: ['text'] },
+      capabilities: { reasoning: true, toolCall: true },
+    });
+  });
+
+  it('preserves provider maxOutput through the edit round trip', () => {
+    expect(customProviderModelConfigFromCatalogModel({
+      id: 'limited-output',
+      name: 'Limited Output',
+      contextWindow: 128_000,
+      maxOutput: 8_192,
+    })).toEqual({
+      id: 'limited-output',
+      name: 'Limited Output',
+      contextWindow: 128_000,
+      maxOutput: 8_192,
+    });
+  });
+});
+
+describe('CustomProviderDialog model metadata projection', () => {
+  it('preserves model capability fields through the canonical no-op save projection', () => {
+    const original: ProviderRuntimeModelConfig = {
+      id: '  vlm  ',
+      name: '  Vision Model  ',
+      mode: 'responses',
+      contextWindow: 1_048_576,
+      maxOutput: 8_192,
+      modalities: { input: ['text', 'image'], output: ['text'] },
+      capabilities: { reasoning: true, toolCall: true, attachment: false },
+      defaultEnabled: false,
+      supportsImageInput: true,
+      reasoning: true,
+      reasoningEfforts: ['low', 'high'],
+    };
+
+    const saved = customProviderModelConfigForSave(original);
+
+    expect(saved).toEqual({
+      ...original,
+      id: 'vlm',
+      name: 'Vision Model',
+    });
+    expect(saved.modalities).not.toBe(original.modalities);
+    expect(saved.capabilities).not.toBe(original.capabilities);
+    expect(saved.reasoningEfforts).not.toBe(original.reasoningEfforts);
+  });
+
+  it('normalizes bounded provider modes and drops unsafe mode values on save', () => {
+    expect(customProviderModelConfigForSave({
+      id: 'm',
+      name: 'M',
+      mode: '  responses  ',
+    })).toEqual({ id: 'm', name: 'M', mode: 'responses' });
+    expect(customProviderModelConfigForSave({
+      id: 'm',
+      name: 'M',
+      mode: 'x'.repeat(129),
+    })).toEqual({ id: 'm', name: 'M' });
+  });
+
+  it('gap-fills resolved metadata without overriding existing facts or persisting unknown capabilities', () => {
+    expect(fillCustomProviderModelMetadata(
+      {
+        id: 'vlm',
+        name: 'VLM',
+        mode: 'chat',
+        contextWindow: 128_000,
+        maxOutput: 16_384,
+        modalities: { input: ['text'], output: ['text'] },
+      },
+      {
+        mode: 'embedding',
+        contextWindow: 1_048_576,
+        maxOutput: 8_192,
+        modalities: { input: ['text', 'image'], output: ['text'] },
+        capabilities: { reasoning: true, toolCall: true, unknown: true },
+      },
+    )).toEqual({
+      id: 'vlm',
+      name: 'VLM',
+      mode: 'embedding',
+      contextWindow: 128_000,
+      maxOutput: 8_192,
+      modalities: { input: ['text'], output: ['text'] },
+      capabilities: { reasoning: true, toolCall: true },
+    });
+  });
+
+  it('replays metadata that arrived before picker rows were created', () => {
+    const earlyResolved = [{
+      id: 'model-a',
+      mode: 'responses',
+      contextWindow: 1_000_000,
+      maxOutput: 16_384,
+      capabilities: { reasoning: true },
+    }];
+
+    expect(fillCustomProviderModelsMetadata(
+      [{ id: 'model-a', name: 'Model A' }],
+      earlyResolved,
+    )).toEqual([{
+      id: 'model-a',
+      name: 'Model A',
+      mode: 'responses',
+      contextWindow: 1_000_000,
+      maxOutput: 16_384,
+      capabilities: { reasoning: true },
+    }]);
+  });
+
+  it('keeps the conservative maxOutput through picker confirmation while preserving form edits', () => {
+    const result = mergeCustomProviderPickerSelection(
+      [
+        { id: 'edited', name: 'Edited Name', maxOutput: 16_384 },
+        { id: 'late-manual', name: 'Late Manual', maxOutput: 2_048 },
+      ],
+      [
+        { id: 'edited', name: 'Fetched Name', maxOutput: 8_192 },
+        { id: 'resolved', name: 'Resolved', maxOutput: 16_384 },
+        { id: 'unchecked', name: 'Unchecked', maxOutput: 32_768 },
+      ],
+      new Set(['edited', 'resolved']),
+    );
+
+    expect(result).toEqual([
+      { id: 'edited', name: 'Edited Name', maxOutput: 8_192 },
+      { id: 'resolved', name: 'Resolved', maxOutput: 16_384 },
+      { id: 'late-manual', name: 'Late Manual', maxOutput: 2_048 },
+    ]);
+  });
+
+  it('applies a late resolve push only to its exact request picker', () => {
+    const picker = {
+      requestId: 'request-new',
+      agent: 'codex',
+      models: [{ id: 'model-a', name: 'Model A' }],
+      selected: new Set(['model-a']),
+      query: '',
+    };
+    const resolved = [{ id: 'model-a', mode: 'responses' }];
+
+    expect(fillMatchingCustomProviderPickerModels(
+      picker,
+      'request-new',
+      'codex',
+      resolved,
+    )?.models).toEqual([{ id: 'model-a', name: 'Model A', mode: 'responses' }]);
+    expect(fillMatchingCustomProviderPickerModels(
+      picker,
+      'request-old',
+      'codex',
+      resolved,
+    )).toBe(picker);
+    expect(fillMatchingCustomProviderPickerModels(
+      picker,
+      'request-new',
+      'claude-code',
+      resolved,
+    )).toBe(picker);
+  });
 });
 
 describe('providerViewToCustomProviderConfig', () => {
@@ -277,24 +461,304 @@ describe('appendDiscoveredCustomProviderModels', () => {
         { id: 'new', name: 'New', defaultEnabled: false },
       ],
       addedIds: ['new'],
+      changed: true,
     });
   });
 
-  it('carries the endpoint-declared contextWindow into appended models (#386)', () => {
+  // #386「端点声明的 contextWindow 随发现落盘」的入参形状已改为 providerReported,
+  // 同语义由下面 'persists provider-reported contextWindow into the config' 覆盖
+  // (含非正数忽略),不再保留旧形状的重复用例。
+
+  it('backfills provider-reported contextWindow onto existing models that lack one', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [
+        { id: 'has', name: 'Has', contextWindow: 128_000 }, // 已有值 → 不覆盖
+        { id: 'gap', name: 'Gap' }, // 缺失 + 厂商上报 → 回填
+        { id: 'nogap', name: 'NoGap' }, // 缺失但厂商未上报 → 不动
+      ],
+      [
+        { id: 'has', name: 'Has', providerReported: { contextWindow: 999_999 } },
+        { id: 'gap', name: 'Gap', providerReported: { contextWindow: 1_000_000 } },
+        { id: 'nogap', name: 'NoGap' },
+      ],
+    );
+    expect(result).toEqual({
+      models: [
+        { id: 'has', name: 'Has', contextWindow: 128_000 },
+        { id: 'gap', name: 'Gap', contextWindow: 1_000_000 },
+        { id: 'nogap', name: 'NoGap' },
+      ],
+      addedIds: [],
+      changed: true,
+    });
+  });
+
+  it('reports changed=false when there is nothing to add or backfill', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [{ id: 'a', name: 'A', contextWindow: 128_000 }],
+      [{ id: 'a', name: 'A', providerReported: { contextWindow: 999_999 } }],
+    );
+    expect(result).toEqual({
+      models: [{ id: 'a', name: 'A', contextWindow: 128_000 }],
+      addedIds: [],
+      changed: false,
+    });
+  });
+
+  it('persists provider-reported contextWindow into the config (survives restart / feeds save-resolve)', () => {
     const result = appendDiscoveredCustomProviderModels(
       [],
       [
-        { id: 'big', name: 'Big', contextWindow: 1_000_000 },
-        { id: 'plain', name: 'Plain' },
-        { id: 'bogus', name: 'Bogus', contextWindow: -1 },
+        { id: 'a', name: 'A', providerReported: { contextWindow: 1_000_000 } },
+        { id: 'b', name: 'B' }, // 无上报 → 不写假窗口
+        { id: 'c', name: 'C', providerReported: { contextWindow: 0 } }, // 非正数忽略
       ],
     );
     expect(result.models).toEqual([
-      { id: 'big', name: 'Big', contextWindow: 1_000_000, defaultEnabled: false },
-      { id: 'plain', name: 'Plain', defaultEnabled: false },
-      // 非法值不落盘,回落保守默认
-      { id: 'bogus', name: 'Bogus', defaultEnabled: false },
+      { id: 'a', name: 'A', defaultEnabled: false, contextWindow: 1_000_000 },
+      { id: 'b', name: 'B', defaultEnabled: false },
+      { id: 'c', name: 'C', defaultEnabled: false },
     ]);
+  });
+
+  it('persists maxOutput, accepts lower limits, and never auto-raises an existing limit', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [
+        { id: 'kept', name: 'Kept', maxOutput: 4_096 },
+        { id: 'lowered', name: 'Lowered', maxOutput: 16_384 },
+        { id: 'gap', name: 'Gap' },
+      ],
+      [
+        { id: 'kept', name: 'Kept', providerReported: { maxOutput: 16_384 } },
+        { id: 'lowered', name: 'Lowered', providerReported: { maxOutput: 8_192 } },
+        { id: 'gap', name: 'Gap', providerReported: { maxOutput: 8_192 } },
+        { id: 'fresh', name: 'Fresh', providerReported: { maxOutput: 32_768 } },
+        { id: 'invalid', name: 'Invalid', providerReported: { maxOutput: Number.POSITIVE_INFINITY } },
+      ],
+    );
+
+    expect(result.models).toEqual([
+      { id: 'kept', name: 'Kept', maxOutput: 4_096 },
+      { id: 'lowered', name: 'Lowered', maxOutput: 8_192 },
+      { id: 'gap', name: 'Gap', maxOutput: 8_192 },
+      { id: 'fresh', name: 'Fresh', defaultEnabled: false, maxOutput: 32_768 },
+      { id: 'invalid', name: 'Invalid', defaultEnabled: false },
+    ]);
+    expect(result.changed).toBe(true);
+  });
+
+  it('persists provider-reported mode so non-chat classification survives restart', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [
+        { id: 'existing-chat', name: 'Existing Chat', mode: 'chat' },
+        { id: 'existing-embedding', name: 'Existing Embedding', mode: 'embedding' },
+      ],
+      [
+        {
+          id: 'existing-chat',
+          name: 'Existing Chat',
+          providerReported: { mode: 'embedding' },
+        },
+        {
+          id: 'existing-embedding',
+          name: 'Existing Embedding',
+          providerReported: { mode: 'chat' },
+        },
+        { id: 'new-responses', name: 'New Responses', providerReported: { mode: 'responses' } },
+      ],
+    );
+    expect(result.models).toEqual([
+      { id: 'existing-chat', name: 'Existing Chat', mode: 'embedding' },
+      { id: 'existing-embedding', name: 'Existing Embedding', mode: 'chat' },
+      { id: 'new-responses', name: 'New Responses', mode: 'responses', defaultEnabled: false },
+    ]);
+    expect(result.changed).toBe(true);
+  });
+
+  it('persists provider-reported modalities/capabilities on new models, narrowing unknown capability keys', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [],
+      [
+        {
+          id: 'vlm',
+          name: 'VLM',
+          providerReported: {
+            contextWindow: 1_048_576,
+            modalities: { input: ['text', 'image'], output: ['text'] },
+            // 宽松上报:只保留已知 boolean 键,丢弃未知键与非 boolean。
+            capabilities: { reasoning: true, toolCall: false, bogus: 'x', temperature: 1 },
+          },
+        },
+      ],
+    );
+    expect(result.models).toEqual([
+      {
+        id: 'vlm',
+        name: 'VLM',
+        defaultEnabled: false,
+        contextWindow: 1_048_576,
+        modalities: { input: ['text', 'image'], output: ['text'] },
+        capabilities: { reasoning: true, toolCall: false },
+      },
+    ]);
+    expect(result.changed).toBe(true);
+  });
+
+  it('backfills modalities/capabilities onto existing models that lack them, per field', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [
+        // 已有 modalities → 不覆盖;缺 capabilities → 回填。
+        { id: 'has-mod', name: 'HasMod', modalities: { input: ['text'], output: ['text'] } },
+        // 三者皆缺 → 全部回填。
+        { id: 'bare', name: 'Bare' },
+      ],
+      [
+        {
+          id: 'has-mod',
+          name: 'HasMod',
+          providerReported: {
+            modalities: { input: ['text', 'image'], output: ['text'] }, // 应被忽略(已有)
+            capabilities: { toolCall: true },
+          },
+        },
+        {
+          id: 'bare',
+          name: 'Bare',
+          providerReported: {
+            contextWindow: 262_144,
+            modalities: { input: ['text'], output: ['text'] },
+            capabilities: { reasoning: true },
+          },
+        },
+      ],
+    );
+    expect(result.models).toEqual([
+      {
+        id: 'has-mod',
+        name: 'HasMod',
+        modalities: { input: ['text'], output: ['text'] },
+        capabilities: { toolCall: true },
+      },
+      {
+        id: 'bare',
+        name: 'Bare',
+        contextWindow: 262_144,
+        modalities: { input: ['text'], output: ['text'] },
+        capabilities: { reasoning: true },
+      },
+    ]);
+    expect(result.addedIds).toEqual([]);
+    expect(result.changed).toBe(true);
+  });
+});
+
+describe('refreshCustomProviderModels', () => {
+  function twoAgentProvider(): ProviderView {
+    const model = {
+      id: 'shared-model',
+      name: 'Shared Model',
+      contextWindow: 200_000,
+      efforts: [],
+      defaultEffort: null,
+    };
+    return {
+      id: 'openrouter',
+      name: 'OpenRouter',
+      source: 'user',
+      agents: ['claude-code', 'codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': {
+          upstream: 'https://openrouter.example/v1',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'anthropic-messages',
+        },
+        codex: {
+          upstream: 'https://openrouter.example/v1',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'openai-responses',
+        },
+      },
+      models: {
+        'claude-code': [{ ...model }],
+        codex: [{ ...model }],
+      },
+      connected: true,
+    };
+  }
+
+  it('defers per-agent resolve and executes one saved-provider batch when config is unchanged', async () => {
+    const fetchProviderModels = vi.fn(async (_input: FetchProviderModelsInput) => ({
+      ok: true,
+      models: [{ id: 'shared-model', name: 'Shared Model' }],
+    }));
+    const resolveSavedProviderModels = vi.fn(async () => ({ ok: true as const }));
+    const update = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        safeStorageRead: vi.fn(async () => 'provider-key'),
+        maker: {
+          fetchProviderModels,
+          resolveSavedProviderModels,
+          updateCustomProvider: update,
+        },
+      },
+    });
+
+    await expect(refreshCustomProviderModels(twoAgentProvider())).resolves.toEqual({
+      ok: true,
+      added: 0,
+      changed: false,
+    });
+    expect(fetchProviderModels).toHaveBeenCalledTimes(2);
+    expect(fetchProviderModels.mock.calls.map(([input]) => input)).toEqual([
+      expect.objectContaining({
+        agent: 'claude-code',
+        savedProviderId: 'openrouter',
+        deferResolve: true,
+      }),
+      expect.objectContaining({
+        agent: 'codex',
+        savedProviderId: 'openrouter',
+        deferResolve: true,
+      }),
+    ]);
+    expect(resolveSavedProviderModels).toHaveBeenCalledOnce();
+    expect(resolveSavedProviderModels).toHaveBeenCalledWith('openrouter');
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('persists all agent discoveries once and lets update trigger the single save-resolve batch', async () => {
+    const fetchProviderModels = vi.fn(async ({ agent }: FetchProviderModelsInput) => ({
+      ok: true,
+      models: [
+        { id: 'shared-model', name: 'Shared Model' },
+        { id: `${agent}-new`, name: `${agent} New` },
+      ],
+    }));
+    const resolveSavedProviderModels = vi.fn(async () => ({ ok: true as const }));
+    const update = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        safeStorageRead: vi.fn(async () => 'provider-key'),
+        maker: {
+          fetchProviderModels,
+          resolveSavedProviderModels,
+          updateCustomProvider: update,
+        },
+      },
+    });
+
+    await expect(refreshCustomProviderModels(twoAgentProvider())).resolves.toEqual({
+      ok: true,
+      added: 2,
+      changed: true,
+    });
+    expect(fetchProviderModels).toHaveBeenCalledTimes(2);
+    expect(fetchProviderModels.mock.calls.every(([input]) => input.deferResolve === true)).toBe(true);
+    expect(update).toHaveBeenCalledOnce();
+    expect(resolveSavedProviderModels).not.toHaveBeenCalled();
   });
 });
 

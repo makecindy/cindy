@@ -39,6 +39,7 @@ import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
+  clearAccountDerivedProviderModels,
   commitModelPlaneFromCatalog,
   getActiveCatalog,
   getModelPlaneWarnings,
@@ -46,6 +47,7 @@ import {
   setCustomProviders,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
+  setResolvedProviderModels,
 } from './active-catalog.js';
 import { readModelCatalogOverrides } from './model-catalog-override-store.js';
 import {
@@ -53,6 +55,7 @@ import {
   readCodexDiscoveredModelsForAuthRefresh,
 } from './codex-model-discovery.js';
 import {
+  clearAnthropicDiscoveredModels,
   getAnthropicModelDiscoveryFailure,
   loadAnthropicModelsFromDiskCache,
   refreshAnthropicModelsFromHttp,
@@ -88,6 +91,10 @@ import {
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
 import { getAuthState } from '../authManager.js';
+import {
+  isLatestModelResolveResult,
+  resolveProviderModelEntries,
+} from '../model-access/modelResolve.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import {
   filterProviderCatalogForAccount,
@@ -103,6 +110,90 @@ import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
 
 const log = createLogger('provider-service');
+let accountModelDiscoveryGeneration = 0;
+let accountModelDiscoveryCleanup: Promise<void> = Promise.resolve();
+
+type DiscoveredCodexModels = NonNullable<Awaited<ReturnType<typeof readCodexDiscoveredModels>>>;
+
+async function applyAccountScopedCodexModels(
+  load: () => Promise<DiscoveredCodexModels | null>,
+  apply: (models: DiscoveredCodexModels) => void,
+  shouldApply: () => boolean = () => true,
+): Promise<boolean> {
+  const generation = accountModelDiscoveryGeneration;
+  const models = await load();
+  if (
+    models === null
+    || generation !== accountModelDiscoveryGeneration
+    || !shouldApply()
+  ) return false;
+  apply(models);
+  return true;
+}
+
+/** Retire account-derived discovery producers before their consumer snapshots are cleared. */
+export function invalidateAccountDerivedProviderModelDiscovery(): void {
+  accountModelDiscoveryGeneration += 1;
+  // clearAnthropicDiscoveredModels bumps its own generation before the first await, so old HTTP /
+  // SDK work is synchronously retired; cache deletion then finishes in its existing serialized queue.
+  accountModelDiscoveryCleanup = clearAnthropicDiscoveredModels().catch((err) => {
+    log.warn('anthropic model discovery account-boundary cleanup failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+/** Refill native discovery after an authenticated Cindy account / realm boundary settles. */
+export async function reloadAccountDerivedProviderModelDiscovery(
+  shouldApply: () => boolean = () => true,
+): Promise<void> {
+  const generation = accountModelDiscoveryGeneration;
+  // The Anthropic cache is process-global and intentionally removed at the auth boundary. Finish
+  // that serialized deletion before an official HTTP refresh can persist the new identity's list.
+  await accountModelDiscoveryCleanup;
+  if (generation !== accountModelDiscoveryGeneration || !shouldApply()) return;
+
+  await Promise.all([
+    refreshDiscoveredCodexModels(true, shouldApply),
+    refreshAnthropicModelsFromHttp(),
+  ]);
+}
+
+function resolveDiscoveredCodexModels(models: Catalog['providers'][number]['models']['codex']): void {
+  if (!models || models.length === 0 || process.env.XDT_DISABLE_MODEL_CATALOG_RESOLVE === '1') return;
+  const requestModels = models.map((model) => ({
+    id: model.id,
+    name: model.name,
+    ...(model.contextWindowVerified ? { providerReported: { contextWindow: model.contextWindow } } : {}),
+  }));
+  const ids = models.map((model) => model.id);
+  const agents = ['codex', 'claude-code'] as const;
+  void resolveProviderModelEntries(agents.map((agent) => ({
+    providerId: 'openai',
+    agent,
+    sourceIdentity: { kind: 'native' as const, id: 'openai:codex-models-cache' },
+    models: requestModels,
+  }))).then((resolvedEntries) => {
+    for (const [index, agent] of agents.entries()) {
+      const resolved = resolvedEntries[index];
+      if (!resolved || !isLatestModelResolveResult(resolved)) continue;
+      const overlay = resolved.entry.models.map((model) => ({
+        ...model,
+        ...(agent === 'claude-code' ? { id: `chatgpt/${model.id}`, supportsFastMode: false } : {}),
+      }));
+      const overlayIds = overlay.map((model) => model.id);
+      const allIds = agent === 'claude-code' ? ids.map((id) => `chatgpt/${id}`) : ids;
+      setResolvedProviderModels(
+        'openai',
+        agent,
+        overlayIds,
+        overlay,
+        resolved.knowledgeRevision,
+        allIds,
+      );
+    }
+  }).catch(() => undefined);
+}
 
 /**
  * electron net.request GET → 文本。非 200 / 超时 / 网络错均 reject，
@@ -432,11 +523,10 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   addProviderSecretsClearedListener(() => {
     resetGenericOAuthMemoryCache();
     resetGrokOAuthMemoryCache();
+    clearAccountDerivedProviderModels();
   });
-  const readOAuthToken = (providerId: string): string | null => {
-    const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-    return readCachedGenericOAuthAccessToken(providerId, provider?.auth.oauth);
-  };
+  const readOAuthToken = (provider: Catalog['providers'][number]): string | null =>
+    readCachedGenericOAuthAccessToken(provider);
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
   // 在启动期固定 service 实例，避免请求路由热路径重复进入 getter 里的 legacy
@@ -472,8 +562,13 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 读 codex models_cache.json 得到规范化快照,由 active-catalog 同时投影到 Codex 与
         // Claude bridge。null 表示没读到有效 cache,保留现值 / 静态兜底;[] 表示合法空快照。
         try {
-          const discovered = await readCodexDiscoveredModels();
-          if (discovered !== null) setDiscoveredCodexModels(discovered);
+          await applyAccountScopedCodexModels(
+            readCodexDiscoveredModels,
+            (discovered) => {
+              setDiscoveredCodexModels(discovered);
+              resolveDiscoveredCodexModels(discovered);
+            },
+          );
         } catch {
           /* 读/映射失败:保持现值,不影响启动 */
         }
@@ -662,8 +757,14 @@ export async function refreshDiscoveredCodexModels(
     if (shouldApply()) setDiscoveredCodexModels([]);
     return;
   }
-  const discovered = await readCodexDiscoveredModelsForAuthRefresh();
-  if (shouldApply()) setDiscoveredCodexModels(discovered);
+  await applyAccountScopedCodexModels(
+    readCodexDiscoveredModelsForAuthRefresh,
+    (discovered) => {
+      setDiscoveredCodexModels(discovered);
+      resolveDiscoveredCodexModels(discovered);
+    },
+    shouldApply,
+  );
 }
 
 /**
@@ -823,7 +924,7 @@ export function getDesktopProviderService(): ProviderService {
       },
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
-    genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
+    genericOAuthConnected: (provider) => hasGenericOAuthLogin(provider),
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
       providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
@@ -843,6 +944,7 @@ export function getDesktopProviderService(): ProviderService {
 }
 
 export const __testing = {
+  applyAccountScopedCodexModels,
   catalogLkgEnvelope,
   catalogLkgPath,
   catalogLkgTemporaryPath,

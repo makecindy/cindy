@@ -62,7 +62,7 @@ export interface ProviderServiceDeps {
    * 通用 OAuth 供应商（目录 auth.oauth 描述符驱动、非内置 bespoke 四家）的连接态判定
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
-  genericOAuthConnected?: (providerId: string) => boolean;
+  genericOAuthConnected?: (provider: Catalog['providers'][number]) => boolean;
   /**
    * 内置 API-key 供应商(auth.method 'apiKey' 且 source 'builtin',如 Gemini 图像来源,
    * 2026-07)的连接态判定:连接 = 该供应商的 key 已存(生产 = providerSecretStore.has)。
@@ -134,7 +134,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
       else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
-        connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
+        connected[p.id] = deps.genericOAuthConnected?.(p) ?? false;
       }
       // API key 形态的自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」
       // 替代「连接 / 断开」，没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。

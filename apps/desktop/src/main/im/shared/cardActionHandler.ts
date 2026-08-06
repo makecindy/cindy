@@ -74,6 +74,7 @@ import {
   updatePermissionMode,
 } from './sessionRepo';
 import { changeSessionPermissionMode } from './permissionModeControl';
+import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
@@ -84,7 +85,7 @@ function pickRandom<T>(arr: readonly T[]): T {
 }
 
 const DESKTOP_CC_DEFAULTS: DesktopCcPrefs = {
-  model: 'claude-sonnet-4-6',
+  model: IM_DEFAULT_SETTINGS.agents['claude-code'].model,
   providerId: null,
   effort: 'medium',
   permissionMode: 'acceptEdits',

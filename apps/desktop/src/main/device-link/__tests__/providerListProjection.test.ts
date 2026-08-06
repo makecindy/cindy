@@ -89,6 +89,8 @@ function xdProviderWithFullRouting() {
           efforts: [],
           defaultEffort: null,
           supportsFastMode: true,
+          source: 'resolved',
+          knowledgeRevision: 'catalog-r1',
         },
       ],
     },
@@ -159,6 +161,16 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
       id: 'claude-opus-4-8',
       supportsFastMode: true,
     });
+  });
+
+  it('显式剥离 host-only resolve 来源与 knowledge revision', () => {
+    const { providers } = project({ providers: [xdProviderWithFullRouting()] });
+    const model = (providers[0].models as Record<string, Record<string, unknown>[]>)[
+      'claude-code'
+    ][0];
+    expect(model).not.toHaveProperty('source');
+    expect(model).not.toHaveProperty('knowledgeRevision');
+    expect(JSON.stringify(providers)).not.toContain('catalog-r1');
   });
 
   it('保留模型显示 override 快照并过滤非布尔值', () => {

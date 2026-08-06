@@ -15,6 +15,7 @@
  * 与「会话内切来源」同一口径,不在本函数重复一套。
  */
 
+import { BUNDLED_CATALOG, resolveDefaultModel } from '@cindy/model-providers';
 import type { AgentCapabilities, AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
@@ -87,7 +88,14 @@ export function resolveDeviceLinkDraftDefaults(
 
   if (models.length === 0) {
     return {
-      model: wantedModelId ?? '',
+      model: wantedModelId ?? (agentKind
+        ? resolveDefaultModel(
+            BUNDLED_CATALOG,
+            agentKind,
+            'session',
+            '',
+          )
+        : ''),
       effort: (remoteDraft?.effort as Effort) ?? 'high',
       fastMode: false,
       permissionMode,

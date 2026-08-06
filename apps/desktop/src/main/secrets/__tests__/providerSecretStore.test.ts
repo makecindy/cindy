@@ -4,16 +4,17 @@ const sessionState = vi.hoisted(() => ({
   mode: 'signed-out' as 'signed-out' | 'local' | 'cloud',
   dataOwnerId: null as string | null,
 }));
+const safeStorageState = vi.hoisted(() => ({ available: false }));
 
 // providerSecretStore 顶层 `import { app, safeStorage } from 'electron'` —— 这些测试
 // 注入自己的 SecretStorageIo,不会走默认 electronSecretIo,因此 electron mock 只为
 // 让 import 链在 node 测试环境下可加载(app.getPath 给个 tmp 目录即可)。
 vi.mock('electron', () => ({
-  app: { getPath: () => '/tmp/xdt-provider-secret-test' },
+  app: { getPath: () => `/tmp/xdt-provider-secret-test-${process.pid}` },
   safeStorage: {
-    isEncryptionAvailable: () => false,
-    encryptString: () => Buffer.from(''),
-    decryptString: () => '',
+    isEncryptionAvailable: () => safeStorageState.available,
+    encryptString: (value: string) => Buffer.from(value, 'utf-8'),
+    decryptString: (value: Buffer) => value.toString('utf-8'),
   },
 }));
 
@@ -34,6 +35,7 @@ vi.mock('../../appSessionState', () => ({
 
 import {
   createProviderSecretStore,
+  genericOAuthSecretIo,
   readCustomProviderKeyForMutation,
   readGhostSecretTailFromIo,
   setProviderSecretsClearedListener,
@@ -173,6 +175,38 @@ describe('providerSecrets registry', () => {
     } finally {
       sessionState.mode = previousMode;
       sessionState.dataOwnerId = previousOwnerId;
+    }
+  });
+
+  it('captured OAuth storage stays bound to its owner across an account switch', () => {
+    const previousMode = sessionState.mode;
+    const previousOwnerId = sessionState.dataOwnerId;
+    const providerId = `capture-race-${process.pid}`;
+    const ownerA = `capture-owner-a-${process.pid}`;
+    const ownerB = `capture-owner-b-${process.pid}`;
+    safeStorageState.available = true;
+    sessionState.mode = 'cloud';
+    sessionState.dataOwnerId = ownerA;
+    const capturedA = genericOAuthSecretIo.capture();
+
+    try {
+      expect(capturedA.write(providerId, 'token-a')).toBe(true);
+
+      sessionState.dataOwnerId = ownerB;
+      expect(genericOAuthSecretIo.write(providerId, 'token-b')).toBe(true);
+      expect(capturedA.readStrict(providerId)).toBe('token-a');
+
+      expect(capturedA.remove(providerId)).toBe(true);
+      expect(capturedA.readStrict(providerId)).toBeNull();
+      expect(genericOAuthSecretIo.readStrict(providerId)).toBe('token-b');
+    } finally {
+      sessionState.dataOwnerId = ownerB;
+      genericOAuthSecretIo.remove(providerId);
+      sessionState.dataOwnerId = ownerA;
+      genericOAuthSecretIo.remove(providerId);
+      sessionState.mode = previousMode;
+      sessionState.dataOwnerId = previousOwnerId;
+      safeStorageState.available = false;
     }
   });
 });

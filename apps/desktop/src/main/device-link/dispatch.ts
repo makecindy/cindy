@@ -372,6 +372,23 @@ function projectInvokeResultForTunnel(
       rest.logoKind = logoKind;
     }
     rest.routing = projectRoutingForDisplay(p.routing);
+    if (rest.models && typeof rest.models === 'object' && !Array.isArray(rest.models)) {
+      rest.models = Object.fromEntries(
+        Object.entries(rest.models as Record<string, unknown>).map(([agent, value]) => [
+          agent,
+          Array.isArray(value)
+            ? value.map((model) => {
+                if (!model || typeof model !== 'object' || Array.isArray(model)) return model;
+                const projected = { ...(model as Record<string, unknown>) };
+                // Host-only view provenance must never extend the device-link wire contract.
+                delete projected.source;
+                delete projected.knowledgeRevision;
+                return projected;
+              })
+            : value,
+        ]),
+      );
+    }
     return rest;
   });
   const modelVisibilityOverrides = r.modelVisibilityOverrides

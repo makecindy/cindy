@@ -1,3 +1,4 @@
+// TODO(unified-model-catalog): utility selection stays on this product table until utility capability metadata lands.
 export type UtilityModelTransport =
   | 'codex-responses'
   | 'litellm-chat-completions';

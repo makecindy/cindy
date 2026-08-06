@@ -26,6 +26,7 @@ const DEFAULT_REFINER_ORDER_WITHOUT_CODEX: readonly VoiceInputRefinerProviderKin
   CODEX_GPT_MINI,
 ];
 
+// TODO(unified-model-catalog): voice refiner routing stays on the legacy profile until utility metadata lands.
 export type VoiceInputRefinerRoutingSelection = {
   refinerProvider: VoiceInputRefinerProviderKind;
   refinerProviderChain: readonly VoiceInputRefinerProviderKind[];

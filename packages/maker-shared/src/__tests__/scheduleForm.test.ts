@@ -42,6 +42,23 @@ function schedule(patch: Partial<RemoteSchedule> = {}): RemoteSchedule {
 }
 
 describe('mobile schedule form model', () => {
+  it('accepts injected catalog defaults without importing model-providers', () => {
+    expect(createMobileScheduleDraft(null, {
+      modelDefaults: {
+        'claude-code': 'catalog-claude',
+        codex: 'catalog-codex',
+      },
+    }).model).toBe('catalog-claude');
+    expect(updateDraftAgentKind(createMobileScheduleDraft(null), 'codex', {
+      codex: 'catalog-codex',
+    }).model).toBe('catalog-codex');
+  });
+
+  it('retains historical fallback constants when no catalog defaults are injected', () => {
+    expect(createMobileScheduleDraft(null).model).toBe('claude-sonnet-4-6');
+    expect(updateDraftAgentKind(createMobileScheduleDraft(null), 'codex').model).toBe('gpt-5.5');
+  });
+
   it('builds a desktop-compatible create input for recurring project schedules', () => {
     const draft = createMobileScheduleDraft(null, { fallbackWorkingDir: '/repo/xdt-maker' });
     const input = buildMobileScheduleInput({

@@ -33,6 +33,8 @@ export interface SectionModel {
   id: string;
   displayName: string;
   description?: string;
+  category?: string;
+  group?: string;
   efforts: readonly Effort[];
   defaultEffort: Effort | null;
   effortDisplayNames?: Record<string, string>;
@@ -175,6 +177,8 @@ export function buildProviderSections(args: {
         contextWindow: m.contextWindow,
       };
       if (m.description !== undefined) sm.description = m.description;
+      if (m.category !== undefined) sm.category = m.category;
+      if (m.group !== undefined) sm.group = m.group;
       if (m.effortDisplayNames !== undefined) sm.effortDisplayNames = m.effortDisplayNames;
       if (m.supportsFastMode !== undefined) sm.supportsFastMode = m.supportsFastMode;
       if (m.codexCompatibilityWireProtocol !== undefined) {

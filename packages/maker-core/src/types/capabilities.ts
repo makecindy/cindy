@@ -240,6 +240,8 @@ export interface ModelDescriptor {
    * UI 据此显示 / 隐藏 Fast Mode 开关, 不再自己 startsWith 解析 model id。
    */
   supportsFastMode?: boolean;
+  /** 服务端能力分类；存在时优先于 legacy group / id 启发式。 */
+  category?: string;
   /**
    * 厂商分组 id（纯展示元数据，源自目录 providers.json，host 派生时透传）。
    * 渲染层据此对模型分组；缺省时回退 id 前缀归类。maker-core 运行时不读它。
@@ -263,6 +265,12 @@ export interface ModelDescriptor {
    * 否则默认模型可能是用户在清单里根本看不到的那个。maker-core 运行时不读它。
   */
   defaultEnabled?: boolean;
+  /**
+   * 该模型是否被标记为**本 agent** 的新会话默认 seed(host 派生时由 CatalogModel
+   * `newSessionDefault` 按 agent 求值透传;descriptor 已按 agent 分组,故为 per-agent 布尔)。
+   * 渲染层种子默认据它优先于纯 sortOrder 选取。maker-core 运行时不读它。
+   */
+  newSessionDefault?: boolean;
   /**
    * 模型计费($/1M tokens,源自目录/网关刷新,host 派生时透传)。pi 用它生成
    * models.json 的 cost 让 pi 自行计价;缺省按 0 计(用量页不显示钱数)。

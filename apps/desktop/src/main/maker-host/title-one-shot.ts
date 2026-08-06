@@ -38,6 +38,7 @@ import {
   findModelRegistryRoute,
   isModelSelectableForNewRoute,
   nativeDefaultSourceId,
+  lowestEffort,
 } from '@cindy/model-providers';
 import { toSdkModelString } from '@cindy/maker-core';
 
@@ -98,22 +99,6 @@ export interface TitleOneShotDeps {
   readGatewayKey?: () => string | null;
 }
 
-const EFFORT_RANK: Record<Effort, number> = {
-  minimal: 0,
-  low: 1,
-  medium: 2,
-  high: 3,
-  xhigh: 4,
-  max: 5,
-  ultra: 6,
-};
-
-/** 取一组 effort 里的最低档;空 → null。 */
-function lowestEffort(efforts: Effort[]): Effort | null {
-  if (!efforts.length) return null;
-  return [...efforts].sort((a, b) => EFFORT_RANK[a] - EFFORT_RANK[b])[0];
-}
-
 function trimTrailingSlash(s: string): string {
   return s.replace(/\/+$/, '');
 }
@@ -149,7 +134,7 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider?.titleModel) return null;
   const model = provider.titleModel;
-  const effort = lowestEffort(findCatalogModel(provider, model)?.efforts ?? []);
+  const effort = lowestEffort(findCatalogModel(provider, model)?.efforts ?? []) as Effort | null;
 
   switch (provider.id) {
     case 'anthropic': {

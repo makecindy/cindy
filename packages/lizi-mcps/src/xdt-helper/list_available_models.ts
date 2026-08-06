@@ -1,8 +1,3 @@
-/**
- * xdt-helper/list_available_models.ts —— 列出每个 agent 当前 host 支持的 model。
- * 用于 create_worker 前确认 model 名拼写, Codex 和 Claude Code 模型不可跨用。
- */
-
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { z } from 'zod';
 
@@ -13,9 +8,11 @@ import { okPayload, errorPayload } from './_payload.js';
 export interface ModelDescriptor {
   id: string;
   label: string;
+  category?: string;
+  group?: string;
 }
 
-/** tier: 'budget' = codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
+/** tier: catalog budget group/category first; legacy codex/ prefix is the fallback. */
 type ModelTier = 'budget' | 'standard';
 
 interface TaggedModel extends ModelDescriptor {
@@ -23,19 +20,22 @@ interface TaggedModel extends ModelDescriptor {
 }
 
 /**
- * 给每个 model 打 tier 标记。
- *
- * tier='budget'(gateway 折扣 codex 路由) 的唯一判定依据是 model id 的 `codex/` 前缀 ——
- * 与 renderer ModelSelector.categorize() 的归类规则保持一致 (codex/* → 折扣分组),
- * 也与 host CODEX_BUDGET_MODELS 的 id 命名约定一致。据此打 tier 后, agent 不必再从
- * label / description 里语义推断, 直接按 tier 精准匹配用户指定的档位。
- * label (= host displayName, 同时是 UI 下拉展示名) 不受影响, 保持干净。
+ * Keep this adapter dependency-free: lizi-mcps consumes the already projected catalog fields.
+ * Missing/unknown fields intentionally retain the legacy codex/ heuristic for old hosts.
  */
-function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefined {
+function isBudgetModel(model: Pick<ModelDescriptor, 'id' | 'category' | 'group'>): boolean {
+  const declared = model.category ?? model.group;
+  if (declared === 'gpt-budget') return true;
+  if (declared !== undefined) return false;
+  return model.id.startsWith('codex/');
+}
+
+/** Add the tier marker without asking agents to infer it from labels. */
+export function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefined {
   if (!models) return undefined;
   return models.map((m) => ({
     ...m,
-    tier: m.id.startsWith('codex/') ? 'budget' : 'standard',
+    tier: isBudgetModel(m) ? 'budget' : 'standard',
   }));
 }
 
@@ -61,7 +61,7 @@ const DESCRIPTION = [
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier}]',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
-  "- tier='budget': codex/ 前缀的 gateway 折扣路由 (如 codex/gpt-5.5)",
+  "- tier='budget': catalog 的 group/category=gpt-budget;旧 host 缺字段时 codex/ 前缀兜底",
   "- tier='standard': 官方原版 (如 gpt-5.5)",
   '选型规则: 用户明确要求折扣路由 → 选 tier=budget 的模型; 说「官方 / 原版 / 普通版」→ 选 tier=standard。',
   '默认规则: 用户只报模型名 (如 "gpt-5.5") 时, 一律默认 tier=standard (官方原版); 只有用户明确要求折扣路由才允许选 tier=budget。',

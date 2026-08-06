@@ -35,6 +35,7 @@ export const CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY = 'xdt-provider-auth-placehold
  * 前缀兼容地板(见文件头)。新增 Anthropic 家族名**不需要**改这里——
  * 加进 OSS 目录 anthropic 供应商名下即可;此列表只为历史裸别名与目录失效兜底而存在。
  */
+// TODO(unified-model-catalog): keep this compatibility floor until all historical wire aliases carry catalog identity.
 const ANTHROPIC_WIRE_MODEL_PREFIXES = ['claude-', 'sonnet', 'opus', 'haiku', 'fable'] as const;
 
 /** 目录集合的 memo:目录对象每进程加载一次(active-catalog),按引用同一性缓存派生结果。 */

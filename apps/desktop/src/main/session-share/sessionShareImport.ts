@@ -15,12 +15,14 @@ import path from 'node:path';
 
 import JSZip from 'jszip';
 import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
+import { resolveDefaultModel } from '@cindy/model-providers';
 import { app } from 'electron';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   importSharedCodexThread,
   removeSharedCodexThread,
@@ -863,10 +865,12 @@ async function writeIfMissing(
 const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const PERMISSION_MODES = new Set(['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
 
-/** draftPrefs 缺省(旧调用方 / 测试)时按 agentKind 兜底的模型。 */
+/** draftPrefs 缺省(旧调用方 / 测试)且目录不可用时按 agentKind 兜底的模型。 */
 const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
   cc: 'claude-sonnet-4-6',
-  codex: 'gpt-5.4',
+  // 2026-08-01 产品定案:与全局目录默认统一。
+  codex: 'gpt-5.5',
+  // pi 不在本次定案范围内(定案时 pi 尚未成为一等 agent),保留原冷启动值待单独拍板。
   pi: 'gpt-5.4',
 };
 
@@ -931,7 +935,22 @@ function buildSessionRow(params: {
     workingDir,
     workspaceKind: manifest.workspaceKind,
     worktreePath,
-    model: str(draftPrefs?.model, FALLBACK_MODEL_BY_AGENT[manifest.agentKind]),
+    model: str(
+      draftPrefs?.model,
+      // 2026-08-01 产品定案:导入默认与全局目录默认统一(codex 侧 gpt-5.4 是漂移残留)。
+      // pi 不进 resolver:它没有跨来源合法的静态默认,只用自己的兜底值 —— 否则会
+      // 落成 cc 的 claude-sonnet-4-6,给 pi 会话造出一条假 Claude 路由。
+      manifest.agentKind === 'pi'
+        ? FALLBACK_MODEL_BY_AGENT.pi
+        : resolveDefaultModel(
+            getActiveCatalog(),
+            manifest.agentKind === 'codex' ? 'codex' : 'claude-code',
+            'session',
+            manifest.agentKind === 'codex'
+              ? FALLBACK_MODEL_BY_AGENT.codex
+              : FALLBACK_MODEL_BY_AGENT.cc,
+          ),
+    ),
     effort: EFFORTS.has(effort) ? effort : 'high',
     permissionMode: PERMISSION_MODES.has(permissionMode) ? permissionMode : 'auto',
     providerId:

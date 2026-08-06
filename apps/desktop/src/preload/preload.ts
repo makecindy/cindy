@@ -549,6 +549,7 @@ const fanOutMakerAuthStateChanged = createIpcFanOut('maker:auth:state-changed');
 const fanOutMakerAuthLoginProgress = createIpcFanOut('maker:auth:login-progress');
 // 自定义供应商增删改广播 → 各 useProviders 实例 refetch（设置页列表 + 对话模型选择器 live 刷新）。
 const fanOutMakerProvidersChanged = createIpcFanOut('maker:provider:changed');
+const fanOutMakerProviderModelsResolved = createIpcFanOut('maker:provider:models-resolved');
 const fanOutMakerProviderOAuthProgress = createIpcFanOut('maker:provider:oauth:progress');
 // 自定义 MCP 服务器增删改广播 → 设置页 McpServersSection refetch。
 const fanOutMakerMcpChanged = createIpcFanOut('maker:mcp:changed');
@@ -1954,17 +1955,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /**
    * renderer 把 newMakerDraft 的 vendor/model 偏好快照推给 main 缓存 ——
    * collab mode spawn worker (enableOrca / orca-bridge.create_worker) 读这份
-   * 缓存决定 worker 的 model/effort/fastMode, 让 worker 默认 = "用户在 New Maker
-   * 面板该 vendor 当前的选择"。启动时推一次 + 用户每次改 New Maker 偏好都推,
+   * 缓存决定 worker 的显式 model/effort/fastMode 偏好；用户未主动选过模型时仍跟随
+   * active catalog 产品默认。启动时推一次 + 用户每次改 New Maker 偏好都推，
    * fire-and-forget。
    */
   syncNewMakerDraft: (snapshot: {
     lastByVendor: Partial<
       Record<
-        'cc' | 'codex',
+        'cc' | 'codex' | 'pi',
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
+    modelChosenByVendor?: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
@@ -4699,6 +4701,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 结构化结果：ok=true 带 models；失败 code 走 providerError.* i18n。
      */
     fetchProviderModels: (input: {
+      requestId?: string;
       agent: 'claude-code' | 'codex' | 'pi';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
@@ -4711,13 +4714,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
        * (renderer 不回读明文头);renderer 显式头优先。端点一改就不传,避免凭证外泄给新主机。
        */
       savedProviderId?: string;
+      /** Saved-provider manual refresh batches resolve after all agent fetches finish. */
+      deferResolve?: boolean;
     }): Promise<{
       ok: boolean;
-      models?: { id: string; name: string; contextWindow?: number }[];
+      models?: Array<{
+        id: string;
+        name: string;
+        providerReported?: import('../main/maker-host/generic-oauth').ProviderReportedModelHints;
+        contextWindow?: number;
+        maxOutput?: number;
+        description?: string;
+        family?: string;
+        group?: string;
+        category?: string;
+        mode?: string;
+        sortOrder?: number;
+        efforts?: import('@cindy/model-providers').Effort[];
+        defaultEffort?: import('@cindy/model-providers').Effort | null;
+        supportsFastMode?: boolean;
+      }>;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
     }> => ipcRenderer.invoke('maker:provider:models-fetch', input),
+    /** Resolve every saved Claude Code / Codex runtime for one provider in one entries[] request. */
+    resolveSavedProviderModels: (providerId: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:models-resolve-saved', providerId),
     /**
      * 本机 agent CLI 安装 / 登录态扫描（设置「检测建议」用）。只 stat 不读凭证内容;
      * 失败降级空数组。
@@ -4738,6 +4761,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:provider:models-rediscover', providerId),
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: fanOutMakerProvidersChanged,
+    onProviderModelsResolved: fanOutMakerProviderModelsResolved,
 
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (): Promise<{

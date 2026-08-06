@@ -31,8 +31,10 @@
  *   - session 需实际费用或价值估算大于 0（没跑过 turn 时隐藏）
  */
 
+import type { ProviderAccess } from '@cindy/model-providers';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+
 import type { TFunction } from 'i18next';
 import {
   summarizeCodexRateLimitReset,
@@ -986,10 +988,86 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
   ));
 }
 
+interface TodaySpendModelMetadata {
+  sourceAccess?: ProviderAccess;
+  category?: string;
+  group?: string;
+}
+
+export interface SpendRouteClassification {
+  chatgptBridge: boolean;
+  xaiBridge: boolean;
+  codexBudget: boolean;
+  codexXai: boolean;
+}
+
+/**
+ * Metadata is authoritative when present; each missing field keeps its exact legacy prefix fallback.
+ *
+ * providerId 是**硬门**,排在元数据之前:用户显式选定某个供应商后,该会话的额度就落在那家,
+ * 目录元数据不得翻案(否则显式选 openai 的会话会被按 xAI 记账)。cc 与 pi 共用桥接口径 ——
+ * 两者都经本地 responses-bridge 打订阅额度,只有 codex 是子进程自带凭证那一路。
+ */
+export function classifySpendRoute(
+  vendorKey: 'cc' | 'codex' | 'pi',
+  modelId: string | null | undefined,
+  metadata?: TodaySpendModelMetadata,
+  providerId?: string | null,
+): SpendRouteClassification {
+  const sourceKind = metadata?.sourceAccess?.kind;
+  const declaredGroup = metadata?.category ?? metadata?.group;
+  const legacyChatgptBridge =
+    (vendorKey === 'cc' || vendorKey === 'pi')
+    && typeof modelId === 'string'
+    && modelId.startsWith(CHATGPT_MODEL_PREFIX);
+  const legacyXaiBridge =
+    (vendorKey === 'cc' || vendorKey === 'pi')
+    && typeof modelId === 'string'
+    && modelId.startsWith(XAI_MODEL_PREFIX);
+  const legacyCodexBudgetModel = typeof modelId === 'string' && modelId.startsWith('codex/');
+  const legacyCodexXaiProvider =
+    vendorKey === 'codex' && typeof modelId === 'string' && modelId.startsWith(XAI_MODEL_PREFIX);
+  return {
+    chatgptBridge:
+      (vendorKey === 'cc' || vendorKey === 'pi')
+      && (providerId == null || providerId === 'openai')
+      && (
+        sourceKind === 'subscription'
+          ? metadata?.sourceAccess?.product === 'ChatGPT'
+          : legacyChatgptBridge
+      ),
+    xaiBridge:
+      (vendorKey === 'cc' || vendorKey === 'pi')
+      && (providerId == null || providerId === 'xai')
+      && (
+        sourceKind === 'subscription'
+          ? metadata?.sourceAccess?.product === 'SuperGrok'
+          : legacyXaiBridge
+      ),
+    codexBudget: declaredGroup !== undefined
+      ? declaredGroup === 'gpt-budget'
+      : legacyCodexBudgetModel,
+    codexXai:
+      vendorKey === 'codex'
+      && (providerId == null || providerId === 'xai')
+      && (
+        sourceKind === 'subscription'
+          ? metadata?.sourceAccess?.product === 'SuperGrok'
+          : declaredGroup === 'grok'
+            ? true
+            : declaredGroup !== undefined
+              ? false
+              : legacyCodexXaiProvider
+      ),
+  };
+}
+
 interface TodaySpendChipProps {
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
   modelId?: string | null;
+  /** 当前实际来源与模型条目的目录身份；缺失时保持原前缀判定。 */
+  modelMetadata?: TodaySpendModelMetadata;
   /**
    * 本会话显式选定的供应商('anthropic' / 'openai' / 'xd' / null=默认路由)。
    * 决定计费形态:cc 选了 'anthropic' = 走订阅(抑制网关 quota);cc 默认路由的形态由
@@ -1018,6 +1096,7 @@ interface TodaySpendChipProps {
 export function TodaySpendChip({
   vendorKey = 'cc',
   modelId,
+  modelMetadata,
   providerId,
   sessionId,
   sessionInitialMoney,
@@ -1081,29 +1160,19 @@ export function TodaySpendChip({
   //   - chatgpt/ → 与 codex 同一 ChatGPT 账户,复用 codex 订阅 chip 形态(限额窗口 + 价值估算);
   //   - xai/    → SuperGrok 无订阅窗口端点,尽力显示 bridge 抓到的限流头,否则仅价值估算。
   // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
-  const isChatgptBridge =
-    (vendorKey === 'cc' || vendorKey === 'pi')
-    && (providerId == null || providerId === 'openai')
-    && typeof modelId === 'string'
-    && modelId.startsWith(CHATGPT_MODEL_PREFIX);
-  const isXaiBridge =
-    (vendorKey === 'cc' || vendorKey === 'pi')
-    && (providerId == null || providerId === 'xai')
-    && typeof modelId === 'string'
-    && modelId.startsWith(XAI_MODEL_PREFIX);
+  const spendRoute = classifySpendRoute(vendorKey, modelId, modelMetadata, providerId);
+  const isChatgptBridge = spendRoute.chatgptBridge;
+  const isXaiBridge = spendRoute.xaiBridge;
   const isSubscriptionBridge = isChatgptBridge || isXaiBridge;
   const isRemoteCodexSession = vendorKey === 'codex' && Boolean(remoteHostId);
-  const isCodexBudgetModel = typeof modelId === 'string' && modelId.startsWith('codex/');
+  const isCodexBudgetModel = spendRoute.codexBudget;
   const isCodexGatewayBudgetModel =
     isCodexBudgetModel && (providerId == null || providerId === 'xd');
-  const isCodexXaiProvider =
-    vendorKey === 'codex'
-    && (providerId == null || providerId === 'xai')
-    && typeof modelId === 'string'
-    && modelId.startsWith(XAI_MODEL_PREFIX);
-  // codex 走订阅价值估算:ChatGPT 订阅需要 oauth-bearer + OpenAI 来源;xAI 由 proxy 注入
-  // SuperGrok OAuth。显式自定义供应商优先于共享 host 的 authInjection 和模型名前缀。
-  // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
+  const isCodexXaiProvider = spendRoute.codexXai;
+  // codex 走订阅价值估算:ChatGPT 订阅需要 oauth-bearer 且未显式选 XD;xAI 由 proxy 注入
+  // SuperGrok OAuth,不依赖 Codex 子进程凭证。env-key fallback、codex/ 折扣、或显式选 XD
+  // → 复用 cc 的 cost tooltip 形态。远端 Codex 的事实在远端 daemon 上,本机只记录 token
+  // 价值估算,不写本地 gateway cost。
   const isCodexOauth = vendorKey === 'codex' && !isCodexXaiProvider && (
     isRemoteCodexSession ||
     (

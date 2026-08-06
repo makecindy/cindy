@@ -10,6 +10,7 @@ import {
   buildRecentWorkspaceOptions,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
+  defaultNewSessionModel,
   defaultPermissionModeForNewSessionAgent,
   normalizeCreateSessionResult,
   parseNewSessionDeviceOptions,
@@ -170,13 +171,15 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low' });
   });
 
-  it('falls back to DEFAULT_MODELS and keeps current effort when providers are not loaded yet', () => {
+  it('uses catalog session defaults for both agents (2026-08-01 unified)', () => {
+    expect(defaultNewSessionModel('claude-code')).toBe('claude-sonnet-4-6');
+    expect(defaultNewSessionModel('codex')).toBe('gpt-5.5');
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
       sessions: [],
       modelRows: [],
       currentEffort: 'medium',
-    })).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium' });
+    })).toEqual({ agentKind: 'codex', model: 'gpt-5.5', effort: 'medium' });
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
       sessions: [],
@@ -427,7 +430,7 @@ describe('new session model', () => {
     const codex = withAgentDefaults(DEFAULT_NEW_SESSION_DRAFT, 'codex');
     expect(codex).toMatchObject({
       agentKind: 'codex',
-      model: 'gpt-5.4',
+      model: 'gpt-5.5',
       permissionMode: 'auto',
     });
 

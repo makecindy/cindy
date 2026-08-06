@@ -30,13 +30,15 @@ import {
   setProviderModelFast,
 } from '@/state/providerModelMemory';
 import type { Effort } from '@/lib/userPreferences.types';
-import { selectWorkerModels } from './workerModelAvailability';
+import { selectWorkerDefaultModel, selectWorkerModels } from './workerModelAvailability';
 
 const PREDEFINED_ROLES = ['developer', 'designer', 'reviewer', 'tester', 'merger'] as const;
 const PREFS_KEY = 'workerCreationPrefs';
 
 interface WorkerAgentPrefs {
   model: string;
+  /** true only for a remembered/user-selected model; false means the model is a live UI preview. */
+  modelExplicit: boolean;
   effort: Effort;
   fast: boolean;
   /** 上次显式选定的模型来源;null = 未显式选择(跟随默认路由解析)。 */
@@ -52,10 +54,23 @@ interface WorkerPrefs {
 
 const DEFAULT_PREFS: WorkerPrefs = {
   lastAgent: 'codex',
-  codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false, providerId: null },
-  'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false, providerId: null },
-  // pi worker 默认模型与 orcaWorkerCreationService.resolveWorkerConfig 的 pi 分支一致。
-  pi: { model: 'claude-sonnet-4-6', effort: 'high', fast: false, providerId: null },
+  codex: {
+    model: '',
+    modelExplicit: false,
+    effort: 'high',
+    fast: false,
+    providerId: null,
+  },
+  'claude-code': {
+    model: '',
+    modelExplicit: false,
+    effort: 'high',
+    fast: false,
+    providerId: null,
+  },
+  // Pi 没有跨来源合法的静态 model id；空种子会在目录就绪后由 activeModels 首项收敛，
+  // 避免把 Claude / GPT 的某个供应商路由伪装成全局默认。
+  pi: { model: '', modelExplicit: false, effort: 'high', fast: false, providerId: null },
 };
 
 function readWorkerPrefs(): WorkerPrefs {
@@ -65,13 +80,23 @@ function readWorkerPrefs(): WorkerPrefs {
     const parsed = JSON.parse(raw) as Partial<WorkerPrefs>;
     const agentPrefs = (agent: 'codex' | 'claude-code' | 'pi'): WorkerAgentPrefs => {
       const p = parsed[agent];
+      const model = typeof p?.model === 'string' ? p.model.trim() : '';
+      const providerId =
+        typeof p?.providerId === 'string' && p.providerId.trim() ? p.providerId.trim() : null;
+      const modelExplicit =
+        typeof p?.modelExplicit === 'boolean'
+          ? p.modelExplicit && model.length > 0
+          : model.length > 0 || providerId !== null;
       return {
         ...DEFAULT_PREFS[agent],
         ...(p ?? {}),
+        model,
+        // Legacy prefs predate this bit and only wrote concrete selections; preserve those as
+        // explicit. New synthetic preview values carry modelExplicit=false and never freeze.
+        modelExplicit,
         fast: p?.fast === true,
         // 老版本 prefs 无此字段 → null(未显式);非法类型/空白串同样回落(与 IPC 同口径 trim)。
-        providerId:
-          typeof p?.providerId === 'string' && p.providerId.trim() ? p.providerId.trim() : null,
+        providerId: modelExplicit ? providerId : null,
       };
     };
     return {
@@ -139,6 +164,7 @@ export function CreateWorkerPopover({
   const [customRole, setCustomRole] = useState('');
   const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
   const [model, setModel] = useState(DEFAULT_PREFS.codex.model);
+  const [modelExplicit, setModelExplicit] = useState(DEFAULT_PREFS.codex.modelExplicit);
   const [effort, setEffort] = useState<Effort>(DEFAULT_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_PREFS.codex.fast);
   // 显式选定的模型来源(标准面板供应商分段);null = 未显式。device-link 远程创建
@@ -308,6 +334,7 @@ export function CreateWorkerPopover({
     setPrefs(stored);
     setAgent(stored.lastAgent);
     setModel(agentPrefs.model);
+    setModelExplicit(agentPrefs.modelExplicit);
     setEffort(agentPrefs.effort);
     setFast(agentPrefs.fast);
     setProviderSource(deviceId ? null : agentPrefs.providerId);
@@ -316,17 +343,22 @@ export function CreateWorkerPopover({
   }, [deviceId, open]);
 
   // capabilities 可能尚未加载或模型被移除；加载后把当前选择收敛到可用模型和 effort。
+  // 未显式选择时始终跟随 live catalog seed，即使旧 bundled id 仍然可用也不能把它固化。
   useEffect(() => {
     if (!open || !prefsRestored || modelCatalogLoading) return;
     const models = activeModels;
     if (models.length === 0) return;
-    let selected = models.find((m) => m.id === model);
+    let selected = modelExplicit
+      ? models.find((candidate) => candidate.id === model)
+      : selectWorkerDefaultModel(models, activeCaps?.sessionDefaultModel);
     if (!selected) {
       // Provider loading has settled, so activeModels is authoritative for both local and remote
       // creation. A capability entry alone does not make a disconnected provider's model usable.
-      selected = models[0];
-      setModel(selected.id);
+      selected = selectWorkerDefaultModel(models, activeCaps?.sessionDefaultModel) ?? models[0];
+      setModelExplicit(false);
+      setProviderSource(null);
     }
+    if (selected.id !== model) setModel(selected.id);
     // effort 收敛按**实际路由来源档位表**(routeEffortMetaFor,与提交同口径):
     // 按拍平条目收敛会留下「显示 high、提交时被对账成 low」的静默不一致
     // (codex review)。
@@ -342,9 +374,11 @@ export function CreateWorkerPopover({
     }
   }, [
     activeModels,
+    activeCaps?.sessionDefaultModel,
     agent,
     effort,
     model,
+    modelExplicit,
     modelCatalogLoading,
     narrowProviderSource,
     open,
@@ -371,6 +405,7 @@ export function CreateWorkerPopover({
         ...prefs,
         [agent]: {
           model,
+          modelExplicit,
           effort,
           fast,
           // device-link 面板无来源维度(providerSource 恒 null),保留本地记忆原值,
@@ -382,16 +417,18 @@ export function CreateWorkerPopover({
       setAgent(nextAgent);
       const remembered = snapshot[nextAgent];
       setModel(remembered.model);
+      setModelExplicit(remembered.modelExplicit);
       setEffort(remembered.effort);
       setFast(remembered.fast);
       setProviderSource(deviceId ? null : remembered.providerId);
     },
-    [agent, deviceId, effort, fast, model, prefs, providerSource],
+    [agent, deviceId, effort, fast, model, modelExplicit, prefs, providerSource],
   );
 
   const updateModel = useCallback(
     (nextModel: string) => {
       setModel(nextModel);
+      setModelExplicit(true);
       // flat 面板换模型(device-link 退化路径):effort 同样按路由来源档位表收敛,
       // 与收敛 effect / 提交同口径,不留显示与派发不一致的窗口。
       const effortMeta = routeEffortMetaFor(nextModel);
@@ -418,6 +455,9 @@ export function CreateWorkerPopover({
     (providerId: string | null, modelId?: string, reconciledEffort?: Effort) => {
       const nextModel = modelId ?? model;
       const narrowed = narrowProviderSource(providerId, nextModel);
+      // A provider/model row interaction is an explicit routing choice, including re-pinning the
+      // currently effective source. From here on the concrete model may be persisted and sent.
+      setModelExplicit(true);
       // 「钉/重选当前生效来源」与「切到恰好提供同一模型的另一来源」必须区分
       // (codex review):前者保留表单 live 值(仅把生效来源钉成显式);后者是真实
       // 来源切换,要恢复目标行显示的预设。判据 = 目标来源是否就是切换前的生效来源
@@ -519,6 +559,7 @@ export function CreateWorkerPopover({
   const updateEffort = useCallback(
     (next: Effort) => {
       setEffort(next);
+      setModelExplicit(true);
       if (activeMemorySourceId && model) {
         setProviderModelEffort(agent, activeMemorySourceId, model, next);
       }
@@ -528,6 +569,7 @@ export function CreateWorkerPopover({
   const updateFast = useCallback(
     (enabled: boolean) => {
       setFast(enabled);
+      setModelExplicit(true);
       if (activeMemorySourceId && model) {
         setProviderModelFast(agent, activeMemorySourceId, model, enabled);
       }
@@ -572,12 +614,15 @@ export function CreateWorkerPopover({
     submittingRef.current = true;
     setIsSubmitting(true);
     // 提交前对 (来源, 模型) 再收窄一次:收敛 effect 与提交之间目录可能已变化。
-    const submitProviderId = narrowProviderSource(providerSource, model);
+    const submitProviderId = modelExplicit
+      ? narrowProviderSource(providerSource, model)
+      : null;
     const nextPrefs: WorkerPrefs = {
       ...prefs,
       lastAgent: agent,
       [agent]: {
         model,
+        modelExplicit,
         effort,
         fast,
         // device-link 创建不覆盖本地来源记忆(远程面板没有来源维度)。
@@ -620,6 +665,7 @@ export function CreateWorkerPopover({
     agent,
     deviceId,
     model,
+    modelExplicit,
     effort,
     fast,
     providerSource,
@@ -721,7 +767,7 @@ export function CreateWorkerPopover({
                 外置 FastModeToggle,不能删。 */}
             <div className="flex min-w-0 items-center gap-2">
               {deviceId && currentModelSupportsFast && (
-                <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
+                <FastModeToggle enabled={fast} onToggle={() => updateFast(!fast)} />
               )}
               <ModelSelector
                 modelId={model}

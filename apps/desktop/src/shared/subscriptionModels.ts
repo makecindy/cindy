@@ -10,6 +10,7 @@
  */
 
 /** ChatGPT 订阅直连前缀。 */
+// TODO(unified-model-catalog): subscription identity remains here until the catalog exposes the required runtime-safe field.
 export const CHATGPT_MODEL_PREFIX = 'chatgpt/';
 /** SuperGrok(xAI)订阅直连前缀。 */
 export const XAI_MODEL_PREFIX = 'xai/';

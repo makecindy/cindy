@@ -336,6 +336,36 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(got?.runtimes.codex?.headers).toBeUndefined();
   });
 
+  it('normalizes and round-trips a provider-reported model mode', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          ...valid.runtimes.codex!,
+          models: [{ id: 'embedding-model', name: 'Embedding', mode: '  embedding  ' }],
+        },
+      },
+    });
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.models).toEqual([
+      { id: 'embedding-model', name: 'Embedding', mode: 'embedding' },
+    ]);
+  });
+
+  it('rejects blank or oversized provider-reported model modes', () => {
+    for (const mode of ['   ', 'x'.repeat(129)]) {
+      expect(validateCustomProviderConfig({
+        ...valid,
+        runtimes: {
+          codex: {
+            ...valid.runtimes.codex!,
+            models: [{ id: 'model', name: 'Model', mode }],
+          },
+        },
+      }).ok).toBe(false);
+    }
+  });
+
   it('round-trips only an explicitly enabled Pi image-input capability', async () => {
     mountDb();
     await createCustomProvider({
@@ -391,6 +421,45 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       },
       { id: 'legacy', name: 'Legacy' },
       { id: 'explicit-off', name: 'Explicit off' },
+    ]);
+  });
+
+  it('round-trips provider modalities/capabilities and drops malformed capability data', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          models: [
+            {
+              id: 'vlm',
+              name: 'VLM',
+              contextWindow: 1_048_576,
+              maxOutput: 8_192,
+              modalities: { input: ['text', 'image'], output: ['text'] },
+              // 坏数据:未知键 + 非 boolean 值,写库/读回都应被清洗掉。
+              capabilities: {
+                reasoning: true,
+                toolCall: false,
+                bogus: 'x',
+                temperature: 1,
+              } as never,
+            },
+          ],
+        },
+      },
+    });
+    const got = await getCustomProvider('openrouter');
+    expect(got?.runtimes.codex?.models).toEqual([
+      {
+        id: 'vlm',
+        name: 'VLM',
+        contextWindow: 1_048_576,
+        maxOutput: 8_192,
+        modalities: { input: ['text', 'image'], output: ['text'] },
+        capabilities: { reasoning: true, toolCall: false },
+      },
     ]);
   });
 
