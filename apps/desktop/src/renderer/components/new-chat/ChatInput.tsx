@@ -891,7 +891,7 @@ function detectTrigger(editor: Editor): TriggerState {
  * (光标移到锚点前 / 跨段落 / 中间出现空白、chip 或换行),此时
  * ChatInput 会清掉合成锚点、关闭面板。
  */
-function deriveSyntheticAtQuery(editor: Editor, anchor: number): string | null {
+function deriveSyntheticAtQuery(editor: Editor, anchor: number, rangeEnd: number): string | null {
   const { state } = editor;
   const { selection, doc } = state;
   // 点击「+」前可能已有文本选区。synthetic anchor 就落在 selection.from，
@@ -899,7 +899,9 @@ function deriveSyntheticAtQuery(editor: Editor, anchor: number): string | null {
   // 后续字符再按 anchor → caret 推导 query。
   if (!selection.empty) return selection.from === anchor ? '' : null;
   const pos = selection.from;
-  if (pos < anchor || anchor > doc.content.size) return null;
+  if (pos < anchor || pos > rangeEnd || anchor > doc.content.size || rangeEnd > doc.content.size) {
+    return null;
+  }
   let $anchor;
   let $pos;
   try {
@@ -1200,9 +1202,19 @@ export function ChatInput({
   // 创建,通过 ref 读最新锚点。锚点 = 打开面板那一刻的光标位,query = 锚点→光标
   // 纯文本(deriveSyntheticAtQuery)。
   const syntheticAtAnchorRef = useRef<number | null>(null);
+  // synthetic query 的真实替换终点跟随 ProseMirror transaction mapping；它与
+  // 当前光标位置分离，因此光标移回 query 中间时仍能删除完整 filter，同时不会
+  // 吞掉「+」激活前就存在于锚点后的连续文本。
+  const syntheticAtRangeEndRef = useRef<number | null>(null);
   const [syntheticAtAnchor, setSyntheticAtAnchorState] = useState<number | null>(null);
   const setSyntheticAtAnchor = useCallback((next: number | null) => {
+    const previous = syntheticAtAnchorRef.current;
     syntheticAtAnchorRef.current = next;
+    if (next === null) {
+      syntheticAtRangeEndRef.current = null;
+    } else if (previous !== next || syntheticAtRangeEndRef.current === null) {
+      syntheticAtRangeEndRef.current = next;
+    }
     setSyntheticAtAnchorState(next);
   }, []);
   // render gate 的 trigger 快照:typed 触发优先;合成激活期间以 pseudo-at 快照
@@ -1214,7 +1226,8 @@ export function ChatInput({
     if (typed.kind !== 'none') return typed;
     const anchor = syntheticAtAnchorRef.current;
     if (anchor != null) {
-      const q = deriveSyntheticAtQuery(ed, anchor);
+      const rangeEnd = syntheticAtRangeEndRef.current;
+      const q = rangeEnd == null ? null : deriveSyntheticAtQuery(ed, anchor, rangeEnd);
       return { kind: 'at', query: q ?? '__synthetic_invalid__', from: anchor };
     }
     return typed;
@@ -2187,7 +2200,11 @@ export function ChatInput({
       },
     },
     // Tick state on every update so triggerState below recomputes.
-    onUpdate: ({ editor: ed }) => {
+    onUpdate: ({ editor: ed, transaction }) => {
+      const syntheticRangeEnd = syntheticAtRangeEndRef.current;
+      if (syntheticRangeEnd !== null && transaction.docChanged) {
+        syntheticAtRangeEndRef.current = transaction.mapping.map(syntheticRangeEnd, 1);
+      }
       if (
         !suppressListNormalizationRef.current &&
         !ed.view.composing &&
@@ -3525,7 +3542,12 @@ export function ChatInput({
   const syntheticAtQuery = useMemo(
     () =>
       editor && syntheticAtAnchor !== null
-        ? deriveSyntheticAtQuery(editor, syntheticAtAnchor)
+        ? (() => {
+            const rangeEnd = syntheticAtRangeEndRef.current;
+            return rangeEnd == null
+              ? null
+              : deriveSyntheticAtQuery(editor, syntheticAtAnchor, rangeEnd);
+          })()
         : null,
     [editor, syntheticAtAnchor, trigger],
   );
@@ -3887,10 +3909,12 @@ export function ChatInput({
     if (!editor || !effectiveAt) return null;
     const { from } = effectiveAt;
 
-    // 「+」刚打开且尚未输入过滤词时，激活范围只是光标处的零长度锚点。
-    // 不向后扫描已有文本，避免选择条目时误删光标后的完整单词。
-    if (effectiveAt.activation === 'synthetic' && effectiveAt.query.length === 0) {
-      return { from, to: from };
+    // synthetic query 没有文档内触发符，替换范围由 transaction mapping 单独跟踪。
+    // 不能像 typed `@` 一样向后扫到空白，否则在已有单词中间激活并输入过滤词时
+    // 会把激活前就存在的单词后缀一起删除。
+    if (effectiveAt.activation === 'synthetic') {
+      const to = syntheticAtRangeEndRef.current;
+      return to !== null && to >= from ? { from, to } : null;
     }
 
     // Extend replace-range to the end of the complete query run (up to
@@ -3905,7 +3929,7 @@ export function ChatInput({
     }
     const parent = $from.parent;
     const parentStart = $from.start();
-    const triggerOffset = effectiveAt.activation === 'typed' ? 1 : 0;
+    const triggerOffset = 1;
     let runEnd = from + triggerOffset;
     const offset = from - parentStart + triggerOffset;
     let stopped = false;
@@ -4051,10 +4075,6 @@ export function ChatInput({
       return;
     }
     if (!editor || editor.isDestroyed || composerMutationLocked) return;
-    if (atOpen) {
-      closeAtPanel();
-      return;
-    }
     if (trigger.kind === 'slash') {
       setSuppressedSlashAt(trigger.from);
     } else if (trigger.kind === 'at') {
@@ -4064,8 +4084,6 @@ export function ChatInput({
     setAtFocus(0);
     editor.commands.focus();
   }, [
-    atOpen,
-    closeAtPanel,
     composerMutationLocked,
     editor,
     setSyntheticAtAnchor,

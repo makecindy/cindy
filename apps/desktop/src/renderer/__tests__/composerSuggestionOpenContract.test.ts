@@ -40,35 +40,41 @@ describe('composer synthetic suggestion open contract', () => {
     );
   });
 
-  it('synthetic 查询选择条目时替换完整查询段而不是只替换到光标', () => {
+  it('synthetic 查询使用映射后的独立范围，typed @ 才向后扫描完整 run', () => {
     const start = source.indexOf('const resolveEffectiveAtRange = useCallback');
     const end = source.indexOf('const insertAtResource', start);
     const resolver = source.slice(start, end);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
-    expect(resolver).toContain(
-      "const triggerOffset = effectiveAt.activation === 'typed' ? 1 : 0;",
-    );
+    expect(resolver).toContain("if (effectiveAt.activation === 'synthetic') {");
+    expect(resolver).toContain('const to = syntheticAtRangeEndRef.current;');
+    expect(resolver).toContain('return to !== null && to >= from ? { from, to } : null;');
+    expect(resolver).toContain('const triggerOffset = 1;');
     expect(resolver).toContain('let runEnd = from + triggerOffset;');
     expect(resolver).toContain('const offset = from - parentStart + triggerOffset;');
-    expect(resolver).not.toContain('const to = editor.state.selection.from;');
   });
 
   it('synthetic 空查询保持零长度替换范围', () => {
-    const start = source.indexOf('const resolveEffectiveAtRange = useCallback');
-    const end = source.indexOf('const insertAtResource', start);
-    const resolver = source.slice(start, end);
-    const emptyQueryGuard =
-      "if (effectiveAt.activation === 'synthetic' && effectiveAt.query.length === 0) {";
+    const stateStart = source.indexOf('const syntheticAtAnchorRef = useRef');
+    const stateEnd = source.indexOf('const [isDragOver', stateStart);
+    const state = source.slice(stateStart, stateEnd);
+
+    expect(stateStart).toBeGreaterThanOrEqual(0);
+    expect(stateEnd).toBeGreaterThan(stateStart);
+    expect(state).toContain('const syntheticAtRangeEndRef = useRef<number | null>(null);');
+    expect(state).toContain('syntheticAtRangeEndRef.current = next;');
+  });
+
+  it('synthetic 输入范围随文档 transaction 映射', () => {
+    const start = source.indexOf('onUpdate: ({ editor: ed, transaction }) => {');
+    const end = source.indexOf('const nextRenderSnapshot', start);
+    const updater = source.slice(start, end);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
-    expect(resolver).toContain(emptyQueryGuard);
-    expect(resolver).toContain('return { from, to: from };');
-    expect(resolver.indexOf(emptyQueryGuard)).toBeLessThan(
-      resolver.indexOf('editor.state.doc.resolve(from)'),
-    );
+    expect(updater).toContain('transaction.docChanged');
+    expect(updater).toContain('transaction.mapping.map(syntheticRangeEnd, 1)');
   });
 
   it('已有文本选区时 + 仍以选区起点打开空查询面板', () => {
@@ -96,6 +102,7 @@ describe('composer synthetic suggestion open contract', () => {
     expect(end).toBeGreaterThan(start);
     expect(handler).toContain('setSuppressedAtAt(trigger.from);');
     expect(handler).not.toContain('setSuppressedAtAt(null);');
+    expect(handler).not.toContain('if (atOpen)');
     expect(handler).toContain('setSyntheticAtAnchor(editor.state.selection.from);');
   });
 });
