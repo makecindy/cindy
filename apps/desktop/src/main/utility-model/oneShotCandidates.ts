@@ -415,6 +415,13 @@ async function requestExplicitProviderText(
     };
   }
 
+  // 自定义供应商目录钉同样钳制到模型声明的输出上限(与 builtin 分支同口径,
+  // 见 requestBuiltinProviderText 开头)。Codex 2026-08-06。
+  const catalogModel = provider.models[agentKind]?.find((m) => m.id === model);
+  if (opts.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
+    opts = { ...opts, maxTokens: Math.min(opts.maxTokens, catalogModel.maxOutput) };
+  }
+
   if (provider.id === 'xd' || provider.id === 'anthropic' || provider.id === 'openai' || provider.id === 'xai') {
     return requestBuiltinProviderText(prompt, {
       provider,
@@ -567,6 +574,14 @@ async function requestBuiltinProviderText(
   // Codex 2026-08-06。
   if (routing.disabled) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+  }
+
+  // 目录钉可能指向 maxOutput 低于缺省 81920 的模型(如 claude-opus-4-5 的
+  // 64000):请求的 maxTokens 钳到该模型目录声明的输出上限,避免被 provider 拒绝。
+  // Codex 2026-08-06。
+  const catalogModel = findProviderModel(input.provider, input.agentKind, input.model);
+  if (input.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
+    input = { ...input, maxTokens: Math.min(input.maxTokens, catalogModel.maxOutput) };
   }
 
   if (input.provider.id === 'xd') {

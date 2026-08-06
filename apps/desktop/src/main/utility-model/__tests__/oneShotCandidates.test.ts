@@ -968,6 +968,38 @@ describe('utility one-shot candidates', () => {
     expect(init.headers['anthropic-version']).toBeUndefined();
   });
 
+  it('clamps the requested maxTokens to the catalog model maxOutput (Codex 2026-08-06)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex', 'claude-code'],
+        auth: { method: 'api-key' },
+        routing: {
+          codex: { upstream: 'https://xd.example/v1', authStrategy: 'api-key-header' },
+        },
+        models: { codex: [{ id: 'claude-opus-4-5', name: 'Opus', contextWindow: 100_000, maxOutput: 64_000 }] },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'claude-opus-4-5',
+      maxTokens: 81_920,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'ok' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.max_tokens).toBe(64_000);
+  });
+
   it('routes a descriptor-backed no-auth builtin through the generic utility transport', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
