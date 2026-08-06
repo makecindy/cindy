@@ -41,6 +41,7 @@ function modelRow(
   id: string,
   efforts: readonly string[] = [],
   defaultEffort: string | null = null,
+  newSessionDefault?: readonly ('claude-code' | 'codex')[],
 ): ProviderModelRow {
   return {
     provider: { id: `prov-${id}`, name: id } as ProviderModelRow['provider'],
@@ -50,6 +51,7 @@ function modelRow(
       efforts: efforts as ProviderModelRow['model']['efforts'],
       defaultEffort: defaultEffort as ProviderModelRow['model']['defaultEffort'],
       contextWindow: 0,
+      ...(newSessionDefault ? { newSessionDefault: [...newSessionDefault] } : {}),
     },
   };
 }
@@ -170,6 +172,25 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low' });
   });
 
+  it('uses the regional default before the top row, with Pi sharing the claude-code marker', () => {
+    const rows = [
+      modelRow('top', ['low'], 'low'),
+      modelRow('regional', ['medium'], 'medium', ['claude-code']),
+    ];
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [],
+      modelRows: rows,
+      currentEffort: 'high',
+    })).toEqual({ agentKind: 'claude-code', model: 'regional', effort: 'medium' });
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'pi',
+      sessions: [],
+      modelRows: rows,
+      currentEffort: 'high',
+    })).toEqual({ agentKind: 'pi', model: 'regional', effort: 'medium' });
+  });
+
   it('falls back to DEFAULT_MODELS and keeps current effort when providers are not loaded yet', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
@@ -207,6 +228,8 @@ describe('resolveNewSessionAutoDefault', () => {
     selectedDeviceId: 'devA',
     sessions: [] as RemoteSession[],
     modelRows: [] as ProviderModelRow[],
+    availableModels: [],
+    agentKind: 'claude-code' as const,
     currentEffort: 'medium',
   };
 
@@ -254,6 +277,37 @@ describe('resolveNewSessionAutoDefault', () => {
       patch: { model: 'claude-sonnet-4-6', effort: 'low', providerId: null },
     });
     expect(result?.patch).not.toHaveProperty('agentKind');
+  });
+
+  it('intent ②a: no recent session → regional default before the top row', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      currentEffort: 'high',
+      modelRows: [
+        modelRow('top', ['low'], 'low'),
+        modelRow('regional', ['medium'], 'medium', ['claude-code']),
+      ],
+    });
+    expect(result?.patch).toEqual({ model: 'regional', effort: 'medium', providerId: null });
+  });
+
+  it('intent ②b: provider list unavailable → regional default from normalized capabilities', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      currentEffort: 'high',
+      availableModels: [
+        {
+          id: 'regional',
+          label: 'Regional',
+          efforts: ['medium'],
+          effortDisplayNames: {},
+          defaultEffort: 'medium',
+          supportsFastMode: false,
+          newSessionDefault: ['claude-code'],
+        },
+      ],
+    });
+    expect(result?.patch).toEqual({ model: 'regional', effort: 'medium', providerId: null });
   });
 
   it('intent ③: switching device (not manually touched) recomputes for the new device', () => {
