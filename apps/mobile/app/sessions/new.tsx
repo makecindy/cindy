@@ -559,8 +559,7 @@ export default function NewRemoteSessionScreen() {
   // 运行配置操作的代际计数:switchAgent / 恢复 agent / 手动选行每次触发 +1,
   // 异步回调(权限确认 .then)提交前比对触发时捕获的代际,不等即放弃写入 ——
   // 同一设备上的连续操作也是最新者胜(Greptile review P1:旧确认回调覆盖新选择)。
-  const runtimeActionSeqRef = useRef(0);
-  const runtimeOptions = useMemo(
+  const runtimeActionSeqRef = useRef(0);  const runtimeOptions = useMemo(
     () => buildSessionRuntimeOptions(draft, capabilities),
     [capabilities, draft.model],
   );
@@ -587,6 +586,14 @@ export default function NewRemoteSessionScreen() {
     () => flattenProviderSections(modelSections.sections),
     [modelSections.sections],
   );
+  // modelRows / 目录就绪信号的渲染期镜像:create / createGoalSession 是长依赖数组的
+  // useCallback,闭包可能停在旧渲染——提交点终检必须读最新值,否则目录从未就绪变为
+  // 就绪后,旧回调仍以 catalogReady=false 放行已失效来源(Greptile review P1:
+  // 旧目录快照绕过终检)。
+  const modelRowsRef = useRef(modelRows);
+  modelRowsRef.current = modelRows;
+  const catalogReadyRef = useRef(deviceProviders.ready);
+  catalogReadyRef.current = deviceProviders.ready;
   // 发送前鉴权门禁(对齐桌面 useVendorAuthGate):选中 agent 在被控端没有已连接
   // 供应商时提前提示 + 拦截创建,不让用户发出注定失败的首条消息。unknown 不拦截。
   const agentAuthVerdict = useMemo(
@@ -2776,9 +2783,10 @@ export default function NewRemoteSessionScreen() {
       }
       // 提交点来源终检(Greptile review P1):目录就绪后的清理 effect 跑在渲染后,
       // 用户可能在清理生效前点创建——创建路径自身必须守卫,失效来源即清空回默认路由。
+      // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
       effectiveDraft = {
         ...effectiveDraft,
-        providerId: validateModelProviderId(modelRows, effectiveDraft.providerId, effectiveDraft.model, deviceProviders.ready),
+        providerId: validateModelProviderId(modelRowsRef.current, effectiveDraft.providerId, effectiveDraft.model, catalogReadyRef.current),
       };
       const agentKindSnapshot = effectiveDraft.agentKind;
       const deviceIdSnapshot = selectedDeviceId;
@@ -2915,10 +2923,11 @@ export default function NewRemoteSessionScreen() {
           name: selectedDeviceName || selectedDeviceId,
         },
       });
-      // 提交点来源终检(同 create(),Greptile review P1):守卫不依赖渲染后的清理 effect。
+      // 提交点来源终检(同 create(),Greptile review P1):守卫不依赖渲染后的清理 effect,
+      // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
       const finalDraft = {
         ...draft,
-        providerId: validateModelProviderId(modelRows, draft.providerId, draft.model, deviceProviders.ready),
+        providerId: validateModelProviderId(modelRowsRef.current, draft.providerId, draft.model, catalogReadyRef.current),
       };
       const createOpts = buildRemoteCreateSessionOptions(finalDraft);
       await withTransientRemoteRetry(async () => {
