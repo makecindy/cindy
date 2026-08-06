@@ -1474,6 +1474,11 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 // 图像可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 后端自定:
 //   { kind: 'gen_image', prompt: '一只猫', aspectRatio: '3:2' }
 
+//   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素
+//   以返回的 width/height 为准。**图像类专用**(gen_image 与 edit_image 都收;
+//   改图不传 = 跟随源图画幅);视频画幅是另一个参数 ratio,值域不同,带错会被拒。
+//   用户没提横竖要求时别自作主张,不传让后端自定。
+//
 // Cindy 托管 Web Search(需声明 cindy.search:["web"]):
 // provider 固定为 cindy,主机固定 Anthropic Messages 搜索模型与上游凭证;
 // 不接受 api_base/header/key/model/tool。
@@ -1487,10 +1492,6 @@ const search = await cindy.send({
   callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
 });
 // search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
-//   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素
-//   以返回的 width/height 为准。**图像类专用**(gen_image 与 edit_image 都收;
-//   改图不传 = 跟随源图画幅);视频画幅是另一个参数 ratio,值域不同,带错会被拒。
-//   用户没提横竖要求时别自作主张,不传让后端自定。
 // 改图(需详单含 "edit";源图必须是本意识名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
