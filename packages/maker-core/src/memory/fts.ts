@@ -5,8 +5,11 @@
  *  - 用 standalone FTS5 (所有列存表内, 含 body) 而非 contentless / external content。
  *    理由: memory 量级小 (per-workdir 几十到一两百条), 空间开销可忽略;
  *    standalone 直接支持 snippet() 高亮, 不用维护内容→FTS 同步关系。
- *  - tokenize='porter unicode61' — porter stemming + unicode61 分词, 中文按字符拆 (够用,
- *    专业中文 tokenizer 等真实漏检率高了再上 jieba)。
+ *  - tokenize='porter unicode61' — porter stemming + unicode61 分词。⚠️ unicode61
+ *    把**连续 CJK 文本当一个 token** ("数据分析链路"是单 token), 中文子串无法被
+ *    phrase MATCH 命中; 因此 search 用 **MATCH + LIKE 兜底** 保证 CJK 召回
+ *    (模式对齐 contacts/fts.ts)。不换 trigram: 它对 <3 字符查询(如"边界")返回空,
+ *    且要重建存量 fts.db 表。
  *  - upsert = DELETE + INSERT (FTS5 没有 ON CONFLICT 子句)。
  *  - 不在 maker-core 加 better-sqlite3 runtime dep — 用 type-only import, 实例由 host
  *    (desktop) 注入, 跟 zero-electron-deps 边界一致。
@@ -29,6 +32,9 @@ import {
 const TABLE = 'memory_fts';
 const SNIPPET_TOKEN_RADIUS = 8; // snippet() 命中前后各取 N tokens
 const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 50;
+/** LIKE 兜底没有 snippet() 高亮, 用 body 前 N 字符顶替 (防 UI 展示超长原文) */
+const SNIPPET_FALLBACK_LEN = 160;
 
 export class MemoryFts {
   constructor(private readonly db: Database.Database) {}
@@ -74,10 +80,23 @@ export class MemoryFts {
   /**
    * 全文检索. query 直接走 FTS5 MATCH 语法 (支持 AND/OR/NOT/phrase "...")。
    * 返回按 bm25 排序 (越小越相关) 的命中, 含 snippet() 高亮片段。
+   *
+   * CJK 兜底: MATCH 只覆盖整 token 命中; 中文子串(「数据分析链路」含「边界」)
+   * 只有 LIKE 扫描捞得到 — MATCH 命中不足 limit 时合并 LIKE 兜底结果并按
+   * filename 去重, 否则子串命中行被整 token 命中行遮蔽 (模式对齐 contacts/fts.ts)。
    */
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
     if (!query || query.trim().length === 0) return [];
-    const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, 50));
+    const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+    const matched = this.searchMatch(query, opts, limit);
+    if (matched.length >= limit) return matched;
+    const seen = new Set(matched.map((h) => h.filename));
+    const fallback = this.searchLike(query, opts, limit).filter((h) => !seen.has(h.filename));
+    return [...matched, ...fallback].slice(0, limit);
+  }
+
+  /** FTS5 MATCH 路径; query 语法错静默返空(让 LIKE 兜底接管) */
+  private searchMatch(query: string, opts: SearchOptions, limit: number): SearchHit[] {
     const escapedQuery = escapeFtsQuery(query);
 
     let sql = `SELECT filename, type, title,
@@ -113,6 +132,39 @@ export class MemoryFts {
       const msg = (e as Error).message;
       if (msg.includes('fts5') || msg.includes('syntax error')) return [];
       throw new MemoryError('io-error', `fts search failed: ${msg}`);
+    }
+  }
+
+  /** LIKE 子串兜底: 大小写不敏感(LIKE 默认 ASCII 不敏感, CJK 逐字节精确), 无 bm25/snippet */
+  private searchLike(query: string, opts: SearchOptions, limit: number): SearchHit[] {
+    const pattern = `%${escapeLikePattern(query.trim())}%`;
+    let sql = `SELECT filename, type, title, body
+               FROM ${TABLE}
+               WHERE (title LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')`;
+    const params: unknown[] = [pattern, pattern, pattern];
+    if (opts.type) {
+      sql += ` AND type = ?`;
+      params.push(opts.type);
+    }
+    sql += ` LIMIT ?`;
+    params.push(limit);
+
+    try {
+      const rows = this.db.prepare(sql).all(...params) as Array<{
+        filename: string;
+        type: string;
+        title: string;
+        body: string;
+      }>;
+      return rows.map((r) => ({
+        filename: r.filename,
+        type: r.type as MemoryType,
+        title: r.title,
+        snippet: r.body ? truncate(r.body, SNIPPET_FALLBACK_LEN) : r.title,
+        score: 0,
+      }));
+    } catch (e) {
+      throw new MemoryError('io-error', `fts like-fallback failed: ${(e as Error).message}`);
     }
   }
 
@@ -157,4 +209,17 @@ export class MemoryFts {
  */
 function escapeFtsQuery(q: string): string {
   return `"${q.trim().replace(/"/g, '""')}"`;
+}
+
+/**
+ * LIKE 通配符转义. % _ 是 LIKE 语法字符, 用户 query 里出现时按字面匹配;
+ * 转义符用 '!' (避开反斜杠, 省去 SQL/TS 双重转义的坑)。
+ */
+function escapeLikePattern(q: string): string {
+  return q.replace(/[!%_]/g, (c) => `!${c}`);
+}
+
+function truncate(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, maxLen)}…`;
 }
