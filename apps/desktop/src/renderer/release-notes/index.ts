@@ -83,8 +83,8 @@ function legacyContentFromRoot(raw: RawReleaseNotes): RawLocalizedContent {
   };
 }
 
-function hasUsableContent(content: RawLocalizedContent | undefined): boolean {
-  return content !== undefined && hasRenderableContent(content);
+function hasUsableContent(content: unknown): content is RawLocalizedContent {
+  return content !== null && typeof content === 'object' && hasRenderableContent(content);
 }
 
 /**
@@ -98,14 +98,14 @@ export function selectLocalizedContent(
   const localized = raw.contentByLocale;
   if (locale === 'zh-CN') {
     const zh = localized?.['zh-CN'];
-    if (hasUsableContent(zh)) return zh!;
+    if (hasUsableContent(zh)) return zh;
     const legacy = legacyContentFromRoot(raw);
     return hasUsableContent(legacy) ? legacy : null;
   }
 
   for (const candidate of [locale, 'en', 'zh-CN'] as const) {
     const content = localized?.[candidate];
-    if (hasUsableContent(content)) return content!;
+    if (hasUsableContent(content)) return content;
   }
 
   const legacy = legacyContentFromRoot(raw);

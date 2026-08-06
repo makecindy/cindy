@@ -154,6 +154,25 @@ describe('release-notes normalization', () => {
       .toBe('localized-zh');
   });
 
+  it('localized block 为 null 或非对象时按缺失处理并继续 fallback', async () => {
+    const fetchReleaseNotes = stubFetch({
+      version: '0.1.29',
+      date: '2026-08-06',
+      contentByLocale: {
+        en: { topics: [{ title: 'English', text: 'localized-en' }] },
+        ja: null,
+        ko: 'not-an-object',
+      },
+    });
+    const mod = await import('@/release-notes');
+
+    expect((await mod.fetchReleaseNotes('0.1.29', 'ja'))?.topics[0]?.text)
+      .toBe('localized-en');
+    expect((await mod.fetchReleaseNotes('0.1.29', 'ko'))?.topics[0]?.text)
+      .toBe('localized-en');
+    expect(fetchReleaseNotes).toHaveBeenCalledTimes(1);
+  });
+
   it('英文缺失时回退中文,中文 localized 缺失时直接回退顶层中文', async () => {
     stubFetch({
       version: '0.1.25',
