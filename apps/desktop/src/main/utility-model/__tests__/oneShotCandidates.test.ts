@@ -1013,6 +1013,32 @@ describe('utility one-shot candidates', () => {
     expect(readCustomKey).not.toHaveBeenCalled();
   });
 
+  it('rejects an explicit builtin provider whose routing is disabled (Codex 2026-08-06)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex', 'claude-code'],
+        auth: { method: 'api-key' },
+        routing: {
+          codex: { upstream: 'https://xd.example/v1', authStrategy: 'api-key-header', disabled: true },
+        },
+        models: { codex: [{ id: 'gpt-5.5', name: 'GPT 5.5', contextWindow: 100_000 }] },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'no_candidate' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('can infer a unique custom provider when an older caller omits providerId', async () => {
     activeCatalog.mockReturnValue({
       providers: [{

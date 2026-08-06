@@ -562,6 +562,12 @@ async function requestBuiltinProviderText(
   if (!routing) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
   }
+  // 内置供应商同样要尊重 routing.disabled:目录钉指向的 runtime 被停用后,
+  // 不应再把 prompt 发过去(与自定义分支 430-431 同一判据,reason 同口径)。
+  // Codex 2026-08-06。
+  if (routing.disabled) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+  }
 
   if (input.provider.id === 'xd') {
     const apiKey = readClaudeApiKey();
