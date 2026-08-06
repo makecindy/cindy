@@ -4688,8 +4688,11 @@ export function registerGhostIpc(): void {
     }
     const oauthManager = getGhostOauthAccountManager();
     const result: Record<string, GhostSetupProfile> = {};
+    // 一次性快照:availableGhosts() 内部调 GhostManager.list() 会触发全盘扫描;
+    // 先建 Map 再按 id 查,避免循环中对每个插件重复扫描 N 次。
+    const ghostMap = new Map(availableGhosts().map((g) => [g.manifest.id, g]));
     for (const ghostId of ids) {
-      const ghost = findAvailableGhost(ghostId);
+      const ghost = ghostMap.get(ghostId);
       if (!ghost) continue;
       const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
       const requirementGroups = runtimeManifest.setup
