@@ -601,7 +601,9 @@ describe('DiscordIM inbound pipeline', () => {
     im.setSchedulerHooks({
       isTransportAllowed: () => transportAllowed,
     });
-    im.onMessage((event) => received.push(event));
+    im.onMessage((event) => {
+      received.push(event);
+    });
 
     await im.init();
     await gateway.emitDm(message({
@@ -624,14 +626,16 @@ describe('DiscordIM inbound pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(gateway.destroy).toHaveBeenCalledTimes(1);
-    expect(gateway.appId).toBe('');
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(gateway.appId).toBe('app-1');
     expect(handoffFinished).toBe(false);
     expect(received).toEqual([]);
 
     releaseFetch.resolve();
     await handoff;
 
+    expect(gateway.destroy).toHaveBeenCalledTimes(1);
+    expect(gateway.appId).toBe('');
     expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-handoff']);
 
     await gateway.emitDm(message({ id: 'msg-after-handoff', content: 'must not enter' }));
@@ -656,7 +660,9 @@ describe('DiscordIM inbound pipeline', () => {
     const received: IMCardActionEvent[] = [];
     let transportAllowed = true;
     im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
-    im.onCardAction((event) => received.push(event));
+    im.onCardAction((event) => {
+      received.push(event);
+    });
 
     await im.init();
     gateway.emitButton({
@@ -673,7 +679,7 @@ describe('DiscordIM inbound pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(gateway.destroy).toHaveBeenCalledOnce();
+    expect(gateway.destroy).not.toHaveBeenCalled();
     expect(handoffFinished).toBe(false);
     expect(received).toEqual([]);
 
@@ -686,12 +692,70 @@ describe('DiscordIM inbound pipeline', () => {
     acknowledged.resolve(undefined);
     await handoff;
 
+    expect(gateway.destroy).toHaveBeenCalledOnce();
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({
       buttonId: 'control:start',
       messageId: 'dm-1|msg-button',
       payload: { source: 'accepted' },
     });
+  });
+
+  it('commits an accepted Agent task response before closing the handoff Gateway', async () => {
+    const channel = makeChannel('dm-1');
+    const gateway = makeGateway({ client: makeClient(channel) });
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage((event) => {
+      const terminal = (async () => {
+        await releaseTask.promise;
+        await im.sendText(event.senderId, 'final response');
+      })();
+      im.trackAcceptedTask(terminal);
+    });
+    im.onCardAction((event) => {
+      if (event.buttonId === 'control:finish') releaseTask.resolve(undefined);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    transportAllowed = false;
+    let handoffFinished = false;
+    const handoff = im.enterSchedulerStandby().then(() => {
+      handoffFinished = true;
+    });
+    await flushMicrotasks();
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(handoffFinished).toBe(false);
+    expect(channel.send).not.toHaveBeenCalled();
+
+    await gateway.emitDm(message({ id: 'msg-late-task', content: 'must not enter' }));
+    gateway.emitButton({
+      customId: encodeCustomId('control:finish', {}),
+      user: { id: 'user-1' },
+      channelId: 'dm-1',
+      message: { id: 'msg-finish' },
+    });
+    await handoff;
+
+    expect(channel.send).toHaveBeenCalledWith('final response');
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+    expect(handoffFinished).toBe(true);
   });
 
   it('connects gateway when set-config receives a token', async () => {

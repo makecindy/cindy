@@ -324,6 +324,8 @@ export interface ImRunAgentTurnArgs {
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
+  /** Observe the terminal promise once this message enters the IM-owned turn queue. */
+  onTurnAccepted?: (terminal: Promise<ImTurnTerminal>) => void;
   /** Reports the concrete channel/default or attached Desktop session before provider startup. */
   onRouteResolved?: (sessionId: string) => void;
   /** Keep fire-and-forget work inside the ingress account's drain boundary. */
@@ -758,6 +760,7 @@ export function createTurnRunner(
         return { kind: 'busy', reason: 'session_running' };
       }
       state.sendQueue.push(item);
+      args.onTurnAccepted?.(turn.terminalPromise);
       log.info(`queued message for session=${row.id.slice(-8)} position=${state.sendQueue.length}`);
       // 本渠道没有未收口的 turn(纯 desktop turn 在跑) → 派发只能靠它的 stray
       // done/error 触发;若该事件在 enqueue 前已送达(isTurnRunning 释放略晚于
@@ -771,7 +774,13 @@ export function createTurnRunner(
     }
 
     const dispatch = await dispatchQueuedSend(state, userId, item);
-    if (dispatch.kind !== 'accepted') return dispatch;
+    if (dispatch.kind !== 'accepted') {
+      if (dispatch.kind === 'busy' && dispatch.reason === 'queued_internally') {
+        args.onTurnAccepted?.(turn.terminalPromise);
+      }
+      return dispatch;
+    }
+    args.onTurnAccepted?.(turn.terminalPromise);
     return {
       kind: 'accepted',
       sessionId: row.id,

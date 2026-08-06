@@ -172,7 +172,10 @@ import {
   startImConnection,
   stopImConnection,
 } from './im';
-import { stopImAndDeviceLinkBeforeDbClient } from './im/discordQuitOrdering';
+import {
+  closeLocalDbAfterDiscordShutdown,
+  stopImAndDeviceLinkBeforeDbClient,
+} from './im/discordQuitOrdering';
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
@@ -6686,14 +6689,17 @@ onQuit(
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
 onQuit('shutdown-maker', shutdownMaker, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
+let imDeviceLinkDbShutdown = Promise.resolve();
 onQuit(
   'im-device-link-db-client',
-  () =>
-    stopImAndDeviceLinkBeforeDbClient(
+  () => {
+    imDeviceLinkDbShutdown = stopImAndDeviceLinkBeforeDbClient(
       () => stopImConnection('quit'),
       () => stopDeviceLinkServiceForQuit(),
       () => lifecycleDbClientManager.dispose('quit'),
-    ),
+    );
+    return imDeviceLinkDbShutdown;
+  },
   'async',
 );
 onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
@@ -6719,8 +6725,13 @@ onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'async');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-// Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
-onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
+// Post-async 阶段: 串行跑。即使 async 总预算先到，也不得让 local DB close
+// 越过仍在执行的 Device Link ownership release / DbClient dispose。
+onQuit(
+  'local-db-close',
+  () => closeLocalDbAfterDiscordShutdown(imDeviceLinkDbShutdown, () => localDbCloseDb()),
+  'post-async',
+);
 
 installQuitHandler(6000);
 

@@ -7,6 +7,7 @@ import type { DiscordIM, IMStatus } from '@cindy/im';
 import {
   getSelfDeviceId,
   getDeviceLinkStatus,
+  isDeviceRevoked,
   isDeviceLinkOwner,
   listOnlineDesktopDevices,
   onDeviceLinkOwnershipChanged,
@@ -66,6 +67,7 @@ export class ImSchedulerManager {
   private readonly resolvedRuntimeGenerations = new Set<string>();
   private readonly resolvedRuntimeGenerationOrder: string[] = [];
   private localRuntime: SchedulerRuntimeFrame | null = null;
+  private pendingCleanHandoff: { identity: string; generation: string } | null = null;
   private started = false;
   private deviceLinkReady = false;
   private schedulerHooksInstalled = false;
@@ -89,7 +91,11 @@ export class ImSchedulerManager {
       this.handleDiscordStatusChanged(status);
     });
     this.offPresence = onDeviceLinkPresenceChanged((snapshot) => {
-      if (!snapshot.online || !isDesktopSchedulerPlatform(snapshot.platform)) {
+      if (
+        !snapshot.online
+        || !isDesktopSchedulerPlatform(snapshot.platform)
+        || isDeviceRevoked(snapshot.deviceId)
+      ) {
         this.removePeer(snapshot.deviceId);
         this.confirmedPeers.delete(snapshot.deviceId);
         this.pendingProbePeers.delete(snapshot.deviceId);
@@ -112,18 +118,32 @@ export class ImSchedulerManager {
       void this.reconcile();
     });
     this.offPush = onDeviceLinkPush(IM_SCHEDULER_PUSH_CHANNEL, (source, payload) => {
+      if (isDeviceRevoked(source)) {
+        this.removePeer(source);
+        this.confirmedPeers.delete(source);
+        this.pendingProbePeers.delete(source);
+        void this.reconcile();
+        return;
+      }
       if (!isImSchedulerFrame(payload)) return;
       if (payload.kind === 'probe') {
-        this.confirmedPeers.add(source);
-        this.pendingProbePeers.delete(source);
-        this.observePeerRuntime(payload.runtime);
-        this.peers.set(source, {
-          deviceId: source,
-          sentAt: payload.sentAt,
-          lastSeenAt: Date.now(),
-          channels: payload.channels,
-          runtime: payload.runtime,
-        });
+        // A probe carries the sender's state, but it does not prove that the
+        // sender observed our current discovery generation. Only an explicit
+        // reply to this.discoveryNonce can confirm a peer after local config
+        // changes; otherwise a delayed pre-change probe could authorize both
+        // Desktops to activate from incompatible snapshots.
+        const previous = this.peers.get(source);
+        const alreadyConfirmed = this.confirmedPeers.has(source);
+        if (alreadyConfirmed && (!previous || payload.sentAt >= previous.sentAt)) {
+          this.observePeerRuntime(payload.runtime);
+          this.peers.set(source, {
+            deviceId: source,
+            sentAt: payload.sentAt,
+            lastSeenAt: Date.now(),
+            channels: payload.channels,
+            runtime: payload.runtime,
+          });
+        }
         this.advertise(source, payload.nonce);
         void this.reconcile();
         return;
@@ -155,7 +175,7 @@ export class ImSchedulerManager {
     });
     this.advertisementTimer = setInterval(() => {
       this.advertiseAll();
-      for (const peer of listOnlineDesktopDevices()) {
+      for (const peer of this.listSchedulerPeers()) {
         if (!this.confirmedPeers.has(peer.deviceId)) this.probe(peer.deviceId);
       }
       void this.reconcile();
@@ -180,6 +200,7 @@ export class ImSchedulerManager {
     this.activationCooldownUntil = 0;
     this.connectedIdentity = null;
     this.withdrawingIdentity = null;
+    this.pendingCleanHandoff = null;
     this.offPresence?.();
     this.offPush?.();
     this.offOwnership?.();
@@ -316,7 +337,7 @@ export class ImSchedulerManager {
       lastSeenAt: now,
       channels: [{ channel: 'discord' as const, identity }],
     }];
-    for (const peer of listOnlineDesktopDevices()) {
+    for (const peer of this.listSchedulerPeers()) {
       if (!this.confirmedPeers.has(peer.deviceId)) return null;
       const advertisement = this.peers.get(peer.deviceId);
       if (!advertisement || now - advertisement.lastSeenAt > PEER_STALE_MS) return null;
@@ -361,7 +382,16 @@ export class ImSchedulerManager {
     this.desired = 'standby';
     this.desiredIdentity = identity;
     this.lastActivationAttemptAt = 0;
-    if (!this.discord.isSchedulerTransportActive()) return;
+    if (!this.discord.isSchedulerTransportActive()) {
+      // Provider-side teardown can publish idle/error before reconcile gets
+      // here. Retire the runtime generation even when the Gateway is already
+      // gone, otherwise peers keep seeing a stale active lease indefinitely.
+      if (this.localRuntime?.identity === identity && this.localRuntime.state === 'active') {
+        this.finishLocalRuntime(identity, false);
+        this.advertiseAll();
+      }
+      return;
+    }
     try {
       await this.discord.enterSchedulerStandby({ clearRuntimeActiveMarker: clearRuntimeMarker });
       this.finishLocalRuntime(identity, clearRuntimeMarker);
@@ -382,6 +412,7 @@ export class ImSchedulerManager {
     this.confirmedPeers.clear();
     this.connectedIdentity = null;
     this.withdrawingIdentity = null;
+    this.pendingCleanHandoff = null;
     this.clearReconnectGrace();
     this.clearActivationFailure();
     this.beginDiscoveryGrace();
@@ -472,10 +503,11 @@ export class ImSchedulerManager {
   }
 
   private advertiseAll(): void {
-    for (const peer of listOnlineDesktopDevices()) this.advertise(peer.deviceId);
+    for (const peer of this.listSchedulerPeers()) this.advertise(peer.deviceId);
   }
 
   private advertise(deviceId: string, inReplyTo?: string): void {
+    if (isDeviceRevoked(deviceId)) return;
     const frame: SchedulerAdvertisementFrame = {
       kind: 'advertisement',
       sentAt: Date.now(),
@@ -487,11 +519,11 @@ export class ImSchedulerManager {
   }
 
   private probeAll(): void {
-    for (const peer of listOnlineDesktopDevices()) this.probe(peer.deviceId);
+    for (const peer of this.listSchedulerPeers()) this.probe(peer.deviceId);
   }
 
   private probe(deviceId: string): void {
-    if (!this.discoveryNonce) return;
+    if (!this.discoveryNonce || isDeviceRevoked(deviceId)) return;
     this.pendingProbePeers.add(deviceId);
     sendDeviceLinkPush(deviceId, IM_SCHEDULER_PUSH_CHANNEL, {
       kind: 'probe',
@@ -531,6 +563,7 @@ export class ImSchedulerManager {
 
   private markActivationFailure(identity: string): void {
     if (!this.started || identity !== this.discord.getSchedulerIdentity()) return;
+    this.recordActivationGapAfterCleanHandoff(identity);
     this.activationCooldownUntil = Date.now() + ACTIVATION_RETRY_MS;
     this.advertiseAll();
     if (this.activationRetryTimer) clearTimeout(this.activationRetryTimer);
@@ -549,7 +582,7 @@ export class ImSchedulerManager {
   private hasRemoteCandidate(identity: string): boolean {
     const now = Date.now();
     this.dropStalePeers(now);
-    return listOnlineDesktopDevices().some((peer) => {
+    return this.listSchedulerPeers().some((peer) => {
       if (!this.confirmedPeers.has(peer.deviceId)) return false;
       const advertisement = this.peers.get(peer.deviceId);
       return Boolean(
@@ -564,7 +597,7 @@ export class ImSchedulerManager {
 
   private hasRemoteActiveRuntime(identity: string): boolean {
     const now = Date.now();
-    return listOnlineDesktopDevices().some((peer) => {
+    return this.listSchedulerPeers().some((peer) => {
       if (!this.confirmedPeers.has(peer.deviceId)) return false;
       const advertisement = this.peers.get(peer.deviceId);
       return Boolean(
@@ -580,10 +613,19 @@ export class ImSchedulerManager {
     if (!runtime) return;
     if (runtime.predecessor) this.resolveRuntimeGeneration(runtime.predecessor);
     if (runtime.state === 'clean') {
+      if (this.localRuntime?.state !== 'dirty') {
+        this.pendingCleanHandoff = {
+          identity: runtime.identity,
+          generation: runtime.generation,
+        };
+      }
       this.resolveRuntimeGeneration(runtime.generation);
       return;
     }
     if (runtime.state === 'active') {
+      if (this.pendingCleanHandoff?.identity === runtime.identity) {
+        this.pendingCleanHandoff = null;
+      }
       if (
         this.localRuntime?.state === 'dirty'
         && this.localRuntime.generation === runtime.generation
@@ -603,8 +645,22 @@ export class ImSchedulerManager {
 
   private adoptActiveRuntimeFromAllPeers(): void {
     for (const peer of this.peers.values()) {
+      if (isDeviceRevoked(peer.deviceId)) continue;
       if (peer.runtime?.state === 'active') this.adoptRuntimeGap(peer.runtime);
     }
+  }
+
+  private listSchedulerPeers(): ReturnType<typeof listOnlineDesktopDevices> {
+    return listOnlineDesktopDevices().filter((peer) => {
+      if (!isDeviceRevoked(peer.deviceId)) return true;
+      // Drop any previously confirmed advertisement while access is revoked.
+      // If access is restored later, the peer must complete a fresh probe
+      // round instead of reusing pre-revocation scheduler state.
+      this.removePeer(peer.deviceId);
+      this.confirmedPeers.delete(peer.deviceId);
+      this.pendingProbePeers.delete(peer.deviceId);
+      return false;
+    });
   }
 
   private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
@@ -619,6 +675,9 @@ export class ImSchedulerManager {
       generation: runtime.generation,
       state: 'dirty',
     };
+    if (this.pendingCleanHandoff?.identity === runtime.identity) {
+      this.pendingCleanHandoff = null;
+    }
   }
 
   private beginLocalRuntime(identity: string, predecessor?: string): void {
@@ -629,6 +688,19 @@ export class ImSchedulerManager {
       state: 'active',
       ...(predecessor ? { predecessor } : {}),
     };
+    if (this.pendingCleanHandoff?.identity === identity) {
+      this.pendingCleanHandoff = null;
+    }
+  }
+
+  private recordActivationGapAfterCleanHandoff(identity: string): void {
+    if (this.pendingCleanHandoff?.identity !== identity) return;
+    this.localRuntime = {
+      identity,
+      generation: randomUUID().replaceAll('-', ''),
+      state: 'dirty',
+    };
+    this.pendingCleanHandoff = null;
   }
 
   private finishLocalRuntime(identity: string, clean: boolean): void {

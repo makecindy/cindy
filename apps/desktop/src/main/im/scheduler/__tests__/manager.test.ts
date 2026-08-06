@@ -19,6 +19,7 @@ const harness = vi.hoisted(() => ({
   }) => void) | null,
   ownershipHandler: null as ((owner: boolean) => void) | null,
   statusHandler: null as ((status: 'online' | 'offline') => void) | null,
+  revoked: new Set<string>(),
   hooks: null as {
     isTransportAllowed(identity?: string | null): boolean;
     onConfigurationChanged?: () => void;
@@ -29,6 +30,7 @@ const harness = vi.hoisted(() => ({
 vi.mock('../../../device-link', () => ({
   getDeviceLinkStatus: () => harness.deviceLinkStatus,
   getSelfDeviceId: () => harness.selfDeviceId,
+  isDeviceRevoked: (deviceId: string) => harness.revoked.has(deviceId),
   isDeviceLinkOwner: () => harness.owner,
   listOnlineDesktopDevices: () => harness.peers,
   onDeviceLinkOwnershipChanged: (handler: (owner: boolean) => void) => {
@@ -159,6 +161,7 @@ beforeEach(() => {
   harness.presenceHandler = null;
   harness.ownershipHandler = null;
   harness.statusHandler = null;
+  harness.revoked.clear();
   harness.hooks = null;
   harness.sendPush.mockReset();
 });
@@ -272,6 +275,112 @@ describe('Discord scheduler manager', () => {
         }),
       }),
     );
+    await manager.stop();
+  });
+
+  it('publishes a dirty generation when activation fails after a clean handoff', async () => {
+    harness.selfDeviceId = 'a';
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord('12345678901234567', { activateOnInit: false });
+    const manager = createManager(discord);
+    const cleanGeneration = 'd'.repeat(32);
+
+    await manager.start();
+    confirmPeer(
+      'z',
+      [{ channel: 'discord', identity: '12345678901234567' }],
+      {
+        identity: '12345678901234567',
+        generation: cleanGeneration,
+        state: 'active',
+      },
+    );
+    await finishDiscovery(manager);
+    expect(discord.init).not.toHaveBeenCalled();
+
+    confirmPeer(
+      'z',
+      [{ channel: 'discord', identity: '12345678901234567' }],
+      {
+        identity: '12345678901234567',
+        generation: cleanGeneration,
+        state: 'clean',
+      },
+    );
+    await manager.reconcile();
+
+    expect(discord.init).toHaveBeenCalledOnce();
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual({
+      kind: 'advertisement',
+      sentAt: expect.any(Number),
+      channels: [],
+      runtime: {
+        identity: '12345678901234567',
+        generation: expect.not.stringMatching(new RegExp(`^${cleanGeneration}$`)),
+        state: 'dirty',
+      },
+    });
+    await manager.stop();
+  });
+
+  it('replaces a previous local clean runtime when the next handoff activation fails', async () => {
+    harness.selfDeviceId = 'z';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+    const peerGeneration = 'f'.repeat(32);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledOnce();
+
+    const peer = {
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true as const,
+      lastSeenAt: Date.now(),
+    };
+    harness.peers = [peer];
+    harness.presenceHandler?.(peer);
+    confirmPeer(
+      'a',
+      [{ channel: 'discord', identity: '12345678901234567' }],
+      {
+        identity: '12345678901234567',
+        generation: peerGeneration,
+        state: 'active',
+      },
+    );
+    await manager.reconcile();
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledOnce();
+
+    discord.init.mockImplementationOnce(async () => undefined);
+    confirmPeer(
+      'a',
+      [],
+      {
+        identity: '12345678901234567',
+        generation: peerGeneration,
+        state: 'clean',
+      },
+    );
+    await manager.reconcile();
+
+    expect(discord.init).toHaveBeenCalledTimes(2);
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual({
+      kind: 'advertisement',
+      sentAt: expect.any(Number),
+      channels: [],
+      runtime: {
+        identity: '12345678901234567',
+        generation: expect.not.stringMatching(new RegExp(`^${peerGeneration}$`)),
+        state: 'dirty',
+      },
+    });
     await manager.stop();
   });
 
@@ -504,6 +613,114 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('does not confirm a new discovery round from a delayed peer probe', async () => {
+    harness.selfDeviceId = null;
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('a', []);
+    await finishDiscovery(manager);
+    expect(discord.init).not.toHaveBeenCalled();
+
+    harness.selfDeviceId = 'z';
+    harness.hooks?.onConfigurationChanged?.();
+    harness.pushHandler?.('a', {
+      kind: 'probe',
+      sentAt: Date.now() + 60_000,
+      nonce: 'delayed-remote-generation',
+      channels: [],
+    });
+    await finishDiscovery(manager);
+
+    // The probe is answered, but only a reply to our current nonce may
+    // authorize election after the local configuration generation changed.
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual(
+      expect.objectContaining({
+        kind: 'advertisement',
+        inReplyTo: 'delayed-remote-generation',
+      }),
+    );
+    expect(discord.init).not.toHaveBeenCalled();
+
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await manager.reconcile();
+    expect(discord.init).not.toHaveBeenCalled();
+    await manager.stop();
+  });
+
+  it('retires an active runtime even when the provider transport is already gone', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledOnce();
+
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    discord.emitStatus({ kind: 'idle' });
+    harness.owner = false;
+    harness.ownershipHandler?.(false);
+    await manager.reconcile();
+
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual(
+      expect.objectContaining({
+        kind: 'advertisement',
+        runtime: expect.objectContaining({
+          identity: '12345678901234567',
+          state: 'dirty',
+        }),
+      }),
+    );
+    await manager.stop();
+  });
+
+  it('excludes revoked Desktops from Discord election and scheduler frames', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    harness.revoked.add('a');
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+
+    expect(discord.init).toHaveBeenCalledOnce();
+    expect(harness.sendPush.mock.calls.some(([target]) => target === 'a')).toBe(false);
+
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: Date.now(),
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      runtime: {
+        identity: '12345678901234567',
+        generation: 'e'.repeat(32),
+        state: 'active',
+      },
+    });
+    await manager.reconcile();
+
+    expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
+    await manager.stop();
+  });
+
   it('re-probes a peer after its advertisement expires despite a wall-clock rollback', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [{
@@ -559,7 +776,7 @@ describe('Discord scheduler manager', () => {
 
     harness.pushHandler?.('a', {
       kind: 'probe',
-      sentAt: 100,
+      sentAt: Date.now() + 1,
       nonce: 'remoteconfig1234',
       channels: [{ channel: 'discord', identity: '12345678901234567' }],
     });

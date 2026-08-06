@@ -92,6 +92,7 @@ describe('messageHandler !stop routing', () => {
   let handleSlashCommand: ReturnType<typeof vi.fn>;
   let sendMarkdownText: ReturnType<typeof vi.fn>;
   let sendText: ReturnType<typeof vi.fn>;
+  let trackAcceptedTask: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
 
   function wire(threadScoped: boolean): void {
@@ -100,6 +101,7 @@ describe('messageHandler !stop routing', () => {
     handleSlashCommand = vi.fn(async () => true);
     sendMarkdownText = vi.fn(async () => undefined);
     sendText = vi.fn(async () => undefined);
+    trackAcceptedTask = vi.fn();
 
     const im = {
       onMessage(handler: (event: IMMessageEvent) => void) {
@@ -108,6 +110,7 @@ describe('messageHandler !stop routing', () => {
       },
       sendMarkdownText,
       sendText,
+      trackAcceptedTask,
     } as unknown as ChannelIM;
 
     const adapter = {
@@ -209,6 +212,25 @@ describe('messageHandler !stop routing', () => {
     background.resolve();
     await draining;
     expect(drained).toBe(true);
+  });
+
+  it('forwards an accepted turn terminal to a transport handoff tracker', async () => {
+    const terminal = deferred();
+    runAgentTurn.mockImplementationOnce(
+      async (args: Parameters<ImTurnRunner['runAgentTurn']>[0]) => {
+        args.onTurnAccepted?.(terminal.promise.then(() => ({
+          kind: 'done' as const,
+          text: 'done',
+          completedAt: Date.now(),
+        })));
+      },
+    );
+
+    deliver(makeEvent({ messageId: 'tracked-turn', text: 'run this' }));
+    await vi.waitFor(() => expect(trackAcceptedTask).toHaveBeenCalledOnce());
+
+    expect(trackAcceptedTask.mock.calls[0]?.[0]).toBeInstanceOf(Promise);
+    terminal.resolve();
   });
 
   it('routes !stop to stopActiveTurn with the thread scopeKey and replies stopDone', async () => {

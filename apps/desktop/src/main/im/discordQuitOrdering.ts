@@ -35,3 +35,16 @@ export async function stopImAndDeviceLinkBeforeDbClient(
     await stopDbClient();
   }
 }
+
+/**
+ * The lifecycle async phase is time-bounded. If it advances to post-async while
+ * Discord/Device Link cleanup is still running, local DB close must keep
+ * waiting instead of racing the ownership DELETE that still needs DbClient.
+ */
+export async function closeLocalDbAfterDiscordShutdown(
+  discordShutdown: Promise<void>,
+  closeLocalDb: () => void | Promise<void>,
+): Promise<void> {
+  await discordShutdown.catch(() => undefined);
+  await closeLocalDb();
+}

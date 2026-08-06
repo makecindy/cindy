@@ -59,8 +59,8 @@ const DEFAULT_OWNER_NOTICES = {
   offlineNotice: '🔔 I was offline for a while, so messages sent during that time may have been missed.',
 } as const;
 
-type MessageHandler = (e: IMMessageEvent) => void;
-type CardActionHandler = (e: IMCardActionEvent) => void;
+type MessageHandler = (e: IMMessageEvent) => void | Promise<void>;
+type CardActionHandler = (e: IMCardActionEvent) => void | Promise<void>;
 type StatusHandler = (s: IMStatus) => void;
 type OwnerNoticePhase = keyof typeof DEFAULT_OWNER_NOTICES;
 type OwnerNoticeGuard = () => boolean;
@@ -105,6 +105,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private dmResolver: ((userId: string) => Promise<DMChannelLike>) | null = null;
   private readonly dmMessageQueues = new Map<string, Promise<void>>();
   private readonly buttonInteractionQueues = new Set<Promise<void>>();
+  private readonly acceptedTasks = new Set<Promise<unknown>>();
   private readonly mediaDir: string;
   private suppressNextOnlineNotice = false;
   private pendingOfflineNotice = false;
@@ -113,6 +114,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private lifecycleAnnouncementEnabled = true;
   private lifecycleNoticeVersion = 0;
   private disposing = false;
+  private schedulerHandoffDraining = false;
   private schedulerHooks: DiscordSchedulerHooks | null = null;
 
   constructor(host: IMHost, private readonly opts: DiscordIMOptions = {}) {
@@ -381,20 +383,32 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async enterSchedulerStandby(options: { clearRuntimeActiveMarker?: boolean } = {}): Promise<void> {
     const identity = this.getSchedulerIdentity() ?? 'discord';
-    this.configVersion += 1;
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
-    await this.gateway.destroy();
-    // The Gateway is closed before draining so no second ingress can overlap,
-    // while inbound work already accepted by this lease still reaches the local task.
-    await Promise.all([
-      this.drainAcceptedDmMessages(),
-      this.drainAcceptedButtonInteractions(),
-    ]);
-    if (options.clearRuntimeActiveMarker && !this.pendingOfflineNotice) {
-      this.clearRuntimeActiveMarker();
+    this.schedulerHandoffDraining = true;
+    try {
+      // The scheduler gate is already closed, so new ingress is rejected. Keep
+      // the current Gateway/client and lease generation alive only long enough
+      // for work accepted before the handoff to commit its terminal response.
+      await this.drainSchedulerHandoffWork();
+      this.configVersion += 1;
+      await this.gateway.destroy();
+      if (options.clearRuntimeActiveMarker && !this.pendingOfflineNotice) {
+        this.clearRuntimeActiveMarker();
+      }
+      this.setStatus({ kind: 'standby', appId: identity });
+    } finally {
+      this.schedulerHandoffDraining = false;
     }
-    this.setStatus({ kind: 'standby', appId: identity });
+  }
+
+  trackAcceptedTask(task: Promise<unknown>): void {
+    const tracked = Promise.resolve(task);
+    this.acceptedTasks.add(tracked);
+    void tracked.then(
+      () => this.acceptedTasks.delete(tracked),
+      () => this.acceptedTasks.delete(tracked),
+    );
   }
 
   /** Preserve a cross-device unclean runtime fact until the next active lease can compensate it. */
@@ -424,6 +438,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     // normal authentication error. Scheduler arbitration only applies after
     // the non-secret Discord application id is known.
     return identity ? (this.schedulerHooks?.isTransportAllowed(identity) ?? true) : true;
+  }
+
+  private schedulerOutboundAllowed(identity: string): boolean {
+    return (
+      this.schedulerHandoffDraining
+      && identity === this.getSchedulerIdentity()
+    ) || this.schedulerTransportAllowed(identity);
   }
 
   private schedulerConfigurationChanged(): void {
@@ -1114,22 +1135,18 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       ) {
         return;
       }
+      const handlers: Promise<void>[] = [];
       for (const h of this.messageHandlers) {
         try {
-          h(event);
+          handlers.push(Promise.resolve(h(event)));
         } catch {
           /* swallow */
         }
       }
+      await Promise.allSettled(handlers);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord inbound message failed: ${msg}`);
-    }
-  }
-
-  private async drainAcceptedDmMessages(): Promise<void> {
-    while (this.dmMessageQueues.size > 0) {
-      await Promise.allSettled([...this.dmMessageQueues.values()]);
     }
   }
 
@@ -1137,7 +1154,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     i: ButtonInteractionLike,
     acknowledged: Promise<void> = Promise.resolve(),
   ): Promise<void> {
-    if (this.disposing || !this.schedulerTransportAllowed()) return Promise.resolve();
+    if (
+      this.disposing
+      || (!this.schedulerTransportAllowed()
+        && !(this.schedulerHandoffDraining && this.acceptedTasks.size > 0))
+    ) {
+      return Promise.resolve();
+    }
     const acceptedContext = {
       inboundConfigVersion: this.inboundConfigVersion,
       ownerUserId: this.ownerUserId,
@@ -1175,18 +1198,28 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return;
     }
 
+    const handlers: Promise<void>[] = [];
     for (const h of this.cardActionHandlers) {
       try {
-        h(event);
+        handlers.push(Promise.resolve(h(event)));
       } catch {
         /* swallow */
       }
     }
+    await Promise.allSettled(handlers);
   }
 
-  private async drainAcceptedButtonInteractions(): Promise<void> {
-    while (this.buttonInteractionQueues.size > 0) {
-      await Promise.allSettled([...this.buttonInteractionQueues]);
+  private async drainSchedulerHandoffWork(): Promise<void> {
+    while (
+      this.dmMessageQueues.size > 0
+      || this.buttonInteractionQueues.size > 0
+      || this.acceptedTasks.size > 0
+    ) {
+      await Promise.allSettled([
+        ...this.dmMessageQueues.values(),
+        ...this.buttonInteractionQueues,
+        ...this.acceptedTasks,
+      ]);
     }
   }
 
@@ -1238,7 +1271,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       || this.configVersion !== lease.configVersion
       || this.gateway.client !== lease.client
       || this.getSchedulerIdentity() !== lease.identity
-      || !this.schedulerTransportAllowed(lease.identity)
+      || !this.schedulerOutboundAllowed(lease.identity)
     ) {
       throw new Error('DISCORD_SCHEDULER_STANDBY');
     }

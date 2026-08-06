@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  closeLocalDbAfterDiscordShutdown,
   stopImAndDeviceLinkBeforeDbClient,
   stopImBeforeDeviceLink,
 } from '../discordQuitOrdering';
@@ -98,5 +99,31 @@ describe('stopImAndDeviceLinkBeforeDbClient', () => {
       ),
     ).rejects.toThrow('ownership release failed');
     expect(stopDbClient).toHaveBeenCalledOnce();
+  });
+});
+
+describe('closeLocalDbAfterDiscordShutdown', () => {
+  it('does not close the local DB while ownership release is still pending', async () => {
+    const shutdown = deferred();
+    const closeLocalDb = vi.fn();
+    const close = closeLocalDbAfterDiscordShutdown(shutdown.promise, closeLocalDb);
+
+    await Promise.resolve();
+    expect(closeLocalDb).not.toHaveBeenCalled();
+
+    shutdown.resolve();
+    await close;
+    expect(closeLocalDb).toHaveBeenCalledOnce();
+  });
+
+  it('still closes the local DB after a failed shutdown attempt settles', async () => {
+    const closeLocalDb = vi.fn();
+
+    await closeLocalDbAfterDiscordShutdown(
+      Promise.reject(new Error('ownership release failed')),
+      closeLocalDb,
+    );
+
+    expect(closeLocalDb).toHaveBeenCalledOnce();
   });
 });

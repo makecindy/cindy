@@ -1203,6 +1203,34 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('reports the terminal promise when an internal turn is accepted', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnAccepted = vi.fn();
+
+    await getRunner().runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-tracked',
+      text: 'tracked task',
+      attachments: [],
+      onTurnAccepted,
+    });
+
+    expect(onTurnAccepted).toHaveBeenCalledOnce();
+    const terminal = onTurnAccepted.mock.calls[0]?.[0] as Promise<unknown> | undefined;
+    let settled = false;
+    void terminal?.then(() => {
+      settled = true;
+    });
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+
+    h.emit({ type: 'text', data: { text: 'tracked answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await terminal;
+    expect(settled).toBe(true);
+  });
+
   it('reports the attached Desktop route before provider startup', async () => {
     const h = setupAttachedSession(async () => ({ accepted: true }));
     const onRouteResolved = vi.fn();

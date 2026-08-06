@@ -261,7 +261,7 @@ let unsubscribeDictionaryChanged: (() => void) | null = null;
  * 用户撤销过访问权限的设备,同样不参与词典同步 —— 撤销的意图是「不再跟这台设备
  * 交换数据」,不只是「不许它操作我」。
  */
-function isDeviceRevoked(deviceId: string): boolean {
+export function isDeviceRevoked(deviceId: string): boolean {
   return readDeviceLinkSettings().revokedControllers.includes(deviceId);
 }
 
