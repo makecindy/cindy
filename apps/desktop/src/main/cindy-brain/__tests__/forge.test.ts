@@ -786,7 +786,6 @@ describe('FORGE_GUIDE', () => {
       // 2026-07-31 快问快答(cindy.text.oneshot)与派活取件(agent.errand)。
       'oneshot_text',
       'NO_CANDIDATE',
-<<<<<<< HEAD
       // 2026-08-05 快问快答偏好模型声明(目录模型 id;用户钉档 > 插件声明 > 默认链)。
       'oneshotModel',
       '"paths": ["/v1/convert"]',

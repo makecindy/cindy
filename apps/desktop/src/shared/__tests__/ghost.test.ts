@@ -2580,6 +2580,53 @@ describe('ghost · network 详单校验', () => {
     expect(expanded.added.map((i) => i.key)).toContain('network:secret:api_token');
   });
 
+  it('旧 host-only 清单的 inject.hosts 保持声明顺序(manifestDigest 兼容,不排序)', () => {
+    // manifestDigest 按数组原始顺序计算;对旧插件排序会让已装插件的账本摘要
+    // 永久失配,触发市场所有权检查与 OIDC 签发拒绝(AGENTS.md 存量兼容红线)。
+    const r = validateGhostManifest(
+      withNet({
+        hosts: ['api.example.com', 'cdn.example.com'],
+        secrets: [{
+          ...goodSecret(),
+          inject: { header: 'X-Token', format: '{value}', hosts: ['cdn.example.com', 'api.example.com'] },
+        }],
+      }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.network?.secrets?.[0]?.inject.hosts).toEqual([
+      'cdn.example.com',
+      'api.example.com',
+    ]);
+  });
+
+  it('声明 paths/methods 时 inject.hosts 排序归一化(权限 detail 稳定)', () => {
+    const r = validateGhostManifest(
+      withNet({
+        hosts: ['api.example.com', 'cdn.example.com'],
+        secrets: [{
+          ...goodSecret(),
+          inject: {
+            header: 'X-Token',
+            format: '{value}',
+            hosts: ['cdn.example.com', 'api.example.com'],
+            paths: ['/v1/convert'],
+          },
+        }],
+      }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.network?.secrets?.[0]?.inject.hosts).toEqual([
+      'api.example.com',
+      'cdn.example.com',
+    ]);
+    // 权限 detail 里的 Hosts 列表同样稳定排序(省略 hosts 时按 network.hosts 排序)。
+    const items = ghostPermissionItems(r.manifest);
+    const detail = items.find((i) => i.key === 'network:secret:api_token')?.detail;
+    expect(detail).toContain('Hosts: api.example.com, cdn.example.com');
+  });
+
   it('secrets.inject.hosts 必须是 hosts 声明条目的子集(逐字)', () => {
     const ok = validateGhostManifest(
       withNet({
