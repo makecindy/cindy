@@ -4433,6 +4433,11 @@ export function ChatInput({
             return;
           }
         }
+        // 发送新消息时立即递增 turnGen，让任何还未落地的旧 turn 预测结果失效。
+        // 必须在所有异步操作（effort settle / reference 解析）之前递增，防止
+        // device-link 乐观发送清空编辑器后、异步准备完成前旧预测写回输入框。
+        turnGenRef.current += 1;
+
         let result: boolean | void;
         let effortForSend = activeEffort;
         try {
@@ -4482,10 +4487,6 @@ export function ChatInput({
             // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
             effortForSend = coordinator.getCommittedEffort(sessionId) ?? activeEffort;
           }
-          // 发送新消息时立即递增 turnGen，让任何还未落地的旧 turn 预测结果失效。
-          // 防止「编辑器已清空 → showStopButton 尚未变 true」之间的空窗导致
-          // 旧上下文推荐短暂显示。
-          turnGenRef.current += 1;
           result = await onSend(
             textToSend,
             activeModel,
