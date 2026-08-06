@@ -273,6 +273,38 @@ describe('redact', () => {
       expect(out).toContain("mode: 'fast'");
     });
   });
+
+  /**
+   * 2026-08-06 review P1：字段名被**整体引起来**（闭合引号夹在名与分隔符之间）时,老规则全漏。
+   * 最典型的是带连字符的 HTTP 头 `x-api-key`——`api[_-]?key` 只匹配到 `api-key` 子串,`x-` 前缀
+   * 又把 `sensitive-field-json` 的「引号紧贴敏感名」挡掉,于是任意 x-api-key 值原样外泄。
+   */
+  describe('⚠️ 引号包起来的字段名（含 x-api-key 等带前缀/连字符的头）', () => {
+    const KEY = 'opaqueApiKeyValue0123456789';
+    const FORMS = [
+      `{ 'x-api-key': '${KEY}' }`, // Node 对象渲染,单引号连字符键
+      `"x-api-key":"${KEY}"`, // 裸 JSON
+      `headers { "x-api-key": "${KEY}", "content-type": "application/json" }`,
+      `log \\"x-api-key\\":\\"${KEY}\\" tail`, // 转义 JSON（日志里字符串化过一次）
+      `{ 'authorization': '${KEY}' }`, // 引号包起来的 authorization
+      `{ "x-goog-api-key": "${KEY}" }`, // 多段厂商前缀
+      `{ 'refresh-token': '${KEY}' }`,
+    ];
+    it.each(FORMS)('%s', (input) => {
+      expect(redact(input)).not.toContain(KEY);
+    });
+
+    it('键名不带引号仍走原有规则（不回归）', () => {
+      expect(redact(`x-api-key: ${KEY}`)).not.toContain(KEY);
+      expect(redact(`token=${KEY}`)).not.toContain(KEY);
+    });
+
+    it('不误伤引号包起来的非敏感键', () => {
+      const out = redact(`{ 'x-request-id': 'req-123', 'content-type': 'text/plain' }`);
+      expect(out).toContain('req-123');
+      expect(out).toContain('text/plain');
+    });
+  });
 });
 
 describe('homeUserName', () => {

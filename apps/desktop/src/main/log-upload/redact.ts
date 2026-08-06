@@ -62,6 +62,24 @@ const RULES: readonly RedactRule[] = [
     replace: (_m, name: string) => `${name}: ${tag('auth-header')}`,
   },
   {
+    // 引号包起来的**字段名**(允许 x-/厂商前缀,名以敏感词结尾);分隔符在**闭合引号之后**。
+    // 覆盖 util.inspect 对象渲染 / (转义)JSON 里被整体引起来的键：
+    //   `{ 'x-api-key': 'opaque' }`   `"x-api-key":"opaque"`   `\"x-api-key\":\"opaque\"`
+    // 这形态四条老规则全都不命中(2026-08-06 review)：`auth-header` 要求名后**紧跟**冒号;
+    // `sensitive-field-json` 要求引号**紧贴**敏感名、不容前缀(`x-`);`sensitive-field-quoted`
+    // 与 `sensitive-field-kv` 要求名后紧跟分隔符,而这里名与分隔符之间夹着闭合引号。于是任意
+    // `x-api-key` 值除非撞上某个厂商形态,否则原样留在上报正文里。
+    // 放在其它字段规则**之前**:命中后值(连引号)整段抹掉,后面的规则看到的已是无引号占位符、
+    // 不再重复处理。g2=键引号(可带转义反斜杠),g3=值引号(可选,值也可不带引号)。
+    name: 'sensitive-field-quoted-key',
+    pattern: new RegExp(
+      `((\\\\?['"\`])[\\w-]*(?:${SENSITIVE_FIELD_NAMES})\\2\\s*[:=]\\s*)` +
+        `(?:(\\\\?['"\`])(?:\\\\.|(?!\\3)[^\\n])*\\3|[^\\s&;,]+)`,
+      'gi',
+    ),
+    replace: (_m, keyPart: string) => `${keyPart}${tag('sensitive-field')}`,
+  },
+  {
     // 裸 JSON / 转义 JSON：`"token":"abc"` / `\"token\":\"abc\"`
     // `\\\\?` 吃掉可选的转义反斜杠;值里允许出现被转义的引号。
     name: 'sensitive-field-json',

@@ -147,6 +147,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 `sensitive-field-auth-scheme` 在 kv 规则**之前**把这种形态一路抹到行尾。新增规则时先想清楚
 它与已有规则的先后关系：**先跑的规则做了局部替换，会让后面本该整段抹掉的规则失配。**
 
+另一次坑（2026-08-06 review P1）——字段名被**整体引起来**时闭合引号夹在名与分隔符之间
+（`{ 'x-api-key': 'opaque' }`、JSON `"x-api-key":"..."`），`auth-header` 要名后紧跟冒号、
+`sensitive-field-json` 要引号紧贴敏感名（不容 `x-` 前缀）、`quoted`/`kv` 要名后紧跟分隔符，
+四条全失配，于是带连字符/前缀的头（`x-api-key` 等）的值原样外泄。现由 `sensitive-field-quoted-key`
+在其它字段规则**之前**吃掉这种「引号包起来的键」。**别按厂商加 key 形态就以为覆盖了头部字段——
+字段名的书写形态（裸 / JSON / 转义 JSON / 带引号的对象键）同样要逐个想到。**
+
 ## 3. 授权
 
 - 手动上传：要求已配置上报目标 **且** 已明示同意《隐私政策》。点击按钮本身即用户对这一次
