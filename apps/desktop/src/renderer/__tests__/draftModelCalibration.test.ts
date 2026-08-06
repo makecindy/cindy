@@ -246,6 +246,90 @@ describe('pickConnectedModelForAgent', () => {
   });
 });
 
+describe('pickConnectedModelForAgent — newSessionDefault 标记优先（步骤 0）', () => {
+  it('被标记为新对话默认的模型优先，即便种子模型本身可用', () => {
+    const providers = [
+      provider('xd', true, {
+        'claude-code': [
+          model('claude-opus-5', { sortOrder: 0 }),
+          model('deepseek', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+        ],
+      }),
+    ];
+    // 种子是可用的 opus-5，但目录/服务端把 deepseek 标为新对话默认 → 落到 deepseek。
+    expect(pickId(providers, 'claude-code', 'claude-opus-5')).toBe('deepseek');
+  });
+
+  it('没有标记时行为不变：种子可用则保留', () => {
+    const providers = [
+      provider('xd', true, {
+        'claude-code': [model('claude-opus-5'), model('claude-sonnet-5')],
+      }),
+    ];
+    expect(pickId(providers, 'claude-code', 'claude-opus-5')).toBe('claude-opus-5');
+  });
+
+  it('多来源都提供被标记模型时，按订阅优先取来源', () => {
+    const gateway = provider('xd', true, {
+      'claude-code': [model('deepseek', { newSessionDefault: ['claude-code'] })],
+    });
+    const sub = provider(
+      'anthropic',
+      true,
+      { 'claude-code': [model('deepseek', { newSessionDefault: ['claude-code'] })] },
+      'subscription',
+    );
+    const picked = pickConnectedModelForAgent([gateway, sub], 'claude-code', 'seed');
+    expect(picked?.model).toBe('deepseek');
+    expect(picked?.providerId).toBe('anthropic');
+  });
+
+  it('pi 按 claude-code 口径判定标记（pi 镜像 cc-compatible 模型）', () => {
+    const providers = [
+      provider('xd', true, {
+        pi: [
+          model('claude-sonnet-5', { sortOrder: 0 }),
+          model('deepseek', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+        ],
+      }),
+    ];
+    expect(pickId(providers, 'pi', 'claude-sonnet-5')).toBe('deepseek');
+  });
+
+  it('被标记但默认收起(defaultEnabled:false)时不选', () => {
+    const providers = [
+      provider('xd', true, {
+        'claude-code': [
+          model('visible', { sortOrder: 5 }),
+          model('hidden', {
+            sortOrder: 0,
+            defaultEnabled: false,
+            newSessionDefault: ['claude-code'],
+          }),
+        ],
+      }),
+    ];
+    expect(pickId(providers, 'claude-code', 'visible')).toBe('visible');
+  });
+
+  it('用户显式选过时，标记不覆盖用户选择', () => {
+    const providers = [
+      provider('xd', true, {
+        'claude-code': [model('my-pick'), model('deepseek', { newSessionDefault: ['claude-code'] })],
+      }),
+    ];
+    expect(
+      calibratedId({
+        providers,
+        agent: 'claude-code',
+        model: 'my-pick',
+        chosenByUser: true,
+        providersLoading: false,
+      }),
+    ).toBe('my-pick');
+  });
+});
+
 describe('calibrateDraftModel', () => {
   const base = {
     providers: [gatewayWithoutOpus, disconnectedAnthropic],

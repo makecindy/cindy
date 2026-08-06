@@ -80,6 +80,9 @@ function toDescriptor(
   // 默认可见性要透传：渲染层的种子默认模型取「排序第一**且默认可见**」的那个，没有它就会
   // 把默认收起的 legacy 模型选成默认 —— 用户在选择器里根本看不到自己的默认模型。
   if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
+  // 新对话默认种子标记要透传：渲染层 getDefaultModelForVendor 据它优先选中被标记的模型。
+  // pi tab 的条目多从 CC 投影而来，会带上 ['claude-code']，pi 侧按 'claude-code' 口径判定。
+  if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
   const supportsImageInput = m.supportsImageInput

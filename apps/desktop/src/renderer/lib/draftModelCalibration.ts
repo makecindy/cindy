@@ -65,8 +65,7 @@ function firstModelByOrder(provider: ProviderView, agent: AgentKind): CatalogMod
   return pool
     .slice()
     .sort(
-      (a, b) =>
-        (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
+      (a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
     )[0];
 }
 
@@ -86,6 +85,11 @@ export interface PickedConnectedModel {
 
 /**
  * 在该 agent 的已连接来源里挑 (模型, 来源)：
+ *   0. 目录/服务端**显式标记**为新对话默认（`newSessionDefault`）、且可用且默认可见的模型
+ *      优先 —— 未显式选过模型的用户应跟随它，即便种子恰好是另一个可用模型（种子是
+ *      capabilities 未到位时算的冷启动值，不反映标记）。按订阅优先取第一家提供它的来源，
+ *      同一来源多个被标记时按 sortOrder 决胜。pi 按 claude-code 口径判定（pi 的模型宇宙是
+ *      cc-compatible 模型的镜像）。**没有任何模型被标记时这步为空转，行为回到 1/2**（非破坏性）。
  *   1. `preferredModelId` 本身可用**且默认可见** —— 默认值能用就绝不动它，避免首屏莫名换
  *      模型；来源仍按订阅优先顺序取「第一家提供它的」，让默认值也享受订阅优先；
  *   2. 否则按「订阅优先」的供应商序取第一家，返回它排序第一的默认可见模型
@@ -110,6 +114,25 @@ export function pickConnectedModelForAgent(
 ): PickedConnectedModel | null {
   const ranked = providersByPreference(providers, agent);
   if (ranked.length === 0) return null;
+  // 0. 目录/服务端显式标记的新对话默认(newSessionDefault)优先。pi 不是 wire agent,按
+  //    claude-code 口径判定(host 把含 claude-code 的模型投影进 pi tab,标记随之带上)。
+  const flagAgent: 'claude-code' | 'codex' = agent === 'codex' ? 'codex' : 'claude-code';
+  for (const provider of ranked) {
+    const userProvider = provider.source === 'user';
+    const flagged = (provider.models[agent] ?? [])
+      .filter(
+        (m) =>
+          m.defaultEnabled !== false &&
+          (m.newSessionDefault?.includes(flagAgent) ?? false) &&
+          isModelSelectableForNewRoute(m, { userProvider }),
+      )
+      .slice()
+      .sort(
+        (a, b) =>
+          (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
+      )[0];
+    if (flagged) return { model: flagged.id, providerId: provider.id };
+  }
   for (const provider of ranked) {
     const preferred = (provider.models[agent] ?? []).find((m) => m.id === preferredModelId);
     if (
@@ -197,12 +220,7 @@ export function resolveDraftSessionProviderId({
     return explicitProviderId;
   }
   if (!effectiveProviderId) return null;
-  const modelDefaultProviderId = effectiveSourceIdForModel(
-    [...providers],
-    null,
-    model,
-    agent,
-  );
+  const modelDefaultProviderId = effectiveSourceIdForModel([...providers], null, model, agent);
   // main 收到 providerId=null 后按 agent 的原生来源选择启动链路，而不是只在“提供当前
   // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含
   // claude-opus-5。modelDefault 是 anthropic，但 agentDefault 仍是 xd；若只比较前者
