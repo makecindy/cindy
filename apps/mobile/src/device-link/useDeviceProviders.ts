@@ -97,7 +97,13 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setLoading(false);
       setReadyFor(deviceId);
       setReadyGen(getDeviceProvidersGen(deviceId));
-      return unsubscribe;
+      // 缓存命中分支也必须返回统一 cleanup(codex review P2):只退 payload 订阅会让
+      // 代际订阅漏订存活——切走后旧设备的 evict 通知仍会 setReadyFor(null),误伤新设备。
+      return () => {
+        cancelled = true;
+        unsubscribe();
+        unsubscribeGen();
+      };
     }
     // cache miss:先清空,避免 fetch 解析前(失败则永远)残留上一设备的供应商。
     setPayload(EMPTY_PAYLOAD);
