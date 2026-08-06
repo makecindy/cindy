@@ -9,9 +9,23 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: { availableModels: [] } }),
-}));
+vi.mock('@/hooks/useAgentCapabilities', () => {
+  // Pi 未声明 turnPermissionPolicy(警告);Claude Code / Codex 声明且受支持(不警告)。
+  const supported = {
+    capabilities: {
+      availableModels: [],
+      turnPermissionPolicy: {
+        supported: { supported: true },
+        unsupportedPermissionModes: [],
+      },
+    },
+  };
+  const unsupported = { capabilities: { availableModels: [] } };
+  return {
+    useAgentCapabilities: (agentKind: string) =>
+      agentKind === 'pi' ? unsupported : supported,
+  };
+});
 
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: [] }),
@@ -66,7 +80,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     render(<ImDefaultSettingsSection channel="wechat" />);
 
     expect(
-      await screen.findByText('settings.imBot.defaults.piUnsupportedHint'),
+      await screen.findByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeTruthy();
   });
 
@@ -79,14 +93,18 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     render(<ImDefaultSettingsSection channel="wechat" />);
 
     await screen.findByText('settings.imBot.defaults.agentLabel');
-    expect(screen.queryByText('settings.imBot.defaults.piUnsupportedHint')).toBeNull();
+    expect(
+      screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
+    ).toBeNull();
   });
 
   it('does not warn for Pi on channels without turn policy (feishu)', async () => {
     render(<ImDefaultSettingsSection channel="feishu" />);
 
     await screen.findByText('settings.imBot.defaults.agentLabel');
-    expect(screen.queryByText('settings.imBot.defaults.piUnsupportedHint')).toBeNull();
+    expect(
+      screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
+    ).toBeNull();
   });
 
   it('does not warn for Pi on conditional-policy channels (telegram / dingtalk)', async () => {
@@ -94,11 +112,15 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     // 主人私聊 Pi 可用;设置 UI 不区分群聊/私聊,不能整体警告。
     const first = render(<ImDefaultSettingsSection channel="telegram" />);
     await first.findByText('settings.imBot.defaults.agentLabel');
-    expect(screen.queryByText('settings.imBot.defaults.piUnsupportedHint')).toBeNull();
+    expect(
+      screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
+    ).toBeNull();
     cleanup();
 
     const second = render(<ImDefaultSettingsSection channel="dingtalk" />);
     await second.findByText('settings.imBot.defaults.agentLabel');
-    expect(screen.queryByText('settings.imBot.defaults.piUnsupportedHint')).toBeNull();
+    expect(
+      screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
+    ).toBeNull();
   });
 });

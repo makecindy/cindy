@@ -3034,7 +3034,7 @@
           "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
         },
         "agentLabel": "Agent",
-        "piUnsupportedHint": "Pi Agent does not support per-message permission confirmations on this channel; messages cannot be processed. Switch to Claude Code or Codex.",
+        "agentUnsupportedOnChannelHint": "{{agent}} Agent does not support per-message permission confirmations on this channel; messages cannot be processed. Switch to Claude Code or Codex.",
         "modelLabel": "Model Configuration",
         "loading": "Loading new conversation configuration…",
         "loadFailed": "Failed to load new conversation configuration",

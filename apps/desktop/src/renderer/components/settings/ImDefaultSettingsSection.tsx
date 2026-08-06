@@ -216,13 +216,23 @@ export function ImDefaultSettingsSection({
   }
 
   const activeSettings = settings.agents[settings.agentKind];
-  // 个人微信对每次 dispatch 无条件挂 turnPermissionPolicy;Pi 未声明该 capability,
-  // 选它发消息必然失败,此处给可执行提示。(Telegram / 钉钉仅在群聊挂 policy,
+  // 按选中 Agent 的 capabilities 判断:未声明 / 声明了但 supported.supported !== true
+  // 的 Agent(如 Pi)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。不写死 Pi——
+  // 未来 Pi 补上该 capability、或新增其它不支持的 Agent 时,此处自动跟随 main 侧
+  // 的 capability 真相,不会误警告 / 漏警告。(Telegram / 钉钉仅在群聊挂 policy,
   // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
-  const piUnsupportedOnChannel =
+  const selectedAgentCaps =
+    settings.agentKind === 'claude-code'
+      ? cc
+      : settings.agentKind === 'codex'
+        ? codex
+        : pi;
+  const selectedAgentUnsupported =
+    selectedAgentCaps.capabilities?.turnPermissionPolicy?.supported.supported !== true;
+  const agentUnsupportedOnChannel =
     channel !== undefined &&
     isUnconditionalTurnPolicyChannel(channel) &&
-    settings.agentKind === 'pi';
+    selectedAgentUnsupported;
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
@@ -343,7 +353,7 @@ export function ImDefaultSettingsSection({
         </div>
       </div>
 
-      {piUnsupportedOnChannel && (
+      {agentUnsupportedOnChannel && (
         <div
           role="note"
           className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2"
@@ -354,7 +364,9 @@ export function ImDefaultSettingsSection({
             aria-hidden
           />
           <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
-            {t('settings.imBot.defaults.piUnsupportedHint')}
+            {t('settings.imBot.defaults.agentUnsupportedOnChannelHint', {
+              agent: t(`settings.imBot.defaults.agents.${settings.agentKind}`),
+            })}
           </p>
         </div>
       )}
