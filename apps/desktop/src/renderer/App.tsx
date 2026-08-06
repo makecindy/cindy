@@ -55,6 +55,11 @@ import {
   setProviderModelFast,
   subscribeProviderModelMemory,
 } from '@/state/providerModelMemory';
+import {
+  readWorkerCreationPrefs,
+  setWorkerPermissionModePreference,
+  subscribeWorkerCreationPrefs,
+} from '@/state/workerCreationPrefs';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { router } from './router';
@@ -174,6 +179,26 @@ export function App() {
     };
     syncPrefs();
     return subscribeDraft(syncPrefs);
+  }, []);
+
+  // Worker 创建偏好的真源是 renderer localStorage；main 只缓存权限默认值供
+  // Orca UI / agent tool 的创建路径读取。tool 显式改默认时再经 apply push 回写真源。
+  useEffect(() => {
+    const sync = () => {
+      const prefs = readWorkerCreationPrefs();
+      window.electronAPI.syncWorkerCreationPrefs({
+        workerPermissionMode: prefs.workerPermissionMode,
+      });
+    };
+    sync();
+    const unsubscribe = subscribeWorkerCreationPrefs(sync);
+    const offApply = window.electronAPI.onWorkerCreationPrefsApply(({ workerPermissionMode }) => {
+      setWorkerPermissionModePreference(workerPermissionMode);
+    });
+    return () => {
+      unsubscribe();
+      offApply();
+    };
   }, []);
 
   // device-link 被控端单一真相:把 providerModelMemory(草稿模型列表行的真实读源)全量镜像给 main,

@@ -1,8 +1,14 @@
+import {
+  DEFAULT_ORCA_WORKER_PERMISSION_MODE,
+  resolveOrcaWorkerPermissionMode,
+  type OrcaWorkerPermissionMode,
+} from '../../shared/orca-worker-permission-mode.js';
+
 /**
  * newMakerDefaultsCache —— renderer "New Maker" 面板用户当前选择的 main 端缓存。
  *
- * Source of truth 仍是 renderer 的 newMakerDraft (localStorage); renderer 启动
- * 时全量 push 一次, 此后每次 draft 变化都增量 push, main 端只是一份内存镜像。
+ * Source of truth 仍是 renderer 的 newMakerDraft / workerCreationPrefs (localStorage)；
+ * renderer 启动时全量 push 一次，此后每次偏好变化都增量 push，main 端只保存内存镜像。
  *
  * 用途: collab mode spawn worker 时 (enableOrcaInternal / orca-bridge.create_worker)
  * 不再用 hardcode 默认值,优先读这份缓存 —— worker 实际启动参数 = "用户在 New Maker
@@ -18,7 +24,7 @@ interface VendorPrefsSnapshot {
   effort?: string;
   /**
    * 该 vendor 当前草稿的权限档 / 来源(供应商)。device-link 远程草稿镜像需要完整
-   * 镜像;collab worker 权限固定,但必须携带来源,避免模型与凭证路由脱钩。
+   * 镜像；collab worker 不消费这里的会话权限，但必须携带来源，避免模型与凭证路由脱钩。
    * 老版本 renderer 不推这两项 → undefined,消费方按自己的兜底处理。
    */
   permissionMode?: string;
@@ -39,6 +45,12 @@ export interface NewMakerDraftSnapshot {
 
 let cache: NewMakerDraftSnapshot | null = null;
 
+export interface WorkerCreationPrefsSnapshot {
+  workerPermissionMode: OrcaWorkerPermissionMode;
+}
+
+let workerCreationPrefsCache: WorkerCreationPrefsSnapshot | null = null;
+
 /**
  * providerModelMemory 全量快照镜像(renderer 经 SYNC_PROVIDER_MODEL_MEMORY 推)。
  * 形状 = providerModelMemory.snapshotForSeed():`${agent}:*` 是模型级全局预设,
@@ -54,6 +66,18 @@ let providerMemoryCache: ProviderModelMemorySnapshot | null = null;
 /** Renderer push handler 调; 整体替换缓存 (而不是合并), 跟 source of truth 对齐。 */
 export function setNewMakerDraftCache(snapshot: NewMakerDraftSnapshot): void {
   cache = snapshot;
+}
+
+/** Renderer localStorage workerCreationPrefs 的 main 端内存镜像。 */
+export function setWorkerCreationPrefsCache(snapshot: WorkerCreationPrefsSnapshot): void {
+  workerCreationPrefsCache = {
+    workerPermissionMode: resolveOrcaWorkerPermissionMode(snapshot.workerPermissionMode),
+  };
+}
+
+/** 缓存未就绪时使用产品默认 Auto-review。 */
+export function getWorkerPermissionModeFromCreationPrefs(): OrcaWorkerPermissionMode {
+  return workerCreationPrefsCache?.workerPermissionMode ?? DEFAULT_ORCA_WORKER_PERMISSION_MODE;
 }
 
 /** Renderer push handler 调; 整体替换 providerModelMemory 镜像。 */

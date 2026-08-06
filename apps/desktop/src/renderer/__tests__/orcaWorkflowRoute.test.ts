@@ -254,12 +254,14 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {
     const requestEnable = sessionViewSource.indexOf('const requestEnableCollab = useCallback');
-    // device-link:enableOrca 按 sessionId 来源路由(本机走本地 maker,远程走隧道),
-    // 调用形态从 window.electronAPI.maker.enableOrca 改成 makerApiFor*(collabSessionId).enableOrca。
-    // 归属用**粘滞**版(makerApiForSticky):瞬断窗口内退回本机会在控制端建出 team,
-    // 与按粘滞 remoteDeviceId 渲染的入口自相矛盾(见 orcaRemoteRoutingInvariants 的对称守卫)。
-    const enableCall = sessionViewSource.indexOf(
-      'await makerApiForSticky(collabSessionId).enableOrca',
+    // device-link 按粘滞 deviceId 走共享远程 handoff；本机会话仍直调本机 IPC。
+    // reveal promise 必须在两条 mutation 分支之前启动，不能等 Worker bootstrap 完成后才开 tab。
+    const remoteEnableCall = sessionViewSource.indexOf(
+      'await enableRemoteCollabForSession({',
+      requestEnable,
+    );
+    const localEnableCall = sessionViewSource.indexOf(
+      'await window.electronAPI.maker.enableOrca(collabSessionId, enableOptions)',
       requestEnable,
     );
     const openTab = sessionViewSource.indexOf(
@@ -268,8 +270,11 @@ describe('OrcaWorkflowRoute source invariants', () => {
     );
 
     expect(requestEnable).toBeGreaterThan(-1);
-    expect(enableCall).toBeGreaterThan(requestEnable);
+    expect(remoteEnableCall).toBeGreaterThan(requestEnable);
+    expect(localEnableCall).toBeGreaterThan(requestEnable);
     expect(openTab).toBeGreaterThan(requestEnable);
+    expect(openTab).toBeLessThan(remoteEnableCall);
+    expect(openTab).toBeLessThan(localEnableCall);
     expect(sessionViewSource).not.toContain(
       `/cc-agent/orca/${templatePlaceholder('collabSessionId')}`,
     );

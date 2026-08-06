@@ -702,6 +702,11 @@ export const MAKER_SEND = {
    */
   SYNC_NEW_MAKER_DRAFT: 'maker:sync-new-maker-draft',
   /**
+   * renderer `workerCreationPrefs` → main 内存镜像。Orca tool 创建 Worker 时读取同一份
+   * 默认权限；真源仍是 renderer localStorage。启动推一次 + 变化时增量推。
+   */
+  SYNC_WORKER_CREATION_PREFS: 'maker:sync-worker-creation-prefs',
+  /**
    * 被控端 renderer → 自身 main:把 providerModelMemory 的全量快照(snapshotForSeed():
    * `${agent}:*` 为模型级全局预设,来源槽为旧 v2 兼容副本)镜像给 main 缓存。device-link 草稿
    * 列表行的真实读源是 providerModelMemory(非选中行 = modelMemory.getEffort/getFast),旧的
@@ -829,6 +834,11 @@ export const MAKER_PUSH = {
    * payload = { worktreeEnabled: boolean }(APPLY_NEW_MAKER_WORKTREE_PREF 入参)。
    */
   WORKTREE_PREF_APPLY: 'maker:worktree-pref:apply',
+  /**
+   * 本地 main → renderer：Orca tool 显式修改 Worker 默认权限后，通知 renderer 回写
+   * workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
+   */
+  WORKER_CREATION_PREFS_APPLY: 'maker:worker-creation-prefs:apply',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

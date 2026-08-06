@@ -29,8 +29,14 @@ const mocks = vi.hoisted(() => ({
     }>,
   },
   capabilitiesByAgent: {
-    codex: null as { availableModels: Array<{ id: string }> } | null,
-    'claude-code': null as { availableModels: Array<{ id: string }> } | null,
+    codex: null as {
+      availableModels: Array<{ id: string }>;
+      supportsOrcaWorkerPermissionMode?: boolean;
+    } | null,
+    'claude-code': null as {
+      availableModels: Array<{ id: string }>;
+      supportsOrcaWorkerPermissionMode?: boolean;
+    } | null,
   },
   capabilitiesLoading: false,
   providersLoading: false,
@@ -73,6 +79,7 @@ const mocks = vi.hoisted(() => ({
     >;
   }>,
   sidebarWindow: false,
+  confirm: vi.fn(async () => true),
 }));
 
 function model(id: string, efforts = ['high'], defaultEffort = 'high') {
@@ -173,6 +180,28 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
   ),
 }));
 
+vi.mock('@/components/new-chat/PermissionSelector', () => ({
+  PermissionSelector: (props: {
+    permissionMode: 'auto' | 'bypassPermissions';
+    onPermissionModeChange: (mode: 'auto' | 'bypassPermissions') => void;
+    allowedModes?: string[];
+  }) => (
+    <button
+      type="button"
+      data-testid="permission-selector"
+      data-mode={props.permissionMode}
+      data-allowed={props.allowedModes?.join(',') ?? ''}
+      onClick={() => props.onPermissionModeChange('bypassPermissions')}
+    >
+      {props.permissionMode}
+    </button>
+  ),
+}));
+
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: mocks.confirm }),
+}));
+
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   isModelEnabled: (_agent: string, providerId: string, m: { id: string }) =>
     !mocks.hiddenModels.includes(`${providerId}:${m.id}`),
@@ -200,6 +229,8 @@ describe('CreateWorkerPopover', () => {
     mocks.remoteProviders = [];
     mocks.hiddenModels = [];
     mocks.sidebarWindow = false;
+    mocks.confirm.mockReset();
+    mocks.confirm.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -228,10 +259,9 @@ describe('CreateWorkerPopover', () => {
 
     const permissionMode = screen.getByTestId('worker-permission-mode');
     expect(permissionMode.textContent).toContain('orca.createWorker.permissionLabel');
-    expect(permissionMode.textContent).toContain(
-      'newChat.permissionSelector.modes.codex.auto.label',
+    expect(screen.getByTestId('permission-selector').getAttribute('data-allowed')).toBe(
+      'auto,bypassPermissions',
     );
-    expect(permissionMode.querySelector('button, input, select, [role="combobox"]')).toBeNull();
 
     const initialTask = screen.getByPlaceholderText('orca.createWorker.initialTaskPlaceholder');
     expect(initialTask.className).toContain('h-[96px]');
@@ -241,6 +271,82 @@ describe('CreateWorkerPopover', () => {
     render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
 
     expect(screen.queryByTestId('worker-permission-mode')).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it('lets Worker creation choose Full access and saves it as the next default', async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover
+        open
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    const selector = screen.getByTestId('permission-selector');
+    expect(selector.getAttribute('data-mode')).toBe('auto');
+    expect(selector.getAttribute('data-allowed')).toBe('auto,bypassPermissions');
+
+    fireEvent.click(selector);
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(selector.getAttribute('data-mode')).toBe('bypassPermissions'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
+      ),
+    );
+    expect(JSON.parse(localStorage.getItem('workerCreationPrefs') ?? '{}')).toMatchObject({
+      workerPermissionMode: 'bypassPermissions',
+    });
+  });
+
+  it('blocks Worker creation when a device-link peer cannot honor permission selection', () => {
+    render(
+      <CreateWorkerPopover
+        open
+        deviceId="old-device"
+        requireWorkerPermissionModeSupport
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('permission-selector')).toBeNull();
+    expect(screen.getByText('newChat.collaboration.unsupportedRemoteHint')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it('keeps Auto-review when the Full access confirmation is cancelled', async () => {
+    mocks.confirm.mockResolvedValue(false);
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover
+        open
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    const selector = screen.getByTestId('permission-selector');
+    fireEvent.click(selector);
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1));
+    expect(selector.getAttribute('data-mode')).toBe('auto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ workerPermissionMode: 'auto' }),
+      ),
+    );
   });
 
   it('disables immediately and collapses repeated click events into one request', async () => {

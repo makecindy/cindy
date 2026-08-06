@@ -194,6 +194,16 @@ export function makerApiForDevice(deviceId: string): RoutableMaker {
   return remoteMakerApi(deviceId);
 }
 
+/** Mutation 前按明确 deviceId 重新读取被控端能力，避免复用可能过期的 renderer cache。 */
+export function agentCapabilitiesForDevice(
+  deviceId: string,
+  agentKind: 'claude-code' | 'codex' | 'pi',
+): Promise<{ supportsOrcaWorkerPermissionMode?: boolean }> {
+  return invokeRemote(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<{
+    supportsOrcaWorkerPermissionMode?: boolean;
+  }>;
+}
+
 /**
  * 按 sessionId 来源返回 maker 操作入口:
  *   - 本地 → 真 window.electronAPI.maker(零开销,行为不变)

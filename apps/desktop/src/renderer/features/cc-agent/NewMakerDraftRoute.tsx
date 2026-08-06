@@ -392,6 +392,7 @@ function draftEnableOrcaOptions(
       role: cfg.role,
       label: createWorkerLabel(cfg.role, []),
       delegateTask: cfg.initialTask || undefined,
+      workerPermissionMode: cfg.workerPermissionMode,
     };
   }
   // 草稿里持久化的来源在发送时按 live 目录重新收窄(已连接 + 提供该模型 + 未被可见性
@@ -427,6 +428,7 @@ function draftEnableOrcaOptions(
     fast: cfg.fast,
     providerId,
     delegateTask: cfg.initialTask || undefined,
+    workerPermissionMode: cfg.workerPermissionMode,
   };
 }
 
@@ -4685,12 +4687,14 @@ export function NewMakerDraftRoute() {
                 fast: form.fast,
                 providerId: form.providerId,
                 initialTask: form.initialTask || undefined,
+                workerPermissionMode: form.workerPermissionMode,
               },
             });
             setCreateWorkerOpen(false);
           }}
           title={t('orca.createWorker.enableCollabTitle')}
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
+          requireWorkerPermissionModeSupport
           deviceId={effectiveDeviceLinkDeviceId ?? undefined}
           // SSH 远程草稿(draft.remoteHostId):worker 在远端 spawn,模型清单按 SSH
           // 口径过滤,与本路由 ChatInput 候选及 main 侧 remote-worker guard 同口径。

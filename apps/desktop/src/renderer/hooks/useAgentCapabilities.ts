@@ -104,6 +104,11 @@ export interface AgentCapabilities {
    * 到达时无法安全关联后续模型写入。
    */
   supportsSessionAgentSwitchCas?: boolean;
+  /**
+   * 被控端是否支持在开启 Orca Team 时显式设置 Worker 默认权限。
+   * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
+   */
+  supportsOrcaWorkerPermissionMode?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -182,7 +187,8 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !Array.isArray(value.permissionModes) ||
     !value.permissionModes.every(isNamedDescriptor) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
-    !isOptionalBoolean(value.supportsSessionAgentSwitchCas)
+    !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode)
   ) {
     throw new Error('Invalid agent capabilities response');
   }
