@@ -234,4 +234,40 @@ describe('Discord scheduler manager', () => {
     expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
     await manager.stop();
   });
+
+  it('restarts discovery grace when the local Discord identity changes', async () => {
+    harness.selfDeviceId = null;
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: Date.now(),
+      channels: [],
+    });
+    await finishDiscovery(manager);
+    expect(discord.init).not.toHaveBeenCalled();
+
+    harness.selfDeviceId = 'z';
+    harness.hooks?.onConfigurationChanged?.();
+    await manager.reconcile();
+    expect(discord.init).not.toHaveBeenCalled();
+
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: Date.now(),
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+    });
+    await finishDiscovery(manager);
+
+    expect(discord.init).not.toHaveBeenCalled();
+    await manager.stop();
+  });
 });

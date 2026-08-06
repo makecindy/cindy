@@ -237,6 +237,11 @@ export class ImSchedulerManager {
 
   private notifyLocalConfigurationChanged(): void {
     if (!this.started) return;
+    // A new local Discord identity is not authoritative until the peer view has
+    // had a full round trip to advertise and confirm the binding. Reset the
+    // grace window before reconciling so two Desktops configured at the same
+    // time cannot both treat the previous empty advertisement as final.
+    this.beginDiscoveryGrace();
     this.advertiseAll();
     void this.reconcile();
   }

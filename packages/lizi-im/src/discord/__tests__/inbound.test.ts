@@ -570,22 +570,30 @@ describe('DiscordIM inbound pipeline', () => {
 
   it('connects gateway when set-config receives a token', async () => {
     const gateway = makeGateway();
-    const host = makeHost();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const host = makeHost({ initialSecrets: [['discord-bot-token', 'old-token'], ['discord-owner-user-id', 'user-1']] });
     const im = new DiscordIM(host, {
       gatewayFactory: (handlers) => {
         gateway.setHandlers(handlers);
         return gateway;
       },
     });
+    const allowed = vi.fn(() => true);
+    const onConfigurationChanged = vi.fn();
+    im.setSchedulerHooks({ isTransportAllowed: allowed, onConfigurationChanged });
 
     im.registerIpc();
     await host.invoke('discordBot:set-config', {
-      token: 'new-token',
+      token,
       ownerUserId: 'user-1',
     });
 
     expect(gateway.destroy).toHaveBeenCalledOnce();
-    expect(gateway.connect).toHaveBeenCalledWith('new-token');
+    expect(onConfigurationChanged).toHaveBeenCalledOnce();
+    expect(onConfigurationChanged.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.connect.mock.invocationCallOrder[0],
+    );
+    expect(gateway.connect).toHaveBeenCalledWith(token);
   });
 
   it('sends the owner a fixed notice after a successful link', async () => {

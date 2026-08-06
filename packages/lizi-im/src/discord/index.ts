@@ -222,9 +222,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         await this.gateway.destroy();
         this.ownerUserId = nextOwnerUserId;
         const configuredIdentity = this.schedulerIdentityFromToken(token);
+        // Publish the new binding and enter the scheduler's discovery grace
+        // before attempting a Gateway connection. Otherwise two Desktops
+        // moving from empty configuration to the same Bot can both connect
+        // while their old empty advertisements are still the only peer view.
+        this.schedulerConfigurationChanged();
         if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
           this.setStatus({ kind: 'standby', appId: configuredIdentity });
-          this.schedulerConfigurationChanged();
           return configResult();
         }
         this.suppressNextOnlineNotice = true;
@@ -232,7 +236,6 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           await this.gateway.connect(token);
           if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
             await this.enterSchedulerStandby();
-            this.schedulerConfigurationChanged();
             return configResult();
           }
           this.markRuntimeActive();
@@ -263,7 +266,6 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         this.configVersion += 1;
         this.ownerUserId = nextOwnerUserId;
       }
-      if (token) this.schedulerConfigurationChanged();
       return configResult();
     });
 
