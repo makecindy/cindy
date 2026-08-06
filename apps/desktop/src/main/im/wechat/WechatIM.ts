@@ -1898,7 +1898,7 @@ function safeMachineCode(value: string): string {
  *  - `${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:mode:<mode>` — 当前权限模式
  *    在该 Agent 的 unsupportedPermissionModes 里 → 引导换权限模式;
  *  - 旧格式 `TURN_PERMISSION_POLICY_UNSUPPORTED:<mode>` / `unsupported_turn_permission`
- *    兜底按「换权限模式或换 Agent」处理;
+ *    保持既有兼容行为,兜底按「换权限模式」处理;
  *  - 'missing_auth' — 未连接模型服务;
  *  - 其余 — 通用重试提示。
  */
