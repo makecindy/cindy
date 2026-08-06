@@ -214,9 +214,11 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
       close: ReturnType<typeof vi.fn>;
       setWindowOpenHandler: ReturnType<typeof vi.fn>;
       getOpenHandler: () => typeof openHandler;
+      getURL: () => string;
     };
     contents.id = id;
     contents.isDestroyed = () => false;
+    contents.getURL = () => 'https://example.com';
     contents.send = vi.fn();
     contents.close = vi.fn();
     contents.setWindowOpenHandler = vi.fn((handler) => {
@@ -225,6 +227,17 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
     contents.getOpenHandler = () => openHandler;
     return contents;
   }
+
+  it('denies popups from sandboxed preview pages (parity with CSP sandbox)', () => {
+    const host = makeContents(1);
+    const opener = makeContents(42);
+    opener.getURL = () =>
+      'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+    installBrowserGuestHandlers(host as never, opener as never);
+
+    const response = opener.getOpenHandler()!({ url: 'https://evil.example/', disposition: 'foreground-tab' });
+    expect(response).toEqual({ action: 'deny' });
+  });
 
   it.each([
     ['direct URL', 'https://accounts.example.com/oauth'],

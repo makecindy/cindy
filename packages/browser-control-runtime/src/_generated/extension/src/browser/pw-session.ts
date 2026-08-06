@@ -1360,6 +1360,21 @@ export async function gotoPageWithNavigationGuard(
     browserProxyMode: opts.browserProxyMode,
   });
   let blockedError: unknown = null;
+  // LOCAL PATCH (Cindy, via sync.mjs): the exact-origin preview
+  // allowlist entry this navigation lands on, if any. For such pages
+  // the route guard stays alive for the page lifetime AND enforces
+  // EXACT origin equality — the SSRF policy alone would permit
+  // ordinary public HTTP(S) destinations, so a previewed page could
+  // otherwise location.href its DOM/CSSOM to a public origin.
+  let previewOrigin: string | null = null;
+  try {
+    const entryUrl = new URL(opts.url);
+    if (opts.ssrfPolicy?.allowedOrigins?.includes(entryUrl.origin)) {
+      previewOrigin = entryUrl.origin;
+    }
+  } catch {
+    previewOrigin = null;
+  }
 
   const handler = async (route: Route, request: Request) => {
     if (blockedError) {
@@ -1370,6 +1385,24 @@ export async function gotoPageWithNavigationGuard(
     const isSubframeDocument =
       !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
     if (!isTopLevel && !isSubframeDocument) {
+      await continueRouteSafely(route);
+      return;
+    }
+    // LOCAL PATCH (Cindy, via sync.mjs): preview pages navigate only
+    // within their exact origin — any other destination (public
+    // sites, other loopback services, file://) is aborted regardless
+    // of what the SSRF policy would allow.
+    if (previewOrigin !== null) {
+      let sameOrigin = false;
+      try {
+        sameOrigin = new URL(request.url()).origin === previewOrigin;
+      } catch {
+        sameOrigin = false;
+      }
+      if (!sameOrigin) {
+        await route.abort().catch(() => {});
+        return;
+      }
       await continueRouteSafely(route);
       return;
     }
@@ -1404,21 +1437,12 @@ export async function gotoPageWithNavigationGuard(
     }
     throw err;
   } finally {
-    // LOCAL PATCH (Cindy, via sync.mjs): keep the navigation guard alive
-    // for pages on an exact-origin allowlist entry (the sandboxed local
-    // HTML preview origin). Without this, page-initiated navigations
-    // after the initial goto — location.href / window.location to an
-    // external origin or to other loopback services — would run
-    // unchecked, letting a previewed page exfiltrate its DOM/CSSOM
-    // content or probe local services. The guard lives for the page
-    // lifetime and is torn down with the page (Playwright removes
-    // routes when the page closes).
-    const keepGuard =
-      opts.url !== undefined &&
-      opts.ssrfPolicy?.allowedOrigins?.some(
-        (origin) => new URL(opts.url).origin === origin,
-      ) === true;
-    if (!keepGuard) {
+    // LOCAL PATCH (Cindy, via sync.mjs): keep the navigation guard
+    // alive for preview pages (previewOrigin !== null). Without this,
+    // page-initiated navigations after the initial goto would run
+    // unchecked; the guard lives for the page lifetime and is torn
+    // down with the page (Playwright removes routes on close).
+    if (previewOrigin === null) {
       await opts.page.unroute("**", handler).catch(() => {});
     }
     if (blockedError) {

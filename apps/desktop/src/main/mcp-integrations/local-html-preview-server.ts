@@ -359,13 +359,18 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const baseName = nodePath.basename(abs);
     if (baseName.startsWith('.') || !ALLOWED_EXTENSIONS.has(ext)) return refuse(res);
 
+    // Snapshot the vetted object BEFORE opening (size + nanosecond
+    // timestamps). The opened handle must describe the SAME object when
+    // re-checked after open: a swap-and-restore of the path (replace `abs`
+    // with an outside symlink for fs.open, then restore it before the
+    // realpath recheck) would defeat a pathname-only recheck while the fd
+    // still references the outside file (codex-connector P1, round 6).
+    const preStat = await fs.stat(abs, { bigint: true }).catch(() => null);
+    if (!preStat?.isFile()) return refuse(res);
     // Open by file descriptor: closes the TOCTOU window between containment
     // checks and the actual read. Immediately after opening, re-verify the
-    // path still resolves to the vetted real path — if the file or an
-    // ancestor directory was swapped (symlink/junction) in the window
-    // between validation and open, realpath now resolves the NEW target and
-    // differs from `abs`; the handle is closed and nothing is served from
-    // the replaced object (codex-connector P1, round 5).
+    // path still resolves to the vetted real path AND the handle's identity
+    // fields match the pre-open snapshot.
     const fd = await fs.open(abs, 'r').catch(() => null);
     if (!fd) return refuse(res);
     const recheck = await fs.realpath(abs).catch(() => null);
@@ -375,19 +380,24 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     }
     let stat;
     try {
-      stat = await fd.stat();
+      stat = await fd.stat({ bigint: true });
     } catch {
       await fd.close().catch(() => {});
       return refuse(res);
     }
-    if (!stat.isFile()) {
+    if (
+      !stat.isFile() ||
+      stat.size !== preStat.size ||
+      stat.mtimeNs !== preStat.mtimeNs ||
+      stat.birthtimeNs !== preStat.birthtimeNs
+    ) {
       await fd.close().catch(() => {});
       return refuse(res);
     }
 
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
-      'Content-Length': stat.size,
+      'Content-Length': Number(stat.size),
       ...SECURITY_HEADERS,
     });
     if (req.method === 'HEAD') {

@@ -416,9 +416,8 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
     } as never);
     expect(res.ok).toBe(true);
     expect(wc.loadURLMock).toHaveBeenCalledWith(PREVIEW_URL);
-    // guard attached: will-navigate listener registered + window-open handler set
+    // guard attached: will-navigate listener registered
     expect(wc.willNavigateListeners.length).toBeGreaterThan(0);
-    expect(wc.windowOpenHandler).toBeTruthy();
   });
 
   it('blocks page-initiated navigation away from a preview page, allows same-origin', async () => {
@@ -447,11 +446,17 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
     listener({ preventDefault: () => { prevented = true; } }, 'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/other.html');
     expect(prevented).toBe(false);
 
-    // popup from a preview page → denied; after the tab navigated to a
-    // normal page (same webContents, current URL changed) → allowed
-    expect(wc.windowOpenHandler?.({ url: 'https://evil.example/' })).toEqual({ action: 'deny' });
-    wc.getURL = () => 'https://example.com';
-    expect(wc.windowOpenHandler?.({ url: 'https://other.example/' })).toEqual({ action: 'allow' });
+    // SAME path shape on a DIFFERENT loopback port → blocked (exact-origin
+    // enforcement, round-6 review: a port-agnostic shape check would let a
+    // preview page reach another local service).
+    prevented = false;
+    listener({ preventDefault: () => { prevented = true; } }, 'http://127.0.0.1:9999/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html');
+    expect(prevented).toBe(true);
+
+    // public origin → blocked
+    prevented = false;
+    listener({ preventDefault: () => { prevented = true; } }, 'https://evil.example/?exfil=1');
+    expect(prevented).toBe(true);
   });
 
   it('does not block navigation when the current page is not a preview', async () => {

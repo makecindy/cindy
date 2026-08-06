@@ -44,6 +44,14 @@
     },
     {
       "file": "extension/src/browser/pw-session.ts",
+      "desc": "compute the exact preview origin (if any) before installing the navigation route guard — drives both the persistent guard and exact-origin enforcement for preview pages"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "enforce exact-origin equality for preview pages inside the route handler (public origins, other loopback services and file:// all abort)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
       "desc": "keep the navigation route guard alive for exact-origin preview pages (sandboxed local HTML preview) so page-initiated navigations stay blocked after the initial goto"
     },
     {
@@ -56,7 +64,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "f99f5cbbc8ed645ed608306722168d0f4bac92f1c2fdcc9825ba385f36e2f1af",
+  "contentHash": "7f63d303331a712c4a2b0358c879299983d0e2557a533ba4065cf163024fc930",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

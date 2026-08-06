@@ -40,6 +40,7 @@ import {
   resolveGhostWebviewAttach,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
+import { isPreviewUrl } from './mcp-integrations/browser-backend/rsb-webview-backend.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
 import {
   attributeRsbNativePopupSurface,
@@ -588,6 +589,14 @@ export function installBrowserGuestHandlers(
   guestContents: WebContents,
 ): void {
   guestContents.setWindowOpenHandler((details) => {
+    // Preview pages never get popups (parity with the CSP sandbox on the
+    // external-Chrome path). Checked HERE — inside the existing handler —
+    // so the controlled-tab routing below stays intact for every other
+    // page; replacing the handler from the RSB guard would bypass popup
+    // routing entirely (round-6 review).
+    if (isPreviewUrl(guestContents.getURL?.() ?? '')) {
+      return { action: 'deny' };
+    }
     if (!isRoutablePopupUrl(details.url) && !isInitialBlankPopupUrl(details.url)) {
       return { action: 'deny' };
     }
