@@ -405,17 +405,31 @@ async function collectOrcaWorkerSources(
   const workers: OrcaWorkerSource[] = [];
   for (const record of workerRows) {
     const workerSession = await readSessionRow(record.sessionId);
-    if (!workerSession || workerSession.status === 'deleted') continue;
+    // active team 的可导出 Worker 必须与运行期 listWorkersByLead 同口径:
+    // 只接受存在且 status=active 的 session。关系悬空/deleted 表示数据异常,
+    // archived 表示用户已归档、当前协同不再展示；前两者不能静默产出缺成员包，
+    // 后者应明确排除而不是导入后复活成 active。
+    if (!workerSession || workerSession.status === 'deleted') {
+      throw codedError(
+        'SHARE_EXPORT_FAILED',
+        `orca worker session is missing or deleted: ${record.sessionId}`,
+      );
+    }
+    if (workerSession.status === 'archived') {
+      log.info('archived orca worker excluded from export', {
+        workerSessionId: record.sessionId,
+      });
+      continue;
+    }
     if (
       workerSession.agentKind !== 'cc' &&
       workerSession.agentKind !== 'codex' &&
       workerSession.agentKind !== 'pi'
     ) {
-      log.warn('orca worker with unsupported agentKind skipped in export', {
-        workerSessionId: record.sessionId,
-        agentKind: workerSession.agentKind,
-      });
-      continue;
+      throw codedError(
+        'SHARE_EXPORT_FAILED',
+        `unsupported agentKind for orca worker ${record.sessionId}: ${workerSession.agentKind}`,
+      );
     }
     workers.push({
       record,
@@ -658,7 +672,7 @@ export async function exportSessionShare(
     : undefined;
 
   const manifest: XdtshareManifest = {
-    formatVersion: XDTSHARE_FORMAT_VERSION,
+    formatVersion: orcaSection ? XDTSHARE_FORMAT_VERSION : XDTSHARE_MIN_READER_VERSION,
     // 协同包必须让不认识 orca 段的旧读端拒读(否则静默丢全部 Worker);
     // 普通包保持 1,旧读端照常可读。
     minReaderVersion: orcaSection ? XDTSHARE_ORCA_MIN_READER_VERSION : XDTSHARE_MIN_READER_VERSION,

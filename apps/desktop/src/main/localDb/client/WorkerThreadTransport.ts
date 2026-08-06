@@ -588,6 +588,11 @@ function sessionImportShare(readyDb, args) {
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
   const messages = expectArray(payload.messages, 'messages');
+  const replaceSessionIds = payload.replaceSessionIds == null
+    ? []
+    : expectArray(payload.replaceSessionIds, 'replaceSessionIds').map((id, i) =>
+        expectString(id, 'replaceSessionIds[' + i + ']'),
+      );
   const orca = payload.orca == null ? null : asRecord(payload.orca, 'orca');
   const insertSession = readyDb.prepare(
     'INSERT INTO sessions (id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode, provider_id, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled, agent_kind, orca_role, source, extra_dirs, codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -647,6 +652,15 @@ function sessionImportShare(readyDb, args) {
     return rawMessages.length;
   };
   const messageCount = readyDb.transaction(() => {
+    // 覆盖导入的替换必须与新图落库同事务:失败时旧 session 状态原子回滚。
+    // 不能走带异步资源清理副作用的 patchSessionMetaInDb。
+    const deleteReplacedSession = readyDb.prepare(
+      "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
+    );
+    const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
+    for (const replacedSessionId of replaceSessionIds) {
+      deleteReplacedSession.run(replacementUpdatedAt, replacedSessionId);
+    }
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');

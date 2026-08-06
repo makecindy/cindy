@@ -311,6 +311,108 @@ describe('tx session.importShare', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM orca_workers').get()).toEqual({ n: 0 });
   });
 
+  it('overwrite replacement is atomic with the imported graph', () => {
+    const existing = validArgs().args.session;
+    db.prepare(
+      `INSERT INTO sessions (
+        id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode,
+        provider_id, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
+        context_window, fast_mode, plan_mode_enabled, agent_kind, orca_role, source, extra_dirs,
+        codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      'existing-session',
+      '旧会话',
+      existing.workingDir,
+      existing.workspaceKind,
+      null,
+      existing.model,
+      existing.effort,
+      existing.permissionMode,
+      null,
+      'active',
+      'old-sdk',
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      'cc',
+      null,
+      'desktop',
+      '[]',
+      null,
+      null,
+      null,
+      1,
+      1,
+    );
+    const args = orcaArgs();
+    (args.args as typeof args.args & { replaceSessionIds?: string[] }).replaceSessionIds = [
+      'existing-session',
+    ];
+
+    tx(db, args);
+
+    expect(
+      db.prepare('SELECT status FROM sessions WHERE id = ?').get('existing-session'),
+    ).toEqual({ status: 'deleted' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 3 });
+  });
+
+  it('overwrite replacement rolls back when the imported graph fails', () => {
+    const existing = validArgs().args.session;
+    db.prepare(
+      `INSERT INTO sessions (
+        id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode,
+        provider_id, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
+        context_window, fast_mode, plan_mode_enabled, agent_kind, orca_role, source, extra_dirs,
+        codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      'existing-session',
+      '旧会话',
+      existing.workingDir,
+      existing.workspaceKind,
+      null,
+      existing.model,
+      existing.effort,
+      existing.permissionMode,
+      null,
+      'archived',
+      'old-sdk',
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      'cc',
+      null,
+      'desktop',
+      '[]',
+      null,
+      null,
+      null,
+      1,
+      1,
+    );
+    const args = orcaArgs();
+    (args.args as typeof args.args & { replaceSessionIds?: string[] }).replaceSessionIds = [
+      'existing-session',
+    ];
+    (args.args.orca.workers[0].session as Record<string, unknown>).title = 42;
+
+    expect(() => tx(db, args)).toThrow();
+
+    expect(
+      db.prepare('SELECT status FROM sessions WHERE id = ?').get('existing-session'),
+    ).toEqual({ status: 'archived' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM orca_teams').get()).toEqual({ n: 0 });
+  });
+
   it('regular bundle without orca leaves orca_role NULL and no team rows', () => {
     tx(db, validArgs());
     const lead = db

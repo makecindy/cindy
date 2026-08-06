@@ -29,7 +29,6 @@ import type {
   SessionImportShareSessionRow,
 } from '../localDb/client/tx/types.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace.js';
-import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import {
   importSharedCodexThread,
@@ -466,21 +465,10 @@ export async function commitShareImport(
   };
 
   try {
-    // 0. 覆盖导入:软删旧会话(复用手动删除的完整语义——DB 更新 + 图片缓存清理 +
-    //    sessions:patched 广播,sidebar 即时移除),并登记 journal 恢复原 status:
-    //    后续任一步失败逆序回滚时旧会话回到列表,不丢用户数据。
-    for (const { id: existingId, status: prevStatus } of conflictExisting) {
-      await patchSessionMetaInDb(existingId, { status: 'deleted' });
-      journal.push(async () => {
-        await patchSessionMetaInDb(existingId, {
-          status: prevStatus === 'archived' ? 'archived' : 'active',
-        });
-      });
-      log.info('share import overwrite: soft-deleted existing session', {
-        existingId,
-        prevStatus,
-      });
-    }
+    // 0. 覆盖导入命中的旧 session 不在编排层提前软删。patchSessionMetaInDb
+    // 会异步清理图片、媒体引用、附件目录与 worktree,这些副作用无法随 journal
+    // 回滚。旧 session id 改由最后的 session.importShare 事务一并标 deleted:
+    // 新图落库失败则 SQLite 原子恢复旧状态,成功才完成替换。
 
     // 0b. worktree(仅 project 会话 + 用户勾选):以所选目录的 git 仓库根为
     //     baseRepo 建会话级 worktree,后续所有 workingDir 相关落位(CC 转录转码
@@ -780,14 +768,21 @@ export async function commitShareImport(
         now,
       }),
       messages: dbMessages,
+      ...(conflictExisting.length > 0
+        ? { replaceSessionIds: conflictExisting.map((existing) => existing.id) }
+        : {}),
       ...(orcaTxArgs ? { orca: orcaTxArgs } : {}),
     });
 
     // ── 最终保真度(lead + 全部 Worker 聚合) ──
-    const bundledCount = restorePlans.reduce((sum, restore) => sum + restore.bundled.length, 0);
+    const bundledKeys = new Set(
+      restorePlans.flatMap((restore) =>
+        restore.bundled.map((transcript) => `${restore.agentKind}:${transcript.sdkSessionId}`),
+      ),
+    );
     const fidelity = resolveFinalFidelity({
       exportFidelity: manifest.exportFidelity,
-      bundledCount,
+      bundledCount: bundledKeys.size,
       transcriptsWritten,
     });
     if (hasCcTranscripts && !transcriptsPlaceable) notes.push('workdirKeyInexact');
@@ -1164,8 +1159,9 @@ function buildSessionRow(params: {
 }
 
 /**
- * 最终保真度:lead + 全部 Worker 聚合口径。bundledCount 是包内实际携带的转录数
- * (codex rollout 计入);transcriptsWritten 是本次真实落位(含复用)数。导出端
+ * 最终保真度:lead + 全部 Worker 聚合口径。bundledCount 按
+ * (agentKind + sdkSessionId) 去重,与 Pi 内容寻址转录的全局去重写盘保持一致。
+ * Codex rollout 也计入；transcriptsWritten 是本次真实落位(含复用)数。导出端
  * 已把"导出时就缺"折进 exportFidelity,导入端只对"包里有但没落成"再降档。
  */
 function resolveFinalFidelity(params: {

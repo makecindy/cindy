@@ -1037,6 +1037,11 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
   const messages = expectArray(payload.messages, 'messages');
+  const replaceSessionIds = payload.replaceSessionIds == null
+    ? []
+    : expectArray(payload.replaceSessionIds, 'replaceSessionIds').map((id, i) =>
+        expectString(id, `replaceSessionIds[${i}]`),
+      );
   const orca = payload.orca == null ? null : asRecord(payload.orca, 'orca');
   const insertSession = db.prepare(
     `INSERT INTO sessions (
@@ -1112,6 +1117,16 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
     return rawMessages.length;
   };
   const transaction = db.transaction(() => {
+    // 覆盖导入的替换必须与新图落库同事务:失败时旧 session 状态原子回滚。
+    // 这里仅改 DB 状态,不能走 patchSessionMetaInDb——它会 fire-and-forget 清理
+    // 图片/媒体引用/附件/worktree,那些副作用无法随 SQLite 事务回滚。
+    const deleteReplacedSession = db.prepare(
+      "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
+    );
+    const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
+    for (const replacedSessionId of replaceSessionIds) {
+      deleteReplacedSession.run(replacementUpdatedAt, replacedSessionId);
+    }
     let messageCount = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');

@@ -27,9 +27,6 @@ const dbMock = vi.hoisted(() => ({
   txCalls: [] as Array<{ name: string; args: unknown }>,
   txError: null as Error | null,
 }));
-const patchMock = vi.hoisted(() => ({
-  calls: [] as Array<{ sessionId: string; patch: Record<string, unknown> }>,
-}));
 const codexMock = vi.hoisted(() => ({
   importCalls: [] as unknown[],
   removeCalls: [] as unknown[],
@@ -165,14 +162,6 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({
     worktreeMock.removeCalls.push(sessionId);
   },
 }));
-// 覆盖导入的软删/恢复走 patchSessionMetaInDb(真实实现依赖 Electron 主进程环境)
-vi.mock('../../localDb/ipc/sessions.js', () => ({
-  patchSessionMetaInDb: async (sessionId: string, patch: Record<string, unknown>) => {
-    patchMock.calls.push({ sessionId, patch });
-    return { id: sessionId, ...patch };
-  },
-}));
-
 const { inspectShareFile, unlockShareDraft, commitShareImport, cancelShareDraft } = await import(
   '../sessionShareImport.js'
 );
@@ -392,7 +381,6 @@ describe('sessionShareImport', () => {
     dbMock.queryCalls = [];
     dbMock.txCalls = [];
     dbMock.txError = null;
-    patchMock.calls = [];
     codexMock.importCalls = [];
     codexMock.removeCalls = [];
     cindyMediaMock.ingestCalls = [];
@@ -646,10 +634,9 @@ describe('sessionShareImport', () => {
       commitShareImport({ draftId: i1.draftId, workingDir: newWorkdir, projectsRootOverride: projectsRoot }),
     ).rejects.toMatchObject({ code: 'SHARE_CONFLICT' });
     expect(dbMock.txCalls).toHaveLength(0);
-    expect(patchMock.calls).toHaveLength(0);
   });
 
-  it('overwrite: soft-deletes existing live session then imports as replacement', async () => {
+  it('overwrite: replaces existing live session inside the import transaction', async () => {
     dbMock.conflictRow = { id: 'existing-session', status: 'active' };
     const filePath = await writeBundleFile(await buildBundle());
     const inspect = await inspectShareFile(filePath);
@@ -662,14 +649,12 @@ describe('sessionShareImport', () => {
       overwrite: true,
     });
     expect(result.sessionId).toBeTruthy();
-    // 旧会话被软删(覆盖 = 替换而非叠加),新会话行正常落库
-    expect(patchMock.calls).toEqual([
-      { sessionId: 'existing-session', patch: { status: 'deleted' } },
-    ]);
     expect(dbMock.txCalls).toHaveLength(1);
+    const txArgs = dbMock.txCalls[0].args as { replaceSessionIds?: string[] };
+    expect(txArgs.replaceSessionIds).toEqual(['existing-session']);
   });
 
-  it('overwrite rollback restores the soft-deleted session to its previous status', async () => {
+  it('overwrite failure leaves replacement entirely to the failed transaction', async () => {
     dbMock.conflictRow = { id: 'existing-session', status: 'archived' };
     dbMock.txError = new Error('disk full');
     const filePath = await writeBundleFile(await buildBundle());
@@ -684,11 +669,7 @@ describe('sessionShareImport', () => {
         overwrite: true,
       }),
     ).rejects.toMatchObject({ code: 'SHARE_IMPORT_FAILED' });
-    // 逆序回滚把旧会话恢复回原 status(archived 不误恢复成 active),不丢用户数据
-    expect(patchMock.calls).toEqual([
-      { sessionId: 'existing-session', patch: { status: 'deleted' } },
-      { sessionId: 'existing-session', patch: { status: 'archived' } },
-    ]);
+    // tx mock 在失败时不记录调用；编排层没有提前 patch/清理旧 session。
     expect(dbMock.txCalls).toHaveLength(0);
   });
 
@@ -704,8 +685,9 @@ describe('sessionShareImport', () => {
       overwrite: true,
     });
     expect(result.sessionId).toBeTruthy();
-    expect(patchMock.calls).toHaveLength(0);
     expect(dbMock.txCalls).toHaveLength(1);
+    const txArgs = dbMock.txCalls[0].args as { replaceSessionIds?: string[] };
+    expect(txArgs.replaceSessionIds).toBeUndefined();
   });
 
   it('reuses pre-existing transcript on disk without overwriting (deleted-session re-import)', async () => {
@@ -1255,7 +1237,7 @@ describe('sessionShareImport', () => {
     ).rejects.toMatchObject({ code: 'SHARE_CONFLICT' });
     expect(dbMock.txCalls).toHaveLength(0);
 
-    // 覆盖导入:命中的旧 Worker 会话被软删后整包落库
+    // 覆盖导入:命中的旧 Worker 会话 id 随整包事务原子替换
     const result = await commitShareImport({
       draftId: inspect.draftId,
       workingDir: newWorkdir,
@@ -1264,11 +1246,9 @@ describe('sessionShareImport', () => {
       overwrite: true,
     });
     expect(result.orcaWorkers).toBe(1);
-    expect(patchMock.calls).toContainEqual({
-      sessionId: 'existing-worker-session',
-      patch: { status: 'deleted' },
-    });
     expect(dbMock.txCalls).toHaveLength(1);
+    const txArgs = dbMock.txCalls[0].args as OrcaTxArgs & { replaceSessionIds?: string[] };
+    expect(txArgs.replaceSessionIds).toEqual(['existing-worker-session']);
   });
 
   it('orca bundle: cc Worker transcripts land beside lead in the same re-sanitized dir', async () => {

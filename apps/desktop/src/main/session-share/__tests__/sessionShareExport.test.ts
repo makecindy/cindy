@@ -31,8 +31,8 @@ vi.mock('../../localDb/client/current.js', () => ({
     queryOne: async (sql: string, params: unknown[]) => {
       if (typeof sql === 'string' && sql.includes('FROM orca_teams')) return teamRef.row;
       const id = params?.[0];
-      if (typeof id === 'string' && workerSessionsById.has(id)) {
-        return workerSessionsById.get(id);
+      if (typeof id === 'string' && id !== 'xdt-session-1') {
+        return workerSessionsById.get(id) ?? null;
       }
       return sessionRowRef.row;
     },
@@ -462,6 +462,7 @@ describe('exportSessionShare', () => {
     expect(outcome.orcaWorkers).toBe(0);
     const zip = await unzipOf(target);
     const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+    expect(manifest.formatVersion).toBe(1);
     expect(manifest.minReaderVersion).toBe(1);
     expect(manifest.orca).toBeUndefined();
   });
@@ -471,8 +472,8 @@ describe('exportSessionShare', () => {
     teamRef.row = { id: 'team-1', status: 'active' };
     workerRowsRef.rows = [
       { sessionId: 'worker-s-1', status: 'done', label: 'dev-1', role: 'developer', focused: 1 },
-      // 已删除的 worker 会话:跳过不入包
-      { sessionId: 'worker-s-gone', status: 'error', label: 'dev-2', role: 'reviewer', focused: 0 },
+      // 已归档 Worker 不在当前协同列表中,导出也应排除,避免导入后复活。
+      { sessionId: 'worker-s-archived', status: 'done', label: 'dev-2', role: 'reviewer', focused: 0 },
     ];
     workerSessionsById.set('worker-s-1', {
       ...baseSession(),
@@ -482,10 +483,10 @@ describe('exportSessionShare', () => {
       orcaRole: 'worker',
       sdkSessionId: 'thread-1',
     });
-    workerSessionsById.set('worker-s-gone', {
+    workerSessionsById.set('worker-s-archived', {
       ...baseSession(),
-      id: 'worker-s-gone',
-      status: 'deleted',
+      id: 'worker-s-archived',
+      status: 'archived',
       orcaRole: 'worker',
     });
     workerMessagesBySession.set('worker-s-1', [
@@ -501,7 +502,7 @@ describe('exportSessionShare', () => {
         rewindAt: null,
       },
     ]);
-    workerMessagesBySession.set('worker-s-gone', []);
+    workerMessagesBySession.set('worker-s-archived', []);
 
     const target = path.join(tmpRoot, 'out-orca.xdtshare');
     const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
@@ -512,6 +513,7 @@ describe('exportSessionShare', () => {
 
     const zip = await unzipOf(target);
     const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+    expect(manifest.formatVersion).toBe(2);
     expect(manifest.minReaderVersion).toBe(2);
     expect(manifest.agentKind).toBe('cc'); // 顶层仍描述 lead
     expect(manifest.orca).toBeDefined();
@@ -541,5 +543,20 @@ describe('exportSessionShare', () => {
       await zip.file('orca/workers/0/session.json')!.async('string'),
     ) as Record<string, unknown>;
     expect(workerSnapshot.agentKind).toBe('codex');
+  });
+
+  it('orca lead export fails closed when an active team Worker session is missing or deleted', async () => {
+    sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };
+    teamRef.row = { id: 'team-broken', status: 'active' };
+    workerRowsRef.rows = [
+      { sessionId: 'worker-missing', status: 'error', label: 'broken', role: 'reviewer', focused: 0 },
+    ];
+
+    await expect(
+      exportSessionShare({
+        sessionId: 'xdt-session-1',
+        targetPath: path.join(tmpRoot, 'out-orca-broken.xdtshare'),
+      }),
+    ).rejects.toMatchObject({ code: 'SHARE_EXPORT_FAILED' });
   });
 });

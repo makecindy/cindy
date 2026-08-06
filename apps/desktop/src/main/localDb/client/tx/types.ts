@@ -378,6 +378,11 @@ export interface SessionImportShareMessageRow {
 export interface SessionImportShareArgs {
   session: SessionImportShareSessionRow;
   messages: SessionImportShareMessageRow[];
+  /**
+   * 覆盖导入命中的旧会话:与新会话/消息/Orca 关系在同一事务先标 deleted。
+   * 事务失败时旧会话状态自动回滚,避免编排层提前软删触发不可逆资源清理。
+   */
+  replaceSessionIds?: string[];
   orca?: {
     team: {
       id: string;
