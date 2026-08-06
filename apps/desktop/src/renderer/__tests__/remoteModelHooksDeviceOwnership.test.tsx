@@ -88,6 +88,53 @@ describe('remote model hook device ownership', () => {
     view.unmount();
   });
 
+  it('does not let a pre-refresh Pi request revive a committed missing snapshot', async () => {
+    let piUnavailable = false;
+    let resolveStalePi!: (value: ReturnType<typeof capabilities>) => void;
+    const stalePi = new Promise<ReturnType<typeof capabilities>>((resolve) => {
+      resolveStalePi = resolve;
+    });
+    const getCapabilities = vi.fn((agentKind: string) => {
+      if (agentKind === 'pi') {
+        if (piUnavailable) return Promise.reject(new Error("Agent 'pi' is not registered"));
+        return stalePi;
+      }
+      return Promise.resolve(capabilities(`local:${agentKind}`));
+    });
+    setElectronApi({ maker: { getCapabilities } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];
+    function Probe() {
+      frames.push(mod.useAgentCapabilities('pi'));
+      return null;
+    }
+
+    const view = render(<Probe />);
+    await waitFor(() => expect(getCapabilities).toHaveBeenCalledWith('pi'));
+
+    piUnavailable = true;
+    const generation = mod.beginLocalCapabilitiesRefresh();
+    const entries = await mod.loadLocalCapabilitiesSnapshot();
+    await act(async () => {
+      expect(mod.commitLocalCapabilitiesSnapshot(generation, entries)).toBe(true);
+    });
+    await waitFor(() => {
+      expect(frames.at(-1)?.capabilities).toBeNull();
+      expect(frames.at(-1)?.loading).toBe(false);
+    });
+
+    await act(async () => {
+      resolveStalePi(capabilities('stale:pi'));
+      await stalePi;
+      await Promise.resolve();
+    });
+
+    expect(frames.at(-1)?.capabilities).toBeNull();
+    expect(mod.getCachedCapabilities('pi')).toBeNull();
+    view.unmount();
+  });
+
   it('never renders the previous device capabilities under a newly selected device', async () => {
     const invoke = vi.fn((deviceId: string) => {
       if (deviceId === 'dev-a') return Promise.resolve(capabilities('Mac A'));

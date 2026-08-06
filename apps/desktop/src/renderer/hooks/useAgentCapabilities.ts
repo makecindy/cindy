@@ -224,7 +224,7 @@ function cacheKey(agentKind: AgentKind, deviceId?: string): CacheKey {
 }
 
 const cache = new Map<CacheKey, AgentCapabilities>();
-const inflight = new Map<CacheKey, Promise<AgentCapabilities>>();
+const inflight = new Map<CacheKey, Promise<AgentCapabilities | null>>();
 /** 本地能力刷新代际；使刷新前的在途 IPC 结果无法回写旧快照。 */
 let localGen = 0;
 /** 已挂载 hook 的本地能力订阅者；刷新完成后一次性切到新快照，避免中途空白帧。 */
@@ -272,7 +272,7 @@ export function subscribeDeviceCapabilities(
 async function fetchCapabilities(
   agentKind: AgentKind,
   deviceId?: string,
-): Promise<AgentCapabilities> {
+): Promise<AgentCapabilities | null> {
   const key = cacheKey(agentKind, deviceId);
   const cached = cache.get(key);
   if (cached) return cached;
@@ -307,8 +307,9 @@ async function fetchCapabilities(
           notifyRemoteCapabilities(deviceId, agentKind, { status: 'ready', capabilities: caps });
       } else if (!deviceId) {
         // 本地热刷新可能已原子换入更新快照；旧请求的调用方也应拿当前 cache，不能在
-        // listener 更新之后又把 hook state 覆盖回旧对象。刷新仍在途时保留旧对象，完成后再通知。
-        return cache.get(key) ?? caps;
+        // listener 更新之后又把 hook state 覆盖回旧对象。刷新仍在途时保留旧对象，完成后再通知；
+        // 若提交的快照明确删除了该 agent，null 是 tombstone，阻止旧请求复活自身结果。
+        return cache.get(key) ?? null;
       }
       return caps;
     })
@@ -422,7 +423,7 @@ export function useAgentCapabilities(
       .then((caps) => {
         // 远程成功结果只经「当前代际 cache commit → listener」更新，避免 revision 前的
         // 旧 Promise 晚到后直接把已刷新的 hook state 覆盖回旧快照。
-        if (cancelled || deviceId) return;
+        if (cancelled || deviceId || caps === null) return;
         setCapabilities(caps);
       })
       .catch((e: unknown) => {
