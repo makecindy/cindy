@@ -154,9 +154,12 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
  * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
  */
-function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
+export async function recycleSessionWorktreeForStatusChange(
+  sessionId: string,
+  status: unknown,
+): Promise<void> {
   if (status !== 'deleted' && status !== 'archived') return;
-  void (async () => {
+  try {
     const [mh, recycle, routeLock] = await Promise.all([
       import('../../maker-host/index.js'),
       import('../../worktree/sessionRemovalRecycle.js'),
@@ -171,16 +174,18 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
         .catch(() => undefined);
     });
     await recycle.recycleWorktreeForRemovedSession(sessionId);
-  })()
-    .catch((err) => {
-      log.warn('worktree recycle after session status change failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    })
-    .finally(() => {
-      broadcastWorktreeChanged(sessionId);
+  } catch (err) {
+    log.warn('worktree recycle after session status change failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    broadcastWorktreeChanged(sessionId);
+  }
+}
+
+function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
+  void recycleSessionWorktreeForStatusChange(sessionId, status);
 }
 
 // shadow savepoint 链(refs/cindy/savepoints/<sid>)刻意**不**挂 status 变化

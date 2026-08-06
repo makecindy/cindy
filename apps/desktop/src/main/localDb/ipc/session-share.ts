@@ -17,7 +17,6 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { isIpcErrorCode } from '../../../shared/ipc-errors.js';
 import { createLogger } from '../../logger.js';
-import { getMakerIfReady } from '../../maker-host/index.js';
 import { notifyGhostSessionEvent } from '../../cindy-brain/index.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import {
@@ -40,7 +39,10 @@ import {
   type ShareImportDraftPrefs,
 } from '../../session-share/sessionShareImport.js';
 import { getDbClient } from '../client/current.js';
-import { broadcastSessionPatched } from './sessions.js';
+import {
+  broadcastSessionPatched,
+  recycleSessionWorktreeForStatusChange,
+} from './sessions.js';
 
 const log = createLogger('session-share-ipc');
 
@@ -169,20 +171,14 @@ export function registerSessionShareIpc(): void {
       const useWorktree = payload.useWorktree === true;
       try {
         const result = await commitShareImport({ draftId, workingDir, draftPrefs, overwrite, useWorktree });
-        // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI/账本收尾：
-        // - 关闭旧 lead + 完整旧 Worker 图的 live runtime，避免被标 deleted 后仍跑；
+        // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI/资源收尾：
         // - 广播 patched 让 sidebar/会话视图立即移除旧任务；
+        // - 经统一回收链在 route lock 下复验 deleted，关闭 runtime 并回收旧 worktree；
         // - 删除旧 session 名下的媒体引用，引用归零的共享 blob 交 recycler 回收。
-        // 不在这里删除转录、worktree 或媒体字节：同 resume id/内容的
-        // 新任务可能复用它们，直接删物理资源会误伤新任务。
+        // 不直接删除转录或媒体字节：同 resume id/内容的新任务可能复用它们。
         for (const replaced of result.replacedSessions) {
-          await getMakerIfReady()?.closeSession(replaced.id).catch((err) => {
-            log.warn('share overwrite close replaced session failed', {
-              sessionId: replaced.id,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
           broadcastSessionPatched(replaced.id, { status: 'deleted' });
+          await recycleSessionWorktreeForStatusChange(replaced.id, 'deleted');
         }
         await cleanupReplacedSessionMediaRefs(result.replacedSessions);
         // replacedSessions 是 main 内部收尾信息，不暴露给 renderer/preload 契约。
