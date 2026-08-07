@@ -757,6 +757,20 @@ export class GoalController {
       if (!changed) return null;
       if (shouldLimit) {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
+        // #2105 P0:直接降上限路径(reviewer P2:shouldLimit 分支写 budgetLimited 此前无
+        // 事件,getGoalRunEvents 会漏掉该预算终态)。与 setGoal 降上限路径埋点语义对齐;
+        // changed 为持久化后的 budgetLimited 状态,预算快照即最终值。
+        if (changed) {
+          this.recordRunEvent('budget-consumed', sessionId, changed, {
+            from: state.status,
+            to: 'budgetLimited',
+            reason: changed.lastReason,
+          });
+          this.recordRunEvent('terminal', sessionId, changed, {
+            to: 'budgetLimited',
+            reason: changed.lastReason,
+          });
+        }
         this.stopSession(sessionId);
       }
       let next = changed;
@@ -1130,12 +1144,14 @@ export class GoalController {
     // updated 为持久化后的 active 状态,非回合事件,不递增 turnIndex。
     // generation 用随后 fireTurn 派发的同代(resetTurn 会在派发前 +1),否则按
     // generation 聚合的消费者无法把恢复原因与首轮派发关联(reviewer P1)。
-    this.recordRunEvent('resumed', sessionId, updated, {
-      to: 'active',
-      reason: opts?.auto ? 'auto-resume' : 'manual-resume',
-      generation: resumedBoundary.generation + 1,
-    });
+    // **busy 时不发 resumed**(reviewer P1:session busy 会跳过 fireTurn,若仍记录
+    // 会产生"已恢复但无派发"的孤儿事件)——resumed 与立即续跑严格成对。
     if (!this.isBusy(sessionId)) {
+      this.recordRunEvent('resumed', sessionId, updated, {
+        to: 'active',
+        reason: opts?.auto ? 'auto-resume' : 'manual-resume',
+        generation: resumedBoundary.generation + 1,
+      });
       await this.fireTurn(sessionId);
     }
   }
@@ -1277,15 +1293,17 @@ export class GoalController {
       this.turns.set(state.sessionId, resumeBoundary);
       this.attachListener(state.sessionId);
       this.emit(state);
+      // 统计"恢复动作"数(与事件口径不同:事件只在实际派发时发)。
+      resumed += 1;
       // #2105 P0:启动/恢复扫描续跑。generation 与随后的 fireTurn 派发同代
       // (resetTurn 派发前 +1),保证恢复原因可关联到其触发的首轮派发。
-      this.recordRunEvent('resumed', state.sessionId, state, {
-        to: 'active',
-        reason: 'resumeActiveGoals',
-        generation: resumeBoundary.generation + 1,
-      });
-      resumed += 1;
+      // **busy 时不发 resumed**(与 resumeGoal 一致,避免孤儿恢复事件)。
       if (!this.isBusy(state.sessionId)) {
+        this.recordRunEvent('resumed', state.sessionId, state, {
+          to: 'active',
+          reason: 'resumeActiveGoals',
+          generation: resumeBoundary.generation + 1,
+        });
         void this.fireTurn(state.sessionId);
       }
     }

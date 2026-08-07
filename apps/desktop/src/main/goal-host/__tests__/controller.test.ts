@@ -3407,4 +3407,28 @@ describe('GoalController', () => {
     expect(terminal).toMatchObject({ to: 'budgetLimited' });
   });
 
+  it('does not record resumed when auto-resume finds the session busy (no orphan resume events)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'usageLimited', usageResetAt: 0, objective: 'busy resume' }));
+    local.session.running = true; // busy → fireTurn 被跳过,resumed 也不得记录
+    await local.controller.resumeGoal('s1', { auto: true });
+    await tick();
+    expect(events.some((e) => e.type === 'resumed')).toBe(false);
+    expect(events.some((e) => e.type === 'turn-dispatched')).toBe(false);
+  });
+
+  it('records budget-consumed + terminal when updateGoal lowers limits below current usage', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'active', turnsUsed: 3, tokensUsed: 900, budgetTokens: 1000, objective: 'edit me' }));
+    await local.controller.updateGoal('s1', { budgetTokens: 100 });
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('budgetLimited');
+    expect(events.some((e) => e.type === 'budget-consumed')).toBe(true);
+    const terminal = events.find((e) => e.type === 'terminal');
+    expect(terminal).toMatchObject({ to: 'budgetLimited' });
+  });
+
 });
