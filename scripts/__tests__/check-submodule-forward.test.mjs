@@ -120,6 +120,31 @@ test('rejects matching tree when the parent list differs', () => {
   }
 });
 
+test('classifies reachable same-tree different-parent history as diverged', () => {
+  const f = fixture();
+  try {
+    const tree = git(f.repo, 'rev-parse', `${f.two}^{tree}`);
+    const duplicate = commitTree(
+      f.repo,
+      git(f.repo, 'rev-parse', `${f.one}^{tree}`),
+      null,
+      'duplicate root',
+    );
+    const candidate = commitTree(
+      f.repo,
+      tree,
+      duplicate,
+      'same tree, different parent',
+    );
+    assert.equal(
+      classifyProtocolRelation(f.repo, f.two, candidate),
+      'diverged',
+    );
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
 test('fails closed when an unavailable base cannot be fetched', () => {
   const f = fixture();
   try {

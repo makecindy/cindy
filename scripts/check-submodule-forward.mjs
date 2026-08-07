@@ -58,10 +58,33 @@ function isAncestor(repoRoot, older, newer) {
   );
 }
 
+function parseCommitMetadata(output) {
+  const [oid, tree, parents = ''] = output.split('\0');
+  return { oid, tree, parents: parents ? parents.split(' ') : [] };
+}
+
 function readCommitMetadata(protocolRepo, oid) {
-  const result = git(protocolRepo, ['show', '-s', '--format=%T%n%P', oid]);
-  const [tree, parents = ''] = result.stdout.trim().split('\n');
-  return { tree, parents: parents ? parents.split(' ') : [] };
+  const result = git(protocolRepo, [
+    'show',
+    '-s',
+    '--format=%H%x00%T%x00%P%x00',
+    oid,
+  ]);
+  const metadata = parseCommitMetadata(result.stdout.trimEnd());
+  return { tree: metadata.tree, parents: metadata.parents };
+}
+
+function readAncestorMetadata(protocolRepo, headOid) {
+  const result = git(protocolRepo, [
+    'log',
+    '--format=%H%x00%T%x00%P%x01',
+    headOid,
+  ]);
+  return result.stdout
+    .trimEnd()
+    .split('\x01')
+    .filter(Boolean)
+    .map(parseCommitMetadata);
 }
 
 function hasEquivalentAncestor(
@@ -78,13 +101,8 @@ function hasEquivalentAncestor(
       : metadata.get(baseOid);
   if (!expected) return false;
 
-  const ancestors = git(protocolRepo, ['rev-list', headOid])
-    .stdout.trim()
-    .split('\n')
-    .filter(Boolean);
-  return ancestors.some((candidateOid) => {
-    if (candidateOid === baseOid) return false;
-    const candidate = readCommitMetadata(protocolRepo, candidateOid);
+  return readAncestorMetadata(protocolRepo, headOid).some((candidate) => {
+    if (candidate.oid === baseOid) return false;
     return (
       candidate.tree === expected.tree &&
       candidate.parents.length === expected.parents.length &&
@@ -131,7 +149,11 @@ export function classifyProtocolRelation(
   return 'diverged';
 }
 
-function ensureCommit(protocolRepo, oid) {
+function ensureCommit(
+  protocolRepo,
+  oid,
+  { allowUnreachableBase = false } = {},
+) {
   if (
     git(protocolRepo, ['cat-file', '-e', `${oid}^{commit}`], {
       allowFailure: true,
@@ -139,6 +161,7 @@ function ensureCommit(protocolRepo, oid) {
   ) {
     return true;
   }
+  if (allowUnreachableBase && UNREACHABLE_BASE_COMMITS.has(oid)) return false;
   return (
     git(protocolRepo, ['fetch', '--no-tags', 'origin', oid], {
       allowFailure: true,
@@ -150,7 +173,7 @@ export function validateSubmoduleForward(repoRoot, baseRef, headRef = 'HEAD') {
   const baseOid = readGitlink(repoRoot, baseRef);
   const headOid = readGitlink(repoRoot, headRef);
   const protocolRepo = path.join(repoRoot, SUBMODULE_PATH);
-  ensureCommit(protocolRepo, baseOid);
+  ensureCommit(protocolRepo, baseOid, { allowUnreachableBase: true });
   if (!ensureCommit(protocolRepo, headOid)) {
     throw new Error(`无法准备协议 head commit ${headOid}`);
   }
