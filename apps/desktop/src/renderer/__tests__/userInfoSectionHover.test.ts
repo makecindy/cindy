@@ -123,7 +123,7 @@ describe('UserInfoSection — mobile download entry', () => {
     expect(source).toContain(
       "import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';",
     );
-    expect(source).toMatch(/mobile-download-btn',\s*\n\s*'flex shrink-0.*\n.*isCollapsed \? 'h-8 w-8' : 'h-9 w-9'/);
+    expect(source).toMatch(/mobile-download-btn',\s*\r?\n\s*'flex shrink-0[\s\S]*isCollapsed \? 'h-8 w-8' : 'h-9 w-9'/);
     expect(source).toContain('<Smartphone className="h-5 w-5" aria-hidden="true" />');
   });
 
