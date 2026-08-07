@@ -264,6 +264,22 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.stopDone(2));
   });
 
+  it('/exitctr 隐藏别名与 /exctr 同路径 — 归一化后仍走 executeDetach', async () => {
+    // 守住注册表 alias 归一化链: 老 switch 的 `case '/exitctr':` label 已删,
+    // 等价性依赖 parsePersonalBotCommand 把别名归一到 /exctr — 这里做 dispatch 级兜底。
+    const { executeDetach } = await import('../../binding');
+    vi.mocked(executeDetach).mockResolvedValue({ wasAttached: true } as never);
+    const { handlers } = makeHarness();
+
+    await handlers.handleSlashCommand('/exitctr', { botContextId: 'bot', userId: 'ou_user' });
+
+    expect(executeDetach).toHaveBeenCalledWith(
+      { channel: 'feishu', botContextId: 'bot', userId: 'ou_user' },
+      'feishu-slash',
+    );
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.detachedBySlash);
+  });
+
   it('/start 有欢迎语的渠道回欢迎语, 否则回未知命令', async () => {
     const { handlers } = makeHarness({
       adapterOverrides: {
@@ -311,9 +327,7 @@ describe('IM slash commands', () => {
     expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
     expect(turnRunner.resolveRouteTarget).toHaveBeenCalledOnce();
     expect(mocks.sendMarkdownText.mock.calls.slice(0, 3).map(([, text]) => text)).toEqual(
-      ['/model', '/ctr', '/session'].map((command) =>
-        ui.slash.unknownCommand(command),
-      ),
+      ['/model', '/ctr', '/session'].map((command) => ui.slash.unknownCommand(command)),
     );
     expect(mocks.sendMarkdownText.mock.calls[3]?.[1]).toContain('/permission auto');
   });
