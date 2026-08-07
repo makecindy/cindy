@@ -1593,6 +1593,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       ack: task.ack,
       turnEnd: durableTurnEnd(turnEnd),
     });
+    // 👀 必须换成终态, 否则取消掉的消息会永远挂着「在做」。取消的三个入口
+    // (排队中被 cancel、account deactivation 清队、群上下文 admission 作废)
+    // 都收敛到本方法, 所以这一处就覆盖全部 —— 不要在各入口分别补。
+    // deactivateAccount 里 sendFns.clear() 在本方法之后, 表情发得出去。
+    const ackSend = sendFns.get(task.connectionId);
+    if (ackSend) ackReactions.onFinished(ackTaskOf(task), 'cancelled', ackSend);
   }
 
   /**

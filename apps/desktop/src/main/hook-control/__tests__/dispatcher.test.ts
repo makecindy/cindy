@@ -4192,6 +4192,48 @@ describe('官方 bot ack 表情(msg.op)', () => {
     expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']);
   });
 
+  it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'running' }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'to-cancel' }), c.send);
+    await tick();
+    d.cancel('conn-1', 'to-cancel');
+    await tick();
+
+    // 两条各打 👀, 被取消那条补一个终态 —— 用户主动停止不算失败, 仍是 👍。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀', '👍']);
+  });
+
+  it('表情始终跟随终态: 账号停用不发 turn.end 的队列任务也不补表情', async () => {
+    // 账号停用时普通队列不发终态是**既有** teardown 语义(本 PR 不动出站路径)。
+    // 表情收敛到 finishTaskAsCancelled 这唯一收口点, 于是它天然与终态同进退 ——
+    // 不会出现「终态没发、表情却变了」这种对不上的状态。
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'running' }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
+    await tick();
+    const endsBefore = c.sent.filter((m) => m.type === 'turn.end').length;
+    const reactionsBefore = reactionEmojis(c.sent).length;
+
+    const draining = d.deactivateAccount();
+    await tick();
+    const endsAfter = c.sent.filter((m) => m.type === 'turn.end').length;
+    expect(reactionEmojis(c.sent).length - reactionsBefore).toBe(endsAfter - endsBefore);
+
+    // HookRunOutcome 只有 ok / error 两态, 取消由 dispatcher 侧改写。
+    fr.finish({ status: 'ok' });
+    await draining;
+  });
+
   it('老 server 没宣告 msg-op-v1 → 一帧 msg.op 都不发', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
