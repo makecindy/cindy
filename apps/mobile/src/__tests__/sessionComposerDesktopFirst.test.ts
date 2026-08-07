@@ -352,12 +352,16 @@ describe('mobile session composer desktop-first surface', () => {
     // (停止听写并有意打字)时由 WebKit 按触点放置。
     expect(source).not.toContain('setSelectionToEnd');
     expect(source).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');
-    expect(source).toContain('caretHidden={voiceIsListening}');
+    expect(source).toContain('const voiceIsActiveLayout = voiceIsListening || voiceStartPending;');
+    expect(source).toContain('caretHidden={voiceIsActiveLayout}');
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');
     expect(source).toContain('onPressIn={handleComposerInputPressIn}');
-    expect(source).toContain("placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}");
+    expect(source).toContain("placeholder={voiceIsActiveLayout ? '' : composerLayout.input.placeholder}");
     expect(source).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(source).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
+    expect(source).toContain('inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}');
+    expect(source).toContain('inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}');
+    expect(source).toContain('hidden={voiceIsActiveLayout}');
+    expect(source).toContain("pointerEvents={voiceIsListening ? 'auto' : 'none'}");
     expect(source).toContain('styles.voiceDraftOverlay');
     expect(voiceDraftOverlayStyle).toContain('...StyleSheet.absoluteFill');
     expect(voiceDraftOverlayStyle).toContain("overflow: 'hidden'");

@@ -1258,6 +1258,9 @@ export default function NewRemoteSessionScreen() {
     || voiceState === 'refining';
   const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
+  // Keep Composer geometry stable while startup waits for the first PCM chunk.
+  // Pending reserves the listening slot without showing live listening content.
+  const voiceIsActiveLayout = voiceIsListening || voiceStartPending;
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
   // 只有一台可选设备时无可切换项:禁用下拉、隐藏 ⇕(用户反馈:单选项不要出选框)。
   const deviceHasChoices = deviceOptions.length > 1;
@@ -3224,7 +3227,7 @@ export default function NewRemoteSessionScreen() {
       {composerShowCreateButton ? renderCreateButton() : null}
     </>
   );
-  const renderComposerInputOverlay = () => voiceIsListening ? (
+  const renderComposerInputOverlay = () => voiceIsActiveLayout ? (
     <ScrollView
       ref={voiceDraftScrollRef}
       contentContainerStyle={styles.voiceDraftOverlayContent}
@@ -3243,7 +3246,7 @@ export default function NewRemoteSessionScreen() {
       showsVerticalScrollIndicator={false}
       style={styles.voiceDraftOverlay}
     >
-      {voiceDraftShowsListeningPrompt ? (
+      {voiceIsListening ? (voiceDraftShowsListeningPrompt ? (
         <View style={styles.voiceDraftListeningPrompt}>
           <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           <Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>
@@ -3269,7 +3272,7 @@ export default function NewRemoteSessionScreen() {
             <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           </View>
         </View>
-      )}
+      )) : null}
     </ScrollView>
   ) : null;
 
@@ -4911,16 +4914,16 @@ export default function NewRemoteSessionScreen() {
                   accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                   autoFocus={visualFocusComposer}
                   cardActive={composerCardActive}
-                  caretHidden={voiceIsListening}
+                  caretHidden={voiceIsActiveLayout}
                   cursorColor={colors.inputCaret}
                   inputRef={firstMessageInputRef}
                   leading={renderComposerCollapsedAttachmentBadge()}
                   inputFrameHeight={composerResize.frameHeight}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
-                  inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                  inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                   inputOverlay={renderComposerInputOverlay()}
-                  inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
+                  inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}
                   inputTestID="newSession.firstMessageInput"
                   maxHeight={composerResize.inputMaxHeight}
                   multilineShape={!composerCardActive && composerInputIsMultiline}
@@ -4938,7 +4941,7 @@ export default function NewRemoteSessionScreen() {
                   onPressIn={() => {
                     if (voiceIsListening) void finishVoiceRecording();
                   }}
-                  placeholder={voiceIsListening ? '' : composerPlaceholder}
+                  placeholder={voiceIsActiveLayout ? '' : composerPlaceholder}
                   placeholderTextColor={colors.textTertiary}
                   resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
                   scrollEnabled={composerInputScrollEnabled}

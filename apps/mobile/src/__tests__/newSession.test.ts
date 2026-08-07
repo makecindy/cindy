@@ -934,10 +934,10 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
     expect(newComposerSource).toContain('inputOverlay={renderComposerInputOverlay()}');
-    expect(newComposerSource).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
+    expect(newComposerSource).toContain('inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}');
     expect(newComposerSource).toContain('onChangeText={setFirstMessageDraft}');
     expect(newComposerSource).toContain('onContentSizeChange={handleFirstMessageInputContentSizeChange}');
-    expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
+    expect(newComposerSource).toContain("placeholder={voiceIsActiveLayout ? '' : composerPlaceholder}");
     expect(newComposerSource).toContain('scrollEnabled={composerInputScrollEnabled}');
     expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
@@ -1071,7 +1071,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('testID="newSession.voiceStatus"');
     expect(newSource).toContain('testID="newSession.voiceSettingsButton"');
     expect(newSource).toContain('testID="newSession.voiceMicCaret"');
-    expect(newSource).toContain('const renderComposerInputOverlay = () => voiceIsListening ? (');
+    expect(newSource).toContain('const voiceIsActiveLayout = voiceIsListening || voiceStartPending;');
+    expect(newSource).toContain('const renderComposerInputOverlay = () => voiceIsActiveLayout ? (');
+    expect(newSource).toContain('{voiceIsListening ? (voiceDraftShowsListeningPrompt ? (');
+    expect(newSource).toContain('caretHidden={voiceIsActiveLayout}');
+    expect(newSource).toContain('inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}');
     expect(newSource).toContain("import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';");
     expect(newSource).toContain('const composerListeningPlaceholder = buildSessionComposerLayout({');
     expect(newSource).toContain('<Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>');

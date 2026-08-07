@@ -1959,6 +1959,10 @@ export default function SessionScreen() {
     expanded: voiceIsListening || voiceStartPending,
     counting: voiceIsListening,
   });
+  // Keep Composer geometry stable while startup waits for the first PCM chunk.
+  // Pending reserves the listening slot without enabling the stop gesture or
+  // showing live listening content before capture is real.
+  const voiceIsActiveLayout = voiceIsListening || voiceStartPending;
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
@@ -2333,7 +2337,7 @@ export default function SessionScreen() {
       {renderComposerSendSlot()}
     </>
   );
-  const renderComposerInputOverlay = () => voiceIsListening ? (
+  const renderComposerInputOverlay = () => voiceIsActiveLayout ? (
     // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
     // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
     // 的 view,它根本收不到触摸——把停听写挂在 WebView 的 focus / touch 上都不成立
@@ -2346,6 +2350,7 @@ export default function SessionScreen() {
       // handler 幂等:finishVoiceRecording 有 voiceStopInFlight 门,重复调用是 no-op。
       onPress={handleComposerInputPressIn}
       onPressIn={handleComposerInputPressIn}
+      pointerEvents={voiceIsListening ? 'auto' : 'none'}
       style={styles.voiceDraftOverlay}
       testID="session.voiceDraftOverlay"
     >
@@ -2367,7 +2372,7 @@ export default function SessionScreen() {
         showsVerticalScrollIndicator={false}
         style={styles.voiceDraftScroll}
       >
-        {voiceDraftShowsListeningPrompt ? (
+        {voiceIsListening ? (voiceDraftShowsListeningPrompt ? (
           <View style={styles.voiceDraftListeningPrompt}>
             <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
@@ -2393,7 +2398,7 @@ export default function SessionScreen() {
               <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             </View>
           </View>
-        )}
+        )) : null}
       </ScrollView>
     </Pressable>
   ) : null;
@@ -8498,7 +8503,7 @@ export default function SessionScreen() {
                     accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                     autoFocus={visualFocusComposer}
                     cardActive={composerCardActive}
-                    caretHidden={voiceIsListening}
+                    caretHidden={voiceIsActiveLayout}
                     compact={compactComposer && !composerCardActive}
                     editable={!composerLayout.input.disabled}
                     floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
@@ -8506,7 +8511,7 @@ export default function SessionScreen() {
                     inputFrameHeight={composerResize.frameHeight}
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
                     // hitSlop 越不过父边界(见常量注释)。
-                    inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                    inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                     inputElement={(
                       <ComposerRichInput
                         ref={composerInputRef}
@@ -8515,7 +8520,7 @@ export default function SessionScreen() {
                         document={composerDocument}
                         editable={!composerLayout.input.disabled}
                         height={composerInputVisibleHeight}
-                        hidden={voiceIsListening}
+                        hidden={voiceIsActiveLayout}
                         maxHeight={composerResize.inputMaxHeight}
                         onBlur={() => {
                           setComposerFocused(false);
@@ -8527,7 +8532,7 @@ export default function SessionScreen() {
                         onPasteImages={(uris) => void addPastedImageAttachments(uris)}
                         onPasteImagesLoading={beginPastePlaceholders}
                         onPasteImagesLoadFailed={failPastePlaceholders}
-                        placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
+                        placeholder={voiceIsActiveLayout ? '' : composerLayout.input.placeholder}
                         resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
                         testID="session.composerRichInput"
                         theme={{
@@ -8542,7 +8547,7 @@ export default function SessionScreen() {
                       />
                     )}
                     inputOverlay={renderComposerInputOverlay()}
-                    inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
+                    inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}
                     inputTestID="session.composerInput"
                     leading={renderComposerCollapsedAttachmentBadge()}
                     maxHeight={composerResize.inputMaxHeight}
@@ -8562,7 +8567,7 @@ export default function SessionScreen() {
                     onPasteImagesLoading={beginPastePlaceholders}
                     onPasteImagesLoadFailed={failPastePlaceholders}
                     onPressIn={handleComposerInputPressIn}
-                    placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
+                    placeholder={voiceIsActiveLayout ? '' : composerLayout.input.placeholder}
                     placeholderTextColor={colors.textTertiary}
                     resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
                     scrollEnabled={composerInputScrollEnabled}
