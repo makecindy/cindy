@@ -216,6 +216,30 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('shows a real permission interaction for prompt MCPs in official Claude OAuth Auto', async () => {
+    const { handle, canUseTool, queryPermissionMode, seen } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      mcpProviderNames: ['custom_prompt_mcp'],
+      mcpToolApprovalPolicy: () => 'prompt',
+    });
+    expect(queryPermissionMode).toBe('default');
+
+    const result = await canUseTool(
+      'mcp__custom_prompt_mcp__write_record',
+      { value: 'approved by the interaction resolver' },
+      { toolUseID: 'oauth-prompt-mcp' },
+    );
+
+    expect(result.behavior).toBe('allow');
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]).toMatchObject({
+      kind: 'permission',
+      toolName: 'mcp__custom_prompt_mcp__write_record',
+    });
+    await handle.close();
+  });
+
   it('uses SDK default for a third-party route so Cindy can review callbacks', async () => {
     const { handle, queryPermissionMode } = await startSession('auto', { providerId: 'xd' });
     expect(queryPermissionMode).toBe('default');
