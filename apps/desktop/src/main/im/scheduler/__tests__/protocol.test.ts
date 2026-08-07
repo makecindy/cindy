@@ -26,6 +26,13 @@ describe('Discord scheduler protocol', () => {
       sentAt: 1,
       nonce: '1234567890abcdef',
       channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      runtimeGaps: [
+        {
+          identity: '12345678901234567',
+          generation: 'c'.repeat(32),
+          state: 'dirty',
+        },
+      ],
     })).toBe(true);
   });
 
@@ -86,6 +93,35 @@ describe('Discord scheduler protocol', () => {
       channels: [
         { channel: 'discord', identity: '12345678901234567' },
         { channel: 'discord', identity: '12345678901234568' },
+      ],
+    })).toBe(false);
+    expect(isImSchedulerFrame({
+      kind: 'advertisement',
+      sentAt: 1,
+      channels: [],
+      runtimeGaps: [
+        {
+          identity: '12345678901234567',
+          generation: 'c'.repeat(32),
+          state: 'active',
+        },
+      ],
+    })).toBe(false);
+    expect(isImSchedulerFrame({
+      kind: 'advertisement',
+      sentAt: 1,
+      channels: [],
+      runtimeGaps: [
+        {
+          identity: '12345678901234567',
+          generation: 'c'.repeat(32),
+          state: 'dirty',
+        },
+        {
+          identity: '12345678901234567',
+          generation: 'd'.repeat(32),
+          state: 'dirty',
+        },
       ],
     })).toBe(false);
   });

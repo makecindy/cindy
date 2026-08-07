@@ -16,6 +16,8 @@ export interface SchedulerAdvertisementFrame {
   sentAt: number;
   channels: SchedulerChannelIdentity[];
   runtime?: SchedulerRuntimeFrame;
+  /** Bounded dirty runtime gaps, keyed by Discord identity. */
+  runtimeGaps?: SchedulerRuntimeFrame[];
   /** Echoes a discovery probe so the receiver knows this view is current. */
   inReplyTo?: string;
 }
@@ -26,12 +28,14 @@ export interface SchedulerProbeFrame {
   nonce: string;
   channels: SchedulerChannelIdentity[];
   runtime?: SchedulerRuntimeFrame;
+  runtimeGaps?: SchedulerRuntimeFrame[];
 }
 
 export type ImSchedulerFrame = SchedulerAdvertisementFrame | SchedulerProbeFrame;
 
 const DISCORD_ID_PATTERN = /^[1-9][0-9]{16,19}$/;
 const RUNTIME_GENERATION_PATTERN = /^[a-f0-9]{32}$/;
+const MAX_RUNTIME_GAPS = 8;
 
 /** Only a non-secret Discord application id may cross Device Link. */
 export function isSchedulerChannelIdentity(value: unknown): value is SchedulerChannelIdentity {
@@ -78,20 +82,34 @@ export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
   if (size > 8_192) return false;
   if (typeof frame.sentAt !== 'number' || !Number.isFinite(frame.sentAt)) return false;
   if (frame.kind === 'probe') {
-    if (Object.keys(frame).some((key) => !['kind', 'sentAt', 'nonce', 'channels', 'runtime'].includes(key))) return false;
+    if (Object.keys(frame).some((key) => !['kind', 'sentAt', 'nonce', 'channels', 'runtime', 'runtimeGaps'].includes(key))) return false;
     if (typeof frame.nonce !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(frame.nonce)) return false;
     return Array.isArray(frame.channels)
       && frame.channels.length <= 1
       && frame.channels.every(isSchedulerChannelIdentity)
-      && (frame.runtime === undefined || isSchedulerRuntimeFrame(frame.runtime));
+      && (frame.runtime === undefined || isSchedulerRuntimeFrame(frame.runtime))
+      && isSchedulerRuntimeGaps(frame.runtimeGaps);
   }
   if (frame.kind !== 'advertisement') return false;
-  if (Object.keys(frame).some((key) => !['kind', 'sentAt', 'channels', 'runtime', 'inReplyTo'].includes(key))) return false;
+  if (Object.keys(frame).some((key) => !['kind', 'sentAt', 'channels', 'runtime', 'runtimeGaps', 'inReplyTo'].includes(key))) return false;
   if (
     frame.inReplyTo !== undefined
     && (typeof frame.inReplyTo !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(frame.inReplyTo))
   ) return false;
   if (!Array.isArray(frame.channels) || frame.channels.length > 1) return false;
   return frame.channels.every(isSchedulerChannelIdentity)
-    && (frame.runtime === undefined || isSchedulerRuntimeFrame(frame.runtime));
+    && (frame.runtime === undefined || isSchedulerRuntimeFrame(frame.runtime))
+    && isSchedulerRuntimeGaps(frame.runtimeGaps);
+}
+
+function isSchedulerRuntimeGaps(value: unknown): value is SchedulerRuntimeFrame[] | undefined {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > MAX_RUNTIME_GAPS) return false;
+  const identities = new Set<string>();
+  return value.every((runtime) => {
+    if (!isSchedulerRuntimeFrame(runtime) || runtime.state !== 'dirty') return false;
+    if (identities.has(runtime.identity)) return false;
+    identities.add(runtime.identity);
+    return true;
+  });
 }

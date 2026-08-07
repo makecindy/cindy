@@ -199,7 +199,9 @@ describe('DiscordIM card methods', () => {
           client: { user: { id: 'bot-1' } } as never,
           appId: 'app-1',
           botTag: 'bot#0000',
+          ingressOpen: true,
           connect: vi.fn(async () => {}),
+          closeIngress: vi.fn(async () => {}),
           destroy: vi.fn(async () => {}),
         };
       },
@@ -243,7 +245,9 @@ describe('DiscordIM card methods', () => {
           client: { user: { id: 'bot-1' } } as never,
           appId: 'app-1',
           botTag: 'bot#0000',
+          ingressOpen: true,
           connect: vi.fn(async () => {}),
+          closeIngress: vi.fn(async () => {}),
           destroy: vi.fn(async () => {}),
         };
       },
@@ -276,7 +280,9 @@ describe('DiscordIM card methods', () => {
           } as never,
           appId: 'app-1',
           botTag: 'bot#0000',
+          ingressOpen: true,
           connect: vi.fn(async () => {}),
+          closeIngress: vi.fn(async () => {}),
           destroy: vi.fn(async () => {}),
         };
       },
@@ -316,7 +322,9 @@ describe('DiscordIM card methods', () => {
           } as never,
           appId: 'app-1',
           botTag: 'bot#0000',
+          ingressOpen: true,
           connect: vi.fn(async () => {}),
+          closeIngress: vi.fn(async () => {}),
           destroy: vi.fn(async () => {}),
         };
       },
@@ -399,7 +407,9 @@ function makeIm(channel: ReturnType<typeof makeChannel>): DiscordIM {
       } as never,
       appId: 'app-1',
       botTag: 'bot#0000',
+      ingressOpen: true,
       connect: vi.fn(async () => {}),
+      closeIngress: vi.fn(async () => {}),
       destroy: vi.fn(async () => {}),
     }),
   });

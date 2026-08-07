@@ -197,7 +197,9 @@ function makeIm(
       client: makeClient(channel) as never,
       appId: 'app-1',
       botTag: 'bot#0000',
+      ingressOpen: true,
       connect: vi.fn(async () => {}),
+      closeIngress: vi.fn(async () => {}),
       destroy: vi.fn(async () => {}),
     }),
   });

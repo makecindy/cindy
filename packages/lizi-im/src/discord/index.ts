@@ -378,24 +378,36 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   isSchedulerTransportActive(): boolean {
-    return this.gateway.client !== null;
+    return this.gateway.client !== null && this.gateway.ingressOpen;
   }
 
-  async enterSchedulerStandby(options: { clearRuntimeActiveMarker?: boolean } = {}): Promise<void> {
+  async enterSchedulerStandby(options: {
+    clearRuntimeActiveMarker?: boolean;
+    closeIngress?: boolean;
+  } = {}): Promise<void> {
     const identity = this.getSchedulerIdentity() ?? 'discord';
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
     this.schedulerHandoffDraining = true;
     try {
-      // The scheduler gate is already closed, so new ingress is rejected. Keep
-      // the current Gateway/client and lease generation alive only long enough
-      // for work accepted before the handoff to commit its terminal response.
+      if (options.closeIngress) {
+        // A same-device Device Link ownership loss is invisible to the peer
+        // snapshot because both processes share one deviceId. Close the old
+        // Gateway ingress before the new owner can connect, while retaining
+        // the REST client for already accepted work below.
+        await this.gateway.closeIngress();
+      }
+      // A same-device ownership handoff closes the websocket before this
+      // drain. A normal remote handoff keeps the Gateway receiving DMs so
+      // messages arriving during the drain are accepted into this queue. In
+      // both cases keep the REST client and lease generation alive only long
+      // enough for accepted work to commit its terminal response.
       await this.drainSchedulerHandoffWork();
       // Presence can change while an accepted Agent turn is draining. If the
       // remote winner disappeared and this Desktop owns ingress again, the
       // original handoff decision is stale: keep the existing Gateway instead
       // of manufacturing a clean logout/relogin gap.
-      if (this.schedulerHooks && this.schedulerTransportAllowed(identity)) {
+      if (!options.closeIngress && this.schedulerHooks && this.schedulerTransportAllowed(identity)) {
         // Keep the provider's real connection status. In particular, an
         // existing discord.js client can still be reconnecting; only a real
         // ShardReady/ShardResume event may promote it back to connected.
@@ -1103,7 +1115,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private async handleDmMessage(m: MessageLike): Promise<void> {
-    if (this.disposing || !this.schedulerTransportAllowed()) return;
+    if (this.disposing || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining)) return;
     const acceptedOwnerUserId = this.ownerUserId;
     if (m.author.id !== acceptedOwnerUserId) return;
 

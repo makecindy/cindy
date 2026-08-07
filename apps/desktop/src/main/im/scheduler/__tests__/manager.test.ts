@@ -146,12 +146,18 @@ function confirmPeer(
     state: 'active' | 'dirty' | 'clean';
     predecessor?: string;
   },
+  runtimeGaps?: Array<{
+    identity: string;
+    generation: string;
+    state: 'dirty';
+  }>,
 ): void {
   harness.pushHandler?.(deviceId, {
     kind: 'advertisement',
     sentAt: Date.now(),
     channels,
     ...(runtime ? { runtime } : {}),
+    ...(runtimeGaps ? { runtimeGaps } : {}),
     inReplyTo: latestProbeNonce(deviceId),
   });
 }
@@ -557,6 +563,47 @@ describe('Discord scheduler manager', () => {
     }
   });
 
+  it('advertises dirty runtime gaps for multiple Discord identities without overwriting either one', async () => {
+    harness.owner = false;
+    harness.peers = [
+      { deviceId: 'a', platform: 'darwin', online: true, lastSeenAt: Date.now() },
+      { deviceId: 'b', platform: 'win32', online: true, lastSeenAt: Date.now() },
+    ];
+    const manager = createManager(createDiscord());
+
+    await manager.start();
+    confirmPeer(
+      'a',
+      [],
+      undefined,
+      [{ identity: '12345678901234567', generation: '1'.repeat(32), state: 'dirty' }],
+    );
+    confirmPeer(
+      'b',
+      [],
+      undefined,
+      [{ identity: '76543210987654321', generation: '2'.repeat(32), state: 'dirty' }],
+    );
+    harness.presenceHandler?.({
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    });
+    const advertisement = [...harness.sendPush.mock.calls].reverse().find(
+      ([target, , payload]) => target === 'a'
+        && typeof payload === 'object'
+        && payload !== null
+        && (payload as { kind?: unknown }).kind === 'advertisement',
+    )?.[2] as { runtimeGaps?: Array<{ identity?: string; generation?: string }> } | undefined;
+
+    expect(advertisement?.runtimeGaps).toEqual([
+      { identity: '12345678901234567', generation: '1'.repeat(32), state: 'dirty' },
+      { identity: '76543210987654321', generation: '2'.repeat(32), state: 'dirty' },
+    ]);
+    await manager.stop();
+  });
+
   it('stops the active transport immediately when Device Link ownership is lost', async () => {
     harness.selfDeviceId = 'a';
     const discord = createDiscord();
@@ -571,6 +618,7 @@ describe('Discord scheduler manager', () => {
     await manager.reconcile();
 
     expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledWith({ closeIngress: true });
     await manager.stop();
   });
 

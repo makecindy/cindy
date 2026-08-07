@@ -26,8 +26,11 @@ export interface DiscordGatewayEvents {
 
 export interface DiscordGateway {
   connect(token: string): Promise<void>;
+  /** Close only the Gateway ingress while keeping the REST client alive. */
+  closeIngress(): Promise<void>;
   destroy(): Promise<void>;
   readonly client: Client | null;
+  readonly ingressOpen: boolean;
   readonly appId: string;
   readonly botTag: string;
 }
@@ -82,6 +85,7 @@ export function connectedStatusForBotTag(botTag: string): IMStatus {
 class DiscordJsGateway implements DiscordGateway {
   #client: Client | null = null;
   #connectPromise: Promise<void> | null = null;
+  #ingressOpen = false;
   #appId = '';
   #botTag = '';
   #dedup = createDedup(DEDUP_CAPACITY);
@@ -90,6 +94,10 @@ class DiscordJsGateway implements DiscordGateway {
 
   get client(): Client | null {
     return this.#client;
+  }
+
+  get ingressOpen(): boolean {
+    return this.#ingressOpen;
   }
 
   get appId(): string {
@@ -105,6 +113,7 @@ class DiscordJsGateway implements DiscordGateway {
     if (this.#client?.isReady()) return;
 
     this.ev.onStatus({ kind: 'connecting' });
+    this.#ingressOpen = true;
     const client = new Client({
       intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
       partials: [Partials.Channel],
@@ -120,6 +129,7 @@ class DiscordJsGateway implements DiscordGateway {
         if (this.#client === client) {
           this.ev.onStatus(mapDiscordLoginErrorToStatus(error));
           this.#client = null;
+          this.#ingressOpen = false;
         }
         client.destroy();
         throw error;
@@ -134,10 +144,22 @@ class DiscordJsGateway implements DiscordGateway {
     return connectPromise;
   }
 
+  async closeIngress(): Promise<void> {
+    this.#ingressOpen = false;
+    const client = this.#client;
+    if (!client) return;
+
+    // Client.destroy() also clears the REST token. Handoff must keep accepted
+    // turns able to send their final response, so close only the websocket
+    // manager here; the owning DiscordIM performs full destroy after draining.
+    await (client.ws as unknown as { destroy(): Promise<void> }).destroy();
+  }
+
   async destroy(): Promise<void> {
     const client = this.#client;
     this.#client = null;
     this.#connectPromise = null;
+    this.#ingressOpen = false;
     this.#appId = '';
     this.#botTag = '';
     if (client) {
@@ -150,11 +172,13 @@ class DiscordJsGateway implements DiscordGateway {
       if (this.#client !== client) return;
       this.#appId = readyClient.application?.id ?? readyClient.user.id;
       this.#botTag = readyClient.user.tag;
+      this.#ingressOpen = true;
       this.ev.onStatus(connectedStatusForBotTag(this.#botTag));
     });
 
     client.on(Events.MessageCreate, (message) => {
       if (this.#client !== client) return;
+      if (!this.#ingressOpen) return;
       if (message.author.id === client.user?.id || message.author.bot) return;
       if (message.channel.type !== ChannelType.DM) return;
       if (this.#dedup.seen(message.id)) return;
@@ -163,6 +187,7 @@ class DiscordJsGateway implements DiscordGateway {
 
     client.on(Events.InteractionCreate, async (interaction) => {
       if (this.#client !== client) return;
+      if (!this.#ingressOpen) return;
       if (!interaction.isButton()) return;
       let acknowledged: Promise<void>;
       try {
@@ -191,6 +216,7 @@ class DiscordJsGateway implements DiscordGateway {
       const status = mapDiscordCloseCodeToStatus(event.code);
       if (status.kind === 'error') {
         this.#client = null;
+        this.#ingressOpen = false;
         this.#appId = '';
         this.#botTag = '';
         client.destroy();
@@ -199,14 +225,17 @@ class DiscordJsGateway implements DiscordGateway {
     });
     client.on(Events.ShardReconnecting, () => {
       if (this.#client !== client) return;
+      this.#ingressOpen = false;
       this.ev.onStatus({ kind: 'connecting' });
     });
     client.on(Events.ShardResume, () => {
       if (this.#client !== client) return;
+      this.#ingressOpen = true;
       this.ev.onStatus(connectedStatusForBotTag(this.#botTag));
     });
     client.on(Events.ShardReady, () => {
       if (this.#client !== client) return;
+      this.#ingressOpen = true;
       this.ev.onStatus(connectedStatusForBotTag(this.#botTag));
     });
   }

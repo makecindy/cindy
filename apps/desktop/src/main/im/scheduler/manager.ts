@@ -40,6 +40,7 @@ interface PeerAdvertisement {
   lastSeenAt: number;
   channels: SchedulerAdvertisementFrame['channels'];
   runtime?: SchedulerRuntimeFrame;
+  runtimeGaps?: SchedulerRuntimeFrame[];
 }
 
 export class ImSchedulerManager {
@@ -70,7 +71,8 @@ export class ImSchedulerManager {
   private readonly resolvedRuntimeGenerations = new Set<string>();
   private readonly resolvedRuntimeGenerationOrder: string[] = [];
   private localRuntime: SchedulerRuntimeFrame | null = null;
-  private pendingCleanHandoff: { identity: string; generation: string } | null = null;
+  private readonly runtimeGaps = new Map<string, SchedulerRuntimeFrame>();
+  private readonly pendingCleanHandoffs = new Map<string, { identity: string; generation: string }>();
   private started = false;
   private deviceLinkReady = false;
   private schedulerHooksInstalled = false;
@@ -152,13 +154,14 @@ export class ImSchedulerManager {
         const previous = this.peers.get(source);
         const alreadyConfirmed = this.confirmedPeers.has(source);
         if (alreadyConfirmed && (!previous || payload.sentAt >= previous.sentAt)) {
-          this.observePeerRuntime(payload.runtime);
+          this.observePeerRuntime(payload.runtime, payload.runtimeGaps);
           this.peers.set(source, {
             deviceId: source,
             sentAt: payload.sentAt,
             lastSeenAt: Date.now(),
             channels: payload.channels,
             runtime: payload.runtime,
+            runtimeGaps: payload.runtimeGaps,
           });
         }
         this.advertise(source, payload.nonce);
@@ -173,13 +176,14 @@ export class ImSchedulerManager {
       }
       const previous = this.peers.get(source);
       if (previous && payload.sentAt < previous.sentAt) return;
-      this.observePeerRuntime(payload.runtime);
+      this.observePeerRuntime(payload.runtime, payload.runtimeGaps);
       this.peers.set(source, {
         deviceId: source,
         sentAt: payload.sentAt,
         lastSeenAt: Date.now(),
         channels: payload.channels,
         runtime: payload.runtime,
+        runtimeGaps: payload.runtimeGaps,
       });
       void this.reconcile();
     });
@@ -218,7 +222,7 @@ export class ImSchedulerManager {
     this.activationCooldownUntil = 0;
     this.connectedIdentity = null;
     this.withdrawingIdentity = null;
-    this.pendingCleanHandoff = null;
+    this.pendingCleanHandoffs.clear();
     this.offPresence?.();
     this.offPush?.();
     this.offOwnership?.();
@@ -278,7 +282,7 @@ export class ImSchedulerManager {
     const current = this.reconcileTail.catch(() => undefined).then(async () => {
       if (!this.started) return;
       if (!this.deviceLinkReady || !isDeviceLinkOwner()) {
-        await this.ensureStandby();
+        await this.ensureStandby(undefined, false, true);
         return;
       }
       const identity = this.discord.getSchedulerIdentity();
@@ -383,9 +387,7 @@ export class ImSchedulerManager {
     if (this.discord.isSchedulerTransportActive()) return;
     if (sameIntent && Date.now() - this.lastActivationAttemptAt < ACTIVATION_RETRY_MS) return;
     this.lastActivationAttemptAt = Date.now();
-    const predecessor = this.localRuntime?.identity === identity && this.localRuntime.state === 'dirty'
-      ? this.localRuntime.generation
-      : undefined;
+    const predecessor = this.runtimeGaps.get(identity)?.generation;
     if (predecessor) this.discord.markSchedulerOfflineGap();
     try {
       await this.discord.init();
@@ -408,6 +410,7 @@ export class ImSchedulerManager {
   private async ensureStandby(
     identity = this.discord.getSchedulerIdentity() ?? 'discord',
     clearRuntimeMarker = false,
+    closeIngress = false,
   ): Promise<void> {
     this.desired = 'standby';
     this.desiredIdentity = identity;
@@ -423,7 +426,11 @@ export class ImSchedulerManager {
       return;
     }
     try {
-      await this.discord.enterSchedulerStandby({ clearRuntimeActiveMarker: clearRuntimeMarker });
+      const options = {
+        ...(clearRuntimeMarker ? { clearRuntimeActiveMarker: true } : {}),
+        ...(closeIngress ? { closeIngress: true } : {}),
+      };
+      await this.discord.enterSchedulerStandby(options);
       if (this.discord.isSchedulerTransportActive()) {
         // The winning peer may have disappeared while Discord drained an
         // already accepted turn. The provider re-checks the lease before
@@ -452,7 +459,7 @@ export class ImSchedulerManager {
     this.confirmedPeers.clear();
     this.connectedIdentity = null;
     this.withdrawingIdentity = null;
-    this.pendingCleanHandoff = null;
+    this.pendingCleanHandoffs.clear();
     this.clearReconnectGrace();
     this.clearActivationFailure();
     this.beginDiscoveryGrace();
@@ -552,11 +559,14 @@ export class ImSchedulerManager {
 
   private advertise(deviceId: string, inReplyTo?: string): void {
     if (isDeviceRevoked(deviceId)) return;
+    const legacyRuntime = this.localRuntime ?? this.legacyRuntimeGap();
+    const runtimeGapFrames = this.advertisedRuntimeGaps();
     const frame: SchedulerAdvertisementFrame = {
       kind: 'advertisement',
       sentAt: Date.now(),
       channels: this.advertisedChannels(),
-      ...(this.localRuntime ? { runtime: this.localRuntime } : {}),
+      ...(legacyRuntime ? { runtime: legacyRuntime } : {}),
+      ...(runtimeGapFrames ? { runtimeGaps: runtimeGapFrames } : {}),
       ...(inReplyTo ? { inReplyTo } : {}),
     };
     sendDeviceLinkPush(deviceId, IM_SCHEDULER_PUSH_CHANNEL, frame);
@@ -569,13 +579,28 @@ export class ImSchedulerManager {
   private probe(deviceId: string): void {
     if (!this.discoveryNonce || isDeviceRevoked(deviceId)) return;
     this.pendingProbePeers.add(deviceId);
+    const legacyRuntime = this.localRuntime ?? this.legacyRuntimeGap();
+    const runtimeGapFrames = this.advertisedRuntimeGaps();
     sendDeviceLinkPush(deviceId, IM_SCHEDULER_PUSH_CHANNEL, {
       kind: 'probe',
       sentAt: Date.now(),
       nonce: this.discoveryNonce,
       channels: this.advertisedChannels(),
-      ...(this.localRuntime ? { runtime: this.localRuntime } : {}),
+      ...(legacyRuntime ? { runtime: legacyRuntime } : {}),
+      ...(runtimeGapFrames ? { runtimeGaps: runtimeGapFrames } : {}),
     });
+  }
+
+  /** Keep older Desktops interoperable while newer peers receive every gap. */
+  private legacyRuntimeGap(): SchedulerRuntimeFrame | undefined {
+    return [...this.runtimeGaps.values()]
+      .sort((left, right) => left.generation.localeCompare(right.generation))[0];
+  }
+
+  private advertisedRuntimeGaps(): SchedulerRuntimeFrame[] | undefined {
+    if (this.runtimeGaps.size === 0) return undefined;
+    if (this.runtimeGaps.size === 1 && !this.localRuntime) return undefined;
+    return [...this.runtimeGaps.values()];
   }
 
   private advertisedChannels(): SchedulerAdvertisementFrame['channels'] {
@@ -653,37 +678,37 @@ export class ImSchedulerManager {
     });
   }
 
-  private observePeerRuntime(runtime: SchedulerRuntimeFrame | undefined): void {
-    if (!runtime) return;
-    if (runtime.predecessor) this.resolveRuntimeGeneration(runtime.predecessor);
-    if (runtime.state === 'clean') {
-      if (this.localRuntime?.state !== 'dirty') {
-        this.pendingCleanHandoff = {
-          identity: runtime.identity,
-          generation: runtime.generation,
-        };
+  private observePeerRuntime(
+    runtime: SchedulerRuntimeFrame | undefined,
+    runtimeGaps: SchedulerRuntimeFrame[] | undefined,
+  ): void {
+    if (runtime) {
+      if (runtime.predecessor) this.resolveRuntimeGeneration(runtime.predecessor);
+      if (runtime.state === 'clean') {
+        if (!this.runtimeGaps.has(runtime.identity)) {
+          this.pendingCleanHandoffs.set(runtime.identity, {
+            identity: runtime.identity,
+            generation: runtime.generation,
+          });
+        }
+        this.resolveRuntimeGeneration(runtime.generation);
+      } else if (runtime.state === 'active') {
+        this.pendingCleanHandoffs.delete(runtime.identity);
+        if (this.runtimeGaps.get(runtime.identity)?.generation === runtime.generation) {
+          this.runtimeGaps.delete(runtime.identity);
+        }
+      } else {
+        this.adoptRuntimeGap(runtime);
       }
-      this.resolveRuntimeGeneration(runtime.generation);
-      return;
     }
-    if (runtime.state === 'active') {
-      if (this.pendingCleanHandoff?.identity === runtime.identity) {
-        this.pendingCleanHandoff = null;
-      }
-      if (
-        this.localRuntime?.state === 'dirty'
-        && this.localRuntime.generation === runtime.generation
-      ) {
-        this.localRuntime = null;
-      }
-      return;
-    }
-    this.adoptRuntimeGap(runtime);
+    for (const gap of runtimeGaps ?? []) this.adoptRuntimeGap(gap);
   }
 
   private removePeer(deviceId: string): void {
-    const runtime = this.peers.get(deviceId)?.runtime;
+    const peer = this.peers.get(deviceId);
+    const runtime = peer?.runtime;
     if (runtime?.state === 'active') this.adoptRuntimeGap(runtime);
+    for (const gap of peer?.runtimeGaps ?? []) this.adoptRuntimeGap(gap);
     this.peers.delete(deviceId);
   }
 
@@ -691,6 +716,7 @@ export class ImSchedulerManager {
     for (const peer of this.peers.values()) {
       if (isDeviceRevoked(peer.deviceId)) continue;
       if (peer.runtime?.state === 'active') this.adoptRuntimeGap(peer.runtime);
+      for (const gap of peer.runtimeGaps ?? []) this.adoptRuntimeGap(gap);
     }
   }
 
@@ -709,23 +735,19 @@ export class ImSchedulerManager {
 
   private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
     if (this.resolvedRuntimeGenerations.has(runtime.generation)) return;
-    if (this.localRuntime?.state === 'active') return;
+    if (this.localRuntime?.state === 'active' && this.localRuntime.identity === runtime.identity) return;
     // A generation is an opaque random token, not a clock.  Concurrent peers
     // can report more than one unresolved gap before their advertisements
     // converge; keep the lexical minimum only as an order-independent
     // tie-breaker so every observer carries the same compensation token.
-    if (
-      this.localRuntime?.state === 'dirty'
-      && this.localRuntime.generation <= runtime.generation
-    ) return;
-    this.localRuntime = {
+    const existing = this.runtimeGaps.get(runtime.identity);
+    if (existing && existing.generation <= runtime.generation) return;
+    this.runtimeGaps.set(runtime.identity, {
       identity: runtime.identity,
       generation: runtime.generation,
       state: 'dirty',
-    };
-    if (this.pendingCleanHandoff?.identity === runtime.identity) {
-      this.pendingCleanHandoff = null;
-    }
+    });
+    this.pendingCleanHandoffs.delete(runtime.identity);
   }
 
   private beginLocalRuntime(identity: string, predecessor?: string): void {
@@ -736,31 +758,34 @@ export class ImSchedulerManager {
       state: 'active',
       ...(predecessor ? { predecessor } : {}),
     };
-    if (this.pendingCleanHandoff?.identity === identity) {
-      this.pendingCleanHandoff = null;
-    }
+    this.pendingCleanHandoffs.delete(identity);
+    this.runtimeGaps.delete(identity);
   }
 
   private recordActivationGapAfterCleanHandoff(identity: string): void {
-    if (this.pendingCleanHandoff?.identity !== identity) return;
-    this.localRuntime = {
+    const pending = this.pendingCleanHandoffs.get(identity);
+    if (!pending) return;
+    this.runtimeGaps.set(identity, {
       identity,
       generation: randomUUID().replaceAll('-', ''),
       state: 'dirty',
-    };
-    this.pendingCleanHandoff = null;
+    });
+    if (this.localRuntime?.identity === identity) this.localRuntime = null;
+    this.pendingCleanHandoffs.delete(identity);
   }
 
   private finishLocalRuntime(identity: string, clean: boolean): void {
     if (!this.localRuntime || this.localRuntime.identity !== identity) return;
     if (this.localRuntime.state === 'clean') return;
     const runtimeClean = clean && !this.discord.hasPendingSchedulerOfflineNotice();
-    this.localRuntime = {
-      identity,
-      generation: this.localRuntime.generation,
-      state: runtimeClean ? 'clean' : 'dirty',
-    };
-    if (runtimeClean) this.resolveRuntimeGeneration(this.localRuntime.generation);
+    const generation = this.localRuntime.generation;
+    if (runtimeClean) {
+      this.localRuntime = { identity, generation, state: 'clean' };
+      this.resolveRuntimeGeneration(generation);
+    } else {
+      this.localRuntime = null;
+      this.runtimeGaps.set(identity, { identity, generation, state: 'dirty' });
+    }
   }
 
   private markLocalRuntimeDirty(identity: string): void {
@@ -775,11 +800,8 @@ export class ImSchedulerManager {
       const oldest = this.resolvedRuntimeGenerationOrder.shift();
       if (oldest) this.resolvedRuntimeGenerations.delete(oldest);
     }
-    if (
-      this.localRuntime?.state === 'dirty'
-      && this.localRuntime.generation === generation
-    ) {
-      this.localRuntime = null;
+    for (const [identity, runtime] of this.runtimeGaps) {
+      if (runtime.generation === generation) this.runtimeGaps.delete(identity);
     }
   }
 
@@ -798,7 +820,8 @@ export class ImSchedulerManager {
     this.resolvedRuntimeGenerations.clear();
     this.resolvedRuntimeGenerationOrder.length = 0;
     this.localRuntime = null;
-    this.pendingCleanHandoff = null;
+    this.runtimeGaps.clear();
+    this.pendingCleanHandoffs.clear();
     this.discoveryNonce = '';
     this.discoveryDeadline = 0;
     this.desired = null;
