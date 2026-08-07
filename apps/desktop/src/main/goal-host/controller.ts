@@ -451,7 +451,16 @@ export class GoalController {
       ...extra,
       at: this.now(),
     };
-    this.deps.recordRunEvent(evt);
+    try {
+      this.deps.recordRunEvent(evt);
+    } catch (error) {
+      // 观测是 best-effort：回调/sink 抛错不得改变状态机执行(派发/持久化/通知)。
+      this.deps.logger.warn('[goal] recordRunEvent failed (best-effort)', {
+        type,
+        goalSessionId,
+        error: String(error),
+      });
+    }
   }
 
   // ── 公开 API ───────────────────────────────────────────────────────────────
@@ -1115,6 +1124,14 @@ export class GoalController {
     this.turns.set(sessionId, resumedBoundary);
     this.attachListener(sessionId);
     this.emit(updated);
+    // #2105 P0:恢复边界事件(reviewer:resumed 此前只在 resumeActiveGoals 记录,
+    // 手动 resumeGoal 会直接从旧生命周期跳到新 generation 的 turn-dispatched,
+    // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑;
+    // updated 为持久化后的 active 状态,非回合事件,不递增 turnIndex。
+    this.recordRunEvent('resumed', sessionId, updated, {
+      to: 'active',
+      reason: opts?.auto ? 'auto-resume' : 'manual-resume',
+    });
     if (!this.isBusy(sessionId)) {
       await this.fireTurn(sessionId);
     }
@@ -1601,13 +1618,27 @@ export class GoalController {
     );
 
     // ── #2105 P0 观测:本轮收口 + 状态迁移 ──────────────────────────────────
-    this.recordRunEvent('turn-finalized', sessionId, state, {
+    // 用决策后计数快照(reviewer: 传决策前 state 会让 turnIndex/预算落后一轮,
+    // 首轮收口被记成第 0 轮)。decision 的 turnsUsed/tokensUsed/noProgressStreak
+    // 是即将持久化的值,状态迁移只与 decision.status 有关,快照只取计数。
+    const postDecisionCounts: Pick<
+      GoalState,
+      'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'
+    > = {
+      turnsUsed: decision.turnsUsed,
+      tokensUsed: decision.tokensUsed,
+      noProgressStreak: decision.noProgressStreak,
+      budgetTokens: state.budgetTokens,
+      maxTurns: state.maxTurns,
+      noProgressLimit: state.noProgressLimit,
+    };
+    this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
       from: state.status,
       to: decision.status,
       reason: decision.lastReason,
     });
     if (decision.status !== state.status) {
-      this.recordRunEvent('state-transition', sessionId, state, {
+      this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
         from: state.status,
         to: decision.status,
         reason: decision.lastReason,
@@ -1620,7 +1651,7 @@ export class GoalController {
       state.noProgressStreak + 1 >= state.noProgressLimit &&
       /no tool use/i.test(decision.lastReason)
     ) {
-      this.recordRunEvent('stall-detected', sessionId, state, {
+      this.recordRunEvent('stall-detected', sessionId, postDecisionCounts, {
         from: state.status,
         to: 'paused',
         reason: decision.lastReason,
@@ -1628,12 +1659,12 @@ export class GoalController {
     }
     // 预算撞线 → budget-consumed + terminal(与 complete 并列的唯二终态)
     if (decision.status === 'budgetLimited') {
-      this.recordRunEvent('budget-consumed', sessionId, state, {
+      this.recordRunEvent('budget-consumed', sessionId, postDecisionCounts, {
         from: state.status,
         to: 'budgetLimited',
         reason: decision.lastReason,
       });
-      this.recordRunEvent('terminal', sessionId, state, {
+      this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
         to: 'budgetLimited',
         reason: decision.lastReason,
       });
@@ -1643,7 +1674,7 @@ export class GoalController {
     // 记录(role:'assistant' + agentMeta.goalCompletion,重开会话仍在),随后删 goal
     // 行让 chip 消失。视觉由 renderer 渲成"目标已达成 · N 轮 · 耗时 X"分隔条。
     if (decision.status === 'complete') {
-      this.recordRunEvent('terminal', sessionId, state, { to: 'complete', reason: decision.lastReason });
+      this.recordRunEvent('terminal', sessionId, postDecisionCounts, { to: 'complete', reason: decision.lastReason });
       // completion commit 保持“达成记录 → clear”的耐久顺序，但单独登记：Stop 会同步
       // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
       // 防止旧目标的删除迟到并抹掉新目标。
@@ -2060,8 +2091,6 @@ export class GoalController {
       const outgoing = pendingHandoff
         ? prependHandoffToUserMessage({ type: 'user', content }, pendingHandoff)
         : { type: 'user' as const, content };
-      // #2105 P0:本轮实际派发(在 send 前、预算守卫之后——走到这里即确定会发)。
-      this.recordRunEvent('turn-dispatched', sessionId, state);
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {
@@ -2079,6 +2108,11 @@ export class GoalController {
             if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
               this.goalDispatchAbortControllers.delete(sessionId);
             }
+            // #2105 P0:turn-dispatched 只能在真正跨过 vendor dispatch 边界后发出
+            // (reviewer: send 返回 accepted:false 时若已记录,会出现"已派发无收口"
+            // 的幽灵事件;onDispatching 是唯一的真实派发边界,且带 isCurrentDispatch
+            // 守卫,取消/竞态下不产生事件)。
+            this.recordRunEvent('turn-dispatched', sessionId, state);
           },
           signal: dispatchAbortController.signal,
         },

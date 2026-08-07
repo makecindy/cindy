@@ -3318,4 +3318,46 @@ describe('GoalController', () => {
     expect(events.find((e) => e.type === 'resumed')).toMatchObject({ to: 'active' });
   });
 
+  it('records decision-post counters on finalize events (turnIndex=1 / budget.turnsUsed=1 on first completion)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"all green"}\n```', tokens: 50 });
+    await tick();
+    const finalized = events.find((e) => e.type === 'turn-finalized');
+    const terminal = events.find((e) => e.type === 'terminal');
+    // 决策后快照:首轮收口 turnIndex=1、budget.turnsUsed=1、tokensUsed=50(不得落后一轮为 0)。
+    expect(finalized).toMatchObject({ turnIndex: 1, from: 'active', to: 'complete' });
+    expect(finalized?.budget).toMatchObject({ turnsUsed: 1, tokensUsed: 50 });
+    expect(terminal).toMatchObject({ turnIndex: 1, to: 'complete' });
+    expect(terminal?.budget).toMatchObject({ turnsUsed: 1, tokensUsed: 50 });
+  });
+
+  it('records resumed with reason manual-resume on manual resumeGoal', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'paused', objective: 'resume me' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    const resumed = events.filter((e) => e.type === 'resumed');
+    expect(resumed.length).toBeGreaterThanOrEqual(1);
+    // 手动恢复路径也必须产出 resumed(此前只有 resumeActiveGoals 记录),且不递增 turnIndex。
+    expect(resumed.at(-1)).toMatchObject({ to: 'active', reason: 'manual-resume', turnIndex: 0 });
+  });
+
+  it('keeps the goal state machine intact when recordRunEvent throws (best-effort observation)', async () => {
+    const local = makeController({
+      recordRunEvent: () => {
+        throw new Error('sink boom');
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"still works"}\n```', tokens: 10 });
+    await tick();
+    // 观测抛错不得中断终态收口:达成记录落账 + goal 行清除。
+    expect(local.completions).toHaveLength(1);
+    expect(local.completions[0].summary).toMatchObject({ turnsUsed: 1, reason: 'still works' });
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
 });
