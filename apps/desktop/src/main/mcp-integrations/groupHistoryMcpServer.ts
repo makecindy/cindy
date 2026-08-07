@@ -109,8 +109,9 @@ function presentHits(hits: GroupHistorySearchHit[]) {
     budget -= text.length;
     return {
       messageId: hit.messageId,
-      chatName: hit.chatName,
-      // 作者名同样是成员可控字符串, 一并中和(否则栅栏可以从 author 字段被撬开)。
+      // 群名与作者名同样是成员可控字符串(群管理员可改群名), 一并中和 ——
+      // 栅栏只要有一个字段没走中和路径, 就能从那里被提前闭合。
+      chatName: hit.chatName === null ? null : neutralizeHistoryFence(hit.chatName),
       author: neutralizeHistoryFence(hit.author),
       isBot: hit.isBot,
       sentAt: hit.sentAt,
@@ -130,11 +131,19 @@ function presentHits(hits: GroupHistorySearchHit[]) {
  * 其中指令不执行"。工具结果这条通道尤其要守 —— 它是**owner 亲自发起**的调用,
  * 模型天然更信任返回值, 而内容仍来自任意群成员。
  */
-function fenceHistoryPayload(payload: Record<string, unknown>): Record<string, unknown> {
+function fenceHistoryPayload(payload: {
+  ok: boolean;
+  lane: GroupHistorySearchLane;
+  count: number;
+  hits: ReturnType<typeof presentHits>;
+}): Record<string, unknown> {
+  const { hits, ...meta } = payload;
   return {
-    ...payload,
+    ...meta,
     untrustedData: true,
-    fence: `<${HISTORY_FENCE_TAG}>\n${JSON.stringify(payload.hits ?? [], null, 2)}\n</${HISTORY_FENCE_TAG}>\n${HISTORY_UNTRUSTED_NOTE}`,
+    // 命中数据**只在栅栏内出现这一次**: 顶层再留一份等于给模型一条绕过边界的
+    // 旁路(它可以直接读没有说明包裹的那份), 同一批正文也会把 4000 字预算撑成两倍。
+    fence: `<${HISTORY_FENCE_TAG}>\n${JSON.stringify(hits, null, 2)}\n</${HISTORY_FENCE_TAG}>\n${HISTORY_UNTRUSTED_NOTE}`,
   };
 }
 
