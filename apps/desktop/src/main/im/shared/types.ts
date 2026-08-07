@@ -140,7 +140,21 @@ export interface ImChannelAdapter {
    * Text-only channels can still resolve agent interactions without rich cards.
    * The callback owns channel-specific correlation and parsing.
    */
-  handleTextInteraction?(userId: string, request: InteractionRequest): Promise<InteractionDecision>;
+  handleTextInteraction?(
+    userId: string,
+    request: InteractionRequest,
+    options?: { timeoutMs?: number },
+  ): Promise<InteractionDecision>;
+  /**
+   * Cancel a channel-owned text interaction when the central route times out,
+   * the turn stops, or the session closes. Return true when the adapter found
+   * and resolved the matching pending request itself.
+   */
+  cancelTextInteraction?(
+    userId: string,
+    requestId: string,
+    decision: InteractionDecision,
+  ): boolean;
   /** Durable channels may promote task-scoped attachments after message persistence succeeds. */
   onUserMessagePersisted?(args: {
     sessionId: string;

@@ -3427,6 +3427,7 @@
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
+        "cindyTextOneshotModelDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply. The plugin declares a preferred model: {{model}} (effective when available in the current catalog; your pin takes precedence).",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -3485,6 +3486,7 @@
         "codeDetailWithNode": "The panel UI runs in an isolated sandbox; local processing is provided by the Node runtime declared above.",
         "added": "New",
         "removed": "Removed",
+        "updated": "Updated",
         "unchanged": "{{count}} other permissions unchanged",
         "noChange": "No permission changes.",
         "pick": "Can ask you to pick a folder for it",
@@ -3554,6 +3556,9 @@
             "embed.text": "Text to vector"
           },
           "defaultOption": "{{model}} (default)",
+          "defaultOptionDeclared": "{{model}} (plugin declared)",
+          "searchPlaceholder": "Search models or providers",
+          "budgetBadge": "Discount",
           "noModels": "No models available"
         },
         "errandPrefs": {
@@ -8618,6 +8623,25 @@
       "waitingForWorker": "Waiting for worker",
       "closeAria": "Close"
     }
+  },
+  "splitGroup": {
+    "closeAria": "Close Pane for “{{title}}”",
+    "closeAll": "Close Split",
+    "toggleDirection": "Toggle Horizontal / Vertical Split",
+    "dropHint": "Drop to Open the Session Here",
+    "loadingTask": "Loading Session…",
+    "resizeAria": "Resize Session Panes",
+    "openInSplit": "Open in Split",
+    "openSide": {
+      "left": "Open Session on Left",
+      "right": "Open Session on Right",
+      "top": "Open Session Above",
+      "bottom": "Open Session Below"
+    },
+    "alreadyOpen": "This session is already open in the split. Choose another session.",
+    "limitReached": "A split can contain up to {{count}} sessions. Close one pane and try again.",
+    "addUnavailable": "This session can’t be opened in the current split. Open a session in the main area and try again.",
+    "workerUnavailable": "A Worker can’t open in a separate pane. Open its Lead session instead."
   },
   "extraDirs": {
     "menuAria": "Composer actions",

@@ -1064,6 +1064,7 @@ my-ghost/
     "ko": "locales/ko.json"
   },
   "version": "1.0.0",
+  "minCindyVersion": "1.2.3", // 可选:安装所需最低 Cindy 正式版本(SemVer)。不写=兼容所有版本;只在确实使用了新版宿主能力时声明
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:意识只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(确认框会如实标注"常驻运行",绝大多数意识不需要,仅订阅型/需秒响应的场景用)
   "slots": ["tool", "cindy", "panel"],   // 能力白名单,没声明的槽运行时不存在
@@ -1095,6 +1096,9 @@ my-ghost/
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 \`\`\`
+
+不要为“当前开发环境版本”机械填写 \`minCindyVersion\`。旧插件和不依赖新版宿主能力的
+插件应省略它；只有确认更早版本无法解析或安装时，才填写能工作的最早正式版本。
 
 ### 2.1 本地化资源(locales)
 
@@ -1624,12 +1628,14 @@ await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash })
 
 \`\`\`js
 // 需声明:"slots": [..., "cindy"], "cindy": { "text": ["oneshot"] }
+// 可选偏好:"cindy": { "text": ["oneshot"], "oneshotModel": "codex/gpt-5.5" }
 const r = await cindy.send({
   type: 'cindy-request',
   kind: 'oneshot_text',
   prompt: '把下面的反馈按情绪分成 正面/负面/中性,只回类别词:\\n' + feedback,
   // expectJson: true,     // 可选:要求只输出 JSON,主机校验可解析
-  // maxTokens: 256,       // 可选:回答预算(1–4096,缺省 1024)
+  // maxTokens: 256,       // 可选:插件自限输出(正整数)。快问快答不设输出上限——
+                          // 与宿主会话一致,按所选供应商/模型的自然输出,60s 超时兜底
   callId: msg.callId,      // tool-call 触发时务必带上(归因)
 });
 // 成功:{ ok:true, text:'…', model:'…' }(model = 实际应答的通道/型号,仅诊断)
@@ -1641,7 +1647,13 @@ const r = await cindy.send({
 - 它走主机的**轻量任务模型链**(用户在设置里配置的快速通道,与会话自动起
   标题同一条),不拉起 Agent、没有工具、碰不到用户文件、不进任何会话——
   要"干活"(读文件、查资料、多步操作)请用派活(§4.11.1);
-- 选型不在你手里,也没有 tier/model 参数:链由用户配置,主机逐候选兜底;
+- 选型仍不在你手里(没有 tier/model 参数),但有两级偏好:**用户可在插件
+  详情页把这项能力钉到他供应商列表里的任意文本模型**(钉死,失败不回落);
+  你也可以在身份卡 \`cindy\` 里声明 \`"oneshotModel": "<目录模型 id>"\` 表达
+  偏好——主机目录解析得到(且用户没停用)就用它,解析不到按未声明处理。
+  优先级:用户钉档 > 你的声明 > 系统默认链。声明只表达意图,别拿它当可用性
+  保证;**更老的宿主会整份拒装含此字段的身份卡**(cindy 详单未知类目硬拒),
+  声明前确认目标用户群的主机版本;
 - \`errorCode:'NO_CANDIDATE'\` = 用户当前没有可用的快速通道(未配置或凭证
   不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸;
 - \`expectJson: true\` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回

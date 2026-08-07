@@ -95,6 +95,7 @@ const INCOMPLETE_REASONS = new Set<TurnChangeIncompleteReason>([
   'diff-too-large',
   'provider-diff-conflict',
   'turn-failed',
+  'concurrent-workspace',
 ]);
 const FILE_STATUSES = new Set<FileDiff['status']>([
   'added',
@@ -133,24 +134,14 @@ export interface BeginTurnChangeSetInput {
 const pendingBySession = new Map<string, PendingTurnChangeSet>();
 const sessionWriteChains = new Map<string, Promise<unknown>>();
 const workspaceActionChains = new Map<string, Promise<unknown>>();
-const workspaceCaptureChains = new Map<string, Promise<void>>();
-const workspaceCaptureLeasesBySession = new Map<string, WorkspaceCaptureLease>();
+const workspaceSealChains = new Map<string, Promise<void>>();
+const beginEpochBySession = new Map<string, number>();
 const pendingWorkspaceBySession = new Map<string, string>();
 const pendingWorkspaceCounts = new Map<string, number>();
 const retainedSessionDirs = new Map<string, number>();
 const activeActionPromises = new Set<Promise<unknown>>();
 const legacyReversibleCapabilityByDetailPath = new Map<string, boolean>();
 let storageWriteChain = Promise.resolve();
-
-interface WorkspaceCaptureLease {
-  key: string;
-  anchorClientId: string;
-  ready: Promise<void>;
-  resolveReady: () => void;
-  rejectReady: (error: unknown) => void;
-  cancelled: boolean;
-  release: () => void;
-}
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');
@@ -249,6 +240,10 @@ function isReversiblePatch(value: PersistedTurnChangeSetV1): boolean {
   ) {
     return false;
   }
+  // An after-image read while another turn overlapped in the same workspace may
+  // contain the other turn's writes; applying it in either direction could undo
+  // work this turn never did. Keep overlapped captures review-only.
+  if (value.incompleteReasons.includes('concurrent-workspace')) return false;
   if (/^(?:GIT binary patch|Binary files .* differ)$/m.test(value.unifiedDiff)) return false;
   if (/^(?:old mode|new mode)\s+/m.test(value.unifiedDiff)) return false;
   if (/\b160000\b/.test(value.unifiedDiff)) return false;
@@ -555,59 +550,55 @@ function unregisterPendingWorkspace(sessionId: string): void {
   else pendingWorkspaceCounts.set(key, next);
 }
 
-function releaseWorkspaceCaptureLease(sessionId: string): void {
-  const lease = workspaceCaptureLeasesBySession.get(sessionId);
-  if (!lease) return;
-  workspaceCaptureLeasesBySession.delete(sessionId);
-  lease.rejectReady(new Error('Turn change-set capture was cancelled.'));
-  lease.release();
+function cancelPendingBegin(sessionId: string): void {
+  beginEpochBySession.set(sessionId, (beginEpochBySession.get(sessionId) ?? 0) + 1);
 }
 
 /**
- * Reserve the workspace synchronously before the first await in beginTurnChangeSet.
- * This makes concurrent dispatches for one local workdir queue behind the prior
- * turn's after-image capture instead of interleaving before/after snapshots.
+ * Tracks in-flight after-image persistence per workspace. The next dispatch in the
+ * same directory waits for prior snapshots to seal before its turn may mutate files.
+ * This wait is bounded capture I/O — never the duration of a running turn.
  */
-function reserveWorkspaceCaptureLease(sessionId: string, cwd: string, anchorClientId: string): {
-  previous: Promise<void>;
-  lease: WorkspaceCaptureLease;
-} {
+function registerWorkspaceSeal(cwd: string, operation: Promise<unknown>): void {
   const key = normalizeTurnChangeSetWorkspaceKey(cwd);
-  const previous = workspaceCaptureChains.get(key) ?? Promise.resolve();
-  let resolveCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    resolveCurrent = resolve;
+  const settled = operation.then(() => undefined, () => undefined);
+  const previous = workspaceSealChains.get(key) ?? Promise.resolve();
+  const current = previous.then(() => settled).finally(() => {
+    if (workspaceSealChains.get(key) === current) workspaceSealChains.delete(key);
   });
-  workspaceCaptureChains.set(key, current);
+  workspaceSealChains.set(key, current);
+}
 
-  let resolveReady!: () => void;
-  let rejectReady!: (error: unknown) => void;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  // A rejected readiness promise is only an internal coordination signal. Keep
-  // it from becoming an unhandled rejection when no re-entrant caller awaits it.
-  void ready.catch(() => undefined);
+async function waitForWorkspaceSeals(cwd: string): Promise<void> {
+  const key = normalizeTurnChangeSetWorkspaceKey(cwd);
+  for (;;) {
+    const current = workspaceSealChains.get(key);
+    if (!current) return;
+    await current.catch(() => undefined);
+    if (workspaceSealChains.get(key) === current) return;
+  }
+}
 
-  let released = false;
-  const lease: WorkspaceCaptureLease = {
-    key,
-    anchorClientId,
-    ready,
-    resolveReady,
-    rejectReady,
-    cancelled: false,
-    release: () => {
-      if (released) return;
-      released = true;
-      lease.cancelled = true;
-      resolveCurrent();
-      if (workspaceCaptureChains.get(key) === current) workspaceCaptureChains.delete(key);
-    },
-  };
-  workspaceCaptureLeasesBySession.set(sessionId, lease);
-  return { previous, lease };
+/**
+ * Optimistic concurrency for one shared workdir: overlapping turns are never
+ * serialized (a turn has no bounded duration). Instead every capture that overlaps
+ * another session's active capture is marked — the record stays reviewable, but an
+ * after-image read during overlap may contain the other turn's writes, so both
+ * sides become review-only (see isReversiblePatch).
+ */
+function markConcurrentWorkspaceCapture(sessionId: string): void {
+  const key = pendingWorkspaceBySession.get(sessionId);
+  const own = pendingBySession.get(sessionId);
+  if (!key || !own) return;
+  let overlapped = false;
+  for (const [otherSessionId, otherKey] of pendingWorkspaceBySession) {
+    if (otherSessionId === sessionId || otherKey !== key) continue;
+    const other = pendingBySession.get(otherSessionId);
+    if (!other) continue;
+    addIncompleteReason(other, 'concurrent-workspace');
+    overlapped = true;
+  }
+  if (overlapped) addIncompleteReason(own, 'concurrent-workspace');
 }
 
 async function waitForWorkspaceActions(cwd: string): Promise<void> {
@@ -814,7 +805,7 @@ export async function beginTurnChangeSet(input: BeginTurnChangeSetInput): Promis
     clearPendingTurnChangeSets(input.sessionId);
     return;
   }
-  let existing = pendingBySession.get(input.sessionId);
+  const existing = pendingBySession.get(input.sessionId);
   if (existing) {
     if (existing.anchorClientId === input.anchorClientId) return;
     log.warn('replacing unfinished turn change-set at dispatch boundary', {
@@ -825,41 +816,21 @@ export async function beginTurnChangeSet(input: BeginTurnChangeSetInput): Promis
     pendingBySession.delete(input.sessionId);
     unregisterPendingWorkspace(input.sessionId);
   }
-  const existingLease = workspaceCaptureLeasesBySession.get(input.sessionId);
-  if (existingLease) {
-    if (existingLease.anchorClientId === input.anchorClientId) {
-      await existingLease.ready;
-      return;
-    }
-    releaseWorkspaceCaptureLease(input.sessionId);
+  const epoch = beginEpochBySession.get(input.sessionId) ?? 0;
+  // Bounded waits only: prior after-image seals and user-triggered undo/reapply in
+  // this workspace. Dispatch never waits for another session's running turn — an
+  // overlapping turn degrades both captures instead (markConcurrentWorkspaceCapture).
+  await waitForWorkspaceSeals(input.cwd);
+  await waitForWorkspaceActions(input.cwd);
+  if ((beginEpochBySession.get(input.sessionId) ?? 0) !== epoch) return;
+  const raced = pendingBySession.get(input.sessionId);
+  if (raced && raced.anchorClientId !== null && raced.anchorClientId !== input.anchorClientId) {
+    pendingBySession.delete(input.sessionId);
+    unregisterPendingWorkspace(input.sessionId);
   }
-  const { previous, lease } = reserveWorkspaceCaptureLease(
-    input.sessionId,
-    input.cwd,
-    input.anchorClientId,
-  );
-  try {
-    await previous.catch(() => undefined);
-    if (lease.cancelled || workspaceCaptureLeasesBySession.get(input.sessionId) !== lease) return;
-    await waitForWorkspaceActions(input.cwd);
-    if (lease.cancelled || workspaceCaptureLeasesBySession.get(input.sessionId) !== lease) return;
-    existing = pendingBySession.get(input.sessionId);
-    if (existing?.anchorClientId === input.anchorClientId) {
-      lease.resolveReady();
-      return;
-    }
-    if (existing) {
-      pendingBySession.delete(input.sessionId);
-      unregisterPendingWorkspace(input.sessionId);
-    }
-    const pending = ensurePending(input.sessionId, input.provider, input.cwd);
-    pending.anchorClientId = input.anchorClientId;
-    lease.resolveReady();
-  } catch (error) {
-    lease.rejectReady(error);
-    releaseWorkspaceCaptureLease(input.sessionId);
-    throw error;
-  }
+  const pending = ensurePending(input.sessionId, input.provider, input.cwd);
+  pending.anchorClientId = input.anchorClientId;
+  markConcurrentWorkspaceCapture(input.sessionId);
 }
 
 function addIncompleteReason(
@@ -1096,7 +1067,16 @@ async function persistPending(
   const files = diffs.length > 0 ? summarizeDiffs(diffs) : pending.nativeFiles;
   // An opaque tool with no known paths is still important turn metadata. Persist a
   // zero-file partial entry so the UI never silently represents it as fully tracked.
-  if (files.length === 0 && pending.incompleteReasons.size === 0) return;
+  // 'turn-failed' and 'concurrent-workspace' alone are not such evidence: a turn
+  // that failed or merely overlapped another session without any capture activity
+  // (no tools, no files) has nothing to record, so persisting an empty partial card
+  // would claim untracked changes that never existed.
+  if (
+    files.length === 0
+    && [...pending.incompleteReasons].every(
+      (reason) => reason === 'turn-failed' || reason === 'concurrent-workspace',
+    )
+  ) return;
   const anchorClientId = pending.anchorClientId;
   if (!anchorClientId) {
     log.warn('turn change-set has no visible user anchor', { sessionId, id: pending.id });
@@ -1142,12 +1122,15 @@ export function finalizeTurnChangeSet(
   const pending = pendingBySession.get(sessionId);
   if (!pending) return Promise.resolve();
   pendingBySession.delete(sessionId);
-  return enqueueSessionWrite(sessionId, () => persistPending(sessionId, pending, terminalState))
+  const write = enqueueSessionWrite(sessionId, () => persistPending(sessionId, pending, terminalState))
     .catch((error) => log.warn('turn change-set persist failed', { sessionId, error }))
     .finally(() => {
       unregisterPendingWorkspace(sessionId);
-      releaseWorkspaceCaptureLease(sessionId);
     });
+  // The next dispatch in this workspace must not let its turn mutate files while
+  // this after-image is still being read (registered synchronously on purpose).
+  registerWorkspaceSeal(pending.cwd, write);
+  return write;
 }
 
 /** Prevents the next product turn from mutating files before the prior after-image is sealed. */
@@ -1421,7 +1404,7 @@ export function applyTurnChangeSetAction(
 export function clearPendingTurnChangeSets(sessionId: string): void {
   pendingBySession.delete(sessionId);
   unregisterPendingWorkspace(sessionId);
-  releaseWorkspaceCaptureLease(sessionId);
+  cancelPendingBegin(sessionId);
 }
 
 async function validAnchorIds(sessionId: string, summaries: readonly TurnChangeSetSummary[]): Promise<Set<string>> {
@@ -1442,10 +1425,24 @@ async function validAnchorIds(sessionId: string, summaries: readonly TurnChangeS
   return new Set(rows.map((row) => row.clientId));
 }
 
+/**
+ * A zero-file entry whose incomplete reasons are at most 'turn-failed' carries no
+ * change information (see persistPending). Earlier builds persisted such entries for
+ * every failed turn; hide them on read so legacy sidecars self-heal without a
+ * migration. The reasons-empty shape is deliberately included: no build has ever
+ * persisted it (the write guard drops it), and if a corrupted sidecar produced one
+ * it would render an equally information-free "+0 -0" card, so it is hidden too.
+ */
+function isEmptyFailedTurnEntry(summary: TurnChangeSetSummary): boolean {
+  return summary.fileCount === 0
+    && summary.incompleteReasons.every((reason) => reason === 'turn-failed');
+}
+
 export async function listTurnChangeSets(sessionId: string): Promise<TurnChangeSetSummary[]> {
   const summaries = await readIndex(sessionId);
   const anchors = await validAnchorIds(sessionId, summaries);
-  return summaries.filter((summary) => anchors.has(summary.anchorClientId));
+  return summaries.filter((summary) =>
+    anchors.has(summary.anchorClientId) && !isEmptyFailedTurnEntry(summary));
 }
 
 export async function getTurnChangeSets(
@@ -1478,7 +1475,7 @@ export async function getTurnChangeSets(
 export async function removeTurnChangeSetsForSession(sessionId: string): Promise<void> {
   pendingBySession.delete(sessionId);
   unregisterPendingWorkspace(sessionId);
-  releaseWorkspaceCaptureLease(sessionId);
+  cancelPendingBegin(sessionId);
   await enqueueSessionWrite(sessionId, async () => {
     await fs.rm(sessionDir(sessionId), { recursive: true, force: true });
   });

@@ -598,6 +598,7 @@ export function ErrorBanner({
         // 与「切换到 Claude.ai 并重试」同一档低打扰内联恢复动作:不弹窗、不抢焦点。
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={onViewBalance}
           className={cn(
             'shrink-0 flex select-none items-center gap-1 text-xs font-medium',
@@ -645,6 +646,7 @@ export function ErrorBanner({
       {onContinueAfterUsageReset && (
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={onContinueAfterUsageReset}
           className={cn(
             'shrink-0 flex items-center gap-1 text-xs font-medium',
@@ -677,6 +679,7 @@ export function ErrorBanner({
       {showInvalidEncryptedContentRecovery && onForkStripEncrypted && (
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={() => void onForkStripEncrypted()}
           disabled={forkStripEncryptedRunning}
           className={cn(

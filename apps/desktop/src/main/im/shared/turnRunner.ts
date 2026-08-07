@@ -106,7 +106,7 @@ import {
   registerPendingExternal,
   rejectAllPending,
 } from './pendingInteractions';
-import { checkDestructiveToolCall } from '../../destructiveGuard';
+import { checkChannelDestructiveToolCall } from './channelToolPolicy';
 import { readXdGatewayApiKey } from './apiKey';
 import {
   hasAuthForImRoute,
@@ -202,6 +202,14 @@ interface TurnState {
   releaseHeadlessSetupTurn: (() => void) | null;
   /** Active central interaction route; acquired at beforeProviderStart. */
   interactionRouteLease: InteractionRouteLease | null;
+  /**
+   * Host turn lease held for the duration of a per-turn permission policy turn.
+   * While held, session.setPermissionMode() blocks any switch into a mode the
+   * agent lists as turnPermissionPolicy-unsupported (e.g. Pi Full Access),
+   * closing the hot-switch bypass window. Released on every terminal / requeue /
+   * cleanup path via releaseTurnInteractionRoute. Null when the turn has no policy.
+   */
+  hostTurnLeaseRelease: (() => void) | null;
   /** Terminal classification consumed by chunked-text commitFinal. */
   terminalKind: 'done' | 'aborted' | 'error';
   terminalErrorCode: string | null;
@@ -663,6 +671,7 @@ export function createTurnRunner(
       headlessSetupClosed: false,
       releaseHeadlessSetupTurn: null,
       interactionRouteLease: null,
+      hostTurnLeaseRelease: null,
       terminalKind: 'done',
       terminalErrorCode: null,
       chunkedReplyBegun: false,
@@ -850,6 +859,13 @@ export function createTurnRunner(
         planMode: false,
         ...(item.turnPermissionPolicy ? { turnPermissionPolicy: item.turnPermissionPolicy } : {}),
         beforeProviderStart: async () => {
+          // 策略轮持一张 host turn lease:期间 setPermissionMode 切到 agent 声明为
+          // turnPermissionPolicy-unsupported 的档位(如 Pi Full Access)会被阻塞到本轮
+          // 终态,堵死"热切到 bypass 让 bridge 直接放行、策略连冒泡机会都没有"的绕过。
+          // 两个 surface 都需要:channel 与 desktop 的策略同样必须扛住热切。
+          if (item.turnPermissionPolicy) {
+            item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
+          }
           item.turn.interactionRouteLease =
             item.turnPermissionPolicy?.confirmationSurface === 'desktop'
               ? beginInteractionRoute(state.makerSession, {
@@ -874,11 +890,29 @@ export function createTurnRunner(
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
-                    origin: { kind: 'im', channel },
+                    origin: item.turnPermissionPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
+                    ...(item.turnPermissionPolicy?.confirmationTimeoutMs
+                      ? { timeoutMs: item.turnPermissionPolicy.confirmationTimeoutMs }
+                      : {}),
+                    ...(item.turnPermissionPolicy?.onInteractionStateChange
+                      ? { onStateChange: item.turnPermissionPolicy.onInteractionStateChange }
+                      : {}),
                   },
-                  handle: handleInteractionFor(rowId, userId, state.scopeKey),
-                  onCancel: (requestId) => cancelPending(requestId, 'interaction_route_released'),
+                  handle: handleInteractionFor(
+                    rowId,
+                    userId,
+                    state.scopeKey,
+                    item.turnPermissionPolicy?.confirmationTimeoutMs,
+                  ),
+                  onCancel: (requestId, decision) =>
+                    adapter.cancelTextInteraction?.(userId, requestId, decision) === true
+                    || cancelPending(
+                      requestId,
+                      'reason' in decision
+                        ? decision.reason ?? 'interaction_route_released'
+                        : 'interaction_route_released',
+                    ),
                 });
           await item.beforeProviderStart?.();
           acceptedAt = Date.now();
@@ -2046,6 +2080,11 @@ export function createTurnRunner(
     const lease = turn.interactionRouteLease;
     turn.interactionRouteLease = null;
     lease?.release(reason);
+    // Release the host turn lease on the same terminal / requeue / cleanup paths
+    // so an unsupported permission-mode switch can proceed once the policy turn ends.
+    const releaseHostLease = turn.hostTurnLeaseRelease;
+    turn.hostTurnLeaseRelease = null;
+    releaseHostLease?.();
   }
 
   function settleTurnTerminal(turn: TurnState): void {
@@ -2546,7 +2585,12 @@ export function createTurnRunner(
 
   // ── interaction handling ────────────────────────────────────────────────────
 
-  function handleInteractionFor(localSessionId: string, userId: string, scopeKey?: string) {
+  function handleInteractionFor(
+    localSessionId: string,
+    userId: string,
+    scopeKey?: string,
+    confirmationTimeoutMs?: number,
+  ) {
     return async (req: InteractionRequest): Promise<InteractionDecision> => {
       log.info(
         `interaction request kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
@@ -2555,7 +2599,7 @@ export function createTurnRunner(
       if (output.kind === 'chunked-text') {
         if (adapter.handleTextInteraction) {
           if (req.kind === 'permission') {
-            const guard = checkDestructiveToolCall(req.toolName, req.input);
+            const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
             if (guard.destructive) {
               log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
               return {
@@ -2565,7 +2609,9 @@ export function createTurnRunner(
               };
             }
           }
-          return adapter.handleTextInteraction(userId, req);
+          return adapter.handleTextInteraction(userId, req, {
+            ...(confirmationTimeoutMs ? { timeoutMs: confirmationTimeoutMs } : {}),
+          });
         }
         if (req.kind === 'ask_user_question') {
           return { kind: 'ask_user_question', answers: {} };
@@ -2593,7 +2639,7 @@ export function createTurnRunner(
       // Bash/PowerShell 命令含 rm/del/Remove-Item/find -delete/git clean -f 等。
       // 模型收到 deny 后通常会改用 AskUserQuestion 跟用户沟通。
       if (req.kind === 'permission') {
-        const guard = checkDestructiveToolCall(req.toolName, req.input);
+        const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
         if (guard.destructive) {
           log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
           return {

@@ -151,6 +151,7 @@ import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { useWorktreeCreation, worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useWorktreeForSession } from '@/contexts/WorktreeContext';
 import {
+  getSessionRouteOwnerId,
   isOrcaLeadSession,
   isOrcaWorkerSession,
   resolveSessionRoute,
@@ -161,7 +162,7 @@ import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
-import { tryHandleNavigationCommand } from '@/lib/navigationCommands';
+import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
 import { subscribeLearnEvents } from '@/features/learn/learnTransport';
@@ -180,6 +181,8 @@ import {
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
+import { hasSplitGroupSessionType } from './splitGroupDnd';
+import { splitGroupStore } from './splitGroupStore';
 import {
   attachGhostMediaToSession,
   getGhostMediaUriFromDataTransfer,
@@ -250,6 +253,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import {
   SessionNavigationModeProvider,
+  type SessionNavigationIntentReporter,
   type SessionNavigationMode,
 } from './embeddedSessionNavigation';
 import {
@@ -328,6 +332,12 @@ function parseOrcaWorkersRevealState(state: unknown): OrcaWorkersRevealState | n
 
 interface CCAgentSessionViewProps {
   sessionIdProp?: string;
+  /**
+   * 显式声明内嵌实例是否接管当前窗口路由的 header / 右栏主权。默认不传时沿用
+   * 历史判据：只有无 sessionIdProp 的全屏路由实例拥有主权。SplitGroup 用它在
+   * 多个常驻会话 pane 之间转移主权，避免切活动 pane 时卸载重挂聊天视图。
+   */
+  routeOwner?: boolean;
   compact?: boolean;
   orcaMode?: boolean;
   /** 在输入区显示被控端提示。普通路由自动显示；完整态居中，折叠态位于 token 左侧。 */
@@ -363,8 +373,12 @@ interface CCAgentSessionViewProps {
   onSearchJumpConsumed?: () => void;
   /** sidebar 子窗口内嵌视图不拥有 router，所有“打开其它会话”入口必须禁用。 */
   navigationMode?: SessionNavigationMode;
+  /** split-pane 内部跳转前上报目标任务，让宿主替换发起跳转的 pane。 */
+  onSessionNavigate?: SessionNavigationIntentReporter;
   /** 内嵌聊天触发侧栏动作时使用的可见 RSB bucket；消息身份仍由 sessionIdProp 决定。 */
   sidebarTargetSessionId?: string;
+  /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
+  disableAutofocus?: boolean;
 }
 
 /**
@@ -473,6 +487,7 @@ function findLatestWorkflowTask(
 
 export function CCAgentSessionView({
   sessionIdProp,
+  routeOwner,
   compact,
   orcaMode,
   showControlledBanner = false,
@@ -483,13 +498,23 @@ export function CCAgentSessionView({
   searchJumpProp,
   onSearchJumpConsumed,
   navigationMode = 'route-owner',
+  onSessionNavigate,
   sidebarTargetSessionId,
+  disableAutofocus = false,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
   const ownsWindowRoute = navigationMode === 'route-owner';
+  const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
+  const sessionNavigationVersionRef = useRef(0);
+  useEffect(
+    () => () => {
+      sessionNavigationVersionRef.current += 1;
+    },
+    [navigationMode, sessionId],
+  );
   const location = useLocation();
   useEffect(() => {
     return window.electronAPI.ghosts.onSetupNavigate((payload) => {
@@ -587,10 +612,10 @@ export function CCAgentSessionView({
   // 让窄 rail 里的消息和输入框尽量铺满。
   const isCompactRail = compact ?? location.pathname.startsWith('/cc-agent/files/');
   const isOrcaMode = orcaMode ?? location.pathname.startsWith('/cc-agent/orca/');
-  // 路由主实例判据(与 SessionContentHeaderRegistration 同款,见 1259 行):只有
-  // 「全屏聊天视图」这个实例拥有右栏开关 / 声明右栏在场;内嵌复用实例(doc 模式
-  // chat rail / 协同 worker 面板,带 sessionIdProp 或处于 compact/orca 语境)不参与。
-  const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;
+  // 路由主实例判据(与 SessionContentHeaderRegistration 同款):默认只有全屏路由
+  // 实例拥有右栏 / header 主权。SplitGroup 的常驻 pane 可用 routeOwner 显式转移
+  // 主权；其它内嵌复用实例(doc rail / Orca worker)不传，行为保持不变。
+  const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);
   const showComposerControlledBanner = ownsRoute || showControlledBanner;
   const controlledBy = useControlledBy();
   const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
@@ -894,6 +919,9 @@ export function CCAgentSessionView({
     if (!sessionId) return;
     if (session?.status === 'deleted') {
       makerChatStore.purgeSession(sessionId);
+      // 分屏树同步收敛：已删任务的 pane 立即塌缩，持久化布局不再保留死节点；
+      // 嵌入 pane 靠这一步退出（下方 return 不导航），owner 导航后也不会恢复它。
+      splitGroupStore.removeSession(sessionId);
       if (!ownsWindowRoute) {
         log.info('deleted session navigation ignored by embedded sidebar view', { sessionId });
         return;
@@ -907,7 +935,10 @@ export function CCAgentSessionView({
     if (!sessionId || !searchJump) return;
     if (searchJump.sessionId !== sessionId) {
       if (!session) return;
-      if (!isOrcaMode && !isOrcaLeadSessionView) {
+      // 仅路由主权实例回收「跳转目标 ≠ 当前会话」的陈旧状态：分屏的嵌入 pane
+      // sessionId 固定，跨会话跳转时它们天然不匹配，若也清理会把 owner 正在
+      // 消费的跳转取消掉（异步 loadAround 被 cleanup 置为 cancelled）。
+      if (!isOrcaMode && !isOrcaLeadSessionView && ownsWindowRoute) {
         clearSearchJumpState();
       }
       return;
@@ -970,6 +1001,7 @@ export function CCAgentSessionView({
     clearSearchJumpState,
     isOrcaLeadSessionView,
     isOrcaMode,
+    ownsWindowRoute,
     requestFocusMessage,
     searchJump,
     session,
@@ -1103,14 +1135,17 @@ export function CCAgentSessionView({
   }, [handoffFrom?.dispatcherSessionId, navigate, ownsWindowRoute, sessionId]);
 
   const handleOpenForkOrigin = useCallback(() => {
-    if (!ownsWindowRoute) {
+    if (!canNavigateSession) {
       log.info('fork origin navigation ignored by embedded sidebar view', { sessionId });
       return;
     }
     if (!session?.parentSessionId || !session.forkedAtMessageId) return;
     const parentSessionId = session.parentSessionId;
     const forkedAtMessageId = session.forkedAtMessageId;
+    const navigationRequestVersion = ++sessionNavigationVersionRef.current;
     void resolveSessionRoute(parentSessionId).then((target) => {
+      if (sessionNavigationVersionRef.current !== navigationRequestVersion) return;
+      onSessionNavigate?.(parentSessionId, getSessionRouteOwnerId(target) ?? parentSessionId);
       navigate(target, {
         state: {
           searchJump: {
@@ -1123,18 +1158,25 @@ export function CCAgentSessionView({
         },
       });
     });
-  }, [navigate, ownsWindowRoute, session?.forkedAtMessageId, session?.parentSessionId, sessionId]);
+  }, [
+    canNavigateSession,
+    navigate,
+    onSessionNavigate,
+    session?.forkedAtMessageId,
+    session?.parentSessionId,
+    sessionId,
+  ]);
 
   const forkOrigin = useMemo(
     () =>
-      ownsWindowRoute && session?.parentSessionId && session.forkedAtMessageId
+      canNavigateSession && session?.parentSessionId && session.forkedAtMessageId
         ? {
             parentSessionId: session.parentSessionId,
             forkedAtMessageId: session.forkedAtMessageId,
             forkedSessionCreatedAt: session.createdAt,
           }
         : null,
-    [ownsWindowRoute, session?.createdAt, session?.forkedAtMessageId, session?.parentSessionId],
+    [canNavigateSession, session?.createdAt, session?.forkedAtMessageId, session?.parentSessionId],
   );
 
   // F-CMD /help: 拉三源(desktop + agent-builtin + agent-skill) palette 快照,
@@ -1853,7 +1895,7 @@ export function CCAgentSessionView({
   // 已记录为开/关都尊重用户历史,只 ensure tab 存在,不抢 active tab。
   // doc rail (isCompactRail) 不在这里打开,由 WorkdirBrowseRoute 的 toggle 布局接管。
   useEffect(() => {
-    if (!collabEnabled || isCompactRail || !sessionId) return;
+    if (!ownsRoute || !collabEnabled || isCompactRail || !sessionId) return;
     const shouldRevealForMissingCollapsedRecord =
       passiveOrcaWorkersRevealSessionRef.current !== sessionId &&
       shouldRevealOrcaWorkersAfterPaint({
@@ -2460,12 +2502,21 @@ export function CCAgentSessionView({
       },
     ) => {
       const deliveryMode = opts?.deliveryMode ?? 'queue';
+      const navigationRequestVersion =
+        deliveryMode !== 'steer' && matchNavigationCommandName(message)
+          ? ++sessionNavigationVersionRef.current
+          : null;
       if (
         deliveryMode !== 'steer' &&
         (await tryHandleNavigationCommand(message, {
           navigate,
           t,
-          allowNavigation: ownsWindowRoute,
+          allowNavigation: canNavigateSession,
+          onSessionNavigate: navigationMode === 'split-pane' ? onSessionNavigate : undefined,
+          isNavigationCurrent:
+            navigationRequestVersion === null
+              ? undefined
+              : () => sessionNavigationVersionRef.current === navigationRequestVersion,
         }))
       ) {
         return;
@@ -2602,7 +2653,9 @@ export function CCAgentSessionView({
       maybeShowContextUsage,
       folderPickerOpen,
       isCodex,
-      ownsWindowRoute,
+      canNavigateSession,
+      navigationMode,
+      onSessionNavigate,
       patchLocalSession,
       sendMessage,
       steerMessage,
@@ -2787,10 +2840,11 @@ export function CCAgentSessionView({
 
   const handleForkStripEncrypted = useCallback(async () => {
     if (!sessionId || session?.agentKind !== 'codex') return;
-    if (!ownsWindowRoute) {
+    if (!canNavigateSession) {
       log.info('encrypted-session fork ignored by embedded sidebar view', { sessionId });
       return;
     }
+    const forkStripNavigationVersion = ++sessionNavigationVersionRef.current;
     setForkStripEncryptedRunning(true);
     try {
       const newSession = await sessionService.forkStripEncrypted(sessionId);
@@ -2798,6 +2852,8 @@ export function CCAgentSessionView({
       // 远程会话:新会话在被控端,先重拉该设备会话列表注册新 sessionId 再 navigate(否则 404)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
+      if (sessionNavigationVersionRef.current !== forkStripNavigationVersion) return;
+      onSessionNavigate?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
       const ipcError = extractIpcError(err);
@@ -2812,7 +2868,15 @@ export function CCAgentSessionView({
     } finally {
       setForkStripEncryptedRunning(false);
     }
-  }, [navigate, ownsWindowRoute, refreshServerSession, session?.agentKind, sessionId, t]);
+  }, [
+    canNavigateSession,
+    navigate,
+    onSessionNavigate,
+    refreshServerSession,
+    session?.agentKind,
+    sessionId,
+    t,
+  ]);
 
   // M35: Vendor fallback —— 会话的 model 与它(固定不变的)agent vendor 明确错配时,
   // 回退到该 vendor 的默认模型。守的是「绕过模型选择器写入 session.model」的脏数据路径
@@ -3216,11 +3280,9 @@ export function CCAgentSessionView({
     // in that case so the card catches scroll/click events without a wrapper
     // swap that would flash the layout.
     <>
-      {/* ContentHeader 注入：仅路由直挂实例（无 sessionIdProp）注册会话标题
-          到右栏顶栏；内嵌实例（workdir-browse chat rail / Orca 面板）不注册，
-          避免覆盖路由主实例的 header。渲染为 null，不影响布局。
-          见 SessionContentHeaderRegistration。 */}
-      {!sessionIdProp && !isCompactRail && !isOrcaMode && session && (
+      {/* ContentHeader 注入：仅 ownsRoute 实例注册。普通路由仍由历史判据获得主权；
+          SplitGroup 则把主权交给活动 pane，非活动 pane 不覆盖 header。 */}
+      {ownsRoute && session && (
         <SessionContentHeaderRegistration
           session={session}
           remoteSessionUnavailable={remoteSessionUnavailable}
@@ -3254,23 +3316,27 @@ export function CCAgentSessionView({
         className="relative flex h-full w-full flex-col bg-content-area"
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current += 1;
           if (dragCounterRef.current === 1) setIsDragOver(true);
         }}
         onDragOver={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = 'copy';
         }}
         onDragLeave={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current -= 1;
           if (dragCounterRef.current === 0) setIsDragOver(false);
         }}
         onDrop={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current = 0;
@@ -3558,7 +3624,7 @@ export function CCAgentSessionView({
                     canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                   }
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
-                  onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
+                  onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -3606,7 +3672,7 @@ export function CCAgentSessionView({
                 onViewBalance={canAccessBilling ? handleViewBalance : undefined}
                 errorSourceProviderId={liveErrorSourceProviderId}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
-                onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
+                onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
                 style={{ width: inputWidth }}
                 className="py-1"
@@ -3828,7 +3894,7 @@ export function CCAgentSessionView({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={isCompactRail}
+                  disableAutofocus={isCompactRail || disableAutofocus}
                   focusOnStorageKeyChange={ownsRoute}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
@@ -4076,11 +4142,14 @@ export function CCAgentSessionView({
           能流到。content 内同时包含两者,所以包在外层即可。 */}
       <SessionNavigationModeProvider
         mode={navigationMode}
+        onSessionNavigate={onSessionNavigate}
         sidebarTargetSessionId={sidebarTargetSessionId}
-        // 只有声明右栏在场的路由主实例(ownsRoute)才是面板宿主:右栏当前显示的
-        // 就是它的 bucket。内嵌实例(worker 面板 / 文件浏览窄 rail / Orca split)
-        // 传 undefined → 面板类入口自行降级,见 useSidebarPanelReachable。
-        sidebarPanelHostSessionId={ownsRoute ? sessionId : undefined}
+        // 路由主实例的 bucket 当前可见；可见 split pane 会在点击前先接管路由，
+        // 因而自己的 bucket 对本次面板动作同样可达。其它内嵌实例(worker 面板 /
+        // 文件浏览窄 rail / Orca split)仍传 undefined，让入口安全降级。
+        sidebarPanelHostSessionId={
+          ownsRoute || navigationMode === 'split-pane' ? sessionId : undefined
+        }
       >
         <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
           <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
