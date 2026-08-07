@@ -3431,4 +3431,46 @@ describe('GoalController', () => {
     expect(terminal).toMatchObject({ to: 'budgetLimited' });
   });
 
+  it('does not record resumed when resume hits a preflight budget stop (no orphan resume events)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    // maxTurns 已耗尽:resumeGoal → fireTurn preflight 撞线 → budgetLimited,无实际派发。
+    await local.storage.upsert(seededGoal({ status: 'paused', turnsUsed: 5, maxTurns: 5, objective: 'resume preflight' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('budgetLimited');
+    // 恢复未触发派发:不得有孤儿 resumed(有 budget 终态事件,但无 resumed/dispatch 对)。
+    expect(events.some((e) => e.type === 'resumed')).toBe(false);
+    expect(events.some((e) => e.type === 'turn-dispatched')).toBe(false);
+    expect(events.some((e) => e.type === 'terminal')).toBe(true);
+  });
+
+  it('does not emit finalize events when the turn is cleared during the quota lookup', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    let releaseQuota: (() => void) | null = null;
+    const quotaGate = new Promise<void>((resolve) => {
+      releaseQuota = resolve;
+    });
+    const local = makeController({
+      recordRunEvent: (e) => events.push(e),
+      getAccountLimit: async () => {
+        await quotaGate;
+        return { limited: false, resetAtMs: null };
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```', tokens: 20 });
+    await tick();
+    // finalizeTurn 已卡在 getAccountLimit;用户此刻清目标。
+    await local.controller.clearGoal('s1');
+    expect(await local.storage.get('s1')).toBeNull();
+    releaseQuota?.();
+    await tick();
+    // abandoned generation:不得出现未提交的假收口事件。
+    expect(events.some((e) => e.type === 'turn-finalized')).toBe(false);
+    expect(events.some((e) => e.type === 'terminal')).toBe(false);
+    expect(events.some((e) => e.type === 'state-transition')).toBe(false);
+  });
+
 });

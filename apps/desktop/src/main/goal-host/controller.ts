@@ -413,6 +413,13 @@ export class GoalController {
   private readonly consecutiveOverloadTurns = new Map<string, number>();
   private readonly now: () => number;
   private readonly debounceMs: number;
+  /**
+   * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
+   * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
+   * turn-dispatched 严格同代成对。generation 校验防止换代/间隔后的旧标记被误消费;
+   * busy / 预算预检拦截 / session 缺失 / send 拒绝等未派发路径不会产生孤儿恢复事件。
+   */
+  private readonly pendingResumeEvents = new Map<string, { reason: string; generation: number }>();
 
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
@@ -1140,15 +1147,13 @@ export class GoalController {
     this.emit(updated);
     // #2105 P0:恢复边界事件(reviewer:resumed 此前只在 resumeActiveGoals 记录,
     // 手动 resumeGoal 会直接从旧生命周期跳到新 generation 的 turn-dispatched,
-    // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑;
-    // updated 为持久化后的 active 状态,非回合事件,不递增 turnIndex。
-    // generation 用随后 fireTurn 派发的同代(resetTurn 会在派发前 +1),否则按
-    // generation 聚合的消费者无法把恢复原因与首轮派发关联(reviewer P1)。
-    // **busy 时不发 resumed**(reviewer P1:session busy 会跳过 fireTurn,若仍记录
-    // 会产生"已恢复但无派发"的孤儿事件)——resumed 与立即续跑严格成对。
+    // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑。
+    // **登记而非立即发出**(reviewer P1:busy / 预算预检拦截 / session 缺失等派发前
+    // 退出路径若已发 resumed,会产生无同代派发的孤儿事件)——fireTurn 在 onDispatching
+    // 真实派发边界消费,与 turn-dispatched 同代成对;generation 校验防旧标记误消费。
+    // busy 时不登记:恢复未触发续跑,不产生恢复事件(与 T10 语义一致)。
     if (!this.isBusy(sessionId)) {
-      this.recordRunEvent('resumed', sessionId, updated, {
-        to: 'active',
+      this.pendingResumeEvents.set(sessionId, {
         reason: opts?.auto ? 'auto-resume' : 'manual-resume',
         generation: resumedBoundary.generation + 1,
       });
@@ -1295,12 +1300,10 @@ export class GoalController {
       this.emit(state);
       // 统计"恢复动作"数(与事件口径不同:事件只在实际派发时发)。
       resumed += 1;
-      // #2105 P0:启动/恢复扫描续跑。generation 与随后的 fireTurn 派发同代
-      // (resetTurn 派发前 +1),保证恢复原因可关联到其触发的首轮派发。
-      // **busy 时不发 resumed**(与 resumeGoal 一致,避免孤儿恢复事件)。
+      // #2105 P0:启动/恢复扫描续跑。登记恢复事件,由 fireTurn 在 onDispatching
+      // 派发边界消费(与 turn-dispatched 同代成对);busy 时不登记,避免孤儿事件。
       if (!this.isBusy(state.sessionId)) {
-        this.recordRunEvent('resumed', state.sessionId, state, {
-          to: 'active',
+        this.pendingResumeEvents.set(state.sessionId, {
           reason: 'resumeActiveGoals',
           generation: resumeBoundary.generation + 1,
         });
@@ -1644,10 +1647,10 @@ export class GoalController {
       outcome,
     );
 
-    // ── #2105 P0 观测:本轮收口 + 状态迁移 ──────────────────────────────────
+    // ── #2105 P0 观测:决策后计数快照 ─────────────────────────────────────
     // 用决策后计数快照(reviewer: 传决策前 state 会让 turnIndex/预算落后一轮,
     // 首轮收口被记成第 0 轮)。decision 的 turnsUsed/tokensUsed/noProgressStreak
-    // 是即将持久化的值,状态迁移只与 decision.status 有关,快照只取计数。
+    // 是即将持久化的值;事件本身在确认提交后才发出(见下方),此处只预备快照。
     const postDecisionCounts: Pick<
       GoalState,
       'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'
@@ -1659,48 +1662,25 @@ export class GoalController {
       maxTurns: state.maxTurns,
       noProgressLimit: state.noProgressLimit,
     };
-    this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
-      from: state.status,
-      to: decision.status,
-      reason: decision.lastReason,
-    });
-    if (decision.status !== state.status) {
-      this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
-        from: state.status,
-        to: decision.status,
-        reason: decision.lastReason,
-      });
-    }
-    // 连续空轮撞 noProgressLimit → paused(decision.lastReason 带 no tool use 标记)
-    if (
-      decision.status === 'paused' &&
-      state.noProgressLimit != null &&
-      state.noProgressStreak + 1 >= state.noProgressLimit &&
-      /no tool use/i.test(decision.lastReason)
-    ) {
-      this.recordRunEvent('stall-detected', sessionId, postDecisionCounts, {
-        from: state.status,
-        to: 'paused',
-        reason: decision.lastReason,
-      });
-    }
-    // 预算撞线 → budget-consumed + terminal(与 complete 并列的唯二终态)
-    if (decision.status === 'budgetLimited') {
-      this.recordRunEvent('budget-consumed', sessionId, postDecisionCounts, {
-        from: state.status,
-        to: 'budgetLimited',
-        reason: decision.lastReason,
-      });
-      this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
-        to: 'budgetLimited',
-        reason: decision.lastReason,
-      });
-    }
 
     // complete 收尾(产品决策):不写 'complete' 行,而是在对话里留一条**持久**达成
     // 记录(role:'assistant' + agentMeta.goalCompletion,重开会话仍在),随后删 goal
     // 行让 chip 消失。视觉由 renderer 渲成"目标已达成 · N 轮 · 耗时 X"分隔条。
     if (decision.status === 'complete') {
+      // 观测:complete 不经 quota 改判(在 quota 前 return),decision 即最终状态;
+      // turn-finalized/state-transition 与 terminal 同发(complete 有顺序提交 barrier)。
+      this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: 'complete',
+        reason: decision.lastReason,
+      });
+      if (decision.status !== state.status) {
+        this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+          from: state.status,
+          to: 'complete',
+          reason: decision.lastReason,
+        });
+      }
       this.recordRunEvent('terminal', sessionId, postDecisionCounts, { to: 'complete', reason: decision.lastReason });
       // completion commit 保持“达成记录 → clear”的耐久顺序，但单独登记：Stop 会同步
       // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
@@ -1760,18 +1740,6 @@ export class GoalController {
       }
     }
 
-    // #2105 P0:quota override 改判后补 corrective 迁移事件(reviewer P1:verdict 应
-    // continue 时,turn-finalized 已在 quota 检查前发出 to:'active';这里状态被改写为
-    // usageLimited,事件流必须补一条真实迁移,否则审计看不到停止原因)。usageLimited
-    // 不是产品终态(到点自动续跑),只补 transition 不补 terminal。
-    if (status !== decision.status) {
-      this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
-        from: decision.status,
-        to: status,
-        reason: lastReason,
-      });
-    }
-
     // 目标改写(Option 1):模型澄清含糊目标后,经 refined_objective 报回更具体的目标。
     // 仅在目标继续推进(shouldFire)且新目标非空、与当前不同时确定性改写 storage.objective,
     // 让 chip 更新、后续续轮按新目标跑。终止/暂停态不改写(避免停掉的目标文案被无意义重写)。
@@ -1811,6 +1779,49 @@ export class GoalController {
     );
     if (!isCurrentTurn()) return;
     if (updated) this.emit(updated);
+
+    // ── #2105 P0 观测(确认提交后):本轮收口 + 状态迁移 ─────────────────────
+    // reviewer P1:事件必须在 quota override 完成 + current-turn 校验 + 持久化
+    // 成功后发出——getAccountLimit pending 期间 Stop/clear 会让 finalizeTurn 提前
+    // return,若事件在 await 前发,审计会报告未提交的假收口。用最终 status/lastReason
+    // (含 quota 改判),state-transition 条件自然覆盖 active→usageLimited 改判场景。
+    this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
+      from: state.status,
+      to: status,
+      reason: lastReason,
+    });
+    if (status !== state.status) {
+      this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: status,
+        reason: lastReason,
+      });
+    }
+    // 连续空轮撞 noProgressLimit → paused(lastReason 带 no tool use 标记)
+    if (
+      status === 'paused' &&
+      state.noProgressLimit != null &&
+      state.noProgressStreak + 1 >= state.noProgressLimit &&
+      /no tool use/i.test(lastReason)
+    ) {
+      this.recordRunEvent('stall-detected', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: 'paused',
+        reason: lastReason,
+      });
+    }
+    // 预算撞线 → budget-consumed + terminal(与 complete 并列的唯二终态)
+    if (status === 'budgetLimited') {
+      this.recordRunEvent('budget-consumed', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: 'budgetLimited',
+        reason: lastReason,
+      });
+      this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
+        to: 'budgetLimited',
+        reason: lastReason,
+      });
+    }
 
     this.resetTurn(sessionId);
 
@@ -2160,6 +2171,17 @@ export class GoalController {
             // cancelled-before-dispatch。
             if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
               this.goalDispatchAbortControllers.delete(sessionId);
+            }
+            // #2105 P0:消费恢复标记——resumed 与 turn-dispatched 在真实派发边界同代
+            // 成对发出(reviewer P1:busy/预算预检/session 缺失等派发前退出不得产生
+            // 孤儿恢复事件;generation 校验防换代/间隔后的旧标记被误消费)。
+            const pendingResume = this.pendingResumeEvents.get(sessionId);
+            if (pendingResume && pendingResume.generation === dispatchBoundary.generation) {
+              this.pendingResumeEvents.delete(sessionId);
+              this.recordRunEvent('resumed', sessionId, state, {
+                to: 'active',
+                reason: pendingResume.reason,
+              });
             }
             // #2105 P0:turn-dispatched 只能在真正跨过 vendor dispatch 边界后发出
             // (reviewer: send 返回 accepted:false 时若已记录,会出现"已派发无收口"
