@@ -424,6 +424,18 @@ export class GoalController {
    */
   private readonly pendingResumeEvents = new Map<string, { reason: string; boundary: TurnAccumulator }>();
 
+  /**
+   * 仅当恢复标记属于给定 boundary 时才清除(reviewer P1:并发下旧 fireTurn 的早退
+   * 清理不得按 sessionId 无条件删除新恢复刚登记的标记——否则新派发缺配对的 resumed)。
+   * boundary 为空时视为无匹配(不删)。
+   */
+  private clearPendingResumeForBoundary(sessionId: string, boundary: TurnAccumulator | undefined | null): void {
+    const pending = this.pendingResumeEvents.get(sessionId);
+    if (pending && pending.boundary === boundary) {
+      this.pendingResumeEvents.delete(sessionId);
+    }
+  }
+
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
     this.debounceMs = deps.continuationDebounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -2041,9 +2053,9 @@ export class GoalController {
   private async fireTurn(sessionId: string): Promise<void> {
     const lifecycleBoundary = this.turns.get(sessionId);
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) {
-      // 生命周期已接管(cancelled / 无 owner):清除恢复标记,防同 session 新目标误消费
-      // (reviewer P2:此 early return 早于 preflight/finally 的清理路径)。
-      this.pendingResumeEvents.delete(sessionId);
+      // 生命周期已接管(cancelled / 无 owner):仅清除属于本次 boundary 的恢复标记
+      // (reviewer P2:此 early return 早于 preflight/finally;并发新恢复的标记不误删)。
+      this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
       return;
     }
     const lifecycleGeneration = lifecycleBoundary.generation;
@@ -2058,8 +2070,8 @@ export class GoalController {
       state.status !== 'active' ||
       !isCurrentLifecycle()
     ) {
-      // 状态/owner 不符即放弃本次派发:清除恢复标记(与 lifecycle 早退一致)。
-      this.pendingResumeEvents.delete(sessionId);
+      // 状态/owner 不符即放弃本次派发:仅清除本次 boundary 的恢复标记(并发新恢复不误删)。
+      this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
       return;
     }
     // preflight 预算守卫:用户可能把 maxTurns/budgetTokens 调小到已超当前用量(updateGoal 会即时
@@ -2091,13 +2103,15 @@ export class GoalController {
       }
       this.stopSession(sessionId);
       if (limited) this.emit(limited);
-      // 派发被放弃:清除恢复标记,防止串入同 sessionId 的下一个 Goal(reviewer P1/P2)。
-      this.pendingResumeEvents.delete(sessionId);
+      // 派发被放弃:仅清除本次 boundary 的恢复标记,防串入同 sessionId 的下一个 Goal
+      // (reviewer P1/P2;并发新恢复的标记不误删)。
+      this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
       return;
     }
     if (this.firing.has(sessionId)) {
-      // 已在派发:本次 fireTurn 不派发,放弃恢复标记(新目标不应消费旧恢复意图)。
-      this.pendingResumeEvents.delete(sessionId);
+      // 已在派发(并发新恢复已取得所有权):本次 fireTurn 不派发,仅清除自身 boundary 的
+      // 恢复标记(reviewer P1:不得按 sessionId 无条件删除新恢复刚登记的有效标记)。
+      this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
       return;
     }
     // 首轮 vs 续轮由 state 派生(turnsUsed===0 = 首轮尚未真正跑完),不再由调用方指定。
@@ -2266,8 +2280,9 @@ export class GoalController {
         this.firing.delete(sessionId);
       }
       // 清除残留恢复标记(reviewer P1/P2):正常派发时已在 onDispatching 消费删除,
-      // 此处幂等兜底 send 失败/拒绝/未派发路径,防止旧标记串入同 sessionId 新目标。
-      this.pendingResumeEvents.delete(sessionId);
+      // 此处幂等兜底 send 失败/拒绝/未派发路径——按本次 dispatchBoundary 身份清理,
+      // 并发新恢复登记的其他 boundary 标记不受影响。
+      this.clearPendingResumeForBoundary(sessionId, dispatchBoundary ?? lifecycleBoundary);
     }
   }
 }
