@@ -42,6 +42,7 @@ import type {
 } from './types/events.js';
 import { isTerminalAgentErrorEvent } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
+import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
   AgentSessionHandle,
   BackgroundTaskSnapshot,
@@ -717,6 +718,18 @@ export class Session {
 
   getUsageSnapshot(): UsageSnapshot {
     return this.handle.getUsageSnapshot();
+  }
+
+  /** Return the current per-session Pi runtime capability snapshot, if exposed. */
+  getRuntimeCapabilities(): PiRuntimeCapabilityManifest | undefined {
+    return this.handle.getRuntimeCapabilities?.();
+  }
+
+  /** Subscribe to replacement of the current per-session Pi runtime catalog. */
+  onRuntimeCapabilitiesChange(
+    listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+  ): () => void {
+    return this.handle.onRuntimeCapabilitiesChange?.(listener) ?? (() => undefined);
   }
 
   async getContextUsage(): Promise<ContextUsageData> {

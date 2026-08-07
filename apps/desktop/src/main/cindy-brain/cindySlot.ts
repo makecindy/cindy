@@ -57,9 +57,7 @@ import {
   GHOST_CINDY_SEARCH_MAX_RESULTS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
-  GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS,
-  GHOST_ONESHOT_TEXT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_TIMEOUT_MS,
   GHOST_VIDEO_MAX_DURATION_SECONDS,
   GHOST_VIDEO_MAX_FPS,
@@ -80,6 +78,11 @@ import {
 } from '../../shared/ghost.js';
 import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { probeImageSize } from './imageProbe.js';
+import {
+  decodeCatalogPin,
+  type OneshotRoute,
+} from '../utility-model/textOneshotPinOptions.js';
+import type { AgentKind } from '@cindy/model-providers';
 
 /**
  * 媒体能力配置(图像/视频同构):白名单 + 默认/档位选型,真身在 providers.json 目录。
@@ -289,14 +292,23 @@ export interface CindySlotDeps {
    */
   oneshotText?(params: {
     prompt: string;
-    maxTokens: number;
+    /** 插件显式给的输出上限;undefined = 不钳(失控兜底是 timeoutMs)。 */
+    maxTokens?: number;
     timeoutMs: number;
-    /** 用户在插件详情页把 text.oneshot 钉到的轻量档位(供应商×模型);没钉 = 跟随默认链。 */
-    pinnedProfileId?: string;
+    /**
+     * 本次快问快答的路由(用户钉档或身份卡声明偏好解析出的终态,见
+     * utility-model/textOneshotPinOptions);缺省 = 跟随系统默认轻量链。
+     */
+    route?: OneshotRoute;
   }): Promise<
     | { ok: true; text: string; model?: string }
     | { ok: false; reason: 'no_candidate' | 'timeout' | 'failed'; message: string }
   >;
+  /**
+   * 把身份卡声明的偏好模型 id 解析成当前目录里可路由的 供应商×agent×模型;
+   * 解析不到(目录没有/已停用/不可路由)返回 null = 按未声明处理。
+   */
+  resolveOneshotModel?(modelId: string): { providerId: string; agentKind: AgentKind; model: string } | null;
   /**
    * 管子续命挂钩(pipeDispatcher.holdCall/releaseCall 接线):tool-call
    * 触发的同步视频代办开始时 hold(budgetMs = 这单的轮询预算),结束时
@@ -1402,8 +1414,9 @@ export class GhostCindySlot {
 
   /**
    * oneshot_text:快问快答(2026-07-31 开闸)。轻量任务模型链直答一次,
-   * 文字随本次 invoke 递回;不选型(链由用户在主机侧配置)、不产媒体、
-   * 不进任何会话。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
+   * 文字随本次 invoke 递回;不产媒体、不进任何会话。选型不自由:只接受
+   * 用户钉档或身份卡声明的偏好(2026-08-05 起,解析权在主机),都没有才走
+   * 系统默认链。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
    * 在途并发闸与媒体代办共用同一计数与用户上限——它们花的都是用户的额度。
    */
   private async handleOneshotText(
@@ -1449,10 +1462,12 @@ export class GhostCindySlot {
     if (p.expectJson !== undefined && typeof p.expectJson !== 'boolean') {
       return { ok: false, message: 'expectJson 必须是布尔值(或不传)', errorCode: 'INVALID_PARAMS' };
     }
-    if (p.maxTokens !== undefined && !isPositiveIntWithin(p.maxTokens, GHOST_ONESHOT_TEXT_MAX_TOKENS)) {
+    // 插件显式传 maxTokens 只做基本正整数校验,不设实际上限——宿主不限制
+    // 输出 token 数(与宿主会话一致,用户主动使用插件的成本由用户承担)。
+    if (p.maxTokens !== undefined && !isPositiveIntWithin(p.maxTokens, Number.MAX_SAFE_INTEGER)) {
       return {
         ok: false,
-        message: `maxTokens 不合法(1–${GHOST_ONESHOT_TEXT_MAX_TOKENS} 的整数,或不传)`,
+        message: 'maxTokens 不合法(正整数,或不传)',
         errorCode: 'INVALID_PARAMS',
       };
     }
@@ -1486,14 +1501,40 @@ export class GhostCindySlot {
       const prompt = expectJson
         ? `${p.prompt}\n\n(只输出 JSON 本体,不要任何解释、前后缀或代码围栏)`
         : p.prompt;
-      // 选型仍不在意识手里,但用户可以在插件详情页把这项能力钉到某个轻量档位
-      // (与 image.*/video.* 的"钉后端"同一张覆盖表、同一条 IPC)。
-      const pinnedProfileId = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
+      // 选型优先级:用户在详情页的钉档 > 身份卡声明的偏好模型 > 系统默认链。
+      // 钉档两形态:轻量档位键(随系统链演进的逻辑档位)与目录钉(cat: 编码的
+      // 供应商×agent×模型);声明解析不到(目录没有/已停用/不可路由)按未声明处理。
+      const override = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
+      let route: OneshotRoute | undefined;
+      if (override !== undefined) {
+        const catalogPin = decodeCatalogPin(override);
+        if (catalogPin) {
+          route = { kind: 'catalog', ...catalogPin };
+        } else if (override.startsWith('cat:')) {
+          // 带目录钉前缀但解码失败(存储损坏/未来格式):目录钉的语义是「钉死
+          // 不回落」,静默落到系统默认链会悄悄烧错链路的钱——按无可选通道
+          // 收单,引导用户到详情页重新钉档。
+          return {
+            ok: false,
+            message: '快问快答的钉档值无法解析(可能已损坏或来自新版本),请到插件详情页重新钉档',
+            errorCode: 'NO_CANDIDATE',
+          };
+        } else {
+          route = { kind: 'utility-profile', profileId: override };
+        }
+      } else {
+        const declaredModel = ghost.manifest.cindy?.oneshotModel;
+        const resolved = declaredModel ? this.deps.resolveOneshotModel?.(declaredModel) : null;
+        if (resolved) route = { kind: 'catalog', ...resolved };
+      }
       const outcome = await oneshot({
         prompt,
-        maxTokens: (p.maxTokens as number | undefined) ?? GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
+        // 缺省不设输出上限:各供应商/模型按自然输出,60s 超时是实际边界;
+        // 插件可显式传 maxTokens 自限(1–81920)。(2026-08-07:曾给缺省加
+        // 81920,但 Codex / OpenAI 路径无法落实该参数,撤回为无上限设计。)
+        maxTokens: p.maxTokens as number | undefined,
         timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
-        pinnedProfileId,
+        route,
       });
       if (!outcome.ok) {
         const errorCode =
@@ -1516,6 +1557,13 @@ export class GhostCindySlot {
           JSON.parse(cleaned);
           text = cleaned;
         } catch {
+          // 不落原始输出(内容敏感度);长度足够让插件侧 fallback_detail 与
+          // 日志对得上同一次调用。
+          this.deps.log?.warn('ghost cindy-request oneshot_text bad json', {
+            ghostId,
+            callId,
+            chars: text.length,
+          });
           return {
             ok: false,
             errorCode: 'BAD_MODEL_OUTPUT',

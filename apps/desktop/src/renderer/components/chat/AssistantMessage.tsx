@@ -59,7 +59,10 @@ import { MessageActionBar } from './MessageActionBar';
 import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import {
+  isInteractiveSessionNavigationMode,
+  useSessionNavigationMode,
+} from '@/features/cc-agent/embeddedSessionNavigation';
 
 /**
  * Streaming 渲染策略开关 (代码级 / 编译期):
@@ -254,7 +257,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   });
   const navigationMode = useSessionNavigationMode();
   const canFork =
-    navigationMode === 'route-owner' &&
+    isInteractiveSessionNavigationMode(navigationMode) &&
     Boolean(currentSessionId && messageClientId) &&
     forkSupported;
   // 远程会话的消息深链把归属设备冻进 `?device=`(粘滞解析,relay 重连窗口不丢),

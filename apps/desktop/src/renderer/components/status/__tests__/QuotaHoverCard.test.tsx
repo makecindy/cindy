@@ -17,6 +17,9 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.limitRejected') return '已触发套餐限额，请求可能被拒绝';
       if (key === 'quotaCard.limitWarning') return '接近套餐限额';
       if (key === 'quotaCard.resetAt') return `${options.at} 重置`;
+      if (key === 'quotaCard.paceTrendFast') return '按当前平均速度偏快（粗略趋势）';
+      if (key === 'quotaCard.paceTrendNormal') return '按当前平均速度正常（粗略趋势）';
+      if (key === 'quotaCard.paceTrendSlow') return '按当前平均速度偏慢（粗略趋势）';
       if (key === 'quotaCard.tokenBreakdown') {
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
@@ -40,6 +43,7 @@ vi.mock('react-i18next', () => ({
 import { QuotaHoverCard } from '../QuotaHoverCard';
 
 const NOW_MS = new Date(2026, 7, 1, 10, 0, 0).getTime();
+const WEEKLY_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
 function epochSeconds(year: number, month: number, day: number, hour: number, minute: number) {
   return new Date(year, month, day, hour, minute, 0).getTime() / 1000;
@@ -51,6 +55,14 @@ function makeSnapshot(
   return {
     source: 'oauth-endpoint',
     ...overrides,
+  };
+}
+
+/** 按周窗口进度构造稳定输入，便于精确覆盖趋势百分点边界。 */
+function weeklyAtProgress(utilization: number, progress: number) {
+  return {
+    utilization,
+    resetsAt: (NOW_MS + WEEKLY_WINDOW_MS * (1 - progress)) / 1000,
   };
 }
 
@@ -644,5 +656,138 @@ describe('QuotaHoverCard', () => {
     expect(opusTitle.classList.contains('text-[var(--quota-bar-crit)]')).toBe(true);
     expect(screen.getByText('5 小时').getAttribute('data-severity')).toBe('normal');
     expect(screen.getByText('周限').getAttribute('data-severity')).toBe('normal');
+  });
+
+  it.each([
+    { label: '偏快', utilization: 31, expected: '按当前平均速度偏快（粗略趋势）' },
+    { label: '+5 边界', utilization: 30, expected: '按当前平均速度正常（粗略趋势）' },
+    { label: '正常', utilization: 25, expected: '按当前平均速度正常（粗略趋势）' },
+    { label: '-5 边界', utilization: 20, expected: '按当前平均速度正常（粗略趋势）' },
+    { label: '偏慢', utilization: 19, expected: '按当前平均速度偏慢（粗略趋势）' },
+  ])('renders the $label weekly pace trend', ({ utilization, expected }) => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ updatedAt: NOW_MS, sevenDay: weeklyAtProgress(utilization, 0.25) })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.getByTestId('quota-pace').textContent).toBe(expected);
+  });
+
+  it('keeps the pace line muted at a 68-point critical delta', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ updatedAt: NOW_MS, sevenDay: weeklyAtProgress(93, 0.25) })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    const pace = screen.getByTestId('quota-pace');
+    expect(pace.textContent).toBe('按当前平均速度偏快（粗略趋势）');
+    expect(pace.getAttribute('data-severity')).toBeNull();
+    expect(pace.classList.contains('text-[var(--text-secondary)]')).toBe(true);
+    expect(pace.className).not.toContain('quota-bar-crit');
+  });
+
+  it('hides the pace line when the snapshot has no valid updatedAt observation time', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ sevenDay: weeklyAtProgress(31, 0.25) })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    // 没有观测时刻就无法把利用率钉在时间轴上;不算节奏,避免趋势随重渲染自跳档。
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+  });
+
+  it('keeps the pace trend stable when the same snapshot renders 30 minutes later', () => {
+    const snapshot = makeSnapshot({
+      updatedAt: NOW_MS,
+      sevenDay: weeklyAtProgress(30.1, 0.25),
+    });
+    const { rerender } = render(<QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS} />);
+    const originalText = screen.getByTestId('quota-pace').textContent;
+
+    rerender(
+      <QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS + 30 * 60_000} />,
+    );
+
+    expect(originalText).toBe('按当前平均速度偏快（粗略趋势）');
+    expect(screen.getByTestId('quota-pace').textContent).toBe(originalText);
+  });
+
+  it('hides weekly pace after reset until a fresh snapshot arrives', () => {
+    const resetsAtMs = NOW_MS - 60 * 60_000;
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          updatedAt: resetsAtMs - 24 * 60 * 60_000,
+          sevenDay: {
+            utilization: 30,
+            resetsAt: resetsAtMs / 1000,
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+  });
+
+  it('renders no pace for a scoped-only weekly snapshot', () => {
+    // 分模型周限有意不做节奏预测（计划范围决定）。
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          scoped: [{
+            modelDisplayName: 'Opus',
+            ...weeklyAtProgress(93, 0.25),
+          }],
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.getByText('Opus 周限')).toBeTruthy();
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+  });
+
+  it('hides weekly pace when the window is missing, lacks a reset, or is under 3% elapsed', () => {
+    const { rerender } = render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          fiveHour: {
+            utilization: 50,
+            resetsAt: epochSeconds(2026, 7, 1, 12, 0),
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ sevenDay: { utilization: 30, resetsAt: null } })}
+        nowMs={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          sevenDay: {
+            utilization: 30,
+            resetsAt: epochSeconds(2026, 7, 8, 8, 0),
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
   });
 });

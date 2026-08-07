@@ -116,6 +116,11 @@ export interface ImChannelAdapter {
    */
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
   /**
+   * 交互被作废(turn 收口 / session 清理 / 抢跑)时, 把它那张卡片正文改写成的失效
+   * 提示。缺省 = 不改写(该渠道保持原行为)。
+   */
+  interactionExpiredNotice?: string;
+  /**
    * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
    * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
    * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
@@ -140,7 +145,21 @@ export interface ImChannelAdapter {
    * Text-only channels can still resolve agent interactions without rich cards.
    * The callback owns channel-specific correlation and parsing.
    */
-  handleTextInteraction?(userId: string, request: InteractionRequest): Promise<InteractionDecision>;
+  handleTextInteraction?(
+    userId: string,
+    request: InteractionRequest,
+    options?: { timeoutMs?: number },
+  ): Promise<InteractionDecision>;
+  /**
+   * Cancel a channel-owned text interaction when the central route times out,
+   * the turn stops, or the session closes. Return true when the adapter found
+   * and resolved the matching pending request itself.
+   */
+  cancelTextInteraction?(
+    userId: string,
+    requestId: string,
+    decision: InteractionDecision,
+  ): boolean;
   /** Durable channels may promote task-scoped attachments after message persistence succeeds. */
   onUserMessagePersisted?(args: {
     sessionId: string;
@@ -215,6 +234,18 @@ export interface ImUiTextPack {
     scheduledTaskHeader: (name: string | null) => string;
     unsupportedOnly: (entries: IMUnsupportedEntry[]) => string;
     unsupportedNotice: (entries: IMUnsupportedEntry[]) => string;
+  };
+  /**
+   * 派发前失败文案。agentUnsupported 用于「所选 Agent 无法提供渠道所需的
+   * 逐条权限确认」(如 Pi 在个人微信),permissionModeUnsupported 用于
+   * 「当前权限模式在该 Agent 的 turnPermissionPolicy 排除清单里」。
+   * 可选:仅需要细分文案的渠道实现,其余渠道可不提供。
+   */
+  error?: {
+    agentUnsupported: string;
+    permissionModeUnsupported: string;
+    /** 换 Agent 后仍可能不兼容的权限模式(bypassPermissions / acceptEdits)时附加。 */
+    agentSwitchAlsoCheckPermissionMode?: string;
   };
   cards: {
     permission: {

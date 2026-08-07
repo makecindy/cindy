@@ -1,4 +1,4 @@
-import { GHOST_OAUTH_SCOPES_MAX } from '@cindy/plugin-protocol';
+import { GHOST_OAUTH_SCOPES_MAX, isValidCindyVersion } from '@cindy/plugin-protocol';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
@@ -479,8 +479,9 @@ export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number]
 
 /**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
- * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
- * (选型权在主机的解析表:调用时显式点名 > 意识专属覆盖 > 用户能力偏好 >
+ * 向主机点哪几类代办"——类目与动作之外只有**意图级**字段(oneshotModel 偏好,
+ * 2026-08-05 起),**不构成任何硬依赖**(选型权在主机的解析表:调用时显式点名 >
+ * 用户在详情页的钉档(意识专属覆盖)> 意识声明的偏好模型 > 用户能力偏好 >
  * 出厂默认;意识只表达意图,永不腐烂)。装入确认框与代办资格审共同消费。
  */
 export interface GhostCindyNeeds {
@@ -496,6 +497,14 @@ export interface GhostCindyNeeds {
   embed?: GhostCindyEmbedAction[];
   /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由，意识不经手网关凭证)。 */
   search?: GhostCindySearchAction[];
+  /**
+   * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
+   * 成对)。主机能从当前供应商目录解析到(且用户未停用)就用它,解析不到按
+   * 未声明处理;用户在详情页的钉档永远优先于本声明。注意:旧宿主会把含本
+   * 字段的身份卡**整份拒装**(cindy 详单未知类目硬拒)——声明前确认目标
+   * 用户群的主机版本。
+   */
+  oneshotModel?: string;
 }
 
 /**
@@ -782,6 +791,9 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   授权换来的 access token——用户在意识设置页填 client 凭证并点"连接账号",
  *   主机跑授权流程并保管全部令牌,出网时现取新鲜 token 注入(见
  *   GhostSecretOauthDecl;必须同时声明 oauth 详单)。
+ * - 'gh-cli':仅供官方 cindy-github 使用。主机优先现读本机 GitHub CLI 的
+ *   `gh auth token`,不可用时回落到同 key 经 /secrets 保存的 PAT。两种值都
+ *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
  *   JWT。只有当前组织的 Plugin Market organization 安装记录和 manifest digest
  *   校验通过时,Host 才根据当前组织和插件 id 推导 audience;插件不能声明或读取。
@@ -791,7 +803,7 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  * 改走 source:'oauth' + tokenBroker:'feishu';存量已装清单由内置意识播种器
  * 按指纹覆盖自愈,未覆盖前该意识加载被拒属预期。)
  */
-export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth', 'oidc-token'] as const;
+export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth', 'gh-cli', 'oidc-token'] as const;
 export type GhostSecretSource = (typeof GHOST_SECRET_SOURCES)[number];
 
 /**
@@ -1255,6 +1267,8 @@ export interface GhostManifest {
   name: string;
   /** 版本字符串(不强制 semver,仅展示用)。 */
   version: string;
+  /** 安装此 Release 所需的最低 Cindy 客户端 SemVer；缺省表示不限制。 */
+  minCindyVersion?: string;
   /** 作者展示名(仅展示用)。 */
   author?: string;
   /**
@@ -1427,7 +1441,10 @@ export interface InstalledGhost {
   };
 }
 
-/** 插件包的来源与审核等级；决定 UI 徽标，不改变运行时 slot 权限。 */
+/**
+ * 插件包的来源与审核等级；通常只决定 UI 徽标。保留的 gh-cli 凭证来源还会
+ * 要求 cindy-github 具备 cindy-official Host receipt，防止第三方仅自报 id。
+ */
 export type GhostTrustLevel =
   | 'cindy-official'
   | 'reviewed'
@@ -1602,10 +1619,14 @@ function formatGhostQuotaSize(bytes: number): string {
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
   for (const [category, actions] of Object.entries(manifest.cindy ?? {})) {
+    if (category === 'oneshotModel') continue; // 偏好模型是标量意图,不是能力键
     for (const action of actions ?? []) {
       const cap = `${category}.${action}`;
       const labelKey = GHOST_CINDY_PERM_LABEL[cap];
-      const detailKey = GHOST_CINDY_PERM_DETAIL[cap];
+      // 快问快答声明了偏好模型:说明行换带模型的版本(装入即知情,成本透明)。
+      const declaredOneshotModel =
+        cap === 'text.oneshot' ? manifest.cindy?.oneshotModel : undefined;
+      const detailKey = declaredOneshotModel ? 'cindyTextOneshotModelDetail' : GHOST_CINDY_PERM_DETAIL[cap];
       // 未登记的能力键不该出现(validateGhostManifest 已拦),防御性跳过。
       if (labelKey) {
         items.push({
@@ -1617,11 +1638,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
           // 持久媒体占用上限);改常量四份 locale 自动跟随。
           ...(cap === 'media.deposit'
             ? { detailArgs: { quota: formatGhostQuotaSize(GHOST_CINDY_DEPOSIT_QUOTA_BYTES) } }
-            : {}),
-          // 向量单次条数上限同样单源插值:改常量四份 locale 自动跟随。
-          ...(cap === 'embed.text'
-            ? { detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) } }
-            : {}),
+            : cap === 'embed.text'
+              ? { detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) } }
+              : declaredOneshotModel
+                ? { detailArgs: { model: declaredOneshotModel } }
+                : {}),
         });
       }
     }
@@ -1748,8 +1769,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     // 来源分档文案:登录邮箱派生 vs 用户自填(意识 settingsHtml 收单——宿主
     // 凭证渲染已退役,user 凭证只剩这一档)。收单档文案不许说"意识代码无法
     // 读取"这种过头话:录入瞬间明文经过意识页面,知情同意面要如实。
-    // user/login-email/oauth 保持历史 key,不影响存量插件;企业身份是新的高风险
-    // Host 托管来源,单独带 source 后缀,从其它来源切换时必须重新确认。
+    // user/login-email/oauth/gh-cli 保持历史 key,不影响存量插件；gh-cli
+    // 只改变 Host 来源文案，不把“自动复用 gh”误报成新增权限确认。
     if (secret.source === 'oauth' && secret.oauth) {
       // OAuth 凭证:展示授权域名 + scopes 全量如实列出(通用声明式的知情
       // 同意面——平台不预设 provider,用户看到的就是全部授权事实)。detail
@@ -1779,6 +1800,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'networkSecretOrganizationIdentity',
         labelArgs: { name: secret.label },
         detailKey: 'networkSecretOrganizationIdentityDetail',
+      });
+      continue;
+    }
+    if (secret.source === 'gh-cli') {
+      items.push({
+        key: `network:secret:${secret.key}`,
+        kind: 'network',
+        labelKey: 'networkSecretGhCli',
+        labelArgs: { name: secret.label },
+        detailKey: 'networkSecretGhCliDetail',
       });
       continue;
     }
@@ -1972,8 +2003,38 @@ export interface GhostPermissionDiff {
 }
 
 /**
- * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(key + detail)。
- * 与 diffGhostPermissionItems 同口径(按 key 对齐、detail 变化算差异),
+ * 权限条目指纹:key + 作者自由文本 detail + 主机固定说明(detailKey + detailArgs,
+ * args 按键序稳定化)。detailKey/detailArgs 必须在内:同一 key 的固定说明会随
+ * 声明变化(cindy text.oneshot 声明 oneshotModel、network secret 的 identity
+ * 形态),只看 key+detail 会把"说明/成本面变了"漏判成"权限面没变",更新时
+ * 用户看不到重新确认。
+ */
+function permissionDetailKeyForFingerprint(item: GhostPermissionItem): string {
+  // cindy-github 从存量 PAT(source:user)升级为 Host 优先 gh-cli 时，凭证仍由
+  // Main 只注入同一个 network secret key 与同一组目标；变化的是设置页/权限
+  // 页对“凭证从哪里来”的说明，不是插件获得了新权限。两档共用历史 key 的
+  // 同时也必须共用审阅指纹，否则升级会被误判成扩权并要求存量用户重新确认。
+  // gh-cli 的 manifest 校验只允许官方 cindy-github，因此这个兼容等价不会
+  // 放宽其它插件；其它 detailKey/detailArgs 变化仍按新说明完整性规则复核。
+  if (
+    item.detailKey === 'networkSecretGhostInputDetail' ||
+    item.detailKey === 'networkSecretGhCliDetail'
+  ) {
+    return 'networkSecretGithubCredentialDetail';
+  }
+  return item.detailKey ?? '';
+}
+
+function ghostPermissionItemFingerprint(item: GhostPermissionItem): string {
+  const args = item.detailArgs
+    ? Object.entries(item.detailArgs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    : [];
+  return JSON.stringify([item.key, item.detail ?? '', permissionDetailKeyForFingerprint(item), args]);
+}
+
+/**
+ * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(条目指纹见上)。
+ * 与 diffGhostPermissionItems 同口径(按 key 对齐、指纹变化算差异),
  * 所以"指纹相同"等价于"权限面没变",可安全沿用先前的审阅结论。
  *
  * renderer 审阅时记录基线并随安装请求回传,main 在安装锁内用**当前**已装
@@ -1982,7 +2043,7 @@ export interface GhostPermissionDiff {
  */
 export function ghostPermissionBaselineKey(manifest: GhostManifest): string {
   return ghostPermissionItems(manifest)
-    .map((item) => JSON.stringify([item.key, item.detail ?? '']))
+    .map(ghostPermissionItemFingerprint)
     .sort()
     .join('\n');
 }
@@ -1995,14 +2056,15 @@ export function diffGhostPermissionItems(
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
-  const prevDetailByKey = new Map(prevItems.map((i) => [i.key, i.detail ?? '']));
+  const prevPrintByKey = new Map(prevItems.map((i) => [i.key, ghostPermissionItemFingerprint(i)]));
+  const nextPrintByKey = new Map(nextItems.map((i) => [i.key, ghostPermissionItemFingerprint(i)]));
   const added: GhostPermissionItem[] = [];
   const removed: GhostPermissionItem[] = [];
   const unchanged: GhostPermissionItem[] = [];
   for (const item of nextItems) {
     if (!prevKeys.has(item.key)) {
       added.push(item);
-    } else if ((item.detail ?? '') !== prevDetailByKey.get(item.key)) {
+    } else if (ghostPermissionItemFingerprint(item) !== prevPrintByKey.get(item.key)) {
       added.push(item);
     } else {
       unchanged.push(item);
@@ -2011,7 +2073,7 @@ export function diffGhostPermissionItems(
   for (const item of prevItems) {
     if (!nextKeys.has(item.key)) {
       removed.push(item);
-    } else if ((item.detail ?? '') !== (nextItems.find((n) => n.key === item.key)?.detail ?? '')) {
+    } else if (ghostPermissionItemFingerprint(item) !== nextPrintByKey.get(item.key)) {
       removed.push(item);
     }
   }
@@ -2024,13 +2086,11 @@ export function unreviewedGhostPermissionItems(
   previouslyInstalled: GhostManifest | undefined,
   actual: GhostManifest,
 ): GhostPermissionItem[] {
-  const approvalKey = (item: GhostPermissionItem): string =>
-    JSON.stringify([item.key, item.detail ?? '']);
-  const approved = new Set(ghostPermissionItems(reviewed).map(approvalKey));
+  const approved = new Set(ghostPermissionItems(reviewed).map(ghostPermissionItemFingerprint));
   for (const item of ghostPermissionItems(previouslyInstalled ?? reviewed)) {
-    approved.add(approvalKey(item));
+    approved.add(ghostPermissionItemFingerprint(item));
   }
-  return ghostPermissionItems(actual).filter((item) => !approved.has(approvalKey(item)));
+  return ghostPermissionItems(actual).filter((item) => !approved.has(ghostPermissionItemFingerprint(item)));
 }
 
 /**
@@ -2683,6 +2743,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (typeof raw.version !== 'string' || raw.version.trim().length === 0 || raw.version.length > 32) {
     return { ok: false, reason: 'version 必须是 1–32 字符的非空字符串' };
   }
+  if (raw.minCindyVersion !== undefined && !isValidCindyVersion(raw.minCindyVersion)) {
+    return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
+  }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。
   if (raw.kind !== undefined && raw.kind !== 'chip') {
@@ -3015,6 +3078,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
     cindy = {};
+    // oneshotModel(快问快答偏好模型)是标量键不是类目:先摘出,不进类目循环。
+    // 只验形态不验存在——目录随主机演进,声明式字段永不构成硬依赖。
+    const oneshotModelRaw = cindyRaw.oneshotModel;
+    if (
+      oneshotModelRaw !== undefined
+      && (typeof oneshotModelRaw !== 'string'
+        || oneshotModelRaw.trim().length === 0
+        || oneshotModelRaw.length > 128)
+    ) {
+      return { ok: false, reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")' };
+    }
     // 类目 → 合法动作表(image / video / media;image 与 video 的动作集恰好
     // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。新增类目必须
     // 同时在下面的落位分支登记 —— 漏登记会让动作静默落进别的类目。
@@ -3027,6 +3101,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
+      if (category === 'oneshotModel') continue;
       const allowed = actionTable[category];
       if (!allowed) {
         return {
@@ -3059,6 +3134,14 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
       else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
+    }
+    // 偏好模型只是快问快答的选型意图,必须挂在能力本体上(无能力单挂偏好 =
+    // 清单自相矛盾,与"有详单必有槽"同一判据)。
+    if (oneshotModelRaw !== undefined) {
+      if (!cindy.text?.includes('oneshot')) {
+        return { ok: false, reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)' };
+      }
+      cindy.oneshotModel = (oneshotModelRaw as string).trim();
     }
     if (
       cindy.image === undefined &&
@@ -3618,7 +3701,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (typeof s.label !== 'string' || s.label.trim().length === 0 || s.label.length > 64) {
           return { ok: false, reason: 'network.secrets[].label 必须是 1–64 字符的非空字符串' };
         }
-        // 来源:缺省 'user';login-email / oauth / oidc-token 均由主机托管。
+        // 来源:缺省 'user';login-email / oauth / gh-cli / oidc-token 均由主机托管。
         // 归一化:'user' 不落清单(与缺省同义,权限 diff 不 churn)。
         let source: GhostSecretSource | undefined;
         if (s.source !== undefined) {
@@ -3633,6 +3716,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           }
           if (s.source === 'login-email') source = 'login-email';
           if (s.source === 'oauth') source = 'oauth';
+          if (s.source === 'gh-cli') source = 'gh-cli';
           if (s.source === 'oidc-token') source = 'oidc-token';
         }
         // 旧 input 字段已退役：Setup Runtime 直接从 Secret 声明生成 Host 表单，
@@ -3671,6 +3755,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           return {
             ok: false,
             reason: `network.secrets[].source 为 ${source} 时不允许声明 exchange(登录态凭证不外送交换端点)`,
+          };
+        }
+        if (source === 'gh-cli' && s.exchange !== undefined) {
+          return {
+            ok: false,
+            reason: 'network.secrets[].source 为 gh-cli 时不允许声明 exchange(GitHub token 只能直接注入 GitHub API)',
           };
         }
         if (
@@ -3748,6 +3838,25 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             return {
               ok: false,
               reason: 'network.secrets[].source 为 oidc-token 时 inject.hosts 只允许精确域名，不允许通配',
+            };
+          }
+        }
+        if (source === 'gh-cli') {
+          if (raw.id !== 'cindy-github') {
+            return {
+              ok: false,
+              reason: 'network.secrets[].source 为 gh-cli 时仅允许官方 cindy-github 插件使用',
+            };
+          }
+          if (
+            inj.header !== 'Authorization' ||
+            inj.format !== 'Bearer {value}' ||
+            injectHosts?.length !== 1 ||
+            injectHosts[0] !== 'api.github.com'
+          ) {
+            return {
+              ok: false,
+              reason: 'network.secrets[].source 为 gh-cli 时 inject 必须固定为 api.github.com 的 Authorization: Bearer {value}',
             };
           }
         }
@@ -4269,14 +4378,16 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     const secretByKey = new Map<
       string,
-      { hostDerivedSource: 'login-email' | 'oidc-token' | null }
+      { hostDerivedSource: 'login-email' | 'gh-cli' | 'oidc-token' | null }
     >([
       ...(network?.secrets ?? []).map(
         (s) => [
           s.key,
           {
             hostDerivedSource:
-              s.source === 'login-email' || s.source === 'oidc-token' ? s.source : null,
+              s.source === 'login-email' || s.source === 'gh-cli' || s.source === 'oidc-token'
+                ? s.source
+                : null,
           },
         ] as const,
       ),
@@ -4392,6 +4503,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       id: raw.id,
       name: raw.name,
       version: raw.version,
+      ...(raw.minCindyVersion !== undefined
+        ? { minCindyVersion: raw.minCindyVersion as string }
+        : {}),
       kind: 'chip',
       ...(raw.author !== undefined ? { author: raw.author as string } : {}),
       ...(locales !== undefined ? { locales } : {}),
@@ -5449,12 +5563,13 @@ export const GHOST_CINDY_DEPOSIT_REFILL_MS = 1000;
 /**
  * ── oneshot_text 政策参数(2026-07-31 开闸)────────────────────────────
  * 快问快答走轻量任务模型链,秒级到几十秒,只有同步形态(没有 submit 档:
- * 一单等不起的文本问答本身就是用错了通道)。上限对齐 agent-request 的
- * 消息量级;回答预算钳在小额度——这是"快问快答",不是长文生成通道。
+ * 一单等不起的文本问答本身就是用错了通道)。prompt 上限对齐 agent-request
+ * 的消息量级;输出**不设宿主级上限**——缺省按各供应商/模型的自然输出,
+ * 插件可显式传 maxTokens 自我约束(仅正整数校验,不设上限),单次等待上限
+ * (60s 超时)是实际边界。与宿主会话一致:用户主动使用插件的成本由用户承担,
+ * 宿主不额外钳制输出 token 数(2026-08-07 决策)。
  */
 export const GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS = 32_768;
-export const GHOST_ONESHOT_TEXT_MAX_TOKENS = 4096;
-export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 1024;
 /** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */
 export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
 

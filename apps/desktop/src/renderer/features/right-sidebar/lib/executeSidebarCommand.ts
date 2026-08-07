@@ -56,6 +56,7 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
       selectedDiffId: command.selectedDiffId ?? null,
       selectedPath: command.selectedPath ?? null,
       requestNonce: command.requestNonce,
+      hostSessionId: command.hostSessionId ?? null,
     });
     return;
   }

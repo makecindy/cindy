@@ -327,6 +327,61 @@ describe('buildRenderItems — key stability', () => {
     expect(items.indexOf(cards[0])).toBeGreaterThan(items.findIndex((item) => item.key === 'msg-a1'));
   });
 
+  it('hides zero-file cards without change evidence but keeps evidence-bearing ones', () => {
+    const base: TurnChangeSetSummary = {
+      id: 'cs-base',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'claude-code',
+      providerTurnId: null,
+      cwd: 'C:/work',
+      state: 'partial',
+      workspaceState: 'applied',
+      isReversible: false,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [],
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+    };
+    // Only "we might not have seen everything" reasons: review pane would be empty.
+    const noEvidence: TurnChangeSetSummary = {
+      ...base,
+      id: 'cs-noise',
+      incompleteReasons: ['opaque-tool', 'turn-failed', 'concurrent-workspace'],
+    };
+    // Proof that real changes existed but were not recorded: card must stay.
+    const truncated: TurnChangeSetSummary = {
+      ...base,
+      id: 'cs-too-large',
+      incompleteReasons: ['opaque-tool', 'diff-too-large'],
+      createdAt: 3,
+      completedAt: 4,
+    };
+    // The store only records 'outside-workspace' for suspicious captures (symlink
+    // escapes, fail-closed provider diff blocks) — that evidence must stay visible.
+    const escaped: TurnChangeSetSummary = {
+      ...base,
+      id: 'cs-escape',
+      incompleteReasons: ['outside-workspace'],
+      createdAt: 5,
+      completedAt: 6,
+    };
+
+    const { items } = buildRenderItems(
+      [mkUser('u1'), mkAssistant('a1'), mkUser('u2')],
+      undefined,
+      undefined,
+      { turnChangeSets: [noEvidence, truncated, escaped] },
+    );
+    const cards = items.filter(
+      (item): item is Extract<RenderItem, { type: 'turn_changes' }> => item.type === 'turn_changes',
+    );
+    expect(cards.map((card) => card.changeSet.id)).toEqual(['cs-too-large', 'cs-escape']);
+  });
+
   it('keeps opaque command artifacts as fallback chips without duplicating exact files', () => {
     const messages = [
       mkUser('u1'),

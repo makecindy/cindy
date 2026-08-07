@@ -1,8 +1,8 @@
 /**
- * 个人 Telegram 群窗口单测: 入窗幂等、按键 GC、TTL、上下文拼装(trigger 剔重 /
+ * 个人 Telegram 群窗口单测: 入窗幂等、永久保留、上下文拼装(trigger 剔重 /
  * 游标 commit 延迟 / 字符预算 / 栅栏中和)、与官方通道行(provider='telegram')
  * 的隔离。harness 与 hook-control/groupWindow.test.ts 同款: 内存 better-sqlite3
- * 执行 0083 + 0086 migration, drizzle 同步 driver 假装 DbClient。
+ * 执行 0083 / 0086 / 0087 / 0088 migration, drizzle 同步 driver 假装 DbClient。
  */
 
 import fs from 'node:fs';
@@ -31,7 +31,7 @@ import {
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../../drizzle');
-  return ['0083_', '0086_']
+  return ['0083_', '0086_', '0087_', '0088_']
     .map((prefix) => {
       const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
       if (!file) throw new Error(`${prefix} migration not found`);

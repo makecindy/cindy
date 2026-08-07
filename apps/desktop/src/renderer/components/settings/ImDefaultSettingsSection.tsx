@@ -10,7 +10,7 @@ import {
   getModel,
   isModelSelectableForNewRoute,
 } from '@cindy/model-providers';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils';
 import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
+  isUnconditionalTurnPolicyChannel,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -215,6 +216,41 @@ export function ImDefaultSettingsSection({
   }
 
   const activeSettings = settings.agents[settings.agentKind];
+  // 按选中 Agent 的 capabilities 判断:未声明 / 声明了但 supported.supported !== true
+  // 的 Agent(如 Pi)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。不写死 Pi——
+  // 未来 Pi 补上该 capability、或新增其它不支持的 Agent 时,此处自动跟随 main 侧
+  // 的 capability 真相,不会误警告 / 漏警告。(Telegram / 钉钉仅在群聊挂 policy,
+  // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
+  const selectedAgentCaps =
+    settings.agentKind === 'claude-code'
+      ? cc
+      : settings.agentKind === 'codex'
+        ? codex
+        : pi;
+  const selectedAgentCapabilitiesReady =
+    !selectedAgentCaps.loading &&
+    selectedAgentCaps.error === null &&
+    selectedAgentCaps.capabilities !== null;
+  const selectedTurnPolicy = selectedAgentCaps.capabilities?.turnPermissionPolicy;
+  const selectedAgentUnsupported =
+    selectedAgentCapabilitiesReady && selectedTurnPolicy?.supported.supported !== true;
+  const selectedPermissionModeUnsupported =
+    selectedAgentCapabilitiesReady &&
+    selectedTurnPolicy?.supported.supported === true &&
+    selectedTurnPolicy.unsupportedPermissionModes.includes(settings.permissionMode);
+  // 渠道默认权限模式若是换 Agent 后仍不兼容的档位(Claude Code / Codex 的
+  // unsupportedPermissionModes 并集:bypassPermissions / acceptEdits),仅换 Agent
+  // 会在新会话(/new)上再次命中权限模式错误,警告需附加 /permission 提示。
+  const modeUnsupportedAfterSwitch =
+    settings.permissionMode === 'bypassPermissions' || settings.permissionMode === 'acceptEdits';
+  const turnPolicyWarning =
+    channel !== undefined && isUnconditionalTurnPolicyChannel(channel)
+      ? selectedAgentUnsupported
+        ? 'agent'
+        : selectedPermissionModeUnsupported
+          ? 'mode'
+          : null
+      : null;
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
@@ -334,6 +370,41 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {turnPolicyWarning && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2"
+        >
+          <AlertTriangle
+            size={14}
+            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+            aria-hidden
+          />
+          <div className="min-w-0">
+            {turnPolicyWarning === 'agent' ? (
+              <>
+                <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+                  {t('settings.imBot.defaults.agentUnsupportedOnChannelHint', {
+                    agent: t(`settings.imBot.defaults.agents.${settings.agentKind}`),
+                  })}
+                </p>
+                {modeUnsupportedAfterSwitch && (
+                  <p className="mt-1 text-11 leading-[1.45] text-[var(--text-secondary)]">
+                    {t('settings.imBot.defaults.agentUnsupportedOnChannelModeHint')}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+                {t('settings.imBot.defaults.permissionModeUnsupportedOnChannelHint')}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

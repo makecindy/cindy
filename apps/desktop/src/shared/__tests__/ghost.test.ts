@@ -23,6 +23,7 @@ import {
   isOfficialGhostId,
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
+  unreviewedGhostPermissionItems,
   parseGhostPartition,
   resolveGhostManifestLocale,
   validateGhostManifest,
@@ -155,6 +156,14 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), name: 'x'.repeat(65) }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), version: '' }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), version: 'v'.repeat(33) }).ok).toBe(false);
+  });
+
+  it('minCindyVersion 缺省兼容旧插件，声明时只接受 SemVer', () => {
+    expect(validateGhostManifest(goodManifest()).ok).toBe(true);
+    const declared = validateGhostManifest({ ...goodManifest(), minCindyVersion: '1.2.3' });
+    expect(declared.ok && declared.manifest.minCindyVersion).toBe('1.2.3');
+    expect(validateGhostManifest({ ...goodManifest(), minCindyVersion: 'v1.2.3' }).ok).toBe(false);
+    expect(validateGhostManifest({ ...goodManifest(), minCindyVersion: '1.2' }).ok).toBe(false);
   });
 
   it('kind 可省略:缺省归一化为 chip(2026-07-12 晚定案,单形态后纯冗余)', () => {
@@ -1513,10 +1522,78 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
     );
   });
 
+  // 2026-08-05:oneshotModel 快问快答偏好模型(标量意图键,不是类目;
+  // 必须与 text.oneshot 成对;权限行说明换带模型版本,装入即知情)。
+  it('oneshotModel 合法声明:落 cindy.oneshotModel,权限行说明带模型', () => {
+    const v = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:text.oneshot',
+          detailKey: 'cindyTextOneshotModelDetail',
+          detailArgs: { model: 'codex/gpt-5.5' },
+        }),
+      ]),
+    );
+  });
+
   it('search.web 缺少 tool 槽或工具声明时拒装', () => {
     const withoutTool = validateGhostManifest(chipWithModel({ search: ['web'] }));
     expect(withoutTool.ok).toBe(false);
     expect(!withoutTool.ok && withoutTool.reason).toContain('tool');
+  });
+
+  it('oneshotModel 形态非法 / 无 text.oneshot 本体单挂 → 拒', () => {
+    for (const bad of [
+      { text: ['oneshot'], oneshotModel: '' },
+      { text: ['oneshot'], oneshotModel: '   ' },
+      { text: ['oneshot'], oneshotModel: 42 },
+      { text: ['oneshot'], oneshotModel: 'x'.repeat(129) },
+      { oneshotModel: 'codex/gpt-5.5' },
+      { image: ['generate'], oneshotModel: 'gpt-5.5' },
+    ]) {
+      const v = validateGhostManifest(chipWithModel(bad));
+      expect(v.ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  // 2026-08-05 review:权限指纹必须含 detailKey/detailArgs——同一 key 的固定说明
+  // 随声明变(新增/改/删 oneshotModel),只看 key+detail 会把变化漏判成"权限面
+  // 没变",更新时用户看不到重新确认。
+  it('oneshotModel 新增/变更/移除都算权限面变化(diff/基线/未审三条路径)', () => {
+    const plain = validateGhostManifest(chipWithModel({ text: ['oneshot'] }));
+    const declared = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    const declared2 = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'gpt-5.5' }));
+    if (!plain.ok || !declared.ok || !declared2.ok) throw new Error('fixture 应合法');
+
+    // 新增声明:diff 标 added+removed(key 同、说明变),基线不同,未审列出。
+    const addDiff = diffGhostPermissionItems(plain.manifest, declared.manifest);
+    expect(addDiff.added.map((i) => i.key)).toEqual(['cindy:text.oneshot']);
+    expect(addDiff.removed.map((i) => i.key)).toEqual(['cindy:text.oneshot']);
+    expect(ghostPermissionBaselineKey(plain.manifest)).not.toBe(ghostPermissionBaselineKey(declared.manifest));
+    expect(
+      unreviewedGhostPermissionItems(plain.manifest, plain.manifest, declared.manifest).map((i) => i.key),
+    ).toEqual(['cindy:text.oneshot']);
+
+    // 改模型:同样算变化。
+    expect(diffGhostPermissionItems(declared.manifest, declared2.manifest).added.map((i) => i.key)).toEqual([
+      'cindy:text.oneshot',
+    ]);
+
+    // 移除声明:同样算变化。
+    expect(diffGhostPermissionItems(declared.manifest, plain.manifest).added.map((i) => i.key)).toEqual([
+      'cindy:text.oneshot',
+    ]);
+
+    // 声明原样:三条路径都认为无变化。
+    const same = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    if (!same.ok) throw new Error('fixture 应合法');
+    expect(diffGhostPermissionItems(declared.manifest, same.manifest).added).toEqual([]);
+    expect(ghostPermissionBaselineKey(declared.manifest)).toBe(ghostPermissionBaselineKey(same.manifest));
+    expect(unreviewedGhostPermissionItems(declared.manifest, declared.manifest, same.manifest)).toEqual([]);
   });
 });
 
@@ -2255,6 +2332,118 @@ describe('ghost · network 详单校验', () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('source');
+  });
+
+  it('secrets.source:gh-cli 仅允许官方 GitHub 插件的固定 GitHub API 注入形态', () => {
+    const valid = validateGhostManifest({
+      ...goodManifest(),
+      id: 'cindy-github',
+      slots: ['panel', 'network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub authentication',
+            source: 'gh-cli',
+            url: 'https://github.com/settings/tokens',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.github.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(valid.ok, valid.ok ? '' : valid.reason).toBe(true);
+    if (valid.ok) {
+      const item = ghostPermissionItems(valid.manifest).find(
+        (entry) => entry.key === 'network:secret:github_pat',
+      );
+      expect(item?.labelKey).toBe('networkSecretGhCli');
+      expect(item?.detailKey).toBe('networkSecretGhCliDetail');
+
+      const prior = validateGhostManifest({
+        ...goodManifest(),
+        id: 'cindy-github',
+        slots: ['panel', 'network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.github.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub authentication',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                hosts: ['api.github.com'],
+              },
+            },
+          ],
+        },
+      });
+      expect(prior.ok).toBe(true);
+      if (prior.ok) {
+        expect(diffGhostPermissionItems(prior.manifest, valid.manifest).added).toEqual([]);
+        expect(ghostPermissionBaselineKey(prior.manifest)).toBe(
+          ghostPermissionBaselineKey(valid.manifest),
+        );
+        expect(
+          unreviewedGhostPermissionItems(
+            prior.manifest,
+            prior.manifest,
+            valid.manifest,
+          ),
+        ).toEqual([]);
+      }
+    }
+
+    for (const fixture of [
+      { id: 'github-helper' },
+      { header: 'X-GitHub-Token' },
+      { format: 'token {value}' },
+      { hosts: undefined },
+      { hosts: ['objects.githubusercontent.com'] },
+      {
+        exchange: {
+          url: 'https://api.github.com/token',
+          bodyFormat: '{"token":"{value}"}',
+          tokenPath: 'token',
+        },
+      },
+    ]) {
+      const id = 'id' in fixture ? fixture.id : 'cindy-github';
+      const result = validateGhostManifest({
+        ...goodManifest(),
+        id,
+        slots: ['panel', 'network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.github.com', 'objects.githubusercontent.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub authentication',
+              source: 'gh-cli',
+              inject: {
+                header: 'header' in fixture ? fixture.header : 'Authorization',
+                format: 'format' in fixture ? fixture.format : 'Bearer {value}',
+                ...('hosts' in fixture
+                  ? fixture.hosts === undefined
+                    ? {}
+                    : { hosts: fixture.hosts }
+                  : { hosts: ['api.github.com'] }),
+              },
+              ...('exchange' in fixture ? { exchange: fixture.exchange } : {}),
+            },
+          ],
+        },
+      });
+      expect(result.ok, JSON.stringify(fixture)).toBe(false);
+    }
   });
 
   it('权限清单:login-email 凭证用"将使用登录邮箱"分档文案,key 与 user 凭证同构', () => {

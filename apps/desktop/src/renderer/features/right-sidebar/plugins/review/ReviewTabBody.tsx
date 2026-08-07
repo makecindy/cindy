@@ -106,6 +106,23 @@ interface ReviewTabBodyProps {
   ctx: TabKindHostContext;
 }
 
+/**
+ * source / selectedCommitOid 由外层 ReviewTabBody 持有并下发:轮次视图与
+ * Git 视图共用同一个来源状态机,从轮次视图的来源下拉切走时目标 source
+ * 要在 Git 视图挂载前就位(对齐 Codex 的单 source + turnSelection 模型)。
+ */
+interface GitReviewBodyProps extends ReviewTabBodyProps {
+  source: ReviewSource;
+  setSource: (source: ReviewSource) => void;
+  selectedCommitOid: string | null;
+  setSelectedCommitOid: (oid: string | null) => void;
+}
+
+interface TurnReviewBodyProps extends ReviewTabBodyProps {
+  setSource: (source: ReviewSource) => void;
+  setSelectedCommitOid: (oid: string | null) => void;
+}
+
 type ReviewToggleAction = Extract<ReviewStageAction, 'stage' | 'unstage'>;
 type RevealActionScope = 'file' | 'section';
 type ReviewToolbarLayout = 'wide' | 'compact' | 'minimal';
@@ -368,13 +385,51 @@ export function useClearReviewOperationNoticeOnSourceChange(
 }
 
 export function ReviewTabBody(props: ReviewTabBodyProps) {
-  if (props.state.turnTarget) return <TurnChangeSetReviewBody {...props} />;
-  return <GitReviewTabBody {...props} />;
+  const [source, setSource] = useState<ReviewSource>('unstaged');
+  const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(null);
+  if (props.state.turnTarget) {
+    return (
+      <TurnChangeSetReviewBody
+        {...props}
+        setSource={setSource}
+        setSelectedCommitOid={setSelectedCommitOid}
+      />
+    );
+  }
+  return (
+    <GitReviewTabBody
+      {...props}
+      source={source}
+      setSource={setSource}
+      selectedCommitOid={selectedCommitOid}
+      setSelectedCommitOid={setSelectedCommitOid}
+    />
+  );
 }
 
-function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
+function TurnChangeSetReviewBody({ state, ctx, setSource, setSelectedCommitOid }: TurnReviewBodyProps) {
   const { t } = useTranslation();
   const target = state.turnTarget;
+  // 变更集所属会话。协同面板里审查 worker 的轮次时,tab 桶在 lead 会话
+  // (worker 自己的桶在协同视图下不可见),数据按 targetSessionId 取。
+  const reviewSessionId = target?.targetSessionId ?? ctx.sessionId;
+  const crossSession = Boolean(target?.targetSessionId && target.targetSessionId !== ctx.sessionId);
+  // 供来源下拉的「提交」子菜单用;与 Git 视图同一 IPC,子菜单展开时刷新。
+  // 跨会话时不挂来源下拉(git 视图跟随桶会话 workdir,对 worker 语义错误),
+  // 传 null 跳过取数。
+  const commitsState = useReviewCommits(crossSession ? null : ctx.sessionId || null, state.branchBaseRef ?? null);
+  const switchToGitSource = useCallback((next: ReviewSource) => {
+    // 对齐 Codex EP 语义:切到其它来源即退出轮次审查(清 turnTarget),
+    // 轮次选择不保留;要再看本条消息需从聊天流卡片重新进入。
+    setSelectedCommitOid(null);
+    setSource(next);
+    ctx.patchState({ turnTarget: null });
+  }, [ctx, setSelectedCommitOid, setSource]);
+  const switchToCommitSource = useCallback((oid: string) => {
+    setSelectedCommitOid(oid);
+    setSource('commit');
+    ctx.patchState({ turnTarget: null });
+  }, [ctx, setSelectedCommitOid, setSource]);
   const [changeSets, setChangeSets] = useState<TurnChangeSetDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -403,7 +458,7 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
       setLoading(false);
       return;
     }
-    void window.electronAPI.maker.getTurnChangeSets(ctx.sessionId, targetIdsKey.split('\0'))
+    void window.electronAPI.maker.getTurnChangeSets(reviewSessionId, targetIdsKey.split('\0'))
       .then((sets) => {
         if (cancelled) return;
         setChangeSets(sets);
@@ -418,7 +473,7 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
     return () => {
       cancelled = true;
     };
-  }, [ctx.deviceLinkDeviceId, ctx.remoteHostId, ctx.sessionId, reloadToken, t, targetIdsKey]);
+  }, [ctx.deviceLinkDeviceId, ctx.remoteHostId, reloadToken, reviewSessionId, t, targetIdsKey]);
 
   const selectedDiff = target?.selectedDiffId
     ? visibleDiffs.find((diff) => diff.id === target.selectedDiffId)
@@ -441,21 +496,34 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
       <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 py-2">
-        <FileDiffIcon size={15} className="shrink-0 text-[var(--text-secondary)]" />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[var(--text-primary)]">
-          {t('rightSidebar.review.turn.title')}
-        </span>
+        {crossSession ? (
+          // 跨会话(协同 worker 的轮次):不提供 git 来源切换——git 视图跟随
+          // 桶会话的 workdir,对 worker 的 worktree 语义错误。静态标题,关 tab 退出。
+          <>
+            <FileDiffIcon size={15} className="shrink-0 text-[var(--text-secondary)]" />
+            <span className="min-w-0 truncate text-[12px] font-medium text-[var(--text-primary)]">
+              {t('rightSidebar.review.turn.title')}
+            </span>
+          </>
+        ) : (
+          <SourceDropdown
+            source="turn"
+            counts={{}}
+            commits={commitsState.data?.commits ?? []}
+            commitsLoading={commitsState.loading}
+            commitsError={commitsState.error}
+            commitsLoaded={commitsState.data !== null}
+            selectedCommitOid={null}
+            onChange={switchToGitSource}
+            onSelectCommit={switchToCommitSource}
+            onRefreshCommits={commitsState.refresh}
+          />
+        )}
+        <span className="min-w-0 flex-1 truncate" />
         <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
           <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
           <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
         </span>
-        <button
-          type="button"
-          onClick={() => ctx.patchState({ turnTarget: null })}
-          className="h-7 shrink-0 rounded-full px-2 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-        >
-          {t('rightSidebar.review.turn.currentWorkspace')}
-        </button>
       </header>
       {!loading && !error && isPartial && (
         <div className="flex shrink-0 items-start gap-2 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
@@ -503,7 +571,7 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
   );
 }
 
-function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
+function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, setSelectedCommitOid }: GitReviewBodyProps) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const sessionId = ctx.sessionId || null;
@@ -511,8 +579,6 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const branchBaseRef = state.branchBaseRef ?? null;
   const { data, loading, error, refresh, setData: setReviewData } = useReviewGitState(sessionId, hideWhitespace);
   const commitsState = useReviewCommits(sessionId, branchBaseRef);
-  const [source, setSource] = useState<ReviewSource>('unstaged');
-  const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [operationSummary, setOperationSummary] = useState<ReviewStageOperationSummary | null>(null);
@@ -909,7 +975,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       if (!committed) return messageText;
       return decoratePushError(messageText, err);
     }).then((completed) => ({ committed, completed }));
-  }, [branchDiffState, commitsState, decoratePushError, runPushFlow, runWrite, sessionId, source, updateReviewDataFromWrite]);
+  }, [branchDiffState, commitsState, decoratePushError, runPushFlow, runWrite, sessionId, setSelectedCommitOid, source, updateReviewDataFromWrite]);
 
   const pushCurrentBranch = useCallback(() => {
     if (!sessionId) return;
@@ -927,7 +993,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       setSelectedCommitOid(null);
       setSource('branch');
     }
-  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, source]);
+  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSelectedCommitOid, setSource, source]);
 
   const togglePath = useCallback(
     (id: string) => {
@@ -962,7 +1028,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const selectCommitSource = useCallback((oid: string) => {
     setSelectedCommitOid(oid);
     setSource('commit');
-  }, []);
+  }, [setSelectedCommitOid, setSource]);
   const requestFileJump = useCallback((diff: FileDiff) => {
     setJumpRequest((prev) => ({ id: diff.id, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
@@ -2145,8 +2211,9 @@ export function SourceDropdown({
   onSelectCommit,
   onRefreshCommits,
 }: {
-  source: ReviewSource;
-  counts: { unstaged: number; staged: number; branch: number; lastTurn: number };
+  /** `'turn'` 表示轮次审查(turnTarget)选中态:非 git 来源,仅作为当前项展示。 */
+  source: ReviewSource | 'turn';
+  counts: { unstaged?: number; staged?: number; branch?: number; lastTurn?: number };
   commits?: ReviewCommit[];
   commitsLoading?: boolean;
   commitsError?: string | null;
@@ -2158,6 +2225,11 @@ export function SourceDropdown({
   onRefreshCommits?: () => void;
 }) {
   const { t } = useTranslation();
+  // 轮次项只在轮次审查态存在(进入它的唯一入口是聊天流的变更卡片);
+  // 切走即清 turnTarget、不提供"切回轮次"的常驻项,对齐 Codex 的 EP 语义。
+  const turnOption: SourceDropdownOption | null = source === 'turn'
+    ? { source: 'turn', label: t('rightSidebar.review.turn.title') }
+    : null;
   const options: SourceDropdownOption[] = [
     { source: 'unstaged', label: t('rightSidebar.review.source.unstaged'), count: counts.unstaged },
     { source: 'staged', label: t('rightSidebar.review.source.staged'), count: counts.staged },
@@ -2166,7 +2238,7 @@ export function SourceDropdown({
     { source: 'last-turn', label: t('rightSidebar.review.source.lastTurn') },
   ];
   const directOptions = options.filter((option) => option.source !== 'commit');
-  const selected = options.find((option) => option.source === source) ?? options[0];
+  const selected = turnOption ?? options.find((option) => option.source === source) ?? options[0];
   const commitList = commits ?? [];
   const commitMenuLoaded = commitsLoaded ?? false;
   return (
@@ -2190,6 +2262,13 @@ export function SourceDropdown({
         sideOffset={4}
         className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[12rem] rounded-[8px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
       >
+        {turnOption && (
+          <SourceDropdownItem
+            option={turnOption}
+            active
+            onChange={onChange}
+          />
+        )}
         {directOptions.slice(0, 2).map((option) => (
           <SourceDropdownItem
             key={option.source}
@@ -2291,7 +2370,7 @@ export function SourceDropdown({
 }
 
 interface SourceDropdownOption {
-  source: ReviewSource;
+  source: ReviewSource | 'turn';
   label: string;
   count?: number;
 }
@@ -2316,7 +2395,10 @@ function SourceDropdownItem({
 }) {
   return (
     <DropdownMenuItem
-      onSelect={() => onChange(option.source)}
+      // 轮次伪选项已是选中态,点它只关菜单,不产生来源切换。
+      onSelect={() => {
+        if (option.source !== 'turn') onChange(option.source);
+      }}
       className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
     >
       <span className="min-w-0 flex-1 truncate">{option.label}</span>

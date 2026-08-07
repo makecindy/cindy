@@ -16,7 +16,9 @@ export type TurnChangeIncompleteReason =
   | 'read-failed'
   | 'diff-too-large'
   | 'provider-diff-conflict'
-  | 'turn-failed';
+  | 'turn-failed'
+  /** Another session's turn overlapped in the same workspace; capture attribution is best-effort and never undoable. */
+  | 'concurrent-workspace';
 
 export interface TurnChangeFileSummary {
   id: string;
@@ -71,6 +73,31 @@ export interface PersistedTurnChangeSetV1 {
   completedAt: number;
   unifiedDiff: string;
   files: TurnChangeFileSummary[];
+}
+
+/**
+ * Reasons that only say "the capture may not have seen everything", without any
+ * evidence that a change actually happened (opaque tools ran, the turn failed, or
+ * another session overlapped). Reasons outside this set prove changes existed but
+ * were not recorded — including 'outside-workspace', which the store only records
+ * for suspicious cases (a workspace path whose realpath escapes via symlink, or a
+ * provider diff block rejected as unsafe); literal out-of-workspace targets are
+ * skipped at capture time without recording any reason.
+ */
+const NO_CHANGE_EVIDENCE_REASONS: ReadonlySet<TurnChangeIncompleteReason> = new Set([
+  'opaque-tool',
+  'turn-failed',
+  'concurrent-workspace',
+]);
+
+/**
+ * Whether a summary carries anything a standalone review card can show. Zero-file
+ * entries whose reasons carry no change evidence open an empty review pane — hide
+ * the chat-stream card instead of sending users into a dead end.
+ */
+export function hasReviewableTurnChanges(summary: TurnChangeSetSummary): boolean {
+  if (summary.fileCount > 0 || summary.files.length > 0) return true;
+  return summary.incompleteReasons.some((reason) => !NO_CHANGE_EVIDENCE_REASONS.has(reason));
 }
 
 export interface TurnChangeSetUpdatedPayload {

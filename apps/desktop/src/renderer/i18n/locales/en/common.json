@@ -252,7 +252,8 @@
             "listAgent": "List currently loaded keys:",
             "linuxStart": "Start a user-local ssh-agent (add this line to ~/.bashrc / ~/.zshrc to persist):",
             "win32Enable": "Enable the ssh-agent service (run as Administrator in PowerShell):"
-          }
+          },
+          "noSuchFileFix": "This path does not exist on disk. Go back to the host settings and re-select the correct private key, or double-check the Identity file path (the ~/.ssh/… form is supported and expands to your home directory)."
         }
       },
       "add": {
@@ -370,7 +371,8 @@
         "codexSyncDone": "Codex credentials pushed to remote",
         "codexSyncDoneDaemonRestartFailed": "Codex credentials pushed, but the old daemon did not restart — reconnect to the remote / restart the daemon before retrying",
         "codexSyncFailed": "Codex credentials sync failed",
-        "codexSyncNoLocal": "No local Codex credentials found — log in to Codex in {{appName}} first"
+        "codexSyncNoLocal": "No local Codex credentials found — log in to Codex in {{appName}} first",
+        "connectKeyFileMissing": "Private key file not found or unreadable: {{detail}}. Check the path, or re-select the key in the host settings."
       },
       "silentInstall": {
         "starting": "Installing {{agent}} on remote {{hostId}}…",
@@ -3034,6 +3036,9 @@
           "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
         },
         "agentLabel": "Agent",
+        "agentUnsupportedOnChannelHint": "{{agent}} Agent does not support per-message permission confirmations on this channel; messages cannot be processed. Switch to Claude Code or Codex.",
+        "agentUnsupportedOnChannelModeHint": "After switching the Agent and sending /new, if the new Agent still reports a permission-mode issue, send /permission to adjust the permission mode.",
+        "permissionModeUnsupportedOnChannelHint": "The current Agent cannot run on this channel in this permission mode, so messages cannot be processed. Send /permission to choose a supported mode.",
         "modelLabel": "Model Configuration",
         "loading": "Loading new conversation configuration…",
         "loadFailed": "Failed to load new conversation configuration",
@@ -3427,6 +3432,7 @@
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
+        "cindyTextOneshotModelDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply. The plugin declares a preferred model: {{model}} (effective when available in the current catalog; your pin takes precedence).",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -3473,6 +3479,8 @@
         "networkSecretGhostInputDetail": "Collected by this plugin's own settings UI — the plugin page sees the value at entry time. It is then handed to the host in one step for encrypted storage; once stored, the plugin can never read it back, and the host injects it only for the domains it declares.",
         "networkSecretIdentity": "Will use your login email as the credential \"{{name}}\"",
         "networkSecretIdentityDetail": "The value comes from your signed-in account's email, derived and injected by the host at request time; nothing to fill in. The plugin can read this email to show the current identity in its settings UI.",
+        "networkSecretGhCli": "Will prefer your local GitHub CLI login for the credential \"{{name}}\"",
+        "networkSecretGhCliDetail": "The host reads the local gh login token only when needed and injects it only into GitHub API requests; plugin code cannot read or store the token. If gh is unavailable, you can configure a fallback Personal Access Token in the plugin settings.",
         "networkSecretOrganizationIdentity": "Will use your Cindy organization identity as the credential \"{{name}}\"",
         "networkSecretOrganizationIdentityDetail": "Cindy issues a short-lived identity assertion when needed, and the host sends it only to the explicitly listed service hosts. The plugin code cannot read or store the token.",
         "networkSecretOauth": "Will guide you through OAuth authorization at {{host}} ({{name}})",
@@ -3483,6 +3491,7 @@
         "codeDetailWithNode": "The panel UI runs in an isolated sandbox; local processing is provided by the Node runtime declared above.",
         "added": "New",
         "removed": "Removed",
+        "updated": "Updated",
         "unchanged": "{{count}} other permissions unchanged",
         "noChange": "No permission changes.",
         "pick": "Can ask you to pick a folder for it",
@@ -3552,6 +3561,9 @@
             "embed.text": "Text to vector"
           },
           "defaultOption": "{{model}} (default)",
+          "defaultOptionDeclared": "{{model}} (plugin declared)",
+          "searchPlaceholder": "Search models or providers",
+          "budgetBadge": "Discount",
           "noModels": "No models available"
         },
         "errandPrefs": {
@@ -4244,6 +4256,9 @@
     "cacheLabel": "Cache",
     "modelLabel": "Model",
     "staleData": "Data updated {{minutes}} minutes ago",
+    "paceTrendFast": "Trending fast at the current average pace (rough estimate)",
+    "paceTrendNormal": "Trending normally at the current average pace (rough estimate)",
+    "paceTrendSlow": "Trending slowly at the current average pace (rough estimate)",
     "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
@@ -4474,7 +4489,6 @@
     "review": {
       "turn": {
         "title": "Changes from this message",
-        "currentWorkspace": "Current workspace",
         "localOnly": "Exact message changes are not available for remote sessions yet.",
         "partialNotice": "This message includes command or tool writes that could not be tracked exactly. Only the captured subset is shown; it is not a complete patch.",
         "emptyTitle": "No recorded changes",
@@ -6288,6 +6302,7 @@
       "actionUnavailable": "This message includes file changes that cannot be safely undone",
       "actionFailed": "The changes could not be applied. Try again",
       "partial": "Only the changes captured exactly are shown",
+      "partialNone": "Files were changed, but their contents could not be recorded, so they cannot be reviewed or undone here",
       "partialReversible": "Only exactly captured changes can be undone or reapplied; uncaptured changes are not handled",
       "partialActionHint": "Only undo or reapply exactly captured file changes",
       "showMore": "Show {{count}} more files",
@@ -8616,6 +8631,25 @@
       "waitingForWorker": "Waiting for worker",
       "closeAria": "Close"
     }
+  },
+  "splitGroup": {
+    "closeAria": "Close Pane for “{{title}}”",
+    "closeAll": "Close Split",
+    "toggleDirection": "Toggle Horizontal / Vertical Split",
+    "dropHint": "Drop to Open the Session Here",
+    "loadingTask": "Loading Session…",
+    "resizeAria": "Resize Session Panes",
+    "openInSplit": "Open in Split",
+    "openSide": {
+      "left": "Open Session on Left",
+      "right": "Open Session on Right",
+      "top": "Open Session Above",
+      "bottom": "Open Session Below"
+    },
+    "alreadyOpen": "This session is already open in the split. Choose another session.",
+    "limitReached": "A split can contain up to {{count}} sessions. Close one pane and try again.",
+    "addUnavailable": "This session can’t be opened in the current split. Open a session in the main area and try again.",
+    "workerUnavailable": "A Worker can’t open in a separate pane. Open its Lead session instead."
   },
   "extraDirs": {
     "menuAria": "Composer actions",

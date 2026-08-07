@@ -12,6 +12,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { openTurnReview } from '@/features/right-sidebar/lib/openTurnReview';
+import { useSidebarHostSessionId } from '@/features/right-sidebar/lib/sidebarHostSession';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { toast } from '@/lib/toast';
@@ -123,9 +124,13 @@ export function TurnChangesCard({
     setApplying(false);
   }, [changeSet.id]);
 
+  // 内嵌在 RSB(协同 worker 面板)里时把 review tab 开到宿主(lead)的可见桶;
+  // 主实例 hostSessionId 为 null,openTurnReview 落到本会话桶,行为不变。
+  const hostSessionId = useSidebarHostSessionId();
   const openReview = (selectedDiffId?: string): void => {
     void openTurnReview(sessionId, [changeSet.id], {
       selectedDiffId: selectedDiffId ?? null,
+      hostSessionId,
     });
   };
 
@@ -182,17 +187,23 @@ export function TurnChangesCard({
               ? t('chat.turnChanges.title', { count: changeSet.fileCount })
               : t('chat.turnChanges.partialTitle')}
           </div>
-          <div className="mt-0.5 font-mono text-[12px] tabular-nums">
-            <span className="text-[var(--diff-add-fg)]">+{changeSet.additions}</span>{' '}
-            <span className="text-[var(--diff-del-fg)]">-{changeSet.deletions}</span>
-          </div>
+          {files.length > 0 && (
+            // 零文件卡的语义是「发生了变更但没录下内容」,+0 −0 会被误读成
+            // 「没有变化」,所以增删统计只在录到文件时显示。
+            <div className="mt-0.5 font-mono text-[12px] tabular-nums">
+              <span className="text-[var(--diff-add-fg)]">+{changeSet.additions}</span>{' '}
+              <span className="text-[var(--diff-del-fg)]">-{changeSet.deletions}</span>
+            </div>
+          )}
           {changeSet.state === 'partial' && (
             <div className="mt-1 flex items-center gap-1 text-[11px] text-[var(--warning-fg)]">
               <AlertTriangle size={12} />
               <span>{t(
-                appliesCapturedSubset
-                  ? 'chat.turnChanges.partialReversible'
-                  : 'chat.turnChanges.partial',
+                files.length === 0
+                  ? 'chat.turnChanges.partialNone'
+                  : appliesCapturedSubset
+                    ? 'chat.turnChanges.partialReversible'
+                    : 'chat.turnChanges.partial',
               )}</span>
             </div>
           )}
@@ -233,13 +244,17 @@ export function TurnChangesCard({
               )}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => openReview()}
-            className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-[13px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
-          >
-            {t('chat.turnChanges.review')}
-          </button>
+          {files.length > 0 && (
+            // 零文件卡没有可展示的 diff,审查面板必然为空;这类卡只承担
+            // 「有变更但未记录」的警示职责,不提供死路入口。
+            <button
+              type="button"
+              onClick={() => openReview()}
+              className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-[13px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            >
+              {t('chat.turnChanges.review')}
+            </button>
+          )}
         </div>
       </div>
 

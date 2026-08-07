@@ -194,7 +194,7 @@ describe('turn change-set sidecar store', () => {
     });
   });
 
-  it('serializes exact captures for sessions sharing one workspace', async () => {
+  it('keeps overlapping same-workspace captures parallel and degrades both to review-only', async () => {
     const target = path.join(workdir, 'shared.txt');
     const workspaceAlias = path.join(root, 'workspace-alias');
     await fs.writeFile(target, 'old\n', 'utf8');
@@ -215,37 +215,191 @@ describe('turn change-set sidecar store', () => {
       targetPath: 'shared.txt',
     });
 
-    let secondResolved = false;
-    const second = beginTurnChangeSet({
+    // The second dispatch through the workspace alias must not wait for the first
+    // session's turn — overlap is marked instead of serialized.
+    await beginTurnChangeSet({
       sessionId: 'session-2',
       anchorClientId: 'user-2',
       provider: 'pi',
       cwd: workspaceAlias,
-    }).then(() => {
-      secondResolved = true;
     });
-    await Promise.resolve();
-    expect(secondResolved).toBe(false);
-
-    await fs.writeFile(target, 'first\n', 'utf8');
-    await finalizeTurnChangeSet('session-1', null, 'complete');
-    await second;
-
     await captureKnownFileBefore({
       sessionId: 'session-2',
       provider: 'pi',
       cwd: workspaceAlias,
       targetPath: 'shared.txt',
     });
+
+    await fs.writeFile(target, 'first\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
     await fs.writeFile(target, 'second\n', 'utf8');
     await finalizeTurnChangeSet('session-2', null, 'complete');
 
-    const [first] = await getTurnChangeSets('session-1', (await listTurnChangeSets('session-1')).map(({ id }) => id));
-    const [secondDetail] = await getTurnChangeSets('session-2', (await listTurnChangeSets('session-2')).map(({ id }) => id));
-    expect(first?.diffs[0]?.rawPatch).toContain('-old');
-    expect(first?.diffs[0]?.rawPatch).toContain('+first');
-    expect(secondDetail?.diffs[0]?.rawPatch).toContain('-first');
-    expect(secondDetail?.diffs[0]?.rawPatch).toContain('+second');
+    const [first] = await listTurnChangeSets('session-1');
+    const [second] = await listTurnChangeSets('session-2');
+    expect(first).toMatchObject({
+      state: 'partial',
+      incompleteReasons: expect.arrayContaining(['concurrent-workspace']),
+      isReversible: false,
+    });
+    expect(second).toMatchObject({
+      state: 'partial',
+      incompleteReasons: expect.arrayContaining(['concurrent-workspace']),
+      isReversible: false,
+    });
+    // Captures are still recorded for review even though they overlapped.
+    const [firstDetail] = await getTurnChangeSets('session-1', [first!.id]);
+    expect(firstDetail?.diffs[0]?.rawPatch).toContain('-old');
+    await expect(applyTurnChangeSetAction('session-1', first!.id, 'undo'))
+      .rejects.toMatchObject({ kind: 'unsupported' } satisfies Partial<TurnChangeSetActionError>);
+  });
+
+  it('does not degrade sequential turns or different workspaces', async () => {
+    const target = path.join(workdir, 'seq.txt');
+    await fs.writeFile(target, 'a\n', 'utf8');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'seq.txt',
+    });
+    await fs.writeFile(target, 'b\n', 'utf8');
+
+    // A concurrent turn in a *different* directory shares nothing.
+    const otherDir = path.join(root, 'other-workspace');
+    await fs.mkdir(otherDir);
+    const otherTarget = path.join(otherDir, 'other.txt');
+    await fs.writeFile(otherTarget, 'x\n', 'utf8');
+    await beginTurnChangeSet({
+      sessionId: 'session-2',
+      anchorClientId: 'user-2',
+      provider: 'pi',
+      cwd: otherDir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-2',
+      provider: 'pi',
+      cwd: otherDir,
+      targetPath: 'other.txt',
+    });
+    await fs.writeFile(otherTarget, 'y\n', 'utf8');
+
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+    await finalizeTurnChangeSet('session-2', null, 'complete');
+
+    expect((await listTurnChangeSets('session-1'))[0]).toMatchObject({
+      state: 'complete',
+      incompleteReasons: [],
+      isReversible: true,
+    });
+    expect((await listTurnChangeSets('session-2'))[0]).toMatchObject({
+      state: 'complete',
+      incompleteReasons: [],
+      isReversible: true,
+    });
+
+    // A sequential turn in the same directory (begun after the prior finalize) is
+    // untouched by overlap marking.
+    await beginTurnChangeSet({
+      sessionId: 'session-2',
+      anchorClientId: 'user-2',
+      provider: 'pi',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-2',
+      provider: 'pi',
+      cwd: workdir,
+      targetPath: 'seq.txt',
+    });
+    await fs.writeFile(target, 'c\n', 'utf8');
+    await finalizeTurnChangeSet('session-2', null, 'complete');
+    const sequential = (await listTurnChangeSets('session-2')).find(
+      (entry) => entry.cwd === workdir,
+    );
+    expect(sequential).toMatchObject({
+      state: 'complete',
+      incompleteReasons: [],
+      isReversible: true,
+    });
+  });
+
+  it('waits for the prior after-image seal instead of marking a non-overlapping dispatch', async () => {
+    const target = path.join(workdir, 'seal.txt');
+    await fs.writeFile(target, 'before\n', 'utf8');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'seal.txt',
+    });
+    await fs.writeFile(target, 'after\n', 'utf8');
+
+    // Finalize is not awaited: the next dispatch must wait for the seal, then see
+    // no active capture — no degradation on either side.
+    const sealing = finalizeTurnChangeSet('session-1', null, 'complete');
+    await beginTurnChangeSet({
+      sessionId: 'session-2',
+      anchorClientId: 'user-2',
+      provider: 'pi',
+      cwd: workdir,
+    });
+    await sealing;
+    await finalizeTurnChangeSet('session-2', null, 'complete');
+
+    expect((await listTurnChangeSets('session-1'))[0]).toMatchObject({
+      state: 'complete',
+      incompleteReasons: [],
+      isReversible: true,
+    });
+    expect(await listTurnChangeSets('session-2')).toHaveLength(0);
+  });
+
+  it('drops an overlapping turn that never touched files instead of persisting an empty card', async () => {
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    const target = path.join(workdir, 'busy-work.txt');
+    await fs.writeFile(target, 'v1\n', 'utf8');
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'busy-work.txt',
+    });
+    // Chat-only turn overlapping in the same directory: no captures, no card.
+    await beginTurnChangeSet({
+      sessionId: 'session-2',
+      anchorClientId: 'user-2',
+      provider: 'pi',
+      cwd: workdir,
+    });
+    await finalizeTurnChangeSet('session-2', null, 'complete');
+    await fs.writeFile(target, 'v2\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+
+    expect(await listTurnChangeSets('session-2')).toHaveLength(0);
+    expect((await listTurnChangeSets('session-1'))[0]).toMatchObject({
+      state: 'partial',
+      incompleteReasons: expect.arrayContaining(['concurrent-workspace']),
+      isReversible: false,
+      fileCount: 1,
+    });
   });
 
   it('undoes and reapplies an exact text patch without changing chat history', async () => {
@@ -942,6 +1096,207 @@ describe('turn change-set sidecar store', () => {
       fileCount: 0,
       files: [],
       isReversible: false,
+    });
+  });
+
+  it('drops the change set when a turn fails without any capture activity', async () => {
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    await finalizeTurnChangeSet('session-1', null, 'partial');
+
+    expect(await listTurnChangeSets('session-1')).toHaveLength(0);
+  });
+
+  it('drops the change set when a failed turn only touched files without changing them', async () => {
+    const target = path.join(workdir, 'a.ts');
+    await fs.writeFile(target, 'same\n', 'utf8');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'a.ts',
+    });
+    await finalizeTurnChangeSet('session-1', null, 'partial');
+
+    expect(await listTurnChangeSets('session-1')).toHaveLength(0);
+  });
+
+  it('persists a partial entry with turn-failed when a failed turn changed files', async () => {
+    const target = path.join(workdir, 'a.ts');
+    await fs.writeFile(target, 'old\n', 'utf8');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'a.ts',
+    });
+    await fs.writeFile(target, 'new\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'partial');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'partial',
+      incompleteReasons: ['turn-failed'],
+      fileCount: 1,
+      additions: 1,
+      deletions: 1,
+    });
+  });
+
+  it('hides legacy zero-file turn-failed-only entries persisted by earlier builds', async () => {
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'pi',
+      cwd: workdir,
+    });
+    noteOpaqueTurnChange({ sessionId: 'session-1', provider: 'pi', cwd: workdir });
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+    expect(await listTurnChangeSets('session-1')).toHaveLength(1);
+
+    // Rewrite the sidecar as an earlier build would have persisted a failed turn
+    // with no capture activity: zero files, incompleteReasons = ['turn-failed'].
+    const sidecarDir = path.join(mocks.userDataRoot, 'turn-change-sets', 'session-1');
+    const indexPath = path.join(sidecarDir, 'index.json');
+    const index = JSON.parse(await fs.readFile(indexPath, 'utf8')) as {
+      version: number;
+      entries: Array<{ id: string; incompleteReasons: string[] }>;
+    };
+    index.entries[0]!.incompleteReasons = ['turn-failed'];
+    await fs.writeFile(indexPath, `${JSON.stringify(index)}\n`, 'utf8');
+
+    expect(await listTurnChangeSets('session-1')).toHaveLength(0);
+  });
+
+  it('keeps the zero-file partial entry when a failed turn also ran an opaque tool', async () => {
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'pi',
+      cwd: workdir,
+    });
+    noteOpaqueTurnChange({ sessionId: 'session-1', provider: 'pi', cwd: workdir });
+    await finalizeTurnChangeSet('session-1', null, 'partial');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'partial',
+      incompleteReasons: expect.arrayContaining(['opaque-tool', 'turn-failed']),
+      fileCount: 0,
+      files: [],
+    });
+  });
+
+  it('skips known writes literally outside the workspace without marking the capture incomplete', async () => {
+    const inWorkspace = path.join(workdir, 'kept.txt');
+    const outside = path.join(root, 'agent-temp.md');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    // Deliberate scope exclusion: temp files outside the workspace tree are not
+    // tracked and must not degrade the in-workspace capture to partial.
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: outside,
+    });
+    await fs.writeFile(outside, 'temp\n', 'utf8');
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'kept.txt',
+    });
+    await fs.writeFile(inWorkspace, 'kept\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'complete',
+      incompleteReasons: [],
+      fileCount: 1,
+    });
+    expect(summary?.files[0]?.path).toBe('kept.txt');
+  });
+
+  it('drops a turn whose only known write was outside the workspace', async () => {
+    const outside = path.join(root, 'agent-temp.md');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: outside,
+    });
+    await fs.writeFile(outside, 'temp\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+
+    expect(await listTurnChangeSets('session-1')).toHaveLength(0);
+  });
+
+  it('still marks the capture incomplete when an in-workspace path escapes via symlink', async () => {
+    const escapeTarget = path.join(root, 'escape-target');
+    await fs.mkdir(escapeTarget);
+    await fs.writeFile(path.join(escapeTarget, 'secret.txt'), 'secret\n', 'utf8');
+    await fs.symlink(
+      escapeTarget,
+      path.join(workdir, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    // Literally inside the workspace, resolves outside: the workspace tree looks
+    // touched, so the incomplete reason must stay.
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'link/secret.txt',
+    });
+    const inWorkspace = path.join(workdir, 'kept.txt');
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'kept.txt',
+    });
+    await fs.writeFile(inWorkspace, 'kept\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'partial',
+      incompleteReasons: expect.arrayContaining(['outside-workspace']),
+      fileCount: 1,
     });
   });
 

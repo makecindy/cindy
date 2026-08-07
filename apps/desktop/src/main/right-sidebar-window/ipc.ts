@@ -127,6 +127,13 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     if (typeof r.requestNonce !== 'number' || !Number.isSafeInteger(r.requestNonce)) {
       throwIpcError('INVALID_PARAMS', 'command.requestNonce must be an integer');
     }
+    if (
+      r.hostSessionId !== undefined
+      && r.hostSessionId !== null
+      && (typeof r.hostSessionId !== 'string' || r.hostSessionId.length === 0 || r.hostSessionId.length > 256)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.hostSessionId must be string | null');
+    }
     return {
       type: 'open-turn-review',
       sessionId: r.sessionId,
@@ -134,6 +141,8 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       selectedDiffId: typeof r.selectedDiffId === 'string' ? r.selectedDiffId : null,
       selectedPath: typeof r.selectedPath === 'string' ? r.selectedPath : null,
       requestNonce: r.requestNonce,
+      // 协同面板里 worker 流的入口带宿主(lead)桶;缺省 null = tab 落 sessionId 自身桶。
+      hostSessionId: typeof r.hostSessionId === 'string' ? r.hostSessionId : null,
     };
   }
   if (r.type === 'open-file-browser') {
