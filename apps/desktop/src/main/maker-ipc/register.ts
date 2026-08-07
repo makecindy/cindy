@@ -530,8 +530,8 @@ import {
 } from './orcaTeamService.js';
 import {
   closeOrcaWorkerRuntimeWhileLocked,
-  fenceOrcaWorkerSessionsForDisable,
   isOrcaWorkerSessionDisableFenced,
+  withOrcaWorkerDisableFence,
   withOrcaWorkerSessionLocks,
 } from './orcaDisableWorkerRuntime.js';
 import {
@@ -7800,6 +7800,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
+    withSessionLock: withSendToSessionLock,
+    isSessionSendFenced: isOrcaWorkerSessionDisableFenced,
     buildCreateOptsForQueuedSession,
     enqueueQueuedMessage: (sessionId, item) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
@@ -7958,35 +7960,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
-    fenceOrcaWorkerSessionsForDisable(activeWorkers.map((worker) => worker.sessionId));
-    await withOrcaWorkerSessionLocks(
-      withSendToSessionLock,
+    await withOrcaWorkerDisableFence(
       activeWorkers.map((worker) => worker.sessionId),
-      async () => {
-        for (const w of activeWorkers) {
-          await closeOrcaWorkerRuntimeWhileLocked(
-            {
-              getSession: (sessionId) => maker.getSession(sessionId),
-              closeSession: (sessionId) => maker.closeSession(sessionId),
-              beforeClose: () => orcaTeamService.clearAutoBridgeState(w.sessionId),
-              afterClose: () => {
-                cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
-                forgetKnownOrcaWorkerSession(w.sessionId);
-              },
-              log,
-            },
-            w.sessionId,
-          );
-        }
+      async (markTeamEndDurable) => {
+        await withOrcaWorkerSessionLocks(
+          withSendToSessionLock,
+          activeWorkers.map((worker) => worker.sessionId),
+          async () => {
+            for (const w of activeWorkers) {
+              await closeOrcaWorkerRuntimeWhileLocked(
+                {
+                  getSession: (sessionId) => maker.getSession(sessionId),
+                  closeSession: (sessionId) => maker.closeSession(sessionId),
+                  beforeClose: () => orcaTeamService.clearAutoBridgeState(w.sessionId),
+                  afterClose: () => {
+                    cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
+                    forgetKnownOrcaWorkerSession(w.sessionId);
+                  },
+                  log,
+                },
+                w.sessionId,
+              );
+            }
 
-        // Keep every Worker route locked until the ended/archived state is
-        // durable. Otherwise a queued send could recreate a runtime in the gap
-        // after closeSession and before these writes complete.
-        await markTeamEnded(team.id, 'completed');
-        await markWorkersStatusByTeam(team.id, 'done');
-        await archiveWorkersByTeam(team.id);
+            // Keep every Worker route locked until the ended/archived state is
+            // durable. Otherwise a queued send could recreate a runtime in the gap
+            // after closeSession and before these writes complete.
+            await markTeamEnded(team.id, 'completed');
+            markTeamEndDurable();
+            await markWorkersStatusByTeam(team.id, 'done');
+            await archiveWorkersByTeam(team.id);
 
-        await clearLeadOrcaRoleState(leadSessionId);
+            await clearLeadOrcaRoleState(leadSessionId);
+          },
+        );
       },
     );
 

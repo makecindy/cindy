@@ -766,7 +766,7 @@ describe('sendToSession ordering', () => {
       'return {',
     );
 
-    expect(activeDisableBlock).toContain('fenceOrcaWorkerSessionsForDisable(');
+    expect(activeDisableBlock).toContain('await withOrcaWorkerDisableFence(');
     expect(activeDisableBlock).toContain('beforeClose: () => orcaTeamService.clearAutoBridgeState(w.sessionId),');
     expect(activeDisableBlock).not.toContain('clearWorkerAutoBridgeState(w.sessionId);');
     expect(activeDisableBlock).toContain('await withOrcaWorkerSessionLocks(');
@@ -776,7 +776,7 @@ describe('sendToSession ordering', () => {
     expect(activeDisableBlock).toContain('forgetKnownOrcaWorkerSession(w.sessionId);');
     expectOrder(
       activeDisableBlock,
-      'fenceOrcaWorkerSessionsForDisable(',
+      'await withOrcaWorkerDisableFence(',
       'await withOrcaWorkerSessionLocks(',
     );
     expectOrder(
@@ -886,7 +886,7 @@ describe('sendToSession ordering', () => {
     const block = extractDispatchOrEnqueueOrcaInterAgentMessageSource();
     const liveBlock = extractBetween(
       block,
-      'const live = deps.getLiveSession(params.targetSessionId);',
+      'const directResult = await deps.withSessionLock(params.targetSessionId, async () => {',
       'const result = await deps.sendToSessionInternal({',
     );
     const fallbackBlock = extractBetween(
@@ -899,7 +899,9 @@ describe('sendToSession ordering', () => {
     expect(block).toContain('targetTitle: dbRow.title,');
     expect(block).toContain('targetLastUserSendAt: dbRow.userSendAt !== null');
     expect(block).toContain('...dispatchReceipt,');
-    expect(liveBlock).toContain("return { ok: true, mode: 'dispatched', clientId, dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };");
+    expect(liveBlock).toContain("mode: 'dispatched',");
+    expect(liveBlock).toContain('...dispatchReceipt,');
+    expect(liveBlock).toContain('deps.isSessionSendFenced(params.targetSessionId)');
     expect(liveBlock).not.toContain('isQueuedCollabDispatchResult(result)');
     expect(fallbackBlock).toContain('targetTitle: result.targetTitle,');
     expect(fallbackBlock).toContain('targetLastUserSendAt: result.targetLastUserSendAt,');

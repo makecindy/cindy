@@ -5,6 +5,7 @@ import {
   fenceOrcaWorkerSessionsForDisable,
   isOrcaWorkerSessionDisableFenced,
   type OrcaDisableWorkerRuntimeDeps,
+  withOrcaWorkerDisableFence,
   withOrcaWorkerSessionLocks,
 } from '../orcaDisableWorkerRuntime';
 
@@ -117,6 +118,40 @@ describe('Orca disable Worker runtime locking', () => {
     expect(teamArchived.mock.invocationCallOrder[0]).toBeLessThan(
       sendStarted.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('rolls back its fence when shutdown fails before the team end is durable', async () => {
+    await expect(
+      withOrcaWorkerDisableFence(['worker-before-durable'], async () => {
+        expect(isOrcaWorkerSessionDisableFenced('worker-before-durable')).toBe(true);
+        throw new Error('route lock failed');
+      }),
+    ).rejects.toThrow('route lock failed');
+
+    expect(isOrcaWorkerSessionDisableFenced('worker-before-durable')).toBe(false);
+  });
+
+  it('retains the fence when cleanup fails after the team end is durable', async () => {
+    await expect(
+      withOrcaWorkerDisableFence(['worker-after-durable'], async (markTeamEndDurable) => {
+        markTeamEndDurable();
+        throw new Error('worker archive failed');
+      }),
+    ).rejects.toThrow('worker archive failed');
+
+    expect(isOrcaWorkerSessionDisableFenced('worker-after-durable')).toBe(true);
+  });
+
+  it('does not let one failed shutdown remove another shutdown fence', async () => {
+    const rollbackFirst = fenceOrcaWorkerSessionsForDisable(['worker-overlap']);
+    const rollbackSecond = fenceOrcaWorkerSessionsForDisable(['worker-overlap']);
+
+    rollbackFirst();
+    rollbackFirst();
+    expect(isOrcaWorkerSessionDisableFenced('worker-overlap')).toBe(true);
+
+    rollbackSecond();
+    expect(isOrcaWorkerSessionDisableFenced('worker-overlap')).toBe(false);
   });
 
   it('still closes after abort fails', async () => {

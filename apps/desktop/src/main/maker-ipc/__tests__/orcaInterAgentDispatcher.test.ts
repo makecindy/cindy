@@ -67,6 +67,8 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     getLiveSession: vi.fn(() => liveSession),
     shouldQueueNewTurn: vi.fn(() => false),
     hasSendToSessionLock: vi.fn(() => false),
+    withSessionLock: vi.fn(async (_sessionId, task) => task()),
+    isSessionSendFenced: vi.fn(() => false),
     buildCreateOptsForQueuedSession: vi.fn(async () => createOpts),
     enqueueQueuedMessage: vi.fn((_sessionId, item) => {
       queuedItems.push(item);
@@ -150,6 +152,71 @@ describe('Orca lead/worker dispatcher', () => {
       },
       expect.objectContaining({ throwOnStartFailure: true }),
     );
+  });
+
+  it('holds the shared session lock for the full direct live send', async () => {
+    let allowLockedSend!: () => void;
+    const lockedSendGate = new Promise<void>((resolve) => {
+      allowLockedSend = resolve;
+    });
+    let lockRequested!: () => void;
+    const lockRequest = new Promise<void>((resolve) => {
+      lockRequested = resolve;
+    });
+    const h = createHarness({
+      withSessionLock: vi.fn(async (_sessionId, task) => {
+        lockRequested();
+        await lockedSendGate;
+        return task();
+      }),
+    });
+
+    const dispatch = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Wait for route lock',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'direct-lock-test' },
+    });
+    await lockRequest;
+
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    allowLockedSend();
+    await expect(dispatch).resolves.toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.deps.withSessionLock).toHaveBeenCalledWith(
+      'target-session',
+      expect.any(Function),
+    );
+    expect(h.liveSession.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks the shutdown fence after winning the direct-send lock', async () => {
+    let fenced = false;
+    const h = createHarness({
+      isSessionSendFenced: vi.fn(() => fenced),
+      withSessionLock: vi.fn(async (_sessionId, task) => {
+        fenced = true;
+        return task();
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Must not outlive team',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'disable-fence-race-test' },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SESSION_NOT_FOUND',
+      },
+    });
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
   });
 
   it('delays queued accepted side effects until the coordinator accepted hook runs', async () => {

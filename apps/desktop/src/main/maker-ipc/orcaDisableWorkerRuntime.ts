@@ -14,14 +14,62 @@ export interface OrcaDisableWorkerRuntimeDeps {
   };
 }
 
-const disabledOrcaWorkerSessionIds = new Set<string>();
+const disabledOrcaWorkerSessionFenceCounts = new Map<string, number>();
 
-export function fenceOrcaWorkerSessionsForDisable(sessionIds: readonly string[]): void {
-  for (const sessionId of sessionIds) disabledOrcaWorkerSessionIds.add(sessionId);
+/**
+ * Fence sends before a team shutdown starts. The returned rollback only removes
+ * this caller's claim, so overlapping shutdown attempts cannot unfence each
+ * other. Successful shutdowns deliberately retain their claim for the rest of
+ * the process lifetime.
+ */
+export function fenceOrcaWorkerSessionsForDisable(
+  sessionIds: readonly string[],
+): () => void {
+  const uniqueSessionIds = [...new Set(sessionIds)];
+  for (const sessionId of uniqueSessionIds) {
+    disabledOrcaWorkerSessionFenceCounts.set(
+      sessionId,
+      (disabledOrcaWorkerSessionFenceCounts.get(sessionId) ?? 0) + 1,
+    );
+  }
+
+  let rolledBack = false;
+  return () => {
+    if (rolledBack) return;
+    rolledBack = true;
+    for (const sessionId of uniqueSessionIds) {
+      const nextCount = (disabledOrcaWorkerSessionFenceCounts.get(sessionId) ?? 0) - 1;
+      if (nextCount > 0) {
+        disabledOrcaWorkerSessionFenceCounts.set(sessionId, nextCount);
+      } else {
+        disabledOrcaWorkerSessionFenceCounts.delete(sessionId);
+      }
+    }
+  };
 }
 
 export function isOrcaWorkerSessionDisableFenced(sessionId: string): boolean {
-  return disabledOrcaWorkerSessionIds.has(sessionId);
+  return (disabledOrcaWorkerSessionFenceCounts.get(sessionId) ?? 0) > 0;
+}
+
+/**
+ * Keep shutdown fences after the team end is durable; roll back only this
+ * attempt when lock acquisition or the durable team-end write fails first.
+ */
+export async function withOrcaWorkerDisableFence<T>(
+  sessionIds: readonly string[],
+  task: (markTeamEndDurable: () => void) => Promise<T>,
+): Promise<T> {
+  const rollbackFence = fenceOrcaWorkerSessionsForDisable(sessionIds);
+  let teamEndIsDurable = false;
+  try {
+    return await task(() => {
+      teamEndIsDurable = true;
+    });
+  } catch (error) {
+    if (!teamEndIsDurable) rollbackFence();
+    throw error;
+  }
 }
 
 async function waitForRuntimeOperation(

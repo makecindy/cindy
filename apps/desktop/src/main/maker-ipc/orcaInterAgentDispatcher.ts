@@ -134,6 +134,8 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
   shouldQueueNewTurn: (sessionId: string) => boolean;
   hasSendToSessionLock: (sessionId: string) => boolean;
+  withSessionLock: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
+  isSessionSendFenced: (sessionId: string) => boolean;
   buildCreateOptsForQueuedSession: (
     sessionId: string,
     meta: TSessionMeta,
@@ -335,6 +337,18 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       };
     };
 
+    const fencedFailure = (): Promise<DispatchOrcaInterAgentMessageResult> => failureResult({
+      ...createHostSendFailure(
+        'SESSION_NOT_FOUND',
+        `Session ${params.targetSessionId} is closed because its Orca team ended`,
+      ),
+      source: params.meta.source,
+      context: params.meta.context,
+    });
+    if (deps.isSessionSendFenced(params.targetSessionId)) {
+      return fencedFailure();
+    }
+
     const shouldQueue = deps.shouldQueueNewTurn(params.targetSessionId)
       || deps.hasSendToSessionLock(params.targetSessionId)
       || deps.getLiveSession(params.targetSessionId)?.isTurnRunning?.() === true;
@@ -343,24 +357,47 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
 
     try {
-      const live = deps.getLiveSession(params.targetSessionId);
-      if (live) {
-        const result = await sendPersistedUserMessageToSession(deps, {
-          session: live,
-          dbContent: persistedContent,
-          agentMessage: { type: 'user', content: agentMessageText },
-          clientId,
-          source: params.meta.source,
-          context: params.meta.context,
-          onAccepted: runAccepted,
+      if (deps.getLiveSession(params.targetSessionId)) {
+        const directResult = await deps.withSessionLock(params.targetSessionId, async () => {
+          if (deps.isSessionSendFenced(params.targetSessionId)) {
+            return fencedFailure();
+          }
+          const lockedLive = deps.getLiveSession(params.targetSessionId);
+          if (
+            deps.shouldQueueNewTurn(params.targetSessionId)
+            || lockedLive?.isTurnRunning?.() === true
+          ) {
+            return enqueueQueuedMessage('orca inter-agent message queued after route-lock race');
+          }
+          if (!lockedLive) return null;
+
+          const result = await sendPersistedUserMessageToSession(deps, {
+            session: lockedLive,
+            dbContent: persistedContent,
+            agentMessage: { type: 'user', content: agentMessageText },
+            clientId,
+            source: params.meta.source,
+            context: params.meta.context,
+            onAccepted: runAccepted,
+          });
+          if (result.dispatched) {
+            return {
+              ok: true,
+              mode: 'dispatched',
+              clientId,
+              dispatchOutcome: result.dispatchOutcome,
+              ...dispatchReceipt,
+            } as const;
+          }
+          if (
+            result.dispatchOutcome.kind === 'host-send'
+            && result.dispatchOutcome.code === 'SESSION_RUNNING'
+          ) {
+            return enqueueQueuedMessage('orca inter-agent message queued after SESSION_RUNNING race');
+          }
+          return failureResult(result.dispatchOutcome);
         });
-        if (result.dispatched) {
-          return { ok: true, mode: 'dispatched', clientId, dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };
-        }
-        if (result.dispatchOutcome.kind === 'host-send' && result.dispatchOutcome.code === 'SESSION_RUNNING') {
-          return enqueueQueuedMessage('orca inter-agent message queued after SESSION_RUNNING race');
-        }
-        return failureResult(result.dispatchOutcome);
+        if (directResult) return directResult;
       }
 
       const result = await deps.sendToSessionInternal({
