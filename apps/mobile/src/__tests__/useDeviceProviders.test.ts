@@ -64,6 +64,24 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-old-xd' }] });
   });
 
+  it('fresh 失败且曾作废普通在途 → 恢复普通拉取,目录不再卡未知(codex P2)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    // 普通请求在途(发起时目录 A)
+    const ordinaryResolvers: Array<(v: Providers) => void> = [];
+    const ordinary = vi.fn(() => new Promise<Providers>((r) => ordinaryResolvers.push(r)));
+    void mod.fetchDeviceProviders('dev-1', ordinary);
+    // fresh 触发并失败(瞬断)
+    const freshFetcher = vi.fn(() => Promise.reject(new Error('transient down')));
+    await expect(mod.fetchDeviceProvidersFresh('dev-1', freshFetcher)).rejects.toThrow('transient down');
+    // 恢复拉取:cache-first 重新发起(有缓存立即恢复已知 / 无缓存访问工作站)
+    const recoveryFetcher = vi.fn(async () => result('dev-1-recovered'));
+    // 等待 fire-and-forget 恢复请求落定(经 inflight 槽,reject 后槽已清)
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // 恢复请求应已发出并回写缓存(hook 不再停在 ready=false 未知态)
+    await mod.fetchDeviceProviders('dev-1', recoveryFetcher);
+    expect(recoveryFetcher).toHaveBeenCalled();
+  });
+
   it('fetchDeviceProvidersFresh 无普通在途时不推进代际:守卫 genAt 校验可直接采信(codex P2)', async () => {
     const mod = await import('@/device-link/deviceProvidersCache');
     const genBefore = mod.getDeviceProvidersGen('dev-1');

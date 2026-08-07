@@ -114,6 +114,9 @@ export async function fetchDeviceProvidersFresh(
   // 为外部驱逐而丢弃结果;仅在确有在途时推进,守卫下一轮重跑(普通在途已清)
   // 即收敛,gen 保持稳定时 fetch 前后一致直接采信。
   const ip = inflight.get(deviceId);
+  // 是否曾作废普通在途:失败时需恢复拉取(copilot review P1 要求失败分支不动
+  // 普通 inflight,这里只在启动时作废过一次;记录以便失败后恢复)。
+  const invalidatedOrdinary = ip !== undefined;
   if (ip) {
     inflight.delete(deviceId);
     deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
@@ -138,8 +141,13 @@ export async function fetchDeviceProvidersFresh(
       return payload;
     })
     .catch((e) => {
-      // 失败分支不动普通 inflight:那是 cache-first 槽,fresh 不写它也不该清它
-      // (copilot review P1)。freshInflight 由下方 finally 清理。
+      // fresh 失败且曾作废普通在途 → 恢复普通拉取(codex review P2):被作废的
+      // 普通请求已因代际失效不回写,hook 会停在 ready=false 不再自动重拉(设备/
+      // maker 未变化不触发 effect)——重新走 cache-first 拉取:有缓存立即恢复
+      // 已知状态,无缓存重新访问工作站。fire-and-forget,不阻塞调用方的 reject。
+      if (invalidatedOrdinary) {
+        void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined);
+      }
       throw e;
     });
   freshInflight.set(deviceId, p);
