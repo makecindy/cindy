@@ -1,4 +1,4 @@
-import { GHOST_OAUTH_SCOPES_MAX } from '@cindy/plugin-protocol';
+import { GHOST_OAUTH_SCOPES_MAX, isValidCindyVersion } from '@cindy/plugin-protocol';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
@@ -467,9 +467,21 @@ export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
 /**
+ * cindy 槽·搜索类可申请的动作。
+ *
+ * `web` = Cindy 托管的公网搜索:意识只递查询词与结果数，主机固定走当前
+ * model-access 下发的 XD endpoint + XD user key，通过固定模型别名调用
+ * Anthropic Messages 原生网页搜索，不把网关 key、模型名或工具定义暴露给
+ * 意识。它与 network 槽里的 BYO Brave/Tavily 是两条独立凭证与计费路径。
+ */
+export const GHOST_CINDY_SEARCH_ACTIONS = ['web'] as const;
+export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number];
+
+/**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
- * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
- * (选型权在主机的解析表:调用时显式点名 > 意识专属覆盖 > 用户能力偏好 >
+ * 向主机点哪几类代办"——类目与动作之外只有**意图级**字段(oneshotModel 偏好,
+ * 2026-08-05 起),**不构成任何硬依赖**(选型权在主机的解析表:调用时显式点名 >
+ * 用户在详情页的钉档(意识专属覆盖)> 意识声明的偏好模型 > 用户能力偏好 >
  * 出厂默认;意识只表达意图,永不腐烂)。装入确认框与代办资格审共同消费。
  */
 export interface GhostCindyNeeds {
@@ -483,6 +495,16 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
+  /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由，意识不经手网关凭证)。 */
+  search?: GhostCindySearchAction[];
+  /**
+   * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
+   * 成对)。主机能从当前供应商目录解析到(且用户未停用)就用它,解析不到按
+   * 未声明处理;用户在详情页的钉档永远优先于本声明。注意:旧宿主会把含本
+   * 字段的身份卡**整份拒装**(cindy 详单未知类目硬拒)——声明前确认目标
+   * 用户群的主机版本。
+   */
+  oneshotModel?: string;
 }
 
 /**
@@ -1242,6 +1264,8 @@ export interface GhostManifest {
   name: string;
   /** 版本字符串(不强制 semver,仅展示用)。 */
   version: string;
+  /** 安装此 Release 所需的最低 Cindy 客户端 SemVer；缺省表示不限制。 */
+  minCindyVersion?: string;
   /** 作者展示名(仅展示用)。 */
   author?: string;
   /**
@@ -1552,6 +1576,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'media.deposit': 'cindyMediaDeposit',
   'text.oneshot': 'cindyTextOneshot',
   'embed.text': 'cindyEmbedText',
+  'search.web': 'cindySearchWeb',
 };
 
 /**
@@ -1565,6 +1590,7 @@ const GHOST_CINDY_PERM_DETAIL: Record<string, string> = {
   // 向量:用户要知道的是"文字会被送去算向量"(计费面)与"结果不落主机"
   // (向量归意识自己保管)。单次条数上限一并插值,同 deposit 的口径。
   'embed.text': 'cindyEmbedTextDetail',
+  'search.web': 'cindySearchWebDetail',
 };
 
 /**
@@ -1587,10 +1613,14 @@ function formatGhostQuotaSize(bytes: number): string {
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
   for (const [category, actions] of Object.entries(manifest.cindy ?? {})) {
+    if (category === 'oneshotModel') continue; // 偏好模型是标量意图,不是能力键
     for (const action of actions ?? []) {
       const cap = `${category}.${action}`;
       const labelKey = GHOST_CINDY_PERM_LABEL[cap];
-      const detailKey = GHOST_CINDY_PERM_DETAIL[cap];
+      // 快问快答声明了偏好模型:说明行换带模型的版本(装入即知情,成本透明)。
+      const declaredOneshotModel =
+        cap === 'text.oneshot' ? manifest.cindy?.oneshotModel : undefined;
+      const detailKey = declaredOneshotModel ? 'cindyTextOneshotModelDetail' : GHOST_CINDY_PERM_DETAIL[cap];
       // 未登记的能力键不该出现(validateGhostManifest 已拦),防御性跳过。
       if (labelKey) {
         items.push({
@@ -1602,11 +1632,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
           // 持久媒体占用上限);改常量四份 locale 自动跟随。
           ...(cap === 'media.deposit'
             ? { detailArgs: { quota: formatGhostQuotaSize(GHOST_CINDY_DEPOSIT_QUOTA_BYTES) } }
-            : {}),
-          // 向量单次条数上限同样单源插值:改常量四份 locale 自动跟随。
-          ...(cap === 'embed.text'
-            ? { detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) } }
-            : {}),
+            : cap === 'embed.text'
+              ? { detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) } }
+              : declaredOneshotModel
+                ? { detailArgs: { model: declaredOneshotModel } }
+                : {}),
         });
       }
     }
@@ -1957,8 +1987,22 @@ export interface GhostPermissionDiff {
 }
 
 /**
- * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(key + detail)。
- * 与 diffGhostPermissionItems 同口径(按 key 对齐、detail 变化算差异),
+ * 权限条目指纹:key + 作者自由文本 detail + 主机固定说明(detailKey + detailArgs,
+ * args 按键序稳定化)。detailKey/detailArgs 必须在内:同一 key 的固定说明会随
+ * 声明变化(cindy text.oneshot 声明 oneshotModel、network secret 的 identity
+ * 形态),只看 key+detail 会把"说明/成本面变了"漏判成"权限面没变",更新时
+ * 用户看不到重新确认。
+ */
+function ghostPermissionItemFingerprint(item: GhostPermissionItem): string {
+  const args = item.detailArgs
+    ? Object.entries(item.detailArgs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    : [];
+  return JSON.stringify([item.key, item.detail ?? '', item.detailKey ?? '', args]);
+}
+
+/**
+ * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(条目指纹见上)。
+ * 与 diffGhostPermissionItems 同口径(按 key 对齐、指纹变化算差异),
  * 所以"指纹相同"等价于"权限面没变",可安全沿用先前的审阅结论。
  *
  * renderer 审阅时记录基线并随安装请求回传,main 在安装锁内用**当前**已装
@@ -1967,7 +2011,7 @@ export interface GhostPermissionDiff {
  */
 export function ghostPermissionBaselineKey(manifest: GhostManifest): string {
   return ghostPermissionItems(manifest)
-    .map((item) => JSON.stringify([item.key, item.detail ?? '']))
+    .map(ghostPermissionItemFingerprint)
     .sort()
     .join('\n');
 }
@@ -1980,14 +2024,15 @@ export function diffGhostPermissionItems(
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
-  const prevDetailByKey = new Map(prevItems.map((i) => [i.key, i.detail ?? '']));
+  const prevPrintByKey = new Map(prevItems.map((i) => [i.key, ghostPermissionItemFingerprint(i)]));
+  const nextPrintByKey = new Map(nextItems.map((i) => [i.key, ghostPermissionItemFingerprint(i)]));
   const added: GhostPermissionItem[] = [];
   const removed: GhostPermissionItem[] = [];
   const unchanged: GhostPermissionItem[] = [];
   for (const item of nextItems) {
     if (!prevKeys.has(item.key)) {
       added.push(item);
-    } else if ((item.detail ?? '') !== prevDetailByKey.get(item.key)) {
+    } else if (ghostPermissionItemFingerprint(item) !== prevPrintByKey.get(item.key)) {
       added.push(item);
     } else {
       unchanged.push(item);
@@ -1996,7 +2041,7 @@ export function diffGhostPermissionItems(
   for (const item of prevItems) {
     if (!nextKeys.has(item.key)) {
       removed.push(item);
-    } else if ((item.detail ?? '') !== (nextItems.find((n) => n.key === item.key)?.detail ?? '')) {
+    } else if (ghostPermissionItemFingerprint(item) !== nextPrintByKey.get(item.key)) {
       removed.push(item);
     }
   }
@@ -2009,13 +2054,11 @@ export function unreviewedGhostPermissionItems(
   previouslyInstalled: GhostManifest | undefined,
   actual: GhostManifest,
 ): GhostPermissionItem[] {
-  const approvalKey = (item: GhostPermissionItem): string =>
-    JSON.stringify([item.key, item.detail ?? '']);
-  const approved = new Set(ghostPermissionItems(reviewed).map(approvalKey));
+  const approved = new Set(ghostPermissionItems(reviewed).map(ghostPermissionItemFingerprint));
   for (const item of ghostPermissionItems(previouslyInstalled ?? reviewed)) {
-    approved.add(approvalKey(item));
+    approved.add(ghostPermissionItemFingerprint(item));
   }
-  return ghostPermissionItems(actual).filter((item) => !approved.has(approvalKey(item)));
+  return ghostPermissionItems(actual).filter((item) => !approved.has(ghostPermissionItemFingerprint(item)));
 }
 
 /**
@@ -2668,6 +2711,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (typeof raw.version !== 'string' || raw.version.trim().length === 0 || raw.version.length > 32) {
     return { ok: false, reason: 'version 必须是 1–32 字符的非空字符串' };
   }
+  if (raw.minCindyVersion !== undefined && !isValidCindyVersion(raw.minCindyVersion)) {
+    return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
+  }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。
   if (raw.kind !== undefined && raw.kind !== 'chip') {
@@ -3000,6 +3046,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
     cindy = {};
+    // oneshotModel(快问快答偏好模型)是标量键不是类目:先摘出,不进类目循环。
+    // 只验形态不验存在——目录随主机演进,声明式字段永不构成硬依赖。
+    const oneshotModelRaw = cindyRaw.oneshotModel;
+    if (
+      oneshotModelRaw !== undefined
+      && (typeof oneshotModelRaw !== 'string'
+        || oneshotModelRaw.trim().length === 0
+        || oneshotModelRaw.length > 128)
+    ) {
+      return { ok: false, reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")' };
+    }
     // 类目 → 合法动作表(image / video / media;image 与 video 的动作集恰好
     // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。新增类目必须
     // 同时在下面的落位分支登记 —— 漏登记会让动作静默落进别的类目。
@@ -3009,8 +3066,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
       embed: GHOST_CINDY_EMBED_ACTIONS,
+      search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
+      if (category === 'oneshotModel') continue;
       const allowed = actionTable[category];
       if (!allowed) {
         return {
@@ -3041,16 +3100,32 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
+    }
+    // 偏好模型只是快问快答的选型意图,必须挂在能力本体上(无能力单挂偏好 =
+    // 清单自相矛盾,与"有详单必有槽"同一判据)。
+    if (oneshotModelRaw !== undefined) {
+      if (!cindy.text?.includes('oneshot')) {
+        return { ok: false, reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)' };
+      }
+      cindy.oneshotModel = (oneshotModelRaw as string).trim();
     }
     if (
       cindy.image === undefined &&
       cindy.video === undefined &&
       cindy.media === undefined &&
       cindy.text === undefined &&
-      cindy.embed === undefined
+      cindy.embed === undefined &&
+      cindy.search === undefined
     ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
+    }
+    if (cindy.search?.includes('web') && (!slots.includes('tool') || tools === undefined)) {
+      return {
+        ok: false,
+        reason: 'cindy.search.web 只允许由真实 tool-call 触发，必须同时声明 "tool" 槽和 tools',
+      };
     }
   }
 
@@ -4368,6 +4443,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       id: raw.id,
       name: raw.name,
       version: raw.version,
+      ...(raw.minCindyVersion !== undefined
+        ? { minCindyVersion: raw.minCindyVersion as string }
+        : {}),
       kind: 'chip',
       ...(raw.author !== undefined ? { author: raw.author as string } : {}),
       ...(locales !== undefined ? { locales } : {}),
@@ -5425,14 +5503,20 @@ export const GHOST_CINDY_DEPOSIT_REFILL_MS = 1000;
 /**
  * ── oneshot_text 政策参数(2026-07-31 开闸)────────────────────────────
  * 快问快答走轻量任务模型链,秒级到几十秒,只有同步形态(没有 submit 档:
- * 一单等不起的文本问答本身就是用错了通道)。上限对齐 agent-request 的
- * 消息量级;回答预算钳在小额度——这是"快问快答",不是长文生成通道。
+ * 一单等不起的文本问答本身就是用错了通道)。prompt 上限对齐 agent-request
+ * 的消息量级;输出**不设宿主级上限**——缺省按各供应商/模型的自然输出,
+ * 插件可显式传 maxTokens 自我约束(仅正整数校验,不设上限),单次等待上限
+ * (60s 超时)是实际边界。与宿主会话一致:用户主动使用插件的成本由用户承担,
+ * 宿主不额外钳制输出 token 数(2026-08-07 决策)。
  */
 export const GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS = 32_768;
-export const GHOST_ONESHOT_TEXT_MAX_TOKENS = 4096;
-export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 1024;
 /** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */
 export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
+
+/** Cindy 托管 Web Search 的请求边界。 */
+export const GHOST_CINDY_SEARCH_MAX_QUERY_CHARS = 2000;
+export const GHOST_CINDY_SEARCH_DEFAULT_RESULTS = 5;
+export const GHOST_CINDY_SEARCH_MAX_RESULTS = 10;
 
 /**
  * ── embed_text 政策参数(2026-08-04 开闸)──────────────────────────────
@@ -5579,6 +5663,29 @@ export type GhostPipeCindyRequest =
       callId?: string;
       /** 异步模式(同 gen_video 分支)。 */
       mode?: 'submit';
+    }
+  | {
+      /**
+       * Cindy 托管 Web Search:主机固定使用当前 XD endpoint、XD user key
+       * 与内置 Anthropic Messages 搜索模型，不接受意识传入
+       * api_base/header/key/model/tool。
+       * `provider` 固定为 cindy，用于与插件 network 槽的 BYO Brave/Tavily
+       * 明确分账。
+       *
+       * 须声明 'cindy' 卡槽 + `cindy.search: ["web"]`。
+       */
+      type: 'cindy-request';
+      kind: 'search_web';
+      /** 用户原话查询，trim 后 1–2000 字符。 */
+      query: string;
+      /** 结果条数，1–10，缺省 5。 */
+      limit?: number;
+      /** 固定为 cindy；其它值明拒。 */
+      provider: 'cindy';
+      /** 搜索只由 tool-call 触发，必须透传本次 callId 用于账单与日志归因。 */
+      callId: string;
+      /** 必须透传本次 tool-call 的 msg.tool，供宿主与 callId 事实表配对验身。 */
+      callerTool: string;
     }
   | {
       type: 'cindy-request';
@@ -5888,6 +5995,16 @@ export type GhostPipeModelResult =
       documentEmbeddings: number[][][];
     } & GhostCindyEmbedResultMeta)
   | {
+      /** search_web 成功；逻辑 Provider 恒为 cindy，不暴露内部模型路由。 */
+      ok: true;
+      provider: 'cindy';
+      results: Array<{
+        title: string;
+        url: string;
+        snippet: string;
+      }>;
+    }
+  | {
       ok: false;
       message: string;
       /**
@@ -5896,7 +6013,9 @@ export type GhostPipeModelResult =
        * 'NO_CANDIDATE'(快速通道无可用模型/凭证;embed_text 复用它表示
        * 目录里没有可用的向量型号)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
-       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'。
+       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
+       * search_web 在这些通用值之外另使用 'NOT_CONFIGURED'、'QUOTA_EXHAUSTED'、
+       * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */
       errorCode?: string;
     };

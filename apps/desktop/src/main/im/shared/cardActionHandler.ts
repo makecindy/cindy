@@ -18,7 +18,6 @@ import fs from 'node:fs';
 
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
 import {
-  createSessionPermissionUpdate,
   hasSessionPermissionUpdates,
   type AgentKind,
   type Effort,
@@ -75,6 +74,16 @@ import {
 } from './sessionRepo';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
+import {
+  buildAskAnswerDecision,
+  buildPermissionAllowAlwaysDecision,
+  buildPermissionAllowOnceDecision,
+  buildPermissionDenyDecision,
+  buildPlanApproveDecision,
+  buildPlanDenyDecision,
+  PERMISSION_USER_DENIED_REASON,
+  PLAN_USER_REJECTED_REASON,
+} from './interactionCardModel';
 import type { ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
 
@@ -1204,7 +1213,7 @@ export function createCardActionHandler(
     const requestId = String(p.requestId ?? '');
     switch (event.buttonId) {
       case 'permission:allow:once':
-        return { kind: 'permission', behavior: 'allow' };
+        return buildPermissionAllowOnceDecision();
       case 'permission:allow:always': {
         // "Allow always for this session": ask the SDK to add a session-scoped
         // allow rule for the same toolName so subsequent calls of the same tool
@@ -1215,26 +1224,16 @@ export function createCardActionHandler(
         if (!toolName) {
           // No toolName recoverable — degrade to plain allow (one-shot). User
           // sees the same outcome as "allow once" for this single call.
-          return { kind: 'permission', behavior: 'allow' };
+          return buildPermissionAllowOnceDecision();
         }
-        return {
-          kind: 'permission',
-          behavior: 'allow',
-          permissionUpdates: [
-            createSessionPermissionUpdate({
-              type: 'addRules',
-              rules: [{ toolName }],
-              behavior: 'allow',
-            }),
-          ],
-        };
+        return buildPermissionAllowAlwaysDecision(toolName);
       }
       case 'permission:deny':
-        return { kind: 'permission', behavior: 'deny', reason: 'user_denied' };
+        return buildPermissionDenyDecision(PERMISSION_USER_DENIED_REASON);
       case 'plan:approve':
-        return { kind: 'plan_review', behavior: 'allow' };
+        return buildPlanApproveDecision();
       case 'plan:reject':
-        return { kind: 'plan_review', behavior: 'deny', reason: 'user_rejected', dismissed: true };
+        return buildPlanDenyDecision(PLAN_USER_REJECTED_REASON);
       case 'ask:pick':
       case 'ask:noop': {
         // answers 的 key 必须是 question.question 全文 — SDK 用全文匹配
@@ -1244,7 +1243,7 @@ export function createCardActionHandler(
         // 历史 payload, 新卡片(cardBuilders.ts)总是带 questionText。
         const qKey = String(p.questionText ?? p.questionHeader ?? 'q');
         const label = String(p.optionLabel ?? '');
-        return { kind: 'ask_user_question', answers: { [qKey]: label } };
+        return buildAskAnswerDecision(qKey, label);
       }
       default:
         return null;
@@ -1369,6 +1368,9 @@ export function createCardActionHandler(
 
           const resolved = resolvePending(requestId, decision);
           if (!resolved) {
+            // 卡片正文**不动**: 交互被作废时 turnRunner 已经把它收口了(dropInteractionCard),
+            // 而这里拿不到的另一半原因是"刚刚已经成功处理过" —— 那种情况改写成过期态
+            // 等于把一次已经生效的授权报成失效。渠道侧的气泡提示已足够告知这次点击无效。
             log.warn(
               `no pending interaction for requestId=...${requestId.slice(-8)} (already resolved? user double-tapped?)`,
             );

@@ -168,6 +168,17 @@ describe('theme-import 模板 · key 集合与既有 builtin 主题一致', () =
   it('模板不产出任何语义豁免族 token（登录/危险/警告/焦点/diff）', () => {
     expect(TEMPLATE_TOKEN_IDS.filter((id) => isProtectedToken(id))).toEqual([]);
   });
+
+  it.each([
+    'process-agent-task-icon',
+    'process-agent-service-icon',
+    'process-main-icon',
+    'process-renderer-icon',
+    'process-gpu-icon',
+    'process-utility-icon',
+  ])('资源用量类别色 "%s" 不被外部主题导入改写', (id) => {
+    expect(isProtectedToken(id)).toBe(true);
+  });
 });
 
 describe.each([

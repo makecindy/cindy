@@ -24,6 +24,7 @@ import {
   createFenceNeutralizer,
   GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS,
   recordGroupWindowEntry,
+  resetGroupWindowCursors,
   type GroupContextAssembly,
 } from '../shared/groupWindowCore';
 import { getDbClient } from '../../localDb/client/current';
@@ -38,7 +39,7 @@ export const TELEGRAM_PERSONAL_WINDOW_PROVIDER = 'telegram-personal';
 /**
  * provider 按 bot 命名空间(`telegram-personal:<botId>`): 换绑不同 bot 后,
  * 新 bot 的上下文注入与设置卡群清单不掺前任 bot 的历史(review P1)。
- * 官方 hook 通道的 TTL 清扫按 'telegram-personal%' 前缀豁免本命名空间全部行。
+ * 官方 hook 通道的旧行清扫只精确删除 provider='telegram'，不会命中本命名空间。
  */
 function providerOf(botId: string): string {
   return botId
@@ -69,8 +70,8 @@ export async function recordTelegramGroupMessage(entry: TelegramGroupWindowEntry
 }
 
 /**
- * 每 lane 的增量游标(上次拼装到的窗口行 id)。内存态: 重启后首次触发会
- * 重新包含整个窗口(一次性冗余, 可接受), 之后恢复增量语义。
+ * 每 lane 的增量游标(上次拼装到的窗口行 id)。内存态只作热缓存, 持久事实在
+ * hook_group_context_cursors; 重启后首次触发从本地 DB 恢复增量语义。
  */
 const contextCursors = new Map<string, number>();
 
@@ -113,9 +114,8 @@ export async function buildTelegramGroupContextPrefix(args: {
   /** 窗口维度(topic id 或 '' 主群流) — 普通群 reply 链共享主群流窗口。 */
   threadId: string;
   /**
-   * 游标命名空间(缺省 = threadId)。per-root reply 链传 lane 的 root 段:
-   * 各链共享同一窗口但各自维护"上次拼到哪"的增量游标(官方 externalKey
-   * cursorKeyOf 同语义)。
+   * 游标命名空间(缺省 = threadId)。只能传稳定、低基数的 lane scope；不得传
+   * messageId/requestId/turnId 等逐消息高基数值，否则会制造无界游标行。
    */
   cursorScope?: string;
   /** 触发消息的 Telegram 原生 message id — 从上下文中精确剔除"当前消息"。 */
@@ -134,9 +134,16 @@ export async function buildTelegramGroupContextPrefix(args: {
   });
 }
 
-/** 测试与登出清理: 重置内存游标(窗口行随账号 DB 生命周期)。 */
-export function resetTelegramGroupContextCursors(): void {
-  contextCursors.clear();
+/** 测试与登出清理: 只清理个人 Telegram provider 的内存态与持久游标。 */
+export function resetTelegramGroupContextCursors(options?: {
+  clearPersisted?: boolean;
+}): Promise<void> {
+  return resetGroupWindowCursors({
+    cursors: contextCursors,
+    providerPrefixes: ['telegram-personal:'],
+    providerNames: [TELEGRAM_PERSONAL_WINDOW_PROVIDER],
+    ...(options?.clearPersisted === false ? { clearPersisted: false } : {}),
+  });
 }
 
 /**

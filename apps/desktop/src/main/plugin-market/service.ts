@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 
 import {
   isValidPluginResourceId,
+  supportsCindyVersion,
   type PluginRemovalNotice,
   type VisiblePluginDetail,
   type VisiblePluginSummary,
@@ -237,6 +238,10 @@ function ghostIdCounts(
   return counts;
 }
 
+function manifestSupportsCurrentCindy(manifest: GhostManifest): boolean {
+  return supportsCindyVersion(app.getVersion(), manifest.minCindyVersion);
+}
+
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
 interface CustomMarketEntry {
   config: MarketSourceConfig;
@@ -329,7 +334,7 @@ export class PluginMarketService {
   private readonly pendingRemovalNotices = new Map<string, PluginRemovalUserNotice>();
 
   constructor(
-    private readonly api = new PluginMarketApi(),
+    private readonly api = new PluginMarketApi(undefined, () => app.getVersion()),
     private readonly ledger = new PluginMarketLedger(() =>
       ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
     ),
@@ -456,6 +461,9 @@ export class PluginMarketService {
       if (!compatible.ok) {
         throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
       }
+      if (!manifestSupportsCurrentCindy(compatible.manifest)) {
+        throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
+      }
       return {
         ...this.toItem(plugin, this.localInstallSnapshot(this.ledgerForOwner(owner))),
         manifest: compatible.manifest,
@@ -511,6 +519,9 @@ export class PluginMarketService {
           'PRECONDITION_FAILED',
           'Plugin manifest changed after permission review',
         );
+      }
+      if (!manifestSupportsCurrentCindy(compatible.manifest)) {
+        throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
       }
       const existing = getGhostManager()
         .list()
@@ -682,6 +693,9 @@ export class PluginMarketService {
       if (!plugin) {
         throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
       }
+      if (!manifestSupportsCurrentCindy(plugin.manifest)) {
+        throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
+      }
       return {
         ...this.customToItem(
           { config: discovered.config, plugin },
@@ -726,6 +740,9 @@ export class PluginMarketService {
         );
         if (!plugin) {
           throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
+        }
+        if (!manifestSupportsCurrentCindy(plugin.manifest)) {
+          throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
         }
         const pluginId = customMarketPluginId(ref.marketName, plugin.ghostId);
         const releaseId = customMarketReleaseId(ref.marketName, plugin.ghostId, plugin.version);
@@ -903,6 +920,7 @@ export class PluginMarketService {
           });
         }
         for (const plugin of result.marketplace.plugins) {
+          if (!manifestSupportsCurrentCindy(plugin.manifest)) continue;
           entries.push({ config, plugin });
         }
       }

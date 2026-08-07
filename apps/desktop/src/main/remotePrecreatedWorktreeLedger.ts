@@ -18,6 +18,7 @@ import {
   coercePendingRemotePrecreatedWorktree,
   coercePendingRemotePrecreatedWorktreeTarget,
   normalizePendingRemotePrecreatedWorktrees,
+  parsePersistedPendingRemotePrecreatedWorktreeRecords,
   remotePrecreatedWorktreeRecordKey,
   type PendingRemotePrecreatedWorktree,
   type PendingRemotePrecreatedWorktreeTarget,
@@ -102,9 +103,18 @@ function readMergedRecords(): RemotePrecreatedWorktreeLedgerSnapshot {
   const memoryRecords = memoryRecordsFor(ownerId);
   let persisted: PendingRemotePrecreatedWorktree[];
   try {
-    persisted = normalizePendingRemotePrecreatedWorktrees(
+    const parsed = parsePersistedPendingRemotePrecreatedWorktreeRecords(
       getStore().get('records', []),
     );
+    if (!parsed) {
+      return {
+        records: normalizePendingRemotePrecreatedWorktrees(
+          [...memoryRecords.values()].filter((record) => record.dataOwnerId === ownerId),
+        ),
+        storageReadable: false,
+      };
+    }
+    persisted = parsed;
   } catch {
     return {
       records: normalizePendingRemotePrecreatedWorktrees(

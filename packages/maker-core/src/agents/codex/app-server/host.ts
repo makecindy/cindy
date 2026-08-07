@@ -57,6 +57,7 @@ import {
   type ThreadUnsubscribeResponse,
   type TurnPlanUpdatedNotification,
   type TurnCompletedNotification,
+  type TurnDiffUpdatedNotification,
   type TurnStartedNotification,
   type ReasoningSummaryTextDeltaNotification,
   type ReasoningSummaryPartAddedNotification,
@@ -81,6 +82,7 @@ const SUBSCRIBED_METHODS = [
   'thread/started',
   'turn/started',
   'turn/completed',
+  'turn/diff/updated',
   'thread/tokenUsage/updated', // Codex usage 走单独通知 (不在 turn/completed 上), 必订
   'item/started',
   'item/updated',
@@ -104,8 +106,6 @@ const NOTIFICATIONS_TO_OPT_OUT = [
   'item/plan/delta',
   'item/commandExecution/outputDelta',
   'item/fileChange/outputDelta',
-  // 后续要做实时 patch / plan 流时再去掉:
-  'turn/diff/updated',
 ];
 
 const DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
@@ -136,6 +136,7 @@ export interface ThreadEventHandlers {
   descendantNotification?: (childThreadId: string, method: string, params: unknown) => void;
   turnStarted?: (params: TurnStartedNotification['params']) => void;
   turnCompleted?: (params: TurnCompletedNotification['params']) => void;
+  turnDiffUpdated?: (params: TurnDiffUpdatedNotification['params']) => void;
   /** 每次 turn 都会推一次 (turn 完成前), 与 turn/completed 在同 turnId 下成对出现。 */
   tokenUsageUpdated?: (params: ThreadTokenUsageUpdatedNotification['params']) => void;
   itemStarted?: (params: ItemStartedNotification['params']) => void;
@@ -1371,6 +1372,7 @@ export class AppServerHost {
       case 'thread/started': fn = handlers.threadStarted as (p: never) => void; break;
       case 'turn/started': fn = handlers.turnStarted as (p: never) => void; break;
       case 'turn/completed': fn = handlers.turnCompleted as (p: never) => void; break;
+      case 'turn/diff/updated': fn = handlers.turnDiffUpdated as (p: never) => void; break;
       case 'thread/tokenUsage/updated': fn = handlers.tokenUsageUpdated as (p: never) => void; break;
       case 'item/started': fn = handlers.itemStarted as (p: never) => void; break;
       case 'item/updated': fn = handlers.itemUpdated as (p: never) => void; break;

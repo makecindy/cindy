@@ -4,20 +4,27 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 
-import { checkDestructiveToolCall } from '../../destructiveGuard';
+import { channelForceConfirmToolCall } from '../shared/channelToolPolicy';
 
 export const WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED =
   'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
-function record(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
+/**
+ * Single source of truth for the personal-WeChat one-shot confirmation deadline.
+ * The policy advertises it as confirmationTimeoutMs AND WechatIM enforces the
+ * actual auto-deny timer from the same constant, so the declared contract and
+ * the enforced timeout can never drift (design §7.9). WeChat confirmation is a
+ * text reply from a remote human; 30 minutes matches the state machine copy.
+ */
+export const WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS = 30 * 60 * 1_000;
 
 /**
  * Personal WeChat has no structured card UI. Interaction requests are rendered
  * as one-shot text prompts by the channel adapter; the destructive guard still
- * blocks unsafe calls before a prompt can be approved.
+ * blocks unsafe calls before a prompt can be approved. Detection is shared with
+ * Telegram / DingTalk via channelForceConfirmToolCall (nested unwrap covers
+ * Claude call_tool, Codex MCP elicitation, and Pi bridged MCP / secondary
+ * dispatch plugins).
  */
 export function createWechatTurnPermissionPolicy(
   taskId: string,
@@ -28,38 +35,11 @@ export function createWechatTurnPermissionPolicy(
   return {
     origin: { kind: 'im', channel: 'wechat', taskId },
     confirmationSurface: 'channel',
-    confirmationTimeoutMs: 30 * 60 * 1_000,
+    confirmationTimeoutMs: WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
     ...(options?.onInteractionStateChange
       ? { onInteractionStateChange: options.onInteractionStateChange }
       : {}),
-    forceConfirmToolCall(toolName, input) {
-      const direct = checkDestructiveToolCall(toolName, record(input));
-      if (direct.destructive) return true;
-
-      // Claude call_tool wrappers put the inner action directly in input.name.
-      // Codex MCP elicitation wraps it in input.toolParams.name.
-      const outer = record(input);
-      const nested = record(outer?.toolParams);
-      const innerName =
-        typeof nested?.name === 'string'
-          ? nested.name
-          : typeof outer?.name === 'string'
-            ? outer.name
-            : null;
-      const innerInput = nested ?? outer;
-      if (
-        innerName &&
-        (checkDestructiveToolCall(innerName, innerInput).destructive ||
-          /(?:^|_)(?:merge|system_write|overwrite)(?:_|$)/i.test(innerName))
-      ) {
-        return true;
-      }
-
-      // Codex does not expose the patch body in fileChangeApproval, and a
-      // permissions escalation can authorize an opaque write. Confirm these
-      // conservatively rather than auto-approving a possible deletion.
-      return toolName === 'file_change' || toolName === 'permissions';
-    },
+    forceConfirmToolCall: channelForceConfirmToolCall,
   };
 }
 

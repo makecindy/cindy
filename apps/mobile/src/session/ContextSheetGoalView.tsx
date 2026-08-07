@@ -104,6 +104,8 @@ export function ContextSheetGoalView({
  */
 export function ContextSheetGoalCreateForm({
   busy,
+  disabled = false,
+  disabledHint,
   error,
   onSetGoal,
   testID,
@@ -111,6 +113,9 @@ export function ContextSheetGoalCreateForm({
 }: Pick<ContextSheetGoalViewProps, 'busy' | 'error' | 'onSetGoal' | 'testID'> & {
   /** 表单初始值(objective 通常来自 composer 已有文字)。 */
   initial?: { objective: string; limits?: MobileGoalLimitsInput };
+  /** 外层创建合同尚未就绪时只禁用提交，目标草稿仍可编辑。 */
+  disabled?: boolean;
+  disabledHint?: string;
 }) {
   const styles = useThemedStyles(makeGoalStyles);
   const { colors } = useTheme();
@@ -131,7 +136,7 @@ export function ContextSheetGoalCreateForm({
 
   const submit = () => {
     const trimmed = objective.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || busy || disabled) return;
     onSetGoal({ objective: trimmed, ...(limitsTouched ? { limits } : {}) });
   };
 
@@ -196,14 +201,15 @@ export function ContextSheetGoalCreateForm({
       ) : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <Pressable
+        accessibilityHint={disabled ? disabledHint : undefined}
         accessibilityLabel={t('interaction.contextSheet.startGoal')}
         accessibilityRole="button"
-        accessibilityState={{ disabled: busy || !objective.trim() }}
-        disabled={busy || !objective.trim()}
+        accessibilityState={{ disabled: busy || disabled || !objective.trim() }}
+        disabled={busy || disabled || !objective.trim()}
         onPress={submit}
         style={({ pressed }) => [
           styles.ctaButton,
-          (busy || !objective.trim()) && styles.ctaButtonDisabled,
+          (busy || disabled || !objective.trim()) && styles.ctaButtonDisabled,
           pressed && styles.pressed,
         ]}
         testID="contextSheet.goalStartButton"

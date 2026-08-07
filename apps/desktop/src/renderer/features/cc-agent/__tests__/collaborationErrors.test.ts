@@ -36,4 +36,14 @@ describe('getCollaborationStartErrorMessage', () => {
       'newChat.collaboration.startFailed',
     );
   });
+
+  it('maps a device-link capability mismatch to the upgrade hint', () => {
+    expect(
+      getCollaborationStartErrorMessage(
+        new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] capability missing'),
+        t,
+        { remoteDevice: true },
+      ),
+    ).toBe('newChat.collaboration.unsupportedRemoteHint');
+  });
 });

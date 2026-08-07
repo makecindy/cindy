@@ -529,7 +529,10 @@ function ManualBody({
     }
     return m;
   });
-  const inFlightRef = useRef<Set<string>>(new Set());
+  const inFlightRef = useRef<Map<string, number>>(new Map());
+  const localeGenerationRef = useRef(0);
+  const previousLocaleRef = useRef(locale);
+  const notesMapRef = useRef(notesMap);
   // Ref mirror of stateMap so `startLoad` doesn't need it in useCallback deps.
   // Without this, every setStateMap → new startLoad identity → observer
   // useEffect re-runs → new observer immediately fires callbacks for still-
@@ -537,6 +540,64 @@ function ManualBody({
   // again → infinite loading↔failed flicker (the bug this refactor fixes).
   const stateMapRef = useRef(stateMap);
   useEffect(() => { stateMapRef.current = stateMap; }, [stateMap]);
+  useEffect(() => { notesMapRef.current = notesMap; }, [notesMap]);
+
+  // Parent-owned seed notes change when the app locale changes. Merge them
+  // into the manual body's local map instead of remounting the scroll area.
+  useEffect(() => {
+    if (initialLoaded.size === 0) return;
+    setNotesMap((prev) => {
+      const next = new Map(prev);
+      for (const [version, notes] of initialLoaded) next.set(version, notes);
+      notesMapRef.current = next;
+      return next;
+    });
+    setStateMap((prev) => {
+      const next = new Map(prev);
+      for (const version of initialLoaded.keys()) next.set(version, 'loaded');
+      stateMapRef.current = next;
+      return next;
+    });
+  }, [initialLoaded]);
+
+  // Refresh every already-loaded history block in place on locale changes.
+  // Blocks that have never loaded stay idle and will use the new locale later.
+  useEffect(() => {
+    if (previousLocaleRef.current === locale) return;
+    previousLocaleRef.current = locale;
+    const generation = localeGenerationRef.current + 1;
+    localeGenerationRef.current = generation;
+    inFlightRef.current.clear();
+    setStateMap((prev) => {
+      const next = new Map(prev);
+      for (const [version, state] of next) {
+        if (state === 'loading') next.set(version, 'idle');
+      }
+      stateMapRef.current = next;
+      return next;
+    });
+
+    const loadedVersions = [...notesMapRef.current.keys()];
+    if (loadedVersions.length === 0) return;
+    let cancelled = false;
+    void Promise.all(loadedVersions.map((version) => loadVersion(version)))
+      .then((results) => {
+        if (cancelled || localeGenerationRef.current !== generation) return;
+        setNotesMap((prev) => {
+          const next = new Map(prev);
+          results.forEach((notes, index) => {
+            if (notes) next.set(loadedVersions[index], notes);
+          });
+          notesMapRef.current = next;
+          return next;
+        });
+      })
+      .catch(() => {
+        // Keep the previous-language content visible; individual retry/loading
+        // behavior remains unchanged and the next locale change can retry.
+      });
+    return () => { cancelled = true; };
+  }, [locale, loadVersion]);
 
   const startLoad = useCallback(
     async (version: string) => {
@@ -546,20 +607,29 @@ function ManualBody({
       // loading is already in flight (also guarded by inFlightRef), error is
       // sticky until user hits the retry button (see `retryVersion`).
       if (current === 'loaded' || current === 'loading' || current === 'error') return;
-      inFlightRef.current.add(version);
+      const generation = localeGenerationRef.current;
+      inFlightRef.current.set(version, generation);
       setStateMap((prev) => new Map(prev).set(version, 'loading'));
       try {
         const notes = await loadVersion(version);
+        if (localeGenerationRef.current !== generation) return;
         if (notes) {
-          setNotesMap((prev) => new Map(prev).set(version, notes));
+          setNotesMap((prev) => {
+            const next = new Map(prev).set(version, notes);
+            notesMapRef.current = next;
+            return next;
+          });
           setStateMap((prev) => new Map(prev).set(version, 'loaded'));
         } else {
           setStateMap((prev) => new Map(prev).set(version, 'error'));
         }
       } catch {
+        if (localeGenerationRef.current !== generation) return;
         setStateMap((prev) => new Map(prev).set(version, 'error'));
       } finally {
-        inFlightRef.current.delete(version);
+        if (inFlightRef.current.get(version) === generation) {
+          inFlightRef.current.delete(version);
+        }
       }
     },
     [loadVersion],

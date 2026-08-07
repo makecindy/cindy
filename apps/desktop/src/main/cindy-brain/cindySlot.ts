@@ -38,7 +38,7 @@
  * 依赖注入(规则 14):生成/落盘/记账/归属解析全部经 deps,单测直测。
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   GHOST_CINDY_DEPOSIT_BURST,
@@ -52,11 +52,12 @@ import {
   GHOST_CINDY_EMBED_TIMEOUT_MS,
   GHOST_CINDY_JOB_TTL_MS,
   GHOST_CINDY_MAX_ASYNC_JOBS,
+  GHOST_CINDY_SEARCH_DEFAULT_RESULTS,
+  GHOST_CINDY_SEARCH_MAX_QUERY_CHARS,
+  GHOST_CINDY_SEARCH_MAX_RESULTS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
-  GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS,
-  GHOST_ONESHOT_TEXT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_TIMEOUT_MS,
   GHOST_VIDEO_MAX_DURATION_SECONDS,
   GHOST_VIDEO_MAX_FPS,
@@ -75,7 +76,13 @@ import {
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { probeImageSize } from './imageProbe.js';
+import {
+  decodeCatalogPin,
+  type OneshotRoute,
+} from '../utility-model/textOneshotPinOptions.js';
+import type { AgentKind } from '@cindy/model-providers';
 
 /**
  * 媒体能力配置(图像/视频同构):白名单 + 默认/档位选型,真身在 providers.json 目录。
@@ -270,6 +277,13 @@ export interface CindySlotDeps {
   /** 撤回该意识对某指纹的寄存引用;返回是否真的删掉了行(false = 本就没有)。 */
   releaseDeposit?(params: { ghostId: string; hash: string }): Promise<boolean>;
   /**
+   * Cindy 托管 Web Search。实现固定读取主机 XD endpoint + XD user key，
+   * 并通过固定模型别名调用 Anthropic Messages 原生网页搜索；插件不能注入
+   * 上游地址、凭证、模型名或工具定义。
+   * 可选依赖:未接线的宿主/测试环境 fail closed。
+   */
+  searchWeb?: CindyProxySearchService['search'];
+  /**
    * 快问快答(text.oneshot,2026-07-31):把 prompt 交给主机的轻量任务
    * 模型链直答一次。注入实现包装 utility-model/oneShotCandidates 的
    * requestUtilityText(动态 import,保持本模块纯 node 可测)。可选依赖:
@@ -278,14 +292,23 @@ export interface CindySlotDeps {
    */
   oneshotText?(params: {
     prompt: string;
-    maxTokens: number;
+    /** 插件显式给的输出上限;undefined = 不钳(失控兜底是 timeoutMs)。 */
+    maxTokens?: number;
     timeoutMs: number;
-    /** 用户在插件详情页把 text.oneshot 钉到的轻量档位(供应商×模型);没钉 = 跟随默认链。 */
-    pinnedProfileId?: string;
+    /**
+     * 本次快问快答的路由(用户钉档或身份卡声明偏好解析出的终态,见
+     * utility-model/textOneshotPinOptions);缺省 = 跟随系统默认轻量链。
+     */
+    route?: OneshotRoute;
   }): Promise<
     | { ok: true; text: string; model?: string }
     | { ok: false; reason: 'no_candidate' | 'timeout' | 'failed'; message: string }
   >;
+  /**
+   * 把身份卡声明的偏好模型 id 解析成当前目录里可路由的 供应商×agent×模型;
+   * 解析不到(目录没有/已停用/不可路由)返回 null = 按未声明处理。
+   */
+  resolveOneshotModel?(modelId: string): { providerId: string; agentKind: AgentKind; model: string } | null;
   /**
    * 管子续命挂钩(pipeDispatcher.holdCall/releaseCall 接线):tool-call
    * 触发的同步视频代办开始时 hold(budgetMs = 这单的轮询预算),结束时
@@ -295,6 +318,23 @@ export interface CindySlotDeps {
    */
   holdPipeCall?(ghostId: string, callId: string, budgetMs: number): void;
   releasePipeCall?(ghostId: string, callId: string): void;
+  /** 绑定真实在途 tool-call；同请求只允许一次受控重试。 */
+  claimPipeCall?(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+  ): boolean;
+  /** 收束能力尝试；allowRetry 只对首次明确暂态失败生效。 */
+  settlePipeCallClaim?(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+    allowRetry: boolean,
+  ): boolean;
   /**
    * 视频型号预期耗时(秒;video registry 登记值)。hold 预算与异步受理
    * 返回的 expectedSeconds 共用。未注入/查无该型号 → null(用缺省)。
@@ -562,6 +602,10 @@ export class GhostCindySlot {
       data?: unknown;
       label?: unknown;
       hash?: unknown;
+      query?: unknown;
+      limit?: unknown;
+      provider?: unknown;
+      callerTool?: unknown;
     };
     if (p?.kind === 'query_job') {
       return this.handleQueryJob(ghostId, p);
@@ -627,13 +671,28 @@ export class GhostCindySlot {
         return { ok: false, message: `文本转向量失败:${message}`, errorCode };
       }
     }
+    if (p?.kind === 'search_web') {
+      try {
+        return await this.handleSearchWeb(ghostId, payload);
+      } catch (err) {
+        this.deps.log?.warn('ghost cindy-request search_web unexpected failure', {
+          ghostId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return {
+          ok: false,
+          message: 'Cindy AI 搜索失败，请稍后再试',
+          errorCode: 'INTERNAL',
+        };
+      }
+    }
     const info = typeof p?.kind === 'string' ? KIND_INFO[p.kind] : undefined;
     if (!info) {
       return {
         ok: false,
         message:
           `未知的代办类型(当前支持 ${Object.keys(KIND_INFO).join(' / ')} / ` +
-          'deposit_media / release_media / oneshot_text / embed_text / query_job)',
+          'deposit_media / release_media / oneshot_text / embed_text / search_web / query_job)',
       };
     }
     const kind = p.kind as string;
@@ -1142,9 +1201,222 @@ export class GhostCindySlot {
   }
 
   /**
+   * search_web:Cindy 托管公网搜索。它与插件 network 槽里的 BYO Provider
+   * 完全分账，主机只接受 provider:'cindy'，失败不做任何跨 Provider fallback。
+   * 查询文本不进日志；日志只留归因号、状态、耗时、结果数和上游 request id。
+   */
+  private async handleSearchWeb(
+    ghostId: string,
+    payload: unknown,
+  ): Promise<GhostPipeModelResult> {
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost || !ghost.enabled) {
+      return {
+        ok: false,
+        message: '意识不在可用状态',
+        errorCode: 'PERMISSION_DENIED',
+      };
+    }
+    if (!ghost.manifest.slots?.includes('cindy')) {
+      return {
+        ok: false,
+        message: '本意识未声明 cindy 卡槽，无权请 Cindy 搜索',
+        errorCode: 'PERMISSION_DENIED',
+      };
+    }
+    const declared: readonly string[] = ghost.manifest.cindy?.search ?? [];
+    if (!declared.includes('web')) {
+      return {
+        ok: false,
+        message:
+          '本意识未声明搜索「网页搜索」能力(身份卡 cindy.search 缺 "web")，请意识作者更新声明',
+        errorCode: 'PERMISSION_DENIED',
+      };
+    }
+
+    const p = payload as {
+      query?: unknown;
+      limit?: unknown;
+      provider?: unknown;
+      callId?: unknown;
+      callerTool?: unknown;
+    };
+    if (p.provider !== 'cindy') {
+      return {
+        ok: false,
+        message: 'search_web 的 provider 必须固定为 cindy',
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (typeof p.query !== 'string' || p.query.trim().length === 0) {
+      return { ok: false, message: 'query 不能为空', errorCode: 'INVALID_PARAMS' };
+    }
+    const query = p.query.trim();
+    if (query.length > GHOST_CINDY_SEARCH_MAX_QUERY_CHARS) {
+      return {
+        ok: false,
+        message: `query 过长(上限 ${GHOST_CINDY_SEARCH_MAX_QUERY_CHARS} 字符)`,
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (
+      p.limit !== undefined &&
+      (typeof p.limit !== 'number' ||
+        !Number.isInteger(p.limit) ||
+        p.limit < 1 ||
+        p.limit > GHOST_CINDY_SEARCH_MAX_RESULTS)
+    ) {
+      return {
+        ok: false,
+        message: `limit 不合法(1–${GHOST_CINDY_SEARCH_MAX_RESULTS} 的整数，或不传)`,
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (
+      typeof p.callId !== 'string' ||
+      p.callId.length === 0 ||
+      p.callId.length > MAX_CALL_ID_LEN
+    ) {
+      return {
+        ok: false,
+        message: 'callId 不合法(搜索必须透传 1–128 字符的 tool-call 归因号)',
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    const callId = p.callId;
+    if (
+      typeof p.callerTool !== 'string' ||
+      !/^[a-z][a-z0-9_-]{0,63}$/.test(p.callerTool)
+    ) {
+      return {
+        ok: false,
+        message: 'callerTool 不合法(必须透传本次 tool-call 的 msg.tool)',
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    const callerTool = p.callerTool;
+    const searchWeb = this.deps.searchWeb;
+    if (!searchWeb) {
+      return {
+        ok: false,
+        message: '主机当前不支持 Cindy AI 搜索(能力未接线)',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    const inflight = this.inflight.get(ghostId) ?? 0;
+    const inflightLimit = this.deps.getInflightLimit?.(ghostId) ?? null;
+    if (inflightLimit !== null && inflight >= inflightLimit) {
+      return {
+        ok: false,
+        message: `同时进行的代办已达上限(${inflightLimit} 单)，请稍后再试`,
+        errorCode: 'RATE_LIMITED',
+      };
+    }
+
+    this.inflight.set(ghostId, inflight + 1);
+    try {
+      if (this.deps.isOwnerBoundaryPending()) {
+        return {
+          ok: false,
+          message: '账号正在切换，请稍后再试',
+          errorCode: 'UPSTREAM_UNAVAILABLE',
+        };
+      }
+      const limit =
+        (p.limit as number | undefined) ?? GHOST_CINDY_SEARCH_DEFAULT_RESULTS;
+      const requestKey = createHash('sha256')
+        .update(query)
+        .update('\0')
+        .update(String(limit))
+        .digest('hex');
+      if (
+        !this.deps.claimPipeCall?.(
+          ghostId,
+          callId,
+          callerTool,
+          'cindy.search.web',
+          requestKey,
+        )
+      ) {
+        return {
+          ok: false,
+          message: 'Cindy AI 搜索只允许由当前插件真实在途的工具调用触发',
+          errorCode: 'PERMISSION_DENIED',
+        };
+      }
+      const ownerScopeKey = this.deps.getOwnerScopeKey();
+      this.deps.log?.info('ghost cindy-request search_web start', {
+        ghostId,
+        callId,
+        logicalProvider: 'cindy',
+      });
+      let allowRetry = false;
+      try {
+        const outcome = await searchWeb({ query, limit });
+        if (
+          this.deps.isOwnerBoundaryPending() ||
+          this.deps.getOwnerScopeKey() !== ownerScopeKey
+        ) {
+          allowRetry = false;
+          return {
+            ok: false,
+            message: '搜索期间账号已切换，本次结果已丢弃',
+            errorCode: 'UPSTREAM_UNAVAILABLE',
+          };
+        }
+        if (!outcome.ok) {
+          allowRetry = outcome.requestStarted === false;
+          this.deps.log?.warn('ghost cindy-request search_web failed', {
+            ghostId,
+            callId,
+            logicalProvider: 'cindy',
+            errorCode: outcome.errorCode,
+            ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+            ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
+          });
+          return {
+            ok: false,
+            message: outcome.message,
+            errorCode: outcome.errorCode,
+          };
+        }
+        allowRetry = false;
+        this.deps.log?.info('ghost cindy-request search_web done', {
+          ghostId,
+          callId,
+          logicalProvider: 'cindy',
+          resultCount: outcome.results.length,
+          ...(outcome.webSearchRequests !== undefined
+            ? { webSearchRequests: outcome.webSearchRequests }
+            : {}),
+          ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
+        });
+        return {
+          ok: true,
+          provider: 'cindy',
+          results: outcome.results,
+        };
+      } finally {
+        this.deps.settlePipeCallClaim?.(
+          ghostId,
+          callId,
+          callerTool,
+          'cindy.search.web',
+          requestKey,
+          allowRetry,
+        );
+      }
+    } finally {
+      this.releaseInflight(ghostId);
+    }
+  }
+
+  /**
    * oneshot_text:快问快答(2026-07-31 开闸)。轻量任务模型链直答一次,
-   * 文字随本次 invoke 递回;不选型(链由用户在主机侧配置)、不产媒体、
-   * 不进任何会话。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
+   * 文字随本次 invoke 递回;不产媒体、不进任何会话。选型不自由:只接受
+   * 用户钉档或身份卡声明的偏好(2026-08-05 起,解析权在主机),都没有才走
+   * 系统默认链。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
    * 在途并发闸与媒体代办共用同一计数与用户上限——它们花的都是用户的额度。
    */
   private async handleOneshotText(
@@ -1190,10 +1462,12 @@ export class GhostCindySlot {
     if (p.expectJson !== undefined && typeof p.expectJson !== 'boolean') {
       return { ok: false, message: 'expectJson 必须是布尔值(或不传)', errorCode: 'INVALID_PARAMS' };
     }
-    if (p.maxTokens !== undefined && !isPositiveIntWithin(p.maxTokens, GHOST_ONESHOT_TEXT_MAX_TOKENS)) {
+    // 插件显式传 maxTokens 只做基本正整数校验,不设实际上限——宿主不限制
+    // 输出 token 数(与宿主会话一致,用户主动使用插件的成本由用户承担)。
+    if (p.maxTokens !== undefined && !isPositiveIntWithin(p.maxTokens, Number.MAX_SAFE_INTEGER)) {
       return {
         ok: false,
-        message: `maxTokens 不合法(1–${GHOST_ONESHOT_TEXT_MAX_TOKENS} 的整数,或不传)`,
+        message: 'maxTokens 不合法(正整数,或不传)',
         errorCode: 'INVALID_PARAMS',
       };
     }
@@ -1227,14 +1501,40 @@ export class GhostCindySlot {
       const prompt = expectJson
         ? `${p.prompt}\n\n(只输出 JSON 本体,不要任何解释、前后缀或代码围栏)`
         : p.prompt;
-      // 选型仍不在意识手里,但用户可以在插件详情页把这项能力钉到某个轻量档位
-      // (与 image.*/video.* 的"钉后端"同一张覆盖表、同一条 IPC)。
-      const pinnedProfileId = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
+      // 选型优先级:用户在详情页的钉档 > 身份卡声明的偏好模型 > 系统默认链。
+      // 钉档两形态:轻量档位键(随系统链演进的逻辑档位)与目录钉(cat: 编码的
+      // 供应商×agent×模型);声明解析不到(目录没有/已停用/不可路由)按未声明处理。
+      const override = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
+      let route: OneshotRoute | undefined;
+      if (override !== undefined) {
+        const catalogPin = decodeCatalogPin(override);
+        if (catalogPin) {
+          route = { kind: 'catalog', ...catalogPin };
+        } else if (override.startsWith('cat:')) {
+          // 带目录钉前缀但解码失败(存储损坏/未来格式):目录钉的语义是「钉死
+          // 不回落」,静默落到系统默认链会悄悄烧错链路的钱——按无可选通道
+          // 收单,引导用户到详情页重新钉档。
+          return {
+            ok: false,
+            message: '快问快答的钉档值无法解析(可能已损坏或来自新版本),请到插件详情页重新钉档',
+            errorCode: 'NO_CANDIDATE',
+          };
+        } else {
+          route = { kind: 'utility-profile', profileId: override };
+        }
+      } else {
+        const declaredModel = ghost.manifest.cindy?.oneshotModel;
+        const resolved = declaredModel ? this.deps.resolveOneshotModel?.(declaredModel) : null;
+        if (resolved) route = { kind: 'catalog', ...resolved };
+      }
       const outcome = await oneshot({
         prompt,
-        maxTokens: (p.maxTokens as number | undefined) ?? GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
+        // 缺省不设输出上限:各供应商/模型按自然输出,60s 超时是实际边界;
+        // 插件可显式传 maxTokens 自限(1–81920)。(2026-08-07:曾给缺省加
+        // 81920,但 Codex / OpenAI 路径无法落实该参数,撤回为无上限设计。)
+        maxTokens: p.maxTokens as number | undefined,
         timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
-        pinnedProfileId,
+        route,
       });
       if (!outcome.ok) {
         const errorCode =
@@ -1257,6 +1557,13 @@ export class GhostCindySlot {
           JSON.parse(cleaned);
           text = cleaned;
         } catch {
+          // 不落原始输出(内容敏感度);长度足够让插件侧 fallback_detail 与
+          // 日志对得上同一次调用。
+          this.deps.log?.warn('ghost cindy-request oneshot_text bad json', {
+            ghostId,
+            callId,
+            chars: text.length,
+          });
           return {
             ok: false,
             errorCode: 'BAD_MODEL_OUTPUT',

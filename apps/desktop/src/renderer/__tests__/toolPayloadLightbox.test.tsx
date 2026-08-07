@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -24,6 +24,13 @@ vi.mock('@/components/chat/MarkdownDiffBlock', () => ({
   MarkdownDiffBlock: ({ raw }: { raw: string }) => <div data-testid="raw-diff-view">{raw}</div>,
 }));
 
+beforeEach(() => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: { platform: 'darwin' },
+  });
+});
+
 afterEach(() => {
   act(() => vi.runOnlyPendingTimers());
   cleanup();
@@ -31,10 +38,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderEditable(options: {
-  onSave?: (text: string) => void;
-  onClose?: () => void;
-} = {}) {
+function renderEditable(
+  options: {
+    onSave?: (text: string) => void;
+    onClose?: () => void;
+  } = {},
+) {
   const onSave = options.onSave ?? vi.fn();
   const onClose = options.onClose ?? vi.fn();
   render(
@@ -118,9 +127,11 @@ describe('ToolPayloadLightbox editable text mode', () => {
         />
       </Tooltip.Provider>,
     );
-    expect(screen.queryByRole('textbox')).toBeNull();
+    const textPreview = screen.getByRole('textbox', { name: 'Pasted Text' });
+    expect(textPreview).toHaveProperty('readOnly', true);
+    expect(textPreview).toHaveProperty('value', 'read only');
+    expect(document.activeElement).toBe(textPreview);
     expect(screen.queryByRole('button', { name: 'Save Text' })).toBeNull();
-    expect(screen.getByText('read only').tagName).toBe('PRE');
 
     unmount();
     render(
@@ -133,6 +144,24 @@ describe('ToolPayloadLightbox editable text mode', () => {
     );
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Save Text' })).toBeNull();
+  });
+
+  it('keeps select-all scoped to the focused read-only text preview', () => {
+    vi.useFakeTimers();
+    render(
+      <Tooltip.Provider>
+        <ToolPayloadLightbox
+          payload={{ kind: 'text', title: 'Pasted Text', text: 'first\nsecond' }}
+          onClose={() => undefined}
+        />
+      </Tooltip.Provider>,
+    );
+
+    const textPreview = screen.getByRole('textbox', { name: 'Pasted Text' }) as HTMLTextAreaElement;
+    fireEvent.keyDown(document, { key: 'a', metaKey: true });
+
+    expect(textPreview.selectionStart).toBe(0);
+    expect(textPreview.selectionEnd).toBe(textPreview.value.length);
   });
 });
 

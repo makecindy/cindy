@@ -29,7 +29,10 @@ import { StringDecoder } from 'node:string_decoder';
 
 import { net } from 'electron';
 
-import { hasRenderableContent } from '../shared/releaseNotesContent';
+import {
+  hasRenderableContent,
+  type RawReleaseNotes,
+} from '../shared/releaseNotesContent';
 
 import { getBaseUrl, getPlatformKey } from './manifestService';
 
@@ -39,48 +42,6 @@ const log = createLogger('releaseNotesService');
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-/** Author-grouped item: one block per contributor, with their bullets. */
-export interface RawItem {
-  name: string;
-  list: string[];
-}
-
-export interface RawSection {
-  title: string;
-  items: RawItem[];
-}
-
-/** Topic-format (v2) block: one user-facing theme with a short narrative. */
-export interface RawTopic {
-  emoji?: string;
-  title: string;
-  text: string;
-  contributors?: string[];
-}
-
-export interface RawReleaseNotes {
-  version: string;
-  date: string;
-  /**
-   * Full main-HEAD commit hash captured when the notice was generated.
-   * Bookkeeping only — nothing in this service (or the renderer) reads it; it
-   * exists so a later release can recover the previous version's anchor commit.
-   * Optional because older notice files predate the field.
-   */
-  githash?: string;
-  /**
-   * Flat contributor list — collective hall-of-fame on top of per-item `by`.
-   * Optional: older notice files predate the field (renderer defaults to []).
-   */
-  contributors?: string[];
-  /** Legacy author-grouped sections. Absent on topic-format payloads. */
-  sections?: RawSection[];
-  /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */
-  topics?: RawTopic[];
-  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
-  intro?: string;
-}
-
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -88,6 +49,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // ── State ──────────────────────────────────────────────────────────────────
 
 const cache = new Map<string, RawReleaseNotes>();
+const inFlight = new Map<string, Promise<RawReleaseNotes | null>>();
 
 // Sorted ascending list of every version that has a notice JSON on the CDN
 // for this platform. Cached on success only — a failed fetch falls through so
@@ -181,22 +143,34 @@ export async function fetchReleaseNotes(version: string): Promise<RawReleaseNote
   const hit = cache.get(version);
   if (hit) return hit;
 
-  const platform = getPlatformKey();
-  // Cache-bust to dodge stale CDN edges
-  const url = `${getBaseUrl()}/notice/${platform}/${version}.json?t=${Date.now()}`;
-  const json = await fetchCdnJson<RawReleaseNotes>(url);
-  if (!json) return null;
-  // A 200 payload with nothing renderable (e.g. a v2 document whose topics
-  // are all malformed) is treated as a failed fetch and NOT cached — the
-  // process-lifetime cache would otherwise keep serving the bad document
-  // even after the CDN is corrected, and the renderer would reject it anyway.
-  if (!hasRenderableContent(json)) {
-    log.warn('Payload has no renderable content, treating as failure: version=%s', version);
-    return null;
+  const pending = inFlight.get(version);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const platform = getPlatformKey();
+    // Cache-bust to dodge stale CDN edges
+    const url = `${getBaseUrl()}/notice/${platform}/${version}.json?t=${Date.now()}`;
+    const json = await fetchCdnJson<RawReleaseNotes>(url);
+    if (!json) return null;
+    // A 200 payload with nothing renderable (e.g. a v2 document whose topics
+    // are all malformed) is treated as a failed fetch and NOT cached — the
+    // process-lifetime cache would otherwise keep serving the bad document
+    // even after the CDN is corrected, and the renderer would reject it anyway.
+    if (!hasRenderableContent(json)) {
+      log.warn('Payload has no renderable content, treating as failure: version=%s', version);
+      return null;
+    }
+    cache.set(version, json);
+    log.info('Fetched OK: version=%s, sections=%d', json.version, json.sections?.length ?? 0);
+    return json;
+  })();
+  inFlight.set(version, request);
+
+  try {
+    return await request;
+  } finally {
+    if (inFlight.get(version) === request) inFlight.delete(version);
   }
-  cache.set(version, json);
-  log.info('Fetched OK: version=%s, sections=%d', json.version, json.sections?.length ?? 0);
-  return json;
 }
 
 /**

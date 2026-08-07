@@ -66,13 +66,14 @@
 
     /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
        引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档交互时长 +
-       spinner 语义循环例外 + 3 条曲线,与三档圆角同一哲学。 */
+       spinner 语义循环例外、侧栏标题阅读例外 + 3 条曲线,与三档圆角同一哲学。 */
     --motion-instant: 80ms; /* hover 即时反馈、轻浮层退场 */
     --motion-fast: 150ms; /* 颜色/透明度状态切换、轻浮层入场(§14.4 功能性过渡上限) */
     --motion-base: 200ms; /* 尺寸变化:展开折叠、面板收展 */
     --motion-enter: 250ms; /* 重浮层(弹窗)入场 */
     --motion-exit: 150ms; /* 重浮层(弹窗)退场 */
     --motion-spinner-cycle: 1000ms; /* 功能性 loading spinner 完整一圈(§14.4 窄例外) */
+    --motion-sidebar-title-marquee-per-viewport: 2400ms; /* 溢出标题每个可视宽度的阅读时长(§14.4 窄例外) */
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
@@ -149,6 +150,14 @@
     -webkit-user-drag: none;
   }
 
+  /* SessionItem 是同窗分屏的原生 HTML5 拖拽源。拖拽通常从标题、图标或时间
+     子节点起手，所以必须与 composer atom 一样让整棵子树恢复 element drag；
+     行内按钮仍由 onDragStart 的交互区守卫 preventDefault，不会误触发分屏。 */
+  [data-split-group-drag-source='true'],
+  [data-split-group-drag-source='true'] * {
+    -webkit-user-drag: element !important;
+  }
+
   /* F3: Global disable focus outline — Chromium default :focus-visible draws
      a yellow/orange ring on buttons, options and menu items after Esc/click
      transitions focus. Suppress it on non-input elements while inputs keep
@@ -176,6 +185,7 @@
       --motion-enter: 0ms;
       --motion-exit: 0ms;
       --motion-spinner-cycle: 0ms;
+      --motion-sidebar-title-marquee-per-viewport: 0ms;
     }
 
     [class*='animate-spinner'] {
@@ -1835,6 +1845,67 @@ body.resizing-pane [data-ghost-webview] {
   }
   to {
     transform: translateX(0);
+  }
+}
+
+/* 侧栏超长任务标题：只在实际溢出且 hover 时把完整标题横向带过视口。
+   轨道是 HTML 元素，动效只改 transform/opacity，离开标题区域立即恢复省略号。 */
+@keyframes sidebar-title-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(var(--sidebar-title-marquee-shift));
+  }
+}
+
+.sidebar-title-marquee {
+  position: relative;
+  display: block;
+}
+
+.sidebar-title-marquee__ellipsis {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-title-marquee__track {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: max-content;
+  max-width: none;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(0);
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {
+  opacity: 0;
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+  visibility: visible;
+  opacity: 1;
+  animation: sidebar-title-marquee var(--sidebar-title-marquee-duration) var(--motion-ease-move)
+    forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+    animation: none;
+    visibility: hidden;
+    opacity: 0;
+  }
+
+  .sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {
+    opacity: 1;
   }
 }
 

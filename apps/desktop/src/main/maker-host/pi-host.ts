@@ -186,6 +186,8 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
 
 export interface BuildPiAgentOpts {
   logger: AgentDeps['logger'];
+  turnChangeCapture?: AgentDeps['turnChangeCapture'];
+  registerLocalAgentProcess?: AgentDeps['registerLocalAgentProcess'];
   capabilityAdditions?: AgentDeps['capabilityAdditions'];
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
@@ -361,6 +363,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     binaryPath,
     logger: opts.logger,
+    turnChangeCapture: opts.turnChangeCapture,
+    registerLocalAgentProcess: opts.registerLocalAgentProcess,
     capabilityAdditions: opts.capabilityAdditions,
     reviewAutoPermissionAction: opts.reviewAutoPermissionAction,
     mcpProviders: opts.mcpProviders,
