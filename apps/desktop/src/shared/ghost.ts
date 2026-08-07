@@ -4510,6 +4510,18 @@ export interface GhostPipePlanUpdate {
   plan: GhostPlanItem[];
 }
 
+/**
+ * Host-owned, in-memory projection of a plugin progress update. This is a UI
+ * push payload, not a conversation message or persistence contract.
+ */
+export interface GhostPlanProgressSnapshot {
+  sessionId: string;
+  sessionInstanceId: string;
+  explanation?: string;
+  plan: GhostPlanItem[];
+  updatedAtMs: number;
+}
+
 export type GhostPipePlanUpdateResult =
   | { ok: true }
   | {

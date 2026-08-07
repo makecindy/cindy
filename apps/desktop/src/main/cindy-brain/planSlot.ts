@@ -14,7 +14,6 @@ import {
 } from '../../shared/ghost.js';
 
 export type PlanUpdateProjector = (
-  ghostId: string,
   sessionContext: PlanUpdateSessionContext,
   update: Omit<GhostPipePlanUpdate, 'type'>,
 ) => void | Promise<void>;
@@ -115,9 +114,7 @@ export class PlanSlot {
       plan: validated.value.plan,
     };
     try {
-      // Plan 是会话级 UI；插件不提供可碰撞的更新键。投影端以 ghost 身份和
-      // session incarnation 铸造稳定键，使同一 Plan 的进度原地更新。
-      await this.projector(ghostId, sessionContext, update);
+      await this.projector(sessionContext, update);
       return { ok: true };
     } catch (error) {
       this.deps.log?.warn('plan-update projection failed', {

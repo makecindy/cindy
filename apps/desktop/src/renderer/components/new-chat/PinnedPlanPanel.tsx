@@ -15,12 +15,14 @@ import { findLatestMessageTodoInsertion } from '@cindy/maker-shared/message-rend
 import { TodoListCard } from '@/components/chat/TodoListCard';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { cn } from '@/lib/utils';
+import type { GhostPlanProgressSnapshot } from '../../../shared/ghost';
 
 const COMPLETED_PLAN_VISIBLE_MS = 2_000;
 
 export function PinnedPlanPanel({
   sessionId,
   messages,
+  hostProgress = null,
   animated,
   width,
   taskHistoryMayBeIncomplete = false,
@@ -29,6 +31,8 @@ export function PinnedPlanPanel({
 }: {
   sessionId: string | null;
   messages: readonly ChatMessage[];
+  /** Ephemeral host projection used by plugin-driven system progress. */
+  hostProgress?: GhostPlanProgressSnapshot | null;
   /** 保留旧调用方的兼容参数;计划胶囊现在始终使用静态灰度进度环。 */
   animated: boolean;
   /** 与 composer 同宽(inputWidth),胶囊在该宽度内居中,浮层不超出。 */
@@ -38,10 +42,19 @@ export function PinnedPlanPanel({
   visible?: boolean;
   className?: string;
 }): React.ReactElement | null {
-  const insertion = useMemo(
+  const messageInsertion = useMemo(
     () => findLatestMessageTodoInsertion(messages, { taskHistoryMayBeIncomplete }),
     [messages, taskHistoryMayBeIncomplete],
   );
+  const insertion = hostProgress
+    ? {
+        key: `host-progress:${hostProgress.sessionInstanceId}`,
+        todos: hostProgress.plan.map((item) => ({ content: item.step, status: item.status })),
+        createdAt: undefined,
+        updatedAtMs: hostProgress.updatedAtMs,
+        source: 'codex' as const,
+      }
+    : messageInsertion;
   const allDone = Boolean(
     insertion &&
     insertion.todos.length > 0 &&

@@ -7431,22 +7431,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return tracked;
   }
 
-  // plan 槽只负责接口守门；通过 Cindy 现有 synthetic update_plan 信号入口投影。
+  // plan 槽只负责接口守门；投影是本地临时进度状态，不是 agent 消息。
   setPlanUpdateLiveSessionValidator((context) =>
     maker.getSession(context.sessionId)?.instanceId === context.sessionInstanceId,
   );
-  setPlanUpdateProjector((ghostId, context, update) => {
-    broadcastSyntheticToolEvent(context.sessionId, {
-      type: 'tool_use',
-      source: 'codex',
-      data: {
-        // sessionId 是持久化层的外层作用域；ghostId + session incarnation
-        // 唯一标识当前全局 Plan。后续快照复用同一条 tool_use，避免消息膨胀。
-        toolUseId: `plan:ghost:${ghostId}:${context.sessionInstanceId}`,
-        toolName: 'update_plan',
-        input: update,
-      },
-    });
+  setPlanUpdateProjector((context, update) => {
+    // 不伪造 agent tool_use，因此不会落库、进入消息流或经 device-link 转发；
+    // 新窗口和刷新后的恢复也不在这个插件接口内。
+    const snapshot = {
+      sessionId: context.sessionId,
+      sessionInstanceId: context.sessionInstanceId,
+      ...update,
+      updatedAtMs: Date.now(),
+    };
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.SESSION_PROGRESS_CHANGED, snapshot);
+      } catch (error) {
+        log.warn('broadcast session progress to window failed', {
+          sessionId: context.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   });
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走

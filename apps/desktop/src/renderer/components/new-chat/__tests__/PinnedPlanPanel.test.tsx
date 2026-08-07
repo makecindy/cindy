@@ -3,6 +3,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import type { GhostPlanProgressSnapshot } from '../../../../shared/ghost';
 
 import { PinnedPlanPanel } from '../PinnedPlanPanel';
 
@@ -49,40 +50,28 @@ afterEach(() => {
 });
 
 describe('PinnedPlanPanel completed plan lifetime', () => {
-  it('prefers an in-place updated plan over a later message position', () => {
-    const ghost = {
-      ...planMessage('in_progress', T0, T0 + 2_000),
-      clientId: 'ghost-plan',
-      toolUseId: 'plan:ghost:planner:instance-1',
-      toolInput: {
-        plan: [
-          { step: 'Ghost current', status: 'in_progress' },
-          { step: 'Ghost follow-up', status: 'pending' },
-        ],
-      },
-    } as ChatMessage;
-    const laterNormalPlan = {
-      ...planMessage('in_progress', T0 + 1_000, T0 + 1_000),
-      clientId: 'normal-plan',
-      toolUseId: 'plan:turn-2',
-      toolInput: {
-        plan: [
-          { step: 'Normal stale', status: 'in_progress' },
-          { step: 'Normal follow-up', status: 'pending' },
-        ],
-      },
-    } as ChatMessage;
+  it('prefers the host progress snapshot without changing message ordering', () => {
+    const hostProgress: GhostPlanProgressSnapshot = {
+      sessionId: 'plan-update-order',
+      sessionInstanceId: 'instance-1',
+      updatedAtMs: T0 + 2_000,
+      plan: [
+        { step: 'Current progress', status: 'in_progress' },
+        { step: 'Next progress', status: 'pending' },
+      ],
+    };
 
     render(
       <PinnedPlanPanel
         sessionId="plan-update-order"
-        messages={[ghost, laterNormalPlan]}
+        messages={[planMessage('in_progress', T0 + 1_000, T0 + 1_000)]}
+        hostProgress={hostProgress}
         animated
         width={400}
       />,
     );
 
-    expect(screen.getByTestId('plan-pill').textContent).toBe('Ghost current,Ghost follow-up');
+    expect(screen.getByTestId('plan-pill').textContent).toBe('Current progress,Next progress');
   });
 
   it('does not show a progress pill for a single-step plan', () => {

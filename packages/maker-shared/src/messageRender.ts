@@ -484,8 +484,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 /**
  * 常驻计划面板(composer 上方钉住式)用:取整段会话里**最近一次更新**的 plan
  * session 快照 —— 跨 source(TodoWrite / update_plan / Task*)按消息位置取最大者。
- * 宿主原地更新的 Ghost Plan 是例外：按最后更新时间选取，避免其初始位置被保留后
- * 被较早的快照遮蔽。面板只展示"当前计划"一份,历史 session 不再逐张呈现。
+ * 面板只展示"当前计划"一份,历史 session 不再逐张呈现。
  * 没有任何 plan 调用时返回 null(面板不渲染、不占位)。
  */
 export function findLatestMessageTodoInsertion<TMessage extends MessageRenderSourceMessageLike>(
@@ -499,46 +498,20 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   messages: readonly TMessage[],
   options: MessageRenderTodoGroupingOptions = {},
 ): MessageRenderLatestTodoState {
-  const hasInPlaceGhostPlan = messages.some(isInPlaceGhostPlan);
   let latestPlanIndex = -1;
   let latestPlanMessage: TMessage | null = null;
-  let latestPlanOrder = Number.NEGATIVE_INFINITY;
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (!isAgentPlanToolName(toolNameOf(message))) continue;
-    const order = hasInPlaceGhostPlan ? planEventOrder(message, index) : index;
-    if (order >= latestPlanOrder) {
-      latestPlanIndex = index;
-      latestPlanMessage = message;
-      latestPlanOrder = order;
-    }
+    latestPlanIndex = index;
+    latestPlanMessage = message;
   }
 
   let latest: MessageRenderTodoInsertion | null = null;
   let latestIndex = -1;
-  let latestInsertionOrder = Number.NEGATIVE_INFINITY;
   for (const [index, insertion] of findMessageTodoInsertions(messages, options)) {
-    const order = hasInPlaceGhostPlan ? planEventOrder(messages[index], index) : index;
-    if (order >= latestInsertionOrder) {
-      latestIndex = index;
-      latest = insertion;
-      latestInsertionOrder = order;
-    }
-  }
-  // update_plan 是完整快照。它被原地更新时保留原消息位置，且与后来另一条
-  // update_plan 同属 codex 分组；直接从本次最新事件取快照，避免分组尾部遮蔽。
-  if (latestPlanMessage && isInPlaceGhostPlan(latestPlanMessage)) {
-    const todos = extractPlanTodos(toolNameOf(latestPlanMessage), toolInputOf(latestPlanMessage));
-    if (todos) {
-      latestIndex = latestPlanIndex;
-      latest = {
-        key: `todo-${sourceClientId(latestPlanMessage)}`,
-        todos,
-        createdAt: latestPlanMessage.createdAt,
-        updatedAtMs: latestPlanMessage.planUpdatedAtMs,
-        source: 'codex',
-      };
-    }
+    latestIndex = index;
+    latest = insertion;
   }
   const hasPlanEvent = latestPlanIndex >= 0;
   const latestTaskWindowResolved =
@@ -565,19 +538,6 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
     latestPlanIndex,
     latestInsertionIndex: latestIndex,
   };
-}
-
-/** A persisted Ghost Plan keeps its original position when update_plan is replaced in place. */
-function planEventOrder(message: MessageRenderSourceMessageLike | undefined, index: number): number {
-  if (typeof message?.planUpdatedAtMs === 'number' && Number.isFinite(message.planUpdatedAtMs)) {
-    return message.planUpdatedAtMs;
-  }
-  const createdAtMs = Date.parse(message?.createdAt ?? '');
-  return Number.isFinite(createdAtMs) ? createdAtMs : index;
-}
-
-function isInPlaceGhostPlan(message: MessageRenderSourceMessageLike): boolean {
-  return toolNameOf(message) === 'update_plan' && (toolUseIdOf(message)?.startsWith('plan:ghost:') ?? false);
 }
 
 export interface CodexPlanSnapshotApplyResult<

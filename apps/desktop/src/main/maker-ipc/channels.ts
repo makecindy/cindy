@@ -735,6 +735,8 @@ export const MAKER_SEND = {
 
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
+  /** Ephemeral host-owned progress snapshot for an open local Desktop window. */
+  SESSION_PROGRESS_CHANGED: 'maker:session-progress-changed',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */

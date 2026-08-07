@@ -54,6 +54,7 @@ import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
+import { useSessionProgress } from '@/lib/sessionProgressStore';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
 import { useWorkerProjection, useWorkerProjectionOwner } from './hooks/workerProjectionStore';
@@ -488,6 +489,7 @@ export function CCAgentSessionView({
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
+  const hostProgress = useSessionProgress(sessionId ?? null);
   const navigate = useNavigate();
   const ownsWindowRoute = navigationMode === 'route-owner';
   const location = useLocation();
@@ -3467,6 +3469,7 @@ export function CCAgentSessionView({
                 <PinnedPlanPanel
                   sessionId={sessionId ?? null}
                   messages={messages}
+                  hostProgress={hostProgress}
                   animated={isStreaming}
                   width={inputWidth}
                   taskHistoryMayBeIncomplete={
