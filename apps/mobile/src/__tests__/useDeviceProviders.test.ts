@@ -64,7 +64,16 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-old-xd' }] });
   });
 
-  it('fetchDeviceProvidersFresh 发起时作废普通在途:旧普通请求后返回不回写覆盖 fresh(greptile P1)', async () => {
+  it('fetchDeviceProvidersFresh 无普通在途时不推进代际:守卫 genAt 校验可直接采信(codex P2)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    const genBefore = mod.getDeviceProvidersGen('dev-1');
+    const fetcher = vi.fn(async () => result('dev-1'));
+    await mod.fetchDeviceProvidersFresh('dev-1', fetcher);
+    // 无普通在途 → 不得自推进代际(否则守卫把 fresh 自推进误判为外部驱逐而丢结果)
+    expect(mod.getDeviceProvidersGen('dev-1')).toBe(genBefore);
+  });
+
+  it('fetchDeviceProvidersFresh 有普通在途时推进代际:旧普通请求后返回不回写覆盖 fresh(greptile P1)', async () => {
     const mod = await import('@/device-link/deviceProvidersCache');
     // 普通请求挂起(发起时目录为 A)
     const ordinaryResolvers: Array<(v: Providers) => void> = [];

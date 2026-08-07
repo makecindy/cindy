@@ -106,13 +106,19 @@ export async function fetchDeviceProvidersFresh(
   const fp = freshInflight.get(deviceId);
   if (fp) return fp;
 
-  // fresh 语义 = 强制访问工作站拿当前真相:作废更早在途的普通请求(greptile/
-  // copilot/codex review P1/P2)——旧普通请求若在 fresh 之后返回,仍会通过
-  // isCurrent() 回写旧目录覆盖 fresh 结果;代际 +1 使所有更早请求失效,并清掉
-  // 普通 inflight 槽(不再被跟踪)。fresh 自身捕获新代际,回写不受影响。
-  inflight.delete(deviceId);
-  deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
-  notifyDeviceProvidersGen(deviceId);
+  // fresh 语义 = 强制访问工作站拿当前真相。仅当确有普通请求在途时才作废它
+  // (greptile/copilot/codex review P1/P2):旧普通请求若在 fresh 之后返回,仍会
+  // 通过 isCurrent() 回写旧目录覆盖 fresh 结果——代际 +1 使更早请求失效并清掉
+  // 普通 inflight 槽。**无普通在途时不得推进代际**(codex review P2):守卫
+  // resolveSubmitGuardCatalog 在 fetch 前记录 genAt,fresh 自推进会让守卫误判
+  // 为外部驱逐而丢弃结果;仅在确有在途时推进,守卫下一轮重跑(普通在途已清)
+  // 即收敛,gen 保持稳定时 fetch 前后一致直接采信。
+  const ip = inflight.get(deviceId);
+  if (ip) {
+    inflight.delete(deviceId);
+    deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
+    notifyDeviceProvidersGen(deviceId);
+  }
 
   const startGen = deviceGen.get(deviceId) ?? 0;
   const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
