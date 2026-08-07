@@ -879,6 +879,44 @@ describe('DiscordIM inbound pipeline', () => {
     expect(im.getStatus()).toEqual({ kind: 'connecting' });
   });
 
+  it('destroys a forced-closed Gateway when a stale handoff regains ownership', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage(() => {
+      im.trackAcceptedTask(releaseTask.promise);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby();
+    await flushMicrotasks();
+    await im.closeSchedulerIngress();
+    expect(gateway.ingressForcedClosed).toBe(true);
+
+    transportAllowed = true;
+    releaseTask.resolve();
+    await handoff;
+
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+    expect(im.getStatus()).toEqual({ kind: 'standby', appId: '12345678901234567' });
+  });
+
   it('connects gateway when set-config receives a token', async () => {
     const gateway = makeGateway();
     const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
@@ -2595,6 +2633,7 @@ function makeGateway(options: { client?: unknown; clearAppIdOnDestroy?: boolean 
   let onStatus: ((s: IMStatus) => void) | null = null;
   let appId = 'app-1';
   let ingressOpen = true;
+  let ingressForcedClosed = false;
   const client = options.client ?? null;
   return {
     get client() {
@@ -2606,12 +2645,19 @@ function makeGateway(options: { client?: unknown; clearAppIdOnDestroy?: boolean 
     get ingressOpen() {
       return ingressOpen;
     },
+    get ingressForcedClosed() {
+      return ingressForcedClosed;
+    },
     botTag: 'bot#0000',
-    connect: vi.fn(async () => {}),
+    connect: vi.fn(async () => {
+      ingressForcedClosed = false;
+    }),
     closeIngress: vi.fn(async () => {
+      ingressForcedClosed = true;
       ingressOpen = false;
     }),
     destroy: vi.fn(async () => {
+      ingressForcedClosed = false;
       ingressOpen = false;
       if (options.clearAppIdOnDestroy) appId = '';
     }),

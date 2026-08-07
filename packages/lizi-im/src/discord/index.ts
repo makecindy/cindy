@@ -431,7 +431,12 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       // remote winner disappeared and this Desktop owns ingress again, the
       // original handoff decision is stale: keep the existing Gateway instead
       // of manufacturing a clean logout/relogin gap.
-      if (!options.closeIngress && this.schedulerHooks && this.schedulerTransportAllowed(identity)) {
+      if (
+        !options.closeIngress
+        && this.schedulerHooks
+        && this.schedulerTransportAllowed(identity)
+        && this.gateway.ingressForcedClosed !== true
+      ) {
         // Keep the provider's real connection status. In particular, an
         // existing discord.js client can still be reconnecting; only a real
         // ShardReady/ShardResume event may promote it back to connected.

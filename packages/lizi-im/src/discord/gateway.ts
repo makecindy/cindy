@@ -31,6 +31,8 @@ export interface DiscordGateway {
   destroy(): Promise<void>;
   readonly client: Client | null;
   readonly ingressOpen: boolean;
+  /** True after scheduler ownership explicitly closed ingress on this client. */
+  readonly ingressForcedClosed?: boolean;
   readonly appId: string;
   readonly botTag: string;
 }
@@ -99,6 +101,10 @@ class DiscordJsGateway implements DiscordGateway {
 
   get ingressOpen(): boolean {
     return this.#ingressOpen;
+  }
+
+  get ingressForcedClosed(): boolean {
+    return this.#ingressForcedClosed;
   }
 
   get appId(): string {
