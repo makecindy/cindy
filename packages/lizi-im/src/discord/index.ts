@@ -101,6 +101,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private ownerUserId = '';
   private configVersion = 0;
   private inboundConfigVersion = 0;
+  // Invalidates an in-flight init without revoking outbound leases that must
+  // finish during an ordered scheduler handoff drain.
+  private initializationGeneration = 0;
   private dmResolverClient: unknown = null;
   private dmResolver: ((userId: string) => Promise<DMChannelLike>) | null = null;
   private readonly dmMessageQueues = new Map<string, Promise<void>>();
@@ -139,6 +142,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async init(): Promise<void> {
     this.disposing = false;
+    const initializationGeneration = ++this.initializationGeneration;
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
     this.runtimeOnlineAnnounced = false;
@@ -168,6 +172,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     try {
       await this.gateway.connect(token);
+      if (!this.isCurrentInitialization(initializationGeneration)) return;
       if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
         await this.enterSchedulerStandby();
         return;
@@ -183,6 +188,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord gateway connect failed: ${msg}`);
+      if (!this.isCurrentInitialization(initializationGeneration)) return;
       if (pendingToken) {
         this.discardPendingCredentials(pendingToken);
         this.ownerUserId = previousOwnerUserId?.trim() ?? '';
@@ -194,6 +200,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    this.initializationGeneration += 1;
     this.inboundConfigVersion += 1;
     const noticeDeadline = Date.now() + RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS;
     await this.waitForRuntimeOnlineNotice(noticeDeadline);
@@ -248,6 +255,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         if (!nextOwnerUserId) this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
 
         this.configVersion += 1;
+        this.initializationGeneration += 1;
         this.inboundConfigVersion += 1;
         const wasConnectedBeforeReconnect = this.status.kind === 'connected';
         await this.gateway.destroy();
@@ -311,6 +319,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           return configResult();
         }
         this.configVersion += 1;
+        this.initializationGeneration += 1;
         this.inboundConfigVersion += 1;
         this.ownerUserId = nextOwnerUserId;
       }
@@ -344,6 +353,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     this.host.ipc.handle('discordBot:disconnect', async () => {
       this.configVersion += 1;
+      this.initializationGeneration += 1;
       this.inboundConfigVersion += 1;
       const disconnectedNoticeConfigVersion = this.configVersion;
       const disconnectedOwnerUserId = this.ownerUserId;
@@ -395,6 +405,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     clearRuntimeActiveMarker?: boolean;
     closeIngress?: boolean;
   } = {}): Promise<void> {
+    // Invalidate pending init side effects before awaiting ingress close or
+    // accepted-task drain. `configVersion` intentionally changes later so
+    // already accepted outbound work can still finish on the old client.
+    this.initializationGeneration += 1;
     const identity = this.getSchedulerIdentity() ?? 'discord';
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
@@ -732,6 +746,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (expectedToken && this.readPendingToken() !== expectedToken) return;
     this.host.secrets.remove(PENDING_TOKEN_SECRET_KEY);
     this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
+  }
+
+  private isCurrentInitialization(generation: number): boolean {
+    return !this.disposing && this.initializationGeneration === generation;
   }
 
   private readLifecycleAnnouncement(): boolean {

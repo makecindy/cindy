@@ -1080,6 +1080,60 @@ describe('DiscordIM inbound pipeline', () => {
     expect(gateway.connect).not.toHaveBeenCalledWith(previousToken);
   });
 
+  it.each(['resolve', 'reject'] as const)(
+    'does not let a stale timed-out activation %s overwrite a later successful retry',
+    async (settlement) => {
+      const gateway = makeGateway();
+      const staleActivation = deferred<void>();
+      const previousToken = `${Buffer.from('12345678901234568').toString('base64url')}.old.signature`;
+      const candidateToken = `${Buffer.from('12345678901234567').toString('base64url')}.candidate.signature`;
+      gateway.connect
+        .mockImplementationOnce(() => staleActivation.promise)
+        .mockImplementationOnce(async () => {
+          gateway.emitStatus({ kind: 'connected', appId: 'candidate-bot#0000' });
+        });
+      const host = makeHost({
+        initialSecrets: [
+          ['discord-bot-token', previousToken],
+          ['discord-owner-user-id', 'user-1'],
+          ['discord-bot-token-pending', candidateToken],
+          ['discord-owner-user-id-pending', 'user-2'],
+        ],
+      });
+      const im = new DiscordIM(host, {
+        gatewayFactory: (handlers) => {
+          gateway.setHandlers(handlers);
+          return gateway;
+        },
+      });
+      im.setSchedulerHooks({ isTransportAllowed: () => true });
+
+      const staleInit = im.init();
+      await vi.waitFor(() => expect(gateway.connect).toHaveBeenCalledTimes(1));
+
+      // Mirrors the scheduler timeout path: invalidate the pending init before
+      // the cooldown permits a fresh attempt, while preserving drain leases.
+      await im.enterSchedulerStandby({ closeIngress: true });
+      await im.init();
+
+      if (settlement === 'resolve') {
+        staleActivation.resolve();
+      } else {
+        staleActivation.reject(Object.assign(new Error('late login failure'), { code: 'TokenInvalid' }));
+      }
+      await staleInit;
+
+      expect(gateway.connect).toHaveBeenCalledTimes(2);
+      expect(gateway.connect).toHaveBeenNthCalledWith(1, candidateToken);
+      expect(gateway.connect).toHaveBeenNthCalledWith(2, candidateToken);
+      expect(gateway.destroy).toHaveBeenCalledTimes(1);
+      expect(host.readSecret('discord-bot-token')).toBe(candidateToken);
+      expect(host.readSecret('discord-owner-user-id')).toBe('user-2');
+      expect(host.readSecret('discord-bot-token-pending')).toBeNull();
+      expect(host.readSecret('discord-owner-user-id-pending')).toBeNull();
+    },
+  );
+
   it('sends the owner a fixed notice after a successful link', async () => {
     const channel = makeChannel('dm-1');
     const gateway = makeGateway({ client: makeClient(channel) });
