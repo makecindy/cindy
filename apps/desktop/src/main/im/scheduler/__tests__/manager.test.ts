@@ -82,6 +82,7 @@ interface FakeDiscord {
   hasPendingSchedulerOfflineNotice: ReturnType<typeof vi.fn>;
   isSchedulerTransportActive: ReturnType<typeof vi.fn>;
   isSchedulerTransportConnecting: ReturnType<typeof vi.fn>;
+  closeSchedulerIngress: ReturnType<typeof vi.fn>;
   markSchedulerOfflineGap: ReturnType<typeof vi.fn>;
   onStatusChange: ReturnType<typeof vi.fn>;
   setSchedulerHooks: ReturnType<typeof vi.fn>;
@@ -116,6 +117,12 @@ function createDiscord(
     hasPendingSchedulerOfflineNotice: vi.fn(() => false),
     isSchedulerTransportActive: vi.fn(() => active),
     isSchedulerTransportConnecting: vi.fn(() => connecting),
+    closeSchedulerIngress: vi.fn(async () => {
+      active = false;
+      // Closing ingress keeps the REST/client handle alive until the ordered
+      // standby drain performs the final destroy.
+      connecting = true;
+    }),
     markSchedulerOfflineGap: vi.fn(),
     onStatusChange: vi.fn((handler) => {
       statusHandler = handler;
@@ -613,6 +620,57 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('keeps runtime gap advertisements within the protocol limit deterministically', async () => {
+    harness.owner = false;
+    harness.peers = Array.from({ length: 9 }, (_, index) => ({
+      deviceId: String.fromCharCode('a'.charCodeAt(0) + index),
+      platform: 'darwin',
+      online: true as const,
+      lastSeenAt: Date.now(),
+    }));
+    const manager = createManager(createDiscord());
+
+    await manager.start();
+    for (let index = 0; index < 9; index += 1) {
+      confirmPeer(
+        String.fromCharCode('a'.charCodeAt(0) + index),
+        [],
+        undefined,
+        [{
+          identity: `123456789012345${String(index).padStart(2, '0')}`,
+          generation: `${index + 1}`.repeat(32),
+          state: 'dirty',
+        }],
+      );
+    }
+    harness.presenceHandler?.({
+      deviceId: 'i',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    });
+
+    const advertisement = [...harness.sendPush.mock.calls].reverse().find(
+      ([target, , payload]) => target === 'i'
+        && typeof payload === 'object'
+        && payload !== null
+        && (payload as { kind?: unknown }).kind === 'advertisement',
+    )?.[2] as { runtimeGaps?: Array<{ identity?: string; generation?: string }> } | undefined;
+
+    expect(advertisement?.runtimeGaps).toHaveLength(8);
+    expect(advertisement?.runtimeGaps?.map((gap) => gap.generation)).toEqual([
+      '1'.repeat(32),
+      '2'.repeat(32),
+      '3'.repeat(32),
+      '4'.repeat(32),
+      '5'.repeat(32),
+      '6'.repeat(32),
+      '7'.repeat(32),
+      '8'.repeat(32),
+    ]);
+    await manager.stop();
+  });
+
   it('stops the active transport immediately when Device Link ownership is lost', async () => {
     harness.selfDeviceId = 'a';
     const discord = createDiscord();
@@ -626,6 +684,7 @@ describe('Discord scheduler manager', () => {
     harness.ownershipHandler?.(false);
     await manager.reconcile();
 
+    expect(discord.closeSchedulerIngress).toHaveBeenCalledOnce();
     expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(1);
     expect(discord.enterSchedulerStandby).toHaveBeenCalledWith({ closeIngress: true });
     await manager.stop();
@@ -676,6 +735,42 @@ describe('Discord scheduler manager', () => {
         runtime: expect.objectContaining({ state: 'clean' }),
       }),
     );
+    await manager.stop();
+  });
+
+  it('closes ingress immediately when ownership is lost during a handoff drain', async () => {
+    harness.selfDeviceId = 'z';
+    const discord = createDiscord();
+    let releaseHandoff!: () => void;
+    const handoffGate = new Promise<void>((resolve) => {
+      releaseHandoff = resolve;
+    });
+    discord.enterSchedulerStandby.mockImplementation(async () => {
+      await handoffGate;
+      discord.emitStatus({ kind: 'standby', appId: '12345678901234567' });
+    });
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    harness.presenceHandler?.(harness.peers[0]);
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await vi.waitFor(() => expect(discord.enterSchedulerStandby).toHaveBeenCalledOnce());
+
+    harness.owner = false;
+    harness.ownershipHandler?.(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(discord.closeSchedulerIngress).toHaveBeenCalledOnce();
+
+    releaseHandoff();
+    await manager.reconcile();
     await manager.stop();
   });
 

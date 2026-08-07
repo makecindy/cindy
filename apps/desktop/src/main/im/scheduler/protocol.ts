@@ -35,7 +35,7 @@ export type ImSchedulerFrame = SchedulerAdvertisementFrame | SchedulerProbeFrame
 
 const DISCORD_ID_PATTERN = /^[1-9][0-9]{16,19}$/;
 const RUNTIME_GENERATION_PATTERN = /^[a-f0-9]{32}$/;
-const MAX_RUNTIME_GAPS = 8;
+export const MAX_RUNTIME_GAPS = 8;
 
 /** Only a non-secret Discord application id may cross Device Link. */
 export function isSchedulerChannelIdentity(value: unknown): value is SchedulerChannelIdentity {

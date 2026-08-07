@@ -19,6 +19,7 @@ import {
 import { createLogger } from '../../logger';
 import {
   IM_SCHEDULER_PUSH_CHANNEL,
+  MAX_RUNTIME_GAPS,
   isImSchedulerFrame,
   isSchedulerChannelIdentity,
   type SchedulerAdvertisementFrame,
@@ -191,6 +192,14 @@ export class ImSchedulerManager {
       if (owner) {
         this.beginDiscoveryGrace();
         this.advertiseAll();
+      } else {
+        // Ownership can change while reconcileTail is waiting for a remote
+        // handoff drain. Close this process's Gateway ingress immediately so
+        // a same-device replacement can never overlap that drain; the queued
+        // reconcile still performs the ordered runtime cleanup afterwards.
+        void this.discord.closeSchedulerIngress().catch((error) => {
+          log.warn('discord scheduler ownership-loss ingress close failed', error);
+        });
       }
       void this.reconcile();
     });
@@ -752,12 +761,29 @@ export class ImSchedulerManager {
     // tie-breaker so every observer carries the same compensation token.
     const existing = this.runtimeGaps.get(runtime.identity);
     if (existing && existing.generation <= runtime.generation) return;
-    this.runtimeGaps.set(runtime.identity, {
+    this.setRuntimeGap({
       identity: runtime.identity,
       generation: runtime.generation,
       state: 'dirty',
     });
     this.pendingCleanHandoffs.delete(runtime.identity);
+  }
+
+  private setRuntimeGap(runtime: SchedulerRuntimeFrame): void {
+    this.runtimeGaps.set(runtime.identity, runtime);
+    if (this.runtimeGaps.size <= MAX_RUNTIME_GAPS) return;
+
+    // Keep the same deterministic subset on every observer when the local
+    // identity map exceeds the wire-format limit. Generation is opaque, so
+    // lexical order is only a stable tie-breaker, never an age claim.
+    const retained = [...this.runtimeGaps.entries()]
+      .sort((left, right) => (
+        left[1].generation.localeCompare(right[1].generation)
+        || left[0].localeCompare(right[0])
+      ))
+      .slice(0, MAX_RUNTIME_GAPS);
+    this.runtimeGaps.clear();
+    for (const [identity, gap] of retained) this.runtimeGaps.set(identity, gap);
   }
 
   private beginLocalRuntime(identity: string, predecessor?: string): void {
@@ -775,7 +801,7 @@ export class ImSchedulerManager {
   private recordActivationGapAfterCleanHandoff(identity: string): void {
     const pending = this.pendingCleanHandoffs.get(identity);
     if (!pending) return;
-    this.runtimeGaps.set(identity, {
+    this.setRuntimeGap({
       identity,
       generation: randomUUID().replaceAll('-', ''),
       state: 'dirty',
@@ -794,7 +820,7 @@ export class ImSchedulerManager {
       this.resolveRuntimeGeneration(generation);
     } else {
       this.localRuntime = null;
-      this.runtimeGaps.set(identity, { identity, generation, state: 'dirty' });
+      this.setRuntimeGap({ identity, generation, state: 'dirty' });
     }
   }
 

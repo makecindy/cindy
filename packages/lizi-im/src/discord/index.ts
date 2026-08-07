@@ -386,6 +386,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return this.gateway.client !== null && !this.gateway.ingressOpen;
   }
 
+  /** Stop new Discord ingress immediately; ordered handoff cleanup follows. */
+  async closeSchedulerIngress(): Promise<void> {
+    await this.gateway.closeIngress();
+  }
+
   async enterSchedulerStandby(options: {
     clearRuntimeActiveMarker?: boolean;
     closeIngress?: boolean;
