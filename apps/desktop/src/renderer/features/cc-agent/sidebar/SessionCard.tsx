@@ -79,6 +79,7 @@ import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleS
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { useSidebarSessionTimeVisibility } from '@/hooks/useSidebarSessionTimeVisibility';
 
 const log = createLogger('SessionCard');
 
@@ -135,6 +136,7 @@ export function SessionCard({
 }: SessionCardProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { showSessionTime } = useSidebarSessionTimeVisibility();
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
@@ -667,6 +669,7 @@ export function SessionCard({
                 canUnarchive={!remoteWritesBlocked}
                 onUnarchive={handleUnarchiveSelect}
                 yieldToOrdinalBadge={ordinalBadgeLabel != null}
+                showSessionTime={showSessionTime}
               />
             )}
           </div>
@@ -845,13 +848,15 @@ export function SessionCard({
             />
           )}
           <WorktreeBadge sessionId={session.id} size={11} className="size-3.5" />
-          <time
-            dateTime={activityIso}
-            title={formatSidebarTimeAbsolute(activityIso)}
-            className={cn('ml-auto shrink-0', isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--cmd-palette-item-meta)]')}
-          >
-            {cardTimeText}
-          </time>
+          {showSessionTime && (
+            <time
+              dateTime={activityIso}
+              title={formatSidebarTimeAbsolute(activityIso)}
+              className={cn('ml-auto shrink-0', isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--cmd-palette-item-meta)]')}
+            >
+              {cardTimeText}
+            </time>
+          )}
         </div>
       </div>
       )}
@@ -1025,6 +1030,7 @@ function TimeActionsSlot({
   onArchiveNow,
   onUnarchive,
   yieldToOrdinalBadge = false,
+  showSessionTime,
 }: {
   sessionId: string;
   activityIso: string;
@@ -1041,6 +1047,7 @@ function TimeActionsSlot({
   onUnarchive: () => void;
   /** mod+1..9 序号徽标出现时让位:徽标独占右缘,不与时间/badge 并排。 */
   yieldToOrdinalBadge?: boolean;
+  showSessionTime: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -1057,16 +1064,18 @@ function TimeActionsSlot({
         )}
       >
         <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />
-        <time
-          dateTime={activityIso}
-          title={formatSidebarTimeAbsolute(activityIso)}
-          className={cn(
-            'text-[10.5px] font-medium leading-none tabular-nums',
-            isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
-          )}
-        >
-          {formatSidebarTime(activityIso, t)}
-        </time>
+        {showSessionTime && (
+          <time
+            dateTime={activityIso}
+            title={formatSidebarTimeAbsolute(activityIso)}
+            className={cn(
+              'text-[10.5px] font-medium leading-none tabular-nums',
+              isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
+            )}
+          >
+            {formatSidebarTime(activityIso, t)}
+          </time>
+        )}
       </div>
 
       {canQuickArchive && archivePending && (

@@ -92,6 +92,7 @@ import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { useSidebarSessionTimeVisibility } from '@/hooks/useSidebarSessionTimeVisibility';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -299,6 +300,7 @@ export const SessionItem = memo(function SessionItem({
   insideAutomationGroup = false,
 }: SessionItemProps) {
   const { t } = useTranslation();
+  const { showSessionTime } = useSidebarSessionTimeVisibility();
   const prRefs = usePrRefsForSession(session.id);
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅(性能不变量第 2 条),
   // 非按住态恒为 null,不惊动 memo。
@@ -889,7 +891,7 @@ export const SessionItem = memo(function SessionItem({
             <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
             {showRightStatus ? (
               <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
-            ) : (
+            ) : showSessionTime ? (
               <time
                 dateTime={activityIso}
                 title={formatSidebarTimeAbsolute(activityIso)}
@@ -900,7 +902,7 @@ export const SessionItem = memo(function SessionItem({
               >
                 {formatSidebarTime(activityIso, t)}
               </time>
-            )}
+            ) : null}
           </div>
 
           {canQuickArchive && archivePending && (

@@ -462,6 +462,11 @@
         "label": "Sidebar card mode",
         "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
         "aria": "Toggle sidebar card mode"
+      },
+      "sidebarSessionTime": {
+        "label": "Show sidebar session time",
+        "hint": "Hide relative times for completed sessions while keeping the spinner for running sessions.",
+        "aria": "Toggle sidebar session time"
       }
     },
     "notifications": {
