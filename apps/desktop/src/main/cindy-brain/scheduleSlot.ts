@@ -131,6 +131,41 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
   return true;
 }
 
+/**
+ * 确认框宿主窗口判据(与 isMainShellWindowUrl 的差异在 secondaryWindow):
+ *
+ * GhostConfirmDialogHost 挂在 App.tsx 的 ConfirmDialogProvider 里,**所有渲染
+ * 主 App 的窗口都挂**(含「在新窗口打开」的会话副窗 ?secondaryWindow=1)。
+ * 所以确认框应该投给用户**正在看的那个** MainLayout 窗口——副窗也接得住、
+ * 也该接(「谁收到谁弹」)。只排除真正的轻壳窗:utility 工具窗(view)、插件
+ * 面板独立窗(ghostPanelWindow)、右侧栏独立窗(sidebarWindow)——它们没挂 host,
+ * 投过去静默丢失。别复用 isMainShellWindowUrl:它排除 secondaryWindow 是自动化
+ * 草稿「能接住≠该接住」的取舍,确认框没有这个语义(Codex 2026-08-07 P1)。
+ */
+export function isConfirmDialogHostWindowUrl(rawUrl: string): boolean {
+  if (!rawUrl.trim()) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'file:' && parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false;
+  }
+  if (
+    parsed.searchParams.has('view') ||
+    parsed.searchParams.has('ghostPanelWindow') ||
+    parsed.searchParams.has('sidebarWindow')
+  ) {
+    return false;
+  }
+  const hash = parsed.hash;
+  if (hash.includes('/ghost-panel-window') || hash.includes('/sidebar-window')) return false;
+  // secondaryWindow 不排除:副窗挂完整 MainLayout + GhostConfirmDialogHost。
+  return true;
+}
+
 /** 自动化草稿槽:资格审 → 载荷净化 → 频率钳制 → 限速 → 投给单个窗口开面板。 */
 export class GhostScheduleSlot {
   /** 意识 id → 上次尝试时刻(按尝试记账;体量 = 已装意识数,无需清理)。 */

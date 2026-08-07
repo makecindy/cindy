@@ -14,7 +14,12 @@ import {
   type GhostScheduleDraftPush,
   type InstalledGhost,
 } from '../../../shared/ghost';
-import { GhostScheduleSlot, isMainShellWindowUrl, type ScheduleSlotDeps } from '../scheduleSlot';
+import {
+  GhostScheduleSlot,
+  isConfirmDialogHostWindowUrl,
+  isMainShellWindowUrl,
+  type ScheduleSlotDeps,
+} from '../scheduleSlot';
 
 function scheduleGhost(
   options: {
@@ -395,5 +400,37 @@ describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
    */
   it('插件面板独立窗绝不能被当作可投窗口(本能力的主使用路径)', () => {
     expect(isMainShellWindowUrl('file:///app/index.html?ghostPanelWindow=codex-reset-planner#/ghost-panel-window')).toBe(false);
+  });
+});
+
+describe('isConfirmDialogHostWindowUrl（确认框投给哪个窗口的判据）', () => {
+  it.each([
+    ['主窗口', 'file:///app/index.html#/cc-agent'],
+    ['主窗口带其它 query', 'file:///app/index.html?foo=1#/cc-agent'],
+    ['dev server', 'http://localhost:5173/#/cc-agent'],
+    // 与 isMainShellWindowUrl 的关键差异:会话副窗挂完整 MainLayout +
+    // GhostConfirmDialogHost,用户正看着副窗时确认框就该弹在那。
+    ['会话副窗(secondaryWindow=1)', 'file:///app/index.html?secondaryWindow=1#/cc-agent'],
+    ['会话副窗带 bootSession', 'file:///app/index.html?secondaryWindow=1&bootSession=abc#/cc-agent/x'],
+    ['主窗口 secondaryWindow=0', 'file:///app/index.html?secondaryWindow=0#/cc-agent'],
+  ])('%s → 是确认框宿主窗', (_label, url) => {
+    expect(isConfirmDialogHostWindowUrl(url)).toBe(true);
+  });
+
+  it.each([
+    // 轻壳窗没挂 GhostConfirmDialogHost,投过去用户看不到确认框 → 白等超时。
+    ['插件面板独立窗(query)', 'file:///app/index.html?ghostPanelWindow=sign#/ghost-panel-window'],
+    ['插件面板独立窗(仅 hash)', 'file:///app/index.html#/ghost-panel-window'],
+    ['右侧栏独立窗(query)', 'file:///app/index.html?sidebarWindow=1#/sidebar-window'],
+    ['右侧栏独立窗(仅 hash)', 'file:///app/index.html#/sidebar-window'],
+    ['语音浮窗', 'file:///app/index.html?view=voice-input-overlay'],
+    ['词典 toast', 'file:///app/index.html?view=voice-input-dictionary-toast'],
+    ['权限引导窗', 'file:///app/index.html?view=computer-permission-guide'],
+    ['插件沙箱窗(自定义协议)', 'cindy-ghost://codex-reset-planner/__boot__'],
+    ['about:blank', 'about:blank'],
+    ['空串', ''],
+    ['非法 URL', 'not a url'],
+  ])('%s → 不是确认框宿主窗', (_label, url) => {
+    expect(isConfirmDialogHostWindowUrl(url)).toBe(false);
   });
 });

@@ -176,7 +176,7 @@ import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
-import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
+import { GhostScheduleSlot, isConfirmDialogHostWindowUrl, isMainShellWindowUrl } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
@@ -2149,12 +2149,15 @@ function ensureGhostConfirmDialogBridge(): ReturnType<typeof initGhostConfirmDia
     getGhostConfirmDialogBridge() ??
     initGhostConfirmDialogBridge({
       sendToWindow: (payload) => {
-        // 只投**挂了完整主壳**的窗口:确认框由 GhostConfirmDialogHost 渲染,它
-        // 挂在主壳的 ConfirmDialogProvider 里;词典提示窗 / 权限引导窗等辅助
-        // 窗口没挂这个 host,投过去用户看不到、请求白等 90 秒超时按拒绝
-        // (Greptile 2026-08-07 P1)。判据与 schedule 槽同款(isMainShellWindowUrl)。
+        // 只投**挂了确认框宿主**的窗口:GhostConfirmDialogHost 挂在 App.tsx 的
+        // ConfirmDialogProvider 里,所有 MainLayout 窗口都挂(含「在新窗口打开」
+        // 的会话副窗 secondaryWindow=1——用户正看着副窗时,确认框就该弹在那)。
+        // 只排除轻壳窗:utility 工具窗(view)/插件面板独立窗/右侧栏独立窗没挂
+        // host,投过去用户看不到、请求白等 90 秒超时按拒绝(Greptile + Codex
+        // 2026-08-07 P1)。判据 isConfirmDialogHostWindowUrl 专为确认框写,
+        // 不误伤 secondaryWindow。
         const candidates = BrowserWindow.getAllWindows().filter(
-          (window) => !window.isDestroyed() && isMainShellWindowUrl(window.webContents.getURL()),
+          (window) => !window.isDestroyed() && isConfirmDialogHostWindowUrl(window.webContents.getURL()),
         );
         const focused = BrowserWindow.getFocusedWindow();
         const win =
