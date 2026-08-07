@@ -1451,6 +1451,25 @@ describe('TelegramIM', () => {
       };
     }
 
+    it('某张图读不出来 → 逐张回落, 其余照发(不因一张丢整组)', async () => {
+      // 本地读盘失败时请求根本没发出, 一张都没进聊天 —— 与 Telegram 回 400
+      // 同一类确定性失败。把它混进 uncertain 会让整组静默消失。
+      await connect();
+      const present = ['ok1.png', 'ok2.png'].map((name) => {
+        const abs = path.join(tmpDir, name);
+        fs.writeFileSync(abs, 'fake-png');
+        return abs;
+      });
+      const missing = path.join(tmpDir, 'gone.png'); // 故意不创建
+      const handle = await im.startStreamingText(Number(OWNER_ID).toString());
+      for (const abs of [present[0], missing, present[1]]) handle.addExtraImageAbsPath?.(abs);
+      await handle.finalize('三张图, 其中一张缺失');
+      // 相册组装即失败, 一次 sendMediaGroup 都没打成
+      expect(api.calls.filter((c) => c.method === 'sendMediaGroup')).toHaveLength(0);
+      // 两张可读的仍然逐张发了出去; 缺失那张在读盘处失败, 不产生出站
+      expect(api.calls.filter((c) => c.method === 'sendPhoto')).toHaveLength(2);
+    });
+
     it('400 拒绝 → 逐张回落(确定一张都没进聊天)', async () => {
       const { singles } = await sendAlbumWith(
         new TelegramApiError('sendMediaGroup', 400, 'Bad Request: wrong file identifier'),

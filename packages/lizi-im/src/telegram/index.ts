@@ -2023,8 +2023,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): Promise<'sent' | 'rejected' | 'uncertain'> {
     const api = this.api;
     if (!api) return 'uncertain';
+
+    // 组装(含本地读盘)与发送分开 catch。两者都会抛, 但含义相反: 组装失败时请求
+    // 根本没发出, 一张都没进聊天 —— 这跟 Telegram 回 400 是同一类确定性失败,
+    // 逐张回落安全, 而且能把同组其余可读的图片救回来。混在一个 catch 里判成
+    // uncertain, 一张图丢失就会连累整组静默消失。
+    let form: FormData;
     try {
-      const form = new FormData();
+      form = new FormData();
       form.set('chat_id', chatId);
       if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set(
@@ -2034,6 +2040,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       absPaths.forEach((absPath, i) => {
         form.set(`photo${i}`, new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
       });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram album assembly failed before send, fallback to singles: ${msg}`);
+      return 'rejected';
+    }
+
+    try {
       await api.callForm('sendMediaGroup', form);
       return 'sent';
     } catch (err) {
