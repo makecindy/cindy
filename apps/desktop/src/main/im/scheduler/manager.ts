@@ -185,7 +185,9 @@ export class ImSchedulerManager {
           this.peers.clear();
           this.confirmedPeers.clear();
         } else {
+          this.invalidateAuthoritativeSnapshot();
           this.beginDiscoveryRound();
+          this.requestSnapshot(false);
         }
         this.reconcile();
         return;
