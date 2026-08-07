@@ -80,12 +80,14 @@ export class ImSchedulerManager {
   private started = false;
   private deviceLinkReady = false;
   private schedulerHooksInstalled = false;
+  private transportWasConnectingAtStop: boolean | null = null;
 
   constructor(private readonly discord: DiscordIM) {}
 
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.transportWasConnectingAtStop = null;
     this.deviceLinkReady = getDeviceLinkStatus() === 'online';
     this.discord.setSchedulerHooks({
       isTransportAllowed: (identity) => this.isLocalIngress(identity),
@@ -241,6 +243,7 @@ export class ImSchedulerManager {
 
   async stop(options: { preserveTransportForDispose?: boolean } = {}): Promise<void> {
     if (!this.started) return;
+    this.transportWasConnectingAtStop = this.discord.isSchedulerTransportConnecting();
     this.started = false;
     if (this.advertisementTimer) clearInterval(this.advertisementTimer);
     if (this.startTimer) clearTimeout(this.startTimer);
@@ -277,13 +280,18 @@ export class ImSchedulerManager {
     await this.finishStop();
   }
 
-  async finishStop(options: { transportDisposed?: boolean } = {}): Promise<void> {
+  async finishStop(options: {
+    transportDisposed?: boolean;
+    transportWasConnecting?: boolean;
+  } = {}): Promise<void> {
     if (!this.schedulerHooksInstalled) return;
     // A reconnecting discord.js client has no open ingress, but it is still
     // alive and can emit a late Resume/Ready. Treat that shutdown as dirty:
     // close the scheduler path explicitly and preserve the next-owner
     // compensation instead of advertising a falsely clean runtime.
-    const transportWasConnecting = this.discord.isSchedulerTransportConnecting();
+    const transportWasConnecting = options.transportWasConnecting
+      ?? this.transportWasConnectingAtStop
+      ?? this.discord.isSchedulerTransportConnecting();
     try {
       if (
         !options.transportDisposed
@@ -316,6 +324,7 @@ export class ImSchedulerManager {
         // peers, then discard every account-scoped runtime marker before the
         // next Device Link session can start advertising.
         this.resetAccountScopedState();
+        this.transportWasConnectingAtStop = null;
       }
     }
   }

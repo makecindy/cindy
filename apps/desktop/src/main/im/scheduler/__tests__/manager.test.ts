@@ -953,6 +953,9 @@ describe('Discord scheduler manager', () => {
 
     discord.emitStatus({ kind: 'connecting' });
     await manager.stop({ preserveTransportForDispose: true });
+    // Mirrors im.dispose(): the Gateway is already gone before scheduler
+    // finishStop() receives the transportDisposed signal.
+    discord.emitStatus({ kind: 'idle' });
     await manager.finishStop({ transportDisposed: true });
 
     expect(discord.enterSchedulerStandby).toHaveBeenCalledOnce();
