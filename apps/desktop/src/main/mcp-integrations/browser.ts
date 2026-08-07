@@ -29,7 +29,6 @@ import {
   ExternalChromeBackend,
   RsbWebviewBackend,
   type BackendKind,
-  guardPreviewPageNavigation,
   isPreviewUrl,
 } from './browser-backend/index.js';
 import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';

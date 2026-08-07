@@ -1,6 +1,8 @@
+import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  guardPreviewPageNavigation,
   isPreviewUrl,
   isPreviewUrlAuthorized,
   killPreviewWebRtc,
@@ -13,6 +15,53 @@ const PREVIEW_URL =
 afterEach(() => {
   setLivePreviewOrigin(null);
 });
+
+function fakeWcForGuard(initialUrl: string) {
+  const ee = new EventEmitter();
+  let currentUrl = initialUrl;
+  const stopped: unknown[] = [];
+  const loaded: unknown[] = [];
+  const wc = {
+    ee,
+    on: ee.on.bind(ee),
+    once: ee.once.bind(ee),
+    getURL: () => currentUrl,
+    setURL: (u: string) => {
+      currentUrl = u;
+    },
+    stop: () => {
+      stopped.push(true);
+    },
+    loadURL: async (u: string) => {
+      loaded.push(u);
+      currentUrl = u;
+    },
+    emitWillNavigate: (u: string) => {
+      const ev = { preventDefault: vi.fn() };
+      ee.emit('will-navigate', ev, u);
+      return ev;
+    },
+    emitDidStart: (u: string, isInPlace = false) => {
+      // A committed navigation updates the URL (matches real WebContents).
+      currentUrl = u;
+      ee.emit('did-start-navigation', {}, u, isInPlace, true);
+    },
+    stopped,
+    loaded,
+  };
+  return wc as unknown as {
+    on: (e: string, l: (...a: unknown[]) => void) => unknown;
+    once: (e: string, l: (...a: unknown[]) => void) => unknown;
+    getURL(): string;
+    setURL(u: string): void;
+    stop(): void;
+    loadURL(u: string): Promise<void>;
+    emitWillNavigate(u: string): { preventDefault: ReturnType<typeof vi.fn> };
+    emitDidStart(u: string, isInPlace?: boolean): void;
+    stopped: unknown[];
+    loaded: unknown[];
+  };
+}
 
 describe('isPreviewUrl (shape check)', () => {
   it('accepts a plain preview URL', () => {
@@ -97,5 +146,54 @@ describe('killPreviewWebRtc (CDP injection)', () => {
   it('fails closed when the debugger is unavailable', async () => {
     const ok = await killPreviewWebRtc({} as never);
     expect(ok).toBe(false);
+  });
+});
+
+describe('guardPreviewPageNavigation (preview identity)', () => {
+  it('blocks a page-initiated escape away from the preview origin (round 24)', async () => {
+    setLivePreviewOrigin('http://127.0.0.1:49152');
+    const wc = fakeWcForGuard(PREVIEW_URL);
+    guardPreviewPageNavigation(wc as never);
+    // authorized preview load → enter identity
+    wc.emitDidStart(PREVIEW_URL);
+    const ev = wc.emitWillNavigate('https://evil.example/exfil');
+    expect(ev.preventDefault).toHaveBeenCalled();
+  });
+
+  it('survives a history.replaceState path rewrite and still blocks the escape (round 27i)', async () => {
+    setLivePreviewOrigin('http://127.0.0.1:49152');
+    const wc = fakeWcForGuard(PREVIEW_URL);
+    guardPreviewPageNavigation(wc as never);
+    wc.emitDidStart(PREVIEW_URL); // enter identity
+    // Untrusted script rewrites the path to '/' via history.replaceState —
+    // an IN-PAGE navigation (isInPlace=true) that does not fire
+    // will-navigate. getURL() now no longer matches the preview shape, but
+    // the identity must survive and the subsequent cross-origin escape must
+    // still be blocked (codex-connector P1, round 27i).
+    wc.setURL('http://127.0.0.1:49152/');
+    wc.emitDidStart('http://127.0.0.1:49152/', true);
+    const ev = wc.emitWillNavigate('https://evil.example/exfil');
+    expect(ev.preventDefault).toHaveBeenCalled();
+  });
+
+  it('clears identity on a REAL (cross-document) navigation away from preview (round 27i)', async () => {
+    setLivePreviewOrigin('http://127.0.0.1:49152');
+    const wc = fakeWcForGuard(PREVIEW_URL);
+    guardPreviewPageNavigation(wc as never);
+    wc.emitDidStart(PREVIEW_URL); // enter identity
+    // A real navigation (isInPlace=false) commits away from the preview URL
+    // → identity cleared, guard no longer blocks escapes.
+    wc.emitDidStart('https://example.com/');
+    const ev = wc.emitWillNavigate('https://other.example/x');
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('blocks a same-origin non-preview navigation (cannot probe loopback via the preview origin)', async () => {
+    setLivePreviewOrigin('http://127.0.0.1:49152');
+    const wc = fakeWcForGuard(PREVIEW_URL);
+    guardPreviewPageNavigation(wc as never);
+    wc.emitDidStart(PREVIEW_URL);
+    const ev = wc.emitWillNavigate('http://127.0.0.1:49152/not-preview.html');
+    expect(ev.preventDefault).toHaveBeenCalled();
   });
 });

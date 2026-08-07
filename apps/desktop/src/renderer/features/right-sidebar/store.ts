@@ -507,6 +507,8 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
           kind: row.kind as TabKindId,
           state: row.state,
         }));
+      const activeWasDropped =
+        result.activeTabId != null && droppedPreviewIds.has(result.activeTabId);
       const activeTabId =
         result.activeTabId && !droppedPreviewIds.has(result.activeTabId)
           ? result.activeTabId
@@ -527,6 +529,18 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
             .close({ id: row.id })
             .catch(() => {
               /* best-effort: filtered from the UI either way */
+            });
+        }
+        // The dropped row was the ACTIVE tab — persist the fallback active id
+        // so the DB does not end up with every remaining row inactive (the
+        // next hydrate would restore activeTabId=null forever since the
+        // preview row is gone and the fallback cannot re-trigger; codex-connector
+        // P2, round 27i).
+        if (activeWasDropped && activeTabId) {
+          void ipc
+            .setActive({ sessionId, id: activeTabId })
+            .catch(() => {
+              /* best-effort: in-memory fallback already applied */
             });
         }
       }

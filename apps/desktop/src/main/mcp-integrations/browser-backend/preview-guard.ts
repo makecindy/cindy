@@ -86,6 +86,21 @@ function originOf(u: string): string | null {
 /** WebContents that already have the preview-page navigation guard attached. */
 const previewGuardedContents = new WeakSet<WebContents>();
 
+/**
+ * WebContents currently in PREVIEW IDENTITY — the page is a sandboxed
+ * preview page, so the navigation guard must keep blocking page-initiated
+ * escapes.
+ *
+ * Bound to the WebContents, NOT to the current URL's pathname: an untrusted
+ * preview script can rewrite the path via `history.replaceState('/')` or
+ * `pushState` (an in-page navigation that does NOT fire will-navigate), which
+ * would make `wc.getURL()` no longer match the preview shape and silently
+ * disarm a shape-based guard. The identity is only cleared when a REAL
+ * navigation (isInPlace=false) commits away from a preview URL
+ * (codex-connector P1, round 27i).
+ */
+const previewActiveContents = new WeakSet<WebContents>();
+
 /** Minimal structural shape of the webContents debugger transport. */
 interface PreviewDebuggerTransport {
   isAttached(): boolean;
@@ -173,18 +188,26 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   if (previewGuardedContents.has(wc)) return;
   previewGuardedContents.add(wc);
   wc.on('will-navigate', (event, url) => {
+    // PREVIEW IDENTITY check, not a pathname-shape check (round 27i,
+    // codex-connector P1): an untrusted script can rewrite the path with
+    // history.replaceState/pushState (an in-page navigation that does NOT
+    // fire will-navigate), which would make `wc.getURL()` stop matching the
+    // preview shape and disarm a shape-based guard. The identity survives
+    // such rewrites and is only cleared when a REAL navigation commits away
+    // (see did-start-navigation below). After the origin is revoked,
+    // `livePreviewOrigin` is cleared — but a preview tab whose close FAILED
+    // (round 22 keeps the registration for retry) still shows workspace
+    // content, and it must STILL be barred from escaping to an external
+    // origin (Greptile P1, round 24). The authorization check stays on the
+    // did-start-navigation LOAD path (below).
+    // Block if the page has preview identity OR its current URL still has the
+    // preview shape. The identity survives history.pushState/replaceState
+    // rewrites (round 27i); the shape fallback keeps round-24 Greptile P1
+    // semantics — a revocation survivor (close failed, registration kept)
+    // whose origin is no longer authorized but whose URL still looks like a
+    // preview must NOT be allowed to escape and exfiltrate its DOM.
+    if (!previewActiveContents.has(wc) && !isPreviewUrl(currentUrlOf(wc))) return;
     const current = currentUrlOf(wc);
-    // Shape check on the CURRENT page only (round 24, Greptile P1): this
-    // guard's job is "a preview page must not navigate away". After the
-    // origin is revoked, `livePreviewOrigin` is cleared — but a preview tab
-    // whose close FAILED (round 22 keeps the registration for retry) still
-    // shows workspace content, and it must STILL be barred from escaping to
-    // an external origin (the revoked grant does not revoke the page's
-    // capability to exfiltrate its DOM via location.href). The
-    // authorization check stays on the did-start-navigation LOAD path
-    // (below), where its job is refusing to load content from a stale URL
-    // whose port another process may have seized.
-    if (!isPreviewUrl(current)) return; // not a preview page — leave it alone
     const currentOrigin = originOf(current);
     if (!currentOrigin || originOf(url) !== currentOrigin || !isPreviewUrl(url)) {
       event.preventDefault();
@@ -192,8 +215,18 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   });
   // did-start-navigation fires for EVERY navigation — including renderer
   // / webContents.loadURL, which does NOT emit will-navigate (round 10).
-  wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
-    if (!isMainFrame || !isPreviewUrl(url)) return;
+  wc.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
+    if (!isMainFrame) return;
+    // A REAL (cross-document) navigation that commits away from a preview
+    // URL clears the preview identity — the page is no longer a preview.
+    // In-page navigations (history.pushState/replaceState) do NOT clear it:
+    // they keep the same document, so the guard must keep blocking escapes
+    // (codex-connector P1, round 27i).
+    if (!isInPlace && !isPreviewUrl(url)) {
+      previewActiveContents.delete(wc);
+      return;
+    }
+    if (!isPreviewUrl(url)) return;
     // Fail-closed on stale preview URLs (restart / port reuse): never
     // stop-and-replay a URL the current server does not authorize — the port
     // may now serve another local process's content (new Codex reviewer P0,
@@ -210,6 +243,10 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
       }
       return;
     }
+    // Authorized preview load → enter preview identity (survives
+    // history.pushState/replaceState rewrites; cleared only by a real
+    // cross-document navigation away, round 27i).
+    previewActiveContents.add(wc);
     if (previewWebRtcKilled.has(wc)) return; // kill-script already in place
     if (previewGuardReplaying.has(wc)) return; // replay already in flight
     previewGuardReplaying.add(wc);

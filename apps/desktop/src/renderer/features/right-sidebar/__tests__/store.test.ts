@@ -168,6 +168,9 @@ describe('RSB store', () => {
       // dropped preview was the active tab → active falls back to the survivor
       expect(bucket.activeTabId).toBe('t1');
       expect(ipc.close).toHaveBeenCalledWith({ id: 'p1' });
+      // the fallback active is PERSISTED so the DB never ends up all-inactive
+      // (next hydrate would restore null forever; codex-connector P2, round 27i)
+      expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: 't1' });
     });
 
     it('dedupes concurrent calls into a single IPC', async () => {
