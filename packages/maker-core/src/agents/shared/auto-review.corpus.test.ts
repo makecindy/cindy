@@ -411,6 +411,41 @@ describe('review 第五轮 — 选项值与动态执行', () => {
     expect(classifyShellCommand("cat d.txt | awk '{print $1}'", roots, opts)).toBe('prompt');
   });
 
+  it('[P1] xargs 占位符注入解释器的**源码/模块参数**同样是动态执行', () => {
+    // `xargs -I{} node -e '{}'` 与 `xargs -I{} sh -c "{}"` 是同一件事:stdin 的每一行都会
+    // 作为程序正文执行。判据复用 interpreterInlineCodePayload / shellCommandPayload 这两份
+    // 「哪个 flag 承载程序正文」的既有真源,同族一次覆盖,不自己再列一张表。
+    for (const c of [
+      `cat e.txt | xargs -I{} node -e '{}'`,
+      `cat e.txt | xargs -I{} node --eval '{}'`,
+      `cat e.txt | xargs -I{} node -p '{}'`,
+      `cat e.txt | xargs -I{} perl -e '{}'`,
+      `cat e.txt | xargs -I{} perl -E '{}'`,
+      `cat e.txt | xargs -I{} ruby -e '{}'`,
+      `cat e.txt | xargs -I{} php -r '{}'`,
+      `cat e.txt | xargs -I{} python3 -c '{}'`,
+      `cat e.txt | xargs -I{} lua -e '{}'`,
+      `cat e.txt | xargs -I{} pwsh -Command '{}'`,
+      `cat e.txt | xargs -I{} python3 -m {}`,     // 模块名由 stdin 决定
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 任意包装链都不能绕过(unwrapWrappers 只认得其中一部分,判定改为从解释器起点扫后缀)。
+    for (const c of [
+      `cat e.txt | xargs -I{} env node -e '{}'`,
+      `cat e.txt | xargs -I{} env FOO=1 node -e '{}'`,
+      `cat e.txt | xargs -I{} nohup node -e '{}'`,
+      `cat e.txt | xargs -I{} timeout 5 node -e '{}'`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 反向:占位符只作**数据**参数时不误升。
+    expect(classifyShellCommand(
+      'cat list.txt | xargs -I{} node run.js {}', roots, opts,
+    )).toBe('prompt');
+    expect(classifyShellCommand('cat list.txt | xargs -I{} wc -l {}', roots, opts)).toBe('prompt');
+  });
+
   it('[P1] xargs 占位符落进命令位或被重解析成命令,各种写法都要命中', () => {
     for (const c of [
       'cat e.txt | xargs -I{} {} --version',        // 占位符直接作命令名

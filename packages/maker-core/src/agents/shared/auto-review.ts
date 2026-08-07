@@ -1459,8 +1459,35 @@ function analyzeInterpreterArgs(
  *     整个字符串拆成命令再执行,占位符在参数位却仍是命令来源。只看剥离后的 bin 接不住
  *     这一类(review 五轮 P1)。
  */
-/** 会把字符串参数**重新解析成命令**的包装器选项。占位符进到这些位置即动态执行。 */
-const STRING_REPARSING_WRAPPER_OPTIONS = /^(?:-S|--split-string(?:=.*)?|-c)$/;
+/** 会把字符串参数**重新解析成命令**的包装器选项(`env -S`)。占位符进到这里即动态执行。 */
+const STRING_REPARSING_WRAPPER_OPTIONS = /^(?:-S|--split-string(?:=.*)?)$/;
+
+/**
+ * 占位符是否被注入到某个解释器的**源码 / 模块参数**里。
+ *
+ * `xargs -I{} node -e '{}'` 与 `xargs -I{} sh -c "{}"` 是同一件事:stdin 的每一行都会作为
+ * **程序正文**被执行。原来只列了 `-S`/`--split-string`/`-c` 三个字面选项,于是
+ * node 的 `-e`/`--eval`/`-p`、perl 的 `-e`/`-E`、ruby/lua 的 `-e`、php 的 `-r`、
+ * pwsh 的 `-Command`/`-EncodedCommand`、python 的 `-m <模块>` 全部漏判(实测 11 种形态)。
+ *
+ * 这里不再自己列表 —— 直接复用既有的两份「哪个 flag 承载程序正文」真源:
+ * `interpreterInlineCodePayload`(各解释器的内联代码 flag)与 `shellCommandPayload`
+ * (shell 的 `-c`)。它们本就是 `interpreterReadsProgramFromStdin` 判「程序是不是字面量」
+ * 用的同一份知识,复用即同族一次覆盖,将来加解释器也不会再漏这一侧。
+ */
+function xargsPlaceholderFeedsInterpreterSource(argv: string[], placeholder: string): boolean {
+  const inlineCode = interpreterInlineCodePayload(argv);
+  if (inlineCode !== null && inlineCode.includes(placeholder)) return true;
+  const shellPayload = shellCommandPayload(argv);
+  if (shellPayload !== null && shellPayload.includes(placeholder)) return true;
+  // `python3 -m {}`:模块名由 stdin 决定 = stdin 选择跑哪个程序,与源码注入同级。
+  const bin = executableName(argv[0] ?? '');
+  if (/^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin)) {
+    const moduleIndex = argv.findIndex((t) => t === '-m' || t === '--module');
+    if (moduleIndex >= 0 && argv[moduleIndex + 1]?.includes(placeholder) === true) return true;
+  }
+  return false;
+}
 function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   // 占位符解析必须区分「吃下一个参数」和「用缺省 {}」两类,否则会把命令名当成占位符:
   //   -I R / -I{}         GNU xargs 的 -I **必须**带参数(分离或紧贴);
@@ -1481,10 +1508,22 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   if (!placeholder) return false;
   const nested = xargsCommandTokens(tokens);
   if (nested === null) return false;                              // 选项形态未知,交既有分支处理
-  // 形态 2:占位符落进「会把字符串重新解析成命令」的选项值(`env -S "{}"`、`sh -c "{}"`)。
-  // 这类占位符虽在参数位,却仍是命令来源 —— 先判,因为剥离后的 bin 看不到它。
-  if (nested.some((t, i) => STRING_REPARSING_WRAPPER_OPTIONS.test(t)
-    && (nested[i + 1]?.includes(placeholder) === true || t.includes(placeholder)))) return true;
+  // 形态 2:占位符虽在**参数位**,却仍是程序来源。两类都要判(带包装器与不带各查一遍,
+  // `xargs -I{} env node -e '{}'` 只有剥掉 `env` 之后才看得见 node 的 `-e`):
+  //   a) 会把字符串重新解析成命令的包装器选项(`env -S "{}"`);
+  //   b) 解释器的源码 / 模块参数(`node -e '{}'`、`php -r '{}'`、`python3 -m {}` …)。
+  // 包装链形态很多(`env node -e`、`env FOO=1 node -e`、`nohup node -e`、`timeout 5 node -e`),
+  // `unwrapWrappers` 只认得其中一部分 —— 实测 `xargs -I{} env node -e '{}'` 剥不出来。
+  // 与其依赖它,不如**从每个解释器起点扫后缀**:任意前缀是什么包装器都不影响判定。
+  const argvVariants = [nested, unwrapWrappers(nested)];
+  for (let i = 0; i < nested.length; i++) {
+    if (isPipeExecutor(executableName(nested[i] ?? ''))) argvVariants.push(nested.slice(i));
+  }
+  for (const argv of argvVariants) {
+    if (argv.some((t, k) => STRING_REPARSING_WRAPPER_OPTIONS.test(t)
+      && (argv[k + 1]?.includes(placeholder) === true || t.includes(placeholder)))) return true;
+    if (xargsPlaceholderFeedsInterpreterSource(argv, placeholder)) return true;
+  }
   // 形态 1:占位符就是命令名(包装器剥离后的首个 token)。
   // 比对**原 token 与归一化后的 bin 两者**:`executableName` 会做小写/取基名等归一化,
   // 只比归一化结果时 `-I PH … PH`(大小写)与 `-I{} … {}`(特殊字符)会漏判 —— 实测
@@ -1567,12 +1606,21 @@ function interpreterInlineCodePayload(tokens: string[]): string | null {
             : /^(?:pwsh|powershell)$/.test(bin) ? ['-c', '-command', '-e', '-encodedcommand']
               : /^(?:r|rscript|julia|groovy|swift|osascript)$/.test(bin) ? ['-e', '--eval']
                 : [];
+  // 两遍扫描:**先把所有 flag 的精确匹配试完,再试紧贴值形态**。
+  // 单遍按 flag 顺序会让短选项的紧贴分支抢在长选项的精确匹配之前 —— pwsh 的 `-Command`
+  // 被 `-c` 当成「紧贴值 `ommand`」吃掉,于是拿不到真正的载荷,
+  // `xargs -I{} pwsh -Command '{}'` 这类占位符注入源码的形态判不出来(review 七轮)。
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
+    const lower = (tokens[i] as string).toLowerCase();
+    for (const flag of flags) {
+      if (lower === flag.toLowerCase()) return tokens[i + 1] ?? '';
+    }
+  }
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i] as string;
     const lower = token.toLowerCase();
     for (const flag of flags) {
       const normalizedFlag = flag.toLowerCase();
-      if (lower === normalizedFlag) return tokens[i + 1] ?? '';
       if (normalizedFlag.startsWith('--') && lower.startsWith(`${normalizedFlag}=`)) {
         return token.slice(flag.length + 1);
       }
