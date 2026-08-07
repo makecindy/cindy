@@ -83,7 +83,10 @@ function agentConsumesFast(agent: AgentKind): boolean {
 }
 
 function providerRouteUnavailableMessage(agent: AgentKind, model: string): string {
-  return `${agent} 当前没有已连接的供应商提供模型 "${model}"`;
+  return (
+    `${agent} 当前没有已连接的供应商提供模型 "${model}"，`
+    + '请调整模型或在「设置 → 模型供应商」连接对应供应商后重试。'
+  );
 }
 
 function routeProviderFor(params: {
@@ -117,7 +120,9 @@ function routeProviderFor(params: {
     if (!inherited) {
       return {
         ok: false,
-        message: `provider "${sourceProviderId}" is not connected or does not provide model "${model}"`,
+        message:
+          `供应商 "${sourceProviderId}" 当前未连接，或不再为 ${agentKind} 提供模型 "${model}"。`
+          + '请在「设置 → 模型供应商」检查连接与模型配置后重试。',
       };
     }
     return { ok: true, provider: inherited, providerId: sourceProviderId };
@@ -134,7 +139,7 @@ function routeProviderFor(params: {
     ok: true,
     provider,
     providerId: routeChanged
-      ? (offering.length === 1 && provider.requiresExplicitRoute ? provider.id : null)
+      ? (provider.requiresExplicitRoute ? provider.id : null)
       : sourceProviderId,
   };
 }

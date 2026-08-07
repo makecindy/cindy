@@ -182,6 +182,25 @@ describe('send_to_session tool', () => {
     });
   });
 
+  it('create: Pi Agent 配置通过 schema 并完整透传', async () => {
+    const { registry, sendToSession } = setup();
+    const res = await registry.call('send_to_session', {
+      message: '交给 Pi 实现',
+      agent_kind: 'pi',
+      model: 'pi-model',
+      effort: 'max',
+      fast: true,
+    });
+
+    expect(res.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'pi',
+      model: 'pi-model',
+      effort: 'max',
+      fast: true,
+    }));
+  });
+
   it.each([
     { agent_kind: 'not-an-agent' },
     { effort: 'extreme' },

@@ -13,7 +13,16 @@ const available = (agent: AgentKind) => (
           supportsFastMode: true,
         },
       ]
-    : [
+    : agent === 'pi'
+      ? [
+          {
+            id: 'pi-model',
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+            supportsFastMode: true,
+          },
+        ]
+      : [
         {
           id: 'claude-fable-5',
           efforts: ['high'],
@@ -54,10 +63,18 @@ const providerRouting = (defaults: Partial<Record<AgentKind, string>> = {}) => (
         },
       },
     }],
-    pi: [],
+    pi: [{
+      id: 'xd',
+      name: 'Cindy AI',
+      models: ['pi-model'],
+      fastModels: ['pi-model'],
+      effortMetaByModel: {
+        'pi-model': { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
+      },
+    }],
   },
   resolveDefaultProviderIdForModel: (agent: AgentKind) => defaults[agent] ?? (
-    agent === 'claude-code' ? 'anthropic' : agent === 'codex' ? 'openai' : null
+    agent === 'claude-code' ? 'anthropic' : agent === 'codex' ? 'openai' : 'xd'
   ),
 });
 
@@ -81,6 +98,66 @@ describe('resolveSendToSessionExecutionConfig', () => {
         effort: 'xhigh',
         fastMode: false,
         providerId: null,
+      },
+    });
+  });
+
+  it('resolves Claude/Fable → Pi with provider-aware effort and Fast', () => {
+    expect(resolveSendToSessionExecutionConfig({
+      source: fableSource(),
+      overrides: {
+        agentKind: 'pi',
+        model: 'pi-model',
+        effort: 'max',
+        fastMode: true,
+      },
+      availableModels: available('pi'),
+      providerRouting: providerRouting(),
+      hasCindyAiApiKey: true,
+    })).toEqual({
+      ok: true,
+      config: {
+        agentKind: 'pi',
+        model: 'pi-model',
+        effort: 'max',
+        fastMode: true,
+        providerId: null,
+      },
+    });
+  });
+
+  it('pins the default Pi BYOM route when another provider exposes the same model', () => {
+    const routing = providerRouting({ pi: 'local-pi' });
+    routing.availability.pi.push({
+      id: 'local-pi',
+      name: 'Local Pi',
+      models: ['pi-model'],
+      fastModels: ['pi-model'],
+      effortMetaByModel: {
+        'pi-model': { efforts: ['high', 'max'], defaultEffort: 'max' },
+      },
+      requiresExplicitRoute: true,
+    });
+
+    expect(resolveSendToSessionExecutionConfig({
+      source: fableSource(),
+      overrides: {
+        agentKind: 'pi',
+        model: 'pi-model',
+        effort: 'max',
+        fastMode: true,
+      },
+      availableModels: available('pi'),
+      providerRouting: routing,
+      hasCindyAiApiKey: true,
+    })).toEqual({
+      ok: true,
+      config: {
+        agentKind: 'pi',
+        model: 'pi-model',
+        effort: 'max',
+        fastMode: true,
+        providerId: 'local-pi',
       },
     });
   });
