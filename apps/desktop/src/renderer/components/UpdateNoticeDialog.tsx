@@ -520,11 +520,12 @@ function AutoBody({
   const handleAutoScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || !lastVersion) return;
-				// Guard: only apply the bottom override when the content is actually
-				// scrollable.  Use +2 px threshold so that sub-pixel rounding at non-integer
-				// zoom cannot make scrollHeight − clientHeight = 1 while the content is
-				// visually unscrollable; otherwise scrollTop is always 0 and the condition
-				// would trivially hold at the top, causing the header to show the last
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable.  A +1 px threshold prevents sub-pixel rounding at
+    // non-integer zoom from making scrollHeight − clientHeight = 1 while
+    // the content is visually unscrollable; otherwise scrollTop is always
+    // 0 and the condition would trivially hold at the top, causing the
+    // header to show the last version.
     if (
       el.scrollHeight > el.clientHeight + 1 &&
       el.scrollTop + el.clientHeight >= el.scrollHeight - 1
@@ -786,11 +787,12 @@ function ManualBody({
   const handleManualScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || !lastVersion) return;
-				// Guard: only apply the bottom override when the content is actually
-				// scrollable.  Use +2 px threshold so that sub-pixel rounding at non-integer
-				// zoom cannot make scrollHeight − clientHeight = 1 while the content is
-				// visually unscrollable; otherwise scrollTop is always 0 and the condition
-				// would trivially hold at the top, causing the header to show the last
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable.  A +1 px threshold prevents sub-pixel rounding at
+    // non-integer zoom from making scrollHeight − clientHeight = 1 while
+    // the content is visually unscrollable; otherwise scrollTop is always
+    // 0 and the condition would trivially hold at the top, causing the
+    // header to show the last version.
     if (
       el.scrollHeight > el.clientHeight + 1 &&
       el.scrollTop + el.clientHeight >= el.scrollHeight - 1
