@@ -169,7 +169,14 @@ export class ImSchedulerManager {
         return;
       case 'snapshot':
         if (event.snapshot === null) {
-          if (this.snapshot === null) this.beginDiscoveryRound();
+          // A null authoritative snapshot means the transport can no longer
+          // prove that this Desktop is present. Retaining the previous view
+          // would allow a stale self row to keep the ingress active.
+          this.snapshot = null;
+          this.lastSnapshotObservedAt = null;
+          this.peers.clear();
+          this.confirmedPeers.clear();
+          this.beginDiscoveryRound();
           this.reconcile();
           return;
         }
