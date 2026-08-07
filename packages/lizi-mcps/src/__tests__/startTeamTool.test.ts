@@ -163,8 +163,36 @@ describe('start_team tool', () => {
     });
     expect(parse(res)).toMatchObject({
       ok: true,
+      team_id: 'team-1',
       worker_permission_mode: 'bypassPermissions',
       reused: true,
+    });
+  });
+
+  it('lets the host active-team state override a stale Lead role in MCP context', async () => {
+    const startTeam = vi.fn(async () => ({
+      ok: true as const,
+      teamId: 'team-new',
+      workerPermissionMode: 'auto' as const,
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerStartTeamTool(registry, {
+      sessionId: 'lead-session-1',
+      vendorOptions: { orcaRole: 'lead', orcaWorkflowId: 'team-old' },
+      startTeam,
+    });
+
+    const res = await registry.call('start_team', {});
+
+    expect(res.isError).toBeFalsy();
+    expect(parse(res)).toMatchObject({
+      ok: true,
+      team_id: 'team-new',
+      worker_permission_mode: 'auto',
+    });
+    expect(startTeam).toHaveBeenCalledWith({
+      leadSessionId: 'lead-session-1',
+      workerPermissionMode: undefined,
     });
   });
 });

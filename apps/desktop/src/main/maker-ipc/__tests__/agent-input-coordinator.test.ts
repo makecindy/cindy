@@ -94,6 +94,30 @@ function makeItem(
   };
 }
 
+function makeOrcaItem(
+  clientId: string,
+  text: string,
+  teamId: string,
+): AgentInputQueuedMessage {
+  const item = makeItem(clientId, text);
+  const vendorOptions = {
+    orcaRole: 'lead',
+    orcaWorkflowId: teamId,
+    orcaLeadSessionId: 'lead-session',
+  };
+  return {
+    ...item,
+    vendorOptions,
+    createOpts: { ...item.createOpts, vendorOptions },
+    origin: {
+      kind: 'orca',
+      teamId,
+      senderLabel: 'Reviewer',
+      displayText: text,
+    },
+  };
+}
+
 async function persistQueuedUserMessage(
   sessionId: string,
   sendOpts: Parameters<AgentInputCoordinatorDeps['sendToAgent']>[3],
@@ -248,6 +272,8 @@ function createHarness() {
   let hasAssistantProgressAfter:
     ((sessionId: string, userClientId: string) => Promise<boolean>) | null = null;
   let loadQueueSnapshot: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null = null;
+  let isQueueSnapshotItemCurrent:
+    ((sessionId: string, item: AgentInputQueuedMessage) => Promise<boolean>) | null = null;
   let getPersistedClientIds:
     ((sessionId: string, clientIds: string[]) => Promise<Set<string>>) | undefined;
   const persistQueueSnapshot =
@@ -307,6 +333,10 @@ function createHarness() {
     persistQueueSnapshot,
     loadQueueSnapshot: (sessionId) =>
       loadQueueSnapshot ? loadQueueSnapshot(sessionId) : Promise.resolve([]),
+    isQueueSnapshotItemCurrent: (sessionId, item) =>
+      isQueueSnapshotItemCurrent
+        ? isQueueSnapshotItemCurrent(sessionId, item)
+        : Promise.resolve(true),
     getPersistedClientIds: (sessionId, clientIds) =>
       getPersistedClientIds
         ? getPersistedClientIds(sessionId, clientIds)
@@ -378,6 +408,11 @@ function createHarness() {
     persistQueueSnapshot,
     setLoadQueueSnapshot(fn: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null) {
       loadQueueSnapshot = fn;
+    },
+    setQueueSnapshotItemCurrent(
+      fn: ((sessionId: string, item: AgentInputQueuedMessage) => Promise<boolean>) | null,
+    ) {
+      isQueueSnapshotItemCurrent = fn;
     },
     setGetPersistedClientIds(
       fn: ((sessionId: string, clientIds: string[]) => Promise<Set<string>>) | undefined,
@@ -5749,6 +5784,115 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it('drops inactive Orca team items from a crash snapshot without touching user input', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-orca-team-lifecycle';
+    h.setLoadQueueSnapshot(async () => [
+      makeOrcaItem('orca-old', 'old worker report', 'team-old'),
+      makeItem('user-current', 'user follow-up'),
+      makeOrcaItem('orca-current', 'current worker report', 'team-current'),
+    ]);
+    h.setQueueSnapshotItemCurrent(async (_sessionId, item) =>
+      item.origin?.kind !== 'orca' || item.origin.teamId === 'team-current'
+    );
+
+    await h.coordinator.ensureQueueRestored(sid);
+    await flush();
+
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual([
+      'user-current',
+      'orca-current',
+    ]);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+    );
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([
+      'user-current',
+      'orca-current',
+    ]);
+  });
+
+  it('fails closed per item when a crash-snapshot lifecycle check rejects', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-orca-lifecycle-check-failure';
+    h.setLoadQueueSnapshot(async () => [
+      makeOrcaItem('orca-unknown', 'worker report with unknown lifecycle', 'team-unknown'),
+      makeItem('user-current', 'user follow-up'),
+    ]);
+    h.setQueueSnapshotItemCurrent(async (_sessionId, item) => {
+      if (item.clientId === 'orca-unknown') {
+        throw new Error('temporary lifecycle store failure');
+      }
+      return true;
+    });
+
+    await expect(h.coordinator.ensureQueueRestored(sid)).resolves.toBeUndefined();
+    await flush();
+
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual([
+      'user-current',
+    ]);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-unknown' }),
+    );
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['user-current']);
+  });
+
+  it('selectively cancels an old-team pre-vendor item while preserving user and scheduler queue entries', async () => {
+    const h = createHarness();
+    const sid = 'orca-team-pre-vendor-invalidation';
+    const beforeDispatch = deferred<void>();
+    h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
+    await h.coordinator.ensureQueueRestored(sid);
+
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeOrcaItem('orca-old', 'old worker report', 'team-old'));
+    h.coordinator.enqueue(sid, makeItem('user-current', 'user follow-up'));
+    h.coordinator.enqueue(sid, makeItem('scheduler-current', 'scheduled follow-up', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'schedule-1',
+        scheduleName: 'Nightly check',
+      },
+    }));
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.onUserMessagePersisted).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+    );
+
+    // Keep the preserved tail queued while the old active item is invalidated.
+    h.setRunning(true);
+    await expect(
+      h.coordinator.discardQueuedItemsWhere(
+        sid,
+        (item) => item.origin?.kind === 'orca' && item.origin.teamId === 'team-old',
+      ),
+    ).resolves.toMatchObject({ activeCancelled: true });
+
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual([
+      'user-current',
+      'scheduler-current',
+    ]);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+      'cancelled',
+    );
+
+    beforeDispatch.resolve();
+    await flush();
+    expect(h.onDispatchedUserTurn).not.toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+      expect.any(Number),
+    );
+  });
+
   it('persists the queue after restore and shrinks the snapshot once the head crosses the DB boundary', async () => {
     const h = createHarness();
     const sid = 'snapshot-persist';

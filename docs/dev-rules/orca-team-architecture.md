@@ -123,6 +123,8 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 - MCP `start_team` 可显式指定 `worker_permission_mode`；省略时沿用当前偏好。显式从 `auto` 升级到 `bypassPermissions` 时，Main 必须在写入偏好或创建 Team 前等待宿主持有的用户确认，不能只依赖 MCP 审批、tool 描述或 prompt；取消／超时不得产生副作用。确认通过后才更新 main 镜像，并通知 renderer 回写同一份 localStorage。已由用户保存为 `bypassPermissions` 时，后续沿用不重复确认。
 - `create_worker` / `create_workers` 省略权限参数，统一读取当前偏好；不继承 Lead 的 `sessions.permission_mode`，也不修改已经创建的 Worker。
 - device-link 新控制端只有在被控端 capabilities 明确声明支持 Worker 权限选择时才允许开启协同；已有旧版远程 Team 继续兼容旧创建行为，不宣称或回写该端不支持的偏好。
+`start_team` 的 active 状态真源是 host lifecycle service 查询到的 `orca_teams.status='active'`，不是 MCP context 中可能陈旧的 `vendorOptions.orcaRole='lead'`。工具侧只按 `orcaRole='worker'` 拒绝嵌套；Lead/普通 session 都必须调用 host，由 host 复用当前 active team 或创建新 team。这样旧 team 结束后即使 live context 尚未刷新，再次 `start_team` 也不会误报 already enabled。
+`start_team` 的 active 状态真源是 host lifecycle service 查询到的 `orca_teams.status='active'`，不是 MCP context 中可能陈旧的 `vendorOptions.orcaRole='lead'`。工具侧只按 `orcaRole='worker'` 拒绝嵌套；Lead/普通 session 都必须调用 host，由 host 复用当前 active team 或创建新 team。这样旧 team 结束后即使 live context 尚未刷新，再次 `start_team` 也不会误报 already enabled。
 
 工具注册是全局可见 + handler 拒绝：
 
@@ -234,6 +236,9 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 6. **Lead 只能管理自己的排队消息，撤回必须结清 accepted 暂存（状态：不变量）**<br>
    `list_worker_queue` / `update_queued_message` / `cancel_queued_message` 经 `resolveWorkerRef` 按 caller Lead 归属校验后，只允许操作目标 worker 队列中 `origin.kind='orca'` 的条目（worker 队列中的 orca 条目只可能来自其 Lead）；队列可见性口径是「看得全、只能动自己的」（2026-07-21 产品决策）——用户手打与 scheduler 排队条目对 Lead 正文可见（供基于完整队列内容编排），但不可改不可撤（`NOT_LEAD_MESSAGE`）。修改是整条正文替换，必须经 `rebuildQueuedOrcaLeadMessage` 按原派发格式重建 `text` / `persistedContent` / `chatMessage.content` / `origin.displayText`，身份字段（clientId / createOpts / createdAt / senderLabel）锚定原条目；不许直接调 coordinator 的 `updateText`（会破坏 orca 派发格式耦合）。撤回必须走 coordinator `remove`（触发 `onDiscardedQueuedMessage` → dispatcher 丢弃该 clientId 的 accepted 暂存回调，与 Stop 清队列同一条 settle 路径），否则 accepted 回调表泄漏。steering 中的条目一律拒绝（`MESSAGE_CONSUMING`）。实现指针：`orcaTeamService.ts` 的 `resolveLeadQueuedMessage` 与三个队列控制方法、`orcaInterAgentDispatcher.ts` 的 `rebuildQueuedOrcaLeadMessage`、`agent-input-coordinator.ts` 的 `replaceQueuedMessage`。
 
+7. **结束 team 必须选择性失效该 team 的自动消息（状态：不变量）**<br>
+   每条新 Orca 队列消息必须在 `origin.teamId` 携带 workflow 归属。`end_team` / 关闭协同先把 team 持久化为终态，再只删除同一 `teamId` 的 pending、pre-vendor active 与 recovery 项；普通用户输入和 scheduler 队列不得受影响。崩溃快照恢复时同样以 DB active team 为真源过滤，旧快照缺少 `origin.teamId` 时只允许从历史 `createOpts.vendorOptions.orcaWorkflowId` 兼容读取，仍无法确定归属则 fail-closed。进入 vendor 前还必须复查进程内 ended-team fence，覆盖 DB 查询与 dispatch 之间的竞态。实现指针：`agent-input-coordinator.ts` 的 `discardQueuedItemsWhere` / `isQueueSnapshotItemCurrent`，`makerSendTransaction.ts` 的 pre-rehydrate active-team 检查，`orcaInterAgentDispatcher.ts` 的 team-scoped ingress，以及 `register.ts` 的 `disableOrcaInternal`。
+
 #### Worker 运行态
 
 1. **worker 终态不被失败回滚覆盖（状态：不变量）**<br>
@@ -263,6 +268,7 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 
 - Service 边界：`orcaLifecycleService`、`orcaWorkerCreationService`、`orcaTeamService` 的单测覆盖 start/enable/create/dispatch/idle/archive/auto-bridge 关键路径。
 - Worker 创建权限偏好：覆盖无保存偏好时默认 `bypassPermissions`、已保存的 `auto` / `bypassPermissions` 继续优先、MCP 显式 `auto → bypassPermissions` 必须先经用户确认且取消／超时零副作用、复用 Team 时省略不重置／显式才更新、首个与后续 Worker 都读取共享创建偏好、已有 Worker 权限不反写、renderer localStorage 启动同步与 tool 写回，以及旧 device-link 被控端被阻止开启协同并提示升级。
+- Team 生命周期队列：覆盖“结束旧 team → 残留 Worker→Lead 队列消息 → 再次 start_team”，并分别锁定 pending、pre-vendor active、崩溃快照恢复；断言普通用户与 scheduler 队列原样保留，`start_team` 不被陈旧 Lead role 短路。
 - MCP 工具：`cindy_orca` 16 工具（13 team + 3 只读诊断）的 role gate、ctx 缺失、worker/main 误调用、soft/hard limit、duplicate label、budget model API mode gate；`create_workers` 另覆盖默认 hard limit、配置 hard=3、部分成功、连续失败与 hard-limit 后不再调用 host；诊断工具的纯只读语义（无 active team 时返回空 workspace、不建 team）；排队消息控制 3 工具的归属校验（跨 lead 拒绝）、非 lead 条目拒绝（`NOT_LEAD_MESSAGE`）、steering 拒绝（`MESSAGE_CONSUMING`）、撤回结清 accepted 暂存。
 - Codex MCP context：`CodexMcpThreadContextStore` 覆盖按 threadId 查 context、unknown / missing threadId fail-closed、unregister 后清理、`vendorOptions` 引用保持；`codexHttpBridge` 覆盖从 JSON-RPC `params._meta.threadId` 注入真实 session context。
 - Host 归属校验：`send_to_worker`、`idle_worker`、`archive_worker` 经共享 `resolveWorkerRef`（同时接受 worker_id / session_id 两种 id）必须以 caller 自身 Lead 身份校验，拒绝跨 workflow worker id 与 ctx 缺失；即使模型传错 id 或换用另一种 id，也不能越权操作。

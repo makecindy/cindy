@@ -558,6 +558,17 @@ export async function setSessionOrcaRole(
   broadcastSessionPatch(sessionId, { orcaRole: role });
 }
 
+/** Durable lifecycle truth used by Orca queue ingress and crash recovery. */
+export async function isOrcaTeamActive(teamId: string): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({ id: orcaTeams.id })
+    .from(orcaTeams)
+    .where(and(eq(orcaTeams.id, teamId), eq(orcaTeams.status, 'active')))
+    .limit(1);
+  return Boolean(row);
+}
+
 async function getTeamById(id: string): Promise<OrcaTeamRecord | null> {
   const db = getDbClient().drizzle;
   const [row] = await db

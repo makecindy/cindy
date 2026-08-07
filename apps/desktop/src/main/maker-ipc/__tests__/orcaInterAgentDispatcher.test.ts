@@ -88,6 +88,7 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     abortDirectTurnChangeSet: vi.fn(() => {
       order.push('abort-change-set');
     }),
+    isOrcaTeamActive: vi.fn(async () => true),
     resolveWorkerSenderLabel: vi.fn(async (_workerId, fallback) => fallback),
     isSessionRunningError: vi.fn((err) =>
       err instanceof Error && (err as { code?: string }).code === 'SESSION_RUNNING'
@@ -116,6 +117,7 @@ describe('Orca lead/worker dispatcher', () => {
 
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
+      teamId: 'team-1',
       rawContent: 'Implement feature',
       source: 'lead',
       senderLabel: 'Lead',
@@ -160,6 +162,7 @@ describe('Orca lead/worker dispatcher', () => {
 
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
+      teamId: 'team-1',
       rawContent: 'Queued task',
       source: 'lead',
       senderLabel: 'Lead',
@@ -186,6 +189,7 @@ describe('Orca lead/worker dispatcher', () => {
 
     await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
+      teamId: 'team-1',
       rawContent: 'Discard me',
       source: 'lead',
       senderLabel: 'Lead',
@@ -216,6 +220,7 @@ describe('Orca lead/worker dispatcher', () => {
 
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
+      teamId: 'team-1',
       rawContent: 'Will fail before accepted',
       source: 'lead',
       senderLabel: 'Lead',
@@ -259,6 +264,7 @@ describe('Orca lead/worker dispatcher', () => {
 
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
+      teamId: 'team-1',
       rawContent: 'Will cancel',
       source: 'lead',
       senderLabel: 'Lead',
@@ -320,6 +326,7 @@ describe('Orca lead/worker dispatcher', () => {
 
     await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
+      teamId: 'team-1',
       rawContent: 'Queued failure',
       source: 'lead',
       senderLabel: 'Lead',
@@ -353,6 +360,154 @@ describe('Orca lead/worker dispatcher', () => {
     expect(rollback).toHaveBeenCalledTimes(1);
   });
 
+  it('discards an unaccepted queued callback for a structured inactive-team failure', async () => {
+    const accepted = vi.fn();
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+    });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Queued stale report',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'inactive-team-cleanup-test' },
+      onAccepted: accepted,
+    });
+
+    const queued = firstQueuedItem(h.queuedItems);
+    await h.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
+      'target-session',
+      {
+        persistUserMessage: {
+          clientId: queued.clientId,
+          content: queued.persistedContent,
+          delivery: 'turn',
+        },
+      },
+      {
+        kind: 'session-dispatch',
+        source: 'maker-ipc',
+        dispatched: false,
+        reason: 'cancelled-before-dispatch',
+        context: 'ORCA_TEAM_INACTIVE/target-session/team-1',
+        message: 'Session send was cancelled before vendor dispatch',
+      },
+    );
+
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', queued);
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an incidental inactive-team substring as a lifecycle failure', async () => {
+    const accepted = vi.fn();
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+    });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Queued retryable report',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'generic-cancellation-test' },
+      onAccepted: accepted,
+    });
+
+    const queued = firstQueuedItem(h.queuedItems);
+    await h.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
+      'target-session',
+      {
+        persistUserMessage: {
+          clientId: queued.clientId,
+          content: queued.persistedContent,
+          delivery: 'turn',
+        },
+      },
+      {
+        kind: 'session-dispatch',
+        source: 'maker-ipc',
+        dispatched: false,
+        reason: 'cancelled-before-dispatch',
+        context: 'retry/ORCA_TEAM_INACTIVE/not-a-lifecycle-fence',
+        message: 'Session send was cancelled before vendor dispatch',
+      },
+    );
+
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', queued);
+    expect(accepted).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves an unexpected final-fence error instead of reporting an inactive team', async () => {
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+      assertOrcaTeamActiveBeforeVendorDispatch: vi.fn(() => {
+        throw new Error('unexpected lifecycle assertion failure');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Queued report',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'final-fence-error-test' },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SEND_FAILED',
+        message: 'unexpected lifecycle assertion failure',
+      },
+    });
+    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves an enqueue failure and discards its unaccepted callback', async () => {
+    const accepted = vi.fn();
+    const rollback = vi.fn();
+    let attemptedItem: AgentInputQueuedMessage | undefined;
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+      enqueueQueuedMessage: vi.fn((_sessionId, item) => {
+        attemptedItem = item;
+        throw new Error('queue persistence unavailable');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Queued report',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'enqueue-error-test' },
+      onAccepted: accepted,
+      onAcceptedRollback: rollback,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SEND_FAILED',
+        message: 'queue persistence unavailable',
+      },
+    });
+    expect(attemptedItem).toBeDefined();
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback(
+      'target-session',
+      attemptedItem!,
+    );
+    expect(accepted).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
   it('returns receipt fields and preserves queued Orca origin metadata', async () => {
     const h = createHarness({
       shouldQueueNewTurn: vi.fn(() => true),
@@ -365,6 +520,7 @@ describe('Orca lead/worker dispatcher', () => {
       source: 'worker',
       senderLabel: 'Worker',
       workerId: 'worker-1',
+      teamId: 'team-1',
       meta: { source: 'orca', context: 'receipt-test' },
     });
 
@@ -387,9 +543,37 @@ describe('Orca lead/worker dispatcher', () => {
       persistedContent: '{"orcaSource":"worker","content":"Done"}',
       origin: {
         kind: 'orca',
+        teamId: 'team-1',
         senderLabel: 'Reviewer',
         displayText: 'Done',
       },
     });
+  });
+
+  it('rejects an ended team before reading or rehydrating the target session', async () => {
+    const h = createHarness({
+      isOrcaTeamActive: vi.fn(async () => false),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Late report',
+      source: 'worker',
+      senderLabel: 'Reviewer',
+      workerId: 'worker-1',
+      teamId: 'team-ended',
+      meta: { source: 'orca', context: 'ended-team-test' },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      },
+    });
+    expect(h.deps.getSessionMeta).not.toHaveBeenCalled();
+    expect(h.deps.getSessionRowSnapshot).not.toHaveBeenCalled();
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
   });
 });

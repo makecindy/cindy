@@ -199,6 +199,7 @@ import {
   getSessionOrcaRole,
   getWorkerLink,
   isActiveWorkerStatus,
+  isOrcaTeamActive,
   listWorkersByLead,
   markTeamEnded,
   markWorkersStatusByTeam,
@@ -7191,7 +7192,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             {
               planMode: false,
               onAccepted: persistUserMessage,
-              onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
+              onDispatching: () => {
+                assertOrcaQueueOriginActive(origin);
+                dispatchAgentIslandUserPrompt(targetSessionId);
+              },
             },
           );
           if (userPromptPreviewStarted) {
@@ -7294,7 +7298,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           {
             planMode: false,
             onAccepted: persistUserMessage,
-            onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
+            onDispatching: () => {
+              assertOrcaQueueOriginActive(origin);
+              dispatchAgentIslandUserPrompt(targetSessionId);
+            },
           },
         );
         if (userPromptPreviewStarted) {
@@ -7609,6 +7616,54 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
+  // DB status is the durable truth; this process-local set closes the narrow
+  // markTeamEnded-to-vendor window without adding a schema epoch column.
+  const MAX_ENDED_ORCA_TEAM_IDS = 512;
+  const endedOrcaTeamIds = new Set<string>();
+  const endedOrcaTeamIdOrder: string[] = [];
+
+  function addEndedOrcaTeamId(teamId: string): void {
+    if (endedOrcaTeamIds.has(teamId)) return;
+    endedOrcaTeamIds.add(teamId);
+    endedOrcaTeamIdOrder.push(teamId);
+    while (endedOrcaTeamIdOrder.length > MAX_ENDED_ORCA_TEAM_IDS) {
+      const expiredTeamId = endedOrcaTeamIdOrder.shift();
+      if (expiredTeamId !== undefined) {
+        endedOrcaTeamIds.delete(expiredTeamId);
+      }
+    }
+  }
+
+  function removeEndedOrcaTeamId(teamId: string): void {
+    if (endedOrcaTeamIds.delete(teamId)) {
+      const idx = endedOrcaTeamIdOrder.indexOf(teamId);
+      if (idx >= 0) {
+        endedOrcaTeamIdOrder.splice(idx, 1);
+      }
+    }
+  }
+
+  function resolveOrcaQueueItemTeamId(item: AgentInputQueuedMessage): string | null {
+    if (item.origin?.kind !== 'orca') return null;
+    if (typeof item.origin.teamId === 'string' && item.origin.teamId.length > 0) {
+      return item.origin.teamId;
+    }
+    const legacyTeamId = item.createOpts.vendorOptions?.orcaWorkflowId;
+    return typeof legacyTeamId === 'string' && legacyTeamId.length > 0
+      ? legacyTeamId
+      : null;
+  }
+
+  function assertOrcaQueueOriginActive(origin: AgentInputQueuedMessage['origin']): void {
+    if (origin?.kind !== 'orca' || !origin.teamId || !endedOrcaTeamIds.has(origin.teamId)) {
+      return;
+    }
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      `ORCA_TEAM_INACTIVE: team ${origin.teamId} has already ended`,
+    );
+  }
+
   async function buildCreateOptsForQueuedSession(
     sessionId: string,
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>,
@@ -7673,6 +7728,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedRollback?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
   }): Promise<void> {
+    assertOrcaQueueOriginActive(params.origin);
     const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta);
     const queued: AgentInputQueuedMessage = {
       clientId: params.clientId,
@@ -7717,13 +7773,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     buildCreateOptsForQueuedSession,
-    enqueueQueuedMessage: (sessionId, item) => {
+    enqueueQueuedMessage: async (sessionId, item) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
       // 队列处于 paused 态不会被新消息的 getDrainableHead 立刻 drain。
-      void (async () => {
-        await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-        inputCoordinator.enqueue(sessionId, item);
-      })();
+      await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
+      assertOrcaQueueOriginActive(item.origin);
+      inputCoordinator.enqueue(sessionId, item);
     },
     sendToSessionInternal,
     createDbMessage,
@@ -7741,6 +7796,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const worker = (await listWorkersByLead(link.leadSessionId)).find((w) => w.id === workerId);
       return worker?.role ?? fallback;
     },
+    isOrcaTeamActive: async (teamId) =>
+      !endedOrcaTeamIds.has(teamId) && (await isOrcaTeamActive(teamId)),
+    assertOrcaTeamActiveBeforeVendorDispatch: (teamId) =>
+      assertOrcaQueueOriginActive({ kind: 'orca', teamId, senderLabel: 'Orca' }),
     isSessionRunningError,
     log,
   });
@@ -7822,6 +7881,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   }
 
+  async function discardOrcaTeamQueuedInputs(input: {
+    teamId: string;
+    sessionIds: string[];
+  }): Promise<void> {
+    const sessionIds = [...new Set(input.sessionIds)];
+    await Promise.all(
+      sessionIds.map((sessionId) =>
+        inputCoordinator.discardQueuedItemsWhere(
+          sessionId,
+          (item) => resolveOrcaQueueItemTeamId(item) === input.teamId,
+        ),
+      ),
+    );
+  }
+
   /**
    * disableOrcaInternal — 关闭 lead session 当前的协同模式。
    *   1. 查 active team;不存在则尝试兜底修复悬空 lead(见下),再返回
@@ -7874,6 +7948,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
+    addEndedOrcaTeamId(team.id);
+    try {
+      await markTeamEnded(team.id, 'completed');
+    } catch (err) {
+      removeEndedOrcaTeamId(team.id);
+      throw err;
+    }
+    await discardOrcaTeamQueuedInputs({
+      teamId: team.id,
+      sessionIds: [leadSessionId, ...activeWorkers.map((worker) => worker.sessionId)],
+    });
     for (const w of activeWorkers) {
       orcaTeamService.clearAutoBridgeState(w.sessionId);
       const sess = maker.getSession(w.sessionId);
@@ -7901,7 +7986,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       forgetKnownOrcaWorkerSession(w.sessionId);
     }
 
-    await markTeamEnded(team.id, 'completed');
     await markWorkersStatusByTeam(team.id, 'done');
     await archiveWorkersByTeam(team.id);
 
@@ -8100,6 +8184,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     dispatchWorkerMessage: async ({
       targetSessionId,
+      teamId,
       message,
       workerId,
       dispatchMeta,
@@ -8108,6 +8193,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }) => {
       const result = await dispatchOrEnqueueOrcaInterAgentMessage({
         targetSessionId,
+        teamId,
         rawContent: message,
         source: 'lead',
         senderLabel: 'Lead',
@@ -8153,9 +8239,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     replaceQueuedMessage: (sessionId, clientId, next) =>
       inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
-    sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
+    sendAutoBridgeToLead: async (leadSessionId, message, workerId, teamId) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
+        teamId,
         rawContent: message,
         source: 'worker',
         senderLabel: 'Worker',
@@ -8836,6 +8923,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
     beforeDispatchDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
+    isOrcaTeamInputActive: async (_sessionId, teamId) =>
+      !endedOrcaTeamIds.has(teamId) && (await isOrcaTeamActive(teamId)),
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
@@ -8844,6 +8933,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputClearBoundary(sessionId, precondition.expected);
       }
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
+      const orcaTeamId =
+        sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+          ? (sendOpts as { orcaTeamId?: unknown }).orcaTeamId
+          : undefined;
+      if (typeof orcaTeamId === 'string' && endedOrcaTeamIds.has(orcaTeamId)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          `ORCA_TEAM_INACTIVE: team ${orcaTeamId} has already ended`,
+        );
+      }
     },
     onUndispatchedDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
     ackInterruptedTurnDispatched: async (sessionId, endedAt) => {
@@ -9911,6 +10010,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 写链保序 + 失败落日志),读回由 IPC 入口的 ensureQueueRestored 懒触发。
     persistQueueSnapshot: (sessionId, items) => saveAgentInputQueueSnapshot(sessionId, items),
     loadQueueSnapshot: (sessionId) => loadAgentInputQueueSnapshot(sessionId),
+    isQueueSnapshotItemCurrent: async (_sessionId, item) => {
+      if (item.origin?.kind !== 'orca') return true;
+      const teamId = resolveOrcaQueueItemTeamId(item);
+      return Boolean(
+        teamId && !endedOrcaTeamIds.has(teamId) && (await isOrcaTeamActive(teamId)),
+      );
+    },
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
