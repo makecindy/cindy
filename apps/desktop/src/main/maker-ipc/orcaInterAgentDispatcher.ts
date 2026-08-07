@@ -143,6 +143,8 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     message: { clientId: string; role: 'user'; content: string },
   ) => Promise<unknown>;
+  beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
+  abortDirectTurnChangeSet: (sessionId: string) => void;
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
   isSessionRunningError: (err: unknown) => boolean;
   log?: OrcaInterAgentDispatcherLogger;
@@ -424,7 +426,8 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   },
 ): Promise<CollabDirectDispatchResult> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, onAccepted } = params;
-  return resolveCollabDispatchResult(
+  let turnChangeSetStarted = false;
+  const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,
       throwOnStartFailure: true,
@@ -435,11 +438,17 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           role: 'user',
           content: dbContent,
         });
+        await deps.beginDirectTurnChangeSet(session.id, clientId);
+        turnChangeSetStarted = true;
         await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
       },
     }),
     { source, context },
   );
+  if (turnChangeSetStarted && !result.dispatched) {
+    deps.abortDirectTurnChangeSet(session.id);
+  }
+  return result;
 }
 
 function makeQueuedDispatchOutcome(source: string): CollabDispatchQueuedOutcome {

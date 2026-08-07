@@ -65,6 +65,7 @@ import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
 import { useStartupEndpointGate } from '@/config/useStartupEndpointGate';
 import { IS_OTA_SELFHOST } from '@/config/env';
 import { getNewSessionCreationTask } from '@/session/newSessionCreation';
+import { isExactRemoteSessionClaimed } from '@/session/newSessionWorktree';
 import {
   isPrecreatedWorktreeRegistrationInFlight,
   recoverPendingPrecreatedWorktrees,
@@ -246,19 +247,10 @@ function PrecreatedWorktreeRecoveryBridge() {
         'worktree:discard-precreated',
         [input],
       ),
-      isSessionClaimed: async (deviceId, sessionId) => {
-        try {
-          const session = await invoke(deviceId, 'local-db:sessions:get', [sessionId]);
-          return !!session;
-        } catch (error) {
-          const code = typeof error === 'object' && error && 'code' in error
-            ? String((error as { code?: unknown }).code ?? '')
-            : '';
-          const message = error instanceof Error ? error.message : String(error);
-          if (`${code} ${message}`.toUpperCase().includes('NOT_FOUND')) return false;
-          throw error;
-        }
-      },
+      isSessionClaimed: (deviceId, sessionId) => isExactRemoteSessionClaimed(
+        sessionId,
+        (id) => invoke(deviceId, 'local-db:sessions:get', [id]),
+      ),
       shouldDefer: (record) => (
         getNewSessionCreationTask(record.sessionId) !== null
         || isPrecreatedWorktreeRegistrationInFlight(record.sessionId)

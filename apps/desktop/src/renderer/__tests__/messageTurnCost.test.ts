@@ -257,6 +257,27 @@ describe('makerChatStore per-turn 费用', () => {
     expect(usageOnly?.turnCompleted).toBe(true);
   });
 
+  it('历史加载:明确失败 seal 优先于旧 usage 收尾兜底', async () => {
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({
+        clientId: 'failed-with-usage',
+        agentMeta: {
+          turnCompleted: false,
+          turnUsageDetails: GPT_DETAILS,
+        },
+      }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+
+    const failed = makerChatStore
+      .getSnapshot(SID)
+      .messages.find((m) => m.clientId === 'failed-with-usage');
+    expect(failed?.turnUsageDetails).toEqual(GPT_DETAILS);
+    expect(failed?.turnCompleted).toBe(false);
+  });
+
   it('device-link 旧历史:缺少持久化累计值时按完整用户轮投影', async () => {
     vi.mocked(messageService.list).mockResolvedValueOnce([
       serverMessage({

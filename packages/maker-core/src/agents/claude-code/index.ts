@@ -30,7 +30,15 @@ import {
   query as sdkQuery,
   forkSession as sdkForkSession,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { Query, CanUseTool, McpServerConfig, PermissionUpdate, Settings } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  Query,
+  CanUseTool,
+  HookCallback,
+  McpServerConfig,
+  PermissionUpdate,
+  PreToolUseHookInput,
+  Settings,
+} from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import {
   reportSubagentModelDiagnostics,
@@ -1231,6 +1239,44 @@ export class ClaudeCodeAgent extends BaseAgent {
         .filter(Boolean)
         .join('\n');
     };
+    const turnChangeCaptureHook: HookCallback = async (input) => {
+      const captureCwd = opts.workingDir;
+      const captureSessionId = opts.sessionId;
+      if (!this.deps.turnChangeCapture || !captureCwd || !captureSessionId) {
+        return { continue: true };
+      }
+      if (input.hook_event_name === 'PreToolUse') {
+        const pre = input as PreToolUseHookInput;
+        const toolInput = pre.tool_input as Record<string, unknown> | undefined;
+        const targetPath = ['file_path', 'path', 'notebook_path']
+          .map((key) => toolInput?.[key])
+          .find((value): value is string => typeof value === 'string' && value.length > 0);
+        if (targetPath && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(pre.tool_name)) {
+          await this.deps.turnChangeCapture.beforeKnownFileWrite({
+            sessionId: captureSessionId,
+            provider: 'claude-code',
+            cwd: captureCwd,
+            targetPath,
+            ...(opts.remoteHostId ? { remote: true } : {}),
+          });
+        }
+      } else if (
+        input.hook_event_name === 'PostToolUse'
+        || input.hook_event_name === 'PostToolUseFailure'
+      ) {
+        const toolName = (input as { tool_name?: unknown }).tool_name;
+        if (typeof toolName !== 'string' || (toolName !== 'Bash' && !toolName.startsWith('mcp__'))) {
+          return { continue: true };
+        }
+        this.deps.turnChangeCapture.noteOpaqueWrite({
+          sessionId: captureSessionId,
+          provider: 'claude-code',
+          cwd: captureCwd,
+          ...(opts.remoteHostId ? { remote: true } : {}),
+        });
+      }
+      return { continue: true };
+    };
     const localClaudeHooks = mergeClaudeHookSets(
       buildClaudeLocalToolGuardHooks(
         this.deps.capabilityRouting,
@@ -1244,6 +1290,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
         () => nonHarnessMcpServerNames,
       ),
+      {
+        PreToolUse: [{ hooks: [turnChangeCaptureHook] }],
+        PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
+        PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
+      },
       this.deps.claudeHooks,
     );
     const deniedCapabilityRoute = (toolName: string) => {

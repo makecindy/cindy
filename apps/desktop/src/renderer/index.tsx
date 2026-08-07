@@ -81,6 +81,8 @@ const isVoiceInputDictionaryToast = view === 'voice-input-dictionary-toast';
 const isComputerPermissionGuide = view === 'computer-permission-guide';
 const isComputerPermissionBackdrop = view === 'computer-permission-backdrop';
 const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissionBackdrop;
+const isAppearanceUtilityView =
+  isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
@@ -131,6 +133,10 @@ if (import.meta.env.DEV) {
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
 applyFontSettings(getInitialFontSettings());
+const disposeUtilityAppearanceSettingsSync = isAppearanceUtilityView
+  ? (window.electronAPI.appearanceSettings?.onChanged?.(applyFontSettings) ?? (() => {}))
+  : (): void => {};
+import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync);
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

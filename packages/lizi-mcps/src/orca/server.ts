@@ -75,8 +75,15 @@ import { errorPayload, okPayload } from '../xdt-helper/_payload.js';
 export interface OrcaMcpDeps {
   logger?: import('../types.js').LiziMcpLogger;
   /** 启动 multi-worker workflow (只建 team, 不含 worker / initial_task)。 */
-  startTeam: (params: { leadSessionId: string }) => Promise<
-    ControlResult<{ teamId: string }>
+  startTeam: (params: {
+    leadSessionId: string;
+    workerPermissionMode?: 'auto' | 'bypassPermissions';
+  }) => Promise<
+    ControlResult<{
+      teamId: string;
+      workerPermissionMode: 'auto' | 'bypassPermissions';
+      reused?: boolean;
+    }, 'USER_CANCELLED' | 'CONFIRM_TIMEOUT'>
   >;
   /** 在 workflow 内创建新 worker session。 */
   createWorker: (params: {

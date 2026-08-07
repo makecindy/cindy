@@ -74,7 +74,9 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
   const reservations = new Set<string>();
   const deps: OrcaWorkerCreationDeps = {
     getActiveTeamByLead: vi.fn(async (leadSessionId) => (
-      leadSessionId === 'lead-1' ? { id: 'team-1', leadSessionId: 'lead-1' } : null
+      leadSessionId === 'lead-1'
+        ? { id: 'team-1', leadSessionId: 'lead-1' }
+        : null
     )),
     listWorkersByLead: vi.fn(async () => []),
     isActiveWorkerStatus: vi.fn(isActiveWorkerStatus),
@@ -92,6 +94,7 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
       remoteHostId: null,
     })),
     getWorkerDefaults: vi.fn(() => ({})),
+    getWorkerPermissionMode: vi.fn(() => 'auto' as const),
     getAvailableModels: vi.fn((agent: AgentKind) => (
       agent === 'codex'
         ? [
@@ -1391,7 +1394,7 @@ describe('OrcaWorkerCreationService', () => {
       providerId: 'xd',
       effort: 'high',
       fastMode: true,
-      permissionMode: 'bypassPermissions',
+      permissionMode: 'auto',
       title: 'Worker · reviewer · reviewer',
       orcaRole: 'worker',
       vendorOptions: expect.objectContaining({
@@ -1417,6 +1420,42 @@ describe('OrcaWorkerCreationService', () => {
       `markOrcaRoleIfNeeded:${WORKER_SESSION_ID}:worker`,
     ]);
   });
+
+  it.each(
+    (['auto', 'bypassPermissions'] as const).flatMap((workerPermissionMode) =>
+      (['claude-code', 'codex', 'pi'] as const).map((workerAgent) => ({
+        workerPermissionMode,
+        workerAgent,
+      })),
+    ),
+  )(
+    'starts a $workerAgent Worker with the saved preference $workerPermissionMode',
+    async ({ workerPermissionMode, workerAgent }) => {
+      const workerModel = workerAgent === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6';
+      const { deps, service } = createDeps({
+        getWorkerPermissionMode: vi.fn(() => workerPermissionMode),
+        getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+          'claude-code': [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
+          codex: [{ id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] }],
+          pi: [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
+        })),
+      });
+
+      await expect(service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: workerAgent,
+        label: 'reviewer',
+        model: workerModel,
+        providerId: 'xd',
+      })).resolves.toMatchObject({ ok: true });
+
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        agentKind: workerAgent,
+        permissionMode: workerPermissionMode,
+      }));
+    },
+  );
 
   it('inherits the target-agent New Maker provider and persists it on the worker session', async () => {
     const { deps, service } = createDeps({

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import test from 'node:test';
 import {
   assertPinnedRuntimeAsset,
   assetDigestMatchesUpstream,
+  extractArchive,
   flattenExtractedDir,
   readCachedAssetDigest,
 } from '../../tools/pi/update.mjs';
@@ -35,6 +37,50 @@ test('Pi updater still flattens the nested Unix release layout', (t) => {
   assert.equal(flattenExtractedDir(dir, 'pi'), path.join(dir, 'pi'));
   assert.ok(fs.statSync(path.join(dir, 'pi')).isFile());
   assert.ok(fs.statSync(path.join(dir, 'theme')).isDirectory());
+});
+
+test('Pi updater extracts tar.gz archives streamed to the system tar', async (t) => {
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const inputDir = path.join(root, 'input');
+  const outputDir = path.join(root, 'output');
+  fs.mkdirSync(path.join(inputDir, 'pi'), { recursive: true });
+  fs.mkdirSync(outputDir);
+  fs.writeFileSync(path.join(inputDir, 'pi', 'pi'), 'pi-fixture');
+
+  const created = spawnSync('tar', ['-czf', 'fixture.tar.gz', '-C', 'input', 'pi'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.equal(created.status, 0, created.stderr || created.error?.message);
+
+  await extractArchive(path.join(root, 'fixture.tar.gz'), outputDir);
+
+  assert.equal(fs.readFileSync(path.join(outputDir, 'pi', 'pi'), 'utf8'), 'pi-fixture');
+});
+
+test('Pi updater rejects unreadable archives through the returned promise', async (t) => {
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const outputDir = path.join(root, 'output');
+  fs.mkdirSync(outputDir);
+
+  await assert.rejects(
+    extractArchive(path.join(root, 'missing.tar.gz'), outputDir),
+    { code: 'ENOENT' },
+  );
+});
+
+test('Pi updater rejects corrupt streamed archives', async (t) => {
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = path.join(root, 'corrupt.tar.gz');
+  const outputDir = path.join(root, 'output');
+  // Keep the source multi-chunk so the pipeline also covers tar closing before all input is written.
+  fs.writeFileSync(archive, Buffer.alloc(4 * 1024 * 1024, 0x61));
+  fs.mkdirSync(outputDir);
+
+  await assert.rejects(extractArchive(archive, outputDir));
 });
 
 test('Pi release pin covers every supported desktop architecture', () => {

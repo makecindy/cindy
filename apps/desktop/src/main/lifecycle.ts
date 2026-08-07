@@ -331,6 +331,47 @@ let _isDisposing = false;
 let _disposeStarted: Promise<void> | null = null;
 
 /**
+ * 「致命 shutdown」观察者 —— 目前唯一消费者是日志上报的崩溃即时路径。
+ *
+ * 为什么用注册回调而不是让 lifecycle 直接 import 上报模块:上报模块要 onQuit() 注册自己的
+ * 清理,反向 import 会成环。接线由 bootstrap 完成,lifecycle 只管「什么时候派发」。
+ *
+ * ⚠️ 回调**不是 disposer**:它不进 registry,因此不占 runQuitDisposers 的 timeoutMs 预算、
+ * 也不推迟其起点(需求「不拖慢退出」)。代价是回调必须自己保证极短 —— 只允许做同步小写盘
+ * 或 fire-and-forget,绝不能 await 网络。
+ */
+type FatalShutdownListener = (reason: string) => void;
+const fatalShutdownListeners: FatalShutdownListener[] = [];
+
+export function onFatalShutdown(listener: FatalShutdownListener): void {
+  fatalShutdownListeners.push(listener);
+}
+
+/**
+ * reason 是否属于「致命崩溃」。
+ *
+ * 判据收口在这里是有意的:自挂 process 事件的实现会漏掉渲染进程崩溃(白屏),并把可恢复的
+ * 悬空 promise 误报成崩溃。能走到 beginShutdown 的 uncaughtException 已经被上面的
+ * broken-stdio / 瞬时网络两个分支筛过,渲染进程崩溃也已排除沙箱与 webview guest。
+ * 未知 reason 一律不算崩溃(宁可漏报,也不把正常退出当崩溃)。
+ */
+export function isFatalShutdownReason(reason: string): boolean {
+  return reason === 'uncaughtException' || reason.startsWith('render-process-gone:');
+}
+
+function notifyFatalShutdown(reason: string): void {
+  if (!isFatalShutdownReason(reason)) return;
+  for (const listener of fatalShutdownListeners) {
+    try {
+      listener(reason);
+    } catch (err) {
+      // 观察者出错绝不能影响退出链。
+      log.warn('fatal-shutdown listener threw', err);
+    }
+  }
+}
+
+/**
  * 幂等启动 disposer chain: 第一次调用真的跑, 后续调用复用同一个 Promise。
  * 返回的 Promise 在 sync + async + post-async 三阶段都跑完 (或 async 超时) 后 resolve。
  *
@@ -348,6 +389,10 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
   armShutdownHardKillWatchdog();
   log.info(`beginShutdown timeoutMs=${timeoutMs} reason=${reason}`);
   noteShutdownBegin(reason);
+  // 致命崩溃的观察者派发排在 disposer chain **之前**: 崩溃现场的待补传标记必须在清理链
+  // 开始前落盘(清理链可能超时被腰斩,甚至进程可能马上就没了)。回调不进 registry,
+  // 不占 timeoutMs 预算(见 onFatalShutdown 的注释)。
+  notifyFatalShutdown(reason);
   _disposeStarted = runQuitDisposers(timeoutMs)
     .then(() => {
       log.info('runQuitDisposers completed');

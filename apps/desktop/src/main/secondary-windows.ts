@@ -25,6 +25,7 @@ import { markAppContentWindow } from './windowFocusClassifier.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
 import { resolveVibrancyConfig, type WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
+import { applyAppearanceToWindow } from './appearance-settings-ipc.js';
 
 const log = createLogger('secondary-windows');
 
@@ -79,10 +80,7 @@ export function installExternalLinkGuards(win: BrowserWindow): void {
  * 新开一个完整应用窗口并定位到指定 session。
  * @param mainWindow 主窗口,用来取当前 bounds 作为新窗初始大小(右下错开);可为 null。
  */
-export function openSessionInNewWindow(
-  sessionId: string,
-  mainWindow: BrowserWindow | null,
-): void {
+export function openSessionInNewWindow(sessionId: string, mainWindow: BrowserWindow | null): void {
   // frame 配置复刻主窗(bootstrap-electron.ts createWindow): Mac 隐藏标题栏留红绿灯,
   // Windows 无边框 + 自绘标题栏。
   const platformOptions =
@@ -120,11 +118,18 @@ export function openSessionInNewWindow(
     },
   });
   markAppContentWindow(win);
+  applyAppearanceToWindow(win);
+  win.webContents.on('did-finish-load', () => {
+    if (win.isDestroyed()) return;
+    applyAppearanceToWindow(win);
+  });
   installNewMakerWindowShortcut(win);
   installSelectionContextMenu(win);
   // E4D:副窗加入 set,供 vibrancy 动态开关;关闭时移除。
   secondaryWindows.add(win);
-  win.once('closed', () => { secondaryWindows.delete(win); });
+  win.once('closed', () => {
+    secondaryWindows.delete(win);
+  });
 
   installExternalLinkGuards(win);
 
@@ -147,10 +152,10 @@ export function openSessionInNewWindow(
     url.hash = hash;
     void win.loadURL(url.toString());
   } else {
-    void win.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-      { query: { secondaryWindow: '1', bootSession: sessionId }, hash },
-    );
+    void win.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`), {
+      query: { secondaryWindow: '1', bootSession: sessionId },
+      hash,
+    });
   }
 
   log.info('opened session in new window', { sessionId });

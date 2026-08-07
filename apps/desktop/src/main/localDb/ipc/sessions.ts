@@ -55,6 +55,7 @@ import {
   rebroadcastAgentSwitchBoundary,
 } from './messages';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -795,6 +796,14 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .limit(1);
   const effectiveClearedAt = updated?.clearedAt ?? ts;
   const effectiveUpdatedAt = updated?.updatedAt ?? effectiveClearedAt;
+  try {
+    await removeTurnChangeSetsForSession(sessionId);
+  } catch (error) {
+    log.warn('turn change-set cleanup after clear failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(
@@ -1609,6 +1618,15 @@ export async function setSessionsStatusInDb(
  */
 function removeHookAttachmentDir(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
+  if (status === 'deleted') {
+    void removeTurnChangeSetsForSession(sessionId)
+      .catch((err) => {
+        log.warn('turn change-set cleanup failed', {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
   const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
   const attachDir = path.join(attachRoot, sessionId);
   if (!attachDir.startsWith(attachRoot + path.sep)) return;

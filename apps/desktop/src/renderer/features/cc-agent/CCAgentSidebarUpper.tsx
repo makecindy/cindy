@@ -3764,7 +3764,7 @@ function RailPanels({
 
   const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-extrabold text-foreground">
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-foreground">
         {title}
       </span>
       <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">

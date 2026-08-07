@@ -472,6 +472,17 @@ export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
 /**
+ * cindy 槽·搜索类可申请的动作。
+ *
+ * `web` = Cindy 托管的公网搜索:意识只递查询词与结果数，主机固定走当前
+ * model-access 下发的 XD endpoint + XD user key，通过固定模型别名调用
+ * Anthropic Messages 原生网页搜索，不把网关 key、模型名或工具定义暴露给
+ * 意识。它与 network 槽里的 BYO Brave/Tavily 是两条独立凭证与计费路径。
+ */
+export const GHOST_CINDY_SEARCH_ACTIONS = ['web'] as const;
+export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number];
+
+/**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
  * (选型权在主机的解析表:调用时显式点名 > 意识专属覆盖 > 用户能力偏好 >
@@ -488,6 +499,8 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
+  /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由，意识不经手网关凭证)。 */
+  search?: GhostCindySearchAction[];
 }
 
 /**
@@ -635,10 +648,10 @@ export interface GhostSecretExchangeDecl {
  * 本校验取值级"严出"(plugin-security-and-authoring.md §7):超上限的包在旧版
  * 客户端拒装,插件市场铺开须等携带新上限的客户端先行发布。
  *
- * 涨过 64 前必须同步两处只留了防御余量的 64 上限,否则会拒绝合法的缺权上报
- * /静默判废 assessment:insufficient-scopes 端点的整包条数上限
- * (runtime/ghostOauthEndpoint.ts)与 cindy-tools 的 SETUP_REAUTH_SCOPE_MAX
- * (ghost/mcpServer.ts,包依赖方向不允许直接引用本常量)。
+ * 当前 256 上限外另留 64 条防御余量。涨过 320 前必须同步两处 320 上限,
+ * 否则会拒绝合法的缺权上报 / 静默判废 assessment:insufficient-scopes
+ * 端点的整包条数上限(runtime/ghostOauthEndpoint.ts)与 cindy-tools 的
+ * SETUP_REAUTH_SCOPE_MAX(ghost/mcpServer.ts,包依赖方向不允许直接引用本常量)。
  */
 export { GHOST_OAUTH_SCOPES_MAX };
 /** OAuth broker 模式可声明的备用 clientId 上限(默认 clientId 不计入)。 */
@@ -692,7 +705,7 @@ export interface GhostSecretOauthDecl {
   clientIdAlternatives?: string[];
   /** 可选:内置 client 的 secret(与 clientId 成对;纯 PKCE 服务商可省略)。 */
   clientSecret?: string;
-  /** 申请的 scope 列表(0–48 条,确认框逐条展示;缺省 = 不带 scope 参数)。 */
+  /** 申请的 scope 列表(0–256 条,确认框逐条展示;缺省 = 不带 scope 参数)。 */
   scopes?: string[];
   /**
    * 可选:authorize URL 里 scope 参数的拼接分隔符。OAuth 标准是空格(缺省),
@@ -1558,6 +1571,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'media.deposit': 'cindyMediaDeposit',
   'text.oneshot': 'cindyTextOneshot',
   'embed.text': 'cindyEmbedText',
+  'search.web': 'cindySearchWeb',
 };
 
 /**
@@ -1571,6 +1585,7 @@ const GHOST_CINDY_PERM_DETAIL: Record<string, string> = {
   // 向量:用户要知道的是"文字会被送去算向量"(计费面)与"结果不落主机"
   // (向量归意识自己保管)。单次条数上限一并插值,同 deposit 的口径。
   'embed.text': 'cindyEmbedTextDetail',
+  'search.web': 'cindySearchWebDetail',
 };
 
 /**
@@ -2019,12 +2034,7 @@ export function diffGhostPermissionItems(
   return { added, removed, unchanged };
 }
 
-/**
- * 返回未被发布清单或已批准旧版本覆盖的包权限。
- *
- * 第二个来源用于兼容旧市场元数据：旧详情投影可能漏掉已存在的权限，
- * 但这些权限此前已经被用户批准，更新时应继续保留。
- */
+/** 返回真实包中既未在安装前展示、也未被当前已装版本覆盖的权限。 */
 export function unreviewedGhostPermissionItems(
   reviewed: GhostManifest,
   previouslyInstalled: GhostManifest | undefined,
@@ -3030,6 +3040,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
       embed: GHOST_CINDY_EMBED_ACTIONS,
+      search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       const allowed = actionTable[category];
@@ -3062,6 +3073,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
     }
     if (
@@ -3069,9 +3081,16 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       cindy.video === undefined &&
       cindy.media === undefined &&
       cindy.text === undefined &&
-      cindy.embed === undefined
+      cindy.embed === undefined &&
+      cindy.search === undefined
     ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
+    }
+    if (cindy.search?.includes('web') && (!slots.includes('tool') || tools === undefined)) {
+      return {
+        ok: false,
+        reason: 'cindy.search.web 只允许由真实 tool-call 触发，必须同时声明 "tool" 槽和 tools',
+      };
     }
   }
 
@@ -5574,6 +5593,11 @@ export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 1024;
 /** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */
 export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
 
+/** Cindy 托管 Web Search 的请求边界。 */
+export const GHOST_CINDY_SEARCH_MAX_QUERY_CHARS = 2000;
+export const GHOST_CINDY_SEARCH_DEFAULT_RESULTS = 5;
+export const GHOST_CINDY_SEARCH_MAX_RESULTS = 10;
+
 /**
  * ── embed_text 政策参数(2026-08-04 开闸)──────────────────────────────
  * 上限不是抄上游 API 的(Voyage / OpenAI 都收到 1000 条一批),而是被**回传体积**
@@ -5719,6 +5743,29 @@ export type GhostPipeCindyRequest =
       callId?: string;
       /** 异步模式(同 gen_video 分支)。 */
       mode?: 'submit';
+    }
+  | {
+      /**
+       * Cindy 托管 Web Search:主机固定使用当前 XD endpoint、XD user key
+       * 与内置 Anthropic Messages 搜索模型，不接受意识传入
+       * api_base/header/key/model/tool。
+       * `provider` 固定为 cindy，用于与插件 network 槽的 BYO Brave/Tavily
+       * 明确分账。
+       *
+       * 须声明 'cindy' 卡槽 + `cindy.search: ["web"]`。
+       */
+      type: 'cindy-request';
+      kind: 'search_web';
+      /** 用户原话查询，trim 后 1–2000 字符。 */
+      query: string;
+      /** 结果条数，1–10，缺省 5。 */
+      limit?: number;
+      /** 固定为 cindy；其它值明拒。 */
+      provider: 'cindy';
+      /** 搜索只由 tool-call 触发，必须透传本次 callId 用于账单与日志归因。 */
+      callId: string;
+      /** 必须透传本次 tool-call 的 msg.tool，供宿主与 callId 事实表配对验身。 */
+      callerTool: string;
     }
   | {
       type: 'cindy-request';
@@ -6028,6 +6075,16 @@ export type GhostPipeModelResult =
       documentEmbeddings: number[][][];
     } & GhostCindyEmbedResultMeta)
   | {
+      /** search_web 成功；逻辑 Provider 恒为 cindy，不暴露内部模型路由。 */
+      ok: true;
+      provider: 'cindy';
+      results: Array<{
+        title: string;
+        url: string;
+        snippet: string;
+      }>;
+    }
+  | {
       ok: false;
       message: string;
       /**
@@ -6036,7 +6093,9 @@ export type GhostPipeModelResult =
        * 'NO_CANDIDATE'(快速通道无可用模型/凭证;embed_text 复用它表示
        * 目录里没有可用的向量型号)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
-       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'。
+       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
+       * search_web 在这些通用值之外另使用 'NOT_CONFIGURED'、'QUOTA_EXHAUSTED'、
+       * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */
       errorCode?: string;
     };
@@ -6320,11 +6379,15 @@ export const GHOST_FETCH_DIR_UPLOAD_MAX_FILES = 500;
 /** 目录上传:单文件字节上限。 */
 export const GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE = 50 * 1024 * 1024;
 /** 目录上传:单次总字节上限(multipart 体整体驻内存组装,必须封顶)。 */
-export const GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+export const GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES = 500 * 1024 * 1024;
 /** 目录上传:随行普通表单字段条数上限。 */
 export const GHOST_FETCH_DIR_UPLOAD_MAX_FIELDS = 8;
-/** 目录上传:普通表单字段值长度上限(字符)。 */
-export const GHOST_FETCH_DIR_UPLOAD_FIELD_VALUE_MAX_CHARS = 2048;
+/** 目录上传:普通表单字段值长度上限(字符)。
+ * 要容纳与 MAX_FILES(500)同量级的部署清单类字段(站点部署插件的
+ * metadata 按每文件路径+摘要 ~250 字符计,500 文件 ≈ 125K):2048 时
+ * ~100 文件即溢出,大目录部署被本校验拦死。内存上界仍受
+ * MAX_FIELDS(8)封顶(~1MB),远小于 multipart 总量上限。 */
+export const GHOST_FETCH_DIR_UPLOAD_FIELD_VALUE_MAX_CHARS = 131072;
 /** 目录过户票据形状(主机 randomUUID 发放)。 */
 export const GHOST_DIR_DEPOSIT_TOKEN_RE = /^[a-f0-9-]{36}$/;
 /** 目录过户票据有效期(毫秒;过期未消费自动作废)。 */

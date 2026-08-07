@@ -148,6 +148,7 @@ import {
   extractUsageLimitRecoveryHint,
   type UsageLimitRecoveryHint,
 } from '@/lib/usageLimitRecovery';
+import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
   materializeAnnotatedAttachmentsForSend,
@@ -277,9 +278,9 @@ export function decodeRemoteErrorMessage(msg: string): string {
   const bracketMatch = BRACKET_ERROR_CODE_RE.exec(msg);
   const bracketCode = bracketMatch?.[1];
   if (
-    bracketCode
-    && (DEVICE_LINK_CHAT_ERROR_CODES.has(bracketCode)
-      || AGENT_RUNTIME_CHAT_ERROR_CODES.has(bracketCode))
+    bracketCode &&
+    (DEVICE_LINK_CHAT_ERROR_CODES.has(bracketCode) ||
+      AGENT_RUNTIME_CHAT_ERROR_CODES.has(bracketCode))
   ) {
     return i18n.t(`chat.remoteError.${bracketCode}`, {
       defaultValue: bracketMatch[2] || msg,
@@ -368,6 +369,8 @@ export interface ChatMessage {
    * rewritten because it also participates in message ordering.
    */
   planUpdatedAtMs?: number;
+  /** Main stamped this persisted Codex plan at the successful done boundary. */
+  terminalPlanSnapshot?: boolean;
   /**
    * 产生这条消息的模型 raw id(读自 agentMeta.model)。对 subagent 子消息而言
    * 即子代理实际跑的模型(如 'claude-haiku-4-5-20251001')。仅 SDK 带 model 的
@@ -375,8 +378,9 @@ export interface ChatMessage {
    */
   model?: string;
   /**
-   * Host 在 SDK `done` 边界写入的持久化 turn seal。一个真实用户请求可能因后台任务
-   * 完成而自动续跑多个 SDK turn；每个 seal 都代表一条应保留在「已工作」外的正式回复。
+   * Host 在 SDK `done` 边界写入的持久化 turn seal。通常位于最后一条 assistant；
+   * 无 assistant 文本的 Codex 失败轮会把 false 写在所属 update_plan 行，防止后续轮次
+   * 的成功边界误收口旧计划。
    */
   turnCompleted?: boolean;
   /**
@@ -584,7 +588,8 @@ export interface AgentTaskUpdate {
   lastToolName?: string;
   taskType?: string;
   workflowName?: string;
-  model?: string;
+  /** `null` is an explicit live-update instruction to clear a stale model badge. */
+  model?: string | null;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
   /**
@@ -1033,10 +1038,10 @@ function isRemoteClearFenceCurrent(sessionId: string, fence?: RemoteClearFence):
   const current = fence ?? remoteClearFences.get(sessionId);
   return Boolean(
     current &&
-      remoteClearFences.get(sessionId) === current &&
-      isDataOwnerGenerationCurrent(current.dataOwner) &&
-      getStickySessionDeviceId(sessionId) === current.deviceId &&
-      (rendererClearGenerationBySession.get(sessionId) ?? 0) === current.clearGeneration,
+    remoteClearFences.get(sessionId) === current &&
+    isDataOwnerGenerationCurrent(current.dataOwner) &&
+    getStickySessionDeviceId(sessionId) === current.deviceId &&
+    (rendererClearGenerationBySession.get(sessionId) ?? 0) === current.clearGeneration,
   );
 }
 
@@ -1185,11 +1190,11 @@ function resolveRemoteClearFenceFromProjection(
 }
 
 type RemoteClearOperationResult<T> =
-  | { kind: 'value'; value: T }
-  | { kind: 'error'; error: unknown }
-  | { kind: 'timeout' };
+  { kind: 'value'; value: T } | { kind: 'error'; error: unknown } | { kind: 'timeout' };
 
-async function awaitRemoteClearOperation<T>(promise: Promise<T>): Promise<RemoteClearOperationResult<T>> {
+async function awaitRemoteClearOperation<T>(
+  promise: Promise<T>,
+): Promise<RemoteClearOperationResult<T>> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -2828,11 +2833,11 @@ function observeRemoteInputClearBoundary(
   );
   const acknowledgesPendingFence = Boolean(
     pendingFenceIsCurrent &&
-      typeof normalized === 'number' &&
-      (opts.acknowledgePendingFence === true ||
-        pendingFence!.clearBoundaryBeforeRequest === null ||
-        (typeof pendingFence!.clearBoundaryBeforeRequest === 'number' &&
-          normalized > pendingFence!.clearBoundaryBeforeRequest)),
+    typeof normalized === 'number' &&
+    (opts.acknowledgePendingFence === true ||
+      pendingFence!.clearBoundaryBeforeRequest === null ||
+      (typeof pendingFence!.clearBoundaryBeforeRequest === 'number' &&
+        normalized > pendingFence!.clearBoundaryBeforeRequest)),
   );
   let advanced = false;
   if (!hadPrevious) {
@@ -3357,6 +3362,119 @@ function shallowEqualRecord(
 }
 
 const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
+/** Codex app-server 自带的 Reconnecting N/M 进行态行。与 Cindy 接管行分开，避免
+ * 无关的 input projection 把仍在进行中的原生重连误删。 */
+const CODEX_RECONNECT_PENDING_CLIENT_ID = '__codex_reconnect_pending__';
+
+function removeCodexReconnectPendingCard(messages: ChatMessage[]): ChatMessage[] {
+  if (!messages.some((message) => message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID)) {
+    return messages;
+  }
+  return messages.filter((message) => message.clientId !== CODEX_RECONNECT_PENDING_CLIENT_ID);
+}
+
+function removeResumePendingCards(messages: ChatMessage[]): ChatMessage[] {
+  if (
+    !messages.some(
+      (message) =>
+        message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID ||
+        message.clientId === AUTO_RESUME_PENDING_CLIENT_ID,
+    )
+  ) {
+    return messages;
+  }
+  return messages.filter(
+    (message) =>
+      message.clientId !== CODEX_RECONNECT_PENDING_CLIENT_ID &&
+      message.clientId !== AUTO_RESUME_PENDING_CLIENT_ID,
+  );
+}
+
+function upsertCodexReconnectPendingCard(
+  messages: ChatMessage[],
+  data: Record<string, unknown>,
+): ChatMessage[] {
+  const existingIndex = messages.findIndex(
+    (message) => message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID,
+  );
+  const card: ChatMessage = {
+    clientId: CODEX_RECONNECT_PENDING_CLIENT_ID,
+    role: 'assistant',
+    content: '',
+    isStreaming: false,
+    systemCardType: 'auto-resume-pending',
+    systemCardData: data,
+    createdAt: new Date().toISOString(),
+  };
+  if (existingIndex >= 0) {
+    const existing = messages[existingIndex];
+    if (existing && shallowEqualRecord(existing.systemCardData, data)) return messages;
+    return messages.map((message, index) =>
+      index === existingIndex
+        ? { ...existing, ...card, createdAt: existing.createdAt ?? card.createdAt }
+        : message,
+    );
+  }
+  return collapseConsecutiveAutoResumeRows([...messages, card]);
+}
+
+function isCodexUserActionableRetryError(data: unknown): boolean {
+  const root = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+  const message = typeof root.message === 'string' ? root.message : '';
+  const sdkError = typeof root.sdkError === 'string' ? root.sdkError : '';
+  const rawStatus = root.errorStatus ?? root.status;
+  const status =
+    typeof rawStatus === 'number'
+      ? rawStatus
+      : typeof rawStatus === 'string' && rawStatus.trim() !== ''
+        ? Number(rawStatus)
+        : null;
+  const authError =
+    sdkError === 'authentication_failed' ||
+    sdkError === 'authentication_error' ||
+    status === 401 ||
+    /\b401\b|Missing bearer|authentication_(?:error|failed)|invalid[\s_-]*api[\s_-]*key|api key not valid/i.test(
+      message,
+    );
+  return authError || extractUsageLimitRecoveryHint(data) !== null;
+}
+
+/**
+ * Codex 原生重连行只应在真正的 turn 进展或明确收尾时让位。
+ *
+ * `maker:event` 里还混着后台任务更新、tool_result、thinking 等旁路事件；它们
+ * 可能属于同一会话但不代表重连已经恢复。Codex 子代理的 descendant 状态通知不会走这条
+ * 主事件流，而是专用的 `agent_task_update`；但协作控制调用本身仍可能以 `tool_use` 进入流。
+ * `collab:*` 是这类控制调用的稳定命名空间，不代表根 turn 已经恢复，因此不能让它提前
+ * 清掉原生行。其它 `tool_use` 仍作为根 turn 的实质进展边界，并与 main 的
+ * `isSubstantiveProgressEvent` 对齐。文本仍共用可见文本判据，避免空白 delta 误报恢复。
+ */
+function isCodexReconnectRecoveryOutput(event: CCAgentStreamEvent): boolean {
+  if (event.type === 'text') {
+    const text = (event.data as { text?: unknown } | null | undefined)?.text;
+    return hasUserVisibleText(text);
+  }
+  if (event.type === 'tool_use') {
+    const toolName = (event.data as { toolName?: unknown } | null | undefined)?.toolName;
+    return typeof toolName !== 'string' || !toolName.startsWith('collab:');
+  }
+  return event.type === 'done' && !isTurnContinuationBoundaryEvent(event);
+}
+
+/** Main 的接管 projection 与随后 maker:event 来自两个 channel。只有活动行里保存的
+ * 原始错误与终态 event 完全一致，才把 event 视为同一次接管的广播回声；不能仅凭存在
+ * 一张 pending 卡就吞掉后来其它 turn 的错误。 */
+function hasMatchingAutoResumePendingError(messages: ChatMessage[], data: unknown): boolean {
+  const root = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+  const message = typeof root.message === 'string' ? root.message : '';
+  if (!message) return false;
+  return messages.some(
+    (item) =>
+      item.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
+      typeof item.systemCardData?.error === 'string' &&
+      item.systemCardData.error === message,
+  );
+}
 
 function applyInputProjection(
   projection: AgentInputProjection,
@@ -3492,11 +3610,20 @@ function applyInputProjection(
       if (messages.some((message) => message.clientId === item.clientId)) return messages;
       return [...messages, { ...item.chatMessage, isPendingPersist: true }];
     }, dedupedMessages);
+    // Codex 原生重连已经被 host 接管、进入凭证切换等待或明确回落时，原生进行态行
+    // 必须让位给 Cindy 的接管行、凭证切换状态或终态错误。没有这些字段的普通
+    // projection 不触碰它，以免无关队列投影把正在更新的 N/M 进度提前擦掉。
+    const projectionSettledCodexReconnect = Boolean(
+      projection.autoResumePending || projection.error || projection.credentialSwitchWait,
+    );
+    const messagesBeforeAutoResume = projectionSettledCodexReconnect
+      ? removeCodexReconnectPendingCard(withSettlingMessages)
+      : withSettlingMessages;
     // 中断自愈接管中 → 在流末尾挂一条 ephemeral 的「正在自动继续」分隔条(不落库);
     // 接管结束(补发已发出 / 放弃 / 用户自己接手)由同一处撤掉。红横幅只留给最终失败,
     // 所以这几秒里 projection.error 是 null,用户看到的就只有这条低调提示。
     const autoResumePending = !!projection.autoResumePending;
-    const hasPendingCard = withSettlingMessages.some(
+    const hasPendingCard = messagesBeforeAutoResume.some(
       (m) => m.clientId === AUTO_RESUME_PENDING_CLIENT_ID,
     );
     const pendingCardData = projection.autoResumePending
@@ -3507,7 +3634,7 @@ function applyInputProjection(
         ? // 卡已在:必须把最新展示信息写回去 —— 同一次中断的进度会连续更新
           // (1/5 → 2/5 …),原样保留旧卡的话进度永远停在第一次(copilot review)。
           // 只在内容真的变了时才换引用,避免每次 projection 都触发无谓重渲染。
-          withSettlingMessages.map((m) =>
+          messagesBeforeAutoResume.map((m) =>
             m.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
             pendingCardData &&
             !shallowEqualRecord(m.systemCardData, pendingCardData)
@@ -3515,7 +3642,7 @@ function applyInputProjection(
               : m,
           )
         : [
-            ...withSettlingMessages,
+            ...messagesBeforeAutoResume,
             {
               clientId: AUTO_RESUME_PENDING_CLIENT_ID,
               role: 'assistant' as const,
@@ -3527,8 +3654,8 @@ function applyInputProjection(
             },
           ]
       : hasPendingCard
-        ? withSettlingMessages.filter((m) => m.clientId !== AUTO_RESUME_PENDING_CLIENT_ID)
-        : withSettlingMessages;
+        ? messagesBeforeAutoResume.filter((m) => m.clientId !== AUTO_RESUME_PENDING_CLIENT_ID)
+        : messagesBeforeAutoResume;
     // 折叠:同一次中断事件里,ephemeral 进行中行与它前面那些已落库的重连行只显示最新
     // 一条(否则第 2 次重连时会看到「未成功」+「重新连接中 2/5」两行并存)。
     const messages = collapseConsecutiveAutoResumeRows(withPendingCard);
@@ -3755,7 +3882,11 @@ function hydratePersistedMessage(
     typeof persisted.toolInput === 'object' &&
     persisted.toolInput !== null &&
     Array.isArray((existing.toolInput as { plan?: unknown }).plan) &&
-    Array.isArray((persisted.toolInput as { plan?: unknown }).plan)
+    Array.isArray((persisted.toolInput as { plan?: unknown }).plan) &&
+    // Ordinary DB echoes can lag behind the live Codex event, including rows
+    // whose old payload happens to be fully completed or empty. Only Main's
+    // explicit done-boundary stamp may close a newer in-memory plan.
+    persisted.terminalPlanSnapshot !== true
   ) {
     hydrated.toolInput = existing.toolInput;
     hydrated.content = existing.content;
@@ -3995,7 +4126,11 @@ function normalizeAgentTaskUpdate(
     ...(typeof raw.workflowName === 'string' && raw.workflowName
       ? { workflowName: raw.workflowName }
       : {}),
-    ...(typeof raw.model === 'string' && raw.model ? { model: raw.model } : {}),
+    ...(raw.model === null
+      ? { model: null }
+      : typeof raw.model === 'string' && raw.model
+        ? { model: raw.model }
+        : {}),
     ...(typeof raw.reasoningEffort === 'string' && raw.reasoningEffort
       ? { reasoningEffort: raw.reasoningEffort }
       : {}),
@@ -4029,6 +4164,7 @@ function mergeAgentTaskUpdate(
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
+    model: next.model === null ? null : next.model ?? prev.model,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
 }
@@ -4164,10 +4300,34 @@ export function handleStreamEvent(
   inputState: SessionChatState,
   event: CCAgentStreamEvent,
 ): SessionChatState {
-  const state =
-    event.type === 'error' || inputState.recoverableError == null
+  const reconnectAttempt =
+    event.type === 'error'
+      ? parseReconnectAttemptMessage(
+          typeof (event.data as { message?: unknown } | null | undefined)?.message === 'string'
+            ? (event.data as { message: string }).message
+            : '',
+        )
+      : null;
+  const isCodexReconnectProgress =
+    event.type === 'error' &&
+    event.source === 'codex' &&
+    !isTerminalErrorData(event.data) &&
+    reconnectAttempt !== null &&
+    !isCodexUserActionableRetryError(event.data);
+  const hasCodexReconnectRecoveryOutput = isCodexReconnectRecoveryOutput(event);
+  const shouldClearCodexReconnectPendingCard =
+    event.type === 'error' ? !isCodexReconnectProgress : hasCodexReconnectRecoveryOutput;
+  const stateBeforeReconnectCleanup =
+    !hasCodexReconnectRecoveryOutput || inputState.recoverableError == null
       ? inputState
       : { ...inputState, recoverableError: null };
+  const messagesAfterReconnectCleanup = shouldClearCodexReconnectPendingCard
+    ? removeCodexReconnectPendingCard(stateBeforeReconnectCleanup.messages)
+    : stateBeforeReconnectCleanup.messages;
+  const state =
+    messagesAfterReconnectCleanup === stateBeforeReconnectCleanup.messages
+      ? stateBeforeReconnectCleanup
+      : { ...stateBeforeReconnectCleanup, messages: messagesAfterReconnectCleanup };
   // agent-meta: 任何带 agentMeta 的事件都刷新 lastAgentMeta——mid-turn 抢救
   // assistant 累积流时拿这份当 fallback。直接 mutate state 不行，下面各 case
   // 在 return 时把它合并进去；如果 case 没主动处理 lastAgentMeta，由下面统一兜底。
@@ -4492,7 +4652,9 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
-          ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
+          ...(toolName === 'update_plan'
+            ? { planUpdatedAtMs: Date.now(), terminalPlanSnapshot: false }
+            : {}),
         };
         return {
           ...finalized,
@@ -4706,6 +4868,48 @@ export function handleStreamEvent(
                 : decodeRemoteErrorMessage(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
       if (!isTerminalError) {
+        // Codex app-server 的有限重连进度是进行态，不是用户需要处理的错误。
+        // 复用 Cindy 自动接管活动行的视觉通道，固定 clientId 原地更新 N/M；
+        // host 接管成功后 projection 会先撤掉这条原生行并交棒给自己的 pending 行。
+        if (isCodexReconnectProgress) {
+          const hasAutoResumePendingCard = state.messages.some(
+            (message) => message.clientId === AUTO_RESUME_PENDING_CLIENT_ID,
+          );
+          // 终态错误之后跨 channel 到达的迟到 Reconnecting 不能复活运行态。
+          // 正常首个重连事件没有 error/retry token,仍按进行中的 turn 点亮 spinner；
+          // 已有 Cindy 接管卡时则保留当前 running 快照，交给 projection 的权威状态。
+          const terminalized = state.error !== null || state.errorRetryText !== null;
+          if (terminalized && !hasAutoResumePendingCard) {
+            return {
+              ...state,
+              messages: removeCodexReconnectPendingCard(state.messages),
+            };
+          }
+          return {
+            ...state,
+            messages: hasAutoResumePendingCard
+              ? state.messages
+              : upsertCodexReconnectPendingCard(state.messages, {
+                  attempt: reconnectAttempt.attempt,
+                  maxAttempts: reconnectAttempt.maxAttempts,
+                }),
+            error: null,
+            usageLimitRecovery: null,
+            errorReason: null,
+            recoverableError: null,
+            errorRetryText: null,
+            isStreaming: hasAutoResumePendingCard ? state.isStreaming : true,
+            agentStatus: {
+              ...(hasAutoResumePendingCard
+                ? state.agentStatus
+                : {
+                    ...state.agentStatus,
+                    isRunning: true,
+                    startedAt: state.agentStatus.startedAt ?? Date.now(),
+                  }),
+            },
+          };
+        }
         return {
           ...state,
           error: null,
@@ -4727,6 +4931,10 @@ export function handleStreamEvent(
       }
       const finalized = finalizeStreamingInState(state);
       const derivedRetryText = deriveErrorRetryText(finalized);
+      const suppressAutoResumeBroadcastError =
+        event.source === 'codex' &&
+        !isCodexUserActionableRetryError(event.data) &&
+        hasMatchingAutoResumePendingError(finalized.messages, event.data);
       // main coordinator 在终止型 error 时**先**同步 emit projection(errorRetryText
       // = projectionRetryText 的权威 retry token,active-turn 恢复恒非空)再 broadcast
       // 本事件,所以此刻 finalized.errorRetryText 可能已经持有 main 的 token。本地推导
@@ -4745,11 +4953,21 @@ export function handleStreamEvent(
         reason === 'remote_daemon_closed' && isSessionUpgrading(event.sessionId);
       return {
         ...finalized,
-        error: isPlannedUpgradeClose ? null : errMsg,
-        usageLimitRecovery: isPlannedUpgradeClose
-          ? null
-          : extractUsageLimitRecoveryHint(event.data),
-        errorReason: isPlannedUpgradeClose ? null : (reason ?? null),
+        messages: suppressAutoResumeBroadcastError
+          ? finalized.messages
+          : finalized.messages.filter(
+              (message) => message.clientId !== AUTO_RESUME_PENDING_CLIENT_ID,
+            ),
+        // coordinator 已经先发 autoResumePending projection 时，终态 maker:event
+        // 只是同一次失败的广播回声，不能把接管态重新点成红色横幅。若接管失败，
+        // projection 会先撤掉 pending 行并带 error 到达，此处仍正常落红。
+        error: isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : errMsg,
+        usageLimitRecovery:
+          isPlannedUpgradeClose || suppressAutoResumeBroadcastError
+            ? null
+            : extractUsageLimitRecoveryHint(event.data),
+        errorReason:
+          isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
         recoverableError: null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
         isStreaming: false,
@@ -5146,6 +5364,11 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     state.steeringQueueClientIds.length === 0 &&
     state.continuationTurnClientId === null &&
     !state.pendingTaskWake &&
+    !state.messages.some(
+      (message) =>
+        message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID ||
+        message.clientId === AUTO_RESUME_PENDING_CLIENT_ID,
+    ) &&
     stoppedTasks === state.taskUpdates
   ) {
     return state;
@@ -5156,8 +5379,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
   // as NO_ACTIVE_TURN, the missing marker tells the catch path not to fallback
   // into a fresh normal turn.
   const steeringIds = new Set(finalized.steeringQueueClientIds);
-  const cleared = finalized.messages
-    .map((m) => {
+  const cleared = removeResumePendingCards(
+    finalized.messages.map((m) => {
       let next = m;
       if (m.isStreaming) next = { ...next, isStreaming: false };
       if (m.role === 'ask_user' && m.askUserStatus === 'pending') {
@@ -5167,8 +5390,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
         next = { ...next, planReviewStatus: 'expired' as const };
       }
       return next;
-    })
-    .filter((m) => !steeringIds.has(m.clientId));
+    }),
+  ).filter((m) => !steeringIds.has(m.clientId));
   return {
     ...finalized,
     messages: cleared,
@@ -5360,11 +5583,7 @@ function isCurrentLiveIngress(context?: LiveIngressContext): boolean {
     return !hasStamp || isDataOwnerPushStampCurrent(context.ownerStamp);
   }
 
-  return isRemoteDataOwnerPushCurrent(
-    context.remoteDeviceId,
-    context.ownerStamp,
-    hasStamp,
-  );
+  return isRemoteDataOwnerPushCurrent(context.remoteDeviceId, context.ownerStamp, hasStamp);
 }
 
 function isCurrentLocalLiveIngress(ownerStamp: unknown): boolean {
@@ -5380,8 +5599,7 @@ function sameLiveIngressScope(a: LiveIngressContext, b: LiveIngressContext): boo
   const bStamp = isDataOwnerPushStamp(b.ownerStamp) ? b.ownerStamp : null;
   if (aStamp === null || bStamp === null) return aStamp === bStamp;
   return (
-    aStamp.dataOwnerId === bStamp.dataOwnerId &&
-    aStamp.ownerGeneration === bStamp.ownerGeneration
+    aStamp.dataOwnerId === bStamp.dataOwnerId && aStamp.ownerGeneration === bStamp.ownerGeneration
   );
 }
 
@@ -5412,11 +5630,9 @@ function bindIpc(
     ipcUnsubscribers.push(() => {});
     return;
   }
-  const result = (
-    subscribe as (
-      cb: (data: unknown, ownerStamp?: unknown) => void,
-    ) => unknown
-  )(handler);
+  const result = (subscribe as (cb: (data: unknown, ownerStamp?: unknown) => void) => unknown)(
+    handler,
+  );
   if (typeof result === 'function') {
     ipcUnsubscribers.push(result as () => void);
   } else {
@@ -5482,10 +5698,7 @@ function flushPendingTextDelta(sessionId: string, deferNotification = false): vo
   pendingTextDeltaBatches.delete(sessionId);
   if (pendingTextDeltaBatches.size === 0) clearTextDeltaFlushTimer();
 
-  if (
-    !isDataOwnerGenerationCurrent(pending.dataOwner) ||
-    !isCurrentLiveIngress(pending.ingress)
-  ) {
+  if (!isDataOwnerGenerationCurrent(pending.dataOwner) || !isCurrentLiveIngress(pending.ingress)) {
     return;
   }
 
@@ -6110,10 +6323,7 @@ function initGlobalListeners(): void {
   );
 
   // ── Maker interaction request: permission/ask/plan 三合一,按 kind 分发 ──
-  const handleInteractionRequestRaw = (
-    raw: unknown,
-    ingress: LiveIngressContext = {},
-  ) => {
+  const handleInteractionRequestRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
     if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as {
       sessionId?: string;
@@ -6280,10 +6490,7 @@ function initGlobalListeners(): void {
     }
   };
 
-  const handleLiveInteractionRequestRaw = (
-    raw: unknown,
-    ingress: LiveIngressContext = {},
-  ) => {
+  const handleLiveInteractionRequestRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
     if (!isCurrentLiveIngress(ingress)) return;
     const sessionId = (raw as { sessionId?: unknown } | null)?.sessionId;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
@@ -6305,10 +6512,7 @@ function initGlobalListeners(): void {
   applyInteractionRequestRef = handleInteractionRequestRaw;
 
   // ── Maker interaction dismissed: setPermissionMode 切换 / close 时关掉对话框 ──
-  const handleInteractionDismissedRaw = (
-    raw: unknown,
-    ingress: LiveIngressContext = {},
-  ) => {
+  const handleInteractionDismissedRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
     if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as { sessionId?: string; requestId?: string; reason?: string } | null;
     if (!payload?.sessionId || !payload.requestId) return;
@@ -6336,10 +6540,7 @@ function initGlobalListeners(): void {
       handleStreamEvent(s, { sessionId, type: 'permission_dismissed', data }),
     );
   };
-  const handleLiveInteractionDismissedRaw = (
-    raw: unknown,
-    ingress: LiveIngressContext = {},
-  ) => {
+  const handleLiveInteractionDismissedRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
     if (!isCurrentLiveIngress(ingress)) return;
     const sessionId = (raw as { sessionId?: unknown } | null)?.sessionId;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
@@ -6359,10 +6560,7 @@ function initGlobalListeners(): void {
 
   // Main 端写库的消息推送(接管路径 persistUserMessage / persistAssistantMessage),也复用给
   // device-link 远程会话(被控端 messages:created 经 onRemotePush 转发,注入同一套 in-memory state)。
-  function handleMessageCreatedRaw(
-    raw: unknown,
-    ingress: LiveIngressContext = {},
-  ): void {
+  function handleMessageCreatedRaw(raw: unknown, ingress: LiveIngressContext = {}): void {
     if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as { sessionId?: string; message?: Message } | null;
     if (!payload?.sessionId || !payload.message) return;
@@ -6429,10 +6627,7 @@ function initGlobalListeners(): void {
 
   // 消息本地删除推送:本机多窗口与 device-link 控制端共用同一 reducer。
   // 新 payload 一次带齐整轮 clientIds；旧 host 仍回退到单个 clientId。
-  function handleMessageDeletedRaw(
-    raw: unknown,
-    ingress: LiveIngressContext = {},
-  ): void {
+  function handleMessageDeletedRaw(raw: unknown, ingress: LiveIngressContext = {}): void {
     if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as {
       sessionId?: string;
@@ -6450,10 +6645,7 @@ function initGlobalListeners(): void {
     removeMessagesByClientIds(payload.sessionId, clientIds);
   }
 
-  function handleUsageMessageTurnCostRaw(
-    raw: unknown,
-    ingress: LiveIngressContext = {},
-  ): void {
+  function handleUsageMessageTurnCostRaw(raw: unknown, ingress: LiveIngressContext = {}): void {
     if (!isCurrentLiveIngress(ingress)) return;
     const p = raw as {
       sessionId?: string;
@@ -8712,7 +8904,14 @@ function ensureInitialMessages(sessionId: string): void {
   // device-link 远程 session 经隧道读被控端 row(本地 DB 没有,直接 get 会 404)。
   getSessionFor(sessionId)
     .then((session) => {
-      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+      if (
+        !isCurrentHistoryFetch(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        )
+      ) {
         // The history list owns the shared in-flight guard and will settle the
         // invalidated generation. Do not release it while that request is still
         // pending, otherwise a caller could start a second initial fetch beside it.
@@ -8768,7 +8967,14 @@ function ensureInitialMessages(sessionId: string): void {
       });
     })
     .catch((err) => {
-      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+      if (
+        !isCurrentHistoryFetch(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        )
+      ) {
         // See the resolve branch above: let listMessagesFor settle the shared
         // initial-fetch guard and decide whether the current generation retries.
         return;
@@ -8783,7 +8989,14 @@ function ensureInitialMessages(sessionId: string): void {
 
   listMessagesFor(sessionId)
     .then(async (existing) => {
-      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+      if (
+        !isCurrentHistoryFetch(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        )
+      ) {
         retryInvalidatedInitialHistoryFetchIfNeeded(
           sessionId,
           historyFetchToken,
@@ -8793,7 +9006,14 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
       if (existing.length === 0) {
-        if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+        if (
+          !isCurrentHistoryFetch(
+            sessionId,
+            historyFetchToken,
+            historyOriginAtStart,
+            historyEpochAtStart,
+          )
+        ) {
           retryInvalidatedInitialHistoryFetchIfNeeded(
             sessionId,
             historyFetchToken,
@@ -8841,7 +9061,14 @@ function ensureInitialMessages(sessionId: string): void {
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
-        if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+        if (
+          !isCurrentHistoryFetch(
+            sessionId,
+            historyFetchToken,
+            historyOriginAtStart,
+            historyEpochAtStart,
+          )
+        ) {
           retryInvalidatedInitialHistoryFetchIfNeeded(
             sessionId,
             historyFetchToken,
@@ -8936,7 +9163,14 @@ function ensureInitialMessages(sessionId: string): void {
             limit: 50,
             before: oldestRow.id,
           });
-          if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+          if (
+            !isCurrentHistoryFetch(
+              sessionId,
+              historyFetchToken,
+              historyOriginAtStart,
+              historyEpochAtStart,
+            )
+          ) {
             retryInvalidatedInitialHistoryFetchIfNeeded(
               sessionId,
               historyFetchToken,
@@ -8961,7 +9195,14 @@ function ensureInitialMessages(sessionId: string): void {
       // perf/session-switch 探针纯诊断:整段测量走 import.meta.env.DEV,生产
       // 构建里 Vite 把常量折成 false 后 dead-code 消除,零开销。
       const ingestStartMs = import.meta.env.DEV ? performance.now() : 0;
-      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+      if (
+        !isCurrentHistoryFetch(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        )
+      ) {
         retryInvalidatedInitialHistoryFetchIfNeeded(
           sessionId,
           historyFetchToken,
@@ -9028,7 +9269,14 @@ function ensureInitialMessages(sessionId: string): void {
       void reconcilePendingInteractions(sessionId, isCurrentHistoryLoad).catch(() => undefined);
     })
     .catch(() => {
-      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+      if (
+        !isCurrentHistoryFetch(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        )
+      ) {
         retryInvalidatedInitialHistoryFetchIfNeeded(
           sessionId,
           historyFetchToken,
@@ -11624,16 +11872,18 @@ function stopSession(
   setState(sessionId, (s) => {
     const id = s.streamingClientId;
     // F7.6 / FP-3: expire any pending ask_user + plan_review messages on stop
-    const msgs = s.messages.map((m) => {
-      if (id && m.clientId === id) return { ...m, isStreaming: false };
-      if (m.role === 'ask_user' && m.askUserStatus === 'pending') {
-        return { ...m, askUserStatus: 'expired' as const };
-      }
-      if (m.role === 'plan_review' && m.planReviewStatus === 'pending') {
-        return { ...m, planReviewStatus: 'expired' as const };
-      }
-      return m;
-    });
+    const msgs = removeResumePendingCards(
+      s.messages.map((m) => {
+        if (id && m.clientId === id) return { ...m, isStreaming: false };
+        if (m.role === 'ask_user' && m.askUserStatus === 'pending') {
+          return { ...m, askUserStatus: 'expired' as const };
+        }
+        if (m.role === 'plan_review' && m.planReviewStatus === 'pending') {
+          return { ...m, planReviewStatus: 'expired' as const };
+        }
+        return m;
+      }),
+    );
 
     return {
       ...s,
@@ -11960,8 +12210,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
     return {
       ...s,
       messages: s.messages.filter(
-        (message) =>
-          message.isPendingPersist && postClearOptimisticClientIds.has(message.clientId),
+        (message) => message.isPendingPersist && postClearOptimisticClientIds.has(message.clientId),
       ),
       taskUpdates: new Map(),
       pendingTaskWake: false,
@@ -13914,6 +14163,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
+          ? { terminalPlanSnapshot: true }
+          : {}),
+        ...(toolName === 'update_plan' && c.turnCompleted === false
+          ? { turnCompleted: false }
+          : {}),
         isStreaming: false,
         // subagent-model-chip: 从持久化 agentMeta 复原 model / parentUuid,
         // 让历史重载后 Agent/Task 行也能显示子代理模型 chip(透传点 B)。
@@ -14242,6 +14497,16 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
           }
         : {};
+    // 新数据的显式 turn seal 权威高于旧历史兜底：失败/中断轮也可能带 usage 或费用，
+    // `false` 不能因此被重新推成成功。只有 seal 缺失的存量行才用收尾费用/明细补 true。
+    const persistedTurnCompleted =
+      m.role !== 'assistant'
+        ? undefined
+        : typeof agentMeta?.turnCompleted === 'boolean'
+          ? agentMeta.turnCompleted
+          : (persistedTurnMoney?.amount ?? 0) > 0 || turnUsageDetails !== undefined
+            ? true
+            : undefined;
     return {
       clientId: m.clientId,
       role: m.role,
@@ -14250,16 +14515,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(m.role === 'tool_result' && typeof m.toolUseId === 'string' && m.toolUseId.length > 0
         ? { toolUseId: m.toolUseId }
         : {}),
-      // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
-      // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
-      // turnUsageDetails 同样是 turn 结束才 patch 的字段(无报价轮只落它),因此
-      // 也是等价的收尾信号 —— 少了它,无金额轮重开会话就挂不出 action bar。
-      ...(m.role === 'assistant' &&
-      (agentMeta?.turnCompleted === true ||
-        (persistedTurnMoney?.amount ?? 0) > 0 ||
-        turnUsageDetails !== undefined)
-        ? { turnCompleted: true }
-        : {}),
+      // SDK done turn seal；存量会话 seal 缺失时才用 turn 费用/明细补成功边界。
+      ...(persistedTurnCompleted !== undefined ? { turnCompleted: persistedTurnCompleted } : {}),
       // 本轮 token 明细独立于金额挂载:Pi/新模型算不出报价的轮次只有它，
       // UI 据此退回显示 token，历史加载不能把它绑在 money 分支。
       ...(m.role === 'assistant' && turnUsageDetails ? { turnUsageDetails } : {}),

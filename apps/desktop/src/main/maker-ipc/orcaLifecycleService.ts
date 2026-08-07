@@ -9,6 +9,10 @@ import type {
   OrcaWorkerCreateParams,
   OrcaWorkerCreationResult,
 } from './orcaWorkerCreationService.js';
+import {
+  resolveOrcaWorkerPermissionMode,
+  type OrcaWorkerPermissionMode,
+} from '../../shared/orca-worker-permission-mode.js';
 
 export const ORCA_WORKER_READY_MESSAGE = '[系统] Orca Worker 已就绪，等待 Lead 分配任务。';
 
@@ -24,11 +28,15 @@ export interface OrcaEnableTeamParams {
   /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
   providerId?: string | null;
   delegateTask?: string;
+  /** 本次首个 Worker 权限；缺省读取 Worker 创建偏好。显式值同时更新后续默认。 */
+  workerPermissionMode?: OrcaWorkerPermissionMode;
 }
 
 /** MCP start_team 只建立 lead team，不创建 worker；worker 后续由 create_worker 添加。 */
 export interface OrcaStartTeamParams {
   leadSessionId: string;
+  /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
+  workerPermissionMode?: OrcaWorkerPermissionMode;
 }
 
 /** lifecycle 内部统一使用 INTERNAL 承载依赖异常，adapter 再决定 IPC/MCP 如何翻译。 */
@@ -43,6 +51,7 @@ export type OrcaStartTeamResult =
   | {
       ok: true;
       teamId: string;
+      workerPermissionMode: OrcaWorkerPermissionMode;
       reused?: boolean;
     }
   | OrcaInternalFailure;
@@ -55,6 +64,7 @@ export type OrcaEnableTeamResult =
       workerSessionId: string;
       workerId: string;
       dispatched: boolean;
+      workerPermissionMode: OrcaWorkerPermissionMode;
       dispatchOutcome?: DispatchWorkerTaskResult['dispatchOutcome'];
     }
   | Extract<OrcaWorkerCreationResult, { ok: false }>
@@ -68,6 +78,8 @@ export type OrcaEnableTeamResult =
 export interface OrcaLifecycleDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   createActiveTeam(leadSessionId: string): Promise<OrcaTeamSnapshot>;
+  getWorkerPermissionMode(): OrcaWorkerPermissionMode;
+  setWorkerPermissionMode(workerPermissionMode: OrcaWorkerPermissionMode): void;
   createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult>;
   dispatchWorkerTask(params: {
     targetSessionId: string;
@@ -157,6 +169,15 @@ function hasNonEmptyInitialTask(value: string | undefined): value is string {
 export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecycleService {
   const dispatchSource = 'maker-ipc/collab';
 
+  function workerPermissionModeForCreate(
+    explicitMode: OrcaWorkerPermissionMode | undefined,
+  ): OrcaWorkerPermissionMode {
+    if (explicitMode === undefined) return deps.getWorkerPermissionMode();
+    const resolved = resolveOrcaWorkerPermissionMode(explicitMode);
+    deps.setWorkerPermissionMode(resolved);
+    return resolved;
+  }
+
   async function dispatchInitialTask(params: {
     workerSessionId: string;
     message: string | undefined;
@@ -193,7 +214,12 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
     }
     const initialTask = hasNonEmptyInitialTask(params.initialTask) ? params.initialTask : undefined;
-    const created = await deps.createWorkerInTeam({ ...params, teamId: team.id });
+    const workerPermissionMode = workerPermissionModeForCreate(params.workerPermissionMode);
+    const created = await deps.createWorkerInTeam({
+      ...params,
+      teamId: team.id,
+      workerPermissionMode,
+    });
     if (!created.ok) return created;
 
     const dispatchResult = initialTask
@@ -275,6 +301,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   }
 
   async function startTeam(params: OrcaStartTeamParams): Promise<OrcaStartTeamResult> {
+    const workerPermissionMode = workerPermissionModeForCreate(params.workerPermissionMode);
     const existing = await deps.getActiveTeamByLead(params.leadSessionId);
     if (existing) {
       try {
@@ -282,7 +309,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       } catch (err) {
         return internalFailure(err);
       }
-      return { ok: true, teamId: existing.id, reused: true };
+      return { ok: true, teamId: existing.id, workerPermissionMode, reused: true };
     }
 
     const team = await deps.createActiveTeam(params.leadSessionId);
@@ -291,10 +318,11 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     } catch (err) {
       return failCreatedTeamOnly({ teamId: team.id, leadSessionId: params.leadSessionId, err });
     }
-    return { ok: true, teamId: team.id };
+    return { ok: true, teamId: team.id, workerPermissionMode };
   }
 
   async function enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult> {
+    const workerPermissionMode = workerPermissionModeForCreate(params.workerPermissionMode);
     const normalized = normalizeEnableParams(params);
     const validationFailure = validateEnableParams(normalized);
     if (validationFailure) return validationFailure;
@@ -309,7 +337,11 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     }
 
     const team = await deps.createActiveTeam(params.leadSessionId);
-    const created = await deps.createWorkerInTeam({ ...normalized, teamId: team.id });
+    const created = await deps.createWorkerInTeam({
+      ...normalized,
+      teamId: team.id,
+      workerPermissionMode,
+    });
     if (!created.ok) {
       return failCreatedTeam({
         teamId: team.id,
@@ -375,6 +407,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       workerSessionId: created.workerSessionId,
       workerId: created.workerId,
       dispatched: dispatchResult?.dispatched ?? false,
+      workerPermissionMode,
       ...(dispatchResult ? { dispatchOutcome: dispatchResult.dispatchOutcome } : {}),
     };
   }

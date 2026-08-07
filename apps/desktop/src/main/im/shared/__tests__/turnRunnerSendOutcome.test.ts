@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
   persistUserMessage: vi.fn(),
   persistAssistantMessage: vi.fn(),
   wireSessionToIpcExternal: vi.fn(),
+  beginTurnChangeSetAtDispatch: vi.fn(async () => undefined),
+  clearPendingTurnChangeSets: vi.fn(),
   noteSilentStopUserSend: vi.fn(),
   noteSilentStopSessionReset: vi.fn(),
   onSilentStopSettled: vi.fn(() => vi.fn()),
@@ -122,12 +124,17 @@ vi.mock('../../binding', () => ({
 }));
 
 vi.mock('../../../maker-ipc/register', () => ({
+  beginTurnChangeSetAtDispatch: mocks.beginTurnChangeSetAtDispatch,
   wireSessionToIpcExternal: mocks.wireSessionToIpcExternal,
   installDesktopInteractionListener: mocks.installDesktopInteractionListener,
   takePendingInteractionsForSession: mocks.takePendingInteractionsForSession,
   noteSilentStopUserSend: mocks.noteSilentStopUserSend,
   noteSilentStopSessionReset: mocks.noteSilentStopSessionReset,
   onSilentStopSettled: mocks.onSilentStopSettled,
+}));
+
+vi.mock('../../../turn-change-set/store', () => ({
+  clearPendingTurnChangeSets: mocks.clearPendingTurnChangeSets,
 }));
 
 vi.mock('../pendingInteractions', () => ({
@@ -544,6 +551,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       'ou_user',
       expect.stringContaining('错误'),
       expect.anything(),
+    );
+  });
+
+  it('anchors direct IM capture to the durable accepted user message', async () => {
+    mocks.persistUserMessage.mockResolvedValue({ clientId: 'im-anchor-client' });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+
+    expect(mocks.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      h.session,
+      'im-anchor-client',
     );
   });
 

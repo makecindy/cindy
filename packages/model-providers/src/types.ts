@@ -350,6 +350,17 @@ export interface CatalogModel {
    */
   defaultEnabled?: boolean;
   /**
+   * 该模型是哪些 agent 的**新对话默认种子**（cold-start seed），与 `sortOrder`（只管选择器
+   * 陈列顺序）和 `defaultEnabled`（只管可见性）独立。桌面运行时只从**区域门控后的**
+   * model-access `/models` v2 响应写入本字段；公共 Registry 的同名策略字段由 server 消费，
+   * `modelPlanePolicy` 刻意不把它投影进 CatalogModel，避免 Global 绕过区域门。
+   *
+   * 渲染层优先取被标记、当前可用且默认可见的模型；无标记时回退 `sortOrder` 第一。取值仅
+   * wire agent（'claude-code' | 'codex'）；pi 按 'claude-code' 口径投影。缺省 = 不作为默认。
+   * 故意**不纳入** `modelSignature` 跨供应商一致性校验：同一 id 在不同供应商下可各自表态。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
+  /**
    * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
    * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与
    * `modelSignature` 的同 id 跨供应商一致性校验。

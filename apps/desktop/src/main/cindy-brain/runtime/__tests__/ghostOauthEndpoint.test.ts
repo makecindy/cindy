@@ -274,7 +274,7 @@ describe('POST /oauth/<key>/connect · scopes body(降面授权)', () => {
 });
 
 describe('POST /oauth/<key>/insufficient-scopes', () => {
-  const DECLARED_SCOPES = Array.from({ length: 64 }, (_, index) => `scope.${index}`);
+  const DECLARED_SCOPES = Array.from({ length: 320 }, (_, index) => `scope.${index}`);
   const SCOPED: GhostOauthDecl = {
     authorizeUrl: 'https://accounts.example.com/authorize',
     tokenUrl: 'https://accounts.example.com/token',
@@ -325,7 +325,7 @@ describe('POST /oauth/<key>/insufficient-scopes', () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
-  it('64 条边界放行；65 条拒绝', async () => {
+  it('320 条边界放行；321 条拒绝', async () => {
     const accepted = fakeManager();
     expect((await report(JSON.stringify({ scopes: DECLARED_SCOPES }), accepted)).status).toBe(204);
     expect(accepted.reportInsufficientScopes).toHaveBeenCalledWith(

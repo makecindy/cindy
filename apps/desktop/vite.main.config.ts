@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => {
   // 非 VITE_* 的 main-only 变量（不暴露到 renderer/preload；编译期注入）
   const allEnv = loadEnv(mode, process.cwd(), '');
   const readMainEnv = (key: string): string => allEnv[key] || process.env[key] || '';
+  const readMainEnvPreservingEmpty = (key: string): string =>
+    Object.prototype.hasOwnProperty.call(process.env, key)
+      ? process.env[key] ?? ''
+      : allEnv[key] ?? '';
   return {
     resolve: {
       // 仅 fixtures 生产排除条件(v6.17 允许范围):production 构建把
@@ -45,6 +49,12 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_ENDPOINT_MANIFEST_PEER_BASE_URL': JSON.stringify(
         readViteEnv('VITE_ENDPOINT_MANIFEST_PEER_BASE_URL'),
       ),
+      // 日志上报目标(main-only,不暴露到 renderer)。真值不进仓,由 package-desktop.mjs 经
+      // scripts/shared/log-upload-build-env.mjs 从 config/log-upload.json 读出**本区域那一个**
+      // 目标后注入。dev server / 未注入 ⇒ 空串 ⇒ 运行时判「未配置」、功能整体关闭。
+      // ⚠️ main 侧必须写成完整的 `process.env.XDT_LOG_UPLOAD_TARGET` 才能被本 define 文本替换,
+      // 见 main/log-upload/logUploadTarget.ts 的 injectedRaw()。
+      'process.env.XDT_LOG_UPLOAD_TARGET': JSON.stringify(readMainEnv('XDT_LOG_UPLOAD_TARGET')),
       // Triage bot token (dev only — production 留空，BotTokenStore 走 safeStorage)
       'process.env.TRIAGE_BOT_TOKEN': JSON.stringify(readMainEnv('TRIAGE_BOT_TOKEN')),
       // Filo Google OAuth desktop client（main-only，仓库不保存实际值）。
@@ -53,6 +63,11 @@ export default defineConfig(({ mode }) => {
       ),
       'process.env.XDT_FILO_GOOGLE_CLIENT_SECRET': JSON.stringify(
         readMainEnv('XDT_FILO_GOOGLE_CLIENT_SECRET'),
+      ),
+      // macOS WebAuthn Touch ID 的 Team ID 是公开签名身份，不是凭证。正式打包入口
+      // 只在 Developer ID 签名路径注入；ad-hoc/dev 留空，runtime fail closed。
+      'process.env.CINDY_WEBAUTHN_APPLE_TEAM_ID': JSON.stringify(
+        readMainEnvPreservingEmpty('CINDY_WEBAUTHN_APPLE_TEAM_ID').trim(),
       ),
       'process.env.XDT_VOICE_INPUT_DICTIONARY_TEXT_DEBUG': JSON.stringify(
         readMainEnv('XDT_VOICE_INPUT_DICTIONARY_TEXT_DEBUG'),

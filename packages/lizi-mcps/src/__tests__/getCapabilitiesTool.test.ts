@@ -80,6 +80,15 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('https://cindy.cn');
     expect(entry!.detail).toContain('https://cindy.app');
   });
+
+  it('collab-mode 明确 Pi 可作本地 Lead 和 Worker，且不扩大到 SSH 远程 Pi', () => {
+    const entry = findCapability('collab-mode');
+
+    expect(entry).toBeDefined();
+    expect(entry!.detail).toContain('Claude Code / Codex / Pi 本地项目或对话 session');
+    expect(entry!.detail).toContain('也都可以作为 Worker');
+    expect(entry!.detail).toContain('SSH 远程 Lead 与 Worker 当前只支持 Claude Code / Codex');
+  });
 });
 
 describe('get_capabilities tool', () => {

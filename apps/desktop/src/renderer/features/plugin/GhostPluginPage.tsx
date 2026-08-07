@@ -58,7 +58,11 @@ import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/instal
 import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { useGhostUnread, useGhostUnreadSummary } from '@/cindy-brain/ghostUnreadStore';
+import {
+  useGhostUnread,
+  useGhostUnreadEntries,
+  useGhostUnreadSummary,
+} from '@/cindy-brain/ghostUnreadStore';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import { resolveSystemLocale } from '../../../shared/locale';
@@ -85,8 +89,9 @@ import {
   ghostPanelOwnerKey,
   ghostPrimaryAction,
   marketPresentationForInstalledGhost,
+  installedVisibleCount,
   nextOpenPanelIdForOwner,
-  sortGhostPluginItemsByRecentUse,
+  sortInstalledForDisplay,
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
 import { ignoredRoundStorageKey, isBatchFinished, updateRoundKey } from './lib/updateAllModel';
@@ -153,55 +158,6 @@ function visibleInstalledPluginItems<T>(items: readonly T[]): T[] {
 
 function collapsedInstalledPluginPreviewItems<T>(items: readonly T[]): T[] {
   return items.slice(0, MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS);
-}
-
-function reconcileInstalledPluginOrderSnapshot(
-  snapshot: readonly string[],
-  previousIds: readonly string[],
-  nextIds: readonly string[],
-): string[] {
-  const previousSet = new Set(previousIds);
-  const nextSet = new Set(nextIds);
-  const addedIds = nextIds.filter((id) => !previousSet.has(id));
-  const addedSet = new Set(addedIds);
-  const retainedIds = snapshot.filter((id) => nextSet.has(id) && !addedSet.has(id));
-  const retainedSet = new Set(retainedIds);
-  const untrackedIds = nextIds.filter((id) => !addedSet.has(id) && !retainedSet.has(id));
-  return [...addedIds, ...retainedIds, ...untrackedIds];
-}
-
-function initializeInstalledPluginOrderSnapshot(
-  marketSortedIds: readonly string[],
-  preSnapshotIds: readonly string[],
-  currentIds: readonly string[],
-): string[] {
-  return reconcileInstalledPluginOrderSnapshot(marketSortedIds, preSnapshotIds, currentIds);
-}
-
-function shouldInitializeInstalledPluginOrderSnapshot(
-  hasOrderSnapshot: boolean,
-  orderSnapshotHasAvailableMarket: boolean,
-  marketSnapshot: PluginMarketSnapshot | null,
-): boolean {
-  if (marketSnapshot === null) return false;
-  if (!hasOrderSnapshot) return true;
-  return !orderSnapshotHasAvailableMarket && marketSnapshot.unavailableReason === null;
-}
-
-function surfaceNewlyUpdatableInstalledPlugins(
-  orderSnapshot: readonly string[],
-  previousUpdatableIds: readonly string[],
-  nextUpdatableIds: readonly string[],
-): readonly string[] {
-  const previousUpdatableSet = new Set(previousUpdatableIds);
-  const newlyUpdatableSet = new Set(nextUpdatableIds.filter((id) => !previousUpdatableSet.has(id)));
-  const hiddenNewlyUpdatableIds = orderSnapshot
-    .slice(MAX_VISIBLE_INSTALLED_PLUGINS)
-    .filter((id) => newlyUpdatableSet.has(id));
-  if (hiddenNewlyUpdatableIds.length === 0) return orderSnapshot;
-
-  const promotedSet = new Set(hiddenNewlyUpdatableIds);
-  return [...hiddenNewlyUpdatableIds, ...orderSnapshot.filter((id) => !promotedSet.has(id))];
 }
 
 type InstalledPluginPreviewItem = Pick<PresentedGhostPluginItem, 'id' | 'name' | 'iconDataUrl'>;
@@ -298,10 +254,6 @@ export const __installedPluginLayoutForTests = {
   MAX_VISIBLE_INSTALLED_PLUGINS,
   MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS,
   visibleInstalledPluginItems,
-  initializeInstalledPluginOrderSnapshot,
-  reconcileInstalledPluginOrderSnapshot,
-  shouldInitializeInstalledPluginOrderSnapshot,
-  surfaceNewlyUpdatableInstalledPlugins,
   InstalledPluginOverflow,
   InstalledPluginDisclosure,
 };
@@ -343,18 +295,11 @@ export function GhostPluginPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [installedExpanded, setInstalledExpanded] = useState(false);
-  const [orderSnapshot, setOrderSnapshot] = useState<string[] | null>(null);
-  const preOrderSnapshotInstalledGhostIdsRef = useRef(installedGhostIds);
   const installedOverflowId = useId();
   const [marketSnapshot, setMarketSnapshot] = useState<PluginMarketSnapshot | null>(null);
   const [openPanelId, setOpenPanelId] = useState<string | null>(null);
-  // 数据归属键:面板宿主与排序快照都按它失效(定义要早于两处消费点)。
+  // 数据归属键:面板宿主按它失效(定义要早于消费点)。
   const panelOwnerKey = ghostPanelOwnerKey(mode, dataOwnerId);
-  const orderSnapshotStatusRef = useRef<{
-    ownerKey: string | null;
-    hasAvailableMarket: boolean;
-    updatableIds: string[];
-  }>({ ownerKey: panelOwnerKey, hasAvailableMarket: false, updatableIds: [] });
   const ignoredRoundKey = ignoredRoundStorageKey(mode, dataOwnerId);
   const [ignoredRound, setIgnoredRound] = useState(() => readIgnoredRound(ignoredRoundKey));
   // 账号 / 本地云模式切换:换桶重读,不把上一个身份的「忽略本轮」带进来。
@@ -388,7 +333,6 @@ export function GhostPluginPage() {
   const lastMarketRefreshAtRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
   const installedGhostIdsKeyRef = useRef(installedGhostIdsKey);
-  const installedGhostIdsRef = useRef(installedGhostIds);
   const legacyRecoveryStatusRequestRef = useRef(0);
   const legacyRecoveryRetryRequestRef = useRef(0);
   const [legacyRecoveryStatus, setLegacyRecoveryStatus] =
@@ -435,22 +379,10 @@ export function GhostPluginPage() {
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
   useEffect(() => {
     if (installedGhostIdsKeyRef.current === installedGhostIdsKey) return;
-    const previousInstalledGhostIds = installedGhostIdsRef.current;
     installedGhostIdsKeyRef.current = installedGhostIdsKey;
-    installedGhostIdsRef.current = installedGhostIds;
-    setOrderSnapshot((snapshot) =>
-      snapshot === null
-        ? null
-        : reconcileInstalledPluginOrderSnapshot(
-            snapshot,
-            previousInstalledGhostIds,
-            installedGhostIds,
-          ),
-    );
-    // refreshMarket(true) reports an unavailable market by rejecting after preserving
-    // the current snapshot; the state update already happened in refreshMarket.
+    // 已装集合变化(装/卸)时刷新市场;排序是反应式的,没有快照需要维护。
     void refreshMarket(true).catch(() => undefined);
-  }, [installedGhostIds, installedGhostIdsKey, refreshMarket]);
+  }, [installedGhostIdsKey, refreshMarket]);
   const activeSessionWorkingDir = useSyncExternalStore(
     subscribeToLastWorkingDir,
     getLastWorkingDir,
@@ -666,120 +598,47 @@ export function GhostPluginPage() {
     return counts;
   }, [searchedAvailableMarketItems]);
 
-  // ── 排序快照:首个市场结果先定序;若它不可用,首次恢复时再升级一次 ──
-  // 可更新的排最前,其余按最近使用。有效快照建立后保持稳定;只有刷新中新出现
-  // 且原本藏在折叠区的更新会临时移入前 8,避免更新提示不可见。
-  // 换账号/模式要丢弃旧顺序:两个 owner 的已装集合、可更新集合与最近使用
-  // 都不同,沿用账号 A 的 id 顺序会把 B 的非更新项排到更新项前面,违背
-  // 「可更新优先」。清空后由下面的 effect 基于**新 owner 的首个市场快照**重排。
-  const orderOwnerKeyRef = useRef(panelOwnerKey);
+  // ── 已安装区排序:未读通知(新→旧) → 最近使用 → 基础序,实时计算 ──
+  // 反应式而非冻结快照:排序信号变化即重排。安全边界——`markUsed` 只在对话里
+  // 触发(ChatInput),插件页自身不打点,所以「最近使用」的变化只发生在离开本页
+  // 之后,回到页面即已重排,不会在用户眼皮下洗牌;后台到达的未读通知冒头则正是
+  // 目的所在。切账号/模式时 recentGhostIds 与未读表都会随 owner 快照整体作废。
+  // marketUpdate 刻意不作排序键——更新已有统一横幅兜底,可被折叠。
+  const unreadEntries = useGhostUnreadEntries();
+  const unreadAtById = useMemo(
+    () => new Map(unreadEntries.map((entry) => [entry.ghostId, entry.at])),
+    [unreadEntries],
+  );
+  // 切账号/模式收起折叠区:换 owner 的已装集合不同,上一个身份的展开态不带过去。
+  const collapseOwnerKeyRef = useRef(panelOwnerKey);
   useEffect(() => {
-    if (orderOwnerKeyRef.current === panelOwnerKey) return;
-    orderOwnerKeyRef.current = panelOwnerKey;
-    orderSnapshotStatusRef.current = {
-      ownerKey: null,
-      hasAvailableMarket: false,
-      updatableIds: [],
-    };
-    preOrderSnapshotInstalledGhostIdsRef.current = installedGhostIds;
-    setOrderSnapshot(null);
+    if (collapseOwnerKeyRef.current === panelOwnerKey) return;
+    collapseOwnerKeyRef.current = panelOwnerKey;
     setInstalledExpanded(false);
-  }, [installedGhostIds, panelOwnerKey]);
-  useEffect(() => {
-    const orderSnapshotStatus = orderSnapshotStatusRef.current;
-    if (orderSnapshot !== null && orderSnapshotStatus.ownerKey !== panelOwnerKey) return;
-    if (marketSnapshot === null) return;
-    const updatableIds = installedItems
-      .filter((item) => item.marketUpdate !== null)
-      .map((item) => item.id);
-    const marketAvailable = marketSnapshot.unavailableReason === null;
-    const shouldInitializeOrder = shouldInitializeInstalledPluginOrderSnapshot(
-      orderSnapshot !== null,
-      orderSnapshotStatus.hasAvailableMarket,
-      marketSnapshot,
-    );
-    if (!shouldInitializeOrder) {
-      if (orderSnapshot === null || !marketAvailable || !orderSnapshotStatus.hasAvailableMarket) {
-        return;
-      }
-      orderSnapshotStatusRef.current = {
-        ownerKey: panelOwnerKey,
-        hasAvailableMarket: true,
-        updatableIds,
-      };
-      setOrderSnapshot((currentOrderSnapshot) => {
-        if (currentOrderSnapshot === null) return currentOrderSnapshot;
-        const nextOrderSnapshot = surfaceNewlyUpdatableInstalledPlugins(
-          currentOrderSnapshot,
-          orderSnapshotStatus.updatableIds,
-          updatableIds,
-        );
-        return nextOrderSnapshot === currentOrderSnapshot
-          ? currentOrderSnapshot
-          : [...nextOrderSnapshot];
-      });
-      return;
-    }
-    const updatable = new Set(updatableIds);
-    const byRecentUse = sortGhostPluginItemsByRecentUse(installedItems, recentGhostIds);
-    const ids = byRecentUse
-      .map((item, stableIndex) => ({ item, stableIndex }))
-      .sort((a, b) => {
-        const aUp = updatable.has(a.item.id) ? 0 : 1;
-        const bUp = updatable.has(b.item.id) ? 0 : 1;
-        if (aUp !== bUp) return aUp - bUp;
-        return a.stableIndex - b.stableIndex;
-      })
-      .map(({ item }) => item.id);
-    orderSnapshotStatusRef.current = {
-      ownerKey: panelOwnerKey,
-      hasAvailableMarket: marketAvailable,
-      updatableIds: marketAvailable ? updatableIds : [],
-    };
-    setOrderSnapshot(
-      initializeInstalledPluginOrderSnapshot(
-        ids,
-        preOrderSnapshotInstalledGhostIdsRef.current,
-        installedGhostIds,
-      ),
-    );
-  }, [
-    orderSnapshot,
-    marketSnapshot,
-    installedGhostIds,
-    installedItems,
-    panelOwnerKey,
-    recentGhostIds,
-  ]);
-  const displayInstalledItems = useMemo(() => {
-    if (orderSnapshot === null) return searchedInstalledItems;
-    const orderIndex = new Map(orderSnapshot.map((id, index) => [id, index]));
-    return searchedInstalledItems
-      .map((item, stableIndex) => ({ item, stableIndex }))
-      .sort((a, b) => {
-        const aIndex = orderIndex.get(a.item.id);
-        const bIndex = orderIndex.get(b.item.id);
-        if (aIndex !== undefined && bIndex !== undefined && aIndex !== bIndex) {
-          return aIndex - bIndex;
-        }
-        if (aIndex !== undefined && bIndex === undefined) return -1;
-        if (aIndex === undefined && bIndex !== undefined) return 1;
-        return a.stableIndex - b.stableIndex;
-      })
-      .map(({ item }) => item);
-  }, [orderSnapshot, searchedInstalledItems]);
+  }, [panelOwnerKey]);
+  const displayInstalledItems = useMemo(
+    () =>
+      sortInstalledForDisplay(searchedInstalledItems, {
+        recentIds: recentGhostIds,
+        unreadAtById,
+      }),
+    [searchedInstalledItems, recentGhostIds, unreadAtById],
+  );
+  // 未读通知永不折叠:可见窗口至少 MAX_VISIBLE_INSTALLED_PLUGINS 个,并容纳全部
+  // 未读——未读已排在最前,按未读数量扩窗即可保证它们都落在可见区(更新可被折叠)。
+  const visibleInstalledCount = useMemo(
+    () => installedVisibleCount(displayInstalledItems, unreadAtById, MAX_VISIBLE_INSTALLED_PLUGINS),
+    [displayInstalledItems, unreadAtById],
+  );
   const primaryInstalledItems = useMemo(
-    () => visibleInstalledPluginItems(displayInstalledItems),
-    [displayInstalledItems],
+    () => displayInstalledItems.slice(0, visibleInstalledCount),
+    [displayInstalledItems, visibleInstalledCount],
   );
   const additionalInstalledItems = useMemo(
-    () => displayInstalledItems.slice(MAX_VISIBLE_INSTALLED_PLUGINS),
-    [displayInstalledItems],
+    () => displayInstalledItems.slice(visibleInstalledCount),
+    [displayInstalledItems, visibleInstalledCount],
   );
-  const hiddenInstalledCount = Math.max(
-    0,
-    displayInstalledItems.length - MAX_VISIBLE_INSTALLED_PLUGINS,
-  );
+  const hiddenInstalledCount = Math.max(0, displayInstalledItems.length - visibleInstalledCount);
 
   // ── 更新横幅与批量更新(设计定稿:全部更新;扩权单独确认,绝不静默放行)──
   const updatableInstalledItems = useMemo(
@@ -910,56 +769,23 @@ export function GhostPluginPage() {
     [t],
   );
 
-  /**
-   * 市场详情与真实下载包权限不一致时，展示 Main 验证后的真实权限并绑定重试。
-   * Renderer 只负责确认；包 SHA 和已装权限基线均由 Main 重新核对。
-   */
+  /** 真实包的追加确认由窗口级 Host 在这一次 install IPC 事务内完成。 */
   const installReviewedMarketPackage = useCallback(
     async (input: {
       detail: PluginMarketDetail;
       lease: { pluginId: string };
       options: PluginMarketInstallOptions;
     }): Promise<InstalledGhost | null> => {
-      const initial = await window.electronAPI.pluginMarket.install(
+      const result = await window.electronAPI.pluginMarket.install(
         input.detail.pluginId,
         input.options,
       );
-      if (initial.ghost !== undefined) return initial.ghost;
-      if (!isMarketBusyLeaseActive(input.lease)) return null;
-
-      const review = initial.reviewRequired;
-      if (!review) return null;
-      const approved = await confirm({
-        title: t('settings.ghosts.market.installConfirmTitle', {
-          name: input.detail.name,
-        }),
-        description: t('settings.ghosts.market.installConfirmDescription'),
-        content: <GhostPermissionList items={ghostPermissionItems(review.manifest)} />,
-        maxWidth: 520,
-        confirmText: t('settings.ghosts.market.install'),
-        cancelText: t('settings.ghosts.installConfirm.cancel'),
-        autoFocusConfirm: true,
-      });
-      if (!approved || !isMarketBusyLeaseActive(input.lease)) return null;
-
-      const retried = await window.electronAPI.pluginMarket.install(input.detail.pluginId, {
-        ...input.options,
-        allowPermissionExpansion: review.installedBaseline !== null,
-        reviewedBaseline: review.installedBaseline ?? undefined,
-        approvedPackageSha256: review.packageSha256,
-      });
-      if (retried.ghost !== undefined) return retried.ghost;
-
-      // 同一 release 的真实包不应漂移；再次要求复核说明已装基线在往返窗口内变化。
-      toast.error(t('settings.ghosts.market.errors.stateChanged'));
-      await refreshMarket();
-      return null;
+      return result.ghost ?? null;
     },
-    [confirm, isMarketBusyLeaseActive, refreshMarket, t],
+    [],
   );
 
-  // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
-  // 权限 diff,经用户确认后才安装,不做静默升级。
+  // 所有来源先展示详情清单；官方包下载后仍以真实包清单兜底发现额外权限。
   const handleMarketUpdate = useCallback(
     async (ghostId: string) => {
       const marketItem = marketByGhostId.get(ghostId);
@@ -987,19 +813,18 @@ export function GhostPluginPage() {
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
         if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        const options: PluginMarketInstallOptions = {
+          expectedReleaseId: next.releaseId,
+          expectedManifest: next.manifest,
+          allowPermissionExpansion: diff.added.length > 0,
+          ...(installedGhost
+            ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+            : {}),
+        };
         const ghost = await installReviewedMarketPackage({
           detail: next,
           lease: marketBusyLease,
-          options: {
-            expectedReleaseId: next.releaseId,
-            ...(next.sourceType !== 'server' ? { expectedManifest: next.manifest } : {}),
-            allowPermissionExpansion: diff.added.length > 0,
-            // 用户看确认框这段时间里已装 manifest 可能被换掉(如从文件更新);
-            // 把审阅基线交给 Main,在安装锁内复核后才放行扩权。
-            ...(installedGhost
-              ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-              : {}),
-          },
+          options,
         });
         if (!ghost) return;
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
@@ -1305,40 +1130,23 @@ export function GhostPluginPage() {
       // 详情页按钮在 update-available 态复用本入口,后端走原位更新并保留
       // 生效状态 —— 文案必须分支,不能对更新路径承诺"装完即开"(review P1)。
       const isUpdate = marketDetail.installState === 'update-available';
-      // 装完即开意味着"确认安装"就是运行授权,确认框里必须如实展示权限清单
-      // (与本地装入确认框同一信息量,review P1):首装展示完整清单,更新展示
-      // 与已装版本的权限 diff,并据此决定 allowPermissionExpansion(否则扩权
-      // 更新从本入口必被 main 的 PRECONDITION_FAILED 拦下)。更新详情来自 Main
-      // 的现查事实,renderer 的 ghosts 推送缓存可能短暂滞后;仅在 update 态且缓存
-      // 缺目标时,用既有 listSync 向 Main 现查一次。仍缺失说明状态已经变化,
-      // 让后端按原有校验拒绝,绝不能拿新清单和自己做 diff 吞掉新增权限。
-      let installedGhost =
-        ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
-      if (isUpdate && !installedGhost) {
-        try {
+      try {
+        let installedGhost =
+          ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+        if (isUpdate && !installedGhost) {
           installedGhost =
             window.electronAPI.ghosts
               .listSync()
               .ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
-        } catch {
-          // bridge 不可用/状态切换时保持 null;下面不展示伪造的空 diff,
-          // 安装调用也不放开 permission expansion,Main 会按真实状态 fail closed。
         }
-      }
-      if (isUpdate && !installedGhost) {
-        // detail 仍说可更新、Main 的实时已装清单却没有目标:这是明确的状态
-        // 变化,不要展示伪造的空 diff 后让用户确认一次必失败的更新。
-        if (isMarketBusyLeaseActive(marketBusyLease)) {
+        if (isUpdate && !installedGhost) {
           toast.error(t('settings.ghosts.market.errors.stateChanged'));
+          await refreshMarket();
+          return;
         }
-        releaseMarketBusy(marketBusyLease);
-        await refreshMarket();
-        return;
-      }
-      const diff = isUpdate
-        ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
-        : null;
-      try {
+        const diff = isUpdate
+          ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
+          : null;
         const confirmed = await confirm({
           title: isUpdate
             ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
@@ -1347,13 +1155,11 @@ export function GhostPluginPage() {
               }),
           description: isUpdate
             ? t('settings.ghosts.market.updateConfirmDescription')
-            : // 自定义市场未经服务端完整性校验，确认文案必须如实区分。
-              marketDetail.sourceType !== 'server'
-              ? t('settings.ghosts.market.customInstallConfirmDescription')
-              : t('settings.ghosts.market.installConfirmDescription'),
-          // 限高与滚动交给共享 ConfirmDialog(max-h-[85vh] + 内部滚动区 + 打开时
-          // 闪一下滚动条),这里不再自套一层 min(56vh,520px) —— 两层限高会让
-          // "到底了没有"取决于内外层谁先触底(2026-07-27 收口)。
+            : t(
+                marketDetail.sourceType === 'server'
+                  ? 'settings.ghosts.market.installConfirmDescription'
+                  : 'settings.ghosts.market.customInstallConfirmDescription',
+              ),
           content: isUpdate ? (
             <GhostUpdateReview diff={diff!} />
           ) : (
@@ -1369,25 +1175,22 @@ export function GhostPluginPage() {
           autoFocusConfirm: true,
         });
         if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        const options: PluginMarketInstallOptions = {
+          expectedReleaseId: marketDetail.releaseId,
+          expectedManifest: marketDetail.manifest,
+          ...(isUpdate && diff!.added.length > 0
+            ? {
+                allowPermissionExpansion: true,
+                ...(installedGhost
+                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+                  : {}),
+              }
+            : {}),
+        };
         const ghost = await installReviewedMarketPackage({
           detail: marketDetail,
           lease: marketBusyLease,
-          options: {
-            expectedReleaseId: marketDetail.releaseId,
-            ...(marketDetail.sourceType !== 'server'
-              ? { expectedManifest: marketDetail.manifest }
-              : {}),
-            ...(isUpdate && diff!.added.length > 0
-              ? {
-                  allowPermissionExpansion: true,
-                  // 确认框展示期间已装 manifest 可能被换掉;基线交由 Main 在
-                  // 安装锁内复核,不一致就拒绝这次批准而不是沿用旧同意。
-                  ...(installedGhost
-                    ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-                    : {}),
-                }
-              : {}),
-          },
+          options,
         });
         if (!ghost) return;
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;

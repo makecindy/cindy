@@ -5,6 +5,10 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import {
+  resolveOrcaWorkerPermissionMode,
+  type OrcaWorkerPermissionMode,
+} from '../../shared/orca-worker-permission-mode.js';
 
 /** active team 的最小快照；创建 service 不直接持有 Drizzle row。 */
 export interface OrcaTeamSnapshot {
@@ -183,11 +187,14 @@ export interface OrcaWorkerCreateParams {
    */
   providerId?: string | null;
   initialTask?: string;
+  /** 显式值用于本次创建；缺省读取全局 Worker 创建偏好。 */
+  workerPermissionMode?: OrcaWorkerPermissionMode;
 }
 
 /** enableOrca 已经创建 team 后，可复用同一 worker 创建内核。 */
 export interface OrcaWorkerCreateInTeamParams extends OrcaWorkerCreateParams {
   teamId: string;
+  workerPermissionMode: OrcaWorkerPermissionMode;
 }
 
 /** creation service 的 I/O 边界；register.ts 负责把 DB、Maker 与 broadcast 注入进来。 */
@@ -198,6 +205,7 @@ export interface OrcaWorkerCreationDeps {
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
+  getWorkerPermissionMode(): OrcaWorkerPermissionMode;
   getAvailableModels(agent: AgentKind): OrcaWorkerModelCapabilities[];
   /**
    * 从同一次 provider registry 读取构造 Worker 路由上下文。
@@ -584,7 +592,14 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
     }
-    return createWorkerInTeam({ ...params, teamId: team.id });
+    return createWorkerInTeam({
+      ...params,
+      teamId: team.id,
+      workerPermissionMode:
+        params.workerPermissionMode === undefined
+          ? deps.getWorkerPermissionMode()
+          : resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
+    });
   }
 
   async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult> {
@@ -982,7 +997,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         providerId: resolved.providerId,
         effort: resolved.effort as MakerSessionCreateOpts['effort'],
         fastMode: resolved.fastMode,
-        permissionMode: 'bypassPermissions',
+        // 所有创建入口先解析 Worker 创建偏好，再统一透传到这里；不继承 Lead 权限。
+        permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
         title: `Worker · ${role.value} · ${label.value}`,
         orcaRole: 'worker',
         vendorOptions: workerVendorOptions,

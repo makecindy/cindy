@@ -435,7 +435,7 @@ export class PiAgent extends BaseAgent {
     agentHome: string,
     nativeProviders: PiNativeProviderSpec[] = [],
     retainedRuntimeModel?: ModelDescriptor,
-  ): Promise<void> {
+  ): Promise<Map<string, boolean>> {
     const endpoint = this.deps.runtimeConfig.endpoint;
     if (!endpoint) {
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
@@ -444,17 +444,20 @@ export class PiAgent extends BaseAgent {
     const runtimeModels = retainedRuntimeModel && !publicModels.some((m) => m.id === retainedRuntimeModel.id)
       ? [...publicModels, retainedRuntimeModel]
       : publicModels;
+    const gatewayImageInputByModel = new Map<string, boolean>();
     const models = runtimeModels.map((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
       // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
       const m = this.deps.resolvePiGatewayModelDescriptor?.(publicModel.id) ?? publicModel;
+      const supportsImageInput = m.supportsImageInput === true;
+      gatewayImageInputByModel.set(m.id, supportsImageInput);
       return {
         id: m.id,
         name: m.displayName,
         reasoning: m.efforts.length > 0,
-        input: ['text', 'image'],
+        input: supportsImageInput ? ['text', 'image'] : ['text'],
         contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
         maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
@@ -504,6 +507,7 @@ export class PiAgent extends BaseAgent {
     }
     await fs.mkdir(agentHome, { recursive: true });
     await fs.writeFile(path.join(agentHome, 'models.json'), JSON.stringify({ providers }, null, 2) + '\n');
+    return gatewayImageInputByModel;
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
@@ -716,7 +720,11 @@ export class PiAgent extends BaseAgent {
       configHomeCleaned = true;
       void fs.rm(configHome, { recursive: true, force: true }).catch(() => {});
     };
-    await this.writeModelsJson(configHome, nativeProviders, retainedRuntimeModel);
+    const gatewayImageInputByModel = await this.writeModelsJson(
+      configHome,
+      nativeProviders,
+      retainedRuntimeModel,
+    );
     const sessionDir = path.join(agentHome, 'sessions');
     await fs.mkdir(sessionDir, { recursive: true });
 
@@ -787,6 +795,10 @@ export class PiAgent extends BaseAgent {
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode = normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    // 与 Claude / Codex 一致，运行期 Orca 身份更新必须原地落在同一个对象上。
+    // Desktop Pi MCP bridge 在 startSession 时持有这个引用；start_team 成功后 host
+    // 调 setVendorOptions，后续 create_worker 等工具才能立即读到最新 Lead 身份。
+    const mutableVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
     type PermissionSnapshot = {
       mode: 'ask' | 'auto' | 'bypassPermissions';
       readOnlyRoots: string[];
@@ -933,7 +945,7 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
-          vendorOptions: opts.vendorOptions,
+          vendorOptions: mutableVendorOptions,
         });
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
@@ -1213,6 +1225,9 @@ export class PiAgent extends BaseAgent {
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
+              sessionId: opts.sessionId ?? '',
+              workingDir: opts.workingDir ?? '',
+              remote: Boolean(opts.remoteHostId),
             }));
             return;
           }
@@ -1468,11 +1483,14 @@ export class PiAgent extends BaseAgent {
     };
 
     const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
-      if (images.length === 0 || mutablePiProviderId === PI_PROVIDER_ID) return;
-      const nativeModel = nativeProviderById
-        .get(mutablePiProviderId)
-        ?.models.find((candidate) => candidate.id === mutableModel);
-      if (nativeModel?.input?.includes('image')) return;
+      if (images.length === 0) return;
+      const supportsImageInput = mutablePiProviderId === PI_PROVIDER_ID
+        ? gatewayImageInputByModel.get(mutableModel) === true
+        : nativeProviderById
+          .get(mutablePiProviderId)
+          ?.models.find((candidate) => candidate.id === mutableModel)
+          ?.input?.includes('image') === true;
+      if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
     };
 
@@ -1790,6 +1808,11 @@ export class PiAgent extends BaseAgent {
           ...requestedPermissionSnapshot,
           readOnlyRoots: [...dirs],
         });
+      },
+
+      async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
+        Object.assign(mutableVendorOptions, patch);
+        deps.logger.debug('pi setVendorOptions', { patchKeys: Object.keys(patch) });
       },
 
       isTurnRunning(): boolean {
@@ -2221,6 +2244,9 @@ export class PiAgent extends BaseAgent {
       notifyAutoReviewUnavailable: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
       registeredMcpServerNames: ReadonlySet<string>;
+      sessionId: string;
+      workingDir: string;
+      remote: boolean;
       /**
        * 把一张挂起的权限卡登记进会话级表,返回注销函数。档位切换 / 关闭会话时由
        * `dismissAllPendingPrompts` 强制 settle,避免放宽档位后调用仍卡在失效的卡上。
@@ -2234,6 +2260,50 @@ export class PiAgent extends BaseAgent {
     const method = typeof event.method === 'string' ? event.method : '';
     const id = typeof event.id === 'string' ? event.id : undefined;
     if (!id) return;
+
+    if (method === 'confirm' && event.title === 'cindy:turn-change-capture') {
+      let toolName = '';
+      let input: Record<string, unknown> = {};
+      try {
+        const payload = JSON.parse(typeof event.message === 'string' ? event.message : '{}') as {
+          toolName?: unknown;
+          input?: unknown;
+        };
+        if (typeof payload.toolName === 'string') toolName = payload.toolName;
+        if (payload.input && typeof payload.input === 'object') input = payload.input as Record<string, unknown>;
+      } catch {
+        // Malformed capture payload is non-fatal; let the tool proceed and mark it opaque.
+      }
+      const context = getPermissionCtx();
+      void (async () => {
+        if (!context.sessionId || !context.workingDir) return;
+        const targetPath = typeof input.path === 'string' ? input.path : null;
+        if (targetPath && (toolName === 'edit' || toolName === 'write')) {
+          await this.deps.turnChangeCapture?.beforeKnownFileWrite({
+            sessionId: context.sessionId,
+            provider: 'pi',
+            cwd: context.workingDir,
+            targetPath,
+            ...(context.remote ? { remote: true } : {}),
+          });
+        } else {
+          this.deps.turnChangeCapture?.noteOpaqueWrite({
+            sessionId: context.sessionId,
+            provider: 'pi',
+            cwd: context.workingDir,
+            ...(context.remote ? { remote: true } : {}),
+          });
+        }
+      })().catch((error) => {
+        this.deps.logger.warn('pi turn change capture failed', {
+          toolName,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }).finally(() => {
+        proc.send({ type: 'extension_ui_response', id, confirmed: true });
+      });
+      return;
+    }
 
     if (method === 'confirm' && event.title === 'cindy:permission') {
       let toolName = 'tool';

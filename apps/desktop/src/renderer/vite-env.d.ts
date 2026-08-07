@@ -16,6 +16,8 @@ type AgentProxyPrefPayload = import('../shared/agentProxyConfig').SshHostAgentPr
 type AgentProxyTunnelStatePayload = import('../shared/agentProxyConfig').AgentProxyTunnelState;
 type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatus;
 type AnalyticsSettingsPayload = import('../shared/analyticsSettings').AnalyticsSettingsPayload;
+type LogUploadSettingsPayload = import('../shared/logUpload').LogUploadSettingsPayload;
+type LogUploadResult = import('../shared/logUpload').LogUploadResult;
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
 type VoiceInputPowerStatePayload =
   import('../shared/voiceInputPowerIpc').VoiceInputPowerStatePayload;
@@ -43,6 +45,12 @@ type PendingRemotePrecreatedWorktreeTarget =
   import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktreeTarget;
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
+
+interface NewMakerWorktreeBranchPreferenceSnapshot {
+  baseRepo: string;
+  sourceBranch: string;
+  revision: number;
+}
 
 /* ── Environment check ── */
 
@@ -549,6 +557,7 @@ interface OrcaTeamRecord {
   id: string;
   leadSessionId: string;
   status: 'active' | 'completed' | 'cancelled' | 'failed';
+  workerPermissionMode: 'auto' | 'bypassPermissions';
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1060,9 +1069,20 @@ interface ElectronAPI {
    * splash / login 阶段会 reject (handler 未注册), 调用方需 catch 兜底成 false。
    */
   anySessionInTurn: () => Promise<boolean>;
-  pageZoomIn: () => Promise<{ ok: true; zoomLevel: number }>;
-  pageZoomOut: () => Promise<{ ok: true; zoomLevel: number }>;
-  pageZoomReset: () => Promise<{ ok: true; zoomLevel: number }>;
+  pageZoomIn: () => Promise<{ ok: true; zoomFactor: number }>;
+  pageZoomOut: () => Promise<{ ok: true; zoomFactor: number }>;
+  pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
+  appearanceSettings: {
+    getSync: () => import('../shared/appearanceSettings').AppearanceSettings | null;
+    get: () => Promise<unknown>;
+    setPatch: (
+      patch: Partial<import('../shared/appearanceSettings').AppearanceSettings>,
+    ) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    reset: () => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    onChanged: (
+      callback: (settings: import('../shared/appearanceSettings').AppearanceSettings) => void,
+    ) => () => void;
+  };
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void) => () => void;
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
   billing: import('../shared/billing').BillingRendererApi;
@@ -1449,11 +1469,7 @@ interface ElectronAPI {
       id?: string,
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
     /** dev-only：经正式插件派发/权限链调用一个已声明工具。 */
-    devCall: (
-      id: string,
-      tool: string,
-      args: Record<string, unknown>,
-    ) => Promise<unknown>;
+    devCall: (id: string, tool: string, args: Record<string, unknown>) => Promise<unknown>;
   };
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
@@ -1464,7 +1480,20 @@ interface ElectronAPI {
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
+    onPackagePermissionReview: (
+      callback: (
+        request: import('../shared/pluginMarket').PluginMarketPackageReviewRequest,
+      ) => void,
+    ) => () => void;
+    resolvePackagePermissionReview: (
+      requestId: string,
+      confirmed: boolean,
+    ) => Promise<{ handled: boolean }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
+    consumeRemovalNotice: () => Promise<
+      import('../shared/pluginMarket').PluginRemovalUserNotice | null
+    >;
+    onRemovalNoticeAvailable: (callback: () => void) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,
@@ -1630,9 +1659,7 @@ interface ElectronAPI {
     onGlobalOverlayCommand: (
       callback: (command: { type: 'start' | 'submit' | 'cancel' }) => void,
     ) => () => void;
-    adviseDictionaryLearning: (
-      payload: VoiceInputDictionaryAdviceInput,
-    ) => Promise<
+    adviseDictionaryLearning: (payload: VoiceInputDictionaryAdviceInput) => Promise<
       | {
           ok: true;
           actions: VoiceInputDictionaryLearningAction[];
@@ -1838,6 +1865,23 @@ interface ElectronAPI {
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
   onAnalyticsSettingsChange: (callback: (payload: AnalyticsSettingsPayload) => void) => () => void;
+
+  // ── 客户端日志上报(设置 → 关于)──
+  // 只上报 App 自身的运行记录 + 设备环境信息;对话内容、文件内容、提示词、工作目录路径
+  // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
+  getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
+  setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
+  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  resetLogUploadCrashAuto: () => Promise<LogUploadSettingsPayload>;
+  /**
+   * 手动上传一次;成功返回可报的上传编号。失败以 IPC 错误码区分:
+   * `LOG_UPLOAD_UNAVAILABLE`(未配置目标)/ `PRIVACY_CONSENT_REQUIRED`(未同意)/
+   * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
+   */
+  uploadLogsNow: () => Promise<LogUploadResult>;
+  onLogUploadSettingsChange: (
+    callback: (payload: LogUploadSettingsPayload) => void,
+  ) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: () => Promise<{
@@ -2057,10 +2101,17 @@ interface ElectronAPI {
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
+    /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
     worktreeEnabled: boolean;
+  }) => void;
+
+  /** Renderer localStorage workerCreationPrefs → main 内存镜像。 */
+  syncWorkerCreationPrefs: (snapshot: {
+    workerPermissionMode: 'auto' | 'bypassPermissions';
   }) => void;
 
   /** 被控端 renderer → 自身 main:providerModelMemory 全量快照镜像(草稿列表行真实读源)。 */
@@ -2096,6 +2147,27 @@ interface ElectronAPI {
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」(patchDraft 写真实草稿)。 */
   onMakerWorktreePrefApply: (cb: (payload: { worktreeEnabled: boolean }) => void) => () => void;
+
+  /** 工作端 canonical baseRepo scoped 的新建 worktree 源分支；未选过返回 null。 */
+  getNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+  ) => Promise<NewMakerWorktreeBranchPreferenceSnapshot | null>;
+
+  /** 写穿本机工作端的源分支选择，返回 host 接受后的权威 snapshot。 */
+  applyNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+    sourceBranch: string,
+  ) => Promise<NewMakerWorktreeBranchPreferenceSnapshot>;
+
+  /** 本机或远程控制端改动本工作端源分支后的权威广播。 */
+  onNewMakerWorktreeBranchChanged: (
+    cb: (snapshot: NewMakerWorktreeBranchPreferenceSnapshot) => void,
+  ) => () => void;
+
+  /** Orca tool 显式修改 Worker 默认权限后，回写 renderer localStorage。 */
+  onWorkerCreationPrefsApply: (
+    cb: (payload: { workerPermissionMode: 'auto' | 'bypassPermissions' }) => void,
+  ) => () => void;
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的会话「模型 effort/fast」pref(调本地 setter)。 */
   onMakerSessionPrefApply: (
@@ -2545,6 +2617,18 @@ interface ElectronAPI {
    */
   openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
 
+  /**
+   * 文件 chip 右键「打开方式」:枚举可打开该文件的应用(Windows 注册表;
+   * 其余平台空列表)。appId 只在 main 侧映射到可执行体,renderer 原样回传。
+   */
+  listOpenWithApps: (params: { filePath: string }) => Promise<{
+    success: boolean;
+    apps: Array<{ id: string; label: string; iconDataUrl?: string }>;
+    error?: string;
+  }>;
+  /** 用 listOpenWithApps 返回的 appId 指定应用打开文件;失败以 IPC 错误抛出。 */
+  openFileWithApp: (params: { filePath: string; appId: string }) => Promise<void>;
+
   /** Copy a dangerous local attachment into the controlled inert cache. */
   stageChatAttachment: (params: { sourcePath: string; suggestedName: string }) => Promise<
     | { success: true; path: string }
@@ -2681,7 +2765,12 @@ interface ElectronAPI {
       entries: { name: string; kind: 'dir' | 'symlink'; path: string }[];
       parent: string | null;
     }>;
-    statPath: (path: string) => Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }>;
+    statPath: (path: string) => Promise<{
+      kind: 'dir' | 'file' | 'missing';
+      resolvedPath: string;
+      mtimeMs?: number;
+      birthtimeMs?: number;
+    }>;
     mkdirP: (path: string) => Promise<{ resolvedPath: string }>;
   };
 
@@ -3369,12 +3458,19 @@ interface ElectronAPI {
       getMessages: (
         deviceId: string,
         sessionId: string,
-      ) => Promise<{ messages: Record<string, unknown>[]; invalidation?: number }>;
+      ) => Promise<{
+        messages: Record<string, unknown>[];
+        invalidation?: number;
+        ownerToken?: string;
+        accountCounter?: number;
+      }>;
       putMessages: (
         deviceId: string,
         sessionId: string,
         messages: readonly Record<string, unknown>[],
         expectedInvalidation?: number,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ) => Promise<{ ok: true; invalidation?: number }>;
       getSessionList: () => Promise<{
         devices: Array<{
@@ -3382,6 +3478,8 @@ interface ElectronAPI {
           deviceName: string;
           sessions: Record<string, unknown>[];
         }>;
+        ownerToken?: string;
+        accountCounter?: number;
       }>;
       putSessionList: (
         devices: ReadonlyArray<{
@@ -3389,6 +3487,8 @@ interface ElectronAPI {
           deviceName: string;
           sessions: readonly Record<string, unknown>[];
         }>,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ) => Promise<{ ok: true }>;
       /** 清掉一台设备的缓存;deviceId 必填(登出的整体清理由 main 在账号边界自己做) */
       clear: (deviceId: string) => Promise<{ ok: true }>;
@@ -3798,11 +3898,14 @@ interface ElectronAPI {
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // today aggregate 已搬到 electronAPI.maker.usage.* (Claude USD + Codex token 统一)。
   onUsageSessionSpendChanged: (
-    cb: (data: {
-      sessionId: string;
-      totalMoney: import('../shared/regionalMoney').RegionalMoney;
-      totalCostUsd?: number;
-    }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+    cb: (
+      data: {
+        sessionId: string;
+        totalMoney: import('../shared/regionalMoney').RegionalMoney;
+        totalCostUsd?: number;
+      },
+      ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => void,
   ) => () => void;
   onUsageSessionTokensChanged: (
     cb: (
@@ -3825,11 +3928,14 @@ interface ElectronAPI {
   // per-message 维度: turn 结束检测到模型被上游降级 / 替换时 main 推标记
   // (挂在该轮最后一条 assistant 上,AssistantMessage 渲染降级提示行)。
   onUsageMessageModelMismatch: (
-    cb: (data: {
-      sessionId: string;
-      clientId: string;
-      modelMismatch: import('../shared/modelMismatch').ModelMismatchInfo;
-    }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+    cb: (
+      data: {
+        sessionId: string;
+        clientId: string;
+        modelMismatch: import('../shared/modelMismatch').ModelMismatchInfo;
+      },
+      ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => void,
   ) => () => void;
 
   // ── 首登轻量数据迁移(mToc) — 老 userData → Cindy 一次性复制迁移弹窗 ──
@@ -4068,7 +4174,9 @@ interface ElectronAPI {
       getByLeadSession: (leadSessionId: string) => Promise<OrcaTeamRecord | null>;
       getByWorkerSession: (workerSessionId: string) => Promise<OrcaTeamRecord | null>;
       listWorkersByLead: (leadSessionId: string) => Promise<OrcaWorkerRecord[]>;
-      listWorkersByLeads?: (leadSessionIds: string[]) => Promise<Record<string, OrcaWorkerRecord[]>>;
+      listWorkersByLeads?: (
+        leadSessionIds: string[],
+      ) => Promise<Record<string, OrcaWorkerRecord[]>>;
       updateWorkerStatus: (
         workerId: string,
         status: 'idle' | 'running' | 'done' | 'error',
@@ -4135,10 +4243,13 @@ interface ElectronAPI {
         clientId: string,
       ) => Promise<import('@/lib/ccAgent.types').Message>;
       onCreated: (
-        callback: (payload: {
-          sessionId: string;
-          message: import('@/lib/ccAgent.types').Message;
-        }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+        callback: (
+          payload: {
+            sessionId: string;
+            message: import('@/lib/ccAgent.types').Message;
+          },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
       ) => () => void;
       onDeleted: (
         callback: (
@@ -4161,10 +4272,13 @@ interface ElectronAPI {
         ) => void,
       ) => () => void;
       onPatched: (
-        callback: (payload: {
-          sessionId: string;
-          patch: Partial<import('@/lib/ccAgent.types').Session>;
-        }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+        callback: (
+          payload: {
+            sessionId: string;
+            patch: Partial<import('@/lib/ccAgent.types').Session>;
+          },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
       ) => () => void;
     };
     /** V0.4 (C10): one-shot toast trigger when ensureReady ran two-level fallback. */
@@ -4664,8 +4778,15 @@ interface ElectronAPI {
         fast?: boolean;
         /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
         providerId?: string | null;
+        /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
+        workerPermissionMode?: 'auto' | 'bypassPermissions';
       },
-    ) => Promise<{ teamId: string; workerSessionId: string; workerId: string }>;
+    ) => Promise<{
+      teamId: string;
+      workerSessionId: string;
+      workerId: string;
+      workerPermissionMode: 'auto' | 'bypassPermissions';
+    }>;
 
     /**
      * F-COLLAB: 关闭 lead session 当前的协同 workflow。
@@ -4870,9 +4991,7 @@ interface ElectronAPI {
     }) => Promise<void>;
 
     /** 快照:某会话当前挂起交互(permission/ask/plan),打开/重连/刷新会话时拉一次重建面板。 */
-    getPendingInteractions: (
-      sessionId: string,
-    ) => Promise<
+    getPendingInteractions: (sessionId: string) => Promise<
       Array<{
         request: { kind: string; requestId: string; [k: string]: unknown };
         persistId?: string;
@@ -5056,9 +5175,7 @@ interface ElectronAPI {
       defaultEnabled?: boolean;
     }>;
     /** Takes effect immediately for proxy recovery. */
-    silentEncryptedRetrySet: (
-      enabled: boolean,
-    ) => Promise<{
+    silentEncryptedRetrySet: (enabled: boolean) => Promise<{
       enabled: boolean;
       isCustomized: boolean;
       defaultEnabled: boolean;
@@ -5108,9 +5225,7 @@ interface ElectronAPI {
       defaultAutoSnapshotEnabled: boolean;
     }>;
     /** 立即生效; Codex rewind 入口跟随此开关显示 */
-    gitSafetySet: (
-      enabled: boolean,
-    ) => Promise<{
+    gitSafetySet: (enabled: boolean) => Promise<{
       autoSnapshotEnabled: boolean;
       isCustomized: boolean;
       defaultAutoSnapshotEnabled: boolean;
@@ -5198,6 +5313,21 @@ interface ElectronAPI {
     xaiOAuthCancel: () => Promise<{ authorized: boolean }>;
 
     // Push channels
+    listTurnChangeSets: (
+      sessionId: string,
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeSetSummary[]>;
+    getTurnChangeSets: (
+      sessionId: string,
+      ids: string[],
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeSetDetail[]>;
+    applyTurnChangeSet: (
+      sessionId: string,
+      id: string,
+      action: import('../shared/turnChangeSet').TurnChangeAction,
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeActionResult>;
+    onTurnChangeSetUpdated: (
+      cb: (data: unknown, ownerStamp?: unknown) => void,
+    ) => () => void;
     onEvent: (cb: (data: unknown) => void) => () => void;
     onStatusChanged: (cb: (data: unknown) => void) => () => void;
     onInteractionRequest: (cb: (data: unknown) => void) => () => void;
@@ -5431,9 +5561,7 @@ interface ElectronAPI {
         workingDir: string,
         agentKind: 'claude-code' | 'codex' | 'pi',
       ) => Promise<{ items: CrossAgentMigrationItem[] }>;
-      convert: (
-        items: CrossAgentMigrationItem[],
-      ) => Promise<{
+      convert: (items: CrossAgentMigrationItem[]) => Promise<{
         total: number;
         successCount: number;
         skippedCount: number;

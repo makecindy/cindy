@@ -696,6 +696,17 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('向量检索示例按请求维度回放,不把回执 dim 当作请求判据', () => {
+    expect(FORGE_GUIDE).toContain('const requestedDim = undefined');
+    expect(FORGE_GUIDE).toContain('requestedDim 来自这次请求而不是回执');
+    expect(FORGE_GUIDE).toContain(
+      '...(storedRequestedDim !== undefined ? { dimensions: storedRequestedDim } : {}),',
+    );
+    expect(FORGE_GUIDE).not.toContain(
+      '...(storedDim !== undefined ? { dimensions: storedDim } : {}),',
+    );
+  });
+
   it('分章体量守卫:每个 ## 章节须留在单次工具结果安全体量内(#890 分章投递的不变量)', () => {
     // 手册"随主机版本演进"持续增长;任一章越过单次 MCP 结果上限会静默复现 #890 于该章。
     // 上限取 32KB:当前最大章 ~22KB,余量 ~45%,越线即该拆小节。

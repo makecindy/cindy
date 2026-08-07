@@ -210,10 +210,12 @@ describe('ChatInput session switch focus contract', () => {
     expect(pluginPageSource).toContain(
       'window.electronAPI.ghosts.onRecentUsageChanged(({ ids }) => {',
     );
-    expect(pluginPageSource).toMatch(
-      /sortGhostPluginItemsByRecentUse\(installedItems, recentGhostIds\)/,
-    );
-    expect(pluginPageSource).not.toContain('sortGhostPluginItemsByRecentUse(\n        ghosts');
+    // Ranking runs over the (searched) installed set, not the raw ghost list, and feeds
+    // recent-use + unread signals into the shared pure sorter.
+    expect(pluginPageSource).toMatch(/sortInstalledForDisplay\(searchedInstalledItems, \{/);
+    expect(pluginPageSource).toContain('recentIds: recentGhostIds');
+    expect(pluginPageSource).not.toContain('sortInstalledForDisplay(ghosts');
+    expect(pluginPageSource).not.toContain('sortInstalledForDisplay(installedItems');
   });
 });
 

@@ -40,6 +40,9 @@
 - [`engineering-conventions.md`](engineering-conventions.md)：统一日志、IPC 错误协议
   （`throwIpcError`）、main 侧默认带测试、macOS／Windows 双端兼容，以及 UI 文案的
   i18n 落地与 `pnpm check:i18n` 门禁。
+- [`log-upload-and-redaction.md`](log-upload-and-redaction.md)：客户端日志采集／脱敏／上报的
+  三条不变量（记录边界、白名单方向 deny-by-default、标记代次 + 原子清除）、四层收窄管道、
+  授权闸、区域绑定与崩溃时序。
 - [`protocol-and-submodules.md`](protocol-and-submodules.md)：`cindy-protocol` 协议权威源、
   device-link relay 层、内建插件来源与 wire protocol 兼容。
 - [`architecture-invariants.md`](architecture-invariants.md)：package 与 render／main 解耦、

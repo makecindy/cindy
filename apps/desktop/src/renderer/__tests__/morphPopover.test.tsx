@@ -70,6 +70,16 @@ afterEach(() => {
 });
 
 describe('MorphPopover interaction contract', () => {
+  it('keeps the portaled panel outside Electron window drag regions', async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+
+    expect((panel.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion).toBe(
+      'no-drag',
+    );
+  });
+
   it('打开聚焦首个可交互项;Esc 关闭并把焦点归还 trigger', async () => {
     render(<Harness />);
     const trigger = screen.getByRole('button', { name: 'Toggle' });
@@ -168,9 +178,7 @@ describe('MorphPopover interaction contract', () => {
     fireEvent.pointerDown(action);
     fireEvent.click(action);
 
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Select action' })).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Select action' })).toBeNull());
     expect(document.activeElement).not.toBe(trigger);
   });
 
@@ -215,10 +223,76 @@ describe('MorphPopover interaction contract', () => {
     action.focus();
     fireEvent.click(action);
 
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Open dialog' })).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Open dialog' })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Dialog field' }));
+  });
+
+  it('outside pointerdown 交接给相邻 MorphPopover 时旧层不延迟抢回焦点', async () => {
+    setReducedMotion(false);
+
+    function SiblingHandoffHarness() {
+      const [modelOpen, setModelOpen] = useState(false);
+      const [agentOpen, setAgentOpen] = useState(false);
+      return (
+        <>
+          <MorphPopover
+            open={modelOpen}
+            onOpenChange={setModelOpen}
+            panelAriaLabel="Model panel"
+            trigger={
+              <button type="button" aria-expanded={modelOpen} onClick={() => setModelOpen(true)}>
+                Model
+              </button>
+            }
+          >
+            <input aria-label="Search models" />
+          </MorphPopover>
+          <MorphPopover
+            open={agentOpen}
+            onOpenChange={setAgentOpen}
+            panelAriaLabel="Agent panel"
+            trigger={
+              <button
+                type="button"
+                aria-expanded={agentOpen}
+                // AgentSelect 为保持 composer focus-within 视觉会阻止鼠标默认聚焦。
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setAgentOpen(true)}
+              >
+                Agent
+              </button>
+            }
+          >
+            <button type="button" data-morph-autofocus>
+              Current agent
+            </button>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<SiblingHandoffHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+    const search = await screen.findByRole('textbox', { name: 'Search models' });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+
+    const agentTrigger = screen.getByRole('button', { name: 'Agent' });
+    // 真实点击从 pointerdown 到 click 有按压时长。旧层从 pointerdown 起计 240ms 收合，
+    // 新层到 click 才开始 220ms autofocus；按压超过 20ms 时旧层会先走到回焦终点。
+    fireEvent.pointerDown(agentTrigger);
+    fireEvent.mouseDown(agentTrigger);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 40));
+    });
+    fireEvent.mouseUp(agentTrigger);
+    fireEvent.click(agentTrigger);
+    expect(agentTrigger.getAttribute('aria-expanded')).toBe('true');
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
+    });
+    expect(agentTrigger.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Current agent' }));
   });
 
   it('嵌套 Radix portal 内 pointerdown 不算 outside;真正 outside pointerdown 关闭', async () => {

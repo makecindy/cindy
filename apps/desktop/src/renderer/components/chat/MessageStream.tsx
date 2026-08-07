@@ -47,7 +47,12 @@ import type {
 import { Spinner } from '@/components/ui/spinner';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
-import type { KnownLocalFileRef } from '@/lib/localPathResolver';
+import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
+import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
+import {
+  isRemoteSessionSticky,
+  subscribeTurnChangeSetUpdated,
+} from '@/lib/makerTransport';
 import { createLogger } from '@/lib/logger';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
 import {
@@ -154,6 +159,8 @@ import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
+import { TurnChangesCard } from './TurnChangesCard';
+import { GeneratedFilesCard } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
   extractAnchorCardId,
@@ -209,6 +216,9 @@ import {
 } from './autoFollowIntent';
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
+import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
+import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
   /** Active session id — used to reset scroll state on session switch. */
@@ -314,6 +324,19 @@ type ForkOriginRenderItem = {
   parentSessionId: string;
   forkedAtMessageId: string;
 };
+type TurnChangesRenderItem = {
+  /** Exact provider patches attached to one visible user turn. */
+  type: 'turn_changes';
+  key: string;
+  changeSet: TurnChangeSetSummary;
+};
+type GeneratedFilesRenderItem = {
+  type: 'generated_files';
+  key: string;
+  files: GeneratedFileRef[];
+  turnStartMs: number | null;
+  turnEndMs: number | null;
+};
 
 /** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
 export type WorkChildItem = ToolSegmentRenderItem | AgentTaskRenderItem | MessageRenderItem;
@@ -343,6 +366,8 @@ export type RenderItem =
   | ToolSegmentRenderItem
   | AgentTaskRenderItem
   | ForkOriginRenderItem
+  | TurnChangesRenderItem
+  | GeneratedFilesRenderItem
   | {
       /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
        *  提取出来作为独立视觉消息渲染,跳出 tool_segment 折叠卡片。统一容器,
@@ -889,6 +914,10 @@ export function buildRenderItems(
      * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
      */
     historyWindowIncomplete?: boolean;
+    /** Main-persisted exact patches, anchored to their visible user message. */
+    turnChangeSets?: readonly TurnChangeSetSummary[];
+    /** Session working directory for opaque generated-file fallback chips. */
+    workingDir?: string;
   },
 ): {
   items: RenderItem[];
@@ -1033,9 +1062,67 @@ export function buildRenderItems(
     pendingSegmentGhostCards = [];
   };
 
+  let turnStartIdx = 0;
+  const flushTurnChanges = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const anchorClientId = messages[lo]?.clientId;
+    if (!anchorClientId) return;
+    const changeSets = (opts?.turnChangeSets ?? []).filter(
+      (changeSet) => changeSet.anchorClientId === anchorClientId,
+    );
+    const exactPaths = new Set<string>();
+    const pathKey = (value: string): string => {
+      const normalized = value.replace(/\\/g, '/');
+      const windowsShape = /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\');
+      return windowsShape ? normalized.toLowerCase() : normalized;
+    };
+    for (const changeSet of changeSets) {
+      for (const file of changeSet.files) {
+        exactPaths.add(pathKey(resolveToolFilePath(file.path, changeSet.cwd)));
+        if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
+      }
+    }
+    for (const changeSet of changeSets) {
+      items.push({
+        type: 'turn_changes',
+        key: `turnchanges-${changeSet.id}`,
+        changeSet,
+      });
+    }
+    const workingDir = opts?.workingDir ?? '';
+    if (!workingDir || hi <= lo) return;
+    const slice = messages.slice(lo, hi);
+    const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
+      const normalized = pathKey(file.path);
+      return !exactPaths.has(normalized) || changeSets.length === 0;
+    });
+    if (generatedFiles.length === 0) return;
+    let turnStartMs: number | null = null;
+    for (const message of slice) {
+      const timestamp = Date.parse(message.createdAt ?? '');
+      if (Number.isFinite(timestamp) && (turnStartMs === null || timestamp < turnStartMs)) {
+        turnStartMs = timestamp;
+      }
+    }
+    const boundaryTimestamp = Date.parse(messages[hi]?.createdAt ?? '');
+    items.push({
+      type: 'generated_files',
+      key: `genfiles-${messages[lo].clientId}`,
+      files: generatedFiles,
+      turnStartMs,
+      turnEndMs: Number.isFinite(boundaryTimestamp) ? boundaryTimestamp : null,
+    });
+  };
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
+
+    // User turn boundary: attach the sealed patch after the turn it belongs to.
+    if (msg.role === 'user' && msg.delivery !== 'steer' && !msg.isSyntheticTrigger) {
+      flushSegment();
+      flushTurnChanges(turnStartIdx, i);
+      turnStartIdx = i;
+    }
 
     // ask_user: pending lives in the bottom input overlay; expired/unanswered
     // questions have no user selection to show. Only the answered state surfaces
@@ -1331,6 +1418,8 @@ export function buildRenderItems(
   // Flush trailing segment — important for streaming, where the turn often
   // ends mid-segment (no closing text yet).
   flushSegment();
+  // 末尾 turn 的产出文件卡(没有后续 user 边界触发)。
+  flushTurnChanges(turnStartIdx, messages.length);
 
   if (taskUpdates) {
     // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
@@ -2073,6 +2162,7 @@ function renderWorkGroupChild(
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
     turnFinalAssistantClientIds: ReadonlySet<string>;
     subagentModelByToolUseId: ReadonlyMap<string, string>;
+    userTurnUsageDetailsByAssistantId: ReadonlyMap<string, TurnUsageDetails>;
   },
 ): ReactNode {
   if (item.type === 'agent_task') {
@@ -2107,6 +2197,7 @@ function renderWorkGroupChild(
         props.assistantsWithFollowingUserBoundary,
       )}
       assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
+      userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
       isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
       isLastUserInput={item.message.clientId === props.lastUserInputClientId}
@@ -2344,6 +2435,41 @@ export function MessageStream({
     }
   }, [messages]);
 
+  const [turnChangeSets, setTurnChangeSets] = useState<TurnChangeSetSummary[]>([]);
+  useEffect(() => {
+    if (!sessionId || remoteHostId !== null || isRemoteSessionSticky(sessionId)) {
+      setTurnChangeSets([]);
+      return;
+    }
+    let cancelled = false;
+    setTurnChangeSets([]);
+    const off = subscribeTurnChangeSetUpdated(sessionId, ({ summary }) => {
+      if (cancelled) return;
+      setTurnChangeSets((current) => {
+        const next = current.filter((item) => item.id !== summary.id);
+        next.push(summary);
+        next.sort((a, b) => a.createdAt - b.createdAt);
+        return next;
+      });
+    });
+    void window.electronAPI.maker.listTurnChangeSets(sessionId)
+      .then((next) => {
+        if (cancelled) return;
+        setTurnChangeSets((current) => {
+          const merged = new Map(next.map((item) => [item.id, item]));
+          for (const item of current) merged.set(item.id, item);
+          return Array.from(merged.values()).sort((a, b) => a.createdAt - b.createdAt);
+        });
+      })
+      .catch(() => {
+        // A live push may already have arrived; keep it instead of clearing the card.
+      });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [remoteHostId, sessionId]);
+
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
@@ -2351,8 +2477,10 @@ export function MessageStream({
     () =>
       buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
         historyWindowIncomplete: Boolean(hasMoreMessages),
+        turnChangeSets,
+        workingDir,
       }),
-    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages],
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, turnChangeSets, workingDir],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(messages),
@@ -3572,6 +3700,10 @@ export function MessageStream({
   // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
   const lastUserInputClientId = useMemo(() => findLastUserInputClientId(messages), [messages]);
 
+  const userTurnUsageDetailsByAssistantId = useMemo(() => {
+    return collectAssistantTurnUsageDetails(messages, turnFinalAssistantClientIds);
+  }, [messages, turnFinalAssistantClientIds]);
+
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。
   const lastMessageClientId =
@@ -3657,6 +3789,28 @@ export function MessageStream({
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
                     }
 
+                    if (item.type === 'turn_changes') {
+                      if (!sessionId) return null;
+                      return (
+                        <TurnChangesCard
+                          key={item.key}
+                          sessionId={sessionId}
+                          changeSet={item.changeSet}
+                        />
+                      );
+                    }
+
+                    if (item.type === 'generated_files') {
+                      return (
+                        <GeneratedFilesCard
+                          key={item.key}
+                          files={item.files}
+                          turnStartMs={item.turnStartMs}
+                          turnEndMs={item.turnEndMs}
+                        />
+                      );
+                    }
+
                     if (item.type === 'tool_segment') {
                       return (
                         <AgentActionsBlock
@@ -3734,6 +3888,7 @@ export function MessageStream({
                               assistantsWithFollowingUserBoundary,
                               turnFinalAssistantClientIds,
                               subagentModelByToolUseId,
+                              userTurnUsageDetailsByAssistantId,
                             }),
                         };
                       };
@@ -3846,6 +4001,7 @@ export function MessageStream({
                             assistantsWithFollowingUserBoundary,
                           )}
                           assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
+                          userTurnUsageDetails={userTurnUsageDetailsByAssistantId.get(msg.clientId)}
                           isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
                           isLastUserInput={msg.clientId === lastUserInputClientId}
@@ -3940,6 +4096,7 @@ const MessageItem = memo(function MessageItem({
   sessionRunning,
   assistantForkBlocked,
   assistantIsTurnFinal,
+  userTurnUsageDetails,
   isFirstUserMessage,
   isLastUserMessage,
   isLastUserInput,
@@ -3970,6 +4127,8 @@ const MessageItem = memo(function MessageItem({
    *  (collectTurnFinalAssistantClientIds). Gates the hover action bar —
    *  mid-turn texts don't mount it, keeping the stream compact. */
   assistantIsTurnFinal?: boolean;
+  /** Aggregated token/cache/model details for this assistant's visible user turn. */
+  userTurnUsageDetails?: TurnUsageDetails;
   /** True iff this message is the first user message in the visible list.
    *  UserMessage hides the Rewind button for it (no prior assistant to
    *  resumeSessionAt anchor on — backend would throw NO_PRIOR_ASSISTANT). */
@@ -4077,6 +4236,7 @@ const MessageItem = memo(function MessageItem({
           userTurnCostUsd={message.userTurnCostUsd}
           userTurnCostIsEstimate={message.userTurnCostIsEstimate}
           turnUsageDetails={message.turnUsageDetails}
+          userTurnUsageDetails={userTurnUsageDetails}
           modelMismatch={message.modelMismatch}
           ghostReplyPending={message.ghostReplyPending}
         />

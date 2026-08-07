@@ -33,6 +33,61 @@ describe('SessionCard review regressions', () => {
     );
   });
 
+  it('plays overflowing sidebar titles only while hovered', () => {
+    expect(sessionItemSource).toContain('function SidebarTitleMarquee');
+    expect(sessionItemSource).toContain("container.dataset.titleOverflowing = 'true'");
+    expect(sessionItemSource).toContain("delete container.dataset.titleOverflowing");
+    expect(globalsSource).toContain('@keyframes sidebar-title-marquee');
+    expect(globalsSource).toContain(
+      "sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track",
+    );
+    expect(globalsSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.sidebar-title-marquee\[data-title-overflowing='true'\][\s\S]*animation: none;/,
+    );
+    expect(globalsSource).toContain(
+      'animation: sidebar-title-marquee var(--sidebar-title-marquee-duration)',
+    );
+  });
+
+  it('recalculates the marquee when a hovered title changes', () => {
+    expect(sessionItemSource).toContain('const isHoveredRef = useRef(false);');
+    expect(sessionItemSource).toContain('useLayoutEffect(() => {');
+    expect(sessionItemSource).toContain('if (isHoveredRef.current) startMarquee();');
+    expect(sessionItemSource).toContain('}, [startMarquee, title]);');
+    expect(sessionItemSource).toContain('delete container.dataset.titleOverflowing;');
+    expect(sessionItemSource).toContain(
+      "container.style.removeProperty('--sidebar-title-marquee-shift');",
+    );
+    expect(sessionItemSource).toContain(
+      "container.style.removeProperty('--sidebar-title-marquee-duration');",
+    );
+    expect(sessionItemSource).toContain('const viewportCount = Math.max(');
+    expect(sessionItemSource).toContain(
+      'calc(var(--motion-sidebar-title-marquee-per-viewport) * ${viewportCount})',
+    );
+    expect(sessionItemSource).not.toContain('var(--motion-base) * ${viewportCount * 12}');
+  });
+
+  it('observes layout changes only while the title is hovered', () => {
+    expect(sessionItemSource).toContain('const resizeObserverRef = useRef<ResizeObserver | null>(null);');
+    expect(sessionItemSource).toContain("typeof ResizeObserver === 'undefined'");
+    expect(sessionItemSource).toContain('observer.observe(container);');
+    expect(sessionItemSource).toContain('observer.observe(track);');
+    expect(sessionItemSource).toContain('resizeObserverRef.current?.disconnect();');
+    expect(sessionItemSource).toContain('startObserving();');
+    expect(sessionItemSource).toContain('stopObserving();');
+    expect(sessionItemSource).toContain('if (isHoveredRef.current) startMarquee();');
+  });
+
+  it('keeps the original accessible title visible when reduced motion is enabled', () => {
+    expect(globalsSource).toMatch(
+      /\.sidebar-title-marquee\[data-title-overflowing='true'\] \.sidebar-title-marquee__ellipsis \{\r?\n {2}opacity: 0;\r?\n\}/,
+    );
+    expect(globalsSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.sidebar-title-marquee\[data-title-overflowing='true'\] \.sidebar-title-marquee__ellipsis \{[\s\S]*opacity: 1;/,
+    );
+  });
+
   it('keeps card titles to two lines with shared inline prefix alignment', () => {
     expect(sessionCardSource).toContain('[-webkit-line-clamp:2] overflow-hidden');
     expect(sessionCardSource).toContain('style={{ textIndent: 0, paddingLeft: 0 }}');

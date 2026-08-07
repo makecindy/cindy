@@ -51,11 +51,13 @@ import { getMaker } from '../maker-host/index.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
+  beginTurnChangeSetAtDispatch,
   wireSessionToIpc,
   isSessionInTurn,
   noteSilentStopUserSend,
   onSilentStopSettled,
 } from '../maker-ipc/register.js';
+import { clearPendingTurnChangeSets } from '../turn-change-set/store.js';
 import {
   beginInteractionRoute,
   type InteractionHandler,
@@ -68,6 +70,7 @@ import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
   getSessionRowSnapshot,
+  getSessionRowSnapshotStrict,
   setSessionProviderIdInDb,
   setSessionSourceInDb,
   setWorktreePathInDb,
@@ -431,10 +434,8 @@ export function createMakerHookSessionRunner(deps: {
 
     async inspect(sessionId) {
       const [meta, row] = await Promise.all([
-        getMaker()
-          .getSessionMeta(sessionId)
-          .catch(() => null),
-        getSessionRowSnapshot(sessionId),
+        getMaker().getSessionMeta(sessionId),
+        getSessionRowSnapshotStrict(sessionId),
       ]);
       if (!meta && !row) return null;
       const usable =
@@ -952,6 +953,8 @@ export function createMakerHookSessionRunner(deps: {
           ? { text: req.prompt, images: imageRefs, files: fileRefs }
           : req.prompt;
 
+      const turnChangeAnchorClientId = randomUUID();
+      let turnChangeSetStarted = false;
       try {
         const pendingHandoff = await agentHandoffPending.peek(session.id);
         const outgoingMessage: UserMessage = pendingHandoff
@@ -1003,11 +1006,13 @@ export function createMakerHookSessionRunner(deps: {
             // 裸 path 的 image block 会被忽略), 无图为纯文本 string。
             noteSilentStopUserSend(session.id);
             await createMessage(session.id, {
-              clientId: randomUUID(),
+              clientId: turnChangeAnchorClientId,
               role: 'user',
               content: userMessageContent,
               agentMeta: { origin, ...(req.source ? { hookSource: req.source } : {}) },
             });
+            await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
+            turnChangeSetStarted = true;
             // 每次被接受的 IM 消息都是一次用户发送: bump userSendAt 让排序
             // 时间轴与桌面端 sendMessage 口径一致, sessions:patched 广播顺带把
             // 复用/接管会话即时重排序(新建路径已在广播前落过, 这里更新为实际
@@ -1023,12 +1028,14 @@ export function createMakerHookSessionRunner(deps: {
           context: `hook:${req.origin.connectionId}`,
         });
         if (!outcome.dispatched) {
+          if (turnChangeSetStarted) clearPendingTurnChangeSets(session.id);
           observer.stop();
           finalizeInteractions();
           releaseTelegramGroupTurn();
           return fail(`send not dispatched: ${outcome.reason}`);
         }
       } catch (err) {
+        if (turnChangeSetStarted) clearPendingTurnChangeSets(session.id);
         observer.stop();
         finalizeInteractions();
         releaseTelegramGroupTurn();

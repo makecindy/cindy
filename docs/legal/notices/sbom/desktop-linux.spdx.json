@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/156d44a61ecf03e9226484f8e891de84ed099853480e30fba697a651bf84af24",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/8151ecd512d84f855fdd8838bf5948fc9b37ad5b84e05bfde10182cf77f14a3b",
   "creationInfo": {
     "created": "2026-08-02T09:08:05Z",
     "creators": [
@@ -43,8 +43,8 @@
     },
     {
       "name": "Electron (bundled runtime)",
-      "SPDXID": "SPDXRef-Package-e01faf6cc0ab33f1",
-      "versionInfo": "41.2.0",
+      "SPDXID": "SPDXRef-Package-e57785feb130dc56",
+      "versionInfo": "41.10.3",
       "downloadLocation": "https://github.com/electron/electron",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -13669,7 +13669,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e01faf6cc0ab33f1"
+      "relatedSpdxElement": "SPDXRef-Package-e57785feb130dc56"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

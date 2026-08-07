@@ -8,8 +8,10 @@
  *   - 鼠标悬停时临时展开,移开即收起;点击/Enter 后固定展开,再次触发立即收起。
  *     浮层绝对定位(bottom-full),不改变 composer overlay 的实测高度,
  *     消息流不会因 hover 抖动。
- *   - 浮层行:completed 灰(check 圆圈),in_progress 高亮(虚线圆圈 + 旋转),
+ *   - 浮层行:completed 灰(check 圆圈),in_progress 高亮(静态虚线圆圈),
  *     pending 正常前景色(空心圆圈)。
+ *   - 胶囊图标使用静态灰度进度圆环表达当前步骤位置,不使用持续旋转或 pulse;
+ *     进度变化只通过圆环长度的短过渡反馈。
  *
  * 颜色沿用 ToolCallCard 同套 token(设计系统零阴影,浮层用 1px 边框):
  *   --msg-tool-card-text:    primary(icon、in_progress/pending 文本)
@@ -22,7 +24,6 @@ import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 
 // ---------------------------------------------------------------------------
 // Types — normalized agent plan/todo item
@@ -32,18 +33,78 @@ export type TodoItem = MessageRenderTodoItem;
 
 type FlyoutOpenMode = 'closed' | 'hover' | 'pinned';
 
+/**
+ * 静态灰度进度圆环。
+ *
+ * 这里没有 loading 语义:圆环表达计划当前位于第几步,而不是告诉用户“还在转”。
+ * SVG 本身不挂常驻动画;步骤变化时只过渡 stroke-dashoffset,避免在聊天底部制造
+ * 持续运动和额外注意力竞争。
+ */
+function ProgressRing({
+  progress,
+  size,
+  strokeWidth = 1.75,
+  className,
+}: {
+  progress: number;
+  size: number;
+  strokeWidth?: number;
+  className?: string;
+}) {
+  const clampedProgress = Math.min(1, Math.max(0, progress));
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference * (1 - clampedProgress);
+
+  return (
+    <svg
+      data-plan-progress-ring="true"
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className={cn('shrink-0', className)}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="var(--msg-tool-card-chevron)"
+        strokeWidth={strokeWidth}
+        opacity={0.45}
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="var(--msg-tool-card-text)"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={dashOffset}
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        className="transition-[stroke-dashoffset] duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:transition-none"
+      />
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export function TodoListCard({
   todos,
-  animated = true,
   maxWidth,
 }: {
   todos: TodoItem[];
-  /** When false, in_progress items render the dashed circle but no pulse / spin —
-   *  used after the session stops so frozen todos don't keep "spinning". */
+  /**
+   * Kept for source compatibility with older callers. Plan progress is intentionally
+   * static now, so this flag no longer enables an infinite animation.
+   */
   animated?: boolean;
   /** Composer/chat column width. Keeps the flyout inside clipped compact panes. */
   maxWidth?: number;
@@ -93,17 +154,17 @@ export function TodoListCard({
         ? pendingIndex
         : Math.min(completed, total - 1);
   const currentStep = allDone ? total : currentIndex + 1;
-  const hasActive = todos.some((todo) => todo.status === 'in_progress');
+  const stepProgress = total > 0 ? currentStep / total : 0;
   const flyoutMaxWidth =
     typeof maxWidth === 'number' && Number.isFinite(maxWidth) && maxWidth > 0
       ? `${Math.floor(maxWidth)}px`
       : null;
 
   return (
-    <div className="flex w-full justify-center">
+    <div className="pointer-events-none flex w-auto shrink-0 justify-center">
       <div
         ref={cardRef}
-        className="relative inline-flex items-center justify-center"
+        className="pointer-events-auto inline-flex items-center justify-center"
         onMouseEnter={() => {
           setOpenMode((current) => (current === 'closed' ? 'hover' : current));
         }}
@@ -111,93 +172,85 @@ export function TodoListCard({
           setOpenMode((current) => (current === 'hover' ? 'closed' : current));
         }}
       >
-        {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
-        <button
-          type="button"
-          onClick={() => {
-            setOpenMode((current) => (current === 'pinned' ? 'closed' : 'pinned'));
-          }}
-          aria-controls={flyoutId}
-          aria-expanded={revealed}
-          className={cn(
-            'flex items-center gap-2 rounded-full',
-            'border border-[var(--msg-tool-card-border)]',
-            'bg-[var(--msg-tool-card-bg)]',
-            'px-[14px] py-[8px]',
-            'cursor-pointer select-none',
-            'hover:opacity-80 transition-opacity',
-          )}
+        <div
+          data-plan-pill-anchor="true"
+          className="pointer-events-auto relative inline-flex items-center justify-center"
         >
-          {allDone ? (
-            <CircleCheck
-              size={14}
-              strokeWidth={2}
-              className="shrink-0 text-[var(--msg-tool-card-text)]"
-            />
-          ) : hasActive ? (
-            <Spinner
-              icon={CircleDashed}
-              size={14}
-              strokeWidth={2}
-              spinning={animated}
-              className="shrink-0 text-[var(--msg-tool-card-text)]"
-            />
-          ) : (
-            <Circle
-              size={14}
-              strokeWidth={2}
-              className="shrink-0 text-[var(--msg-tool-card-text)]"
-            />
-          )}
-          <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
-            {t('chat.planPill.step', { current: currentStep, total })}
-          </span>
-        </button>
+          {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
+          <button
+            type="button"
+            onClick={() => {
+              setOpenMode((current) => (current === 'pinned' ? 'closed' : 'pinned'));
+            }}
+            aria-controls={flyoutId}
+            aria-expanded={revealed}
+            className={cn(
+              'flex items-center gap-2 rounded-full',
+              'border border-[var(--msg-tool-card-border)]',
+              'bg-[var(--msg-tool-card-bg)]',
+              // 28px 紧凑高度:计划槽位仍保持 32px,上下各留约 2px,避免胶囊贴住输入框。
+              'px-[14px] py-[6px]',
+              'cursor-pointer select-none',
+              'hover:opacity-80 transition-opacity',
+            )}
+          >
+            {allDone ? (
+              <CircleCheck
+                size={14}
+                strokeWidth={2}
+                className="shrink-0 text-[var(--msg-tool-card-text)]"
+              />
+            ) : (
+              <ProgressRing progress={stepProgress} size={16} strokeWidth={2} />
+            )}
+            <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
+              {t('chat.planPill.step', { current: currentStep, total })}
+            </span>
+          </button>
 
-        {/* Hover flyout — 完整清单向上浮出;绝对定位不占布局高度,消息流不抖动。 */}
-        {renderFlyout && (
-          <>
+          {/* 只让 hover 热区跟随胶囊；完整浮层则相对 composer 中央区域定位。 */}
+          {renderFlyout && (
             <div
-              className="absolute bottom-full left-1/2 h-2 min-w-full -translate-x-1/2"
+              className="absolute bottom-full left-1/2 h-3 min-w-full -translate-x-1/2"
               aria-hidden="true"
             />
+          )}
+        </div>
+
+        {/* Hover flyout — 相对 composer 中央区域居中,被控提示把胶囊左推时也不会越界。 */}
+        {renderFlyout && (
+          <div
+            id={flyoutId}
+            data-plan-flyout-positioner="composer"
+            className={cn(
+              'absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2',
+              'w-max',
+              flyoutMaxWidth === null && 'min-w-[220px] max-w-[min(420px,calc(100vw-32px))]',
+            )}
+            style={
+              flyoutMaxWidth === null
+                ? undefined
+                : {
+                    minWidth: `min(220px, ${flyoutMaxWidth})`,
+                    maxWidth: `min(420px, ${flyoutMaxWidth}, calc(100vw - 32px))`,
+                  }
+            }
+          >
             <div
-              id={flyoutId}
+              aria-hidden={!revealed}
               className={cn(
-                'absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2',
-                'w-max',
-                flyoutMaxWidth === null && 'min-w-[220px] max-w-[min(420px,calc(100vw-32px))]',
+                'w-full origin-bottom overflow-hidden rounded-[12px]',
+                'border border-[var(--msg-tool-card-border)]',
+                'bg-[var(--msg-tool-card-bg)]',
+                revealed ? 'animate-float-in' : 'animate-float-out',
               )}
-              style={
-                flyoutMaxWidth === null
-                  ? undefined
-                  : {
-                      minWidth: `min(220px, ${flyoutMaxWidth})`,
-                      maxWidth: `min(420px, ${flyoutMaxWidth}, calc(100vw - 32px))`,
-                    }
-              }
+              onAnimationEnd={() => {
+                if (!revealed) setRenderFlyout(false);
+              }}
             >
-              <div
-                aria-hidden={!revealed}
-                className={cn(
-                  'w-full origin-bottom overflow-hidden rounded-[12px]',
-                  'border border-[var(--msg-tool-card-border)]',
-                  'bg-[var(--msg-tool-card-bg)]',
-                  revealed ? 'animate-float-in' : 'animate-float-out',
-                )}
-                onAnimationEnd={() => {
-                  if (!revealed) setRenderFlyout(false);
-                }}
-              >
-                <div className="flex max-h-[280px] flex-col gap-[2px] overflow-y-auto px-[14px] py-[10px]">
-                  {todos.map((todo, i) => (
-                    <div
-                      key={i}
-                      className={cn(
-                        'flex h-[30px] items-center gap-[10px]',
-                        todo.status === 'in_progress' && animated && 'animate-pulse',
-                      )}
-                    >
+              <div className="flex max-h-[280px] flex-col gap-[2px] overflow-y-auto px-[14px] py-[10px]">
+                {todos.map((todo, i) => (
+                  <div key={i} className="flex h-[30px] items-center gap-[10px]">
                       {/* Icon */}
                       {todo.status === 'completed' && (
                         <CircleCheck
@@ -207,12 +260,10 @@ export function TodoListCard({
                         />
                       )}
                       {todo.status === 'in_progress' && (
-                        <Spinner
-                          icon={CircleDashed}
+                        <CircleDashed
                           size={18}
                           strokeWidth={1.5}
-                          spinning={animated}
-                          className="text-[var(--msg-tool-card-text)]"
+                          className="shrink-0 text-[var(--msg-tool-card-text)]"
                         />
                       )}
                       {todo.status === 'pending' && (
@@ -237,12 +288,11 @@ export function TodoListCard({
                       >
                         {todo.content}
                       </span>
-                    </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>

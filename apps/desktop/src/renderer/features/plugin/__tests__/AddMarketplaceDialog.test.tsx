@@ -86,6 +86,8 @@ describe('AddMarketplaceDialog', () => {
           lastRevision: null,
           source: { type: 'git' as const, url: 'https://git.acme.test/private/repo.git', sparsePaths: [] },
           pluginCount: 1,
+          skippedCount: 0,
+          unreadableCount: 0,
           status: 'ok' as const,
           errorCode: null,
         },
