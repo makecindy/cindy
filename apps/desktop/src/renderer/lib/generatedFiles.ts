@@ -51,9 +51,16 @@ interface ToolUseLike {
  */
 function dedupeKeyForPath(abs: string): string {
   const isWindowsShape = /^[a-zA-Z]:[\\/]/.test(abs) || abs.includes('\\');
+  if (!isWindowsShape) return abs;
   // 斜杠也归一:`C:/x/a.md`(命令文本常见形态)与 `C:\x\a.md`(Write 记录)是
-  // 同一文件,不折叠会重复出 chip。
-  return isWindowsShape ? abs.replace(/\//g, '\\').toLowerCase() : abs;
+  // 同一文件,不折叠会重复出 chip。连续分隔符同理折叠:命令文本常是二次转义的
+  // 包装串(如 powershell 包一层 node -e),提取出的 `C:\\x\\a.md` 与 `C:\x\a.md`
+  // 在 fs 层等价(Windows 归并重复分隔符),不折叠会对同一文件出两个 chip。
+  // UNC 头部的 `\\` 是路径语义的一部分,保留。
+  return abs
+    .replace(/\//g, '\\')
+    .replace(/(?<!^)\\{2,}/g, '\\')
+    .toLowerCase();
 }
 
 /**
@@ -63,7 +70,11 @@ function dedupeKeyForPath(abs: string): string {
  * 路径原样保留。
  */
 function canonicalizeWindowsShape(abs: string): string {
-  return /^[a-zA-Z]:[\\/]/.test(abs) ? abs.replace(/\//g, '\\') : abs;
+  // 连续分隔符折叠进画布路径本身(不只 dedupe key):stat 虽能容忍 `C:\\x`,但
+  // Explorer `/select` 与 chip 展示不该带转义残留。盘符形态不存在 UNC 头,可整段折叠。
+  return /^[a-zA-Z]:[\\/]/.test(abs)
+    ? abs.replace(/\//g, '\\').replace(/\\{2,}/g, '\\')
+    : abs;
 }
 
 /** 单条 tool_use 消息 → 它新建的文件原始路径列表(可能为空)。 */

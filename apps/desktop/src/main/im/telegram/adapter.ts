@@ -27,7 +27,7 @@ import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from 
 import { readTelegramPersona } from './behaviorStore';
 import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
-import { ui, PROCESSING_EMOJI } from './uiText';
+import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
 
 function ensureWorkingDir(botId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', `telegram-${botId}`);
@@ -69,6 +69,7 @@ export function buildTelegramAdapter(
     output: { kind: 'rich-card', im: telegramIm },
     config,
     ui,
+    interactionExpiredNotice: telegramUiText.expiredCardNotice,
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,
@@ -139,7 +140,9 @@ export function buildTelegramAdapter(
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
         agentText: `${persona}${ambientBlock}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
-        commit: assembly.commit,
+        commit: async () => {
+          await assembly.commit();
+        },
       };
     },
   };

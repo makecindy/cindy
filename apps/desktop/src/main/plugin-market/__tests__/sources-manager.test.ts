@@ -87,6 +87,8 @@ describe('MarketSourceManager local sources', () => {
     expect(added).toMatchObject({
       name: 'local-lib',
       pluginCount: 1,
+      skippedCount: 0,
+      unreadableCount: 0,
       status: 'ok',
     });
     expect(added.source).toEqual({ type: 'local', path: market });
@@ -94,6 +96,26 @@ describe('MarketSourceManager local sources', () => {
     const list = await manager.listSources();
     expect(list).toHaveLength(1);
     expect(list[0]?.name).toBe('local-lib');
+  });
+
+  it('reports skipped entries separately from an empty marketplace', async () => {
+    const root = makeRoot();
+    const market = path.join(root, 'my-market');
+    writeMarketplace(market, 'local-lib', [{ rel: 'plugins/a', id: 'alpha' }]);
+    const manifestPath = path.join(market, '.agents', 'plugins', 'marketplace.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+      plugins: Array<{ name: string; source: string }>;
+    };
+    manifest.plugins.push({ name: 'missing', source: 'plugins/missing' });
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const summary = await makeManager(root).addSource({ source: market });
+    expect(summary).toMatchObject({
+      pluginCount: 1,
+      skippedCount: 1,
+      unreadableCount: 0,
+      status: 'ok',
+    });
   });
 
   it('rejects a local source that is not a directory', async () => {
@@ -145,6 +167,8 @@ describe('MarketSourceManager local sources', () => {
     const list = await manager.listSources();
     expect(list[0]?.status).toBe('error');
     expect(list[0]?.errorCode).toBe('MARKET_SOURCE_INVALID');
+    expect(list[0]?.skippedCount).toBe(0);
+    expect(list[0]?.unreadableCount).toBe(0);
   });
 
   it('refreshes local sources by rescanning the manifest', async () => {

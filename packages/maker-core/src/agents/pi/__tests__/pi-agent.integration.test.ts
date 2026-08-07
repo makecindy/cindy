@@ -22,7 +22,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
@@ -355,6 +355,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
+            // 网关图片门控(assertImageInputSupported)按目录能力放行;多模态用例
+            // 走的正是本模型,不标会在 send 前被 PiImageInputUnsupportedError 拒收。
+            supportsImageInput: true,
           },
         ],
       },
@@ -420,7 +423,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'rejects a turn permission policy (Pi cannot enforce it) and honors steer cancellation before RPC',
+    'accepts a turn permission policy in ask, rejects it in Full Access, and honors steer cancellation before RPC',
     { timeout: 60_000 },
     async () => {
       const agent = new PiAgent(buildDeps());
@@ -434,13 +437,20 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         const requestsBefore = seenRequests.length;
 
-        // turnPermissionPolicy(IM 群等)是 host 回调,Pi 无法在其独立进程的工具边界执行
-        // → fail-closed 拒绝(任何档位),防止群上下文不经 owner 确认执行破坏性工具。
+        // ask/auto 下 Pi bridge 会把受控工具冒泡给 host，policy turn 可以启动。
         const policy = {
           origin: { kind: 'im' as const, channel: 'telegram' as const },
           confirmationSurface: 'channel' as const,
           forceConfirmToolCall: () => true,
         };
+        await expect(
+          handle.send({ type: 'user', content: 'policy-safe turn' }, { turnPermissionPolicy: policy }),
+        ).resolves.toBeUndefined();
+        await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(requestsBefore));
+
+        // Full Access 下 bridge 不上报 tool_call，host 无法兑现每轮策略，必须 preflight 拒绝。
+        await handle.setPermissionMode?.('bypassPermissions');
+        const requestsBeforeFullAccess = seenRequests.length;
         await expect(
           handle.send({ type: 'user', content: 'destructive?' }, { turnPermissionPolicy: policy }),
         ).rejects.toBeInstanceOf(TurnPermissionPolicyUnsupportedError);
@@ -453,8 +463,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           handle.steer({ type: 'user', content: 'late steer' }, { signal: aborted.signal }),
         ).rejects.toThrow(/cancelled before acceptance/);
 
-        // 两次都在到达假网关前被拦下:没有新请求打到 pi。
-        expect(seenRequests.length).toBe(requestsBefore);
+        // Full Access policy 与 cancelled steer 都在到达假网关前被拦下。
+        expect(seenRequests.length).toBe(requestsBeforeFullAccess);
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });

@@ -45,10 +45,10 @@
 | `auth-client` | 平台无关的 Cindy auth-server 客户端契约（zod） | desktop + mobile |
 | `model-providers` | 模型供应商目录 + 路由抽象（Anthropic／OpenAI／XD），纯逻辑 | desktop + mobile |
 | `anthropic-compat-proxy` | 本地回环 HTTP 代理：剥离 Anthropic 专有字段，让 Claude Code SDK 可经网关访问非 Anthropic 后端 | desktop |
-| `anthropic-responses-bridge` | 本地回环 HTTP 桥：Anthropic Messages API ↔ OpenAI Responses API 转换 | desktop |
+| `anthropic-responses-bridge` | 挂载在 `anthropic-compat-proxy` 回环 HTTP 代理内部的进程内协议转换处理器：作为 `RoutingDecision.localHandler` 完成 Anthropic Messages API ↔ OpenAI Responses API 转换 | desktop |
 | `responses-anthropic-bridge` | 本地 Responses → Anthropic Messages 桥：请求、图片／工具／thinking 转换与 Responses SSE 回译 | desktop |
 | `lizi-mcps` | 可复用 MCP server 集合（Google 套件、GitHub／GitLab、浏览器、scheduler 等） | desktop |
-| `cindy-tools` | 意识（Ghost）系统内部工具集（MCP），含 ghost 总机（`ghost_list` / `ghost_call`） | desktop |
+| `cindy-tools` | 意识（Ghost）系统内部工具集（MCP），含 ghost 总机（`ghost_list` / `ghost_info` / `ghost_call`） | desktop |
 | `browser-control-runtime` | 浏览器自动化运行时适配层（playwright-core + MCP） | desktop、lizi-mcps |
 | `file-browser-core` | 文件浏览核心：workdir 扫描、ignore 匹配、ripgrep 搜索；本地后端与远程守护进程共享 | desktop、remote-file-service |
 | `remote-file-service` | 远程文件服务：跑在远程 SSH 机器上的 NDJSON RPC 守护进程，封装 file-browser-core | desktop |

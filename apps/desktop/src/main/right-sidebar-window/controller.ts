@@ -61,6 +61,15 @@ export interface RsbWindowControllerDeps {
 const READY_TIMEOUT_MS = 8000;
 const MAX_DEFERRED_SESSIONS = 8;
 
+/**
+ * command 的宿主桶 session —— 裁决可见性与 deferred 排队都以它为准。
+ * open-turn-review 可跨会话(协同面板审查 worker 轮次:sessionId 是取数目标
+ * worker,tab 落在 lead 的桶),其余命令宿主即自身 sessionId。
+ */
+function commandHostSessionId(cmd: RsbWindowCommand): string {
+  return cmd.type === 'open-turn-review' ? (cmd.hostSessionId ?? cmd.sessionId) : cmd.sessionId;
+}
+
 export class RsbWindowController {
   private winRef: BrowserWindow | null = null;
   /** BrowserWindow.close() 到 closed 事件之间仍未 destroyed，不能继续当活 host。 */
@@ -209,7 +218,7 @@ export class RsbWindowController {
     return Boolean(
       this.lastContext?.available &&
         this.lastContext.sessionId &&
-        this.lastContext.sessionId === cmd.sessionId,
+        this.lastContext.sessionId === commandHostSessionId(cmd),
     );
   }
 
@@ -271,7 +280,10 @@ export class RsbWindowController {
   }
 
   private enqueueDeferredCommand(command: RsbWindowCommand): void {
-    const previous = this.deferredCommands.get(command.sessionId);
+    // 按宿主桶排队:跨会话 open-turn-review 属于 lead 的桶,须由 lead 上下文
+    // flush;按 worker sessionId 入队会在 context 保持 lead 时永远刷不出来。
+    const hostSessionId = commandHostSessionId(command);
+    const previous = this.deferredCommands.get(hostSessionId);
     if (
       command.type === 'ensure-orca-workers-tab' &&
       previous?.type === 'ensure-orca-workers-tab' &&
@@ -281,13 +293,13 @@ export class RsbWindowController {
       return;
     }
     if (
-      !this.deferredCommands.has(command.sessionId) &&
+      !this.deferredCommands.has(hostSessionId) &&
       this.deferredCommands.size >= MAX_DEFERRED_SESSIONS
     ) {
       const oldest = this.deferredCommands.keys().next().value as string | undefined;
       if (oldest) this.deferredCommands.delete(oldest);
     }
-    this.deferredCommands.set(command.sessionId, command);
+    this.deferredCommands.set(hostSessionId, command);
   }
 
   private flushDeferredCommandsToDetachedHost(): void {

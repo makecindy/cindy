@@ -59,6 +59,21 @@ describe('serialized IM connection lifecycle', () => {
     expect(stopConnection).toHaveBeenCalledTimes(2);
   });
 
+  it('forwards the stop reason to the serialized connection teardown', async () => {
+    const stopConnection = vi.fn(async (_reason?: string) => undefined);
+    const lifecycle = createSerializedConnectionLifecycle({
+      startConnection: vi.fn(async () => undefined),
+      stopConnection,
+      onStartError: vi.fn(),
+    });
+
+    lifecycle.start();
+    await vi.waitFor(() => expect(lifecycle.isStarted()).toBe(true));
+    await lifecycle.stop('quit');
+
+    expect(stopConnection).toHaveBeenCalledWith('quit');
+  });
+
   it('cancels a queued start when logout wins the race', async () => {
     const startConnection = vi.fn(async () => undefined);
     const stopConnection = vi.fn(async () => undefined);

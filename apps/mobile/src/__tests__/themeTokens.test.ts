@@ -44,8 +44,9 @@ describe('theme tokens', () => {
     expect(palettes.dark).toBe(darkColors);
   });
 
-  it('spinner 语义循环例外与 DESIGN.md §14.4 保持一致', () => {
+  it('语义动效例外与 DESIGN.md §14.4 保持一致', () => {
     expect(motionDuration.spinnerCycle).toBe(1000);
+    expect(motionDuration.sidebarTitleMarqueePerViewport).toBe(2400);
   });
 
   it('每个颜色 token 都是非空字符串(login 登录皮嵌套组下钻)', () => {

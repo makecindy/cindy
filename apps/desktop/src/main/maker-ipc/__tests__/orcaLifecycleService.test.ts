@@ -7,7 +7,14 @@ import {
   type OrcaLifecycleDeps,
 } from '../orcaLifecycleService';
 import type { DispatchWorkerTaskResult } from '../orcaTeamService';
-import type { OrcaWorkerCreationResult } from '../orcaWorkerCreationService';
+import type {
+  OrcaTeamSnapshot,
+  OrcaWorkerCreationResult,
+} from '../orcaWorkerCreationService';
+
+function activeTeam(): OrcaTeamSnapshot {
+  return { id: 'team-existing', leadSessionId: 'lead-1' };
+}
 
 function createdWorker(overrides: Partial<Extract<OrcaWorkerCreationResult, { ok: true }>> = {}): Extract<OrcaWorkerCreationResult, { ok: true }> {
   return {
@@ -36,6 +43,10 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
     createActiveTeam: vi.fn(async (leadSessionId) => {
       calls.push(`createActiveTeam:${leadSessionId}`);
       return { id: 'team-1', leadSessionId };
+    }),
+    getWorkerPermissionMode: vi.fn(() => 'auto' as const),
+    setWorkerPermissionMode: vi.fn((workerPermissionMode) => {
+      calls.push(`setWorkerPermissionMode:${workerPermissionMode}`);
     }),
     createWorkerInTeam: vi.fn(async (params) => {
       calls.push(`createWorkerInTeam:${params.teamId}:${params.label}`);
@@ -111,6 +122,7 @@ describe('OrcaLifecycleService', () => {
     await expect(service.startTeam({ leadSessionId: 'lead-1' })).resolves.toEqual({
       ok: true,
       teamId: 'team-1',
+      workerPermissionMode: 'auto',
     });
 
     expect(calls).toEqual([
@@ -123,12 +135,13 @@ describe('OrcaLifecycleService', () => {
 
   it('reuses an existing team and refreshes lead state for MCP start_team', async () => {
     const { calls, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
     });
 
     await expect(service.startTeam({ leadSessionId: 'lead-1' })).resolves.toEqual({
       ok: true,
       teamId: 'team-existing',
+      workerPermissionMode: 'auto',
       reused: true,
     });
 
@@ -137,6 +150,60 @@ describe('OrcaLifecycleService', () => {
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:undefined',
     ]);
+  });
+
+  it('persists an explicit Full access Worker creation preference when start_team creates the team', async () => {
+    const { deps, service } = createDeps();
+
+    await expect(
+      service.startTeam({
+        leadSessionId: 'lead-1',
+        workerPermissionMode: 'bypassPermissions',
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      teamId: 'team-1',
+      workerPermissionMode: 'bypassPermissions',
+    });
+
+    expect(deps.createActiveTeam).toHaveBeenCalledWith('lead-1');
+    expect(deps.setWorkerPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+  });
+
+  it('switches the shared Worker creation preference when start_team explicitly specifies it', async () => {
+    const { calls, deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+    });
+
+    await expect(
+      service.startTeam({
+        leadSessionId: 'lead-1',
+        workerPermissionMode: 'bypassPermissions',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      teamId: 'team-existing',
+      workerPermissionMode: 'bypassPermissions',
+      reused: true,
+    });
+
+    expect(deps.setWorkerPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(calls).toContain('setWorkerPermissionMode:bypassPermissions');
+  });
+
+  it('uses the saved Full access preference when start_team omits the mode', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      getWorkerPermissionMode: vi.fn(() => 'bypassPermissions' as const),
+    });
+
+    await expect(service.startTeam({ leadSessionId: 'lead-1' })).resolves.toMatchObject({
+      ok: true,
+      teamId: 'team-existing',
+      workerPermissionMode: 'bypassPermissions',
+      reused: true,
+    });
+    expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
   });
 
   it('fails a newly created team when start_team lead activation fails', async () => {
@@ -206,7 +273,7 @@ describe('OrcaLifecycleService', () => {
 
   it('creates a worker in an existing team and dispatches the initial task before broadcasting', async () => {
     const { calls, deps, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
     });
 
     await expect(
@@ -233,9 +300,29 @@ describe('OrcaLifecycleService', () => {
     ]);
   });
 
+  it('uses the saved Worker creation preference for later create_worker calls', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      getWorkerPermissionMode: vi.fn(() => 'bypassPermissions' as const),
+    });
+
+    await expect(
+      service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'codex' as AgentKind,
+        label: 'reviewer',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
+    );
+  });
+
   it('keeps a created worker when initial task dispatch throws before vendor dispatch', async () => {
     const { calls, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
       dispatchWorkerTask: vi.fn(async (params) => {
         calls.push(`dispatchWorkerTask:${params.dispatchMeta.context}`);
         throw new Error('dispatch failed');
@@ -274,7 +361,7 @@ describe('OrcaLifecycleService', () => {
 
   it('sends the shared ready placeholder when create_worker has no initial task', async () => {
     const { calls, deps, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
     });
 
     await expect(
@@ -308,7 +395,7 @@ describe('OrcaLifecycleService', () => {
 
   it('treats blank create_worker initial task as empty and does not dispatch whitespace', async () => {
     const { deps, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
     });
 
     await expect(
@@ -335,7 +422,7 @@ describe('OrcaLifecycleService', () => {
 
   it('rolls back create_worker when the ready placeholder is not accepted', async () => {
     const { calls, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
       sendWorkerReadyPlaceholder: vi.fn(async (params) => {
         calls.push(`sendWorkerReadyPlaceholder:${params.entrypoint}:${params.context}`);
         throw new Error('ready placeholder cancelled');
@@ -364,7 +451,7 @@ describe('OrcaLifecycleService', () => {
 
   it('rolls back create_worker when the ready placeholder start fails', async () => {
     const { calls, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
       sendWorkerReadyPlaceholder: vi.fn(async (params) => {
         calls.push(`sendWorkerReadyPlaceholder:${params.entrypoint}:${params.context}`);
         throw new Error('ready placeholder start failed');
@@ -393,7 +480,7 @@ describe('OrcaLifecycleService', () => {
 
   it('keeps an explicit create_worker initial task unchanged instead of replacing it with the ready placeholder', async () => {
     const { deps, service } = createDeps({
-      getActiveTeamByLead: vi.fn(async () => ({ id: 'team-existing', leadSessionId: 'lead-1' })),
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
     });
 
     await expect(
@@ -445,6 +532,29 @@ describe('OrcaLifecycleService', () => {
       'broadcastSessionCreated:worker-session-1',
       'broadcastOrcaWorkerChanged:lead-1',
     ]);
+  });
+
+  it('uses and saves the explicitly selected preference for the first UI-created Worker', async () => {
+    const { deps, service } = createDeps();
+
+    await expect(
+      service.enableTeam({
+        leadSessionId: 'lead-1',
+        workerAgent: 'codex',
+        role: 'reviewer',
+        label: 'reviewer',
+        workerPermissionMode: 'bypassPermissions',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      workerPermissionMode: 'bypassPermissions',
+    });
+
+    expect(deps.createActiveTeam).toHaveBeenCalledWith('lead-1');
+    expect(deps.setWorkerPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
+    );
   });
 
   it('uses the worker role slug as the default label when enabling a team', async () => {

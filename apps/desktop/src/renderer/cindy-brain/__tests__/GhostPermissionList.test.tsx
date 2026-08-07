@@ -121,6 +121,16 @@ describe('GhostPermissionList(装入全量清单)', () => {
     expect(screen.queryByText('settings.ghosts.perm.codeDetail')).toBeNull();
   });
 
+  it('Cindy Web Search 能力在安装权限清单中单独披露', () => {
+    const search: GhostManifest = {
+      ...chip(),
+      cindy: { search: ['web'] },
+    };
+    render(<GhostPermissionList items={ghostPermissionItems(search)} />);
+    expect(screen.getByText('settings.ghosts.perm.cindySearchWeb')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.cindySearchWebDetail')).toBeTruthy();
+  });
+
   it('Node 持久凭证单独披露明文注入范围', () => {
     const node: GhostManifest = {
       ...chip(),
@@ -193,6 +203,13 @@ describe('GhostPermissionDiffView(更新权限 diff)', () => {
     // 真正的权限变化(新增网络域名)仍在折叠区之外,第一屏就能看到。
     expect(screen.getByText(/perm\.networkHost:.*api\.example\.com/)).toBeTruthy();
     expect(screen.getByText('settings.ghosts.perm.added')).toBeTruthy();
+    // 新增 network 槽后 code 项的主机固定说明换版本(codeDetail → codeDetailNetwork):
+    // 指纹含 detailKey 后这算权限面变化,但同 key 配对成一条「更新」行,
+    // 不渲染成「移除+新增」两条误导用户。
+    expect(screen.getByText('settings.ghosts.perm.updated')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.code')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.codeDetailNetwork')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.perm.removed')).toBeNull();
     // 4 条工具行收进一个折叠组,原文默认不渲染。
     expect(screen.getByText(/perm\.itemCount:.*"count":4/)).toBeTruthy();
     expect(screen.queryByText('新说明 A（整段接口文档）')).toBeNull();

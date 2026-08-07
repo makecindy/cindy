@@ -802,6 +802,11 @@ export interface TurnStartedNotification {
   params: { threadId: string; turn: { id: string; [k: string]: unknown }; [k: string]: unknown };
 }
 
+export interface TurnDiffUpdatedNotification {
+  method: 'turn/diff/updated';
+  params: { threadId: string; turnId: string; diff: string; [k: string]: unknown };
+}
+
 /**
  * v2.rs TurnCompletedNotification: { thread_id, turn: Turn }
  * Turn 包含 status (TurnStatus enum: completed/interrupted/failed/inProgress)
@@ -1154,6 +1159,7 @@ export interface ItemEnvelope {
 export type ServerNotification =
   | ThreadStartedNotification
   | TurnStartedNotification
+  | TurnDiffUpdatedNotification
   | TurnCompletedNotification
   | ThreadTokenUsageUpdatedNotification
   | ItemStartedNotification

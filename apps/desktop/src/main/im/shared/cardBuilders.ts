@@ -18,7 +18,6 @@
 import type {
   InteractionRequest,
   AgentKind,
-  AskUserQuestionItem,
   Effort,
   PermissionModeDescriptor,
 } from '@cindy/maker-core';
@@ -27,20 +26,22 @@ import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { InteractiveCardSpec } from '@cindy/im';
 
 import type { ImUiTextPack } from './types';
+import {
+  composeInteractionModel,
+  truncateBlock,
+  BTN_LABEL_MAX,
+  IM_PERMISSION_INPUT_PREVIEW_MAX,
+  MAX_PLAN_LEN,
+} from './interactionCardModel';
 import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
 
-const MAX_PLAN_LEN = 1500;
-const MAX_INPUT_PREVIEW = 800;
-const MAX_OPTIONS = 6;
+/** IM 卡片文本截断(实现见 interactionCardModel.truncateBlock)。 */
+const truncate = truncateBlock;
 
-function truncate(s: string, max: number): string {
-  if (!s) return '';
-  return s.length > max ? `${s.slice(0, max)}\n\n…(已截断)` : s;
-}
-
+/** 工具入参 -> pretty JSON 预览(IM 卡片正文有排版空间, 与 hook 侧的单行摘要不同)。 */
 function previewInput(input: Record<string, unknown>): string {
   try {
-    return truncate(JSON.stringify(input, null, 2), MAX_INPUT_PREVIEW);
+    return truncate(JSON.stringify(input, null, 2), IM_PERMISSION_INPUT_PREVIEW_MAX);
   } catch {
     return '<unserializable>';
   }
@@ -114,9 +115,10 @@ export function createCardBuilders(
     // ── permission ──────────────────────────────────────────────────────────
 
     buildPermissionCard(req) {
+      const model = composeInteractionModel(req);
       return {
-        title: ui.cards.permission.title(req.toolName),
-        body: `${ui.cards.permission.paramsLabel}\n\`\`\`json\n${previewInput(req.input)}\n\`\`\``,
+        title: ui.cards.permission.title(model.toolName),
+        body: `${ui.cards.permission.paramsLabel}\n\`\`\`json\n${previewInput(model.input)}\n\`\`\``,
         buttons: [
           {
             id: 'permission:allow:once',
@@ -141,22 +143,17 @@ export function createCardBuilders(
     },
 
     // ── ask_user_question ───────────────────────────────────────────────────
-    // v1 simplification (mirrors legacy cardRenderer behaviour):
-    // - render only the FIRST question
-    // - max 6 options (single-select); multiSelect is downgraded to single-select
+    // v1 简化(只渲染第一问 / 至多 6 个选项 / multiSelect 降级单选)已收进
+    // interactionCardModel.composeInteractionModel — 这里只做渲染。
 
     buildAskUserCard(req) {
-      const question: AskUserQuestionItem | undefined = req.questions[0];
-      if (!question) return null;
+      const model = composeInteractionModel(req);
+      if (!model) return null;
 
-      const headerText = question.header || question.question;
-      const options = (question.options ?? []).slice(0, MAX_OPTIONS);
-      const bodyExtra =
-        question.header && question.header !== question.question
-          ? `\n${question.question}`
-          : '';
+      const { headerText, question } = model;
+      const bodyExtra = model.questionBody ? `\n${model.questionBody}` : '';
 
-      if (options.length === 0) {
+      if (model.degraded) {
         return {
           title: ui.cards.ask.title(headerText),
           body: bodyExtra
@@ -165,7 +162,7 @@ export function createCardBuilders(
           buttons: [
             {
               id: 'ask:noop',
-              label: '继续',
+              label: model.choices[0].label ?? '',
               type: 'default',
               payload: {
                 requestId: req.requestId,
@@ -174,7 +171,7 @@ export function createCardBuilders(
                 // headerText 只作卡片标题, 不参与 answers 匹配。
                 questionText: question.question,
                 questionHeader: headerText,
-                optionLabel: '',
+                optionLabel: model.choices[0].answerText ?? '',
               },
             },
           ],
@@ -184,15 +181,15 @@ export function createCardBuilders(
       return {
         title: ui.cards.ask.title(headerText),
         body: bodyExtra || ' ',
-        buttons: options.map((opt) => ({
+        buttons: model.choices.map((choice) => ({
           id: 'ask:pick',
-          label: truncate(opt.label, 30),
+          label: truncate(choice.label ?? '', BTN_LABEL_MAX),
           type: 'default' as const,
           payload: {
             requestId: req.requestId,
             questionText: question.question,
             questionHeader: headerText,
-            optionLabel: opt.label,
+            optionLabel: choice.answerText ?? '',
           },
         })),
       };
@@ -201,9 +198,10 @@ export function createCardBuilders(
     // ── plan_review ─────────────────────────────────────────────────────────
 
     buildPlanReviewCard(req) {
+      const model = composeInteractionModel(req);
       return {
         title: ui.cards.plan.title,
-        body: truncate(req.plan, MAX_PLAN_LEN),
+        body: truncate(model.plan, MAX_PLAN_LEN),
         buttons: [
           {
             id: 'plan:approve',

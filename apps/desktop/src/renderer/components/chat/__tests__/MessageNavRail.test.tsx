@@ -15,29 +15,21 @@ vi.mock('react-i18next', () => ({
 }));
 
 // 预览卡内容不在本文件的覆盖范围(Content 直接丢掉,与原先 Tip stub 只透传
-// children 等价)。Provider 记**挂载中的实例数**而不是渲染次数:组件会因
-// 测量 setState 反复重渲,计渲染次数是脆的;挂载数对重渲染免疫。
-const tooltipMocks = vi.hoisted(() => ({ mountedProviders: { value: 0 } }));
-
-vi.mock('@/components/ui/tooltip', async () => {
-  const { useEffect } = await import('react');
-  return {
-    Tooltip: {
-      Provider: ({ children }: { children: ReactNode }) => {
-        useEffect(() => {
-          tooltipMocks.mountedProviders.value += 1;
-          return () => {
-            tooltipMocks.mountedProviders.value -= 1;
-          };
-        }, []);
-        return <>{children}</>;
-      },
-      Root: ({ children }: { children: ReactNode }) => <>{children}</>,
-      Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-      Content: () => null,
-    },
-  };
-});
+// children 等价)。Provider 放一个隐藏结构标记,直接断言当前 DOM 中的实例数,
+// 避免 Windows 全量 shard 高负载时 useEffect 挂载计数尚未刷新造成误报。
+vi.mock('@/components/ui/tooltip', () => ({
+  Tooltip: {
+    Provider: ({ children }: { children: ReactNode }) => (
+      <>
+        <span data-testid="message-nav-tooltip-provider" hidden />
+        {children}
+      </>
+    ),
+    Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+    Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+    Content: () => null,
+  },
+}));
 
 import { MessageNavRail } from '../MessageNavRail';
 import { NAV_RAIL_ACTIVE_FUDGE_PX, type NavRailEntry } from '../messageNavRailModel';
@@ -92,7 +84,6 @@ const ENTRIES: NavRailEntry[] = [
 describe('MessageNavRail', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
-    tooltipMocks.mountedProviders.value = 0;
     vi.stubGlobal('ResizeObserver', ResizeObserverStub);
     // jsdom 没有 CSS.escape(真实渲染器 Chromium 提供);测试 id 都是安全字符。
     vi.stubGlobal('CSS', { escape: (s: string) => s });
@@ -152,7 +143,7 @@ describe('MessageNavRail', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('button')).toHaveLength(5);
     });
-    expect(tooltipMocks.mountedProviders.value).toBe(1);
+    expect(screen.getAllByTestId('message-nav-tooltip-provider')).toHaveLength(1);
   });
 
   it('点击刻度回调 onJump(clientId),且点击项乐观标记为当前项', async () => {

@@ -9,6 +9,11 @@ import {
   type GhostManifest,
 } from '../../shared/ghost.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
+import {
+  CINDY_OFFICIAL_GHOST_TRUST,
+  hasCindyOfficialTrustMetadata,
+} from './GhostManager.js';
+import { withGhostInstallLock } from './ghostInstallLock.js';
 
 /**
  * builtinGhostProvisioner — 内置意识的启动播种(第一方可信通道)。
@@ -363,45 +368,64 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           continue;
         }
 
-        const installedDir = path.join(repoRootDir, id);
-        const installedExists = fs.existsSync(path.join(installedDir, GHOST_MANIFEST_FILE));
+        await withGhostInstallLock(id, async () => {
+          const installedDir = path.join(repoRootDir, id);
+          const installedExists = fs.existsSync(path.join(installedDir, GHOST_MANIFEST_FILE));
 
-        // 3) 受众:不命中 → 回收"播种装的"(seeded 台账内),手动装的不动。
-        if (!matchesAudience(config.get(id)?.audience, identity)) {
-          if (seeded.has(id) && installedExists) {
+          // 3) 受众:不命中 → 回收"播种装的"(seeded 台账内),手动装的不动。
+          if (!matchesAudience(config.get(id)?.audience, identity)) {
+            if (seeded.has(id) && installedExists) {
+              markApplyStart();
+              await deps.beforeRemove?.(id);
+              await fs.promises.rm(installedDir, { recursive: true, force: true });
+              seeded.delete(id);
+              outcome.removed.push(id);
+              log?.info('builtin ghost removed: audience no longer matches', { id });
+            } else {
+              outcome.skipped.push(id);
+            }
+            return;
+          }
+
+          // 4) 指纹比对(忽略点开头文件:`.disabled` 是用户状态不是内容)。
+          if (installedExists) {
+            const seedHash = await hashDirContent(seedDir);
+            const installedHash = await hashDirContent(installedDir);
+            if (seedHash === installedHash) {
+              if (id === 'cindy-github' && !hasCindyOfficialTrustMetadata(installedDir)) {
+                // receipt 与官方字节必须在同一把安装锁内、经同一次 staging swap
+                // 原子落位；不能在 hash 后单独给可能已被替换的目录补 trust。
+                const wasDisabled = fs.existsSync(path.join(installedDir, '.disabled'));
+                markApplyStart();
+                await swapInSeed(seedDir, installedDir, repoRootDir, id, {
+                  disabled: wasDisabled,
+                  trust: CINDY_OFFICIAL_GHOST_TRUST,
+                });
+              }
+              outcome.skipped.push(id);
+              return;
+            }
+            const wasDisabled = fs.existsSync(path.join(installedDir, '.disabled'));
             markApplyStart();
-            await deps.beforeRemove?.(id);
-            await fs.promises.rm(installedDir, { recursive: true, force: true });
-            seeded.delete(id);
-            outcome.removed.push(id);
-            log?.info('builtin ghost removed: audience no longer matches', { id });
-          } else {
-            outcome.skipped.push(id);
+            await swapInSeed(seedDir, installedDir, repoRootDir, id, {
+              disabled: wasDisabled,
+              ...(id === 'cindy-github' ? { trust: CINDY_OFFICIAL_GHOST_TRUST } : {}),
+            });
+            seeded.add(id);
+            outcome.updated.push(manifest);
+            log?.info('builtin ghost updated to bundled content', { id, version: manifest.version });
+            return;
           }
-          continue;
-        }
 
-        // 4) 指纹比对(忽略点开头文件:`.disabled` 是用户状态不是内容)。
-        if (installedExists) {
-          const seedHash = await hashDirContent(seedDir);
-          const installedHash = await hashDirContent(installedDir);
-          if (seedHash === installedHash) {
-            outcome.skipped.push(id);
-            continue;
-          }
-          const wasDisabled = fs.existsSync(path.join(installedDir, '.disabled'));
           markApplyStart();
-          await swapInSeed(seedDir, installedDir, repoRootDir, id, { disabled: wasDisabled });
-          seeded.add(id);
-          outcome.updated.push(manifest);
-          log?.info('builtin ghost updated to bundled content', { id, version: manifest.version });
-        } else {
-          markApplyStart();
-          await swapInSeed(seedDir, installedDir, repoRootDir, id, { disabled: false });
+          await swapInSeed(seedDir, installedDir, repoRootDir, id, {
+            disabled: false,
+            ...(id === 'cindy-github' ? { trust: CINDY_OFFICIAL_GHOST_TRUST } : {}),
+          });
           seeded.add(id);
           outcome.installed.push(manifest);
           log?.info('builtin ghost installed', { id, version: manifest.version });
-        }
+        });
       } catch (err) {
         outcome.skipped.push(id);
         log?.warn('builtin ghost provisioning failed', {
@@ -628,7 +652,7 @@ async function swapInSeed(
   finalDir: string,
   repoRootDir: string,
   id: string,
-  opts: { disabled: boolean },
+  opts: { disabled: boolean; trust?: typeof CINDY_OFFICIAL_GHOST_TRUST },
 ): Promise<void> {
   const rand = crypto.randomBytes(4).toString('hex');
   const stagingDir = path.join(repoRootDir, `.cindy-provisioning-${id}-${rand}`);
@@ -638,6 +662,12 @@ async function swapInSeed(
     await copyDirSkippingDotEntries(seedDir, stagingDir);
     if (opts.disabled) {
       await fs.promises.writeFile(path.join(stagingDir, '.disabled'), '');
+    }
+    if (opts.trust) {
+      await fs.promises.writeFile(
+        path.join(stagingDir, '.cindy-trust.json'),
+        `${JSON.stringify(opts.trust, null, 2)}\n`,
+      );
     }
   } catch (err) {
     await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});

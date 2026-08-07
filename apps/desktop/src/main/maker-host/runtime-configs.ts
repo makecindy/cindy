@@ -42,13 +42,28 @@ function ripgrepBinaryName(): string {
   return process.platform === 'win32' ? 'rg.exe' : 'rg';
 }
 
+// 探测结果 memoize:pathPrepends getter 每次 codex spawn 都会读、getRipgrepBinaryPath
+// 被 file-browser / pi-host 每次搜索调用,不能每次都重打 fs 探测 + chmod。
+// 只缓存成功结果 —— 探测失败的 throw 不缓存,下次调用重新探测(dev 期补装 rg 后
+// 不必纠结缓存住了失败态)。
+let cachedBundledRipgrepDir: string | undefined;
+
+// 不在模块顶层调用(issue #1956):本函数在 dev/测试分支依赖 app.getAppPath(),
+// 顶层求值会让任何 import 链摸到本模块的纯 node / vitest 环境在收集阶段就炸。
+// 调用点:desktopCodexRuntimeConfig.pathPrepends 的 lazy getter、
+// getRipgrepBinaryPath(),以及启动期 fail-fast 的 ensureBundledRipgrepReady()。
 function bundledRipgrepDir(): string {
+  if (cachedBundledRipgrepDir) return cachedBundledRipgrepDir;
   const key = platformKey();
   const file = ripgrepBinaryName();
   const candidates = app.isPackaged
     ? [path.join(process.resourcesPath, 'tools', 'ripgrep')]
     : [
-        path.join(app.getAppPath(), '..', '..', 'apps', 'ripgrep-bin', key),
+        // 非打包环境(dev / 测试)首选 app 目录;测试环境的 electron mock 可能
+        // 不提供 getAppPath,此时跳过该候选,用 cwd 相对候选兜底。
+        ...(typeof app.getAppPath === 'function'
+          ? [path.join(app.getAppPath(), '..', '..', 'apps', 'ripgrep-bin', key)]
+          : []),
         path.join(process.cwd(), 'apps', 'ripgrep-bin', key),
         path.join(process.cwd(), '..', 'ripgrep-bin', key),
       ];
@@ -59,11 +74,12 @@ function bundledRipgrepDir(): string {
     if (process.platform !== 'win32') {
       try { fs.chmodSync(bin, 0o755); } catch { /* ignore */ }
     }
+    cachedBundledRipgrepDir = dir;
     return dir;
   }
 
   throw new Error(
-    `Bundled ripgrep not found for ${key}. Run "pnpm update:ripgrep" before starting desktop dev or packaging.`,
+    `Bundled ripgrep not found for ${key}. Run "pnpm install:ripgrep" before starting desktop dev or packaging.`,
   );
 }
 
@@ -74,6 +90,19 @@ function bundledRipgrepDir(): string {
  */
 export function getRipgrepBinaryPath(): string {
   return path.join(bundledRipgrepDir(), ripgrepBinaryName());
+}
+
+/**
+ * 启动期 fail-fast 预热(issue #1956):import 本模块不再探测 ripgrep(见
+ * desktopCodexRuntimeConfig.pathPrepends 的 lazy getter),缺 rg 的显式失败由
+ * 两个启动期调用点承担 —— bootstrap 的 splash check-environment(Phase 2.5,
+ * 缺失时 splash 进失败态可重试,与 claude/codex binary 缺失同一体验)和
+ * getMaker() 首次构造(防御性断言,与那里的 claude/codex 检查同层)。
+ * dev 忘跑 "pnpm install:ripgrep" 会在 splash 即失败;生产打包缺资源同样
+ * 在启动期暴露,语义不变。
+ */
+export function ensureBundledRipgrepReady(): void {
+  bundledRipgrepDir();
 }
 
 // memorySettings 在 main 启动期已 ready (userData 同步可访问)。
@@ -239,7 +268,13 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   behaviorFlags: (ctx) => (ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
   // 产品身份 + Skill 来源优先级 + Codex 专属段。
   systemPrompt: composeHostPrompt(codexSystemPrompt),
-  pathPrepends: [bundledRipgrepDir()],
+  // lazy getter(与 endpoint/memoryEnabled 同一惯用法,issue #1956):import 期
+  // 不探测 bundled ripgrep,纯 node / vitest 环境 import 本模块不再炸;真正的
+  // fail-fast 由 maker-host 启动期的 ensureBundledRipgrepReady() 承担,此处 getter
+  // 在 env-builder 每次 codex spawn 时求值(结果已 memoize)。
+  get pathPrepends() {
+    return [bundledRipgrepDir()];
+  },
   userDataPath: app.getPath('userData'),
   get memoryEnabled() {
     return readMemorySettings().codex;

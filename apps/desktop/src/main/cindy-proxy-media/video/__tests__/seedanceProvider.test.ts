@@ -32,6 +32,14 @@ describe('seedance provider · capabilities', () => {
       true,
     );
   });
+  it('exposes the catalog Seedance 2.5 id as an explicit opt-in model', () => {
+    expect(
+      p.capabilities.modelAliases.find((a) => a.alias === 'bytedance/seedance-2.5'),
+    ).toMatchObject({
+      internalModel: 'doubao-seedance-2-5-260628',
+    });
+    expect(p.capabilities.expectedSecondsByAlias['bytedance/seedance-2.5']).toBe(300);
+  });
   it('首尾帧模式上限 2 张,参考图模式 9 张(同一个 2.0 模型的两种 role)', () => {
     expect(p.capabilities.maxImagesByRefMode).toEqual({
       first_and_last_frame: 2,
@@ -151,6 +159,21 @@ describe('seedance provider · submit body shape', () => {
     expect(body.content).toHaveLength(3);
     expect(body.content[1].role).toBe('first_frame');
     expect(body.content[2].role).toBe('last_frame');
+  });
+
+  it('Seedance 2.5: translates the catalog id to the Volcengine model id', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: 'cgt-FAKE-25' }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const p = makeProvider(fetchMock);
+    const handle = await p.submit(
+      { prompt: '一只猫在雨里奔跑' },
+      'bytedance/seedance-2.5',
+    );
+    const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.model).toBe('doubao-seedance-2-5-260628');
+    expect(handle.modelUsed).toBe('doubao-seedance-2-5-260628');
   });
 
   it('refMode:reference_image → 每张图都是 role:reference_image,顺序原样保留', async () => {

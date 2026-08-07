@@ -2698,6 +2698,41 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).not.toHaveBeenCalled();
   });
 
+  it('ui continue with a queue-head recovery resends the failed head, skips onUiRetry, and drops the synthetic continue', async () => {
+    const h = createHarness();
+    const sid = 'ui-continue-queue-head';
+    h.sendToAgent.mockResolvedValueOnce(hostSendFailure('SEND_FAILED', 'boom'));
+
+    h.coordinator.enqueue(sid, makeItem('q-head', 'never dispatched'));
+    await flush();
+    expect(latestProjection(h.projections).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'q-head',
+    });
+
+    // UI「继续」按钮(sendUiTrigger → enqueue CONTINUE_AFTER_ERROR_PROMPT):
+    // 等价 retryLastError 重发队首 A,合成 continue 项不入队/不派发;
+    // queue-head 从未成为 turn,与 retryLastError 同口径**不**发 onUiRetry。
+    h.sendToAgent.mockResolvedValueOnce(sendSuccess());
+    // text 是 CONTINUE_AFTER_ERROR_PROMPT → enqueue 入口 captureOriginalSyntheticTrigger
+    // 自动识别为 'continue'(isUiContinuationItem 判定),无需也不能显式赋值。
+    const continueItem = makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT);
+    h.coordinator.enqueue(sid, continueItem);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.recovery).toBeNull();
+    expect(projection.pendingQueue.map((q) => q.clientId)).toEqual([]);
+    // 第二次派发的是队首 A(never dispatched),不是 continue 项。
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'never dispatched',
+    });
+    // queue-head 从不发 onUiRetry(与 retryLastError 语义一致)。
+    expect(h.onUiRetry).not.toHaveBeenCalled();
+  });
+
   it('queue-head retry never substitutes the continue prompt and redrains the original head', async () => {
     const h = createHarness();
     const sid = 'retry-continue-queue-head';
@@ -2756,9 +2791,9 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
   });
 
-  it('enqueue keeps a queue-head recovery blocked (no silent resend of the failed head)', async () => {
+  it('explicit user input abandons a queue-head recovery and dispatches the new message', async () => {
     const h = createHarness();
-    const sid = 'enqueue-preserves-queue-head-recovery';
+    const sid = 'enqueue-unlocks-queue-head-recovery';
     h.sendToAgent.mockResolvedValueOnce(hostSendFailure('SEND_FAILED', 'boom'));
 
     h.coordinator.enqueue(sid, makeItem('q-head', 'never dispatched'));
@@ -2768,15 +2803,56 @@ describe('AgentInputCoordinator send transaction', () => {
       clientId: 'q-head',
     });
 
-    // queue-head recovery 语义不变:失败消息还躺在队首,新消息只排队,
-    // 不触发对失败队首的静默重发。
+    // 用户显式新输入 = 表态「不重试旧消息」(2026-07-13 口径,与 active-turn 对齐):
+    // 放弃从未 accepted 的队首 A(摘除 + onDiscardedQueuedMessage 可见化),B 正常派发。
+    const discarded: string[] = [];
+    h.onDiscardedQueuedMessage.mockImplementation((_sid, item) => {
+      discarded.push(item.clientId);
+    });
+    h.sendToAgent.mockResolvedValueOnce(sendSuccess());
     h.coordinator.enqueue(sid, makeItem('q-second', 'later message'));
     await flush();
 
     const projection = latestProjection(h.projections);
+    expect(projection.recovery).toBeNull();
+    expect(projection.pendingQueue.map((q) => q.clientId)).toEqual([]);
+    expect(discarded).toEqual(['q-head']);
+    // 新消息 B 派发(而非静默重发 A):sendToAgent 第二次收到的是 B 的正文。
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'later message',
+    });
+  });
+
+  it.each([
+    { kind: 'scheduler', scheduleId: 's1', scheduleName: 's1' } as const,
+    { kind: 'orca', senderLabel: 'worker-1' } as const,
+  ])('automatic input ($kind) does not unlock a queue-head recovery', async (origin) => {
+    const h = createHarness();
+    const sid = `automatic-preserves-queue-head-recovery-${origin.kind}`;
+    h.sendToAgent.mockResolvedValueOnce(hostSendFailure('SEND_FAILED', 'boom'));
+
+    h.coordinator.enqueue(sid, makeItem('q-head', 'never dispatched'));
+    await flush();
+    expect(latestProjection(h.projections).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'q-head',
+    });
+
+    // 自动来源(scheduler / orca)不代表用户表态,维持「不清」语义。
+    const autoItem = makeItem(`q-${origin.kind}`, `${origin.kind} prompt`);
+    autoItem.origin = origin as never;
+    h.coordinator.enqueue(sid, autoItem);
+    await flush();
+
+    const projection = latestProjection(h.projections);
     expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-head' });
+    expect(projection.pendingQueue.map((q) => q.clientId)).toEqual([
+      'q-head',
+      `q-${origin.kind}`,
+    ]);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-head', 'q-second']);
   });
 
   it('does not clear a queue-head recovery when compact is requested', async () => {
@@ -2877,6 +2953,60 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'next' });
+  });
+
+  it('preserveInputBoundary keeps the input signal alive but still clears active state (#1930)', async () => {
+    const h = createHarness();
+    const sid = 'session-close-preserve-input-boundary';
+    const sendStarted = deferred<void>();
+    const sendGate = deferred<AgentInputSendResult>();
+    let capturedSignal: AbortSignal | undefined;
+    h.sendToAgent.mockImplementationOnce(async (_sid, _msg, _createOpts, sendOpts) => {
+      capturedSignal = sendOpts?.signal;
+      sendStarted.resolve();
+      return sendGate.promise;
+    });
+
+    // 发送进行中(activeTurn 非空,持有 input boundary signal)。
+    const sendPromise = h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    await sendStarted.promise;
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // rehydrate 窗口内 close:preserveInputBoundary=true → signal 不被 abort。
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true });
+    await flush();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    // 但其余清理照常:activeTurn 已清,新消息可排队。
+    h.sendToAgent.mockResolvedValueOnce(sendSuccess());
+    h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+    sendGate.resolve(sendSuccess());
+    await sendPromise;
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts the input boundary on plain session close (no preserve flag)', async () => {
+    const h = createHarness();
+    const sid = 'session-close-aborts-input-boundary';
+    const sendStarted = deferred<void>();
+    let capturedSignal: AbortSignal | undefined;
+    h.sendToAgent.mockImplementationOnce(async (_sid, _msg, _createOpts, sendOpts) => {
+      capturedSignal = sendOpts?.signal;
+      sendStarted.resolve();
+      return new Promise<AgentInputSendResult>(() => undefined); // 永不 resolve
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    await sendStarted.promise;
+    await flush();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    // 普通 close(无 preserve)→ abort input boundary。
+    h.coordinator.onSessionClosed(sid);
+    await flush();
+    expect(capturedSignal?.aborted).toBe(true);
   });
 
   it('releases compact active turn when close races before dispatch outcome', async () => {
@@ -3118,9 +3248,9 @@ describe('AgentInputCoordinator send transaction', () => {
     );
   });
 
-  it('does not auto-retry a failed queue head from later enqueue or Cancel', async () => {
+  it('abandons a failed queue head on explicit user enqueue and dispatches the new message', async () => {
     const h = createHarness();
-    const sid = 'send-rollback-blocks-auto-drain';
+    const sid = 'send-rollback-user-input-unlocks';
     const first = makeItem('q-1', 'first');
     const second = makeItem('q-2', 'second');
 
@@ -3130,14 +3260,20 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     h.coordinator.clearError(sid);
+    h.sendToAgent.mockResolvedValueOnce(sendSuccess());
     h.coordinator.enqueue(sid, second);
     await flush();
 
     const projection = latestProjection(h.projections);
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    // 用户显式新输入 = 表态「不重试旧消息」:放弃 q-1,派发 q-2。
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(projection.error).toBeNull();
-    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-1' });
-    expect(projection.pendingQueue.map((q) => q.text)).toEqual(['first', 'second']);
+    expect(projection.recovery).toBeNull();
+    expect(projection.pendingQueue.map((q) => q.text)).toEqual([]);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-1' }),
+    );
   });
 
   it('ignores late done wakeups after a pre-accept rollback', async () => {

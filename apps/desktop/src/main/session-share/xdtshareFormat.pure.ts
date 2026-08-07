@@ -40,10 +40,17 @@ export const SHARE_FILE_EXTENSIONS = [SHARE_FILE_EXT, LEGACY_SHARE_FILE_EXT] as 
 
 export const XDTSHARE_MAGIC = 'XDTSHARE';
 export const XDTSHARE_HEADER_VERSION = 1;
-export const XDTSHARE_FORMAT_VERSION = 1;
+/** v2:manifest 新增可选 orca 段(协同 lead + Worker 打包)。 */
+export const XDTSHARE_FORMAT_VERSION = 2;
+/** 非协同包保持 1:旧读端仍可读新导出的普通会话包(orca 段是 additive)。 */
 export const XDTSHARE_MIN_READER_VERSION = 1;
+/**
+ * 协同包的 minReaderVersion:旧读端不认识 orca 段,导入会静默丢全部 Worker,
+ * 必须让它明确拒读而不是降级成"只导 lead"。
+ */
+export const XDTSHARE_ORCA_MIN_READER_VERSION = 2;
 /** 本端能读的最高 minReaderVersion(导入端门禁比较对象)。 */
-export const XDTSHARE_READER_VERSION = 1;
+export const XDTSHARE_READER_VERSION = 2;
 
 export const XDTSHARE_PLAIN_HEADER_LENGTH = 12;
 export const XDTSHARE_ENCRYPTED_HEADER_LENGTH = 60;
@@ -206,6 +213,29 @@ export interface XdtshareTranscriptRef {
   path: string | null;
 }
 
+/** 协同包内单个 Worker 的清单条目;会话数据在 zip 的 orca/workers/<index>/ 下。 */
+export interface XdtshareOrcaWorkerManifest {
+  /** zip 前缀序号(orca/workers/<index>/session.json 等)。 */
+  index: number;
+  agentKind: 'cc' | 'codex' | 'pi';
+  title: string;
+  role: string;
+  label: string | null;
+  /** 导出时的 orca_workers.status;导入端把 running 归一为 idle。 */
+  status: 'idle' | 'running' | 'done' | 'error';
+  focused: boolean;
+  sdkSessionIds: string[];
+  activeSdkSessionId: string | null;
+  counts: { messages: number };
+  transcripts: XdtshareTranscriptRef[];
+}
+
+/** manifest 可选 orca 段:lead 的协同关系图(team + Worker 列表)。 */
+export interface XdtshareOrcaManifest {
+  teamStatus: 'active' | 'completed' | 'cancelled' | 'failed';
+  workers: XdtshareOrcaWorkerManifest[];
+}
+
 export interface XdtshareManifest {
   formatVersion: number;
   minReaderVersion: number;
@@ -224,11 +254,20 @@ export interface XdtshareManifest {
   counts: { messages: number; media: number };
   entries: XdtshareManifestEntry[];
   transcripts: XdtshareTranscriptRef[];
+  /** 协同包:lead 会话即顶层 session.json,Worker 挂在这里。缺省 = 普通单会话包。 */
+  orca?: XdtshareOrcaManifest;
 }
 
 const FIDELITIES: ReadonlySet<string> = new Set(['full', 'partial', 'db-only']);
 const AGENT_KINDS: ReadonlySet<string> = new Set(['cc', 'codex', 'pi']);
 const WORKSPACE_KINDS: ReadonlySet<string> = new Set(['project', 'dialogue']);
+const ORCA_TEAM_STATUSES: ReadonlySet<string> = new Set([
+  'active',
+  'completed',
+  'cancelled',
+  'failed',
+]);
+const ORCA_WORKER_STATUSES: ReadonlySet<string> = new Set(['idle', 'running', 'done', 'error']);
 
 /**
  * 校验解包出的 manifest。字段级损坏 → SHARE_FILE_INVALID;
@@ -261,13 +300,8 @@ export function validateManifest(value: unknown): XdtshareManifest {
       sha256: expectString(raw.sha256, `entries[${i}].sha256`),
     };
   });
-  const transcripts = expectArray(value.transcripts, 'transcripts').map((raw, i) => {
-    if (!isRecord(raw)) throw invalid(`transcripts[${i}] must be an object`);
-    return {
-      sdkSessionId: expectString(raw.sdkSessionId, `transcripts[${i}].sdkSessionId`),
-      path: raw.path == null ? null : expectString(raw.path, `transcripts[${i}].path`),
-    };
-  });
+  const transcripts = validateTranscriptRefs(value.transcripts, 'transcripts');
+  const orca = value.orca == null ? undefined : validateOrcaSection(value.orca);
 
   return {
     formatVersion,
@@ -296,7 +330,57 @@ export function validateManifest(value: unknown): XdtshareManifest {
     },
     entries,
     transcripts,
+    ...(orca ? { orca } : {}),
   };
+}
+
+function validateTranscriptRefs(value: unknown, label: string): XdtshareTranscriptRef[] {
+  return expectArray(value, label).map((raw, i) => {
+    if (!isRecord(raw)) throw invalid(`${label}[${i}] must be an object`);
+    return {
+      sdkSessionId: expectString(raw.sdkSessionId, `${label}[${i}].sdkSessionId`),
+      path: raw.path == null ? null : expectString(raw.path, `${label}[${i}].path`),
+    };
+  });
+}
+
+function validateOrcaSection(value: unknown): XdtshareOrcaManifest {
+  if (!isRecord(value)) throw invalid('orca must be an object');
+  const teamStatus = expectString(value.teamStatus, 'orca.teamStatus');
+  if (!ORCA_TEAM_STATUSES.has(teamStatus)) throw invalid(`unknown orca.teamStatus: ${teamStatus}`);
+  const workers = expectArray(value.workers, 'orca.workers').map((raw, i) => {
+    if (!isRecord(raw)) throw invalid(`orca.workers[${i}] must be an object`);
+    const agentKind = expectString(raw.agentKind, `orca.workers[${i}].agentKind`);
+    if (!AGENT_KINDS.has(agentKind)) {
+      throw invalid(`unknown orca.workers[${i}].agentKind: ${agentKind}`);
+    }
+    const status = expectString(raw.status, `orca.workers[${i}].status`);
+    if (!ORCA_WORKER_STATUSES.has(status)) {
+      throw invalid(`unknown orca.workers[${i}].status: ${status}`);
+    }
+    const counts = isRecord(raw.counts) ? raw.counts : {};
+    return {
+      index: expectNonNegativeInt(raw.index, `orca.workers[${i}].index`),
+      agentKind: agentKind as 'cc' | 'codex' | 'pi',
+      title: expectString(raw.title, `orca.workers[${i}].title`),
+      role: expectString(raw.role, `orca.workers[${i}].role`),
+      label: raw.label == null ? null : expectString(raw.label, `orca.workers[${i}].label`),
+      status: status as 'idle' | 'running' | 'done' | 'error',
+      focused: raw.focused === true,
+      sdkSessionIds: expectArray(raw.sdkSessionIds, `orca.workers[${i}].sdkSessionIds`).map(
+        (id, j) => expectString(id, `orca.workers[${i}].sdkSessionIds[${j}]`),
+      ),
+      activeSdkSessionId:
+        raw.activeSdkSessionId == null
+          ? null
+          : expectString(raw.activeSdkSessionId, `orca.workers[${i}].activeSdkSessionId`),
+      counts: {
+        messages: expectNonNegativeInt(counts.messages ?? 0, `orca.workers[${i}].counts.messages`),
+      },
+      transcripts: validateTranscriptRefs(raw.transcripts, `orca.workers[${i}].transcripts`),
+    };
+  });
+  return { teamStatus: teamStatus as XdtshareOrcaManifest['teamStatus'], workers };
 }
 
 function invalid(message: string): XdtshareError {

@@ -28,6 +28,14 @@ import type { BaseAgent } from 'ssh2';
 import { createFilteredAgentFromPubkey } from './filteredAgent.js';
 import type { HostConfig } from './types.js';
 
+/**
+ * Stable local code tagged onto the ENOENT identityFile error so the connect
+ * IPC layer can classify it as SSH_KEY_FILE_NOT_FOUND WITHOUT pattern-matching
+ * the message text (see resolveAuth). Only set by our own code — a remote SSH
+ * server can never produce it.
+ */
+export const KEY_FILE_NOT_FOUND_CODE = 'KEY_FILE_NOT_FOUND';
+
 export interface ResolvedAuth {
   /**
    * ssh2 agent option — either a socket path / pipe string (unfiltered) OR
@@ -94,8 +102,15 @@ export async function resolveAuth(host: HostConfig): Promise<ResolvedAuth> {
     try {
       privateKey = await fs.readFile(host.identityFile);
     } catch (err) {
-      const msg = (err as Error).message;
-      throw new Error(`failed to read identityFile ${host.identityFile}: ${msg}`);
+      // Tag ENOENT with KEY_FILE_NOT_FOUND_CODE so classifyConnectFailure can
+      // distinguish a local path problem from network/remote errors without
+      // pattern-matching the message text (see connect-failure.ts).
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        const e = new Error(`identity file not found: ${host.identityFile}`);
+        (e as { code?: string }).code = KEY_FILE_NOT_FOUND_CODE;
+        throw e;
+      }
+      throw new Error(`failed to read identityFile ${host.identityFile}: ${(err as Error).message}`);
     }
     return { privateKey, label: `key:${baseName(host.identityFile)}` };
   }

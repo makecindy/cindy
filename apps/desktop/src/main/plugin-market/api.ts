@@ -1,4 +1,5 @@
 import {
+  CINDY_CLIENT_VERSION_HEADER,
   parseGetPluginResponse,
   parseListPluginsResponse,
   parsePluginDownloadResponse,
@@ -32,7 +33,17 @@ const defaultFetcher: Fetcher = (apiPath, options) =>
 
 /** plugin-server 普通客户端 API；每个响应都经过共享 v2 parser fail-closed。 */
 export class PluginMarketApi {
-  constructor(private readonly fetcher: Fetcher = defaultFetcher) {}
+  constructor(
+    private readonly fetcher: Fetcher = defaultFetcher,
+    private readonly getClientVersion: () => string = () => '0.0.0',
+  ) {}
+
+  private requestOptions(): Omit<ApiFetchOptions, 'baseUrl'> {
+    return {
+      cache: 'no-store',
+      headers: { [CINDY_CLIENT_VERSION_HEADER]: this.getClientVersion() },
+    };
+  }
 
   async listAll(
     query?: string,
@@ -46,9 +57,10 @@ export class PluginMarketApi {
       if (query?.trim()) search.set('query', query.trim());
       if (cursor) search.set('cursor', cursor);
       const response = parseListPluginsResponse(
-        await this.fetcher<unknown>(`/api/plugins?${search.toString()}`, {
-          cache: 'no-store',
-        }),
+        await this.fetcher<unknown>(
+          `/api/plugins?${search.toString()}`,
+          this.requestOptions(),
+        ),
       );
       for (const plugin of response.plugins) {
         if (seen.has(plugin.id)) continue;
@@ -81,9 +93,10 @@ export class PluginMarketApi {
 
   async detail(pluginId: string): Promise<GetPluginResponse['plugin']> {
     return parseGetPluginResponse(
-      await this.fetcher<unknown>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
-        cache: 'no-store',
-      }),
+      await this.fetcher<unknown>(
+        `/api/plugins/${encodeURIComponent(pluginId)}`,
+        this.requestOptions(),
+      ),
     ).plugin;
   }
 
@@ -94,7 +107,7 @@ export class PluginMarketApi {
     return parsePluginDownloadResponse(
       await this.fetcher<unknown>(
         `/api/plugins/${encodeURIComponent(pluginId)}/releases/${encodeURIComponent(releaseId)}/download`,
-        { cache: 'no-store' },
+        this.requestOptions(),
       ),
     );
   }

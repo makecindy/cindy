@@ -26,6 +26,7 @@ const captured = vi.hoisted(() => ({
   mcpVendorOptions: undefined as Record<string, unknown> | undefined,
   failSetModel: false,
   rejectSetModel: false,
+  failPrompt: false,
   onAfterSetModel: null as null | (() => void),
   // 卡住 set_model 的回包,让测试能在"RPC 在飞"的那一刻观察盘上的路由快照。
   holdSetModel: null as null | Promise<void>,
@@ -56,6 +57,9 @@ vi.mock('../rpc-client.js', () => ({
       }
       if (cmd.type === 'set_model' && captured.failSetModel) {
         captured.onAfterSetModel?.();
+        return { success: false };
+      }
+      if (cmd.type === 'prompt' && captured.failPrompt) {
         return { success: false };
       }
       if (cmd.type === 'get_state') {
@@ -101,6 +105,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.mcpVendorOptions = undefined;
     captured.failSetModel = false;
     captured.rejectSetModel = false;
+    captured.failPrompt = false;
     captured.onAfterSetModel = null;
     captured.holdSetModel = null;
     captured.closed = false;
@@ -282,6 +287,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(noProxy).toContain(entry);
     }
     expect(captured.env.no_proxy).toBeUndefined();
+  });
+
+  it('把 session 花名册快照追加到 Pi system prompt', async () => {
+    const deps = buildDeps();
+    deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'roster-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const idx = captured.args.indexOf('--append-system-prompt');
+    expect(captured.args[idx + 1]).toContain('GHOST ROSTER PROMPT');
+    expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir: cwd });
+    await handle.close();
   });
 
   it('does not inherit an unmanaged ripgrep path from the host process env', async () => {
@@ -656,6 +676,156 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }));
     expect(resolverCalls).toBe(0);
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r2', confirmed: true });
+  });
+
+  it('lets a turn policy override Auto-Review allow and passes exact tool evidence', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    const forceConfirmToolCall = vi.fn(() => true);
+    await handle.send(
+      { type: 'user', content: 'Update the shared scratch file.' },
+      {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-policy' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall,
+        },
+      },
+    );
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    const input = { path: '/tmp/policy.txt' };
+    firePermissionRequest('policy-allow', 'write', input);
+    expect(await waitForResponse('policy-allow')).toEqual({
+      type: 'extension_ui_response', id: 'policy-allow', confirmed: true,
+    });
+    expect(forceConfirmToolCall).toHaveBeenCalledWith('write', input);
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
+  });
+
+  it('lets a turn policy override MCP auto-approve and fail-closes policy exceptions', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'allow' as const }), false, {
+      serverNames: ['cindy_contacts'],
+      policy: () => 'auto-approve',
+    });
+    await handle.send(
+      { type: 'user', content: 'Update a contact.' },
+      {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-mcp' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall: () => {
+            throw new Error('policy unavailable');
+          },
+        },
+      },
+    );
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest('policy-mcp', 'mcp__cindy_contacts__call_tool', {
+      name: 'contacts_merge',
+      args: { sourceId: 'a', targetId: 'b' },
+    });
+    expect(await waitForResponse('policy-mcp')).toEqual({
+      type: 'extension_ui_response', id: 'policy-mcp', confirmed: false,
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it('denies Auto-Review ask without an extra channel prompt on policy turns', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'ask' as const }));
+    await handle.send(
+      { type: 'user', content: 'Touch an outside file.' },
+      {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-gray' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall: () => false,
+        },
+      },
+    );
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest('policy-gray', 'write', { path: '/tmp/outside-gray.txt' });
+    expect(await waitForResponse('policy-gray')).toEqual({
+      type: 'extension_ui_response', id: 'policy-gray', confirmed: false,
+    });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('keeps a policy across internal continuation tools and clears it at agent_settled', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'allow' as const }));
+    const forceConfirmToolCall = vi.fn(() => true);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+    await handle.send(
+      { type: 'user', content: 'Run a plan and continue.' },
+      {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-continuation' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall,
+        },
+      },
+    );
+
+    firePermissionRequest('policy-first', 'write', { path: '/tmp/first.txt' });
+    firePermissionRequest('policy-continuation', 'bash', { command: 'pnpm test' });
+    expect((await waitForResponse('policy-first')).confirmed).toBe(true);
+    expect((await waitForResponse('policy-continuation')).confirmed).toBe(true);
+    expect(forceConfirmToolCall).toHaveBeenCalledTimes(2);
+
+    captured.onEvent?.({ type: 'agent_settled' });
+    await handle.send({ type: 'user', content: 'Desktop follow-up without channel policy.' });
+    firePermissionRequest('desktop-after-policy', 'write', { path: '/tmp/desktop.txt' });
+    expect((await waitForResponse('desktop-after-policy')).confirmed).toBe(true);
+    expect(forceConfirmToolCall).toHaveBeenCalledTimes(2);
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  it('rolls back a policy when Pi rejects the prompt before provider acceptance', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'allow' as const }));
+    const forceConfirmToolCall = vi.fn(() => true);
+    captured.failPrompt = true;
+    await expect(handle.send(
+      { type: 'user', content: 'Rejected policy turn.' },
+      {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-rejected' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall,
+        },
+      },
+    )).rejects.toThrow('pi prompt rejected');
+
+    captured.failPrompt = false;
+    await handle.send({ type: 'user', content: 'Normal Desktop turn.' });
+    firePermissionRequest('desktop-after-reject', 'write', { path: '/tmp/desktop-after-reject.txt' });
+    expect((await waitForResponse('desktop-after-reject')).confirmed).toBe(true);
+    expect(forceConfirmToolCall).not.toHaveBeenCalled();
+  });
+
+  it('rejects a policy in Full Access before sending the prompt RPC', async () => {
+    const handle = await start('bypassPermissions');
+    const promptsBefore = captured.requests.filter((request) => request.type === 'prompt').length;
+    await expect(handle.send(
+      { type: 'user', content: 'Unsafe remote turn.' },
+      {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-full-access' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall: () => true,
+        },
+      },
+    )).rejects.toMatchObject({
+      name: 'TurnPermissionPolicyUnsupportedError',
+      permissionMode: 'bypassPermissions',
+    });
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(promptsBefore);
   });
 
   /**

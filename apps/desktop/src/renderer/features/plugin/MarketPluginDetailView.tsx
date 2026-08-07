@@ -26,10 +26,10 @@ export function MarketPluginDetailView({
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
-  const permissions = ghostPermissionItems(detail.manifest);
   const presentationOrigin = pluginPresentationOrigin(detail);
   // 自定义市场（Git/本地源）的包字节未经服务端校验，安全说明必须如实区分。
   const isCustomSource = detail.sourceType !== 'server';
+  const permissions = ghostPermissionItems(detail.manifest);
   const actionKey =
     detail.installState === 'update-available'
       ? 'settings.ghosts.market.update'
@@ -133,33 +133,33 @@ export function MarketPluginDetailView({
         </section>
 
         <section className="mt-10" aria-labelledby="market-permissions-title">
-          <div className="flex items-baseline gap-2">
-            <h2
-              id="market-permissions-title"
-              className="text-18 font-medium leading-[26px] text-[var(--text-primary)]"
-            >
-              {t('settings.ghosts.perm.grantsTitle')}
-            </h2>
-            <span className="text-12 text-[var(--text-tertiary)]">
-              {t('settings.ghosts.perm.itemCount', { count: permissions.length })}
-            </span>
-          </div>
-          <div className="mt-5 max-w-[760px] divide-y divide-[var(--border-default)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5">
-            {permissions.length > 0 ? (
-              permissions.map((permission, index) => (
-                <div
-                  key={`${permission.kind}-${permission.labelKey}-${index}`}
-                  className="py-3.5 text-13 leading-5 text-[var(--text-secondary)]"
-                >
-                  {t(`settings.ghosts.perm.${permission.labelKey}`, permission.labelArgs)}
+            <div className="flex items-baseline gap-2">
+              <h2
+                id="market-permissions-title"
+                className="text-18 font-medium leading-[26px] text-[var(--text-primary)]"
+              >
+                {t('settings.ghosts.perm.grantsTitle')}
+              </h2>
+              <span className="text-12 text-[var(--text-tertiary)]">
+                {t('settings.ghosts.perm.itemCount', { count: permissions.length })}
+              </span>
+            </div>
+            <div className="mt-5 max-w-[760px] divide-y divide-[var(--border-default)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5">
+              {permissions.length > 0 ? (
+                permissions.map((permission, index) => (
+                  <div
+                    key={`${permission.kind}-${permission.labelKey}-${index}`}
+                    className="py-3.5 text-13 leading-5 text-[var(--text-secondary)]"
+                  >
+                    {t(`settings.ghosts.perm.${permission.labelKey}`, permission.labelArgs)}
+                  </div>
+                ))
+              ) : (
+                <div className="py-4 text-13 text-[var(--text-tertiary)]">
+                  {t('settings.ghosts.market.noPermissions')}
                 </div>
-              ))
-            ) : (
-              <div className="py-4 text-13 text-[var(--text-tertiary)]">
-                {t('settings.ghosts.market.noPermissions')}
-              </div>
-            )}
-          </div>
+              )}
+            </div>
         </section>
       </article>
     </main>

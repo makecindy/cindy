@@ -8,6 +8,12 @@
  *   → 最后单事务落 DB(tx session.importShare,原子)。
  * 任何一步失败 → RollbackJournal 逆序清理已写文件(best-effort),DB 因 tx 原子
  * 天然无残留 —— 保证导入中断不留半截会话。
+ *
+ * 协同包(manifest.orca):lead 是顶层会话,Worker 会话从 orca/workers/<i>/
+ * 逐个按同样的三层策略还原(转录/rollout/pi 转录落位与单会话导入同机制),
+ * lead + 全部 Worker + orca_teams/orca_workers 关系图在同一 DB 事务落库;
+ * 冲突预检覆盖 lead 与每个 Worker 的 resume id。Worker 的 orca_workers.status
+ * 里 running 归一为 idle(导入端没有正在跑的 turn)。
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
@@ -18,13 +24,15 @@ import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-
 import { app } from 'electron';
 
 import { getDbClient } from '../localDb/client/current.js';
+import type {
+  SessionImportShareMessageRow,
+  SessionImportShareSessionRow,
+} from '../localDb/client/tx/types.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace.js';
-import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import {
   importSharedCodexThread,
   removeSharedCodexThread,
-  type ImportSharedCodexThreadResult,
 } from '../maker-host/codex-local-sessions.js';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors.js';
 import {
@@ -51,6 +59,7 @@ import {
   validateManifest,
   type XdtshareFidelity,
   type XdtshareManifest,
+  type XdtshareOrcaWorkerManifest,
 } from './xdtshareFormat.pure.js';
 import { buildLooseUrl, parseImageUrl, rewriteMediaUrls } from './mediaUrlRewrite.pure.js';
 import type { MediaMapEntry } from './sessionShareExport.js';
@@ -90,6 +99,8 @@ export interface SharePreview {
   fidelity: XdtshareFidelity;
   messageCount: number;
   mediaCount: number;
+  /** 协同包携带的 Worker 会话数;普通包为 0。 */
+  orcaWorkerCount: number;
 }
 
 export type InspectResult =
@@ -111,6 +122,7 @@ function toPreview(manifest: XdtshareManifest): SharePreview {
     fidelity: manifest.exportFidelity,
     messageCount: manifest.counts.messages,
     mediaCount: manifest.counts.media,
+    orcaWorkerCount: manifest.orca?.workers.length ?? 0,
   };
 }
 
@@ -236,6 +248,13 @@ export interface CommitShareImportResult {
   fidelity: XdtshareFidelity;
   /** 需要用户知晓的降档/提示信息 key(renderer 翻译)。 */
   notes: string[];
+  /** 随协同包一并导入的 Worker 会话数;普通包为 0。 */
+  orcaWorkers: number;
+}
+
+/** main 内部结果：额外携带覆盖成功后的旧会话图，供 IPC 层做 runtime/UI 收尾。 */
+export interface CommitShareImportInternalResult extends CommitShareImportResult {
+  replacedSessions: Array<{ id: string; status: 'active' | 'archived' }>;
 }
 
 interface BundleMessageRow {
@@ -250,10 +269,52 @@ interface BundleMessageRow {
   rewindAt: number | null;
 }
 
+/** manifest.transcripts 里实际随包携带(path 非 null)的条目。 */
+type BundledTranscript = { sdkSessionId: string; path: string };
+
+/** 协同包单个 Worker 的导入计划(只读解析结果 + 逐步补齐的派生字段)。 */
+interface WorkerImportPlan {
+  manifest: XdtshareOrcaWorkerManifest;
+  /** zip 内前缀 orca/workers/<index>/。 */
+  prefix: string;
+  newId: string;
+  snapshot: Record<string, unknown>;
+  messages: BundleMessageRow[];
+  bundledTranscripts?: BundledTranscript[];
+  /** pi 便携 id 已映射为本机绝对路径;codex/cc 为包内 id 原样。 */
+  activeSdkSessionId: string | null;
+}
+
+/**
+ * 覆盖事务提交后的旧会话媒体账本收尾。只删旧 session 名下的引用行；共享 blob
+ * 字节不直接删除，引用归零后由 recycler 统一回收。失败不反转已经提交的新会话图，
+ * 与普通会话删除的媒体清理保持 best-effort 语义。
+ */
+export async function cleanupReplacedSessionMediaRefs(
+  sessions: ReadonlyArray<{ id: string }>,
+): Promise<void> {
+  for (const session of sessions) {
+    try {
+      const removed = await removeSessionMediaRefs(session.id);
+      if (removed > 0) {
+        log.info('replaced session media refs removed', {
+          sessionId: session.id,
+          count: removed,
+        });
+      }
+    } catch (err) {
+      log.warn('replaced session media ref cleanup failed', {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
 /** 第三段:落三层数据。前置校验全过才写;文件步登记 journal,失败逆序回滚。 */
 export async function commitShareImport(
   opts: CommitShareImportOptions,
-): Promise<CommitShareImportResult> {
+): Promise<CommitShareImportInternalResult> {
   sweepExpiredDrafts();
   const draft = drafts.get(opts.draftId);
   if (!draft) throw codedError('NOT_FOUND', 'draft expired or not found');
@@ -264,9 +325,25 @@ export async function commitShareImport(
 
   // ── 解析包内数据(仍属只读阶段) ──
   const sessionSnapshot = await readJsonEntry(zip, 'session.json');
-  const messages = await readMessagesJsonl(zip);
+  const messages = await readMessagesJsonl(zip, 'messages.jsonl');
   if (messages.length === 0) throw codedError('SHARE_FILE_INVALID', 'bundle has no messages');
   const mediaMap = await readMediaMap(zip);
+
+  // 协同包:逐个读 Worker 的包内数据(Worker 允许 0 条消息——刚创建未派活)。
+  const workerPlans: WorkerImportPlan[] = [];
+  if (manifest.orca) {
+    for (const workerManifest of manifest.orca.workers) {
+      const prefix = `orca/workers/${workerManifest.index}/`;
+      workerPlans.push({
+        manifest: workerManifest,
+        prefix,
+        newId: randomUUID(),
+        snapshot: await readJsonEntry(zip, `${prefix}session.json`),
+        messages: await readMessagesJsonl(zip, `${prefix}messages.jsonl`),
+        activeSdkSessionId: null,
+      });
+    }
+  }
 
   // ── 前置校验 ──
   const now = Date.now();
@@ -287,28 +364,56 @@ export async function commitShareImport(
   // activeSdkSessionId 同样是不可信输入,且会流入落盘路径:codex 侧
   // importSharedCodexThread 的 rollout 文件名兜底会把 threadId 拼进 filename,
   // CC 侧 resume 也按 `<id>.jsonl` 定位转录——非单路径段一律拒整包(审查 P0)。
+  // 协同包的每个 Worker 与 lead 同口径校验。
   const portableActiveSdkSessionId = manifest.activeSdkSessionId;
   if (portableActiveSdkSessionId && !isSafePathSegment(portableActiveSdkSessionId)) {
     throw new XdtshareError('SHARE_FILE_INVALID', `unsafe activeSdkSessionId: ${portableActiveSdkSessionId}`);
   }
-  const bundledTranscripts = manifest.transcripts.filter(
-    (t): t is { sdkSessionId: string; path: string } => t.path !== null,
-  );
   // .xdtshare 是他人给的不可信输入:sdkSessionId 会拼进落盘路径(`<id>.jsonl`),
   // 恶意包塞 `../../evil` 可逃出转码目录写任意文件(review bot P1)。写盘/预检前
   // 先整体校验为单路径段,非法直接拒绝整包。
-  for (const t of bundledTranscripts) {
-    if (!isSafePathSegment(t.sdkSessionId)) {
-      throw new XdtshareError('SHARE_FILE_INVALID', `unsafe sdkSessionId in transcripts: ${t.sdkSessionId}`);
+  const filterBundled = (
+    transcripts: XdtshareManifest['transcripts'],
+    label: string,
+  ): BundledTranscript[] => {
+    const bundled = transcripts.filter(
+      (t): t is BundledTranscript => t.path !== null,
+    );
+    for (const t of bundled) {
+      if (!isSafePathSegment(t.sdkSessionId)) {
+        throw new XdtshareError(
+          'SHARE_FILE_INVALID',
+          `unsafe sdkSessionId in ${label}: ${t.sdkSessionId}`,
+        );
+      }
     }
+    return bundled;
+  };
+  const bundledTranscripts = filterBundled(manifest.transcripts, 'transcripts');
+  for (const plan of workerPlans) {
+    if (
+      plan.manifest.activeSdkSessionId &&
+      !isSafePathSegment(plan.manifest.activeSdkSessionId)
+    ) {
+      throw new XdtshareError(
+        'SHARE_FILE_INVALID',
+        `unsafe worker activeSdkSessionId: ${plan.manifest.activeSdkSessionId}`,
+      );
+    }
+    plan.bundledTranscripts = filterBundled(
+      plan.manifest.transcripts,
+      `orca.workers[${plan.manifest.index}].transcripts`,
+    );
   }
   const piSessionsRoot = path.resolve(
     opts.piSessionsRootOverride ??
       path.join(app.getPath('userData'), 'pi-agent-home', 'sessions', 'shared'),
   );
+  // pi 便携 id 是内容散列,lead 与 Worker 共用一张全局映射表(同内容同 id,
+  // 落盘目标天然一致)。
   const piTranscriptTargets = new Map<string, string>();
-  if (manifest.agentKind === 'pi') {
-    for (const transcript of bundledTranscripts) {
+  const registerPiTargets = (bundled: BundledTranscript[]): void => {
+    for (const transcript of bundled) {
       // 只有包内实际存在的转录才映射成可 resume 的本机绝对路径。
       if (zip.file(transcript.path)) {
         piTranscriptTargets.set(
@@ -317,30 +422,96 @@ export async function commitShareImport(
         );
       }
     }
+  };
+  if (manifest.agentKind === 'pi') registerPiTargets(bundledTranscripts);
+  for (const plan of workerPlans) {
+    if (plan.manifest.agentKind === 'pi') registerPiTargets(plan.bundledTranscripts ?? []);
   }
-  const activeSdkSessionId =
-    manifest.agentKind === 'pi'
-      ? (portableActiveSdkSessionId
-          ? (piTranscriptTargets.get(portableActiveSdkSessionId) ?? null)
-          : null)
-      : portableActiveSdkSessionId;
+  const resolveActiveSdkSessionId = (
+    agentKind: 'cc' | 'codex' | 'pi',
+    portableId: string | null,
+  ): string | null =>
+    agentKind === 'pi'
+      ? (portableId ? (piTranscriptTargets.get(portableId) ?? null) : null)
+      : portableId;
+  const activeSdkSessionId = resolveActiveSdkSessionId(
+    manifest.agentKind,
+    portableActiveSdkSessionId,
+  );
+  for (const plan of workerPlans) {
+    plan.activeSdkSessionId = resolveActiveSdkSessionId(
+      plan.manifest.agentKind,
+      plan.manifest.activeSdkSessionId,
+    );
+  }
   // 互斥判定的唯一权威:DB 里是否已有同 agent + 同 resume id 的**存活**会话行。
   // 刻意排除 status='deleted'——删除会话不清理盘上的转录/rollout/state,重导同一
   // 分享包时下方文件层一律「存在即复用、绝不覆盖」,不把盘上残留当成冲突。
   // overwrite = 用户在冲突弹窗确认"覆盖导入":记下旧会话,写入阶段先软删它,
   // 再走既有的"已删除会话重导"路径(盘上转录复用)——净效果是替换而非叠加。
-  let conflictExisting: { id: string; status: string } | null = null;
-  if (activeSdkSessionId) {
-    const existing = await getDbClient().queryOne<{ id: string; status: string }>(
+  // 协同包对 lead 与每个 Worker 逐一预检,任一命中即冲突;覆盖导入软删全部命中。
+  const conflictExisting: Array<{ id: string; status: 'active' | 'archived' }> = [];
+  const conflictProbes: Array<{ agentKind: string; resumeId: string }> = [
+    ...(activeSdkSessionId
+      ? [{ agentKind: manifest.agentKind as string, resumeId: activeSdkSessionId }]
+      : []),
+    ...workerPlans.flatMap((plan) =>
+      plan.activeSdkSessionId
+        ? [{ agentKind: plan.manifest.agentKind as string, resumeId: plan.activeSdkSessionId }]
+        : [],
+    ),
+  ];
+  for (const probe of conflictProbes) {
+    const existing = await getDbClient().queryOne<{
+      id: string;
+      status: 'active' | 'archived';
+    }>(
       `SELECT id, status FROM sessions
        WHERE agent_kind = ? AND sdk_session_id = ? AND status != 'deleted' LIMIT 1`,
-      [manifest.agentKind, activeSdkSessionId],
+      [probe.agentKind, probe.resumeId],
     );
     if (existing) {
       if (!opts.overwrite) {
         throw codedError('SHARE_CONFLICT', `session with same resume id already imported: ${existing.id}`);
       }
-      conflictExisting = existing;
+      if (!conflictExisting.some((c) => c.id === existing.id)) conflictExisting.push(existing);
+    }
+  }
+
+  // 无论冲突行是旧 Orca lead 还是 Worker，覆盖语义都必须替换它所属的
+  // 完整图，而不是只删 manifest 本次碰巧探测到的 resume ids。从 lead
+  // 命中其历次 team，从 Worker 反查所属 team，再把对应 lead 与全部 Worker
+  // session 纳入同一事务，防止旧隐藏 Worker/关系残留成孤儿或与新图并存。
+  for (const existing of [...conflictExisting]) {
+    const graphRows = await getDbClient().query<{
+      id: string;
+      status: 'active' | 'archived';
+    }>(
+      `WITH related_leads AS (
+         SELECT lead_session_id AS id FROM orca_teams WHERE lead_session_id = ?
+         UNION
+         SELECT t.lead_session_id AS id
+         FROM orca_workers w
+         JOIN orca_teams t ON t.id = w.team_id
+         WHERE w.session_id = ?
+       ), related_sessions AS (
+         SELECT id FROM related_leads
+         UNION
+         SELECT w.session_id AS id
+         FROM related_leads l
+         JOIN orca_teams t ON t.lead_session_id = l.id
+         JOIN orca_workers w ON w.team_id = t.id
+       )
+       SELECT s.id, s.status
+       FROM related_sessions r
+       JOIN sessions s ON s.id = r.id
+       WHERE s.status != 'deleted'`,
+      [existing.id, existing.id],
+    );
+    for (const row of graphRows) {
+      if (!conflictExisting.some((candidate) => candidate.id === row.id)) {
+        conflictExisting.push(row);
+      }
     }
   }
 
@@ -365,22 +536,10 @@ export async function commitShareImport(
   };
 
   try {
-    // 0. 覆盖导入:软删旧会话(复用手动删除的完整语义——DB 更新 + 图片缓存清理 +
-    //    sessions:patched 广播,sidebar 即时移除),并登记 journal 恢复原 status:
-    //    后续任一步失败逆序回滚时旧会话回到列表,不丢用户数据。
-    if (conflictExisting) {
-      const { id: existingId, status: prevStatus } = conflictExisting;
-      await patchSessionMetaInDb(existingId, { status: 'deleted' });
-      journal.push(async () => {
-        await patchSessionMetaInDb(existingId, {
-          status: prevStatus === 'archived' ? 'archived' : 'active',
-        });
-      });
-      log.info('share import overwrite: soft-deleted existing session', {
-        existingId,
-        prevStatus,
-      });
-    }
+    // 0. 覆盖导入命中的旧 session 不在编排层提前软删。patchSessionMetaInDb
+    // 会异步清理图片、媒体引用、附件目录与 worktree,这些副作用无法随 journal
+    // 回滚。旧 session id 改由最后的 session.importShare 事务一并标 deleted:
+    // 新图落库失败则 SQLite 原子恢复旧状态,成功才完成替换。
 
     // 0b. worktree(仅 project 会话 + 用户勾选):以所选目录的 git 仓库根为
     //     baseRepo 建会话级 worktree,后续所有 workingDir 相关落位(CC 转录转码
@@ -419,10 +578,15 @@ export async function commitShareImport(
     // worktree 步之后计算。盘上已有同名转录不算冲突(典型是删除 Maker 会话后
     // 重导——软删不清理转录):写入步用 wx 独占写,已存在则复用盘上副本,绝不
     // 覆盖(sdk id 是 UUID,同名即同一会话,且盘上副本可能含删除前 resume 产生
-    // 的更新内容)。
+    // 的更新内容)。协同包的 cc Worker 与 lead 落同一转码目录(同 workingDir)。
+    const hasCcTranscripts =
+      (manifest.agentKind === 'cc' && bundledTranscripts.length > 0) ||
+      workerPlans.some(
+        (plan) => plan.manifest.agentKind === 'cc' && (plan.bundledTranscripts?.length ?? 0) > 0,
+      );
     let claudeTargetDir: string | null = null;
     let transcriptsPlaceable = true;
-    if (manifest.agentKind === 'cc' && bundledTranscripts.length > 0) {
+    if (hasCcTranscripts) {
       if (!isClaudeProjectKeyExact(workingDir)) {
         // 超长路径无法精确复算转码目录:降档为仅历史,不阻断导入。
         transcriptsPlaceable = false;
@@ -479,46 +643,78 @@ export async function commitShareImport(
       });
     }
 
+    // 会话级还原描述:lead + 全部 Worker 走同一套转录/rollout 落位流程。
+    const restorePlans: Array<{
+      agentKind: 'cc' | 'codex' | 'pi';
+      prefix: string;
+      title: string;
+      bundled: BundledTranscript[];
+      activeSdkSessionId: string | null;
+    }> = [
+      {
+        agentKind: manifest.agentKind,
+        prefix: '',
+        title: manifest.title,
+        bundled: bundledTranscripts,
+        activeSdkSessionId,
+      },
+      ...workerPlans.map((plan) => ({
+        agentKind: plan.manifest.agentKind,
+        prefix: plan.prefix,
+        title: plan.manifest.title,
+        bundled: plan.bundledTranscripts ?? [],
+        activeSdkSessionId: plan.activeSdkSessionId,
+      })),
+    ];
+
     // 2a. CC 转录落位(B 机 workdir 重新转码目录)。wx 独占写:已存在(删除后
     //     重导 / 同源 CLI 转录)则复用盘上副本不覆盖,也不进 journal——回滚
     //     只删本次真实写入的文件。复用同样计入 transcriptsWritten(resume 可用,
     //     保真度不降档)。
     let transcriptsWritten = 0;
-    if (manifest.agentKind === 'cc' && claudeTargetDir && transcriptsPlaceable) {
+    if (claudeTargetDir && transcriptsPlaceable) {
       await fsp.mkdir(claudeTargetDir, { recursive: true });
-      for (const t of bundledTranscripts) {
-        const file = zip.file(t.path);
-        if (!file) continue;
-        const target = path.join(claudeTargetDir, `${t.sdkSessionId}.jsonl`);
-        try {
-          await fsp.writeFile(target, Buffer.from(await file.async('nodebuffer')), { flag: 'wx' });
-          journal.push(async () => {
-            await fsp.rm(target, { force: true });
-          });
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-          log.info('transcript already on disk, reusing', { sdkSessionId: t.sdkSessionId });
+      for (const restore of restorePlans) {
+        if (restore.agentKind !== 'cc') continue;
+        for (const t of restore.bundled) {
+          const file = zip.file(t.path);
+          if (!file) continue;
+          const target = path.join(claudeTargetDir, `${t.sdkSessionId}.jsonl`);
+          try {
+            await fsp.writeFile(target, Buffer.from(await file.async('nodebuffer')), { flag: 'wx' });
+            journal.push(async () => {
+              await fsp.rm(target, { force: true });
+            });
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+            log.info('transcript already on disk, reusing', { sdkSessionId: t.sdkSessionId });
+          }
+          transcriptsWritten += 1;
         }
-        transcriptsWritten += 1;
       }
     }
 
     // 2a-2. Pi 转录恢复到本机 pi-agent-home；DB 与消息元数据在下方统一改写为
-    // 这里的绝对路径。wx 复用/回滚语义与 CC 一致。
-    if (manifest.agentKind === 'pi') {
-      for (const transcript of bundledTranscripts) {
+    // 这里的绝对路径。wx 复用/回滚语义与 CC 一致(lead 与 Worker 同一张全局
+    // piTranscriptTargets,重复 id 由 wx 天然去重,只计一次)。
+    const piTargetsWritten = new Set<string>();
+    for (const restore of restorePlans) {
+      if (restore.agentKind !== 'pi') continue;
+      for (const transcript of restore.bundled) {
         const target = piTranscriptTargets.get(transcript.sdkSessionId);
         const file = zip.file(transcript.path);
-        if (!target || !file) continue;
+        if (!target || !file || piTargetsWritten.has(target)) continue;
+        piTargetsWritten.add(target);
         await writeIfMissing(target, Buffer.from(await file.async('nodebuffer')), journal);
         transcriptsWritten += 1;
       }
     }
 
-    // 2b. Codex rollout + state 落位
-    let codexWritten: ImportSharedCodexThreadResult | null = null;
-    if (manifest.agentKind === 'codex' && activeSdkSessionId) {
-      const stateEntry = zip.file('codex-state/thread.json');
+    // 2b. Codex rollout + state 落位(lead 与 codex Worker 各自的 thread 独立落位)
+    for (const restore of restorePlans) {
+      if (restore.agentKind !== 'codex' || !restore.activeSdkSessionId) continue;
+      const threadId = restore.activeSdkSessionId;
+      const stateEntry = zip.file(`${restore.prefix}codex-state/thread.json`);
       const stateRows = stateEntry
         ? ((JSON.parse(await stateEntry.async('string'))) as {
             threads: Array<Record<string, unknown>>;
@@ -526,76 +722,161 @@ export async function commitShareImport(
             threadSpawnEdges: Array<Record<string, unknown>>;
           })
         : { threads: [], threadDynamicTools: [], threadSpawnEdges: [] };
-      const rolloutRef = bundledTranscripts[0] ?? null;
+      const rolloutRef = restore.bundled[0] ?? null;
       const rolloutFile = rolloutRef ? zip.file(rolloutRef.path) : null;
-      codexWritten = await importSharedCodexThread({
-        threadId: activeSdkSessionId,
+      const written = await importSharedCodexThread({
+        threadId,
         stateRows,
         rolloutBuffer: rolloutFile ? Buffer.from(await rolloutFile.async('nodebuffer')) : null,
         rolloutFilename: rolloutRef ? path.posix.basename(rolloutRef.path) : null,
         newCwd: workingDir,
-        title: manifest.title,
+        title: restore.title,
         updatedAt: now,
       });
-      const written = codexWritten;
       journal.push(async () => {
-        await removeSharedCodexThread(activeSdkSessionId, written);
+        await removeSharedCodexThread(threadId, written);
       });
+      if (written.rolloutPath) transcriptsWritten += 1;
       // 降档提示看 statePresent(state 行最终在不在),不能看 stateWritten——
       // 删除后重导时行已存在、本次零插入,state 依然完好,不该提示。
-      if (!written.statePresent && stateRows.threads.length > 0) {
+      if (!written.statePresent && stateRows.threads.length > 0 && !notes.includes('codexStateSkipped')) {
         notes.push('codexStateSkipped');
       }
     }
 
-    // 3. DB 最后一步(tx 原子):message id 重新生成防撞库,content 过媒体重写
+    // 3. DB 最后一步(tx 原子):message id 重新生成防撞库,content 过媒体重写;
+    //    协同包把 Worker 会话 + 关系图放进同一事务。
     const rewriteRules = urlMap.size > 0 ? { urlMap } : {};
-    const dbMessages = messages.map((m) => ({
-      id: randomUUID(),
-      clientId: m.clientId,
-      role: m.role,
-      content: rewriteMediaUrls(m.content, rewriteRules),
-      toolUseId: m.toolUseId,
-      agentMeta:
-        manifest.agentKind === 'pi'
-          ? rewritePiAgentMetaForImport(m.agentMeta, piTranscriptTargets)
-          : m.agentMeta,
-      agentKind: m.agentKind,
-      createdAt: m.createdAt,
-      rewindAt: m.rewindAt,
-    }));
+    const toDbMessages = (
+      rows: BundleMessageRow[],
+      agentKind: 'cc' | 'codex' | 'pi',
+    ): SessionImportShareMessageRow[] =>
+      rows.map((m) => ({
+        id: randomUUID(),
+        clientId: m.clientId,
+        role: m.role,
+        content: rewriteMediaUrls(m.content, rewriteRules),
+        toolUseId: m.toolUseId,
+        agentMeta:
+          agentKind === 'pi'
+            ? rewritePiAgentMetaForImport(m.agentMeta, piTranscriptTargets)
+            : m.agentMeta,
+        agentKind: m.agentKind,
+        createdAt: m.createdAt,
+        rewindAt: m.rewindAt,
+      }));
+    const dbMessages = toDbMessages(messages, manifest.agentKind);
+    const draftPrefs = opts.draftPrefs ?? null;
+    const teamId = randomUUID();
+    // 恶意/损坏包可能带多个 focused=true(源库有 partial unique 保证唯一);
+    // 归一为只保留第一个,避免整包因索引冲突白白失败。
+    let focusedSeen = false;
+    const orcaTxArgs = manifest.orca
+      ? {
+          team: {
+            id: teamId,
+            leadSessionId: newId,
+            status: manifest.orca.teamStatus,
+            completedAt: manifest.orca.teamStatus === 'active' ? null : now,
+            createdAt: now,
+            updatedAt: now,
+          },
+          workers: workerPlans.map((plan) => {
+            const focused = plan.manifest.focused && !focusedSeen;
+            if (focused) focusedSeen = true;
+            return {
+              record: {
+                id: randomUUID(),
+                teamId,
+                sessionId: plan.newId,
+                // running 归一为 idle:导入端没有正在跑的 turn,保留 running 会
+                // 让 UI 呈现一个不存在的活跃状态。
+                status: plan.manifest.status === 'running' ? 'idle' : plan.manifest.status,
+                label: plan.manifest.label,
+                role: plan.manifest.role,
+                focused,
+                createdAt: now,
+                updatedAt: now,
+              },
+              session: buildSessionRow({
+                newId: plan.newId,
+                agentKind: plan.manifest.agentKind,
+                title:
+                  (typeof plan.snapshot.title === 'string' && plan.snapshot.title) ||
+                  plan.manifest.title ||
+                  'Worker',
+                workspaceKind: manifest.workspaceKind,
+                orcaRole: 'worker' as const,
+                snapshot: plan.snapshot,
+                draftPrefs,
+                // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用内置兜底模型。
+                applyDraftPrefs: plan.manifest.agentKind === manifest.agentKind,
+                // 与 OrcaWorkerCreationService 同口径:Worker 固定 auto,不继承。
+                permissionModeOverride: 'auto',
+                workingDir,
+                worktreePath,
+                activeSdkSessionId: plan.activeSdkSessionId,
+                now,
+              }),
+              messages: toDbMessages(plan.messages, plan.manifest.agentKind),
+            };
+          }),
+        }
+      : undefined;
     await getDbClient().tx('session.importShare', {
       session: buildSessionRow({
         newId,
-        manifest,
+        agentKind: manifest.agentKind,
+        title: manifest.title || 'Shared session',
+        workspaceKind: manifest.workspaceKind,
+        orcaRole: manifest.orca ? ('lead' as const) : null,
         snapshot: sessionSnapshot,
-        draftPrefs: opts.draftPrefs ?? null,
+        draftPrefs,
+        applyDraftPrefs: true,
         workingDir,
         worktreePath,
         activeSdkSessionId,
         now,
       }),
       messages: dbMessages,
+      ...(conflictExisting.length > 0
+        ? { replaceSessions: conflictExisting }
+        : {}),
+      ...(orcaTxArgs ? { orca: orcaTxArgs } : {}),
     });
 
-    // ── 最终保真度 ──
+    // ── 最终保真度(lead + 全部 Worker 聚合) ──
+    const bundledKeys = new Set(
+      restorePlans.flatMap((restore) =>
+        restore.bundled.map((transcript) => `${restore.agentKind}:${transcript.sdkSessionId}`),
+      ),
+    );
     const fidelity = resolveFinalFidelity({
-      manifest,
+      exportFidelity: manifest.exportFidelity,
+      bundledCount: bundledKeys.size,
       transcriptsWritten,
-      bundledCount: bundledTranscripts.length,
-      codexWritten,
     });
-    if (manifest.agentKind === 'cc' && !transcriptsPlaceable) notes.push('workdirKeyInexact');
+    if (hasCcTranscripts && !transcriptsPlaceable) notes.push('workdirKeyInexact');
     log.info('session share imported', {
       newId,
       agentKind: manifest.agentKind,
       fidelity,
       messages: dbMessages.length,
+      orcaWorkers: workerPlans.length,
       transcriptsWritten,
       notes,
     });
     drafts.delete(opts.draftId);
-    return { sessionId: newId, fidelity, notes };
+    // 回传被原子替换的旧图，IPC 层在 commit 成功后执行可逆性不再需要的
+    // 运行时/UI 收尾（closeSession + patched 广播）。资源字节不立即删除，避免
+    // 与同 resume id 的新任务复用转录/媒体发生竞态，交既有对账/回收路径处理。
+    return {
+      sessionId: newId,
+      fidelity,
+      notes,
+      orcaWorkers: workerPlans.length,
+      replacedSessions: conflictExisting,
+    };
   } catch (err) {
     await rollback();
     const code = (err as { code?: unknown }).code;
@@ -623,9 +904,9 @@ async function readJsonEntry(zip: JSZip, entryPath: string): Promise<Record<stri
   }
 }
 
-async function readMessagesJsonl(zip: JSZip): Promise<BundleMessageRow[]> {
-  const file = zip.file('messages.jsonl');
-  if (!file) throw codedError('SHARE_FILE_INVALID', 'messages.jsonl missing');
+async function readMessagesJsonl(zip: JSZip, entryPath: string): Promise<BundleMessageRow[]> {
+  const file = zip.file(entryPath);
+  if (!file) throw codedError('SHARE_FILE_INVALID', `${entryPath} missing`);
   const text = await file.async('string');
   const rows: BundleMessageRow[] = [];
   for (const line of text.split('\n')) {
@@ -871,67 +1152,59 @@ const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
 };
 
 /**
- * 组装 tx session.importShare 的 session 行。
+ * 组装 tx session.importShare 的 session 行(lead 与协同 Worker 共用)。
  *
  * 字段来源分两类(导入语义 = 用本地草稿默认值新建会话,只有 agent 跟随分享包):
  * - 会话配置(model/effort/permissionMode/planMode/fastMode/providerId)→ 导入端
  *   draftPrefs(白名单校验,非法/缺省落内置兜底),**不读** snapshot——导出方的
  *   模型/供应商在导入端不一定存在,照搬会产出本机不可用的脏 model(选择器显示
- *   不出、发消息才暴露)。
+ *   不出、发消息才暴露)。draftPrefs 按包顶层 vendor 采集,跨 vendor 的 Worker
+ *   经 applyDraftPrefs=false 落内置兜底;Worker 的 permissionMode 固定 auto
+ *   (与 OrcaWorkerCreationService 同口径)。
  * - 历史事实(token 统计 / contextTokens / clearedAt / 时间戳等)→ snapshot 照搬。
  *   contextWindow 也照搬:仅是展示缓存,renderer 按 session.model 重新计算。
  */
 function buildSessionRow(params: {
   newId: string;
-  manifest: XdtshareManifest;
+  agentKind: 'cc' | 'codex' | 'pi';
+  title: string;
+  workspaceKind: string;
+  orcaRole: 'lead' | 'worker' | null;
   snapshot: Record<string, unknown>;
   draftPrefs: ShareImportDraftPrefs | null;
+  applyDraftPrefs: boolean;
+  permissionModeOverride?: string;
   workingDir: string;
   worktreePath: string | null;
   activeSdkSessionId: string | null;
   now: number;
-}): {
-  id: string;
-  title: string;
-  workingDir: string | null;
-  workspaceKind: string;
-  worktreePath: string | null;
-  model: string;
-  effort: string;
-  permissionMode: string;
-  providerId: string | null;
-  status: string;
-  sdkSessionId: string | null;
-  totalTokenUsage: number;
-  totalCostUsd: number;
-  contextTokens: number;
-  contextWindow: number;
-  fastMode: boolean;
-  planModeEnabled: boolean;
-  agentKind: string;
-  source: string;
-  extraDirs: string;
-  codexHistoryHasProductPrompt: boolean | null;
-  clearedAt: number | null;
-  userSendAt: number | null;
-  createdAt: number;
-  updatedAt: number;
-} {
-  const { newId, manifest, snapshot, draftPrefs, workingDir, worktreePath, activeSdkSessionId, now } =
-    params;
+}): SessionImportShareSessionRow {
+  const {
+    newId,
+    agentKind,
+    title,
+    workspaceKind,
+    orcaRole,
+    snapshot,
+    workingDir,
+    worktreePath,
+    activeSdkSessionId,
+    now,
+  } = params;
+  const draftPrefs = params.applyDraftPrefs ? params.draftPrefs : null;
   const str = (v: unknown, fallback: string): string =>
     typeof v === 'string' && v ? v : fallback;
   const num = (v: unknown, fallback: number): number =>
     typeof v === 'number' && Number.isFinite(v) ? v : fallback;
   const effort = str(draftPrefs?.effort, 'high');
-  const permissionMode = str(draftPrefs?.permissionMode, 'auto');
+  const permissionMode = params.permissionModeOverride ?? str(draftPrefs?.permissionMode, 'auto');
   return {
     id: newId,
-    title: manifest.title || 'Shared session',
+    title,
     workingDir,
-    workspaceKind: manifest.workspaceKind,
+    workspaceKind,
     worktreePath,
-    model: str(draftPrefs?.model, FALLBACK_MODEL_BY_AGENT[manifest.agentKind]),
+    model: str(draftPrefs?.model, FALLBACK_MODEL_BY_AGENT[agentKind]),
     effort: EFFORTS.has(effort) ? effort : 'high',
     permissionMode: PERMISSION_MODES.has(permissionMode) ? permissionMode : 'auto',
     providerId:
@@ -946,13 +1219,14 @@ function buildSessionRow(params: {
     contextWindow: num(snapshot.contextWindow, 0),
     fastMode: draftPrefs?.fastMode === true,
     planModeEnabled: draftPrefs?.planMode === true,
-    agentKind: manifest.agentKind,
+    agentKind,
+    orcaRole,
     source: 'shared',
     extraDirs: '[]',
     // Shared bundles can come from a build whose product prompt still named
     // lizi_memory (or any future prompt generation). Force the existing one-shot
     // non-proxy restore path instead of trusting a versionless exported boolean.
-    codexHistoryHasProductPrompt: manifest.agentKind === 'codex' ? false : null,
+    codexHistoryHasProductPrompt: agentKind === 'codex' ? false : null,
     // /clear 边界照搬:不带会让 pre-clear 历史在导入端重新显示(review bot 指出)
     clearedAt:
       typeof snapshot.clearedAt === 'number' && Number.isFinite(snapshot.clearedAt)
@@ -964,18 +1238,19 @@ function buildSessionRow(params: {
   };
 }
 
+/**
+ * 最终保真度:lead + 全部 Worker 聚合口径。bundledCount 按
+ * (agentKind + sdkSessionId) 去重,与 Pi 内容寻址转录的全局去重写盘保持一致。
+ * Codex rollout 也计入；transcriptsWritten 是本次真实落位(含复用)数。导出端
+ * 已把"导出时就缺"折进 exportFidelity,导入端只对"包里有但没落成"再降档。
+ */
 function resolveFinalFidelity(params: {
-  manifest: XdtshareManifest;
-  transcriptsWritten: number;
+  exportFidelity: XdtshareFidelity;
   bundledCount: number;
-  codexWritten: ImportSharedCodexThreadResult | null;
+  transcriptsWritten: number;
 }): XdtshareFidelity {
-  const { manifest, transcriptsWritten, bundledCount, codexWritten } = params;
-  if (manifest.agentKind === 'codex') {
-    if (!codexWritten?.rolloutPath) return 'db-only';
-    return manifest.exportFidelity === 'full' ? 'full' : manifest.exportFidelity;
-  }
+  const { exportFidelity, bundledCount, transcriptsWritten } = params;
   if (bundledCount === 0 || transcriptsWritten === 0) return 'db-only';
-  if (transcriptsWritten < manifest.transcripts.length) return 'partial';
-  return manifest.exportFidelity;
+  if (transcriptsWritten < bundledCount) return 'partial';
+  return exportFidelity;
 }

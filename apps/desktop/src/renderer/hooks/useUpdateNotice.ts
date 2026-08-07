@@ -6,6 +6,8 @@ import {
   fetchReleaseNotesIndex,
   type ReleaseNotes,
 } from '@/release-notes';
+import { useLocale } from '@/hooks/useLocale';
+import type { SupportedLocale } from '@/i18n';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 
@@ -199,6 +201,7 @@ function versionsForManual(index: string[] | null, appVersion: string): string[]
 
 export function useUpdateNotice(): UseUpdateNoticeReturn {
   const { t } = useTranslation();
+  const { effectiveLocale } = useLocale();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<UpdateNoticeMode | null>(null);
   const [releaseNotes, setReleaseNotes] = useState<ReleaseNotes[] | null>(null);
@@ -215,6 +218,46 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
   // Stored handle for the dismiss cleanup timer so onOpen can cancel it if
   // the user re-opens the dialog before the 200ms animation delay fires.
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Async entry points capture a locale. This ref prevents a slower response
+  // for the previous locale from replacing newly selected-language content.
+  const localeRef = useRef(effectiveLocale);
+  localeRef.current = effectiveLocale;
+  const previousLocaleRef = useRef(effectiveLocale);
+
+  /**
+   * Resolve a whole version set in one stable locale. If the user changes the
+   * language while requests are in flight, the raw/version cache makes the
+   * retry local and cheap while preventing a mixed-language result set.
+   */
+  const fetchVersionsForCurrentLocale = useCallback(
+    async (
+      versions: string[],
+      initialRequest?: {
+        version: string;
+        locale: SupportedLocale;
+        promise: Promise<ReleaseNotes | null>;
+      },
+    ): Promise<(ReleaseNotes | null)[]> => {
+      let requestLocale = localeRef.current;
+      let canUseInitialRequest = true;
+      for (;;) {
+        const results = await Promise.all(versions.map((version) => {
+          if (
+            canUseInitialRequest &&
+            initialRequest?.version === version &&
+            initialRequest.locale === requestLocale
+          ) {
+            return initialRequest.promise;
+          }
+          return fetchReleaseNotes(version, requestLocale);
+        }));
+        canUseInitialRequest = false;
+        if (localeRef.current === requestLocale) return results;
+        requestLocale = localeRef.current;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const appVersion = window.electronAPI.appVersion;
@@ -241,7 +284,7 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
       const targets = versionsToFetch(index, lastRead, appVersion).slice(
         -MAX_AGGREGATED_VERSIONS,
       );
-      const results = await Promise.all(targets.map((v) => fetchReleaseNotes(v)));
+      const results = await fetchVersionsForCurrentLocale(targets);
       if (cancelled) return;
       const notes = results.filter((n): n is ReleaseNotes => n !== null);
 
@@ -281,7 +324,35 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
     });
 
     return () => { cancelled = true; };
-  }, []);
+  }, [fetchVersionsForCurrentLocale]);
+
+  // Re-select every version currently owned by the hook when the language
+  // changes. Renderer raw caching keeps this local: no extra CDN/IPC request.
+  useEffect(() => {
+    if (previousLocaleRef.current === effectiveLocale) return;
+    previousLocaleRef.current = effectiveLocale;
+    const versions = releaseNotes?.map((notes) => notes.version) ?? [];
+    if (versions.length === 0) return;
+
+    let cancelled = false;
+    void Promise.all(versions.map((version) => fetchReleaseNotes(version, effectiveLocale)))
+      .then((localized) => {
+        if (cancelled || localeRef.current !== effectiveLocale) return;
+        const byVersion = new Map(
+          localized
+            .filter((notes): notes is ReleaseNotes => notes !== null)
+            .map((notes) => [notes.version, notes]),
+        );
+        setReleaseNotes((current) =>
+          current?.map((notes) => byVersion.get(notes.version) ?? notes) ?? current,
+        );
+      })
+      .catch((err) => {
+        log.warn('locale-refresh threw:', err);
+      });
+
+    return () => { cancelled = true; };
+  }, [effectiveLocale, releaseNotes]);
 
   const dismiss = useCallback(() => {
     dialogOpenedRef.current = false;
@@ -320,10 +391,14 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
       // dialog uses to render placeholders for every history entry; the
       // appVersion notes are what the top block shows immediately so the
       // dialog isn't blank-until-lazy-load on open.
-      const [index, appNotes] = await Promise.all([
-        fetchReleaseNotesIndex(),
-        fetchReleaseNotes(appVersion),
-      ]);
+      const warmupLocale = localeRef.current;
+      const appNotesWarmup = fetchReleaseNotes(appVersion, warmupLocale)
+        .catch(() => null);
+      const index = await fetchReleaseNotesIndex();
+      const [appNotes] = await fetchVersionsForCurrentLocale(
+        [appVersion],
+        { version: appVersion, locale: warmupLocale, promise: appNotesWarmup },
+      );
       // The dialog needs at least one loaded note as its initial seed.
       // If appVersion's JSON is temporarily unavailable (CDN lag / 404), try
       // the most-recent historical version from the index as fallback seed so
@@ -335,7 +410,7 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
         // so a single bad/lagging CDN file doesn't block the entire history view.
         for (const fallbackVersion of versionsForManual(index, appVersion)) {
           if (fallbackVersion === appVersion) continue;
-          const fallback = (await fetchReleaseNotes(fallbackVersion)) ?? null;
+          const [fallback] = await fetchVersionsForCurrentLocale([fallbackVersion]);
           if (fallback) {
             seed = fallback;
             break;
@@ -366,7 +441,7 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
       log.warn('manual-fetch threw:', err);
       toast.error(t('logic.toasts.fetchUpdateNoticeFailed'));
     });
-  }, [t, open]);
+  }, [t, open, fetchVersionsForCurrentLocale]);
 
   const onOpenVersion = useCallback((pendingVersion: string) => {
     // `open` is state, so two clicks in the same tick both read `false` and both
@@ -385,7 +460,9 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
       // Kick off the pending version's notes immediately — it is the one block
       // that must be there, and the banner's probe usually leaves it cached, so
       // this resolves ~instantly and overlaps whatever the index costs.
-      const pendingNotes = fetchReleaseNotes(pendingVersion);
+      const warmupLocale = localeRef.current;
+      const pendingNotesWarmup = fetchReleaseNotes(pendingVersion, warmupLocale)
+        .catch(() => null);
       // The index only adds the *in-between* blocks. Waiting out the full CDN
       // timeout (15s, releaseNotesService) for them would make the link look
       // dead, so give it a budget and degrade to the pending version alone —
@@ -397,8 +474,9 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
         }),
       ]);
       const targets = versionsToPreview(index, appVersion, pendingVersion);
-      const results = await Promise.all(
-        targets.map((v) => (v === pendingVersion ? pendingNotes : fetchReleaseNotes(v))),
+      const results = await fetchVersionsForCurrentLocale(
+        targets,
+        { version: pendingVersion, locale: warmupLocale, promise: pendingNotesWarmup },
       );
       const notes = results.filter((n): n is ReleaseNotes => n !== null);
 
@@ -428,11 +506,11 @@ export function useUpdateNotice(): UseUpdateNoticeReturn {
       log.warn('preview-fetch threw:', err);
       toast.error(t('logic.toasts.fetchUpdateNoticeFailed'));
     });
-  }, [t, open]);
+  }, [t, open, fetchVersionsForCurrentLocale]);
 
   const loadVersion = useCallback(
-    (version: string) => fetchReleaseNotes(version),
-    [],
+    (version: string) => fetchReleaseNotes(version, effectiveLocale),
+    [effectiveLocale],
   );
 
   return {

@@ -29,9 +29,12 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.closeDialog': 'Close dialog',
         'settings.ghosts.perm.networkHost': `Access ${String(options?.host ?? '')}`,
         'settings.ghosts.perm.networkHostDetail': 'Can access this declared domain.',
+        'settings.ghosts.perm.cindyTextOneshotModelDetail':
+          `Takes effect when the model (${String(options?.model ?? '')}) is available in the catalog.`,
         'settings.ghosts.perm.command': `Command ${String(options?.command ?? '')}`,
         'settings.ghosts.perm.tool': `Tool ${String(options?.name ?? '')}`,
         'settings.ghosts.perm.cindyImageGenerate': 'Generate images',
+        'settings.ghosts.perm.cindyTextOneshot': 'Quick Q&A',
         'settings.ghosts.detail.infoTitle': 'Details',
         'settings.ghosts.detail.byAuthor': `By ${String(options?.author ?? '')}`,
         'settings.ghosts.detail.infoVersion': 'Version',
@@ -94,6 +97,13 @@ const permissions: GhostPermissionItem[] = [
     key: 'cindy:image.generate',
     kind: 'cindy',
     labelKey: 'cindyImageGenerate',
+  },
+  {
+    key: 'cindy:text.oneshot',
+    kind: 'cindy',
+    labelKey: 'cindyTextOneshot',
+    detailKey: 'cindyTextOneshotModelDetail',
+    detailArgs: { model: 'codex/gpt-5.5' },
   },
 ];
 
@@ -512,6 +522,212 @@ describe('Ghost plugin detail sections', () => {
     expect(select.className).toContain('max-w-[60%]');
   });
 
+  // 2026-08-05:快问快答钉档扩展为目录全量文本模型——富列表选择器(供应商
+  // 分组 / 折扣与订阅徽标 / 搜索),身份卡声明偏好时"跟随默认"行如实展示。
+  it('text capability renders the rich pin picker with provider groups and budget badge', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: {},
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+                {
+                  id: 'cat:openai:codex:gpt-5.5',
+                  label: 'GPT 5.5 · OpenAI',
+                  group: 'OpenAI',
+                  providerId: 'openai',
+                  agentKind: 'codex',
+                  modelId: 'gpt-5.5',
+                  modelName: 'GPT 5.5',
+                  budget: false,
+                  subscription: true,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              declaredModel: { id: 'cat:xd:codex:codex/gpt-5.5', label: 'codex/gpt-5.5' },
+            },
+          }),
+          setCindyPref,
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+
+    const listbox = await screen.findByRole('listbox');
+    // 分组标题 + 首行是声明版"跟随默认"(i18n mock 透传 key)。
+    expect(within(listbox).getByText('GW')).toBeTruthy();
+    expect(within(listbox).getByText('OpenAI')).toBeTruthy();
+    const defaultRow = within(listbox).getAllByRole('option')[0]!;
+    expect(defaultRow.textContent).toContain(
+      'settings.ghosts.detail.cindyPrefs.defaultOptionDeclared',
+    );
+    // 折扣徽标只出现在预算行;订阅徽标只出现在订阅行。
+    const budgetRow = within(listbox).getByText('GPT 5.5 折扣').closest('button')!;
+    expect(within(budgetRow).getByText('settings.ghosts.detail.cindyPrefs.budgetBadge')).toBeTruthy();
+    const plainRow = within(listbox).getByText('GPT 5.5', { exact: true }).closest('button')!;
+    expect(
+      within(plainRow).queryByText('settings.ghosts.detail.cindyPrefs.budgetBadge'),
+    ).toBeNull();
+    expect(within(plainRow).getByText('settings.providers.models.subscription')).toBeTruthy();
+    // 点行钉档:写回 cat: 编码钉值。
+    fireEvent.click(plainRow);
+    expect(setCindyPref).toHaveBeenCalledWith(
+      'xdt-knowledge',
+      'text.oneshot',
+      'cat:openai:codex:gpt-5.5',
+    );
+    vi.unstubAllEnvs();
+  });
+
+  // 2026-08-05 review:存量轻量档位钉(目录扩展前的合法钉值)回显友好名,
+  // 不当 stale 露原始 id。
+  it('text capability shows a friendly label for a legacy utility-profile pin', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'text.oneshot': 'litellm-kimi-k2.6' },
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              utilityProfiles: [{ id: 'litellm-kimi-k2.6', label: 'kimi-k2.6 · Gateway' }],
+            },
+          }),
+          setCindyPref: vi.fn(async () => ({ overrides: {} })),
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    const trigger = screen.getByRole('button', {
+      name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot',
+    });
+    expect(trigger.textContent).toContain('kimi-k2.6 · Gateway');
+    expect(trigger.textContent).not.toContain('litellm-kimi-k2.6');
+    vi.unstubAllEnvs();
+  });
+
+  // 2026-08-05 review:stale 目录钉(模型已下架)点中 = 当前值,只收起不回写
+  // (回写必被白名单拒成「操作失败」);清钉走「跟随默认」行。
+  it('stale catalog pin row closes without rewriting; clearing goes through the default row', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'text.oneshot': 'cat:gone:codex:retired-model' },
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              utilityProfiles: [],
+            },
+          }),
+          setCindyPref,
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+    const listbox = await screen.findByRole('listbox');
+    // stale 行如实显示原值且为当前选中;点它不回写。
+    const staleRow = within(listbox).getByText('cat:gone:codex:retired-model').closest('button')!;
+    expect(staleRow.getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(staleRow);
+    expect(setCindyPref).not.toHaveBeenCalled();
+
+    // 重新展开,点「跟随默认」清钉(model=null)。
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+    const reopened = await screen.findByRole('listbox');
+    fireEvent.click(within(reopened).getAllByRole('option')[0]!);
+    expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null);
+    vi.unstubAllEnvs();
+  });
+
   it('replaces the select with tertiary copy for ability categories the catalog has no models for', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -627,6 +843,11 @@ describe('Ghost plugin detail sections', () => {
     expect(within(dialog).getByText('Command render')).toBeTruthy();
     expect(within(dialog).queryByText('Tool render')).toBeNull();
     expect(within(dialog).getByText('Generate images')).toBeTruthy();
+    // detailArgs 的 model 插值必须替换占位符,不能显示裸 {{model}}(Greptile 2026-08-07)。
+    expect(
+      within(dialog).getByText('Takes effect when the model (codex/gpt-5.5) is available in the catalog.'),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/Takes effect when the model \(\{\{model\}\}\)/)).toBeNull();
   });
 
   it('uses the same elevated theme surface for Tool bubbles and Permission cards', () => {

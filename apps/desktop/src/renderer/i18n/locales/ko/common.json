@@ -252,7 +252,8 @@
             "listAgent": "현재 agent 에 로드된 키 목록:",
             "linuxStart": "사용자 로컬 ssh-agent 시작(영구 적용은 ~/.bashrc / ~/.zshrc 에 추가):",
             "win32Enable": "ssh-agent 서비스 활성화(관리자 PowerShell 에서 실행):"
-          }
+          },
+          "noSuchFileFix": "이 경로는 디스크에 존재하지 않습니다. 호스트 설정으로 돌아가 올바른 개인 키를 다시 선택하거나, Identity file 경로 입력을 확인하세요 (~/.ssh/… 형식이 지원되며 홈 디렉터리로 확장됩니다)."
         }
       },
       "add": {
@@ -370,7 +371,8 @@
         "codexSyncDone": "Codex 자격 증명을 원격에 푸시했습니다",
         "codexSyncDoneDaemonRestartFailed": "Codex 자격 증명이 원격에 푸시되었지만 이전 daemon이 재시작되지 않았습니다 — 원격에 다시 연결한 후 재시도하세요",
         "codexSyncFailed": "Codex 자격 증명 동기화 실패",
-        "codexSyncNoLocal": "로컬에 Codex 자격 증명이 없습니다 — 먼저 {{appName}} 에서 Codex 에 로그인하세요"
+        "codexSyncNoLocal": "로컬에 Codex 자격 증명이 없습니다 — 먼저 {{appName}} 에서 Codex 에 로그인하세요",
+        "connectKeyFileMissing": "개인 키 파일을 찾을 수 없거나 읽을 수 없습니다: {{detail}}. 경로를 확인하거나 호스트 설정에서 키를 다시 선택하세요."
       },
       "silentInstall": {
         "starting": "원격 {{hostId}} 에 {{agent}} 설치 중…",
@@ -3033,6 +3035,9 @@
           "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
+        "agentUnsupportedOnChannelHint": "{{agent}} Agent는 이 채널에서 메시지별 권한 확인을 지원하지 않아 메시지를 처리할 수 없습니다. Claude Code 또는 Codex로 전환하세요.",
+        "agentUnsupportedOnChannelModeHint": "Agent를 전환하고 /new를 보낸 후에도 새 Agent에서 권한 모드 문제가 표시되면 /permission을 보내 권한 모드를 조정하세요.",
+        "permissionModeUnsupportedOnChannelHint": "현재 Agent는 이 권한 모드로 이 채널에서 실행할 수 없어 메시지를 처리할 수 없습니다. /permission을 보내 지원되는 권한 모드로 변경하세요.",
         "modelLabel": "모델 설정",
         "loading": "새 대화 설정을 불러오는 중…",
         "loadFailed": "새 대화 설정을 불러오지 못했습니다",
@@ -3273,6 +3278,9 @@
           "listTitle": "추가된 마켓",
           "pluginCount": "플러그인 {{count}}개",
           "sourceError": "읽기 실패",
+          "empty": "이 마켓에는 플러그인 항목이 없습니다",
+          "skippedEntries": "잘못된 플러그인 항목 {{count}}개를 건너뛰었습니다",
+          "unreadableEntries": "플러그인 항목 {{count}}개를 일시적으로 읽을 수 없습니다. 새로고침하여 다시 시도하세요",
           "localBadge": "로컬",
           "defaultRef": "기본 브랜치",
           "neverSynced": "동기화되지 않음",
@@ -3421,6 +3429,9 @@
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
         "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
         "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
+        "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
+        "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 사용량을 소모할 수 있습니다.",
+        "cindyTextOneshotModelDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다. 플러그인이 선호 모델을 선언했습니다: {{model}}(현재 카탈로그에서 사용 가능한 경우에 적용되며, 핀 설정이 우선 적용됩니다).",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
@@ -3467,6 +3478,8 @@
         "networkSecretGhostInputDetail": "이 자격 증명은 플러그인 자체 설정 화면에서 입력받으므로 입력 시점에 플러그인 페이지를 거칩니다. 이후 호스트에 한 번만 전달되어 암호화 저장되며, 저장 후에는 플러그인이 다시 읽을 수 없습니다. 주입은 선언된 도메인 요청 시에만 호스트가 수행합니다.",
         "networkSecretIdentity": "로그인 이메일을 자격 증명 \"{{name}}\"(으)로 사용합니다",
         "networkSecretIdentityDetail": "값은 로그인된 계정의 이메일에서 가져오며, 요청 시 호스트가 자동으로 파생하여 주입합니다. 입력할 필요가 없으며, 플러그인은 설정 화면에 현재 신원을 표시하기 위해 이 이메일을 읽을 수 있습니다.",
+        "networkSecretGhCli": "자격 증명 \"{{name}}\"에는 로컬 GitHub CLI 로그인을 우선 사용합니다",
+        "networkSecretGhCliDetail": "호스트는 필요할 때만 로컬 gh 로그인 토큰을 읽어 GitHub API 요청에만 주입합니다. 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다. gh를 사용할 수 없으면 플러그인 설정에서 예비 Personal Access Token을 구성할 수 있습니다.",
         "networkSecretOrganizationIdentity": "Cindy 조직 사용자 신원을 자격 증명 \"{{name}}\"(으)로 사용합니다",
         "networkSecretOrganizationIdentityDetail": "Cindy가 필요할 때 단기 신원 어설션을 발급하며, 호스트만 명시된 서비스 호스트로 전송합니다. 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다.",
         "networkSecretOauth": "{{host}}에서 OAuth 인증을 진행하도록 안내합니다({{name}})",
@@ -3477,6 +3490,7 @@
         "codeDetailWithNode": "패널 UI는 독립된 샌드박스에서 실행됩니다. 로컬 처리는 위에서 선언된 Node 런타임이 제공합니다.",
         "added": "추가",
         "removed": "제거",
+        "updated": "업데이트됨",
         "unchanged": "그 외 {{count}}개 권한은 변경 없음",
         "noChange": "권한 변경이 없습니다.",
         "pick": "폴더 선택을 요청할 수 있습니다",
@@ -3546,6 +3560,9 @@
             "embed.text": "텍스트 벡터 변환"
           },
           "defaultOption": "{{model}} (기본값)",
+          "defaultOptionDeclared": "{{model}}(플러그인 선언)",
+          "searchPlaceholder": "모델 또는 제공자 검색",
+          "budgetBadge": "할인",
           "noModels": "사용 가능한 모델 없음"
         },
         "errandPrefs": {
@@ -4237,6 +4254,9 @@
     "cacheLabel": "캐시",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
+    "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
+    "paceTrendNormal": "현재 평균 사용 속도는 보통입니다(대략적인 추세)",
+    "paceTrendSlow": "현재 평균 사용 속도는 느린 편입니다(대략적인 추세)",
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
@@ -4364,6 +4384,7 @@
         "terminal": "터미널",
         "review": "리뷰",
         "backgroundTasks": "백그라운드 작업",
+        "resourceUsage": "리소스 사용량",
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
         "ghostPanel": "플러그인 패널"
@@ -4382,13 +4403,14 @@
       "empty": {
         "eyebrow": "오른쪽 사이드바",
         "title": "패널 시작하기",
-        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일 트리, 리뷰, 내장 브라우저, 터미널을 여기에 여세요.",
+        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 리소스 사용량, 내장 브라우저, 터미널을 여기에 여세요.",
         "openFile": "파일 열기",
         "fileSub": "Files",
         "openReview": "리뷰 열기",
         "reviewSub": "Review",
         "openBackgroundTasks": "백그라운드 작업 열기",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "리소스 사용량 열기",
         "openBrowser": "브라우저 열기",
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
@@ -4463,6 +4485,13 @@
       "spawnFailed": "터미널을 시작할 수 없습니다: {{detail}}"
     },
     "review": {
+      "turn": {
+        "title": "이 메시지의 변경 사항",
+        "localOnly": "메시지별 정확한 변경 사항은 아직 원격 작업에서 사용할 수 없습니다.",
+        "partialNotice": "이 메시지에는 정확히 추적할 수 없는 명령 또는 도구 쓰기가 포함되어 있습니다. 아래에는 캡처된 일부만 표시되며 완전한 패치가 아닙니다.",
+        "emptyTitle": "기록된 변경 사항 없음",
+        "emptyDesc": "이 메시지에 저장된 패치에는 표시할 수 있는 파일 변경 사항이 없습니다."
+      },
       "fileCount_one": "{{count}}개 파일",
       "fileCount_other": "{{count}}개 파일",
       "emptyTitle": "아직 변경 사항이 없습니다",
@@ -4757,6 +4786,53 @@
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
       "noProgress": "진행 상황 정보가 아직 없습니다"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent 프로세스",
+        "app": "앱 프로세스"
+      },
+      "columns": {
+        "process": "프로세스",
+        "cpu": "CPU",
+        "memory": "메모리",
+        "pid": "PID"
+      },
+      "kinds": {
+        "main": "메인 프로세스",
+        "renderer": "UI 프로세스",
+        "gpu": "GPU 프로세스",
+        "utility": "서비스 프로세스"
+      },
+      "agentRoles": {
+        "codexTask": "Codex 작업",
+        "codexService": "Codex 서비스"
+      },
+      "agentRoleDetails": {
+        "task": "작업 실행",
+        "service": "계정 및 모델"
+      },
+      "services": {
+        "audio": "오디오 서비스",
+        "network": "네트워크 서비스",
+        "storage": "스토리지 서비스",
+        "videoCapture": "비디오 캡처"
+      },
+      "processCount_one": "프로세스 트리: {{count}}개",
+      "processCount_other": "프로세스 트리: {{count}}개",
+      "agentsEmpty": "실행 중인 Agent 프로세스가 없습니다. 작업을 시작하면 여기에 표시됩니다.",
+      "tableLabel": "프로세스별 리소스 사용량",
+      "sortBy": "{{column}} 기준 정렬",
+      "loading": "리소스 사용량을 불러오는 중…",
+      "remoteUnavailableTitle": "원격 세션에서는 사용할 수 없음",
+      "remoteUnavailableDescription": "이 패널은 이 기기의 프로세스만 읽습니다. 이 기기에서 로컬로 실행되는 세션에만 사용할 수 있습니다.",
+      "selectHint": "프로세스 선택",
+      "readOnlyHint": "작업용 Agent 프로세스만 종료할 수 있습니다",
+      "terminate": "프로세스 종료",
+      "terminateConfirmTitle": "{{name}} 프로세스를 종료할까요?",
+      "terminateConfirmDescription": "이 Agent 프로세스를 강제 종료합니다. 이 프로세스를 사용하는 모든 작업이 중단되며, 영향을 받은 작업에서 메시지를 보내면 필요할 때 Agent를 다시 시작할 수 있습니다.",
+      "terminated": "{{name}} 프로세스를 종료했습니다",
+      "terminateFailed": "프로세스를 종료하지 못했습니다. 이미 종료되었을 수 있습니다. 목록은 다음 샘플링 때 자동으로 업데이트됩니다."
     }
   },
   "update": {
@@ -5056,6 +5132,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "이 모델은 설정에서 API key를 구성해야 사용할 수 있습니다",
+      "hidden": "숨김",
       "subscriptionDirectDisabled": {
         "chatgpt": "구독 직결 GPT 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
         "xai": "구독 직결 Grok 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
@@ -5658,6 +5735,23 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "이번 요청 상세"
     },
+    "shareImage": {
+      "entry": "이미지로 공유",
+      "title": "대화 공유",
+      "subtitle_other": "메시지 {{count}}개 선택",
+      "selectAll": "전체 선택",
+      "clearAll": "선택 해제",
+      "checkboxLabel": "이 메시지 선택",
+      "cancel": "취소",
+      "download": "이미지 저장",
+      "copy": "이미지 복사",
+      "generating": "생성 중…",
+      "copied": "이미지를 복사했습니다",
+      "saved": "이미지를 저장했습니다",
+      "notMounted": "선택한 메시지 중 일부가 표시되지 않았습니다. 위로 스크롤해 표시한 후 다시 시도하세요",
+      "tooLarge": "선택한 내용이 너무 길거나 넓습니다. 선택을 줄인 후 다시 시도하세요",
+      "failed": "이미지를 생성하지 못했습니다. 다시 시도해 주세요"
+    },
     "errorBanner": {
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
@@ -6181,8 +6275,35 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
     },
     "generatedFiles": {
-      "title": "이번 턴에 생성된 파일",
+      "title": "이 메시지에서 생성된 파일",
       "showMore": "{{count}}개 더 보기",
+      "showLess": "간략히 보기"
+    },
+    "turnChanges": {
+      "title": "파일 {{count}}개 변경",
+      "partialTitle": "이 메시지의 파일 변경 사항이 완전히 캡처되지 않았습니다",
+      "review": "검토",
+      "undo": "실행 취소",
+      "undoAria": "이 메시지의 변경 사항 실행 취소",
+      "undoPartialAria": "이 메시지에서 정확히 캡처된 변경 사항 실행 취소",
+      "reapply": "다시 적용",
+      "reapplyAria": "이 메시지의 변경 사항 다시 적용",
+      "reapplyPartialAria": "이 메시지에서 정확히 캡처된 변경 사항 다시 적용",
+      "undoSuccess": "이 메시지의 변경 사항을 실행 취소했습니다",
+      "reapplySuccess": "이 메시지의 변경 사항을 다시 적용했습니다",
+      "undoPartialSuccess": "정확히 캡처된 변경 사항을 실행 취소했습니다. 캡처되지 않은 변경 사항은 실행 취소하지 않았습니다",
+      "reapplyPartialSuccess": "정확히 캡처된 변경 사항을 다시 적용했습니다. 캡처되지 않은 변경 사항은 다시 적용하지 않았습니다",
+      "actionRunning": "현재 응답이 끝난 후 작업 공간을 변경하세요",
+      "gitUnavailable": "Git이 감지되지 않았습니다. Git을 설치하고 시스템 PATH에 추가한 뒤 Cindy를 다시 시작하면 실행 취소 및 다시 적용의 전체 기능을 사용할 수 있습니다.",
+      "actionConflict": "작업 공간이 변경되어 이 패치를 안전하게 적용할 수 없습니다. 현재 변경 사항을 먼저 검토하세요",
+      "actionUnavailable": "이 메시지에는 안전하게 실행 취소할 수 없는 파일 변경 사항이 포함되어 있습니다",
+      "actionFailed": "변경 사항을 적용하지 못했습니다. 다시 시도하세요",
+      "partial": "정확히 캡처된 변경 사항만 표시됩니다",
+      "partialNone": "파일이 변경되었지만 내용을 기록하지 못해 여기에서 검토하거나 실행 취소할 수 없습니다",
+      "partialReversible": "실행 취소와 다시 적용은 정확히 캡처된 변경 사항만 처리하며 캡처되지 않은 변경 사항은 처리하지 않습니다",
+      "partialActionHint": "정확히 캡처된 파일 변경 사항만 실행 취소하거나 다시 적용합니다",
+      "showMore": "파일 {{count}}개 더 보기",
+      "reviewRemaining": "나머지 파일 {{count}}개를 검토에서 보기",
       "showLess": "접기"
     },
     "agentActions": {
@@ -6389,6 +6510,7 @@
     "draft": {
       "createSessionFailed": "세션 생성에 실패했습니다. 다시 시도하세요",
       "piRemoteUnsupported": "Pi는 로컬에서만 실행되어 SSH 원격 호스트를 사용할 수 없습니다. 이 호스트를 사용하려면 Claude 또는 Codex로 전환하세요.",
+      "localWorktreeCleanupPending": "이전 로컬 worktree 세션 정리가 아직 완료되지 않았습니다. 정리가 끝난 후 다시 시도하세요.",
       "remoteWorktreeCleanupPending": "이전 원격 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요.",
       "remoteProviderUpdating": "제공자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
@@ -8496,6 +8618,25 @@
       "closeAria": "닫기"
     }
   },
+  "splitGroup": {
+    "closeAria": "‘{{title}}’ 분할 창 닫기",
+    "closeAll": "분할 닫기",
+    "toggleDirection": "상하 / 좌우 분할 전환",
+    "dropHint": "여기에 세션을 놓아 열기",
+    "loadingTask": "세션 불러오는 중…",
+    "resizeAria": "세션 분할 창 크기 조절",
+    "openInSplit": "분할로 열기",
+    "openSide": {
+      "left": "세션을 왼쪽에 열기",
+      "right": "세션을 오른쪽에 열기",
+      "top": "세션을 위쪽에 열기",
+      "bottom": "세션을 아래쪽에 열기"
+    },
+    "alreadyOpen": "이 세션은 이미 분할 창에 열려 있습니다. 다른 세션을 선택하세요.",
+    "limitReached": "한 분할 창에는 세션을 최대 {{count}}개까지 열 수 있습니다. 분할 창 하나를 닫고 다시 시도하세요.",
+    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요.",
+    "workerUnavailable": "Worker는 별도의 분할 창에서 열 수 없습니다. 소속 Lead 세션을 대신 여세요."
+  },
   "extraDirs": {
     "menuAria": "작업 메뉴",
     "tooltipEmpty": "더 많은 작업",
@@ -8508,7 +8649,11 @@
     "empty": "아직 참조 디렉터리가 없습니다",
     "add": "디렉터리 추가…",
     "atLimit": "최대 {{max}}개 도달",
-    "remove": "{{name}} 제거"
+    "remove": "{{name}} 제거",
+    "parentConfirmTitle": "상위 디렉터리를 추가할까요?",
+    "parentConfirmDescription": "선택한 디렉터리는 현재 작업 디렉터리의 상위 또는 조상 디렉터리입니다. Agent가 작업 디렉터리 밖의 내용까지 볼 수 있어 표시 범위가 넓어집니다.\n\n그래도 추가할까요?\n\n{{path}}",
+    "parentConfirmAccept": "그래도 추가",
+    "parentConfirmCancel": "취소"
   },
   "commands": {
     "toast": {
@@ -8679,6 +8824,7 @@
       "passwordPlaceholder": "비밀번호",
       "unlock": "잠금 해제",
       "previewMeta": "{{agent}} · 메시지 {{count}}개 · {{exportedAt}} 내보냄",
+      "previewOrca": "협업 태스크 · Worker {{count}}개 포함",
       "riskWarning": "이 파일은 외부에서 공유된 파일입니다. 출처를 신뢰할 수 있는지 확인하세요. 가져온 기록은 이후 AI의 동작에 영향을 줄 수 있으며, 대화를 이어가면 AI가 로컬 파일을 읽고 쓰거나 명령을 실행할 수 있습니다.",
       "workdirHint": "원래 세션의 작업 디렉터리는 {{originalDir}}입니다. 이 컴퓨터에서 해당하는 디렉터리를 선택하세요.",
       "workdirEmpty": "디렉터리가 선택되지 않았습니다",
@@ -8690,6 +8836,7 @@
       "close": "닫기",
       "openSession": "세션 열기",
       "doneTitle": "가져오기 완료",
+      "doneOrca": "협업 Worker {{count}}개도 함께 가져왔습니다",
       "conflictTitle": "이 세션이 이미 존재합니다",
       "conflictBody": "동일한 식별자의 세션이 이 기기에 이미 존재합니다(이전에 가져왔거나, 원본 세션이 이 기기에 있습니다). 다시 가져오면 기존 세션이 이 공유 파일의 내용으로 덮어쓰기됩니다.",
       "conflictOverwrite": "덮어쓰고 가져오기",

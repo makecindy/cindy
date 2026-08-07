@@ -4255,6 +4255,60 @@ function stopRunningAgentTasks(
   return changed ? next : tasks;
 }
 
+/**
+ * 快照对账收口:把「早于快照请求就已 running、但 main 权威表里已不存在」的
+ * claude-code 条目标 stopped —— 终态 agent_task_update 丢失时的自愈路径
+ * (此前 taskUpdates 不在任何 reconcile 覆盖内,终态掉帧 = spinner 永久转)。
+ *
+ * 时序安全性(为何不会误杀在跑任务):main 的 runningBackgroundTasks 在
+ * translator push 事件时旁路更新,严格先于事件抵达 renderer——store 里能看到
+ * running 的任务,main 表在更早时刻必然有它。candidates 限定为**发起快照请求
+ * 之前**就已 running 的 taskId:请求在飞窗口内新启动的任务不在候选集,不收;
+ * 候选任务若不在其后拉到的快照里,说明 main 侧已出表(终态/被停/会话不活跃),
+ * 收口正确。即便极端竞态下收错,后续真实事件(task_progress → running /
+ * task_notification → 终态)仍会覆盖回来,非终局性错误。
+ *
+ * 仅 provider==='claude-code'(快照通道只覆盖 claude-code 的任务表;codex /
+ * pi 条目对空快照没有任何含义)。别名键(taskId / parentToolUseId)共享同一
+ * 新对象,口径 = stopRunningAgentTasks。
+ */
+function reconcileStaleRunningTasks(
+  state: SessionChatState,
+  snapshot: ReadonlyArray<{ taskId: string; toolUseId?: string }>,
+  candidates: ReadonlySet<string>,
+): SessionChatState {
+  const tasks = state.taskUpdates;
+  if (!tasks || tasks.size === 0) return state;
+  const alive = new Set<string>();
+  for (const t of snapshot) {
+    if (t && typeof t.taskId === 'string' && t.taskId) alive.add(t.taskId);
+    if (t && typeof t.toolUseId === 'string' && t.toolUseId) alive.add(t.toolUseId);
+  }
+  let changed = false;
+  const replaced = new Map<AgentTaskUpdate, AgentTaskUpdate>();
+  const next = new Map<string, AgentTaskUpdate>();
+  for (const [key, task] of tasks) {
+    const stale =
+      task.status === 'running' &&
+      task.provider === 'claude-code' &&
+      candidates.has(task.taskId) &&
+      !alive.has(task.taskId) &&
+      !(task.parentToolUseId && alive.has(task.parentToolUseId));
+    if (!stale) {
+      next.set(key, task);
+      continue;
+    }
+    let stopped = replaced.get(task);
+    if (!stopped) {
+      stopped = { ...task, status: 'stopped' as const };
+      replaced.set(task, stopped);
+    }
+    next.set(key, stopped);
+    changed = true;
+  }
+  return changed ? { ...state, taskUpdates: next } : state;
+}
+
 function isSameAgentTaskAlias(left: AgentTaskUpdate, right: AgentTaskUpdate): boolean {
   if (left.taskId === right.taskId) return true;
   if (left.parentToolUseId && left.parentToolUseId === right.taskId) return true;
@@ -5614,6 +5668,55 @@ type PendingTextDeltaBatch = {
 
 const pendingTextDeltaBatches = new Map<string, PendingTextDeltaBatch>();
 let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+// ── 后台任务对账定时器(活动熄灭触发的 stale running 自愈)────────────────
+// 触发沿:onSessionBackgroundActivityChanged 的 active:false(CC 子进程停止调
+// 模型 —— 正是终态事件若丢失、stale running 开始显形的时刻)。延迟给正常终态
+// 事件 / wake turn 落地留窗口,到点后拉一次快照走 seed+对账;每会话至多一个
+// 待执行定时器(防抖),active:true 到达即取消。只在翻转沿触发,不轮询。
+const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
+const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelBackgroundTaskReconcile(sessionId: string): void {
+  const timer = backgroundTaskReconcileTimers.get(sessionId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    backgroundTaskReconcileTimers.delete(sessionId);
+  }
+}
+
+function scheduleBackgroundTaskReconcile(sessionId: string): void {
+  cancelBackgroundTaskReconcile(sessionId);
+  backgroundTaskReconcileTimers.set(
+    sessionId,
+    setTimeout(() => {
+      backgroundTaskReconcileTimers.delete(sessionId);
+      // 触发沿复查远程归属(粘滞版):调度沿已筛过,但 3s 窗口内会话可能被识别
+      // 为远程(启动期 registry 迟到水合等)。误放行的代价是拿本机空快照把镜像
+      // 里真实在跑的任务错误收口,必须再拦一次。
+      if (isRemoteSessionSticky(sessionId)) return;
+      // 候选集在发起请求前捕获(时序论证见 reconcileStaleRunningTasks);此刻
+      // 已无 running 条目则无账可对,不发无谓 IPC。定时器只在 store 对象初始化
+      // 之后才可能到点,前向引用 makerChatStore 安全。
+      const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
+      if (staleRunningCandidates.size === 0) return;
+      const api = window.electronAPI?.maker;
+      if (!api?.listSessionBackgroundTasks) return;
+      void api
+        .listSessionBackgroundTasks(sessionId)
+        .then(({ tasks }) => {
+          if (!Array.isArray(tasks)) return;
+          // 响应落地前再复查一次:请求在飞期间远程注册表才完成会话水合的话,
+          // 本机「查无此会话」的空表不可用于收口镜像任务。
+          if (isRemoteSessionSticky(sessionId)) return;
+          makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, { staleRunningCandidates });
+        })
+        .catch(() => {
+          // 静默:与其余快照拉取失败同口径(失败不对账,下次翻转沿 / 挂载重试)。
+        });
+    }, BACKGROUND_TASK_RECONCILE_DELAY_MS),
+  );
+}
 
 /**
  * Defensive wrapper: contextBridge proxies may not preserve the return type.
@@ -7376,6 +7479,32 @@ function initGlobalListeners(): void {
     },
     'ghosts-preview-open',
   );
+
+  // ── 后台活动熄灭 → stale running 对账(终态事件丢失的自动自愈)──
+  // 数据源与 sessionBackgroundActivityStore 同一广播;这里只做调度,拉取与
+  // 收口逻辑在 scheduleBackgroundTaskReconcile。仅本机会话:device-link 镜像
+  // 会话的快照有降级空表窗口,不可当权威(与远程豁免 running 折算同口径)。
+  // 远程判定用**粘滞版**(与面板水合、Stop gating 同口径):relay 瞬断重连会
+  // 清空注册表,非粘滞判定在该窗口把远程会话误判成本机 → 到点拿本机空快照把
+  // 镜像里真实在跑的任务错误收口;触发沿(timer 到点)还会再复查一次。
+  // 可选调用兜底:老 preload 没有该 fanOut 时不得让 initGlobalListeners 整体崩掉。
+  bindIpc(
+    (cb: (data: unknown) => void) =>
+      window.electronAPI?.maker?.onSessionBackgroundActivityChanged?.(cb),
+    (raw: unknown) => {
+      const p = raw as { sessionId?: string; active?: boolean } | null;
+      if (!p || typeof p.sessionId !== 'string' || !p.sessionId) return;
+      if (p.active) {
+        cancelBackgroundTaskReconcile(p.sessionId);
+        return;
+      }
+      if (isRemoteSessionSticky(p.sessionId)) return;
+      // 调度前粗筛:没有 running 条目就不必挂定时器;到点后还会再次捕获候选集。
+      if (makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0) return;
+      scheduleBackgroundTaskReconcile(p.sessionId);
+    },
+    'session-background-activity-reconcile',
+  );
 }
 
 /** Primarily for tests — tears down the global listeners. */
@@ -7386,6 +7515,8 @@ function __teardownGlobalListeners(): void {
   _stopDemoteTimer();
   clearTextDeltaFlushTimer();
   pendingTextDeltaBatches.clear();
+  for (const timer of backgroundTaskReconcileTimers.values()) clearTimeout(timer);
+  backgroundTaskReconcileTimers.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
@@ -13613,16 +13744,39 @@ export const makerChatStore = {
   setTitleUpdateCallback,
   syncActiveTurnsFromMain,
   /**
+   * 当前 running 的 claude-code 后台任务 taskId 集合(按 taskId 归一,别名键去重)。
+   * 用途:快照对账的候选集捕获 —— 必须在发起 listSessionBackgroundTasks **之前**
+   * 调用,请求在飞窗口内新启动的任务才不会被误收(见 reconcileStaleRunningTasks)。
+   */
+  captureRunningClaudeTaskIds: (sessionId: string): ReadonlySet<string> => {
+    const tasks = sessions.get(sessionId)?.taskUpdates;
+    const out = new Set<string>();
+    if (!tasks) return out;
+    for (const task of tasks.values()) {
+      if (task.status === 'running' && task.provider === 'claude-code') out.add(task.taskId);
+    }
+    return out;
+  },
+  /**
    * 后台任务快照水合:把 main 的 listSessionBackgroundTasks 结果补进 taskUpdates。
    * 只补「store 里完全没见过」的任务 —— 事件流是唯一实时源,快照可能落后于刚到
    * 的终态事件,已存在的条目(无论何状态)绝不用快照的 running 覆盖复活。
-   * 消费方:useBackgroundBashTasks(会话挂载 / reloadMessages 清空 taskUpdates 后)。
+   * 消费方:useBackgroundBashTasks(会话挂载 / reloadMessages 清空 taskUpdates 后)、
+   * BackgroundTasksBody(面板挂载)、活动熄灭触发的延迟对账。
+   *
+   * opts.staleRunningCandidates(可选):对账收口 —— 调用方在**发起快照请求前**
+   * 从 store 捕获的 running claude-code taskId 集合;seed 完成后,候选集内仍
+   * running 且不在快照中的条目标 stopped(终态事件丢失的自愈,时序论证见
+   * reconcileStaleRunningTasks)。仅本机会话可传:device-link 镜像会话的快照
+   * 有降级空表窗口,不可当权威(与远程豁免 running 折算同口径)。
    */
   seedBackgroundTaskSnapshots: (
     sessionId: string,
     tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>,
+    opts?: { staleRunningCandidates?: ReadonlySet<string> },
   ): void => {
-    if (!tasks.length) return;
+    const candidates = opts?.staleRunningCandidates;
+    if (!tasks.length && !(candidates && candidates.size > 0)) return;
     setState(sessionId, (s) => {
       let next = s;
       for (const t of tasks) {
@@ -13644,6 +13798,9 @@ export const makerChatStore = {
             ...(t.title ? { title: t.title } : {}),
           },
         } as CCAgentStreamEvent);
+      }
+      if (candidates && candidates.size > 0) {
+        next = reconcileStaleRunningTasks(next, tasks, candidates);
       }
       return next;
     });

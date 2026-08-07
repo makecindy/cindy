@@ -8,6 +8,7 @@ import React from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
+import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
 import type {
   ClaudeSubscriptionUsageSnapshot,
@@ -52,9 +53,13 @@ interface DisplayWindow {
   key: string;
   title: string;
   window: ClaudeUsageWindow;
+  paceWindowMinutes?: number;
 }
 
 const STALE_AFTER_MS = 5 * 60_000;
+const WEEKLY_WINDOW_MINUTES = 10_080;
+/** 产品定档：±5 个百分点内视为正常节奏。 */
+const PACE_TREND_DELTA_PERCENT = 5;
 
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -148,16 +153,32 @@ function CardDivider() {
   return <div aria-hidden="true" className="mx-4 my-1.5 h-px bg-[var(--border-default)]" />;
 }
 
+/** 将 pace 偏差映射成不承诺精确耗尽时间的粗略趋势。 */
+function formatPaceLine(pace: QuotaPace, t: TFunction): string {
+  const { deltaPercent } = pace;
+  if (deltaPercent > PACE_TREND_DELTA_PERCENT) {
+    return t('quotaCard.paceTrendFast');
+  }
+  if (deltaPercent < -PACE_TREND_DELTA_PERCENT) {
+    return t('quotaCard.paceTrendSlow');
+  }
+  return t('quotaCard.paceTrendNormal');
+}
+
 function WindowBlock({
   title,
   window,
+  paceWindowMinutes,
   nowMs,
+  paceNowMs,
   locale,
   t,
 }: {
   title: string;
   window: ClaudeUsageWindow;
+  paceWindowMinutes?: number;
   nowMs: number;
+  paceNowMs: number | null;
   locale: string | undefined;
   t: TFunction;
 }) {
@@ -171,6 +192,21 @@ function WindowBlock({
         ? t('quotaCard.limitWarning')
         : null;
   const resetAt = formatResetAt(window.resetsAt, nowMs, locale);
+  // 窗口已过重置点，旧观测的节奏失真，待新快照。
+  const resetPassed =
+    typeof window.resetsAt === 'number' &&
+    Number.isFinite(window.resetsAt) &&
+    nowMs > window.resetsAt * 1000;
+  const pace =
+    paceWindowMinutes === undefined || paceNowMs === null || resetPassed
+      ? null
+      : computeQuotaPace({
+          utilization: window.utilization,
+          resetsAt: window.resetsAt,
+          windowMinutes: paceWindowMinutes,
+          nowMs: paceNowMs,
+        });
+  const paceLine = pace === null ? null : formatPaceLine(pace, t);
 
   return (
     <section data-testid="quota-window" className="px-4 pb-1 pt-2">
@@ -199,6 +235,14 @@ function WindowBlock({
           </span>
         ) : null}
       </div>
+      {paceLine !== null ? (
+        <div
+          data-testid="quota-pace"
+          className="mt-[3px] text-xs tabular-nums text-[var(--text-secondary)]"
+        >
+          {paceLine}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -350,6 +394,13 @@ export function QuotaHoverCard({
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const planLabel = formatPlanType(snapshot?.subscriptionType);
+  // utilization 是 updatedAt 时刻的观测值，用观测时刻算节奏，避免旧快照随渲染时间自漂移；
+  // 缺有效观测时刻则不算节奏——回退渲染时刻会让趋势随倒计时重渲染无新数据自跳档。
+  const paceNowMs = snapshot
+    && typeof snapshot.updatedAt === 'number'
+    && Number.isFinite(snapshot.updatedAt)
+    ? snapshot.updatedAt
+    : null;
 
   const windows: DisplayWindow[] = [];
   if (isDisplayableWindow(snapshot?.fiveHour)) {
@@ -364,6 +415,7 @@ export function QuotaHoverCard({
       key: 'seven-day',
       title: t('quotaCard.weeklyLabel'),
       window: snapshot.sevenDay,
+      paceWindowMinutes: WEEKLY_WINDOW_MINUTES,
     });
   }
   // 持久化旧快照可能把 scoped 写成非数组；脏容器按缺失处理，避免 .entries() 崩溃。
@@ -431,7 +483,9 @@ export function QuotaHoverCard({
                     key={displayWindow.key}
                     title={displayWindow.title}
                     window={displayWindow.window}
+                    paceWindowMinutes={displayWindow.paceWindowMinutes}
                     nowMs={nowMs}
+                    paceNowMs={paceNowMs}
                     locale={locale}
                     t={t}
                   />

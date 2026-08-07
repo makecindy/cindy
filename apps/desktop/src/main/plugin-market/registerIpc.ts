@@ -1,6 +1,6 @@
 import os from 'node:os';
 
-import { ipcMain } from 'electron';
+import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { GhostManifest } from '../../shared/ghost.js';
@@ -12,12 +12,16 @@ import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { parseMarketSource } from './sources/parse.js';
+import { PluginMarketPackagePermissionReviewBridge } from './packagePermissionReviewBridge.js';
 import { PluginMarketService } from './service.js';
 
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 let serviceSingleton: PluginMarketService | null = null;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
+const PACKAGE_PERMISSION_REVIEW_CHANNEL = 'plugin-market:package-permission-review';
+const trackedReviewRequesters = new WeakSet<WebContents>();
+const packagePermissionReviewBridge = new PluginMarketPackagePermissionReviewBridge();
 
 function service(): PluginMarketService {
   serviceSingleton ??= new PluginMarketService();
@@ -71,6 +75,21 @@ async function invokePluginMarket<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+function trackPackageReviewRequester(contents: WebContents): void {
+  if (trackedReviewRequesters.has(contents)) return;
+  trackedReviewRequesters.add(contents);
+  const requesterId = contents.id;
+  const cancelPending = () => packagePermissionReviewBridge.cancelRequester(requesterId);
+  contents.once('destroyed', cancelPending);
+  contents.on('render-process-gone', cancelPending);
+  contents.on(
+    'did-start-navigation',
+    (_event, _url, isSameDocument, isMainFrame) => {
+      if (isMainFrame && !isSameDocument) cancelPending();
+    },
+  );
+}
+
 /** 注册 renderer 可用的只读市场与显式安装/卸载写路径。 */
 export function registerPluginMarketIpc(): void {
   if (registered) return;
@@ -96,6 +115,7 @@ export function registerPluginMarketIpc(): void {
     'plugin-market:install',
     (event, pluginId: unknown, options: unknown) => {
       assertTrustedAppRendererEvent(event);
+      trackPackageReviewRequester(event.sender);
       const obj =
         typeof options === 'object' && options !== null
           ? (options as {
@@ -103,39 +123,52 @@ export function registerPluginMarketIpc(): void {
               expectedManifest?: unknown;
               allowPermissionExpansion?: unknown;
               reviewedBaseline?: unknown;
-              approvedPackageSha256?: unknown;
             })
           : null;
       const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
-      const expectedManifest =
-        obj?.expectedManifest === undefined || obj?.expectedManifest === null
-          ? undefined
-          : requireObject(obj.expectedManifest);
+      const expectedManifest = requireObject(obj?.expectedManifest);
       const allowPermissionExpansion = obj?.allowPermissionExpansion === true;
       // 扩权批准的审阅基线:只收字符串,野值按缺席处理(缺席 = 保持旧行为)。
       const reviewedBaseline =
         typeof obj?.reviewedBaseline === 'string' ? obj.reviewedBaseline : undefined;
-      const approvedPackageSha256 =
-        typeof obj?.approvedPackageSha256 === 'string'
-          ? obj.approvedPackageSha256
-          : undefined;
-      if (
-        approvedPackageSha256 !== undefined &&
-        !/^[a-f0-9]{64}$/.test(approvedPackageSha256)
-      ) {
-        throwIpcError('INVALID_PARAMS', 'approvedPackageSha256 is invalid');
-      }
       return invokePluginMarket(() =>
-        service().install(requireString(pluginId, 'pluginId'), {
-          expectedReleaseId,
-          ...(expectedManifest ? { expectedManifest: expectedManifest as unknown as GhostManifest } : {}),
-          allowPermissionExpansion,
-          ...(reviewedBaseline !== undefined ? { reviewedBaseline } : {}),
-          ...(approvedPackageSha256 !== undefined ? { approvedPackageSha256 } : {}),
-        }),
+        service().install(
+          requireString(pluginId, 'pluginId'),
+          {
+            expectedReleaseId,
+            expectedManifest: expectedManifest as unknown as GhostManifest,
+            allowPermissionExpansion,
+            ...(reviewedBaseline !== undefined ? { reviewedBaseline } : {}),
+          },
+          (facts) =>
+            packagePermissionReviewBridge.request(
+              event.sender.id,
+              facts,
+              (request) => {
+                if (event.sender.isDestroyed()) return false;
+                event.sender.send(PACKAGE_PERMISSION_REVIEW_CHANNEL, request);
+                return true;
+              },
+            ),
+        ),
       );
     },
   );
+  ipcMain.handle('plugin-market:resolve-package-permission-review', (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const payload = requireObject(raw);
+    const requestId = requireString(payload.requestId, 'requestId');
+    if (requestId.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'requestId is too long');
+    }
+    return {
+      handled: packagePermissionReviewBridge.resolve(
+        event.sender.id,
+        requestId,
+        payload.confirmed,
+      ),
+    };
+  });
   ipcMain.handle('plugin-market:uninstall', (event, pluginId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>

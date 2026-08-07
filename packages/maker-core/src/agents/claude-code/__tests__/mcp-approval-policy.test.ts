@@ -199,6 +199,7 @@ async function startSession(
       status: string;
       scope?: string;
     }>;
+    turnChangeCapture?: AgentDeps['turnChangeCapture'];
   },
 ) {
   const configDir = await makeTempDir();
@@ -214,6 +215,7 @@ async function startSession(
 
   const deps = createDeps(policy, options?.mcpServerNames);
   deps.capabilityRouting = options?.capabilityRouting;
+  deps.turnChangeCapture = options?.turnChangeCapture;
   const agent = new ClaudeCodeAgent(deps);
   const handle = await agent.startSession({
     sessionId: 'session-mcp-policy',
@@ -250,6 +252,7 @@ async function startSession(
     canUseTool: queryOptions.canUseTool,
     hooks: queryOptions.hooks,
     seen,
+    workingDir,
   };
 }
 
@@ -272,6 +275,47 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
+  it('captures known writes before execution and marks Bash opaque only after execution', async () => {
+    const beforeKnownFileWrite = vi.fn(async () => undefined);
+    const noteOpaqueWrite = vi.fn();
+    const { handle, hooks, workingDir } = await startSession(undefined, {
+      turnChangeCapture: { beforeKnownFileWrite, noteOpaqueWrite },
+    });
+    const pre = hooks?.PreToolUse?.[0]?.hooks[0];
+    const post = hooks?.PostToolUse?.[0]?.hooks[0];
+    if (!pre || !post) throw new Error('expected turn change capture hooks');
+
+    await pre({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: 'a.ts', content: 'next' },
+    });
+    await pre({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch b.ts' },
+    });
+    expect(beforeKnownFileWrite).toHaveBeenCalledWith({
+      sessionId: 'session-mcp-policy',
+      provider: 'claude-code',
+      cwd: workingDir,
+      targetPath: 'a.ts',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    await post({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch b.ts' },
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledWith({
+      sessionId: 'session-mcp-policy',
+      provider: 'claude-code',
+      cwd: workingDir,
+    });
+    await handle.close();
+  });
+
   it('injects the local route as a PreToolUse guard even in Full access', async () => {
     const capabilityRouting = {
       overrides: [
@@ -762,6 +806,27 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 });
 
 describe('a custom server cannot take over a builtin name', () => {
+  it('把 session 花名册快照追加到 Claude systemPrompt', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const deps = createDeps();
+    deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-roster-prompt',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+    const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      systemPrompt?: { append?: string };
+    };
+    expect(options.systemPrompt?.append).toContain('GHOST ROSTER PROMPT');
+    expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir });
+    await handle.close();
+  });
+
   it('passes the runtime session instance id into Claude MCP provider context', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -930,6 +995,7 @@ describe('remote sessions share the same permission semantics', () => {
       permissionMode?: PermissionMode;
       initMcpServerNames?: readonly string[];
       failedInitMcpServerNames?: readonly string[];
+      getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
     },
   ) {
     const configDir = await makeTempDir();
@@ -938,6 +1004,7 @@ describe('remote sessions share the same permission semantics', () => {
 
     let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
     const deps = createDeps(policy);
+    deps.getGhostRosterPrompt = options?.getGhostRosterPrompt;
     deps.capabilityRouting = options?.capabilityRouting;
     // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
     deps.mcpProviders = (
@@ -995,6 +1062,18 @@ describe('remote sessions share the same permission semantics', () => {
       sessionId: 'session-remote-mcp-policy',
       sessionInstanceId: 'instance-remote-mcp-policy',
     });
+    await handle.close();
+  });
+
+  it('does not inject the local ghost roster into remote Claude sessions', async () => {
+    const getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
+    const { handle, remoteStartParams } = await startRemoteSession(() => 'auto-approve', {
+      getGhostRosterPrompt,
+    });
+
+    expect(remoteStartParams).toBeDefined();
+    expect(JSON.stringify(remoteStartParams)).not.toContain('GHOST ROSTER PROMPT');
+    expect(getGhostRosterPrompt).not.toHaveBeenCalled();
     await handle.close();
   });
 
