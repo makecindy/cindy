@@ -131,10 +131,11 @@ describe('createGhCliTokenSource', () => {
       },
     );
     const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+    const expectedGhExecutable = process.platform === 'win32' ? 'gh.exe' : 'gh';
 
     expect(await src.probeAvailability()).toBe(true);
     expect(execFileFn).toHaveBeenCalledWith(
-      'gh',
+      expectedGhExecutable,
       ['auth', 'status', '--hostname', 'github.com'],
       { timeout: expect.any(Number) },
       expect.any(Function),
