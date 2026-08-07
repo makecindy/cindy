@@ -781,8 +781,14 @@ export class GoalController {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         // #2105 P0:直接降上限路径(reviewer P2:shouldLimit 分支写 budgetLimited 此前无
         // 事件,getGoalRunEvents 会漏掉该预算终态)。与 setGoal 降上限路径埋点语义对齐;
-        // changed 为持久化后的 budgetLimited 状态,预算快照即最终值。
+        // changed 为持久化后的 budgetLimited 状态,预算快照即最终值。补 state-transition
+        // 供 consumer 重建状态迁移。
         if (changed) {
+          this.recordRunEvent('state-transition', sessionId, changed, {
+            from: state.status,
+            to: 'budgetLimited',
+            reason: changed.lastReason,
+          });
           this.recordRunEvent('budget-consumed', sessionId, changed, {
             from: state.status,
             to: 'budgetLimited',
@@ -2089,8 +2095,14 @@ export class GoalController {
       if (!isCurrentLifecycle()) return;
       // #2105 P0:preflight 预算停止(reviewer P2:此路径写 budgetLimited 但此前无
       // 审计事件——usage-resume 自动续跑 / continuation timer 撞预算时,事件流会漏掉
-      // 终态)。与 finalizeTurn 决策 budgetLimited 的语义对齐,补 budget-consumed + terminal。
+      // 终态)。与 finalizeTurn 决策 budgetLimited 的语义对齐,补 state-transition +
+      // budget-consumed + terminal(consumer 按事件重建状态需要 active→budgetLimited 迁移)。
       if (limited) {
+        this.recordRunEvent('state-transition', sessionId, limited, {
+          from: state.status,
+          to: 'budgetLimited',
+          reason: limited.lastReason,
+        });
         this.recordRunEvent('budget-consumed', sessionId, limited, {
           from: state.status,
           to: 'budgetLimited',
