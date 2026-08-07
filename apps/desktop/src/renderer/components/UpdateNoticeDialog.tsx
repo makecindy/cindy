@@ -541,7 +541,7 @@ function AutoBody({
     let best: { v: string; top: number } | null = null;
     for (const [version, blockEl] of blockRefs.current.entries()) {
       const top = blockEl.getBoundingClientRect().top;
-      if (top > containerTop) continue; // block is still below the container top
+      if (top > containerTop + 9) continue; // block far below container top (9px = py-2 padding + 1px tolerance)
       if (best === null || top > best.top) best = { v: version, top };
     }
     if (best) onStickyChange(best.v);
@@ -808,7 +808,7 @@ function ManualBody({
     let best: { v: string; top: number } | null = null;
     for (const [version, blockEl] of blockRefs.current.entries()) {
       const top = blockEl.getBoundingClientRect().top;
-      if (top > containerTop) continue; // block is still below the container top
+      if (top > containerTop + 9) continue; // block far below container top (9px = py-2 padding + 1px tolerance)
       if (best === null || top > best.top) best = { v: version, top };
     }
     if (best) onStickyChange(best.v);
@@ -924,8 +924,18 @@ export function UpdateNoticeDialog({
   }, [onDismiss]);
 
   // Reset sticky when dialog re-opens (avoids showing last-session's badge).
+  // Preserve the current sticky version across locale refreshes — when the
+  // dialog is already open and releaseNotes changes only because of a locale
+  // switch, the scroll position in ManualBody remains in place so the badge
+  // should not jump back to the newest version.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (open) setStickyVersion(releaseNotes?.[0]?.version ?? '');
+    if (open) {
+      if (!wasOpenRef.current) {
+        setStickyVersion(releaseNotes?.[0]?.version ?? '');
+      }
+    }
+    wasOpenRef.current = open;
   }, [open, releaseNotes]);
 
   if (!releaseNotes || !mode || releaseNotes.length === 0) {
