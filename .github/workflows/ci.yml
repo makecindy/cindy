@@ -93,6 +93,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
+      # Linux verify runs the real Codex functions.exec boundary regression. Windows
+      # intentionally skips that integration because the bundled binary's teardown
+      # is not reliable on the hosted runner.
+      - name: Install bundled Codex
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:codex
+
       - name: Check endpoint literals
         run: pnpm check:endpoints
 
