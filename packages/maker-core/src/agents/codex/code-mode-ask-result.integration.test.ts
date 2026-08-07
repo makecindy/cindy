@@ -1,4 +1,5 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -190,7 +191,12 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 `);
-    cleanups.push(() => rmSync(tempRoot, { recursive: true, force: true }));
+    cleanups.push(() => rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    }));
 
     const host = new AppServerHost({
       createTransport: () => createStdioTransport({
