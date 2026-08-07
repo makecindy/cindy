@@ -2,7 +2,11 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { isImSchedulerFrame, type SchedulerAdvertisementFrame } from './protocol';
+import {
+  isImSchedulerFrame,
+  type ImSchedulerFrame,
+  type SchedulerAdvertisementFrame,
+} from './protocol';
 import { RuntimeGapSet } from './runtimeGaps';
 import {
   isDesktopSchedulerPlatform,
@@ -12,6 +16,9 @@ import {
 } from './state';
 import type { SchedulerDesktopDeviceSnapshot } from './deviceSnapshot';
 import type { SchedulerTransport, SchedulerTransportEvent } from './transport';
+
+const DEFAULT_DISCOVERY_RETRY_DELAY_MS = 1_000;
+const DEFAULT_DISCOVERY_RETRY_LIMIT = 3;
 
 export type SchedulerDecision =
   | { state: 'active'; channel: SchedulerChannelIdentity; reason: 'elected' }
@@ -36,6 +43,8 @@ export interface ImSchedulerManagerOptions {
   getLocalChannel: () => SchedulerChannelIdentity | null;
   onDecision?: (decision: SchedulerDecision) => void;
   nonceFactory?: () => string;
+  discoveryRetryDelayMs?: number;
+  maxDiscoveryRetries?: number;
 }
 
 /**
@@ -47,13 +56,18 @@ export class ImSchedulerManager {
   private readonly getLocalChannel: () => SchedulerChannelIdentity | null;
   private readonly onDecision?: (decision: SchedulerDecision) => void;
   private readonly nonceFactory: () => string;
+  private readonly discoveryRetryDelayMs: number;
+  private readonly maxDiscoveryRetries: number;
   private readonly peers = new Map<string, PeerAdvertisement>();
   private readonly confirmedPeers = new Set<string>();
   private readonly runtimeGaps = new RuntimeGapSet();
   private unsubscribe: (() => void) | null = null;
   private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
   private lastSnapshotObservedAt: number | null = null;
+  private lastLocalIdentity: string | null = null;
   private discoveryNonce = '';
+  private discoveryRetryAttempt = 0;
+  private discoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private decision: SchedulerDecision = { state: 'standby', channel: null, reason: 'stopped' };
 
@@ -62,11 +76,20 @@ export class ImSchedulerManager {
     this.getLocalChannel = options.getLocalChannel;
     this.onDecision = options.onDecision;
     this.nonceFactory = options.nonceFactory ?? (() => randomUUID().replaceAll('-', ''));
+    this.discoveryRetryDelayMs = Math.max(
+      1,
+      Math.floor(options.discoveryRetryDelayMs ?? DEFAULT_DISCOVERY_RETRY_DELAY_MS),
+    );
+    this.maxDiscoveryRetries = Math.max(
+      0,
+      Math.floor(options.maxDiscoveryRetries ?? DEFAULT_DISCOVERY_RETRY_LIMIT),
+    );
   }
 
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
     this.unsubscribe = this.transport.subscribe((event) => this.handleEvent(event));
     this.beginDiscoveryRound();
     this.reconcile();
@@ -75,16 +98,41 @@ export class ImSchedulerManager {
   stop(): void {
     if (!this.started) return;
     this.started = false;
+    this.cancelDiscoveryRetry();
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.runtimeGaps.clear();
+    this.snapshot = null;
+    this.lastSnapshotObservedAt = null;
+    this.lastLocalIdentity = null;
     this.publishDecision({ state: 'standby', channel: null, reason: 'stopped' });
   }
 
-  /** Start a new round after an account or Discord binding change. */
-  resetDiscovery(): void {
+  /** Start a new round after a binding change while retaining the account view. */
+  resetBindingDiscovery(): void {
+    this.resetDiscovery('binding');
+  }
+
+  /** Start a new account-scoped round and discard the previous account state. */
+  resetAccountDiscovery(): void {
+    this.resetDiscovery('account');
+  }
+
+  resetDiscovery(scope: 'binding' | 'account' = 'binding'): void {
     if (!this.started) return;
-    this.snapshot = null;
-    this.lastSnapshotObservedAt = null;
+    this.cancelDiscoveryRetry();
+    if (scope === 'account') {
+      this.snapshot = null;
+      this.lastSnapshotObservedAt = null;
+      this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
+      this.runtimeGaps.clear();
+    } else {
+      const currentIdentity = this.getLocalChannel()?.identity ?? null;
+      for (const identity of [this.lastLocalIdentity, currentIdentity]) {
+        if (identity) this.runtimeGaps.clearIdentity(identity);
+      }
+      this.lastLocalIdentity = currentIdentity;
+    }
     this.beginDiscoveryRound();
     this.reconcile();
   }
@@ -102,6 +150,7 @@ export class ImSchedulerManager {
     switch (event.type) {
       case 'relay-status':
         if (event.status === 'offline') {
+          this.cancelDiscoveryRetry();
           this.snapshot = null;
           this.peers.clear();
           this.confirmedPeers.clear();
@@ -111,22 +160,30 @@ export class ImSchedulerManager {
         this.reconcile();
         return;
       case 'ownership':
-        if (event.owner) this.beginDiscoveryRound();
+        if (event.owner) {
+          this.beginDiscoveryRound();
+        } else {
+          this.cancelDiscoveryRetry();
+        }
         this.reconcile();
         return;
       case 'snapshot':
+        if (event.snapshot === null) {
+          if (this.snapshot === null) this.beginDiscoveryRound();
+          this.reconcile();
+          return;
+        }
         if (
-          event.snapshot &&
           this.lastSnapshotObservedAt !== null &&
           event.snapshot.observedAt < this.lastSnapshotObservedAt
         ) {
           // A clock rollback or delayed response must not revive an older
           // account view after a newer snapshot has already been accepted.
-          this.snapshot = null;
-        } else {
-          this.snapshot = event.snapshot;
-          if (event.snapshot) this.lastSnapshotObservedAt = event.snapshot.observedAt;
+          this.reconcile();
+          return;
         }
+        this.snapshot = event.snapshot;
+        this.lastSnapshotObservedAt = event.snapshot.observedAt;
         this.beginDiscoveryRound();
         this.reconcile();
         return;
@@ -148,38 +205,108 @@ export class ImSchedulerManager {
   }
 
   private handlePush(sourceDeviceId: string, payload: unknown): void {
-    if (!isImSchedulerFrame(payload)) return;
+    if (!isImSchedulerFrame(payload) || !this.isAuthoritativePeer(sourceDeviceId)) return;
     if (payload.kind === 'probe') {
+      this.observePeerProbe(sourceDeviceId, payload);
       this.sendAdvertisement(sourceDeviceId, payload.nonce);
       return;
     }
     if (payload.inReplyTo !== this.discoveryNonce) return;
     const previous = this.peers.get(sourceDeviceId);
-    if (previous && payload.sentAt < previous.sentAt) return;
     this.confirmedPeers.add(sourceDeviceId);
-    this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
+    if (!previous || payload.sentAt >= previous.sentAt) {
+      this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
+    }
     for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
       if (runtime?.state === 'dirty') this.runtimeGaps.adopt(runtime);
     }
+    if (this.isDiscoveryComplete()) this.cancelDiscoveryRetry();
     this.reconcile();
   }
 
+  private isAuthoritativePeer(deviceId: string): boolean {
+    return this.snapshot?.peers.some((peer) => peer.deviceId === deviceId) === true;
+  }
+
+  private observePeerProbe(
+    sourceDeviceId: string,
+    payload: Extract<ImSchedulerFrame, { kind: 'probe' }>,
+  ): void {
+    const previous = this.peers.get(sourceDeviceId);
+    if (!previous || payload.sentAt >= previous.sentAt) {
+      this.peers.set(sourceDeviceId, {
+        sentAt: payload.sentAt,
+        frame: {
+          kind: 'advertisement',
+          sentAt: payload.sentAt,
+          channels: payload.channels,
+          ...(payload.runtime ? { runtime: payload.runtime } : {}),
+          ...(payload.runtimeGaps ? { runtimeGaps: payload.runtimeGaps } : {}),
+        },
+      });
+    }
+    for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
+      if (runtime?.state === 'dirty') this.runtimeGaps.adopt(runtime);
+    }
+  }
+
   private beginDiscoveryRound(): void {
+    this.cancelDiscoveryRetry();
     this.discoveryNonce = this.nonceFactory();
+    this.discoveryRetryAttempt = 0;
     this.peers.clear();
     this.confirmedPeers.clear();
     this.publishProbeToVisiblePeers();
+    this.scheduleDiscoveryRetry();
   }
 
   private publishProbeToVisiblePeers(): void {
+    const channel = this.getLocalChannel();
     for (const peer of this.snapshot?.peers ?? []) {
       this.transport.sendPush(peer.deviceId, {
         kind: 'probe',
         sentAt: Date.now(),
         nonce: this.discoveryNonce,
-        channels: [],
+        channels: channel ? [channel] : [],
       });
     }
+  }
+
+  private isDiscoveryComplete(): boolean {
+    return (
+      this.snapshot !== null &&
+      this.snapshot.peers.every((peer) => this.confirmedPeers.has(peer.deviceId))
+    );
+  }
+
+  private scheduleDiscoveryRetry(): void {
+    if (
+      this.discoveryRetryTimer ||
+      !this.started ||
+      this.transport.getStatus() !== 'online' ||
+      !this.transport.isOwner() ||
+      this.isDiscoveryComplete() ||
+      this.discoveryRetryAttempt >= this.maxDiscoveryRetries
+    )
+      return;
+
+    const nonce = this.discoveryNonce;
+    this.discoveryRetryTimer = setTimeout(() => {
+      this.discoveryRetryTimer = null;
+      if (!this.started || nonce !== this.discoveryNonce || this.isDiscoveryComplete()) return;
+      this.discoveryRetryAttempt += 1;
+      this.transport.requestSnapshot?.();
+      this.publishProbeToVisiblePeers();
+      this.scheduleDiscoveryRetry();
+      this.reconcile();
+    }, this.discoveryRetryDelayMs);
+    this.discoveryRetryTimer.unref?.();
+  }
+
+  private cancelDiscoveryRetry(): void {
+    if (this.discoveryRetryTimer) clearTimeout(this.discoveryRetryTimer);
+    this.discoveryRetryTimer = null;
+    this.discoveryRetryAttempt = 0;
   }
 
   private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {
@@ -194,27 +321,35 @@ export class ImSchedulerManager {
 
   private reconcile(): void {
     const channel = this.getLocalChannel();
+    if (channel) this.lastLocalIdentity = channel.identity;
     if (!this.started) return;
     if (this.transport.getStatus() !== 'online') {
+      this.cancelDiscoveryRetry();
       this.publishDecision({ state: 'standby', channel, reason: 'relay-offline' });
       return;
     }
     if (!this.transport.isOwner()) {
+      this.cancelDiscoveryRetry();
       this.publishDecision({ state: 'standby', channel, reason: 'not-owner' });
       return;
     }
     if (!channel) {
+      this.cancelDiscoveryRetry();
       this.publishDecision({ state: 'standby', channel: null, reason: 'missing-binding' });
       return;
     }
     if (!this.snapshot || this.snapshot.selfDeviceId !== this.transport.selfDeviceId) {
+      this.scheduleDiscoveryRetry();
       this.publishDecision({ state: 'standby', channel, reason: 'missing-snapshot' });
       return;
     }
     if (this.snapshot.peers.some((peer) => !this.confirmedPeers.has(peer.deviceId))) {
+      this.scheduleDiscoveryRetry();
       this.publishDecision({ state: 'standby', channel, reason: 'incomplete-peer-view' });
       return;
     }
+
+    this.cancelDiscoveryRetry();
 
     const devices: SchedulerDevice[] = [
       {

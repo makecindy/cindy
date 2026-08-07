@@ -25,4 +25,12 @@ describe('bounded runtime gaps', () => {
     expect(gaps.resolve('1'.repeat(32))).toBe(true);
     expect(gaps.resolve('1'.repeat(32))).toBe(false);
   });
+
+  it('can retire one binding without clearing unrelated account gaps', () => {
+    const gaps = new RuntimeGapSet();
+    gaps.adopt(gap('12345678901234567', '1'.repeat(32)));
+    gaps.adopt(gap('12345678901234568', '2'.repeat(32)));
+    expect(gaps.clearIdentity('12345678901234567')).toBe(true);
+    expect(gaps.values()).toEqual([gap('12345678901234568', '2'.repeat(32))]);
+  });
 });

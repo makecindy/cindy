@@ -1,4 +1,5 @@
 import { MAX_RUNTIME_GAPS, type SchedulerRuntimeFrame } from './protocol';
+import { compareSchedulerStrings } from './state';
 
 /**
  * Bounded, deterministic runtime-gap state. This is deliberately a data
@@ -35,8 +36,8 @@ export class RuntimeGapSet {
     return [...this.gaps.values()]
       .sort(
         (left, right) =>
-          left.generation.localeCompare(right.generation) ||
-          left.identity.localeCompare(right.identity),
+          compareSchedulerStrings(left.generation, right.generation) ||
+          compareSchedulerStrings(left.identity, right.identity),
       )
       .map((runtime) => ({ ...runtime }));
   }
@@ -47,6 +48,10 @@ export class RuntimeGapSet {
 
   clear(): void {
     this.gaps.clear();
+  }
+
+  clearIdentity(identity: string): boolean {
+    return this.gaps.delete(identity);
   }
 
   private trim(): void {

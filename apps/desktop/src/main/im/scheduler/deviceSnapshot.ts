@@ -1,6 +1,6 @@
 import type { DeviceView } from '@cindy/device-link';
 
-import { isDesktopSchedulerPlatform } from './state';
+import { compareSchedulerStrings, isDesktopSchedulerPlatform } from './state';
 
 export interface SchedulerDesktopDeviceSnapshot {
   /** Presence of this row is the completion barrier for an authoritative view. */
@@ -31,7 +31,7 @@ export function buildSchedulerDesktopDeviceSnapshot(
           return [];
         return [{ deviceId: device.deviceId, platform: device.platform }];
       })
-      .sort((left, right) => left.deviceId.localeCompare(right.deviceId)),
+      .sort((left, right) => compareSchedulerStrings(left.deviceId, right.deviceId)),
     observedAt,
   };
 }

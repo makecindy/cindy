@@ -52,8 +52,10 @@ Device Link 的具体 host/client 接线全部延后到 PR-B。PR-A 只在
 
 - relay 不在线、ownership 不成立、self Desktop 不在权威快照中时 fail-closed。
 - peer presence 必须有当前 discovery round 的确认，不能把空视图当作完整视图。
+- discovery probe 使用 nonce 绑定的有界 retry/refresh；完成、停止、重置或快照世代变化时取消旧轮。
 - 选主必须是确定性的，同一 `(channel, non-secret identity)` 同一时刻最多一个赢家。
-- 设备成员变化、时钟回拨、账号切换会使旧 discovery/runtime 视图失效。
+- 所有选主、快照和 gap 裁剪排序使用 locale-independent comparator；设备成员变化、时钟回拨、账号切换会使旧 discovery/runtime 视图失效。
+- 只有当前权威 Desktop 快照中的 peer 能参与 probe/advertisement；binding 变化会在下一轮 probe 中传播当前非敏感 identity。
 - runtime gap 以 identity 归属、generation 去重并有确定性上限；不携带 token 或 secret。
 - PR-A 的 manager 不被任何现有 IM 启动路径调用。
 
