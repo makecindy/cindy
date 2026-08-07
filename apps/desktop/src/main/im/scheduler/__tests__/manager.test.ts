@@ -157,6 +157,28 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
+  it('refreshes the peer snapshot while the local Discord binding is absent', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => null,
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: null,
+      reason: 'missing-binding',
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.snapshotRequests).toHaveLength(1);
+    manager.stop();
+  });
+
   it('restarts the discovery round when ownership returns', () => {
     const owner = { value: false };
     const harness = createTransport();
