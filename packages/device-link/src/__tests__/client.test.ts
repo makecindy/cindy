@@ -592,6 +592,17 @@ describe('DeviceLinkClient', () => {
     h.client.start();
     await tick();
     const ws = h.current();
+    // 确定性回 pong:监听出站 ping、同步应答,彻底消除对真实计时器调度的依赖。
+    // 必须在 ack()(hello-ack 启动心跳)之前装上:装晚了,建链期间的若干
+    // await tick() 在慢 CI/Windows 上可能耗掉两个 8ms 心跳周期,期间 ping
+    // 无人应答就已误判断网。语义不变:若慢业务 handler 真堵住帧处理,push
+    // 进来的 pong 不会被消费,pongMiss 照样触发断网,断言仍能抓住回归。
+    const originalSend = ws.send.bind(ws);
+    ws.send = (data: string) => {
+      originalSend(data);
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'ping') ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+    };
     ws.ack();
     await establishInboundReliableLink(h, 'slow-stream');
 
@@ -611,16 +622,6 @@ describe('DeviceLinkClient', () => {
         data: JSON.stringify({ channel: 'maker:event', payload: { text: 'slow' } }),
       },
     });
-    // 确定性回 pong:监听出站 ping、同步应答,彻底消除对真实计时器调度的依赖
-    // (旧写法用 4ms setInterval 自由跑,慢 CI/Windows 上会落后两个 8ms 心跳
-    // 周期触发误断网)。语义不变:若慢业务 handler 真堵住帧处理,push 进来的
-    // pong 不会被消费,pongMiss 照样触发断网,断言仍能抓住回归。
-    const originalSend = ws.send.bind(ws);
-    ws.send = (data: string) => {
-      originalSend(data);
-      const env = JSON.parse(data) as Envelope;
-      if (env.kind === 'ping') ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
-    };
     await tick();
     expect(release).toBeTypeOf('function');
 
