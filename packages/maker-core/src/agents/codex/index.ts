@@ -2493,8 +2493,7 @@ export class CodexAgent extends BaseAgent {
     // (注意: 即使塞进 ThreadStartParams.config, ChatGPT 订阅的
     // chatgpt.com/backend-api/codex 端点对 max_output_tokens 也直接 400,
     // 见 anthropic-responses-bridge/src/translate-request.ts:290 —— 这条路由
-    // 上游就拒绝该参数, 不是协议层漏字段那么简单。快问快答的宿主侧钳制
-    // 在 cindy-brain oneshotText wiring 处补齐。)
+    // 上游就拒绝该参数, 不是协议层漏字段那么简单。)
     if (opts?.maxTokens !== undefined) {
       log.warn(`maxTokens=${opts.maxTokens} ignored — Codex host protocol does not expose max_tokens`);
     }

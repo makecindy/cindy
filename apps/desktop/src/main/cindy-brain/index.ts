@@ -2813,11 +2813,10 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
       oneshotText: async ({ prompt, maxTokens, timeoutMs, route }) => {
-        const [{ requestUtilityText, oneshotRouteCannotEnforceMaxTokens, clampOneshotTextOutput }, { getMaker }] =
-          await Promise.all([
-            import('../utility-model/oneShotCandidates.js'),
-            import('../maker-host/index.js'),
-          ]);
+        const [{ requestUtilityText }, { getMaker }] = await Promise.all([
+          import('../utility-model/oneShotCandidates.js'),
+          import('../maker-host/index.js'),
+        ]);
         const r = await requestUtilityText(getMaker(), prompt, {
           maxTokens,
           timeoutMs,
@@ -2829,26 +2828,9 @@ export function getGhostCindySlot(): GhostCindySlot {
             : {}),
         });
         if (r.ok) {
-          // 快问快答 maxTokens 无法由服务端落实的订阅路由:Codex 快速通道档位
-          // (codex-responses 经 OpenAI 订阅,maker.oneShot 忽略 maxTokens)与
-          // OpenAI 目录钉(supportsMaxOutputTokens:false,上游 chatgpt 端点对
-          // max_output_tokens 返回 400)。xAI 虽同为 codex-responses transport,
-          // 但 max_output_tokens 已实际下发,不在此列;按量路由(xd/anthropic/
-          // 自定义)同样已落实。这些路由上插件显式传的 maxTokens 是真实契约,
-          // 上游执行不了就由宿主侧按字符上界钳制兑现。
-          const cannotEnforce =
-            maxTokens !== undefined && oneshotRouteCannotEnforceMaxTokens(r.transport, r.providerId);
-          const text = cannotEnforce ? clampOneshotTextOutput(r.text, maxTokens) : r.text;
-          if (cannotEnforce && text.length < r.text.length) {
-            log.warn('ghost oneshot_text output clamped to plugin maxTokens on subscription route', {
-              providerId: r.providerId,
-              model: r.model,
-              maxTokens,
-              inputChars: r.text.length,
-              outputChars: text.length,
-            });
-          }
-          return { ok: true, text, model: `${r.providerId}/${r.model}` };
+          // 快问快答不设输出 token 上限:与宿主会话一致,用户主动使用插件的
+          // 成本由用户承担,宿主不额外钳制(2026-08-07 决策:全部限制拿掉)。
+          return { ok: true, text: r.text, model: `${r.providerId}/${r.model}` };
         }
         log.warn('ghost oneshot_text utility chain failed', {
           reason: r.reason,

@@ -1724,15 +1724,15 @@ describe('快问快答(oneshot_text)', () => {
     expect(
       await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 0 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
-    expect(
-      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 81921 }),
-    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
-    // 显式自限上限 81920 合法(缺省不设上限,无"绕过"一说)。
+    // 宿主不设输出上限:任意正整数 maxTokens 合法(仅基本校验,挡负数/小数)。
     expect(
       await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 81920 }),
     ).toMatchObject({ ok: true });
     expect(
-      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 99999 }),
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 999999 }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: -1 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     expect(
       await slot.handleModelRequest('art', { ...ONESHOT, expectJson: 'yes' }),

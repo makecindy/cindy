@@ -80,12 +80,7 @@ import { readModelDisableOverrides } from '../../maker-host/model-disable-store.
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
-import {
-  clampOneshotTextOutput,
-  getUtilityTextCandidates,
-  oneshotRouteCannotEnforceMaxTokens,
-  requestUtilityText,
-} from '../oneShotCandidates.js';
+import { getUtilityTextCandidates, requestUtilityText } from '../oneShotCandidates.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const readKey = vi.mocked(readClaudeApiKey);
@@ -1065,35 +1060,6 @@ describe('utility one-shot candidates', () => {
     expect(result).toMatchObject({ ok: true, text: 'ok' });
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body).not.toHaveProperty('max_tokens');
-  });
-
-  describe('订阅路由 maxTokens 宿主侧钳制(Greptile 追分 2026-08-07)', () => {
-    it('oneshotRouteCannotEnforceMaxTokens:codex 档位与 openai 目录钉无法服务端落实', () => {
-      // Codex 快速通道档位:transport=codex-responses,providerId=档位键
-      expect(oneshotRouteCannotEnforceMaxTokens('codex-responses', 'codex-gpt-5.4-mini')).toBe(true);
-      expect(oneshotRouteCannotEnforceMaxTokens('codex-responses', 'codex-gpt-5.4-nano')).toBe(true);
-      // OpenAI 目录钉:transport=codex-responses,providerId=openai
-      expect(oneshotRouteCannotEnforceMaxTokens('codex-responses', 'openai')).toBe(true);
-    });
-
-    it('oneshotRouteCannotEnforceMaxTokens:xai 与按量路由已服务端落实,不钳制', () => {
-      // xAI 虽同为 codex-responses,但 max_output_tokens 已下发
-      expect(oneshotRouteCannotEnforceMaxTokens('codex-responses', 'xai')).toBe(false);
-      // XD / Anthropic 走 litellm wire,已落实
-      expect(oneshotRouteCannotEnforceMaxTokens('litellm-chat-completions', 'xd')).toBe(false);
-      expect(oneshotRouteCannotEnforceMaxTokens('litellm-chat-completions', 'anthropic')).toBe(false);
-      // 未知 transport 防御:不命中(宁可放过不误伤)
-      expect(oneshotRouteCannotEnforceMaxTokens(undefined, 'whatever')).toBe(false);
-    });
-
-    it('clampOneshotTextOutput:超长按 maxTokens×4 字符宽松截断', () => {
-      // maxTokens=10 → 上界 40 字符
-      expect(clampOneshotTextOutput('a'.repeat(100), 10)).toBe('a'.repeat(40));
-      // 未超界不截
-      expect(clampOneshotTextOutput('short', 10)).toBe('short');
-      // 边界:恰等上界不截
-      expect(clampOneshotTextOutput('a'.repeat(40), 10)).toBe('a'.repeat(40));
-    });
   });
 
   it('routes a descriptor-backed no-auth builtin through the generic utility transport', async () => {

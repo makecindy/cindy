@@ -58,7 +58,6 @@ import {
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
   GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS,
-  GHOST_ONESHOT_TEXT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_TIMEOUT_MS,
   GHOST_VIDEO_MAX_DURATION_SECONDS,
   GHOST_VIDEO_MAX_FPS,
@@ -1463,10 +1462,12 @@ export class GhostCindySlot {
     if (p.expectJson !== undefined && typeof p.expectJson !== 'boolean') {
       return { ok: false, message: 'expectJson 必须是布尔值(或不传)', errorCode: 'INVALID_PARAMS' };
     }
-    if (p.maxTokens !== undefined && !isPositiveIntWithin(p.maxTokens, GHOST_ONESHOT_TEXT_MAX_TOKENS)) {
+    // 插件显式传 maxTokens 只做基本正整数校验,不设实际上限——宿主不限制
+    // 输出 token 数(与宿主会话一致,用户主动使用插件的成本由用户承担)。
+    if (p.maxTokens !== undefined && !isPositiveIntWithin(p.maxTokens, Number.MAX_SAFE_INTEGER)) {
       return {
         ok: false,
-        message: `maxTokens 不合法(1–${GHOST_ONESHOT_TEXT_MAX_TOKENS} 的整数,或不传)`,
+        message: 'maxTokens 不合法(正整数,或不传)',
         errorCode: 'INVALID_PARAMS',
       };
     }
