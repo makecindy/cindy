@@ -2778,7 +2778,17 @@ export class AgentInputCoordinator {
     this.scheduleDrain(sessionId, 'turn-done');
   }
 
-  onSessionClosed(sessionId: string): void {
+  /**
+   * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。
+   *   用于 rehydrate / 凭证切换 close-rebuild 窗口:abort 会取消驱动本次重建的
+   *   input signal(#1930),但**其余清理必须照常**(activeTurn / steer / queue
+   *   状态不能残留,否则 rebuild 失败或 close 后不 rebuild 时 coordinator
+   *   残留旧状态阻塞后续发送)。
+   */
+  onSessionClosed(
+    sessionId: string,
+    opts?: { preserveInputBoundary?: boolean },
+  ): void {
     const state = this.getState(sessionId);
     this.supersedePendingAutoResumeRecoveries(sessionId);
     const releasedAbortLock = state.queueAbortPending;
@@ -2786,7 +2796,7 @@ export class AgentInputCoordinator {
     this.clearAbortReconcileRetry(state);
     this.clearSessionRunningRetry(state);
     this.clearPendingExternalTerminalDone(state);
-    this.abortInputBoundary(sessionId);
+    if (!opts?.preserveInputBoundary) this.abortInputBoundary(sessionId);
     this.abortSteerTransactions(sessionId);
     const active = state.activeTurn;
     if (active && !isActiveTurnDispatched(active)) {

@@ -3011,6 +3011,60 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'next' });
   });
 
+  it('preserveInputBoundary keeps the input signal alive but still clears active state (#1930)', async () => {
+    const h = createHarness();
+    const sid = 'session-close-preserve-input-boundary';
+    const sendStarted = deferred<void>();
+    const sendGate = deferred<AgentInputSendResult>();
+    let capturedSignal: AbortSignal | undefined;
+    h.sendToAgent.mockImplementationOnce(async (_sid, _msg, _createOpts, sendOpts) => {
+      capturedSignal = sendOpts?.signal;
+      sendStarted.resolve();
+      return sendGate.promise;
+    });
+
+    // 发送进行中(activeTurn 非空,持有 input boundary signal)。
+    const sendPromise = h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    await sendStarted.promise;
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // rehydrate 窗口内 close:preserveInputBoundary=true → signal 不被 abort。
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true });
+    await flush();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    // 但其余清理照常:activeTurn 已清,新消息可排队。
+    h.sendToAgent.mockResolvedValueOnce(sendSuccess());
+    h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+    sendGate.resolve(sendSuccess());
+    await sendPromise;
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts the input boundary on plain session close (no preserve flag)', async () => {
+    const h = createHarness();
+    const sid = 'session-close-aborts-input-boundary';
+    const sendStarted = deferred<void>();
+    let capturedSignal: AbortSignal | undefined;
+    h.sendToAgent.mockImplementationOnce(async (_sid, _msg, _createOpts, sendOpts) => {
+      capturedSignal = sendOpts?.signal;
+      sendStarted.resolve();
+      return new Promise<AgentInputSendResult>(() => undefined); // 永不 resolve
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    await sendStarted.promise;
+    await flush();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    // 普通 close(无 preserve)→ abort input boundary。
+    h.coordinator.onSessionClosed(sid);
+    await flush();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
   it('releases compact active turn when close races before dispatch outcome', async () => {
     const h = createHarness();
     const sid = 'compact-close-before-dispatch-outcome';

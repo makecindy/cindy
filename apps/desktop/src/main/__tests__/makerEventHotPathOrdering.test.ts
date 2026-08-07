@@ -385,32 +385,28 @@ describe('maker:event hot path ordering', () => {
     expect(closedBlock).toContain('gitSnapshotCoordinator?.onSessionClosed(session.id);');
     expectOrder(
       closedBlock,
-      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id, {',
       'gitSnapshotCoordinator?.onSessionClosed(session.id);',
     );
   });
 
-  it('skips coordinator onSessionClosed inside the rehydrate suppression window (#1930)', () => {
+  it('preserves coordinator input boundary inside the rehydrate suppression window (#1930)', () => {
     const wireSessionSource = extractWireSessionSource();
     const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
 
-    // rehydrate / 凭证切换 close-rebuild 期间同一逻辑会话进程内重建:必须跳过
-    // coordinator.onSessionClosed,否则 abortInputBoundary 取消驱动本次重建的
-    // input signal → cancelled-before-dispatch(#1930)。去掉守卫即回归事故。
+    // rehydrate / 凭证切换 close-rebuild 期间同一逻辑会话进程内重建:窗口内
+    // onSessionClosed 传 preserveInputBoundary(true)保留 input boundary(不 abort
+    // 驱动本次重建的 signal → #1930),但**其余清理必须照常执行**(不能整体跳过
+    // onSessionClosed,否则 rebuild 失败/close 后不 rebuild 时 coordinator 残留)。
     expect(closedBlock).toContain(
-      'if (!rehydrateCloseSuppression.isSuppressed(session.id)) {',
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id, {',
     );
     expect(closedBlock).toContain(
-      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
+      'preserveInputBoundary: rehydrateCloseSuppression.isSuppressed(session.id),',
     );
     expectOrder(
       closedBlock,
-      'if (!rehydrateCloseSuppression.isSuppressed(session.id)) {',
-      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
-    );
-    expectOrder(
-      closedBlock,
-      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id, {',
       'gitSnapshotCoordinator?.onSessionClosed(session.id);',
     );
   });
