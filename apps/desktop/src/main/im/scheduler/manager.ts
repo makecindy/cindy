@@ -710,6 +710,10 @@ export class ImSchedulerManager {
   private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
     if (this.resolvedRuntimeGenerations.has(runtime.generation)) return;
     if (this.localRuntime?.state === 'active') return;
+    // A generation is an opaque random token, not a clock.  Concurrent peers
+    // can report more than one unresolved gap before their advertisements
+    // converge; keep the lexical minimum only as an order-independent
+    // tie-breaker so every observer carries the same compensation token.
     if (
       this.localRuntime?.state === 'dirty'
       && this.localRuntime.generation <= runtime.generation

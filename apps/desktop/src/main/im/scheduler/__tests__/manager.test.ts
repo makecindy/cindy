@@ -513,6 +513,50 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('converges concurrent dirty generations with an order-independent tie-breaker', async () => {
+    harness.owner = false;
+    harness.peers = [
+      { deviceId: 'a', platform: 'darwin', online: true, lastSeenAt: Date.now() },
+      { deviceId: 'b', platform: 'darwin', online: true, lastSeenAt: Date.now() },
+    ];
+    const lowerGeneration = '1'.repeat(32);
+    const higherGeneration = 'e'.repeat(32);
+
+    for (const generations of [
+      [higherGeneration, lowerGeneration],
+      [lowerGeneration, higherGeneration],
+    ]) {
+      harness.sendPush.mockClear();
+      const manager = createManager(createDiscord());
+      await manager.start();
+      confirmPeer('a', [], {
+        identity: '12345678901234567',
+        generation: generations[0],
+        state: 'dirty',
+      });
+      confirmPeer('b', [], {
+        identity: '12345678901234567',
+        generation: generations[1],
+        state: 'dirty',
+      });
+
+      harness.presenceHandler?.({
+        deviceId: 'a',
+        platform: 'darwin',
+        online: true,
+        lastSeenAt: Date.now(),
+      });
+      const advertisement = [...harness.sendPush.mock.calls].reverse().find(
+        ([target, , payload]) => target === 'a'
+          && typeof payload === 'object'
+          && payload !== null
+          && (payload as { kind?: unknown }).kind === 'advertisement',
+      )?.[2] as { runtime?: { generation?: string } } | undefined;
+      expect(advertisement?.runtime?.generation).toBe(lowerGeneration);
+      await manager.stop();
+    }
+  });
+
   it('stops the active transport immediately when Device Link ownership is lost', async () => {
     harness.selfDeviceId = 'a';
     const discord = createDiscord();
