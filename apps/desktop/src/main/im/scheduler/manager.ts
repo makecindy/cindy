@@ -334,7 +334,10 @@ export class ImSchedulerManager {
       if (!this.started || roundNonce !== this.discoveryNonce) return;
       this.publishProbeToVisiblePeers();
       if (this.discoveryRetryAttempt >= this.maxDiscoveryRetries) {
-        this.resetSnapshotRequestState();
+        // Keep the final refresh request alive so its response can still
+        // replace the membership view. The new discovery round gets its own
+        // nonce and retry budget, while an older request id remains stale.
+        this.snapshotRefreshPending = false;
         this.beginDiscoveryRound();
       } else {
         this.scheduleDiscoveryRetry();
