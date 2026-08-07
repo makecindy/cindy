@@ -1,6 +1,7 @@
 import type { AgentKind } from '@cindy/maker-core';
 import { describe, expect, it } from 'vitest';
 
+import type { OrcaWorkerProviderRoutingContext } from '../orcaWorkerCreationService';
 import { resolveSendToSessionExecutionConfig } from '../sendToSessionExecutionConfig';
 
 const available = (agent: AgentKind) => (
@@ -29,6 +30,12 @@ const available = (agent: AgentKind) => (
           defaultEffort: 'high',
           supportsFastMode: false,
         },
+        {
+          id: 'claude-opus-fast',
+          efforts: ['high'],
+          defaultEffort: 'high',
+          supportsFastMode: true,
+        },
       ]
 );
 
@@ -40,15 +47,18 @@ const fableSource = () => ({
   providerId: 'anthropic',
 });
 
-const providerRouting = (defaults: Partial<Record<AgentKind, string>> = {}) => ({
+const providerRouting = (
+  defaults: Partial<Record<AgentKind, string>> = {},
+): OrcaWorkerProviderRoutingContext => ({
   availability: {
     'claude-code': [{
       id: 'anthropic',
       name: 'Anthropic',
-      models: ['claude-fable-5'],
-      fastModels: [],
+      models: ['claude-fable-5', 'claude-opus-fast'],
+      fastModels: ['claude-opus-fast'],
       effortMetaByModel: {
         'claude-fable-5': { efforts: ['high'], defaultEffort: 'high' },
+        'claude-opus-fast': { efforts: ['high'], defaultEffort: 'high' },
       },
     }],
     codex: [{
@@ -78,7 +88,79 @@ const providerRouting = (defaults: Partial<Record<AgentKind, string>> = {}) => (
   ),
 });
 
+const sourceFor = (agent: AgentKind) => {
+  if (agent === 'claude-code') return fableSource();
+  if (agent === 'codex') {
+    return {
+      agentKind: 'codex' as const,
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh' as const,
+      fastMode: true,
+      providerId: 'openai',
+    };
+  }
+  return {
+    agentKind: 'pi' as const,
+    model: 'pi-model',
+    effort: 'high' as const,
+    fastMode: true,
+    providerId: 'xd',
+  };
+};
+
+const targetFor = (agent: AgentKind) => {
+  if (agent === 'claude-code') {
+    return {
+      agentKind: 'claude-code' as const,
+      model: 'claude-opus-fast',
+      effort: 'high' as const,
+      fastMode: true,
+    };
+  }
+  if (agent === 'codex') {
+    return {
+      agentKind: 'codex' as const,
+      model: 'gpt-5.6-sol',
+      effort: 'max' as const,
+      fastMode: true,
+    };
+  }
+  return {
+    agentKind: 'pi' as const,
+    model: 'pi-model',
+    effort: 'max' as const,
+    fastMode: true,
+  };
+};
+
 describe('resolveSendToSessionExecutionConfig', () => {
+  it.each([
+    ['claude-code', 'codex'],
+    ['claude-code', 'pi'],
+    ['codex', 'claude-code'],
+    ['codex', 'pi'],
+    ['pi', 'claude-code'],
+    ['pi', 'codex'],
+  ] satisfies ReadonlyArray<readonly [AgentKind, AgentKind]>) (
+    'resolves %s → %s through the same target execution gateway',
+    (sourceAgent, targetAgent) => {
+      const target = targetFor(targetAgent);
+      expect(resolveSendToSessionExecutionConfig({
+        source: sourceFor(sourceAgent),
+        overrides: target,
+        availableModels: available(targetAgent),
+        providerRouting: providerRouting(),
+        hasCindyAiApiKey: true,
+      })).toEqual({
+        ok: true,
+        config: {
+          ...target,
+          providerId: null,
+        },
+      });
+    },
+  );
+
   it('resolves Claude/Fable → Codex/gpt with explicit effort and clears the old provider', () => {
     expect(resolveSendToSessionExecutionConfig({
       source: fableSource(),

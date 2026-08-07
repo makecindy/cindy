@@ -78,10 +78,6 @@ function normalizeEffort(params: {
   };
 }
 
-function agentConsumesFast(agent: AgentKind): boolean {
-  return agent === 'codex' || agent === 'pi';
-}
-
 function providerRouteUnavailableMessage(agent: AgentKind, model: string): string {
   return (
     `${agent} 当前没有已连接的供应商提供模型 "${model}"，`
@@ -225,7 +221,7 @@ export function resolveSendToSessionExecutionConfig(params: {
   const supportsFast = route.provider.fastModels
     ? route.provider.fastModels.includes(model)
     : modelCapabilities.supportsFastMode === true;
-  if (overrides.fastMode === true && (!agentConsumesFast(agentKind) || !supportsFast)) {
+  if (overrides.fastMode === true && !supportsFast) {
     return {
       ok: false,
       errorCode: 'INVALID_ARGS',
@@ -233,7 +229,7 @@ export function resolveSendToSessionExecutionConfig(params: {
     };
   }
   const fastMode = overrides.fastMode
-    ?? (routeChanged ? source.fastMode && agentConsumesFast(agentKind) && supportsFast : source.fastMode);
+    ?? (routeChanged ? source.fastMode && supportsFast : source.fastMode);
   const effort = overrides.effort !== undefined || routeChanged
     ? normalizedEffort.effort
     : source.effort;
