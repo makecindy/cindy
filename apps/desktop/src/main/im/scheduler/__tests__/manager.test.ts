@@ -939,6 +939,42 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
+  it('retries after a final refresh returns an empty authoritative snapshot', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+      discoveryRetryDelayMs: 100,
+      snapshotResponseTimeoutMs: 500,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    const request = harness.snapshotRequests.at(-1);
+    expect(request).toBeTruthy();
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
+      snapshot: null,
+    });
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.snapshotRequests.length).toBeGreaterThan(1);
+    manager.stop();
+  });
+
   it('accepts a slow final snapshot response before its independent timeout', async () => {
     vi.useFakeTimers();
     const harness = createTransport();
