@@ -25,6 +25,10 @@ function normalizePath(value: string, platform: 'posix' | 'win32'): string | nul
 
   if (!value) return null;
   let withForwardSlashes = value.replaceAll('\\', '/');
+  // JavaScript Unicode case folding is not the Win32 ordinal comparison used
+  // by the filesystem. Until the host supplies a Win32 comparison identity,
+  // reject non-ASCII paths rather than allowing approval-key collisions.
+  if (platform === 'win32' && /[^\x00-\x7F]/u.test(withForwardSlashes)) return null;
   if (withForwardSlashes.toLowerCase().startsWith('//?/unc/')) {
     withForwardSlashes = `//${withForwardSlashes.slice(8)}`;
   } else if (/^\/\/\?\/[A-Za-z]:\//.test(withForwardSlashes)) {

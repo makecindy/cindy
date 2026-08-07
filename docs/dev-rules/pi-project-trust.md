@@ -7,6 +7,7 @@
 - trust 输入只能来自 Cindy 已有、可审计的项目 approval。当前 `origin/main` 尚未提供通用 project approval store，因此实现必须通过 host 注入 `PiProjectApprovalSnapshot`，不得把 `permissionMode`、工具审批、MCP approval、插件启用状态或 Pi 用户设置解释为项目 trust。
 - approval 在新建、重启、fork 或切换到新 `workingDir` 时重新求值；一个运行中的 Pi 进程使用启动时快照。撤销或失效对下一次新会话生效，不声称热卸载已加载资源。
 - `workingDir` 与 git repo root 必须先做 `realpath`/规范化，host 必须同时提供可信的 `platform`（`posix` / `win32`），不得从路径字符串猜测或缺省为 POSIX。POSIX canonical bytes 只有能无损往返 UTF-8 时才可标记 `utf8-lossless`；Windows canonical path 只有能无损往返 host Unicode string 时才可标记 `utf16-lossless`。编码标记与平台不匹配、含替换字符或无法证明无损时必须标记 `unavailable`，不得用有损字符串生成 approval key。解析失败、目录消失、repo 边界变化、symlink 指向变化均 fail closed。默认作用域是 `repo-root + workingDir`；只有 approval 明确声明 `repo-root` 才能让同一仓库的多个 workingDir 共享批准。`extraDirs`、引用目录和其他 workspace root 不继承。
+- 当前纯函数只对 ASCII Windows canonical path 做分隔符、扩展长度前缀和大小写归一化；非 ASCII Windows path 因 JavaScript Unicode folding 不等同于 Win32 ordinal comparison，必须 fail closed 为 `unavailable`，直到 host 提供独立的 Win32 comparison identity。
 - `projectKey` 为 `${canonicalRepoRoot}\0${canonicalWorkingDir}`；Windows 比较折叠分隔符与大小写。approval 的 `scopeKey` 对 `repo-root` 是 canonical root，对 `working-dir` 是同样的复合 key。
 
 ## 状态与资源边界

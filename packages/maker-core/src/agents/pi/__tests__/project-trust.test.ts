@@ -397,6 +397,45 @@ describe('Pi project trust contract', () => {
     }).status).toBe('unapproved');
   });
 
+  it('fails closed for non-ASCII Windows paths without a Win32 comparison identity', () => {
+    const nonAsciiIdentity: PiProjectIdentityResolution = {
+      ...identity,
+      workingDir: 'C:\\repo\\İ',
+      canonicalWorkingDir: 'C:/repo/İ',
+      canonicalRepoRoot: 'C:/repo',
+      platform: 'win32',
+      canonicalPathEncoding: 'utf16-lossless',
+    };
+    const result = evaluatePiProjectTrust({
+      identity: nonAsciiIdentity,
+      approval: approval({ scopeKey: 'c:/repo\0c:/repo/i̇' }),
+      discovered,
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.status).toBe('unavailable');
+    expect(result.resources.skills).toBe('discovered');
+    expect(result.eligibleSkillPaths).toEqual([]);
+  });
+
+  it('preserves non-ASCII POSIX paths when the host proves UTF-8 losslessness', () => {
+    const posixIdentity: PiProjectIdentityResolution = {
+      ...identity,
+      workingDir: '/repo/café',
+      canonicalWorkingDir: '/repo/café',
+      canonicalRepoRoot: '/repo',
+      platform: 'posix',
+      canonicalPathEncoding: 'utf8-lossless',
+    };
+    const result = evaluatePiProjectTrust({
+      identity: posixIdentity,
+      approval: approval({ scopeKey: '/repo\0/repo/café' }),
+      discovered,
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.status).toBe('approved');
+    expect(result.eligibleSkillPaths).toEqual(discovered.skills);
+  });
+
   it('preserves Windows UNC canonical roots while matching approval scope', () => {
     const uncIdentity: PiProjectIdentityResolution = {
       ...identity,
