@@ -105,6 +105,19 @@ function sameScriptConfig(
 }
 
 let importTail: Promise<void> = Promise.resolve();
+const failedStagedScheduleIds = new WeakMap<
+  CodexAutomationMigrationScheduler,
+  Map<string, string>
+>();
+
+function stagedScheduleIdsFor(scheduler: CodexAutomationMigrationScheduler): Map<string, string> {
+  let ids = failedStagedScheduleIds.get(scheduler);
+  if (!ids) {
+    ids = new Map();
+    failedStagedScheduleIds.set(scheduler, ids);
+  }
+  return ids;
+}
 
 function withImportLock<T>(task: () => Promise<T>): Promise<T> {
   const run = importTail.then(task, task);
@@ -233,6 +246,7 @@ export function createCodexAutomationMigrationService(
         const skipped: CodexAutomationImportResult['skipped'] = [];
         const failed: CodexAutomationImportResult['failed'] = [];
         const knownSchedules = [...schedules];
+        const stagedScheduleIds = stagedScheduleIdsFor(deps.scheduler);
 
         for (const sourceId of requestedIds) {
           const detail = byId.get(sourceId);
@@ -261,6 +275,51 @@ export function createCodexAutomationMigrationService(
             });
             continue;
           }
+          const desiredManual = converted.input.manual ?? false;
+          if (converted.status === 'paused') {
+            const stagedScheduleId = stagedScheduleIds.get(detail.sourcePath);
+            const stagedSchedule = stagedScheduleId
+              ? knownSchedules.find((schedule) => schedule.id === stagedScheduleId)
+              : undefined;
+            const stagingInput: CreateScheduleInput = { ...converted.input, manual: true };
+            const stagingMatch =
+              stagedSchedule &&
+              (stagedSchedule.status === 'active' || stagedSchedule.status === 'paused')
+                ? findDuplicateSchedule([stagedSchedule], stagingInput, stagedSchedule.status)
+                : undefined;
+            if (stagedScheduleId && !stagingMatch) {
+              stagedScheduleIds.delete(detail.sourcePath);
+            } else if (stagingMatch) {
+              try {
+                let recoveredSchedule = stagingMatch;
+                if (recoveredSchedule.status === 'active') {
+                  recoveredSchedule = await deps.scheduler.pause(recoveredSchedule.id);
+                }
+                if (recoveredSchedule.manual !== desiredManual) {
+                  recoveredSchedule = await deps.scheduler.update(recoveredSchedule.id, {
+                    manual: desiredManual,
+                  });
+                }
+                stagedScheduleIds.delete(detail.sourcePath);
+                const knownIndex = knownSchedules.findIndex(
+                  (schedule) => schedule.id === recoveredSchedule.id,
+                );
+                if (knownIndex >= 0) knownSchedules[knownIndex] = recoveredSchedule;
+                created.push({
+                  sourceId,
+                  scheduleId: recoveredSchedule.id,
+                  name: recoveredSchedule.name,
+                });
+              } catch (error) {
+                failed.push({
+                  sourceId,
+                  name: detail.name,
+                  error: `${error instanceof Error ? error.message : String(error)}; schedule ${stagingMatch.id} remains manual and will not auto-run`,
+                });
+              }
+              continue;
+            }
+          }
           const duplicate = findDuplicateSchedule(
             knownSchedules,
             converted.input,
@@ -276,7 +335,6 @@ export function createCodexAutomationMigrationService(
             continue;
           }
           let createdSchedule: Schedule | undefined;
-          const desiredManual = converted.input.manual ?? false;
           const createInput: CreateScheduleInput =
             converted.status === 'paused' ? { ...converted.input, manual: true } : converted.input;
           try {
@@ -304,7 +362,11 @@ export function createCodexAutomationMigrationService(
             if (createdSchedule) {
               try {
                 await deps.scheduler.delete(createdSchedule.id);
+                stagedScheduleIds.delete(detail.sourcePath);
               } catch (cleanupError) {
+                if (createdSchedule.manual) {
+                  stagedScheduleIds.set(detail.sourcePath, createdSchedule.id);
+                }
                 const safetyState = createdSchedule.manual
                   ? `schedule ${createdSchedule.id} remains manual and will not auto-run`
                   : `schedule ${createdSchedule.id} may still be active`;

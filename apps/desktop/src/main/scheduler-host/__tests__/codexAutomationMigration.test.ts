@@ -283,6 +283,28 @@ describe('CodexAutomationMigrationService', () => {
     expect(leftover?.nextFireAt).toBeUndefined();
   });
 
+  it('does not create another schedule when retrying a fail-closed paused import', async () => {
+    const item = detail('paused', { status: 'PAUSED' });
+    const { service, scheduler } = setup([item]);
+    scheduler.update.mockRejectedValueOnce(new Error('restore manual failed'));
+    scheduler.delete.mockRejectedValueOnce(new Error('delete failed'));
+
+    const first = await service.import(['paused']);
+    const second = await service.import(['paused']);
+
+    expect(first.failed[0]?.error).toContain('remains manual and will not auto-run');
+    expect(scheduler.create).toHaveBeenCalledTimes(1);
+    expect(scheduler.update).toHaveBeenCalledTimes(2);
+    expect(second.created[0]).toMatchObject({
+      sourceId: 'paused',
+      scheduleId: 'schedule-1',
+    });
+    expect(second.skipped).toEqual([]);
+    expect(await scheduler.list()).toEqual([
+      expect.objectContaining({ id: 'schedule-1', status: 'paused', manual: false }),
+    ]);
+  });
+
   it('restores the intended automatic cadence only after a paused task is safely paused', async () => {
     const item = detail('paused', { status: 'PAUSED' });
     const { service, scheduler } = setup([item]);
