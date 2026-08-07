@@ -397,6 +397,30 @@ describe('review 第五轮 — 选项值与动态执行', () => {
     )).toBe('auto-approve');
   });
 
+  it('文件型选项的**等号**形态同样不遮蔽凭证路径', () => {
+    // review 曾判断等号形态会绕过(prefix 以 `=` 结尾 → 文件型选项检查不匹配)。实测不成立:
+    // 剥离正则的 flag 段 `-{1,2}[\w-]+(?:=\S+)?` 会把 `--opt=值` **整体**吃成一个 flag,
+    // 那个值从来不会以「prefix + 引号字面量」的形式进入替换,凭证路径始终留在扫描面上。
+    // 用例把这个结论钉住,免得后来人为一个不存在的洞加逻辑。
+    for (const c of [
+      'grep --exclude-from="~/.ssh/id_rsa" foo src',
+      'grep --include-from="~/.ssh/id_rsa" foo src',
+      'rg --ignore-file="~/.aws/credentials" foo',
+      'grep --file="~/.ssh/id_rsa" src',
+      "grep --exclude-from='~/.ssh/id_rsa' foo src",
+      'grep --exclude-from="~/.ssh/id_rsa" "foo|bar" src',   // 后面还跟着真正的模式
+      'grep --exclude-from= "~/.ssh/id_rsa" foo src',        // 等号后带空格
+      'grep --exclude-from="~/my docs/.ssh/id_rsa" foo src',  // 路径含空格
+      'grep -rn --exclude-from="~/.ssh/id_rsa" "foo" src',    // 与其它 flag 混排
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 值无害时不因这条护栏反向误报。
+    expect(classifyShellCommand(
+      'grep --exclude-from="/tmp/skip.txt" foo src', roots, opts,
+    )).toBe('auto-approve');
+  });
+
   it('[P1] awk 的输出管道目标是变量/表达式时同样是动态执行', () => {
     for (const c of [
       `printf 'x' | awk -v cmd=sh '{ print $0 | cmd }'`,
