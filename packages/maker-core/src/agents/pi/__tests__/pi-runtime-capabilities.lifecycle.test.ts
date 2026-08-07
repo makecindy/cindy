@@ -113,11 +113,13 @@ describe('Pi runtime capability lifecycle', () => {
   it('captures once after ready, exposes a stable per-session query/event contract, and clears on close', async () => {
     captured.catalogs.s1 = catalog('skill:s1');
     const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
-    const changes: unknown[] = [];
-    const dispose = handle.onRuntimeCapabilitiesChange?.((manifest) => changes.push(manifest));
     await vi.waitFor(() => {
       expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', sessionId: 's1', commands: [{ name: 'skill:s1' }] });
     });
+    const changes: unknown[] = [];
+    const dispose = handle.onRuntimeCapabilitiesChange?.((manifest) => changes.push(manifest));
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:s1' }] });
     expect(captured.instances[0]?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(1);
     await handle.close();
     expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
@@ -135,7 +137,8 @@ describe('Pi runtime capability lifecycle', () => {
     handle.onRuntimeCapabilitiesChange?.((manifest) => changes.push(manifest));
     instance.onExit?.({ code: 1, signal: null });
     expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
-    expect(changes).toEqual([undefined]);
+    expect(changes.at(-1)).toBeUndefined();
+    expect(changes.length).toBeGreaterThanOrEqual(1);
     await handle.close();
     expect(instance.closed).toBe(true);
   });
@@ -203,7 +206,9 @@ describe('Pi runtime capability lifecycle', () => {
     const result = await handle.commitRewindFiles?.('', '', { tailTurnsToDrop: 1 });
     expect(result?.sdkSessionId).toBe('/mock/s1-rewind.jsonl');
     expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
-    expect(changes).toEqual([undefined]);
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toMatchObject({ sdkSessionId: '/mock/s1.jsonl', status: 'loaded' });
+    expect(changes[1]).toBeUndefined();
 
     captured.runtimeRelease?.();
     await vi.waitFor(() => {

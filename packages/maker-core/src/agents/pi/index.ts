@@ -1156,16 +1156,22 @@ export class PiAgent extends BaseAgent {
     const runtimeCapabilityListeners = new Set<(
       manifest: PiRuntimeCapabilityManifest | undefined,
     ) => void>();
+    const notifyRuntimeCapabilityListener = (
+      listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+      manifest: PiRuntimeCapabilityManifest | undefined,
+    ): void => {
+      try {
+        listener(manifest);
+      } catch (error) {
+        this.deps.logger.warn('pi runtime capability listener failed (non-fatal)', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
     const publishRuntimeCapabilities = (manifest: PiRuntimeCapabilityManifest | undefined): void => {
       runtimeCapabilityManifest = manifest;
       for (const listener of runtimeCapabilityListeners) {
-        try {
-          listener(manifest);
-        } catch (error) {
-          this.deps.logger.warn('pi runtime capability listener failed (non-fatal)', {
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
+        notifyRuntimeCapabilityListener(listener, manifest);
       }
     };
     const proxySessionToken = randomBytes(32).toString('base64url');
@@ -1747,7 +1753,14 @@ export class PiAgent extends BaseAgent {
       get model() { return mutableModel; },
       getRuntimeCapabilities() { return runtimeCapabilityManifest; },
       onRuntimeCapabilitiesChange(listener) {
+        if (closed) {
+          notifyRuntimeCapabilityListener(listener, undefined);
+          return () => undefined;
+        }
         runtimeCapabilityListeners.add(listener);
+        // Replay the current snapshot synchronously so late subscribers cannot
+        // miss an async ready/rewind capture that completed before registration.
+        notifyRuntimeCapabilityListener(listener, runtimeCapabilityManifest);
         return () => runtimeCapabilityListeners.delete(listener);
       },
 
