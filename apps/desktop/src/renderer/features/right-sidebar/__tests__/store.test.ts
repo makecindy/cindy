@@ -148,6 +148,28 @@ describe('RSB store', () => {
       expect(ipc.list).toHaveBeenCalledTimes(1);
     });
 
+    it('drops persisted sandbox-preview rows at hydrate and deletes them from the store (round 27e)', async () => {
+      // A stale preview row (crash-leftover) must not re-materialize: the
+      // tokenized origin is process-local, so the preview guard would park
+      // it on about:blank forever. The row is filtered from the UI and
+      // best-effort-deleted from the persisted store.
+      const previewUrl =
+        'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+      ipc.list.mockResolvedValueOnce({
+        tabs: [
+          { id: 'p1', kind: 'web-browser', position: 0, state: { url: previewUrl } },
+          { id: 't1', kind: 'web-browser', position: 1, state: { url: 'https://example.com/' } },
+        ],
+        activeTabId: 'p1',
+      });
+      await store.ensureHydrated('s1');
+      const bucket = store.getBucket('s1');
+      expect(bucket.tabs.map((t) => t.id)).toEqual(['t1']);
+      // dropped preview was the active tab → active falls back to the survivor
+      expect(bucket.activeTabId).toBe('t1');
+      expect(ipc.close).toHaveBeenCalledWith({ id: 'p1' });
+    });
+
     it('dedupes concurrent calls into a single IPC', async () => {
       let resolveList!: (v: { tabs: unknown[]; activeTabId: null }) => void;
       ipc.list.mockReturnValueOnce(

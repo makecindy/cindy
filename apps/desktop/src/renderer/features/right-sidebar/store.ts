@@ -27,6 +27,29 @@ import type { TabKindId, TabState } from './types';
 
 const log = createLogger('rightSidebar.store');
 
+/**
+ * Sandboxed local-HTML-preview URLs are process-local: a tokenized loopback
+ * origin with a 24h TTL that the main process serves. Persisting such a tab
+ * row is pointless AND harmful — after a crash/force-quit the main-side
+ * token registry is gone, so hydrating the stale row on restart would park
+ * the WebContents on about:blank (preview-guard fail-closed) and the orphan
+ * row would keep re-materializing a blank tab forever (codex-connector P2,
+ * round 27e). Mirror the main-side shape check here (renderer must not
+ * import the main mcp-integrations module).
+ */
+function isSandboxPreviewUrl(u: string): boolean {
+  try {
+    const parsed = new URL(u);
+    return (
+      parsed.protocol === 'http:' &&
+      parsed.hostname === '127.0.0.1' &&
+      /^\/preview\/[a-f0-9]{64}\//.test(parsed.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Bucket = 某个 session 的 tab 列表 + 激活 + hydrate 状态。 */
 export interface TabBucket {
   /** false = 尚未从 IPC 加载,Shell 应渲染 placeholder。 */
@@ -462,12 +485,51 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
       } else {
         memoryOnlySessions.delete(sessionId);
       }
-      const tabs: TabState[] = result.tabs.map((row) => ({
-        id: row.id,
-        kind: row.kind as TabKindId,
-        state: row.state,
-      }));
-      setBucket(sessionId, { hydrated: true, tabs, activeTabId: result.activeTabId });
+      const droppedPreviewIds = new Set<string>();
+      const tabs: TabState[] = result.tabs
+        .filter((row) => {
+          // Drop persisted sandbox-preview rows at hydrate: the tokenized
+          // origin is process-local (24h TTL, main-process server), so a
+          // stale row from before this fix would re-materialize a tab the
+          // preview guard parks on about:blank forever (codex-connector
+          // P2, round 27e). Mirror the shape check — renderer must not
+          // import the main mcp-integrations module.
+          const u =
+            row.kind === 'web-browser' && row.state && typeof row.state === 'object'
+              ? ((row.state as { url?: unknown }).url as string | undefined) ?? ''
+              : '';
+          const keep = !isSandboxPreviewUrl(u);
+          if (!keep) droppedPreviewIds.add(row.id);
+          return keep;
+        })
+        .map((row) => ({
+          id: row.id,
+          kind: row.kind as TabKindId,
+          state: row.state,
+        }));
+      const activeTabId =
+        result.activeTabId && !droppedPreviewIds.has(result.activeTabId)
+          ? result.activeTabId
+          : tabs[0]?.id ?? null;
+      setBucket(sessionId, { hydrated: true, tabs, activeTabId });
+      // Best-effort: physically delete the dropped preview rows from the
+      // persisted store so they never come back on the next hydrate.
+      const dropped = result.tabs.filter(
+        (row) =>
+          row.kind === 'web-browser' &&
+          row.state &&
+          typeof row.state === 'object' &&
+          isSandboxPreviewUrl(((row.state as { url?: unknown }).url as string | undefined) ?? ''),
+      );
+      if (dropped.length > 0 && ipc) {
+        for (const row of dropped) {
+          void ipc
+            .close({ id: row.id })
+            .catch(() => {
+              /* best-effort: filtered from the UI either way */
+            });
+        }
+      }
     } finally {
       inflight.delete(sessionId);
     }
@@ -522,7 +584,18 @@ export async function addTab(
   let rowCommitted = false;
   try {
     const ipc = ipcApi();
-    if (ipc && shouldPersist(sessionId)) {
+    const initialUrl =
+      kind === 'web-browser' && initialState && typeof initialState === 'object'
+        ? ((initialState as { url?: unknown }).url as string | undefined) ?? ''
+        : '';
+    // Sandboxed preview tabs are process-local (tokenized loopback, 24h TTL,
+    // served by the main process). Persisting them is pointless AND harmful:
+    // after a crash/force-quit the token registry is gone, so hydrating the
+    // stale row would park the tab on about:blank forever (codex-connector
+    // P2, round 27e). Skip the DB write for preview tabs — the in-memory
+    // bucket still holds them for the current session.
+    const skipPersistForPreview = isSandboxPreviewUrl(initialUrl);
+    if (ipc && shouldPersist(sessionId) && !skipPersistForPreview) {
       // 同步登记 in-flight 创建(与乐观插入同一 tick),并发的 closeTab 才等得到。
       // `rowCommitted` 只跟踪 **upsert 这一步**:upsert 成功但随后的 setActive 失败
       // 时,DB 里已经有这一行了,关闭路径必须照常发 close 把它删掉,否则 addTab
