@@ -660,6 +660,11 @@ describe('mobile session composer desktop-first surface', () => {
     // cleanup 只改 ref 时不会触发 effect;后台、手势取消和会话切换必须显式清 pending。
     expect(source).toContain('const clearVoiceStartPending = useCallback(() => {');
     expect(source).toContain('voiceRecordingActiveRef.current = false;\n    clearVoiceStartPending();\n    voiceLongPressActiveRef.current = false;');
+    // Controller 异步报错必须释放仍由本轮持有的 refs/pending，同时保留 owner
+    // 比对，避免旧 controller 的迟到错误清掉下一轮录音。
+    expect(voiceSource).toContain('const failedController = getCreatedController();');
+    expect(voiceSource).toContain('voiceControllerSessionRef.current === failedController');
+    expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;\n              voiceStopInFlightRef.current = false;\n              voiceRecordingActiveRef.current = false;\n              clearVoiceStartPending();');
     expect(source).toContain('voicePermissionRequestInFlightRef.current = false;\n    clearVoiceStartPending();\n    cancelVoiceForAppBackground();');
     expect(source).toContain('useEffect(() => {\n    setVoiceStartPending(false);\n    return () => {');
     // 手势被系统/滚动打断时撤销按下即录(review P1)。

@@ -4493,6 +4493,24 @@ export default function SessionScreen() {
           onDraftChanged: setComposerDraft,
           onStateChanged: setVoiceState,
           onError: (message) => {
+            const failedController = getCreatedController();
+            if (
+              failedController
+              && voiceControllerSessionRef.current === failedController
+            ) {
+              voiceStartupSeqRef.current += 1;
+              voiceControllerSessionRef.current = null;
+              voiceStartupInFlightRef.current = false;
+              voiceStopInFlightRef.current = false;
+              voiceRecordingActiveRef.current = false;
+              clearVoiceStartPending();
+              voiceLongPressActiveRef.current = false;
+              voiceSuppressNextPressRef.current = false;
+              voiceStopAfterStartRef.current = false;
+              setVoiceReleaseToSendActive(false);
+              setComposerVoiceHoldArmed(false);
+              void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
+            }
             setVoiceState('error');
             setVoiceError(message);
           },
@@ -4586,7 +4604,7 @@ export default function SessionScreen() {
       setVoiceError(formatRemoteError(err));
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
-  }, [deviceId, draft, openLink, renderItems, t, voiceIsProcessing, voiceState]);
+  }, [clearVoiceStartPending, deviceId, draft, openLink, renderItems, t, voiceIsProcessing, voiceState]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;

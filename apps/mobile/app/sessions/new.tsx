@@ -2863,6 +2863,20 @@ export default function NewRemoteSessionScreen() {
         onDraftChanged: setFirstMessageDraft,
         onStateChanged: setVoiceState,
         onError: (message) => {
+          const failedController = createdController;
+          if (
+            failedController
+            && voiceControllerSessionRef.current === failedController
+          ) {
+            voiceStartupSeqRef.current += 1;
+            voiceControllerSessionRef.current = null;
+            voiceStartupInFlightRef.current = false;
+            voiceStopInFlightRef.current = false;
+            voiceRecordingActiveRef.current = false;
+            clearVoiceStartPending();
+            setComposerVoiceHoldArmed(false);
+            void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
+          }
           setVoiceState('error');
           setVoiceError(message);
         },
@@ -2938,7 +2952,7 @@ export default function NewRemoteSessionScreen() {
       setVoiceError(formatRemoteError(err));
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
-  }, [openLink, selectedDeviceId, setFirstMessageDraft, voiceIsProcessing, voiceState]);
+  }, [clearVoiceStartPending, openLink, selectedDeviceId, setFirstMessageDraft, voiceIsProcessing, voiceState]);
 
   const finishVoiceRecording = useCallback(async (): Promise<string | null> => {
     if (voiceStopInFlightRef.current) return null;
