@@ -433,6 +433,62 @@ describe('setContext / routeCommand', () => {
     });
   });
 
+  it('跨会话 open-turn-review 按 hostSessionId(lead 桶)裁决,worker sessionId 不拒发', async () => {
+    // 协同面板审查 worker 轮次:command.sessionId 是取数目标 worker,可见桶是
+    // lead(hostSessionId)。detached context 停在 lead 上,按 sessionId 裁决会
+    // 误判 stale-context,worker 审查入口在 detached 形态下点了没反应。
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.open();
+    h.controller.markReady();
+
+    const command = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-1',
+      changeSetIds: ['c1'],
+      selectedDiffId: null,
+      selectedPath: null,
+      requestNonce: 1,
+      hostSessionId: 's1',
+    };
+    await expect(
+      h.controller.routeCommand({ command, allowOpen: true }),
+    ).resolves.toBe('routed');
+    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
+
+    // hostSessionId 与当前 context 不符时仍是 stale-context(不能放宽成任意会话)。
+    await expect(
+      h.controller.routeCommand({
+        command: { ...command, hostSessionId: 'other-lead' },
+        allowOpen: true,
+      }),
+    ).resolves.toBe('stale-context');
+  });
+
+  it('跨会话 open-turn-review 延迟命令按 lead 桶入队,lead ready 后派发', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+
+    const command = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-1',
+      changeSetIds: ['c1'],
+      selectedDiffId: null,
+      selectedPath: null,
+      requestNonce: 2,
+      hostSessionId: 's1',
+    };
+    await expect(
+      h.controller.routeCommand({ command, allowOpen: false }),
+    ).resolves.toBe('queued');
+    expect(h.windows).toHaveLength(0);
+
+    // context 一直是 lead(s1),不会切到 worker;flush 必须按 lead 桶命中。
+    h.controller.open();
+    h.controller.markReady();
+    expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: command });
+  });
+
   it('context mismatch / unavailable 返回 stale-context，不开窗也不派发', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext({ ...ctx, sessionId: 's2' });
