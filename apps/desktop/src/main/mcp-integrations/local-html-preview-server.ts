@@ -497,7 +497,12 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
 
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
-      'Content-Length': Number(stat.size),
+      // `stat.size` is a bigint (fd.stat({ bigint: true })); Number() would
+      // lose precision beyond Number.MAX_SAFE_INTEGER and send a wrong
+      // Content-Length for very large resources (video/wasm), which can make
+      // clients truncate or hang. toString() keeps the exact value
+      // (Copilot P1, round 24).
+      'Content-Length': stat.size.toString(),
       ...SECURITY_HEADERS,
     });
     if (req.method === 'HEAD') {
