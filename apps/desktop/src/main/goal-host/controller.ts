@@ -416,10 +416,13 @@ export class GoalController {
   /**
    * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
    * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
-   * turn-dispatched 严格同代成对。generation 校验防止换代/间隔后的旧标记被误消费;
-   * busy / 预算预检拦截 / session 缺失 / send 拒绝等未派发路径不会产生孤儿恢复事件。
+   * turn-dispatched 同代成对。以 **boundary 身份**绑定生命周期(reviewer P1/P2:
+   * generation 不足以区分"busy 重试同代派发"与"同 sessionId 新目标首轮",二者都是
+   * gen 1;boundary 引用不变 = 同一次恢复的重试可消费,换代 = 新生命周期自动失效)。
+   * busy / 预算预检拦截 / send 拒绝等未派发路径不产生孤儿恢复事件;stopSession
+   * (生命周期接管)清空作废的恢复意图。
    */
-  private readonly pendingResumeEvents = new Map<string, { reason: string; generation: number }>();
+  private readonly pendingResumeEvents = new Map<string, { reason: string; boundary: TurnAccumulator }>();
 
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
@@ -1150,12 +1153,13 @@ export class GoalController {
     // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑。
     // **登记而非立即发出**(reviewer P1:busy / 预算预检拦截 / session 缺失等派发前
     // 退出路径若已发 resumed,会产生无同代派发的孤儿事件)——fireTurn 在 onDispatching
-    // 真实派发边界消费,与 turn-dispatched 同代成对;generation 校验防旧标记误消费。
+    // 真实派发边界消费,与 turn-dispatched 同代成对;以 boundary 身份绑定本次生命周期,
+    // busy 重试(同 boundary)可消费,新目标(换 boundary)自动失效。
     // busy 时不登记:恢复未触发续跑,不产生恢复事件(与 T10 语义一致)。
     if (!this.isBusy(sessionId)) {
       this.pendingResumeEvents.set(sessionId, {
         reason: opts?.auto ? 'auto-resume' : 'manual-resume',
-        generation: resumedBoundary.generation + 1,
+        boundary: resumedBoundary,
       });
       await this.fireTurn(sessionId);
     }
@@ -1305,7 +1309,7 @@ export class GoalController {
       if (!this.isBusy(state.sessionId)) {
         this.pendingResumeEvents.set(state.sessionId, {
           reason: 'resumeActiveGoals',
-          generation: resumeBoundary.generation + 1,
+          boundary: resumeBoundary,
         });
         void this.fireTurn(state.sessionId);
       }
@@ -1367,6 +1371,9 @@ export class GoalController {
     }
     this.firing.delete(sessionId);
     this.goalTurnsInFlight.delete(sessionId);
+    // 生命周期接管(Stop / clear / 新 setGoal 编辑等):恢复意图随本次生命周期作废,
+    // 防同 sessionId 新目标误消费旧恢复标记(boundary 校验的兜底清理)。
+    this.pendingResumeEvents.delete(sessionId);
     this.turns.delete(sessionId);
   }
 
@@ -2088,9 +2095,9 @@ export class GoalController {
       // status≠active 自然停,不会空转。
       this.deps.logger.info('[goal] session busy, retry fire soon', { sessionId, kind });
       this.scheduleContinuation(sessionId);
-      // 派发被放弃:清除恢复标记(reviewer P1:busy 早退若保留,同 sessionId 新目标
-      // 首轮 gen 1 会误消费旧标记;重试续跑按普通 continuation 记录,不再标 resumed)。
-      this.pendingResumeEvents.delete(sessionId);
+      // **不删恢复标记**(reviewer P1:busy 重试是同一 boundary 的防抖续跑,重试真实
+      // 派发时 onDispatching 会消费标记并记录 resumed,恢复事件不得丢失)。换代
+      // (Stop/新 setGoal 等)由 stopSession 清标记,新目标不会误消费旧恢复意图。
       return;
     }
     const firingOwner = {};
@@ -2183,9 +2190,10 @@ export class GoalController {
             }
             // #2105 P0:消费恢复标记——resumed 与 turn-dispatched 在真实派发边界同代
             // 成对发出(reviewer P1:busy/预算预检/session 缺失等派发前退出不得产生
-            // 孤儿恢复事件;generation 校验防换代/间隔后的旧标记被误消费)。
+            // 孤儿恢复事件;以 boundary 身份校验——busy 重试同 boundary 可消费,
+            // 新目标换 boundary 自动失效,防旧标记串入)。
             const pendingResume = this.pendingResumeEvents.get(sessionId);
-            if (pendingResume && pendingResume.generation === dispatchBoundary.generation) {
+            if (pendingResume && pendingResume.boundary === dispatchBoundary) {
               this.pendingResumeEvents.delete(sessionId);
               this.recordRunEvent('resumed', sessionId, state, {
                 to: 'active',
