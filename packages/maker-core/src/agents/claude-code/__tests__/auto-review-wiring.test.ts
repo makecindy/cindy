@@ -73,17 +73,43 @@ function createDeps(options: {
   };
 }
 
-function createFakeQuery() {
+function createFakeQuery(
+  initMcpServerNames: readonly string[] = [],
+  blockMcpServerStatus = false,
+  rejectPermissionModeChange = false,
+) {
+  let initEmitted = false;
   return {
     [Symbol.asyncIterator]() {
-      return { next: () => new Promise<IteratorResult<unknown>>(() => {}) };
+      return {
+        next: () => {
+          if (!initEmitted && initMcpServerNames.length > 0) {
+            initEmitted = true;
+            return Promise.resolve({
+              done: false as const,
+              value: {
+                type: 'system',
+                subtype: 'init',
+                session_id: 'sdk-auto-review',
+                mcp_servers: initMcpServerNames.map((name) => ({ name, status: 'connected' })),
+              },
+            });
+          }
+          return new Promise<IteratorResult<unknown>>(() => {});
+        },
+      };
     },
-    setPermissionMode: vi.fn(async () => {}),
+    setPermissionMode: vi.fn(async () => {
+      if (rejectPermissionModeChange) throw new Error('permission transport failed');
+    }),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
+    ...(blockMcpServerStatus
+      ? { mcpServerStatus: vi.fn(() => new Promise<never>(() => {})) }
+      : {}),
   };
 }
 
@@ -109,13 +135,20 @@ async function startSession(
     attachResolver?: boolean;
     model?: string;
     mcpProviderNames?: readonly string[];
+    initMcpServerNames?: readonly string[];
+    blockMcpServerStatus?: boolean;
+    rejectPermissionModeChange?: boolean;
     mcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
   } = {},
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
-  const fakeQuery = createFakeQuery();
+  const fakeQuery = createFakeQuery(
+    options.initMcpServerNames,
+    options.blockMcpServerStatus,
+    options.rejectPermissionModeChange,
+  );
   sdkMock.query.mockReturnValue(fakeQuery);
 
   const reviewAutoPermissionAction = options.reviewer ?? vi.fn(async () => ({
@@ -194,6 +227,32 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     });
     expect(queryPermissionMode).toBe('auto');
     expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('downgrades native OAuth Auto after SDK init reveals a settings MCP', async () => {
+    const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      initMcpServerNames: ['settings_prompt_mcp'],
+      blockMcpServerStatus: true,
+    });
+
+    // Settings MCPs are not host-injected, so startup legitimately begins native Auto.
+    expect(queryPermissionMode).toBe('auto');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default'));
+    await handle.close();
+  });
+
+  it('closes instead of leaving settings MCPs in native Auto when downgrade fails', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      initMcpServerNames: ['settings_prompt_mcp'],
+      rejectPermissionModeChange: true,
+    });
+
+    await vi.waitFor(() => expect(fakeQuery.close).toHaveBeenCalledTimes(1));
     await handle.close();
   });
 

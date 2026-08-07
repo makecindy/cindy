@@ -3534,6 +3534,41 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             const rawType = (rawMsg as { type?: string } | null)?.type;
             if (noteSdkInitMcpServerNames(rawMsg)) {
+              // User/project/local settings MCPs are only revealed by the SDK init
+              // payload, after the query has already started. Native OAuth Auto skips
+              // canUseTool, so immediately hand later turns back to Cindy when that
+              // payload reports any connected MCP server. Do this before the optional
+              // provenance RPC below: a slow status call must not prolong native Auto.
+              if (
+                mutablePermissionMode === 'auto'
+                && !mutablePlanMode
+                && !planTurnActive
+                && mutableAutoReviewCredentialMode === 'oauth-bearer'
+                && hasRegisteredMcpServers()
+              ) {
+                try {
+                  await currentQ.setPermissionMode(effectiveSdkPermissionMode());
+                } catch (error) {
+                  // Keeping this query alive would leave connected MCP tools under the
+                  // native classifier, which bypasses Cindy's canUseTool policy. Close
+                  // and surface a terminal stream failure instead of failing open.
+                  log.error('failed to downgrade native Auto after SDK settings MCP init', {
+                    error: String(error),
+                  });
+                  try {
+                    await currentQ.close();
+                  } catch (closeError) {
+                    log.warn('failed to close query after native Auto downgrade failure', {
+                      error: String(closeError),
+                    });
+                  }
+                  throw new Error(
+                    `[MCP_APPROVAL_MODE_DOWNGRADE_FAILED] ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                  );
+                }
+              }
               await refreshSdkMcpProvenance(currentQ);
             }
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
