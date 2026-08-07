@@ -30,7 +30,9 @@ function createTransport(
     sendPush: (peerDeviceId, payload) => pushes.push({ peerDeviceId, payload }),
     requestSnapshot:
       overrides.requestSnapshot ??
-      ((accountGeneration, requestId) => snapshotRequests.push({ accountGeneration, requestId })),
+      ((accountGeneration, requestId) => {
+        snapshotRequests.push({ accountGeneration, requestId });
+      }),
   };
   return {
     transport,
