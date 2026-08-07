@@ -123,6 +123,6 @@ export interface PiProjectTrustDecision {
     allowPackages: false;
     allowExtensions: false;
   };
-  /** Revocation/identity changes require a fresh Pi process. */
+  /** Trust inputs are startup-only; this contract conservatively requires a fresh Pi session for every decision. */
   requiresNewSession: boolean;
 }
