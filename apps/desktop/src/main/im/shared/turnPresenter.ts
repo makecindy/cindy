@@ -184,9 +184,18 @@ export function createProgressEmitter(
   let ticker: NodeJS.Timeout | null = null;
   let stopped = false;
 
-  /** in-flight 发送 settle: 提升 sending→lastSent, 再冲刷窗口内压入的 pending。 */
-  const onSendSettled = (): void => {
-    if (slots.sending !== undefined) slots.lastSent = slots.sending;
+  /**
+   * 一次出站结束后的状态推进(无论成功/失败都要解除 in-flight, 再冲刷窗口内压入的 pending):
+   *   - 成功: sending→lastSent —— 该帧已送达, 成为新的去重基线;
+   *   - 失败(async emit reject): **绝不**把没送达的帧记进 lastSent。否则同一快照重试时会被
+   *     shouldEmitProgressFrame 判等去重吞掉、永远发不出去。只清 sending 解除 in-flight、
+   *     **保留原 lastSent**, 于是相同内容在下一次 schedule / ticker 触发时仍判为"与基线不等"
+   *     而重新起飞(重试)。
+   * 两种情况都要把 in-flight 期间压入的 pending(更新的一帧)冲刷出去, 否则会残留孤儿帧,
+   * 被后续 settle 误当"最新"发出。
+   */
+  const finishSend = (failed: boolean): void => {
+    if (!failed && slots.sending !== undefined) slots.lastSent = slots.sending;
     slots.sending = undefined;
     if (stopped) {
       slots.pending = undefined;
@@ -195,20 +204,27 @@ export function createProgressEmitter(
     if (slots.pending !== undefined) {
       const next = slots.pending;
       slots.pending = undefined;
-      // pending 已在压入时对当时基线去重; 提升 lastSent 后再核一次, 相等则不重发。
+      // pending 压入时已对当时基线去重; 基线变化(lastSent 可能刚提升)后再核一次, 相等则不重发。
       if (shouldEmitProgressFrame(next, slots)) startSend(next);
     }
   };
 
-  /** 起飞一帧: 标记 sending, 记节流基准, 调 emit; 同步返回则立即 settle。 */
+  /**
+   * 起飞一帧: 标记 sending(in-flight), 记节流基准, 调 emit。同步返回即视为立即送达
+   * (observer turn.progress 现状, 逐字等价旧实现); 异步按 resolve/reject 分别推进 ——
+   * reject 走失败分支, 不污染 lastSent(见 finishSend)。
+   */
   const startSend = (snapshot: string): void => {
     slots.sending = snapshot;
     lastEmitAt = Date.now();
     const result = emit(snapshot);
     if (result && typeof (result as Promise<void>).then === 'function') {
-      (result as Promise<void>).then(onSendSettled, onSendSettled);
+      (result as Promise<void>).then(
+        () => finishSend(false),
+        () => finishSend(true),
+      );
     } else {
-      onSendSettled();
+      finishSend(false);
     }
   };
 
@@ -253,7 +269,7 @@ export function createProgressEmitter(
       if (ticker !== null) clearInterval(ticker);
       pending = null;
       ticker = null;
-      // 收口后丢弃尚未起飞的 pending; in-flight 的 sending 由 onSendSettled 的 stopped 分支清理。
+      // 收口后丢弃尚未起飞的 pending; in-flight 的 sending 由 finishSend 的 stopped 分支清理。
       slots.pending = undefined;
     },
   };

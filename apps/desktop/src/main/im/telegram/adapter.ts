@@ -27,7 +27,7 @@ import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from 
 import { readTelegramPersona } from './behaviorStore';
 import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
-import { ui, PROCESSING_EMOJI } from './uiText';
+import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
 
 function ensureWorkingDir(botId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', `telegram-${botId}`);
@@ -69,6 +69,7 @@ export function buildTelegramAdapter(
     output: { kind: 'rich-card', im: telegramIm },
     config,
     ui,
+    interactionExpiredNotice: telegramUiText.expiredCardNotice,
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,

@@ -443,3 +443,129 @@ describe('createProgressEmitter — 异步 sink 的真实三槽(pending/sending/
     }
   });
 });
+
+describe('createProgressEmitter — async emit 失败/重试状态机(P2: reject 不污染 lastSent)', () => {
+  /** 可分别 resolve / reject 每次出站的异步 sink。 */
+  function controllableSink() {
+    const emitted: string[] = [];
+    const settlers: Array<{ resolve: () => void; reject: () => void }> = [];
+    const emit = (t: string): Promise<void> => {
+      emitted.push(t);
+      return new Promise<void>((resolve, reject) => {
+        settlers.push({ resolve: () => resolve(), reject: () => reject(new Error('emit failed')) });
+      });
+    };
+    return { emit, emitted, settlers };
+  }
+  /** 冲刷 .then(onReject) 这层微任务(reject 已被第二参数处理, 不产生 unhandledRejection)。 */
+  const flush = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('reject 不把失败帧记入 lastSent, 相同快照可重试(核心 P2)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = controllableSink();
+      let body = 'F1';
+      const emitter = createProgressEmitter(sink.emit, () => body, {
+        ...DEFAULT_PRESENTER_POLICY,
+        intermediateThrottleMs: 100,
+      });
+      emitter.schedule();
+      vi.advanceTimersByTime(0);
+      expect(sink.emitted).toEqual(['F1']); // sending='F1' in-flight
+
+      // 出站失败: 清 in-flight、保留 lastSent(仍 undefined), 不把 F1 记作已送达。
+      sink.settlers[0].reject();
+      await flush();
+
+      // 内容未变仍是 F1 → 下一次 schedule 判为"与基线不等"(F1 !== lastSent)重新起飞。
+      emitter.schedule();
+      vi.advanceTimersByTime(100);
+      expect(sink.emitted).toEqual(['F1', 'F1']); // 同一帧成功重试, 未被去重吞掉
+      sink.settlers[1].resolve();
+      await flush();
+      emitter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('成功送达后相同快照被去重(与失败重试相反, 证明 lastSent 是去重支点)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = controllableSink();
+      let body = 'X';
+      const emitter = createProgressEmitter(sink.emit, () => body, {
+        ...DEFAULT_PRESENTER_POLICY,
+        intermediateThrottleMs: 100,
+      });
+      emitter.schedule();
+      vi.advanceTimersByTime(0);
+      sink.settlers[0].resolve(); // 成功 → lastSent='X'
+      await flush();
+
+      // 相同内容再次 schedule → 命中 lastSent 去重, 不重发。
+      emitter.schedule();
+      vi.advanceTimersByTime(100);
+      expect(sink.emitted).toEqual(['X']);
+      emitter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reject 时仍冲刷 in-flight 期间压入的 pending(更新帧发出, 不残留孤儿)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = controllableSink();
+      let body = 'A';
+      const emitter = createProgressEmitter(sink.emit, () => body, {
+        ...DEFAULT_PRESENTER_POLICY,
+        intermediateThrottleMs: 100,
+      });
+      emitter.schedule();
+      vi.advanceTimersByTime(0);
+      expect(sink.emitted).toEqual(['A']); // sending='A'
+
+      body = 'B';
+      emitter.schedule();
+      vi.advanceTimersByTime(100); // 'B' 压 pending(A 仍 in-flight)
+
+      // A 失败: 不记 lastSent, 但要冲刷 pending → 发更新的 B。
+      sink.settlers[0].reject();
+      await flush();
+      expect(sink.emitted).toEqual(['A', 'B']);
+      sink.settlers[1].resolve();
+      await flush();
+      emitter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stop 后 in-flight reject 不冲刷 pending、不重试(收口丢弃)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = controllableSink();
+      let body = 'A';
+      const emitter = createProgressEmitter(sink.emit, () => body, {
+        ...DEFAULT_PRESENTER_POLICY,
+        intermediateThrottleMs: 100,
+      });
+      emitter.schedule();
+      vi.advanceTimersByTime(0);
+      body = 'B';
+      emitter.schedule();
+      vi.advanceTimersByTime(100); // pending='B'
+
+      emitter.stop();
+      sink.settlers[0].reject(); // 收口后失败: 既不发 B, 也不重试 A
+      await flush();
+      expect(sink.emitted).toEqual(['A']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
