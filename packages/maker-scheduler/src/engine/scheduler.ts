@@ -553,13 +553,21 @@ export class Scheduler extends EventEmitter {
       this.lastDbSyncAt = now;
       try {
         const actives = await this.storage.listActive();
+        const previousSchedules = new Map(this.activeSchedules);
         this.activeSchedules.clear();
         const activeIds = new Set(actives.map((sch) => sch.id));
         for (const scheduleId of this.invalidScheduleIds) {
           if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
         }
         for (const sch of actives) {
-          const current = this.keepInvalidScheduleQuarantined(sch, now);
+          const previous = previousSchedules.get(sch.id);
+          const cadenceChanged =
+            !previous ||
+            previous.cronExpr !== sch.cronExpr ||
+            previous.timezone !== sch.timezone ||
+            previous.intervalMs !== sch.intervalMs ||
+            previous.manual !== sch.manual;
+          const current = this.keepInvalidScheduleQuarantined(sch, now, cadenceChanged);
           this.activeSchedules.set(current.id, current);
         }
       } catch (err) {
@@ -1438,13 +1446,25 @@ export class Scheduler extends EventEmitter {
     return this.serializeScheduleMutation(id, () => this.deleteUnlocked(id, opts));
   }
 
-  private keepInvalidScheduleQuarantined(schedule: Schedule, now: number): Schedule {
-    if (!this.invalidScheduleIds.has(schedule.id)) return schedule;
+  private keepInvalidScheduleQuarantined(
+    schedule: Schedule,
+    now: number,
+    validate = false,
+  ): Schedule {
+    const wasKnownInvalid = this.invalidScheduleIds.has(schedule.id);
+    if (!validate && !wasKnownInvalid) return schedule;
     try {
       computeNextFireAt(schedule, now);
       this.invalidScheduleIds.delete(schedule.id);
       return schedule;
-    } catch {
+    } catch (err) {
+      this.invalidScheduleIds.add(schedule.id);
+      if (!wasKnownInvalid) {
+        this.logger?.warn?.('scheduler: quarantined invalid active schedule during DB sync', {
+          scheduleId: schedule.id,
+          error: String(err),
+        });
+      }
       return { ...schedule, nextFireAt: undefined };
     }
   }

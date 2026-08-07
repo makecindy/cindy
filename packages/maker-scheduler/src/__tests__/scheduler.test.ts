@@ -736,6 +736,45 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  it('quarantines an invalid cron first discovered during periodic DB sync', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    local.storage.schedules.set('late-invalid', {
+      id: 'late-invalid',
+      name: 'late invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: Date.UTC(2020, 0, 1, 0, 0, 0),
+    });
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns('late-invalid')).toHaveLength(0);
+
+    await local.storage.update('late-invalid', {
+      cronExpr: '* * * * *',
+      nextFireAt: local.clock.now(),
+    });
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).toHaveBeenCalledTimes(1);
+    await local.scheduler.stop();
+  });
+
   // ── intervalMs（"上次完成 + N" 语义）──
   // 这条线和 cron-槽位 完全分支：fireOne / start / resume / create 都要分别覆盖。
 
