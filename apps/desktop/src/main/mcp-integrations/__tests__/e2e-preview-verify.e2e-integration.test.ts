@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import nodePath from 'node:path';
 import { chromium } from 'playwright-core';
@@ -50,16 +50,19 @@ describe('e2e: previewLocalHtml with real Chrome', () => {
     expect(granted.at(-1)).toEqual([expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/)]);
 
     // ── real Chrome ────────────────────────────────────────────────────
-    let browser: Awaited<ReturnType<typeof chromium.launch>>;
+    // NOTE: the launch failure path must NOT return before the outer
+    // try/finally below runs — a skipped test must still dispose the server
+    // and delete the temp directory (new Codex reviewer P1, round 23).
+    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
     try {
       browser = await chromium.launch({ channel: 'chrome', headless: true });
     } catch {
       // No system Chrome (e.g. a bare CI runner): skip instead of failing —
       // the suite's value is real-browser verification where Chrome exists.
       ctx.skip();
-      return;
     }
     try {
+      if (!browser) return;
       const page = await browser.newPage();
       // Mirrors the vendored addInitScript the managed Chrome injects on
       // preview pages (LOCAL PATCH in pw-session.ts): RTCPeerConnection is
@@ -150,12 +153,25 @@ describe('e2e: previewLocalHtml with real Chrome', () => {
       // is covered by the preview-guard unit tests (round 22, new Codex
       // reviewer).
     } finally {
-      await browser.close();
+      // Outermost nested finally: each cleanup step is individually guarded
+      // so a throwing earlier step (e.g. browser.close() after a crash) can
+      // never skip the server dispose or the temp-dir deletion — the exact
+      // reliable-cleanup requirement (new Codex reviewer P1, round 23).
+      try {
+        await browser?.close();
+      } catch {
+        /* ignore: best-effort browser teardown */
+      }
       // ── listener close invalidates the URL (server-side check) ─────────
       server.dispose();
       expect(granted.at(-1)).toEqual([]); // origin grant revoked
       // listener is closed → connection refused (URL no longer reachable)
       await expect(fetch(url, { signal: AbortSignal.timeout(5000) })).rejects.toThrow();
+      try {
+        await rm(tmp, { recursive: true, force: true });
+      } catch {
+        /* ignore: best-effort temp cleanup */
+      }
     }
   });
 });

@@ -21,7 +21,7 @@ import type {
 } from '../../../../shared/rsbBrowserBridge.js';
 import * as rendererBridge from '../../../rsb-browser-bridge/renderer-bridge.js';
 import { RsbWebviewBackend } from '../rsb-webview-backend.js';
-import { guardPreviewPageNavigation } from '../preview-guard.js';
+import { guardPreviewPageNavigation, setLivePreviewOrigin } from '../preview-guard.js';
 
 // Build a minimal fake TabRegistry — we only call a handful of methods.
 // pinHistory captures the pin/unpin call order so tests can assert that a
@@ -112,6 +112,8 @@ function fakeWc(opts?: { url?: string; title?: string }): WebContents & {
     })),
     printToPDF: vi.fn(async () => Buffer.from('PDFDATA')),
     on: vi.fn(),
+    once: vi.fn(),
+    removeListener: vi.fn(),
     setWindowOpenHandler: vi.fn(),
     debugger: debuggerMock,
     consoleListeners: [] as Array<(...args: unknown[]) => void>,
@@ -422,6 +424,17 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
   const PREVIEW_URL =
     'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
 
+  // Round 23 (new Codex reviewer P0): the guard only treats a preview URL as
+  // a LIVE preview page when its origin matches the origin the current server
+  // round authorizes (setLivePreviewOrigin). Tests must set it, and must
+  // reset it after each test (module-level state, shared across tests).
+  beforeEach(() => {
+    setLivePreviewOrigin('http://127.0.0.1:49152');
+  });
+  afterEach(() => {
+    setLivePreviewOrigin(null);
+  });
+
   it('blocks page-initiated navigation away from a preview page, allows same-origin', async () => {
     const wc = fakeWc({ url: PREVIEW_URL });
     guardPreviewPageNavigation(wc);
@@ -493,6 +506,37 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
     // the preview navigation is NOT replayed — parked on about:blank instead
     expect(wc.loadURLMock).toHaveBeenCalledWith('about:blank');
     expect(wc.loadURLMock).not.toHaveBeenCalledWith(PREVIEW_URL);
+  });
+
+  it('NEVER stop-and-replays a stale preview URL whose origin is not currently authorized (round 23 P0)', async () => {
+    // Restart scenario: the registration set is gone but a PERSISTENT RSB
+    // tab row survived with a stale loopback URL; another local process may
+    // have seized the port. The URL still LOOKS like a preview URL, but the
+    // current server round authorizes a different origin — the guard must
+    // fail closed: stop the navigation and park on about:blank instead of
+    // re-issuing the URL (which would load the seizer's content).
+    setLivePreviewOrigin('http://127.0.0.1:55555'); // current server round
+    const STALE_URL =
+      'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+    const wc = fakeWc({ url: STALE_URL });
+    wc.debuggerMock.sendCommandMock.mockResolvedValue({});
+    guardPreviewPageNavigation(wc);
+    const startNav = wc.didStartNavigationListeners[0];
+    startNav({}, STALE_URL, false, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(wc.stopMock).toHaveBeenCalled();
+    // parked, NOT replayed — the seizer's content must never load
+    expect(wc.loadURLMock).toHaveBeenCalledWith('about:blank');
+    expect(wc.loadURLMock).not.toHaveBeenCalledWith(STALE_URL);
+    // the kill-script must NOT be installed for an unauthorized preview URL
+    expect(wc.debuggerMock.attachMock).not.toHaveBeenCalled();
+
+    // will-navigate: a stale preview page is NOT a live preview page — the
+    // guard leaves its navigations alone (nothing to protect).
+    const listener = wc.willNavigateListeners[0];
+    let prevented = false;
+    listener({ preventDefault: () => { prevented = true; } }, 'https://elsewhere.test/');
+    expect(prevented).toBe(false);
   });
 });
 

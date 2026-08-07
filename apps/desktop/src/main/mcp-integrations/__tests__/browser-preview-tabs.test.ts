@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 import {
+  _resetPreviewRevocationGenerationForTests,
   _resetRsbPreviewTabsForTests,
   closePreviewTabs,
   registerRsbPreviewTab,
+  trackPreviewTabNavigation,
   unregisterRsbPreviewTab,
   type PreviewTabCloserDeps,
 } from '../browser-preview-tabs.js';
 
 afterEach(() => {
   _resetRsbPreviewTabsForTests();
+  _resetPreviewRevocationGenerationForTests();
 });
 
 const PREVIEW_URL =
@@ -122,5 +126,95 @@ describe('closePreviewTabs (browser-preview-tabs)', () => {
     const deps = fakeDeps({ listRsbTabs: vi.fn(() => []) });
     await closePreviewTabs(deps);
     expect(deps.closeRsbTab).not.toHaveBeenCalled();
+  });
+
+  it('does NOT close a live preview row twice: live sweep success unregisters it (round 23 dedupe)', async () => {
+    // The same tab appears BOTH in the live registry (has a WebContents) and
+    // in the registration set (registered at open time). The live sweep must
+    // close it once and drop the registration, so the registration sweep
+    // does not close the same tab a second time (duplicated-cleanup smell,
+    // new Codex reviewer P1, round 23).
+    registerRsbPreviewTab('s1', 'r1');
+    const deps = fakeDeps();
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
+    expect(deps.closeRsbTab).toHaveBeenCalledWith('s1', 'r1');
+  });
+
+  it('registration sweep repeats while new registrations arrive (revocation race, round 23)', async () => {
+    // A navigation that committed DURING the revocation registers between
+    // sweep iterations; the sweep must pick it up in the next pass instead
+    // of leaving it behind (new Codex reviewer P1, round 23).
+    registerRsbPreviewTab('s9', 'early-1');
+    let registeredLate = false;
+    const deps = fakeDeps({
+      listRsbTabs: vi.fn(() => []),
+      closeRsbTab: vi.fn(async (sessionId: string, tabId: string) => {
+        if (tabId === 'early-1' && !registeredLate) {
+          registeredLate = true;
+          registerRsbPreviewTab('s9', 'late-2');
+        }
+        return true;
+      }),
+    });
+    await closePreviewTabs(deps);
+    // early-1 closed on pass 1; late-2 registered mid-pass and closed on pass 2
+    expect(deps.closeRsbTab.mock.calls.map((c) => c[1]).sort()).toEqual(['early-1', 'late-2']);
+  });
+
+  it('stops the loop when a close keeps failing (no progress)', async () => {
+    registerRsbPreviewTab('s9', 'stuck-1');
+    const deps = fakeDeps({
+      listRsbTabs: vi.fn(() => []),
+      closeRsbTab: vi.fn(async () => false),
+    });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).toHaveBeenCalledTimes(1); // one pass, then no progress → stop
+  });
+});
+
+describe('trackPreviewTabNavigation (address-bar provenance, round 23 P0)', () => {
+  function fakeWc() {
+    const ee = new EventEmitter();
+    return {
+      ee,
+      on: ee.on.bind(ee),
+      once: ee.once.bind(ee),
+      removeListener: ee.removeListener.bind(ee),
+      emitDidNavigate: (url: string) => ee.emit('did-navigate', {}, url),
+      emitDestroyed: () => ee.emit('destroyed'),
+    };
+  }
+
+  it('unregisters the tab when a committed navigation leaves the preview origin', async () => {
+    registerRsbPreviewTab('s1', 't1');
+    const wc = fakeWc();
+    trackPreviewTabNavigation(wc, 't1');
+    wc.emitDidNavigate('https://example.com/');
+    // revocation must no longer close the tab
+    const deps = fakeDeps({ listRsbTabs: vi.fn(() => []) });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).not.toHaveBeenCalled();
+  });
+
+  it('keeps the registration while navigations stay on the preview origin', async () => {
+    registerRsbPreviewTab('s1', 't1');
+    const wc = fakeWc();
+    trackPreviewTabNavigation(wc, 't1');
+    wc.emitDidNavigate(PREVIEW_URL); // same-origin preview navigation
+    const deps = fakeDeps({ listRsbTabs: vi.fn(() => []) });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).toHaveBeenCalledWith('s1', 't1');
+  });
+
+  it('stops tracking when the WebContents is destroyed', async () => {
+    registerRsbPreviewTab('s1', 't1');
+    const wc = fakeWc();
+    trackPreviewTabNavigation(wc, 't1');
+    wc.emitDestroyed();
+    wc.emitDidNavigate('https://example.com/'); // listener was removed
+    const deps = fakeDeps({ listRsbTabs: vi.fn(() => []) });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).toHaveBeenCalledWith('s1', 't1');
   });
 });

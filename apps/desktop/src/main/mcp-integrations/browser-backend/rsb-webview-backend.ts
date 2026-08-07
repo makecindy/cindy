@@ -26,7 +26,12 @@ import type {
 } from '@cindy/browser-control-runtime';
 import { isPublicHttpResourceUrl } from '@cindy/browser-control-runtime';
 import { isPreviewUrl, killPreviewWebRtc } from './preview-guard.js';
-import { registerRsbPreviewTab, unregisterRsbPreviewTab } from '../browser-preview-tabs.js';
+import {
+  getPreviewRevocationGeneration,
+  registerRsbPreviewTab,
+  trackPreviewTabNavigation,
+  unregisterRsbPreviewTab,
+} from '../browser-preview-tabs.js';
 import type { WebContents } from 'electron';
 
 import type { TabRegistry } from '../../rsb-browser-bridge/registry.js';
@@ -497,6 +502,11 @@ export class RsbWebviewBackend implements BrowserBackend {
       return actionFailed(req.action, 'no active RSB session');
     }
     const url = (req as { url?: string }).url;
+    // Snapshot the revocation generation BEFORE the open round-trip: if a
+    // revocation sweeps while the tab is being created, the open must not
+    // register the new preview tab under the swept generation (it would
+    // escape the closure — new Codex reviewer P1, round 23).
+    const revGeneration = getPreviewRevocationGeneration();
     const result = await dispatchTabOp(
       { op: 'open', sessionId, url },
       this.opts.bridge,
@@ -510,8 +520,22 @@ export class RsbWebviewBackend implements BrowserBackend {
       // Register preview tabs so revocation can close them even after LRU
       // eviction dropped the live WebContents (round 21).
       if (typeof url === 'string' && isPreviewUrl(url)) {
-        registerRsbPreviewTab(sessionId, result.tabId);
+        if (getPreviewRevocationGeneration() === revGeneration) {
+          registerRsbPreviewTab(sessionId, result.tabId, revGeneration);
+        } else {
+          // The open committed AFTER the revocation swept: close the fresh
+          // preview tab instead of registering it (its persistent row would
+          // otherwise reload the stale loopback URL after restart).
+          unregisterRsbPreviewTab(result.tabId);
+          await this.closeRsbPreviewTab(sessionId, result.tabId);
+        }
       }
+      // Track the tab's committed navigations: the user can navigate away
+      // from the address bar (renderer-direct loadURL, no MCP request), and
+      // the registration must drop when that happens — otherwise revocation
+      // would delete the normal page's persisted row (round 23 P0).
+      const wc = this.opts.registry.getWebContentsByTabId(result.tabId);
+      if (wc) trackPreviewTabNavigation(wc, result.tabId);
     }
     return actionOk(req.action, {
       targetId: result.tabId,
@@ -554,6 +578,26 @@ export class RsbWebviewBackend implements BrowserBackend {
     return actionOk(req.action, { tabId });
   }
 
+  /**
+   * Close a preview tab that survived a revocation window (its navigation
+   * committed AFTER the revoke sweep — see handleNavigate). Goes through the
+   * renderer bridge so the PERSISTENT tab store row is removed too; the tab
+   * was never registered, so no registration bookkeeping is needed here
+   * (new Codex reviewer P1, round 23).
+   */
+  private async closeRsbPreviewTab(sessionId: string, tabId: string): Promise<void> {
+    try {
+      await dispatchTabOp({ op: 'close', sessionId, tabId }, this.opts.bridge, () =>
+        this.assertActive(),
+      );
+    } catch {
+      /* best-effort: a surviving preview tab whose close failed keeps its
+         stale row; the preview-guard fail-closed (round 23 P0) refuses to
+         load the stale URL after restart */
+    }
+    this.automation.forgetTab(tabId);
+  }
+
   private async handleNavigate(req: BackendRequest): Promise<BackendResult> {
     const tabId = await this.resolveDirectActionTarget(req);
     if (!tabId) return actionFailed(req.action, 'targetId required');
@@ -567,6 +611,12 @@ export class RsbWebviewBackend implements BrowserBackend {
       this.automation.forgetTab(tabId);
       await this.tryObservePageSignals(resolved.wc, tabId);
       this.assertActive();
+      // Snapshot the revocation generation BEFORE the navigation: a preview
+      // navigation that commits while a revocation is sweeping must NOT
+      // register under the swept generation (it would escape the closure).
+      // After success, compare and close the tab instead of registering
+      // (new Codex reviewer P1, round 23).
+      const revGeneration = getPreviewRevocationGeneration();
       await loadUrlWithTimeout(
         resolved.wc,
         url,
@@ -579,10 +629,25 @@ export class RsbWebviewBackend implements BrowserBackend {
       // tab that now shows a normal page (new Codex reviewer, round 22).
       if (isPreviewUrl(url)) {
         const record = this.opts.registry.findByWebContentsId(resolved.wc.id);
-        if (record) registerRsbPreviewTab(record.sessionId, tabId);
+        if (record) {
+          if (getPreviewRevocationGeneration() === revGeneration) {
+            registerRsbPreviewTab(record.sessionId, tabId, revGeneration);
+          } else {
+            // The navigation committed AFTER the revocation swept: the tab is
+            // a survivor of the revocation window. Close it now instead of
+            // registering it (its persistent row would otherwise reload the
+            // stale loopback URL after restart).
+            unregisterRsbPreviewTab(tabId);
+            await this.closeRsbPreviewTab(record.sessionId, tabId);
+          }
+        }
       } else {
         unregisterRsbPreviewTab(tabId);
       }
+      // Same committed-navigation tracking as open: an address-bar
+      // navigation away from the preview URL must drop the registration
+      // (round 23 P0).
+      trackPreviewTabNavigation(resolved.wc, tabId);
       return actionOk(req.action, { tabId, url });
     });
   }

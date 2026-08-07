@@ -26,6 +26,40 @@ export function isPreviewUrl(u: string): boolean {
   }
 }
 
+/**
+ * The origin the CURRENT preview server round actually authorizes, or null
+ * when no preview server is live. Kept in sync by the host (browser.ts) via
+ * `setLivePreviewOrigin` on every grant change.
+ *
+ * Shape-only checks (`isPreviewUrl`) are NOT enough to decide whether a URL
+ * is a live preview page: after a restart the registration set is gone while
+ * PERSISTENT RSB tab rows survive, and the port may have been seized by
+ * another local process — a restored tab pointed at a stale preview URL would
+ * load the SEIZER's content. Treating such a URL as a guarded preview page
+ * (or worse, stop-and-replaying it) would let that content in
+ * (new Codex reviewer P0, round 23).
+ */
+let livePreviewOrigin: string | null = null;
+
+export function setLivePreviewOrigin(origin: string | null): void {
+  livePreviewOrigin = origin;
+}
+
+/**
+ * True when `u` is a preview-shaped URL AND its origin is the one the current
+ * preview server actually authorizes. Fail-closed: no live server → nothing
+ * is an authorized preview URL.
+ */
+export function isPreviewUrlAuthorized(u: string): boolean {
+  if (!isPreviewUrl(u)) return false;
+  if (!livePreviewOrigin) return false;
+  try {
+    return new URL(u).origin === livePreviewOrigin;
+  } catch {
+    return false;
+  }
+}
+
 function currentUrlOf(wc: WebContents): string {
   try {
     return wc.getURL?.() ?? '';
@@ -126,7 +160,11 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   previewGuardedContents.add(wc);
   wc.on('will-navigate', (event, url) => {
     const current = currentUrlOf(wc);
-    if (!isPreviewUrl(current)) return; // not a preview page — leave it alone
+    // Shape check alone is not enough after a restart: a restored tab may sit
+    // on a stale preview URL whose port another local process seized. Only a
+    // URL authorized by the CURRENT server round is a live preview page
+    // (new Codex reviewer P0, round 23).
+    if (!isPreviewUrlAuthorized(current)) return; // not a live preview page
     const currentOrigin = originOf(current);
     if (!currentOrigin || originOf(url) !== currentOrigin || !isPreviewUrl(url)) {
       event.preventDefault();
@@ -136,6 +174,22 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   // / webContents.loadURL, which does NOT emit will-navigate (round 10).
   wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
     if (!isMainFrame || !isPreviewUrl(url)) return;
+    // Fail-closed on stale preview URLs (restart / port reuse): never
+    // stop-and-replay a URL the current server does not authorize — the port
+    // may now serve another local process's content (new Codex reviewer P0,
+    // round 23). Park on about:blank instead of loading the URL at all.
+    if (!isPreviewUrlAuthorized(url)) {
+      try {
+        wc.stop();
+      } catch {
+        /* ignore */
+      }
+      if (!previewGuardReplaying.has(wc)) {
+        previewGuardReplaying.add(wc);
+        void wc.loadURL('about:blank').catch(() => {}).finally(() => previewGuardReplaying.delete(wc));
+      }
+      return;
+    }
     if (previewWebRtcKilled.has(wc)) return; // kill-script already in place
     if (previewGuardReplaying.has(wc)) return; // replay already in flight
     previewGuardReplaying.add(wc);

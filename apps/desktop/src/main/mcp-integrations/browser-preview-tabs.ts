@@ -1,3 +1,5 @@
+import { isPreviewUrl } from './browser-backend/preview-guard.js';
+
 /**
  * Close still-open preview tabs on BOTH browser backends (vendored external
  * Chrome + RSB webview) when a preview origin is revoked.
@@ -28,14 +30,72 @@
  * manual close / successful revocation close, so a tab showing a normal
  * page is never closed by revocation.
  */
-const rsbPreviewTabs = new Map<string, string>();
+/**
+ * Registrations carry the revocation generation they were made under. A
+ * navigation that STARTED before a revocation but COMMITTED its registration
+ * after the revoke sweep finished must not silently re-register and escape
+ * the closure — the caller snapshots the generation before navigating and
+ * compares after; a mismatch means the revoke swept while the navigation was
+ * in flight, and the caller must close the tab instead of registering
+ * (new Codex reviewer P1, round 23).
+ */
+const rsbPreviewTabs = new Map<string, { sessionId: string; generation: number }>();
 
-export function registerRsbPreviewTab(sessionId: string, tabId: string): void {
-  if (sessionId && tabId) rsbPreviewTabs.set(tabId, sessionId);
+let revocationGeneration = 0;
+
+/** Mark a revocation in progress; registrations made under it carry this number. */
+export function beginPreviewRevocation(): number {
+  revocationGeneration += 1;
+  return revocationGeneration;
+}
+
+export function getPreviewRevocationGeneration(): number {
+  return revocationGeneration;
+}
+
+/** Test-only: reset the generation counter (module state is shared across tests). */
+export function _resetPreviewRevocationGenerationForTests(): void {
+  revocationGeneration = 0;
+}
+
+export function registerRsbPreviewTab(
+  sessionId: string,
+  tabId: string,
+  generation = revocationGeneration,
+): boolean {
+  if (!sessionId || !tabId) return false;
+  rsbPreviewTabs.set(tabId, { sessionId, generation });
+  return true;
 }
 
 export function unregisterRsbPreviewTab(tabId: string): void {
   rsbPreviewTabs.delete(tabId);
+}
+
+/** Minimal event surface of an Electron WebContents we track navigation on. */
+interface NavigationTrackTarget {
+  on(event: 'did-navigate', listener: (event: unknown, url: string) => void): unknown;
+  once(event: 'destroyed', listener: () => void): unknown;
+  removeListener(event: 'did-navigate', listener: (event: unknown, url: string) => void): unknown;
+}
+
+/**
+ * Track a tab's COMMITTED navigations and unregister it as soon as it leaves
+ * the preview origin. The MCP navigate handler unregisters on its own MCP
+ * request, but the user can navigate from the ADDRESS BAR — that path goes
+ * renderer-direct loadURL (useBrowserWebview) and never reaches the MCP
+ * request handlers, so a tab that used to show a preview page and was then
+ * navigated to a normal page would keep its registration and revocation
+ * would delete the NORMAL page's persisted row (new Codex reviewer P0,
+ * round 23). did-navigate fires on the committed main-frame URL, which is
+ * exactly the provenance source the reviewer asked for.
+ */
+export function trackPreviewTabNavigation(wc: NavigationTrackTarget, tabId: string): void {
+  const onDidNavigate = (_event: unknown, url: string) => {
+    if (!isPreviewUrl(url)) unregisterRsbPreviewTab(tabId);
+  };
+  wc.on('did-navigate', onDidNavigate);
+  wc.once('destroyed', () => wc.removeListener('did-navigate', onDidNavigate));
 }
 
 /** Test-only: reset the registration set (module state is shared across tests). */
@@ -70,6 +130,10 @@ export interface PreviewTabCloserDeps {
 }
 
 export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void> {
+  // Mark this revocation: registrations committed by in-flight navigations
+  // after this point carry the new generation, and the sweep below must not
+  // leave them behind (new Codex reviewer P1, round 23).
+  beginPreviewRevocation();
   // Skip the vendored tabs probe entirely when the runtime was never used:
   // a bare `tabs` call would BOOT the browser control service during quit —
   // the exact startup quit-time teardown exists to avoid (round 16). The RSB
@@ -101,31 +165,57 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
   // only drops the in-memory registry record, and the tab would be
   // recreated with the stale loopback URL on hydrate/restart.
   try {
-    for (const row of deps.listRsbTabs()) {
-      const wc = row.wc;
-      if (!wc || wc.isDestroyed()) continue;
-      let url = '';
-      try {
-        url = wc.getURL?.() ?? '';
-      } catch {
-        continue;
-      }
-      if (!deps.isPreviewUrl(url)) continue;
-      await deps.closeRsbTab(row.sessionId, row.tabId);
-    }
-    // Rows with NO live WebContents (LRU-evicted / detached-closed) never
-    // appear in the registry: close them from the registration set — the
-    // bridge close deletes the persisted row regardless of liveness
-    // (round 21). Closes run in parallel (bounded by the caller's race);
-    // a failed close (false) KEEPS the entry for the next revocation
-    // (round 22).
-    const entries = [...rsbPreviewTabs.entries()];
-    const results = await Promise.all(
-      entries.map(([tabId, sessionId]) => deps.closeRsbTab(sessionId, tabId)),
+    // Live registry sweep: rows WITH a live WebContents currently on a
+    // preview URL. Also unregisters each closed row so the registration
+    // sweep below does not close the same tab twice — the duplicated-close
+    // smell (new Codex reviewer P1, round 23): a live close that succeeds
+    // already removed the persistent row; closing it AGAIN from the
+    // registration set wastes the caller's bounded quit budget.
+    const liveRows = deps
+      .listRsbTabs()
+      .filter((row) => {
+        const wc = row.wc;
+        if (!wc || wc.isDestroyed()) return false;
+        let url = '';
+        try {
+          url = wc.getURL?.() ?? '';
+        } catch {
+          return false;
+        }
+        return deps.isPreviewUrl(url);
+      });
+    const liveResults = await Promise.all(
+      liveRows.map((row) => deps.closeRsbTab(row.sessionId, row.tabId).then((ok) => ({ row, ok }))),
     );
-    entries.forEach(([tabId], i) => {
-      if (results[i]) rsbPreviewTabs.delete(tabId);
-    });
+    for (const { row, ok } of liveResults) {
+      if (ok) rsbPreviewTabs.delete(row.tabId);
+    }
+    // Registration-set sweep: rows with NO live WebContents (LRU-evicted /
+    // detached-closed) never appear in the registry — close them from the
+    // registration set; the bridge close deletes the persisted row
+    // regardless of liveness (round 21). A failed close (false) KEEPS the
+    // entry for the next revocation (round 22). The sweep is repeated while
+    // new registrations arrive (a navigation that succeeded while this
+    // revocation was in flight registers under the NEW generation and must
+    // be closed in the same pass, not left behind — new Codex reviewer P1,
+    // round 23).
+    for (;;) {
+      const entries = [...rsbPreviewTabs.entries()];
+      if (entries.length === 0) break;
+      const results = await Promise.all(
+        entries.map(([tabId, { sessionId }]) => deps.closeRsbTab(sessionId, tabId)),
+      );
+      let anyDeleted = false;
+      entries.forEach(([tabId], i) => {
+        if (results[i]) {
+          rsbPreviewTabs.delete(tabId);
+          anyDeleted = true;
+        }
+      });
+      // A failed close keeps the entry; without progress the loop would spin
+      // forever on an unclosable tab. Stop when nothing more was closed.
+      if (!anyDeleted) break;
+    }
   } catch {
     /* best-effort */
   }

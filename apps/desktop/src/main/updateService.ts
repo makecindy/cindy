@@ -49,6 +49,13 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { disposeAndroidAdb } from './mcp-integrations/android';
+// Preview cleanup is behind a static import of the LIGHTWEIGHT indirection
+// module (round 23, new Codex reviewer): statically importing browser.js here
+// would load the whole browser runtime (sharp) into the updater chain and
+// break every updateService test on Windows CI (round 22); a runtime dynamic
+// import() is forbidden by architecture-invariants.md §2. browser.ts registers
+// its real implementation with this module at load time.
+import { revokePreviewState } from './mcp-integrations/preview-cleanup';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
 
@@ -1016,18 +1023,11 @@ async function forceQuit(): Promise<void> {
   // 关闭,否则外置 Chrome 会保留指向已释放端口的预览标签、RSB 持久记录
   // 也会在重启后恢复旧 URL (codex-connector P1, round 19)。有界等待清理
   // 完成:更新脚本轮询 PID 消失,等待必须短且有界 (round 20)。
-  // 动态 import:静态导入 browser.ts 会把整个浏览器运行时(含 sharp)拉进
-  // 更新器依赖链,导致 updateService 单元测试在 Windows CI 全挂
-  // (round 22, 新 Codex 审查者发现)。
-  let previewCleanup: Promise<void> = Promise.resolve();
-  try {
-    const { revokePreviewState } = await import('./mcp-integrations/browser.js');
-    previewCleanup = revokePreviewState();
-  } catch (err) {
-    log.warn('revokePreviewState unavailable at force-quit:', err);
-  }
+  // 静态顶层 import preview-cleanup 轻量模块(round 23):不拉浏览器运行时
+  // (sharp)进更新器依赖链,也不违反 architecture-invariants §2 的动态
+  // import 禁令;browser.ts 未加载时 revokePreviewState 是 no-op。
   await Promise.race([
-    previewCleanup.catch(() => {}),
+    revokePreviewState().catch(() => {}),
     new Promise((resolve) => setTimeout(resolve, 1000)),
   ]);
   // 绕过 onQuit 链意味着 disposeAndroidAdb 不会被自动调用——显式 fire-and-forget

@@ -45,6 +45,8 @@ import {
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
 import { createLocalPreviewServer } from './local-html-preview-server.js';
+import { setPreviewCleanupImpl } from './preview-cleanup.js';
+import { setLivePreviewOrigin } from './browser-backend/preview-guard.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 
@@ -109,6 +111,11 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
 const localPreviewServer = createLocalPreviewServer({
   logger,
   applyPreviewOrigins: (previewOrigins) => {
+    // Keep the preview guard's live-origin view in sync: a URL shaped like a
+    // preview URL must ALSO match the origin the current server actually
+    // authorizes, otherwise a stale URL (restart, port reuse) would be
+    // treated as a live preview page (new Codex reviewer P0, round 23).
+    setLivePreviewOrigin(previewOrigins[0] ?? null);
     setBrowserControlRuntimeConfig(buildManagedConfig({ previewOrigins }));
     // Revocation (listener error/close, dispose) must close still-open
     // preview tabs at the SAME moment the grant disappears: the vendored
@@ -504,42 +511,37 @@ async function closePreviewTabs(): Promise<void> {
     },
     closeRsbTab: async (sessionId, tabId) => {
       // Close through the renderer bridge so the PERSISTENT tab store row
-      // is removed too (round 18) — see browser-preview-tabs.ts.
+      // is removed too (round 18) — see browser-preview-tabs.ts. Returns
+      // false on rejection OR business failure (ok:false after one retry)
+      // so the registration survives for the next revocation (round 22).
       const bridge = { getHostWebContents: () => readMainWindowForBackend(), logger };
       try {
-        const result = await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge);
-        // Business failure (e.g. storeCloseTab DB error) resolves ok:false —
-        // do NOT swallow it: the persistent row would survive revocation and
-        // reload the stale URL after restart. Retry once, then log
-        // (codex-connector P1, round 19).
+        let result = await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge);
         if (result?.ok === false) {
           logger.warn?.(`[preview] RSB close tab ok:false, retrying: ${sessionId}/${tabId}`);
-          await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge).catch(() => {});
+          result = await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge);
         }
+        return result?.ok !== false;
       } catch {
-        /* best-effort: registry record is still released on destroy */
+        return false;
       }
     },
     isPreviewUrl,
   });
 }
 
-/**
- * Synchronously revoke the preview origin + close its listener, and start
- * closing preview tabs — for paths that bypass the graceful before-quit
- * chain (updater force-quit in updateService.ts destroys windows and calls
- * process.exit(0) directly, never reaching disposeBrowserRuntime). Without
- * this, external Chrome would keep a preview tab pointing at the freed port
- * and RSB persistent tab rows would reload the stale URL after restart
- * (codex-connector P1, round 19).
- */
-export function revokePreviewState(): Promise<void> {
+// Register the preview cleanup with preview-cleanup.ts (round 23, new Codex
+// reviewer): updateService statically imports THAT module — never this one —
+// so the updater does not pull the whole browser runtime (sharp) into its
+// dependency chain, and no runtime dynamic import() is needed (which
+// architecture-invariants.md §2 forbids in Electron main).
+setPreviewCleanupImpl(() => {
   localPreviewServer.dispose();
   // Return the tab-close promise so callers that bypass before-quit (updater
   // force-quit) can boundedly await it before exiting (codex-connector P1,
   // round 20).
   return closePreviewTabs();
-}
+});
 
 export function disposeBrowserRuntime(): Promise<void> {
   // Revoke the preview origin + close its listener first, so the SSRF policy
