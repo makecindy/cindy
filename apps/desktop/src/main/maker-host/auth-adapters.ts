@@ -387,8 +387,11 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
  */
 async function tightenAclWindows(file: string): Promise<void> {
   const username = process.env.USERNAME ?? os.userInfo().username;
+  // 本机名和用户名相同时，裸用户名会被 icacls 解析成空用户名（例如 `YOP\\`）。
+  // 进程提供域名时显式限定，确保授权对象仍是当前 Windows 用户。
+  const account = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${username}` : username;
   try {
-    await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${username}:F`]);
+    await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${account}:(F)`]);
   } catch (err) {
     credPathLog.warn('icacls failed', { file, error: (err as Error).message });
   }

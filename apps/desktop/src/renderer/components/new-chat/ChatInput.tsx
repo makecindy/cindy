@@ -141,6 +141,7 @@ import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostCom
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
 import { PendingQueuePanel } from './PendingQueuePanel';
+import { getPendingQueueRowPresentation } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
@@ -1059,6 +1060,26 @@ export function ChatInput({
   onStopRef.current = onStop;
   const showStopButtonRef = useRef(showStopButton);
   showStopButtonRef.current = showStopButton;
+  // 空 composer 的发送快捷键可以把队首用户消息直接插入当前对话。只允许与
+  // PendingQueuePanel 相同的可插话行，避免把 Orca / 自动化 / 系统触发消息误送进当前轮。
+  const pendingQueueRef = useRef(pendingQueue);
+  pendingQueueRef.current = pendingQueue;
+  const onQueueSteerRef = useRef(onQueueSteer);
+  onQueueSteerRef.current = onQueueSteer;
+  const steerFirstPendingQueueMessageRef = useRef<() => boolean>(() => false);
+  steerFirstPendingQueueMessageRef.current = () => {
+    const firstPendingMessage = pendingQueueRef.current?.[0];
+    const steer = onQueueSteerRef.current;
+    if (
+      !firstPendingMessage ||
+      !steer ||
+      !getPendingQueueRowPresentation(firstPendingMessage).canSteer
+    ) {
+      return false;
+    }
+    void steer(firstPendingMessage.clientId);
+    return true;
+  };
   // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
   // BEFORE falling through to the existing stop / history shortcuts. That
   // way the user's mental model stays consistent: esc = "back out of the
@@ -2193,6 +2214,18 @@ export function ChatInput({
             void voiceInputStopAndSendRef.current(enterIntent);
             return true;
           }
+
+          // 只有既有 Enter 处理不需要发送当前输入时，才把它作为空 Enter，尝试
+          // 将队首可插话消息送入当前轮。附件和页面评论都是可发送输入，不能被抢走。
+          const hasSendableComposerInput =
+            !composerDocIsEmpty(view.state.doc) ||
+            latestAttachmentsRef.current.length > 0 ||
+            browserCommentsRef.current.length > 0;
+          if (!hasSendableComposerInput) {
+            steerFirstPendingQueueMessageRef.current();
+            return true;
+          }
+
           void dispatchSendRef.current(enterIntent);
           return true;
         }

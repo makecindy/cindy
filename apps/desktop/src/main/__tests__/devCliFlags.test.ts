@@ -206,7 +206,7 @@ describe('resolveDevCliFlags', () => {
           });
           expect(viaLink.isolatedDirIsEpochDerived).toBe(true);
         } finally {
-          rmSync(linkAncestor, { force: true });
+          rmSync(linkAncestor, { recursive: true, force: true });
         }
       }
       // TOCTOU 稳定性:目录被并发进程创建前后,同一写法的判定结果一致——
