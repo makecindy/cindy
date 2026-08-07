@@ -10,7 +10,7 @@
  *
  * 为什么直接注册而非走入口:协同工具藏在 list_tools/call_tool 后面时, 模型在用户
  * 说"开协同 / 派 worker"时往往发现不了 start_team, 反而误抓直接可见的
- * send_to_session(产独立 session、吞掉 worker 的 agent/model 诉求)。把协同工具
+ * send_to_session(产普通独立 session，不进入 team/worker 控制面)。把协同工具
  * 提到顶层直接可见后,"开协同 → start_team" 的路由才确定。代价是这些工具 schema
  * 进系统提示前缀(固定成本、缓存稳定),换路由可靠性。
  *

@@ -99,6 +99,9 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        // create 显式执行配置专用;dispatcher 恒走 jump,仅镜像共用函数的联合形状。
+        | 'BUDGET_MODEL_REQUIRES_API_MODE'
+        | 'PROVIDER_ROUTE_UNAVAILABLE'
         | 'LEAD_NOT_SUPPORTED'
         // create + useWorktree 专用;dispatcher 恒走 jump,不会收到,仅为镜像 register.ts 联合形状。
         | 'WORKTREE_UNAVAILABLE'
