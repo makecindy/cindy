@@ -74,7 +74,10 @@ import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import {
+  isInteractiveSessionNavigationMode,
+  useSessionNavigationMode,
+} from '@/features/cc-agent/embeddedSessionNavigation';
 import { RewindPreviewDialog } from './RewindPreviewDialog';
 import { UserMessageEditBox } from './UserMessageEditBox';
 import HookTaskCard from './HookTaskCard';
@@ -1157,7 +1160,7 @@ export function UserMessage({
   // 同时按 capabilities.fork.supported gate (Codex 现支持; 未来若 agent 不支持自动隐藏)。
   const navigationMode = useSessionNavigationMode();
   const canFork =
-    navigationMode === 'route-owner' &&
+    isInteractiveSessionNavigationMode(navigationMode) &&
     Boolean(sessionId && messageClientId) &&
     !isFirstUserMessage &&
     forkSupported &&

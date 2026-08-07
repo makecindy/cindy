@@ -1521,6 +1521,13 @@ export const hookGroupMessages = sqliteTable(
   }),
 );
 
+/** hook_group_messages 的派生容量计数；由本地 SQLite 触发器增量维护。 */
+export const hookGroupMessageStats = sqliteTable('hook_group_message_stats', {
+  provider: text('provider').primaryKey(),
+  rowCount: integer('row_count').notNull(),
+  textBytes: integer('text_bytes').notNull(),
+});
+
 /**
  * 群消息窗口的已提交游标。游标与消息池同属本地 DB，但按 provider 命名空间
  * 隔离，登出/换绑时只清理对应 bot 的行。
@@ -1535,5 +1542,7 @@ export const hookGroupContextCursors = sqliteTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.provider, t.cursorKey] }),
+    /** 消息命名空间已清空后，惰性 sweep 按最后活跃时间回收孤儿游标。 */
+    byUpdatedAt: index('hook_group_context_cursors_updated_at_idx').on(t.updatedAt),
   }),
 );

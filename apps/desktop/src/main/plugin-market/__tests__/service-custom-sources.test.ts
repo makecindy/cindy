@@ -30,7 +30,10 @@ const pickerDialog = vi.hoisted(() => ({
   showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })),
 }));
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => os.tmpdir()) },
+  app: {
+    getPath: vi.fn(() => os.tmpdir()),
+    getVersion: vi.fn(() => '1.0.0'),
+  },
   dialog: pickerDialog,
 }));
 vi.mock('../../authManager.js', () => ({
@@ -129,7 +132,7 @@ function serverSummary(overrides: Partial<VisiblePluginSummary> = {}): VisiblePl
 function writeLocalMarket(
   root: string,
   marketName: string,
-  plugins: Array<{ rel: string; id: string; version?: string }>,
+  plugins: Array<{ rel: string; id: string; version?: string; minCindyVersion?: string }>,
 ): string {
   const dir = path.join(root, marketName);
   for (const plugin of plugins) {
@@ -137,7 +140,12 @@ function writeLocalMarket(
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, 'ghost.json'),
-      JSON.stringify(ghostManifest(plugin.id, plugin.version ?? '1.0.0')),
+      JSON.stringify({
+        ...ghostManifest(plugin.id, plugin.version ?? '1.0.0'),
+        ...(plugin.minCindyVersion
+          ? { minCindyVersion: plugin.minCindyVersion }
+          : {}),
+      }),
     );
     fs.writeFileSync(path.join(pluginDir, 'main.js'), '// entry');
   }
@@ -215,6 +223,24 @@ describe('PluginMarketService 自定义市场聚合', () => {
       sourceType: 'local-market',
       sourceMarketName: 'team-lib',
     });
+  });
+
+  it('does not expose custom market releases that require a newer Cindy version', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/compatible', id: 'compatible' },
+      {
+        rel: 'plugins/requires-newer',
+        id: 'requires-newer',
+        minCindyVersion: '2.0.0',
+      },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items.map((item) => item.ghostId)).toEqual(['compatible']);
   });
 
   it('strips bidi/control chars from custom plugin name/description/author in snapshot', async () => {

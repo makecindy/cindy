@@ -252,7 +252,8 @@
             "listAgent": "agent に現在登録されている鍵を一覧表示:",
             "linuxStart": "ユーザーローカルの ssh-agent を起動(永続化したい場合は ~/.bashrc / ~/.zshrc に追記):",
             "win32Enable": "ssh-agent サービスを有効化(管理者 PowerShell で実行):"
-          }
+          },
+          "noSuchFileFix": "このパスはディスク上に存在しません。ホスト設定に戻って正しい秘密鍵を選び直すか、「Identity file パス」の入力を確認してください（~/.ssh/… 形式に対応し、ホームディレクトリに展開されます）。"
         }
       },
       "add": {
@@ -370,7 +371,8 @@
         "codexSyncDone": "Codex 認証情報をリモートに送りました",
         "codexSyncDoneDaemonRestartFailed": "Codex 認証情報はリモートに送信されましたが、古い daemon が再起動されませんでした — リモートに再接続してから再試行してください",
         "codexSyncFailed": "Codex 認証情報の同期に失敗",
-        "codexSyncNoLocal": "ローカルに Codex 認証情報が見つかりません — まず {{appName}} で Codex にログインしてください"
+        "codexSyncNoLocal": "ローカルに Codex 認証情報が見つかりません — まず {{appName}} で Codex にログインしてください",
+        "connectKeyFileMissing": "秘密鍵ファイルが見つからないか読み込めません: {{detail}}。パスを確認するか、ホスト設定で鍵を選び直してください。"
       },
       "silentInstall": {
         "starting": "リモート {{hostId}} に {{agent}} をインストール中…",
@@ -3426,6 +3428,7 @@
         "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
         "cindySearchWeb": "Cindy AI で公開ウェブを検索できます",
         "cindySearchWebDetail": "検索では公開ウェブにアクセスし、Cindy AI の利用枠を消費する場合があります。",
+        "cindyTextOneshotModelDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。プラグインが希望モデルを宣言しています: {{model}}(現在のカタログで利用可能な場合に有効。ピン留めが優先されます)。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
@@ -3482,6 +3485,7 @@
         "codeDetailWithNode": "パネル UI は独立したサンドボックスで実行されます。ローカル処理は上記で宣言された Node ランタイムが提供します。",
         "added": "追加",
         "removed": "削除",
+        "updated": "更新",
         "unchanged": "他 {{count}} 件の権限は変更なし",
         "noChange": "権限に変更はありません。",
         "pick": "フォルダの選択をあなたに依頼できます",
@@ -3553,6 +3557,9 @@
             "embed.text": "テキストのベクトル化"
           },
           "defaultOption": "{{model}}(既定)",
+          "defaultOptionDeclared": "{{model}}(プラグイン宣言)",
+          "searchPlaceholder": "モデルやプロバイダを検索",
+          "budgetBadge": "割引",
           "noModels": "利用可能なモデルなし"
         },
         "errandPrefs": {
@@ -8605,6 +8612,25 @@
       "waitingForWorker": "Worker を待機中",
       "closeAria": "閉じる"
     }
+  },
+  "splitGroup": {
+    "closeAria": "「{{title}}」のペインを閉じる",
+    "closeAll": "分割を閉じる",
+    "toggleDirection": "上下 / 左右の分割を切り替え",
+    "dropHint": "ここにセッションをドロップして開く",
+    "loadingTask": "セッションを読み込み中…",
+    "resizeAria": "セッションペインのサイズを変更",
+    "openInSplit": "分割で開く",
+    "openSide": {
+      "left": "セッションを左側で開く",
+      "right": "セッションを右側で開く",
+      "top": "セッションを上側で開く",
+      "bottom": "セッションを下側で開く"
+    },
+    "alreadyOpen": "このセッションはすでに分割内で開いています。別のセッションを選択してください。",
+    "limitReached": "1 つの分割で開けるセッションは最大 {{count}} 件です。ペインを 1 つ閉じてから、もう一度お試しください。",
+    "addUnavailable": "このセッションは現在の分割で開けません。メイン領域でセッションを開いてから、もう一度お試しください。",
+    "workerUnavailable": "Worker は個別のペインで開けません。所属する Lead セッションを開いてください。"
   },
   "extraDirs": {
     "menuAria": "操作メニュー",

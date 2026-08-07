@@ -29,6 +29,7 @@ function fakeGhost(
       text?: string[];
       embed?: string[];
       search?: string[];
+      oneshotModel?: string;
     } | null;
   } = {},
 ): InstalledGhost {
@@ -1723,8 +1724,15 @@ describe('快问快答(oneshot_text)', () => {
     expect(
       await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 0 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    // 宿主不设输出上限:任意正整数 maxTokens 合法(仅基本校验,挡负数/小数)。
     expect(
-      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 99999 }),
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 81920 }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 999999 }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: -1 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     expect(
       await slot.handleModelRequest('art', { ...ONESHOT, expectJson: 'yes' }),
@@ -1742,16 +1750,97 @@ describe('快问快答(oneshot_text)', () => {
     });
   });
 
-  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens=1024', async () => {
+  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens 不设输出上限', async () => {
     const oneshotText = vi.fn(async () => ({ ok: true as const, text: '答案', model: 'chain/mini' }));
     const { slot } = withText({ oneshotText });
     const r = await slot.handleModelRequest('art', ONESHOT);
     expect(r).toMatchObject({ ok: true, text: '答案', model: 'chain/mini' });
     expect(oneshotText).toHaveBeenCalledWith({
       prompt: '总结一下',
-      maxTokens: 1024,
+      maxTokens: undefined,
       timeoutMs: 60_000,
     });
+  });
+
+  // 2026-08-05:选型优先级 = 用户钉档 > 身份卡声明(oneshotModel)> 系统默认链。
+  it('选型优先级:用户钉档 > 身份卡声明 > 系统默认链', async () => {
+    const oneshotText = vi.fn(async (_params: { route?: unknown }) => ({ ok: true as const, text: 'ok' }));
+    const declared = { model: { text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' } };
+    const resolveOneshotModel = vi.fn(() => ({ providerId: 'xd', agentKind: 'codex' as const, model: 'codex/gpt-5.5' }));
+
+    // ① 用户钉了轻量档位键:原样下传,声明不生效(resolve 不调用)。
+    const pinned = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => 'litellm-kimi-k2.6',
+      resolveOneshotModel,
+      oneshotText,
+    });
+    await pinned.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({ route: { kind: 'utility-profile', profileId: 'litellm-kimi-k2.6' } }),
+    );
+    expect(resolveOneshotModel).not.toHaveBeenCalled();
+
+    // ② 用户钉了目录钉(cat: 编码):解码成 供应商×agent×模型。
+    const catalogPinned = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => 'cat:openai:codex:gpt-5.5',
+      oneshotText,
+    });
+    await catalogPinned.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        route: { kind: 'catalog', providerId: 'openai', agentKind: 'codex', model: 'gpt-5.5' },
+      }),
+    );
+
+    // ③ 无钉档 + 声明可解析:走声明路由。
+    const declaredOnly = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => null,
+      resolveOneshotModel,
+      oneshotText,
+    });
+    await declaredOnly.slot.handleModelRequest('art', ONESHOT);
+    expect(resolveOneshotModel).toHaveBeenCalledWith('codex/gpt-5.5');
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        route: { kind: 'catalog', providerId: 'xd', agentKind: 'codex', model: 'codex/gpt-5.5' },
+      }),
+    );
+
+    // ④ 无钉档 + 声明解析不到(目录没有/已停用):按未声明,跟随默认链。
+    const unresolved = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => null,
+      resolveOneshotModel: () => null,
+      oneshotText,
+    });
+    await unresolved.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
+
+    // ⑤ 无钉档无声明:route 缺省,跟随默认链。
+    const plain = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      getOverride: () => null,
+      oneshotText,
+    });
+    await plain.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
+  });
+
+  // 2026-08-06 终审:带 cat: 前缀但解码失败的钉档值必须 fail-closed——目录钉的
+  // 语义是「钉死不回落」,静默落到系统默认链会悄悄烧错链路的钱。
+  it('畸形目录钉(cat: 前缀但解码失败)→ NO_CANDIDATE,不回落默认链、不下链', async () => {
+    const oneshotText = vi.fn(async () => ({ ok: true as const, text: 'ok' }));
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      getOverride: () => 'cat:broken',
+      oneshotText,
+    });
+    const r = await slot.handleModelRequest('art', ONESHOT);
+    expect(r).toMatchObject({ ok: false, errorCode: 'NO_CANDIDATE' });
+    expect(oneshotText).not.toHaveBeenCalled();
   });
 
   it('链路失败三档映射:no_candidate → NO_CANDIDATE,timeout → TIMEOUT,failed → INTERNAL', async () => {

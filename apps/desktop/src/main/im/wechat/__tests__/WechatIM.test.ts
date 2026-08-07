@@ -176,6 +176,35 @@ describe('WechatIM host boundary', () => {
     });
   });
 
+  it('cancels only the matching one-shot interaction when its central route closes', async () => {
+    const im = new WechatIM(deps());
+    vi.spyOn(im, 'sendText').mockResolvedValue({ messageId: 'interaction-prompt' });
+    const request = {
+      kind: 'permission' as const,
+      requestId: 'request-current',
+      toolName: 'bash',
+      input: { command: 'pnpm test' },
+    };
+    const pending = im.handleTextInteraction('peer-1', request, { timeoutMs: 60_000 });
+    await Promise.resolve();
+
+    expect(im.cancelTextInteraction('peer-1', 'request-stale', {
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'stale_route',
+    })).toBe(false);
+    expect(im.cancelTextInteraction('peer-1', 'request-current', {
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'interaction_route_released',
+    })).toBe(true);
+    await expect(pending).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'interaction_route_released',
+    });
+  });
+
   it('fails closed before authorization when the signed compatibility policy disables it', async () => {
     const createTransport = vi.fn();
     const im = new WechatIM(

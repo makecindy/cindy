@@ -252,7 +252,8 @@
             "listAgent": "查看 agent 当前加载了哪些密钥：",
             "linuxStart": "启动一个用户级 ssh-agent(把这行加到 ~/.bashrc / ~/.zshrc 让它持久)：",
             "win32Enable": "启用 ssh-agent 服务(在管理员 PowerShell 里执行)："
-          }
+          },
+          "noSuchFileFix": "这个路径在磁盘上找不到。请回到主机设置重新选择正确的私钥，或核对“私钥文件路径”是否填写正确（支持 ~/.ssh/… 写法，会自动展开到你的用户目录）。"
         }
       },
       "add": {
@@ -370,7 +371,8 @@
         "codexSyncDone": "已把 Codex 凭证推送到远端",
         "codexSyncDoneDaemonRestartFailed": "Codex 凭证已推送到远端，但旧 daemon 没重启 — 请重连远端 / 重启 daemon 后再用",
         "codexSyncFailed": "Codex 凭证同步失败",
-        "codexSyncNoLocal": "本机找不到 Codex 凭证 — 先在 {{appName}} 里登录 Codex"
+        "codexSyncNoLocal": "本机找不到 Codex 凭证 — 先在 {{appName}} 里登录 Codex",
+        "connectKeyFileMissing": "私钥文件不存在或无法读取：{{detail}}。请检查路径，或在主机设置里重新选择密钥。"
       },
       "silentInstall": {
         "starting": "正在远端 {{hostId}} 安装 {{agent}}…",
@@ -3426,6 +3428,7 @@
         "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "cindySearchWeb": "可使用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查询会访问公网，并可能消耗 Cindy AI 配额。",
+        "cindyTextOneshotModelDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。插件声明了偏好模型：{{model}}(当前目录可用时生效；你的钉档优先)。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
@@ -3482,6 +3485,7 @@
         "codeDetailWithNode": "面板 UI 在独立沙箱中运行；本地处理能力由上方声明的 Node 运行时提供。",
         "added": "新增",
         "removed": "移除",
+        "updated": "更新",
         "unchanged": "其余 {{count}} 项权限不变",
         "noChange": "权限无变化。",
         "pick": "可请求你选择一个文件夹交给它",
@@ -3553,6 +3557,9 @@
             "embed.text": "文本转向量"
           },
           "defaultOption": "{{model}}(默认)",
+          "defaultOptionDeclared": "{{model}}(插件声明)",
+          "searchPlaceholder": "搜索模型或供应商",
+          "budgetBadge": "折扣",
           "noModels": "暂无可用模型"
         },
         "errandPrefs": {
@@ -8605,6 +8612,25 @@
       "waitingForWorker": "等待 Worker",
       "closeAria": "关闭"
     }
+  },
+  "splitGroup": {
+    "closeAria": "关闭任务“{{title}}”的分栏",
+    "closeAll": "关闭分栏",
+    "toggleDirection": "切换上下 / 左右分栏",
+    "dropHint": "松开以在此分栏打开任务",
+    "loadingTask": "正在加载任务…",
+    "resizeAria": "调整任务分栏大小",
+    "openInSplit": "在分栏中打开",
+    "openSide": {
+      "left": "在左侧打开任务",
+      "right": "在右侧打开任务",
+      "top": "在上方打开任务",
+      "bottom": "在下方打开任务"
+    },
+    "alreadyOpen": "该任务已在当前分栏中打开，请选择其他任务",
+    "limitReached": "一个分栏最多可打开 {{count}} 个任务，请先关闭一个任务分栏再重试",
+    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试",
+    "workerUnavailable": "Worker 任务不能单独在分栏中打开，请改为打开所属 Lead 任务"
   },
   "extraDirs": {
     "menuAria": "操作菜单",

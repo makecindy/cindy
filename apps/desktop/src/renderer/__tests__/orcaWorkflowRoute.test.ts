@@ -294,12 +294,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
   it('keeps Orca search jump state available for the target pane', () => {
     expect(sessionViewSource).toContain('if (!sessionId || !searchJump) return;');
     expect(sessionViewSource).toContain(`if (searchJump.sessionId !== sessionId) {
-      if (!session) return;
-      if (!isOrcaMode && !isOrcaLeadSessionView) {
+      if (!session) return;`);
+    // 陈旧跳转只由路由主权实例回收：Orca 视图与分屏嵌入 pane 都不得取消
+    // owner 正在消费的跳转。
+    expect(sessionViewSource).toContain(`if (!isOrcaMode && !isOrcaLeadSessionView && ownsWindowRoute) {
         clearSearchJumpState();
-      }
-      return;
-    }`);
+      }`);
     expect(sessionViewSource).toContain('...(workerSearchJump ? { searchJump: workerSearchJump } : {})');
     expect(sessionViewSource).toContain('...(workerSearchJump ? { searchJump: undefined } : {})');
     expect(workerPanelSource).toContain('searchJumpProp={searchJump}');
@@ -312,6 +312,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('const hasWorkerSearchJump = Boolean(');
     expect(sessionViewSource).toContain('routeWorkerHint.hasWorkerParam || !!orcaWorkersReveal || hasWorkerSearchJump');
     expect(sessionViewSource).toContain('const shouldRevealWorkersTab = hasExplicitOrcaWorkersReveal || shouldPassiveRevealWorkersTab;');
+    expect(sessionViewSource).toContain(
+      'if (!ownsRoute || !collabEnabled || isCompactRail || !sessionId) return;',
+    );
     expect(sessionViewSource).toContain('orcaWorkersReveal?.focusWorkerSessionId ??');
     expect(sessionViewSource).toMatch(
       /hasWorkerSearchJump\s*\?\s*\(?searchJump\?\.sessionId\s*\?\?\s*null\)?\s*:\s*null/,
@@ -405,8 +408,16 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('sidebarTargetSessionId={sidebarTargetSessionId}');
     expect(sessionViewSource).toContain("const ownsWindowRoute = navigationMode === 'route-owner';");
     expect(sessionViewSource).toContain('ownsWindowRoute && handoffFrom');
-    expect(sessionViewSource).toContain('ownsWindowRoute && session?.parentSessionId');
-    expect(sessionViewSource).toContain('onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}');
+    expect(sessionViewSource).toContain('canNavigateSession && session?.parentSessionId');
+    expect(sessionViewSource).toContain(
+      "const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';",
+    );
+    expect(sessionViewSource).toMatch(
+      /sidebarPanelHostSessionId=\{\s*ownsRoute \|\| navigationMode === 'split-pane' \? sessionId : undefined\s*\}/,
+    );
+    expect(sessionViewSource).toContain(
+      'onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}',
+    );
   });
 
   it('waits for detached bootstrap before mounting or writing the embedded right sidebar', () => {
@@ -427,7 +438,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
   });
 
   it('shows the Lead identity bar only in the plain Orca Lead route', () => {
-    expect(sessionViewSource).toContain('const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;');
+    expect(sessionViewSource).toContain(
+      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+    );
     expect(sessionViewSource).toContain('const collabEnabled = isOrcaLeadSessionView;');
     expect(sessionViewSource).toContain('const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;');
     expect(sessionViewSource).toContain("t('orca.split.leadLabel', {");

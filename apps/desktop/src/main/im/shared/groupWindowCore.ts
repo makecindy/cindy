@@ -1,10 +1,27 @@
-/** 官方/个人 Telegram bot 群消息窗口共享核心；provider 必填且读写/GC 不跨命名空间。 */
+/**
+ * 官方/个人 Telegram bot 群消息窗口共享核心。
+ *
+ * 虽位于 im/shared，hook-control 官方 bot 也直接消费本模块；provider 必填且
+ * 读写、GC、游标与统计均不得跨命名空间。
+ */
 
 import { and, desc, eq, gt, like, lt, or, sql, type SQL } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../../localDb/client/current';
 import { hookGroupContextCursors, hookGroupMessages } from '../../localDb/schema';
 import type { Logger } from '../../logger';
+import {
+  maybeLogGroupWindowNamespaceStats,
+  maybeSweepExpiredGroupWindowCursors,
+  prepareGroupWindowText,
+} from './groupWindowMaintenance';
+
+export {
+  GROUP_CONTEXT_CURSOR_RETENTION_MS,
+  GROUP_WINDOW_ENTRY_TEXT_MAX_BYTES,
+  getGroupWindowNamespaceStats,
+  sweepExpiredGroupWindowCursors,
+} from './groupWindowMaintenance';
 
 export const GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS = 500;
 const CONTEXT_READ_LIMIT = 500;
@@ -68,6 +85,7 @@ export async function recordGroupWindowEntry(
   retention?: GroupWindowRetentionPolicy,
 ): Promise<boolean> {
   const db = getDbClient().drizzle;
+  const storedText = prepareGroupWindowText(entry.provider, entry.text);
   const inserted = await db
     .insert(hookGroupMessages)
     .values({
@@ -78,7 +96,7 @@ export async function recordGroupWindowEntry(
       chatName: entry.chatName,
       author: entry.author.name,
       isBot: entry.author.isBot === true ? 1 : 0,
-      text: entry.text,
+      text: storedText,
       fileNames: entry.fileNames?.length ? JSON.stringify(entry.fileNames) : null,
       sentAt: entry.sentAt,
       createdAt: Date.now(),
@@ -86,7 +104,10 @@ export async function recordGroupWindowEntry(
     .onConflictDoNothing()
     .returning({ id: hookGroupMessages.id });
   if (inserted.length === 0) return false;
-  if (retention === undefined) return true;
+  if (retention === undefined) {
+    await maybeLogGroupWindowNamespaceStats(entry.provider);
+    return true;
+  }
 
   const keyFilter = and(
     eq(hookGroupMessages.provider, entry.provider),
@@ -123,6 +144,7 @@ export async function recordGroupWindowEntry(
         ),
       );
   }
+  await maybeLogGroupWindowNamespaceStats(entry.provider);
   return true;
 }
 
@@ -159,6 +181,7 @@ async function persistCursor(
         updatedAt: now,
       },
     });
+  await maybeSweepExpiredGroupWindowCursors(now);
   // The UPSERT is the durable write boundary. Do not read the row back here:
   // a successful write must still leave the caller with a rollback receipt if
   // a subsequent read happens to fail. The in-memory value is monotonic, and

@@ -97,21 +97,24 @@ export function resolvePending(
 /**
  * Resolve one pending card with the safe decision used when its turn ends.
  * 安全默认与 hook 链路同源(interactionCardModel), 只有 reason 文案按渠道给。
+ *
+ * Returns the card's messageId (same shape as `resolvePending`) so the caller
+ * can close the card off. Without that, the card stays on screen with live
+ * buttons after the interaction is already gone — pressing it then does
+ * nothing at all, which is exactly what a dropped turn looks like to the user.
  */
-export function cancelPending(requestId: string, reason: string): boolean {
+export function cancelPending(requestId: string, reason: string): { messageId: string } | null {
   const entry = pending.get(requestId);
-  if (!entry) return false;
+  if (!entry) return null;
   pending.delete(requestId);
   if (entry.kind === 'ask_user_question') {
     entry.resolve(buildAskNoAnswerDecision());
-    return true;
-  }
-  if (entry.kind === 'plan_review') {
+  } else if (entry.kind === 'plan_review') {
     entry.resolve(buildPlanDenyDecision(reason));
-    return true;
+  } else {
+    entry.resolve(buildPermissionDenyDecision(reason));
   }
-  entry.resolve(buildPermissionDenyDecision(reason));
-  return true;
+  return { messageId: entry.messageId };
 }
 
 /** Reject all pending interactions (used on session close / error). */

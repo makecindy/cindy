@@ -150,6 +150,14 @@
     -webkit-user-drag: none;
   }
 
+  /* SessionItem 是同窗分屏的原生 HTML5 拖拽源。拖拽通常从标题、图标或时间
+     子节点起手，所以必须与 composer atom 一样让整棵子树恢复 element drag；
+     行内按钮仍由 onDragStart 的交互区守卫 preventDefault，不会误触发分屏。 */
+  [data-split-group-drag-source='true'],
+  [data-split-group-drag-source='true'] * {
+    -webkit-user-drag: element !important;
+  }
+
   /* F3: Global disable focus outline — Chromium default :focus-visible draws
      a yellow/orange ring on buttons, options and menu items after Esc/click
      transitions focus. Suppress it on non-input elements while inputs keep

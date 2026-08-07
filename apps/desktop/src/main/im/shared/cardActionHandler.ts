@@ -1368,6 +1368,9 @@ export function createCardActionHandler(
 
           const resolved = resolvePending(requestId, decision);
           if (!resolved) {
+            // 卡片正文**不动**: 交互被作废时 turnRunner 已经把它收口了(dropInteractionCard),
+            // 而这里拿不到的另一半原因是"刚刚已经成功处理过" —— 那种情况改写成过期态
+            // 等于把一次已经生效的授权报成失效。渠道侧的气泡提示已足够告知这次点击无效。
             log.warn(
               `no pending interaction for requestId=...${requestId.slice(-8)} (already resolved? user double-tapped?)`,
             );

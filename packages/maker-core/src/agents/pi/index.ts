@@ -35,6 +35,7 @@ import {
   type PiNativeProviderSpec,
   type SendOptions,
   type StartSessionOptions,
+  type TurnPermissionPolicy,
 } from '../base-agent.js';
 import {
   CINDY_BRIDGE_EXTENSION_FILENAME,
@@ -376,6 +377,15 @@ export class PiAgent extends BaseAgent {
         { id: 'bypassPermissions', displayName: 'Full access', description: 'Every tool runs without asking. Highest risk; use only for trusted tasks.' },
       ],
       setPermissionModeMidSession: { supported: true },
+      // Host 每轮权限策略(个人微信 / Telegram 群等远程渠道):在 handleExtensionUiRequest
+      // 的工具审批边界上,先于 MCP auto-approve 与 auto 档 Auto-Review 强制确认命中的调用。
+      // bypassPermissions 下 cindy-bridge 直接放行、tool_call 不冒泡,host 无从执行策略 ——
+      // 因此把 Full Access 列为不支持,由 host 在 provider 启动前 fail-closed 拒绝该组合,
+      // 而不是给出无法兑现的"强制确认"承诺(与 CC/Codex 同口径)。
+      turnPermissionPolicy: {
+        supported: { supported: true },
+        unsupportedPermissionModes: ['bypassPermissions'],
+      },
       // plan 模式经 pi 自带 plan-mode 扩展(--extension 加载):开启后禁用 edit/write、
       // bash 仅允许只读白名单;plan 提示词仅在激活时注入(不增基线上下文)。
       // Cindy 用 setPlanMode 经 /plan 命令 toggle 驱动 enter/exit。
@@ -1034,6 +1044,11 @@ export class PiAgent extends BaseAgent {
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     let interactionResolver: InteractionResolver | null = null;
+    // Host 每轮权限策略(个人微信 / Telegram 群)。刻意保留在 send 之外的闭包里:
+    // pi 的内部续跑(plan 审批后的实施轮、自动继续)不再经 handle.send,却必须继续
+    // 强制确认策略命中的工具 —— 与 Claude(task_notification 续跑)/ Codex(plan
+    // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
+    let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
     let mutableModel = opts.model;
     // Pi RPC 实际选中的 provider。与用于宿主鉴权/审阅元数据的 mutableProviderId 分开：
     // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
@@ -1084,6 +1099,13 @@ export class PiAgent extends BaseAgent {
           source: 'pi',
         });
       }
+    };
+    const clearActiveTurnPermissionPolicy = (
+      reason: string,
+      opts?: { dismissPending?: boolean },
+    ): void => {
+      activeTurnPermissionPolicy = null;
+      if (opts?.dismissPending) dismissAllPendingPrompts(reason, 'deny');
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
@@ -1231,6 +1253,7 @@ export class PiAgent extends BaseAgent {
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
+              turnPermissionPolicy: activeTurnPermissionPolicy,
               sessionId: opts.sessionId ?? '',
               workingDir: opts.workingDir ?? '',
               remote: Boolean(opts.remoteHostId),
@@ -1246,9 +1269,18 @@ export class PiAgent extends BaseAgent {
               void writeCompactionDigest(summary.trim(), reason);
             }
           }
+          // Pi 的真实 turn 终态是 agent_settled；auto-retry 耗尽则先发 terminal error。
+          // 两条路径都必须立即清本轮 host policy，避免它泄漏到后续 Desktop turn。
+          if (
+            event.type === 'agent_settled'
+            || (event.type === 'auto_retry_end' && event.success !== true)
+          ) {
+            clearActiveTurnPermissionPolicy('turn_terminal', { dismissPending: true });
+          }
           translatePiEvent(event, queue, ctx);
         },
         onExit: ({ code, signal }) => {
+          clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true });
           if (!closed) {
             // 非用户 close 的进程死亡:terminal error + 收尾,避免 UI 永久 running。
             queue.push({
@@ -1658,13 +1690,14 @@ export class PiAgent extends BaseAgent {
       agentKind,
       get model() { return mutableModel; },
 
-      // 每轮权限策略(IM 群等)是 host 侧的 forceConfirmToolCall 回调,必须在工具执行前的
-      // 审批边界强制执行。Pi 的工具审批在独立进程的 cindy-bridge extension(按 perm 文件
-      // 现读 ask/auto/bypass 档),没有逐 tool_call 回调进 host 的通道,任何档位都无法执行
-      // 该 host 回调;故一旦带策略就 fail-closed 拒绝,避免成员可控的群上下文在 auto/bypass
-      // 下不经 owner 确认执行破坏性工具(codex review P1)。
+      // 每轮权限策略(IM 群 / 个人微信等)是 host 侧的 forceConfirmToolCall 回调,必须在
+      // 工具执行前的审批边界强制执行。ask/auto 下 cindy-bridge 会把非只读内置工具与桥接
+      // MCP 工具冒泡进 host 审批,故 host 每轮策略可被执行;唯 bypassPermissions 下 bridge
+      // 按 perm 文件现读直接放行、tool_call 根本不冒泡,host 无从执行该回调 —— 故只在
+      // Full Access 下 fail-closed 拒绝带策略的 send(与 capability
+      // turnPermissionPolicy.unsupportedPermissionModes 一致,也与 CC/Codex 同口径)。
       validateSendOptions(sendOpts: SendOptions) {
-        if (sendOpts.turnPermissionPolicy) {
+        if (sendOpts.turnPermissionPolicy && permissionMode === 'bypassPermissions') {
           throw new TurnPermissionPolicyUnsupportedError('pi', permissionMode);
         }
       },
@@ -1672,26 +1705,40 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
-        const { text, images } = await buildPiPrompt(message);
-        rejectIfCancelled(sendOpts, 'send');
-        assertImageInputSupported(images);
-        setAutoReviewIntent(message.content);
-        // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
-        // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
-        const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
-        const command: Record<string, unknown> = { type: 'prompt', message: escapeLeadingSlashCommand(promptText) };
-        if (images.length > 0) command.images = images;
-        // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
-        if (ctx.isStreaming) command.streamingBehavior = 'followUp';
-        const userEntriesBefore = sendOpts?.onTranscriptUserEntry
-          ? await readPiUserEntryIds()
-          : null;
-        rejectIfCancelled(sendOpts, 'send');
-        const resp = await proc.request(command);
-        if (!resp.success) {
-          throw new Error(`pi prompt rejected: ${resp.error ?? 'unknown'}`);
+        // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
+        // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
+        // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。
+        const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
+        activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        let providerAccepted = false;
+        try {
+          const { text, images } = await buildPiPrompt(message);
+          rejectIfCancelled(sendOpts, 'send');
+          assertImageInputSupported(images);
+          setAutoReviewIntent(message.content);
+          // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
+          // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
+          const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
+          const command: Record<string, unknown> = { type: 'prompt', message: escapeLeadingSlashCommand(promptText) };
+          if (images.length > 0) command.images = images;
+          // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
+          if (ctx.isStreaming) command.streamingBehavior = 'followUp';
+          const userEntriesBefore = sendOpts?.onTranscriptUserEntry
+            ? await readPiUserEntryIds()
+            : null;
+          rejectIfCancelled(sendOpts, 'send');
+          const resp = await proc.request(command);
+          if (!resp.success) {
+            throw new Error(`pi prompt rejected: ${resp.error ?? 'unknown'}`);
+          }
+          providerAccepted = true;
+          await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
+        } catch (err) {
+          // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表
+          // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
+          if (!providerAccepted) activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+          throw err;
         }
-        await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
       },
 
       async steer(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
@@ -1713,15 +1760,29 @@ export class PiAgent extends BaseAgent {
 
       async abort(): Promise<void> {
         if (proc.isClosed) return;
-        await proc.request({ type: 'abort' }).catch((err: unknown) => {
-          deps.logger.warn('pi abort request failed', { message: (err as Error).message });
-        });
+        // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
+        // 停止的那次工具继续等一张已失效的卡。policy 仅在 Pi 确认接受 abort 后清空，
+        // RPC 失败时继续保留，防止仍在运行的 turn 失去渠道安全边界。
+        dismissAllPendingPrompts('turn_aborted', 'deny');
+        try {
+          const resp = await proc.request({ type: 'abort' });
+          if (resp.success) {
+            clearActiveTurnPermissionPolicy('turn_aborted');
+          } else {
+            deps.logger.warn('pi abort request rejected', { message: resp.error ?? 'unknown' });
+          }
+        } catch (err) {
+          deps.logger.warn('pi abort request failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       },
 
       async close(): Promise<void> {
         closed = true;
-        // 会话结束时挂起的卡已经不可能有人回答:强制 deny,别让等它的调用悬着(同 CC / Codex)。
-        dismissAllPendingPrompts('session_closed', 'deny');
+        // 会话结束时挂起的卡已经不可能有人回答:清 policy 并强制 deny,别让等它的调用
+        // 悬着(同 CC / Codex)。
+        clearActiveTurnPermissionPolicy('session_closed', { dismissPending: true });
         // 先注销 bridge 身份注册(幂等),再关子进程。放前面:即便 proc.close 抛错
         // 也不泄漏 ctx —— 该 sessionId 的 `?session=` 路由必须随会话结束失效。
         try {
@@ -2267,6 +2328,12 @@ export class PiAgent extends BaseAgent {
         requestId: string,
         entry: { settle: (resolveAs: 'allow' | 'deny') => void; forcePrompt: boolean },
       ) => () => void;
+      /**
+       * 本轮 host 权限策略(个人微信 / Telegram 群等);无策略为 null。命中
+       * forceConfirmToolCall 的调用必须走用户确认,压过 MCP auto-approve 与 auto
+       * 档 Auto-Review 的 allow(§7.4 优先级)。策略抛异常按"必须询问"收口。
+       */
+      turnPermissionPolicy: TurnPermissionPolicy | null;
     },
   ): void {
     const method = typeof event.method === 'string' ? event.method : '';
@@ -2339,7 +2406,26 @@ export class PiAgent extends BaseAgent {
         notifyAutoReviewUnavailable,
         registeredMcpServerNames,
         registerPendingPrompt,
+        turnPermissionPolicy,
       } = getPermissionCtx();
+      /**
+       * 本轮策略是否强制确认此工具调用。命中 → 必须走用户确认(forcePrompt),
+       * 不被 MCP auto-approve 或 Auto-Review allow 覆盖。策略回调是 host 注入的外部
+       * 代码:同步抛错不能变成放行,按"必须询问" fail-closed(与 CC/Codex 同口径)。
+       */
+      const turnPolicyForcePrompt = ((): boolean => {
+        if (!turnPermissionPolicy) return false;
+        try {
+          return turnPermissionPolicy.forceConfirmToolCall(toolName, input) === true;
+        } catch (err) {
+          this.deps.logger.error('pi turn permission policy threw -> force confirmation', {
+            toolName,
+            origin: turnPermissionPolicy.origin,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          return true;
+        }
+      })();
       /**
        * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
        * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
@@ -2410,19 +2496,24 @@ export class PiAgent extends BaseAgent {
         opts?: { forcePrompt?: boolean },
       ): Promise<boolean> => {
         // 发起确认前:已切到 Full access 就不该再弹卡。
-        if (isFullAccessNow()) return true;
+        // 但 forcePrompt 代表不能被权限放宽追认的安全边界；若 host lease / 预检失效
+        // 真的让 policy turn 落进 Full access，宁可拒绝也不能静默放行。
+        if (isFullAccessNow()) return opts?.forcePrompt === true ? false : true;
         const outcome = await requestUserDecision({ forcePrompt: opts?.forcePrompt === true });
         // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
         if (outcome.decided) return outcome.approved;
         // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
-        return isFullAccessNow();
+        return opts?.forcePrompt === true ? false : isFullAccessNow();
       };
       void (async () => {
         // Full access 优先收口,压在所有后续判定之前。bridge 侧按 perm 文件现读已把 bypass
         // 拦在冒泡之前,但档位是热切换的:confirm 冒泡之后用户仍可能切到 Full access。此时
         // MCP 策略 / 灰区审阅 / 弹窗都不该再改变「全放行」语义,也不该因为没有 resolver 就
         // 拒掉工具调用(与 auto 分支既有的 modeAfterReview bypass 收口同口径)。
-        if (isFullAccessNow()) {
+        // 本轮策略命中时不吃 Full Access 短路:policy + bypassPermissions 已在 send 预检
+        // 拒绝、且 policy turn 持 host lease 堵死热切到 bypass,故此处 turnPolicyForcePrompt
+        // 为真本不可达;仍显式 fail-closed,避免任一上游闸门被绕过就静默放行破坏性调用。
+        if (isFullAccessNow() && !turnPolicyForcePrompt) {
           proc.send({ type: 'extension_ui_response', id, confirmed: true });
           return;
         }
@@ -2472,13 +2563,16 @@ export class PiAgent extends BaseAgent {
         })();
         if (mcpPolicy !== null) {
           // Pi 的权限门只有放行/拒绝两态,没有会话级持久化规则,因此 prompt 与
-          // prompt-each-time 在这里收敛成同一个动作:每次都问用户。
+          // prompt-each-time 在这里收敛成同一个动作:每次都问用户。本轮策略命中时
+          // auto-approve 也不放行 —— 渠道安全契约压过第一方 MCP 自动批准(§7.4)。
           proc.send({
             type: 'extension_ui_response',
             id,
-            confirmed: mcpPolicy === 'auto-approve'
+            confirmed: mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt
               ? true
-              : await requestUserConfirmation({ forcePrompt: mcpPolicy === 'prompt-each-time' }),
+              : await requestUserConfirmation({
+                  forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time',
+                }),
           });
           return;
         }
@@ -2486,7 +2580,7 @@ export class PiAgent extends BaseAgent {
           proc.send({
             type: 'extension_ui_response',
             id,
-            confirmed: await requestUserConfirmation(),
+            confirmed: await requestUserConfirmation({ forcePrompt: turnPolicyForcePrompt }),
           });
           return;
         }
@@ -2506,7 +2600,11 @@ export class PiAgent extends BaseAgent {
           //   - 仍是 auto → 按本次审查 verdict 收口(下方原逻辑)。
           const modeAfterReview = getPermissionCtx().permissionMode;
           if (modeAfterReview === 'bypassPermissions') {
-            proc.send({ type: 'extension_ui_response', id, confirmed: true });
+            proc.send({
+              type: 'extension_ui_response',
+              id,
+              confirmed: !turnPolicyForcePrompt,
+            });
             return;
           }
           if (modeAfterReview !== 'auto') {
@@ -2519,11 +2617,25 @@ export class PiAgent extends BaseAgent {
             });
             return;
           }
-          if (decision.verdict === 'ask') {
+          // 本轮策略命中:压过 Auto-Review 的 allow / block,一律走渠道确认(forcePrompt)。
+          if (turnPolicyForcePrompt) {
             proc.send({
               type: 'extension_ui_response',
               id,
               confirmed: await requestUserConfirmation({ forcePrompt: true }),
+            });
+            return;
+          }
+          if (decision.verdict === 'ask') {
+            // policy turn + auto 的灰区语义对齐 Codex:只有渠道 policy 明确命中的调用
+            // 才打扰 owner；普通 Auto-Review ask 直接 fail-closed，不再额外弹微信确认。
+            // 无 policy 的 Desktop auto 会话维持既有逐次确认行为。
+            proc.send({
+              type: 'extension_ui_response',
+              id,
+              confirmed: turnPermissionPolicy
+                ? false
+                : await requestUserConfirmation({ forcePrompt: true }),
             });
             return;
           }

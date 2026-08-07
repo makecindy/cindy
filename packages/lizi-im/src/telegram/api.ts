@@ -137,6 +137,11 @@ export interface TgMessage {
   video_note?: { duration?: number };
   new_chat_members?: TgUser[];
   left_chat_member?: TgUser;
+  /**
+   * 消息当前挂着的内联键盘。callback_query.message 会带上它 —— 于是收到一次
+   * 失效回调时能就地看到同卡其它按钮的 token, 判断整张卡是不是真的都失效了。
+   */
+  reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> };
 }
 
 export interface TgCallbackQuery {
