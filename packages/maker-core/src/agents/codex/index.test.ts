@@ -12477,12 +12477,6 @@ describe('CodexAgent MCP thread context hooks', () => {
         text: JSON.stringify({ 'question-1': { answers: ['Keep going'] } }),
       },
     ]);
-    const resultText = result.contentItems
-      .map((item) => item.type === 'inputText' ? item.text : '')
-      .join('');
-    expect(JSON.parse(resultText)).toEqual({
-      'question-1': { answers: ['Keep going'] },
-    });
     expect(nativeDuplicateResult).toEqual({
       answers: { 'native-q1': { answers: ['Keep going'] } },
     });
