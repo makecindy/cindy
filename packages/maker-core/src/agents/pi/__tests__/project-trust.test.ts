@@ -498,6 +498,23 @@ describe('Pi project trust contract', () => {
     expect(result.projectKey).toBe('//server/share/repo\0//server/share/repo/app');
   });
 
+  it.each(['//', '//server', '///server/share'])('fails closed for incomplete Windows UNC path %s', (invalidRoot) => {
+    const invalidIdentity: PiProjectIdentityResolution = {
+      ...identity,
+      workingDir: invalidRoot,
+      canonicalWorkingDir: invalidRoot,
+      canonicalRepoRoot: invalidRoot,
+      platform: 'win32',
+      canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'ordinal-insensitive',
+    };
+    expect(evaluatePiProjectTrust({
+      identity: invalidIdentity,
+      approval: approval({ scope: 'repo-root', scopeKey: invalidRoot }),
+      discovered,
+    }).status).toBe('unavailable');
+  });
+
   it('does not let concurrent session inputs leak into one another', () => {
     const first = evaluatePiProjectTrust({
       identity,

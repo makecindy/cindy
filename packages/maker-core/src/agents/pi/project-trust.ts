@@ -52,6 +52,7 @@ function normalizePath(
     : withForwardSlashes.replace(/\/+/g, '/');
   if (platform === 'win32') {
     if (!/^(?:[A-Za-z]:\/|\/\/)/.test(slash)) return null;
+    if (slash.startsWith('//') && !/^\/\/[^/]+\/[^/]+(?:\/|$)/.test(slash)) return null;
     if (/^[A-Za-z]:\/$/.test(slash)) {
       return windowsCaseComparison === 'ordinal-insensitive' ? slash.toLowerCase() : slash;
     }
