@@ -1331,7 +1331,12 @@ export class Scheduler extends EventEmitter {
     // cronExpr 即使暂时被 intervalMs 覆盖，也会在调用方显式清除 interval 后重新
     // 成为调度依据。不能让一次 interval 模式更新把畸形 cron 持久化，留到以后才
     // 在重排或启动时爆炸；timezone 变更同样需要验证现有表达式在新时区可解析。
-    if (patch.cronExpr !== undefined || patch.timezone !== undefined) {
+    if (
+      patch.cronExpr !== undefined ||
+      patch.timezone !== undefined ||
+      patch.manual === false ||
+      shouldReactivateExpired
+    ) {
       nextCronOrMonthlyFire(candidate.cronExpr, now, candidate.timezone);
     }
     // manual / intervalMs / cronExpr / timezone 任一变化，或 expired 恢复 active 时，
