@@ -11,7 +11,7 @@
  *   5. 长供应商名称不撑破弹层(truncate)
  */
 
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -413,6 +413,11 @@ describe('ModelSelector provider groups', () => {
     renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
     await openDropdown();
 
+    const searchInput = screen.getByRole('textbox');
+    await waitFor(() => {
+      expect(document.activeElement).toBe(searchInput);
+    });
+
     const modelList = screen.getByRole('listbox', { name: 'Model list' });
     const originalRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
     await openModelOptionsPanel(originalRow);
@@ -423,7 +428,6 @@ describe('ModelSelector provider groups', () => {
     };
     expect(originalFloatingOptions.elements.reference).toBe(originalRow);
 
-    const searchInput = screen.getByRole('textbox');
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: 'qwen' } });
     });
