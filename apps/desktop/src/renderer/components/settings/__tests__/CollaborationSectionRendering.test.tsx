@@ -104,6 +104,24 @@ describe('CollaborationSection', () => {
     });
   });
 
+  it('clamps the hard limit between the current soft limit and 20', async () => {
+    const api = installElectronApi(DEFAULT_WIRE); // soft = 5
+    render(<CollaborationSection />);
+    await waitFor(() => limitInputs());
+
+    // 上界是常量 20
+    fireEvent.change(limitInputs()[1]!, { target: { value: '99' } });
+    await waitFor(() => {
+      expect(api.setCollaborationSetting).toHaveBeenCalledWith('workerHardLimit', 20);
+    });
+
+    // 下界是当前软上限(5),不是 1 —— 硬上限必须 >= 软上限
+    fireEvent.change(limitInputs()[1]!, { target: { value: '1' } });
+    await waitFor(() => {
+      expect(api.setCollaborationSetting).toHaveBeenCalledWith('workerHardLimit', 5);
+    });
+  });
+
   it('clamps the idle-release minutes into range and truncates decimals', async () => {
     const api = installElectronApi(DEFAULT_WIRE);
     render(<CollaborationSection />);
