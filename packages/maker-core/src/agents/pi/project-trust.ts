@@ -6,6 +6,7 @@ import type {
   PiProjectSettingsValues,
   PiProjectTrustCapabilities,
   PiProjectTrustDecision,
+  PiProjectWindowsCaseComparison,
 } from '../../types/pi-project-trust.js';
 
 const DEFAULT_CAPABILITIES: PiProjectTrustCapabilities = {
@@ -15,7 +16,11 @@ const DEFAULT_CAPABILITIES: PiProjectTrustCapabilities = {
   extensionsDisabled: false,
 };
 
-function normalizePath(value: string, platform: 'posix' | 'win32'): string | null {
+function normalizePath(
+  value: string,
+  platform: 'posix' | 'win32',
+  windowsCaseComparison?: PiProjectWindowsCaseComparison,
+): string | null {
   if (value.includes('\0') || value.includes('\uFFFD')) return null;
   if (platform === 'posix') {
     // Canonical POSIX paths come from the host resolver. Preserve their literal
@@ -24,11 +29,17 @@ function normalizePath(value: string, platform: 'posix' | 'win32'): string | nul
   }
 
   if (!value) return null;
+  if (windowsCaseComparison !== 'ordinal-insensitive' && windowsCaseComparison !== 'case-sensitive') return null;
   let withForwardSlashes = value.replaceAll('\\', '/');
   // JavaScript Unicode case folding is not the Win32 ordinal comparison used
   // by the filesystem. Until the host supplies a Win32 comparison identity,
   // reject non-ASCII paths rather than allowing approval-key collisions.
-  if (platform === 'win32' && /[^\x00-\x7F]/u.test(withForwardSlashes)) return null;
+  if (
+    windowsCaseComparison === 'ordinal-insensitive' &&
+    Array.from(withForwardSlashes).some((character) => (character.codePointAt(0) ?? 0) > 0x7f)
+  ) {
+    return null;
+  }
   if (withForwardSlashes.toLowerCase().startsWith('//?/unc/')) {
     withForwardSlashes = `//${withForwardSlashes.slice(8)}`;
   } else if (/^\/\/\?\/[A-Za-z]:\//.test(withForwardSlashes)) {
@@ -41,50 +52,62 @@ function normalizePath(value: string, platform: 'posix' | 'win32'): string | nul
     : withForwardSlashes.replace(/\/+/g, '/');
   if (platform === 'win32') {
     if (!/^(?:[A-Za-z]:\/|\/\/)/.test(slash)) return null;
-    if (/^[A-Za-z]:\/$/.test(slash)) return slash.toLowerCase();
-    return slash.replace(/\/$/, '').toLowerCase();
+    if (/^[A-Za-z]:\/$/.test(slash)) {
+      return windowsCaseComparison === 'ordinal-insensitive' ? slash.toLowerCase() : slash;
+    }
+    const withoutTrailingSlash = slash.replace(/\/$/, '');
+    return windowsCaseComparison === 'ordinal-insensitive'
+      ? withoutTrailingSlash.toLowerCase()
+      : withoutTrailingSlash;
   }
   return null;
 }
 
 function hasLosslessCanonicalEncoding(
-  identity: Pick<PiProjectIdentityResolution, 'platform' | 'canonicalPathEncoding'>,
+  identity: Pick<PiProjectIdentityResolution, 'platform' | 'canonicalPathEncoding' | 'windowsCaseComparison'>,
 ): boolean {
   return identity.platform === 'posix'
     ? identity.canonicalPathEncoding === 'utf8-lossless'
-    : identity.platform === 'win32' && identity.canonicalPathEncoding === 'utf16-lossless';
+    : identity.platform === 'win32' &&
+      identity.canonicalPathEncoding === 'utf16-lossless' &&
+      (identity.windowsCaseComparison === 'ordinal-insensitive' || identity.windowsCaseComparison === 'case-sensitive');
 }
 
 export function piProjectKey(
-  identity: Pick<PiProjectIdentityResolution, 'canonicalWorkingDir' | 'canonicalRepoRoot' | 'platform' | 'canonicalPathEncoding'>,
+  identity: Pick<PiProjectIdentityResolution, 'canonicalWorkingDir' | 'canonicalRepoRoot' | 'platform' | 'canonicalPathEncoding' | 'windowsCaseComparison'>,
 ): string | null {
   const platform = identity.platform;
   if (!platform || !hasLosslessCanonicalEncoding(identity)) return null;
-  const repoRoot = identity.canonicalRepoRoot && normalizePath(identity.canonicalRepoRoot, platform);
-  const workingDir = identity.canonicalWorkingDir && normalizePath(identity.canonicalWorkingDir, platform);
+  const repoRoot = identity.canonicalRepoRoot && normalizePath(identity.canonicalRepoRoot, platform, identity.windowsCaseComparison);
+  const workingDir = identity.canonicalWorkingDir && normalizePath(identity.canonicalWorkingDir, platform, identity.windowsCaseComparison);
   if (!repoRoot || !workingDir) return null;
   return `${repoRoot}\0${workingDir}`;
 }
 
 function approvalScopeKey(
-  identity: Pick<PiProjectIdentityResolution, 'canonicalWorkingDir' | 'canonicalRepoRoot' | 'platform' | 'canonicalPathEncoding'>,
+  identity: Pick<PiProjectIdentityResolution, 'canonicalWorkingDir' | 'canonicalRepoRoot' | 'platform' | 'canonicalPathEncoding' | 'windowsCaseComparison'>,
   scope: 'working-dir' | 'repo-root',
 ): string | null {
   const platform = identity.platform;
   if (!platform || !hasLosslessCanonicalEncoding(identity)) return null;
-  const repoRoot = identity.canonicalRepoRoot && normalizePath(identity.canonicalRepoRoot, platform);
+  const repoRoot = identity.canonicalRepoRoot && normalizePath(identity.canonicalRepoRoot, platform, identity.windowsCaseComparison);
   if (!repoRoot) return null;
   if (scope === 'repo-root') return repoRoot;
-  const workingDir = identity.canonicalWorkingDir && normalizePath(identity.canonicalWorkingDir, platform);
+  const workingDir = identity.canonicalWorkingDir && normalizePath(identity.canonicalWorkingDir, platform, identity.windowsCaseComparison);
   return workingDir ? `${repoRoot}\0${workingDir}` : null;
 }
 
-function normalizeApprovalScopeKey(value: string, platform: 'posix' | 'win32', scope: 'working-dir' | 'repo-root'): string | null {
-  if (scope === 'repo-root') return normalizePath(value, platform);
+function normalizeApprovalScopeKey(
+  value: string,
+  platform: 'posix' | 'win32',
+  scope: 'working-dir' | 'repo-root',
+  windowsCaseComparison?: PiProjectWindowsCaseComparison,
+): string | null {
+  if (scope === 'repo-root') return normalizePath(value, platform, windowsCaseComparison);
   const separator = value.indexOf('\0');
   if (separator < 0 || value.lastIndexOf('\0') !== separator) return null;
-  const repoRoot = normalizePath(value.slice(0, separator), platform);
-  const workingDir = normalizePath(value.slice(separator + 1), platform);
+  const repoRoot = normalizePath(value.slice(0, separator), platform, windowsCaseComparison);
+  const workingDir = normalizePath(value.slice(separator + 1), platform, windowsCaseComparison);
   return repoRoot && workingDir ? `${repoRoot}\0${workingDir}` : null;
 }
 
@@ -211,6 +234,7 @@ export function evaluatePiProjectTrust(input: {
     approval.scopeKey,
     identity.platform,
     approval.scope,
+    identity.windowsCaseComparison,
   );
   if (!expectedKey || suppliedKey !== expectedKey) {
     return emptyDecision(identity, 'unapproved', 'approval-scope-mismatch', approval.revision, discovered);

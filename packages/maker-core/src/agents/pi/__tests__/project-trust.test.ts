@@ -150,11 +150,50 @@ describe('Pi project trust contract', () => {
         workingDir: 'C:\\repo\\app',
         platform: 'win32',
         canonicalPathEncoding: 'utf16-lossless',
+        windowsCaseComparison: 'ordinal-insensitive',
       },
       approval: approval({ scopeKey: 'c:/repo\0c:/repo/app' }),
       discovered,
     });
     expect(result.status).toBe('approved');
+  });
+
+  it('requires a host Windows comparison identity', () => {
+    const windowsIdentity: PiProjectIdentityResolution = {
+      ...identity,
+      workingDir: 'C:\\repo\\app',
+      canonicalWorkingDir: 'C:/repo/app',
+      canonicalRepoRoot: 'C:/repo',
+      platform: 'win32',
+      canonicalPathEncoding: 'utf16-lossless',
+    };
+    expect(evaluatePiProjectTrust({
+      identity: windowsIdentity,
+      approval: approval({ scopeKey: 'c:/repo\0c:/repo/app' }),
+      discovered,
+    }).status).toBe('unavailable');
+  });
+
+  it('preserves case when the host reports a case-sensitive Windows directory', () => {
+    const caseSensitiveIdentity: PiProjectIdentityResolution = {
+      ...identity,
+      workingDir: 'C:\\repo\\App',
+      canonicalWorkingDir: 'C:/repo/App',
+      canonicalRepoRoot: 'C:/repo',
+      platform: 'win32',
+      canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'case-sensitive',
+    };
+    expect(evaluatePiProjectTrust({
+      identity: caseSensitiveIdentity,
+      approval: approval({ scopeKey: 'C:/repo\0C:/repo/App' }),
+      discovered,
+    }).status).toBe('approved');
+    expect(evaluatePiProjectTrust({
+      identity: caseSensitiveIdentity,
+      approval: approval({ scopeKey: 'c:/repo\0c:/repo/app' }),
+      discovered,
+    }).status).toBe('unapproved');
   });
 
   it('preserves a Windows drive root when deriving the project key', () => {
@@ -165,6 +204,7 @@ describe('Pi project trust contract', () => {
       canonicalRepoRoot: 'C:/',
       platform: 'win32',
       canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'ordinal-insensitive',
     };
     const result = evaluatePiProjectTrust({
       identity: driveRootIdentity,
@@ -183,6 +223,7 @@ describe('Pi project trust contract', () => {
       canonicalRepoRoot: '//?/C:/Repo',
       platform: 'win32',
       canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'ordinal-insensitive',
     };
     expect(evaluatePiProjectTrust({
       identity: extendedIdentity,
@@ -350,7 +391,7 @@ describe('Pi project trust contract', () => {
   });
 
   it('fails closed when host platform semantics are missing', () => {
-    const { platform: _platform, ...identityWithoutPlatform } = identity;
+    const identityWithoutPlatform = { ...identity, platform: undefined } as unknown as PiProjectIdentityResolution;
     expect(evaluatePiProjectTrust({
       identity: identityWithoutPlatform as PiProjectIdentityResolution,
       approval: approval(),
@@ -384,6 +425,7 @@ describe('Pi project trust contract', () => {
       canonicalRepoRoot: 'C:/repo',
       platform: 'win32',
       canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'ordinal-insensitive',
     };
     expect(evaluatePiProjectTrust({
       identity: trailingIdentity,
@@ -405,6 +447,7 @@ describe('Pi project trust contract', () => {
       canonicalRepoRoot: 'C:/repo',
       platform: 'win32',
       canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'ordinal-insensitive',
     };
     const result = evaluatePiProjectTrust({
       identity: nonAsciiIdentity,
@@ -444,6 +487,7 @@ describe('Pi project trust contract', () => {
       canonicalRepoRoot: '//server/share/repo',
       platform: 'win32',
       canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'ordinal-insensitive',
     };
     const result = evaluatePiProjectTrust({
       identity: uncIdentity,

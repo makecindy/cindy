@@ -14,6 +14,8 @@ export type PiProjectTrustStatus =
 
 export type PiProjectTrustScope = 'working-dir' | 'repo-root';
 
+export type PiProjectWindowsCaseComparison = 'ordinal-insensitive' | 'case-sensitive' | 'unavailable';
+
 export type PiProjectResourceKind = 'skills' | 'settings' | 'packages' | 'extensions';
 
 export type PiProjectResourceDisposition = 'eligible' | 'discovered' | 'blocked';
@@ -31,6 +33,8 @@ export interface PiProjectIdentityResolution {
   platform: 'posix' | 'win32';
   /** Must match the platform and round-trip without replacement; otherwise fail closed. */
   canonicalPathEncoding: 'utf8-lossless' | 'utf16-lossless' | 'unavailable';
+  /** Host-provided filesystem comparison identity; required for usable win32 keys. */
+  windowsCaseComparison?: PiProjectWindowsCaseComparison;
 }
 /**
  * Result returned by Cindy's existing project-approval authority. The
