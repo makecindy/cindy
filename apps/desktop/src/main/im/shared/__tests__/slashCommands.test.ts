@@ -70,6 +70,7 @@ function makeRepo(overrides: Partial<ImSessionRepo> = {}): ImSessionRepo {
   return {
     sessionIdFor: vi.fn(() => 'feishu-session'),
     findActiveSession: vi.fn(async () => defaultRow),
+    peekSession: vi.fn(async () => defaultRow),
     prepareNewSession: vi.fn(async () => defaultRow),
     createSession: vi.fn(async () => defaultRow),
     getDefaultEffortFor: vi.fn(() => 'high' as const),
@@ -420,7 +421,12 @@ describe('IM slash commands', () => {
     it('Telegram: 按官方 bot 的同一结构给出五项配置', async () => {
       // 官方 bot 的 /settings 是服务端渲染的固定五行(项目 / Agent / 模型 /
       // 强度 / 权限)。个人侧照同一结构给, 两个 bot 的用户看到的是同一份东西。
-      const { handlers } = makeHarness({ adapterOverrides: { ui: telegramUi } });
+      // 固件的托管目录恰好等于 defaultRow.workingDir, 这里换一个真项目目录,
+      // 才验得到「显示目录名」这条路径。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({ ...defaultRow, workingDir: 'D:\\work\\XDMaker' })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
       expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
       const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
       expect(text).toContain('项目：XDMaker'); // 目录名, 不是绝对路径
@@ -438,14 +444,53 @@ describe('IM slash commands', () => {
       expect(text).not.toContain('claude-opus-4-8');
     });
 
-    it('会话未就绪时不报配置, 走鉴权提示', async () => {
-      const turnRunner = makeTurnRunner({
-        resolveRouteTarget: vi.fn(async () => null),
-      } as Partial<ImTurnRunner>);
-      const { handlers } = makeHarness({ turnRunner, adapterOverrides: { ui: telegramUi } });
-      expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
+    it('只读: 不建会话、不复活软删行', async () => {
+      // resolveRouteTarget 没有现成会话时会建一条, 其内部的 findActiveSession
+      // 还会把软删行翻回 active 并广播 —— 问一句「我现在什么配置」不该有这些
+      // 副作用。
+      const repo = makeRepo();
+      const turnRunner = makeTurnRunner();
+      const { handlers } = makeHarness({ repo, turnRunner, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.peekSession).toHaveBeenCalledOnce();
+      expect(repo.createSession).not.toHaveBeenCalled();
+      expect(repo.prepareNewSession).not.toHaveBeenCalled();
+      expect(repo.findActiveSession).not.toHaveBeenCalled();
+      expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
+    });
+
+    it('还没有会话行时报渠道默认值, 项目名不是空串', async () => {
+      const repo = makeRepo({ peekSession: vi.fn(async () => null) });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
       const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
-      expect(text).not.toContain('项目：');
+      expect(text).toContain('项目：对话（托管目录）');
+      expect(text).toContain('Agent：claude-code');
+      expect(text).not.toContain('项目：\n');
+    });
+
+    it('目录是渠道托管目录时显示「对话」, 不露内部路径名', async () => {
+      // ensureWorkingDir 造的是 `telegram-<botId>` 这种内部目录, 它不是项目名。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({ ...defaultRow, workingDir: 'F:\\XDMaker' })),
+      });
+      const { handlers } = makeHarness({
+        repo,
+        adapterOverrides: {
+          ui: telegramUi,
+          sessions: {
+            source: 'feishu',
+            sessionIdFor: () => 'feishu-session',
+            defaultTitle: () => 'Feishu',
+            ensureWorkingDir: () => 'F:\\XDMaker',
+            extraInsertColumns: () => ({}),
+          },
+        },
+      });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：对话（托管目录）');
+      expect(text).not.toContain('XDMaker');
     });
   });
 

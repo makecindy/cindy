@@ -90,6 +90,22 @@ export function createSlashHandlers(
     }
   }
 
+  /**
+   * 工作区显示名。
+   *
+   * 三种情况各有其名: 没有会话行、或目录就是渠道的托管目录时显示「对话」——
+   * 内部的 `telegram-<botId>` 是实现细节, 不是项目名; 否则取目录名(两种分隔符
+   * 都切, 不用 path.basename: 它只认当前平台的分隔符, 而远程控制下一条 Windows
+   * 会话完全可能由 macOS 上的主进程渲染); 目录为空则退回「对话」而不是空串。
+   */
+  function workspaceDisplayName(workingDir: string | null | undefined, botContextId: string): string {
+    // 没有 project 卡文案的渠道(它是可选契约)退回一个中性词, 不硬造。
+    const dialogueName = ui.cards.project?.dialogueName ?? '—';
+    if (!workingDir) return dialogueName;
+    if (workingDir === adapter.sessions.ensureWorkingDir(botContextId)) return dialogueName;
+    return workingDir.split(/[\\/]/).filter(Boolean).pop() ?? dialogueName;
+  }
+
   async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
     // 分词只做一次 —— 注册表内部不再重复 split, 命令名与参数不可能对不上。
     const { definition, invocation, args: commandArgs } = tokenizeBotCommand(text);
@@ -384,11 +400,7 @@ export function createSlashHandlers(
           listProjectsForControl(),
           repo.findActiveSession(ctx.botContextId, ctx.userId),
         ]);
-        const dialogueDir = adapter.sessions.ensureWorkingDir(ctx.botContextId);
-        const currentName =
-          !current || current.workingDir === dialogueDir
-            ? projectUi.dialogueName
-            : (current.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? current.workingDir);
+        const currentName = workspaceDisplayName(current?.workingDir, ctx.botContextId);
         const spec = cards.buildProjectPickerCard({
           botAppId: ctx.botContextId,
           projects,
@@ -414,28 +426,22 @@ export function createSlashHandlers(
           await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
           return true;
         }
-        const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
-        if (!target) {
-          await safeSendText(ctx.userId, ui.agent.apiKeyMissing);
-          return true;
-        }
-        const { row } = target;
+        // 只读查询必须走只读路径: resolveRouteTarget 没有现成会话时会**建**一条,
+        // 而它内部的 findActiveSession 还会把软删行翻回 active 并广播 —— 问一句
+        // 「我现在什么配置」不该凭空造出任务, 更不该把用户已删的会话拉回列表。
+        const row = await repo.peekSession(ctx.botContextId, ctx.userId);
         // 项目显示成目录名而不是绝对路径: 官方 bot 那边显示的是工作区别名(短名),
         // 两边给出的粒度得一样, 否则同一个项目在两个 bot 里看着像两个东西。
-        //
-        // 两种分隔符都切, 不用 path.basename —— 它只认当前平台的分隔符, 而远程
-        // 控制下一条 Windows 会话的 workingDir(`F:\\proj`)完全可能由 macOS 上的
-        // 主进程渲染, 那时 basename 会把整条路径原样吐回来。
-        const workspace =
-          row.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? row.workingDir;
+        const workspace = workspaceDisplayName(row?.workingDir, ctx.botContextId);
+        // 还没有会话行时报渠道默认值 —— 那正是下一条消息会用的配置。
         await safeSendText(
           ctx.userId,
           render({
             workspace,
-            agent: row.agentKind,
-            model: row.model,
-            effort: row.effort,
-            permission: row.permissionMode,
+            agent: row?.agentKind ?? adapter.config.agentKind,
+            model: row?.model ?? adapter.config.defaultModel,
+            effort: row?.effort ?? repo.getDefaultEffortFor(adapter.config.defaultModel),
+            permission: row?.permissionMode ?? adapter.config.defaultPermissionMode,
           }),
         );
         return true;

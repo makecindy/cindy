@@ -72,6 +72,17 @@ export interface ImSessionRepo {
     userId: string,
     scopeKey?: string,
   ): Promise<ImSessionRow | null>;
+  /**
+   * 纯只读地看一眼这对身份的通道行 —— **不创建、不复活、不广播**。
+   *
+   * findActiveSession 会把软删行翻回 active 并广播 created(用户从 IM 侧继续
+   * 发消息就该恢复对话)。那对「发消息」是对的, 对只读查询就是副作用: 问一句
+   * 「我现在什么配置」不该把用户已删的会话拉回列表。
+   *
+   * 软删行照样返回它的配置 —— 用户下次发消息复活的正是这一行、沿用的正是这份
+   * 设置, 报默认值反而误导。
+   */
+  peekSession(botContextId: string, userId: string, scopeKey?: string): Promise<ImSessionRow | null>;
   prepareNewSession(
     botContextId: string,
     userId: string,
@@ -115,6 +126,25 @@ export function createImSessionRepo(
      * (上下文)与模型/权限等全部设置。若把软删行当"不存在"返回 null,caller
      * 会用同 id INSERT 撞 UNIQUE(sessions.id),IM 消息从此全部报错(#748)。
      */
+    async peekSession(botContextId, userId, scopeKey) {
+      const id = ns.sessionIdFor(botContextId, userId, scopeKey);
+      const db = getDbClient().drizzle;
+      const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        agentKind: toCoreAgentKind(row.agentKind),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        model: row.model,
+        effort: row.effort,
+        permissionMode: row.permissionMode,
+        fastMode: row.fastMode,
+        sdkSessionId: row.sdkSessionId,
+        providerId: row.providerId ?? null,
+      };
+    },
+
     async findActiveSession(botContextId, userId, scopeKey) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
       const db = getDbClient().drizzle;
