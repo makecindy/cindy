@@ -189,7 +189,8 @@ const AI_RENAME_BUSINESS_ERROR_KEYS = {
 
 /**
  * 自动起名失败的场景化提示(对齐桌面 SessionRenameInput 的错误码分档):
- * 老被控端没有该 channel / 版本不匹配 → 提示升级;链路不通 → 提示离线;其余通用失败。
+ * 无素材 / 供应商不支持 → 给出对应操作;老被控端没有该 channel / 版本不匹配 →
+ * 提示升级;链路不通 → 提示离线;其余通用失败。
  */
 export function aiRenameFailureText(error: unknown): string {
   const directCode = error instanceof Error ? readErrorCode(error) : '';

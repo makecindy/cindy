@@ -259,11 +259,18 @@ describe('regenerateMakerSessionTitle', () => {
     expect(prompt).not.toContain('Conversation opening');
   });
 
-  it('空 sessionId / 会话不存在 → 明确 IPC 错误且不发起生成', async () => {
-    const deps = makeDeps({ readSessionAgentKind: vi.fn(async () => null) });
+  it('空 sessionId / 会话不存在且素材为空 → NOT_FOUND 且不发起生成', async () => {
+    const deps = makeDeps({
+      readSessionAgentKind: vi.fn(async () => null),
+      collectMaterial: vi.fn(async () => ({
+        opening: { text: '', createdAt: null, rowid: null },
+        recent: [],
+      })),
+    });
 
     await expect(regenerateMakerSessionTitle('', deps)).rejects.toThrow(/\[INVALID_PARAMS\]/);
     await expect(regenerateMakerSessionTitle('missing', deps)).rejects.toThrow(/\[NOT_FOUND\]/);
+    expect(deps.collectMaterial).toHaveBeenCalledOnce();
     expect(deps.generateTitle).not.toHaveBeenCalled();
   });
 

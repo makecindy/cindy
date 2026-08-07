@@ -181,14 +181,6 @@ export async function regenerateMakerSessionTitle(
       REGENERATE_RECENT_WINDOW,
       latestTurnIsInFlight,
     );
-    // 空会话(草稿)没有素材,起不出有意义的标题
-    if (recent.length === 0) {
-      log.info('regenerate session title skipped', {
-        sessionId,
-        reason: 'no-material',
-      });
-      throwIpcError('TITLE_NO_MATERIAL', 'No text messages are available for AI naming');
-    }
     const agentKind = await deps.readSessionAgentKind(sessionId);
     if (!agentKind) {
       log.info('regenerate session title skipped', {
@@ -196,6 +188,14 @@ export async function regenerateMakerSessionTitle(
         reason: 'session-not-found',
       });
       throwIpcError('NOT_FOUND', 'Session not found');
+    }
+    // 空会话(草稿)没有素材,起不出有意义的标题
+    if (recent.length === 0) {
+      log.info('regenerate session title skipped', {
+        sessionId,
+        reason: 'no-material',
+      });
+      throwIpcError('TITLE_NO_MATERIAL', 'No text messages are available for AI naming');
     }
     // 最近窗口已经覆盖到会话开头时,开场消息就在 transcript 里,不再单独给出。
     // 用 rowid 成员判断做精确判定——时间戳启发式在同毫秒批量落库(开场行被
