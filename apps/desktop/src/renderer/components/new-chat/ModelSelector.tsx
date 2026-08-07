@@ -1547,6 +1547,12 @@ function ModelSelectorContentView({
   useEffect(() => {
     if (!optionsPanelUsesLayoutPositioning || !editing) return;
     if (!editingModel || (optionsAnchor !== null && !optionsAnchor.isConnected)) {
+      const anchorDetached = optionsAnchor !== null && !optionsAnchor.isConnected;
+      if (anchorDetached) {
+        // 重挂载后的首个可见行需要无条件可恢复；某些环境下 pointer intent 在重新创建
+        // 的锚点上偶发不满足首次 pointer 移动门槛（见 PR#1792 关联回归）。
+        hoverIntentArmedRef.current = true;
+      }
       closeOptionsPanel();
     }
   }, [closeOptionsPanel, editing, editingModel, optionsAnchor, optionsPanelUsesLayoutPositioning]);
