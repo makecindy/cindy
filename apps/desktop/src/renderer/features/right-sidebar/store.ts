@@ -28,6 +28,27 @@ import type { TabKindId, TabState } from './types';
 const log = createLogger('rightSidebar.store');
 
 /**
+ * Tabs that are EPHEMERAL — never persisted to the DB. Currently only
+ * sandboxed local-HTML-preview tabs: their tokenized loopback origin is
+ * process-local (24h TTL, main-process server), so a persisted row would
+ * re-materialize a tab the preview guard parks on about:blank after restart
+ * (codex-connector P2, round 27f/27i). addTab marks them; every persistence
+ * path (patchTabState / setActiveTab / reorderTabs / closeTab) skips the IPC
+ * write for an ephemeral tabId so a stale row is never (re)created
+ * (codex-connector P2, round 27k).
+ */
+const ephemeralTabIds = new Set<string>();
+
+/** Test-only: reset the ephemeral set (module state shared across tests). */
+export function _resetEphemeralTabsForTests(): void {
+  ephemeralTabIds.clear();
+}
+
+function isEphemeralTab(tabId: string): boolean {
+  return ephemeralTabIds.has(tabId);
+}
+
+/**
  * Sandboxed local-HTML-preview URLs are process-local: a tokenized loopback
  * origin with a 24h TTL that the main process serves. Persisting such a tab
  * row is pointless AND harmful — after a crash/force-quit the main-side
@@ -595,21 +616,24 @@ export async function addTab(
   } catch {
     // 调用方回调抛错不该毒化 addTab 主流程。
   }
+  const initialUrl =
+    kind === 'web-browser' && initialState && typeof initialState === 'object'
+      ? ((initialState as { url?: unknown }).url as string | undefined) ?? ''
+      : '';
+  // Sandboxed preview tabs are process-local (tokenized loopback, 24h TTL,
+  // served by the main process). Persisting them is pointless AND harmful:
+  // after a crash/force-quit the token registry is gone, so hydrating the
+  // stale row would park the tab on about:blank forever. Mark the tab
+  // EPHEMERAL so EVERY persistence path (patch/active/reorder/close) skips
+  // the DB write — not just this first upsert (codex-connector P2, round
+  // 27f/27i/27k). The in-memory bucket still holds it for this session.
+  if (isSandboxPreviewUrl(initialUrl)) {
+    ephemeralTabIds.add(id);
+  }
   let rowCommitted = false;
   try {
     const ipc = ipcApi();
-    const initialUrl =
-      kind === 'web-browser' && initialState && typeof initialState === 'object'
-        ? ((initialState as { url?: unknown }).url as string | undefined) ?? ''
-        : '';
-    // Sandboxed preview tabs are process-local (tokenized loopback, 24h TTL,
-    // served by the main process). Persisting them is pointless AND harmful:
-    // after a crash/force-quit the token registry is gone, so hydrating the
-    // stale row would park the tab on about:blank forever (codex-connector
-    // P2, round 27e). Skip the DB write for preview tabs — the in-memory
-    // bucket still holds them for the current session.
-    const skipPersistForPreview = isSandboxPreviewUrl(initialUrl);
-    if (ipc && shouldPersist(sessionId) && !skipPersistForPreview) {
+    if (ipc && shouldPersist(sessionId) && !isEphemeralTab(id)) {
       // 同步登记 in-flight 创建(与乐观插入同一 tick),并发的 closeTab 才等得到。
       // `rowCommitted` 只跟踪 **upsert 这一步**:upsert 成功但随后的 setActive 失败
       // 时,DB 里已经有这一行了,关闭路径必须照常发 close 把它删掉,否则 addTab
@@ -717,6 +741,7 @@ function forgetClosedTab(sessionId: string, tabId: string, kind: TabKindId): voi
   if (kind === 'web-browser') browserWebviewPool.release(tabId);
   unmarkPopupSpawnedTab(tabId);
   closeNativePopupForTab(tabId);
+  ephemeralTabIds.delete(tabId);
 }
 
 /**
@@ -806,7 +831,7 @@ export async function closeTab(
     try {
       await settleTabStateWrites(sessionId, tabId);
       const ipc = ipcApi();
-      if (ipc && shouldPersist(sessionId)) {
+      if (ipc && shouldPersist(sessionId) && !isEphemeralTab(tabId)) {
         await ipc.close({ id: tabId });
         // —— close 已落库:从这里起任何失败都不得进入下面的回滚分支(把已删的
         // tab 插回 cache 会与 DB 反向分叉)。active 同步单独 catch 兜底。
@@ -928,7 +953,9 @@ export async function setActiveTab(
   setBucket(sessionId, { activeTabId: tabId });
   try {
     const ipc = ipcApi();
-    if (ipc && shouldPersist(sessionId)) await ipc.setActive({ sessionId, id: tabId });
+    if (ipc && shouldPersist(sessionId) && tabId !== null && !isEphemeralTab(tabId)) {
+      await ipc.setActive({ sessionId, id: tabId });
+    }
   } catch (err) {
     if (isMissingSessionPersistenceError(err)) {
       markMemoryOnlySession(sessionId);
@@ -961,7 +988,7 @@ export function patchTabState(
   const nextTabs = [...prev.tabs];
   nextTabs[idx] = { ...oldTab, state: newState };
   setBucket(sessionId, { tabs: nextTabs });
-  if (!shouldPersist(sessionId)) return Promise.resolve();
+  if (!shouldPersist(sessionId) || isEphemeralTab(tabId)) return Promise.resolve();
   const key = tabStateWriteKey(sessionId, tabId);
   if (!persistedStateBaselines.has(key)) {
     persistedStateBaselines.set(key, oldTab.state);
@@ -999,7 +1026,12 @@ export async function reorderTabs(
   try {
     await settleCurrentSessionStateWrites(sessionId);
     const ipc = ipcApi();
-    if (ipc && shouldPersist(sessionId)) await ipc.reorder({ sessionId, orderedIds });
+    // Ephemeral (preview) tabs have no DB row — persist the reorder for the
+    // persisted tabs only, so the DB never references a missing id.
+    const persistedOrderedIds = orderedIds.filter((id) => !isEphemeralTab(id));
+    if (ipc && shouldPersist(sessionId) && persistedOrderedIds.length > 0) {
+      await ipc.reorder({ sessionId, orderedIds: persistedOrderedIds });
+    }
   } catch (err) {
     if (isMissingSessionPersistenceError(err)) {
       markMemoryOnlySession(sessionId);
@@ -1044,5 +1076,6 @@ export function _resetStore(): void {
   pendingTabCreates.clear();
   closeMutationQueues.clear();
   resetStateWriteQueue();
+  ephemeralTabIds.clear();
   listeners.clear();
 }

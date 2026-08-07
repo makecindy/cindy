@@ -1147,3 +1147,55 @@ describe('device-link remote sessions (memory-only tabs)', () => {
     expect(stub.upsert).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () => {
+  const PREVIEW_URL =
+    'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+  let ipc: IpcStub;
+
+  beforeEach(async () => {
+    store = await import('../store');
+    store._resetStore();
+    _resetTabKindRegistry();
+    ipc = makeIpcStub();
+    installIpc(ipc);
+    _resetPopupTabsForTests();
+  });
+
+  afterEach(() => {
+    store._resetStore();
+    _resetTabKindRegistry();
+    _resetPopupTabsForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('addTab does not persist a preview tab, but keeps it in memory', async () => {
+    await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    expect(store.getBucket('s1').tabs).toHaveLength(1);
+    expect(ipc.upsert).not.toHaveBeenCalled();
+  });
+
+  it('patchTabState on a preview tab updates memory but does NOT persist', async () => {
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.upsert.mockClear();
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'Preview' }));
+    expect(store.getBucket('s1').tabs[0].state).toMatchObject({ title: 'Preview' });
+    expect(ipc.upsert).not.toHaveBeenCalled();
+  });
+
+  it('setActiveTab on a preview tab does NOT persist', async () => {
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.setActive.mockClear();
+    await store.setActiveTab('s1', tab.id);
+    expect(store.getBucket('s1').activeTabId).toBe(tab.id);
+    expect(ipc.setActive).not.toHaveBeenCalled();
+  });
+
+  it('closeTab on a preview tab does NOT call ipc.close', async () => {
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.close.mockClear();
+    await store.closeTab('s1', tab.id);
+    expect(store.getBucket('s1').tabs).toHaveLength(0);
+    expect(ipc.close).not.toHaveBeenCalled();
+  });
+});
