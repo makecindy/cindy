@@ -55,6 +55,11 @@ function parseSourceInfo(value: unknown): PiRuntimeCommandSourceInfo | undefined
 /** Conservative parser for Pi's get_commands `data.commands` payload. */
 export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return { ok: false };
+  const rawData = data as Record<string, unknown>;
+  if (Object.keys(rawData).some((key) => key !== 'commands')) return { ok: false };
+  const commands = rawData.commands;
+  if (!Array.isArray(commands) || commands.length > MAX_COMMANDS) return { ok: false };
+
   let serializedLength = 0;
   try {
     const serialized = JSON.stringify(data);
@@ -64,11 +69,6 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
     return { ok: false };
   }
   if (serializedLength > MAX_RESPONSE_BYTES) return { ok: false };
-
-  const rawData = data as Record<string, unknown>;
-  if (Object.keys(rawData).some((key) => key !== 'commands')) return { ok: false };
-  const commands = rawData.commands;
-  if (!Array.isArray(commands) || commands.length > MAX_COMMANDS) return { ok: false };
 
   const seen = new Set<string>();
   const parsed: PiRuntimeCommand[] = [];

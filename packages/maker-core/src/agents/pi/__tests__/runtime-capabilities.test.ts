@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   capturePiRuntimeCapabilityManifest,
@@ -52,7 +52,6 @@ describe('Pi runtime capability parsing', () => {
   });
 
   it('redacts rpc failures and classifies unsupported/timeout as unknown', async () => {
-    const loggerSpy = vi.fn();
     const unsupported = await capturePiRuntimeCapabilityManifest(
       { request: async () => ({ type: 'response', command: 'get_commands', success: false, error: '/secret/provider/path unsupported' }) },
       { sessionId: 's1', sdkSessionId: '/private/session.jsonl' },
@@ -75,7 +74,6 @@ describe('Pi runtime capability parsing', () => {
     );
     expect(timedOut).toMatchObject({ status: 'unknown', error: { code: 'timeout' } });
     expect(JSON.stringify(timedOut)).not.toContain('token=secret');
-    expect(loggerSpy).not.toHaveBeenCalled();
   });
 
   it('marks malformed and explicit rpc failures without throwing', async () => {
