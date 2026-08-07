@@ -11,6 +11,7 @@ import type {
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  __testing,
   createOrcaWorkerBridgeMcpProvider,
   type OrcaBridgeMcpDeps,
   type OrcaWorkerLink,
@@ -365,6 +366,29 @@ describe('orca_worker_bridge MCP helpers', () => {
     });
     expect(persisted).toEqual([]);
     expect(statusUpdates).toEqual([]);
+  });
+
+  it('does not retain settled auto-bridge state after send_to_lead succeeds', async () => {
+    const lead = makeSession('lead-1');
+    const { server } = makeWorkerBridgeLeadHarness(lead);
+    __testing.clearAutoBridgeState('worker-1');
+
+    try {
+      const result = await server._registeredTools.send_to_lead.handler({
+        worker_id: 'worker-1',
+        message: 'completed work',
+      });
+
+      expect(parseToolJson(result)).toMatchObject({
+        ok: true,
+        worker_id: 'worker-1',
+        lead_session_id: 'lead-1',
+      });
+      expect(__testing.hasAutoBridgePending('worker-1')).toBe(false);
+      expect(__testing.autoBridgeStateCount()).toBe(0);
+    } finally {
+      __testing.clearAutoBridgeState('worker-1');
+    }
   });
 
   it('hydrates lead provider route before cold send_to_lead creates the lead session', async () => {

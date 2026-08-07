@@ -3170,11 +3170,14 @@ describe('CodexAgent.startSession developerInstructions', () => {
       'ALWAYS call send_to_lead when complete or blocked.',
       'worker_id=worker-test-id',
     ].join('\n');
-    const baselineAgent = new CodexAgent(createDeps(runtimeConfig));
+    const baselineAgent = new CodexAgent(createDeps(runtimeConfig, {
+      getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
+    }));
     const baselineHost = installFakeHost(baselineAgent);
     const registerCodexSystemPromptForThread = vi.fn();
     const proxyAgent = new CodexAgent(createDeps(runtimeConfig, {
       registerCodexSystemPromptForThread,
+      getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
     }));
     const proxyHost = installFakeHost(proxyAgent, undefined, { codexProxyActive: true });
 
@@ -3209,6 +3212,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
       historyHasProductPrompt: false,
     });
     expect(baselineParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(baselineParams.developerInstructions).toContain('GHOST ROSTER PROMPT');
     expect(baselineParams.developerInstructions).toContain('send_to_lead');
     expect(baselineParams.developerInstructions).toContain('worker_id=worker-test-id');
 
@@ -3284,7 +3288,10 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
-      { registerCodexSystemPromptForThread },
+      {
+        registerCodexSystemPromptForThread,
+        getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
+      },
     ));
     const host = installFakeHost(agent, undefined, {
       codexProxyActive: true,
@@ -3305,6 +3312,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     expect(params.modelProvider).toBe('cindy_openai');
     expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('GHOST ROSTER PROMPT');
     expect(params.developerInstructions).toContain('USER PROMPT');
     expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
     expect(handle.codexProductPromptDelivery).toEqual({
@@ -3681,10 +3689,12 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
   it('keeps developerInstructions for remote sessions when their host is not proxy-active', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
+    const getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
       {
         registerCodexSystemPromptForThread,
+        getGhostRosterPrompt,
       },
     ));
     const host = installFakeHost(agent);
@@ -3701,6 +3711,8 @@ describe('CodexAgent.startSession developerInstructions', () => {
       developerInstructions?: string;
     };
     expect(startParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(startParams.developerInstructions).not.toContain('GHOST ROSTER PROMPT');
+    expect(getGhostRosterPrompt).not.toHaveBeenCalled();
     expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
     await handle.close();
   });

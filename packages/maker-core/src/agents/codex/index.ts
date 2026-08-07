@@ -322,6 +322,7 @@ function hasUnsafeForkRolloutPayload(line: string): boolean {
 function buildCodexDeveloperInstructions(parts: {
   makerMemoryRules?: string;
   contactsRules?: string;
+  ghostRosterPrompt?: string;
   runtimeSystemPrompt?: string;
   makerMemoryIndex?: string;
   userPrompt?: string;
@@ -330,6 +331,7 @@ function buildCodexDeveloperInstructions(parts: {
     MAKER_CODEX_SYSTEM_PROMPT_APPEND,
     parts.makerMemoryRules,
     parts.contactsRules,
+    parts.ghostRosterPrompt,
     parts.runtimeSystemPrompt,
     parts.makerMemoryIndex,
     parts.userPrompt,
@@ -4275,9 +4277,16 @@ export class CodexAgent extends BaseAgent {
         : contactsState === 'disabled'
           ? CONTACTS_RULES_DISABLED
           : '';
+    // 远端 Codex 的 workingDir 属于 SSH 主机，本地插件目录停用偏好无法可靠匹配；
+    // 远端 SSH remote-forward 只下发白名单 MCP，固定 cindy ghost server 不在其中，
+    // 因此与 Claude 远端路径一致地 fail-closed，不把召回清单注入到不可达会话。
+    const ghostRosterPrompt = opts.remoteHostId
+      ? ''
+      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
     const developerInstructions = buildCodexDeveloperInstructions({
       makerMemoryRules,
       contactsRules,
+      ghostRosterPrompt,
       runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
       userPrompt: opts.userPrompt,

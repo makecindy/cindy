@@ -865,6 +865,9 @@ export class Session {
     this.assertPermissionModeSupported(mode);
     this.permissionModeChangesInFlight += 1;
     const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      // The request may have queued before close() but reached the transport only after
+      // shutdown started. Re-check at the serialized side-effect boundary.
+      this.ensureActive();
       await this.handle.setPermissionMode!(mode);
       this.permissionModeStateValue = {
         mode,
@@ -893,6 +896,9 @@ export class Session {
     if (this.externalPermissionModeChangesInFlight > 0) return false;
     this.permissionModeChangesInFlight += 1;
     const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      // A matching restore can wait behind another mode change. Never apply it after
+      // close() has reserved transport shutdown.
+      this.ensureActive();
       const current = this.permissionModeStateValue;
       if (current.mode !== expected.mode || current.generation !== expected.generation) {
         return false;
@@ -912,6 +918,7 @@ export class Session {
   }
 
   private assertPermissionModeSupported(mode: PermissionMode): void {
+    this.ensureActive();
     if (!this.capabilities.permissionModes.some((m) => m.id === mode)) {
       throw new NotSupportedError(
         `permissionMode='${mode}'`,
