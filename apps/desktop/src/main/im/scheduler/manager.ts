@@ -1,0 +1,253 @@
+/** Dormant, provider-free coordinator. Discord Gateway wiring belongs to PR-B. */
+
+import { randomUUID } from 'node:crypto';
+
+import { isImSchedulerFrame, type SchedulerAdvertisementFrame } from './protocol';
+import { RuntimeGapSet } from './runtimeGaps';
+import {
+  isDesktopSchedulerPlatform,
+  selectIngressDevice,
+  type SchedulerChannelIdentity,
+  type SchedulerDevice,
+} from './state';
+import type { SchedulerDesktopDeviceSnapshot } from './deviceSnapshot';
+import type { SchedulerTransport, SchedulerTransportEvent } from './transport';
+
+export type SchedulerDecision =
+  | { state: 'active'; channel: SchedulerChannelIdentity; reason: 'elected' }
+  | { state: 'standby'; channel: SchedulerChannelIdentity | null; reason: SchedulerStandbyReason };
+
+export type SchedulerStandbyReason =
+  | 'stopped'
+  | 'relay-offline'
+  | 'not-owner'
+  | 'missing-binding'
+  | 'missing-snapshot'
+  | 'incomplete-peer-view'
+  | 'peer-won';
+
+interface PeerAdvertisement {
+  sentAt: number;
+  frame: SchedulerAdvertisementFrame;
+}
+
+export interface ImSchedulerManagerOptions {
+  transport: SchedulerTransport;
+  getLocalChannel: () => SchedulerChannelIdentity | null;
+  onDecision?: (decision: SchedulerDecision) => void;
+  nonceFactory?: () => string;
+}
+
+/**
+ * The manager owns only election state. It never starts, stops, or inspects a
+ * provider client, so creating this object cannot change existing IM behavior.
+ */
+export class ImSchedulerManager {
+  private readonly transport: SchedulerTransport;
+  private readonly getLocalChannel: () => SchedulerChannelIdentity | null;
+  private readonly onDecision?: (decision: SchedulerDecision) => void;
+  private readonly nonceFactory: () => string;
+  private readonly peers = new Map<string, PeerAdvertisement>();
+  private readonly confirmedPeers = new Set<string>();
+  private readonly runtimeGaps = new RuntimeGapSet();
+  private unsubscribe: (() => void) | null = null;
+  private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
+  private lastSnapshotObservedAt: number | null = null;
+  private discoveryNonce = '';
+  private started = false;
+  private decision: SchedulerDecision = { state: 'standby', channel: null, reason: 'stopped' };
+
+  constructor(options: ImSchedulerManagerOptions) {
+    this.transport = options.transport;
+    this.getLocalChannel = options.getLocalChannel;
+    this.onDecision = options.onDecision;
+    this.nonceFactory = options.nonceFactory ?? (() => randomUUID().replaceAll('-', ''));
+  }
+
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    this.unsubscribe = this.transport.subscribe((event) => this.handleEvent(event));
+    this.beginDiscoveryRound();
+    this.reconcile();
+  }
+
+  stop(): void {
+    if (!this.started) return;
+    this.started = false;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.publishDecision({ state: 'standby', channel: null, reason: 'stopped' });
+  }
+
+  /** Start a new round after an account or Discord binding change. */
+  resetDiscovery(): void {
+    if (!this.started) return;
+    this.snapshot = null;
+    this.lastSnapshotObservedAt = null;
+    this.beginDiscoveryRound();
+    this.reconcile();
+  }
+
+  getDecision(): SchedulerDecision {
+    return this.decision;
+  }
+
+  getRuntimeGaps(): RuntimeGapSet {
+    return this.runtimeGaps;
+  }
+
+  private handleEvent(event: SchedulerTransportEvent): void {
+    if (!this.started) return;
+    switch (event.type) {
+      case 'relay-status':
+        if (event.status === 'offline') {
+          this.snapshot = null;
+          this.peers.clear();
+          this.confirmedPeers.clear();
+        } else {
+          this.beginDiscoveryRound();
+        }
+        this.reconcile();
+        return;
+      case 'ownership':
+        if (event.owner) this.beginDiscoveryRound();
+        this.reconcile();
+        return;
+      case 'snapshot':
+        if (
+          event.snapshot &&
+          this.lastSnapshotObservedAt !== null &&
+          event.snapshot.observedAt < this.lastSnapshotObservedAt
+        ) {
+          // A clock rollback or delayed response must not revive an older
+          // account view after a newer snapshot has already been accepted.
+          this.snapshot = null;
+        } else {
+          this.snapshot = event.snapshot;
+          if (event.snapshot) this.lastSnapshotObservedAt = event.snapshot.observedAt;
+        }
+        this.beginDiscoveryRound();
+        this.reconcile();
+        return;
+      case 'peer-presence':
+        // Incremental presence is a signal to fetch a new full snapshot, not
+        // an authoritative replacement for the existing membership view.
+        this.snapshot = null;
+        if (!event.online || !isDesktopSchedulerPlatform(event.platform)) {
+          this.peers.delete(event.deviceId);
+          this.confirmedPeers.delete(event.deviceId);
+        } else {
+          this.beginDiscoveryRound();
+        }
+        this.reconcile();
+        return;
+      case 'push':
+        this.handlePush(event.sourceDeviceId, event.payload);
+    }
+  }
+
+  private handlePush(sourceDeviceId: string, payload: unknown): void {
+    if (!isImSchedulerFrame(payload)) return;
+    if (payload.kind === 'probe') {
+      this.sendAdvertisement(sourceDeviceId, payload.nonce);
+      return;
+    }
+    if (payload.inReplyTo !== this.discoveryNonce) return;
+    const previous = this.peers.get(sourceDeviceId);
+    if (previous && payload.sentAt < previous.sentAt) return;
+    this.confirmedPeers.add(sourceDeviceId);
+    this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
+    for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
+      if (runtime?.state === 'dirty') this.runtimeGaps.adopt(runtime);
+    }
+    this.reconcile();
+  }
+
+  private beginDiscoveryRound(): void {
+    this.discoveryNonce = this.nonceFactory();
+    this.peers.clear();
+    this.confirmedPeers.clear();
+    this.publishProbeToVisiblePeers();
+  }
+
+  private publishProbeToVisiblePeers(): void {
+    for (const peer of this.snapshot?.peers ?? []) {
+      this.transport.sendPush(peer.deviceId, {
+        kind: 'probe',
+        sentAt: Date.now(),
+        nonce: this.discoveryNonce,
+        channels: [],
+      });
+    }
+  }
+
+  private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {
+    const channel = this.getLocalChannel();
+    this.transport.sendPush(peerDeviceId, {
+      kind: 'advertisement',
+      sentAt: Date.now(),
+      channels: channel ? [channel] : [],
+      ...(inReplyTo ? { inReplyTo } : {}),
+    });
+  }
+
+  private reconcile(): void {
+    const channel = this.getLocalChannel();
+    if (!this.started) return;
+    if (this.transport.getStatus() !== 'online') {
+      this.publishDecision({ state: 'standby', channel, reason: 'relay-offline' });
+      return;
+    }
+    if (!this.transport.isOwner()) {
+      this.publishDecision({ state: 'standby', channel, reason: 'not-owner' });
+      return;
+    }
+    if (!channel) {
+      this.publishDecision({ state: 'standby', channel: null, reason: 'missing-binding' });
+      return;
+    }
+    if (!this.snapshot || this.snapshot.selfDeviceId !== this.transport.selfDeviceId) {
+      this.publishDecision({ state: 'standby', channel, reason: 'missing-snapshot' });
+      return;
+    }
+    if (this.snapshot.peers.some((peer) => !this.confirmedPeers.has(peer.deviceId))) {
+      this.publishDecision({ state: 'standby', channel, reason: 'incomplete-peer-view' });
+      return;
+    }
+
+    const devices: SchedulerDevice[] = [
+      {
+        deviceId: this.transport.selfDeviceId,
+        online: true,
+        platform: this.transport.platform,
+        channels: [channel],
+        lastSeenAt: this.snapshot.observedAt,
+      },
+      ...this.snapshot.peers.map((peer) => ({
+        deviceId: peer.deviceId,
+        online: true,
+        platform: peer.platform,
+        channels: this.peers.get(peer.deviceId)?.frame.channels ?? [],
+        lastSeenAt: this.peers.get(peer.deviceId)?.sentAt ?? 0,
+      })),
+    ];
+    const winner = selectIngressDevice('discord', channel.identity, devices);
+    this.publishDecision(
+      winner === this.transport.selfDeviceId
+        ? { state: 'active', channel, reason: 'elected' }
+        : { state: 'standby', channel, reason: 'peer-won' },
+    );
+  }
+
+  private publishDecision(decision: SchedulerDecision): void {
+    if (
+      this.decision.state === decision.state &&
+      this.decision.reason === decision.reason &&
+      this.decision.channel?.identity === decision.channel?.identity
+    )
+      return;
+    this.decision = decision;
+    this.onDecision?.(decision);
+  }
+}
