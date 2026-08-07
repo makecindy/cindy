@@ -43,6 +43,7 @@ vi.mock('../useFileChipContextMenu', () => ({
   useFileChipContextMenu: mocks.useFileChipContextMenu,
 }));
 
+import { SidebarHostSessionProvider } from '@/features/right-sidebar/lib/sidebarHostSession';
 import { TurnChangesCard } from '../TurnChangesCard';
 import type { TurnChangeSetSummary } from '../../../../shared/turnChangeSet';
 
@@ -155,7 +156,25 @@ describe('TurnChangesCard file actions', () => {
     expect(mocks.openTurnReview).toHaveBeenCalledWith(
       'session-1',
       ['change-1'],
-      { selectedDiffId: 'file-1' },
+      { selectedDiffId: 'file-1', hostSessionId: null },
+    );
+  });
+
+  it('routes review to the sidebar host bucket when embedded in the collab panel', () => {
+    // 协同面板里 worker 流内嵌于 lead 的 RSB tab:review tab 必须开到 lead 的
+    // 可见桶(hostSessionId),否则落进 worker 自己的桶,点了没有任何反应。
+    render(
+      <SidebarHostSessionProvider sessionId="lead-1">
+        <TurnChangesCard sessionId="session-1" changeSet={CHANGE_SET} />
+      </SidebarHostSessionProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /src\/test\.ts/ }));
+
+    expect(mocks.openTurnReview).toHaveBeenCalledWith(
+      'session-1',
+      ['change-1'],
+      { selectedDiffId: 'file-1', hostSessionId: 'lead-1' },
     );
   });
 

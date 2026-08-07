@@ -4477,7 +4477,6 @@
     "review": {
       "turn": {
         "title": "本条消息的变更",
-        "currentWorkspace": "当前工作区",
         "localOnly": "本条消息的精确变更暂不支持远程任务。",
         "partialNotice": "本条消息包含无法精确追踪的命令或工具写入；以下仅展示已精确捕获的部分，不能视为完整补丁。",
         "emptyTitle": "没有已记录的变更",

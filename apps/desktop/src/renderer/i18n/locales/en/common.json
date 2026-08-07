@@ -4479,7 +4479,6 @@
     "review": {
       "turn": {
         "title": "Changes from this message",
-        "currentWorkspace": "Current workspace",
         "localOnly": "Exact message changes are not available for remote sessions yet.",
         "partialNotice": "This message includes command or tool writes that could not be tracked exactly. Only the captured subset is shown; it is not a complete patch.",
         "emptyTitle": "No recorded changes",

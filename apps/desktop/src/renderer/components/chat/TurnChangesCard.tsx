@@ -12,6 +12,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { openTurnReview } from '@/features/right-sidebar/lib/openTurnReview';
+import { useSidebarHostSessionId } from '@/features/right-sidebar/lib/sidebarHostSession';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { toast } from '@/lib/toast';
@@ -123,9 +124,13 @@ export function TurnChangesCard({
     setApplying(false);
   }, [changeSet.id]);
 
+  // 内嵌在 RSB(协同 worker 面板)里时把 review tab 开到宿主(lead)的可见桶;
+  // 主实例 hostSessionId 为 null,openTurnReview 落到本会话桶,行为不变。
+  const hostSessionId = useSidebarHostSessionId();
   const openReview = (selectedDiffId?: string): void => {
     void openTurnReview(sessionId, [changeSet.id], {
       selectedDiffId: selectedDiffId ?? null,
+      hostSessionId,
     });
   };
 
