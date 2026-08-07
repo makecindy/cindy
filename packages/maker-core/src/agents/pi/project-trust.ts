@@ -1,5 +1,6 @@
 import type {
   PiProjectApprovalSnapshot,
+  PiProjectCanonicalPathEvidence,
   PiProjectDiscoveredResources,
   PiProjectIdentityResolution,
   PiProjectSettingsProjection,
@@ -77,6 +78,12 @@ function hasDotSegments(value: string): boolean {
   return value.split('/').some((segment) => segment === '.' || segment === '..');
 }
 
+function isCanonicalPathEvidence(value: unknown): value is PiProjectCanonicalPathEvidence {
+  if (typeof value !== 'object' || value === null) return false;
+  const evidence = value as Record<string, unknown>;
+  return typeof evidence.discoveredPath === 'string' && typeof evidence.canonicalPath === 'string';
+}
+
 export function piProjectKey(
   identity: Pick<PiProjectIdentityResolution, 'canonicalWorkingDir' | 'canonicalRepoRoot' | 'platform' | 'canonicalPathEncoding' | 'windowsCaseComparison'>,
 ): string | null {
@@ -119,18 +126,19 @@ function canonicalEligibleSkillPaths(
   identity: PiProjectIdentityResolution,
   discovered: PiProjectDiscoveredResources,
 ): readonly string[] {
-  const canonicalSkills = discovered.canonicalSkills;
-  if (!canonicalSkills || canonicalSkills.length !== discovered.skills.length || canonicalSkills.length === 0) return [];
+  const skillsEvidence = discovered.canonicalSkillEvidence;
+  if (!skillsEvidence || skillsEvidence.length !== discovered.skills.length || skillsEvidence.length === 0) return [];
+  if (skillsEvidence.some((evidence, index) => !isCanonicalPathEvidence(evidence) || evidence.discoveredPath !== discovered.skills[index])) return [];
   const repoRoot = identity.canonicalRepoRoot &&
     normalizePath(identity.canonicalRepoRoot, identity.platform, identity.windowsCaseComparison);
   if (!repoRoot) return [];
-  const normalizedSkills = canonicalSkills.map((skillPath) =>
-    normalizePath(skillPath, identity.platform, identity.windowsCaseComparison),
+  const normalizedSkills = skillsEvidence.map((evidence) =>
+    normalizePath(evidence.canonicalPath, identity.platform, identity.windowsCaseComparison),
   );
   const validSkills = normalizedSkills.filter((skillPath): skillPath is string => skillPath !== null);
   if (validSkills.length !== normalizedSkills.length || new Set(validSkills).size !== validSkills.length) return [];
   return validSkills.every((skillPath) => isPathWithinRoot(repoRoot, skillPath))
-    ? validSkills
+    ? skillsEvidence.map((evidence) => evidence.canonicalPath)
     : [];
 }
 
@@ -140,7 +148,7 @@ function canonicalEligibleSettingsPaths(
 ): readonly string[] {
   const settingsEvidence = discovered.canonicalSettings;
   if (!settingsEvidence || settingsEvidence.length !== discovered.settings.length || settingsEvidence.length === 0) return [];
-  if (settingsEvidence.some((evidence, index) => evidence.discoveredPath !== discovered.settings[index])) return [];
+  if (settingsEvidence.some((evidence, index) => !isCanonicalPathEvidence(evidence) || evidence.discoveredPath !== discovered.settings[index])) return [];
   const repoRoot = identity.canonicalRepoRoot &&
     normalizePath(identity.canonicalRepoRoot, identity.platform, identity.windowsCaseComparison);
   if (!repoRoot) return [];
@@ -150,7 +158,7 @@ function canonicalEligibleSettingsPaths(
   const validSettings = normalizedSettings.filter((settingsPath): settingsPath is string => settingsPath !== null);
   if (validSettings.length !== normalizedSettings.length || new Set(validSettings).size !== validSettings.length) return [];
   return validSettings.every((settingsPath) => isPathWithinRoot(repoRoot, settingsPath))
-    ? validSettings
+    ? settingsEvidence.map((evidence) => evidence.canonicalPath)
     : [];
 }
 

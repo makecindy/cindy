@@ -69,8 +69,10 @@ export type PiProjectApprovalSnapshot =
 
 export interface PiProjectDiscoveredResources {
   skills: readonly string[];
-  /** Host-realpath identities corresponding 1:1 to skills; required for eligibility. */
+  /** Legacy canonical skill paths are retained for additive compatibility but are not eligible evidence. */
   canonicalSkills?: readonly string[];
+  /** Host evidence pairing each discovered skill path with its realpath. */
+  canonicalSkillEvidence?: readonly PiProjectCanonicalPathEvidence[];
   settings: readonly string[];
   /** Host evidence pairing each discovered settings path with its realpath. */
   canonicalSettings?: readonly PiProjectCanonicalPathEvidence[];

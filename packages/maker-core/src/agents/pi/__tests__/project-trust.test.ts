@@ -19,7 +19,10 @@ const identity: PiProjectIdentityResolution = {
 
 const discovered: PiProjectDiscoveredResources = {
   skills: ['/repo/.pi/skills/a', '/repo/.agents/skills/b'],
-  canonicalSkills: ['/repo/.pi/skills/a', '/repo/.agents/skills/b'],
+  canonicalSkillEvidence: [
+    { discoveredPath: '/repo/.pi/skills/a', canonicalPath: '/repo/.pi/skills/a' },
+    { discoveredPath: '/repo/.agents/skills/b', canonicalPath: '/repo/.agents/skills/b' },
+  ],
   settings: ['/repo/.pi/settings.json'],
   canonicalSettings: [{ discoveredPath: '/repo/.pi/settings.json', canonicalPath: '/repo/.pi/settings.json' }],
   packages: ['/repo/.pi/package.json'],
@@ -83,11 +86,82 @@ describe('Pi project trust contract', () => {
     const result = evaluatePiProjectTrust({
       identity,
       approval: approval(),
-      discovered: { ...discovered, canonicalSkills: undefined },
+      discovered: {
+        ...discovered,
+        canonicalSkills: discovered.skills,
+        canonicalSkillEvidence: undefined,
+      },
       capabilities: { explicitSkills: true },
     });
     expect(result.resources.skills).toBe('discovered');
     expect(result.eligibleSkillPaths).toEqual([]);
+  });
+
+  it('rejects skill evidence whose discovered path does not match by position', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        canonicalSkillEvidence: [
+          { discoveredPath: '/outside/untrusted-skill', canonicalPath: '/repo/.pi/skills/a' },
+          { discoveredPath: '/repo/.agents/skills/b', canonicalPath: '/repo/.agents/skills/b' },
+        ],
+      },
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.resources.skills).toBe('discovered');
+    expect(result.eligibleSkillPaths).toEqual([]);
+  });
+
+  it('fails closed for malformed skill evidence supplied at the host boundary', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        canonicalSkillEvidence: [null, { discoveredPath: '/repo/.agents/skills/b', canonicalPath: '/repo/.agents/skills/b' }],
+      } as unknown as PiProjectDiscoveredResources,
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.resources.skills).toBe('discovered');
+    expect(result.eligibleSkillPaths).toEqual([]);
+  });
+
+  it('emits canonical I/O paths for an in-repo skill symlink target', () => {
+    const sourcePath = '/repo/.pi/skills/link';
+    const canonicalPath = '/repo/.agents/skills/target';
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        skills: [sourcePath],
+        canonicalSkillEvidence: [{ discoveredPath: sourcePath, canonicalPath }],
+      },
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.resources.skills).toBe('eligible');
+    expect(result.eligibleSkillPaths).toEqual([canonicalPath]);
+  });
+
+  it('maps a raw settings source path to its canonical I/O path', () => {
+    const sourcePath = '/repo/.pi/settings-link.json';
+    const canonicalPath = '/repo/.pi/settings.json';
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        settings: [sourcePath],
+        canonicalSettings: [{ discoveredPath: sourcePath, canonicalPath }],
+      },
+      capabilities: provenSettingsCapabilities,
+      settingsProjection: { sourcePath, values: { compaction: { reserveTokens: 1 } } },
+    });
+    expect(result.resources.settings).toBe('eligible');
+    expect(result.settingsProjection?.sourcePath).toBe(canonicalPath);
+    expect(result.eligibleSettingsPaths).toEqual([canonicalPath]);
   });
 
   it('rejects canonical skill paths that resolve outside the approved repo root', () => {
@@ -96,7 +170,10 @@ describe('Pi project trust contract', () => {
       approval: approval(),
       discovered: {
         ...discovered,
-        canonicalSkills: ['/outside/shared-skill', '/repo/.agents/skills/b'],
+        canonicalSkillEvidence: [
+          { discoveredPath: '/repo/.pi/skills/a', canonicalPath: '/outside/shared-skill' },
+          { discoveredPath: '/repo/.agents/skills/b', canonicalPath: '/repo/.agents/skills/b' },
+        ],
       },
       capabilities: { explicitSkills: true },
     });
@@ -110,7 +187,10 @@ describe('Pi project trust contract', () => {
       approval: approval(),
       discovered: {
         ...discovered,
-        canonicalSkills: ['/repo/../outside/shared-skill', '/repo/.agents/skills/b'],
+        canonicalSkillEvidence: [
+          { discoveredPath: '/repo/.pi/skills/a', canonicalPath: '/repo/../outside/shared-skill' },
+          { discoveredPath: '/repo/.agents/skills/b', canonicalPath: '/repo/.agents/skills/b' },
+        ],
       },
       capabilities: { explicitSkills: true },
     });
@@ -322,6 +402,53 @@ describe('Pi project trust contract', () => {
       approval: approval({ scopeKey: '//server/share/repo\0//server/share/repo/app' }),
       discovered,
     }).status).toBe('approved');
+  });
+
+  it.each([
+    {
+      label: 'drive',
+      canonicalRepoRoot: '//?/C:/Repo',
+      canonicalWorkingDir: '//?/C:/Repo/App',
+      scopeKey: 'c:/repo\0c:/repo/app',
+    },
+    {
+      label: 'UNC',
+      canonicalRepoRoot: '//?/UNC/Server/Share/Repo',
+      canonicalWorkingDir: '//?/UNC/Server/Share/Repo/App',
+      scopeKey: '//server/share/repo\0//server/share/repo/app',
+    },
+  ])('preserves extended-length %s I/O paths with trailing space/dot', ({ canonicalRepoRoot, canonicalWorkingDir, scopeKey }) => {
+    const skillPath = `${canonicalRepoRoot}/.pi/skills/skill `;
+    const settingsPath = `${canonicalRepoRoot}/.pi/settings.json.`;
+    const extendedResources: PiProjectDiscoveredResources = {
+      skills: [skillPath],
+      canonicalSkillEvidence: [{ discoveredPath: skillPath, canonicalPath: skillPath }],
+      settings: [settingsPath],
+      canonicalSettings: [{ discoveredPath: settingsPath, canonicalPath: settingsPath }],
+      packages: [],
+      extensions: [],
+    };
+    const extendedIdentity: PiProjectIdentityResolution = {
+      ...identity,
+      workingDir: canonicalWorkingDir,
+      canonicalWorkingDir,
+      canonicalRepoRoot,
+      platform: 'win32',
+      canonicalPathEncoding: 'utf16-lossless',
+      windowsCaseComparison: 'ordinal-insensitive',
+    };
+    const result = evaluatePiProjectTrust({
+      identity: extendedIdentity,
+      approval: approval({ scopeKey }),
+      discovered: extendedResources,
+      capabilities: { explicitSkills: true, ...provenSettingsCapabilities },
+      settingsProjection: { sourcePath: settingsPath, values: { compaction: { reserveTokens: 1 } } },
+    });
+    expect(result.resources.skills).toBe('eligible');
+    expect(result.eligibleSkillPaths).toEqual([skillPath]);
+    expect(result.resources.settings).toBe('eligible');
+    expect(result.settingsProjection?.sourcePath).toBe(settingsPath);
+    expect(result.eligibleSettingsPaths).toEqual([settingsPath]);
   });
 
   it('preserves literal POSIX canonical path bytes', () => {
@@ -669,7 +796,11 @@ describe('Pi project trust contract', () => {
     const second = evaluatePiProjectTrust({
       identity: { ...identity, canonicalWorkingDir: '/repo/other' },
       approval: approval({ scopeKey: '/repo\0/repo/other', revision: 'b' }),
-      discovered: { ...discovered, skills: ['/repo/other/.pi/skills/c'], canonicalSkills: ['/repo/other/.pi/skills/c'] },
+      discovered: {
+        ...discovered,
+        skills: ['/repo/other/.pi/skills/c'],
+        canonicalSkillEvidence: [{ discoveredPath: '/repo/other/.pi/skills/c', canonicalPath: '/repo/other/.pi/skills/c' }],
+      },
       capabilities: { explicitSkills: true },
     });
     expect(first.approvalRevision).toBe('a');
