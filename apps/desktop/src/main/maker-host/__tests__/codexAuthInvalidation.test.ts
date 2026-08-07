@@ -128,6 +128,13 @@ afterEach(() => {
 });
 
 describe('Codex system credential suppression marker', () => {
+  it('uses the domain-qualified Windows principal when tightening credential ACLs', async () => {
+    const { resolveWindowsAclPrincipal } = await import('../auth-adapters.js');
+
+    expect(resolveWindowsAclPrincipal({ USERDOMAIN: 'YOP', USERNAME: 'yop' })).toBe('YOP\\yop');
+    expect(resolveWindowsAclPrincipal({ USERNAME: 'local-user' })).toBe('local-user');
+  });
+
   it('user disconnect persists as reconcile suppression without surfacing an auth error', () => {
     const { codexHome, systemAuth, localAuth } = fixture();
     writeInvalidatedSystemCodexAuthMarker(

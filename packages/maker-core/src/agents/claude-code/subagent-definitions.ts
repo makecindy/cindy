@@ -329,12 +329,21 @@ async function projectAgentsDirs(workingDir: string): Promise<string[]> {
   if (!workingDir || !path.isAbsolute(workingDir)) return [];
   const dirs: string[] = [];
   let cur = workingDir;
+  let homeDir: string | null = null;
   try {
     cur = await fs.realpath(workingDir);
   } catch {
     /* 保持字面路径 */
   }
+  try {
+    homeDir = await fs.realpath(os.homedir());
+  } catch {
+    /* 无法解析 home 时保持既有的逐级扫描兜底 */
+  }
   for (;;) {
+    // `~/.claude` 是用户作用域，不是用户主目录下所有项目共享的项目作用域。
+    // 不在这里停下会把用户定义重复标成 project，且让临时目录测试受机器配置污染。
+    if (homeDir !== null && cur === homeDir) break;
     const candidate = path.join(cur, '.claude', 'agents');
     if (await isDirectory(candidate)) dirs.push(candidate);
     const parent = path.dirname(cur);
