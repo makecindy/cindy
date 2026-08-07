@@ -105,6 +105,12 @@ function classifyFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | '
   return { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' };
 }
 
+function statusForFailureCode(code: PiRuntimeCapabilityError['code']): 'unknown' | 'failed' {
+  return code === 'unsupported' || code === 'timeout' || code === 'process_unavailable'
+    ? 'unknown'
+    : 'failed';
+}
+
 function errorManifest(
   identity: { sessionId?: string; sdkSessionId?: string },
   generation: number,
@@ -142,7 +148,7 @@ export async function capturePiRuntimeCapabilityManifest(
     );
     if (!response || response.success !== true) {
       const failure = classifyFailure(typeof response?.error === 'string' ? response.error : 'rpc rejected');
-      return errorManifest(identity, generation, stage, failure, failure.code === 'unsupported' ? 'unknown' : 'failed');
+      return errorManifest(identity, generation, stage, failure, statusForFailureCode(failure.code));
     }
     const parsed = parsePiRuntimeCommands(response.data);
     if (!parsed.ok) {
@@ -162,9 +168,6 @@ export async function capturePiRuntimeCapabilityManifest(
     };
   } catch (error) {
     const failure = classifyFailure(error instanceof Error ? error.message : 'rpc failed');
-    const status = failure.code === 'unsupported' || failure.code === 'timeout' || failure.code === 'process_unavailable'
-      ? 'unknown'
-      : 'failed';
-    return errorManifest(identity, generation, stage, failure, status);
+    return errorManifest(identity, generation, stage, failure, statusForFailureCode(failure.code));
   }
 }

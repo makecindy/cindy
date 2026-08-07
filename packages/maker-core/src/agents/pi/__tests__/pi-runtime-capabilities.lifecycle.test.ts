@@ -12,6 +12,8 @@ const captured = vi.hoisted(() => ({
   }>,
   catalogs: {} as Record<string, unknown>,
   runtimeFailures: new Set<string>(),
+  runtimeDeferred: false,
+  runtimeRelease: undefined as (() => void) | undefined,
 }));
 
 vi.mock('../rpc-client.js', () => ({
@@ -40,6 +42,9 @@ vi.mock('../rpc-client.js', () => ({
       if (command.type === 'get_commands') {
         if (captured.runtimeFailures.has(this.state.sessionId)) {
           return { success: false, error: 'provider=/secret/path rejected' };
+        }
+        if (captured.runtimeDeferred) {
+          await new Promise<void>((resolve) => { captured.runtimeRelease = resolve; });
         }
         const data = captured.catalogs[this.state.sessionId] ?? { commands: [] };
         return { success: true, data };
@@ -72,6 +77,8 @@ describe('Pi runtime capability lifecycle', () => {
     captured.instances = [];
     captured.catalogs = {};
     captured.runtimeFailures = new Set();
+    captured.runtimeDeferred = false;
+    captured.runtimeRelease = undefined;
     home = mkdtempSync(path.join(tmpdir(), 'pi-runtime-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-runtime-cwd-'));
   });
@@ -99,12 +106,15 @@ describe('Pi runtime capability lifecycle', () => {
     const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
     const changes: unknown[] = [];
     const dispose = handle.onRuntimeCapabilitiesChange?.((manifest) => changes.push(manifest));
-    expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', sessionId: 's1', commands: [{ name: 'skill:s1' }] });
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', sessionId: 's1', commands: [{ name: 'skill:s1' }] });
+    });
     expect(captured.instances[0]?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(1);
     await handle.close();
     expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
-    expect(changes).toHaveLength(1);
-    expect(changes[0]).toBeUndefined();
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:s1' }] });
+    expect(changes[1]).toBeUndefined();
     dispose?.();
   });
 
@@ -124,11 +134,26 @@ describe('Pi runtime capability lifecycle', () => {
   it('does not block normal prompt dispatch when get_commands fails', async () => {
     captured.runtimeFailures.add('s1');
     const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
-    expect(handle.getRuntimeCapabilities?.()).toMatchObject({
-      status: 'failed',
-      error: { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' },
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+        status: 'failed',
+        error: { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' },
+      });
     });
-    await expect(handle.send({ content: 'hello' })).resolves.toBeUndefined();
+    await expect(handle.send({ type: 'user', content: 'hello' })).resolves.toBeUndefined();
+    await handle.close();
+  });
+
+  it('does not block ready while capability discovery is pending', async () => {
+    captured.catalogs.s1 = catalog('skill:s1');
+    captured.runtimeDeferred = true;
+    const start = new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    const handle = await start;
+    expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
+    captured.runtimeRelease?.();
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:s1' }] });
+    });
     await handle.close();
   });
 
@@ -140,8 +165,10 @@ describe('Pi runtime capability lifecycle', () => {
       agent.startSession({ sessionId: 's1', workingDir: cwd, model: 'm' }),
       agent.startSession({ sessionId: 's2', workingDir: cwd, model: 'm' }),
     ]);
-    expect(first.getRuntimeCapabilities?.()?.commands[0]?.name).toBe('skill:s1');
-    expect(second.getRuntimeCapabilities?.()?.commands[0]?.name).toBe('skill:s2');
+    await vi.waitFor(() => {
+      expect(first.getRuntimeCapabilities?.()?.commands[0]?.name).toBe('skill:s1');
+      expect(second.getRuntimeCapabilities?.()?.commands[0]?.name).toBe('skill:s2');
+    });
     const before = captured.instances.map((instance) => instance.requests.length);
     await agent.listAgentSkills({ workingDir: cwd });
     expect(captured.instances.map((instance) => instance.requests.length)).toEqual(before);
@@ -156,14 +183,25 @@ describe('Pi runtime capability lifecycle', () => {
     const instance = captured.instances[0]!;
     expect(instance.requests.filter((request) => request.type === 'switch_session')).toHaveLength(1);
     expect(instance.requests.filter((request) => request.type === 'get_commands')).toHaveLength(1);
-    expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:resumed' }] });
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:resumed' }] });
+    });
     await handle.close();
 
     captured.catalogs[''] = catalog('skill:fork');
+    captured.catalogs.forked = catalog('skill:fork');
     const fork = await new PiAgent(deps()).forkSdkSession({
       sourceSdkSessionId: '/mock/source.jsonl', upToMessageId: undefined, workingDir: cwd,
     });
-    expect(fork.runtimeCapabilities).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:fork' }] });
-    expect(captured.instances.at(-1)?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(1);
+    expect(fork.runtimeCapabilities).toBeUndefined();
+    expect(captured.instances.at(-1)?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(0);
+
+    const forkedHandle = await new PiAgent(deps()).startSession({
+      sessionId: 'forked', workingDir: cwd, model: 'm', resumeSessionId: fork.newSdkSessionId,
+    });
+    await vi.waitFor(() => {
+      expect(forkedHandle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:fork' }] });
+    });
+    await forkedHandle.close();
   });
 });

@@ -426,6 +426,9 @@ export class PiAgent extends BaseAgent {
       // pi 原生 compact RPC:手动压缩(可带聚焦指令,调 LLM 生成摘要)。
       // 斜杠转义后用户无法手输 /compact,此能力是 pi 会话手动压缩的唯一入口。
       manualCompact: { supported: true },
+      // Pi 的 get_commands runtime catalog 通过 per-session handle 查询；
+      // manifest 本身在 ready/fork 后异步采集，暂不可用不代表能力不支持。
+      runtimeCapabilities: { supported: true },
     };
   }
 
@@ -1521,7 +1524,10 @@ export class PiAgent extends BaseAgent {
       // get_state is the ready boundary. Capture exactly once after the final
       // fresh/resumed runtime has been selected; list/customization calls never
       // trigger this RPC.
-      await refreshRuntimeCapabilities(runtimeCaptureStage);
+      // Capability discovery is optional and must not delay session creation.
+      // The ready boundary has selected the final Pi session identity; publish
+      // the result later through the per-session query/listener contract.
+      void refreshRuntimeCapabilities(runtimeCaptureStage);
 
       // plan 镜像与 pi 持久态对齐(resume 关键):pi 的 plan-mode 扩展在 session_start 会从
       // session entry 自恢复 planModeEnabled,但不发 notify。若镜像固定为 false 而 pi 实为 true,
@@ -2048,7 +2054,10 @@ export class PiAgent extends BaseAgent {
         if (!replacement) throw new Error('pi rewind replacement session path unavailable');
         sdkSessionId = replacement;
         queue.push({ type: 'session_id', data: replacement, source: 'pi' });
-        await refreshRuntimeCapabilities('fork');
+        // The Pi session has already switched to the replacement file. Do not
+        // make rewind wait for optional discovery; the generation fence keeps
+        // this asynchronous refresh from publishing stale data.
+        void refreshRuntimeCapabilities('fork');
         return { sdkSessionId: replacement };
       },
 
@@ -2302,20 +2311,16 @@ export class PiAgent extends BaseAgent {
           );
       }
 
-      const runtimeCapabilities = await capturePiRuntimeCapabilityManifest(
-        proc,
-        { sdkSessionId: newPath },
-        1,
-        'fork',
-      );
-
       log.info('pi forkSdkSession ◀', {
         source: opts.sourceSdkSessionId,
         newSdkSessionId: newPath,
         tailTurnsToDrop: tailDrop,
       });
       // uuidMap 空:与 Codex 一致,pi agentMeta 不存 SDK message uuid。
-      return { newSdkSessionId: newPath, uuidMap: new Map(), runtimeCapabilities };
+      // This short-lived control-plane process is closed immediately. The
+      // newly created live session will capture its own authoritative catalog
+      // at ready; do not hold this fork path for an optional 5s RPC timeout.
+      return { newSdkSessionId: newPath, uuidMap: new Map() };
     } finally {
       await proc.close();
       // 清理隔离的 fork 家目录(只含 models.json;新分支 session 文件在共享 sessions,不受影响)。

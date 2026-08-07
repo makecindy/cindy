@@ -84,5 +84,21 @@ describe('Pi runtime capability parsing', () => {
       'switch_session',
     );
     expect(failed).toMatchObject({ status: 'failed', error: { stage: 'switch_session', code: 'rpc_failed' } });
+
+    const rejectedTimeout = await capturePiRuntimeCapabilityManifest(
+      { request: async () => ({ type: 'response', command: 'get_commands', success: false, error: 'timeout waiting for get_commands' }) },
+      { sessionId: 's1' },
+      3,
+      'ready',
+    );
+    expect(rejectedTimeout).toMatchObject({ status: 'unknown', error: { code: 'timeout' } });
+
+    const rejectedExit = await capturePiRuntimeCapabilityManifest(
+      { request: async () => ({ type: 'response', command: 'get_commands', success: false, error: 'process already exited' }) },
+      { sessionId: 's1' },
+      4,
+      'ready',
+    );
+    expect(rejectedExit).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
   });
 });
