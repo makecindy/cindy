@@ -529,7 +529,12 @@ import {
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
   providerRouteRequiresExplicitSelection,
+  type OrcaWorkerProviderRoutingContext,
 } from './orcaWorkerCreationService.js';
+import {
+  resolveSendToSessionExecutionConfig,
+  type SendToSessionExecutionOverrides,
+} from './sendToSessionExecutionConfig.js';
 import { registerOrcaWorkerControlHandlers } from './orcaWorkerControlHandlers.js';
 import {
   clearOrcaMcpHydrated,
@@ -1307,6 +1312,10 @@ type SendToSessionInternalResult =
       targetLastUserSendAt: string | null;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
       worktreePath?: string | null;
+      model?: string;
+      effort?: SendToSessionCreateDefaults['effort'] | null;
+      fastMode?: boolean;
+      providerId?: string | null;
     }
   | {
       ok: false;
@@ -1317,6 +1326,8 @@ type SendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        | 'BUDGET_MODEL_REQUIRES_API_MODE'
+        | 'PROVIDER_ROUTE_UNAVAILABLE'
         // create 分支专用:dispatcher 无 session 上下文时无法继承配置新建。
         | 'LEAD_NOT_SUPPORTED'
         // create + useWorktree 专用:workingDir 不是 git 仓库 / git 未装 / worktree 创建失败。
@@ -1340,6 +1351,8 @@ interface OrcaCollabService {
     useWorktree?: boolean;
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
+    /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
+    execution?: SendToSessionExecutionOverrides;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
     createDefaults?: SendToSessionCreateDefaults;
   }) => Promise<SendToSessionInternalResult>;
@@ -6748,6 +6761,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     useWorktree?: boolean;
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
+    /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
+    execution?: SendToSessionExecutionOverrides;
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
@@ -6764,6 +6779,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       title,
       useWorktree,
       workingDir: workingDirOverride,
+      execution: executionOverrides,
       onAccepted,
       onAcceptedRollback,
       origin,
@@ -6831,6 +6847,66 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
             resolvedWorkDir = checked.dir;
           }
+          const [row] = await db
+            .select()
+            .from(sessions)
+            .where(eq(sessions.id, dispatcherSessionId))
+            .limit(1);
+          const inheritedBase: SendToSessionCreateDefaults = {
+            agentKind: meta.agentKind,
+            workingDir: resolvedWorkDir,
+            // 覆盖目录必有真实项目目录 → 归 project 工作区(标题/侧栏分组按项目
+            // 语义走);未覆盖时保持缺省继承,行为不变。
+            ...(workingDirOverride !== undefined ? { workspaceKind: 'project' as const } : {}),
+            model: meta.model,
+            effort: (row?.effort ?? undefined) as SendToSessionCreateDefaults['effort'],
+            fastMode: !!row?.fastMode,
+            providerId: row?.providerId,
+            // working_dir 覆盖时强制继承来源会话的权限档(review 反馈):把新目录
+            // 以 Full access 打开是相对 dispatcher 的权限升级,跨项目 handoff
+            // 不应隐式发生;未覆盖时保持既有缺省(bypassPermissions)不变。
+            permissionMode:
+              inheritSourcePermissionMode || workingDirOverride !== undefined
+                ? permissionModeOrAsk(row?.permissionMode)
+                : 'bypassPermissions',
+          };
+          const hasExecutionOverrides = executionOverrides !== undefined && (
+            executionOverrides.agentKind !== undefined
+            || executionOverrides.model !== undefined
+            || executionOverrides.effort !== undefined
+            || executionOverrides.fastMode !== undefined
+          );
+          if (hasExecutionOverrides) {
+            const targetAgent = executionOverrides.agentKind ?? inheritedBase.agentKind;
+            const resolvedExecution = resolveSendToSessionExecutionConfig({
+              source: {
+                agentKind: inheritedBase.agentKind,
+                model: inheritedBase.model,
+                effort: inheritedBase.effort,
+                fastMode: !!inheritedBase.fastMode,
+                providerId: inheritedBase.providerId,
+              },
+              overrides: executionOverrides,
+              availableModels: maker.getCapabilities(targetAgent).availableModels,
+              providerRouting: await getProviderRoutingContext(),
+              hasCindyAiApiKey: readClaudeApiKey() != null,
+            });
+            if (!resolvedExecution.ok) {
+              return {
+                ok: false,
+                errorCode: resolvedExecution.errorCode,
+                message: resolvedExecution.message,
+              };
+            }
+            inherited = {
+              ...inheritedBase,
+              ...resolvedExecution.config,
+            };
+          } else {
+            inherited = inheritedBase;
+          }
+          // 所有可能提前失败的 workingDir / 执行配置校验完成后才创建 worktree，
+          // 避免非法 agent/model/effort/Fast 组合留下无主目录与 store 绑定。
           // useWorktree:为新 session 预建正规 session worktree(与 UI 新会话勾选
           // worktree 同类:worktreeStore 绑定 + 关闭时 auto-stash 清理),新 session 的
           // id 必须用预生成的那个(worktree 绑定已按它登记)。失败硬报 WORKTREE_UNAVAILABLE
@@ -6862,29 +6938,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
             handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta };
           }
-          const [row] = await db
-            .select()
-            .from(sessions)
-            .where(eq(sessions.id, dispatcherSessionId))
-            .limit(1);
-          inherited = {
-            agentKind: meta.agentKind,
-            workingDir: resolvedWorkDir,
-            // 覆盖目录必有真实项目目录 → 归 project 工作区(标题/侧栏分组按项目
-            // 语义走);未覆盖时保持缺省继承,行为不变。
-            ...(workingDirOverride !== undefined ? { workspaceKind: 'project' as const } : {}),
-            model: meta.model,
-            effort: (row?.effort ?? undefined) as SendToSessionCreateDefaults['effort'],
-            fastMode: !!row?.fastMode,
-            providerId: row?.providerId,
-            // working_dir 覆盖时强制继承来源会话的权限档(review 反馈):把新目录
-            // 以 Full access 打开是相对 dispatcher 的权限升级,跨项目 handoff
-            // 不应隐式发生;未覆盖时保持既有缺省(bypassPermissions)不变。
-            permissionMode:
-              inheritSourcePermissionMode || workingDirOverride !== undefined
-                ? permissionModeOrAsk(row?.permissionMode)
-                : 'bypassPermissions',
-          };
         } else {
           if (useWorktree) {
             return {
@@ -6975,6 +7028,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetTitle: newTitle,
           targetLastUserSendAt: null,
           worktreePath: handoffWorktree?.meta.path ?? null,
+          model: inherited.model,
+          effort: inherited.effort ?? null,
+          fastMode: !!inherited.fastMode,
+          providerId: inherited.providerId ?? null,
         };
       } catch (err) {
         if (createdPreviewStarted && createdPreviewSessionId && createdPreviewClientId) {
@@ -8171,6 +8228,68 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   orcaTeamServiceForEvents = orcaTeamService;
 
+  async function getProviderRoutingContext(): Promise<OrcaWorkerProviderRoutingContext> {
+    const catalog = getDesktopSelectableCatalog();
+    const views = await getDesktopProviderService().listProviders({
+      allowSideEffects: true,
+      catalog,
+    });
+    const modelRegistry = catalog.modelRegistry;
+    // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
+    // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
+    // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
+    // create_worker / send_to_session 点名它们会在创建前结构化失败，而不是静默
+    // 路由过去。停用的供应商已在 connectedProvidersForAgent(suspended) 一层出局。
+    // models/fastModels/effortMetaByModel 是两个创建入口唯一能看到的 provider 维度
+    // 快照；同 id 模型跨来源的能力可能分叉，不能只看 Maker 的拍平首见条目。
+    const routableModels = (provider: ProviderView, agent: AgentKind) =>
+      (provider.models[agent] ?? []).filter((model) =>
+        isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
+      );
+    const availabilityFor = (agent: AgentKind) =>
+      connectedProvidersForAgent(views, agent).map((provider) => {
+        const models = routableModels(provider, agent);
+        const registryIdentityByModel = Object.fromEntries(
+          models.flatMap((model) => {
+            const matched = findModelRegistryRoute(
+              modelRegistry,
+              provider.id,
+              model.id,
+              agent === 'pi' ? undefined : agent,
+            );
+            return matched ? [[model.id, matched.entry.id]] : [];
+          }),
+        );
+        return {
+          id: provider.id,
+          name: provider.name,
+          models: models.map((model) => model.id),
+          registryIdentityByModel,
+          fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
+          effortMetaByModel: Object.fromEntries(
+            models.map((model) => [
+              model.id,
+              { efforts: model.efforts, defaultEffort: model.defaultEffort },
+            ]),
+          ),
+          requiresExplicitRoute: providerRouteRequiresExplicitSelection(
+            provider.routing[agent]?.authStrategy,
+          ),
+          chatBridgedCodex:
+            agent === 'codex' && provider.routing[agent]?.wireProtocol === 'openai-chat',
+        };
+      });
+    return {
+      availability: {
+        'claude-code': availabilityFor('claude-code'),
+        codex: availabilityFor('codex'),
+        pi: availabilityFor('pi'),
+      },
+      resolveDefaultProviderIdForModel: (agent, model) =>
+        effectiveSourceIdForModel(views, null, model, agent),
+    };
+  }
+
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
     getActiveTeamByLead,
     listWorkersByLead,
@@ -8202,78 +8321,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
-    getProviderRoutingContext: async () => {
-      const catalog = getDesktopSelectableCatalog();
-      const views = await getDesktopProviderService().listProviders({
-        allowSideEffects: true,
-        catalog,
-      });
-      const modelRegistry = catalog.modelRegistry;
-      // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
-      // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
-      // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
-      // create_worker 点名它们会走既有的 INVALID_PARAMS / NO_PROVIDER 拒绝路径,
-      // 而不是静默路由过去。停用的供应商已在 connectedProvidersForAgent(suspended)
-      // 一层出局。isModelSelectableForNewRoute 同时收口 chat / disabled / retired，
-      // 这里的 models/fastModels/effortMetaByModel 都是
-      // orcaWorkerCreationService 唯一能看到的 provider 快照 —— 一旦某个非聊天
-      // mode 的模型混进这份 id 清单,service 内所有 `provider.models.includes(id)`
-      // 式的 preflight 都只按 id 存在与否放行,永远不会知道这条模型其实是图片/
-      // 语音端点(mode 信息在这一步已经被拍平丢弃),必须在这里先过滤,不能指望
-      // 下游 service 补(2026-07 review 第 16 轮:MCP create_worker / 缓存默认
-      // 路由都走这条快照,不经过 renderer 侧选择器的过滤)。
-      const routableModels = (provider: ProviderView, agent: AgentKind) =>
-        (provider.models[agent] ?? []).filter((model) =>
-          isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
-        );
-      const availabilityFor = (agent: AgentKind) =>
-        connectedProvidersForAgent(views, agent).map((provider) => {
-          const models = routableModels(provider, agent);
-          const registryIdentityByModel = Object.fromEntries(
-            models.flatMap((model) => {
-              const matched = findModelRegistryRoute(
-                modelRegistry,
-                provider.id,
-                model.id,
-                agent === 'pi' ? undefined : agent,
-              );
-              return matched ? [[model.id, matched.entry.id]] : [];
-            }),
-          );
-          return {
-            id: provider.id,
-            name: provider.name,
-            models: models.map((model) => model.id),
-            registryIdentityByModel,
-            // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
-            fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
-            // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。
-            effortMetaByModel: Object.fromEntries(
-              models.map((model) => [
-                model.id,
-                { efforts: model.efforts, defaultEffort: model.defaultEffort },
-              ]),
-            ),
-            requiresExplicitRoute: providerRouteRequiresExplicitSelection(
-              provider.routing[agent]?.authStrategy,
-            ),
-            // chat-bridged codex 供应商标记 (SSH 远端 worker 兼容闸用,
-            // 见 orcaWorkerCreationService R23 P2 校验;wireProtocol 仅
-            // codex 侧存在, 其他 agent 恒 false)。
-            chatBridgedCodex:
-              agent === 'codex' && provider.routing[agent]?.wireProtocol === 'openai-chat',
-          };
-        });
-      return {
-        availability: {
-          'claude-code': availabilityFor('claude-code'),
-          codex: availabilityFor('codex'),
-          pi: availabilityFor('pi'),
-        },
-        resolveDefaultProviderIdForModel: (agent, model) =>
-          effectiveSourceIdForModel(views, null, model, agent),
-      };
-    },
+    getProviderRoutingContext,
     readClaudeApiKey,
     reserveWorkerCreation,
     renewWorkerCreationReservation,

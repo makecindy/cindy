@@ -27,6 +27,14 @@ export type SendToSessionCallback = (params: {
   useWorktree?: boolean;
   /** create 模式可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
   workingDir?: string;
+  /** create 模式可选:显式目标 Agent；缺省继承 dispatcher。jump 忽略。 */
+  agentKind?: ControlWorkerAgent;
+  /** create 模式可选:显式目标模型；缺省继承 dispatcher。jump 忽略。 */
+  model?: string;
+  /** create 模式可选:显式推理强度；缺省继承 dispatcher。jump 忽略。 */
+  effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
+  fast?: boolean;
 }) => Promise<
   ControlResult<
     {
@@ -37,12 +45,18 @@ export type SendToSessionCallback = (params: {
       targetLastUserSendAt: string | null;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
       worktreePath?: string | null;
+      model?: string;
+      effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
+      fastMode?: boolean;
+      providerId?: string | null;
     },
     | "NOT_FOUND"
     | "ARCHIVED"
     | "DELETED"
     | "BUSY"
     | "AGENT_NOT_READY"
+    | "BUDGET_MODEL_REQUIRES_API_MODE"
+    | "PROVIDER_ROUTE_UNAVAILABLE"
     | "INVALID_ARGS"
     | "LEAD_NOT_SUPPORTED"
     | "WORKTREE_UNAVAILABLE"
@@ -57,15 +71,16 @@ export interface SendToSessionDeps {
   sendToSession: SendToSessionCallback;
 }
 
-// 工具描述原样保留(含第一段「不要用于开协同」⚠️ 警告——本次迁移不改 create 语义)。
 // 这是 LLM 点进 handoff 类目、看到本工具后的行为说明;选类目阶段的协同规避另见
 // lizi_xdtHelperMcpServer.ts 的 D_LIST_TOOLS(handoff 类目介绍)。
 const DESCRIPTION = [
-  '⚠️【不要用于"开协同 / 多 worker"】用户要"开协同 / 多 agent / 派个 worker 帮我做 X / 拉个 agent review"等诉求时, 用 cindy_orca 的 start_team + create_worker(create_worker 支持 agent / model / effort / initial_task, 一步建 worker 并派活), 不要用本工具。本工具 create 模式产出的是独立 session: 不进协同分组(不在 Lead 右侧的 worker 栏)、且只能克隆当前 session 的 agent / model, 无法指定 worker 用 codex 或某个模型 —— 拿它"开协同"会让需求被静默吞掉。本工具仅供 skill 把外部业务对象(issue / jira / pr)绑定到专属 session。',
+  '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
-  "- 不传 target_session_id → create:为业务对象新建一个专属 session(继承当前 session 的 workingDir / model / effort / fastMode),投递首条消息,wake_kind 返 created,并在返回里回传新建的 target_session_id 供调用方建立绑定。可加 working_dir 把新 session 落到另一个项目目录(见下),可加 use_worktree=true 让新 session 在自己的独立 git worktree 里工作(见下)。",
+  "- 不传 target_session_id → create:为业务对象新建一个专属 session。workingDir / Agent / model / effort / Fast 缺省继承当前 session；可用 agent_kind / model / effort / fast 显式覆盖目标执行配置。host 会在创建前按目标 Agent 的模型能力校验，非法组合结构化失败，不静默换模型。wake_kind 返 created,并回传 target_session_id 供调用方建立绑定。",
+  "",
+  "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。完全不传这些字段时保持原有 dispatcher 继承行为。jump 模式忽略这些字段，不修改既有 session。",
   "",
   "【working_dir(仅 create 模式)】缺省新 session 继承当前 session 的 workingDir;传 working_dir(绝对路径,目录须已存在)可把新 session 直接落到另一个项目目录——「从项目 A 的对话把任务 handoff 到项目 B 的全新对话」一次调用完成,无需先在 B 里找一个旧对话中转。与 use_worktree 组合时,worktree 的 base git 仓库从 working_dir 解析。路径不是绝对路径 / 不存在 / 不是目录 → 返 INVALID_ARGS(message 带原因)。jump 模式忽略此参数。",
   "",
@@ -134,6 +149,31 @@ export function registerSendToSessionTool(
         .describe(
           "仅 create 模式可选:新 session 的工作目录(绝对路径,目录须已存在)。缺省继承当前 session 的 workingDir;用于把任务 handoff 到另一个项目目录的全新对话。不合法返 INVALID_ARGS。jump 模式忽略。",
         ),
+      agent_kind: z
+        .enum(["claude-code", "codex", "pi"])
+        .optional()
+        .describe(
+          "仅 create 模式可选:目标 Agent/harness。缺省继承 dispatcher；jump 模式忽略。",
+        ),
+      model: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "仅 create 模式可选:目标模型精确 id。缺省继承 dispatcher；与目标 Agent/provider 不匹配时创建前失败，不静默降级。jump 模式忽略。",
+        ),
+      effort: z
+        .enum(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+        .optional()
+        .describe(
+          "仅 create 模式可选:目标模型推理强度。按实际 provider+model 支持档位校验；jump 模式忽略。",
+        ),
+      fast: z
+        .boolean()
+        .optional()
+        .describe(
+          "仅 create 模式可选:Fast 模式开关。目标 Agent/provider/model 不支持时创建前失败；jump 模式忽略。",
+        ),
     },
     handler: async ({
       target_session_id,
@@ -141,6 +181,10 @@ export function registerSendToSessionTool(
       title,
       use_worktree,
       working_dir,
+      agent_kind,
+      model,
+      effort,
+      fast,
     }) => {
       const ctx = deps.getSessionContext();
       const result = await deps.sendToSession({
@@ -150,6 +194,10 @@ export function registerSendToSessionTool(
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,
+        ...(agent_kind !== undefined ? { agentKind: agent_kind } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        ...(fast !== undefined ? { fast } : {}),
       });
 
       if (!result.ok) {
@@ -169,6 +217,10 @@ export function registerSendToSessionTool(
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
         worktree_path: result.worktreePath ?? null,
+        ...(result.model !== undefined ? { model: result.model } : {}),
+        ...(result.effort !== undefined ? { effort: result.effort } : {}),
+        ...(result.fastMode !== undefined ? { fast_mode: result.fastMode } : {}),
+        ...(result.providerId !== undefined ? { provider_id: result.providerId } : {}),
       });
     },
   });

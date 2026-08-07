@@ -41,6 +41,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useLocale', () => ({
+  useLocale: () => ({ locale: 'en', effectiveLocale: 'en', setLocale: vi.fn() }),
+}));
+
 vi.mock('@/hooks/useUpdateStatus', () => ({
   useUpdateStatus: () => updateStatus.current,
 }));
