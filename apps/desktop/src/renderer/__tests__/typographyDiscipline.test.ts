@@ -33,11 +33,11 @@ import { describe, expect, it } from 'vitest';
  *     `*` 起头行仅在**非选择器形态**时按 jsdoc 跳过(`* {` / `*{` 照常受检)。
  *  6. 同一行 / 同一文件多个违规逐个计数(occurrence 级)—— 在已豁免文件里
  *     追加新违规同样会红。
- *  7. numeric 白名单镜像断言覆盖规范正本 DESIGN.md §3 与三处权威来源代码:
- *     tailwind.config.ts fontSize ↔ globals.css 默认值 ↔ useFontSettings.ts
- *     UI_TEXT_TOKEN_SIZES;lib/utils.ts 的 tailwind-merge 字号组另作消费端
- *     一致性校验,不计入镜像。SCALED_TAILWIND_TOKENS 只负责语义类运行时缩放,
- *     与 numeric 白名单无关,不计入任何计数。
+ *  7. 镜像检查覆盖规范正本(DESIGN.md §3 白名单)与三处权威来源代码
+ *     (tailwind.config.ts fontSize / globals.css `--text-<n>` /
+ *     useFontSettings.ts `UI_TEXT_TOKEN_SIZES`);另单独校验消费端
+ *     `lib/utils.ts` tailwind-merge 字号去重组的一致性。SCALED_TAILWIND_TOKENS
+ *     只负责语义类运行时缩放,与 numeric 白名单无关,不计入任何计数。
  *     配置中仍保留 xl..5xl 语义映射(源码零使用),不可简单删除:它们挂在
  *     theme.extend 下,删除会静默回退到不跟随用户缩放的 Tailwind 默认值;
  *     守卫在源码侧拒绝 xl..9xl,配置清理留待后续改成显式 numeric 档位。
@@ -76,7 +76,7 @@ const ROOT = join(__dirname, '..', '..', '..');
 const SCAN_DIR = join(ROOT, 'src');
 const DESIGN_MD = join(ROOT, '..', '..', 'docs', 'design-rules', 'DESIGN.md');
 
-/** DESIGN.md §3 桌面 UI 字号白名单(镜像检查会与文档、config、CSS 变量互验)。 */
+/** DESIGN.md §3 桌面 UI 字号白名单(镜像检查覆盖规范正本与三处权威来源)。 */
 const SIZE_WHITELIST = [10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28] as const;
 const SIZE_SET = new Set<number>(SIZE_WHITELIST);
 const SEMANTIC_TOKEN_VALUES = {
@@ -113,7 +113,7 @@ interface Exemption {
 }
 
 const EXEMPTIONS: Exemption[] = [
-  // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五处形态
+  // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五种形态
   // (238 直接字面量、290 filled/error 三元、300/310 focus/blur style 赋值、748 内联 style)。
   {
     file: 'src/renderer/components/login/LoginControls.tsx',
@@ -574,7 +574,7 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     expect(exemptionDrift).toEqual([]);
   });
 
-  it('mirrors numeric ladder from the spec through authoritative sources and checks the consumer', () => {
+  it('mirrors the size ladder across DESIGN.md and the three authoritative code sources', () => {
     const expected = [...SIZE_WHITELIST].sort((a, b) => a - b);
     const expectedSemantic = { xs: 12, sm: 14, base: 16, lg: 18 };
 
@@ -644,13 +644,6 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       '5xl': 48,
     });
 
-    const mergeUtils = readFileSync(join(ROOT, 'src/renderer/lib/utils.ts'), 'utf8');
-    const mergeBlock = /font-size'[\s\S]*?text:\s*\[([^\]]+)\]/.exec(mergeUtils)?.[1] ?? '';
-    const mergeNumeric = [...mergeBlock.matchAll(/['"](\d+)['"]/g)]
-      .map((m) => Number(m[1]))
-      .sort((a, b) => a - b);
-    expect(mergeNumeric).toEqual(expected);
-
     // DESIGN.md §3「桌面 UI 字号白名单」小节的两个 {…} 集合。
     const design = readFileSync(DESIGN_MD, 'utf8');
     const section = design.split('### 桌面 UI 字号白名单')[1]?.split('###')[0] ?? '';
@@ -664,6 +657,16 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       )
       .sort((a, b) => a - b);
     expect(docTiers).toEqual(expected);
+  });
+
+  it('keeps the tailwind-merge font-size consumer in sync', () => {
+    const expected = [...SIZE_WHITELIST].sort((a, b) => a - b);
+    const mergeUtils = readFileSync(join(ROOT, 'src/renderer/lib/utils.ts'), 'utf8');
+    const mergeBlock = /font-size'[\s\S]*?text:\s*\[([^\]]+)\]/.exec(mergeUtils)?.[1] ?? '';
+    const mergeNumeric = [...mergeBlock.matchAll(/['"](\d+)['"]/g)]
+      .map((m) => Number(m[1]))
+      .sort((a, b) => a - b);
+    expect(mergeNumeric).toEqual(expected);
   });
 
   // ── 红绿 fixture:检查器本身的行为锚定(防误报/漏报同时回归) ──
