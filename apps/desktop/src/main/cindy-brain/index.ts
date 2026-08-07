@@ -4686,6 +4686,14 @@ export function registerGhostIpc(): void {
     if (!Array.isArray(ids) || !ids.every((id): id is string => typeof id === 'string')) {
       throwIpcError('INVALID_PARAMS', 'ids must be a string array');
     }
+      // 防御性上限：可信 renderer 里若出现 XSS/被导航后的脚本调用该 bridge，
+      // 传入超大数组会让后续逐项探针在 main 进程无界运行并卡住所有窗口。
+      // 已装插件数量作为硬上限，拒绝异常大请求。
+      const installedCount = getGhostManager().list().length;
+      const maxIds = Math.max(installedCount, 200);
+      if (ids.length > maxIds) {
+        throwIpcError("INVALID_PARAMS", `ids exceeds maximum of ${maxIds}`);
+      }
     const oauthManager = getGhostOauthAccountManager();
     const result: Record<string, GhostSetupProfile> = {};
     // 一次性快照:availableGhosts() 内部调 GhostManager.list() 会触发全盘扫描;
