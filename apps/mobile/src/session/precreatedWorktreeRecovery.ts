@@ -28,6 +28,12 @@ interface PendingPrecreatedWorktreeBase {
   sessionId: string;
   deviceId: string;
   createdAt: number;
+  /**
+   * Destructive cleanup is allowed only while createSession is known not to
+   * have started. Missing legacy values are normalized to
+   * session-create-started (retain-only).
+   */
+  phase: 'reserved' | 'precreated' | 'session-create-started';
 }
 
 export type PendingPrecreatedWorktree = PendingPrecreatedWorktreeBase & (
@@ -180,6 +186,15 @@ function readRecoveryKey(value: unknown): string | null {
     : null;
 }
 
+function readRecoveryPhase(
+  value: unknown,
+): PendingPrecreatedWorktreeBase['phase'] {
+  return value === 'reserved' || value === 'precreated'
+    || value === 'session-create-started'
+    ? value
+    : 'session-create-started';
+}
+
 function coerceRecord(
   value: unknown,
   now: number,
@@ -200,6 +215,7 @@ function coerceRecord(
     sessionId,
     deviceId,
     createdAt,
+    phase: readRecoveryPhase(value.phase),
   };
   if (path) {
     return {
@@ -230,13 +246,68 @@ function normalizeRecords(
     const record = coerceRecord(raw, now);
     if (!record) continue;
     const existing = bySession.get(record.sessionId);
-    if (!existing || record.createdAt >= existing.createdAt) {
+    if (
+      !existing
+      || record.createdAt > existing.createdAt
+      || (
+        record.createdAt === existing.createdAt
+        && recoveryPhaseRank(record.phase) >= recoveryPhaseRank(existing.phase)
+      )
+    ) {
       bySession.set(record.sessionId, record);
     }
   }
   return [...bySession.values()]
     .sort((left, right) => right.createdAt - left.createdAt)
     .slice(0, MAX_RECORDS);
+}
+
+function recoveryPhaseRank(phase: PendingPrecreatedWorktreeBase['phase']): number {
+  if (phase === 'session-create-started') return 2;
+  if (phase === 'precreated') return 1;
+  return 0;
+}
+
+function parseStoredLedgerRecords(
+  value: unknown,
+  now: number,
+): PendingPrecreatedWorktree[] | null {
+  if (
+    !isRecord(value)
+    || value.version !== STORAGE_VERSION
+    || !Array.isArray(value.records)
+    || value.records.length > MAX_RECORDS
+  ) return null;
+  const seenSessionIds = new Set<string>();
+  for (const raw of value.records) {
+    if (!isRecord(raw)) return null;
+    const sessionId = readString(raw.sessionId, MAX_SESSION_ID_LENGTH);
+    const deviceId = readString(raw.deviceId, MAX_DEVICE_ID_LENGTH);
+    const path = raw.path === undefined ? null : readString(raw.path, MAX_PATH_LENGTH);
+    const recoveryKey = raw.recoveryKey === undefined
+      ? null
+      : readRecoveryKey(raw.recoveryKey);
+    const createdAt = typeof raw.createdAt === 'number' && Number.isFinite(raw.createdAt)
+      ? raw.createdAt
+      : 0;
+    const phaseValid = raw.phase === undefined
+      || raw.phase === 'reserved'
+      || raw.phase === 'precreated'
+      || raw.phase === 'session-create-started';
+    if (
+      !sessionId
+      || !deviceId
+      || (raw.path !== undefined && !path)
+      || (raw.recoveryKey !== undefined && !recoveryKey)
+      || (!path && !recoveryKey)
+      || createdAt <= 0
+      || createdAt > now + 5 * 60 * 1000
+      || !phaseValid
+    ) return null;
+    if (seenSessionIds.has(sessionId)) return null;
+    seenSessionIds.add(sessionId);
+  }
+  return normalizeRecords(value.records, now);
 }
 
 async function readRecordsUnserialized(
@@ -260,7 +331,14 @@ async function readRecordsUnserialized(
   let persisted: PendingPrecreatedWorktree[] = [];
   if (raw) {
     try {
-      persisted = normalizeRecords(JSON.parse(raw), now);
+      const parsed = parseStoredLedgerRecords(JSON.parse(raw), now);
+      if (!parsed) {
+        return {
+          records: normalizeRecords(volatileRecordsForAccount(accountId), now),
+          storageReadable: false,
+        };
+      }
+      persisted = parsed;
     } catch {
       // 损坏的账本可能仍代表未完成的回收义务。不能删除后当空账本继续创建，
       // 保留原值并让调用方按不可读状态 fail closed。
@@ -416,24 +494,24 @@ export async function forgetPendingPrecreatedWorktree(
   });
 }
 
-function errorCode(error: unknown): string {
-  const code =
-    isRecord(error) && typeof error.code === 'string' ? error.code : '';
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === 'string'
-        ? error
-        : '';
-  return `${code} ${message}`.toUpperCase();
-}
-
-function isNonRetryableLocatorFailure(error: unknown): boolean {
-  const text = errorCode(error);
-  return (
-    text.includes('PERMISSION_DENIED') ||
-    text.includes('INVALID_PARAMS')
-  );
+/** Only a complete affirmative ACK proves that destructive cleanup finished. */
+export function parseDiscardPrecreatedAck(value: unknown): {
+  discarded: true;
+  branchDeleted?: boolean;
+} | null {
+  if (!isRecord(value) || value.discarded !== true) return null;
+  if (Object.keys(value).some(
+    (key) => key !== 'discarded' && key !== 'branchDeleted',
+  )) return null;
+  if (value.branchDeleted !== undefined && typeof value.branchDeleted !== 'boolean') {
+    return null;
+  }
+  return {
+    discarded: true,
+    ...(typeof value.branchDeleted === 'boolean'
+      ? { branchDeleted: value.branchDeleted }
+      : {}),
+  };
 }
 
 async function removeIfCurrent(
@@ -487,18 +565,22 @@ export async function recoverPendingPrecreatedWorktrees(
             return;
           }
           if (!isRecoveryCurrent(deps)) return;
-          if (typeof record.path === 'string') {
-            await deps.discardPrecreated(record.deviceId, {
+          if (record.phase !== 'reserved' && record.phase !== 'precreated') {
+            throw new Error('Pre-created worktree session ownership is unresolved');
+          }
+          const discardResult = typeof record.recoveryKey === 'string'
+            ? await deps.discardPrecreated(record.deviceId, {
+                sessionId: record.sessionId,
+                recoveryKey: record.recoveryKey,
+              })
+            : typeof record.path === 'string'
+              ? await deps.discardPrecreated(record.deviceId, {
               sessionId: record.sessionId,
               path: record.path,
-            });
-          } else if (typeof record.recoveryKey === 'string') {
-            await deps.discardPrecreated(record.deviceId, {
-              sessionId: record.sessionId,
-              recoveryKey: record.recoveryKey,
-            });
-          } else {
-            throw new Error('Invalid pre-created worktree recovery record');
+                })
+              : null;
+          if (!parseDiscardPrecreatedAck(discardResult)) {
+            throw new Error('Invalid pre-created worktree discard acknowledgement');
           }
         },
         {
@@ -529,13 +611,6 @@ export async function recoverPendingPrecreatedWorktrees(
       }
       if (isPreconditionFailedRemoteError(error)) {
         result.retained += 1;
-        continue;
-      }
-      if (isNonRetryableLocatorFailure(error)) {
-        // 已确认的定位符不匹配不应永久制造无效重试。CHANNEL_NOT_ALLOWED
-        // 不属于该类：旧端启动期对账已经错过时，只有保留义务才能等升级后回收。
-        await removeIfCurrent(accountId, record);
-        result.recovered += 1;
         continue;
       }
       result.retained += 1;

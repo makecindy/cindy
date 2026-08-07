@@ -99,6 +99,9 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        // create 显式执行配置专用;dispatcher 恒走 jump,仅镜像共用函数的联合形状。
+        | 'BUDGET_MODEL_REQUIRES_API_MODE'
+        | 'PROVIDER_ROUTE_UNAVAILABLE'
         | 'LEAD_NOT_SUPPORTED'
         // create + useWorktree 专用;dispatcher 恒走 jump,不会收到,仅为镜像 register.ts 联合形状。
         | 'WORKTREE_UNAVAILABLE'
@@ -143,6 +146,8 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     message: { clientId: string; role: 'user'; content: string },
   ) => Promise<unknown>;
+  beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
+  abortDirectTurnChangeSet: (sessionId: string) => void;
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
   isSessionRunningError: (err: unknown) => boolean;
   log?: OrcaInterAgentDispatcherLogger;
@@ -424,7 +429,8 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   },
 ): Promise<CollabDirectDispatchResult> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, onAccepted } = params;
-  return resolveCollabDispatchResult(
+  let turnChangeSetStarted = false;
+  const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,
       throwOnStartFailure: true,
@@ -435,11 +441,17 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           role: 'user',
           content: dbContent,
         });
+        await deps.beginDirectTurnChangeSet(session.id, clientId);
+        turnChangeSetStarted = true;
         await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
       },
     }),
     { source, context },
   );
+  if (turnChangeSetStarted && !result.dispatched) {
+    deps.abortDirectTurnChangeSet(session.id);
+  }
+  return result;
 }
 
 function makeQueuedDispatchOutcome(source: string): CollabDispatchQueuedOutcome {

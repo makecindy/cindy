@@ -31,10 +31,7 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import {
-  isAgentPlanToolName,
-  isDeliveryProseText,
-} from '@cindy/maker-shared/message-render';
+import { isAgentPlanToolName, isDeliveryProseText } from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -47,15 +44,24 @@ import type {
 import { Spinner } from '@/components/ui/spinner';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
-import type { KnownLocalFileRef } from '@/lib/localPathResolver';
+import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
+import {
+  isRemoteSessionSticky,
+  subscribeTurnChangeSetUpdated,
+} from '@/lib/makerTransport';
+import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
+import { cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
+import { SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
+import { ShareMessageCheckbox } from './ShareMessageCheckbox';
+import { isShareableMessage, useShareSelectionActive } from './shareSelectionStore';
 
 // perf-baseline: 大 session 切换 first-paint 性能基线,保留用于回归监测。
 // 历史:commit ffff3603 (render-window 首引入) 因 687 条 session first-paint
@@ -108,17 +114,6 @@ export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 30;
 const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
 
-function isEditableKeyboardTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tagName = target.tagName;
-  return (
-    tagName === 'INPUT' ||
-    tagName === 'TEXTAREA' ||
-    tagName === 'SELECT' ||
-    target.isContentEditable
-  );
-}
-
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
   if (target instanceof Node) return target.parentElement;
@@ -155,6 +150,7 @@ import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
+import { TurnChangesCard } from './TurnChangesCard';
 import { GeneratedFilesCard } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
@@ -213,6 +209,7 @@ import { useNavigationKeyListener } from './useNavigationKeyListener';
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
 import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
   /** Active session id — used to reset scroll state on session switch. */
@@ -318,15 +315,17 @@ type ForkOriginRenderItem = {
   parentSessionId: string;
   forkedAtMessageId: string;
 };
+type TurnChangesRenderItem = {
+  /** Exact provider patches attached to one visible user turn. */
+  type: 'turn_changes';
+  key: string;
+  changeSet: TurnChangeSetSummary;
+};
 type GeneratedFilesRenderItem = {
-  /** 每个 user turn 结尾聚合的「本轮 agent 新建文件」卡(Codex artifact 卡对标)。
-   *  纯派生自 turn 内 tool_use;存在性过滤在组件里做,全不存在则整卡不渲染。 */
   type: 'generated_files';
   key: string;
   files: GeneratedFileRef[];
-  /** 本轮首条消息时间(unix ms);command 候选的时间窗下界校验用,不可得为 null。 */
   turnStartMs: number | null;
-  /** 下一条 user 边界时间(unix ms);已结束 turn 的 command 候选时间窗上界。 */
   turnEndMs: number | null;
 };
 
@@ -358,6 +357,7 @@ export type RenderItem =
   | ToolSegmentRenderItem
   | AgentTaskRenderItem
   | ForkOriginRenderItem
+  | TurnChangesRenderItem
   | GeneratedFilesRenderItem
   | {
       /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
@@ -905,7 +905,9 @@ export function buildRenderItems(
      * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
      */
     historyWindowIncomplete?: boolean;
-    /** 会话工作目录:把 tool_use 里的相对路径解析成绝对路径供「本轮产出文件」卡使用。 */
+    /** Main-persisted exact patches, anchored to their visible user message. */
+    turnChangeSets?: readonly TurnChangeSetSummary[];
+    /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
   },
 ): {
@@ -1051,46 +1053,65 @@ export function buildRenderItems(
     pendingSegmentGhostCards = [];
   };
 
-  // 「本轮产出文件」卡:按 user turn 切片派生新建文件,在**下一个** user 边界
-  // (或流末尾)把上一轮的产出 flush 到该轮所有内容之下。turnStartIdx 指向当前
-  // turn 的首条消息。workingDir 缺省时跳过(无从解析相对路径,不出卡)。
-  const workingDir = opts?.workingDir ?? '';
   let turnStartIdx = 0;
-  const flushGeneratedFiles = (lo: number, hi: number): void => {
+  const flushTurnChanges = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const anchorClientId = messages[lo]?.clientId;
+    if (!anchorClientId) return;
+    const changeSets = (opts?.turnChangeSets ?? []).filter(
+      (changeSet) => changeSet.anchorClientId === anchorClientId,
+    );
+    const exactPaths = new Set<string>();
+    const pathKey = (value: string): string => {
+      const normalized = value.replace(/\\/g, '/');
+      const windowsShape = /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\');
+      return windowsShape ? normalized.toLowerCase() : normalized;
+    };
+    for (const changeSet of changeSets) {
+      for (const file of changeSet.files) {
+        exactPaths.add(pathKey(resolveToolFilePath(file.path, changeSet.cwd)));
+        if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
+      }
+    }
+    for (const changeSet of changeSets) {
+      items.push({
+        type: 'turn_changes',
+        key: `turnchanges-${changeSet.id}`,
+        changeSet,
+      });
+    }
+    const workingDir = opts?.workingDir ?? '';
     if (!workingDir || hi <= lo) return;
     const slice = messages.slice(lo, hi);
-    const files = collectGeneratedFiles(slice, workingDir);
-    if (files.length === 0) return;
-    // 本轮时间窗:下界取切片内最早 createdAt;上界取 hi 处的下一条 user
-    // 边界。历史 command 候选必须同时落在这个窗口内,否则后续 turn 在同一路径
-    // 创建/改写文件时,旧卡会被当前 stat 的新时间戳错误点亮(PR #1835 review)。
+    const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
+      const normalized = pathKey(file.path);
+      return !exactPaths.has(normalized) || changeSets.length === 0;
+    });
+    if (generatedFiles.length === 0) return;
     let turnStartMs: number | null = null;
-    for (const m of slice) {
-      const ts = m.createdAt ? Date.parse(m.createdAt) : NaN;
-      if (Number.isFinite(ts) && (turnStartMs === null || ts < turnStartMs)) turnStartMs = ts;
+    for (const message of slice) {
+      const timestamp = Date.parse(message.createdAt ?? '');
+      if (Number.isFinite(timestamp) && (turnStartMs === null || timestamp < turnStartMs)) {
+        turnStartMs = timestamp;
+      }
     }
-    const boundaryCreatedAt = hi < messages.length ? messages[hi]?.createdAt : undefined;
-    const parsedTurnEndMs = boundaryCreatedAt ? Date.parse(boundaryCreatedAt) : NaN;
-    const turnEndMs = Number.isFinite(parsedTurnEndMs) ? parsedTurnEndMs : null;
-    // key 锚定该 turn 首条消息 clientId,窗口滚动 / 流式增量下稳定。
+    const boundaryTimestamp = Date.parse(messages[hi]?.createdAt ?? '');
     items.push({
       type: 'generated_files',
       key: `genfiles-${messages[lo].clientId}`,
-      files,
+      files: generatedFiles,
       turnStartMs,
-      turnEndMs,
+      turnEndMs: Number.isFinite(boundaryTimestamp) ? boundaryTimestamp : null,
     });
   };
-
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
 
-    // user turn 边界(非 steer、非合成触发):先 flush 上一轮的产出文件卡,
-    // 再进入常规处理。第一条 user 消息时 lo==hi,flushGeneratedFiles 自身 no-op。
+    // User turn boundary: attach the sealed patch after the turn it belongs to.
     if (msg.role === 'user' && msg.delivery !== 'steer' && !msg.isSyntheticTrigger) {
       flushSegment();
-      flushGeneratedFiles(turnStartIdx, i);
+      flushTurnChanges(turnStartIdx, i);
       turnStartIdx = i;
     }
 
@@ -1389,7 +1410,7 @@ export function buildRenderItems(
   // ends mid-segment (no closing text yet).
   flushSegment();
   // 末尾 turn 的产出文件卡(没有后续 user 边界触发)。
-  flushGeneratedFiles(turnStartIdx, messages.length);
+  flushTurnChanges(turnStartIdx, messages.length);
 
   if (taskUpdates) {
     // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
@@ -2298,6 +2319,9 @@ export function MessageStream({
   // (见 sessionImageSrcs 处注释)。
   const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId);
 
+  /** 分享选择模式:只驱动整列缩进(低频)。逐条的选中态由每个复选框自己订阅。 */
+  const shareSelectionActive = useShareSelectionActive(sessionId);
+
   // 滚动容器:原生 div + overflow-y-auto,样式由全局 .is-scrolling 体系接管
   // (lib/scrollbarAutoHide.ts 自动加/撤 .is-scrolling 类,globals.css 控制
   // thumb 显隐)。data-scroll-container 给 ImageLightbox 等四个 lightbox
@@ -2405,6 +2429,41 @@ export function MessageStream({
     }
   }, [messages]);
 
+  const [turnChangeSets, setTurnChangeSets] = useState<TurnChangeSetSummary[]>([]);
+  useEffect(() => {
+    if (!sessionId || remoteHostId !== null || isRemoteSessionSticky(sessionId)) {
+      setTurnChangeSets([]);
+      return;
+    }
+    let cancelled = false;
+    setTurnChangeSets([]);
+    const off = subscribeTurnChangeSetUpdated(sessionId, ({ summary }) => {
+      if (cancelled) return;
+      setTurnChangeSets((current) => {
+        const next = current.filter((item) => item.id !== summary.id);
+        next.push(summary);
+        next.sort((a, b) => a.createdAt - b.createdAt);
+        return next;
+      });
+    });
+    void window.electronAPI.maker.listTurnChangeSets(sessionId)
+      .then((next) => {
+        if (cancelled) return;
+        setTurnChangeSets((current) => {
+          const merged = new Map(next.map((item) => [item.id, item]));
+          for (const item of current) merged.set(item.id, item);
+          return Array.from(merged.values()).sort((a, b) => a.createdAt - b.createdAt);
+        });
+      })
+      .catch(() => {
+        // A live push may already have arrived; keep it instead of clearing the card.
+      });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [remoteHostId, sessionId]);
+
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
@@ -2412,9 +2471,10 @@ export function MessageStream({
     () =>
       buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
         historyWindowIncomplete: Boolean(hasMoreMessages),
+        turnChangeSets,
         workingDir,
       }),
-    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, workingDir],
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, turnChangeSets, workingDir],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(messages),
@@ -3558,7 +3618,14 @@ export function MessageStream({
     }
     const id = window.setTimeout(run, 300);
     return () => window.clearTimeout(id);
-  }, [sessionId, navRailEnabled, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
+  }, [
+    sessionId,
+    navRailEnabled,
+    navRailEntries.length,
+    hasMoreMessages,
+    isLoadingMore,
+    onLoadMore,
+  ]);
 
   const railJumpSeqRef = useRef(0);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
@@ -3717,10 +3784,31 @@ export function MessageStream({
               React `key` 一律取 item.key — stable across builds(派生约定见
               RenderItem 类型注释 / buildRenderItems),复用 DOM 节点避免折叠
               态丢失 / 滚动锚点漂走。 */}
-                <div ref={itemsRef} className="flex flex-col gap-3.5">
+                <div
+                  ref={itemsRef}
+                  className={cn(
+                    'flex flex-col gap-3.5',
+                    // 分享选择模式:整列内容右移,左侧让出复选框那一列。缩进加在
+                    // 容器上(不是逐条消息),工具卡等不可选的 item 也跟着移,
+                    // 左边缘保持对齐。
+                    shareSelectionActive && 'pl-10',
+                    'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
+                  )}
+                >
                   {visibleRenderItems.map((item) => {
                     if (item.type === 'fork_origin') {
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
+                    }
+
+                    if (item.type === 'turn_changes') {
+                      if (!sessionId) return null;
+                      return (
+                        <TurnChangesCard
+                          key={item.key}
+                          sessionId={sessionId}
+                          changeSet={item.changeSet}
+                        />
+                      );
                     }
 
                     if (item.type === 'generated_files') {
@@ -3899,16 +3987,32 @@ export function MessageStream({
                       );
                     }
 
+                    // 分享选择:复选框与光栅化定位属性都挂在这个**既有** wrapper 上,
+                    // 不新增 DOM 层级 —— 多包一层会让 AssistantMessage 子树在进出
+                    // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
+                    const shareable =
+                      Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
+
                     return (
                       <div
                         key={item.key}
                         data-message-client-id={msg.clientId}
-                        className={
-                          highlightMessageClientId === msg.clientId
-                            ? 'scroll-mt-20 rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)] transition-colors'
-                            : 'scroll-mt-20 transition-colors'
-                        }
+                        {...(shareable
+                          ? {
+                              [SHARE_SESSION_ATTR]: sessionId,
+                              [SHARE_MESSAGE_ATTR]: msg.clientId,
+                            }
+                          : {})}
+                        className={cn(
+                          'scroll-mt-20 transition-colors',
+                          shareable && 'relative',
+                          highlightMessageClientId === msg.clientId &&
+                            'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
+                        )}
                       >
+                        {shareable && shareSelectionActive ? (
+                          <ShareMessageCheckbox clientId={msg.clientId} />
+                        ) : null}
                         <MessageItem
                           message={msg}
                           toolResult={singleResultMap.get(msg.clientId)}

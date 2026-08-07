@@ -1,6 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { __extraDirsPathOverlapForTesting } from '../components/new-chat/ExtraDirsButton';
+import {
+  __extraDirsPathOverlapForTesting,
+  pickAndAddExtraDir,
+} from '../components/new-chat/extraDirsActions';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('ExtraDirsButton path overlap normalization', () => {
   const { hasExtraDir, isParentOrAncestor, isSelfOrSubdir } = __extraDirsPathOverlapForTesting;
@@ -13,5 +20,40 @@ describe('ExtraDirsButton path overlap normalization', () => {
     expect(isSelfOrSubdir('D:\\repo\\app\\src', 'D:/repo/app')).toBe(true);
     expect(isParentOrAncestor('D:\\repo', 'D:/repo/app')).toBe(true);
     expect(isSelfOrSubdir('D:\\repo-other', 'D:/repo')).toBe(false);
+  });
+});
+
+describe('pickAndAddExtraDir', () => {
+  it('由调用方提供父目录确认弹窗的本地化文案', async () => {
+    vi.stubGlobal('window', {
+      electronAPI: {
+        dialog: {
+          showOpenDirectory: vi.fn(async () => ({ success: true, path: 'D:\\repo' })),
+        },
+      },
+    });
+    const confirm = vi.fn(async () => true);
+    const onChange = vi.fn();
+
+    await pickAndAddExtraDir({
+      extraDirs: [],
+      workingDir: 'D:/repo/app',
+      onChange,
+      confirm,
+      parentDirectoryConfirm: {
+        title: 'localized title',
+        description: (path) => `localized description: ${path}`,
+        confirmText: 'localized confirm',
+        cancelText: 'localized cancel',
+      },
+    });
+
+    expect(confirm).toHaveBeenCalledWith({
+      title: 'localized title',
+      description: 'localized description: D:/repo',
+      confirmText: 'localized confirm',
+      cancelText: 'localized cancel',
+    });
+    expect(onChange).toHaveBeenCalledWith(['D:/repo']);
   });
 });

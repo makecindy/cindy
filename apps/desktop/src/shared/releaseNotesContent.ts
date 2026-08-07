@@ -8,6 +8,51 @@
  * CDN is corrected), and the renderer uses them to filter topic entries.
  */
 
+import type { SupportedLocale } from './locale';
+
+export type NoticeLocale = SupportedLocale;
+
+/** Author-grouped item: one block per contributor, with their bullets. */
+export interface RawItem {
+  name: string;
+  list: string[];
+}
+
+export interface RawSection {
+  title: string;
+  items: RawItem[];
+}
+
+/** Topic-format (v2) block: one user-facing theme with a short narrative. */
+export interface RawTopic {
+  id?: string;
+  emoji?: string;
+  title: string;
+  text: string;
+  contributors?: string[];
+}
+
+export interface RawLocalizedContent {
+  intro?: string;
+  topics?: RawTopic[];
+  sections?: RawSection[];
+}
+
+export interface RawReleaseNotes {
+  version: string;
+  date: string;
+  githash?: string;
+  contributors?: string[];
+
+  // Legacy/root compatibility fields.
+  sections?: RawSection[];
+  topics?: RawTopic[];
+  intro?: string;
+
+  // New one-file, multi-locale payload.
+  contentByLocale?: Partial<Record<NoticeLocale, RawLocalizedContent>>;
+}
+
 /** Minimal structural shapes both processes can check without full typing. */
 interface TopicLike {
   title?: unknown;
@@ -53,15 +98,32 @@ export function isRenderableSection(section: SectionLike | null | undefined): bo
 }
 
 /**
- * Whether a raw CDN payload carries anything the dialog can render: at least
- * one legacy section with a real bullet, or at least one valid v2 topic.
+ * Whether a raw CDN payload carries anything the dialog can render: root
+ * legacy/v2 content or at least one renderable localized content block.
  */
+function hasRenderableLocalizedContent(content: RawLocalizedContent | null | undefined): boolean {
+  if (!content) return false;
+  if (
+    Array.isArray(content.sections) &&
+    content.sections.some((s) => isRenderableSection(s as SectionLike))
+  ) {
+    return true;
+  }
+  return Array.isArray(content.topics) && content.topics.some((t) => isRenderableTopic(t));
+}
+
 export function hasRenderableContent(raw: {
   sections?: unknown;
   topics?: unknown;
+  contentByLocale?: Partial<Record<NoticeLocale, RawLocalizedContent>>;
 }): boolean {
   if (Array.isArray(raw.sections) && raw.sections.some((s) => isRenderableSection(s as SectionLike))) {
     return true;
   }
-  return Array.isArray(raw.topics) && raw.topics.some((t) => isRenderableTopic(t as TopicLike));
+  if (Array.isArray(raw.topics) && raw.topics.some((t) => isRenderableTopic(t as TopicLike))) {
+    return true;
+  }
+  return Object.values(raw.contentByLocale ?? {}).some((content) =>
+    hasRenderableLocalizedContent(content),
+  );
 }

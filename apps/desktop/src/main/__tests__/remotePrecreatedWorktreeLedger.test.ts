@@ -22,7 +22,7 @@ import {
 import type { PendingRemotePrecreatedWorktree } from '../../shared/remotePrecreatedWorktreeLedger';
 
 class FakeLedgerStore {
-  records: PendingRemotePrecreatedWorktree[] = [];
+  records: unknown = [];
   failRead = false;
   failWrite = false;
 
@@ -44,6 +44,7 @@ const first: PendingRemotePrecreatedWorktree = {
   sessionId: 'session-1',
   recoveryKey: 'recovery-key-111111',
   createdAt,
+  phase: 'reserved',
 };
 const second: PendingRemotePrecreatedWorktree = {
   dataOwnerId: 'owner-a',
@@ -51,6 +52,7 @@ const second: PendingRemotePrecreatedWorktree = {
   sessionId: 'session-2',
   recoveryKey: 'recovery-key-222222',
   createdAt: createdAt + 1,
+  phase: 'reserved',
 };
 
 describe('remotePrecreatedWorktreeLedger Main store', () => {
@@ -94,6 +96,27 @@ describe('remotePrecreatedWorktreeLedger Main store', () => {
     });
   });
 
+  it('never lets an equal-time persisted phase downgrade a retain-only memory phase', () => {
+    const precreated: PendingRemotePrecreatedWorktree = {
+      ...first,
+      path: '/repo/.cindy-worktrees/session-1',
+      phase: 'precreated',
+    };
+    expect(registerRemotePrecreatedWorktreeLedgerRecord(precreated)).toBe(true);
+    store.failWrite = true;
+
+    const started: PendingRemotePrecreatedWorktree = {
+      ...precreated,
+      phase: 'session-create-started',
+    };
+    expect(registerRemotePrecreatedWorktreeLedgerRecord(started)).toBe(false);
+    expect(listRemotePrecreatedWorktreeLedger()).toEqual({
+      records: [started],
+      storageReadable: true,
+    });
+    expect(store.records).toEqual([precreated]);
+  });
+
   it('does not forget an obligation when deletion cannot be persisted', () => {
     expect(registerRemotePrecreatedWorktreeLedgerRecord(first)).toBe(true);
     store.failWrite = true;
@@ -131,6 +154,7 @@ describe('remotePrecreatedWorktreeLedger Main store', () => {
         sessionId: 'session-legacy',
         path: '/repo/legacy',
         createdAt,
+        phase: 'session-create-started',
       },
     ];
 
@@ -139,6 +163,48 @@ describe('remotePrecreatedWorktreeLedger Main store', () => {
       storageReadable: false,
     });
     expect(store.records).toHaveLength(2);
+  });
+
+  it.each([
+    [{ ...first, phase: 'future-phase' }],
+    [{ ...first, recoveryKey: 'short' }],
+    [first, { ...first, phase: 'session-create-started' }],
+    Array.from({ length: 33 }, (_, index) => ({
+      ...first,
+      deviceId: `device-${index}`,
+      sessionId: `session-${index}`,
+      recoveryKey: `recovery-key-${String(index).padStart(16, '0')}`,
+    })),
+    { version: 2, records: [first] },
+  ])('preserves malformed persisted storage and fails closed: %j', (malformed) => {
+    store.records = structuredClone(malformed);
+
+    expect(listRemotePrecreatedWorktreeLedger()).toEqual({
+      records: [],
+      storageReadable: false,
+    });
+    expect(store.records).toEqual(malformed);
+    expect(registerRemotePrecreatedWorktreeLedgerRecord(first)).toBe(false);
+    expect(store.records).toEqual(malformed);
+  });
+
+  it('normalizes a well-formed legacy record without phase to retain-only', () => {
+    const legacy = {
+      dataOwnerId: 'owner-a',
+      deviceId: 'device-legacy',
+      sessionId: 'session-legacy',
+      recoveryKey: 'legacy-recovery-key-123456',
+      createdAt,
+    };
+    store.records = [legacy];
+
+    expect(listRemotePrecreatedWorktreeLedger()).toEqual({
+      records: [{ ...legacy, phase: 'session-create-started' }],
+      storageReadable: true,
+    });
+    expect(store.records).toEqual([
+      { ...legacy, phase: 'session-create-started' },
+    ]);
   });
 
   it('does not reuse an in-memory obligation after switching owners', () => {

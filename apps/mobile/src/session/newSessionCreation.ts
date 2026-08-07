@@ -44,7 +44,11 @@ import {
   type NewSessionDraft,
 } from '@/session/newSession';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
-import { forgetPendingPrecreatedWorktree } from '@/session/precreatedWorktreeRecovery';
+import {
+  forgetPendingPrecreatedWorktree,
+  parseDiscardPrecreatedAck,
+  registerPendingPrecreatedWorktree,
+} from '@/session/precreatedWorktreeRecovery';
 import type {
   InputProjection,
   QueuedRemoteMessage,
@@ -123,6 +127,7 @@ interface InternalTask extends NewSessionCreationTask {
   status: NewSessionCreationStatus;
   error: string | null;
   firstMessageSessionRefs: MobileSessionReference[];
+  precreatedWorktreeSessionCreateStarted: boolean;
   params: NewSessionCreationParams;
 }
 
@@ -268,6 +273,7 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
     firstMessageClientId,
     precreatedWorktree: params.precreatedWorktree,
     firstMessageSessionRefs,
+    precreatedWorktreeSessionCreateStarted: false,
     params,
   };
   tasks.set(params.sessionId, task);
@@ -279,6 +285,10 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
 export function retryNewSessionCreation(sessionId: string): void {
   const task = tasks.get(sessionId);
   if (!task || task.status !== 'create-failed') return;
+  // Once createSession may have run against a managed path, retrying can create
+  // another wrong-id session that shares it. Recovery must first prove the
+  // exact pre-generated id was claimed; unknown/NOT_FOUND stays retain-only.
+  if (task.precreatedWorktreeSessionCreateStarted) return;
   if (!isTaskOwnerCurrent(task)) {
     cancelStaleOwnerTask(task);
     return;
@@ -381,16 +391,22 @@ export async function prepareNewSessionCreationForEdit(
   }
   const precreated = task.precreatedWorktree;
   if (precreated) {
+    if (task.precreatedWorktreeSessionCreateStarted) {
+      throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+    }
     try {
       await withTransientRemoteRetry(async () => {
         assertTaskOwnerCurrent(task);
         await task.params.transport.openLink(task.deviceId);
         assertTaskOwnerCurrent(task);
-        await task.params.transport.maker.worktree.discardPrecreated({
+        const discardResult = await task.params.transport.maker.worktree.discardPrecreated({
           sessionId,
-          path: precreated.path,
+          recoveryKey: precreated.recoveryKey,
         });
         assertTaskOwnerCurrent(task);
+        if (!parseDiscardPrecreatedAck(discardResult)) {
+          throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+        }
       }, { maxAttempts: 2 });
     } catch (err) {
       if (isStaleNewSessionOwnerError(err)) {
@@ -558,6 +574,32 @@ function finishTask(task: InternalTask): void {
   emit();
 }
 
+function exactSessionFromProbe(value: unknown, sessionId: string): RemoteSession | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return (value as { id?: unknown }).id === sessionId
+    ? value as RemoteSession
+    : null;
+}
+
+async function persistPrecreatedSessionCreateStarted(task: InternalTask): Promise<void> {
+  const precreated = task.precreatedWorktree;
+  if (!precreated || task.precreatedWorktreeSessionCreateStarted) return;
+  const accountId = task.params.precreatedWorktreeAccountId?.trim();
+  if (!accountId) throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+  assertTaskOwnerCurrent(task);
+  const persisted = await registerPendingPrecreatedWorktree(accountId, {
+    sessionId: task.sessionId,
+    deviceId: task.deviceId,
+    path: precreated.path,
+    recoveryKey: precreated.recoveryKey,
+    createdAt: precreated.createdAt ?? Date.now(),
+    phase: 'session-create-started',
+  });
+  assertTaskOwnerCurrent(task);
+  if (!persisted) throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+  task.precreatedWorktreeSessionCreateStarted = true;
+}
+
 /** createSession 一步:瞬态失败 probe-before-retry,确定性失败直接抛。 */
 /** 返回被控端分配的 workDir(dialogue 会话此刻才有;probe 收敛路径取权威行的值)。 */
 async function createSessionIdempotent(task: InternalTask): Promise<{ workDir: string | null }> {
@@ -567,6 +609,39 @@ async function createSessionIdempotent(task: InternalTask): Promise<{ workDir: s
     ...buildRemoteCreateSessionOptions(task.draft),
     id: task.sessionId,
   };
+
+  if (task.precreatedWorktree) {
+    // Persist the retain-only phase before the first createSession side effect.
+    // From here on, only an exact-id session may clear the ledger; NOT_FOUND,
+    // malformed replies, wrong ids, and transport errors must never authorize
+    // retrying or discarding the managed directory.
+    await persistPrecreatedSessionCreateStarted(task);
+    try {
+      assertTaskOwnerCurrent(task);
+      const created = await maker.createSession(createOpts);
+      assertTaskOwnerCurrent(task);
+      const result = normalizeCreateSessionResult(created);
+      if (!result || result.sessionId !== task.sessionId) {
+        throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+      }
+      return { workDir: result.workDir ?? null };
+    } catch (error) {
+      if (isStaleNewSessionOwnerError(error)) throw error;
+      try {
+        assertTaskOwnerCurrent(task);
+        const probed = exactSessionFromProbe(
+          await maker.getSession(task.sessionId),
+          task.sessionId,
+        );
+        assertTaskOwnerCurrent(task);
+        if (probed) return { workDir: probed.workingDir ?? null };
+      } catch (probeError) {
+        if (isStaleNewSessionOwnerError(probeError)) throw probeError;
+      }
+      throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+    }
+  }
+
   let lastErr: unknown;
   for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
@@ -574,9 +649,13 @@ async function createSessionIdempotent(task: InternalTask): Promise<{ workDir: s
       // 视为已创建;NOT_FOUND / probe 失败才真正重建(串行,防同 id 并发 spawn)。
       try {
         assertTaskOwnerCurrent(task);
-        const probed = await maker.getSession(task.sessionId);
+        const probed = exactSessionFromProbe(
+          await maker.getSession(task.sessionId),
+          task.sessionId,
+        );
         assertTaskOwnerCurrent(task);
-        return { workDir: probed?.workingDir ?? null };
+        if (!probed) throw new Error('Invalid remote session ownership response');
+        return { workDir: probed.workingDir ?? null };
       } catch (error) {
         if (isStaleNewSessionOwnerError(error)) throw error;
         // 未创建(或 probe 也失败):按重试继续。
@@ -611,9 +690,13 @@ async function createSessionIdempotent(task: InternalTask): Promise<{ workDir: s
   // 会话,「返回编辑」还会遗留一个空的远端会话(codex review P2)。
   try {
     assertTaskOwnerCurrent(task);
-    const probed = await maker.getSession(task.sessionId);
+    const probed = exactSessionFromProbe(
+      await maker.getSession(task.sessionId),
+      task.sessionId,
+    );
     assertTaskOwnerCurrent(task);
-    return { workDir: probed?.workingDir ?? null };
+    if (!probed) throw new Error('Invalid remote session ownership response');
+    return { workDir: probed.workingDir ?? null };
   } catch (error) {
     if (isStaleNewSessionOwnerError(error)) throw error;
     // 确认未创建(或 probe 也失败):按最后的瞬态错误交给重试面(同 id 重试幂等)。

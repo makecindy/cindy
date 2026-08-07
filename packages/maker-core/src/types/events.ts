@@ -20,6 +20,7 @@ export type AgentEventType =
   | 'agent_task_update'     // 子 agent / task 状态更新（Claude Code task_* + Codex collab agent）
   | 'image'                 // 模型查看 / 生成的图片 (codex 独有, claude SDK 不会发)
   | 'account_usage'         // vendor-specific 账号级用量 (codex rateLimits 等); data shape 由 emit 端自定, renderer 按 source/字段嗅探
+  | 'turn_diff'             // provider 对本轮工作区变更的累计 unified diff
   | 'interaction_request'   // 需要用户决策(permission / ask_user_question / plan_review)
   | 'interaction_dismissed' // pending interaction 被自动 resolve(如 setPermissionMode 切换)
   | 'plan_mode_changed'     // agent 自行切换计划模式(典型: 计划批准后自动退出), data: { enabled: boolean }; host 据此回写持久化 + 广播 UI
@@ -28,6 +29,17 @@ export type AgentEventType =
   | 'session_id'            // SDK session id 回填
   | 'done'                  // 一轮 turn 完成
   | 'error';                // 错误（是否结束 turn 由 error data 的 isTerminal 显式表达）
+
+export interface TurnDiffEventData {
+  /** Provider-owned turn identity. Same id updates replace, rather than append to, the prior diff. */
+  turnId: string;
+  /** Cumulative unified diff for this provider turn. */
+  diff: string;
+  /** Workspace root used when the provider computed the patch. */
+  cwd: string;
+  /** False when concurrent provider snapshots could not be safely composed. */
+  isComplete?: boolean;
+}
 
 export interface AgentErrorEventData {
   message: string;

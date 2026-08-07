@@ -225,6 +225,32 @@ registerColor('warning-accent', {
   light: '#EA6B17',
   dark: '#EA6B17',
 }, 'Thinking orange / warning accent — running 状态色,设计定稿 2026-07-17(取代 #FF6600 冻结红线);全局同值,9 主题无 override 自动跟随');
+// DESIGN.md §2 / §10 窄范围例外：仅资源用量表的 14px 进程类别 glyph 使用，
+// 不表示健康/状态，也不得扩散到行背景、文字或其它进程 UI。
+registerColor('process-agent-task-icon', {
+  light: '#2563EB',
+  dark: '#60A5FA',
+}, '资源用量表：任务 Agent 进程图标');
+registerColor('process-agent-service-icon', {
+  light: '#7C3AED',
+  dark: '#A78BFA',
+}, '资源用量表：Agent 控制面服务图标');
+registerColor('process-main-icon', {
+  light: '#DB2777',
+  dark: '#F472B6',
+}, '资源用量表：主进程图标');
+registerColor('process-renderer-icon', {
+  light: '#0891B2',
+  dark: '#22D3EE',
+}, '资源用量表：界面进程图标');
+registerColor('process-gpu-icon', {
+  light: '#D97706',
+  dark: '#F59E0B',
+}, '资源用量表：GPU 进程图标');
+registerColor('process-utility-icon', {
+  light: '#059669',
+  dark: '#34D399',
+}, '资源用量表：Utility 服务进程图标');
 registerColor('shadow-soft-panel', {
   light: '0 4px 12px rgb(0 0 0 / 0.08)',
   dark: '0 4px 12px rgb(0 0 0 / 0.3)',

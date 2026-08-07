@@ -30,6 +30,7 @@ import {
   type RenderItem,
 } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
 
 // ── 工厂 / 用例构造工具 ────────────────────────────────────────────────────
 
@@ -274,40 +275,108 @@ describe('collectTurnFinalAssistantClientIds', () => {
 // ── case 1: 流式追加 token 不改变 message item key ────────────────────────
 
 describe('buildRenderItems — key stability', () => {
-  it('bounds historical command-generated files by the next user turn timestamp', () => {
-    const firstUser = { ...mkUser('u1'), createdAt: '2026-08-05T10:00:00.000Z' };
-    const command = {
-      ...mkTool('cmd1', 'Bash', { command: "python gen.py 'out/report.xlsx'" }),
-      createdAt: '2026-08-05T10:00:05.000Z',
+  it('anchors exact change sets to the owning visible user turn', () => {
+    const firstUser = mkUser('u1');
+    const secondUser = mkUser('u2');
+    const firstSet: TurnChangeSetSummary = {
+      id: 'cs1',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'codex',
+      providerTurnId: 'turn-1',
+      cwd: 'C:/work',
+      state: 'complete',
+      workspaceState: 'applied',
+      isReversible: true,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [{
+        id: 'turn-1:a.ts',
+        path: 'a.ts',
+        oldPath: null,
+        status: 'modified',
+        additions: 2,
+        deletions: 1,
+      }],
+      fileCount: 1,
+      additions: 2,
+      deletions: 1,
     };
-    const nextUser = { ...mkUser('u2'), createdAt: '2026-08-05T10:01:00.000Z' };
-    const { items } = buildRenderItems([firstUser, command, nextUser], undefined, undefined, {
-      workingDir: 'C:/work',
-    });
-    const card = items.find(
-      (it): it is Extract<RenderItem, { type: 'generated_files' }> =>
-        it.type === 'generated_files',
+    const secondSet = {
+      ...firstSet,
+      id: 'cs2',
+      anchorClientId: 'u2',
+      providerTurnId: 'turn-2',
+      createdAt: 3,
+      completedAt: 4,
+    };
+
+    const { items } = buildRenderItems(
+      [firstUser, mkAssistant('a1'), secondUser, mkAssistant('a2')],
+      undefined,
+      undefined,
+      { turnChangeSets: [firstSet, secondSet] },
+    );
+    const cards = items.filter(
+      (item): item is Extract<RenderItem, { type: 'turn_changes' }> => item.type === 'turn_changes',
     );
 
-    expect(card?.turnStartMs).toBe(Date.parse(firstUser.createdAt));
-    expect(card?.turnEndMs).toBe(Date.parse(nextUser.createdAt));
+    expect(cards.map((card) => card.key)).toEqual(['turnchanges-cs1', 'turnchanges-cs2']);
+    expect(cards.map((card) => card.changeSet.id)).toEqual(['cs1', 'cs2']);
+    expect(items.indexOf(cards[0])).toBeGreaterThan(items.findIndex((item) => item.key === 'msg-a1'));
   });
 
-  it('leaves the current tail turn unbounded above', () => {
-    const user = { ...mkUser('u1'), createdAt: '2026-08-05T10:00:00.000Z' };
-    const command = {
-      ...mkTool('cmd1', 'Bash', { command: "python gen.py 'out/report.xlsx'" }),
-      createdAt: '2026-08-05T10:00:05.000Z',
+  it('keeps opaque command artifacts as fallback chips without duplicating exact files', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('bash-1', 'Bash', { command: 'python gen.py > C:/work/out/report.xlsx' }),
+      mkResult('bash-result', 'tu-bash-1'),
+      mkUser('u2'),
+    ];
+    const exact: TurnChangeSetSummary = {
+      id: 'cs-opaque',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'codex',
+      providerTurnId: 'turn-1',
+      cwd: 'C:/work',
+      state: 'partial',
+      workspaceState: 'applied',
+      isReversible: false,
+      incompleteReasons: ['opaque-tool'],
+      createdAt: 1,
+      completedAt: 2,
+      files: [],
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
     };
-    const { items } = buildRenderItems([user, command], undefined, undefined, {
+    const fallback = buildRenderItems(messages, undefined, undefined, {
       workingDir: 'C:/work',
-    });
-    const card = items.find(
-      (it): it is Extract<RenderItem, { type: 'generated_files' }> =>
-        it.type === 'generated_files',
-    );
+      turnChangeSets: [exact],
+    }).items.filter((item): item is Extract<RenderItem, { type: 'generated_files' }> => item.type === 'generated_files');
+    expect(fallback).toHaveLength(1);
+    expect(fallback[0]?.files[0]?.name).toBe('report.xlsx');
 
-    expect(card?.turnEndMs).toBeNull();
+    const exactFile = {
+      ...exact,
+      files: [{
+        id: 'turn-1:out/report.xlsx',
+        path: 'out/report.xlsx',
+        oldPath: null,
+        status: 'added' as const,
+        additions: 1,
+        deletions: 0,
+      }],
+      fileCount: 1,
+      additions: 1,
+    };
+    const deduped = buildRenderItems(messages, undefined, undefined, {
+      workingDir: 'C:/work',
+      turnChangeSets: [exactFile],
+    }).items.filter((item): item is Extract<RenderItem, { type: 'generated_files' }> => item.type === 'generated_files');
+    expect(deduped).toHaveLength(0);
   });
 
   it('streaming token append to an assistant message keeps the same item key', () => {

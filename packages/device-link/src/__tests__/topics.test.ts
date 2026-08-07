@@ -33,6 +33,11 @@ describe('topicForPush', () => {
     expect(topicForPush('maker:new-maker-draft:changed', { claudeCode: {}, codex: {} })).toBe(
       'sessions',
     );
+    expect(topicForPush('maker:new-maker-worktree-branch:changed', {
+      baseRepo: '/tmp/repo',
+      sourceBranch: 'feature/mobile',
+      revision: 2,
+    })).toBe('sessions');
   });
 
   it('learn:event → sessions(账号级:run 关联触发/蒸馏两个任务,单 sessionId 路由会漏)', () => {

@@ -425,8 +425,12 @@ export function SessionCard({
     </DropdownMenuItem>
   );
 
+  // Orca lead 可导出(整个协同随包);Worker 不进 sidebar,双保险仍排除。
   const canExportShare =
-    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+    !isEmpty &&
+    !session.remoteHostId &&
+    session.orcaRole !== 'worker' &&
+    !session.deviceLinkDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>

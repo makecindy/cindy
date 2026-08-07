@@ -26,6 +26,9 @@ export function getCollaborationStartErrorMessage(
 ): string {
   const ipcError = extractIpcError(err);
   const base = (() => {
+    if (options.remoteDevice && ipcError?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      return t('newChat.collaboration.unsupportedRemoteHint');
+    }
     if (ipcError && ACTIONABLE_COLLABORATION_ERROR_CODES.has(ipcError.code)) {
       const suffix = options.remoteDevice
         ? '_REMOTE'

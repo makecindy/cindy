@@ -199,6 +199,7 @@ async function startSession(
       status: string;
       scope?: string;
     }>;
+    turnChangeCapture?: AgentDeps['turnChangeCapture'];
   },
 ) {
   const configDir = await makeTempDir();
@@ -214,6 +215,7 @@ async function startSession(
 
   const deps = createDeps(policy, options?.mcpServerNames);
   deps.capabilityRouting = options?.capabilityRouting;
+  deps.turnChangeCapture = options?.turnChangeCapture;
   const agent = new ClaudeCodeAgent(deps);
   const handle = await agent.startSession({
     sessionId: 'session-mcp-policy',
@@ -250,6 +252,7 @@ async function startSession(
     canUseTool: queryOptions.canUseTool,
     hooks: queryOptions.hooks,
     seen,
+    workingDir,
   };
 }
 
@@ -272,6 +275,47 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
+  it('captures known writes before execution and marks Bash opaque only after execution', async () => {
+    const beforeKnownFileWrite = vi.fn(async () => undefined);
+    const noteOpaqueWrite = vi.fn();
+    const { handle, hooks, workingDir } = await startSession(undefined, {
+      turnChangeCapture: { beforeKnownFileWrite, noteOpaqueWrite },
+    });
+    const pre = hooks?.PreToolUse?.[0]?.hooks[0];
+    const post = hooks?.PostToolUse?.[0]?.hooks[0];
+    if (!pre || !post) throw new Error('expected turn change capture hooks');
+
+    await pre({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: 'a.ts', content: 'next' },
+    });
+    await pre({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch b.ts' },
+    });
+    expect(beforeKnownFileWrite).toHaveBeenCalledWith({
+      sessionId: 'session-mcp-policy',
+      provider: 'claude-code',
+      cwd: workingDir,
+      targetPath: 'a.ts',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    await post({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch b.ts' },
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledWith({
+      sessionId: 'session-mcp-policy',
+      provider: 'claude-code',
+      cwd: workingDir,
+    });
+    await handle.close();
+  });
+
   it('injects the local route as a PreToolUse guard even in Full access', async () => {
     const capabilityRouting = {
       overrides: [

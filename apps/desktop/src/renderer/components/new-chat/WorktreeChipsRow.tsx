@@ -6,15 +6,14 @@
  * 2026-07-29 用户裁决(对齐 Claude Code):分支与 worktree 合并为**一个** pill——
  * 左半分支区、竖分隔线、右半 checkbox + "worktree",两个点击区各管各的。
  *
- * 状态不变量(2026-08-05 用户裁决):**勾选状态只属于用户**——
+ * 状态不变量:**勾选状态只属于用户**——
  *   - 系统/环境因素(切项目、探测结果、播种)永远不改 checkbox;资格不满足只是
- *     禁用 + tooltip,发送时由上层按「勾选 && 合格」静默降级,记忆永不被抹;
- *   - 唯一改动路径 = 用户点击 checkbox 本体(onEnabledChange,上层必持久化);
- *   - 选分支不会隐式开启或关闭 worktree。未勾时分支区只读;想从别的分支启动
- *     必须先显式勾选 worktree。
+ *     在 OFF 时禁用开启；若已 ON 则保留可见的关闭入口,发送仍由上层 fail closed;
+ *   - 唯一改动路径 = 用户点击 checkbox 本体,并写入工作端勾选记忆;
+ *   - 分支选择始终只修改 worktree 源分支,永远不联动 checkbox。
  *
- * 分支区语义:未勾 = 只读展示仓库当前 HEAD(会话就跑在它上面);已勾 = worktree
- * 源分支选择器(默认当前分支,点开可换;见 branchPick.ts)。
+ * 分支区语义:始终选择新 worktree 的源分支;checkbox 只决定本次新 session 是否
+ * 真正创建 worktree。两者是独立控制,允许用户先选分支、再决定是否隔离。
  *
  * worktree 名称 **自动生成**（不暴露 UI），由 useSuggestName 拉取后透传给上层。
  */
@@ -72,7 +71,12 @@ export interface WorktreeChipsRowProps {
   onRecoveryKeyDiscardSupportChange?: (supported: boolean | null) => void;
   onSuggestedNameChange?: (name: string) => void;
   worktreeDisabled?: boolean;
+  /** Shared creation/environment gate for both halves of the joined control. */
   disabled?: boolean;
+  /** Branch preference read/write gate; must not disable the checkbox half. */
+  branchDisabled?: boolean;
+  /** Checkbox preference write gate; must not disable the branch half. */
+  checkboxDisabled?: boolean;
   /**
    * device-link 被控端 deviceId。非空表示 cwd 是被控端路径,git 探测 / 分支列表 /
    * 建议名全部经隧道在被控端执行(本机 git 对远程路径必然误报"不是 git 仓库")。
@@ -111,6 +115,8 @@ export function WorktreeChipsRow({
   onSuggestedNameChange,
   worktreeDisabled,
   disabled,
+  branchDisabled,
+  checkboxDisabled,
   deviceLinkDeviceId,
   deviceLinkReconnectEpoch = 0,
   variant = 'full',
@@ -133,7 +139,7 @@ export function WorktreeChipsRow({
       : null;
 
   // 只有明确具备 worktree 资格的仓库才向发送侧提供 repoRoot；linked worktree、非 Git
-  // 目录或探测失败都传 null，让发送侧按「勾选 && baseRepo」自然降级为普通启动。
+  // 目录或探测失败都传 null。发送 / Goal 的 ON 门会据此 fail closed，不能静默降级。
   // useDetectCwd 同时按 {cwd, deviceId} 做 render 阶段 fence，切目标时这里先写 null。
   useLayoutEffect(() => {
     onBaseRepoChange?.(baseRepo);
@@ -152,20 +158,22 @@ export function WorktreeChipsRow({
     return null;
   }, [detect.data, detect.loading, t]);
 
-  const switchDisabled = disabled || worktreeDisabled || !!cantUseReason || detect.loading || !cwd;
+  const environmentDisabled =
+    worktreeDisabled || !!cantUseReason || detect.loading || !cwd || baseRepo === null;
+  const switchDisabled = disabled || checkboxDisabled || (environmentDisabled && !enabled);
 
   // 状态不变量:这里**没有**任何自动改写 enabled 的 effect——勾选状态只属于用户,
-  // 资格不满足只体现为 checkbox 禁用(switchDisabled)+发送侧「勾选 && 合格」降级。
+  // 资格不满足时 OFF 不能开启；已 ON 必须仍能显式关闭，发送侧同时保留输入并阻塞创建。
 
   const effectiveWorktreeEnabled = enabled && !advancedHidden && !worktreeDisabled;
-  // 分支列表只在 worktree 开启后拉取;关闭态左半区仅展示当前 checkout 分支。
-  const branches = useBranches(effectiveWorktreeEnabled ? baseRepo : null, deviceLinkDeviceId);
+  // 分支列表懒加载 latch:worktree 未开时不预拉,首次点开分支 chip 菜单才拉,
+  // 之后保持订阅(baseRepo 变化由 hook 自身依赖触发重拉)。
+  const [branchListWanted, setBranchListWanted] = useState(false);
+  const branches = useBranches(
+    effectiveWorktreeEnabled || branchListWanted ? baseRepo : null,
+    deviceLinkDeviceId,
+  );
   const suggested = useSuggestName(effectiveWorktreeEnabled ? baseRepo : null, deviceLinkDeviceId);
-
-  useEffect(() => {
-    if (!effectiveWorktreeEnabled || sourceBranch || !branches.current) return;
-    onSourceBranchChange(branches.current);
-  }, [effectiveWorktreeEnabled, sourceBranch, branches.current, onSourceBranchChange]);
 
   const lastNameRef = useRef('');
   useEffect(() => {
@@ -196,27 +204,23 @@ export function WorktreeChipsRow({
 
   // ── 分支 chip 状态 ──
   const currentBranch = detect.data?.currentBranch ?? null;
-  // worktree ON 显源分支,列表加载失败/未返回时回退 'HEAD'(与发送管线的源分支
-  // 回退值一致,表示当前 checkout 而不是猜测 main)—— ON 状态下 chip 是唯一的
-  // 分支入口,绝不能因加载失败而消失。OFF 显仓库当前 HEAD 分支；detached HEAD
-  // 没有分支名时仍显示 HEAD，让默认未勾选用户保有开启 worktree 的入口。
-  const branchLabel = effectiveWorktreeEnabled
-    ? sourceBranch || branches.current || currentBranch || 'HEAD'
-    : (currentBranch ?? 'HEAD');
-  const showBranchChip = !advancedHidden && !!detect.data?.isGitRepo;
-  // 分支菜单只在 worktree 已勾时可交互(= 源分支选择器);未勾时分支区只读展示当前
-  // HEAD——选分支不再承担任何隐式开关语义(状态不变量,见文件头)。
-  const branchInteractive = !disabled && effectiveWorktreeEnabled && baseRepo !== null;
+  // 分支与 checkbox 独立:未勾时也要回显用户刚选的源分支,否则菜单虽然可点、
+  // 选择后却仍显示当前 HEAD,看起来像没有生效。首次未选择时回退当前 checkout。
+  const branchLabel = sourceBranch || branches.current || currentBranch || 'HEAD';
+  const showBranchChip = !advancedHidden && (enabled || !!detect.data?.isGitRepo);
+  // 分支选择与 checkbox 是两条独立轴；仅环境不具备 worktree 资格或创建在途时禁用。
+  const branchInteractive =
+    !(disabled || branchDisabled || environmentDisabled) && baseRepo !== null;
 
   const handleBranchPick = useCallback(
     (picked: string) => {
       const effect = resolveBranchPick(
-        { worktreeEnabled: effectiveWorktreeEnabled, sourceBranch: branchLabel },
+        { worktreeEnabled: effectiveWorktreeEnabled, currentBranch, sourceBranch: branchLabel },
         picked,
       );
       if (effect.kind === 'set-source') onSourceBranchChange(effect.branch);
     },
-    [effectiveWorktreeEnabled, branchLabel, onSourceBranchChange],
+    [effectiveWorktreeEnabled, currentBranch, branchLabel, onSourceBranchChange],
   );
 
   const branchWorktree = showBranchChip ? (
@@ -227,11 +231,13 @@ export function WorktreeChipsRow({
       branchesFailed={branches.failed}
       onRetryBranches={branches.refetch}
       checked={enabled}
+      branchSourceSelected={!!sourceBranch}
       branchInteractive={branchInteractive}
       checkboxDisabled={switchDisabled}
       cantUseReason={cantUseReason ?? undefined}
       onPick={handleBranchPick}
       onOpenRequested={() => {
+        setBranchListWanted(true);
         // 上次拉取失败的话,重新打开菜单就自动重试一次,不逼用户去点重试项。
         if (branches.failed && !branches.loading) branches.refetch();
       }}
@@ -241,7 +247,7 @@ export function WorktreeChipsRow({
   ) : null;
 
   // advancedOnly:项目选择交给页面自己的 pill,这里出 [分支 │ ☑ worktree] 联合控件
-  // (cwd 为空 / 非 git 仓库时整体不渲染)。
+  // (cwd 为空时不渲染；环境失效但记忆仍 ON 时保留关闭入口)。
   if (variant === 'advancedOnly') {
     if (advancedHidden) return null;
     return branchWorktree;
@@ -374,6 +380,7 @@ function BranchWorktreeChip({
   branchesFailed,
   onRetryBranches,
   checked,
+  branchSourceSelected,
   branchInteractive,
   checkboxDisabled,
   cantUseReason,
@@ -390,7 +397,9 @@ function BranchWorktreeChip({
   onRetryBranches: () => void;
   /** worktree 勾选状态(工作端记忆原样直出;禁用时也照常显示,不做视觉造假)。 */
   checked: boolean;
-  /** 分支菜单是否可开(仅已勾时 = 源分支选择器;未勾只读展示当前 HEAD)。 */
+  /** 用户是否已经显式选择过源分支(用于区分 tooltip 与首次展示的当前 HEAD)。 */
+  branchSourceSelected: boolean;
+  /** 分支菜单是否可开(与 checkbox 状态独立)。 */
   branchInteractive: boolean;
   checkboxDisabled?: boolean;
   cantUseReason?: string;
@@ -440,7 +449,7 @@ function BranchWorktreeChip({
   const branchTipped = (
     <Tip
       text={
-        checked
+        checked || branchSourceSelected
           ? t('newChat.branchChip.sourceTooltip')
           : t('newChat.branchChip.currentTooltip')
       }

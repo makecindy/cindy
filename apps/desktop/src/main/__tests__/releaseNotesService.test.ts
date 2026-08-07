@@ -108,6 +108,82 @@ describe('releaseNotesService', () => {
     expect(requestMock).toHaveBeenCalledTimes(2);
   });
 
+  it('只有 contentByLocale 的多语言 payload 可加载并继续按 version 缓存', async () => {
+    const request = new MockRequest();
+    const response = new MockResponse();
+    requestMock.mockReturnValueOnce(request);
+
+    const { fetchReleaseNotes } = await import('../releaseNotesService');
+    const first = fetchReleaseNotes('0.1.23');
+    request.emit('response', response);
+    response.emit('data', Buffer.from(JSON.stringify({
+      version: '0.1.23',
+      date: '2026-08-06',
+      githash: '0123456789abcdef0123456789abcdef01234567',
+      contentByLocale: {
+        en: {
+          topics: [{ id: 'voice-input', title: 'Voice input', text: 'More reliable.' }],
+        },
+      },
+    }), 'utf8'));
+    response.emit('end');
+
+    const notes = await first;
+    expect(notes?.contentByLocale?.en?.topics?.[0]?.id).toBe('voice-input');
+    expect(await fetchReleaseNotes('0.1.23')).toBe(notes);
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('同一 version 的并发请求复用同一个在途 CDN 请求', async () => {
+    const request = new MockRequest();
+    const response = new MockResponse();
+    requestMock.mockReturnValueOnce(request);
+
+    const { fetchReleaseNotes } = await import('../releaseNotesService');
+    const first = fetchReleaseNotes('0.1.25');
+    const second = fetchReleaseNotes('0.1.25');
+
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    request.emit('response', response);
+    response.emit('data', Buffer.from(JSON.stringify({
+      version: '0.1.25',
+      date: '2026-08-06',
+      topics: [{ title: '并发缓存', text: '只请求一次。' }],
+    }), 'utf8'));
+    response.emit('end');
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toBe(secondResult);
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('localized 内容全部为空或畸形时按失败处理且不缓存', async () => {
+    const { fetchReleaseNotes } = await import('../releaseNotesService');
+    const payload = JSON.stringify({
+      version: '0.1.24',
+      date: '2026-08-06',
+      contentByLocale: {
+        'zh-CN': { topics: [{ title: '   ', text: '' }] },
+        en: { topics: [] },
+      },
+    });
+
+    const fetchOnce = async () => {
+      const request = new MockRequest();
+      const response = new MockResponse();
+      requestMock.mockReturnValueOnce(request);
+      const promise = fetchReleaseNotes('0.1.24');
+      request.emit('response', response);
+      response.emit('data', Buffer.from(payload, 'utf8'));
+      response.emit('end');
+      return promise;
+    };
+
+    expect(await fetchOnce()).toBeNull();
+    expect(await fetchOnce()).toBeNull();
+    expect(requestMock).toHaveBeenCalledTimes(2);
+  });
+
   it('sections 非空但全部畸形(无任何有效 bullet)同样按失败处理不缓存', async () => {
     const { fetchReleaseNotes } = await import('../releaseNotesService');
 

@@ -317,6 +317,16 @@ export interface MobileNewMakerDefaults {
   [key: string]: unknown;
 }
 
+/**
+ * 工作端拥有的 New Maker worktree 源分支镜像。revision 由工作端按 canonical
+ * baseRepo 独立递增；手机只用它做 pull / push / apply 回包的乱序收敛，不自行生成。
+ */
+export interface MobileWorktreeBranchPreferenceSnapshot {
+  baseRepo: string;
+  sourceBranch: string;
+  revision: number;
+}
+
 /** 工作端 worktree:detect-cwd 资格探测回包(形状对齐被控端 DetectCwdResp)。 */
 export interface MobileWorktreeDetectCwdResult {
   isGitRepo: boolean;
@@ -330,6 +340,12 @@ export interface MobileWorktreeDetectCwdResult {
    * 字段却不把它写入元数据，因此省略必须在副作用前视为不支持。
    */
   supportsRecoveryKeyDiscard?: boolean;
+}
+
+/** 工作端 worktree:list-branches 回包(本地分支列表 + 当前 HEAD 分支)。 */
+export interface MobileWorktreeListBranchesResult {
+  branches: string[];
+  current: string;
 }
 
 /** 工作端 worktree:create 元信息(形状对齐被控端 WorktreeMeta)。 */
@@ -445,6 +461,18 @@ export interface MobileMakerTransport {
   getNewMakerDefaults(agentKind: MobileAgentKind): Promise<MobileNewMakerDefaults>;
   /** 「新建会话默认启用 worktree」写穿工作端(老被控端 → 调用方吞掉降级)。 */
   applyNewMakerWorktreePref(worktreeEnabled: boolean): Promise<void>;
+  /** 读取工作端某 canonical repo 的 New Maker worktree 源分支；未选择过返回 null。 */
+  getNewMakerWorktreeBranchPref(
+    baseRepo: string,
+  ): Promise<MobileWorktreeBranchPreferenceSnapshot | null>;
+  /**
+   * 把源分支选择写穿工作端；回包是工作端接受后的权威 snapshot。
+   * 与 worktree checkbox 使用独立 channel，选择分支不会改动开关偏好。
+   */
+  applyNewMakerWorktreeBranchPref(
+    baseRepo: string,
+    sourceBranch: string,
+  ): Promise<MobileWorktreeBranchPreferenceSnapshot>;
   /**
    * worktree 两步建会话的工作端通道(git/fs 全在被控端执行):detect-cwd 做资格探测,
    * suggest-name 生成名字,create 以预生成 sessionId 建 worktree 拿路径(第二步再以该
@@ -452,6 +480,7 @@ export interface MobileMakerTransport {
    */
   worktree: {
     detectCwd(cwd: string): Promise<MobileWorktreeDetectCwdResult>;
+    listBranches(baseRepo: string): Promise<MobileWorktreeListBranchesResult>;
     suggestName(baseRepo: string): Promise<{ name: string }>;
     create(req: {
       sessionId: string;
@@ -668,8 +697,13 @@ export function createMobileMakerTransport({
     getNewMakerDefaults: (agentKind) => call('maker:get-new-maker-defaults', [agentKind]),
     applyNewMakerWorktreePref: (worktreeEnabled) =>
       call('maker:apply-new-maker-worktree-pref', [{ worktreeEnabled }]),
+    getNewMakerWorktreeBranchPref: (baseRepo) =>
+      call('maker:get-new-maker-worktree-branch-pref', [{ baseRepo }]),
+    applyNewMakerWorktreeBranchPref: (baseRepo, sourceBranch) =>
+      call('maker:apply-new-maker-worktree-branch-pref', [{ baseRepo, sourceBranch }]),
     worktree: {
       detectCwd: (cwd) => call('worktree:detect-cwd', [{ cwd }]),
+      listBranches: (baseRepo) => call('worktree:list-branches', [{ baseRepo }]),
       suggestName: (baseRepo) => call('worktree:suggest-name', [{ baseRepo }]),
       create: (req) => call('worktree:create', [req]),
       discardPrecreated: (input) => call('worktree:discard-precreated', [input]),
