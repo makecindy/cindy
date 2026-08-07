@@ -1535,5 +1535,7 @@ export const hookGroupContextCursors = sqliteTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.provider, t.cursorKey] }),
+    /** 惰性 retention sweep 按最后活跃时间清理长期不用的高基数 lane 游标。 */
+    byUpdatedAt: index('hook_group_context_cursors_updated_at_idx').on(t.updatedAt),
   }),
 );
