@@ -66,9 +66,8 @@ export async function withOrcaWorkerDisableFence<T>(
     return await task(() => {
       teamEndIsDurable = true;
     });
-  } catch (error) {
+  } finally {
     if (!teamEndIsDurable) rollbackFence();
-    throw error;
   }
 }
 

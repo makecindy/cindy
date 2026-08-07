@@ -131,6 +131,14 @@ describe('Orca disable Worker runtime locking', () => {
     expect(isOrcaWorkerSessionDisableFenced('worker-before-durable')).toBe(false);
   });
 
+  it('rolls back its fence when shutdown returns before marking the team end durable', async () => {
+    await withOrcaWorkerDisableFence(['worker-early-return'], async () => {
+      expect(isOrcaWorkerSessionDisableFenced('worker-early-return')).toBe(true);
+    });
+
+    expect(isOrcaWorkerSessionDisableFenced('worker-early-return')).toBe(false);
+  });
+
   it('retains the fence when cleanup fails after the team end is durable', async () => {
     await expect(
       withOrcaWorkerDisableFence(['worker-after-durable'], async (markTeamEndDurable) => {
