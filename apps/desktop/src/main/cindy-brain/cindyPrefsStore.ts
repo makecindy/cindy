@@ -30,8 +30,42 @@ export const CINDY_CAPABILITY_KEYS = [
   'video.generate',
   'video.edit',
   'text.oneshot',
+  // 向量类的取值是 embedding catalog 的 model id(与媒体同为"一组供应商×模型",
+  // 不同于 text.oneshot 那种轻量链档位键)。
+  'embed.text',
 ] as const;
 export type CindyCapabilityKey = (typeof CINDY_CAPABILITY_KEYS)[number];
+
+/** 覆盖值的取值域来自哪份清单(写入校验按此选白名单)。 */
+export type CindyCapabilityValueDomain = 'image' | 'video' | 'embed' | 'utilityChain';
+
+/**
+ * 能力键 → 取值域。
+ *
+ * 写成**穷举 switch** 而不是前缀 if/else 链:新增能力类目时 TS 会在这里报缺分支,
+ * 而不是让它悄悄落进某个兜底分支、被别的类目的白名单拒掉。这个坑已经踩过两次
+ * (PR #1707 review):
+ *   - `embed.*` 落进图像白名单 —— 设置里下拉能选,一选就回滚成一句通用 toast;
+ *   - `text.oneshot` 同样落在那里,而它的取值是轻量链档位键(codex-gpt-5.4-mini 等),
+ *     跟图像目录的 model id 根本不是一个词汇表,所以钉快问快答后端一直是必然失败。
+ * 两者都属于"界面看起来正常、一操作就静默回滚"的类型,不写死映射就还会再来一次。
+ */
+export function cindyCapabilityValueDomain(
+  capability: CindyCapabilityKey,
+): CindyCapabilityValueDomain {
+  switch (capability) {
+    case 'image.generate':
+    case 'image.edit':
+      return 'image';
+    case 'video.generate':
+    case 'video.edit':
+      return 'video';
+    case 'embed.text':
+      return 'embed';
+    case 'text.oneshot':
+      return 'utilityChain';
+  }
+}
 
 export interface GhostCindyPrefs {
   /** ghostId → 能力键 → 白名单模型 id(缺项 = 跟随默认)。 */

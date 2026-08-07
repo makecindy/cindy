@@ -154,7 +154,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     sourceDisconnected?: boolean;
     reselectEmitsChange?: boolean;
     onNavigateToProviders?: () => void;
-    onProviderChange?: (providerId: string | null, modelId?: string) => void;
+    onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
     onModelChange: (modelId: string) => void;
     onEffortChange?: (effort: string) => void;
     modelMemory?: {
@@ -193,6 +193,16 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
           type="button"
           data-testid={`${vendor}:pick-provider-row`}
           onClick={() => props.onProviderChange?.(providerId, modelId)}
+        />
+        <button
+          type="button"
+          data-testid={`${vendor}:pick-provider-row-low`}
+          onClick={() => props.onProviderChange?.(providerId, modelId, 'low')}
+        />
+        <button
+          type="button"
+          data-testid={`${vendor}:pick-provider-row-empty`}
+          onClick={() => props.onProviderChange?.(providerId, modelId, '')}
         />
         <button
           type="button"
@@ -506,6 +516,31 @@ describe('SubagentModelSection Codex row', () => {
       codex: 'gpt-5.6-terra',
       codexProviderId: 'openai',
       codexEffort: 'medium',
+    });
+  });
+
+  it('uses the shared provider-row effort when switching sources', async () => {
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('codex:pick-provider-row-low'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({
+      codex: 'gpt-5.6-terra',
+      codexProviderId: 'openai',
+      codexEffort: 'low',
+    });
+  });
+
+  it('clears a provider row effort when the shared selector returns an explicit empty value', async () => {
+    settingsGet.mockResolvedValue(
+      makeState({ codex: 'gpt-5.6-terra', codexProviderId: 'openai', codexEffort: 'high' }),
+    );
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('codex:pick-provider-row-empty'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({
+      codex: 'gpt-5.6-terra',
+      codexProviderId: 'openai',
+      codexEffort: null,
     });
   });
 

@@ -41,6 +41,7 @@ export type IpcErrorCode =
   | 'REWIND_GIT_FAILED'
   | 'REWIND_UNSUPPORTED_HISTORY'
   | 'REWIND_TARGET_NOT_LATEST'
+  | 'TURN_CHANGE_GIT_UNAVAILABLE'
   // multi-worker
   | 'DUPLICATE_LABEL'
   | 'WORKER_CREATION_IN_PROGRESS'
@@ -62,6 +63,10 @@ export type IpcErrorCode =
   | 'SSH_AUTH_FAILED'
   | 'SSH_CONFIG_IO_FAILED'
   | 'SSH_HOST_NOT_FOUND'
+  // remote-ssh：配置的私钥文件在磁盘上不存在/不可读。与 SSH_CONNECT_FAILED 分开——
+  // 这是本机路径问题（缺失 / ~ 未展开 / 路径被改写），不是网络或服务器错误，renderer
+  // 据此显示明确的路径错误并允许重新选择密钥 / 编辑主机。
+  | 'SSH_KEY_FILE_NOT_FOUND'
   // remote-ssh：远端 agent 阶段
   | 'SSH_NOT_CONNECTED'
   | 'SSH_INSTALL_FAILED'
@@ -133,6 +138,12 @@ export type IpcErrorCode =
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
+  // 本机 HTML 页面打开到系统浏览器
+  | 'BROWSER_FILE_INVALID_TARGET'
+  | 'BROWSER_FILE_PATH_NOT_ALLOWED'
+  | 'BROWSER_FILE_UNSUPPORTED_TYPE'
+  | 'BROWSER_FILE_NOT_FOUND'
+  | 'BROWSER_FILE_OPEN_FAILED'
   // 会话分享(.cshare 导出/导入)
   | 'SHARE_FILE_INVALID' // 不是 .cshare / 头或 manifest 损坏 / payload 不是 zip
   | 'SHARE_PASSWORD_REQUIRED' // 文件已加密但未提供密码
@@ -147,9 +158,17 @@ export type IpcErrorCode =
   | 'THEME_NOT_A_FILE' // 选中路径不是普通文件
   | 'THEME_FILE_TOO_LARGE' // 超 4MB 上限
   | 'THEME_UNSUPPORTED_FILE' // 无法识别为 VSCode / Obsidian 主题
+  | 'THEME_CONTRAST_UNSUPPORTED' // 主题色板无法满足控件对比度约束
   | 'THEME_USES_INCLUDE' // VSCode 主题含 include(需基底才能完整解析)
   | 'THEME_WRITE_ERROR' // 落盘失败(权限/磁盘)
-  | 'THEME_IMPORT_INTERNAL'; // 意外异常
+  | 'THEME_IMPORT_INTERNAL' // 意外异常
+  // 客户端日志上报(log-upload:upload-now)。四种失败要能被 renderer 区分成不同文案:
+  // 「本构建没配上报目标」「还没同意隐私政策」「采到 0 条」「网络失败」是四种不同的用户处置。
+  | 'LOG_UPLOAD_UNAVAILABLE' // 本构建未配置上报目标 = 功能整体关闭
+  | 'PRIVACY_CONSENT_REQUIRED' // 未明示同意《隐私政策》
+  | 'LOG_UPLOAD_EMPTY' // 采集后没有任何可上报的记录
+  | 'LOG_UPLOAD_FAILED' // 上传失败(离线 / 被拒 / 超时)
+  | 'LOG_UPLOAD_BUSY'; // 已有一次上报在进行中
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -187,6 +206,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REWIND_GIT_FAILED',
   'REWIND_UNSUPPORTED_HISTORY',
   'REWIND_TARGET_NOT_LATEST',
+  'TURN_CHANGE_GIT_UNAVAILABLE',
   'DUPLICATE_LABEL',
   'WORKER_CREATION_IN_PROGRESS',
   'WORKER_LIMIT_HARD_EXCEEDED',
@@ -204,6 +224,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SSH_AUTH_FAILED',
   'SSH_CONFIG_IO_FAILED',
   'SSH_HOST_NOT_FOUND',
+  'SSH_KEY_FILE_NOT_FOUND',
   'SSH_NOT_CONNECTED',
   'SSH_INSTALL_FAILED',
   'SSH_EXEC_FAILED',
@@ -257,6 +278,11 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DINGTALK_STREAM_CONNECTION_FAILED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
+  'BROWSER_FILE_INVALID_TARGET',
+  'BROWSER_FILE_PATH_NOT_ALLOWED',
+  'BROWSER_FILE_UNSUPPORTED_TYPE',
+  'BROWSER_FILE_NOT_FOUND',
+  'BROWSER_FILE_OPEN_FAILED',
   'SHARE_FILE_INVALID',
   'SHARE_PASSWORD_REQUIRED',
   'SHARE_PASSWORD_WRONG',
@@ -269,9 +295,15 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'THEME_NOT_A_FILE',
   'THEME_FILE_TOO_LARGE',
   'THEME_UNSUPPORTED_FILE',
+  'THEME_CONTRAST_UNSUPPORTED',
   'THEME_USES_INCLUDE',
   'THEME_WRITE_ERROR',
   'THEME_IMPORT_INTERNAL',
+  'LOG_UPLOAD_UNAVAILABLE',
+  'PRIVACY_CONSENT_REQUIRED',
+  'LOG_UPLOAD_EMPTY',
+  'LOG_UPLOAD_FAILED',
+  'LOG_UPLOAD_BUSY',
 ]);
 
 export function isIpcErrorCode(code: unknown): code is IpcErrorCode {

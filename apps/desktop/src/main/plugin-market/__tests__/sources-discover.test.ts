@@ -2,7 +2,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// 跳过明细只落日志(不进返回值、不进 IPC),所以断言必须打在 logger 上。
+const mocks = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mocks.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+  }),
+}));
 
 import { discoverMarketplace } from '../sources/discover';
 
@@ -22,6 +35,10 @@ const canSymlink = (() => {
     fs.rmSync(probeDir, { recursive: true, force: true });
   }
 })();
+
+beforeEach(() => {
+  mocks.warn.mockClear();
+});
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -55,6 +72,33 @@ function writeManifest(root: string, manifest: unknown, rel = '.agents/plugins/m
   const file = path.join(root, ...rel.split('/'));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, typeof manifest === 'string' ? manifest : JSON.stringify(manifest));
+}
+
+/** LF / CR / NEL / LINE SEPARATOR / PARAGRAPH SEPARATOR 的码位。 */
+const LINE_BREAK_CODE_POINTS = [0x0a, 0x0d, 0x85, 0x2028, 0x2029];
+
+/**
+ * 读最后一次跳过日志。顺带锁住两件事:payload 是**字符串**、且是**单个物理行**。
+ * main logger 走 util.format,传对象会被 util.inspect 按 breakLength 展开——实测
+ * 1 条明细 15 个物理行、20 条 129 行,续行还丢掉时间戳/级别/scope。
+ */
+function lastSkipLog(): {
+  market: string;
+  declared: number;
+  accepted: number;
+  skippedCount: number;
+  unreadableCount: number;
+  entries: Array<{ index: number; path?: string; reason: string; errno?: string }>;
+  detailsTruncated?: number;
+} {
+  const call = mocks.warn.mock.calls.at(-1);
+  expect(call?.[0]).toBe('marketplace skipped plugin entries');
+  const json = call?.[1];
+  expect(typeof json).toBe('string');
+  for (const cp of LINE_BREAK_CODE_POINTS) {
+    expect(json as string).not.toContain(String.fromCharCode(cp));
+  }
+  return JSON.parse(json as string);
 }
 
 describe('discoverMarketplace', () => {
@@ -395,5 +439,97 @@ describe('discoverMarketplace', () => {
     const root2 = makeRoot();
     writeManifest(root2, { name: 'x', plugins: {} });
     expect((await discoverMarketplace(root2)).ok).toBe(false);
+  });
+
+  it('logs why an entry was skipped when the plugin directory has no ghost.json', async () => {
+    const root = makeRoot();
+    writeManifest(root, { name: 'sub-market', plugins: [{ source: './plugins/dep' }] });
+    // Git submodule 未递归检出的形态:目录在,ghost.json 不在。市场 clone 不带
+    // --recurse-submodules,所以这是"市场发现出 0 个插件"最常见的成因。
+    fs.mkdirSync(path.join(root, 'plugins', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.gitmodules'), '[submodule "plugins/dep"]');
+
+    const result = await discoverMarketplace(root);
+
+    // 既有事实不变:清单本身合法,来源照旧可用,条目静默跳过——没有任何错误码。
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.plugins).toHaveLength(0);
+    expect(result.marketplace.skippedCount).toBe(1);
+    expect(result.marketplace.unreadableCount).toBe(0);
+    // 唯一的新增:排查者能定位到是第几条、哪个路径、为什么。path 是清单自报的
+    // repo-relative 路径原样回显(逻辑路径,不跟随宿主分隔符)。
+    const logged = lastSkipLog();
+    expect(logged.market).toBe('sub-market');
+    expect(logged.declared).toBe(1);
+    expect(logged.accepted).toBe(0);
+    expect(logged.skippedCount).toBe(1);
+    expect(logged.entries).toEqual([
+      { index: 0, path: './plugins/dep', reason: 'manifest-missing', errno: 'ENOENT' },
+    ]);
+  });
+
+  it('does not claim a bounded-read rejection is a non-regular file', async () => {
+    const root = makeRoot();
+    const bigDir = path.join(root, 'plugins', 'big');
+    fs.mkdirSync(bigDir, { recursive: true });
+    // 超过 GHOST_MANIFEST_MAX_BYTES:限量读取闸返回 null,与"非普通文件""根内复核
+    // 不过"共用同一个信号。reason 因此不得对文件类型下断言,否则排障者会去查
+    // symlink / 文件类型,而真因是体积。
+    fs.writeFileSync(
+      path.join(bigDir, 'ghost.json'),
+      `{"schemaVersion":2,"id":"big","pad":"${'x'.repeat(600 * 1024)}"}`,
+    );
+    writeManifest(root, { name: 'sized-log', plugins: [{ source: 'plugins/big' }] });
+
+    const result = await discoverMarketplace(root);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.skippedCount).toBe(1);
+    expect(lastSkipLog().entries[0]?.reason).toBe('manifest-bounded-read-rejected');
+  });
+
+  it('strips unicode line separators from logged paths and market names', async () => {
+    const root = makeRoot();
+    // U+2028 / U+2029 / NEL 不在 C0 与双向控制符集合里,JSON.stringify 也不转义它们,
+    // 查看器却按换行渲染 —— 不剥离就能把一行 warn 劈成攻击者控制的多行。
+    const ls = String.fromCharCode(0x2028);
+    const ps = String.fromCharCode(0x2029);
+    const nel = String.fromCharCode(0x85);
+    const hostileRel = `plugins/a${ls}fake-log-line${ps}b${nel}c`;
+    // 市场名同源同险:它那道准入闸(FORBIDDEN_NAME_CHARS)不含这三个码位,所以带
+    // 换行的名字能通过校验,日志侧必须自己消毒。
+    const hostileName = `mkt${ls}fake-log-line`;
+    writeManifest(root, { name: hostileName, plugins: [{ source: hostileRel }] });
+
+    const result = await discoverMarketplace(root);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.skippedCount).toBe(1);
+    // 准入判据未改:名字照旧被接受,只是进日志前被剥离。
+    expect(result.marketplace.name).toBe(hostileName);
+    const logged = lastSkipLog();
+    expect(logged.entries[0]?.path).toBe('plugins/afake-log-linebc');
+    expect(logged.market).toBe('mktfake-log-line');
+  });
+
+  it('caps skip details and reports how many were dropped', async () => {
+    const root = makeRoot();
+    // 损坏或恶意清单可有数百条非法条目;发现会被列表/快照/详情反复调用,明细必须限量。
+    writeManifest(root, {
+      name: 'noisy',
+      plugins: Array.from({ length: 25 }, () => 'not-an-object'),
+    });
+
+    const result = await discoverMarketplace(root);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.skippedCount).toBe(25);
+    const logged = lastSkipLog();
+    expect(logged.entries).toHaveLength(20);
+    expect(logged.detailsTruncated).toBe(5);
   });
 });

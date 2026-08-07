@@ -55,16 +55,72 @@ export function isTrustedAppRendererEvent(event: MainIpcEvent): boolean {
   return isTrustedAppRendererEventForLocation(event, currentRendererUrlOptions());
 }
 
+/**
+ * 判断 IPC 是否来自 Cindy 自有 renderer 地址的顶层页面。
+ *
+ * 该判据不要求窗口登记为 app-content，只能与具体能力的 Main 侧窗口登记表组合使用。
+ * 禁止单独用于文件、进程、凭证、持久化写入或其它特权能力。
+ */
+export function isTrustedTopLevelCindyRendererEvent(event: MainIpcEvent): boolean {
+  return isTrustedTopLevelCindyRendererEventForLocation(event, currentRendererUrlOptions());
+}
+
 /** 与生产判定相同，但允许测试显式传入 renderer 地址。 */
-export function isTrustedAppRendererEventForLocation(
+export function isTrustedTopLevelCindyRendererEventForLocation(
   event: MainIpcEvent,
   options: TrustedRendererUrlOptions,
 ): boolean {
   const frame = event.senderFrame;
   if (!frame || frame !== event.sender.mainFrame || frame.parent !== null) return false;
+  return isTrustedAppRendererUrl(frame.url, options);
+}
+
+/** 与生产判定相同，但允许测试显式传入 renderer 地址。 */
+export function isTrustedAppRendererEventForLocation(
+  event: MainIpcEvent,
+  options: TrustedRendererUrlOptions,
+): boolean {
+  if (!isTrustedTopLevelCindyRendererEventForLocation(event, options)) return false;
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!isAppContentWindow(win)) return false;
+  return true;
+}
+
+/**
+ * 窗口级判据:这个窗口此刻是否是 Cindy 自有顶层页面。
+ *
+ * 事件级判据只管**入站** IPC;**出站**推送(webContents.send)同样是授权边界——
+ * 拿 BrowserWindow.getAllWindows() 无条件广播,等于把载荷发给所有窗口,包括已经
+ * 导航到别处的那些。载荷带用户私密内容(如插件未读摘要:工单标题、邮件主题)时
+ * 就是内容泄漏。判据与入站那条同源同口径,免得两边各写一套慢慢漂开。
+ */
+export function isTrustedAppRendererWindow(win: BrowserWindow | null | undefined): boolean {
+  return isTrustedAppRendererWindowForLocation(win, currentRendererUrlOptions());
+}
+
+/** 判断窗口当前是否仍加载 Cindy 自有 renderer，不包含 app-content 身份授权。 */
+export function isTrustedCindyRendererWindow(win: BrowserWindow | null | undefined): boolean {
+  return isTrustedCindyRendererWindowForLocation(win, currentRendererUrlOptions());
+}
+
+/** 与生产判定相同，但允许测试显式传入 renderer 地址。 */
+export function isTrustedCindyRendererWindowForLocation(
+  win: BrowserWindow | null | undefined,
+  options: TrustedRendererUrlOptions,
+): boolean {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return false;
+  const frame = win.webContents.mainFrame;
+  if (!frame) return false;
   return isTrustedAppRendererUrl(frame.url, options);
+}
+
+/** 与生产判定相同，但允许测试显式传入 renderer 地址。 */
+export function isTrustedAppRendererWindowForLocation(
+  win: BrowserWindow | null | undefined,
+  options: TrustedRendererUrlOptions,
+): boolean {
+  if (!isAppContentWindow(win)) return false;
+  return isTrustedCindyRendererWindowForLocation(win, options);
 }
 
 /** 高权限 IPC 的统一断言；失败时不泄露真实允许地址。 */

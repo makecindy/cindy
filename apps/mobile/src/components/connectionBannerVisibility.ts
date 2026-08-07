@@ -13,10 +13,12 @@ export function resolveConnectionBannerVisibility(input: {
   offlineLongEnough: boolean;
   hasError: boolean;
   hasIssue: boolean;
+  hasUnstableIssue: boolean;
   deviceUnresponsive: boolean;
 }): boolean {
   return input.hasError
     || input.deviceUnresponsive
+    || input.hasUnstableIssue
     || (input.offline && (input.hasIssue || input.offlineLongEnough));
 }
 

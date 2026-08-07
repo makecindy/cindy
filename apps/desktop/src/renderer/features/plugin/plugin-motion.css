@@ -92,12 +92,76 @@
   --plugin-motion-order: 8;
 }
 .plugin-motion-selected {
+  background: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
+  border-color: color-mix(in srgb, var(--border-default) 48%, transparent);
+  box-shadow: var(--plugin-card-shadow);
   animation: plugin-selection-settle var(--plugin-motion-state) var(--plugin-motion-ease-enter);
+}
+
+/* Recommended filters use the shared selected surface without the elevated tab shadow. */
+.plugin-catalog-filters .plugin-motion-selected {
+  box-shadow: none;
+}
+
+/* Keep disclosure content mounted so collapse can ease out instead of jumping. */
+.plugin-installed-overflow {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translate3d(0, -6px, 0);
+  transition:
+    grid-template-rows var(--motion-base) var(--motion-ease-move),
+    opacity var(--motion-base) var(--motion-ease-move),
+    transform var(--motion-base) var(--motion-ease-move);
+}
+
+.plugin-installed-overflow[data-expanded='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.plugin-installed-overflow-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.plugin-installed-overflow-grid {
+  padding-top: 0.75rem;
+}
+
+.plugin-installed-preview-stack {
+  display: inline-flex;
+  align-items: center;
+  isolation: isolate;
+}
+
+.plugin-installed-preview-card {
+  position: relative;
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-left: -0.45rem;
+  border-radius: 0.75rem;
+  background: var(--surface-elevated);
+  outline: 2px solid var(--surface-elevated);
+}
+
+.plugin-installed-preview-card > span {
+  border-radius: inherit;
+}
+
+.plugin-installed-preview-card:first-child {
+  margin-left: 0;
 }
 
 /* Catalog chrome responds to the actual main pane, including when the sidebar stays open. */
 .plugin-management-layout-root {
   container: plugin-management / inline-size;
+}
+
+.plugin-management-content-frame {
+  container: plugin-management-content / inline-size;
 }
 
 .plugin-detail-frame {
@@ -141,23 +205,25 @@
   }
 }
 
-@container plugin-management (max-width: 720px) {
-  .plugin-management-layout-root .plugin-catalog-toolbar {
-    align-items: stretch;
+@container plugin-management-content (max-width: 720px) {
+  .plugin-installed-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-catalog-toolbar {
+    align-items: flex-start;
     flex-direction: column;
     gap: 0.75rem;
   }
 
-  .plugin-management-layout-root .plugin-catalog-filters {
-    width: 100%;
-    justify-content: space-between;
-    gap: 0.125rem;
+  .plugin-catalog-filters {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    width: auto;
   }
+}
 
-  .plugin-management-layout-root .plugin-catalog-filters > button {
-    padding-inline: 0.5rem;
-  }
-
+@container plugin-management (max-width: 720px) {
   .plugin-management-layout-root .plugin-management-header {
     height: 7rem;
   }
@@ -221,8 +287,10 @@
       .plugin-motion-page-header,
       .plugin-motion-page-section,
       .plugin-motion-stagger > *,
-      .plugin-motion-selected
+      .plugin-motion-selected,
+      .plugin-installed-overflow
     ) {
     animation: none !important;
+    transition: none !important;
   }
 }

@@ -55,6 +55,17 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "passkey",
+      "status": "proposed",
+      "en": "Passkey",
+      "translations": {
+        "zh-CN": "通行密钥",
+        "ja": "パスキー",
+        "ko": "패스키"
+      },
+      "note": "WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Microsoft 平台常见译法；先登记为 proposed，待产品术语评审后固化。"
+    },
+    {
       "id": "anthropic-messages",
       "status": "proposed",
       "en": "Anthropic Messages",
@@ -821,6 +832,7 @@
       },
       "note": "面向用户叫「任务」——它是左侧列表里可单独打开/删除/分享的条目，有自己的独立空间、可以同时跑多个；「对话」表达不出这个并行性（2026-07-31 裁决，替代此前的「对话」）。任务内人与 AI 交流的过程与内容仍叫「对话」，见 alsoAllowed 与 chat 条目。「会话」继续禁用于产品概念。但英文的 session 在本仓实际承载**五个**不同概念，其中最容易译错、也最影响用户行为的是 Agent 运行时会话——已单独立为 agent-session 条目，中文叫「Agent 会话」，务必先读它再改这类文案；余下三类（登录/绑定校验、SSH 远程与传输、操作系统桌面）与 mobile 语音连接会话都与产品无关，存量译法不在本条约束内，见本条 exempt。代码与内部标识仍用 Session，本条只约束 UI 文案。ja / ko 用音译 `セッション` / `세션`，本次一并收敛：改名前这两种语言就在混用（音译 271 / 277 处 vs `会話`・`대화` 16 / 11 处），改完英文后不一致放大到 133 处，2026-07-31 逐条判断后统一到音译（详见 docs/product-rules/task-and-conversation-naming.md §5.1）。日韩不存在中文那种一词多义问题，所以 `タスク` / `작업`（task）无需像中文那样改写成「自动化」。交流过程仍用 `会話` / `대화`，chat history 仍用 `チャット履歴` / `채팅 기록`。概念分层与判定规则见 docs/product-rules/task-and-conversation-naming.md。",
       "exempt": [
+        "desktop:settings.providers.custom.fields.modelSupportsReasoningHelp",
         "desktop:chat.backgroundActivity.stopBashTitle",
         "desktop:chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED",
         "desktop:chat.rewind.errors.remoteNotSupported",
@@ -830,6 +842,7 @@
         "desktop:chat.userMessage.forkErrors.unsupportedHistory",
         "desktop:login.errors.INVALID_BIND_TICKET",
         "desktop:login.errors.INVALID_LOGIN_TICKET",
+        "desktop:newChat.atMention.typeToSearchFiles",
         "desktop:newChat.chatInput.agentSwitch.confirmation.description",
         "desktop:newChat.collaboration.archiveWorkerConfirmDesc",
         "desktop:newChat.collaboration.stopConfirmDesc",
@@ -849,8 +862,8 @@
         "desktop:settings.lspMode.toast.disabled",
         "desktop:settings.memory.agent.toast.takesEffectSuffix",
         "desktop:settings.sessionImport.description",
-    "desktop:settings.sessionImport.summary.filteredHint",
-    "desktop:settings.mcp.dialog.desc",
+        "desktop:settings.sessionImport.summary.filteredHint",
+        "desktop:settings.mcp.dialog.desc",
         "desktop:settings.mcp.deleteConfirm.message",
         "desktop:settings.memory.description",
         "desktop:settings.lspMode.toast.enabled",
@@ -1278,6 +1291,72 @@
         "ko": "답장"
       },
       "note": "Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。"
+    },
+    {
+      "id": "upload-code",
+      "status": "proposed",
+      "en": "Upload code",
+      "translations": {
+        "zh-CN": "上传编号",
+        "ja": "アップロード番号",
+        "ko": "업로드 번호"
+      },
+      "note": "客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。"
+    },
+    {
+      "id": "run-records",
+      "status": "proposed",
+      "en": "Run records",
+      "translations": {
+        "zh-CN": "运行记录",
+        "ja": "動作記録",
+        "ko": "실행 기록"
+      },
+      "note": "日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。"
+    },
+    {
+      "id": "crash",
+      "status": "proposed",
+      "en": "Crash",
+      "translations": {
+        "zh-CN": "崩溃",
+        "ja": "クラッシュ",
+        "ko": "크래시"
+      },
+      "note": "应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。"
+    },
+    {
+      "id": "embedding",
+      "status": "proposed",
+      "en": "embedding",
+      "translations": {
+        "zh-CN": "向量",
+        "ja": "ベクトル",
+        "ko": "벡터"
+      },
+      "note": "文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。"
+    },
+    {
+      "id": "resource-usage",
+      "status": "proposed",
+      "en": "Resource usage",
+      "translations": {
+        "zh-CN": "资源用量",
+        "ja": "リソース使用量",
+        "ko": "리소스 사용량"
+      },
+      "note": "右栏「资源用量」面板(对标 Chromium 任务管理器,展示本机进程 CPU/内存并可终止 Agent 进程)。命名裁决:不可叫「任务管理器」——Session→任务 已 decided,「任务管理器」会被读成管理左侧任务列表;「监控/监视」有隐私负面语感判例(见 shortcut listener permission 条目),弃用。「用量」对齐已裁决的 Usage→用量。"
+    },
+    {
+      "id": "process",
+      "status": "proposed",
+      "en": "Process",
+      "translations": {
+        "zh-CN": "进程",
+        "ja": "プロセス",
+        "ko": "프로세스"
+      },
+      "note": "OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。"
     }
   ]
 }

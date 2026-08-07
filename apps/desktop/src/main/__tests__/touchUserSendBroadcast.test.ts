@@ -77,7 +77,12 @@ vi.mock('../logger', () => ({
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn(() => Promise.resolve()) }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
-vi.mock('../device-link/broadcast-tap', () => ({ tapWindowBroadcast: h.tapWindowBroadcast }));
+vi.mock('../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => true),
+  tapWindowBroadcast: h.tapWindowBroadcast,
+}));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => h.agentIslandService,
@@ -164,14 +169,15 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
 describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收敛)', () => {
   it('写 clearedAt + sdkSessionId=null,并用 ISO clearedAt 广播给本机窗口和控制端镜像', async () => {
     const atMs = 1_700_000_123_000;
+    // Drizzle's MAX/COALESCE expressions are not JavaScript numbers.  Mock the
+    // SELECT read-back with the effective values that SQLite would return.
+    h.selectResults.push([{ clearedAt: atMs, updatedAt: atMs }]);
     await clearSessionContextInDb('sess-clear', atMs);
 
     expect(h.updateSetCalls).toHaveLength(1);
-    expect(h.updateSetCalls[0]).toEqual({
-      sdkSessionId: null,
-      clearedAt: atMs,
-      updatedAt: atMs,
-    });
+    expect(h.updateSetCalls[0].sdkSessionId).toBeNull();
+    expect(typeof h.updateSetCalls[0].clearedAt).not.toBe('number');
+    expect(typeof h.updateSetCalls[0].updatedAt).not.toBe('number');
 
     const iso = new Date(atMs).toISOString();
     expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {

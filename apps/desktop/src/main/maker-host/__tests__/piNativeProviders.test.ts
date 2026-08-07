@@ -168,4 +168,49 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       { id: 'legacy', name: 'Legacy', contextWindow: undefined },
     ]);
   });
+
+  it('maps an explicit Responses reasoning capability and supported efforts into Pi', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'reasoning',
+          name: 'Reasoning',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              wireProtocol: 'openai-responses',
+              models: [
+                {
+                  id: 'reasoner',
+                  name: 'Reasoner',
+                  reasoning: true,
+                  reasoningEfforts: ['low', 'high', 'xhigh'],
+                },
+                { id: 'legacy', name: 'Legacy' },
+              ],
+            }),
+          },
+        },
+      ],
+      () => null,
+    );
+
+    expect(providers[0].models).toEqual([
+      {
+        id: 'reasoner',
+        name: 'Reasoner',
+        contextWindow: undefined,
+        reasoning: true,
+        thinkingLevelMap: {
+          minimal: null,
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+          max: null,
+        },
+      },
+      { id: 'legacy', name: 'Legacy', contextWindow: undefined },
+    ]);
+  });
 });

@@ -275,6 +275,70 @@ describe('serverApiFetch', () => {
     );
   });
 
+  it('⚠️ logLabel 路由模板代替真实 path 记日志（插件 ID 在浅层、redactedLogPath 挡不住）', async () => {
+    // 2026-08-06 review：`/api/plugins/<pluginId>` 的 id 是第 3 段,redactedLogPath 会保留它 →
+    // 外泄用户装的第三方插件身份。带 logLabel 的调用一律用模板记日志,真实 path / id 不落日志。
+    mocks.getAccessToken.mockReturnValue('token-a');
+    mocks.netFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ error: { code: 'X', message: 'plugin cindy-github not found' } }),
+      })
+      .mockRejectedValueOnce(new Error('boom cindy-github'));
+
+    await expect(
+      serverApiFetch('/api/plugins/cindy-github/releases/rel-9/download', {
+        baseUrl: 'https://plugins.example.com',
+        redactErrorDetails: true,
+        logLabel: '/api/plugins',
+      }),
+    ).rejects.toBeTruthy();
+    await expect(
+      serverApiFetch('/api/plugins/cindy-github', {
+        baseUrl: 'https://plugins.example.com',
+        redactErrorDetails: true,
+        logLabel: '/api/plugins',
+      }),
+    ).rejects.toBeTruthy();
+
+    const logged = JSON.stringify({
+      error: mocks.logger.error.mock.calls,
+      warn: mocks.logger.warn.mock.calls,
+    });
+    expect(logged).not.toContain('cindy-github'); // 插件身份不进日志
+    expect(logged).not.toContain('rel-9');
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'serverApiFetch.redacted_not_ok',
+      'path=/api/plugins',
+      'method=GET',
+      'status=404',
+      'code=HTTP_404',
+    );
+  });
+
+  it('logLabel 在非 redact 分支也代替真实 path 且省掉 msg（上游 msg 可能回显身份）', async () => {
+    mocks.getAccessToken.mockReturnValue('token-a');
+    mocks.netFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({
+        error: { code: 'SKILL_NOT_FOUND', message: 'skill secret-skill-name not found' },
+      }),
+    });
+    await expect(
+      serverApiFetch('/api/skills-hub/skills/secret-skill-name', {
+        baseUrl: 'https://skills.example.com',
+        logLabel: '/api/skills-hub',
+      }),
+    ).rejects.toMatchObject({ code: 'SKILL_NOT_FOUND' }); // 抛出的 code 不受影响,业务分支仍可用
+    const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).not.toContain('secret-skill-name'); // path 与 msg 都不外泄身份
+    expect(logged).not.toContain('msg=');
+    expect(logged).toContain('path=/api/skills-hub');
+    expect(logged).toContain('code=SKILL_NOT_FOUND'); // 业务 code 仍记(它不是身份)
+  });
+
   it('surfaces only explicitly allowed business codes on redacted requests', async () => {
     mocks.getAccessToken.mockReturnValue('token-a');
     mocks.netFetch

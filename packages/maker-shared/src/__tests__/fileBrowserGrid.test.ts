@@ -137,6 +137,29 @@ describe('fileThumbKind', () => {
     expect(fileThumbKind('noext')).toBe('generic');
     expect(fileThumbKind('c.db')).toBe('generic');
   });
+
+  it('名字里带 `?` / `#` 的真实文件仍归 doc —— 它是预览页的上游分派门(review P1)', () => {
+    // 预览页的分派是 `if (item.thumb === 'doc')` 才进 TextPreviewPage,否则直接 Unsupported。
+    // thumb 由本函数算,而它经 isTextFilePreviewCandidate → remoteFilePreviewKind。
+    // 后者原先按 URL 语义在 `?` / `#` 处截断,于是 macOS / Linux 上合法的
+    // `report#draft.html` 被截成 `report` → unknown → generic → **连文本预览都进不去**,
+    // 下游那些 HTML 渲染态判定根本没机会运行(bot 实捉:判定"实际不会运行")。
+    expect(fileThumbKind('report#draft.html')).toBe('doc');
+    expect(fileThumbKind('report?v=1.html')).toBe('doc');
+    // 同理不该因为带 `?` 就把二进制误判成可读文本。
+    expect(fileThumbKind('data.zip?x=1')).toBe('generic');
+  });
+
+  it('grid item 的 previewKind / thumb 都按真实文件名算(端到端上游门)', () => {
+    const [item] = buildFileBrowserGridItems(
+      [{ name: 'report#draft.html', relPath: 'docs/report#draft.html', type: 'file', size: 12, mtimeMs: 1 }],
+      'name',
+      Date.now(),
+    );
+    // 两个字段一起过关,预览页才会把它交给 TextPreviewPage 而不是 UnsupportedPage。
+    expect(item.previewKind).toBe('text');
+    expect(item.thumb).toBe('doc');
+  });
 });
 
 describe('filterFileNameMatches', () => {

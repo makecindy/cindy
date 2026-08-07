@@ -162,6 +162,25 @@ export class UsageTracker {
   }
 
   /**
+   * 上下文超限错误(400 context_length_exceeded / prompt is too long 等)终态时调。
+   *
+   * 超限请求被上游整体拒绝, 不返回任何 usage —— lastApi 停在上一次成功值(会话重启后
+   * 首轮就失败则是 0), snapshot().contextTokens 会把"已经溢出"显示成低占用甚至 0%,
+   * 且 auto-compact 的 ratio 判定永远走不到阈值, 会话进入"超限 → 无 usage → 不压缩 →
+   * 重试再超限"的自锁(#1429)。这里把 lastApi 锁到窗口满载, 让圆环如实显示 100%、
+   * ratio 达到 1.0, turn end 的 auto-compact 判定得以触发。
+   *
+   * 窗口未知(0)时 no-op —— 与 setContextWindow / AutoCompactController.onUsageUpdate
+   * 一致的"无估算"原则; 已 ≥ 窗口(上一轮真实值本就超了)时也不动, 保留真实读数。
+   */
+  markContextOverflow(): void {
+    if (this.contextWindow <= 0) return;
+    const current = this.lastApi.input + this.lastApi.cacheRead + this.lastApi.cacheCreate;
+    if (current >= this.contextWindow) return;
+    this.lastApi = { input: this.contextWindow, cacheRead: 0, cacheCreate: 0 };
+  }
+
+  /**
    * 当前 turn 已累计的真实用量 (copy, 只读)。
    *
    * 与 endTurn 的关系: endTurn(turnUsage) 会用调用方给的 aggregate **覆盖**

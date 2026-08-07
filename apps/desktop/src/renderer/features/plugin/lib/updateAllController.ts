@@ -8,7 +8,8 @@
  * 为什么在组件外:批次可以在用户关掉弹窗、离开 /plugins 后继续跑
  * (「后台继续」语义),待确认的扩权项也必须在回到插件页后仍然保留
  * 批准/跳过入口——状态生命周期必须长于页面组件,所以照
- * useInstalledGhosts 的先例做成模块级单例 store。
+ * useInstalledGhosts 的先例做成模块级单例 store。真实包复核返回期间若
+ * 已装权限基线漂移,保留目标 release 并退回可恢复的重新审阅状态。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -281,14 +282,18 @@ async function runQueue(generation: number): Promise<void> {
             permissionDiff: diff,
             // 审阅基线绑定权限指纹而非版本号:同版本换 manifest 也能识别。
             reviewedBaseline: ghostPermissionBaselineKey(installedManifest),
-            ...(detail.sourceType !== 'server' ? { expectedManifest: detail.manifest } : {}),
+            expectedManifest: detail.manifest,
           });
           continue;
         }
-        await window.electronAPI.pluginMarket.install(next.pluginId, {
+        const result = await window.electronAPI.pluginMarket.install(next.pluginId, {
           expectedReleaseId: detail.releaseId,
-          ...(detail.sourceType !== 'server' ? { expectedManifest: detail.manifest } : {}),
+          expectedManifest: detail.manifest,
         });
+        if (result.cancelled) {
+          patchRow(generation, next.pluginId, { status: 'skipped' });
+          continue;
+        }
         patchRow(generation, next.pluginId, { status: 'done' });
       } catch (error) {
         if (batchGeneration !== generation) return;
@@ -440,7 +445,7 @@ async function runApprovalBody(pluginId: string, generation: number): Promise<vo
         permissionDiff: diffGhostPermissionItems(installed, detail.manifest),
         staleReview: false,
         reviewedBaseline: ghostPermissionBaselineKey(installed),
-        expectedManifest: detail.sourceType !== 'server' ? detail.manifest : undefined,
+        expectedManifest: detail.manifest,
       });
     };
     // 用户审阅的是「审阅当时的已装权限面 → 那一刻的目标 release」。三个前提
@@ -451,16 +456,13 @@ async function runApprovalBody(pluginId: string, generation: number): Promise<vo
     //  - 目标 release 变化:市场在等待期间发了新版,审的不是这一版。
     //  - 目标 manifest 变化:自定义市场源可以在**同一 releaseId 下**改 manifest,
     //    只比 releaseId 看不出来。
-    // 非 server 源**必须**留有 expectedManifest 且与当前详情逐份一致才算有效:
+    // 所有来源都必须留有 expectedManifest 且与当前详情逐份一致才算有效:
     // 缺失不能短路成「有效」——那样下一次批准会不带 expectedManifest 去装,
     // 主进程对这类来源直接 INVALID_PARAMS,行落成 failed(前一轮把被拒的行
-    // 清成 expectedManifest: undefined,正好会踩中)。server 源无此字段,
-    // 由 releaseId 兜住。
+    // 清成 expectedManifest: undefined,正好会踩中)。
     const manifestStillMatches =
-      detail.sourceType === 'server'
-        ? true
-        : row.expectedManifest !== undefined &&
-          JSON.stringify(row.expectedManifest) === JSON.stringify(detail.manifest);
+      row.expectedManifest !== undefined &&
+      JSON.stringify(row.expectedManifest) === JSON.stringify(detail.manifest);
     const reviewStillValid =
       row.staleReview !== true &&
       ghostPermissionBaselineKey(installed) === row.reviewedBaseline &&
@@ -478,7 +480,11 @@ async function runApprovalBody(pluginId: string, generation: number): Promise<vo
       options: Parameters<typeof window.electronAPI.pluginMarket.install>[1],
     ): Promise<boolean> => {
       try {
-        await window.electronAPI.pluginMarket.install(pluginId, options);
+        const result = await window.electronAPI.pluginMarket.install(pluginId, options);
+        if (result.cancelled) {
+          patchRow(generation, pluginId, { status: 'skipped' });
+          return false;
+        }
         return true;
       } catch (error) {
         if (batchGeneration !== generation) return false;
@@ -499,10 +505,10 @@ async function runApprovalBody(pluginId: string, generation: number): Promise<vo
         throw error;
       }
     };
-    if (reviewStillValid) {
+    if (reviewStillValid && row.expectedManifest !== undefined) {
       const didInstall = await installOrHoldForReReview({
         expectedReleaseId: row.releaseId,
-        ...(row.expectedManifest ? { expectedManifest: row.expectedManifest } : {}),
+        expectedManifest: row.expectedManifest,
         allowPermissionExpansion: true,
         // 审阅基线随批准回传:Main 在安装锁内用当时的已装 manifest 复核,
         // renderer 这边的检查挡不住 IPC 往返窗口内的替换。
@@ -522,7 +528,7 @@ async function runApprovalBody(pluginId: string, generation: number): Promise<vo
       // 不匹配拒绝,不能把它落成终态失败。
       const ok = await installOrHoldForReReview({
         expectedReleaseId: detail.releaseId,
-        ...(detail.sourceType !== 'server' ? { expectedManifest: detail.manifest } : {}),
+        expectedManifest: detail.manifest,
       });
       if (!ok) return;
       patchRow(generation, pluginId, { status: 'done', fromVersion: installed.version });

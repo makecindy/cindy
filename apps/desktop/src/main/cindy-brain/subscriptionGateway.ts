@@ -20,6 +20,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
   GHOST_HOOK_FUSE_THRESHOLD,
@@ -85,7 +87,7 @@ export interface GhostSubscriptionGatewayDeps {
   sendToGhost(ghostId: string, payload: GhostPipeEventPush): void;
   now(): number;
   /** 钩子熔断回调(通知 renderer + 日志;每意识只触发一次)。 */
-  onHookFused?(ghost: InstalledGhost): void;
+  onHookFused?(ghost: InstalledGhost, ownerStamp?: unknown): void;
   /** hookId 生成(测试注入固定序列;缺省 randomUUID)。 */
   newHookId?(): string;
   log?: {
@@ -228,7 +230,10 @@ export class GhostSubscriptionGateway {
    * (currentText 累积)。block 即短路返回;任何异常都不外抛——本方法在发送
    * 热路径上,只能收敛为 allow / 累积 rewrite。
    */
-  async screenUserMessage(input: { sessionId: string; text: string }): Promise<GhostScreenResult> {
+  async screenUserMessage(
+    input: { sessionId: string; text: string },
+    ownerStamp?: unknown,
+  ): Promise<GhostScreenResult> {
     let currentText = input.text;
     let rewritten = false;
     let lastRewriteGhost: InstalledGhost | null = null;
@@ -242,7 +247,7 @@ export class GhostSubscriptionGateway {
       const verdict = await this.askOne(ghost, e, 'will-user-message', {
         sessionId: input.sessionId,
         text: currentText,
-      });
+      }, ownerStamp);
       if (verdict?.action === 'block') {
         const reason = (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS);
         this.deps.log?.info('ghost hook blocked user message', { ghostId, sessionId: input.sessionId });
@@ -281,10 +286,10 @@ export class GhostSubscriptionGateway {
    * (无 rewrite 即等于 AI 原文)。本方法在 turn 结束的独立续跑里跑,异常绝不
    * 外抛,只收敛为 allow / rewrite / render。
    */
-  async screenAssistantMessage(input: {
-    sessionId: string;
-    text: string;
-  }): Promise<GhostAssistantScreenResult> {
+  async screenAssistantMessage(
+    input: { sessionId: string; text: string },
+    ownerStamp?: unknown,
+  ): Promise<GhostAssistantScreenResult> {
     let currentText = input.text;
     let lastRewriteGhost: InstalledGhost | null = null;
     let renderGhost: InstalledGhost | null = null;
@@ -300,7 +305,7 @@ export class GhostSubscriptionGateway {
       const verdict = await this.askOne(ghost, e, 'will-assistant-message', {
         sessionId: input.sessionId,
         text: currentText,
-      });
+      }, ownerStamp);
       if (verdict?.action === 'rewrite' && typeof verdict.text === 'string') {
         const next = verdict.text.slice(0, GHOST_HOOK_REWRITE_MAX_CHARS).trim();
         // 空改写(意识把正文清空)视为无意义,忽略此次 rewrite 保原文。
@@ -351,6 +356,7 @@ export class GhostSubscriptionGateway {
     e: SubEntry,
     hookName: 'will-user-message' | 'will-assistant-message',
     input: { sessionId: string; text: string },
+    ownerStamp?: unknown,
   ): Promise<HookVerdict | null> {
     const ghostId = ghost.manifest.id;
     const hookId = this.deps.newHookId?.() ?? randomUUID();
@@ -389,14 +395,19 @@ export class GhostSubscriptionGateway {
     const verdict = await verdictPromise;
     clearTimeout(timer);
     if (verdict === null) {
-      this.noteHookFailure(ghost, e, deliverFailure ?? 'timeout');
+      this.noteHookFailure(ghost, e, deliverFailure ?? 'timeout', ownerStamp);
       return null;
     }
     e.hookFails = 0;
     return verdict;
   }
 
-  private noteHookFailure(ghost: InstalledGhost, e: SubEntry, why: string): void {
+  private noteHookFailure(
+    ghost: InstalledGhost,
+    e: SubEntry,
+    why: string,
+    ownerStamp?: unknown,
+  ): void {
     e.hookFails += 1;
     this.deps.log?.warn('ghost hook failed (fail-open)', {
       ghostId: ghost.manifest.id,
@@ -408,7 +419,7 @@ export class GhostSubscriptionGateway {
       this.deps.log?.warn('ghost hook fused: degraded to observe-only', {
         ghostId: ghost.manifest.id,
       });
-      this.deps.onHookFused?.(ghost);
+      this.deps.onHookFused?.(ghost, ownerStamp);
     }
   }
 
@@ -488,6 +499,7 @@ export interface MinimalAgentEvent {
   type: string;
   data?: unknown;
   source?: string;
+  turnContinuationId?: number;
 }
 
 export interface TurnEventSink {
@@ -838,6 +850,35 @@ export function normalizeTurnUsage(raw: unknown): GhostEventTurnEndData['usage']
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
+function mergeTurnUsage(
+  left: GhostEventTurnEndData['usage'],
+  right: GhostEventTurnEndData['usage'],
+): GhostEventTurnEndData['usage'] {
+  const compact = (
+    usage: GhostEventTurnEndData['usage'],
+  ): GhostEventTurnEndData['usage'] => {
+    if (!usage) return undefined;
+    const entries = Object.entries(usage).filter(([, value]) => value > 0);
+    return entries.length > 0
+      ? (Object.fromEntries(entries) as NonNullable<GhostEventTurnEndData['usage']>)
+      : undefined;
+  };
+  left = compact(left);
+  right = compact(right);
+  if (!left) return right;
+  if (!right) return left;
+  const merged = {
+    inputTokens: (left.inputTokens ?? 0) + (right.inputTokens ?? 0),
+    outputTokens: (left.outputTokens ?? 0) + (right.outputTokens ?? 0),
+    cacheReadTokens: (left.cacheReadTokens ?? 0) + (right.cacheReadTokens ?? 0),
+    cacheCreationTokens:
+      (left.cacheCreationTokens ?? 0) + (right.cacheCreationTokens ?? 0),
+  };
+  return Object.fromEntries(
+    Object.entries(merged).filter(([, value]) => value > 0),
+  ) as NonNullable<GhostEventTurnEndData['usage']>;
+}
+
 /** status(false) 后等 done/error 定性的宽限窗:两个 agent 的真实事件序都是
  *  先 status(isRunning:false) 后 done(cc/codex translator 皆如此),status
  *  一到就收口会把所有正常完成误判成 interrupted。同队列的 done 毫秒级即到,
@@ -852,6 +893,8 @@ export class GhostTurnTranslator {
   /** closing 进入时刻(duration 以它为准,不算宽限等待)。 */
   private endedAt = 0;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Usage sealed by claimed SDK boundaries inside the still-running product turn. */
+  private continuationUsage: GhostEventTurnEndData['usage'];
   /** 本轮 did-turn-start 实际发出去的 agent(已含 ev.source 覆盖);拆线补发 end 要
    *  复用它,不能退回 opts.agent——两者取值域不同,见 dispose。 */
   private startedAgent: string | null = null;
@@ -876,6 +919,18 @@ export class GhostTurnTranslator {
       ...(model !== undefined ? { model } : {}),
     };
 
+    if (isTurnContinuationBoundaryEvent(ev)) {
+      if (this.state !== 'idle' && ev.type === 'done') {
+        const usage = normalizeTurnUsage(
+          typeof ev.data === 'object' && ev.data !== null
+            ? (ev.data as { usage?: unknown }).usage
+            : undefined,
+        );
+        this.continuationUsage = mergeTurnUsage(this.continuationUsage, usage);
+      }
+      return;
+    }
+
     if (ev.type === 'status') {
       const isRunning = readStatusIsRunning(ev) === true;
       if (isRunning) {
@@ -885,6 +940,7 @@ export class GhostTurnTranslator {
           this.state = 'running';
           this.startedAt = now();
           this.startedAgent = base.agent;
+          this.continuationUsage = undefined;
           sink.turnStart(base);
         }
       } else if (this.state === 'running') {
@@ -907,7 +963,7 @@ export class GhostTurnTranslator {
           ? (ev.data as { usage?: unknown }).usage
           : undefined,
       );
-      this.finish(base, 'completed', usage);
+      this.finish(base, 'completed', mergeTurnUsage(this.continuationUsage, usage));
     } else if (ev.type === 'error') {
       const isTerminal =
         typeof ev.data === 'object' && ev.data !== null
@@ -966,6 +1022,7 @@ export class GhostTurnTranslator {
     const endAt = this.state === 'closing' ? this.endedAt : this.opts.now();
     this.state = 'idle';
     this.startedAgent = null;
+    this.continuationUsage = undefined;
     this.opts.sink.turnEnd({
       ...base,
       durationMs: Math.max(0, endAt - this.startedAt),

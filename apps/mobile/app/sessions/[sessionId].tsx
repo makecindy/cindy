@@ -86,9 +86,14 @@ import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
-import { MessageRenderer, type MobileMessageDraft } from '@/session/MessageRenderer';
+import {
+  MessageRenderer,
+  type MobileMessageActionBusyKind,
+  type MobileMessageDraft,
+} from '@/session/MessageRenderer';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
 import { InlineQueueSection } from '@/session/InlineQueueSection';
+import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
 import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
@@ -104,11 +109,17 @@ import {
 import type { SessionMenuView } from '@/session/sessionMenu';
 import {
   interactionKind,
+  isPendingInteractionCollapsed,
   pendingInteractionsBlockRemoteComposer,
   readRequestId,
   selectPendingInteractionByRequestId,
   shouldUseFullHeightPendingInteractionSurface,
 } from '@/session/interactionModel';
+import {
+  prunePendingInteractionCollapse,
+  togglePendingInteractionCollapse,
+  useCollapsedPendingRequestIds,
+} from '@/session/pendingInteractionCollapseStore';
 import {
   buildSessionRuntimeOptions,
   normalizeMobileAgentCapabilities,
@@ -437,6 +448,7 @@ import {
   useSessionInputProjection,
   useSessionMessages,
   useSessionPendingInteractions,
+  useSessionPendingInteractionsAuthoritative,
   useSessionRunStatus,
   useSessionMakerTurnRunning,
   useSessionRunning,
@@ -772,6 +784,8 @@ export default function SessionScreen() {
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
   const pending = useSessionPendingInteractions(sessionId);
+  // pending 列表是否已被被控端的全量快照确认过(空列表能不能当「都处理完了」用)。
+  const pendingInteractionsAuthoritative = useSessionPendingInteractionsAuthoritative(sessionId);
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
@@ -1048,6 +1062,14 @@ export default function SessionScreen() {
   const [locallyRemovedQueueClientIds, setLocallyRemovedQueueClientIds] = useState<ReadonlySet<string>>(new Set());
   const [pendingHistoryExpanded, setPendingHistoryExpanded] = useState(false);
   const [pendingInteractionActiveRequestId, setPendingInteractionActiveRequestId] = useState<string | null>(null);
+  /**
+   * 用户主动收起的待处理请求(按 requestId),来自模块级 store。
+   *
+   * 不能是本组件的 state:契约是「只有该请求被回答 / 撤销才失效」,而离开任务会卸载本页,
+   * 组件 state 随之丢失——再进来同一条仍在 pending 的请求又会展开占满屏(#1493 review)。
+   * store 按 sessionId 隔离,切换会话不串状态。
+   */
+  const collapsedPendingRequestIds = useCollapsedPendingRequestIds(sessionId);
   const [pendingPlanViewerState, setPendingPlanViewerState] = useState<MobilePlanViewerState>('half');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
@@ -1099,7 +1121,10 @@ export default function SessionScreen() {
   const lastPendingPlanRequestIdRef = useRef<string | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
-  const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
+  const [messageActionBusy, setMessageActionBusy] = useState<{
+    clientId: string;
+    kind: MobileMessageActionBusyKind;
+  } | null>(null);
   const [rewindState, setRewindState] = useState<RewindPreviewState>({ kind: 'idle' });
   // 切 session 时同步(render 阶段)重置回撤确认框 / busy / loading 态并递增「请求代际」。SessionScreen 切
   // session 复用实例、不 remount,这些本地 UI state 不会自动重置,残留会让确认框跨 session 出现且
@@ -1507,10 +1532,24 @@ export default function SessionScreen() {
   const activePendingKind = activePendingInteraction
     ? interactionKind(activePendingInteraction)
     : null;
+  const activePendingCollapsed = isPendingInteractionCollapsed(
+    collapsedPendingRequestIds,
+    activePendingRequestId,
+  );
   const pendingInteractionFullHeight = shouldUseFullHeightPendingInteractionSurface({
     activeKind: activePendingKind,
+    collapsed: activePendingCollapsed,
     planViewerState: pendingPlanViewerState,
   });
+  const toggleCollapsedPendingRequest = useCallback((requestId: string) => {
+    togglePendingInteractionCollapse(sessionId, requestId);
+  }, [sessionId]);
+  // 状态与回调成对下发:Panel 的 collapse prop 是整组给或整组不给,只给一半会得到
+  // 「显示为收起但点不开」的死界面(#1493 review)。
+  const pendingInteractionCollapse = useMemo(
+    () => ({ requestIds: collapsedPendingRequestIds, onToggle: toggleCollapsedPendingRequest }),
+    [collapsedPendingRequestIds, toggleCollapsedPendingRequest],
+  );
   const hasActivePendingInteraction = activePendingInteraction !== null;
   // 只有手机能终结的卡才允许接管输入框。plugin_setup 这类必须回电脑端完成的
   // 请求若也顶掉 composer,用户既处理不了卡、又发不出消息,会话在手机上被彻底
@@ -1562,6 +1601,14 @@ export default function SessionScreen() {
       setPendingInteractionActiveRequestId(null);
     }
   }, [pending, pendingInteractionActiveRequestId]);
+  // 卡被回答 / 被撤后清掉它的收起记录,否则同一 requestId 万一复现会直接以收起态出现。
+  // 只在 pending 列表**权威**时清:短暂离线会按设计清空这份投影(markDeviceOffline),
+  // 那种空列表不代表请求已终结(#1493 review)。prune 无变化时返回原数组,不会自触发。
+  useEffect(() => {
+    prunePendingInteractionCollapse(sessionId, pending, {
+      authoritative: pendingInteractionsAuthoritative,
+    });
+  }, [pending, pendingInteractionsAuthoritative, sessionId]);
   useEffect(() => {
     if (
       sessionOperationLayout.composerSlot !== 'pending-interaction'
@@ -7339,7 +7386,7 @@ export default function SessionScreen() {
   const previewRewindAtMessage = useCallback(async (clientId: string, draft: MobileMessageDraft) => {
     if (messageActionBusy) return;
     const seq = ++rewindRequestSeqRef.current;
-    setMessageActionBusy(clientId);
+    setMessageActionBusy({ clientId, kind: 'rewind' });
     setError(null);
     setRewindState({
       kind: 'loading',
@@ -7381,7 +7428,7 @@ export default function SessionScreen() {
 
   const performForkAtMessage = useCallback(async (clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
-    setMessageActionBusy(clientId);
+    setMessageActionBusy({ clientId, kind: 'fork' });
     setError(null);
     try {
       const forked = await maker.fork(sessionId, clientId);
@@ -7399,11 +7446,13 @@ export default function SessionScreen() {
         params: { sessionId: forked.id, deviceId, deviceName },
       });
     } catch (err) {
-      setError(formatRemoteError(err));
+      const detail = formatRemoteError(err);
+      const projectionKey = inputProjectionErrorI18nKey(detail);
+      setError(projectionKey ? t(projectionKey) : detail);
     } finally {
       setMessageActionBusy(null);
     }
-  }, [deviceId, deviceName, maker, messageActionBusy, router, sessionId]);
+  }, [deviceId, deviceName, maker, messageActionBusy, router, sessionId, t]);
 
   const forkAtMessage = useCallback((clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
@@ -7573,7 +7622,7 @@ export default function SessionScreen() {
         style: 'destructive',
         onPress: () => {
           void (async () => {
-            setMessageActionBusy(clientId);
+            setMessageActionBusy({ clientId, kind: 'delete' });
             setError(null);
             try {
               const result = await maker.deleteMessage(sessionId, clientId);
@@ -7602,7 +7651,7 @@ export default function SessionScreen() {
     if (!deviceId || messageActionBusy || !isCommitReadyRewindState(rewindState)) return;
     const state = rewindState;
     const seq = ++rewindRequestSeqRef.current;
-    setMessageActionBusy(state.clientId);
+    setMessageActionBusy({ clientId: state.clientId, kind: 'rewind' });
     setError(null);
     try {
       const updated = await maker.rewindCommit(sessionId, state.clientId);
@@ -8039,7 +8088,8 @@ export default function SessionScreen() {
                   <MessageRenderer
                     bottomOverlayHeight={bottomOverlayHeight}
                     topOverlayHeight={topOverlayHeight}
-                    busyClientId={messageActionBusy}
+                    busyAction={messageActionBusy?.kind ?? null}
+                    busyClientId={messageActionBusy?.clientId ?? null}
                     canLoadEarlier={hasOlderMessages && messages.length > 0}
                     emptyTestID="session.messageList.empty"
                     focusedItemKey={focusedMessageItemKey ?? null}
@@ -8197,6 +8247,9 @@ export default function SessionScreen() {
                 nestedScrollEnabled
                 testID="interaction.aboveComposerScroll"
               >
+                {/* 这张卡本来就只占 palette 量级高度、且手机上答不了(只能取消 / 回电脑端),
+                    不给收起入口:收起态的文案与 a11y 都是「先不答、稍后回答」,套在它身上是
+                    错的语义。 */}
                 <InteractionPanel
                   deviceId={deviceId}
                   sessionId={sessionId}
@@ -8233,6 +8286,7 @@ export default function SessionScreen() {
                 >
                   <InteractionPanel
                     safeAreaBottomInset={insets.bottom}
+                    collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
                     fillAvailableHeight
                     sessionId={sessionId}
@@ -8253,6 +8307,7 @@ export default function SessionScreen() {
                 >
                 <InteractionPanel
                   safeAreaBottomInset={insets.bottom}
+                  collapse={pendingInteractionCollapse}
                   deviceId={deviceId}
                   sessionId={sessionId}
                   interactions={pending}
@@ -9151,14 +9206,15 @@ function ComposerActivityStatus({
 
   const elapsedText = formatComposerActivityElapsed(elapsed);
   const tokenText = formatComposerActivityTokens(tokenUsage);
-  // 过载退避与传输层重连共用这一个 attempt 字段, 但说法必须分开: 前者是上游没有可用
-  // 容量、agent 在退避重投, 说「正在重新连接」会把用户引向排查自己的网络
-  // (review #844 codex P1)。
+  // 三类进度共用这一个 attempt 字段, 但说法必须分开: 模型容量、请求限流与传输层重连
+  // 的用户含义不同，混用会把用户引向错误的排查方向。
   const activityText = reconnectAttempt
     ? t(
         reconnectAttempt.kind === 'overload'
           ? 'session.screen.modelBusyRetrying'
-          : 'session.screen.networkReconnecting',
+          : reconnectAttempt.kind === 'rate-limit'
+            ? 'session.screen.rateLimitRetrying'
+            : 'session.screen.networkReconnecting',
       )
     : t('session.screen.thinking');
 

@@ -149,6 +149,7 @@ describe('mobile session composer desktop-first surface', () => {
     // (review #844 codex P1)。字符串按 i18n key 断言, 不断言三元表达式的写法。
     expect(source).toContain("'session.screen.networkReconnecting'");
     expect(source).toContain("'session.screen.modelBusyRetrying'");
+    expect(source).toContain("'session.screen.rateLimitRetrying'");
     expect(source).toContain('{reconnectAttempt.attempt}/{reconnectAttempt.maxAttempts}');
     expect(source).toContain('ArrowDown');
     expect(source).toContain('useSessionRunStatus');

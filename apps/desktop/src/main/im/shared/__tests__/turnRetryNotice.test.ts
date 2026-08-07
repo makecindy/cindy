@@ -10,7 +10,44 @@ import {
   overloadFailureNotice,
   overloadRetryNotice,
   terminalErrorText,
+  turnRetryNotice,
 } from '../turnRetryNotice';
+
+describe('turnRetryNotice', () => {
+  it('终态 429 外层重投 → 渠道侧限流进度', () => {
+    expect(
+      turnRetryNotice({
+        message:
+          'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)',
+        reason: 'terminal-rate-limit-retry',
+      }),
+    ).toBe('请求受到限流，正在自动重试（1/2）…');
+  });
+
+  it('reason 与 marker 必须同时命中，普通 429 仍保持静默', () => {
+    expect(
+      turnRetryNotice({
+        message: 'provider failed (rate-limit-retry 1/2)',
+        reason: 'other-reason',
+      }),
+    ).toBeNull();
+    expect(
+      turnRetryNotice({
+        message: 'HTTP 429 Too Many Requests',
+        reason: 'terminal-rate-limit-retry',
+      }),
+    ).toBeNull();
+    expect(turnRetryNotice({ message: 'rate limit exceeded', errorStatus: 429 })).toBeNull();
+  });
+
+  it('继续覆盖原有过载进度', () => {
+    expect(
+      turnRetryNotice({
+        message: 'Selected model is at capacity. (auto-retry 2/4)',
+      }),
+    ).toBe('模型服务繁忙，正在自动重试（2/4）…');
+  });
+});
 
 describe('overloadRetryNotice', () => {
   it('带次数的 Codex 容量重投 → 带进度的中文提示', () => {
@@ -159,6 +196,32 @@ describe('terminalErrorText', () => {
     expect(terminalErrorText('boom')).toBe('boom');
     expect(terminalErrorText(null)).toBe('null');
     expect(terminalErrorText({})).toBe('[object Object]');
+  });
+
+  /**
+   * Auto 档审阅器故障同样走非终止 error。渠道侧原来对这类一律静默 —— Slack /
+   * Telegram 上的用户只看到工具接连被拒、没有原因(codex P1 of #1574)。
+   */
+  it('Auto 档审阅器不可用 → 渠道侧说明 + 可执行动作', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review is temporarily unavailable, so actions '
+        + 'that need review are being denied. Switch this task to Default permissions if you '
+        + 'want to approve them yourself.',
+      isTerminal: false,
+    });
+    expect(notice).toContain('自动审批暂时不可用');
+    // 必须给出用户能做的事,否则等于只说"又失败了"。
+    expect(notice).toContain('默认权限');
+    // 不得把 [CODE] 前缀或英文原文推给渠道用户。
+    expect(notice).not.toContain('AUTO_REVIEW_UNAVAILABLE');
+    expect(notice).not.toContain('Auto-review is temporarily');
+  });
+
+  it('其它带 bracket code 的非终止 error 仍保持静默', () => {
+    // 只放开有明确渠道文案的那一条,不是所有 [CODE] 都外发。
+    expect(turnRetryNotice({
+      message: '[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] Local attachments are not accessible.',
+    })).toBeNull();
   });
 
   it('message 为 undefined / null 时不得把字面量 "undefined" 给用户看', () => {

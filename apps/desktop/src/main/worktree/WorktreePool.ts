@@ -71,14 +71,24 @@ export async function acquireWorktree(
     if (entry) {
       pool.delete(key);
 
-      const newBranch = getBranchName(req.name);
       try {
-        await resetWorktree(entry.meta.path, entry.meta.baseRepo, req.sourceBranch, newBranch, opts);
+        const resolvedName = await WorktreeManager.resolveAvailableWorktreeName(
+          entry.meta.baseRepo,
+          req.name,
+        );
+        const newBranch = getBranchName(resolvedName);
+        await resetWorktree(
+          entry.meta.path,
+          entry.meta.baseRepo,
+          req.sourceBranch,
+          newBranch,
+          opts,
+        );
 
         const meta: WorktreeMeta = {
           ...entry.meta,
           sessionId: req.sessionId,
-          name: req.name,
+          name: resolvedName,
           branch: newBranch,
           sourceBranch: req.sourceBranch,
           createdAt: new Date().toISOString(),
@@ -97,10 +107,12 @@ export async function acquireWorktree(
         if (await isWorktreeDirty(entry.meta.path)) {
           log.warn(`[WorktreePool] dirty worktree preserved at ${entry.meta.path}`);
         } else {
-          const drained = await drainEntry(entry.meta).then(() => true).catch(async () => {
-            await gitExec(['worktree', 'prune'], entry.meta.baseRepo).catch(() => {});
-            return false;
-          });
+          const drained = await drainEntry(entry.meta)
+            .then(() => true)
+            .catch(async () => {
+              await gitExec(['worktree', 'prune'], entry.meta.baseRepo).catch(() => {});
+              return false;
+            });
           if (drained) store.del(entry.meta.sessionId);
         }
       }
@@ -153,8 +165,9 @@ async function resetWorktree(
     }
   }
 
-  // 2. 切换分支并重置文件（-B 强制覆盖已有同名分支）
-  await gitExec(['checkout', '-B', newBranch, sourceBranch], worktreePath);
+  // 2. 非覆盖式创建并切换分支。查重后的 TOCTOU 竞态会让 -b 安全失败，
+  //    绝不能用 -B 重置一个不属于池条目的已有分支。
+  await gitExec(['checkout', '--no-track', '-b', newBranch, sourceBranch], worktreePath);
 
   // 3. 确保 index 与 HEAD 一致（上次 agent 可能 git add 了文件但未 commit）
   await gitExec(['reset', '--hard', sourceBranch], worktreePath);
@@ -226,7 +239,9 @@ export async function releaseWorktree(sessionId: string): Promise<'pooled' | 'pr
     if (hasLiveSessionReference(existing.meta, liveSessionPathKeys)) {
       logPreservedLiveSessionWorktree(existing.meta);
     } else {
-      const drained = await drainEntry(existing.meta).then(() => true).catch(() => false);
+      const drained = await drainEntry(existing.meta)
+        .then(() => true)
+        .catch(() => false);
       if (drained) {
         store.del(existing.meta.sessionId);
       }
@@ -255,16 +270,17 @@ export async function releaseWorktree(sessionId: string): Promise<'pooled' | 'pr
 async function evictIfOverLimit(liveSessionPathKeys?: LiveSessionPathKeys): Promise<void> {
   if (store.getAll().length <= MAX_WORKTREES) return;
 
-  const liveRefs = liveSessionPathKeys === undefined
-    ? await loadLiveSessionPathKeys()
-    : liveSessionPathKeys;
+  const liveRefs =
+    liveSessionPathKeys === undefined ? await loadLiveSessionPathKeys() : liveSessionPathKeys;
 
   // 每轮重新读 store 取最旧的 clean 候选，避免 stale snapshot 问题
   while (store.getAll().length > MAX_WORKTREES) {
     const candidate = await findOldestCleanCandidate(liveRefs);
     if (!candidate) break; // 剩余全是 dirty / 池中在用，允许超限
 
-    const drained = await drainEntry(candidate).then(() => true).catch(() => false);
+    const drained = await drainEntry(candidate)
+      .then(() => true)
+      .catch(() => false);
     if (drained) store.del(candidate.sessionId);
     else break;
   }
@@ -323,7 +339,7 @@ async function drainEntry(meta: WorktreeMeta): Promise<void> {
       throw err;
     }
 
-    // 兜底：只允许删除 xdt 已登记的托管 worktree 目录
+    // 兜底：只允许删除 Cindy 已登记的托管 worktree 目录
     try {
       await fs.rm(meta.path, { recursive: true, force: true });
       await gitExec(['worktree', 'prune'], meta.baseRepo).catch(() => {});
@@ -390,14 +406,18 @@ export async function recoverPool(): Promise<void> {
 
     // 2. 哨兵: 用户声明保留，不入池不清理
     if (hasKeepSentinel(meta.path)) {
-      log.info(`[WorktreePool] preserved sentinel worktree at ${meta.path} (session ${meta.sessionId})`);
+      log.info(
+        `[WorktreePool] preserved sentinel worktree at ${meta.path} (session ${meta.sessionId})`,
+      );
       continue;
     }
 
     // 3. 检查 dirty
     const dirty = await isWorktreeDirty(meta.path);
     if (dirty) {
-      log.warn(`[WorktreePool] preserved dirty worktree at ${meta.path} (session ${meta.sessionId})`);
+      log.warn(
+        `[WorktreePool] preserved dirty worktree at ${meta.path} (session ${meta.sessionId})`,
+      );
       continue;
     }
 
@@ -415,7 +435,9 @@ export async function recoverPool(): Promise<void> {
         if (hasLiveSessionReference(meta, liveSessionPathKeys)) {
           logPreservedLiveSessionWorktree(meta);
         } else {
-          const drained = await drainEntry(meta).then(() => true).catch(() => false);
+          const drained = await drainEntry(meta)
+            .then(() => true)
+            .catch(() => false);
           if (drained) store.del(meta.sessionId);
         }
       }

@@ -1110,6 +1110,285 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  it('routes the first collab_spawn request through its parent custom Responses provider', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'collab-spawn-provider',
+        name: 'Collab Spawn Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://collab-spawn.invalid/v1',
+            models: [{ id: 'collab-spawn-model', name: 'Collab Spawn Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'test-invalid-collab-spawn-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PRODUCT_PROMPT');
+    setSessionProvider('session-collab-parent', 'collab-spawn-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'collab-spawn-model', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'thread-id': 'thread-collab-child',
+            'x-openai-subagent': 'collab_spawn',
+            'x-codex-parent-thread-id': 'thread-collab-parent',
+          },
+        },
+      ));
+
+      expect(decision).toEqual({
+        upstreamOverride: 'https://collab-spawn.invalid/v1',
+        headerOverride: { authorization: 'Bearer test-invalid-collab-spawn-key' },
+        headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+      });
+      expect(mockState.capturedRegistry?.get('thread-collab-child')).toBe('PRODUCT_PROMPT');
+    } finally {
+      host.unregister('session-collab-parent');
+      clearSessionProvider('session-collab-parent');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('fails closed when a collab_spawn request cannot resolve its parent route', async () => {
+    const host = await freshCodexProxyHost();
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-collab-orphan',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-missing-parent',
+      },
+    };
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      { model: 'collab-spawn-model', input: [] },
+      ctx,
+    ));
+
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+    if (!decision?.localHandler) throw new Error('missing unresolved collab_spawn route handler');
+
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision.localHandler({
+      rawBody: Buffer.alloc(0),
+      parsedBody: { model: 'collab-spawn-model', input: [] },
+      ctx,
+      res: { writeHead, end } as never,
+    });
+
+    expect(writeHead).toHaveBeenCalledWith(503, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    expect(JSON.parse(String(end.mock.calls[0]?.[0]))).toEqual({
+      error: {
+        type: 'server_error',
+        code: 'cindy_codex_parent_route_unavailable',
+        message: 'Cindy could not resolve the parent Provider route for this spawned Codex agent.',
+      },
+    });
+    expect(mockState.capturedRegistry?.get('thread-collab-orphan')).toBeUndefined();
+  });
+
+  it('does not use a matching x-client-request-id as a collab_spawn child identity', async () => {
+    const host = await freshCodexProxyHost();
+    host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PARENT_PROMPT');
+    host.registerComposed('session-request-owner', 'request-collab-child', 'OWNER_PROMPT');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'collab-spawn-model', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'x-client-request-id': 'request-collab-child',
+            'x-openai-subagent': 'collab_spawn',
+            'x-codex-parent-thread-id': 'thread-collab-parent',
+          },
+        },
+      ));
+
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      expect(host.registerChildThread('thread-collab-parent', 'request-collab-child')).toBe(false);
+    } finally {
+      host.unregister('session-collab-parent');
+      host.unregister('session-request-owner');
+    }
+  });
+
+  it('keeps an already-owned collab_spawn child on its existing session route', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'collab-parent-provider',
+        name: 'Collab Parent Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://collab-parent.invalid/v1',
+            models: [{ id: 'shared-collab-model', name: 'Shared Collab Model' }],
+          },
+        },
+      }),
+      buildUserProvider({
+        id: 'collab-owner-provider',
+        name: 'Collab Owner Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://collab-owner.invalid/v1',
+            models: [{ id: 'shared-collab-model', name: 'Shared Collab Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((providerId) => `test-invalid-${providerId}-key`);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PARENT_PROMPT');
+    host.registerComposed('session-collab-owner', 'thread-collab-owned', 'OWNER_PROMPT');
+    setSessionProvider('session-collab-parent', 'collab-parent-provider');
+    setSessionProvider('session-collab-owner', 'collab-owner-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'shared-collab-model', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'thread-id': 'thread-collab-owned',
+            'x-openai-subagent': 'collab_spawn',
+            'x-codex-parent-thread-id': 'thread-collab-parent',
+          },
+        },
+      ));
+
+      expect(decision).toEqual({
+        upstreamOverride: 'https://collab-owner.invalid/v1',
+        headerOverride: { authorization: 'Bearer test-invalid-collab-owner-provider-key' },
+        headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+      });
+      expect(mockState.capturedRegistry?.get('thread-collab-owned')).toBe('OWNER_PROMPT');
+    } finally {
+      host.unregister('session-collab-parent');
+      host.unregister('session-collab-owner');
+      clearSessionProvider('session-collab-parent');
+      clearSessionProvider('session-collab-owner');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  const rejectedLazyInheritanceRequests: Array<{
+    name: string;
+    childThreadId: string;
+    headers: Readonly<Record<string, string>>;
+  }> = [
+    {
+      name: 'non-spawn request',
+      childThreadId: 'thread-review-child',
+      headers: {
+        'thread-id': 'thread-review-child',
+        'x-openai-subagent': 'review',
+        'x-codex-parent-thread-id': 'thread-collab-parent',
+      },
+    },
+    {
+      name: 'request id without a thread id',
+      childThreadId: 'request-collab-child',
+      headers: {
+        'x-client-request-id': 'request-collab-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-parent',
+      },
+    },
+  ];
+
+  it.each(rejectedLazyInheritanceRequests)(
+    'does not lazily inherit the parent for a $name',
+    async ({ childThreadId, headers }) => {
+      const host = await freshCodexProxyHost();
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PARENT_PROMPT');
+
+      try {
+        await Promise.resolve(host.createModelRoutingTransform()(
+          { model: 'gpt-5.6', input: [] },
+          { reqId: 1, method: 'POST', url: '/responses', headers },
+        ));
+
+        expect(mockState.capturedRegistry?.get(childThreadId)).toBeUndefined();
+      } finally {
+        host.unregister('session-collab-parent');
+      }
+    },
+  );
+
+  it('does not register a Guardian request as a prompt-inheriting child thread', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-guardian-parent', 'thread-guardian-parent', 'PRODUCT_PROMPT');
+
+    try {
+      await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'codex-auto-review', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'thread-id': 'thread-guardian-child',
+            'x-openai-subagent': 'guardian',
+            'x-codex-parent-thread-id': 'thread-guardian-parent',
+          },
+        },
+      ));
+
+      expect(mockState.capturedRegistry?.get('thread-guardian-child')).toBeUndefined();
+    } finally {
+      host.unregister('session-guardian-parent');
+    }
+  });
+
   it('does not overwrite a child thread that is already owned by another session', async () => {
     const host = await freshCodexProxyHost();
     host.registerComposed('session-parent', 'thread-parent', 'PARENT_PROMPT');
@@ -2550,6 +2829,95 @@ describe('codex proxy host', () => {
       const reasoning = reasoningItemFrom(out.input as unknown[]);
       expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'summary', 'type']);
       expect(reasoning.encrypted_content).toBe('BLOB-NO-ID');
+    });
+  });
+
+  // OpenAI/Codex collab 历史里的 agent_message 不是 xAI ModelInput 变体；跨源 resume
+  // 到 grok 时原样转发 → 422 "data did not match any variant of untagged enum ModelInput"。
+  // (2026-08-03 实测: gpt-5.6-sol collab 会话切 xai/grok-4.5 必挂;新建 grok 会话正常。)
+  describe('xAI collab agent_message 跨源回放', () => {
+    async function runXaiInputTransforms(
+      suffix: string,
+      body: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-agent-message-${suffix}`;
+      const threadId = `thread-agent-message-${suffix}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xai');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      clearSessionProvider(sessionId);
+      return current as Record<string, unknown>;
+    }
+
+    it('把 agent_message 降级成 assistant message，丢掉 content 里的 encrypted_content', async () => {
+      const out = await runXaiInputTransforms('collab-to-message', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] },
+          {
+            type: 'agent_message',
+            author: '/root/official_pr_rules',
+            recipient: '/root',
+            content: [
+              {
+                type: 'input_text',
+                text: 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+              },
+              { type: 'encrypted_content', encrypted_content: 'gAAAAA-openai-collab-blob' },
+            ],
+            internal_chat_message_metadata_passthrough: { turn_id: 't1' },
+          },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(2);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
+      expect(input[1]).toEqual({
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'output_text',
+            text:
+              '[collab /root/official_pr_rules]\n'
+              + 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+          },
+        ],
+      });
+      // 不得残留 collab 专有键或 OpenAI 密文 part。
+      expect(JSON.stringify(input[1])).not.toContain('agent_message');
+      expect(JSON.stringify(input[1])).not.toContain('encrypted_content');
+      expect(JSON.stringify(input[1])).not.toContain('gAAAAA-openai-collab-blob');
+    });
+
+    it('未知 input type 直接丢掉，不原样透传给 xAI', async () => {
+      const out = await runXaiInputTransforms('drop-unknown', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: 'hi' },
+          { type: 'web_search_end', call_id: 'c1', query: 'x' },
+          { type: 'mcp_tool_call_end', call_id: 'c2' },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(1);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
     });
   });
 

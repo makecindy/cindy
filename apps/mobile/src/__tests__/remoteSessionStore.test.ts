@@ -238,6 +238,105 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('mirrors host-revisioned worktree branches without coupling them to the checkbox', () => {
+    remoteSessionStore.setNewMakerWorktreePreference('dev-1', true);
+
+    remoteSessionStore.applyRemotePush(
+      'dev-1',
+      'maker:new-maker-worktree-branch:changed',
+      { baseRepo: '/repo/a', sourceBranch: 'feature/mobile', revision: 1 },
+    );
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/a')).toEqual({
+      baseRepo: '/repo/a',
+      sourceBranch: 'feature/mobile',
+      revision: 1,
+    });
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1')).toEqual({
+      enabled: true,
+      revision: 1,
+    });
+
+    // 同一分支的较新 host snapshot 仍要推进 revision，给在途 pull / apply 回包做 fence。
+    remoteSessionStore.applyRemotePush(
+      'dev-1',
+      'maker:new-maker-worktree-branch:changed',
+      { baseRepo: '/repo/a', sourceBranch: 'feature/mobile', revision: 2 },
+    );
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/a')?.revision)
+      .toBe(2);
+
+    // 更旧 revision 以及同 revision 的冲突值都无权覆盖已接受的宿主快照。
+    remoteSessionStore.applyRemotePush(
+      'dev-1',
+      'maker:new-maker-worktree-branch:changed',
+      { baseRepo: '/repo/a', sourceBranch: 'stale', revision: 1 },
+    );
+    remoteSessionStore.applyRemotePush(
+      'dev-1',
+      'maker:new-maker-worktree-branch:changed',
+      { baseRepo: '/repo/a', sourceBranch: 'conflict', revision: 2 },
+    );
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/a')).toEqual({
+      baseRepo: '/repo/a',
+      sourceBranch: 'feature/mobile',
+      revision: 2,
+    });
+  });
+
+  it('isolates worktree branch snapshots by device and canonical repo, then clears their shards', () => {
+    remoteSessionStore.setNewMakerWorktreeBranchPreference('dev-1', {
+      baseRepo: '/repo/a', sourceBranch: 'main', revision: 1,
+    });
+    remoteSessionStore.setNewMakerWorktreeBranchPreference('dev-1', {
+      baseRepo: '/repo/b', sourceBranch: 'release', revision: 4,
+    });
+    remoteSessionStore.setNewMakerWorktreeBranchPreference('dev-2', {
+      baseRepo: '/repo/a', sourceBranch: 'develop', revision: 2,
+    });
+
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/a')?.sourceBranch)
+      .toBe('main');
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/b')?.sourceBranch)
+      .toBe('release');
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-2', '/repo/a')?.sourceBranch)
+      .toBe('develop');
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-2', '/repo/b')).toBeNull();
+
+    remoteSessionStore.removeDevice('dev-1');
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/a')).toBeNull();
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/b')).toBeNull();
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-2', '/repo/a')?.sourceBranch)
+      .toBe('develop');
+
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-2', '/repo/a')).toBeNull();
+  });
+
+  it('ignores malformed worktree branch pushes without disturbing an accepted snapshot', () => {
+    remoteSessionStore.setNewMakerWorktreeBranchPreference('dev-1', {
+      baseRepo: '/repo/a', sourceBranch: 'main', revision: 3,
+    });
+    for (const payload of [
+      null,
+      { baseRepo: '', sourceBranch: 'release', revision: 4 },
+      { baseRepo: '/repo/a', sourceBranch: '', revision: 4 },
+      { baseRepo: '/repo/a', sourceBranch: 'release', revision: -1 },
+      { baseRepo: '/repo/a', sourceBranch: 'release', revision: 3.5 },
+      { baseRepo: '/repo/a', sourceBranch: 'release', revision: '4' },
+    ]) {
+      remoteSessionStore.applyRemotePush(
+        'dev-1',
+        'maker:new-maker-worktree-branch:changed',
+        payload,
+      );
+    }
+    expect(remoteSessionStore.getNewMakerWorktreeBranchPreference('dev-1', '/repo/a')).toEqual({
+      baseRepo: '/repo/a',
+      sourceBranch: 'main',
+      revision: 3,
+    });
+  });
+
   it('mirrors structured session money and legacy USD usage pushes', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
 
@@ -1816,6 +1915,51 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('projects terminal 429 retries as rate-limit attempts only with their reason', () => {
+    const message =
+      'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)';
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message,
+          reason: 'terminal-rate-limit-retry',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 1,
+      maxAttempts: 2,
+      kind: 'rate-limit',
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: { message, isTerminal: false, willRetry: true },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message: 'provider failed (auto-retry 1/2)',
+          reason: 'terminal-rate-limit-retry',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+  });
+
   it('tracks session running state from maker event push boundaries', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));
@@ -2092,6 +2236,44 @@ describe('remoteSessionStore', () => {
       event: { type: 'done', data: {} },
     });
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+  });
+
+  it('keeps the product turn running across claimed mobile continuation boundaries', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerStatus('s1', { isRunning: true });
+      pushMakerText('s1', 'persist-1', 'first segment', false);
+      vi.runOnlyPendingTimers();
+
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1',
+        event: {
+          type: 'status',
+          turnContinuationId: 7,
+          data: { isRunning: false, status: 'Done' },
+        },
+      });
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1',
+        event: { type: 'done', turnContinuationId: 7, data: {} },
+      });
+
+      expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+      expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+      expect(remoteSessionStore.getSessionRunStatus('s1').startedAt).not.toBeNull();
+      expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).toBe(true);
+
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1',
+        event: { type: 'done', data: {} },
+      });
+
+      expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+      expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+      expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).not.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('preserves boundary agent metadata when finalizing a streaming row', () => {

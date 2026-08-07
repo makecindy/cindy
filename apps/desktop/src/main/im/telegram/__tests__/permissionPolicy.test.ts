@@ -13,6 +13,7 @@ describe('telegram guest turn permission policy(一群一会话的成员轮次�
     });
     expect(policy.confirmationSurface).toBe('channel');
     expect(policy.forceConfirmToolCall('Bash', { command: 'rm -rf build' })).toBe(true);
+    expect(policy.forceConfirmToolCall('bash', { command: 'rm -rf build' })).toBe(true);
     expect(
       policy.forceConfirmToolCall('mcp__cindy_contacts__call_tool', {
         name: 'contacts_delete',
@@ -24,6 +25,13 @@ describe('telegram guest turn permission policy(一群一会话的成员轮次�
         toolParams: { name: 'contacts_merge', args: { sourceId: 'a', targetId: 'b' } },
       }),
     ).toBe(true);
+    expect(
+      policy.forceConfirmToolCall('mcp__cindy__ghost_call', {
+        ghost_id: 'files',
+        tool: 'delete_workspace',
+        args: { id: 'workspace-1' },
+      }),
+    ).toBe(true);
   });
 
   it('读/搜自动放行; Codex 不透明写(file_change/permissions)保守强确认', () => {
@@ -31,6 +39,8 @@ describe('telegram guest turn permission policy(一群一会话的成员轮次�
 
     expect(policy.forceConfirmToolCall('Read', { path: 'README.md' })).toBe(false);
     expect(policy.forceConfirmToolCall('Grep', { pattern: 'foo' })).toBe(false);
+    expect(policy.forceConfirmToolCall('write', { path: 'notes.md', content: 'safe' })).toBe(false);
+    expect(policy.forceConfirmToolCall('edit', { path: 'notes.md', oldText: 'a', newText: 'b' })).toBe(false);
     expect(
       policy.forceConfirmToolCall('mcp:cindy_contacts', {
         toolParams: { name: 'contacts_search', args: { query: 'Carol' } },

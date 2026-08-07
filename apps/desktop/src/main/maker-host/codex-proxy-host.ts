@@ -87,6 +87,8 @@ const httpRecoveryReasonByThread = new Map<string, string>();
 
 const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
+const CODEX_COLLAB_SPAWN_SUBAGENT = 'collab_spawn';
+const CODEX_COLLAB_ROUTE_UNAVAILABLE_CODE = 'cindy_codex_parent_route_unavailable';
 
 let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
@@ -242,12 +244,53 @@ function guardianParentThreadIdFromHeaders(
   return headerValue(headers, 'x-codex-parent-thread-id');
 }
 
+function isCollabSpawnRequest(headers: Readonly<Record<string, string>>): boolean {
+  return headerValue(headers, 'x-openai-subagent').toLowerCase() === CODEX_COLLAB_SPAWN_SUBAGENT;
+}
+
 function sessionIdFromHeaders(
   headers: Readonly<Record<string, string>>,
 ): string | undefined {
   const parentThreadId = guardianParentThreadIdFromHeaders(headers);
   if (parentThreadId) return threadToSession.get(parentThreadId);
-  return threadToSession.get(selectedThreadIdFromHeaders(headers));
+
+  const collabSpawn = isCollabSpawnRequest(headers);
+  const selectedThreadId = collabSpawn
+    ? headerValue(headers, 'thread-id')
+    : selectedThreadIdFromHeaders(headers);
+  const existingSessionId = threadToSession.get(selectedThreadId);
+  if (existingSessionId) return existingSessionId;
+
+  // Codex can send a spawned child's first request before thread/started reaches
+  // the host. Only that explicit spawn request may lazily inherit its parent;
+  // request ids and unrelated parent headers are not stable thread identities.
+  if (!collabSpawn) {
+    return undefined;
+  }
+  const childThreadId = selectedThreadId;
+  const collabParentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
+  if (!childThreadId || !collabParentThreadId) return undefined;
+
+  registerChildThread(collabParentThreadId, childThreadId);
+  return threadToSession.get(childThreadId);
+}
+
+function unresolvedCollabSpawnRouteDecision(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        error: {
+          type: 'server_error',
+          code: CODEX_COLLAB_ROUTE_UNAVAILABLE_CODE,
+          message: 'Cindy could not resolve the parent Provider route for this spawned Codex agent.',
+        },
+      }));
+    },
+  };
 }
 
 function safeDumpName(threadId: string): string {
@@ -1041,12 +1084,22 @@ function isXaiUnsupportedInputItem(item: unknown, opts: { supportsReasoning: boo
 }
 
 /**
- * Codex code-mode / app-server 历史里会回放 `custom_tool_call*`，且 tool output 常是
- * `[{type:"input_text",text}]` 数组。xAI Responses 的 untagged `ModelInput` 只认
- * message / function_call / function_call_output / reasoning 等标准变体；原样转发会 422:
+ * Codex code-mode / app-server 历史里会回放 `custom_tool_call*` / `agent_message` 等
+ * 非 Responses 标准 item，且 tool output 常是 `[{type:"input_text",text}]` 数组。
+ * xAI Responses 的 untagged `ModelInput` 只认 message / function_call /
+ * function_call_output / reasoning 等标准变体；原样转发会 422:
  * "data did not match any variant of untagged enum ModelInput"。
- * 仅在 xAI 路由里把这些历史 item 归一成 xAI 可反序列化的 function_call 形态。
+ * 仅在 xAI 路由里把这些历史 item 归一成 xAI 可反序列化的形态；未知 type 直接丢掉，
+ * 避免跨源 resume（如 OpenAI collab → Grok）整轮卡死。
  */
+/** xAI ModelInput 可反序列化的 input item type（归一化后的白名单）。 */
+const XAI_MODEL_INPUT_TYPES = new Set([
+  'message',
+  'function_call',
+  'function_call_output',
+  'reasoning',
+]);
+
 function textFromResponsesContent(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -1127,6 +1180,28 @@ function normalizeXaiInputItem(item: unknown): { item: unknown; changed: boolean
         type: 'function_call_output',
         call_id: typeof base.call_id === 'string' ? base.call_id : '',
         output: textFromResponsesContent(base.output),
+      },
+      changed: true,
+    };
+  }
+
+  // Codex multi-agent collab 历史项。OpenAI 会话里的 agent_message 带着 author/
+  // recipient 和 content 里的 encrypted_content part；xAI ModelInput 不认这个 type，
+  // 跨源 resume 到 grok 时整轮 422。降级成 assistant message，只保留可读文本
+  // （collab 密文 part 解不开，丢掉）。
+  if (type === 'agent_message') {
+    const bodyText = textFromResponsesContent(base.content).trim();
+    const author = typeof base.author === 'string' && base.author.length > 0
+      ? base.author
+      : 'agent';
+    const text = bodyText.length > 0
+      ? `[collab ${author}]\n${bodyText}`
+      : `[collab message from ${author}; encrypted payload omitted]`;
+    return {
+      item: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text }],
       },
       changed: true,
     };
@@ -1244,14 +1319,16 @@ function normalizeXaiInputItem(item: unknown): { item: unknown; changed: boolean
     return changed ? { item: next, changed: true } : { item: base, changed: false };
   }
 
-  return { item: base, changed: typedFromEasy };
+  // 未知 type 不透传：xAI untagged ModelInput 任一 item 对不上就整包 422。
+  // 调用方按 changed=true + 非白名单 type 丢弃（见 normalizeXaiInputItems）。
+  return { item: base, changed: typedFromEasy || (typeof type === 'string' && !XAI_MODEL_INPUT_TYPES.has(type)) };
 }
 
 function normalizeXaiInputItems(body: Record<string, unknown>): Record<string, unknown> | null {
   if (!Array.isArray(body.input)) return null;
 
   // xAI supports encrypted reasoning replay, but not Codex/OpenAI image replay items in `input[]`.
-  // Codex custom_tool_call* must also be rewritten before xAI's ModelInput deserialize.
+  // Codex custom_tool_call* / agent_message 等必须在 ModelInput deserialize 前洗掉或改写。
   const supportsReasoning = supportsXaiReasoning(xaiRealModelId(body.model));
   let changed = false;
   const input: unknown[] = [];
@@ -1262,6 +1339,15 @@ function normalizeXaiInputItems(body: Record<string, unknown>): Record<string, u
     }
     const normalized = normalizeXaiInputItem(raw);
     if (normalized.changed) changed = true;
+    // 归一化后仍不在白名单（或未知 type 原样返回）→ 丢掉，别把 422 留给上游。
+    if (
+      !isPlainObject(normalized.item)
+      || typeof normalized.item.type !== 'string'
+      || !XAI_MODEL_INPUT_TYPES.has(normalized.item.type)
+    ) {
+      changed = true;
+      continue;
+    }
     input.push(normalized.item);
   }
   if (!changed) return null;
@@ -2059,6 +2145,9 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
+    if (!sessionId && isCollabSpawnRequest(ctx.headers)) {
+      return unresolvedCollabSpawnRouteDecision();
+    }
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const selectedRouting = sessionId
       ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
@@ -2526,7 +2615,8 @@ export function registerReviewerRouteContext(
 
 /**
  * 让 Codex 子 Agent thread 继承父 thread 的业务 session、桥接路由和产品 prompt。
- * app-server 的 thread/started 通知在子 thread 首个请求前同步调用这里。
+ * app-server 的 thread/started 通知和子 thread 首个 collab_spawn 请求都可以
+ * 幂等地调用这里，避免两者乱序时丢失路由。
  */
 export function registerChildThread(parentThreadId: string, childThreadId: string): boolean {
   if (!parentThreadId || !childThreadId || parentThreadId === childThreadId) return false;

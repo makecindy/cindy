@@ -21,6 +21,7 @@ describe('New Maker draft right sidebar', () => {
       sessionId: makeProjectDraftRightSidebarSessionId('C:\\Work\\XDMaker'),
       workdir: 'C:\\Work\\XDMaker',
       remoteHostId: null,
+      deviceLinkDeviceId: null,
     });
   });
 

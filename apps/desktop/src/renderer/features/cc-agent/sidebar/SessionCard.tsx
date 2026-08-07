@@ -8,7 +8,7 @@
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
  *   - 单击导航 / 双击重命名（标题原位变 input）
- *   - 右键 coordinate-anchored DropdownMenu（Pin/Rename/复制ID/新窗口/Archive/Delete，
+ *   - 右键 coordinate-anchored DropdownMenu（Pin/Rename/移动到项目/复制任务链接/新窗口/导出/Archive/Delete，
  *     archived / draft 变体同款分支）
  *   - hover 右上角仅 More（⋮）快捷钮；存档收进 ⋮ / 右键展开菜单的 Archive 项
  *     （卡片不再出现独立的存档快捷钮）。已归档卡片保留"取消归档"快捷钮。
@@ -65,6 +65,7 @@ import {
   isEmptyDraftSession,
 } from '../lib/sessionDisplayTitle';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
+import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { SessionRenameInput } from '../SessionRenameInput';
 import type { SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
@@ -77,6 +78,8 @@ import { useSessionBoundSchedules, scheduleFocusPath } from '@/features/schedule
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
+import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { OpenInSplitMenu } from './OpenInSplitMenu';
 
 const log = createLogger('SessionCard');
 
@@ -210,6 +213,7 @@ export function SessionCard({
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [archivePending, setArchivePending] = useState(false);
+  const [shareExportOpen, setShareExportOpen] = useState(false);
   const confirmPillRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -384,6 +388,12 @@ export function SessionCard({
     void window.electronAPI.maker.openSessionInNewWindow(session.id);
   }, [remoteWritesBlocked, session.id, t]);
 
+  // 「导出会话…」——打成 .cshare 分享给同事。空草稿、remote / orca / device-link 会话不显示此入口
+  // (转录在远端或协同关系不可移植，main 侧同样有双保险拒绝)。
+  const handleExportShareSelect = useCallback(() => {
+    setShareExportOpen(true);
+  }, []);
+
   const handleAutomationIconClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -415,6 +425,26 @@ export function SessionCard({
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
+  const openInSplitMenu = (
+    <OpenInSplitMenu
+      sessionId={session.id}
+      orcaRole={session.orcaRole}
+      onOpenSession={() => onClick(session.id)}
+    />
+  );
+
+  // Orca lead 可导出(整个协同随包);Worker 不进 sidebar,双保险仍排除。
+  const canExportShare =
+    !isEmpty &&
+    !session.remoteHostId &&
+    session.orcaRole !== 'worker' &&
+    !session.deviceLinkDeviceId;
+
+  const exportShareMenuItem = canExportShare ? (
+    <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
+      {t('ccAgent.sidebar.sessionMenu.exportShare')}
+    </DropdownMenuItem>
+  ) : null;
 
   // 「移动到项目」子菜单(main 既有功能;本次侧栏重设保留)。
   const canMoveToProject =
@@ -506,6 +536,11 @@ export function SessionCard({
       data-sidebar-session-row="true"
       role="button"
       tabIndex={0}
+      onPointerDown={(e) => {
+        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+          makerChatStore.ensureInitialMessages(session.id);
+        }
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
@@ -741,7 +776,7 @@ export function SessionCard({
         <div className="relative">
           <div
             className={cn(
-              'min-w-0 text-[12.5px] font-bold leading-[1.22] tracking-[-0.005em]',
+              'min-w-0 text-[12.5px] font-semibold leading-[1.22] tracking-[-0.005em]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
               isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
               isEditing && 'invisible',
@@ -772,7 +807,7 @@ export function SessionCard({
                 setIsEditing(false);
               }}
               containerClassName="absolute inset-x-0 top-1/2 -translate-y-1/2"
-              inputClassName="h-6 text-[12.5px] font-bold text-foreground"
+              inputClassName="h-6 text-[12.5px] font-semibold text-foreground"
               activeForeground={isActive}
             />
           )}
@@ -894,6 +929,8 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
+                {exportShareMenuItem}
+                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -913,6 +950,7 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
+                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -941,6 +979,7 @@ export function SessionCard({
                 </DropdownMenuItem>
                 {moveToProjectSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -949,6 +988,7 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
+                {exportShareMenuItem}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -968,6 +1008,14 @@ export function SessionCard({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+      )}
+
+      {shareExportOpen && (
+        <SessionShareExportDialog
+          open={shareExportOpen}
+          sessionId={session.id}
+          onOpenChange={setShareExportOpen}
+        />
       )}
     </div>
   );

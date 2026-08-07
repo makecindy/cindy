@@ -22,6 +22,16 @@ import { EventEmitter } from 'node:events';
 import type { BrowserWindow, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const nativeSurfaceMocks = vi.hoisted(() => ({
+  create: vi.fn(() => 'surface-oauth'),
+  attribute: vi.fn(),
+}));
+
+vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
+  createRsbNativePopupSurface: nativeSurfaceMocks.create,
+  attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
+}));
+
 import { BROWSER_PARTITION } from '../../shared/webviewPartition';
 import { getEffectiveAppShortcuts, type AppShortcutId } from '../../shared/appShortcuts';
 import {
@@ -34,6 +44,7 @@ import {
   RSB_BROWSER_POPUP_CHANNEL,
   applyGhostWebviewHardening,
   applyWebviewHardening,
+  installBrowserGuestHandlers,
   installDeferredPopupRouter,
   isGuestShortcutKeyDownType,
   resolveGuestShortcutAction,
@@ -162,11 +173,11 @@ describe('applyWebviewHardening', () => {
   });
 });
 
-describe('BLANK_POPUP_WINDOW_WEB_PREFERENCES(about:blank 中转窗口安全集)', () => {
+describe('BLANK_POPUP_WINDOW_WEB_PREFERENCES(popup WebContents 安全集)', () => {
   it('覆盖仓库 BrowserWindow 安全契约的全部显式字段', () => {
     // docs/dev-rules/electron-security-and-process-boundaries.md 第 3 节:新增
-    // BrowserWindow 必须显式配置的清单。隐藏中转窗口同样是真实 BrowserWindow,
-    // 少一个字段就是比主窗宽松的例外。enableBlinkFeatures 的契约是"不设置",
+    // popup WebContents 必须显式配置的清单。少一个字段就是比主窗宽松的例外。
+    // enableBlinkFeatures 的契约是"不设置",
     // 一并断言不存在。
     expect(BLANK_POPUP_WINDOW_WEB_PREFERENCES).toMatchObject({
       sandbox: true,
@@ -183,6 +194,75 @@ describe('BLANK_POPUP_WINDOW_WEB_PREFERENCES(about:blank 中转窗口安全集)'
       partition: BROWSER_PARTITION,
     });
     expect('enableBlinkFeatures' in BLANK_POPUP_WINDOW_WEB_PREFERENCES).toBe(false);
+  });
+});
+
+describe('installBrowserGuestHandlers(main-owned popup)', () => {
+  afterEach(() => {
+    nativeSurfaceMocks.create.mockClear();
+    nativeSurfaceMocks.attribute.mockClear();
+    setRsbPopupOpenerResolver(null);
+    setRsbPopupHostResolver(null);
+  });
+
+  function makeContents(id: number) {
+    let openHandler: ((details: { url: string; disposition: string }) => unknown) | null = null;
+    const contents = new EventEmitter() as EventEmitter & {
+      id: number;
+      isDestroyed: () => boolean;
+      send: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+      setWindowOpenHandler: ReturnType<typeof vi.fn>;
+      getOpenHandler: () => typeof openHandler;
+    };
+    contents.id = id;
+    contents.isDestroyed = () => false;
+    contents.send = vi.fn();
+    contents.close = vi.fn();
+    contents.setWindowOpenHandler = vi.fn((handler) => {
+      openHandler = handler;
+    });
+    contents.getOpenHandler = () => openHandler;
+    return contents;
+  }
+
+  it.each([
+    ['direct URL', 'https://accounts.example.com/oauth'],
+    ['about:blank', 'about:blank'],
+  ])('adopts Electron pre-created WebContents for %s', (_label, url) => {
+    const host = makeContents(1);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    installBrowserGuestHandlers(host as never, opener as never);
+
+    const response = opener.getOpenHandler()!({ url, disposition: 'foreground-tab' }) as {
+      action: string;
+      outlivesOpener: boolean;
+      overrideBrowserWindowOptions: { webPreferences: Record<string, unknown> };
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    expect(response.action).toBe('allow');
+    expect(response.outlivesOpener).toBe(false);
+    expect(response.overrideBrowserWindowOptions.webPreferences).toMatchObject({
+      sandbox: true,
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: true,
+      partition: BROWSER_PARTITION,
+      webviewTag: false,
+    });
+
+    const returned = response.createWindow({ webContents: popup as never });
+    expect(returned).toBe(popup);
+    expect(nativeSurfaceMocks.create).toHaveBeenCalledWith(host, popup);
+    // Nested popup handler is installed on the adopted child too.
+    expect(popup.setWindowOpenHandler).toHaveBeenCalledOnce();
+    expect(host.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url,
+      disposition: 'foreground-tab',
+      nativePopupSurfaceId: 'surface-oauth',
+    });
+    expect(popup.close).not.toHaveBeenCalled();
   });
 });
 

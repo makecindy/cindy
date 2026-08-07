@@ -41,6 +41,9 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:schedule:delete-run');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:codex-rate-limits');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:codex-rate-limit-reset');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:get-new-maker-worktree-branch-pref');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:apply-new-maker-worktree-branch-pref');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:list-branches');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:discard-precreated');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).not.toContain(DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL);
@@ -117,6 +120,8 @@ describe('device-link shared contract', () => {
     expect(connectionIssueTitle('replaced')).toContain('顶替');
     expect(connectionIssueHint('too-many-connections')).toContain('断开其它设备');
     expect(connectionIssueHint('version-mismatch')).toContain('升级到最新版本');
+    expect(connectionIssueTitle('unstable')).toContain('反复断开');
+    expect(connectionIssueHint('unstable')).toContain('本机');
   });
 
   it('preserves structured remote error codes and access revoked classification', () => {

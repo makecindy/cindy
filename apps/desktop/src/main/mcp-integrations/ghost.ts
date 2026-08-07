@@ -50,7 +50,11 @@ import {
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { deriveGhostSessionContext, type GhostSessionContextInjected } from '../../shared/ghost.js';
+import {
+  deriveGhostSessionContext,
+  type GhostSessionContextInjected,
+  type GhostSetupAssessment,
+} from '../../shared/ghost.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
@@ -70,10 +74,17 @@ import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
+import { createForgeIconConverter } from './forgeIconConversion.js';
+import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
+const MAX_FORGE_ICON_SOURCE_BYTES = 25 * 1024 * 1024;
+
+const convertForgeIconToPng = createForgeIconConverter({
+  fork: forkForgeIconConversionHost,
+});
 
 /* ────────────────────────────────────────────────────────────────────────
  * workdir 外过户确认:
@@ -1103,8 +1114,9 @@ export function getCindyGhostsMcpDeps(
             message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
           };
         }
+        let postGrantAssessment: GhostSetupAssessment;
         try {
-          const postGrantAssessment = getGhostSetupAssessment(ghostId);
+          postGrantAssessment = getGhostSetupAssessment(ghostId);
           if (postGrantAssessment.state !== 'ready') {
             return {
               ok: false,
@@ -1123,6 +1135,7 @@ export function getCindyGhostsMcpDeps(
         log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
         return {
           ok: true,
+          ...(postGrantAssessment.reauthSuggest ? { setup: postGrantAssessment } : {}),
           result: {
             ok: true,
             granted_count: grant.hashes.length,
@@ -1307,8 +1320,9 @@ export function getCindyGhostsMcpDeps(
           message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools),
         };
       }
+      let postCtxAssessment: GhostSetupAssessment;
       try {
-        const postCtxAssessment = getGhostSetupAssessment(ghostId);
+        postCtxAssessment = getGhostSetupAssessment(ghostId);
         if (postCtxAssessment.state !== 'ready') {
           return {
             ok: false,
@@ -1351,7 +1365,12 @@ export function getCindyGhostsMcpDeps(
       // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
       const producedMedia = drainGhostCallMedia(ghostId, callId);
       const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
-      return finalized.ok && producedMedia.length > 0 ? { ...finalized, producedMedia } : finalized;
+      if (!finalized.ok) return finalized;
+      // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。
+      const advisory = postCtxAssessment.reauthSuggest ? { setup: postCtxAssessment } : {};
+      return producedMedia.length > 0
+        ? { ...finalized, ...advisory, producedMedia }
+        : { ...finalized, ...advisory };
     },
     async forgeGuide(): Promise<string> {
       return FORGE_GUIDE;
@@ -1368,8 +1387,42 @@ export function getCindyGhostsMcpDeps(
       }
       return result;
     },
-    async forgePack({ dir }): Promise<CindyForgePackResult> {
-      const packed = await packGhostDir(dir);
+    async forgePack({ dir, iconSource }): Promise<CindyForgePackResult> {
+      let iconPng: Buffer | undefined;
+      let iconNote = '';
+      if (iconSource !== undefined) {
+        try {
+          const resolved = blobStore.resolveSafe(iconSource);
+          if (!resolved.mimeType.startsWith('image/')) {
+            throw new Error('icon_source 不是图片');
+          }
+          const stat = await fs.promises.stat(resolved.absPath);
+          if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_FORGE_ICON_SOURCE_BYTES) {
+            throw new Error(`icon_source 体积必须在 1–${MAX_FORGE_ICON_SOURCE_BYTES} 字节之间`);
+          }
+          iconPng = await convertForgeIconToPng(resolved.absPath);
+          iconNote = 'AI 图标已嵌入安装包。';
+        } catch (err) {
+          iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
+          log.warn('ghost forge icon fallback', {
+            dir,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      let packed = await packGhostDir(dir, iconPng ? { iconPng } : undefined);
+      // icon overlay 的任何失败都不是打包门槛：用原源码再打一次。若原源码
+      // 本身也不合法，则返回原本就会出现的结构化错误。
+      if (!packed.ok && iconPng) {
+        const fallbackPacked = await packGhostDir(dir);
+        if (fallbackPacked.ok) {
+          packed = fallbackPacked;
+          iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
+        } else {
+          return fallbackPacked;
+        }
+      }
       if (!packed.ok) return packed;
       // 与双击 .cindy 同一条转交通道:renderer 弹标准确认框(同 id 已装则
       // 自动转"更新 vX → vY"),用户点头才真装。
@@ -1381,7 +1434,7 @@ export function getCindyGhostsMcpDeps(
         id: packed.manifest.id,
         name: packed.manifest.name,
         version: packed.manifest.version,
-        note: '已打包并弹出装入/更新确认框,请告知用户在应用内确认(装入默认沉睡)。',
+        note: `${iconNote}已打包并弹出装入/更新确认框,请告知用户在应用内确认(装入默认沉睡)。`,
       };
     },
     logger: log,

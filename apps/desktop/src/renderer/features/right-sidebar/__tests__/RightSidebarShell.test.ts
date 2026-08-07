@@ -33,6 +33,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 import { RightSidebarShell } from '../RightSidebarShell';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
+import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
 import {
   _resetSidebarCommandsForTests,
   onRequestRightSidebarVisibility,
@@ -66,9 +67,26 @@ interface RsbBrowserPopupPayloadStub {
   disposition: string;
   openerTabId?: string;
   openerSessionId?: string;
+  nativePopupSurfaceId?: string;
 }
 
 let rsbBrowserPopupListeners: Array<(payload: RsbBrowserPopupPayloadStub) => void> = [];
+let rsbNativePopupEventListeners: Array<(payload: { surfaceId: string; type: 'closed' }) => void> =
+  [];
+const rsbNativePopupClaim = vi.fn(async () => ({
+  alive: true as const,
+  snapshot: {
+    url: 'about:blank',
+    title: '',
+    favicon: null,
+    isLoading: false,
+    canGoBack: false,
+    canGoForward: false,
+    isAudible: false,
+    crash: null,
+  },
+}));
+const rsbNativePopupClose = vi.fn(async () => ({ ok: true as const }));
 
 function makeRightSidebarTabsIpc(): RightSidebarTabsIpcStub {
   return {
@@ -97,6 +115,13 @@ function installElectronApi(tabsIpc: RightSidebarTabsIpcStub, fullscreen = false
           forceKill: ReturnType<typeof vi.fn>;
           onResourceEvent: ReturnType<typeof vi.fn>;
         };
+        rsbNativePopup: {
+          claim: typeof rsbNativePopupClaim;
+          close: typeof rsbNativePopupClose;
+          setBounds: ReturnType<typeof vi.fn>;
+          command: ReturnType<typeof vi.fn>;
+          onEvent: ReturnType<typeof vi.fn>;
+        };
         gitReview: { summary: ReturnType<typeof vi.fn> };
         onRsbBrowserPopup: ReturnType<typeof vi.fn>;
         onRsbBrowserCommand: (
@@ -124,6 +149,20 @@ function installElectronApi(tabsIpc: RightSidebarTabsIpcStub, fullscreen = false
       setForeground: vi.fn(async () => undefined),
       forceKill: vi.fn(async () => undefined),
       onResourceEvent: vi.fn(() => () => undefined),
+    },
+    rsbNativePopup: {
+      claim: rsbNativePopupClaim,
+      close: rsbNativePopupClose,
+      setBounds: vi.fn(async () => ({ ok: true })),
+      command: vi.fn(async () => ({ ok: true })),
+      onEvent: vi.fn((callback: (payload: { surfaceId: string; type: 'closed' }) => void) => {
+        rsbNativePopupEventListeners.push(callback);
+        return () => {
+          rsbNativePopupEventListeners = rsbNativePopupEventListeners.filter(
+            (cb) => cb !== callback,
+          );
+        };
+      }),
     },
     gitReview: {
       summary: vi.fn(async () => ({
@@ -205,8 +244,12 @@ describe('RightSidebarShell empty state', () => {
     _resetStore();
     _resetRsbBrowserBridgeForTests();
     _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
     rsbBrowserCommandListeners = [];
     rsbBrowserPopupListeners = [];
+    rsbNativePopupEventListeners = [];
+    rsbNativePopupClaim.mockClear();
+    rsbNativePopupClose.mockClear();
     eagerSpawnAndReport.mockClear();
     eagerSpawnAndReport.mockImplementation(async () => undefined);
     tabsIpc = makeRightSidebarTabsIpc();
@@ -217,6 +260,7 @@ describe('RightSidebarShell empty state', () => {
     _resetStore();
     _resetRsbBrowserBridgeForTests();
     _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
@@ -707,9 +751,13 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     _resetStore();
     _resetRsbBrowserBridgeForTests();
     _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
     _resetSidebarCommandsForTests();
     rsbBrowserCommandListeners = [];
     rsbBrowserPopupListeners = [];
+    rsbNativePopupEventListeners = [];
+    rsbNativePopupClaim.mockClear();
+    rsbNativePopupClose.mockClear();
     eagerSpawnAndReport.mockClear();
     eagerSpawnAndReport.mockImplementation(async () => undefined);
     requests = [];
@@ -726,6 +774,7 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     _resetStore();
     _resetRsbBrowserBridgeForTests();
     _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
@@ -767,6 +816,44 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     // popup 是 guest 页面脚本催生的,不是用户手势:detached 形态下不得 show+focus
     // 抢走用户前台(与 agent tab-op open 路径一致)。
     expect(requests[0].opts.userInitiated).toBe(false);
+  });
+
+  it('native popup claim 原始 WebContents,不再 eagerSpawn 新 webview,并响应 window.close', async () => {
+    renderShell();
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    await act(async () => {
+      rsbBrowserPopupListeners[0]({
+        url: 'about:blank',
+        disposition: 'foreground-tab',
+        openerTabId: 'tab-opener',
+        openerSessionId: 's1',
+        nativePopupSurfaceId: 'surface-oauth',
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+    const tab = getBucket('s1').tabs[0];
+    await waitFor(() => expect(rsbNativePopupClaim).toHaveBeenCalledTimes(1));
+    expect(rsbNativePopupClaim).toHaveBeenCalledWith({
+      surfaceId: 'surface-oauth',
+      sessionId: 's1',
+      tabId: tab.id,
+    });
+    expect(tab.state).toMatchObject({
+      url: 'about:blank',
+      nativePopupSurfaceId: 'surface-oauth',
+    });
+    expect(eagerSpawnAndReport).not.toHaveBeenCalled();
+
+    await act(async () => {
+      for (const listener of rsbNativePopupEventListeners) {
+        listener({ surfaceId: 'surface-oauth', type: 'closed' });
+      }
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(0));
+    expect(rsbNativePopupClose).toHaveBeenCalledWith({ surfaceId: 'surface-oauth' });
   });
 
   it('Shell 卸载(route 切换)后 popup 仍被常驻 router 路由,不丢事件', async () => {

@@ -220,6 +220,29 @@ export async function addKeyToAgent(opts: {
 }): Promise<AddKeyToAgentResult> {
   const { privateKeyPath, passphrase } = opts;
 
+  // Deterministic pre-flight: confirm the private key actually exists BEFORE
+  // handing the path to ssh-add. ssh-add's failure mode for a missing file is
+  // inconsistent across platforms — on Windows OpenSSH it prints
+  // "No such file or directory" (→ no_such_file), but a Git Bash / MSYS
+  // ssh-add can emit "Could not open a connection to your authentication
+  // agent" instead (→ agent_unavailable), sending the user down the wrong
+  // remediation path. We classify the path problem ourselves and carry the
+  // real path in the hint so the UI can say "key file not found at <path>".
+  try {
+    await fs.access(privateKeyPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {
+        success: false,
+        failureReason: 'no_such_file',
+        errorHint: `private key file not found: ${privateKeyPath}`,
+        stderr: String((err as Error).message),
+      };
+    }
+    // Non-ENOENT IO error (permissions etc.) — fall through so ssh-add
+    // attempts the key and buildFailure classifies its stderr downstream.
+  }
+
   // No passphrase = key is unencrypted; ssh-add doesn't need to prompt
   // and we can skip the askpass dance entirely.
   if (!passphrase) {
@@ -327,6 +350,9 @@ function classifyAgentFailure(err: unknown): { reason: AgentFailureReason; hint:
   if (/incorrect|bad passphrase|wrong passphrase/i.test(msg)) {
     return { reason: 'bad_passphrase', hint: 'passphrase rejected by ssh-add' };
   }
+  // Note: addKeyToAgent's fs.access pre-flight now handles the missing-key-file
+  // case before ssh-add runs, so this branch only catches post-spawn "no such
+  // file" errors (ssh-add runtime dependency missing, etc.).
   if (/no such file|enoent/i.test(msg)) {
     return { reason: 'no_such_file', hint: 'private key file not found at expected path' };
   }

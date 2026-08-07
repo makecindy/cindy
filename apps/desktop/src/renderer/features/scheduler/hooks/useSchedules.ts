@@ -23,6 +23,7 @@ import type {
   SchedulerEvent,
   SchedulerRuntimeSnapshot,
 } from '@cindy/maker-scheduler';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 
 import {
   schedulesStore,
@@ -75,7 +76,8 @@ export function useSchedules(): UseSchedulesResult {
           /* 瞬时诊断状态失败不影响任务列表主数据。 */
         });
     };
-    const off = window.electronAPI.maker.schedule.onEvent((raw) => {
+    const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       const ev = raw as SchedulerEvent;
       if (ev.type === 'runtime-state') {
         runtimeRevisionRef.current += 1;

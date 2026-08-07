@@ -28,7 +28,11 @@ function tools(server: unknown) {
 
 function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
   return {
-    startTeam: vi.fn(async () => ({ ok: true as const, teamId: 'team-1' })),
+    startTeam: vi.fn(async () => ({
+      ok: true as const,
+      teamId: 'team-1',
+      workerPermissionMode: 'auto' as const,
+    })),
     createWorker: vi.fn(async () => ({
       ok: true as const,
       workerId: 'worker-1',
@@ -772,6 +776,7 @@ describe('dynamic lizi MCP session context', () => {
     const startTeam = vi.fn(async () => ({
       ok: true as const,
       teamId: 'team-1',
+      workerPermissionMode: 'auto' as const,
     }));
     const deps: OrcaMcpDeps = createOrcaDeps({
       startTeam,

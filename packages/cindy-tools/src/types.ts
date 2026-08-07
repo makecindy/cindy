@@ -83,6 +83,22 @@ export interface CindyGhostSetupAssessment {
       actions: CindyGhostSetupAllowedAction[];
     }>;
   }>;
+  /** 插件仍 ready 时的非阻塞重连建议；不得解释为 SETUP_REQUIRED。 */
+  reauthSuggest?: {
+    ghostId: string;
+    secretKey: string;
+    missingScopes: string[];
+    missingScopeCount: number;
+    requirement: {
+      ref: string;
+      kind: 'oauth';
+      label: string;
+      action: {
+        id: string;
+        kind: 'oauth_connect';
+      };
+    };
+  };
 }
 
 /** Agent 为 Ask 风格配置卡编排的展示步骤；Host 校验后才可采用。 */
@@ -133,6 +149,8 @@ export type CindyGhostCallResult =
   | {
       ok: true;
       result: unknown;
+      /** ready 语义不变；只在有非阻塞重连建议时由 Host 附加。 */
+      setup?: CindyGhostSetupAssessment;
       /**
        * 本次调用期间由主机实际入库(cindy-media)的媒体地址账本(可选,
        * host 按 ghostId+callId 记账后随结果带回)。这是**主机侧事实**,
@@ -287,7 +305,14 @@ export interface CindyGhostsMcpDeps {
    * 装入(同 id 已装则更新)确认框——装不装永远由用户决定,agent 只能
    * 递到用户面前。
    */
-  forgePack(request: { dir: string }): Promise<CindyForgePackResult>;
+  forgePack(request: {
+    dir: string;
+    /**
+     * 用户明确选择 AI 图标后，由图片工具返回的 cindy-media 地址。Host
+     * best-effort 把它嵌入包内；失败保留源码里的默认图标，不阻塞打包。
+     */
+    iconSource?: string;
+  }): Promise<CindyForgePackResult>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

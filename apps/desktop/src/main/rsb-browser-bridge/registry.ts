@@ -59,6 +59,10 @@ export class TabRegistry {
   private readonly records = new Map<string, TabRecord>(); // tabId → record
   /** tabId set of automation-active tabs that must not be LRU-evicted. */
   private readonly pinned = new Set<string>();
+  /** Legacy/manual pin ownership, kept separate from scoped backend leases. */
+  private readonly manualPins = new Set<string>();
+  /** Unique leases prevent a late old-generation release from touching a new pin. */
+  private readonly pinLeases = new Map<string, Set<symbol>>();
   /**
    * tabId → destroyed-listener cleanup. Keyed by tabId (not webContentsId) so
    * that pathological cases — two different tabs reported with the same
@@ -129,6 +133,8 @@ export class TabRegistry {
     }
     this.detachDestroyedListener(tabId);
     this.records.delete(tabId);
+    this.manualPins.delete(tabId);
+    this.pinLeases.delete(tabId);
     if (this.pinned.delete(tabId)) {
       this.firePinChange(tabId, false);
     }
@@ -217,6 +223,8 @@ export class TabRegistry {
    * reads `isPinned`, automation behavior is consistent.
    */
   pin(tabId: string): boolean {
+    if (this.manualPins.has(tabId)) return false;
+    this.manualPins.add(tabId);
     if (this.pinned.has(tabId)) return false;
     this.pinned.add(tabId);
     this.firePinChange(tabId, true);
@@ -224,9 +232,38 @@ export class TabRegistry {
   }
 
   unpin(tabId: string): boolean {
+    if (!this.manualPins.delete(tabId)) return false;
+    if ((this.pinLeases.get(tabId)?.size ?? 0) > 0) return false;
     if (!this.pinned.delete(tabId)) return false;
     this.firePinChange(tabId, false);
     return true;
+  }
+
+  /**
+   * Acquire a scoped automation pin. The returned release is idempotent and
+   * token-specific, so disposal of one backend generation cannot remove a
+   * replacement generation's protection for the same tab.
+   */
+  acquirePinLease(tabId: string): () => void {
+    const token = Symbol(tabId);
+    const leases = this.pinLeases.get(tabId) ?? new Set<symbol>();
+    leases.add(token);
+    this.pinLeases.set(tabId, leases);
+    if (!this.pinned.has(tabId)) {
+      this.pinned.add(tabId);
+      this.firePinChange(tabId, true);
+    }
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const current = this.pinLeases.get(tabId);
+      if (!current?.delete(token)) return;
+      if (current.size > 0) return;
+      this.pinLeases.delete(tabId);
+      if (this.manualPins.has(tabId)) return;
+      if (this.pinned.delete(tabId)) this.firePinChange(tabId, false);
+    };
   }
 
   isPinned(tabId: string): boolean {

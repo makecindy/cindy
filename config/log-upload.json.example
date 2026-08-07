@@ -1,0 +1,32 @@
+{
+  "$comment": [
+    "客户端日志上报的目标(SLS project + logstore + 服务区域)。",
+    "",
+    "本文件是**示例**。真值不进仓(主仓 .gitignore 忽略 config/log-upload.json),",
+    "唯一事实源在 cindy-build-scripts 仓根,打包机由 sync-desktop-release-kit.sh 拷回,",
+    "与 config/endpoint.dev.json / apps/desktop/scripts/release-regions.json 同款约定。",
+    "",
+    "打包时由 scripts/shared/log-upload-build-env.mjs 读取、校验,并把**当前构建区域那一个**",
+    "目标烘焙进 main bundle(process.env.XDT_LOG_UPLOAD_TARGET)。cn 包里物理上不含 global 的",
+    "logstore 地址,反之亦然。",
+    "",
+    "校验规则(不满足即打包失败,见该模块):",
+    "  · cn 与 global 必须存在且合法 —— 缺失不是「功能关闭」而是「发版事故」,所以硬失败;",
+    "    新增发行区域同样自动成为必填,不需要改校验代码。",
+    "  · dev 可缺省(缺省 ⇒ dev 渠道包的日志上报整体关闭,不写任何生产 logstore)。",
+    "  · slsRegion 只写区域代号(如 cn-shanghai),接入域名由代码拼成 <slsRegion>.log.aliyuncs.com。",
+    "  · 任意两个区域的 project 与 logstore 都必须互不相同(跨区域隔离,有事故先例)。"
+  ],
+  "schemaVersion": 1,
+  "cn": {
+    "project": "example-cn-project",
+    "logstore": "example-cn-client-log",
+    "slsRegion": "cn-example"
+  },
+  "global": {
+    "project": "example-global-project",
+    "logstore": "example-global-client-log",
+    "slsRegion": "ap-example-1"
+  },
+  "dev": null
+}

@@ -27,6 +27,9 @@ interface UsageShape {
   total_tokens?: number;
   input_tokens?: number;
   output_tokens?: number;
+  /** DeepSeek-compatible cache counters exposed alongside prompt_tokens. */
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
   input_tokens_details?: { cached_tokens?: number };
   completion_tokens_details?: { reasoning_tokens?: number };
@@ -737,7 +740,15 @@ export class ChatSseTranslator {
       if (state.done) items.push({ outputIndex: state.outputIndex, item: this.toolItem(state, 'completed') });
     }
     const output = items.sort((a, b) => a.outputIndex - b.outputIndex).map((entry) => entry.item);
-    const inputTokens = numberField(this.usage?.prompt_tokens ?? this.usage?.input_tokens);
+    const cachedTokens = numberField(
+      this.usage?.prompt_tokens_details?.cached_tokens
+        ?? this.usage?.input_tokens_details?.cached_tokens
+        ?? this.usage?.prompt_cache_hit_tokens,
+    );
+    const reportedInputTokens = this.usage?.prompt_tokens ?? this.usage?.input_tokens;
+    const inputTokens = reportedInputTokens === undefined
+      ? numberField(this.usage?.prompt_cache_miss_tokens) + cachedTokens
+      : numberField(reportedInputTokens);
     const outputTokens = numberField(this.usage?.completion_tokens ?? this.usage?.output_tokens);
     const usage = this.usage || this.zeroUsageOnMissing
       ? {
@@ -745,10 +756,7 @@ export class ChatSseTranslator {
           output_tokens: outputTokens,
           total_tokens: numberField(this.usage?.total_tokens) || inputTokens + outputTokens,
           input_tokens_details: {
-            cached_tokens: numberField(
-              this.usage?.prompt_tokens_details?.cached_tokens
-                ?? this.usage?.input_tokens_details?.cached_tokens,
-            ),
+            cached_tokens: cachedTokens,
           },
           output_tokens_details: {
             reasoning_tokens: numberField(

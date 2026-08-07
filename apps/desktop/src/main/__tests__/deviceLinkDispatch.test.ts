@@ -36,7 +36,12 @@ import {
   type ActiveController,
 } from '../device-link/dispatch';
 import { __testing as registry, dispatchLocalInvoke } from '../device-link/invoke-registry';
-import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context';
+import {
+  deviceLinkInvokeControllerSupports,
+  getDeviceLinkInvokeContext,
+  isDeviceLinkInvoke,
+} from '../device-link/invoke-context';
+import * as subscriptions from '../device-link/subscriptions';
 
 beforeEach(() => {
   remoteControlEnabled = true;
@@ -98,6 +103,30 @@ describe('runInvoke 双层校验', () => {
       },
     });
     expect(isDeviceLinkInvoke()).toBe(false);
+  });
+
+  it('能力查询只信任当前 device-link controller context,未知控制端 fail closed', async () => {
+    subscriptions.subscribe(
+      'ctrl-cap',
+      ['sessions'],
+      'Desktop',
+      [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
+    );
+    subscriptions.subscribe('ctrl-legacy', ['sessions'], 'Legacy');
+    registry.register('maker:list-active', () => ({
+      explicitProviderNull: deviceLinkInvokeControllerSupports(
+        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+      ),
+    }));
+
+    await expect(runInvoke('ctrl-cap', { channel: 'maker:list-active', args: [] })).resolves.toEqual({
+      ok: true,
+      result: { explicitProviderNull: true },
+    });
+    await expect(runInvoke('ctrl-legacy', { channel: 'maker:list-active', args: [] })).resolves.toEqual({
+      ok: true,
+      result: { explicitProviderNull: false },
+    });
   });
 
   it('本机 handler 抛 throwIpcError → IPC_ERROR 透传 [CODE] message', async () => {
@@ -388,6 +417,7 @@ import {
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import {
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DeviceLinkError,
   SESSION_ACTIVITY_CHANNEL,
   type Envelope,

@@ -35,19 +35,21 @@ const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
 type PermissionInteractionRequest = Extract<InteractionRequest, { kind: 'permission' }>;
 
-function statusEvent(isRunning: boolean, status: string): AgentEvent {
+function statusEvent(isRunning: boolean, status: string, turnContinuationId?: number): AgentEvent {
   return {
     type: 'status',
     source: 'codex',
     data: { isRunning, status },
+    ...(turnContinuationId !== undefined ? { turnContinuationId } : {}),
   };
 }
 
-function doneEvent(): AgentEvent {
+function doneEvent(turnContinuationId?: number): AgentEvent {
   return {
     type: 'done',
     source: 'codex',
     data: { result: 'done' },
+    ...(turnContinuationId !== undefined ? { turnContinuationId } : {}),
   };
 }
 
@@ -110,6 +112,21 @@ function askUserQuestionRequest(requestId: string): InteractionRequest {
 }
 
 describe('Agent Island display state', () => {
+  it('does not complete the island on claimed SDK boundary events', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'continuing', title: 'Continuing', agentKind: 'codex' };
+
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_001).sessions[0]?.phase).toBe('running');
+
+    expect(applyAgentIslandEvent(state, meta, statusEvent(false, 'Done', 7), 1_100)).toBe(false);
+    expect(applyAgentIslandEvent(state, meta, doneEvent(7), 1_101)).toBe(false);
+    expect(buildAgentIslandDisplayState(state, 1_102).sessions[0]?.phase).toBe('running');
+
+    applyAgentIslandEvent(state, meta, doneEvent(), 1_200);
+    expect(buildAgentIslandDisplayState(state, 1_201).sessions[0]?.phase).toBe('completed');
+  });
+
   it('keeps the notch visible even when there are no active sessions', () => {
     const state = createAgentIslandState();
 

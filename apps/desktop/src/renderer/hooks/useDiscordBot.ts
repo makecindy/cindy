@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
@@ -10,6 +10,7 @@ const OWNER_USER_ID_PATTERN = /^\d{17,20}$/;
 interface DiscordBotCache {
   ownerUserId: string;
   status: DiscordBotTransportStatus;
+  lifecycleAnnouncement: boolean;
 }
 
 let cachedState: DiscordBotCache | null = null;
@@ -20,6 +21,8 @@ export interface UseDiscordBotReturn {
   ownerUserId: string;
   setOwnerUserId: (v: string) => void;
   status: DiscordBotTransportStatus;
+  lifecycleAnnouncement: boolean;
+  setLifecycleAnnouncement: (enabled: boolean) => void;
   validationError: string | null;
   isSaving: boolean;
   isDisconnecting: boolean;
@@ -35,22 +38,35 @@ export function useDiscordBot(): UseDiscordBotReturn {
   const [status, setStatus] = useState<DiscordBotTransportStatus>(
     () => cachedState?.status ?? { kind: 'idle' },
   );
+  const [lifecycleAnnouncement, setLifecycleAnnouncementState] = useState(
+    () => cachedState?.lifecycleAnnouncement ?? true,
+  );
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const lifecycleRequestVersionRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    const lifecycleReadVersion = lifecycleRequestVersionRef.current;
     void (async () => {
       try {
         const state = await window.electronAPI.discordBot.getStatus();
         if (cancelled) return;
         const nextOwnerUserId = state.ownerUserId ?? '';
+        const nextLifecycleAnnouncement = state.lifecycleAnnouncement !== false;
+        const lifecycleReadIsCurrent = lifecycleReadVersion === lifecycleRequestVersionRef.current;
         setStatus(state.status);
         setOwnerUserIdState(nextOwnerUserId);
+        if (lifecycleReadIsCurrent) {
+          setLifecycleAnnouncementState(nextLifecycleAnnouncement);
+        }
         cachedState = {
           ownerUserId: nextOwnerUserId,
           status: state.status,
+          lifecycleAnnouncement: lifecycleReadIsCurrent
+            ? nextLifecycleAnnouncement
+            : (cachedState?.lifecycleAnnouncement ?? true),
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -68,6 +84,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
       cachedState = {
         ownerUserId: cachedState?.ownerUserId ?? '',
         status: update.status,
+        lifecycleAnnouncement: cachedState?.lifecycleAnnouncement ?? true,
       };
     });
     return unsub;
@@ -82,6 +99,31 @@ export function useDiscordBot(): UseDiscordBotReturn {
     setOwnerUserIdState(v);
     setValidationError(null);
   }, []);
+
+  const setLifecycleAnnouncement = useCallback((enabled: boolean) => {
+    const previous = lifecycleAnnouncement;
+    const requestVersion = ++lifecycleRequestVersionRef.current;
+    setLifecycleAnnouncementState(enabled);
+    cachedState = {
+      ownerUserId: cachedState?.ownerUserId ?? '',
+      status: cachedState?.status ?? { kind: 'idle' },
+      lifecycleAnnouncement: enabled,
+    };
+    void window.electronAPI.discordBot.setLifecycleAnnouncement(enabled).then((result) => {
+      if (requestVersion !== lifecycleRequestVersionRef.current) return;
+      if (result.ok && result.lifecycleAnnouncement === enabled) return;
+      setLifecycleAnnouncementState(result.lifecycleAnnouncement);
+      if (cachedState) {
+        cachedState = { ...cachedState, lifecycleAnnouncement: result.lifecycleAnnouncement };
+      }
+    }).catch((err) => {
+      if (requestVersion !== lifecycleRequestVersionRef.current) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error('setLifecycleAnnouncement failed:', msg);
+      setLifecycleAnnouncementState(previous);
+      if (cachedState) cachedState = { ...cachedState, lifecycleAnnouncement: previous };
+    });
+  }, [lifecycleAnnouncement]);
 
   const connect = useCallback(async () => {
     if (isSaving) return false;
@@ -110,6 +152,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
       cachedState = {
         ownerUserId: canonicalOwnerUserId,
         status: result.status,
+        lifecycleAnnouncement: cachedState?.lifecycleAnnouncement ?? lifecycleAnnouncement,
       };
       if (result.saveErrorStatus?.kind === 'error' || result.status.kind === 'error') {
         toast.error(t('logic.toasts.discordBotConnectFailed'));
@@ -125,7 +168,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
     } finally {
       setIsSaving(false);
     }
-  }, [isSaving, ownerUserId, t, token]);
+  }, [isSaving, lifecycleAnnouncement, ownerUserId, t, token]);
 
   const disconnect = useCallback(async () => {
     if (isDisconnecting) return;
@@ -139,6 +182,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
       cachedState = {
         ownerUserId: '',
         status: result.status,
+        lifecycleAnnouncement: cachedState?.lifecycleAnnouncement ?? lifecycleAnnouncement,
       };
       toast.success(t('logic.toasts.discordBotDisconnected'));
     } catch (err) {
@@ -148,7 +192,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
     } finally {
       setIsDisconnecting(false);
     }
-  }, [isDisconnecting, t]);
+  }, [isDisconnecting, lifecycleAnnouncement, t]);
 
   const canConnect =
     token.trim().length > 0 &&
@@ -162,6 +206,8 @@ export function useDiscordBot(): UseDiscordBotReturn {
     ownerUserId,
     setOwnerUserId,
     status,
+    lifecycleAnnouncement,
+    setLifecycleAnnouncement,
     validationError,
     isSaving,
     isDisconnecting,

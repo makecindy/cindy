@@ -53,6 +53,25 @@ describe('runSchemaStartupPolicy', () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
+  it('fails closed when packaged read-only invariants require schema cleanup', async () => {
+    const cleanup = vi.fn();
+    const result = await runSchemaStartupPolicy({
+      sharedPassive: false,
+      readOnly: true,
+      checkCompatibility: () => ({ compatible: true, marker: 'exact' }),
+      checkReadOnlyInvariants: () => ({ compatible: false }),
+      prepareRuntimeManifest: vi.fn(),
+      runMigrations: vi.fn(async () => undefined),
+      handleSchemaDrift: vi.fn(async () => undefined),
+      cleanupSchemaDdl: cleanup,
+    });
+
+    expect(result).toEqual({
+      ready: false,
+      compatibility: { compatible: false, marker: 'exact' },
+    });
+    expect(cleanup).not.toHaveBeenCalled();
+  });
   it('prepares identity intent before primary schema maintenance', async () => {
     const events: string[] = [];
     const result = await runSchemaStartupPolicy({

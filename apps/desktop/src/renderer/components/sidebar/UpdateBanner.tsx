@@ -47,6 +47,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
+import { useLocale } from '@/hooks/useLocale';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tip } from '@/components/ui/tooltip';
 import { fetchReleaseNotes } from '@/release-notes';
@@ -65,6 +66,7 @@ interface UpdateBannerProps {
 
 export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
+  const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
   // status/version 变化时下面 effect 会自动 restore,新一版更新到达时 banner
   // 重新出现,不会被上一版的 dismiss 状态吞掉。
@@ -171,11 +173,11 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
       return;
     }
     let cancelled = false;
-    fetchReleaseNotes(version)
+    fetchReleaseNotes(version, effectiveLocale)
       .then((notes) => { if (!cancelled) setHasNotes(notes !== null); })
       .catch(() => { if (!cancelled) setHasNotes(false); });
     return () => { cancelled = true; };
-  }, [status, version, canOpenNotice, isCollapsed]);
+  }, [status, version, canOpenNotice, isCollapsed, effectiveLocale]);
 
   // 取消:先打标记再复位,让上面的 effect 在入口按钮重新挂载后把焦点还回去。
   const handleCancelConfirm = () => {

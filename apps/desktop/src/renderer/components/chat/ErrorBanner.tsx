@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import {
   AlertCircle,
   Check,
@@ -41,7 +42,12 @@ import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
-import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
+import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
+import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
 
 interface ErrorBannerProps {
@@ -252,11 +258,17 @@ export function ErrorBanner({
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
+  const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
+  const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
+  const isClaudeSubscriptionOpusPlanMismatch =
+    errorReason === CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON;
+  // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
+  // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
   const hideRetry =
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
@@ -278,7 +290,9 @@ export function ErrorBanner({
   // 加 else if, 标志自动保持 true, 折扣版提示不会误叠加 (无需记得同步维护条件表)。
   let displayError: string;
   let hasSpecialGuidance = true;
-  if (isPiImageInputUnsupportedError(error)) {
+  if (isCodexResumeNotReadyProjectionError(error)) {
+    displayError = t('chat.errorBanner.codexResumeNotReady');
+  } else if (isPiImageInputUnsupportedError(error)) {
     displayError = t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
   } else if (isCredentialSwitchBusy) {
     displayError = t('chat.errorBanner.credentialSwitchBusy');
@@ -304,10 +318,19 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexAuthMissingLocal');
   } else if (isClaudeGatewayOpusPlanMismatch) {
     displayError = t('chat.errorBanner.claudeGatewayOpusPlanMismatch');
+  } else if (isClaudeSubscriptionOpusPlanMismatch) {
+    displayError = t('chat.errorBanner.claudeSubscriptionOpusPlanMismatch');
   } else if (isGatewayQuotaExhausted) {
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
     displayError = t('chat.errorBanner.gatewayQuotaExhausted');
+  } else if (terminalRateLimitRetryProgress) {
+    // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
+    // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
+    displayError = t('chat.errorBanner.rateLimitRetrying', {
+      attempt: terminalRateLimitRetryProgress.attempt,
+      maxAttempts: terminalRateLimitRetryProgress.maxAttempts,
+    });
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -341,7 +364,11 @@ export function ErrorBanner({
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
   } else {
-    displayError = error;
+    // Keep the raw message available to every specialized gate above. Only
+    // the final fallback uses the stable reason map, so auth/network/overload
+    // recovery behavior keeps its existing priority while generic maker-core
+    // English fallbacks are localized in both the live and tail banner.
+    displayError = errorReasonI18nKey ? t(errorReasonI18nKey) : error;
     hasSpecialGuidance = false;
   }
 
@@ -487,7 +514,11 @@ export function ErrorBanner({
             {t('chat.errorBanner.budgetModelHint')}
           </span>
         )}
-        {(isNetworkishError || isOverloadError || isClaudeGatewayOpusPlanMismatch) && (
+        {(isNetworkishError ||
+          isOverloadError ||
+          terminalRateLimitRetryProgress ||
+          isClaudeGatewayOpusPlanMismatch ||
+          isClaudeSubscriptionOpusPlanMismatch) && (
           // 网络类与过载类的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
           // errno/上游原话)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
           // 本组件其余 red-600/400 为历史存量,error 属语义豁免色但新代码仍走 token)。
@@ -567,6 +598,7 @@ export function ErrorBanner({
         // 与「切换到 Claude.ai 并重试」同一档低打扰内联恢复动作:不弹窗、不抢焦点。
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={onViewBalance}
           className={cn(
             'shrink-0 flex select-none items-center gap-1 text-xs font-medium',
@@ -614,6 +646,7 @@ export function ErrorBanner({
       {onContinueAfterUsageReset && (
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={onContinueAfterUsageReset}
           className={cn(
             'shrink-0 flex items-center gap-1 text-xs font-medium',
@@ -646,6 +679,7 @@ export function ErrorBanner({
       {showInvalidEncryptedContentRecovery && onForkStripEncrypted && (
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={() => void onForkStripEncrypted()}
           disabled={forkStripEncryptedRunning}
           className={cn(

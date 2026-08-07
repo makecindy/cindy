@@ -21,7 +21,6 @@ import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { machineIdSync } from 'node-machine-id';
@@ -38,6 +37,10 @@ import {
 } from './devStartupStatus';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
+import {
+  waitForTurnChangeSetActions,
+  waitForTurnChangeSetPersistence,
+} from './turn-change-set/store.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
@@ -79,6 +82,8 @@ app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 // Windows 上 codex app-server 子进程不会随父死 → 残留孤儿, 持有 binary 文件锁,
 // 用户下次启动时撞 EBUSY / 端口占用 (anthropic-compat-proxy 等)。
 async function shutdownMaker(): Promise<void> {
+  // Do not terminate Main while one workspace patch command is settling.
+  await waitForTurnChangeSetActions();
   // 退出前先把 onClose 重副作用(worktree stash/删除、临时附件清理)一刀切抑制掉:
   // shutdown 触发的批量 onClose 是 fire-and-forget 的,不会被 await,worktree 回收会
   // 和 app.exit 竞争——可能 stash 了一半进程就没了,留下半拆的 worktree。退出期不做
@@ -99,6 +104,9 @@ async function shutdownMaker(): Promise<void> {
     // 注意: getMakerCore 未就绪时抛的是 sync error, await m.shutdown() 也走这里。
     console.error('[main] maker.shutdown failed (or not ready):', err);
   }
+  // Session shutdown may enqueue the final turn sidecar write. Drain only
+  // after maker.shutdown() has closed every session and emitted those writes.
+  await waitForTurnChangeSetPersistence();
   WorktreePool.parkAll();
 }
 
@@ -164,7 +172,15 @@ import { RendererBootGuard } from './renderer-boot-guard';
 import yaml from 'js-yaml';
 import matter from 'gray-matter';
 import type { Maker } from '@cindy/maker-core';
-import { im, feishuIm, telegramIm, registerTelegramBotConfigIpc, startImOrchestrators, startImConnection, stopImConnection } from './im';
+import {
+  im,
+  feishuIm,
+  telegramIm,
+  registerTelegramBotConfigIpc,
+  startImOrchestrators,
+  startImConnection,
+  stopImConnection,
+} from './im';
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
@@ -178,6 +194,7 @@ import {
   setRsbPopupOpenerReportSubscriber,
   setRsbPopupOpenerResolver,
 } from './webview-security';
+import { configureRsbBrowserWebAuthn } from './rsb-browser-webauthn.js';
 import {
   installSelectionContextMenu,
   setSelectionContextMenuLocale,
@@ -188,6 +205,11 @@ import {
   registerRsbBrowserBridgeIpc,
   registerTabOpResultHandler,
 } from './rsb-browser-bridge';
+import {
+  getRsbNativePopupOwnerWebContents,
+  hasActiveRsbNativePopupSurfaces,
+  registerRsbNativePopupSurfaceIpc,
+} from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
 import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
@@ -239,7 +261,10 @@ import {
   isPathAllowedAgainst,
 } from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
+import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { handleOpenFileInBrowser } from './openFileInBrowser';
+import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
@@ -266,7 +291,15 @@ import {
 import { freezeSessionActiveTurnMarkers } from './localDb/sessionActiveTurn';
 import { getDrizzleDir } from './localDb/migrate';
 import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
-import { startEmbeddingHost, stopEmbeddingHost, isEmbeddingHostStarted } from './embedding-host';
+import {
+  startEmbeddingHost,
+  stopEmbeddingHost,
+  isEmbeddingHostStarted,
+  getEmbeddingService,
+  isPluginVectorConsumerActive,
+  registerEmbeddingHostLazyStart,
+  type EmbeddingService,
+} from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
 import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
@@ -282,6 +315,7 @@ import {
 } from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
+import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
@@ -292,9 +326,11 @@ import {
   markAppContentWindow,
 } from './windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
@@ -323,6 +359,8 @@ import {
   WorktreePool,
   reconcileWorktreesForDeletedSessions,
 } from './worktree';
+// shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
+import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
 import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewIpc } from './git-review';
@@ -367,6 +405,7 @@ import {
   waitForInitialCustomMcpRefresh,
 } from './maker-host/index.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
+import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
   ensureActiveCatalogLoaded,
   refreshCustomProvidersIntoCatalog,
@@ -425,6 +464,7 @@ import {
   isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
+  setGoalDeferredResumeCancelObserver,
   setGoalIdleObserver,
   setGoalStopObserver,
   setGoalAskAnswerObserver,
@@ -606,6 +646,13 @@ import {
   initClientEndpoints,
   registerClientEndpointsIpc,
 } from './clientEndpointsService.js';
+import {
+  applyAppearanceToWindow,
+  applyAppearanceToWindows,
+  getPersistedWindowZoom,
+  registerAppearanceSettingsIpc,
+  updatePersistedWindowZoom,
+} from './appearance-settings-ipc.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
@@ -656,12 +703,13 @@ import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-
 import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
-import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
+import { registerPluginMarketIpc, syncDefaultMarketPlugins } from './plugin-market/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { setMainLocale, t } from './i18n.js';
-import { throwIpcError } from './utils/ipcValidate.js';
+import { requireObject, throwIpcError } from './utils/ipcValidate.js';
+import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
 // splash check-environment / user login (触发 ensureReady) 谁先到不固定。
 // 通过 attemptStartScheduler 在两个就绪事件源各调一次幂等 startScheduler，最后到的
@@ -813,59 +861,71 @@ const _scheduleIpcRegistered = new WeakSet<object>();
 /**
  * embedding-host (Phase 1.1/1.2): localDb ensureReady 完成后按需启动。
  *
- * **chat-embedding setting 控制整个 host 启停**:
- *   - settings.enabled=false → 完全不启动 (没 Worker setInterval, 没 Provider 注册,
- *     没 hook 副作用) — 用户感受不到任何后台轮询
- *   - settings.enabled=true → startEmbeddingHost + setupChatHistoryEmbedder +
- *     setEnabled(true) 触发 cutoff 写入
+ * **host 启停由「有没有 consumer 要用」决定, 不归属任何单个开关** (PR #1707 review)。
+ * 现有两个 consumer:
+ *   - chat (聊天嵌入设置): ON 才注册 chat-history-embedder + setEnabled(true) 写 cutoff
+ *   - 插件向量 (embed.text): 按需 —— 首次请求时 ensureEmbeddingServiceForPluginVector()
+ *     打标并回调本函数懒启动
+ * 两个都不要用 → 完全不启动 (没 Worker setInterval, 没 Provider 注册, 没 hook 副作用),
+ * 用户感受不到任何后台轮询; 这条承诺在"关掉聊天嵌入且插件从没用过向量"时依然成立。
  *
- * 当前只有 chat 一个 consumer, 直接对齐它的开关最简单。未来加 memory / document
- * 等 consumer 时再重构成"任一 consumer ON → host start"的引用计数模式。
- *
- * 幂等: 第二次调直接 return (isEmbeddingHostStarted 守卫)。sqlite-vec 不可用时
- * 仍启动 (启动后 Worker 自己 idle 不嵌), 不阻塞 app。
+ * 幂等且可重入: host 已起时复用现有 service, 只补 chat consumer 的注册 —— 关键在于
+ * 插件先把 host 拉起、用户之后才打开聊天嵌入的顺序下, chat provider / cutoff 也必须
+ * 补齐 (否则 setChatEmbeddingEnabled 撞 _deps=null, 聊天嵌入静默不工作)。
+ * sqlite-vec 不可用时仍启动 (启动后 Worker 自己 idle 不嵌), 不阻塞 app。
  */
 function attemptStartEmbeddingHost(): void {
-  if (isEmbeddingHostStarted()) return;
-  try {
-    getDbClient();
-  } catch (err) {
+  // 谁都不要用就别启:插件 consumer 的标记由 ensureEmbeddingServiceForPluginVector
+  // 在回调本函数之前打上,所以这里读到的是"含本次请求"的最新意向。
+  const chatEnabled = readChatEmbeddingSettings().enabled;
+  if (!chatEnabled && !isPluginVectorConsumerActive()) {
     console.log(
-      '[bootstrap-electron] attemptStartEmbeddingHost: DbClient not ready yet:',
-      err instanceof Error ? err.message : String(err),
+      '[bootstrap-electron] no embedding consumer active (chat off, no plugin vector); embeddingHost not started',
     );
     return;
   }
-  // setting OFF → 不启动 host, 不创建 Worker, 不注册 hook。
-  // 用户 toggle ON 时 CHAT_EMBEDDING_SET IPC 会重新调本函数。
-  const settings = readChatEmbeddingSettings();
-  if (!settings.enabled) {
-    console.log(
-      '[bootstrap-electron] chat embedding disabled by settings; embeddingHost not started',
-    );
-    return;
+  let service: EmbeddingService;
+  if (isEmbeddingHostStarted()) {
+    service = getEmbeddingService();
+  } else {
+    try {
+      getDbClient();
+    } catch (err) {
+      console.log(
+        '[bootstrap-electron] attemptStartEmbeddingHost: DbClient not ready yet:',
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+    try {
+      service = startEmbeddingHost({
+        getDbClient: () => getDbClient(),
+        isVecAvailable: () => {
+          try {
+            return getDbClient().vecAvailable;
+          } catch {
+            return false;
+          }
+        },
+        // XD Gateway /v1/embeddings 走 Bearer ANTHROPIC_API_KEY (与 art / claude 同源)
+        getApiKey: () => readClaudeApiKey(),
+        // 函数形态:model-access 下发切换 endpoint 后,常驻的 embedding host 无需重启。
+        gatewayBaseUrl: () => effectiveXdGatewayBaseUrl(),
+        // /v1/embeddings 也要吃系统代理:裸全局 fetch 在「系统代理」模式下裸直连出网
+        // (见 maker-host/outbound-fetch.ts)。
+        fetchImpl: outboundFetch,
+        log: createSchedulerLogger('embeddingHost'),
+      });
+    } catch (err) {
+      console.error('[bootstrap-electron] startEmbeddingHost failed (non-fatal):', err);
+      return;
+    }
   }
-  try {
-    const service = startEmbeddingHost({
-      getDbClient: () => getDbClient(),
-      isVecAvailable: () => {
-        try {
-          return getDbClient().vecAvailable;
-        } catch {
-          return false;
-        }
-      },
-      // XD Gateway /v1/embeddings 走 Bearer ANTHROPIC_API_KEY (与 art / claude 同源)
-      getApiKey: () => readClaudeApiKey(),
-      // 函数形态:model-access 下发切换 endpoint 后,常驻的 embedding host 无需重启。
-      gatewayBaseUrl: () => effectiveXdGatewayBaseUrl(),
-      // /v1/embeddings 也要吃系统代理:裸全局 fetch 在「系统代理」模式下裸直连出网
-      // (见 maker-host/outbound-fetch.ts)。
-      fetchImpl: outboundFetch,
-      log: createSchedulerLogger('embeddingHost'),
-    });
-    // chat-history-embedder consumer 注册 + setEnabled(true) 触发 cutoff 落盘。
-    // 走到这里说明 settings.enabled=true, setEnabled 直接传 true。
+  // chat consumer 只在设置 ON 时挂载。插件独自把 host 拉起来的场景下这里不执行 ——
+  // 没有 chat provider、没有 cutoff、hook 守卫仍是 false, 聊天数据一条都不会被嵌。
+  if (chatEnabled) {
+    // setupChatHistoryEmbedder 幂等 (Map.set 覆盖), setChatEmbeddingEnabled(true)
+    // 重复调不会重置 cutoff, 所以补挂是安全的。
     try {
       setupChatHistoryEmbedder({
         service,
@@ -876,9 +936,34 @@ function attemptStartEmbeddingHost(): void {
     } catch (err) {
       console.error('[bootstrap-electron] setupChatHistoryEmbedder failed (non-fatal):', err);
     }
-  } catch (err) {
-    console.error('[bootstrap-electron] startEmbeddingHost failed (non-fatal):', err);
   }
+}
+
+// 插件向量 consumer 的懒启动接线:cindy-brain 的 embed.text 走
+// ensureEmbeddingServiceForPluginVector(), 由它回调这里完成真正的启动 (启动需要
+// DbClient / api key / gateway url 这些只有 bootstrap 有的依赖)。
+registerEmbeddingHostLazyStart(attemptStartEmbeddingHost);
+
+/**
+ * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
+ * 向量 consumer 时才停 host —— 否则会把另一个 consumer 的能力一起关掉 (插件的
+ * embed_text 全变 INTERNAL)。
+ *
+ * 插件在用时保留 host 的副作用是: chat provider 仍注册着, 已入队的旧 job 会继续做完。
+ * 这与 chat-history-embedder 自己的设计一致 (开关只控制入队, 不取消 provider 注册,
+ * 旧 pending job 不浪费用户已花的钱)。
+ */
+async function shutdownChatEmbeddingConsumer(): Promise<void> {
+  setChatEmbeddingEnabled(false);
+  if (!isEmbeddingHostStarted()) return;
+  if (isPluginVectorConsumerActive()) {
+    console.log(
+      '[bootstrap-electron] chat embedding off; embeddingHost kept alive for plugin vector consumer',
+    );
+    return;
+  }
+  await stopEmbeddingHost();
+  resetChatEmbedderCache();
 }
 
 // Codex / Claude / Pi binary 下载 + 状态查询 全部走 agent-binaries (按 kind 分派)。
@@ -902,8 +987,16 @@ import {
 initLogger();
 const dbClientLog = createLogger('DbClient');
 const authBoundaryLog = createLogger('auth-boundary');
+// 镜像缓存清理失败会把 MirrorCachePurgeError 的 root/remaining 本地缓存路径写进日志,单独一个
+// 子 scope,好让日志上报的来源白名单把它排除掉(auth-boundary 根只留不带路径的服务停止诊断)。
+const authBoundaryPurgeLog = createLogger('auth-boundary:mirror-cache-purge');
 // 主窗 renderer 加载失败可观测性 + dev 启动看门狗(见 renderer-boot-guard.ts 顶部注释)。
 const rendererGuardLog = createLogger('renderer-guard');
+const safeStorageReadLog = createLogger('safe-storage:read');
+// 渲染进程 console 转发**单独一个 scope**:内容是渲染进程的任意 console 正文,可能带用户
+// 内容,因此不进日志上报的来源白名单;而 renderer-guard 的加载失败信号无用户内容、白屏排查
+// 必需,是放行的。两者不能共用 scope,详见 console-message 监听处的注释。
+const rendererConsoleLog = createLogger('renderer-console');
 const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 let rendererBootGuard: RendererBootGuard | null = null;
@@ -929,6 +1022,9 @@ async function ensureLifecycleDbClient(userId: string) {
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  // The boundary is already marked pending by every caller. New actions now
+  // fail closed; drain an action that crossed the boundary before closing its DB.
+  await waitForTurnChangeSetActions();
   skillhubAutoSyncService.cancelInFlight();
   // Custom provider routes are owner-scoped but the active catalog is process-global.
   // Clear synchronously at the boundary; the next owner's tracked readiness reloads them
@@ -945,19 +1041,19 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   try {
     await drainPurgeQueue();
   } catch (err) {
-    authBoundaryLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
+    authBoundaryPurgeLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
   }
   try {
     await getMirrorCache().clearAll();
   } catch (err) {
-    authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
+    authBoundaryPurgeLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
     if (err instanceof MirrorCachePurgeError) {
       // remaining / barriers / tombstones 三样都要带上(同 IPC 侧的 queuePurgeRetry):
       // 只传 root 的话,补删成功后队列既不知道该补自增哪个作废计数,也不会退役 `_account`
       // 墓碑 —— 墓碑一直挂着就等于这个 owner 的缓存读被永久压住(review: codex P1)。
       await enqueuePurge(err.root, err.remaining, err.barriers, err.tombstones).catch(
         (enqueueErr: unknown) => {
-          authBoundaryLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
+          authBoundaryPurgeLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
         },
       );
     }
@@ -970,7 +1066,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   } catch (err) {
     authBoundaryLog.error(`stopHookControlAccount on ${reason} failed (non-fatal):`, err);
   } finally {
-    resetHookControlOwnerBoundary();
+    // Auth/runtime boundaries keep durable group cursors for a later relogin;
+    // only explicit account deletion is a data-removal boundary.
+    resetHookControlOwnerBoundary({ clearPersisted: reason === 'account-deletion' });
   }
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
@@ -1163,6 +1261,7 @@ const rsbWindowController = new RsbWindowController({
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
   isQuitting: () => isQuitting,
+  canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
   log: createLogger('right-sidebar-window-controller'),
 });
 registerRsbWindowIpc({
@@ -1216,9 +1315,12 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
 setGhostsChangedObserver((ghosts) => ghostPanelWindowsController.reconcile(ghosts));
 
+const rsbBrowserRegistry = getRsbBrowserBridge();
+registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
 registerRsbBrowserBridgeIpc({
-  registry: getRsbBrowserBridge(),
+  registry: rsbBrowserRegistry,
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
+  getNativePopupOwnerWebContents: getRsbNativePopupOwnerWebContents,
   logger: createLogger('rsb-browser-bridge-bootstrap'),
 });
 // popup opener 反查:webview-security 的 popup 路由据此把 window.open 的目标
@@ -1270,6 +1372,12 @@ registerBrowserBackendIpc();
 // renderer 启动同步拉 overrides、设置页写路径、changed 广播。顶层注册,
 // ipcMain.handle 在 app ready 前注册也有效。
 registerAppShortcutIpc();
+registerAppearanceSettingsIpc();
+
+// ── 资源用量面板 IPC ─────────────────────────────────────────────────
+// 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
+// 本产品 spawn 的 agent 根进程。见 main/process-monitor/。
+registerProcessMonitorIpc();
 
 // ── 主界面布局树存储 IPC──────────────────────────────────────────────
 // renderer 首帧 sendSync 拉布局(规则 7 无跳变)、set/reset 写路径、changed
@@ -1423,6 +1531,62 @@ function menuAcceleratorFor(id: AppShortcutId): string | undefined {
   return comboToElectronAccelerator(first, process.platform) ?? undefined;
 }
 
+function nativeMenuRoleLabel(role: 'resetZoom' | 'zoomIn' | 'zoomOut'): string {
+  try {
+    return Menu.buildFromTemplate([{ role }]).items[0]?.label ?? role;
+  } catch {
+    return role;
+  }
+}
+
+function persistedZoomMenuItem(
+  role: 'resetZoom' | 'zoomIn' | 'zoomOut',
+  delta: number | null,
+  registerAccelerator: boolean,
+): Electron.MenuItemConstructorOptions {
+  const accelerator =
+    role === 'resetZoom'
+      ? 'CommandOrControl+0'
+      : role === 'zoomIn'
+        ? 'CommandOrControl+Plus'
+        : 'CommandOrControl+-';
+  return {
+    label: nativeMenuRoleLabel(role),
+    accelerator,
+    registerAccelerator,
+    click: () => {
+      void updatePersistedWindowZoom(delta).catch((error: unknown) => {
+        createLogger('appearance-settings-menu').error('persisted page zoom update failed', {
+          role,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+  };
+}
+
+function persistedZoomMenuItems(
+  role: 'resetZoom' | 'zoomIn' | 'zoomOut',
+  delta: number | null,
+  registerAccelerator: boolean,
+): Electron.MenuItemConstructorOptions[] {
+  const item = persistedZoomMenuItem(role, delta, registerAccelerator);
+  if (process.platform !== 'darwin' || role !== 'zoomIn') return [item];
+
+  // macOS treats ⌘= (unshifted Equal) and ⇧⌘= (Plus) as separate accelerator
+  // paths. Keep the second path registered while leaving one visible menu item.
+  return [
+    item,
+    {
+      ...item,
+      id: 'persisted-page-zoom-in-unshifted',
+      accelerator: 'CommandOrControl+=',
+      visible: false,
+      acceleratorWorksWhenHidden: true,
+    },
+  ];
+}
+
 function installApplicationMenu(
   mainWindow: BrowserWindow,
   locale: ApplicationMenuLocale = getPreferredApplicationLocale(),
@@ -1456,9 +1620,9 @@ function installApplicationMenu(
         submenu: [
           toggleSidebarItem,
           { type: 'separator' },
-          { role: 'resetZoom', registerAccelerator: registerMenuAccelerators },
-          { role: 'zoomIn', registerAccelerator: registerMenuAccelerators },
-          { role: 'zoomOut', registerAccelerator: registerMenuAccelerators },
+          ...persistedZoomMenuItems('resetZoom', null, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomIn', PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomOut', -PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
           { type: 'separator' },
           { role: 'togglefullscreen', registerAccelerator: registerMenuAccelerators },
         ],
@@ -1472,9 +1636,9 @@ function installApplicationMenu(
           { role: 'forceReload', registerAccelerator: registerMenuAccelerators },
           { role: 'toggleDevTools', registerAccelerator: registerMenuAccelerators },
           { type: 'separator' },
-          { role: 'resetZoom', registerAccelerator: registerMenuAccelerators },
-          { role: 'zoomIn', registerAccelerator: registerMenuAccelerators },
-          { role: 'zoomOut', registerAccelerator: registerMenuAccelerators },
+          ...persistedZoomMenuItems('resetZoom', null, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomIn', PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomOut', -PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
           { type: 'separator' },
           { role: 'togglefullscreen', registerAccelerator: registerMenuAccelerators },
         ],
@@ -1681,10 +1845,9 @@ let mainWindowBackgroundThrottlingAllowed = true;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
 let updatePresentationRecoveryInitialized = false;
-const PAGE_ZOOM_LEVEL_MIN = -3;
-const PAGE_ZOOM_LEVEL_MAX = 3;
-const PAGE_ZOOM_LEVEL_STEP = 0.5;
-const pageZoomLevels = new WeakMap<BrowserWindow, number>();
+const PAGE_ZOOM_FACTOR_MIN = 0.5;
+const PAGE_ZOOM_FACTOR_MAX = 3;
+const PAGE_ZOOM_FACTOR_STEP = 0.1;
 
 const updatePresentationRecovery = isUpdateRelaunchCandidate
   ? createUpdatePresentationRecoveryController({
@@ -1732,9 +1895,10 @@ const updatePresentationRecovery = isUpdateRelaunchCandidate
 // 让窗口 close handler 放行真正的销毁。
 let isQuitting = false;
 let windowsTray: Tray | null = null;
-// 当前的托盘菜单。我们自己 popUp(见 popUpWindowsTrayMenu 的注释),菜单对象必须由
-// JS 侧持有,不能只作为实参交出去。语言切换时置 null,下一次右键按新语言重建。
+// 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
+// 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
+const activeWindowsTrayMenus = new Set<Menu>();
 const windowsTrayLog = createLogger('windows-tray');
 const WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS = 2_000;
 
@@ -1771,6 +1935,12 @@ function openWindowsTrayMenu(): void {
     buildMenu: buildWindowsTrayMenu,
     retainMenu: (menu) => {
       windowsTrayMenu = menu;
+    },
+    retainActiveMenu: (menu) => {
+      activeWindowsTrayMenus.add(menu);
+    },
+    releaseActiveMenu: (menu) => {
+      activeWindowsTrayMenus.delete(menu);
     },
     onUnavailable: (reason) => {
       windowsTrayLog.warn('tray menu requested without a live tray icon', { reason });
@@ -2054,27 +2224,21 @@ function focusMainWindow(): boolean {
   return true;
 }
 
-function roundPageZoomLevel(level: number): number {
-  return Math.round(level / PAGE_ZOOM_LEVEL_STEP) * PAGE_ZOOM_LEVEL_STEP;
+function roundPageZoomFactor(factor: number): number {
+  return Math.round(factor / PAGE_ZOOM_FACTOR_STEP) * PAGE_ZOOM_FACTOR_STEP;
 }
 
-function clampPageZoomLevel(level: number): number {
-  return Math.min(PAGE_ZOOM_LEVEL_MAX, Math.max(PAGE_ZOOM_LEVEL_MIN, roundPageZoomLevel(level)));
+function clampPageZoomFactor(factor: number): number {
+  return Math.min(
+    PAGE_ZOOM_FACTOR_MAX,
+    Math.max(PAGE_ZOOM_FACTOR_MIN, roundPageZoomFactor(factor)),
+  );
 }
 
-function getPageZoomLevel(mainWindow: BrowserWindow): number {
-  return pageZoomLevels.get(mainWindow) ?? 0;
-}
-
-function applyPageZoomLevel(mainWindow: BrowserWindow, nextLevel: number): number {
-  const zoomLevel = clampPageZoomLevel(nextLevel);
-  pageZoomLevels.set(mainWindow, zoomLevel);
-  mainWindow.webContents.setZoomLevel(zoomLevel);
-  return zoomLevel;
-}
-
-function adjustPageZoomLevel(mainWindow: BrowserWindow, delta: number): number {
-  return applyPageZoomLevel(mainWindow, getPageZoomLevel(mainWindow) + delta);
+function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): number {
+  const zoomFactor = clampPageZoomFactor(nextFactor);
+  applyAppearanceToWindow(mainWindow, { windowZoom: zoomFactor });
+  return zoomFactor;
 }
 
 // ── Custom URL scheme (cindy://... + 历史 xdt-maker://...) ───────────────
@@ -2337,14 +2501,17 @@ const createWindow = () => {
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
   applyMainWindowBackgroundThrottling();
-  applyPageZoomLevel(mainWindow, 0);
+  applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (mainWindow.isDestroyed()) return;
+    applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
+  });
   // Deep link 模块持有同一个 mainWindow 引用 — 解析出的 URL 通过 webContents.send
   // 推给 renderer (channel 'deep-link:navigate')。关窗时同步清空, 避免给已销毁
   // 的 BrowserWindow 发 IPC 触发 'Object has been destroyed'。
   setDeepLinkMainWindow(mainWindow);
   mainWindow.once('closed', () => {
     if (mainWindowRef === mainWindow) mainWindowRef = null;
-    pageZoomLevels.delete(mainWindow);
     setDeepLinkMainWindow(null);
   });
   // Main-window close policy is explicit because hidden utility windows (for
@@ -2410,6 +2577,9 @@ const createWindow = () => {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     if (!app.isPackaged) markDesktopDevWindowReady();
+    // 日志上报的启动补传:采集 + 脱敏是同步的重活,必须让主窗口先出来(内部再延迟 15s,
+    // 避开首帧的 IO 争用)。没有待补传标记时是零成本 no-op。
+    scheduleStartupBackfill();
     // `open` may successfully start the updated process while macOS refuses
     // frontmost activation at the lock/login window. Presentation is not an
     // installation-health signal; retain a one-shot focus grant for unlock.
@@ -2520,13 +2690,20 @@ const createWindow = () => {
   });
   mainWindow.webContents.on('console-message', (details) => {
     // error 恒记;warning 仅 dev(react dev 告警等噪音不进生产日志)。截断防超长堆栈刷屏。
+    //
+    // ⚠️ 这里刻意用 `renderer-console` 而不是 `renderer-guard`:转发的是**渲染进程任意
+    // console 正文**,可能带用户内容(功能代码的 console.error 里的消息文本、搜索词、
+    // 第三方库打出的 payload、React 错误边界里的 props)。日志上报的来源白名单只放行
+    // `renderer-guard`(preload-error / 加载失败 / boot guard —— 白屏排查必需且无用户内容),
+    // `renderer-console` 不在名单内。两者混用同一个 scope 会让整类渲染进程内容跟着放行,
+    // 违反「渲染进程转发的日志整类丢弃」(docs/dev-rules/log-upload-and-redaction.md §1.2)。
     const { level, message, lineNumber, sourceId } = details;
     if (level === 'error') {
-      rendererGuardLog.error(
+      rendererConsoleLog.error(
         `renderer console.error ${sourceId}:${lineNumber} ${message.slice(0, 2000)}`,
       );
     } else if (level === 'warning' && !app.isPackaged) {
-      rendererGuardLog.warn(
+      rendererConsoleLog.warn(
         `renderer console.warn ${sourceId}:${lineNumber} ${message.slice(0, 2000)}`,
       );
     }
@@ -2574,6 +2751,20 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
+let disposePluginMarketAuthListener: (() => void) | null = null;
+let defaultPluginSyncInFlightScope: string | null = null;
+
+/** Run the existing market reconciliation once for each stable app owner. */
+function syncDefaultPluginsForActiveOwner(): void {
+  const session = getActiveAppSession();
+  if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;
+  const scope = activeOwnerScopeKey();
+  if (scope === defaultPluginSyncInFlightScope) return;
+  defaultPluginSyncInFlightScope = scope;
+  void syncDefaultMarketPlugins().finally(() => {
+    if (defaultPluginSyncInFlightScope === scope) defaultPluginSyncInFlightScope = null;
+  });
+}
 
 const registerIpcHandlers = () => {
   // Find the primary app window, skipping transient utility BrowserWindows like
@@ -2794,13 +2985,16 @@ const registerIpcHandlers = () => {
       !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
     return applyCodexSpawnConfigChangeWithRestart(async () => {
       if (!stillValid()) {
-        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; write dropped');
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'app session changed during codex restart; write dropped',
+        );
       }
       writeSubagentModelSettingsPatch(parsed);
       return subagentModelSettingsWire();
-    // stillValid 同时传给执行体:busy 路径 persist 与登记之间还有一个 await 边界,
-    // 该窗口内 owner boundary 清掉旧登记后,本请求不得再 schedule(codex review
-    // P1 第 3 轮)。
+      // stillValid 同时传给执行体:busy 路径 persist 与登记之间还有一个 await 边界,
+      // 该窗口内 owner boundary 清掉旧登记后,本请求不得再 schedule(codex review
+      // P1 第 3 轮)。
     }, stillValid);
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => {
@@ -2821,7 +3015,10 @@ const registerIpcHandlers = () => {
       !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
     return applyCodexSpawnConfigChangeWithRestart(async () => {
       if (!stillValid()) {
-        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; reset dropped');
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'app session changed during codex restart; reset dropped',
+        );
       }
       resetSubagentModelSettings();
       return subagentModelSettingsWire();
@@ -2934,23 +3131,14 @@ const registerIpcHandlers = () => {
     // 先落盘 setting (即使后续 host 启停失败, 用户偏好已记下, 下次启动会用)
     writeChatEmbeddingEnabled(enabled);
     if (enabled) {
-      // ON: 按需启动 embeddingHost (attemptStartEmbeddingHost 内部会读新 settings,
-      // setupChatHistoryEmbedder + setChatEmbeddingEnabled(true) 触发 cutoff 写入)。
-      // 极少见: host 已 started (理论上不会, 因为 ON→ON 没意义), 直接 setEnabled(true) 触底。
-      if (!isEmbeddingHostStarted()) {
-        attemptStartEmbeddingHost();
-      } else {
-        setChatEmbeddingEnabled(true);
-      }
+      // ON: 交给 attemptStartEmbeddingHost —— 它会读新 settings, host 没起就起、
+      // 已被插件 consumer 起过就复用, 两种情况都补上 setupChatHistoryEmbedder +
+      // setChatEmbeddingEnabled(true) (后者第一次为 true 时写 cutoff)。
+      attemptStartEmbeddingHost();
     } else {
-      // OFF: 先 setEnabled(false) 让 hook 守卫立即生效 (新消息不再 enqueue),
-      // 然后 stopEmbeddingHost 清掉 Worker setInterval (彻底没轮询),
-      // 最后 reset chat-embedder 模块级 state (cutoff cache / deps), 下次 ON 时重新挂。
-      setChatEmbeddingEnabled(false);
-      if (isEmbeddingHostStarted()) {
-        await stopEmbeddingHost();
-        resetChatEmbedderCache();
-      }
+      // OFF: 先 setEnabled(false) 让 hook 守卫立即生效 (新消息不再 enqueue);
+      // 没有插件向量 consumer 时才停 Worker setInterval + reset 模块级 state。
+      await shutdownChatEmbeddingConsumer();
     }
     return chatEmbeddingWire();
   });
@@ -2958,17 +3146,9 @@ const registerIpcHandlers = () => {
     requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     const settings = resetChatEmbeddingSettings();
     if (settings.enabled) {
-      if (!isEmbeddingHostStarted()) {
-        attemptStartEmbeddingHost();
-      } else {
-        setChatEmbeddingEnabled(true);
-      }
+      attemptStartEmbeddingHost();
     } else {
-      setChatEmbeddingEnabled(false);
-      if (isEmbeddingHostStarted()) {
-        await stopEmbeddingHost();
-        resetChatEmbedderCache();
-      }
+      await shutdownChatEmbeddingConsumer();
     }
     return chatEmbeddingWire();
   });
@@ -3176,34 +3356,28 @@ const registerIpcHandlers = () => {
   ipcMain.on('window-close-self', (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
-  ipcMain.handle('page-zoom:in', (event) => {
-    const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
-    if (!targetWindow || targetWindow.isDestroyed()) {
-      return { ok: true as const, zoomLevel: 0 };
-    }
+  ipcMain.handle('page-zoom:in', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const settings = await updatePersistedWindowZoom(PAGE_ZOOM_FACTOR_STEP);
     return {
       ok: true as const,
-      zoomLevel: adjustPageZoomLevel(targetWindow, PAGE_ZOOM_LEVEL_STEP),
+      zoomFactor: settings.windowZoom,
     };
   });
-  ipcMain.handle('page-zoom:out', (event) => {
-    const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
-    if (!targetWindow || targetWindow.isDestroyed()) {
-      return { ok: true as const, zoomLevel: 0 };
-    }
+  ipcMain.handle('page-zoom:out', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const settings = await updatePersistedWindowZoom(-PAGE_ZOOM_FACTOR_STEP);
     return {
       ok: true as const,
-      zoomLevel: adjustPageZoomLevel(targetWindow, -PAGE_ZOOM_LEVEL_STEP),
+      zoomFactor: settings.windowZoom,
     };
   });
-  ipcMain.handle('page-zoom:reset', (event) => {
-    const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
-    if (!targetWindow || targetWindow.isDestroyed()) {
-      return { ok: true as const, zoomLevel: 0 };
-    }
+  ipcMain.handle('page-zoom:reset', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const settings = await updatePersistedWindowZoom(null);
     return {
       ok: true as const,
-      zoomLevel: applyPageZoomLevel(targetWindow, 0),
+      zoomFactor: settings.windowZoom,
     };
   });
 
@@ -3498,7 +3672,11 @@ const registerIpcHandlers = () => {
     // 向所有窗口广播 PROVIDER_CHANGED:useProviders 依赖此消息刷新连接态快照(多窗口同步)。
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
-        try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
+        try {
+          win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {});
+        } catch {
+          /* no-op */
+        }
       }
     }
   };
@@ -3566,7 +3744,16 @@ const registerIpcHandlers = () => {
         const buffer = Buffer.from(content, 'base64');
         return safeStorage.decryptString(buffer);
       } catch (err) {
-        console.error('[safe-storage-read]', err);
+        // 非可信 auxiliary/WebView renderer 触发的拒绝是预期安全结果,降为 debug；
+        // guard、allowlist、路径和明文返回边界保持不变。其它异常仍可见,但只记录
+        // 安全的类型/code,绝不落原始 message、路径、sender 或密文。
+        if (isIpcError(err) && err.code === 'PERMISSION_DENIED') {
+          safeStorageReadLog.debug('read denied for untrusted renderer');
+        } else {
+          safeStorageReadLog.error('read failed', {
+            error: isIpcError(err) ? err.code : err instanceof Error ? err.name : 'unknown',
+          });
+        }
         return null;
       }
     },
@@ -3655,7 +3842,11 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     'builtin-api-key-store',
-    async (event: Electron.IpcMainInvokeEvent, providerId: unknown, value: unknown): Promise<void> => {
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      providerId: unknown,
+      value: unknown,
+    ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
     },
@@ -4025,6 +4216,9 @@ const registerIpcHandlers = () => {
       setGoalIdleObserver((sid) => {
         void getGoalController()?.maybeContinueActiveGoal(sid);
       });
+      setGoalDeferredResumeCancelObserver((sid) => {
+        getGoalController()?.cancelDeferredManualResume(sid, { restoreUsageResume: true });
+      });
       // 用户 Stop 当前 turn → 暂停 active 目标。返回 Promise 让 ABORT_SESSION 在 abort 前 await,
       // 确保目标先 paused + detach 监听,abort 终止事件不再触发续跑判定。
       setGoalStopObserver((sid) => getGoalController()?.pauseGoal(sid, 'paused: stopped by user'));
@@ -4057,6 +4251,11 @@ const registerIpcHandlers = () => {
     // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
     void reconcileWorktreesForDeletedSessions().catch((err) => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
+    });
+    // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
+    // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
+    void reconcileSavepointRefsForDeletedSessions().catch((err) => {
+      console.error('[bootstrap-electron] savepoint reconcile failed (non-fatal):', err);
     });
 
     // Scheduler / Goal / Learn 统一由 localDb onReady 在 provider readiness settle 后启动。
@@ -4169,6 +4368,29 @@ const registerIpcHandlers = () => {
       };
     }
 
+    // ── Phase 2.5: bundled ripgrep(必需,codex spawn env 与 file-browser 搜索的
+    // 硬依赖)──────────────────────────────────────────────────────────────
+    // 探测已惰性化(import 不再触发,issue #1956),启动期 fail-fast 落在 splash
+    // 这里:缺失时与 claude/codex binary 缺失同一体验(splash failed + 可重试,
+    // dev 补跑 pnpm install:ripgrep 后重试即过),而不是 import 期硬崩、也不是
+    // maker:* IPC 静默不注册的降级启动。memoize 后此处探测近零成本。
+    try {
+      ensureBundledRipgrepReady();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      // splash 失败态 UI 不渲染 error 字段,这行日志是缺 rg 时唯一的诊断出口
+      // (补装指引在 message 里);与下方 pi 失败的 console.warn 同一既有惯例。
+      console.error('[bootstrap-electron] bundled ripgrep check failed:', message);
+      return {
+        claudeCode: { status: 'passed' as const, path: claudeRes.path },
+        codex: { status: 'passed' as const, path: codexRes.path },
+        pi: { status: 'skipped' as const },
+        ripgrep: { status: 'failed' as const, error: message },
+        allPassed: false,
+        platform,
+      };
+    }
+
     // ── Phase 3: pi 段（可选,失败不阻塞启动）──────────────────────────────────
     // broadcastFailure: false —— pi 下载失败不能把 splash 打进失败态;静默禁用
     // 本次 pi 注册，Claude Code / Codex 与 Cindy 本身仍照常可用。
@@ -4191,9 +4413,10 @@ const registerIpcHandlers = () => {
           broadcastFailure: false,
           signal: piInstallSignal,
         });
-        piInfo = piRes.ready && piRes.path
-          ? { status: 'passed' as const, path: piRes.path }
-          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
+        piInfo =
+          piRes.ready && piRes.path
+            ? { status: 'passed' as const, path: piRes.path }
+            : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
       } catch (err: unknown) {
         piInfo = {
           status: 'failed' as const,
@@ -4215,6 +4438,7 @@ const registerIpcHandlers = () => {
       claudeCode: { status: 'passed' as const, path: claudeRes.path },
       codex: { status: 'passed' as const, path: codexRes.path },
       pi: piInfo,
+      ripgrep: { status: 'passed' as const },
       allPassed: true,
       platform,
     };
@@ -4252,9 +4476,8 @@ const registerIpcHandlers = () => {
   // ChatGPT Desktop 当前注册 `codex:` 协议（macOS bundle id com.openai.codex；
   // Windows 安装包也由系统协议注册表接管）。独立无参 IPC 保持最小权限，不能借此
   // 打开 renderer 提供的任意自定义 scheme / deep link。
-  ipcMain.handle(
-    'shell:open-chatgpt-app',
-    async (event): Promise<{ success: boolean }> => handleOpenChatGPTApp(event, {
+  ipcMain.handle('shell:open-chatgpt-app', async (event): Promise<{ success: boolean }> =>
+    handleOpenChatGPTApp(event, {
       assertTrustedSender: assertTrustedAppRendererEvent,
       openExternal: (url) => shell.openExternal(url),
     }),
@@ -4572,6 +4795,13 @@ const registerIpcHandlers = () => {
   disposeProviderAccessAuthListener = authManager.onAuthStateChange(() => {
     refreshProviderAccessAfterAuthChange();
   });
+  // 默认插件同步不能依赖用户先打开插件页。启动时本地 owner 已经稳定则立刻
+  // 复用市场快照；云端登录/切号的通知可能早于 owner boundary 释放，因此
+  // 延迟到当前调用栈结束后再按已提交的新 owner 补跑一次。
+  disposePluginMarketAuthListener = authManager.onAuthStateChange(() => {
+    queueMicrotask(syncDefaultPluginsForActiveOwner);
+  });
+  syncDefaultPluginsForActiveOwner();
 
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
@@ -4610,6 +4840,46 @@ const registerIpcHandlers = () => {
         return { success: true, path: null };
       }
       return { success: true, path: result.filePaths[0] };
+    },
+  );
+
+  // ── Dialog: @ 资源入口的系统选择器 ──
+  ipcMain.handle(
+    'dialog:show-open-resource',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      payload: unknown = {},
+    ): Promise<{
+      success: true;
+      path: string | null;
+      kind: 'file' | 'directory' | null;
+    }> => {
+      assertTrustedAppRendererEvent(event);
+      const params = requireObject(payload);
+      const defaultPathValue = params.defaultPath;
+      if (
+        defaultPathValue !== undefined &&
+        (typeof defaultPathValue !== 'string' ||
+          defaultPathValue.length > 4096 ||
+          !path.isAbsolute(defaultPathValue))
+      ) {
+        throwIpcError('INVALID_PARAMS', 'defaultPath must be an absolute path');
+      }
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (!owner) return { success: true, path: null, kind: null };
+      try {
+        const picked = await pickNativeAtResource(
+          {
+            platform: process.platform,
+            showOpenDialog: (options) => dialog.showOpenDialog(owner, options),
+            isDirectory: (selectedPath) => fs.statSync(selectedPath).isDirectory(),
+          },
+          defaultPathValue,
+        );
+        return { success: true, ...picked };
+      } catch {
+        throwIpcError('INTERNAL', 'unable to open resource picker');
+      }
     },
   );
 
@@ -4956,56 +5226,52 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // file-chip 右键菜单 "在浏览器中查看":拿绝对路径,校验扩展名在 HTML
-  // 白名单内,然后 shell.openExternal(file:// URL) 走系统默认 file://
+  // file-chip 右键菜单 / 内置浏览器 "在系统浏览器打开":接收绝对路径或
+  // 本机 file:// URL,校验扩展名在 HTML 白名单内,然后走系统默认 file://
   // 处理器(绝大多数 OS 上 .html/.htm 都映射到默认浏览器)。和
   // `shell:open-external` 分开是因为后者只放行 http(s) 防滥用;这里收窄到
   // 受控的扩展名集合后,放行 file:// 是可控的。
+  const openFileInBrowserLog = createLogger('shell:open-file-in-browser');
+  const openFileUrlWithWindowsHandler = createWindowsFileUrlOpener({
+    platform: process.platform,
+    windowsDir: process.env.WINDIR,
+    execFile: (file, args, options, callback) => execFile(file, args, options, callback),
+  });
   ipcMain.handle(
     'shell:open-file-in-browser',
     async (
-      _event: Electron.IpcMainInvokeEvent,
-      filePath: string,
-    ): Promise<{ success: boolean; error?: string }> => {
-      try {
-        if (!filePath || !path.isAbsolute(filePath)) {
-          return { success: false, error: 'Path must be absolute' };
-        }
-        if (!isPathAllowed(filePath)) {
-          return { success: false, error: '不允许访问该路径' };
-        }
-        if (!isBrowserOpenablePath(filePath)) {
-          return { success: false, error: '该文件类型不支持浏览器查看' };
-        }
-        if (!fs.existsSync(filePath)) {
-          return { success: false, error: '文件不存在' };
-        }
-        // 先试 file:// + openExternal —— 保留原行为(按扩展名走默认处理器,
-        // .html / .pdf / .svg 一般落到浏览器)。但 Windows 上 openExternal 对
-        // percent-encode 过的 file:// URL(路径含中文 / 空格时)会报
-        // 0x2 ERROR_FILE_NOT_FOUND;此时兜底走 shell.openPath(原生路径,不做
-        // URL 编码,中文 / 空格都稳)。兜底只在原 file:// URL 本就打不开时触发,
-        // 故不会回归任何原本能正常打开的情况。
-        const fileUrl = pathToFileURL(filePath).toString();
-        try {
-          await shell.openExternal(fileUrl);
-        } catch (e) {
-          // 记录 openExternal 首因再走兜底,否则兜底也失败时只剩 openPath 的
-          // 错误,无法区分"file:// 编码问题"还是"文件 / 权限问题",难排障。
-          createLogger('shell:open-file-in-browser').warn(
-            'openExternal failed, fallback to openPath',
-            {
-              fileUrl,
-              error: String(e),
-            },
-          );
-          const errMsg = await shell.openPath(filePath);
-          if (errMsg) return { success: false, error: errMsg };
-        }
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
-      }
+      event: Electron.IpcMainInvokeEvent,
+      filePathOrUrl: string,
+    ): Promise<{ success: true }> => {
+      assertTrustedAppRendererEvent(event);
+      const result = await handleOpenFileInBrowser(filePathOrUrl, {
+        isPathAllowed,
+        isBrowserOpenablePath,
+        existsSync: fs.existsSync,
+        openExternal: (url) => shell.openExternal(url),
+        openPath: (filePath) => shell.openPath(filePath),
+        openUrlWithWindowsHandler: openFileUrlWithWindowsHandler,
+        onOpenExternalError: ({ filePath, hasUrlState, error }) => {
+          openFileInBrowserLog.warn('openExternal failed', {
+            filePath,
+            hasUrlState,
+            fallback: hasUrlState
+              ? openFileUrlWithWindowsHandler
+                ? 'windows-url-handler'
+                : 'disabled'
+              : 'openPath',
+            error: String(error),
+          });
+        },
+        onWindowsUrlFallbackError: ({ filePath, error }) => {
+          openFileInBrowserLog.warn('Windows file URL fallback failed', {
+            filePath,
+            error: String(error),
+          });
+        },
+      });
+      if (!result.success) throwIpcError(result.errorCode, result.error);
+      return result;
     },
   );
 
@@ -5036,6 +5302,78 @@ const registerIpcHandlers = () => {
       }
     },
   );
+
+  // 文件 chip 右键「打开方式」:枚举 / 指定应用打开 / 系统选择对话框。
+  // 业务体在 openWithApps.ts(依赖注入,单测直接调 handler body);appId → exe
+  // 映射只存 main 侧,renderer 传路径执行在结构上不可表达(该文件头注释)。
+  {
+    // app.getFileIcon 会偶发挂死(见 fileThumbnail.ts),这里同款硬超时 + 按
+    // exe 路径的进程内缓存(打开方式菜单反复展开不重复付原生调用成本)。
+    const appIconCache = new Map<string, string | null>();
+    const getAppIcon = async (exePath: string): Promise<string | null> => {
+      const key = exePath.toLowerCase();
+      const cached = appIconCache.get(key);
+      if (cached !== undefined) return cached;
+      try {
+        const icon = await Promise.race([
+          app.getFileIcon(exePath, { size: 'small' }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+        ]);
+        const dataUrl = icon && !icon.isEmpty() ? icon.toDataURL() : null;
+        appIconCache.set(key, dataUrl);
+        return dataUrl;
+      } catch {
+        appIconCache.set(key, null);
+        return null;
+      }
+    };
+    // reg.exe 重定向输出走控制台代码页(中文系统 GBK)而非 UTF-8,按字节取回、
+    // 用 chcp 探测到的代码页解码,否则中文应用名会变 U+FFFD 乱码。
+    let consoleCodepagePromise: Promise<number | null> | null = null;
+    const getConsoleCodepage = (): Promise<number | null> => {
+      consoleCodepagePromise ??= new Promise((resolve) => {
+        execFile('chcp.com', { windowsHide: true, timeout: 3000 }, (err, stdout) => {
+          resolve(err ? null : parseChcpCodepage(String(stdout ?? '')));
+        });
+      });
+      return consoleCodepagePromise;
+    };
+    const openWith = createOpenWithHandlers({
+      platform: process.platform,
+      isPathAllowed,
+      fileExists: (p) => fs.existsSync(p),
+      regQuery: async (keyPath, args = []) => {
+        const codepage = await getConsoleCodepage();
+        return new Promise<string>((resolve) => {
+          execFile(
+            'reg.exe',
+            ['query', keyPath, ...args],
+            { windowsHide: true, timeout: 5000, encoding: 'buffer' },
+            (err, stdout) => resolve(err ? '' : decodeRegOutput(stdout ?? Buffer.alloc(0), codepage)),
+          );
+        });
+      },
+      getAppIcon,
+      spawnDetached: (command, args) => {
+        const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false });
+        // detached 子进程无人监听 'error' 会变成 EventEmitter 未处理错误直接压垮
+        // main(典型:existsSync 通过后 exe 被卸载的窗口期)。spawn 错误是异步的,
+        // IPC 已返回,只能记日志兜底(PR #1835 review)。
+        child.once('error', (err) => {
+          createLogger('open-with').warn('spawn failed', { command, message: err.message });
+        });
+        child.unref();
+      },
+    });
+    ipcMain.handle('open-with:list', (event, params: { filePath: string }) => {
+      assertTrustedAppRendererEvent(event);
+      return openWith.list(params);
+    });
+    ipcMain.handle('open-with:open', (event, params: { filePath: string; appId: string }) => {
+      assertTrustedAppRendererEvent(event);
+      return openWith.open(params);
+    });
+  }
 
   // 安全降级附件“另存为”：源文件必须通过统一路径策略，解析真实路径后还要
   // 位于聊天附件/远程文件缓存内；建议名在 main 侧清洗，复制完成后不调用
@@ -5103,26 +5441,23 @@ const registerIpcHandlers = () => {
       return stageChatAttachment(params);
     },
   );
-  ipcMain.handle(
-    'chat-attachment:cleanup',
-    async (event, filePaths: readonly string[]) => {
-      assertTrustedAppRendererEvent(event);
-      if (!Array.isArray(filePaths)) return;
-      const ownerScopeKey = activeOwnerScopeKey();
-      const ownerId = getActiveAppSession().dataOwnerId;
-      if (!ownerId || isAppSessionBoundaryPending()) return;
-      const protectedPaths = await listPersistedChatAttachmentPaths();
-      const isCurrentOwner = () =>
-        activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
-      if (!isCurrentOwner()) return;
-      await cleanupOwnedUnpersistedStagedChatAttachments({
-        ownerId,
-        filePaths,
-        protectedPaths,
-        canRemove: isCurrentOwner,
-      });
-    },
-  );
+  ipcMain.handle('chat-attachment:cleanup', async (event, filePaths: readonly string[]) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(filePaths)) return;
+    const ownerScopeKey = activeOwnerScopeKey();
+    const ownerId = getActiveAppSession().dataOwnerId;
+    if (!ownerId || isAppSessionBoundaryPending()) return;
+    const protectedPaths = await listPersistedChatAttachmentPaths();
+    const isCurrentOwner = () =>
+      activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
+    if (!isCurrentOwner()) return;
+    await cleanupOwnedUnpersistedStagedChatAttachments({
+      ownerId,
+      filePaths,
+      protectedPaths,
+      canRemove: isCurrentOwner,
+    });
+  });
   ipcMain.handle(
     'chat-attachment:save-as',
     (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
@@ -5242,6 +5577,9 @@ const registerIpcHandlers = () => {
         if (!absPath) {
           return { success: false, error: 'url 或 filePath 必须二选一' };
         }
+        // Windows Explorer /select 不认正斜杠路径(showItemInFolder 会静默无反应),
+        // 归一成本机分隔符;POSIX 幂等。
+        absPath = path.normalize(absPath);
         if (!isPathAllowed(absPath)) {
           return { success: false, error: '不允许访问该路径' };
         }
@@ -5751,6 +6089,20 @@ app.on('ready', async () => {
     return;
   }
 
+  // WebAuthn 是 app/session 级能力：在任何 RSB guest 或 popup WebContents 创建
+  // 之前装账户选择回调；正式签名的 macOS 包同时启用 Touch ID 平台认证器。
+  configureRsbBrowserWebAuthn();
+
+  // safeStorage 可观测性(#871):这条链路此前在日志里完全不可见,出问题(用户在
+  // 系统钥匙串弹窗点了拒绝 → 加解密静默降级失败)只能靠弹窗反推。这里只落派生
+  // 身份(条目名 = `<app.name> Safe Storage`),**刻意不调 isEncryptionAvailable()**
+  // ——macOS 上探测本身可能触发钥匙串授权弹窗,把 #871 的弹窗时机提前到启动;
+  // 可用性/失败在实际使用点记录(authManager 的 safeStorage helpers)。不含凭证。
+  createLogger('safe-storage').info('safeStorage identity', {
+    appName: app.getName(),
+    isPackaged: app.isPackaged,
+  });
+
   // 客户端端点清单:启动第一步、先于一切更新检查,**阻断式**解析(packaged 走
   // 烘焙 hotfix CDN 基址;dev 默认读仓内 config/endpoint.json,--endpoints-cdn
   // 时同 packaged;失败 → 系统错误框重试/退出,无缓存与烘焙兜底)。
@@ -5880,9 +6232,8 @@ app.on('ready', async () => {
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.
-      const previousProviderTaskSettled = await accountProviderReadinessBarrier.waitForPreviousScope(
-        activeOwnerScopeKey(),
-      );
+      const previousProviderTaskSettled =
+        await accountProviderReadinessBarrier.waitForPreviousScope(activeOwnerScopeKey());
       // The old task may have completed its owner-scoped DB read after teardown cleared the
       // process-global catalog. Clear once more after joining it so a failed next-owner reload
       // cannot inherit the old endpoint/model snapshot. Same-scope ensure retries skip this.
@@ -6037,9 +6388,7 @@ app.on('ready', async () => {
                 });
               }
               await refreshCustomProvidersIntoCatalog(
-                () =>
-                  activeOwnerScopeKey() === providerScopeKey &&
-                  !isAppSessionBoundaryPending(),
+                () => activeOwnerScopeKey() === providerScopeKey && !isAppSessionBoundaryPending(),
               );
               await refreshProviderModelsAfterAccountReady({
                 restartCodex: restartCodexAfterAuthModeChange,
@@ -6211,6 +6560,10 @@ app.on('ready', async () => {
   // handler 还没注册的话那次 invoke 会 reject,而它是 fail closed 的 —— 已同意
   // 的用户会一直不上报,直到手动去设置里拨一下开关。
   initAnalyticsSettingsService();
+  // 日志上报:同样必须在 createWindow 之前注册 —— 设置页一挂载就 invoke
+  // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
+  // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
+  initLogUploadService();
   startupWindowCreationAllowed = true;
   createWindow();
   // 预热仅服务 dev macOS，延迟执行避免和启动关键路径争用 CPU；失败由入口内部吞掉。
@@ -6348,6 +6701,14 @@ onQuit(
   () => {
     disposeProviderAccessAuthListener?.();
     disposeProviderAccessAuthListener = null;
+  },
+  'sync',
+);
+onQuit(
+  'plugin-market-auth-listener',
+  () => {
+    disposePluginMarketAuthListener?.();
+    disposePluginMarketAuthListener = null;
   },
   'sync',
 );

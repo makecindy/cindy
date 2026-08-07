@@ -27,6 +27,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { fetchJsonWithTimeout, downloadToFileWithTimeout, createDownloadProgressLogger } from '../shared/fetch-with-timeout.mjs';
@@ -202,14 +203,22 @@ function targetsExist(version, targets) {
   });
 }
 
-/** 用 bsdtar 解压归档（tar.gz / zip 皆可识别）到 destDir。 */
-async function extractArchive(archivePath, destDir) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('tar', ['-xf', '-'], { cwd: destDir, stdio: ['pipe', 'inherit', 'inherit'] });
-    child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`tar exited with code ${code}`))));
-    fs.createReadStream(archivePath).pipe(child.stdin);
+/** 用 tar 解压归档到 destDir；GNU tar 从 stdin 读取 gzip 时必须显式传 -z。 */
+export async function extractArchive(archivePath, destDir) {
+  const args = archivePath.endsWith('.tar.gz') ? ['-xzf', '-'] : ['-xf', '-'];
+  const child = spawn('tar', args, { cwd: destDir, stdio: ['pipe', 'inherit', 'inherit'] });
+  const exit = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`tar exited with code ${code}`))));
   });
+  const input = pipeline(fs.createReadStream(archivePath), child.stdin);
+  try {
+    await Promise.all([input, exit]);
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await Promise.allSettled([input, exit]);
+    throw error;
+  }
 }
 
 /**

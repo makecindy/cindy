@@ -13,13 +13,25 @@ import { randomBytes } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  __testing as dataOwnerGenerationTesting,
+  setDataOwnerGeneration,
+} from '../contexts/dataOwnerGeneration';
+import { __testing as remoteDataOwnerPushFenceTesting } from '../lib/remoteDataOwnerPushFence';
 
 type InvokeMock = ReturnType<typeof vi.fn>;
+type RemotePush = {
+  deviceId: string;
+  channel: string;
+  payload: unknown;
+  ownerStamp?: { dataOwnerId: string | null; ownerGeneration: number };
+};
 
 const BIG = 'markdown 正文内容\n'.repeat(8000); // ~144K chars,> 64K 压缩阈值
 const SMALL = 'short content';
 
 let invokeMock: InvokeMock;
+let remotePushHandler: ((push: RemotePush, localOwnerStamp?: unknown) => void) | undefined;
 let transport: typeof import('../lib/fileBrowserTransport');
 
 /** 取第 n 次 remote-op invoke 的 op args(invoke(deviceId, channel, [args])) */
@@ -29,13 +41,28 @@ function opArgs(n: number): Record<string, unknown> {
 
 beforeEach(async () => {
   invokeMock = vi.fn();
+  remotePushHandler = undefined;
+  dataOwnerGenerationTesting.reset();
+  remoteDataOwnerPushFenceTesting.reset();
   vi.stubGlobal('window', {
-    electronAPI: { deviceLink: { invoke: invokeMock } },
+    electronAPI: {
+      deviceLink: {
+        invoke: invokeMock,
+        onRemotePush: (handler: (push: RemotePush, localOwnerStamp?: unknown) => void) => {
+          remotePushHandler = handler;
+          return () => {
+            if (remotePushHandler === handler) remotePushHandler = undefined;
+          };
+        },
+      },
+    },
   });
   transport = await import('../lib/fileBrowserTransport');
 });
 
 afterEach(() => {
+  remoteDataOwnerPushFenceTesting.reset();
+  dataOwnerGenerationTesting.reset();
   vi.unstubAllGlobals();
 });
 
@@ -181,5 +208,91 @@ describe('fileBrowserTransport gzip read decode', () => {
     const api = transport.fileBrowserApiFor(deviceId);
     const res = (await api.readFile({ workdir: '/w', relPath: 'a.md' })) as { ok: true; data: { content: string } };
     expect(res.data.content).toBe('plain');
+  });
+});
+
+describe('fileBrowserTransport owner fence', () => {
+  it('rejects stale local-owner frames before they can advance the remote fence', () => {
+    const cb = vi.fn();
+    setDataOwnerGeneration('owner-b', 8);
+    transport.onFileTreeEventFor('device-1', cb);
+
+    const stalePush = {
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload: {
+        workdir: '/w',
+        type: 'change' as const,
+        relPath: 'src/a.ts',
+      },
+      ownerStamp: { dataOwnerId: 'owner-b', ownerGeneration: 5 },
+    };
+    remotePushHandler?.(stalePush, { dataOwnerId: 'owner-b', ownerGeneration: 7 });
+    expect(cb).not.toHaveBeenCalled();
+
+    remotePushHandler?.(
+      {
+        ...stalePush,
+        ownerStamp: { dataOwnerId: 'owner-b', ownerGeneration: 1 },
+      },
+      { dataOwnerId: 'owner-b', ownerGeneration: 8 },
+    );
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('tracks remote generations per device and closes legacy downgrade after a stamp', () => {
+    const cb = vi.fn();
+    setDataOwnerGeneration('owner-b', 8);
+    transport.onFileTreeEventFor('device-1', cb);
+
+    const payload = {
+      workdir: '/w',
+      type: 'change' as const,
+      relPath: 'src/a.ts',
+    };
+    // Legacy peers remain compatible before this device proves stamp support.
+    remotePushHandler?.({
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload,
+    });
+    // Remote generations are process-local. Generation 1 is valid even though
+    // the controller renderer is already at generation 8.
+    remotePushHandler?.({
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload,
+      ownerStamp: { dataOwnerId: 'owner-b', ownerGeneration: 1 },
+    });
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    // Once stamped, unstamped downgrade frames and generation rollback fail
+    // closed, while a newer remote generation remains valid.
+    remotePushHandler?.({
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload,
+    });
+    remotePushHandler?.({
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload,
+      ownerStamp: { dataOwnerId: 'owner-b', ownerGeneration: 0 },
+    });
+    remotePushHandler?.({
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload,
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 9 },
+    });
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    remotePushHandler?.({
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload,
+      ownerStamp: { dataOwnerId: 'owner-b', ownerGeneration: 2 },
+    });
+    expect(cb).toHaveBeenCalledTimes(3);
   });
 });

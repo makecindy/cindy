@@ -18,6 +18,9 @@
  *     • 呼吸(breathing=true):单条会话"有需要你关注的未读结果"的提醒点——卡片
  *       任务完成未读、rail 瓷砖未读。复用 `.session-card-dot` 的 session-card-pulse
  *       关键帧(prefers-reduced-motion 下自动停),用呼吸吸引注意。
+ *       该关键帧是**常驻循环动画**,按 DESIGN.md §14.4 只动 ::after 光环的
+ *       transform / opacity(compositor-only)——多张未读卡长期同屏时不会持续重绘。
+ *       改这段动画前先读那条红线,别退回 box-shadow / width 之类会触发绘制的属性。
  *     • 静态(breathing=false,默认):聚合入口/常驻类未读徽标——如自动化入口(🕐)
  *       的未读小点。不动,低打扰。
  *

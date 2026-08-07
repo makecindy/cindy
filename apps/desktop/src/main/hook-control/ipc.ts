@@ -81,11 +81,12 @@ import {
 import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
 import { createHookBindingStore } from './bindings.js';
+import { createHookRequestLedger } from './requestLedger.js';
 import {
   buildGroupContextPrefix,
   listTelegramKnownGroupsForStableBinding,
   mergeTelegramGroupActivationViews,
-  resetGroupContextCursors,
+  resetGroupContextCursorsSafely,
 } from './groupWindow.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
@@ -332,6 +333,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       bindings: createHookBindingStore({
         filePath: ownerScopedUserDataPath('hook-bindings.json'),
+        log,
+      }),
+      terminalLedger: createHookRequestLedger({
+        filePath: ownerScopedUserDataPath('hook-request-ledger.json'),
         log,
       }),
       runner: createMakerHookSessionRunner({ log }),
@@ -688,19 +693,23 @@ export function registerHookControlIpc(): void {
     return { hook: m.snapshot() };
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_X_DEFAULT_WORKSPACE, (_e, payload) => {
-    requireHookControl();
-    const { store: s, manager: m } = ensureInstances();
-    const p = requireObject(payload);
-    // 只认显式的 null 或字符串: 这里的 null 是「清空默认目录」这个破坏性动作,
-    // 把缺字段当 null 会让 renderer 的一次调用疏忽静默清掉用户已保存的设置。
-    const alias = requireNullableString(p.alias, 'alias');
-    translateValidation(() => s.setXDefaultWorkspace(alias));
-    // 与 SET_WORKSPACES 同款: 默认目录也走 hello, 在线时重发一帧即可让 server
-    // 感知(它以最新一帧为准), 不重建连接 —— 重建会让设置页状态与偏好区闪烁。
-    if (!m.refreshHello()) m.sync();
-    return { hook: m.snapshot() };
-  });
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.SET_PROVIDER_DEFAULT_WORKSPACE,
+    (_e, payload) => {
+      requireHookControl();
+      const { store: s, manager: m } = ensureInstances();
+      const p = requireObject(payload);
+      const provider = requireNeutralProvider(payload);
+      // 只认显式的 null 或字符串: 这里的 null 是「清空默认目录」这个破坏性动作,
+      // 把缺字段当 null 会让 renderer 的一次调用疏忽静默清掉用户已保存的设置。
+      const alias = requireNullableString(p.alias, 'alias');
+      translateValidation(() => s.setProviderDefaultWorkspace(provider, alias));
+      // 与 SET_WORKSPACES 同款: 默认目录也走 hello, 在线时重发一帧即可让 server
+      // 感知(它以最新一帧为准), 不重建连接 —— 重建会让设置页状态与偏好区闪烁。
+      if (!m.refreshHello()) m.sync();
+      return { hook: m.snapshot() };
+    },
+  );
 
   // 发起 Slack 账号绑定(SIWS OIDC): 经已连接的 WS 发 bind.start(无参); server
   // 回 bind.update(pending, authorizeUrl), main 打开系统浏览器并广播状态。
@@ -1055,9 +1064,9 @@ export async function stopHookControlAccount(): Promise<void> {
 }
 
 /** Stop and discard all state tied to the current data owner; IPC stays registered. */
-export function resetHookControlOwnerBoundary(): void {
+export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
   unregisterSlackToolBridge();
-  resetGroupContextCursors();
+  resetGroupContextCursorsSafely(options);
   resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
   manager = null;
@@ -1072,5 +1081,7 @@ export function disposeHookControl(): void {
   disposeAuthListener?.();
   disposeAuthListener = null;
   observedAuthRealm = null;
-  resetHookControlOwnerBoundary();
+  // App quit is not an account unbind: preserve the durable cursor and only
+  // discard the in-memory cache so the next process resumes incrementally.
+  resetHookControlOwnerBoundary({ clearPersisted: false });
 }

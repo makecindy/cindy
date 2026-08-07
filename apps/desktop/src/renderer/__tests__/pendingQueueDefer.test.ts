@@ -16,6 +16,8 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { __resetStickySessionOriginForTest, getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => ({ items: [], hasMore: false, oldestId: null })),
@@ -58,6 +60,7 @@ vi.mock('@/lib/imageRef', () => ({
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
@@ -73,6 +76,7 @@ const WD = 'C:\\workspace';
 
 let projectionHandler: ((projection: AgentInputProjection) => void) | null = null;
 let messageCreatedHandler: ((payload: unknown) => void) | null = null;
+let remoteInvoke = vi.fn();
 
 const legacySend = vi.fn(async () => {});
 const legacySteer = vi.fn(async () => {});
@@ -162,6 +166,7 @@ function queued(clientId: string, text: string): AgentInputQueuedMessage {
 function installElectronBridge(): void {
   projectionHandler = null;
   messageCreatedHandler = null;
+  remoteInvoke = vi.fn().mockResolvedValue(undefined);
   const w = (globalThis as unknown as { window?: Record<string, unknown> });
   if (!w.window) w.window = {};
   w.window.electronAPI = {
@@ -190,6 +195,7 @@ function installElectronBridge(): void {
         }),
       },
     },
+    deviceLink: { invoke: remoteInvoke },
   };
 }
 
@@ -201,12 +207,16 @@ const flushPromises = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  remoteProjectsStore.clear();
+  __resetStickySessionOriginForTest();
   makerChatStore.__teardownGlobalListeners();
   installElectronBridge();
 });
 
 afterEach(() => {
   makerChatStore.__teardownGlobalListeners();
+  remoteProjectsStore.clear();
+  __resetStickySessionOriginForTest();
 });
 
 describe('renderer input queue facade', () => {
@@ -364,6 +374,23 @@ describe('renderer input queue facade', () => {
     expect(input.setInteractionLock).toHaveBeenCalledWith(sid, 'drag', true);
     expect(input.setEditLock).toHaveBeenCalledWith(sid, item.clientId, true);
     expect(legacySteer).not.toHaveBeenCalled();
+  });
+
+  it('keeps queue controls on the sticky remote device while the live mirror is rebuilding', async () => {
+    const sid = `sticky-row-${Math.random().toString(36).slice(2, 8)}`;
+    const deviceId = 'dev-sticky';
+    remoteProjectsStore.setDeviceSessions(deviceId, 'Remote Mac', [
+      { id: sid } as never,
+    ]);
+    expect(getStickySessionDeviceId(sid)).toBe(deviceId);
+    remoteProjectsStore.clear();
+    remoteInvoke.mockResolvedValue(projection(sid, { queueExpanded: true }));
+
+    makerChatStore.setQueueExpanded(sid, true);
+    await flushPromises();
+
+    expect(remoteInvoke).toHaveBeenCalledWith(deviceId, 'maker:input:set-expanded', [sid, true]);
+    expect(input.setExpanded).not.toHaveBeenCalled();
   });
 
   it('preserves queued source device hints while editing an anchored link', async () => {

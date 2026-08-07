@@ -22,10 +22,13 @@
 import { useEffect } from 'react';
 import { Outlet, useLocation, matchPath, useOutletContext } from 'react-router-dom';
 
+import { resolveAgentIslandVisibleSessionIdFromPath } from '@/lib/agentIslandVisibleSessionRoute';
+import { SplitGroup } from './SplitGroup';
 import { useRegisterCCAgentSidebar } from './useRegisterCCAgentSidebar';
 import { saveLastChatView, saveLastDocView } from './lib/lastViewStore';
 
 export function CCAgentFeatureLayout() {
+  const location = useLocation();
   // 注入 CC Agent 项目/对话侧栏到 Shell 上半槽位(SkillHub / IssueTracker 共用同一 hook)。
   useRegisterCCAgentSidebar();
 
@@ -53,9 +56,19 @@ export function CCAgentFeatureLayout() {
      * file-browser plugin 据此 useFileTree / useFileContent。空串 = 尚未解析或 remote session。
      * 同 setRightSidebarSessionId,仅主实例调。
      */
-    setRightSidebarWorkdir?: (workdir: string, remoteHostId?: string | null) => void;
+    setRightSidebarWorkdir?: (
+      workdir: string,
+      remoteHostId?: string | null,
+      deviceLinkDeviceId?: string | null,
+    ) => void;
   } | null>();
-  return <Outlet context={shellContext} />;
+  return (
+    <SplitGroup
+      activeSessionId={resolveAgentIslandVisibleSessionIdFromPath(location.pathname) ?? undefined}
+    >
+      <Outlet context={shellContext} />
+    </SplitGroup>
+  );
 }
 
 /**

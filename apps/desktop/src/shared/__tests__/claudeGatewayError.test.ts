@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
   classifyClaudeGatewayError,
+  classifyClaudeSubscriptionError,
   type ClaudeGatewayErrorContext,
 } from '../claudeGatewayError';
 
@@ -29,7 +31,31 @@ describe('classifyClaudeGatewayError', () => {
     { label: 'non-400 response', status: 429 },
     { label: 'non-Opus model', modelId: 'claude-sonnet-5' },
     { label: 'unrelated error', error: 'model unavailable' },
-  ])('does not guess for $label', ({ label: _label, ...overrides }) => {
+  ])('does not guess for $label', (overrides) => {
     expect(classify(overrides)).toBeNull();
+  });
+});
+
+describe('classifyClaudeSubscriptionError', () => {
+  it('attributes the direct subscription Opus 400 to the Claude.ai plan', () => {
+    expect(
+      classifyClaudeSubscriptionError({
+        modelId: 'claude-opus-5',
+        requestRoute: 'subscription',
+        status: 400,
+        error: planError,
+      }),
+    ).toBe(CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON);
+  });
+
+  it('does not attribute a Gateway response to the Claude.ai plan', () => {
+    expect(
+      classifyClaudeSubscriptionError({
+        modelId: 'claude-opus-5',
+        requestRoute: 'gateway',
+        status: 400,
+        error: planError,
+      }),
+    ).toBeNull();
   });
 });

@@ -19,7 +19,10 @@
  * ASCII 方括号会破坏 markdown 链接语法,清洗为空格。
  */
 import type { Editor } from '@tiptap/core';
-import { boundAgentReferenceText } from '@cindy/maker-shared/agent-input-projection';
+import {
+  boundAgentReferenceText,
+  type AgentInputReference,
+} from '@cindy/maker-shared/agent-input-projection';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { i18n } from '@/i18n';
@@ -82,6 +85,43 @@ export async function resolvePastedSessionMessageText(
 ): Promise<string | null> {
   const { resolveSessionMessageText } = await import('@/lib/sessionMessageText');
   return resolveSessionMessageText(sessionId, clientId);
+}
+
+/**
+ * Resolve semantic bodies on an immutable click-time composer snapshot.
+ *
+ * Device-link optimistic sends clear the live editor before this async work so
+ * the user can immediately start the next message. Mutating the live editor
+ * here would therefore target either a new draft or another session; enrich the
+ * captured AgentInputReference array instead and keep the deep-link wire text
+ * unchanged.
+ */
+export async function resolveSerializedSessionMessageReferencesForSend(
+  references: readonly AgentInputReference[],
+  resolveMessageText: (
+    sessionId: string,
+    clientId: string,
+  ) => Promise<string | null> = resolvePastedSessionMessageText,
+): Promise<AgentInputReference[]> {
+  return Promise.all(
+    references.map(async (reference): Promise<AgentInputReference> => {
+      if (reference.kind !== 'message' || reference.text) return reference;
+      try {
+        const value = await resolveMessageText(reference.sessionId, reference.messageClientId);
+        if (!value) return reference;
+        const bounded = boundAgentReferenceText(value);
+        return {
+          ...reference,
+          text: bounded.text,
+          truncated: bounded.truncated || undefined,
+        };
+      } catch {
+        // Preserve the deep link when the referenced body is unavailable. The
+        // send must remain usable on a weak/offline device-link connection.
+        return reference;
+      }
+    }),
+  );
 }
 
 /**

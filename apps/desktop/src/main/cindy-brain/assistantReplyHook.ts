@@ -49,6 +49,8 @@ export interface AssistantReplyHookDeps {
   }): void;
   /** "意识处理中"轻指示开/关(回复已显示、后台意识还在跑的那段)。 */
   setPending(sessionId: string, clientId: string, pending: boolean): void;
+  /** Optional owner-boundary fence for the async continuation. */
+  isCurrent?(): boolean;
   log?: {
     warn(msg: string, meta?: Record<string, unknown>): void;
   };
@@ -65,16 +67,21 @@ export async function runAssistantReplyHook(
   text: string,
 ): Promise<void> {
   try {
+    if (deps.isCurrent && !deps.isCurrent()) return;
     // 快路径:无 hook 意识直接返回(register.ts 调用点也已同步守卫,双保险)。
     if (!deps.hasHook()) return;
     if (!text || text.length === 0) return;
     if (!(await deps.isEligible(sessionId))) return;
+    if (deps.isCurrent && !deps.isCurrent()) return;
 
     deps.setPending(sessionId, clientId, true);
     try {
       const result = await deps.screen(sessionId, text);
+      if (deps.isCurrent && !deps.isCurrent()) return;
       if (result.action === 'rewrite') {
+        if (deps.isCurrent && !deps.isCurrent()) return;
         await deps.persistRewrite(sessionId, clientId, result.text);
+        if (deps.isCurrent && !deps.isCurrent()) return;
         deps.broadcastRewritten({
           sessionId,
           clientId,
@@ -83,6 +90,7 @@ export async function runAssistantReplyHook(
           text: result.text,
         });
       } else if (result.action === 'render') {
+        if (deps.isCurrent && !deps.isCurrent()) return;
         await deps.applyRenderCard(sessionId, clientId, {
           ghostId: result.ghostId,
           ghostName: result.ghostName,
@@ -92,7 +100,11 @@ export async function runAssistantReplyHook(
       }
       // allow / 未知:不动那条消息。
     } finally {
-      deps.setPending(sessionId, clientId, false);
+      // Do not emit an old owner's completion frame into the new owner's UI.
+      const ownerStillCurrent = deps.isCurrent?.() ?? true;
+      if (ownerStillCurrent) {
+        deps.setPending(sessionId, clientId, false);
+      }
     }
   } catch (err) {
     deps.log?.warn('assistant reply hook failed (fail-open)', {

@@ -65,8 +65,12 @@ afterEach(async () => {
 });
 
 describe('buildWorktreeAddArgs', () => {
-  it('带 --no-track:远端引用为起点时不给 xdt/* 分支挂 branch.<name>.remote/merge 跟踪配置', () => {
-    const args = buildWorktreeAddArgs('xdt/auto-x1', '/repo/.cindy-worktrees/auto-x1', 'refs/remotes/origin/main');
+  it('带 --no-track:远端引用为起点时不给 cindy/* 分支挂 branch.<name>.remote/merge 跟踪配置', () => {
+    const args = buildWorktreeAddArgs(
+      'cindy/auto-x1',
+      '/repo/.cindy-worktrees/auto-x1',
+      'refs/remotes/origin/main',
+    );
     // --no-track 抑制 branch.autoSetupMerge 的默认行为:新分支不产生 upstream
     // 跟踪配置,裸 git push/pull 不会误指向远端默认分支
     expect(args).toContain('--no-track');
@@ -74,7 +78,11 @@ describe('buildWorktreeAddArgs', () => {
     const bIdx = args.indexOf('-b');
     expect(noTrackIdx).toBeGreaterThan(-1);
     expect(noTrackIdx).toBeLessThan(bIdx); // 在 -b 之前,作用于分支创建
-    expect(args.slice(-3)).toEqual(['xdt/auto-x1', '/repo/.cindy-worktrees/auto-x1', 'refs/remotes/origin/main']);
+    expect(args.slice(-3)).toEqual([
+      'cindy/auto-x1',
+      '/repo/.cindy-worktrees/auto-x1',
+      'refs/remotes/origin/main',
+    ]);
   });
 });
 

@@ -50,6 +50,12 @@ export interface ModelDescriptor {
    * 消费点见 modelDefinitions.getDefaultModelForVendor:种子默认只从默认可见的模型里取。
    */
   defaultEnabled?: boolean;
+  /**
+   * 该模型是哪些 wire agent 的**新对话默认种子**(源自目录 newSessionDefault,与 sortOrder
+   * 解耦;生产环境 XD 网关由服务端按区域下发)。消费点见 modelDefinitions.newSessionDefaultModelId
+   * 与 draftModelCalibration:被标记且可用的模型优先作新对话默认。pi 按 'claude-code' 口径判定。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
 }
 
 export interface EffortDescriptor {
@@ -104,6 +110,21 @@ export interface AgentCapabilities {
    * 到达时无法安全关联后续模型写入。
    */
   supportsSessionAgentSwitchCas?: boolean;
+  /**
+   * 被控端是否支持在开启 Orca Team 时显式设置 Worker 默认权限。
+   * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
+   */
+  supportsOrcaWorkerPermissionMode?: boolean;
+  /**
+   * 每轮 host 权限策略能力门:未声明或 supported.supported !== true 的 Agent 无法
+   * 用于「无条件挂逐条权限确认」的渠道(如个人微信)。与 maker-core 的
+   * Capabilities.turnPermissionPolicy 同构;device-link 老被控端无此字段 →
+   * undefined = 不支持。
+   */
+  turnPermissionPolicy?: {
+    supported: CapabilityStatus;
+    unsupportedPermissionModes: string[];
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -133,6 +154,20 @@ function isOptionalStringRecord(value: unknown): boolean {
   );
 }
 
+/** 与 protocol newSessionDefault 约束一致:可选;存在时非空、wire agent、无重复。 */
+function isOptionalNewSessionDefault(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  if (
+    value.some(
+      (agent) => agent !== 'claude-code' && agent !== 'codex',
+    )
+  ) {
+    return false;
+  }
+  return new Set(value).size === value.length;
+}
+
 function isModelDescriptor(value: unknown): value is ModelDescriptor {
   if (!isRecord(value)) return false;
   const efforts = value.efforts;
@@ -154,7 +189,8 @@ function isModelDescriptor(value: unknown): value is ModelDescriptor {
     isOptionalStringRecord(value.effortDisplayNames) &&
     isOptionalBoolean(value.supportsFastMode) &&
     isOptionalFiniteNumber(value.sortOrder) &&
-    isOptionalBoolean(value.defaultEnabled)
+    isOptionalBoolean(value.defaultEnabled) &&
+    isOptionalNewSessionDefault(value.newSessionDefault)
   );
 }
 
@@ -182,7 +218,8 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !Array.isArray(value.permissionModes) ||
     !value.permissionModes.every(isNamedDescriptor) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
-    !isOptionalBoolean(value.supportsSessionAgentSwitchCas)
+    !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode)
   ) {
     throw new Error('Invalid agent capabilities response');
   }
@@ -493,12 +530,25 @@ export function beginLocalCapabilitiesRefresh(): number {
   return localGen;
 }
 
-/** 读取两种 agent 的完整能力快照；失败向上抛，不触碰现有缓存。 */
+/**
+ * 读取本地 agent 能力快照；核心 agent 失败向上抛，可选 Pi 的能力读取失败不阻断 provider 目录。
+ */
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
-  return Promise.all(
-    ALL_AGENT_KINDS.map(async (agent) => [agent, await api.getCapabilities(agent)] as const),
+  const entries = await Promise.all(
+    ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
+      try {
+        return [agent, await api.getCapabilities(agent)] as const;
+      } catch (error) {
+        if (agent !== 'pi') throw error;
+        log.warn('optional Pi capabilities unavailable; continuing with core agents:', error);
+        return null;
+      }
+    }),
+  );
+  return entries.filter(
+    (entry): entry is readonly [AgentKind, AgentCapabilities] => entry !== null,
   );
 }
 
@@ -506,7 +556,7 @@ export function isLocalCapabilitiesRefreshCurrent(generation: number): boolean {
   return localGen === generation;
 }
 
-/** 仅提交当前代际的完整能力快照，并在提交后统一通知 mounted hooks。 */
+/** 仅提交当前代际的可用能力快照，并在提交后统一通知 mounted hooks。 */
 export function commitLocalCapabilitiesSnapshot(
   generation: number,
   entries: LocalCapabilitiesSnapshot,
@@ -520,8 +570,8 @@ export function commitLocalCapabilitiesSnapshot(
 }
 
 /**
- * Codex auth/discovery 广播后的本地热刷新。旧 cache 在两个 IPC 都成功前继续可读；完成后同时
- * 替换 cache 并通知 mounted hooks，避免 provider:list 已更新而 scheduler/selector 仍用旧能力。
+ * Codex auth/discovery 广播后的本地热刷新。旧 cache 在核心 IPC 都成功前继续可读；完成后
+ * 同时替换 cache 并通知 mounted hooks，避免 provider:list 已更新而 scheduler/selector 仍用旧能力。
  */
 export async function refreshLocalCapabilities(): Promise<void> {
   const generation = beginLocalCapabilitiesRefresh();

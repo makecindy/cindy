@@ -51,6 +51,29 @@ const SUPPORTED_TEXT_EXTS = new Set([
   '.nvmrc', '.node-version', '.python-version', '.ruby-version', '.tool-versions',
 ]);
 
+/**
+ * 按「网页」预览的扩展名(渲染态优先,源码态可切)。
+ *
+ * 与桌面 shared/browserOpenableExts.ts 的 BROWSER_OPENABLE_EXTS 同源(桌面进系统
+ * 浏览器 / 侧边栏浏览器)。
+ *
+ * **刻意不收 `.xhtml`,尽管桌面的 useOpenWithMenu.isHtmlFilePath 收**(review P1):
+ * 两端的渲染载体不同,能力也不同。桌面把 `file://` 交给真浏览器,浏览器按扩展名认
+ * `application/xhtml+xml`,XML 语义(自闭合 `<script />`、CDATA、命名空间)照旧成立;
+ * 手机走 react-native-webview 的 `source={{ html }}`,它在 iOS(`loadHTMLString`)与
+ * Android(`loadDataWithBaseURL` 的 mimeType 参数被库写死 `text/html`)两端都只能按
+ * HTML 解析 —— 合法 XHTML 会被 HTML parser 曲解:`<script />` 不自闭合,后面整段正文
+ * 被当脚本文本吞掉;CDATA 段变成 bogus comment 丢内容。结果是**静默白屏**,比不渲染更差。
+ * 要真正支持得给它一条保住 XHTML MIME 的加载路径(临时文件 + `file://`,或改用
+ * `source={{ uri }}`),那是独立改动。这里按「宁可不渲染」收窄:`.xhtml` 仍在
+ * SUPPORTED_TEXT_EXTS 里,退化成源码态 —— 内容照样可读,只是不给渲染切换。
+ *
+ * ⚠️ 这些扩展名同时留在 SUPPORTED_TEXT_EXTS 里,是刻意的:HTML 仍然是「可安全按
+ * UTF-8 读取」的文本,取字节、源码态与内容搜索都依赖那个判定。本集合只多给一层
+ * 「默认怎么展示」的语义,不改变 remoteFilePreviewKind 的分类。
+ */
+const HTML_PREVIEW_EXTS = new Set(['.html', '.htm']);
+
 const COMPOUND_EXTS = ['.env.example', '.env.local', '.env.development', '.env.production'];
 const KNOWN_TEXT_FILENAMES = new Set([
   'dockerfile',
@@ -80,8 +103,30 @@ export function extractRemoteFileExt(name: string): string {
   return lower.slice(dotIdx);
 }
 
+/**
+ * 文件按什么方式展示(text / pdf / office / drawio / binary / unknown)。**入参是真实文件名或路径。**
+ *
+ * ── 为什么不再按 URL 语义在 `?` / `#` 处截断(review P1) ──────────────────────
+ * 原实现先做 `pathOrName.split(/[?#]/)[0]`,那是把入参当 URL 处理。但 `?` / `#` 在真实文件名里
+ * 是**合法字符**(macOS / Linux 都允许),于是 macOS 上一个正常的 `report#draft.html` 会被截成
+ * `report` → 没有扩展名 → 判 `unknown`,**连文本预览都不给**;`report?v=1.html` 同理。
+ * 这不是安全问题,是功能缺失:文件明明可读,却被判成不可读。
+ *
+ * 全部 7 个调用方传的都是真实文件名或路径,**没有一个传 URL**:
+ * `fileBrowserGrid`(被控端 `fs:list` 的 `entry.name`)、`fileBrowser` 的三处(`entry.path` /
+ * `file.resolvedPath` / 用户输入的完整路径)、`MessageRenderer` 的两处(聊天里的文件路径)。
+ * 所以那份 URL 容忍从来没有真实需求 —— 与 `isHtmlFilePreviewCandidate` 上一轮收窄时得到的
+ * 是同一个结论,这次把它补齐到本函数。
+ *
+ * ── 为什么**只**去掉 URL 截断,保留 `.trim()` 与 basenameRemotePath 的削尾 ─────
+ * 这两个判定的严格度要求不同,不能一刀切:
+ *  - 本函数决定「怎么展示」。判宽一点的后果是「把一个怪名字的文件也按文本读了」—— 无害。
+ *  - `isHtmlFilePreviewCandidate` 决定「进不进可执行 WebView」,必须 fail-closed,所以它那边
+ *    连 `.trim()` 和削尾都不做(尾随空格 / 反斜杠都是合法文件名字符,归一化会让文件冒充 .html)。
+ * URL 截断之所以要改,是因为它的后果**不是判宽而是判死**:合法文件被判成不可读。
+ */
 export function remoteFilePreviewKind(pathOrName: string): RemoteFilePreviewKind {
-  const name = basenameRemotePath(pathOrName.split(/[?#]/)[0] ?? '').trim();
+  const name = basenameRemotePath(pathOrName).trim();
   if (!name) return 'unknown';
 
   const lowerName = name.toLowerCase();
@@ -98,6 +143,54 @@ export function remoteFilePreviewKind(pathOrName: string): RemoteFilePreviewKind
 
 export function isTextFilePreviewCandidate(pathOrName: string): boolean {
   return remoteFilePreviewKind(pathOrName) === 'text';
+}
+
+/**
+ * 是否按「网页」渲染态预览。**入参是真实文件名 / 路径,不是 URL。**
+ *
+ * agent 产出的 HTML 报告 / 设计稿是跨端生成物:桌面端点开就进浏览器渲染,手机端此前
+ * 只能看源码——因为 HTML 落在 SUPPORTED_TEXT_EXTS 里,预览页按文本分派。判定单列一处
+ * 供两端共用,不去动 remoteFilePreviewKind 的 'text' 结论(取字节仍走文本通道)。
+ *
+ * ── 为什么契约收成「只吃文件名」(review P2,同一处被连挖三轮) ────────────────
+ * 前两版试图同时吃 URL 形态(`report.html?from=chat`)与真实文件名,而 `?` / `#` 在两者里
+ * 语义相反 —— URL 里是语法,文件名里是**合法字符**(macOS / Linux 都允许)。同一个字符串
+ * 因此无法判别:`report.html?draft` 既可能是名字里带 `?` 的文件,也可能是 `report.html` 带
+ * 查询串。任何"先按原串判、不行再剥"的启发式都只是把误判挪个位置:
+ *  - 一律先剥 → `notes.html#readme.txt` 被截成 `notes.html`,一个 `.txt` 进可执行 WebView;
+ *  - 剥完兜底 → 上一条又被兜底重新放行;
+ *  - 只在"扩展名混进语法"时剥 → `report.html?draft` 仍被判成 HTML。
+ * 所以根因不在判据,在**入参契约**:一个函数吃两种语义。现在收成文件名一种,歧义直接消失。
+ *
+ * 生产调用点只有一处(预览页 `richTextKindOf(item.name)`,传的就是真实文件名),所以这次
+ * 收窄没有真实调用方受影响 —— 之前那份 URL 容忍是臆想出来的需求。将来真出现 URL 入口,
+ * 由它自己先剥 query/fragment,或另立一个显式命名的函数,**不要**再把两种语义塞回这里。
+ *
+ * 判定比 remoteFilePreviewKind 更严是刻意的(fail-closed):`report.html?draft` 会落进源码态
+ * 而不是可执行 WebView —— 少一次渲染,不会多一次执行。
+ */
+export function isHtmlFilePreviewCandidate(fileNameOrPath: string): boolean {
+  const name = htmlCandidateBasename(fileNameOrPath);
+  if (!name) return false;
+  return HTML_PREVIEW_EXTS.has(extractRemoteFileExt(name));
+}
+
+/**
+ * 取「最后一段」用于判扩展名 —— **不做任何归一化**。
+ *
+ * 与 basenameRemotePath 的区别就是这一点,而这一点是判定正确性的关键(review P1,连挖两轮):
+ *  - `basenameRemotePath` 会先 `stripTrailingPathSeparators`,于是 macOS / Linux 上合法的
+ *    `report.html\` 被削成 `report.html`、冒充 HTML 扩展名进可执行 WebView;
+ *  - 上一轮移掉的 `.trim()` 是同一个病:`report.html ` 也是合法文件名。
+ * 归一化的目的是「把路径写法摆平」,而这个入口收到的是**真实名字**,摆平就等于改名。
+ *
+ * 所以只按分隔符切最后一段、**不削尾**:输入以分隔符结尾时最后一段是空串 → 返回 ''
+ * → 调用方判 false。那是目录形态或名字里带尾随分隔符,两种都不该进渲染态(fail-closed:
+ * 少一次渲染,不会多一次执行)。
+ */
+function htmlCandidateBasename(fileNameOrPath: string): string {
+  const slash = Math.max(fileNameOrPath.lastIndexOf('/'), fileNameOrPath.lastIndexOf('\\'));
+  return slash < 0 ? fileNameOrPath : fileNameOrPath.slice(slash + 1);
 }
 
 export function nonTextFilePreviewStatusText(kind: RemoteFilePreviewKind): string {

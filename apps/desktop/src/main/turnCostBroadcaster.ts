@@ -32,7 +32,7 @@ import {
 } from './localDb/ipc/messages.js';
 import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
 import { createLogger } from './logger.js';
-import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
   applyScheduleRunCostMetaChange,
   recordScheduleRunCostDirect,
@@ -44,6 +44,7 @@ import {
 } from '../shared/regionalMoney.js';
 
 const log = createLogger('turnCostBroadcaster');
+type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /** IPC channel: main → renderer 推单条消息的 per-turn 费用。 */
 export const MESSAGE_TURN_COST_CHANGED = 'usage:message-turn-cost';
@@ -71,6 +72,40 @@ export interface TurnCostDeps {
   }>;
   enqueue<T>(label: string, fn: () => Promise<T> | T): Promise<T>;
   broadcast(payload: MessageTurnCostPayload): void;
+  /** Optional owner-aware broadcast used by production; test doubles may omit it. */
+  broadcastWithOwnerScope?(
+    payload: MessageTurnCostPayload,
+    ownerScope: OwnerScope,
+  ): void;
+}
+
+function captureOwnerScope(): OwnerScope {
+  return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
+}
+
+function isOwnerScopeCurrent(scope: OwnerScope): boolean {
+  return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
+}
+
+function broadcastTurnCostPayload(payload: MessageTurnCostPayload, ownerScope: OwnerScope): void {
+  if (ownerScope === null) {
+    broadcastTap.tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
+  } else {
+    broadcastTap.tapWindowBroadcast(
+      MESSAGE_TURN_COST_CHANGED,
+      payload,
+      ownerScope.ownerStamp,
+    );
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      if (ownerScope === null) {
+        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload);
+      } else {
+        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload, ownerScope.ownerStamp);
+      }
+    }
+  }
 }
 
 const defaultDeps: TurnCostDeps = {
@@ -79,12 +114,10 @@ const defaultDeps: TurnCostDeps = {
   readPriorUserRoundCost,
   enqueue: enqueueDurableWrite,
   broadcast(payload) {
-    tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload);
-      }
-    }
+    broadcastTurnCostPayload(payload, null);
+  },
+  broadcastWithOwnerScope(payload, ownerScope) {
+    broadcastTurnCostPayload(payload, ownerScope);
   },
 };
 
@@ -109,6 +142,7 @@ export async function recordTurnCostOnMessage(
   if (!sessionId || !clientId) return false;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return false;
+  const ownerScope = captureOwnerScope();
   try {
     let userTurnMoney = normalized;
     let userTurnCostIsEstimate = normalized.kind === 'value-estimate';
@@ -155,22 +189,28 @@ export async function recordTurnCostOnMessage(
       return result;
     });
     if (!patched) return false;
+    // The patch and scheduler ledger side effect are already durable.  An
+    // owner switch only suppresses the stale renderer/device-link broadcast;
+    // report success so scheduler fallback cannot charge the same segment
+    // again.
+    if (!isOwnerScopeCurrent(ownerScope)) return true;
+    const payload: MessageTurnCostPayload = {
+      sessionId,
+      clientId,
+      turnMoney: normalized,
+      ...(normalized.currency === 'USD' ? { turnCostUsd: normalized.amount } : {}),
+      turnCostIsEstimate: normalized.kind === 'value-estimate',
+      userTurnMoney,
+      ...(userTurnMoney.currency === 'USD' ? { userTurnCostUsd: userTurnMoney.amount } : {}),
+      userTurnCostIsEstimate,
+      ...(turnUsageDetails ? { turnUsageDetails } : {}),
+    };
     try {
-      deps.broadcast({
-        sessionId,
-        clientId,
-        turnMoney: normalized,
-        ...(normalized.currency === 'USD'
-          ? { turnCostUsd: normalized.amount }
-          : {}),
-        turnCostIsEstimate: normalized.kind === 'value-estimate',
-        userTurnMoney,
-        ...(userTurnMoney.currency === 'USD'
-          ? { userTurnCostUsd: userTurnMoney.amount }
-          : {}),
-        userTurnCostIsEstimate,
-        ...(turnUsageDetails ? { turnUsageDetails } : {}),
-      });
+      if (deps.broadcastWithOwnerScope) {
+        deps.broadcastWithOwnerScope(payload, ownerScope);
+      } else {
+        deps.broadcast(payload);
+      }
     } catch (err) {
       // The message cost is already durable; a broadcast failure must not
       // make scheduler fallback record the same segment a second time.
@@ -189,7 +229,11 @@ export async function recordTurnCostOnMessage(
  */
 export type TurnUsageDeps = Pick<
   TurnCostDeps,
-  'patchAgentMeta' | 'enqueue' | 'broadcast' | 'readPriorUserRoundCost'
+  | 'patchAgentMeta'
+  | 'enqueue'
+  | 'broadcast'
+  | 'broadcastWithOwnerScope'
+  | 'readPriorUserRoundCost'
 >;
 
 /**
@@ -217,6 +261,7 @@ export async function recordTurnUsageOnMessage(
 ): Promise<boolean> {
   const { sessionId, clientId, turnUsageDetails } = args;
   if (!sessionId || !clientId || !turnUsageDetails) return false;
+  const ownerScope = captureOwnerScope();
   try {
     const outcome = await deps.enqueue(`turn-usage:${sessionId}:${clientId}`, async () => {
       // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
@@ -237,9 +282,12 @@ export async function recordTurnUsageOnMessage(
       return { userTurnMoney, userTurnCostIsEstimate: prior.hasEstimatedValue };
     });
     if (!outcome) return false;
+    // Usage metadata is durable even when the captured owner became stale;
+    // skip only the old-owner broadcast and keep the successful result.
+    if (!isOwnerScopeCurrent(ownerScope)) return true;
     try {
       const { userTurnMoney, userTurnCostIsEstimate } = outcome;
-      deps.broadcast({
+      const payload: MessageTurnCostPayload = {
         sessionId,
         clientId,
         turnUsageDetails,
@@ -252,7 +300,12 @@ export async function recordTurnUsageOnMessage(
               userTurnCostIsEstimate,
             }
           : {}),
-      });
+      };
+      if (deps.broadcastWithOwnerScope) {
+        deps.broadcastWithOwnerScope(payload, ownerScope);
+      } else {
+        deps.broadcast(payload);
+      }
     } catch (err) {
       // 明细已落库,后开窗口走历史加载仍能读到;广播失败不影响持久事实。
       log.warn(

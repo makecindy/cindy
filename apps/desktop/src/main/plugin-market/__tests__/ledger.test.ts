@@ -82,6 +82,28 @@ describe('PluginMarketLedger', () => {
     });
   });
 
+  it('filters a schema-v1 installation record with required fields missing', () => {
+    const { filePath, ledger } = harness();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          'cindy-test': {
+            pluginId: `c${'a'.repeat(24)}`,
+            ghostId: 'cindy-test',
+            source: 'market',
+            installed: true,
+          },
+        },
+        defaultInstallOptOuts: {},
+      }),
+    );
+
+    expect(ledger.installationForGhost('cindy-test')).toBeNull();
+  });
+
   it('resolves the owner-scoped path for every operation', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-ledger-owner-'));
     roots.push(root);

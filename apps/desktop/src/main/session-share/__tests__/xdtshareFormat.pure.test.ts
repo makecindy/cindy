@@ -149,4 +149,95 @@ describe('validateManifest', () => {
     expect(() => validateManifest(null)).toThrowError(XdtshareError);
     expect(() => validateManifest('{}')).toThrowError(XdtshareError);
   });
+
+  it('accepts a valid orca section and roundtrips worker metadata', () => {
+    const manifest = validateManifest({
+      ...validManifest(),
+      orca: {
+        teamStatus: 'active',
+        workers: [
+          {
+            index: 0,
+            agentKind: 'codex',
+            title: 'Worker 1',
+            role: 'developer',
+            label: 'dev-1',
+            status: 'done',
+            focused: true,
+            sdkSessionIds: ['thread-1'],
+            activeSdkSessionId: 'thread-1',
+            counts: { messages: 5 },
+            transcripts: [{ sdkSessionId: 'thread-1', path: 'orca/workers/0/transcripts/codex/r.jsonl' }],
+          },
+        ],
+      },
+    });
+    expect(manifest.orca).toBeDefined();
+    expect(manifest.orca!.teamStatus).toBe('active');
+    expect(manifest.orca!.workers[0]).toMatchObject({
+      index: 0,
+      agentKind: 'codex',
+      label: 'dev-1',
+      status: 'done',
+      focused: true,
+      counts: { messages: 5 },
+    });
+  });
+
+  it('manifest without orca leaves the field absent', () => {
+    expect('orca' in validateManifest(validManifest())).toBe(false);
+  });
+
+  it.each([
+    ['unknown orca teamStatus', { teamStatus: 'paused', workers: [] }],
+    [
+      'unknown orca worker status',
+      {
+        teamStatus: 'active',
+        workers: [
+          {
+            index: 0,
+            agentKind: 'cc',
+            title: 'w',
+            role: 'developer',
+            label: null,
+            status: 'zombie',
+            focused: false,
+            sdkSessionIds: [],
+            activeSdkSessionId: null,
+            counts: { messages: 0 },
+            transcripts: [],
+          },
+        ],
+      },
+    ],
+    [
+      'unknown orca worker agentKind',
+      {
+        teamStatus: 'active',
+        workers: [
+          {
+            index: 0,
+            agentKind: 'gemini',
+            title: 'w',
+            role: 'developer',
+            label: null,
+            status: 'idle',
+            focused: false,
+            sdkSessionIds: [],
+            activeSdkSessionId: null,
+            counts: { messages: 0 },
+            transcripts: [],
+          },
+        ],
+      },
+    ],
+  ])('rejects %s with SHARE_FILE_INVALID', (_label, orca) => {
+    try {
+      validateManifest({ ...validManifest(), orca });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as XdtshareError).code).toBe('SHARE_FILE_INVALID');
+    }
+  });
 });

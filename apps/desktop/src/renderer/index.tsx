@@ -14,7 +14,6 @@ import '@google/model-viewer';
 import '@/i18n';
 import './themes/colors';
 
-import { App } from './App';
 import { TopLevelErrorBoundary } from './components/error/TopLevelErrorBoundary';
 import { initTapdb } from './analytics/tapdbClient';
 import { installScrollbarAutoHide } from './lib/scrollbarAutoHide';
@@ -35,6 +34,9 @@ import { bootstrapChatEmbeddingFromMain } from './lib/chatEmbeddingStore';
 import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore';
 import { bootstrapLspModeFromMain } from './lib/lspModeStore';
 import { bootstrapSilentEncryptedRetryFromMain } from './lib/silentEncryptedRetryStore';
+import { initRsbBrowserBridge } from './features/right-sidebar/lib/rsbBrowserBridge';
+import { isGhostPanelWindow } from './lib/ghostPanelWindow';
+import { isSecondaryWindow } from './lib/secondaryWindow';
 import {
   installForegroundRecoveryDiagnostics,
   installPerformanceTimelineCleanupInterval,
@@ -43,12 +45,14 @@ import { installRenderLoopWatchdog } from './lib/renderLoopWatchdog';
 import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 import { installInteractionJankProbe } from './lib/interactionJankProbe';
 import { installSwallowActivationClick } from './lib/swallowActivationClick';
+import { installEarlyKeyDownCapture } from './lib/earlyKeyDownCapture';
 import { getSwallowActivationClickEnabled } from './hooks/useSwallowActivationClickSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 import './styles/globals.css';
 import './styles/sortable.css';
 
+const disposeEarlyKeyDownCapture = installEarlyKeyDownCapture();
 installScrollbarAutoHide();
 const disposeForegroundRecoveryDiagnostics = installForegroundRecoveryDiagnostics();
 // 睡醒白屏取证:主线程阻塞漂移 + 可见无帧探针,只记日志(见模块头注释)。
@@ -77,6 +81,8 @@ const isVoiceInputDictionaryToast = view === 'voice-input-dictionary-toast';
 const isComputerPermissionGuide = view === 'computer-permission-guide';
 const isComputerPermissionBackdrop = view === 'computer-permission-backdrop';
 const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissionBackdrop;
+const isAppearanceUtilityView =
+  isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
@@ -117,6 +123,7 @@ if (import.meta.env.DEV) {
     disposeForegroundRecoveryDiagnostics();
     disposeRenderLoopWatchdog();
     disposeHiddenAnimationGate();
+    disposeEarlyKeyDownCapture();
     disposePerformanceTimelineCleanupInterval();
     disposeSwallowActivationClick();
     disposeInteractionJankProbe();
@@ -126,6 +133,10 @@ if (import.meta.env.DEV) {
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
 applyFontSettings(getInitialFontSettings());
+const disposeUtilityAppearanceSettingsSync = isAppearanceUtilityView
+  ? (window.electronAPI.appearanceSettings?.onChanged?.(applyFontSettings) ?? (() => {}))
+  : (): void => {};
+import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync);
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -186,6 +197,16 @@ void (async () => {
     return;
   }
 
+  // Install the RSB control listener before any child Settings effect can ask
+  // main for health. It is renderer-process scoped and must survive collapsed
+  // or unmounted sidebar UI. Only the primary and dedicated sidebar windows
+  // can own RSB tabs; other full-app windows must not publish an empty pool
+  // snapshot into the primary registry.
+  if (!isGhostPanelWindow() && !isSecondaryWindow()) {
+    const disposeRsbBrowserBridge = initRsbBrowserBridge();
+    import.meta.hot?.dispose(disposeRsbBrowserBridge);
+  }
+
   // 主视图挂载前完成 memory 真值同步与旧配置迁移，确保用户可交互的 toggle 不会和
   // 启动快照并发。浮窗不消费该设置，跳过同步以免多个 renderer 争写共享 localStorage。
   await bootstrapMemorySettingsFromMain();
@@ -197,6 +218,9 @@ void (async () => {
 
   // 顶层 boundary:App 内 RouterProvider 之上的 provider 链渲染崩溃时兜底
   // (路由子树的崩溃仍由 router.tsx 的 errorElement 就近接住)。
+  // App 必须延迟到辅助窗口分流之后再加载:完整 App 的 useApiKey 等模块会在
+  // ghost/secondary renderer 启动时触发 safe-storage-read,被 main 正确拒绝并制造噪声。
+  const { App } = await import('./App');
   root.render(
     <TopLevelErrorBoundary>
       <App />

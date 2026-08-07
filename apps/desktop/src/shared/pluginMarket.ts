@@ -1,4 +1,4 @@
-import type { GhostManifest } from './ghost';
+import type { GhostManifest, GhostPermissionDiff, InstalledGhost } from './ghost';
 import type { PluginIconMetadata } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
@@ -40,10 +40,51 @@ export interface PluginMarketSnapshot {
   customSourceNames: string[];
 }
 
-/** 详情额外携带经 Desktop 当前 runtime validator 验证过的完整清单。 */
+/** 服务端清理的一次性汇总提示：按 owner 缓存，consume 前跨多轮对账累加，consume 后即清。 */
+export interface PluginRemovalUserNotice {
+  count: number;
+  /** 累计单条且插件名经安全过滤后非空时为插件名；其余情况为 null，只展示数量。 */
+  name: string | null;
+}
+
+/** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;
 }
+
+/** Main 从已验证真实包中提取的权限复核事实。 */
+export interface PluginMarketPackageReviewFacts {
+  /** 已按当前界面语言本地化，仅用于展示；安全指纹由 Main 基于原始清单计算。 */
+  manifest: GhostManifest;
+  /** Main 基于当前已装原始清单与真实包原始清单算出的权限差异；首装为 null。 */
+  permissionDiff: GhostPermissionDiff | null;
+  packageSha256: string;
+  /** 产生复核结果时的已装权限基线；null 表示当时尚未安装。 */
+  installedBaseline: string | null;
+}
+
+/** Main 在安装事务内请求当前窗口立即确认真实包权限；不暴露内部批准绑定。 */
+export interface PluginMarketPackageReviewRequest {
+  requestId: string;
+  manifest: GhostManifest;
+  permissionDiff: GhostPermissionDiff | null;
+}
+
+export interface PluginMarketInstallOptions {
+  /** 用户审阅时看到的目标 release；Main 会在下载前重新核对。 */
+  expectedReleaseId: string;
+  /** 安装前展示给用户的完整清单；Main 会与当前来源事实重新核对。 */
+  expectedManifest: GhostManifest;
+  /** 仅用于自定义市场确认其本地真实 manifest 的扩权。 */
+  allowPermissionExpansion?: boolean;
+  /** 用户审阅目标权限时的已装权限基线。 */
+  reviewedBaseline?: string;
+}
+
+/** 安装成功，或用户在事务内取消真实包权限确认。 */
+export type PluginMarketInstallResult =
+  | { ghost: InstalledGhost; cancelled?: never }
+  | { ghost?: never; cancelled: true };
 
 /* ------------------------------------------------------------------------ */
 /* 自定义市场源（Git / 本地文件夹）                                           */
@@ -69,6 +110,10 @@ export interface MarketSourceConfig {
 export interface MarketSourceSummary extends MarketSourceConfig {
   /** 最近一次发现到的插件数；发现失败时为 0 并携带 status。 */
   pluginCount: number;
+  /** 清单中因内容非法被跳过的插件条目数。 */
+  skippedCount: number;
+  /** 清单中因权限、文件锁或瞬时 I/O 暂时无法读取的插件条目数。 */
+  unreadableCount: number;
   status: 'ok' | 'error';
   /** status === 'error' 时的 IPC 错误码（Renderer 按码本地化）。 */
   errorCode: string | null;

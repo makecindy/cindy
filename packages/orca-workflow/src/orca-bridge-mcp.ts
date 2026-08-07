@@ -4,6 +4,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { isTerminalAgentErrorEvent, toSessionDispatchOutcome } from '@cindy/maker-core';
 import type { AgentEvent, AgentKind, Logger, Maker, McpProvider, McpProviderContext, Session } from '@cindy/maker-core';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 
 const MAX_CAPTURED_TEXT = 64 * 1024;
 
@@ -358,10 +362,10 @@ function captureSessionOutput(
     if (typeof result === 'string' && result.length > 0) {
       entry.finalText = result;
     }
-    entry.status = 'done';
+    if (isProductTurnDoneEvent(ev)) entry.status = 'done';
     return;
   }
-  if (isTerminalAgentErrorEvent(ev)) {
+  if (isTerminalAgentErrorEvent(ev) && !isTurnContinuationBoundaryEvent(ev)) {
     entry.status = 'error';
   }
 }
@@ -418,7 +422,9 @@ function attachSessionCapture(entry: CapturedSessionEntry): void {
   entry.captureDispose = entry.session.onEvent((ev) => {
     entry.eventSeq += 1;
     const eventSeq = entry.eventSeq;
-    const isTerminalEvent = ev.type === 'done' || isTerminalAgentErrorEvent(ev);
+    const isTerminalEvent =
+      isProductTurnDoneEvent(ev) ||
+      (isTerminalAgentErrorEvent(ev) && !isTurnContinuationBoundaryEvent(ev));
     captureSessionOutput(entry, ev);
     if (isTerminalEvent) {
       entry.terminalEventSeq = eventSeq;

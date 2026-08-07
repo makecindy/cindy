@@ -10,11 +10,19 @@
  */
 
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, existsSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
@@ -30,6 +38,13 @@ const PI_BINARY = path.join(
   `${process.platform}-${process.arch}`,
   process.platform === 'win32' ? 'pi.exe' : 'pi',
 );
+const RIPGREP_DIR = path.join(
+  REPO_ROOT,
+  'apps',
+  'ripgrep-bin',
+  `${process.platform}-${process.arch}`,
+);
+const RIPGREP_BINARY = path.join(RIPGREP_DIR, process.platform === 'win32' ? 'rg.exe' : 'rg');
 const PREVIOUS_PI_BINARY = path.join(
   REPO_ROOT,
   'tools',
@@ -102,6 +117,141 @@ function anthropicStreamBody(text: string): string {
       data: { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 7 } },
     },
     { event: 'message_stop', data: { type: 'message_stop' } },
+  ]);
+}
+
+/** 最小完整的 OpenAI Responses SSE 流：供 Pi 原生 Responses BYOM 回归使用。 */
+function responsesStreamBody(text: string, model: string): string {
+  const responseId = 'resp_byom_reasoning_1';
+  const item = {
+    id: 'msg_byom_reasoning_1',
+    type: 'message',
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text, annotations: [], logprobs: [] }],
+  };
+  const completed = {
+    id: responseId,
+    object: 'response',
+    created_at: 1,
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    max_output_tokens: null,
+    model,
+    output: [item],
+    parallel_tool_calls: true,
+    previous_response_id: null,
+    reasoning: { effort: 'xhigh', summary: null },
+    store: false,
+    temperature: 1,
+    text: { format: { type: 'text' } },
+    tool_choice: 'auto',
+    tools: [],
+    top_p: 1,
+    truncation: 'disabled',
+    usage: {
+      input_tokens: 1,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 1,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 2,
+    },
+    metadata: {},
+  };
+  return sse([
+    {
+      event: 'response.created',
+      data: {
+        type: 'response.created',
+        sequence_number: 0,
+        response: {
+          ...completed,
+          status: 'in_progress',
+          output: [],
+          usage: null,
+        },
+      },
+    },
+    {
+      event: 'response.output_item.added',
+      data: {
+        type: 'response.output_item.added',
+        sequence_number: 1,
+        response_id: responseId,
+        output_index: 0,
+        item: { ...item, status: 'in_progress', content: [] },
+      },
+    },
+    {
+      event: 'response.content_part.added',
+      data: {
+        type: 'response.content_part.added',
+        sequence_number: 2,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text: '', annotations: [], logprobs: [] },
+      },
+    },
+    {
+      event: 'response.output_text.delta',
+      data: {
+        type: 'response.output_text.delta',
+        sequence_number: 3,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        delta: text,
+        logprobs: [],
+      },
+    },
+    {
+      event: 'response.output_text.done',
+      data: {
+        type: 'response.output_text.done',
+        sequence_number: 4,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        text,
+        logprobs: [],
+      },
+    },
+    {
+      event: 'response.content_part.done',
+      data: {
+        type: 'response.content_part.done',
+        sequence_number: 5,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        part: item.content[0],
+      },
+    },
+    {
+      event: 'response.output_item.done',
+      data: {
+        type: 'response.output_item.done',
+        sequence_number: 6,
+        response_id: responseId,
+        output_index: 0,
+        item,
+      },
+    },
+    {
+      event: 'response.completed',
+      data: {
+        type: 'response.completed',
+        sequence_number: 7,
+        response: completed,
+      },
+    },
   ]);
 }
 
@@ -194,7 +344,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'test-key-123' }),
       },
-      runtimeConfig: { endpoint },
+      runtimeConfig: { endpoint, managedExecutablePaths: { ripgrep: RIPGREP_BINARY } },
       binaryPath: PI_BINARY,
       logger: noopLogger,
       capabilityAdditions: {
@@ -205,6 +355,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
+            // 网关图片门控(assertImageInputSupported)按目录能力放行;多模态用例
+            // 走的正是本模型,不标会在 send 前被 PiImageInputUnsupportedError 拒收。
+            supportsImageInput: true,
           },
         ],
       },
@@ -270,7 +423,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'rejects a turn permission policy (Pi cannot enforce it) and honors steer cancellation before RPC',
+    'accepts a turn permission policy in ask, rejects it in Full Access, and honors steer cancellation before RPC',
     { timeout: 60_000 },
     async () => {
       const agent = new PiAgent(buildDeps());
@@ -284,13 +437,20 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         const requestsBefore = seenRequests.length;
 
-        // turnPermissionPolicy(IM 群等)是 host 回调,Pi 无法在其独立进程的工具边界执行
-        // → fail-closed 拒绝(任何档位),防止群上下文不经 owner 确认执行破坏性工具。
+        // ask/auto 下 Pi bridge 会把受控工具冒泡给 host，policy turn 可以启动。
         const policy = {
           origin: { kind: 'im' as const, channel: 'telegram' as const },
           confirmationSurface: 'channel' as const,
           forceConfirmToolCall: () => true,
         };
+        await expect(
+          handle.send({ type: 'user', content: 'policy-safe turn' }, { turnPermissionPolicy: policy }),
+        ).resolves.toBeUndefined();
+        await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(requestsBefore));
+
+        // Full Access 下 bridge 不上报 tool_call，host 无法兑现每轮策略，必须 preflight 拒绝。
+        await handle.setPermissionMode?.('bypassPermissions');
+        const requestsBeforeFullAccess = seenRequests.length;
         await expect(
           handle.send({ type: 'user', content: 'destructive?' }, { turnPermissionPolicy: policy }),
         ).rejects.toBeInstanceOf(TurnPermissionPolicyUnsupportedError);
@@ -303,8 +463,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           handle.steer({ type: 'user', content: 'late steer' }, { signal: aborted.signal }),
         ).rejects.toThrow(/cancelled before acceptance/);
 
-        // 两次都在到达假网关前被拦下:没有新请求打到 pi。
-        expect(seenRequests.length).toBe(requestsBefore);
+        // Full Access policy 与 cancelled steer 都在到达假网关前被拦下。
+        expect(seenRequests.length).toBe(requestsBeforeFullAccess);
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -782,6 +942,113 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'BYOM Responses: an explicit Pi effort reaches the upstream reasoning.effort request field',
+    { timeout: 60_000 },
+    async () => {
+      const nativeSeen: Array<{
+        url: string;
+        auth: string | undefined;
+        body: string;
+      }> = [];
+      const nativeServer = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          nativeSeen.push({
+            url: req.url ?? '',
+            auth: req.headers.authorization as string | undefined,
+            body,
+          });
+          res.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+          });
+          res.end(responsesStreamBody('pong from Responses', 'byom-reasoner'));
+        });
+      });
+      await new Promise<void>((resolve) => nativeServer.listen(0, '127.0.0.1', resolve));
+      const nativeAddr = nativeServer.address();
+      const nativeUrl =
+        typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
+
+      const deps = buildDeps();
+      deps.auth.getState = async (options) =>
+        options?.providerId === 'localresponses'
+          ? {
+              authenticated: true,
+              identity: 'Local Responses',
+              authSource: 'api-key' as const,
+            }
+          : { authenticated: false };
+      deps.auth.getAuthEnv = async () => ({
+        CINDY_PI_API_KEY: 'gateway-unavailable-placeholder',
+      });
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [
+          {
+            id: 'localresponses',
+            name: 'Local Responses',
+            baseUrl: nativeUrl,
+            api: 'openai-responses',
+            apiKeyEnvVar: 'CINDY_PI_KEY_LOCALRESPONSES',
+            models: [
+              {
+                id: 'byom-reasoner',
+                name: 'BYOM Reasoner',
+                reasoning: true,
+                thinkingLevelMap: {
+                  minimal: null,
+                  low: 'low',
+                  medium: null,
+                  high: 'high',
+                  xhigh: 'xhigh',
+                  max: null,
+                },
+              },
+            ],
+          },
+        ],
+        env: { CINDY_PI_KEY_LOCALRESPONSES: 'responses-secret-key' },
+      });
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-byom-responses-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        const gatewayBefore = seenRequests.length;
+        handle = await agent.startSession({
+          sessionId: 'byom-responses-session',
+          workingDir,
+          providerId: 'localresponses',
+          model: 'byom-reasoner',
+          effort: 'xhigh',
+        });
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'reason carefully' });
+        await done;
+
+        expect(nativeSeen).toHaveLength(1);
+        expect(nativeSeen[0]?.url).toMatch(/\/responses(?:\?|$)/);
+        expect(nativeSeen[0]?.auth).toContain('responses-secret-key');
+        expect(JSON.parse(nativeSeen[0]?.body ?? '{}')).toMatchObject({
+          model: 'byom-reasoner',
+          reasoning: { effort: 'xhigh' },
+        });
+        expect(seenRequests.length).toBe(gatewayBefore);
+      } finally {
+        await handle?.close();
+        await new Promise<void>((resolve) => nativeServer.close(() => resolve()));
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
     'exportSessionHtml writes a real HTML file via pi export_html (offline, no gateway)',
     { timeout: 60_000 },
     async () => {
@@ -862,8 +1129,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     workingDir: string;
     permissionMode: 'ask' | 'auto' | 'bypassPermissions';
     resolverBehavior: 'allow' | 'deny';
+    deps?: AgentDeps;
   }): Promise<{ resolverTools: string[]; finalText: string }> {
-    const agent = new PiAgent(buildDeps());
+    const agent = new PiAgent(opts.deps ?? buildDeps());
     const resolverTools: string[] = [];
     let handle: AgentSessionHandle | null = null;
     try {
@@ -897,6 +1165,92 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  it(
+    'offline grep uses the host-managed ripgrep instead of falling back to bash',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-grep-'));
+      writeFileSync(path.join(workingDir, 'tool-target.ts'), 'needle-line\n');
+      const rogueRg = path.join(workingDir, process.platform === 'win32' ? 'rg.exe' : 'rg');
+      writeFileSync(rogueRg, process.platform === 'win32' ? 'not-an-executable' : '#!/bin/sh\nexit 42\n');
+      if (process.platform !== 'win32') chmodSync(rogueRg, 0o755);
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('grep', { pattern: 'needle-line', path: '.', literal: true }),
+          anthropicStreamBody('grep turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-grep',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('tool-target.ts:1: needle-line'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'offline find uses the Cindy ripgrep override without fd',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-find-'));
+      writeFileSync(path.join(workingDir, 'find-me.ts'), 'export {};\n');
+      writeFileSync(path.join(workingDir, 'skip-me.txt'), 'skip\n');
+      mkdirSync(path.join(workingDir, 'nested'));
+      writeFileSync(path.join(workingDir, 'nested', 'find-nested.ts'), 'export {};\n');
+      mkdirSync(path.join(workingDir, 'packages', 'foo', 'src'), { recursive: true });
+      writeFileSync(
+        path.join(workingDir, 'packages', 'foo', 'src', 'find-path.spec.ts'),
+        'export {};\n',
+      );
+      writeFileSync(path.join(workingDir, '.gitignore'), 'ignored-by-git.ts\n');
+      writeFileSync(path.join(workingDir, 'ignored-by-git.ts'), 'secret\n');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('find', { pattern: '*.ts', path: '.' }),
+          anthropicStreamBody('find turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-find',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('find-me.ts'))).toBe(true);
+        expect(followUp.some((body) => body.includes('find-nested.ts'))).toBe(true);
+        expect(followUp.some((body) => body.includes('skip-me.txt'))).toBe(false);
+        expect(followUp.some((body) => body.includes('ignored-by-git.ts'))).toBe(false);
+
+        scriptedResponses.push(
+          anthropicToolUseBody('find', { pattern: 'src/**/*.spec.ts', path: '.' }),
+          anthropicStreamBody('path find turn finished'),
+        );
+        const pathReqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-find-full-path',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const pathFollowUp = seenRequests.slice(pathReqBefore).map((request) => request.body);
+        expect(pathFollowUp.some((body) => body.includes('find-path.spec.ts'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
 
   it(
     'auto mode: safe bash executes end-to-end without prompting (real bridge intercept)',
@@ -936,12 +1290,18 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     async () => {
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-env-isolation-'));
       try {
+        const deps = buildDeps();
+        deps.preparePiExtraSpawnConfig = async () => ({
+          mcpBridge: { token: '', servers: [] },
+          mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: 'remote-mcp-secret-canary' },
+        });
         scriptedResponses.length = 0;
         scriptedResponses.push(
           anthropicToolUseBody('bash', {
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
-              'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_SECRET_ENV_NAMES',
+              'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
+              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH',
               'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
               'done; printf "PI_ENV_CLEAN\\n"',
@@ -955,6 +1315,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           workingDir,
           permissionMode: 'ask',
           resolverBehavior: 'allow',
+          deps,
         });
         const lastBody = JSON.parse(seenRequests.slice(reqBefore).at(-1)?.body ?? '{}') as {
           messages?: Array<{ role?: string; content?: Array<{ type?: string; content?: string }> }>;
@@ -965,6 +1326,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(toolResult).toContain('PI_ENV_CLEAN');
         expect(toolResult).not.toContain('PI_ENV_LEAK:');
         expect(toolResult).not.toContain('test-key-123');
+        expect(toolResult).not.toContain('remote-mcp-secret-canary');
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -1223,6 +1585,324 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
+      }
+    },
+  );
+  it(
+    'subagent tool spawns a real child pi, streams live card usage, and returns only its conclusion',
+    { timeout: 120_000 },
+    async () => {
+      // 端到端:父会话调 subagent → Cindy 自有扩展 spawn 真 pi 子进程 → 子进程走同一
+      // fake gateway → 结论回父模型;进度经工具原生 onUpdate 翻成 agent_task_update。
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-'));
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('subagent', { agent: 'scout', task: 'find the auth entry point' }),
+          // 子进程这一轮:子代理的结论。
+          anthropicStreamBody('auth starts at src/auth/index.ts:42'),
+          anthropicStreamBody('parent turn finished'),
+        );
+
+        const agent = new PiAgent(buildDeps());
+        const resolverTools: string[] = [];
+        let handle: AgentSessionHandle | null = null;
+        const events: AgentEvent[] = [];
+        try {
+          handle = await agent.startSession({
+            sessionId: 'pi-subagent-e2e',
+            workingDir,
+            model: 'pi-test-model',
+            permissionMode: 'ask',
+          });
+          handle.setInteractionResolver?.(async (req) => {
+            resolverTools.push((req as { toolName?: string }).toolName ?? '?');
+            return {
+              kind: 'permission',
+              requestId: (req as { requestId: string }).requestId,
+              behavior: 'allow',
+            } as never;
+          });
+          const done = (async () => {
+            for await (const ev of handle!.events()) {
+              events.push(ev);
+              if (ev.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'go' });
+          await done;
+        } finally {
+          await handle?.close();
+        }
+
+        // 派子代理本身要过审批门(它不是只读内置工具)—— 这是有意的安全属性。
+        expect(resolverTools).toContain('subagent');
+
+        // 卡片走的是与 Claude / Codex 同一条 agent_task_update 通道。
+        const cardUpdates = events
+          .filter((ev) => ev.type === 'agent_task_update')
+          .map((ev) => (ev as { data: Record<string, unknown> }).data);
+        expect(cardUpdates.length).toBeGreaterThan(0);
+        expect(cardUpdates.every((u) => u.provider === 'pi')).toBe(true);
+        expect(cardUpdates.at(0)?.status).toBe('running');
+        expect(cardUpdates.at(-1)?.status).toBe('completed');
+        expect(cardUpdates.at(-1)?.title).toBe('scout');
+        const finalUsage = cardUpdates.at(-1)?.usage as Record<string, number> | undefined;
+        // 真实用量来自子进程的 message_end.usage(fake gateway 上报 42 input tokens)。
+        expect(finalUsage?.totalTokens).toBeGreaterThan(0);
+        expect(typeof finalUsage?.durationMs).toBe('number');
+
+        // 子代理的结论确实回到了父模型(tool_result 出现在后续请求体里)。
+        expect(seenRequests.some((r) => r.body.includes('auth starts at src/auth/index.ts:42'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'subagent write boundary is enforced, not cosmetic: child cannot shell out even under Full Access',
+    { timeout: 120_000 },
+    async () => {
+      // 安全回归:父会话给 Full Access(bypassPermissions)时,bridge 会在子进程里重新注册
+      // bash —— 但 `--tools read,grep,find,ls` 是 pi 的**注册面**白名单(文档:allowlist
+      // built-in, extension, and custom tools),对扩展注册的工具同样生效。这里同时验证
+      // 「没被告知」与「调了也不执行」两层,防止把只读画像做成表面白名单。
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-boundary-'));
+      const marker = path.join(workingDir, 'pwned.txt');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('subagent', { agent: 'scout', task: 'probe the write boundary' }),
+          // 子代理这一轮:硬调 bash 往工作区写文件(白名单外的工具)。
+          anthropicToolUseBody('bash', { command: `echo pwned > ${JSON.stringify(marker)}` }),
+          anthropicStreamBody('child could not run bash'),
+          anthropicStreamBody('parent turn finished'),
+        );
+
+        const agent = new PiAgent(buildDeps());
+        let handle: AgentSessionHandle | null = null;
+        try {
+          handle = await agent.startSession({
+            sessionId: 'pi-subagent-boundary',
+            workingDir,
+            model: 'pi-test-model',
+            // 最宽档:子代理的写边界不能靠父会话的权限档兜。
+            permissionMode: 'bypassPermissions',
+          });
+          const done = (async () => {
+            for await (const ev of handle!.events()) {
+              if (ev.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'go' });
+          await done;
+        } finally {
+          await handle?.close();
+        }
+
+        // 第一层:子进程被告知的工具面里没有 bash,也没有桥接的 MCP 工具。
+        const childRequest = seenRequests.find((r) => r.body.includes('scout subagent'));
+        expect(childRequest).toBeDefined();
+        const advertised = new Set(
+          [...(childRequest?.body ?? '').matchAll(/"name":"([a-zA-Z0-9_]+)"/g)].map((m) => m[1]),
+        );
+        expect([...advertised].sort()).toEqual(['find', 'grep', 'ls', 'read']);
+        expect(advertised.has('bash')).toBe(false);
+
+        // 第二层(真正的边界):即便模型硬调 bash,工作区也不得被改动。
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+  it(
+    'BYOM: a subagent dispatched right after startSession still routes to the native endpoint',
+    { timeout: 120_000 },
+    async () => {
+      // review 回归:子代理的 provider/model 来自运行期快照文件。若该快照不是在会话对外暴露
+      // **之前**写好,BYOM / 本地 provider 会话一开始就派子代理时文件还不存在 → 扩展不传
+      // --provider/--model → 子进程退回 pi 默认解析,直接打到网关而不是用户选的原生端点。
+      const nativeBodies: string[] = [];
+      // 原生端点自带脚本队列:第 1 个请求(父)派子代理,第 2 个(子)出结论,其余兜底。
+      const nativeScript = [
+        anthropicToolUseBody('subagent', { agent: 'scout', task: 'probe byom routing' }),
+        anthropicStreamBody('native child conclusion'),
+      ];
+      const nativeServer = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => { body += String(chunk); });
+        req.on('end', () => {
+          nativeBodies.push(body);
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+          res.end(nativeScript.shift() ?? anthropicStreamBody('native done'));
+        });
+      });
+      await new Promise<void>((r) => nativeServer.listen(0, '127.0.0.1', r));
+      const nativeAddr = nativeServer.address();
+      const nativeUrl = typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
+
+      const deps = buildDeps();
+      deps.auth.getState = async (options) => (options?.providerId === 'localbyom'
+        ? { authenticated: true, identity: 'Local BYOM', authSource: 'api-key' as const }
+        : { authenticated: false });
+      deps.auth.getAuthEnv = async () => ({ CINDY_PI_API_KEY: 'gateway-unavailable-placeholder' });
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [
+          {
+            id: 'localbyom',
+            name: 'Local BYOM',
+            baseUrl: nativeUrl,
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_KEY_LOCALBYOM',
+            models: [{ id: 'byom-model', name: 'BYOM Model' }],
+          },
+        ],
+        env: { CINDY_PI_KEY_LOCALBYOM: 'byom-secret-key' },
+      });
+
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-byom-subagent-'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        const gatewayBefore = seenRequests.length;
+        handle = await agent.startSession({
+          sessionId: 'byom-subagent-session',
+          workingDir,
+          model: 'byom-model',
+          // 派子代理本身要过审批门(ask 档无 resolver 即拒);本例只验路由,给最宽档。
+          permissionMode: 'bypassPermissions',
+        });
+        const done = (async () => {
+          for await (const ev of handle!.events()) {
+            if (ev.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'delegate now' });
+        await done;
+
+        // eslint-disable-next-line no-console
+        // 父 + 子两轮都打在原生端点上。
+        expect(nativeBodies.length).toBeGreaterThanOrEqual(2);
+        // 子进程确实是原生端点接的(子代理画像 prompt 只出现在子进程的请求里)。
+        expect(nativeBodies.some((b) => b.includes('scout subagent'))).toBe(true);
+        // 网关一个请求都没有 —— 子代理没有退回默认 provider。
+        expect(seenRequests.length).toBe(gatewayBefore);
+      } finally {
+        await handle?.close();
+        await new Promise<void>((r) => nativeServer.close(() => r()));
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'refuses to dispatch while a model switch is unconfirmed (no child spawns in the pending window)',
+    { timeout: 120_000 },
+    async () => {
+      // review P1:host 原来在 set_model 回包**之前**就把新路由写进快照,于是等待窗口里模型
+      // 发起的派发会按一个尚未确认的 provider 起子进程;RPC 随后返回失败时,回滚文件撤不回
+      // 已经在跑的子进程。修法是这段窗口里的快照带 `pending: true`,扩展见到就拒绝派发。
+      //
+      // 这条用例验的是那个拒绝**真的挡住了进程**:结构性断言只能证明源码里有这段判断,证明
+      // 不了子进程没起来。判据用"子代理画像 prompt 只出现在子进程自己的请求里"——一个字节都
+      // 没出现 = 一个子进程都没起来。
+      const { readdirSync, readFileSync } = await import('node:fs');
+      const nativeBodies: string[] = [];
+      // 第 1 个请求(父)派子代理;若真起了子进程,它的请求会是第 2 个。
+      const nativeScript = [
+        anthropicToolUseBody('subagent', { agent: 'scout', task: 'must not run during a pending switch' }),
+        anthropicStreamBody('parent handled it without delegating'),
+      ];
+      const nativeServer = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => { body += String(chunk); });
+        req.on('end', () => {
+          nativeBodies.push(body);
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+          res.end(nativeScript.shift() ?? anthropicStreamBody('native done'));
+        });
+      });
+      await new Promise<void>((r) => nativeServer.listen(0, '127.0.0.1', r));
+      const nativeAddr = nativeServer.address();
+      const nativeUrl = typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
+
+      const deps = buildDeps();
+      deps.auth.getState = async (options) => (options?.providerId === 'localbyom'
+        ? { authenticated: true, identity: 'Local BYOM', authSource: 'api-key' as const }
+        : { authenticated: false });
+      deps.auth.getAuthEnv = async () => ({ CINDY_PI_API_KEY: 'gateway-unavailable-placeholder' });
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [
+          {
+            id: 'localbyom',
+            name: 'Local BYOM',
+            baseUrl: nativeUrl,
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_KEY_LOCALBYOM',
+            models: [{ id: 'byom-model', name: 'BYOM Model' }],
+          },
+        ],
+        env: { CINDY_PI_KEY_LOCALBYOM: 'byom-secret-key' },
+      });
+
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-pending-switch-'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'pending-switch-session',
+          workingDir,
+          model: 'byom-model',
+          // 派子代理本身要过审批门(ask 档无 resolver 即拒);本例只验 pending 闸,给最宽档,
+          // 免得"没起子进程"其实是被权限门挡的。
+          permissionMode: 'bypassPermissions',
+        });
+
+        // 把快照改成 host 在等待窗口里写的那个形状(model/provider 不变,只多 pending)。
+        // 这样"没起子进程"唯一可能的原因就是 pending 闸:路由本身仍然完全可用。
+        // 文件名带每运行时 nonce(跨实例隔离),所以按「前缀 + sessionId」找。**不要**只用
+        // startsWith('subagent-'):agentHome 是整组共享的,别的用例留下的快照会被先找到
+        // (实测拿到了另一个会话的 localresponses,单跑绿、全量红)。
+        const runtimeDir = path.join(agentHome, 'runtime');
+        const snapshotName = readdirSync(runtimeDir)
+          .find((f) => f.startsWith('subagent-pending-switch-session-'));
+        expect(snapshotName).toBeTruthy();
+        const snapshotPath = path.join(runtimeDir, snapshotName as string);
+        const confirmed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+        expect(confirmed.provider).toBe('localbyom');
+        writeFileSync(snapshotPath, JSON.stringify({ ...confirmed, pending: true }) + '\n');
+
+        const events: AgentEvent[] = [];
+        const done = (async () => {
+          for await (const ev of handle!.events()) {
+            events.push(ev);
+            if (ev.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'delegate now' });
+        await done;
+
+        // 父进程确实调了工具(否则这条用例什么都没验证)。
+        expect(nativeBodies.length).toBeGreaterThanOrEqual(1);
+        // 一个子进程都没起来:画像 prompt 只出现在子进程自己的请求里。
+        expect(nativeBodies.some((b) => b.includes('scout subagent'))).toBe(false);
+        // 而且拒绝理由回传给了父模型(不是静默无事发生 —— 模型要知道该自己干)。
+        expect(nativeBodies.some((b) => b.includes('not confirmed yet'))).toBe(true);
+        // 卡片必须收到一帧终态 failed。少这一帧,两端的卡片模型都会按"有工具结果 = completed"
+        // 兜底,于是这次被拒绝的委派在界面上立刻变绿(review)。
+        const cardStatuses = events
+          .filter((e) => e.type === 'agent_task_update')
+          .map((e) => (e.data as { status?: string }).status);
+        expect(cardStatuses).toContain('failed');
+        expect(cardStatuses).not.toContain('completed');
+      } finally {
+        await handle?.close();
+        await new Promise<void>((r) => nativeServer.close(() => r()));
+        rmSync(workingDir, { recursive: true, force: true });
       }
     },
   );

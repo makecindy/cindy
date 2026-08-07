@@ -7,6 +7,9 @@
 
 export const MAKER_INVOKE = {
   CREATE_SESSION: 'maker:create-session',
+  TURN_CHANGE_SETS_LIST: 'maker:turn-change-sets:list',
+  TURN_CHANGE_SETS_GET: 'maker:turn-change-sets:get',
+  TURN_CHANGE_SET_APPLY: 'maker:turn-change-set:apply',
   MARK_ORCA_ROLE: 'maker:mark-orca-role',
   /**
    * F-COLLAB: 中途开关协同模式 (Orca workflow toggle)。
@@ -109,8 +112,8 @@ export const MAKER_INVOKE = {
   GET_CAPABILITIES: 'maker:get-capabilities',
   /**
    * device-link 远程草稿镜像:控制端为被控设备新建项目草稿时,经隧道读被控端**当前
-   * New Maker 草稿**在某 vendor 的完整选择(model/effort/fast/permission/source),1:1 seed
-   * 控制端草稿(绝不取控制端本地)。只读、无 sender 依赖、语义在被控端执行 → 进 device-link
+   * New Maker 草稿**在某 vendor 的完整选择(model/effort/fast/permission/source/是否显式
+   * 选过模型),1:1 seed 控制端草稿(绝不取控制端本地)。只读、无 sender 依赖、语义在被控端执行 → 进 device-link
    * allowlist。数据源 = newMakerDefaultsCache(renderer 经 SYNC_NEW_MAKER_DRAFT 推)。
    * 旧版被控端无此 channel → 控制端收 CHANNEL_NOT_ALLOWED → 回退被控端 capabilities 默认。
    */
@@ -134,9 +137,22 @@ export const MAKER_INVOKE = {
    * 被控端 handler 校验布尔后转发给**自身 renderer**(WORKTREE_PREF_APPLY),renderer
    * setWorktreePreference 按字段写真实草稿;变更经既有 SYNC_NEW_MAKER_DRAFT re-mirror +
    * NEW_MAKER_DRAFT_CHANGED 广播回控制端。入参 = { worktreeEnabled: boolean }。
-   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
+   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端保留最后一次宿主镜像,
+   * 不在控制端制造一份仅本次草稿生效的本地偏好。
    */
   APPLY_NEW_MAKER_WORKTREE_PREF: 'maker:apply-new-maker-worktree-pref',
+  /**
+   * 读取工作端某仓库的新建 worktree 源分支选择。分支是 repo-scoped,不能并入
+   * vendor/device 全局的 GET_NEW_MAKER_DEFAULTS。入参 = { baseRepo: string }；
+   * 未选择返回 null，否则返回 { baseRepo, sourceBranch, revision }。
+   */
+  GET_NEW_MAKER_WORKTREE_BRANCH_PREF: 'maker:get-new-maker-worktree-branch-pref',
+  /**
+   * 写穿工作端某仓库的新建 worktree 源分支选择。工作端接受后返回并广播权威
+   * { baseRepo, sourceBranch, revision }；同值写也推进该仓库 revision。
+   * 入参 = { baseRepo: string, sourceBranch: string }。
+   */
+  APPLY_NEW_MAKER_WORKTREE_BRANCH_PREF: 'maker:apply-new-maker-worktree-branch-pref',
   LIST_AVAILABLE_AGENTS: 'maker:list-available-agents',
   /**
    * Palette `/` 命令三源 (palette refactor):
@@ -289,8 +305,10 @@ export const MAKER_INVOKE = {
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
-  // Desktop renderer v2:provider-scoped + currency-aware 模型单价表。
+  // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
   USAGE_MODEL_PRICING_V2: 'maker:usage:model-pricing-v2',
+  // 非 XD Provider 的 Catalog 参考价与用户覆盖；只用于 BYOK / 订阅估值。
+  USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
@@ -594,6 +612,8 @@ export const MAKER_INVOKE = {
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
+  // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
+  AT_CONTEXT_LIST: 'maker:at-context:list',
   // cua-driver installer for direct computer control.
   COMPUTER_INSTALL_DRIVER: 'maker:computer:install-driver',
   // Quiet cua-driver update check (Settings-open triggered only, never polls).
@@ -623,7 +643,7 @@ export const MAKER_INVOKE = {
    *  - GET_STATE: renderer 启动期拉 { detached, lastOpen, open }
    *  - OPEN / CLOSE: 幂等开(已开则 focus)/ 关子窗口,写 lastOpen
    *  - SET_DETACHED(boolean): 落盘偏好;true 附带开窗,false 附带关窗;返回新 state
-   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, available }
+   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    *  - READY: 子窗口根组件挂载握手(resolve main 侧 ensureOpen 等待)
    *  - SEND_COMMAND: 主窗把命令(如 open-terminal 快捷键)转发给子窗口,必要时先开窗
    */
@@ -677,13 +697,18 @@ export const MAKER_SEND = {
    */
   COMPUTER_PERMISSION_APP_DRAG_START: 'maker:computer:permission-app-drag-start',
   /**
-   * 把 renderer `newMakerDraft` 的关键子集 (lastByVendor / fastModeByModel /
-   * effortByModel) 同步给 main 缓存 (newMakerDefaultsCache)。collab mode spawn
+   * 把 renderer `newMakerDraft` 的关键子集 (lastByVendor / modelChosenByVendor /
+   * fastModeByModel / effortByModel) 同步给 main 缓存 (newMakerDefaultsCache)。collab mode spawn
    * worker (enableOrcaInternal / orca-bridge.create_worker) 读这份缓存决定 worker
    * 的 model / effort / fastMode, 让 worker 默认 = "用户在 New Maker 面板该 vendor
    * 当前的选择"。startup 时推一次 + draft 变化时增量推, fire-and-forget。
    */
   SYNC_NEW_MAKER_DRAFT: 'maker:sync-new-maker-draft',
+  /**
+   * renderer `workerCreationPrefs` → main 内存镜像。Orca tool 创建 Worker 时读取同一份
+   * 默认权限；真源仍是 renderer localStorage。启动推一次 + 变化时增量推。
+   */
+  SYNC_WORKER_CREATION_PREFS: 'maker:sync-worker-creation-prefs',
   /**
    * 被控端 renderer → 自身 main:把 providerModelMemory 的全量快照(snapshotForSeed():
    * `${agent}:*` 为模型级全局预设,来源槽为旧 v2 兼容副本)镜像给 main 缓存。device-link 草稿
@@ -701,7 +726,7 @@ export const MAKER_SEND = {
    */
   SYNC_SESSION_MODEL_PREF: 'maker:sync-session-model-pref',
   /**
-   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, available }
+   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    * 变化时无条件推(main 只在 detached 时消费,开偏好瞬间就有 context 可转发)。
    * main 校验 sender 必须是主窗,其它窗口的推送丢弃。fire-and-forget。
    */
@@ -710,6 +735,7 @@ export const MAKER_SEND = {
 
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
+  TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
   COMPUTER_PERMISSION_GUIDE_CANCELLED: 'maker:computer:permission-guide-cancelled',
@@ -784,10 +810,16 @@ export const MAKER_PUSH = {
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。
-   * payload = { claudeCode: RemoteNewMakerDefaults, codex: RemoteNewMakerDefaults }(per-vendor,
-   * 控制端直接复用 resolveDeviceLinkDraftDefaults)。本地窗口不消费(被控端是真相、不自镜像)。
+   * payload = { claudeCode, codex, pi }(每项均为 RemoteNewMakerDefaults，控制端直接复用
+   * resolveDeviceLinkDraftDefaults)。本地窗口不消费(被控端是真相、不自镜像)。
    */
   NEW_MAKER_DRAFT_CHANGED: 'maker:new-maker-draft:changed',
+  /**
+   * 工作端某仓库的新建 worktree 源分支选择变化。payload =
+   * { baseRepo, sourceBranch, revision }。同时广播本地 renderer 与经 device-link
+   * sessions topic 订阅该设备的控制端；消费方必须按 device/baseRepo/revision 收敛。
+   */
+  NEW_MAKER_WORKTREE_BRANCH_CHANGED: 'maker:new-maker-worktree-branch:changed',
   /**
    * 被控端会话「非选中模型」effort/fast 变更广播。带 sessionId → session:<id> topic,转发给打开
    * 该远程会话的控制端,刷新其显示镜像。payload =
@@ -806,6 +838,11 @@ export const MAKER_PUSH = {
    * payload = { worktreeEnabled: boolean }(APPLY_NEW_MAKER_WORKTREE_PREF 入参)。
    */
   WORKTREE_PREF_APPLY: 'maker:worktree-pref:apply',
+  /**
+   * 本地 main → renderer：Orca tool 显式修改 Worker 默认权限后，通知 renderer 回写
+   * workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
+   */
+  WORKER_CREATION_PREFS_APPLY: 'maker:worker-creation-prefs:apply',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

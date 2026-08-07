@@ -26,6 +26,7 @@ vi.mock('../serverApiClient', () => {
 });
 vi.mock('./index', () => ({
   getDeviceLinkStatus: () => 'online',
+  clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
@@ -80,6 +81,7 @@ import {
   handleRenameDevice,
   handleDeleteDevice,
   handleOpenLink,
+  handleCloseLink,
   handleInvoke,
   handleSubscribe,
   handleUnsubscribe,
@@ -100,6 +102,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       keepAwake: false,
       linkStatus: 'online',
       connectionIssue: null,
+      standby: false,
       controlledBy: [],
       revokedControllers: [],
       disabledControlDeviceIds: [],
@@ -117,6 +120,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     revoke: vi.fn(),
     restore: vi.fn(),
     setDeviceControlEnabled: vi.fn(async () => []),
+    clearDeviceResponsiveness: vi.fn(),
     broadcast: vi.fn(),
     readLastKnownDeviceNames: vi.fn(() => ({})),
     rememberLastKnownDeviceName: vi.fn(async () => false),
@@ -136,11 +140,29 @@ describe('device-link IPC handlers', () => {
       keepAwake: false,
       linkStatus: 'online',
       connectionIssue: null,
+      standby: false,
       controlledBy: [],
       revokedControllers: [],
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     });
+  });
+
+  it('getState 透传待命状态', () => {
+    const deps = makeDeps({
+      getState: () => ({
+        remoteControlEnabled: true,
+        keepAwake: false,
+        linkStatus: 'stopped',
+        connectionIssue: null,
+        standby: true,
+        controlledBy: [],
+        revokedControllers: [],
+        disabledControlDeviceIds: [],
+        unresponsiveDeviceIds: [],
+      }),
+    });
+    expect(handleGetState(deps).standby).toBe(true);
   });
 
   it('getState: local/signed-out sessions only expose keepAwake', () => {
@@ -156,6 +178,7 @@ describe('device-link IPC handlers', () => {
           detail: 'account state',
           at: 123,
         },
+        standby: false,
         controlledBy: [{ deviceId: 'controller-1', name: 'Other device' }],
         revokedControllers: ['revoked-1'],
         disabledControlDeviceIds: ['disabled-1'],
@@ -168,6 +191,7 @@ describe('device-link IPC handlers', () => {
       keepAwake: true,
       linkStatus: 'stopped',
       connectionIssue: null,
+      standby: false,
       controlledBy: [],
       revokedControllers: [],
       disabledControlDeviceIds: [],
@@ -207,6 +231,7 @@ describe('device-link IPC handlers', () => {
       disabledControlDeviceIds: ['dev-1'],
     });
     expect(deps.setDeviceControlEnabled).toHaveBeenCalledWith('dev-1', false);
+    expect(deps.clearDeviceResponsiveness).toHaveBeenCalledWith('dev-1');
     expect(deps.closeLink).toHaveBeenCalledWith('dev-1');
     expect(deps.broadcast).toHaveBeenCalledWith('device-link:control-target-changed', {
       deviceId: 'dev-1',
@@ -223,6 +248,7 @@ describe('device-link IPC handlers', () => {
       disabledControlDeviceIds: [],
     });
     expect(deps.closeLink).not.toHaveBeenCalled();
+    expect(deps.clearDeviceResponsiveness).not.toHaveBeenCalled();
     await expect(handleSetDeviceControlEnabled(deps, '', true)).rejects.toThrowError(/\[INVALID_PARAMS\]/);
     await expect(handleSetDeviceControlEnabled(deps, 'dev-1', 'yes')).rejects.toThrowError(/\[INVALID_PARAMS\]/);
   });
@@ -330,6 +356,7 @@ describe('device-link IPC handlers', () => {
         keepAwake: false,
         linkStatus: 'online',
         connectionIssue: null,
+        standby: false,
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: ['dev-1'],
@@ -426,6 +453,7 @@ describe('device-link controller handlers', () => {
         keepAwake: false,
         linkStatus: 'online',
         connectionIssue: null,
+        standby: false,
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: ['dev-2'],
@@ -531,6 +559,7 @@ describe('device-link controller handlers', () => {
         keepAwake: false,
         linkStatus: 'online',
         connectionIssue: null,
+        standby: false,
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: disabled ? ['dev-2'] : [],
@@ -633,6 +662,19 @@ describe('device-link controller handlers', () => {
     );
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).resolves.toEqual({ ok: true });
     expect(deps.unsubscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it('CLOSE_LINK 清空该设备订阅引用与熔断状态:恢复事件不再带幽灵引用重建刚关的链路', async () => {
+    // 引用表是 ws-online / presence 翻转 / 熔断恢复全部重放入口共用的需求信号。
+    // 显式断开若不清引用,close 后任一恢复事件都会经按需建链把链路建回来
+    // (被控端在 link 关闭时已丢弃订阅,控制端账本必须对齐)。
+    const deps = makeDeps();
+    await handleSubscribe(deps, 'dev-2', ['session:s1'], 1);
+    expect(refcountTesting.refCount('dev-2', 'session:s1')).toBe(1);
+    handleCloseLink(deps, 'dev-2');
+    expect(deps.closeLink).toHaveBeenCalledWith('dev-2');
+    expect(deps.clearDeviceResponsiveness).toHaveBeenCalledWith('dev-2');
+    expect(refcountTesting.refCount('dev-2', 'session:s1')).toBe(0);
   });
 
   it('unsubscribe 链路已断(NOT_CONNECTED)→ 不恢复引用(link-close clearController 兜底,避免 phantom ref)', async () => {

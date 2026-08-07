@@ -43,6 +43,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
+import type { BrowserBackendHealth } from '../../../shared/browserBackend';
 import {
   androidDeviceLabel,
   androidStatusFallback,
@@ -77,6 +78,17 @@ const ACTION_BUTTON_CLASS = cn(
   'disabled:opacity-50 disabled:pointer-events-none',
 );
 const ANDROID_AUTO_DEVICE_VALUE = '__auto__';
+
+function browserBackendHealthFallback(
+  active: 'external' | 'rsb-webview',
+): BrowserBackendHealth {
+  return {
+    active,
+    status: 'error',
+    canRecover: active === 'rsb-webview',
+    reason: 'status-failed',
+  };
+}
 
 function androidSourceLabelKey(source: AndroidAdbPathSource | null | undefined): string {
   switch (source) {
@@ -396,6 +408,8 @@ export function ComputerUseSection({
     'external' | 'rsb-webview' | null
   >(null);
   const [browserBackendPending, setBrowserBackendPending] = useState(false);
+  const [browserBackendRecovering, setBrowserBackendRecovering] = useState(false);
+  const [browserBackendHealth, setBrowserBackendHealth] = useState<BrowserBackendHealth | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -412,49 +426,37 @@ export function ComputerUseSection({
       });
     void window.electronAPI.maker.plugins.getState(ANDROID_PLUGIN_ID)
       .then((state) => {
-        if (!cancelled) {
-          setAndroidEnabled(state.effectiveEnabled);
-          if (state.effectiveEnabled) {
-            setAndroidPreparePending(true);
-            void window.electronAPI.maker.android.prepareAdb()
-              .then(() => {
-                if (!cancelled) {
-                  return window.electronAPI.maker.android.status()
-                    .then((status) => {
-                      if (!cancelled) setAndroidStatus(status);
-                    });
-                }
-                return undefined;
-              })
-              .catch((err) => {
-                log.warn('android.prepareAdb failed', err);
-              })
-              .finally(() => {
-                if (!cancelled) setAndroidPreparePending(false);
-              });
-          }
+        if (cancelled) return;
+        setAndroidEnabled(state.effectiveEnabled);
+        // 插件禁用时 mount 不做任何 adb 探测:status() 会跑 `adb devices -l`,
+        // 5037 上没有 server 时会顺手 fork 一个 daemon(#1806)。禁用态只展示
+        // 提示文案;探测留到用户开启开关或手动点「刷新」时进行。
+        if (!state.effectiveEnabled) {
+          setAndroidStatusPending(false);
+          return;
         }
+        setAndroidPreparePending(true);
+        void window.electronAPI.maker.android.prepareAdb()
+          .then(() => (cancelled ? undefined : window.electronAPI.maker.android.status()))
+          .then((status) => {
+            if (!cancelled && status) setAndroidStatus(status);
+          })
+          .catch((err) => {
+            // 这个 catch 同时兜 prepareAdb 与后续 status 的失败,文案别写死单边。
+            log.warn('android adb probe (prepareAdb/status) failed', err);
+            if (!cancelled) setAndroidStatus(androidStatusFallback(err));
+          })
+          .finally(() => {
+            if (!cancelled) {
+              setAndroidPreparePending(false);
+              setAndroidStatusPending(false);
+            }
+          });
       })
       .catch((err) => {
         log.warn('plugins.getState(android) failed', err);
         if (!cancelled) {
           setAndroidEnabled(false);
-        }
-      });
-    void window.electronAPI.maker.android.status()
-      .then((status) => {
-        if (!cancelled) {
-          setAndroidStatus(status);
-        }
-      })
-      .catch((err) => {
-        log.warn('android.status failed', err);
-        if (!cancelled) {
-          setAndroidStatus(androidStatusFallback(err));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
           setAndroidStatusPending(false);
         }
       });
@@ -479,7 +481,8 @@ export function ComputerUseSection({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [browserState, computerState, avail, computer, backendState] = await Promise.all([
+      let backendHealthError: unknown;
+      const [browserState, computerState, avail, computer, backendState, backendHealth] = await Promise.all([
         // `browser` is hidden from plugins.list() (HOSTED_ELSEWHERE), so read its
         // enable state directly by id — list().find() would always be undefined
         // and the toggle would wrongly reset to enabled on every remount.
@@ -516,8 +519,13 @@ export function ComputerUseSection({
             error: String(err),
           } as ComputerDriverStatus;
         }),
-        window.electronAPI.browserBackend?.getState().catch((err) => {
+        window.electronAPI.browserBackend?.getState?.().catch((err) => {
           log.warn('browserBackend.getState failed', err);
+          return null;
+        }) ?? Promise.resolve(null),
+        window.electronAPI.browserBackend?.getHealth?.().catch((err) => {
+          backendHealthError = err;
+          log.warn('browserBackend.getHealth failed', err);
           return null;
         }) ?? Promise.resolve(null),
       ]);
@@ -533,7 +541,15 @@ export function ComputerUseSection({
       // Phase 5: backend kind 拉不到时(老版本 preload / IPC 缺失)安全 fallback
       // 到 'external',保持现有 Chrome 探测 / 登录 UI 可见 — 总比因为 IPC 失败
       // 让卡片整张瘫成内置态强。
-      setBrowserBackendKind(backendState?.active ?? 'external');
+      const activeBackend = backendState?.active ?? 'external';
+      setBrowserBackendKind(activeBackend);
+      setBrowserBackendHealth(
+        backendHealth?.active === activeBackend
+          ? backendHealth
+          : backendHealthError
+            ? browserBackendHealthFallback(activeBackend)
+            : null,
+      );
     })();
     return () => {
       cancelled = true;
@@ -553,6 +569,12 @@ export function ComputerUseSection({
         // main 返回 active 是权威 — 万一同一次 swap 失败 router 拒了我们 fallback
         // 到 main 端的真实值。
         setBrowserBackendKind(res.active);
+        try {
+          setBrowserBackendHealth(await window.electronAPI.browserBackend.getHealth());
+        } catch (healthErr) {
+          log.warn('browserBackend.getHealth after setKind failed', healthErr);
+          setBrowserBackendHealth(browserBackendHealthFallback(res.active));
+        }
       } catch (err) {
         log.error('browserBackend.setKind failed', err);
         setBrowserBackendKind(prev);
@@ -563,6 +585,27 @@ export function ComputerUseSection({
     },
     [browserBackendKind, browserBackendPending, t],
   );
+
+  const handleRecoverBrowserBackend = useCallback(async () => {
+    if (browserBackendPending || browserBackendRecovering) return;
+    setBrowserBackendRecovering(true);
+    try {
+      const result = await window.electronAPI.browserBackend.recover();
+      setBrowserBackendKind(result.health.active);
+      setBrowserBackendHealth(result.health);
+      if (result.ok) {
+        toast.success(t('settings.computerUse.browserBackend.health.recovered'));
+      } else if (result.health.status === 'error') {
+        toast.error(t('settings.computerUse.browserBackend.health.recoverFailed'));
+      }
+    } catch (err) {
+      log.error('browserBackend.recover failed', err);
+      setBrowserBackendHealth(browserBackendHealthFallback('rsb-webview'));
+      toast.error(t('settings.computerUse.browserBackend.health.recoverFailed'));
+    } finally {
+      setBrowserBackendRecovering(false);
+    }
+  }, [browserBackendPending, browserBackendRecovering, t]);
 
   // driver 已安装时安静地查一次是否有新版本。失败或无更新都不渲染任何 UI,
   // 不弹 toast、不做启动检查、不后台轮询 —— 更新入口只是设置里的一个可选项。
@@ -848,6 +891,10 @@ export function ComputerUseSection({
           setAndroidPreparePending(true);
           await window.electronAPI.maker.android.prepareAdb();
           await handleRefreshAndroidStatus(false);
+        } else {
+          // 关闭时清掉旧探测结果:状态区回到禁用提示,设备选择入口一并禁用,
+          // 不再展示已过时的就绪/设备状态(#1829 review)。
+          setAndroidStatus(null);
         }
         toast.success(
           next
@@ -1139,7 +1186,12 @@ export function ComputerUseSection({
     configuredDefaultAndroidDevice
     && !androidDevices.some((device) => device.device_serial === configuredDefaultAndroidDevice),
   );
-  const androidDeviceStatusText = describeAndroidDeviceStatus(androidStatus, t);
+  // 禁用且尚无任何探测结果时显示禁用提示,避免落在 describeAndroidDeviceStatus
+  // 的「正在检查…」上(禁用态 mount 不探测,#1806)。用户手动「刷新」拿到结果后
+  // 仍按真实 status 展示。
+  const androidDeviceStatusText = androidEnabled === false && !androidStatus
+    ? t('settings.computerUse.android.status.disabled')
+    : describeAndroidDeviceStatus(androidStatus, t);
   const androidConnectionGuideKind = getAndroidConnectionGuideKind(androidStatus);
   const androidAdbSource = androidStatus?.adb_path_source ?? androidStatus?.adb_preparation?.source ?? null;
   const androidAdbSourceText = androidPreparePending
@@ -1212,8 +1264,11 @@ export function ComputerUseSection({
         {browserBackendKind !== null ? (
           <BrowserBackendSubsection
             active={browserBackendKind}
-            pending={browserBackendPending}
+            pending={browserBackendPending || browserBackendRecovering}
+            recovering={browserBackendRecovering}
+            health={browserBackendHealth}
             onSelect={(kind) => void handleSelectBackend(kind)}
+            onRecover={() => void handleRecoverBrowserBackend()}
           />
         ) : null}
         {/* 只在 backend === 'external' 时展示 Chrome 探测 + 登录入口。内置 webview

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 import {
+  connectionIssueHint,
+  connectionIssueTitle,
   describeRemoteError,
   formatRemoteError,
   relayStatusHint,
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
+import { i18n } from '@/i18n';
 
 describe('remoteStatus', () => {
   it('labels relay status', () => {
@@ -36,5 +39,19 @@ describe('remoteStatus', () => {
       '[REMOTE_DISABLED] remote disabled',
     );
     expect(formatRemoteError(new Error('[NOT_CONNECTED] offline'))).toBe('[NOT_CONNECTED] offline');
+  });
+
+  it('localizes every connection issue kind', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      await i18n.changeLanguage('en');
+      expect(connectionIssueTitle('auth-failed')).toBe('Sign-in expired');
+      expect(connectionIssueHint('replaced')).toContain('replaced elsewhere');
+      expect(connectionIssueTitle('too-many-connections')).toBe('Too many connections');
+      expect(connectionIssueHint('version-mismatch')).toContain('Update to the latest version');
+      expect(connectionIssueTitle('unstable')).toBe('Connection keeps dropping');
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
 });

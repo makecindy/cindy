@@ -2,11 +2,15 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import { ErrorBanner } from '../ErrorBanner';
 import { useCodexAuth } from '@/hooks/useCodexAuth';
 import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
-import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../../shared/claudeGatewayError';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '../../../../shared/claudeGatewayError';
 
 type AuthStateChangedPayload = {
   agentKind: 'claude-code' | 'codex';
@@ -127,6 +131,21 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       },
       openChatGPTApp: mocks.openChatGPTApp,
     };
+  });
+
+  it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
+    const error = `LAZY_CREATE_FAILED: ${CODEX_RESUME_NOT_READY_WIRE_MESSAGE}`;
+    render(
+      <ErrorBanner
+        error={error}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexResumeNotReady')).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
   });
 
   it('opens the ChatGPT App for an invalidated system-shared login', async () => {
@@ -764,6 +783,22 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(mocks.triggerLogin).not.toHaveBeenCalled();
   });
 
+  it('localizes event-loop terminal errors from the stable reason key', () => {
+    render(
+      <ErrorBanner
+        error="Session event loop stopped unexpectedly without a terminal event"
+        errorReason="session_event_loop_crashed"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('logic.errors.turnFailed')).toBeTruthy();
+    expect(
+      screen.queryByText('Session event loop stopped unexpectedly without a terminal event'),
+    ).toBeNull();
+  });
+
   it('exposes the explicit Continue After Reset action only when provided', () => {
     const onContinueAfterUsageReset = vi.fn();
     const { rerender } = render(
@@ -775,7 +810,11 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.continueAfterReset' }));
+    const continueButton = screen.getByRole('button', {
+      name: 'chat.errorBanner.continueAfterReset',
+    });
+    expect(continueButton.getAttribute('data-split-pane-route-action')).toBe('');
+    fireEvent.click(continueButton);
     expect(onContinueAfterUsageReset).toHaveBeenCalledOnce();
 
     rerender(
@@ -803,6 +842,23 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(
       screen.queryByRole('button', { name: 'chat.errorBanner.switchClaudeSubscription' }),
     ).toBeNull();
+  });
+
+  it('replaces unsupported Claude slash-command advice for subscription errors', () => {
+    render(
+      <ErrorBanner
+        error="Claude Opus is not available with the Claude Pro plan. Run /logout and /login."
+        errorReason={CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="cc"
+        modelId="claude-opus-5"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.claudeSubscriptionOpusPlanMismatch')).toBeTruthy();
+    expect(screen.queryByText(/logout|login/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
 
   it('switches the conversation to Claude.ai through the explicit recovery action', async () => {

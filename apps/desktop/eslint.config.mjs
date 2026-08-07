@@ -18,6 +18,7 @@ export default tseslint.config(
       'src/main/localDb/**/*.{ts,tsx}',
       'src/main/watcher-host/**/*.{ts,tsx}',
       'src/main/workdir-probe-host/**/*.{ts,tsx}',
+      'src/main/mcp-integrations/forgeIconConversionHost.ts',
       'src/main/cindy-brain/nodeRuntimeBroker.ts',
       'src/main/__spike__/**/*.{ts,tsx}',
     ],

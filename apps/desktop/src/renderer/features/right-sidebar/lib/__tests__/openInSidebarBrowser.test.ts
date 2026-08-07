@@ -62,6 +62,14 @@ describe('fileUrlToAbsPath / isLocalHtmlFileUrl', () => {
     expect(isLocalHtmlFileUrl('https://example.com/x.html')).toBe(false);
     expect(isLocalHtmlFileUrl('file:///tmp/notes.md')).toBe(false);
     expect(isLocalHtmlFileUrl('about:blank')).toBe(false);
+    expect(isLocalHtmlFileUrl('file:///tmp/preview.xhtml')).toBe(false);
+  });
+
+  it('rejects non-local file authorities', () => {
+    expect(fileUrlToAbsPath('file://server/share/index.html')).toBeNull();
+    expect(isLocalHtmlFileUrl('file://server/share/index.html')).toBe(false);
+    expect(fileUrlToAbsPath('file://localhost:8080/tmp/index.html')).toBeNull();
+    expect(isLocalHtmlFileUrl('file://localhost:8080/tmp/index.html')).toBe(false);
   });
 
   it('ignores hash/query when recovering the path', () => {

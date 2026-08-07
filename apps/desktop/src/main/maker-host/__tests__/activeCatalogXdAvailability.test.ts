@@ -47,6 +47,29 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
+  it('远端 Catalog 不能覆盖 XD Provider 壳或注入 XD 模型', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
+    const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+    if (!catalogXd || !builtinXd) throw new Error('missing XD provider fixture');
+    catalogXd.name = 'Catalog-supplied XD';
+    catalogXd.models['claude-code'] = [
+      {
+        id: 'catalog-only-model',
+        name: 'Catalog-only model',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
+
+    setActiveCatalog(catalog);
+
+    const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(activeXd?.name).toBe(builtinXd.name);
+    expect(xdModels('claude-code')).toEqual([]);
+  });
+
   it('未登记模型按 Claude-only 兜底并投影到 Codex bridge:3 档 effort + fast=false + 200k 窗口', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
@@ -183,6 +206,32 @@ describe('XD 网关权威模型清单重建', () => {
     const cc = xdModels('claude-code');
     expect(cc.find((m) => m.id === 'claude-fable-5')?.icon).toBe('claude');
     expect('icon' in (cc.find((m) => m.id === 'plain-model') ?? {})).toBe(false);
+  });
+
+  it('把网关图片输入 modalities 投影到 Pi 的 provider-model 能力', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'gateway-vision',
+        modalities: { input: ['text', 'image'], output: ['text'] },
+      },
+      {
+        id: 'gateway-text',
+        modalities: { input: ['text'], output: ['text'] },
+      },
+      { id: 'gateway-unknown' },
+    ]);
+
+    const pi = deriveAvailableModels(getActiveCatalog(), 'pi');
+    expect(pi.find((model) => model.id === 'gateway-vision')).toMatchObject({
+      supportsImageInput: true,
+    });
+    expect(pi.find((model) => model.id === 'gateway-text')).toMatchObject({
+      supportsImageInput: false,
+    });
+    expect(pi.find((model) => model.id === 'gateway-unknown')).not.toHaveProperty(
+      'supportsImageInput',
+    );
   });
 
   it('把标准 token 价投影为每百万 token 的折后展示价', () => {

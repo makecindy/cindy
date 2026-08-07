@@ -139,7 +139,13 @@ describe('login.tsx 接线(源码断言)', () => {
     // 发码点(phone + 邮箱个人行)与社交圆钮为实际发起点,必须过门
     expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,200}?kind: 'phone'/);
     expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,240}?kind: 'email'/);
-    expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,200}?provider: 'apple'/);
+    const appleStart = loginSource.indexOf("label={loginText('apple')}");
+    const appleEnd = loginSource.indexOf('testID="login.appleButton"', appleStart);
+    expect(appleStart).toBeGreaterThan(0);
+    expect(appleEnd).toBeGreaterThan(appleStart);
+    const appleBlock = loginSource.slice(appleStart, appleEnd);
+    expect(appleBlock).toContain('requireConsent(() =>');
+    expect(appleBlock).toContain("provider: 'apple'");
   });
 
   it('企业 SSO 入口豁免:ssoEntryButton onPress 不过 requireConsent', () => {

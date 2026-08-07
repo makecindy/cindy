@@ -59,17 +59,16 @@ export async function installCustomMarketPlugin(input: {
    * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
    * 自定义市场按调用方捕获的账户审阅 manifest;打包是异步的,装出前必须
    * 重新确认会话未漂移,避免把 A 审阅的插件装进当前账户 B 的运行时。
-   * 跨来源 ghostId 所有权也在这里复核——打包耗时,期间另一窗口可能添加了
-   * 声明同一 ghostId 的来源。
+   * 这里同时复核当前账号、所选来源和运行时已安装插件事实。
    */
   beforeCommit?: () => void | Promise<void>;
   /**
    * 提交段(复核 + 落位)的互斥包装,与来源增删共享同一把锁。
    *
    * 只在 `beforeCommit` 里复核不够:它返回后 `installOrUpdateMarketGhostPackage`
-   * 还要先 await 包检查才开始真正改动运行时,那段时间另一窗口仍能添加声明同一
-   * ghostId 的来源,复核结论在落位前就过期了。把"复核 + 落位"整段放进锁里,
-   * 来源变更插不进来。
+   * 还要先 await 包检查才开始真正改动运行时,那段时间另一窗口仍能移除或替换
+   * 所选来源,复核结论在落位前就过期了。把“复核 + 落位”整段放进锁里，来源
+   * 变更插不进来。
    */
   withCommitLock?: <T>(fn: () => Promise<T>) => Promise<T>;
   /**
@@ -159,10 +158,12 @@ export async function installCustomMarketPlugin(input: {
         'Plugin changed after permission review',
       );
     }
-    // 装出前最后防线:打包期间账号可能已切换、也可能有别的来源声明了同一 ghostId。
+    // 装出前最后防线:打包期间账号、所选来源或运行时插件状态都可能已变化。
     // 复核与落位必须在同一把锁内完成,否则复核结论会在落位前过期。
     const commit = async (): Promise<InstalledGhost> => {
       await input.beforeCommit?.();
+      // 自定义来源已经把 Renderer 审阅的本地清单与实际打包清单逐字节绑定，
+      // 不再进入官方市场“下载真实包后复核”的分支。
       const installed = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: validated.manifest.id,
         version: validated.manifest.version,

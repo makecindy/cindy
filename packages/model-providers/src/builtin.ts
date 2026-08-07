@@ -180,6 +180,28 @@ const XD_PROVIDER: Provider = {
     standard: 'seedance-fast',
     best: 'seedance-pro',
   },
+  // 向量模型:id 必须与 @cindy/embedding-client 的 EmbeddingModelId 逐字一致
+  // (执行侧按 id 查 catalog 拿 provider 做 input_type 值域翻译,对不上就翻译不了)。
+  // 只列 2026-08-04 经网关实测确认可用的型号 + 同族高置信的 3-large。
+  // voyage-context-4 经同一 OpenAI 形态端点支持:索引侧把 input 传二维数组
+  // (客户端 embedDocuments,按文档分组),查询侧仍传一维。注意它的响应形状由
+  // **型号**决定而不是请求维度 —— 两侧都返两层嵌套 data,解析走同一个 parser。
+  embeddingModels: [
+    { id: 'voyage/voyage-4', name: 'Voyage 4' },
+    { id: 'voyage/voyage-4-large', name: 'Voyage 4 Large' },
+    { id: 'voyage/voyage-context-4', name: 'Voyage Context 4' },
+    { id: 'voyage/voyage-code-3', name: 'Voyage Code 3' },
+    { id: 'text-embedding-3-small', name: 'OpenAI Embedding 3 Small' },
+    { id: 'text-embedding-3-large', name: 'OpenAI Embedding 3 Large' },
+    { id: 'gemini-embedding-2-preview', name: 'Gemini Embedding 2 (Preview)' },
+  ],
+  // standard 取 voyage-4:1024 维、32K 单条上限、中等价格,且是四个候选里唯一
+  // 实测确定性的多语通用型号。preview 型号不作默认(catalog 注释同口径)。
+  embeddingDefaults: {
+    standard: 'voyage/voyage-4',
+    draft: 'text-embedding-3-small',
+    best: 'voyage/voyage-4-large',
+  },
   // XD 网关真实推理入口运行时由 model-access server 随凭据成对下发
   // (见 main/model-access/effectiveEndpoint.ts;端点清单/静态值已退役)。
   // gateway-key 路由只换鉴权头、不 override upstream,故此处 upstream 不参与路由,

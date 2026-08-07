@@ -151,7 +151,7 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
     >
       <div
         className={cn(
-          'text-13 font-bold leading-[1.3]',
+          'text-13 font-semibold leading-[1.3]',
           isRunning ? 'text-[var(--cmd-palette-item-meta)]' : 'text-foreground',
         )}
       >

@@ -24,6 +24,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
+import { isCindyOfficialTrustInfo } from './GhostManager.js';
 
 import {
   GHOST_FETCH_BODY_MAX_BYTES,
@@ -66,6 +67,8 @@ export interface NetworkSlotDeps {
    * 即生效);未配置 / 读失败返回 null。
    */
   readSecret(ghostId: string, secretKey: string): string | null;
+  /** source:'gh-cli' 的宿主 GitHub CLI 登录 token；不可用返回 null。 */
+  readGhCliToken?: () => Promise<string | null>;
   /**
    * 当前登录账号的邮箱(source:'login-email' 凭证的值来源;现读登录态,
    * 登出/切号下一单即生效)。未登录 / 登录态缺 email 返回 null。
@@ -152,6 +155,19 @@ export interface NetworkSlotDeps {
     invalidateAccessToken(ghostId: string, secretKey: string, accountId: string): void;
   };
   /**
+   * Cindy organization identity assertions (`source: 'oidc-token'`). Audience
+   * resolution is Host-owned; manifests and runtime messages cannot choose it.
+   */
+  connectionTokens?: {
+    resolve(ghostId: string): {
+      membershipId: string;
+      audience: string;
+      allowedHosts: readonly string[];
+    } | null;
+    getToken(input: { membershipId: string; audience: string }): Promise<string>;
+    invalidate(input: { membershipId: string; audience: string }): void;
+  };
+  /**
    * 多连接凭证通道(network.connections;生产由 index.ts 注入闭包,内部按
    * manifest.network.connections 逐 decl 查 GhostConnectionManager)。
    * - hostsFor:该意识名下用户已添加的全部连接地址(小写裸域;动态白名单,
@@ -181,6 +197,9 @@ const MAX_HEADER_VALUE_LEN = 2048;
 
 /** 重定向最大跳数(逐跳重验白名单;超出按失败收)。 */
 const MAX_REDIRECTS = 3;
+
+/** Only these methods may be automatically replayed after a Connection JWT 401. */
+const CONNECTION_RETRYABLE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
  * 意识自带请求头的剥除名单(小写):协议关键头由 HTTP 栈管,凭证类头由
@@ -996,6 +1015,13 @@ export class GhostNetworkSlot {
     if (!net || (net.hosts.length === 0 && connectionDecls.length === 0)) {
       return { ok: false, message: '本意识未声明域名白名单(身份卡缺 network.hosts),请意识作者更新声明' };
     }
+    const ghCliSecrets = net.secrets?.filter((secret) => secret.source === 'gh-cli') ?? [];
+    if (
+      ghCliSecrets.length > 0 &&
+      (ghost.manifest.id !== 'cindy-github' || !isCindyOfficialTrustInfo(ghost.trust))
+    ) {
+      return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };
+    }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。
     const connectionHosts =
@@ -1021,6 +1047,8 @@ export class GhostNetworkSlot {
     if (inject0.error) return { ok: false, message: inject0.error };
     let usedExchange = inject0.usedExchange;
     const oauthInjected = new Map(inject0.oauthInjected);
+    const connectionInjected = new Map(inject0.connectionInjected);
+    let initialConnectionInjected = new Map(inject0.connectionInjected);
 
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
     const inflight = this.inflight.get(ghostId) ?? 0;
@@ -1071,19 +1099,29 @@ export class GhostNetworkSlot {
       }
 
       // ── 执行(重定向逐跳手动跟,每跳重验白名单 + 重算凭证注入)────────
-      // 外层 attempt 循环只为交换型 / oauth 凭证的 401 兜底:令牌可能被
+      // 外层 attempt 循环只为交换型 / oauth / Connection 凭证的 401 兜底:令牌可能被
       // 服务端提前作废,作废本地缓存重换/重刷一次再整链重试;第二次仍
-      // 401 就原样回给意识。
+      // 401 就原样回给意识。原始请求方法也参与判定:POST/上传即使因 3xx
+      // 降级成 GET,仍不得在 401 后重放最初的副作用请求。
       let response: Response | null = null;
+      const originalRequestMethod = method;
       for (let attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) {
           this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
           for (const [secretKey, accountId] of oauthInjected) {
             this.deps.oauthTokens?.invalidateAccessToken(ghostId, secretKey, accountId);
           }
+          for (const input of connectionInjected.values()) {
+            this.deps.connectionTokens?.invalidate({
+              membershipId: input.membershipId,
+              audience: input.audience,
+            });
+          }
           const reInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url.hostname, net.hosts, requestHeaders, authAccount);
           if (reInject.error) return { ok: false, message: reInject.error };
+          initialConnectionInjected = new Map(reInject.connectionInjected);
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
+          for (const [k, v] of reInject.connectionInjected) connectionInjected.set(k, v);
           this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
             ghostId, callId, host: url.hostname,
           });
@@ -1092,7 +1130,10 @@ export class GhostNetworkSlot {
         let currentMethod: string = method;
         let currentBody = body;
         let bodyDropped = false;
+        let responseConnectionInjected = new Map(initialConnectionInjected);
+        let responseMethod = currentMethod;
         response = null;
+        let currentConnectionInjected = initialConnectionInjected;
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
           const hopHeaders = { ...requestHeaders };
           // 降级丢 body 后 Content-Type 也要跟着剥(fetch 规范的 request-body-
@@ -1103,8 +1144,37 @@ export class GhostNetworkSlot {
             // (injectSecrets 开头会先把所有声明凭证头的大小写变体删干净)。
             const hopInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, currentUrl.hostname, net.hosts, hopHeaders, authAccount);
             if (hopInject.error) return { ok: false, message: hopInject.error };
+            currentConnectionInjected = hopInject.connectionInjected;
             usedExchange ||= hopInject.usedExchange;
             for (const [k, v] of hopInject.oauthInjected) oauthInjected.set(k, v);
+            for (const [k, v] of hopInject.connectionInjected) connectionInjected.set(k, v);
+          }
+          if (currentConnectionInjected.size > 0) {
+            let current: {
+              membershipId: string;
+              audience: string;
+              allowedHosts: readonly string[];
+            } | null = null;
+            try {
+              current = this.deps.connectionTokens?.resolve(ghostId) ?? null;
+            } catch {
+              current = null;
+            }
+            const stillCurrent =
+              current !== null
+              && [...currentConnectionInjected.values()].every(
+                (input) =>
+                  input.membershipId === current.membershipId
+                  && input.audience === current.audience
+                  && input.hostname === currentUrl.hostname
+                  && current.allowedHosts.includes(input.hostname),
+              );
+            if (!stillCurrent) {
+              return {
+                ok: false,
+                message: 'Cindy 企业账号已切换，本次请求已取消，请重试',
+              };
+            }
           }
           response = await this.deps.fetchImpl(currentUrl.toString(), {
             method: currentMethod,
@@ -1113,6 +1183,8 @@ export class GhostNetworkSlot {
             signal: controller.signal,
             redirect: 'manual',
           });
+          responseConnectionInjected = currentConnectionInjected;
+          responseMethod = currentMethod;
           if (![301, 302, 303, 307, 308].includes(response.status)) break;
           const location = response.headers.get('location');
           if (!location) break; // 3xx 无 Location:按普通响应回给意识
@@ -1141,7 +1213,30 @@ export class GhostNetworkSlot {
           currentUrl = nextUrl;
         }
         if (!response) break;
-        if (response.status === 401 && (usedExchange || oauthInjected.size > 0) && attempt === 0) {
+        if (
+          response.status === 401
+          && responseConnectionInjected.size > 0
+          && (
+            !CONNECTION_RETRYABLE_METHODS.has(responseMethod)
+            || !CONNECTION_RETRYABLE_METHODS.has(originalRequestMethod)
+          )
+        ) {
+          for (const input of responseConnectionInjected.values()) {
+            this.deps.connectionTokens?.invalidate({
+              membershipId: input.membershipId,
+              audience: input.audience,
+            });
+          }
+          this.deps.log?.info('ghost fetch-request Connection 401 cache invalidated without replay', {
+            ghostId, callId, method: responseMethod, host: url.hostname,
+          });
+          break;
+        }
+        if (
+          response.status === 401
+          && (usedExchange || oauthInjected.size > 0 || responseConnectionInjected.size > 0)
+          && attempt === 0
+        ) {
           // 丢弃本次响应体(best-effort),换新令牌整链重试一次。
           try {
             await (response as { body?: ReadableStream<Uint8Array> | null }).body?.cancel();
@@ -1381,6 +1476,11 @@ export class GhostNetworkSlot {
     usedExchange: boolean;
     /** 本次注入过的 oauth 凭证(secretKey → 实际用的账号 id;401 作废用)。 */
     oauthInjected: Map<string, string>;
+    /** 本次注入过的 Connection 凭证(secretKey → 缓存键;401 作废用)。 */
+    connectionInjected: Map<
+      string,
+      { membershipId: string; audience: string; hostname: string }
+    >;
   }> {
     // 声明的凭证头一律主机独占:先把意识自带(或上一跳残留)的任何大小写
     // 变体删干净,再按本 host 注入——不管这条凭证这一跳注不注入都要删,
@@ -1395,13 +1495,22 @@ export class GhostNetworkSlot {
     }
     let usedExchange = false;
     const oauthInjected = new Map<string, string>();
+    const connectionInjected = new Map<
+      string,
+      { membershipId: string; audience: string; hostname: string }
+    >();
     for (const secret of secrets) {
       const scope = secret.inject.hosts ?? allHosts;
       if (!scope.some((pattern) => ghostNetworkHostMatches(pattern, hostname))) continue;
-      const resolved = await this.resolveSecretValue(ghostId, secret, authAccount);
-      if ('error' in resolved) return { error: resolved.error, usedExchange, oauthInjected };
+      const resolved = await this.resolveSecretValue(ghostId, secret, hostname, authAccount);
+      if ('error' in resolved) {
+        return { error: resolved.error, usedExchange, oauthInjected, connectionInjected };
+      }
       if (secret.exchange !== undefined) usedExchange = true;
       if (resolved.oauthAccountId !== undefined) oauthInjected.set(secret.key, resolved.oauthAccountId);
+      if (resolved.connectionTokenKey !== undefined) {
+        connectionInjected.set(secret.key, resolved.connectionTokenKey);
+      }
       // 函数式替换同 performExchange:凭证/令牌含 $ 不得触发特殊序列解释。
       headers[secret.inject.header] = secret.inject.format.replace('{value}', () => resolved.value);
     }
@@ -1418,26 +1527,102 @@ export class GhostNetworkSlot {
             error: `连接地址 ${hostname} 的凭证读取失败——请到主界面侧边栏「插件」的本插件详情页重新添加该连接`,
             usedExchange,
             oauthInjected,
+            connectionInjected,
           };
         }
         deleteHeaderVariants(headers, tok.header);
         headers[tok.header] = tok.format.replace('{value}', () => tok.value);
       }
     }
-    return { error: null, usedExchange, oauthInjected };
+    return { error: null, usedExchange, oauthInjected, connectionInjected };
   }
 
   /**
    * 解析一条凭证的注入值:无 exchange 声明 = 保险库原始值(source:'login-email'
-   * 则是登录邮箱);有 exchange = 换来的令牌(缓存命中直接用;用户改了 key /
+   * 则是登录邮箱;source:'gh-cli' 先取本机 gh 登录 token,再回落同 key 的 PAT);
+   * 有 exchange = 换来的令牌(缓存命中直接用;用户改了 key /
    * 换了登录账号或缓存过期则重换,单飞去重——交换缓存按 sourceValue 失配重换,
    * 登录邮箱变更天然生效)。
    */
   private async resolveSecretValue(
     ghostId: string,
     secret: GhostSecretDecl,
+    hostname: string,
     authAccount?: string,
-  ): Promise<{ value: string; oauthAccountId?: string } | { error: string }> {
+  ): Promise<
+    | {
+        value: string;
+        oauthAccountId?: string;
+        connectionTokenKey?: { membershipId: string; audience: string; hostname: string };
+      }
+    | { error: string }
+  > {
+    if (secret.source === 'gh-cli') {
+      let ghToken: string | null = null;
+      try {
+        ghToken = (await this.deps.readGhCliToken?.()) ?? null;
+      } catch (error) {
+        this.deps.log?.warn('ghost gh-cli credential source failed', {
+          ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (ghToken && ghToken.trim().length > 0) return { value: ghToken.trim() };
+      const fallback = this.deps.readSecret(ghostId, secret.key);
+      if (fallback && fallback.length > 0) return { value: fallback };
+      return {
+        error: `凭证「${secret.label}」不可用——未检测到本机 gh 登录，且尚未配置备用 Personal Access Token；请先运行 gh auth login，或到主界面侧边栏「插件」的本插件详情页填写 PAT`,
+      };
+    }
+    if (secret.source === 'oidc-token') {
+      const manager = this.deps.connectionTokens;
+      if (!manager) {
+        return { error: 'Cindy 企业身份通道未就绪，请升级应用或反馈' };
+      }
+      let resolution: {
+        membershipId: string;
+        audience: string;
+        allowedHosts: readonly string[];
+      } | null;
+      try {
+        resolution = manager.resolve(ghostId);
+      } catch {
+        this.deps.log?.warn('ghost Connection audience resolver unavailable', { ghostId });
+        return { error: 'Cindy 企业身份暂时不可用，请稍后重试或反馈' };
+      }
+      if (!resolution) {
+        this.deps.log?.warn('ghost Connection audience resolution returned no result', {
+          ghostId,
+          host: hostname,
+        });
+        return { error: '当前 Cindy 企业身份不可用于此插件，请确认已登录正确的企业账号' };
+      }
+      if (!resolution.allowedHosts.includes(hostname)) {
+        this.deps.log?.warn('ghost Connection audience host rejected', {
+          ghostId,
+          host: hostname,
+        });
+        return { error: '当前 Cindy 企业身份不可用于此服务地址' };
+      }
+      const tokenInput = {
+        membershipId: resolution.membershipId,
+        audience: resolution.audience,
+      };
+      try {
+        const token = await manager.getToken(tokenInput);
+        return {
+          value: token,
+          connectionTokenKey: { ...tokenInput, hostname },
+        };
+      } catch (error) {
+        this.deps.log?.warn('ghost Connection token issuance failed', {
+          ghostId,
+          host: hostname,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { error: '暂时无法获取 Cindy 企业身份，请检查网络后重试' };
+      }
+    }
     // source:'oauth':令牌管理器现取新鲜 access token(缓存 + 单飞刷新在
     // 管理器内);错误折叠成人话(不含任何令牌字节),可自愈的引导去设置页。
     if (secret.source === 'oauth') {

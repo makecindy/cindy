@@ -21,6 +21,8 @@ import { TEST_CLIENT_ENDPOINTS } from '../../test/vitest/clientEndpointsFixture'
 
 const ipcOn = vi.hoisted(() => vi.fn());
 const netRequest = vi.hoisted(() => vi.fn());
+const showMessageBoxSync = vi.hoisted(() => vi.fn());
+const clipboardWriteText = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(),
@@ -28,7 +30,8 @@ vi.mock('electron', () => ({
     isPackaged: false,
     exit: vi.fn(),
   },
-  dialog: { showMessageBoxSync: vi.fn() },
+  dialog: { showMessageBoxSync },
+  clipboard: { writeText: clipboardWriteText },
   ipcMain: { on: ipcOn },
   net: { request: netRequest },
   // netLog 是静态 import(architecture-invariants.md §2);captureEndpointNetLog 这条
@@ -46,6 +49,7 @@ import {
   activateClientEndpointRealm,
   captureNetLogAround,
   prepareEndpointNetLogFile,
+  promptRetryDialog,
   verifyEndpointNetLogCapture,
   classifyManifestFailure,
   getClientEndpoint,
@@ -67,6 +71,8 @@ afterEach(() => {
   resetClientEndpointsForTest();
   ipcOn.mockClear();
   netRequest.mockReset();
+  showMessageBoxSync.mockReset();
+  clipboardWriteText.mockReset();
 });
 
 const FULL_MANIFEST = JSON.stringify({
@@ -95,6 +101,93 @@ const LOCAL_MANIFEST = JSON.stringify({
   apiBaseUrl: 'http://localhost:3333',
   authApiBaseUrl: 'http://localhost:3344',
   deviceLinkApiBaseUrl: 'http://localhost:3335',
+});
+
+describe('启动失败系统提示框', () => {
+  it('使用友好警告文案并展示简短错误信息,但不展示地址、网络诊断或本机路径', () => {
+    showMessageBoxSync.mockReturnValueOnce(0);
+
+    const choice = promptRetryDialog(
+      {
+        reason: 'fetch-failed:ERR_CONNECTION_RESET',
+        kind: 'network',
+        diagnosis: 'proxy=DIRECT dns=ok(43.146.61.38) tcp=ok(12ms)',
+        logPath: '/Users/example/Library/Logs/Cindy/endpoint-netlog/capture.json',
+        offlineSavedAt: null,
+      },
+      'https://hotfix.cindy.app/cindy/endpoint.json',
+      'zh-CN',
+    );
+
+    expect(choice).toBe('retry');
+    expect(showMessageBoxSync).toHaveBeenCalledTimes(1);
+    const options = showMessageBoxSync.mock.calls[0]?.[0] as {
+      type: string;
+      message: string;
+      detail: string;
+      buttons: string[];
+    };
+    const visibleText = `${options.message}\n${options.detail}\n${options.buttons.join('\n')}`;
+    expect(options.type).toBe('warning');
+    expect(options.message).toBe('Cindy 暂时无法连接');
+    expect(visibleText).toContain('请确认设备已联网');
+    expect(visibleText).toContain('错误信息：ERR_CONNECTION_RESET');
+    expect(visibleText).toContain('复制诊断信息');
+    expect(visibleText).not.toContain('截图');
+    expect(visibleText).not.toContain('CINDY-NET-');
+    expect(visibleText).not.toContain('43.146.61.38');
+    expect(visibleText).not.toContain('proxy=DIRECT');
+    expect(visibleText).not.toContain('/Users/example');
+  });
+
+  it('复制诊断后保留弹框,不触发重试或退出,并显示已复制反馈', () => {
+    showMessageBoxSync.mockReturnValueOnce(1).mockReturnValueOnce(0);
+
+    const choice = promptRetryDialog(
+      {
+        reason: 'fetch-failed:ERR_CONNECTION_RESET',
+        kind: 'network',
+        diagnosis: 'proxy=DIRECT dns=ok(43.146.61.38) tcp=ok(12ms)',
+        logPath: '/Users/example/Library/Logs/Cindy/endpoint-netlog/capture.json',
+        offlineSavedAt: null,
+      },
+      'https://hotfix.cindy.app/cindy/endpoint.json',
+      'zh-CN',
+    );
+
+    expect(choice).toBe('retry');
+    expect(showMessageBoxSync).toHaveBeenCalledTimes(2);
+    expect(clipboardWriteText).toHaveBeenCalledTimes(1);
+    expect(clipboardWriteText.mock.calls[0]?.[0]).toContain('ERR_CONNECTION_RESET');
+    expect(clipboardWriteText.mock.calls[0]?.[0]).toContain('hotfix.cindy.app');
+    expect(clipboardWriteText.mock.calls[0]?.[0]).toContain('proxy=DIRECT');
+    expect(clipboardWriteText.mock.calls[0]?.[0]).toContain('/Users/example');
+    expect(showMessageBoxSync.mock.calls[1]?.[0].detail).toContain('诊断信息已复制');
+  });
+
+  it('复制诊断失败时在弹框内明确提示,不误报为已复制', () => {
+    showMessageBoxSync.mockReturnValueOnce(1).mockReturnValueOnce(0);
+    clipboardWriteText.mockImplementationOnce(() => {
+      throw new Error('clipboard unavailable');
+    });
+
+    const choice = promptRetryDialog(
+      {
+        reason: 'fetch-failed:ERR_CONNECTION_RESET',
+        kind: 'network',
+        diagnosis: 'proxy=DIRECT dns=ok(43.146.61.38) tcp=ok(12ms)',
+        logPath: '/Users/example/Library/Logs/Cindy/endpoint-netlog/capture.json',
+        offlineSavedAt: null,
+      },
+      'https://hotfix.cindy.app/cindy/endpoint.json',
+      'zh-CN',
+    );
+
+    expect(choice).toBe('retry');
+    expect(showMessageBoxSync).toHaveBeenCalledTimes(2);
+    expect(showMessageBoxSync.mock.calls[1]?.[0].detail).toContain('诊断信息未能复制');
+    expect(showMessageBoxSync.mock.calls[1]?.[0].detail).not.toContain('诊断信息已复制');
+  });
 });
 
 describe('resolveEndpointSource(清单来源三选一)', () => {
@@ -463,24 +556,27 @@ describe('弹框前的自动重试(mac 首装瞬时失败自愈)', () => {
     expect(result).toBeNull();
   });
 
-  it.each([407, 408, 425, 429])('非配置错 HTTP %d 仍消耗重试预算(与分类共用同一判定)', async (status) => {
-    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
-      ok: false,
-      detail: `http-${status}`,
-    });
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+  it.each([407, 408, 425, 429])(
+    '非配置错 HTTP %d 仍消耗重试预算(与分类共用同一判定)',
+    async (status) => {
+      const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+        ok: false,
+        detail: `http-${status}`,
+      });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
 
-    await resolveClientEndpointsBlocking({
-      fetchManifest,
-      promptRetry: vi.fn().mockReturnValue('exit'),
-      exitApp: vi.fn(),
-      autoRetryDelaysMs: [10, 20],
-      sleep,
-    });
+      await resolveClientEndpointsBlocking({
+        fetchManifest,
+        promptRetry: vi.fn().mockReturnValue('exit'),
+        exitApp: vi.fn(),
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
 
-    expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
-    expect(sleep).toHaveBeenCalledTimes(2);
-  });
+      expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
+      expect(sleep).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('HTTP 502(瞬时服务端错误)仍消耗重试预算', async () => {
     const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
@@ -685,6 +781,102 @@ describe('用户确认的离线出口', () => {
     expect(fetchManifest).toHaveBeenCalledTimes(1);
   });
 
+  it('自动模式下网络失败 + 有缓存 → 不弹框、不诊断，直接用缓存启动', async () => {
+    const loadOfflineManifest = vi.fn(offlineCandidate);
+    const promptRetry = vi.fn();
+    const diagnose = vi.fn();
+    const exitApp = vi.fn();
+    const onResolved = vi.fn();
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest: failFetch('ERR_INTERNET_DISCONNECTED'),
+      promptRetry,
+      exitApp,
+      diagnose,
+      loadOfflineManifest,
+      offlineFallbackMode: 'automatic',
+      onResolved,
+      ...NO_AUTO_RETRY,
+    });
+
+    expect(result?.authApiBaseUrl).toBe('https://auth.cached.example.com');
+    expect(loadOfflineManifest).toHaveBeenCalledTimes(1);
+    expect(promptRetry).not.toHaveBeenCalled();
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(exitApp).not.toHaveBeenCalled();
+    expect(onResolved).toHaveBeenCalledWith(expect.anything(), 'cache');
+  });
+
+  it('自动模式仍优先等待短重试自愈，远端成功时不读取缓存', async () => {
+    const fetchManifest = vi
+      .fn<BlockingResolveDeps['fetchManifest']>()
+      .mockResolvedValueOnce({ ok: false, detail: 'ERR_NAME_NOT_RESOLVED' })
+      .mockResolvedValueOnce({ ok: true, text: FULL_MANIFEST });
+    const loadOfflineManifest = vi.fn(offlineCandidate);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry: vi.fn(),
+      exitApp: vi.fn(),
+      loadOfflineManifest,
+      offlineFallbackMode: 'automatic',
+      autoRetryDelaysMs: [10],
+      sleep: async () => {},
+    });
+
+    expect(result?.authApiBaseUrl).toBe('https://auth.remote.example.com');
+    expect(fetchManifest).toHaveBeenCalledTimes(2);
+    expect(loadOfflineManifest).not.toHaveBeenCalled();
+  });
+
+  it('自动模式没有可用缓存时仍诊断并弹框', async () => {
+    const diagnose = vi.fn().mockResolvedValue({
+      summary: 'proxy=DIRECT dns=fail(ENOTFOUND)',
+      logPath: '/tmp/cindy-test-logs',
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const exitApp = vi.fn();
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest: failFetch('ERR_INTERNET_DISCONNECTED'),
+      promptRetry,
+      exitApp,
+      diagnose,
+      loadOfflineManifest: () => null,
+      offlineFallbackMode: 'automatic',
+      ...NO_AUTO_RETRY,
+    });
+
+    expect(result).toBeNull();
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(promptRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'network',
+        offlineSavedAt: null,
+        diagnosis: 'proxy=DIRECT dns=fail(ENOTFOUND)',
+      }),
+    );
+    expect(exitApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('自动模式绝不让缓存掩盖配置事故', async () => {
+    const loadOfflineManifest = vi.fn(offlineCandidate);
+    const promptRetry = vi.fn().mockReturnValue('exit');
+
+    await resolveClientEndpointsBlocking({
+      fetchManifest: okFetch('not json'),
+      promptRetry,
+      exitApp: vi.fn(),
+      loadOfflineManifest,
+      offlineFallbackMode: 'automatic',
+    });
+
+    expect(loadOfflineManifest).not.toHaveBeenCalled();
+    expect(promptRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'config', offlineSavedAt: null }),
+    );
+  });
+
   it('走离线出口时 onResolved 收到 source=cache;网络成功则是 network 并带原文', async () => {
     const cacheResolved = vi.fn();
     await resolveClientEndpointsBlocking({
@@ -753,20 +945,23 @@ describe('用户确认的离线出口', () => {
     },
   );
 
-  it.each([407, 408, 429])('非配置错 HTTP %d 仍给离线出口(代理没登录/被限流不该连缓存都用不上)', async (status) => {
-    const promptRetry = vi.fn().mockReturnValue('offline');
+  it.each([407, 408, 429])(
+    '非配置错 HTTP %d 仍给离线出口(代理没登录/被限流不该连缓存都用不上)',
+    async (status) => {
+      const promptRetry = vi.fn().mockReturnValue('offline');
 
-    const result = await resolveClientEndpointsBlocking({
-      fetchManifest: failFetch(`http-${status}`),
-      promptRetry,
-      exitApp: vi.fn(),
-      loadOfflineManifest: offlineCandidate,
-      ...NO_AUTO_RETRY,
-    });
+      const result = await resolveClientEndpointsBlocking({
+        fetchManifest: failFetch(`http-${status}`),
+        promptRetry,
+        exitApp: vi.fn(),
+        loadOfflineManifest: offlineCandidate,
+        ...NO_AUTO_RETRY,
+      });
 
-    expect(result?.authApiBaseUrl).toBe('https://auth.cached.example.com');
-    expect(promptRetry.mock.calls[0][0]).toMatchObject({ kind: 'network' });
-  });
+      expect(result?.authApiBaseUrl).toBe('https://auth.cached.example.com');
+      expect(promptRetry.mock.calls[0][0]).toMatchObject({ kind: 'network' });
+    },
+  );
 
   it('HTTP 502(瞬时)仍给离线出口', async () => {
     const loadOfflineManifest = vi.fn(offlineCandidate);
@@ -925,7 +1120,7 @@ describe('netlog 抓取(captureNetLogAround)', () => {
 
     const file = await captureNetLogAround(
       { startLogging: () => gate.promise, stopLogging },
-      "/tmp/n.json",
+      '/tmp/n.json',
       async () => {},
       10,
     );
@@ -944,11 +1139,11 @@ describe('netlog 抓取(captureNetLogAround)', () => {
     });
     const file = await captureNetLogAround(
       { startLogging: async () => {}, stopLogging },
-      "/tmp/n.json",
+      '/tmp/n.json',
       async () => {},
       20,
     );
-    expect(file).toBe("/tmp/n.json");
+    expect(file).toBe('/tmp/n.json');
     expect(calls).toBe(2); // NETLOG_STOP_ATTEMPTS
   });
 
@@ -1237,7 +1432,6 @@ describe('getter / IPC', () => {
   it('默认不是离线缓存启动', () => {
     expect(isUsingCachedClientEndpoints()).toBe(false);
   });
-
 
   it('init 之前 getClientEndpoint / getResolvedClientEndpoints 直接抛错(启动时序守卫)', () => {
     expect(() => getClientEndpoint('authApiBaseUrl')).toThrow(/not initialized/);
