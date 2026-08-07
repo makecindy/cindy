@@ -1912,6 +1912,10 @@ export default function SessionScreen() {
   const voiceStartPendingSeqRef = useRef(0);
   // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
   const voiceStartedOnPressInRef = useRef(false);
+  const clearVoiceStartPending = useCallback(() => {
+    voiceStartPendingSeqRef.current += 1;
+    setVoiceStartPending(false);
+  }, []);
   useEffect(() => {
     if (!voiceStartPending) return;
     if (shouldClearMobileVoiceStartPending({
@@ -4603,6 +4607,7 @@ export default function SessionScreen() {
     voiceStartupInFlightRef.current = false;
     voiceStopInFlightRef.current = false;
     voiceRecordingActiveRef.current = false;
+    clearVoiceStartPending();
     voiceLongPressActiveRef.current = false;
     voiceSuppressNextPressRef.current = false;
     voiceStopAfterStartRef.current = false;
@@ -4613,7 +4618,7 @@ export default function SessionScreen() {
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
     void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-  }, [setVoiceState]);
+  }, [clearVoiceStartPending, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -4636,10 +4641,12 @@ export default function SessionScreen() {
     voicePermissionRequestAbortRef.current?.abort();
     voicePermissionRequestAbortRef.current = null;
     voicePermissionRequestInFlightRef.current = false;
+    clearVoiceStartPending();
     cancelVoiceForAppBackground();
-  }, [cancelVoiceForAppBackground]);
+  }, [cancelVoiceForAppBackground, clearVoiceStartPending]);
 
   useEffect(() => {
+    setVoiceStartPending(false);
     return () => {
       const controller = voiceControllerSessionRef.current;
       voiceControllerSessionRef.current = null;
@@ -4649,6 +4656,7 @@ export default function SessionScreen() {
       voicePermissionRequestAbortRef.current?.abort();
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
+      voiceStartPendingSeqRef.current += 1;
       voiceStartupSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;

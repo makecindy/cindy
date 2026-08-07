@@ -657,6 +657,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('startupSettled: !voiceStartupInFlightRef.current');
     expect(source).toContain('startupSettled: true');
     expect(source).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // cleanup 只改 ref 时不会触发 effect;后台、手势取消和会话切换必须显式清 pending。
+    expect(source).toContain('const clearVoiceStartPending = useCallback(() => {');
+    expect(source).toContain('voiceRecordingActiveRef.current = false;\n    clearVoiceStartPending();\n    voiceLongPressActiveRef.current = false;');
+    expect(source).toContain('voicePermissionRequestInFlightRef.current = false;\n    clearVoiceStartPending();\n    cancelVoiceForAppBackground();');
+    expect(source).toContain('useEffect(() => {\n    setVoiceStartPending(false);\n    return () => {');
     // 手势被系统/滚动打断时撤销按下即录(review P1)。
     expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');

@@ -1232,6 +1232,10 @@ export default function NewRemoteSessionScreen() {
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const voiceStartPendingSeqRef = useRef(0);
   const voiceStartedOnPressInRef = useRef(false);
+  const clearVoiceStartPending = useCallback(() => {
+    voiceStartPendingSeqRef.current += 1;
+    setVoiceStartPending(false);
+  }, []);
   useEffect(() => {
     if (!voiceStartPending) return;
     if (shouldClearMobileVoiceStartPending({
@@ -1439,13 +1443,14 @@ export default function NewRemoteSessionScreen() {
     voiceStartupInFlightRef.current = false;
     voiceStopInFlightRef.current = false;
     voiceRecordingActiveRef.current = false;
+    clearVoiceStartPending();
     setComposerVoiceHoldArmed(false);
     setVoiceState('idle');
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
     void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-  }, [setVoiceState]);
+  }, [clearVoiceStartPending, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -3030,6 +3035,7 @@ export default function NewRemoteSessionScreen() {
       voicePermissionRequestAbortRef.current?.abort();
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
+      voiceStartPendingSeqRef.current += 1;
       voiceStartupSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;

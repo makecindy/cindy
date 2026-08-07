@@ -995,6 +995,10 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('startupSettled: !voiceStartupInFlightRef.current');
     expect(newSource).toContain('startupSettled: true');
     expect(newSource).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // controller/ref teardown 不一定改变 voiceState;显式清 pending,避免同值 idle
+    // 被 React 跳过后胶囊常驻。
+    expect(newSource).toContain('const clearVoiceStartPending = useCallback(() => {');
+    expect(newSource).toContain('voiceRecordingActiveRef.current = false;\n    clearVoiceStartPending();\n    setComposerVoiceHoldArmed(false);');
     // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,
     // 否则按钮可点但必失败):点创建 = 停录并用最终转写创建(review 二轮收窄)。
     // 判定必须是结构化的 isNewSessionDraftMissingPayloadOnly,禁止比对本地化
