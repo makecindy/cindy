@@ -243,6 +243,23 @@ describe('discord gateway pure logic', () => {
     expect(client.destroy).toHaveBeenCalledOnce();
   });
 
+  it('does not reopen ingress when Gateway readiness arrives after forced close', async () => {
+    const { gateway, statuses } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    await gateway.closeIngress();
+
+    emitReady(client, 'late#0000');
+    client.emit('shardResume');
+    client.emit('shardReady');
+
+    expect(gateway.ingressOpen).toBe(false);
+    expect(statuses).not.toContainEqual({ kind: 'connected', appId: 'late#0000' });
+
+    await gateway.destroy();
+  });
+
   it('releases the client after a terminal runtime disconnect', async () => {
     const { gateway, statuses } = createGatewayHarness();
 

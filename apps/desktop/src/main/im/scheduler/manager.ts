@@ -580,18 +580,24 @@ export class ImSchedulerManager {
       || this.desiredIdentity !== identity
     ) return;
     this.withdrawingIdentity = identity;
+    this.connectedIdentity = null;
+    // Withdraw from the election before waiting for accepted work to drain.
+    // The old Gateway is already reconnecting, so its REST lease can finish
+    // without keeping this Desktop advertised as the active ingress.
+    this.markLocalRuntimeDirty(identity);
+    this.advertiseAll();
     try {
-      // Destroy the reconnecting Gateway before publishing an empty
-      // advertisement. Releasing the election first would briefly allow a
-      // second device to connect while this client could still resume.
-      await this.discord.enterSchedulerStandby();
+      // Close the reconnecting Gateway before draining its accepted work. The
+      // provider keeps the REST client alive for those terminal responses, but
+      // a healthy peer can now observe the dirty/empty advertisement and take
+      // over without waiting for an unbounded Agent turn.
+      await this.discord.enterSchedulerStandby({ closeIngress: true });
       if (!this.started || this.discoveryNonce !== discoveryNonce) {
         this.withdrawingIdentity = null;
         return;
       }
-      this.markLocalRuntimeDirty(identity);
-      this.advertiseAll();
     } catch (error) {
+      this.markActivationFailure(identity);
       this.withdrawingIdentity = null;
       log.warn('discord scheduler reconnect timeout standby failed', error);
       return;
@@ -678,6 +684,7 @@ export class ImSchedulerManager {
   private advertisedChannels(): SchedulerAdvertisementFrame['channels'] {
     const identity = this.discord.getSchedulerIdentity();
     return identity
+      && this.withdrawingIdentity !== identity
       && !this.isActivationCoolingDown(identity)
       && isSchedulerChannelIdentity({ channel: 'discord', identity })
       ? [{ channel: 'discord' as const, identity }]

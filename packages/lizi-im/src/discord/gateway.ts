@@ -86,6 +86,7 @@ class DiscordJsGateway implements DiscordGateway {
   #client: Client | null = null;
   #connectPromise: Promise<void> | null = null;
   #ingressOpen = false;
+  #ingressForcedClosed = false;
   #appId = '';
   #botTag = '';
   #dedup = createDedup(DEDUP_CAPACITY);
@@ -117,6 +118,7 @@ class DiscordJsGateway implements DiscordGateway {
     if (this.#client) return;
 
     this.ev.onStatus({ kind: 'connecting' });
+    this.#ingressForcedClosed = false;
     this.#ingressOpen = true;
     const client = new Client({
       intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
@@ -149,6 +151,7 @@ class DiscordJsGateway implements DiscordGateway {
   }
 
   async closeIngress(): Promise<void> {
+    this.#ingressForcedClosed = true;
     this.#ingressOpen = false;
     const client = this.#client;
     if (!client) return;
@@ -173,6 +176,7 @@ class DiscordJsGateway implements DiscordGateway {
     const client = this.#client;
     this.#client = null;
     this.#connectPromise = null;
+    this.#ingressForcedClosed = false;
     this.#ingressOpen = false;
     this.#appId = '';
     this.#botTag = '';
@@ -184,6 +188,7 @@ class DiscordJsGateway implements DiscordGateway {
   #bindClient(client: Client): void {
     client.once(Events.ClientReady, (readyClient) => {
       if (this.#client !== client) return;
+      if (this.#ingressForcedClosed) return;
       this.#appId = readyClient.application?.id ?? readyClient.user.id;
       this.#botTag = readyClient.user.tag;
       this.#ingressOpen = true;
@@ -244,11 +249,13 @@ class DiscordJsGateway implements DiscordGateway {
     });
     client.on(Events.ShardResume, () => {
       if (this.#client !== client) return;
+      if (this.#ingressForcedClosed) return;
       this.#ingressOpen = true;
       this.ev.onStatus(connectedStatusForBotTag(this.#botTag));
     });
     client.on(Events.ShardReady, () => {
       if (this.#client !== client) return;
+      if (this.#ingressForcedClosed) return;
       this.#ingressOpen = true;
       this.ev.onStatus(connectedStatusForBotTag(this.#botTag));
     });

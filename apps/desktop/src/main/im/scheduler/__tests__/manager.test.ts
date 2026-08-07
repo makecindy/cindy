@@ -1391,6 +1391,62 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('publishes reconnect withdrawal before waiting for accepted work to drain', async () => {
+    harness.selfDeviceId = 'a';
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    let releaseDrain!: () => void;
+    const drain = new Promise<void>((resolve) => {
+      releaseDrain = resolve;
+    });
+    discord.enterSchedulerStandby.mockImplementation(async () => {
+      await drain;
+      discord.emitStatus({ kind: 'standby', appId: 'bot#0000' });
+    });
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('z', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+    discord.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    discord.emitStatus({ kind: 'connecting' });
+
+    for (let elapsed = 0; elapsed < 14_000; elapsed += 2_000) {
+      await vi.advanceTimersByTimeAsync(2_000);
+      confirmPeer('z', [{ channel: 'discord', identity: '12345678901234567' }]);
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(discord.enterSchedulerStandby).toHaveBeenCalledWith({ closeIngress: true }));
+
+    const withdrawal = [...harness.sendPush.mock.calls].reverse().find(([, , payload]) => (
+      typeof payload === 'object'
+      && payload !== null
+      && (payload as { kind?: unknown }).kind === 'advertisement'
+      && (payload as { channels?: unknown }).channels instanceof Array
+      && (payload as { channels: unknown[] }).channels.length === 0
+    ))?.[2] as {
+      channels?: unknown[];
+      runtime?: { identity?: string; state?: string };
+    } | undefined;
+    expect(withdrawal).toMatchObject({
+      channels: [],
+      runtime: {
+        identity: '12345678901234567',
+        state: 'dirty',
+      },
+    });
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+
+    releaseDrain();
+    await manager.reconcile();
+    await manager.stop();
+  });
+
   it('re-arms reconnect grace when a new discovery generation starts mid-reconnect', async () => {
     harness.selfDeviceId = 'a';
     const discord = createDiscord();
