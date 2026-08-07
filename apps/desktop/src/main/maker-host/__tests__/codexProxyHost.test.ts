@@ -1878,6 +1878,35 @@ describe('codex proxy host', () => {
     );
   });
 
+  it('对外端口绝不解析 WS 上游:内部 spawn 处于 oauth-bearer 态也返回 null(#1666 review 禁 WS 兜底)', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:51999',
+      dispose: vi.fn(async () => undefined),
+    });
+    // 内部 spawn 处于 oauth-bearer:对**内部**端口这会解析出 ChatGPT 上游(见上一用例);对外端口
+    // 必须仍然拒绝 —— 否则手工客户端 / 陈旧配置向公开端口发 Upgrade 就会把 cindy-local- token 透传上游。
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    await host.ensureCodexExternalProxyReady();
+
+    const externalOpts = mockState.createAnthropicCompatProxy.mock.calls.at(-1)![0] as {
+      resolveWebSocketUpstream: (ctx: {
+        url: string;
+        headers: Readonly<Record<string, string>>;
+      }) => string | null;
+    };
+    // 无 thread-id、带 thread-id 都必须为 null(对外端口结构性禁 WS,不看身份 / recovery 状态)。
+    expect(
+      externalOpts.resolveWebSocketUpstream({ url: '/v1/responses', headers: {} }),
+    ).toBeNull();
+    expect(
+      externalOpts.resolveWebSocketUpstream({
+        url: '/v1/responses',
+        headers: { 'thread-id': 'thread-x' },
+      }),
+    ).toBeNull();
+  });
+
   it('declines the next websocket upgrade after a body recovery error is armed', async () => {
     const host = await freshCodexProxyHost();
     const disconnectWebSocketsForThread = vi.fn(() => 2);

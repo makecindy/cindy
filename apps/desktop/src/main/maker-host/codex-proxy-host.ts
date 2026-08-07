@@ -2842,6 +2842,15 @@ function createCodexProxyHandle(
      * thread 不预扫描、不降级，继续保留原生 WS 容量体验。
      */
     resolveWebSocketUpstream: ({ headers }) => {
+      // 对外端口(端口拆分,#1666 review):**绝不**提供 WS 上游。WS upgrade 走的是 proxy 的
+      // upgrade 处理,既不过 createExternalCodexRoutingTransform(对外 token 判定),也不 strip
+      // 入站 Authorization。一旦内部 codex spawn 处于 oauth-bearer 态,手工客户端 / 陈旧配置只要
+      // 向这个已公布的对外端口发 Upgrade,下面就会把连接连同 `Authorization: Bearer cindy-local-*`
+      // 直送 ChatGPT 订阅后端 = 凭证透传上游 + 绕过对外鉴权。生成配置的 supports_websockets=false
+      // 只挡「自家 codex 发起 upgrade」,这里是对「任意客户端向对外端口发 upgrade」的结构性兜底:
+      // 返回 null → proxy 回 426 → 客户端(含 codex 原生 transport)降级到 HTTP,HTTP 路径才有
+      // 对外 token 判定与 strip。
+      if (external) return null;
       if ((frozenAuthInjection ?? getCodexProxyAuthInjection()) !== 'oauth-bearer') return null;
       const threadId = selectedThreadIdFromHeaders(headers);
       const recoveryReason = httpRecoveryReasonByThread.get(threadId);
