@@ -70,27 +70,16 @@ async function probeFreePort(): Promise<number> {
  * LISTEN_FAILED 就是回归,必须原样交给断言。若也一并重试,换个端口跑一次碰巧成功
  * 就把回归掩盖掉了。所以 body 的第一个元素必须是"初始 bind 那一单"的结果。
  */
-type PinnedPortPicker = (attempt: number) => number | Promise<number>;
-
 async function pinnedPortCase<T extends readonly unknown[]>(
   body: (port: number) => Promise<T>,
   attempts = 5,
-  pickPort: PinnedPortPicker = () => probeFreePort(),
 ): Promise<T> {
   let last!: T;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    last = await body(await pickPort(attempt - 1));
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await body(await probeFreePort());
     if (!isListenFailed(last[0])) return last;
   }
   return last;
-}
-
-/**
- * 为需要固定端口交接的用例选 worker 级候选端口。低于常见系统动态端口范围,
- * 避免其它 listen(0) 在前一单释放到下一单重绑的窗口随机拿走被测端口。
- */
-function pickNonEphemeralPinnedPort(attempt: number): number {
-  return 20_000 + ((process.pid + attempt) % 10_000);
 }
 
 /** 只认引擎明确报出的 LISTEN_FAILED;形状不符的值一律不算"端口被抢"。 */
@@ -415,34 +404,35 @@ describe('startGhostOauthFlow', () => {
 
   it('钉死端口:第二单还在排队时第三单进场——前两单 CANCELLED,最后一单赢', async () => {
     const neverOpen = vi.fn();
-    const [firstResult, secondResult, thirdResult] = await pinnedPortCase(
-      async (fixedPort) => {
-        let secondDone: Promise<unknown> = Promise.resolve();
-        let thirdDone: Promise<unknown> = Promise.resolve();
-        const first = await startGhostOauthFlow({
+    let secondDone: Promise<unknown> = Promise.resolve();
+    let thirdDone: Promise<unknown> = Promise.resolve();
+    const firstResult = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, pkce: false },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: (url) => {
+        const redirectUri = new URL(url).searchParams.get('redirect_uri');
+        if (!redirectUri) throw new Error('authorize URL 缺 redirect_uri');
+        const fixedPort = Number(new URL(redirectUri).port);
+        if (!fixedPort) throw new Error('redirect_uri 缺端口');
+
+        // 第一单已由系统分配并占住端口;第二单进场(排队等第一单收尾),
+        // 紧接着第三单进场顶掉排队中的第二单,两单都显式复用第一单的实际端口。
+        secondDone = startGhostOauthFlow({
           config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
           fetchImpl: vi.fn() as unknown as typeof fetch,
-          openExternal: () => {
-            // 第二单进场(排队等第一单收尾),紧接着第三单进场顶掉排队中的第二单。
-            secondDone = startGhostOauthFlow({
-              config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-              fetchImpl: vi.fn() as unknown as typeof fetch,
-              openExternal: neverOpen,
-            });
-            thirdDone = startGhostOauthFlow({
-              config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-              fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-third' })) as unknown as typeof fetch,
-              openExternal: (url3) => {
-                browserRedirect(url3, (au) => ({ code: 'c-third', state: au.searchParams.get('state') ?? '' }));
-              },
-            });
+          openExternal: neverOpen,
+        });
+        thirdDone = startGhostOauthFlow({
+          config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
+          fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-third' })) as unknown as typeof fetch,
+          openExternal: (url3) => {
+            browserRedirect(url3, (au) => ({ code: 'c-third', state: au.searchParams.get('state') ?? '' }));
           },
         });
-        return [first, await secondDone, await thirdDone];
       },
-      5,
-      pickNonEphemeralPinnedPort,
-    );
+    });
+    const secondResult = await secondDone;
+    const thirdResult = await thirdDone;
     expect(firstResult).toMatchObject({ ok: false, error: 'CANCELLED' });
     expect(secondResult).toMatchObject({ ok: false, error: 'CANCELLED' });
     expect(thirdResult).toMatchObject({ ok: true });
