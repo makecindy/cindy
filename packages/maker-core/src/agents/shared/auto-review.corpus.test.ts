@@ -253,6 +253,70 @@ describe('review 第一轮 — 其余修复', () => {
   });
 });
 
+/**
+ * 第三轮 review 的 4 条,同属「shell token/option 解析 → 安全分类」这一族,一次收完。
+ * 全部是本 PR 引入的降级,不是既有缺口。
+ */
+describe('review 第三轮 — token/option 解析族', () => {
+  it('[P1] gh 的令牌短选项与 `auth token` 子命令都是确定性必问', () => {
+    for (const c of [
+      'gh auth status -t',
+      'gh auth status -wt',
+      'gh auth status -tw',   // 簇写里 t 在任意位置
+      'gh auth token',        // 子命令直接打印令牌,同族一并收口
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // `-t` 在别的命令里含义完全不同,红线**限定在 gh auth 命令位**,不得外溢。
+    expect(classifyShellCommand('gh auth status', roots, opts)).toBe('auto-approve');
+    expect(classifyShellCommand('gh pr list -L 10', roots, opts)).toBe('auto-approve');
+    expect(classifyShellCommand('tar -tf archive.tar', roots, opts)).not.toBe('prompt-each-time');
+  });
+
+  it('[P1] grep 的 -f/--file 是模式**文件路径**,不是搜索串', () => {
+    for (const c of [
+      'grep -f "~/.ssh/id_rsa" package.json',
+      'rg -f "~/.aws/credentials" .',
+      'grep -nf "~/.ssh/id_rsa" pkg.json',   // 紧贴簇写同样吃下一个参数
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 真正的搜索模式仍照常剥离,两个方向都不回退。
+    expect(classifyShellCommand(
+      'git diff --name-only | grep -E "\\.env|\\.pem|credential|secret"', roots, opts,
+    )).toBe('auto-approve');
+    expect(classifyShellCommand('grep -Rni "foo|bar" src', roots, opts)).toBe('auto-approve');
+  });
+
+  it('[P2] 表外解释器选项 fail-closed:值不会被当成脚本文件', () => {
+    // 判据方向反过来了 —— 登记「无值开关」,其余一律当作可能吃掉下一个 token。
+    // 补表的做法堵不住(同一条意见被提了两轮),换判据才终结枚举竞赛。
+    for (const c of [
+      "printf 'x' | node --title hi",
+      "printf 'x' | node --icu-data-dir /tmp",
+      "printf 'rm -rf /outside' | bash -O extglob",
+      "echo 'import os' | python3 -W ignore",
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 已知无值开关后面的操作数仍被当成脚本文件,不因 fail-closed 误升。
+    expect(classifyShellCommand('echo x | python3 -u run.py', roots, opts)).toBe('prompt');
+    expect(classifyShellCommand('echo x | node script.js', roots, opts)).toBe('prompt');
+  });
+
+  it('[P1] xargs -I 的替换值落在命令位 = 动态代码执行', () => {
+    // stdin 决定「跑哪个程序」而不是「给什么参数」;文件里写 /bin/rm 就是区外递归删除。
+    expect(classifyShellCommand(
+      'cat executor.txt | xargs -I{} env {} -rf /outside', roots, opts,
+    )).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat e.txt | xargs -I % % --flag', roots, opts)).toBe('prompt-each-time');
+    // 占位符只作参数时仍是普通数据,不升级。
+    expect(classifyShellCommand(
+      'cat list.txt | xargs -I{} grep {} src/x.ts', roots, opts,
+    )).toBe('prompt');
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [

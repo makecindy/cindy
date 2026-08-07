@@ -610,9 +610,18 @@ function stripDataLiterals(command: string): string {
     )
     // 3) grep 家族的搜索模式:要找的正则,不是要读的文件。要读的文件是后面的操作数,
     //    不参与替换,所以这里不需要凭证护栏(加了反而会让「扫描凭证特征」的命令重新误报)。
+    //
+    //    **但 `-f`/`--file` 是例外**:那个位置的值是「模式文件的路径」,不是模式本身。
+    //    `grep -f "~/.ssh/id_rsa" package.json` 抹掉之后凭证路径消失,而 grep 又在只读
+    //    白名单里 → 整条变成 auto-approve;同一路径不加引号却仍必问(review 三轮 P1)。
+    //    紧贴的短选项簇(`-nf`)同样以 `f` 结尾吃下一个参数,一并识别。
     .replace(
-      new RegExp(String.raw`(\b(?:grep|egrep|fgrep|rg|ag)\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+)${QUOTED}`, 'g'),
-      '$1DATA',
+      new RegExp(String.raw`(\b(?:grep|egrep|fgrep|rg|ag)\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+)(${QUOTED})`, 'g'),
+      (_m, prefix: string, literal: string) => (
+        /(?:^|\s)(?:-[a-zA-Z]*f|--file)$/.test(prefix.trimEnd())
+          ? `${prefix}${literal}`   // 这是模式**文件路径**,保留给凭证红线扫描
+          : `${prefix}DATA`
+      ),
     );
 }
 
@@ -623,6 +632,12 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // 意味着可能被轻量审阅器静默放行(`gh auth status` 看起来就是一条状态查询)。
   // 覆盖 `--show-token` / `--show-token=true` 两种形态(review 二轮 P1)。
   /(?:^|\s)--show-token(?:$|[\s=])/,
+  // 短选项形态:`gh auth status -t` 与含 `t` 的簇写(`-wt`/`-tw`)是同一个 flag,只把它挡在
+  // gh 只读白名单外不够 —— 落灰区就可能被轻量审阅器静默放行(review 三轮 P1)。`-t` 本身
+  // 在别的命令里含义完全不同(`docker -t`、`tar -t`),所以**限定在 `gh auth` 命令位**上匹配。
+  /(?:^|\s)gh\s+auth\s+[a-z][\w-]*(?:\s+(?!-)\S+)*\s+-[a-zA-Z]*t[a-zA-Z]*(?![\w=-])/,
+  // `gh auth token` 直接把令牌打到 stdout,与 `--show-token` 同级(同族一次收完)。
+  /(?:^|\s)gh\s+auth\s+token\b/,
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
   // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
   /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
@@ -1320,36 +1335,86 @@ const AWK_SCRIPT_EXECUTES_COMMANDS =
   /\bsystem\s*\(|\bENVIRON\b|\bgetline\b|\bclose\s*\(|\|\s*["']|["']\s*\|/;
 
 /**
- * 解释器里「会吃掉下一个参数」的选项 —— 判断有没有脚本文件操作数之前必须先跳过它们的值。
+ * 解释器里**确定不吃参数**的开关。判据方向刻意反过来:登记「无值选项」,其余一律按
+ * 「可能吃掉下一个参数」处理。
  *
- * review 实证:`printf 'rm -rf /outside' | bash -O extglob` 里 `extglob` 是 `-O` 的值,
- * 通用 `positionalOperands` 把它当成脚本文件 → 认定「程序来自文件」→ 这条**stdin 即程序**
- * 的命令从红线降进灰区。Python 的 `-W`/`-X`、node 的 `-r` 等同理。
- * 表按解释器族维护;`--opt=value` 形态自带值不需要登记。
+ * 为什么不登记「吃参数的选项」:那是一场赢不了的枚举竞赛,而且每漏一个都是**安全降级**。
+ * review 连续两轮实证:
+ *   - `printf 'rm -rf /outside' | bash -O extglob` —— `extglob` 是 `-O` 的值;
+ *   - `printf '…' | node --title hi` —— `hi` 是 `--title` 的值(node 24 实测会消费它)。
+ * 两次都是「值被当成脚本文件 → 认定程序来自文件 → 这条 **stdin 即程序** 的命令从红线
+ * 降进灰区」。第二次是同一条意见的重新提出 —— 说明补表的做法堵不住,必须换判据方向。
+ *
+ * 现在:只要出现表外的选项,就认为它可能吃掉后面的 token,于是「找不到可信的脚本文件
+ * 操作数」→ 按 stdin 即程序处理(红线)。代价是 `cat x | node --some-new-flag run.js`
+ * 这类会误升成必问 —— fail-closed 方向,且实测对语料零影响(见 corpus 用例)。
  */
-const INTERPRETER_VALUE_TAKING_OPTIONS: readonly { match: RegExp; opts: ReadonlySet<string> }[] = [
-  // shell:-O/+O shopt 名、-o/+o set 选项名、--rcfile/--init-file 路径。
-  { match: /^(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)$/, opts: new Set(['-O', '+O', '-o', '+o', '--rcfile', '--init-file']) },
-  { match: /^(?:python|pypy)\d*(?:\.\d+)*$/, opts: new Set(['-W', '-X', '--check-hash-based-pycs']) },
-  { match: /^(?:node|nodejs|bun|deno)$/, opts: new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--conditions']) },
-  { match: /^perl$/, opts: new Set(['-I', '-i', '-x']) },
-  { match: /^ruby\d*(?:\.\d+)*$/, opts: new Set(['-I', '-r', '-E', '-C']) },
+const INTERPRETER_VALUELESS_OPTIONS: readonly { match: RegExp; opts: ReadonlySet<string> }[] = [
+  {
+    match: /^(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)$/,
+    opts: new Set(['-x', '-e', '-u', '-v', '-n', '-l', '-i', '-s', '-h', '-p', '-r', '-a', '-f', '-m',
+      '--login', '--posix', '--norc', '--noprofile', '--noediting', '--restricted', '--verbose', '--debug']),
+  },
+  {
+    match: /^(?:python|pypy)\d*(?:\.\d+)*$/,
+    opts: new Set(['-u', '-B', '-E', '-I', '-O', '-OO', '-S', '-s', '-v', '-b', '-bb', '-d', '-q',
+      '-R', '-x', '-h', '-V', '--version', '--help']),
+  },
+  {
+    match: /^(?:node|nodejs|bun|deno)$/,
+    opts: new Set(['-i', '--interactive', '-v', '--version', '-h', '--help', '--no-warnings',
+      '--trace-warnings', '--trace-uncaught', '--experimental-vm-modules', '--experimental-modules',
+      '--experimental-strip-types', '--zero-fill-buffers', '--abort-on-uncaught-exception',
+      '--preserve-symlinks', '--frozen-intrinsics', '--no-deprecation', '--throw-deprecation']),
+  },
+  { match: /^perl$/, opts: new Set(['-w', '-W', '-c', '-n', '-p', '-l', '-a', '-s', '-T', '-U', '-v']) },
+  { match: /^ruby\d*(?:\.\d+)*$/, opts: new Set(['-w', '-W', '-c', '-n', '-p', '-l', '-a', '-s', '-v', '--verbose']) },
 ];
 
-/** 跳过「吃下一个参数」的选项及其值之后,剩下的真实操作数。 */
-function operandsSkippingInterpreterOptionValues(bin: string, args: readonly string[]): string[] {
-  const entry = INTERPRETER_VALUE_TAKING_OPTIONS.find((e) => e.match.test(bin));
+/**
+ * 解释器参数里能被当作**脚本文件**的操作数。
+ *
+ * 返回空数组 = 找不到可信脚本文件(要么本来就没有,要么被表外选项吃掉了)→ 调用方按
+ * 「stdin 即程序」处理。`--opt=value` 自带值,不吃后面的 token,单独放行。
+ */
+function trustedScriptOperands(bin: string, args: readonly string[]): string[] {
+  const entry = INTERPRETER_VALUELESS_OPTIONS.find((e) => e.match.test(bin));
   if (!entry) return positionalOperands([...args]);
-  const kept: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const token = args[i] as string;
-    if (entry.opts.has(token)) {
-      i += 1; // 连同它的值一起跳过 —— 那不是脚本文件。
-      continue;
+  const operands: string[] = [];
+  for (const token of args) {
+    if (token === '--') continue;
+    if (token.startsWith('-')) {
+      // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
+      if (entry.opts.has(token) || token.includes('=')) continue;
+      // 表外选项:可能吃掉下一个参数 → 无法证明后面还有真正的脚本文件,fail-closed。
+      return [];
     }
-    kept.push(token);
+    operands.push(token);
   }
-  return positionalOperands(kept);
+  return operands;
+}
+
+/**
+ * `xargs -I<占位符>` 的替换值是否落在**命令位**(而不是普通参数位)。
+ *
+ * 落在命令位 = stdin 决定跑哪个程序 = 动态代码执行,必须逐次确认。判据取包装器剥离后的
+ * 可执行文件名:`xargs -I{} env {} -rf /outside` 剥掉 `env` 后 bin 就是 `{}`(占位符本身)。
+ */
+function xargsReplacementDrivesCommand(tokens: string[]): boolean {
+  let placeholder: string | null = null;
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i] as string;
+    if (t === '-I' || t === '-i' || t === '--replace') placeholder = tokens[i + 1] ?? '{}';
+    else if (/^-I./.test(t)) placeholder = t.slice(2);            // `-I{}` 紧贴写法
+    else if (/^--replace=/.test(t)) placeholder = t.slice('--replace='.length);
+    else if (t === '--replace' || t === '-i') placeholder = '{}';  // 缺省占位符
+    if (placeholder) break;
+  }
+  if (!placeholder) return false;
+  const nested = xargsCommandTokens(tokens);
+  if (nested === null) return false;                              // 选项形态未知,交既有分支处理
+  const nestedBin = executableName(unwrapWrappers(nested)[0] ?? '');
+  return nestedBin === placeholder || nestedBin.includes(placeholder);
 }
 
 function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
@@ -1365,6 +1430,13 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // `… | awk -f script.awk -` 会被误升成确定性红线)。
   if (bin === 'xargs' || bin === 'parallel') {
     if (tokens.slice(1).some((t) => SHELL_EXECUTORS.has(executableName(t)))) return true;
+    // `-I{}` 把 stdin 的每一行**替换进 INITIAL-ARGS**。若占位符正好落在**命令位**,
+    // 那 stdin 决定的就是「跑哪个程序」而不是「给什么参数」:
+    //     cat executor.txt | xargs -I{} env {} -rf /outside
+    // 文件里写 `/bin/rm` 就会执行区外递归删除。这里没有字面 shell executor,递归分析也只
+    // 看到未知的 `{}`,所以必须在这一层判定(review P1)。占位符只作**参数**时(如
+    // `xargs -I{} grep {} file`)仍是普通数据,不升级。
+    if (xargsReplacementDrivesCommand(tokens)) return true;
     return bin === 'parallel' && positionalOperands(tokens.slice(1)).length === 0;
   }
   // awk 家族:程序是第一个操作数或 -f 脚本文件,不可能来自 stdin —— **除非**那段字面脚本
@@ -1388,8 +1460,7 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // 有脚本文件操作数 → 程序来自该文件。两点必须先处理干净,否则会把「stdin 即程序」误降:
   //  - 吃参数的启动选项(`bash -O extglob`、`python -W ignore`)的**值**不是脚本文件;
   //  - 裸 `-` 是 stdin 占位符,不算脚本文件(`curl … | python3 -` 仍必须是红线)。
-  const operands = operandsSkippingInterpreterOptionValues(bin, tokens.slice(1))
-    .filter((t) => t !== '-');
+  const operands = trustedScriptOperands(bin, tokens.slice(1)).filter((t) => t !== '-');
   if (operands.length > 0) return false;
   return true;
 }
