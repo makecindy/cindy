@@ -54,12 +54,18 @@ describe('codexRruleToCron', () => {
     expect(result.diagnostics.join(' ')).toContain('INTERVAL=2');
   });
 
-  it('rejects unsupported or ambiguous recurrence fields', () => {
+  it('supports multiple fixed hours and minutes', () => {
+    expect(codexRruleToCron('FREQ=DAILY;BYHOUR=8,9;BYMINUTE=0,30')).toEqual({
+      cronExpr: '0,30 8,9 * * *',
+      diagnostics: [],
+    });
+  });
+
+  it('rejects unsupported recurrence fields', () => {
     const result = codexRruleToCron(
       'FREQ=WEEKLY;BYDAY=MO;BYHOUR=8,9;BYMINUTE=0;COUNT=3;BYSETPOS=1',
     );
     expect(result.cronExpr).toBeUndefined();
-    expect(result.diagnostics.join(' ')).toContain('BYHOUR');
     expect(result.diagnostics.join(' ')).toContain('COUNT');
     expect(result.diagnostics.join(' ')).toContain('BYSETPOS');
   });

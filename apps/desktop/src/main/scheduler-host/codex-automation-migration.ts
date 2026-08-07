@@ -1,4 +1,9 @@
-import type { CreateScheduleInput, Schedule, Scheduler } from '@cindy/maker-scheduler';
+import type {
+  CreateScheduleInput,
+  Schedule,
+  Scheduler,
+  UpdateScheduleInput,
+} from '@cindy/maker-scheduler';
 
 import {
   convertCodexAutomation,
@@ -13,6 +18,7 @@ export type CodexAutomationMigrationConverter = (
 export interface CodexAutomationMigrationScheduler {
   list(): Promise<Schedule[]>;
   create(input: CreateScheduleInput): Promise<Schedule>;
+  update(id: string, patch: UpdateScheduleInput): Promise<Schedule>;
   pause(id: string): Promise<Schedule>;
   delete(id: string): Promise<void>;
 }
@@ -72,6 +78,32 @@ function uniqueDiagnostics(...groups: string[][]): string[] {
   return [...new Set(groups.flat())];
 }
 
+function samePreRunHook(
+  schedule: Schedule['preRunHook'],
+  input: CreateScheduleInput['preRunHook'],
+): boolean {
+  const normalizedInput = input ?? undefined;
+  if (!schedule || !normalizedInput) return schedule === normalizedInput;
+  return (
+    normalized(schedule.command) === normalized(normalizedInput.command) &&
+    schedule.timeoutMs === normalizedInput.timeoutMs
+  );
+}
+
+function sameScriptConfig(
+  schedule: Schedule['scriptConfig'],
+  input: CreateScheduleInput['scriptConfig'],
+): boolean {
+  const normalizedInput = input ?? undefined;
+  if (!schedule || !normalizedInput) return schedule === normalizedInput;
+  return (
+    normalized(schedule.command) === normalized(normalizedInput.command) &&
+    schedule.timeoutMs === normalizedInput.timeoutMs &&
+    [...schedule.capabilities].sort().join(',') ===
+      [...normalizedInput.capabilities].sort().join(',')
+  );
+}
+
 let importTail: Promise<void> = Promise.resolve();
 
 function withImportLock<T>(task: () => Promise<T>): Promise<T> {
@@ -113,6 +145,8 @@ export function findDuplicateSchedule(
       normalized(schedule.workingDir) === normalized(input.workingDir) &&
       schedule.useWorktree === input.useWorktree &&
       (schedule.executionMode ?? 'agent') === (input.executionMode ?? 'agent') &&
+      sameScriptConfig(schedule.scriptConfig, input.scriptConfig) &&
+      samePreRunHook(schedule.preRunHook, input.preRunHook) &&
       (schedule.persistentSession ?? false) === (input.persistentSession ?? false) &&
       (schedule.silentWhenIdle ?? false) === (input.silentWhenIdle ?? false) &&
       schedule.notify.desktop === input.notify.desktop &&
@@ -234,11 +268,22 @@ export function createCodexAutomationMigrationService(
             continue;
           }
           let createdSchedule: Schedule | undefined;
+          const desiredManual = converted.input.manual ?? false;
+          const createInput: CreateScheduleInput =
+            converted.status === 'paused' ? { ...converted.input, manual: true } : converted.input;
           try {
-            createdSchedule = await deps.scheduler.create(converted.input);
+            // Paused Codex tasks are created in manual mode first. This is a
+            // fail-closed staging state: even if both pause and delete fail,
+            // the leftover schedule has no automatic next fire.
+            createdSchedule = await deps.scheduler.create(createInput);
             let importedSchedule = createdSchedule;
             if (converted.status === 'paused' && createdSchedule.status === 'active') {
               importedSchedule = await deps.scheduler.pause(createdSchedule.id);
+            }
+            if (converted.status === 'paused' && importedSchedule.manual !== desiredManual) {
+              importedSchedule = await deps.scheduler.update(importedSchedule.id, {
+                manual: desiredManual,
+              });
             }
             knownSchedules.push(importedSchedule);
             created.push({
@@ -252,7 +297,10 @@ export function createCodexAutomationMigrationService(
               try {
                 await deps.scheduler.delete(createdSchedule.id);
               } catch (cleanupError) {
-                errorMessage = `${errorMessage}; cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+                const safetyState = createdSchedule.manual
+                  ? `schedule ${createdSchedule.id} remains manual and will not auto-run`
+                  : `schedule ${createdSchedule.id} may still be active`;
+                errorMessage = `${errorMessage}; cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}; ${safetyState}`;
               }
             }
             failed.push({

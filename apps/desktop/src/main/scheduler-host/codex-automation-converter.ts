@@ -78,6 +78,31 @@ function parseRrule(rrule: string): { values: Map<string, string>; diagnostics: 
   return { values, diagnostics };
 }
 
+function integerList(
+  values: Map<string, string>,
+  key: string,
+  min: number,
+  max: number,
+  diagnostics: string[],
+): number[] | undefined {
+  const value = values.get(key);
+  if (value === undefined) {
+    diagnostics.push(`RRULE is missing a fixed ${key}`);
+    return undefined;
+  }
+  const parts = value.split(',').map((part) => part.trim());
+  if (parts.length === 0 || parts.some((part) => !/^\d+$/.test(part))) {
+    diagnostics.push(`RRULE ${key} must contain one or more integers`);
+    return undefined;
+  }
+  const parsed = parts.map(Number);
+  if (parsed.some((item) => !Number.isInteger(item) || item < min || item > max)) {
+    diagnostics.push(`RRULE ${key} values must be between ${min} and ${max}`);
+    return undefined;
+  }
+  return [...new Set(parsed)].sort((a, b) => a - b);
+}
+
 function singleInteger(
   values: Map<string, string>,
   key: string,
@@ -85,21 +110,13 @@ function singleInteger(
   max: number,
   diagnostics: string[],
 ): number | undefined {
-  const value = values.get(key);
-  if (value === undefined) {
-    diagnostics.push(`RRULE is missing a fixed ${key}`);
-    return undefined;
-  }
-  if (!/^\d+$/.test(value)) {
+  const parsed = integerList(values, key, min, max, diagnostics);
+  if (!parsed) return undefined;
+  if (parsed.length !== 1) {
     diagnostics.push(`RRULE ${key} must contain one integer`);
     return undefined;
   }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    diagnostics.push(`RRULE ${key} must be between ${min} and ${max}`);
-    return undefined;
-  }
-  return parsed;
+  return parsed[0];
 }
 
 function isAbsoluteWorkdir(value: string): boolean {
@@ -122,8 +139,8 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
     );
   }
 
-  const hour = singleInteger(values, 'BYHOUR', 0, 23, diagnostics);
-  const minute = singleInteger(values, 'BYMINUTE', 0, 59, diagnostics);
+  const hours = integerList(values, 'BYHOUR', 0, 23, diagnostics);
+  const minutes = integerList(values, 'BYMINUTE', 0, 59, diagnostics);
 
   const second = values.get('BYSECOND');
   if (second !== undefined && second !== '0') {
@@ -171,10 +188,13 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
     diagnostics.push('RRULE BYDAY/BYMONTHDAY is not valid for DAILY cron conversion');
   }
 
-  if (hour === undefined || minute === undefined || diagnostics.length > 0) {
+  if (hours === undefined || minutes === undefined || diagnostics.length > 0) {
     return { diagnostics };
   }
-  return { cronExpr: `${minute} ${hour} ${dayOfMonth} * ${dayOfWeek}`, diagnostics };
+  return {
+    cronExpr: `${minutes.join(',')} ${hours.join(',')} ${dayOfMonth} * ${dayOfWeek}`,
+    diagnostics,
+  };
 }
 
 function statusForCodex(status: string, diagnostics: string[]): ScheduleStatus {

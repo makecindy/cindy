@@ -4,6 +4,7 @@ import type { CreateScheduleInput, Schedule } from '@cindy/maker-scheduler';
 import type { CodexAutomationDetail, CodexAutomationReader } from '../codex-automation-reader.js';
 import {
   createCodexAutomationMigrationService,
+  findDuplicateSchedule,
   type CodexAutomationMigrationConverter,
 } from '../codex-automation-migration.js';
 
@@ -51,6 +52,12 @@ function setup(items: CodexAutomationDetail[]) {
       } as Schedule;
       schedules.push(created);
       return created;
+    }),
+    update: vi.fn(async (id: string, patch: Partial<CreateScheduleInput>) => {
+      const schedule = schedules.find((item) => item.id === id);
+      if (!schedule) throw new Error(`schedule ${id} not found`);
+      Object.assign(schedule, patch);
+      return schedule;
     }),
     pause: vi.fn(async (id: string) => {
       const schedule = schedules.find((item) => item.id === id);
@@ -148,6 +155,40 @@ describe('CodexAutomationMigrationService', () => {
     expect(result.items[0]?.selectedByDefault).toBe(true);
   });
 
+  it('does not treat hook configuration changes as duplicates', async () => {
+    const first = detail('one');
+    const { service, scheduler } = setup([first]);
+    scheduler.list.mockResolvedValueOnce([
+      {
+        id: 'existing',
+        ...inputFor(first),
+        status: 'active',
+        preRunHook: { command: 'node check.mjs' },
+      } as Schedule,
+    ]);
+
+    const result = await service.preview();
+
+    expect(result.items[0]?.duplicate).toBe(false);
+  });
+
+  it('does not treat script configuration changes as duplicates', () => {
+    const first = detail('one');
+    const input: CreateScheduleInput = {
+      ...inputFor(first),
+      executionMode: 'script',
+      scriptConfig: { command: 'node import.mjs', capabilities: ['jira.read'] },
+    };
+    const existing = {
+      id: 'existing',
+      ...input,
+      status: 'active',
+      scriptConfig: { command: 'node other.mjs', capabilities: ['jira.read'] },
+    } as Schedule;
+
+    expect(findDuplicateSchedule([existing], input)).toBeUndefined();
+  });
+
   it('deduplicates diagnostics in skipped import results', async () => {
     const item = detail('bad', { diagnostics: ['unsupported recurrence'] });
     const { scheduler } = setup([item]);
@@ -177,6 +218,35 @@ describe('CodexAutomationMigrationService', () => {
 
     expect(result.created).toHaveLength(0);
     expect(result.failed[0]?.error).toContain('pause failed');
+    expect(scheduler.create).toHaveBeenCalledWith(expect.objectContaining({ manual: true }));
     expect(scheduler.delete).toHaveBeenCalledWith('schedule-1');
+  });
+
+  it('leaves a non-auto-running manual schedule when pause and cleanup both fail', async () => {
+    const item = detail('paused', { status: 'PAUSED' });
+    const { service, scheduler } = setup([item]);
+    scheduler.pause.mockRejectedValueOnce(new Error('pause failed'));
+    scheduler.delete.mockRejectedValueOnce(new Error('delete failed'));
+
+    const result = await service.import(['paused']);
+    const [leftover] = await scheduler.list();
+
+    expect(result.created).toHaveLength(0);
+    expect(result.failed[0]?.error).toContain('remains manual and will not auto-run');
+    expect(leftover).toMatchObject({ status: 'active', manual: true });
+    expect(leftover?.nextFireAt).toBeUndefined();
+  });
+
+  it('restores the intended automatic cadence only after a paused task is safely paused', async () => {
+    const item = detail('paused', { status: 'PAUSED' });
+    const { service, scheduler } = setup([item]);
+
+    const result = await service.import(['paused']);
+
+    expect(result.created).toHaveLength(1);
+    expect(scheduler.create).toHaveBeenCalledWith(expect.objectContaining({ manual: true }));
+    expect(scheduler.pause).toHaveBeenCalledWith('schedule-1');
+    expect(scheduler.update).toHaveBeenCalledWith('schedule-1', { manual: false });
+    expect((await scheduler.list())[0]).toMatchObject({ status: 'paused', manual: false });
   });
 });
