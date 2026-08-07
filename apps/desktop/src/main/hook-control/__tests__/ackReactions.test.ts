@@ -203,6 +203,23 @@ describe('官方 bot ack 表情', () => {
       expect(h.sent).toHaveLength(2);
     });
 
+    it('成功回执后出回落表 —— 不让跑完的任务长期占着内存', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      h.reactions.onResult({ opId: 'req-1:final', ok: true, messageId: '55' }, () => h.send);
+      // 出表后再来一条同 opId 的失败回执, 不该再触发回落。
+      h.reactions.onResult({ opId: 'req-1:final', ok: false, error: 'x' }, () => h.send);
+      expect(h.sent).toHaveLength(1);
+    });
+
+    it('reset 清掉待补发与回落表(账号切换)', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
+      h.reactions.onFinished(TASK, 'ok', vi.fn(() => false)); // 断线, 进待补发
+      h.reactions.reset();
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.send).not.toHaveBeenCalled();
+    });
+
     it('minimal 档的失败不回落 —— 基础款没有更基础的可退', () => {
       const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal');
       h.reactions.onFinished(TASK, 'ok', h.send);

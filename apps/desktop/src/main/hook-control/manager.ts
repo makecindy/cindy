@@ -1132,9 +1132,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
    * 关掉了却照发。绑定未确认 / 服务端不支持 behavior 时静默跳过(getTelegramBehavior
    * 自己会短路)。
    */
-  function primeTelegramEmojiReactions(): void {
+  function primeTelegramEmojiReactions(bindingIdOverride?: string | null): void {
     const bindingId =
-      telegramLane.binding?.state === 'confirmed' ? telegramLane.binding.bindingId : null;
+      bindingIdOverride ??
+      (telegramLane.binding?.state === 'confirmed' ? telegramLane.binding.bindingId : null);
     if (bindingId === null) return;
     void sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
       makeProviderBehaviorGet({
@@ -1352,6 +1353,21 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   function persistLaneBinding(lane: NeutralProviderLane, view: ProviderBindingView): void {
+    // 档位是 per-binding 的: 绑定确认(首绑 / 改绑)之后才知道该读谁的设置, 而
+    // 绑定确认往往发生在连接之后 —— 只在连接就绪时拉一次会漏掉这一路。撤销 /
+    // 换绑则回到基线, 不把上一位主人的选择留给下一个。
+    if (lane.config.provider === 'telegram') {
+      if (view.state === 'confirmed') {
+        // 这一刻 lane.binding 可能还是旧值, 用刚确认的 bindingId。
+        primeTelegramEmojiReactions(view.bindingId ?? null);
+      } else if (
+        view.state === 'revoked' ||
+        view.state === 'none' ||
+        view.state === 'superseded'
+      ) {
+        resetTelegramEmojiReactions();
+      }
+    }
     try {
       if (
         view.state === 'confirmed' &&

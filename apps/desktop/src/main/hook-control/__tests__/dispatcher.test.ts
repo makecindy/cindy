@@ -4234,6 +4234,26 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await draining;
   });
 
+  it('断线时的终态表情进待补发队列, 重连后补上', async () => {
+    // 直接跳过的话那条消息会永远挂着 👀, 而重连补发拿不到任何东西可补。
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const online = collector();
+    d.onConnected('conn-1', online.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
+    await tick();
+    expect(reactionEmojis(online.sent)).toEqual(['👀']);
+
+    d.onDisconnected('conn-1');
+    fr.finish({ status: 'ok' });
+    await tick();
+
+    const reconnected = collector();
+    d.onConnected('conn-1', reconnected.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    await tick();
+    expect(reactionEmojis(reconnected.sent)).toEqual(['👍']);
+  });
+
   it('老 server 没宣告 msg-op-v1 → 一帧 msg.op 都不发', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });

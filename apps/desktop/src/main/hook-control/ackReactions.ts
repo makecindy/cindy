@@ -67,6 +67,8 @@ export interface AckReactions {
   onReconnected(connectionId: string, send: (m: HookMessage) => boolean): void;
   /** 该连接握手时宣告了 msg-op-v1 吗(缺席 = 老 server, 整体不发)。 */
   supports(connectionId: string): boolean;
+  /** 账号切换 / 销毁: 清掉待补发与可回落表。 */
+  reset(): void;
 }
 
 export function createAckReactions(deps: {
@@ -85,8 +87,19 @@ export function createAckReactions(deps: {
     deps.emojiReactions?.() ?? DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions;
   const random = deps.random ?? Math.random;
 
+  /**
+   * 曾经宣告过 msg-op-v1 的连接。
+   *
+   * 断线时 serverFeatures 会被清掉(那是对的 —— 滚动发布后重连可能落到不支持的
+   * 实例上, 不能拿旧快照发帧)。但「刚断线」与「老 server 从来不支持」是两回事:
+   * 前者的终态表情要进待补发队列, 后者一帧都不该有。靠这张表区分。
+   */
+  const everSupported = new Set<string>();
+
   function supports(connectionId: string): boolean {
-    return serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_MESSAGE_OPS) === true;
+    const ok = serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_MESSAGE_OPS) === true;
+    if (ok) everSupported.add(connectionId);
+    return ok;
   }
 
   /** 返回是否真的送出去了 —— 终态送不出去要留着重连补发。 */
@@ -97,7 +110,8 @@ export function createAckReactions(deps: {
     send: (m: HookMessage) => boolean,
   ): boolean {
     if (task.triggerMessageId === null) return true;
-    if (!supports(task.connectionId)) return true;
+    // 断线时能力快照已被清 —— 那条连接曾经支持过就照常尝试, 让失败落进待补发。
+    if (!supports(task.connectionId) && !everSupported.has(task.connectionId)) return true;
     // off 档一个表情都不发(含 👀 ack 与终态)—— 与个人 bot 的 off 同语义。
     if (modeOf() === 'off') return true;
     // 发不出去就算了: 表情是「正在做」的提示, 补发一个迟到的 👀 只会更奇怪。
@@ -130,6 +144,11 @@ export function createAckReactions(deps: {
 
   return {
     supports,
+    reset() {
+      pendingFinals.clear();
+      retryables.clear();
+      everSupported.clear();
+    },
     onReconnected(connectionId, send) {
       for (const [opId, entry] of [...pendingFinals]) {
         if (entry.task.connectionId !== connectionId) continue;
@@ -164,7 +183,11 @@ export function createAckReactions(deps: {
       }
     },
     onResult(payload, sendFor) {
-      if (payload.ok) return;
+      // 成功即出表 —— 否则每个跑完的任务都会在回落表里留一条, 只涨不落。
+      if (payload.ok) {
+        retryables.delete(payload.opId);
+        return;
+      }
       const retry = retryables.get(payload.opId);
       // 用这一轮自己记下的 connectionId 取发送函数 —— 不猜「当前哪条连接」。
       const send = retry !== undefined ? sendFor?.(retry.task.connectionId) : undefined;

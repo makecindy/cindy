@@ -736,6 +736,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const serverFeatures = new Map<string, readonly string[]>();
   // 官方 bot 的 ack 表情(👀 → 👍/👎) —— 个人 bot 早有, 官方侧靠 msg.op 补上。
   let emojiReactionsMode: TelegramEmojiReactions = 'minimal';
+  /** 连接不在时的发送器: 恒失败, 于是终态表情落进待补发队列。 */
+  const OFFLINE_SEND = (): boolean => false;
   const ackReactions = createAckReactions({
     serverFeatures,
     emojiReactions: () => emojiReactionsMode,
@@ -1497,10 +1499,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       ack: task.ack,
       turnEnd: durableTurnEnd(turnEnd),
     });
-    // 表情换终态。发不出去就算了 —— 它是装饰, 任务的送达由上面的 outbox 保证。
-    // 连接断了就没有发送函数 —— 表情随之跳过, 与它「发不出去就算了」的语义一致。
-    const ackSend = sendFns.get(task.connectionId);
-    if (ackSend) ackReactions.onFinished(ackTaskOf(task), status, ackSend);
+    // 表情换终态。连接断了也要**调**一次 —— 传一个必然失败的发送器, 让
+    // ackReactions 把它记进待补发队列; 直接跳过的话那条消息会永远挂着 👀,
+    // 而重连补发拿不到任何东西可补。
+    ackReactions.onFinished(ackTaskOf(task), status, sendFns.get(task.connectionId) ?? OFFLINE_SEND);
     running.delete(sessionId);
     // 失败收口 -> 记一笔"等着被续跑"。只有 error 记: cancelled 是用户按了停止,
     // ok 没什么可续的。用户之后在桌面端点「重试」时, 这一轮的进展与结果就能接回
@@ -1596,9 +1598,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 👀 必须换成终态, 否则取消掉的消息会永远挂着「在做」。取消的三个入口
     // (排队中被 cancel、account deactivation 清队、群上下文 admission 作废)
     // 都收敛到本方法, 所以这一处就覆盖全部 —— 不要在各入口分别补。
-    // deactivateAccount 里 sendFns.clear() 在本方法之后, 表情发得出去。
-    const ackSend = sendFns.get(task.connectionId);
-    if (ackSend) ackReactions.onFinished(ackTaskOf(task), 'cancelled', ackSend);
+    // deactivateAccount 里 sendFns.clear() 在本方法之后, 表情发得出去; 真断线
+    // 时同样要调, 让终态进待补发队列而不是消失。
+    ackReactions.onFinished(
+      ackTaskOf(task),
+      'cancelled',
+      sendFns.get(task.connectionId) ?? OFFLINE_SEND,
+    );
   }
 
   /**
@@ -2254,6 +2260,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 能力快照按连接存, 而连接身份含账号指纹 —— 换账号后旧条目永远不会再被
       // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
       serverFeatures.clear();
+      // ack 的待补发与可回落表随账号走 —— 换账号后它们指向的连接与消息都不再
+      // 属于当前主人, 留着既补不出去也是一份只涨不落的内存。
+      ackReactions.reset();
       // 续跑记账与在观察的续跑轮都属于上一个账号, 一并清掉(记账里带
       // accountGeneration 只是第二道防线, 表本身不该跨账号留存)。
       for (const sessionId of [...activeContinuations.keys()]) {
