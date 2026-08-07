@@ -27,6 +27,6 @@ export interface SchedulerTransport {
   isOwner(): boolean;
   subscribe(listener: (event: SchedulerTransportEvent) => void): () => void;
   sendPush(peerDeviceId: string, payload: ImSchedulerFrame): void;
-  /** Optional REST/presence refresh hook used by bounded discovery retries. */
-  requestSnapshot?: (accountGeneration: string, requestId: string) => void;
+  /** REST/presence refresh hook used by bounded discovery retries. */
+  requestSnapshot: (accountGeneration: string, requestId: string) => void;
 }

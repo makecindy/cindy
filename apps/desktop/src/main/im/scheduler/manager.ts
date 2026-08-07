@@ -19,6 +19,7 @@ import type { SchedulerTransport, SchedulerTransportEvent } from './transport';
 
 const DEFAULT_DISCOVERY_RETRY_DELAY_MS = 1_000;
 const DEFAULT_DISCOVERY_RETRY_LIMIT = 3;
+const DEFAULT_SNAPSHOT_RESPONSE_TIMEOUT_MS = 5_000;
 
 export type SchedulerDecision =
   | { state: 'active'; channel: SchedulerChannelIdentity; reason: 'elected' }
@@ -44,6 +45,7 @@ export interface ImSchedulerManagerOptions {
   onDecision?: (decision: SchedulerDecision) => void;
   nonceFactory?: () => string;
   discoveryRetryDelayMs?: number;
+  snapshotResponseTimeoutMs?: number;
   maxDiscoveryRetries?: number;
 }
 
@@ -57,6 +59,7 @@ export class ImSchedulerManager {
   private readonly onDecision?: (decision: SchedulerDecision) => void;
   private readonly nonceFactory: () => string;
   private readonly discoveryRetryDelayMs: number;
+  private readonly snapshotResponseTimeoutMs: number;
   private readonly maxDiscoveryRetries: number;
   private readonly peers = new Map<string, PeerAdvertisement>();
   private readonly confirmedPeers = new Set<string>();
@@ -84,6 +87,10 @@ export class ImSchedulerManager {
     this.discoveryRetryDelayMs = Math.max(
       1,
       Math.floor(options.discoveryRetryDelayMs ?? DEFAULT_DISCOVERY_RETRY_DELAY_MS),
+    );
+    this.snapshotResponseTimeoutMs = Math.max(
+      1,
+      Math.floor(options.snapshotResponseTimeoutMs ?? DEFAULT_SNAPSHOT_RESPONSE_TIMEOUT_MS),
     );
     this.maxDiscoveryRetries = Math.max(
       1,
@@ -312,7 +319,7 @@ export class ImSchedulerManager {
   private publishProbeToVisiblePeers(): void {
     const channel = this.getLocalChannel();
     for (const peer of this.snapshot?.peers ?? []) {
-      this.transport.sendPush(peer.deviceId, {
+      this.sendPushSafely(peer.deviceId, {
         kind: 'probe',
         sentAt: Date.now(),
         nonce: this.discoveryNonce,
@@ -376,9 +383,9 @@ export class ImSchedulerManager {
   private requestSnapshot(preserveRetryAttempt: boolean): string {
     const requestId = this.nonceFactory();
     this.snapshotRequestId = requestId;
-    this.awaitingSnapshot = this.transport.requestSnapshot !== undefined;
+    this.awaitingSnapshot = true;
     this.snapshotRefreshPending = preserveRetryAttempt;
-    this.transport.requestSnapshot?.(this.snapshotAccountGeneration, requestId);
+    this.transport.requestSnapshot(this.snapshotAccountGeneration, requestId);
     return requestId;
   }
 
@@ -397,7 +404,7 @@ export class ImSchedulerManager {
       this.resetSnapshotRequestState();
       this.beginDiscoveryRound();
       this.reconcile();
-    }, this.discoveryRetryDelayMs);
+    }, this.snapshotResponseTimeoutMs);
     this.discoveryRetryTimer.unref?.();
   }
 
@@ -409,12 +416,21 @@ export class ImSchedulerManager {
 
   private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {
     const channel = this.getLocalChannel();
-    this.transport.sendPush(peerDeviceId, {
+    this.sendPushSafely(peerDeviceId, {
       kind: 'advertisement',
       sentAt: Date.now(),
       channels: channel ? [channel] : [],
       ...(inReplyTo ? { inReplyTo } : {}),
     });
+  }
+
+  private sendPushSafely(peerDeviceId: string, payload: ImSchedulerFrame): void {
+    try {
+      this.transport.sendPush(peerDeviceId, payload);
+    } catch {
+      // A single peer's queue/relay failure must not abort the rest of the
+      // discovery round. The bounded retry timer remains the recovery path.
+    }
   }
 
   private reconcile(): void {
@@ -431,8 +447,7 @@ export class ImSchedulerManager {
       return;
     }
     if (!channel) {
-      if (this.snapshot || this.transport.requestSnapshot) this.scheduleDiscoveryRetry();
-      else this.cancelDiscoveryRetry();
+      this.scheduleDiscoveryRetry();
       this.publishDecision({ state: 'standby', channel: null, reason: 'missing-binding' });
       return;
     }
