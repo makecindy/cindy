@@ -15,6 +15,7 @@ const captured = vi.hoisted(() => ({
   runtimeFailures: new Set<string>(),
   runtimeDeferred: false,
   runtimeRelease: undefined as (() => void) | undefined,
+  rewindStateFailure: false,
 }));
 
 vi.mock('../rpc-client.js', () => ({
@@ -39,6 +40,9 @@ vi.mock('../rpc-client.js', () => ({
     async request(command: Record<string, unknown>): Promise<{ type?: string; command?: string; success: boolean; data?: unknown; error?: string }> {
       this.state.requests.push(command);
       if (command.type === 'get_state') {
+        if (captured.rewindStateFailure && this.state.requests.some((request) => request.type === 'fork')) {
+          return { success: false, error: 'rewind state unavailable' };
+        }
         return { success: true, data: { sessionFile: this.state.sdkSessionId, model: { contextWindow: 200_000 } } };
       }
       if (command.type === 'get_commands') {
@@ -88,6 +92,7 @@ describe('Pi runtime capability lifecycle', () => {
     captured.runtimeFailures = new Set();
     captured.runtimeDeferred = false;
     captured.runtimeRelease = undefined;
+    captured.rewindStateFailure = false;
     home = mkdtempSync(path.join(tmpdir(), 'pi-runtime-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-runtime-cwd-'));
   });
@@ -188,6 +193,21 @@ describe('Pi runtime capability lifecycle', () => {
   });
 
   it('clears the old catalog immediately when rewind changes runtime identity', async () => {
+    captured.catalogs.s1 = catalog('skill:before-failed-rewind');
+    const failedHandle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    await vi.waitFor(() => {
+      expect(failedHandle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded' });
+    });
+    const failedChanges: unknown[] = [];
+    failedHandle.onRuntimeCapabilitiesChange?.((manifest) => failedChanges.push(manifest));
+    captured.rewindStateFailure = true;
+    await expect(failedHandle.commitRewindFiles?.('', '', { tailTurnsToDrop: 1 }))
+      .rejects.toThrow('pi rewind get_state failed');
+    expect(failedHandle.getRuntimeCapabilities?.()).toBeUndefined();
+    expect(failedChanges.at(-1)).toBeUndefined();
+    await failedHandle.close();
+
+    captured.rewindStateFailure = false;
     captured.catalogs.s1 = catalog('skill:before-rewind');
     const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
     await vi.waitFor(() => {
@@ -218,7 +238,7 @@ describe('Pi runtime capability lifecycle', () => {
         commands: [{ name: 'skill:after-rewind' }],
       });
     });
-    expect(captured.instances[0]?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+    expect(captured.instances.at(-1)?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
     await handle.close();
   });
 

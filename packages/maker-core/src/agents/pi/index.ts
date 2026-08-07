@@ -1444,13 +1444,8 @@ export class PiAgent extends BaseAgent {
     let sdkSessionId = '';
     const refreshRuntimeCapabilities = async (
       stage: 'ready' | 'switch_session' | 'fork',
-      clearCurrent = false,
     ): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
-      // A runtime identity switch invalidates the old catalog immediately.
-      // This runs before the first await, so callers may keep discovery
-      // fire-and-forget without exposing commands from the previous runtime.
-      if (clearCurrent) publishRuntimeCapabilities(undefined);
       const manifest = await capturePiRuntimeCapabilityManifest(
         proc,
         {
@@ -2066,6 +2061,10 @@ export class PiAgent extends BaseAgent {
         }
         const forked = await proc.request({ type: 'fork', entryId });
         if (!forked.success) throw new Error(`pi rewind fork failed: ${forked.error ?? 'unknown'}`);
+        // Pi has switched runtime identity at the successful fork response. Clear
+        // the old catalog before any follow-up get_state can fail or time out.
+        runtimeCapabilityGeneration++;
+        publishRuntimeCapabilities(undefined);
         const state = await proc.request({ type: 'get_state' });
         if (!state.success) throw new Error(`pi rewind get_state failed: ${state.error ?? 'unknown'}`);
         const replacement = (state.data as { sessionFile?: string } | undefined)?.sessionFile;
@@ -2074,9 +2073,8 @@ export class PiAgent extends BaseAgent {
         queue.push({ type: 'session_id', data: replacement, source: 'pi' });
         // The Pi session has already switched to the replacement file. Do not
         // make rewind wait for optional discovery; the generation fence keeps
-        // this asynchronous refresh from publishing stale data. Clear the old
-        // catalog synchronously so it cannot be observed under the new id.
-        void refreshRuntimeCapabilities('fork', true);
+        // this asynchronous refresh from publishing stale data.
+        void refreshRuntimeCapabilities('fork');
         return { sdkSessionId: replacement };
       },
 
