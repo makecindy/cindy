@@ -353,6 +353,7 @@ import {
 } from '@/session/mobileVoicePrewarm';
 import {
   resolveMobileVoiceRecordingPermission,
+  shouldClearMobileVoiceStartPending,
   shouldCancelMobileVoiceForBackground,
   waitForMobileVoiceAppActive,
 } from '@/session/mobileVoiceStartup';
@@ -1911,6 +1912,17 @@ export default function SessionScreen() {
   const voiceStartPendingSeqRef = useRef(0);
   // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
   const voiceStartedOnPressInRef = useRef(false);
+  useEffect(() => {
+    if (!voiceStartPending) return;
+    if (shouldClearMobileVoiceStartPending({
+      voiceState,
+      startupSettled: false,
+      recordingActive: voiceRecordingActiveRef.current,
+      hasController: Boolean(voiceControllerSessionRef.current),
+    })) {
+      setVoiceStartPending(false);
+    }
+  }, [voiceStartPending, voiceState]);
   // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
   // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
   // 发送键回到发送位(录音期=「结束并发送」,润色期=禁用态占位),停止任务退到
@@ -4754,8 +4766,15 @@ export default function SessionScreen() {
     void startVoiceRecording()
       .catch(() => undefined)
       .finally(() => {
-        // 只收自己世代的 pending:切会话后旧启动的收尾不能塌掉新录音的胶囊。
-        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+        // 启动 Promise 可能早于首个 PCM 完成;这时仍保持 pending,由
+        // listening 状态 effect 在真实采集开始后收口。
+        if (voiceStartPendingSeqRef.current !== pendingSeq) return;
+        if (shouldClearMobileVoiceStartPending({
+          voiceState: voiceStateTransitionRef.current,
+          startupSettled: true,
+          recordingActive: voiceRecordingActiveRef.current,
+          hasController: Boolean(voiceControllerSessionRef.current),
+        })) setVoiceStartPending(false);
       });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 

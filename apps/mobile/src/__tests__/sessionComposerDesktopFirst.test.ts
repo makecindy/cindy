@@ -651,8 +651,12 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('expanded: voiceIsListening || voiceStartPending,');
     expect(source).toContain('counting: voiceIsListening,');
     expect(source).toContain('const voiceStartedOnPressInRef = useRef(false);');
-    // pending 世代守卫:切会话后旧启动收尾不得塌掉新录音的乐观胶囊(review P1)。
-    expect(source).toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // pending 世代守卫:启动 Promise 早于首个 PCM 时不得收掉乐观胶囊,
+    // 进入真实 listening 或终态后才收口。
+    expect(source).toContain('shouldClearMobileVoiceStartPending');
+    expect(source).toContain('startupSettled: false');
+    expect(source).toContain('startupSettled: true');
+    expect(source).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
     // 手势被系统/滚动打断时撤销按下即录(review P1)。
     expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');

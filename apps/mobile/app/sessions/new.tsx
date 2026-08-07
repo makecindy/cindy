@@ -241,6 +241,7 @@ import {
 } from '@/session/mobileVoicePrewarm';
 import {
   resolveMobileVoiceRecordingPermission,
+  shouldClearMobileVoiceStartPending,
   shouldCancelMobileVoiceForBackground,
   waitForMobileVoiceAppActive,
 } from '@/session/mobileVoiceStartup';
@@ -1231,6 +1232,17 @@ export default function NewRemoteSessionScreen() {
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const voiceStartPendingSeqRef = useRef(0);
   const voiceStartedOnPressInRef = useRef(false);
+  useEffect(() => {
+    if (!voiceStartPending) return;
+    if (shouldClearMobileVoiceStartPending({
+      voiceState,
+      startupSettled: false,
+      recordingActive: voiceRecordingActiveRef.current,
+      hasController: Boolean(voiceControllerSessionRef.current),
+    })) {
+      setVoiceStartPending(false);
+    }
+  }, [voiceStartPending, voiceState]);
   // 语音生命周期内创建按钮常驻(与会话页发送槽同理,对齐桌面):录音中点创建
   // = 结束录音并用转写创建(create() 已有 listening 分支);否则首段转写落地的
   // 瞬间按钮冒出来,右对齐工具排会把语音胶囊整格推左。乐观 pending 期同理占位,
@@ -2998,8 +3010,15 @@ export default function NewRemoteSessionScreen() {
     void startVoiceRecording()
       .catch(() => undefined)
       .finally(() => {
-        // 只收自己世代的 pending(与会话页同款守卫)。
-        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+        // 启动 Promise 可能早于首个 PCM 完成;这时仍保持 pending,由
+        // listening 状态 effect 在真实采集开始后收口。
+        if (voiceStartPendingSeqRef.current !== pendingSeq) return;
+        if (shouldClearMobileVoiceStartPending({
+          voiceState: voiceStateTransitionRef.current,
+          startupSettled: true,
+          recordingActive: voiceRecordingActiveRef.current,
+          hasController: Boolean(voiceControllerSessionRef.current),
+        })) setVoiceStartPending(false);
       });
   }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 

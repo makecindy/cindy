@@ -648,6 +648,7 @@ describe('mobileVoiceController', () => {
     // 'listening' is only surfaced once the mic delivers real PCM (capture goes
     // live), so a chunk must arrive before it appears. The native layer then
     // reports an interruption mid-capture.
+    expect(states).not.toContain('listening');
     audioChunkCb?.({
       pcm16: new Uint8Array([1, 2]).buffer,
       trace: { capturedAt: 1, convertedAt: 2, chunkIndex: 0, sampleRate: 16_000, durationMs: 20 },

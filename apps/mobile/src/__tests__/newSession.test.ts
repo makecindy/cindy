@@ -991,6 +991,10 @@ describe('new session composer surface', () => {
     // 语音生命周期内创建按钮常驻(2026-07-25 对齐桌面):录音中点创建=结束录音并
     // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
     expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
+    expect(newSource).toContain('shouldClearMobileVoiceStartPending');
+    expect(newSource).toContain('startupSettled: false');
+    expect(newSource).toContain('startupSettled: true');
+    expect(newSource).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
     // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,
     // 否则按钮可点但必失败):点创建 = 停录并用最终转写创建(review 二轮收窄)。
     // 判定必须是结构化的 isNewSessionDraftMissingPayloadOnly,禁止比对本地化
