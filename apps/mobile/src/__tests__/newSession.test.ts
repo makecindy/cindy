@@ -1974,11 +1974,13 @@ describe('submit guard catalog wiring (source locks)', () => {
   });
 
   it('every catalog rebuild in the guards passes the keepSelected exemption pair', () => {
-    // 两处守卫内的 buildRows(2 处)带 effectiveDraft 豁免对 + 渲染期(1 处)带 draft = 3 处。
+    // 两处守卫内的 buildRows(2 处)带 effectiveDraft 豁免对 + 渲染期(1 处)带 draft
+    // + 轮次 35 新增:create 管线 revalidate(1 处)与 Goal 路径 fresh 校验(1 处)
+    // 均带 effectiveDraft 豁免对 = 5 处。
     const selectedModel = newSource.match(/selectedModelId: (effectiveDraft|draft|selected)\.model,/g) ?? [];
     const selectedProvider = newSource.match(/selectedProviderId: (effectiveDraft|draft|selected)\.providerId,/g) ?? [];
-    expect(selectedModel.length).toBe(3);
-    expect(selectedProvider.length).toBe(3);
+    expect(selectedModel.length).toBe(5);
+    expect(selectedProvider.length).toBe(5);
   });
 
   it('both guards are device-guarded through to the handoff, with ACK-gated ledger compensation after precreate', () => {

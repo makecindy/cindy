@@ -106,7 +106,7 @@ function makeParams(sessionId: string, maker: MakerMock, patch: Partial<NewSessi
     attachments: [],
     planModeArm: false,
     legacyPlanRestore: null,
-    confirmUnauthenticated: () => Promise.resolve(false),
+    confirmUnauthenticated: () => Promise.resolve({ unauthenticated: false, fresh: null }),
     authGateHint: '请先在电脑端完成登录。',
     onUnauthenticated: () => undefined,
     transport: {
@@ -697,7 +697,7 @@ describe('newSessionCreation pipeline', () => {
         createdAt,
       },
       precreatedWorktreeAccountId: 'owner-a',
-      confirmUnauthenticated: async () => true,
+      confirmUnauthenticated: async () => ({ unauthenticated: true, fresh: null }),
     }));
     await flushPipeline();
     await expect(prepareNewSessionCreationForEdit('s19')).rejects.toThrow();

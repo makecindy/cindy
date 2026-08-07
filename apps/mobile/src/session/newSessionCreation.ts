@@ -43,6 +43,7 @@ import {
   sessionFromCreateResult,
   type NewSessionDraft,
 } from '@/session/newSession';
+import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import {
   forgetPendingPrecreatedWorktree,
@@ -92,13 +93,21 @@ export interface NewSessionCreationParams {
   /** 与预创建 worktree 账本绑定的账号；空值表示旧调用方不启用持久清理。 */
   precreatedWorktreeAccountId?: string;
   /**
-   * createSession 前的鉴权 fresh revalidate(与建链并行跑)。返回 true = 确认
-   * 未鉴权 → create-failed(文案用 authGateHint)并触发 onUnauthenticated
-   * (页面闭包驱逐 provider 缓存)。
+   * createSession 前的鉴权 fresh revalidate(与建链并行跑)。返回
+   * { unauthenticated, fresh }:unauthenticated=true = 确认未鉴权 →
+   * create-failed(文案用 authGateHint)并触发 onUnauthenticated(页面闭包驱逐
+   * provider 缓存);fresh = 本次现拉的工作站目录(可能为 null,如拉取失败)。
    */
-  confirmUnauthenticated: () => Promise<boolean>;
+  confirmUnauthenticated: () => Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null }>;
   authGateHint: string;
   onUnauthenticated: () => void;
+  /**
+   * 鉴权 fresh revalidate 之后、createSession 之前,用工作站当前目录联合校验
+   * (model, providerId)(codex review P2):提交终检在 handoff 前完成,后台管线
+   * 建链/鉴权期间工作站可能已替换 provider——返回需覆盖 task.draft 的 patch
+   * (组合变化时调用方负责 effort/fastMode 联动),null = 无需修正。
+   */
+  revalidateDraftAfterAuth?: (fresh: DeviceProvidersPayload) => Promise<Partial<NewSessionDraft> | null>;
   /** Account-generation fence captured before the create flow starts. */
   isCurrentOwner?: () => boolean;
   transport: NewSessionCreationTransport;
@@ -602,11 +611,16 @@ async function persistPrecreatedSessionCreateStarted(task: InternalTask): Promis
 
 /** createSession 一步:瞬态失败 probe-before-retry,确定性失败直接抛。 */
 /** 返回被控端分配的 workDir(dialogue 会话此刻才有;probe 收敛路径取权威行的值)。 */
-async function createSessionIdempotent(task: InternalTask): Promise<{ workDir: string | null }> {
+async function createSessionIdempotent(
+  task: InternalTask,
+  draftPatch?: Partial<NewSessionDraft>,
+): Promise<{ workDir: string | null }> {
   const { maker } = task.params.transport;
   const sleep = task.params.sleep ?? realSleep;
+  // 鉴权后联合校验的 patch 覆盖 task.draft(codex review P2):只影响本次创建,
+  // 不改 task.draft 状态(UI 快照保持提交时语义)。
   const createOpts = {
-    ...buildRemoteCreateSessionOptions(task.draft),
+    ...buildRemoteCreateSessionOptions(draftPatch ? { ...task.draft, ...draftPatch } : task.draft),
     id: task.sessionId,
   };
 
@@ -784,14 +798,14 @@ async function runPipeline(task: InternalTask): Promise<void> {
   void subscribe(`session:${sessionId}`, params.deviceId, ['sessions', `session:${sessionId}`]).catch(() => undefined);
   try {
     // 鉴权 fresh revalidate 与建链并行(对齐原 create() 的并行结构)。
-    const freshUnauthenticated = (async (): Promise<boolean | null> => {
+    const freshUnauthenticated = (async (): Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null } | null> => {
       if (!isTaskOwnerCurrent(task)) return null;
       try {
         const value = await params.confirmUnauthenticated();
         if (!isTaskOwnerCurrent(task)) return null;
         return value;
       } catch {
-        return false;
+        return { unauthenticated: false, fresh: null };
       }
     })();
     await withTransientRemoteRetry(async () => {
@@ -801,15 +815,23 @@ async function runPipeline(task: InternalTask): Promise<void> {
       await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
       assertTaskOwnerCurrent(task);
     });
-    const unauthenticated = await freshUnauthenticated;
+    const auth = await freshUnauthenticated;
     assertTaskOwnerCurrent(task);
-    if (unauthenticated) {
+    if (auth?.unauthenticated) {
       params.onUnauthenticated();
       failTask(task, 'create-failed', params.authGateHint);
       return;
     }
+    // 鉴权 fresh revalidate 之后、createSession 之前,用工作站当前目录联合校验
+    // (model, providerId)(codex review P2):终检在 handoff 前完成,建链/鉴权期间
+    // 工作站可能已替换 provider——patch 覆盖 task.draft,避免向已删除来源发创建。
+    let draftPatch: Partial<NewSessionDraft> | null = null;
+    if (auth?.fresh && params.revalidateDraftAfterAuth) {
+      draftPatch = await params.revalidateDraftAfterAuth(auth.fresh);
+      assertTaskOwnerCurrent(task);
+    }
 
-    const createOutcome = await createSessionIdempotent(task);
+    const createOutcome = await createSessionIdempotent(task, draftPatch ?? undefined);
     assertTaskOwnerCurrent(task);
     if (!tasks.has(sessionId)) return; // 已被用户 dismiss
     // 从这一刻起 worktree 已被会话认领；即使首条消息 enqueue 后续失败，

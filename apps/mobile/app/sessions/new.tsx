@@ -72,7 +72,7 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
-import { fetchDeviceProviders, fetchDeviceProvidersFresh, getCachedDeviceProviders, getDeviceProvidersGen } from '@/device-link/deviceProvidersCache';
+import { fetchDeviceProvidersFresh, getCachedDeviceProviders, getDeviceProvidersGen, type DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { evictDeviceProviders, useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useDeviceApiKeyStatus, useDeviceModelPricing } from '@/device-link/useDeviceModelMeta';
 import {
@@ -753,14 +753,23 @@ export default function NewRemoteSessionScreen() {
   );
   // 创建前的 fresh 鉴权确认(绕过缓存现拉):true = 确认无已连接供应商,应拦截。
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
-  // fail-open 返回 false 放行(review P2:不把空回包升级成硬拦截)。
+  // fail-open 返回 unauthenticated=false 放行(review P2:不把空回包升级成硬拦截)。
+  // fresh = 本次现拉的工作站目录(管线鉴权后联合校验用,codex review P2)。
   const confirmAgentUnauthenticated = useCallback(async (agentKind: NewSessionAgentKind) => {
     try {
       const fresh = await maker.listProviders();
-      return fresh.providers.length > 0
-        && connectedProvidersForAgent(fresh.providers, agentKind).length === 0;
+      return {
+        unauthenticated: fresh.providers.length > 0
+          && connectedProvidersForAgent(fresh.providers, agentKind).length === 0,
+        fresh: {
+          providers: fresh.providers,
+          ...(fresh.modelVisibilityOverrides !== undefined
+            ? { modelVisibilityOverrides: fresh.modelVisibilityOverrides }
+            : {}),
+        },
+      };
     } catch {
-      return false;
+      return { unauthenticated: false, fresh: null };
     }
   }, [maker]);
   // setDraft 函数式更新里拿不到最新 modelSections —— 用 ref 镜像当前高亮来源 id。
@@ -3861,7 +3870,7 @@ export default function NewRemoteSessionScreen() {
       // 目录缓存可能过期(用户刚在电脑端配好 key):拦截前现拉一遍确认;确认不了
       // (已连接 / 空目录 / 拉失败)时缓存判死已不可信,清掉重取并放行。
       if (agentAuthVerdict === 'unauthenticated') {
-        if (await confirmAgentUnauthenticated(effectiveDraft.agentKind)) {
+        if ((await confirmAgentUnauthenticated(effectiveDraft.agentKind)).unauthenticated) {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           setError(agentAuthGateHint(effectiveDraft.agentKind));
@@ -4191,8 +4200,33 @@ export default function NewRemoteSessionScreen() {
         // stale-ready 防护(review P1):缓存判 ready/unknown 也可能已过期。管线内
         // 与建链并行 revalidate;verdict 已是 unauthenticated 时上面刚现拉确认过,跳过。
         confirmUnauthenticated: agentAuthVerdict === 'unauthenticated'
-          ? () => Promise.resolve(false)
+          ? () => Promise.resolve({ unauthenticated: false, fresh: null })
           : () => confirmAgentUnauthenticated(agentKindSnapshot),
+        // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):建链/鉴权
+        // 期间工作站可能已替换 provider——patch 覆盖本次创建,不再向已删除来源发。
+        revalidateDraftAfterAuth: async (fresh) => {
+          const rows = flattenProviderSections(buildMobileModelSections({
+            providers: fresh.providers,
+            agentKind: effectiveDraft.agentKind,
+            visibilityOverrides: fresh.modelVisibilityOverrides,
+            selectedModelId: effectiveDraft.model,
+            selectedProviderId: effectiveDraft.providerId,
+          }).sections);
+          const resolved = resolveRecentModelAndProvider(
+            rows,
+            { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
+            effectiveDraft.agentKind,
+            true,
+          );
+          const pairChanged = resolved.model !== effectiveDraft.model
+            || resolved.providerId !== effectiveDraft.providerId;
+          if (!pairChanged) return null;
+          return {
+            ...resolved,
+            effort: reconcileEffortAfterFallback(rows, resolved, effectiveDraft.effort),
+            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+          };
+        },
         authGateHint: agentAuthGateHint(agentKindSnapshot),
         onUnauthenticated: () => evictDeviceProviders(deviceIdSnapshot),
         isCurrentOwner,
@@ -4384,7 +4418,7 @@ export default function NewRemoteSessionScreen() {
       // fireTurn 的鉴权失败,用户会被带进一个永远跑不起来的目标会话——比普通路径更需要
       // 提前拦截。判定与 create() 完全同款:缓存判死先现拉确认;ready/unknown 与建链并行重验。
       if (agentAuthVerdict === 'unauthenticated') {
-        if (await confirmAgentUnauthenticated(draft.agentKind)) {
+        if ((await confirmAgentUnauthenticated(draft.agentKind)).unauthenticated) {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           setGoalError(agentAuthGateHint(draft.agentKind));
@@ -4394,14 +4428,16 @@ export default function NewRemoteSessionScreen() {
         if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
       }
-      const freshUnauthenticated: Promise<boolean> = agentAuthVerdict === 'unauthenticated'
-        ? Promise.resolve(false)
-        : confirmAgentUnauthenticated(draft.agentKind);
+      const freshAuth: Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null }> =
+        agentAuthVerdict === 'unauthenticated'
+          ? Promise.resolve({ unauthenticated: false, fresh: null })
+          : confirmAgentUnauthenticated(draft.agentKind);
       if (!isCurrentOwner()) return;
       // Resolve the fresh auth check before any worktree副作用. A Goal auth
       // rejection must not leave a managed directory behind just because its
       // session path performs precreation before createSession.
-      if (await freshUnauthenticated) {
+      const authResult = await freshAuth;
+      if (authResult.unauthenticated) {
         if (!isCurrentOwner()) return;
         if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
@@ -4724,6 +4760,34 @@ export default function NewRemoteSessionScreen() {
       }
       // 同一 turn:同步应用 + createSession,零 await 间隔(独立 review round-21 Spec P1)。
       applyGuard(guardResult);
+      // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):鉴权现拉
+      // 是离 createSession 最近的工作站目录快照——守卫目录可能仍停在替换前的
+      // 来源 A,此处用 fresh 再核一次,失效即回退(纯同步,不破坏零 await 间隔)。
+      if (authResult.fresh) {
+        const freshRows = flattenProviderSections(buildMobileModelSections({
+          providers: authResult.fresh.providers,
+          agentKind: effectiveDraft.agentKind,
+          visibilityOverrides: authResult.fresh.modelVisibilityOverrides,
+          selectedModelId: effectiveDraft.model,
+          selectedProviderId: effectiveDraft.providerId,
+        }).sections);
+        const resolved = resolveRecentModelAndProvider(
+          freshRows,
+          { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
+          effectiveDraft.agentKind,
+          true,
+        );
+        const pairChanged = resolved.model !== effectiveDraft.model
+          || resolved.providerId !== effectiveDraft.providerId;
+        if (pairChanged) {
+          effectiveDraft = {
+            ...effectiveDraft,
+            ...resolved,
+            effort: reconcileEffortAfterFallback(freshRows, resolved, effectiveDraft.effort),
+            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+          };
+        }
+      }
       const finalDraft = {
         ...effectiveDraft,
       };

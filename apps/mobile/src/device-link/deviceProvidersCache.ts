@@ -92,14 +92,19 @@ export async function fetchDeviceProviders(
  * 强制刷新取某被控设备的供应商目录(codex review P2):**跳过缓存命中短路**——
  * 即使缓存仍存在也执行 fetcher 访问工作站,成功后回写缓存并推送 payload 订阅者。
  * 用途:提交终检的 revalidate(缓存命中分支要拿到工作站当前真相,而不是旧目录),
- * 与普通读取的 cache-first 语义区分。仍保留 inflight 去重与代际作废。
+ * 与普通读取的 cache-first 语义区分。
+ * 不复用普通 fetch 的在途请求(greptile review P1):普通请求可能发起于工作站目录
+ * 变更之前、本地代际尚未递增——fresh 语义是「强制访问工作站拿当前真相」,join
+ * 旧请求会拿过期目录当已知目录。fresh 自身并发仍经独立 inflight 槽去重。
  */
+const freshInflight = new Map<string, Promise<DeviceProvidersPayload>>();
+
 export async function fetchDeviceProvidersFresh(
   deviceId: string,
   fetcher: DeviceProvidersFetcher,
 ): Promise<DeviceProvidersPayload> {
-  const ip = inflight.get(deviceId);
-  if (ip) return ip;
+  const fp = freshInflight.get(deviceId);
+  if (fp) return fp;
 
   const startGen = deviceGen.get(deviceId) ?? 0;
   const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
@@ -123,7 +128,10 @@ export async function fetchDeviceProvidersFresh(
       if (isCurrent()) inflight.delete(deviceId);
       throw e;
     });
-  inflight.set(deviceId, p);
+  freshInflight.set(deviceId, p);
+  void p.finally(() => {
+    if (freshInflight.get(deviceId) === p) freshInflight.delete(deviceId);
+  }).catch(() => undefined);
   return p;
 }
 
@@ -131,6 +139,7 @@ export async function fetchDeviceProvidersFresh(
 export function evictDeviceProviders(deviceId: string): void {
   cache.delete(deviceId);
   inflight.delete(deviceId);
+  freshInflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   notifyDeviceProvidersGen(deviceId);
 }
@@ -185,4 +194,5 @@ export function clearAllDeviceProviders(): void {
   }
   cache.clear();
   inflight.clear();
+  freshInflight.clear();
 }
