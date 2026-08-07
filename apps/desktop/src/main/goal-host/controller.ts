@@ -1667,21 +1667,6 @@ export class GoalController {
     // 记录(role:'assistant' + agentMeta.goalCompletion,重开会话仍在),随后删 goal
     // 行让 chip 消失。视觉由 renderer 渲成"目标已达成 · N 轮 · 耗时 X"分隔条。
     if (decision.status === 'complete') {
-      // 观测:complete 不经 quota 改判(在 quota 前 return),decision 即最终状态;
-      // turn-finalized/state-transition 与 terminal 同发(complete 有顺序提交 barrier)。
-      this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
-        from: state.status,
-        to: 'complete',
-        reason: decision.lastReason,
-      });
-      if (decision.status !== state.status) {
-        this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
-          from: state.status,
-          to: 'complete',
-          reason: decision.lastReason,
-        });
-      }
-      this.recordRunEvent('terminal', sessionId, postDecisionCounts, { to: 'complete', reason: decision.lastReason });
       // completion commit 保持“达成记录 → clear”的耐久顺序，但单独登记：Stop 会同步
       // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
       // 防止旧目标的删除迟到并抹掉新目标。
@@ -1707,6 +1692,21 @@ export class GoalController {
           this.deps.emitStatus({ sessionId, goal: null });
         })(),
       );
+      // 观测:completion 提交(达成记录 + clear + null emit)成功后才宣告终态
+      // (reviewer P1:提交卡住或 clear 拒绝时,不得产生假 terminal complete)。
+      this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: 'complete',
+        reason: decision.lastReason,
+      });
+      if (decision.status !== state.status) {
+        this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+          from: state.status,
+          to: 'complete',
+          reason: decision.lastReason,
+        });
+      }
+      this.recordRunEvent('terminal', sessionId, postDecisionCounts, { to: 'complete', reason: decision.lastReason });
       if (isCurrentTurn()) this.stopSession(sessionId);
       return;
     }
@@ -2088,6 +2088,9 @@ export class GoalController {
       // status≠active 自然停,不会空转。
       this.deps.logger.info('[goal] session busy, retry fire soon', { sessionId, kind });
       this.scheduleContinuation(sessionId);
+      // 派发被放弃:清除恢复标记(reviewer P1:busy 早退若保留,同 sessionId 新目标
+      // 首轮 gen 1 会误消费旧标记;重试续跑按普通 continuation 记录,不再标 resumed)。
+      this.pendingResumeEvents.delete(sessionId);
       return;
     }
     const firingOwner = {};
