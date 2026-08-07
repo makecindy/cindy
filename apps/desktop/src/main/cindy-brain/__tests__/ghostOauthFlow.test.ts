@@ -379,25 +379,28 @@ describe('startGhostOauthFlow', () => {
   });
 
   it('钉死端口:第二单顶掉第一单后立刻复用同一端口(自家僵尸监听自愈,无需回收器)', async () => {
-    const [firstResult, secondResult] = await pinnedPortCase(async (fixedPort) => {
-      let secondDone: Promise<unknown> = Promise.resolve();
-      const first = await startGhostOauthFlow({
-        config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-        fetchImpl: vi.fn() as unknown as typeof fetch,
-        openExternal: () => {
-          // 第一单占着钉死端口等回调时,第二单同端口进场——必须等到第一单的
-          // 监听真正关闭后成功 listen,而不是 LISTEN_FAILED。
-          secondDone = startGhostOauthFlow({
-            config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-            fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-heal' })) as unknown as typeof fetch,
-            openExternal: (url2) => {
-              browserRedirect(url2, (au) => ({ code: 'c-heal', state: au.searchParams.get('state') ?? '' }));
-            },
-          });
-        },
-      });
-      return [first, await secondDone];
+    let secondDone: Promise<unknown> = Promise.resolve();
+    const firstResult = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, pkce: false },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: (url) => {
+        const redirectUri = new URL(url).searchParams.get('redirect_uri');
+        if (!redirectUri) throw new Error('authorize URL 缺 redirect_uri');
+        const fixedPort = Number(new URL(redirectUri).port);
+        if (!fixedPort) throw new Error('redirect_uri 缺端口');
+
+        // 第一单已由系统分配并占住端口;第二单复用该端口进场——必须等到
+        // 第一单监听真正关闭后成功 listen,而不是 LISTEN_FAILED。
+        secondDone = startGhostOauthFlow({
+          config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
+          fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-heal' })) as unknown as typeof fetch,
+          openExternal: (url2) => {
+            browserRedirect(url2, (au) => ({ code: 'c-heal', state: au.searchParams.get('state') ?? '' }));
+          },
+        });
+      },
     });
+    const secondResult = await secondDone;
     expect(firstResult).toMatchObject({ ok: false, error: 'CANCELLED' });
     expect(secondResult).toMatchObject({ ok: true });
   });

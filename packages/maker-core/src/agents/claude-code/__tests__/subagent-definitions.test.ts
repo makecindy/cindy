@@ -339,9 +339,10 @@ describe('discoverSubagentDefinitions', () => {
   // 于是又把覆盖用的 env 设回去。抛出来才能走调用方的显式降级。
   it('文件数超预算 → 抛 SubagentScanBudgetError', async () => {
     const agents = path.join(root, 'repo', '.claude', 'agents');
+    const maxFiles = 5;
     await fs.mkdir(agents, { recursive: true });
     await Promise.all(
-      Array.from({ length: 210 }, (_, i) =>
+      Array.from({ length: maxFiles + 1 }, (_, i) =>
         fs.writeFile(
           path.join(agents, `a${i}.md`),
           `---\nname: a${i}\ndescription: d\n---\nbody\n`,
@@ -354,6 +355,7 @@ describe('discoverSubagentDefinitions', () => {
       discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+        maxFiles,
       }),
     ).rejects.toBeInstanceOf(SubagentScanBudgetError);
   });
@@ -485,9 +487,10 @@ describe('discoverSubagentDefinitions', () => {
   // 同步排序还堵住事件循环让外层定时器都没机会触发。改 opendir 流式并就地封顶。
   it('单目录条目数超上限 → 抛(不物化、不排序)', async () => {
     const agents = path.join(root, 'repo', '.claude', 'agents');
+    const maxDirEntries = 5;
     await fs.mkdir(agents, { recursive: true });
     await Promise.all(
-      Array.from({ length: 520 }, (_, i) =>
+      Array.from({ length: maxDirEntries + 1 }, (_, i) =>
         fs.writeFile(path.join(agents, `x${i}.txt`), 'not a definition', 'utf8'),
       ),
     );
@@ -496,19 +499,22 @@ describe('discoverSubagentDefinitions', () => {
       discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+        maxDirEntries,
       }),
     ).rejects.toBeInstanceOf(SubagentScanBudgetError);
   });
 
   // 深度上限也是预算:静默返回空会让上层判「没人声明 model」→ 又把覆盖用的 env 设回去。
   it('递归深度超上限 → 抛(不静默截断)', async () => {
-    const deep = path.join(root, 'repo', '.claude', 'agents', ...Array(10).fill('d'));
+    const maxDepth = 2;
+    const deep = path.join(root, 'repo', '.claude', 'agents', ...Array(3).fill('d'));
     await writeAgent(deep, 'x.md', 'name: deep\nmodel: opus');
 
     await expect(
       discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+        maxDepth,
       }),
     ).rejects.toBeInstanceOf(SubagentScanBudgetError);
   });
