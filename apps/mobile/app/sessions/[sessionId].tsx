@@ -1907,6 +1907,9 @@ export default function SessionScreen() {
   // pending 的世代号:本组件会随 sessionId 复用,上一个会话的启动收尾不能把
   // 当前会话刚展开的乐观胶囊收掉——finally 只在世代未前进时清 pending。
   const voiceStartPendingSeqRef = useRef(0);
+  // The permission request starts before voiceStartupInFlightRef is set. Keep
+  // optimistic pending alive across that synchronous-to-async handoff.
+  const voiceStartRequestedRef = useRef(false);
   // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
   const voiceStartedOnPressInRef = useRef(false);
   const clearVoiceStartPending = useCallback(() => {
@@ -1917,7 +1920,7 @@ export default function SessionScreen() {
     if (!voiceStartPending) return;
     if (shouldClearMobileVoiceStartPending({
       voiceState,
-      startupSettled: !voiceStartupInFlightRef.current,
+      startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current,
       recordingActive: voiceRecordingActiveRef.current,
       hasController: Boolean(voiceControllerSessionRef.current),
     })) {
@@ -4794,6 +4797,7 @@ export default function SessionScreen() {
     // 否则松手的 onPress 会被吞掉,用户失去 toggle 能力。
     if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
     voiceStartedOnPressInRef.current = true;
+    voiceStartRequestedRef.current = true;
     const pendingSeq = ++voiceStartPendingSeqRef.current;
     setVoiceStartPending(true);
     void startVoiceRecording()
@@ -4808,6 +4812,7 @@ export default function SessionScreen() {
           recordingActive: voiceRecordingActiveRef.current,
           hasController: Boolean(voiceControllerSessionRef.current),
         })) setVoiceStartPending(false);
+        voiceStartRequestedRef.current = false;
       });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 

@@ -992,7 +992,8 @@ describe('new session composer surface', () => {
     // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
     expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
     expect(newSource).toContain('shouldClearMobileVoiceStartPending');
-    expect(newSource).toContain('startupSettled: !voiceStartupInFlightRef.current');
+    expect(newSource).toContain('startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current');
+    expect(newSource).toContain('voiceStartRequestedRef.current = true;');
     expect(newSource).toContain('startupSettled: true');
     expect(newSource).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
     // controller/ref teardown 不一定改变 voiceState;显式清 pending,避免同值 idle

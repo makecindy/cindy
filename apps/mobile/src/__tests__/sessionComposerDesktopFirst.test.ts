@@ -659,7 +659,8 @@ describe('mobile session composer desktop-first surface', () => {
     // pending 世代守卫:启动 Promise 早于首个 PCM 时不得收掉乐观胶囊,
     // 进入真实 listening 或终态后才收口。
     expect(source).toContain('shouldClearMobileVoiceStartPending');
-    expect(source).toContain('startupSettled: !voiceStartupInFlightRef.current');
+    expect(source).toContain('startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current');
+    expect(source).toContain('voiceStartRequestedRef.current = true;');
     expect(source).toContain('startupSettled: true');
     expect(source).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
     // cleanup 只改 ref 时不会触发 effect;后台、手势取消和会话切换必须显式清 pending。

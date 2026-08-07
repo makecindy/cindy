@@ -1228,6 +1228,9 @@ export default function NewRemoteSessionScreen() {
   // 声明在 composerShowCreateButton 之前:pending 期就要占住创建槽。
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const voiceStartPendingSeqRef = useRef(0);
+  // The permission request starts before voiceStartupInFlightRef is set. Keep
+  // optimistic pending alive across that synchronous-to-async handoff.
+  const voiceStartRequestedRef = useRef(false);
   const voiceStartedOnPressInRef = useRef(false);
   const clearVoiceStartPending = useCallback(() => {
     voiceStartPendingSeqRef.current += 1;
@@ -1237,7 +1240,7 @@ export default function NewRemoteSessionScreen() {
     if (!voiceStartPending) return;
     if (shouldClearMobileVoiceStartPending({
       voiceState,
-      startupSettled: !voiceStartupInFlightRef.current,
+      startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current,
       recordingActive: voiceRecordingActiveRef.current,
       hasController: Boolean(voiceControllerSessionRef.current),
     })) {
@@ -3029,6 +3032,7 @@ export default function NewRemoteSessionScreen() {
     // 启动已在途/停止在途时不重复发起,也不把这次按下标成「已起录」。
     if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
     voiceStartedOnPressInRef.current = true;
+    voiceStartRequestedRef.current = true;
     const pendingSeq = ++voiceStartPendingSeqRef.current;
     setVoiceStartPending(true);
     void startVoiceRecording()
@@ -3043,6 +3047,7 @@ export default function NewRemoteSessionScreen() {
           recordingActive: voiceRecordingActiveRef.current,
           hasController: Boolean(voiceControllerSessionRef.current),
         })) setVoiceStartPending(false);
+        voiceStartRequestedRef.current = false;
       });
   }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
