@@ -162,8 +162,8 @@ describe('reconcileEffortAfterFallback', () => {
     expect(reconcileEffortAfterFallback(rows, { model: 'claude-haiku', providerId: 'prov-claude-haiku' }, 'xhigh')).toBe('low');
   });
 
-  it('keeps the base effort when no catalog row matches (cannot reconcile)', () => {
-    expect(reconcileEffortAfterFallback([], { model: 'claude-sonnet-4-6', providerId: null }, 'high')).toBe('high');
+  it('omits effort when no catalog row matches (built-in default fallback, Codex P2: 不沿用旧模型档位)', () => {
+    expect(reconcileEffortAfterFallback([], { model: 'claude-sonnet-4-6', providerId: null }, 'high')).toBe('');
   });
 });
 

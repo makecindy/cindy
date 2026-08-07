@@ -967,7 +967,11 @@ export default function NewRemoteSessionScreen() {
         // 协调三条路径都不会处理它)。组合变化时保守关闭,由延迟恢复 effect 在 B 的
         // 组合 + 能力就绪后按记忆重评(手动关过 → 记忆为 false,不会重新打开)。
         const nextModel = result.patch.model ?? current.model;
-        const nextProviderId = result.patch.providerId ?? current.providerId;
+        // providerId 用 `!== undefined` 而非 `??`:patch 显式带 providerId:null(来源
+        // 切回默认路由)是真实的组合变化,`??` 会取回旧值抹掉该变化(Codex review P2)。
+        const nextProviderId = result.patch.providerId !== undefined
+          ? result.patch.providerId
+          : current.providerId;
         const nextAgentKind = result.patch.agentKind ?? current.agentKind;
         const comboChanged = nextModel !== current.model
           || nextProviderId !== current.providerId

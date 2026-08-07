@@ -508,7 +508,10 @@ export function reconcileEffortAfterFallback(
   baseEffort: string,
 ): string {
   const sectionModel = findSectionModelRow(modelRows, next.model, next.providerId)?.model;
-  return sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : baseEffort;
+  // 无匹配行 = 回退到内置默认模型(目录为空/loaded-but-empty):旧自定义模型的档位
+  // 对新内置模型无效——省略 effort(创建时省略该字段,由被控端取默认),不得沿用
+  // (Codex review P2:沿用会向不支持该档位的模型发送非法 effort)。
+  return sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : '';
 }
 
 /**
