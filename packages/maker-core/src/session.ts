@@ -912,6 +912,7 @@ export class Session {
   }
 
   private assertPermissionModeSupported(mode: PermissionMode): void {
+    this.ensureActive();
     if (!this.capabilities.permissionModes.some((m) => m.id === mode)) {
       throw new NotSupportedError(
         `permissionMode='${mode}'`,
