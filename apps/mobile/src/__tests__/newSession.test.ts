@@ -204,14 +204,24 @@ describe('resolveSubmitGuardCatalog —— 提交终检目录取信(代际安全
     buildRows: (pl: DeviceProvidersPayload) => rowsOf((pl as TestPayload).id),
   };
 
-  it('缓存命中 → 不 fetch,catalogKnown=true(缓存恒为当前代,含 loaded-but-empty)', async () => {
+  it('缓存命中 → join fetch revalidate,成功用新目录(工作站已换 provider,codex review P1)', async () => {
     const fetchSpy = vi.fn(baseArgs.fetch);
     const res = await resolveSubmitGuardCatalog({
       ...baseArgs,
       cached: () => payload('cached'),
       fetch: fetchSpy,
     });
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // 缓存命中不再直接采信:与新鲜响应 revalidate(缓存层 inflight 去重),成功用新目录
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ rows: rowsOf('fetched'), catalogKnown: true });
+  });
+
+  it('缓存命中 + fetch 失败 → 回退缓存命中(历史知识优于未知,保持 fail-open)', async () => {
+    const res = await resolveSubmitGuardCatalog({
+      ...baseArgs,
+      cached: () => payload('cached'),
+      fetch: () => Promise.reject(new Error('revalidate down')),
+    });
     expect(res).toMatchObject({ rows: rowsOf('cached'), catalogKnown: true });
   });
 
@@ -2073,7 +2083,8 @@ describe('fast memory restore wiring (source locks)', () => {
   it('defers the remembered-fast restore until target-agent capabilities arrive', () => {
     expect(newSource).toContain('function targetAgentHasFast(deviceId: string, agentKind: NewSessionAgentKind): boolean');
     // 延迟恢复 effect:记忆为 true 才评 + 门控用目标 agent 缓存能力表 + 写回前再核一次当前草稿
-    expect(newSource).toContain('draftMemory.getFast(draft.agentKind, draft.providerId, draft.model) !== true');
+    // (来源 id 与 changeSelectedFastMode 同口径:显式 providerId 优先,默认路由用推断来源)
+    expect(newSource).toContain('draftMemory.getFast(draft.agentKind, pid, draft.model) !== true');
     expect(newSource).toContain('targetAgentHasFast(selectedDeviceId, draft.agentKind)');
     expect(newSource).toContain('current.providerId === draft.providerId');
   });

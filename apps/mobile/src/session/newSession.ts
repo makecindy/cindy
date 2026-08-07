@@ -417,7 +417,21 @@ export async function resolveSubmitGuardCatalog(args: {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const genAt = gen();
     const hit = cached();
-    if (hit) return { rows: buildRows(hit), catalogKnown: true, genAt };
+    if (hit) {
+      // 缓存命中也要与新鲜响应 revalidate(codex review P1):缓存仍含 provider A,
+      // 但工作站已换成 B 时(confirmAgentUnauthenticated 现拉过 fresh 却不回写缓存),
+      // 直接采信缓存会向已移除的来源发创建 → 失败。join 一次拉取(缓存层 inflight
+      // 去重,不重复发请求):成功 → 用新目录(同时缓存层回写);失败 → 回退缓存命中
+      // (历史知识优于未知,保持 fail-open 语义)。
+      try {
+        const fresh = await fetch();
+        if (gen() !== genAt) continue; // 拉取期间换代 → join 新代
+        return { rows: buildRows(fresh), catalogKnown: true, genAt };
+      } catch {
+        if (gen() !== genAt) continue;
+        return { rows: buildRows(hit), catalogKnown: true, genAt };
+      }
+    }
     if (genAt === 0) {
       // 冷启动:首轮拉取可能在途——join 它(缓存层 inflight 去重,不重复发请求),
       // 成功按新目录校验,避免带着已失效的最近会话绑定提交(Codex review P2:

@@ -1714,7 +1714,13 @@ export default function NewRemoteSessionScreen() {
   // 否则 UI 的 rowFastEditable 已显示关、创建仍发 fastMode:true 被拒。仅能力表
   // 与目录均就绪时判定(缓存缺失/加载中不动作,避免切设备瞬间误关)。
   useEffect(() => {
-    if (!selectedDeviceId || !draft.providerId) return;
+    if (!selectedDeviceId) return;
+    // 来源 id 与 changeSelectedFastMode 同口径:显式选了来源用 providerId,默认路由
+    // (null)草稿可用推断来源(activeSourceIdRef)开启 Fast——撤销检查不得漏掉它
+    // (codex review P2:目录 revision 改变默认来源/移除 Fast 支持时,null-provider
+    // 草稿仍在发 fastMode:true)。
+    const pid = draft.providerId ?? activeSourceIdRef.current;
+    if (!pid) return;
     const capsKnown = getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(selectedDeviceId, draft.agentKind)) !== undefined;
     if (draft.fastMode) {
       if (
@@ -1722,7 +1728,7 @@ export default function NewRemoteSessionScreen() {
         && catalogReadyRef.current
         && !isFastRestorable(
           draft.agentKind,
-          draft.providerId,
+          pid,
           draft.model,
           modelRowsRef.current,
           targetAgentHasFast(selectedDeviceId, draft.agentKind),
@@ -1739,10 +1745,10 @@ export default function NewRemoteSessionScreen() {
       }
       return;
     }
-    if (draftMemory.getFast(draft.agentKind, draft.providerId, draft.model) !== true) return;
+    if (draftMemory.getFast(draft.agentKind, pid, draft.model) !== true) return;
     if (!isFastRestorable(
       draft.agentKind,
-      draft.providerId,
+      pid,
       draft.model,
       modelRowsRef.current,
       targetAgentHasFast(selectedDeviceId, draft.agentKind),
