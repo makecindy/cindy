@@ -251,6 +251,31 @@ describe('closePreviewTabs (browser-preview-tabs)', () => {
     // the new-origin RSB tab is NOT closed either
     expect(deps.closeRsbTab).not.toHaveBeenCalledWith('s1', 'r1');
   });
+
+  it('registration sweep does NOT close a NEW round registered tab on a different origin (round 27j)', async () => {
+    // A NEW-round preview tab with NO live WebContents (registered, but the
+    // webview is not yet materialized) must NOT be closed by the OLD round's
+    // fire-and-forget closePreviewTabs: the registration records its origin,
+    // and the sweep filters by revokedOrigin (Greptile/Codex/Copilot P1,
+    // round 27j).
+    const NEW_PREVIEW_URL = PREVIEW_URL.replace(':49152', ':49200');
+    registerRsbPreviewTab('s1', 'newreg', 1, 'http://127.0.0.1:49200');
+    const deps = fakeDeps({
+      revokedOrigin: 'http://127.0.0.1:49152',
+      listVendoredTabs: vi.fn(async () => []),
+      listRsbTabs: vi.fn(() => []),
+    });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).not.toHaveBeenCalledWith('s1', 'newreg');
+    // the entry survives for the NEW round's own revocation
+    const deps2 = fakeDeps({
+      revokedOrigin: 'http://127.0.0.1:49200',
+      listVendoredTabs: vi.fn(async () => []),
+      listRsbTabs: vi.fn(() => []),
+    });
+    await closePreviewTabs(deps2);
+    expect(deps2.closeRsbTab).toHaveBeenCalledWith('s1', 'newreg');
+  });
 });
 
 describe('trackPreviewTabNavigation (address-bar provenance, round 23 P0)', () => {

@@ -518,10 +518,14 @@ export class RsbWebviewBackend implements BrowserBackend {
     if (result.tabId) {
       this.trackBackground(this.observeOpenedTab(result.tabId));
       // Register preview tabs so revocation can close them even after LRU
-      // eviction dropped the live WebContents (round 21).
+      // eviction dropped the live WebContents (round 21). The ORIGIN is
+      // recorded so a revocation only ever closes tabs of ITS origin — a
+      // fire-and-forget close still running when the next round starts must
+      // not sweep the new round's registrations (Greptile/Codex/Copilot P1,
+      // round 27j).
       if (typeof url === 'string' && isPreviewUrl(url)) {
         if (getPreviewRevocationGeneration() === revGeneration) {
-          registerRsbPreviewTab(sessionId, result.tabId, revGeneration);
+          registerRsbPreviewTab(sessionId, result.tabId, revGeneration, new URL(url).origin);
         } else {
           // The open committed AFTER the revocation swept: close the fresh
           // preview tab instead of registering it (its persistent row would
@@ -631,7 +635,7 @@ export class RsbWebviewBackend implements BrowserBackend {
         const record = this.opts.registry.findByWebContentsId(resolved.wc.id);
         if (record) {
           if (getPreviewRevocationGeneration() === revGeneration) {
-            registerRsbPreviewTab(record.sessionId, tabId, revGeneration);
+            registerRsbPreviewTab(record.sessionId, tabId, revGeneration, new URL(url).origin);
           } else {
             // The navigation committed AFTER the revocation swept: the tab is
             // a survivor of the revocation window. Close it now instead of

@@ -39,7 +39,10 @@ import { isPreviewUrl } from './browser-backend/preview-guard.js';
  * in flight, and the caller must close the tab instead of registering
  * (new Codex reviewer P1, round 23).
  */
-const rsbPreviewTabs = new Map<string, { sessionId: string; generation: number }>();
+const rsbPreviewTabs = new Map<
+  string,
+  { sessionId: string; generation: number; origin: string }
+>();
 
 let revocationGeneration = 0;
 
@@ -62,9 +65,10 @@ export function registerRsbPreviewTab(
   sessionId: string,
   tabId: string,
   generation = revocationGeneration,
+  origin?: string,
 ): boolean {
   if (!sessionId || !tabId) return false;
-  rsbPreviewTabs.set(tabId, { sessionId, generation });
+  rsbPreviewTabs.set(tabId, { sessionId, generation, origin: origin ?? '' });
   return true;
 }
 
@@ -161,11 +165,17 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
   // shape check (isPreviewUrl) alone matches any preview origin (Greptile
   // P1, round 27h). null revokedOrigin = dispose/quit: close every preview
   // tab regardless of origin (no next round exists).
+  // Match an already-extracted origin: null revokedOrigin (dispose/quit)
+  // matches every preview origin; otherwise exact origin equality. Used for
+  // registrations whose origin was recorded at register time (round 27j).
+  const matchesRevokedByOrigin = (origin: string): boolean => {
+    if (deps.revokedOrigin == null) return true;
+    return origin === deps.revokedOrigin;
+  };
   const matchesRevoked = (u: string): boolean => {
     if (!deps.isPreviewUrl(u)) return false;
-    if (deps.revokedOrigin == null) return true;
     try {
-      return new URL(u).origin === deps.revokedOrigin;
+      return matchesRevokedByOrigin(new URL(u).origin);
     } catch {
       return false;
     }
@@ -255,8 +265,16 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
     // revocation was in flight registers under the NEW generation and must
     // be closed in the same pass, not left behind — new Codex reviewer P1,
     // round 23).
+    //
+    // Origin-scoped (round 27j, Greptile/Codex/Copilot P1): only entries
+    // whose recorded ORIGIN matches the revoked origin are closed. A
+    // fire-and-forget close still running when the NEXT preview round starts
+    // would otherwise sweep the new round's registrations (they have no live
+    // WebContents yet, so the origin-scoped live sweep above misses them).
     for (;;) {
-      const entries = [...rsbPreviewTabs.entries()];
+      const entries = [...rsbPreviewTabs.entries()].filter(([, entry]) =>
+        matchesRevokedByOrigin(entry.origin),
+      );
       if (entries.length === 0) break;
       const results = await Promise.all(
         entries.map(([tabId, { sessionId }]) => deps.closeRsbTab(sessionId, tabId)),
