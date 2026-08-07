@@ -243,6 +243,21 @@ export function normalizeNullableIntervalMs<T extends { intervalMs?: number | nu
   return { ...input, intervalMs: undefined };
 }
 
+function rejectReservedScheduleOriginFields(
+  input: Record<string, unknown>,
+  name: 'input' | 'patch',
+): void {
+  if (
+    Object.prototype.hasOwnProperty.call(input, 'originKind') ||
+    Object.prototype.hasOwnProperty.call(input, 'originId')
+  ) {
+    throwIpcError(
+      'PERMISSION_DENIED',
+      `${name}.originKind and ${name}.originId are reserved for internal import provenance`,
+    );
+  }
+}
+
 /**
  * 版本错位兼容的另一半:**旧版 mobile** 清空间隔靠「全量表单不带 intervalMs key +
  * 引擎隐式清空」表达;真 partial 语义下省略 key 变成「不修改」,旧 mobile 的清空
@@ -344,10 +359,13 @@ export function registerScheduleHandlers(
   });
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_CREATE, async (_e, input: unknown) => {
-    requireObject(input, 'input');
+    const body = requireObject(input, 'input');
+    rejectReservedScheduleOriginFields(body, 'input');
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
-        normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
+        normalizeNullableIntervalMs(
+          body as unknown as CreateScheduleInput & { intervalMs?: number | null },
+        ),
         hookPathDeps,
       );
       return scheduler.create(normalized);
@@ -356,14 +374,15 @@ export function registerScheduleHandlers(
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown) => {
     const scheduleId = requireString(id, 'id');
-    requireObject(patch, 'patch');
+    const body = requireObject(patch, 'patch');
+    rejectReservedScheduleOriginFields(body, 'patch');
     return withScheduler(({ scheduler }) =>
       scheduler.updateFromCurrent(scheduleId, (existing) =>
         stabilizePreRunHookForUpdate(
           existing,
           normalizeLegacyDeviceLinkIntervalClear(
             normalizeNullableIntervalMs(
-              patch as UpdateScheduleInput & { intervalMs?: number | null },
+              body as UpdateScheduleInput & { intervalMs?: number | null },
             ),
             isDeviceLinkInvoke(),
           ),

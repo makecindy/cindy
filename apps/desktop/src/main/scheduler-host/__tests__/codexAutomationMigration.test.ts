@@ -96,6 +96,7 @@ describe('CodexAutomationMigrationService', () => {
     const result = await service.preview();
     expect(result.items).toHaveLength(2);
     expect(result.items[0].selectedByDefault).toBe(true);
+    expect(result.items[0]).not.toHaveProperty('sourcePath');
     expect(scheduler.list).toHaveBeenCalledTimes(1);
   });
 

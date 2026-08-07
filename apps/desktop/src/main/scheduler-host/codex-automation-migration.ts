@@ -36,7 +36,6 @@ export interface CodexAutomationMigrationPreviewItem {
   executionEnvironment?: string;
   target?: CodexAutomationDetail['target'];
   cwds: string[];
-  sourcePath: string;
   diagnostics: string[];
   canImport: boolean;
   /** Convenience flag for renderer checkbox state; duplicateScheduleId carries the detail. */
@@ -182,7 +181,6 @@ function toPreviewItem(
     executionEnvironment: detail.executionEnvironment,
     target: detail.target,
     cwds: detail.cwds,
-    sourcePath: detail.sourcePath,
     diagnostics,
     canImport,
     duplicate: duplicateScheduleId !== undefined,
