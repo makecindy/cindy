@@ -1347,10 +1347,12 @@ export class Scheduler extends EventEmitter {
     // cronExpr 即使暂时被 intervalMs 覆盖，也会在调用方显式清除 interval 后重新
     // 成为调度依据。不能让一次 interval 模式更新把畸形 cron 持久化，留到以后才
     // 在重排或启动时爆炸；timezone 变更同样需要验证现有表达式在新时区可解析。
+    const intervalKeyPresent = Object.prototype.hasOwnProperty.call(patch, 'intervalMs');
     if (
       patch.cronExpr !== undefined ||
       patch.timezone !== undefined ||
       patch.manual === false ||
+      intervalKeyPresent ||
       shouldReactivateExpired
     ) {
       nextCronOrMonthlyFire(candidate.cronExpr, now, candidate.timezone);
@@ -1362,7 +1364,6 @@ export class Scheduler extends EventEmitter {
     //   - manual:false 且 触发字段没动 → nextFireAt 保留（避免 update 副作用）
     // intervalMs 按「key 是否在场」判定而不是「值是否 undefined」：显式清空
     // （key 在、值 undefined）同样是触发字段变化，必须重算回 cron 槽位。
-    const intervalKeyPresent = Object.prototype.hasOwnProperty.call(patch, 'intervalMs');
     const needsRecompute =
       patch.cronExpr !== undefined ||
       patch.timezone !== undefined ||

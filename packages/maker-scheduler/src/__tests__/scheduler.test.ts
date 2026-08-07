@@ -1048,6 +1048,15 @@ describe('Scheduler', () => {
     });
   });
 
+  it('rejects interval-only re-arms when legacy cron metadata is malformed', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs: 10 * 60_000 });
+    await h.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+    const before = await h.storage.get(sch.id);
+
+    await expect(h.scheduler.update(sch.id, { intervalMs: 5 * 60_000 })).rejects.toThrow();
+    expect(await h.storage.get(sch.id)).toEqual(before);
+  });
+
   it('update(prompt only) leaves intervalMs and nextFireAt completely untouched', async () => {
     // 2026-07-29 #211 事故形态的回归：改 prompt 绝不能动 interval 语义
     const sch = await h.scheduler.create({ ...baseInput, cronExpr: '*/10 * * * *', intervalMs: 10 * 60_000 });
