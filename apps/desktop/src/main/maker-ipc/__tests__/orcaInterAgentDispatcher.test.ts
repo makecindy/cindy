@@ -219,6 +219,45 @@ describe('Orca lead/worker dispatcher', () => {
     expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
   });
 
+  it('rechecks the shutdown fence before falling back after the locked live Session disappears', async () => {
+    let fenced = false;
+    let liveReadCount = 0;
+    const h = createHarness();
+    h.deps.getLiveSession = vi.fn(() => {
+      liveReadCount += 1;
+      return liveReadCount <= 2 ? h.liveSession : undefined;
+    });
+    h.deps.isSessionSendFenced = vi.fn(() => fenced);
+    h.deps.withSessionLock = vi.fn(async (_sessionId, task) => {
+      const result = await task();
+      fenced = true;
+      return result;
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Must not use an unfenced fallback',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'fallback-fence-race-test' },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SESSION_NOT_FOUND',
+      },
+    });
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    expect(h.deps.withSessionLock).toHaveBeenCalledWith(
+      'target-session',
+      expect.any(Function),
+    );
+    expect(h.deps.getLiveSession).toHaveBeenCalledTimes(3);
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+  });
+
   it('delays queued accepted side effects until the coordinator accepted hook runs', async () => {
     const accepted = vi.fn();
     const h = createHarness({

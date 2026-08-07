@@ -800,6 +800,19 @@ describe('sendToSession ordering', () => {
     expectOrder(serviceArchiveBlock, 'await deps.archiveWorkerSession(worker.sessionId);', "await deps.updateWorkerStatus(worker.id, 'done');");
   });
 
+  it('rechecks the Orca shutdown fence inside the send_to_session route lock', () => {
+    const sendToSessionBlock = extractSendToSessionSource();
+    const jumpBranch = sendToSessionBlock.slice(
+      sendToSessionBlock.indexOf('const prev = sendToSessionLocks.get(targetSessionId);'),
+    );
+    const fenceCheck = 'isOrcaWorkerSessionDisableFenced(targetSessionId)';
+
+    expect(jumpBranch).toContain(fenceCheck);
+    expectOrder(jumpBranch, 'const run = waitPrev.then(async () => {', fenceCheck);
+    expectOrder(jumpBranch, fenceCheck, 'maker.getSessionMeta(targetSessionId)');
+    expectOrder(jumpBranch, fenceCheck, 'await bootstrapSession(createOpts);');
+  });
+
   it('keeps worker idle/archive adapters passing the caller lead session id', () => {
     const workerAdapterBlock = extractBetween(preloadSource, 'idleWorker: (', 'endTeam:');
     expect(workerAdapterBlock).toContain('leadSessionId: string,');

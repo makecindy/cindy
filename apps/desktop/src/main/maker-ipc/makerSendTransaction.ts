@@ -578,7 +578,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         return toCompatibleMakerSendResult(
           createHostSendFailure(
             'SESSION_NOT_FOUND',
-            `Session ${sessionId} is closed because its Orca team ended`,
+            `Session ${sessionId} is unavailable because its Orca team is ending or has ended`,
           ),
         );
       }

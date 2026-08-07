@@ -340,7 +340,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     const fencedFailure = (): Promise<DispatchOrcaInterAgentMessageResult> => failureResult({
       ...createHostSendFailure(
         'SESSION_NOT_FOUND',
-        `Session ${params.targetSessionId} is closed because its Orca team ended`,
+        `Session ${params.targetSessionId} is unavailable because its Orca team is ending or has ended`,
       ),
       source: params.meta.source,
       context: params.meta.context,
@@ -398,6 +398,9 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           return failureResult(result.dispatchOutcome);
         });
         if (directResult) return directResult;
+        if (deps.isSessionSendFenced(params.targetSessionId)) {
+          return fencedFailure();
+        }
       }
 
       const result = await deps.sendToSessionInternal({

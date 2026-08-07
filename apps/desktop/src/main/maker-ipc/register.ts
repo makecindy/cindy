@@ -7098,6 +7098,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const prev = sendToSessionLocks.get(targetSessionId);
     const waitPrev = prev ? prev.catch(() => undefined) : Promise.resolve();
     const run = waitPrev.then(async () => {
+      // The Orca direct-send fallback releases its first route lock before it
+      // can enter this shared send path. Recheck the shutdown fence only after
+      // this path wins the same per-session lock, otherwise end_team can fence
+      // the Worker in that gap and this branch could still lazy-bootstrap it.
+      if (isOrcaWorkerSessionDisableFenced(targetSessionId)) {
+        return {
+          ok: false as const,
+          errorCode: 'NOT_FOUND' as const,
+          message:
+            `session ${targetSessionId} is unavailable because its Orca team is ending or has ended`,
+        };
+      }
       const [meta, dbRow] = await Promise.all([
         maker.getSessionMeta(targetSessionId).catch(() => null),
         getSessionRowSnapshot(targetSessionId),
