@@ -3663,6 +3663,10 @@ export class AgentInputCoordinator {
               retries: AgentInputCoordinator.SESSION_RUNNING_RECONCILE_THRESHOLD,
               reason,
             });
+            // reconcile 已确认 live session idle → 立刻 drain,不再等下一轮 retry
+            // delay(自动续跑 10s 档下避免额外 10s 等待)。
+            this.scheduleDrain(sessionId, `session-running-reconciled:${reason}`);
+            return;
           }
         }
         this.scheduleSessionRunningRetry(sessionId, reason);
