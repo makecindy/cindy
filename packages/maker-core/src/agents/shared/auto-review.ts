@@ -691,7 +691,11 @@ const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
   /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除
 
   // 执行影响型环境变量赋值：让“看似只读”的命令运行其它程序，应由 reviewer 静默拦截或判定。
-  /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
+  // 分页器按**整族**登记(`(?:[A-Z][A-Z0-9]*_)?PAGER`):每个 CLI 都有自己的 `<TOOL>_PAGER`,
+  // 只列 `PAGER` / `GIT_PAGER` 等于给一个换前缀就绕过的口子 —— `GH_PAGER='touch /tmp/pwn'
+  // gh pr view 1` 里 gh 照样会启动那个外部程序,却因为 `gh pr view` 在只读白名单里被直接
+  // 放行(review 报)。
+  /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|(?:[A-Z][A-Z0-9_]*_)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
   /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
@@ -1576,6 +1580,14 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
     if (argv.some((t, k) => STRING_REPARSING_WRAPPER_OPTIONS.test(t)
       && (argv[k + 1]?.includes(placeholder) === true || t.includes(placeholder)))) return true;
     if (xargsPlaceholderFeedsInterpreterSource(argv, placeholder)) return true;
+    // c) 占位符落在解释器的**脚本操作数位**(`xargs -I{} python3 {}`):跑哪个脚本由 stdin
+    //    决定,与「程序位空着等 stdin 补」是同一件事的显式写法。
+    //    只看**第一个**操作数 —— 它才是程序;后面的操作数是传给脚本的 argv,
+    //    `xargs -I{} node run.js {}` 跑的始终是 run.js,占位符在那里只是数据。
+    const abin = executableName(argv[0] ?? '');
+    if (isPipeExecutor(abin)
+      && analyzeInterpreterArgs(abin, argv.slice(1)).scriptOperands[0]
+        ?.includes(placeholder) === true) return true;
   }
   // 形态 1:占位符就是命令名(包装器剥离后的首个 token)。
   // 比对**原 token 与归一化后的 bin 两者**:`executableName` 会做小写/取基名等归一化,
@@ -1603,6 +1615,14 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // `… | awk -f script.awk -` 会被误升成确定性红线)。
   if (bin === 'xargs' || bin === 'parallel') {
     if (tokens.slice(1).some((t) => SHELL_EXECUTORS.has(executableName(t)))) return true;
+    // xargs / parallel 把输入项**追加**到命令后面。解释器的脚本操作数位空着时,那个位置就
+    // 由 stdin 补上 —— `printf '/tmp/evil.py' | xargs python3` 会真的去执行那个脚本
+    // (review 报)。问的是同一个问题「程序位是不是空的」,所以直接对嵌套命令递归。
+    // 反面同样重要:`printf 'x' | xargs python3 run.py` 里 stdin 只是 run.py 的 argv,
+    // 程序位已被静态脚本占住 —— 递归自然返回 false,不回退成本 PR 已消除的那条误报。
+    const nested = bin === 'xargs' ? xargsCommandTokens(tokens) : tokens.slice(1);
+    if (nested !== null && nested.length > 0
+      && interpreterReadsProgramFromStdin(unwrapWrappers(nested))) return true;
     // 注:`-I` 占位符落在命令位的判定**不在这里** —— 本分支拿到的 tokens 已被
     // `unwrapCommand` 剥掉 xargs 本身,挂在这里是死代码。真正的调用点在
     // `highImpactExecutionNeedsConsent` 的 xargs 块(按 rawTokens 判)。

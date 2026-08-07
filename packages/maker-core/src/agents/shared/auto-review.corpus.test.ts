@@ -609,6 +609,57 @@ describe('review 第九轮 — shell 源码选择器按位 / gh 令牌 flag 等�
   });
 });
 
+/**
+ * 第十轮 review 的 2 条:xargs/parallel 把 stdin 补进解释器的程序位,以及分页器类
+ * 环境变量的整族登记。
+ */
+describe('review 第十轮 — stdin 补程序位 / 分页器环境变量', () => {
+  it('xargs / parallel 后面的解释器缺脚本操作数 → 程序路径来自 stdin', () => {
+    for (const c of [
+      `printf '/tmp/evil.py' | xargs python3`,
+      `printf '/tmp/evil.py' | xargs python3 -u`,
+      `printf '/tmp/evil.py' | xargs -n1 python3`,
+      `printf '/tmp/evil.py' | xargs env python3`,
+      `printf '/tmp/evil.py' | parallel python3`,
+      `printf '/tmp/evil.js' | xargs node`,
+      // `-I` 占位符落在脚本操作数位,是同一件事的显式写法
+      `printf '/tmp/evil.py' | xargs -I{} python3 {}`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('程序位已被静态脚本占住时,stdin 只是它的 argv → 仍是灰区', () => {
+    // 这条是本 PR 有意消除的误报源之一,不能借「收紧」之名回退。
+    for (const c of [
+      `printf 'x' | xargs python3 run.py`,
+      'cat list.txt | xargs grep foo',
+      'ls | xargs wc -l',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt');
+    }
+  });
+
+  it('`<TOOL>_PAGER=` 整族都算执行影响型环境变量,不因只读子命令而放行', () => {
+    // gh pr view 在只读白名单里,但 GH_PAGER 会让 gh 启动外部程序。
+    for (const c of [
+      `GH_FORCE_TTY=1 GH_PAGER='touch /tmp/pwn' gh pr view 1`,
+      `GH_PAGER='touch /tmp/pwn' gh pr view 1`,
+      'GH_PAGER=cat gh pr view 1',
+      'GIT_PAGER=cat git log',
+      `PAGER='touch /tmp/pwn' gh pr view 1`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt');
+    }
+  });
+
+  it('无关的 gh 环境变量不受影响', () => {
+    for (const c of ['GH_FORCE_TTY=1 gh pr view 1', 'NO_COLOR=1 gh pr list']) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
+    }
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [
