@@ -621,9 +621,27 @@ describe('dormant scheduler manager', () => {
       .find(
         (push) =>
           push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
-      )?.payload as { channels?: Array<{ identity: string }> } | undefined;
+      )?.payload as { channels?: Array<{ identity: string }>; nonce?: string } | undefined;
     expect(latestProbe?.channels).toEqual([{ channel: 'discord', identity: nextIdentity }]);
     expect(manager.getRuntimeGaps().values()).toEqual([]);
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 2,
+        channels: [{ channel: 'discord', identity: nextIdentity }],
+        inReplyTo: latestProbe?.nonce,
+        runtimeGaps: [
+          { identity, generation: 'a'.repeat(32), state: 'dirty' },
+          { identity: nextIdentity, generation: 'b'.repeat(32), state: 'dirty' },
+        ],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([
+      { identity: nextIdentity, generation: 'b'.repeat(32), state: 'dirty' },
+    ]);
 
     manager
       .getRuntimeGaps()
