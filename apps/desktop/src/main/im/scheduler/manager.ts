@@ -3,9 +3,11 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  MAX_RUNTIME_GAPS,
   isImSchedulerFrame,
   type ImSchedulerFrame,
   type SchedulerAdvertisementFrame,
+  type SchedulerRuntimeFrame,
 } from '@cindy/device-link';
 import { RuntimeGapSet } from './runtimeGaps';
 import {
@@ -64,6 +66,7 @@ export class ImSchedulerManager {
   private readonly peers = new Map<string, PeerAdvertisement>();
   private readonly confirmedPeers = new Set<string>();
   private readonly runtimeGaps = new RuntimeGapSet();
+  private readonly invalidatedRuntimeGaps = new Set<string>();
   private unsubscribe: (() => void) | null = null;
   private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
   private lastSnapshotObservedAt: number | null = null;
@@ -117,6 +120,7 @@ export class ImSchedulerManager {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.runtimeGaps.clear();
+    this.invalidatedRuntimeGaps.clear();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
     this.resetSnapshotRequestState();
@@ -146,11 +150,12 @@ export class ImSchedulerManager {
       this.resetSnapshotRequestState();
       this.requiresTaggedSnapshot = true;
       this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
+      this.rememberInvalidatedRuntimeGaps();
       this.runtimeGaps.clear();
     } else {
       const currentIdentity = this.getLocalChannel()?.identity ?? null;
       for (const identity of [this.lastLocalIdentity, currentIdentity]) {
-        if (identity) this.runtimeGaps.clearIdentity(identity);
+        if (identity) this.invalidateRuntimeGapIdentity(identity);
       }
       this.lastLocalIdentity = currentIdentity;
     }
@@ -285,7 +290,7 @@ export class ImSchedulerManager {
     this.confirmedPeers.add(sourceDeviceId);
     this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
     for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
-      if (runtime?.state === 'dirty') this.runtimeGaps.adopt(runtime);
+      if (runtime?.state === 'dirty') this.adoptRuntimeGap(runtime);
     }
     if (this.isDiscoveryComplete()) this.cancelDiscoveryRetry();
     this.reconcile();
@@ -293,6 +298,36 @@ export class ImSchedulerManager {
 
   private isAuthoritativePeer(deviceId: string): boolean {
     return this.snapshot?.peers.some((peer) => peer.deviceId === deviceId) === true;
+  }
+
+  private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
+    if (this.invalidatedRuntimeGaps.has(this.runtimeGapKey(runtime))) return;
+    this.runtimeGaps.adopt(runtime);
+  }
+
+  private invalidateRuntimeGapIdentity(identity: string): void {
+    const runtime = this.runtimeGaps.get(identity);
+    if (runtime) this.rememberInvalidatedRuntimeGap(runtime);
+    this.runtimeGaps.clearIdentity(identity);
+  }
+
+  private rememberInvalidatedRuntimeGaps(): void {
+    for (const runtime of this.runtimeGaps.values()) this.rememberInvalidatedRuntimeGap(runtime);
+  }
+
+  private rememberInvalidatedRuntimeGap(runtime: SchedulerRuntimeFrame): void {
+    const key = this.runtimeGapKey(runtime);
+    if (this.invalidatedRuntimeGaps.has(key)) return;
+    while (this.invalidatedRuntimeGaps.size >= MAX_RUNTIME_GAPS) {
+      const oldest = this.invalidatedRuntimeGaps.values().next().value;
+      if (typeof oldest !== 'string') break;
+      this.invalidatedRuntimeGaps.delete(oldest);
+    }
+    this.invalidatedRuntimeGaps.add(key);
+  }
+
+  private runtimeGapKey(runtime: SchedulerRuntimeFrame): string {
+    return `${runtime.identity}:${runtime.generation}`;
   }
 
   private observePeerProbe(
