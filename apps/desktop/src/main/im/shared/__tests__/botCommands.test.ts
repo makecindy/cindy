@@ -55,6 +55,7 @@ describe('bot command registry', () => {
       ['project', true, null],
       ['model', true, null],
       ['permission', true, null],
+      ['settings', false, null],
       ['ctr', true, null],
       ['exctr', false, ['exitctr']],
     ]);
@@ -73,6 +74,7 @@ describe('bot command registry', () => {
         command: 'permission',
         description: 'translated:settings.telegramBot.commandMenu.permission',
       },
+      { command: 'settings', description: 'translated:settings.telegramBot.commandMenu.settings' },
       { command: 'ctr', description: 'translated:settings.telegramBot.commandMenu.ctr' },
       { command: 'exctr', description: 'translated:settings.telegramBot.commandMenu.exctr' },
     ]);
@@ -135,7 +137,6 @@ describe('bot command registry', () => {
       'unbind',
       'effort',
       'agent',
-      'settings',
       'status',
       'unlink',
     ]);

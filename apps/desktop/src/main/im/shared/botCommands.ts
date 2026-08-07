@@ -120,6 +120,12 @@ export const BOT_COMMANDS = [
     textFallbackChannels: ['wecom'],
   },
   {
+    command: 'settings',
+    surfaces: ['personal', 'official'],
+    telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.settings',
+    requiresRichCards: false,
+  },
+  {
     command: 'ctr',
     surfaces: ['personal', 'official'],
     telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.ctr',
@@ -158,12 +164,6 @@ export const BOT_COMMANDS = [
     surfaces: ['official'],
     parityNote: '切换 Agent(Claude Code / Codex / Pi)。个人 bot 尚未实现 —— 只能在桌面端改。',
     requiresRichCards: true,
-  },
-  {
-    command: 'settings',
-    surfaces: ['official'],
-    parityNote: '查看项目与 Agent 设置总览。个人 bot 尚未实现。',
-    requiresRichCards: false,
   },
   {
     command: 'status',

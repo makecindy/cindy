@@ -47,6 +47,7 @@ vi.mock('../controlState', () => ({
 import type { ChannelIM, TextChannelIM } from '@cindy/im';
 
 import { ui } from '../../feishu/uiText';
+import { ui as telegramUi } from '../../telegram/uiText';
 import { createSlashHandlers } from '../slashCommands';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
@@ -411,6 +412,41 @@ describe('IM slash commands', () => {
     expect(cards.buildControlPickerCard).not.toHaveBeenCalled();
     expect(cards.buildProjectPickerCard).not.toHaveBeenCalled();
     expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
+  });
+
+  const SLASH_CTX = { botContextId: 'bot', userId: 'ou_user' };
+
+  describe('/settings', () => {
+    it('Telegram: 按官方 bot 的同一结构给出五项配置', async () => {
+      // 官方 bot 的 /settings 是服务端渲染的固定五行(项目 / Agent / 模型 /
+      // 强度 / 权限)。个人侧照同一结构给, 两个 bot 的用户看到的是同一份东西。
+      const { handlers } = makeHarness({ adapterOverrides: { ui: telegramUi } });
+      expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：XDMaker'); // 目录名, 不是绝对路径
+      expect(text).toContain('Agent：claude-code');
+      expect(text).toContain('模型：claude-opus-4-8');
+      expect(text).toContain('强度：xhigh');
+      expect(text).toContain('权限：auto');
+    });
+
+    it('没有该文案的渠道回未知命令 —— 不硬造一个配置概念', async () => {
+      const { handlers } = makeHarness(); // 飞书 ui 没有 settings 文案
+      expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('/settings');
+      expect(text).not.toContain('claude-opus-4-8');
+    });
+
+    it('会话未就绪时不报配置, 走鉴权提示', async () => {
+      const turnRunner = makeTurnRunner({
+        resolveRouteTarget: vi.fn(async () => null),
+      } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ turnRunner, adapterOverrides: { ui: telegramUi } });
+      expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).not.toContain('项目：');
+    });
   });
 
   describe('/project (projectSwitching channels)', () => {

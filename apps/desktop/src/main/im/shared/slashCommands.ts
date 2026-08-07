@@ -403,6 +403,44 @@ export function createSlashHandlers(
         return true;
       }
 
+      case '/settings': {
+        // 只读总览 —— 不改任何配置, 所以不需要富卡, 纯文本渠道也照常可用。
+        const render = ui.slash.settings;
+        if (!render) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        if (threadScoped && threadUi) {
+          await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
+          return true;
+        }
+        const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
+        if (!target) {
+          await safeSendText(ctx.userId, ui.agent.apiKeyMissing);
+          return true;
+        }
+        const { row } = target;
+        // 项目显示成目录名而不是绝对路径: 官方 bot 那边显示的是工作区别名(短名),
+        // 两边给出的粒度得一样, 否则同一个项目在两个 bot 里看着像两个东西。
+        //
+        // 两种分隔符都切, 不用 path.basename —— 它只认当前平台的分隔符, 而远程
+        // 控制下一条 Windows 会话的 workingDir(`F:\\proj`)完全可能由 macOS 上的
+        // 主进程渲染, 那时 basename 会把整条路径原样吐回来。
+        const workspace =
+          row.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? row.workingDir;
+        await safeSendText(
+          ctx.userId,
+          render({
+            workspace,
+            agent: row.agentKind,
+            model: row.model,
+            effort: row.effort,
+            permission: row.permissionMode,
+          }),
+        );
+        return true;
+      }
+
       case '/permission': {
         if (threadScoped && threadUi) {
           await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
