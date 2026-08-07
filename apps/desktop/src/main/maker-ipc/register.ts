@@ -7435,12 +7435,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setPlanUpdateLiveSessionValidator((context) =>
     maker.getSession(context.sessionId)?.instanceId === context.sessionInstanceId,
   );
-  setPlanUpdateProjector((context, update) => {
+  setPlanUpdateProjector((ghostId, context, update) => {
     broadcastSyntheticToolEvent(context.sessionId, {
       type: 'tool_use',
       source: 'codex',
       data: {
-        toolUseId: `plan:update:${createId()}`,
+        // sessionId 是持久化层的外层作用域；ghostId + session incarnation
+        // 唯一标识当前全局 Plan。后续快照复用同一条 tool_use，避免消息膨胀。
+        toolUseId: `plan:ghost:${ghostId}:${context.sessionInstanceId}`,
         toolName: 'update_plan',
         input: update,
       },
