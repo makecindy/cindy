@@ -1835,6 +1835,58 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
+  it('直达受理的游标补偿持续失败时有界结束账号边界并记录失败终态', async () => {
+    vi.useFakeTimers();
+    try {
+      let beginDeactivation: () => Promise<void> = async () => undefined;
+      let deactivation: Promise<void> | null = null;
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const rollback = vi.fn(async () => {
+        throw new Error('disk full');
+      });
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({
+        runner: fr.runner,
+        log,
+        buildContextPrefix: async () => ({
+          prefix: '<group_chat_context>背景</group_chat_context>',
+          commit: async () => {
+            queueMicrotask(() => {
+              deactivation = beginDeactivation();
+            });
+            return { rollback };
+          },
+        }),
+      });
+      beginDeactivation = () => d.deactivateAccount();
+      const c = collector();
+
+      d.handleDispatch(
+        'conn-1',
+        dispatch({ requestId: 'accepted-exhausted', externalKey: 'telegram:group:bot:-900:9:g0' }),
+        c.send,
+      );
+      for (let i = 0; i < 30 && rollback.mock.calls.length === 0; i += 1) {
+        await Promise.resolve();
+      }
+      expect(deactivation).not.toBeNull();
+
+      await vi.runAllTimersAsync();
+      await deactivation!;
+
+      expect(rollback).toHaveBeenCalledTimes(6);
+      expect(c.ofType('task.ack')).toHaveLength(0);
+      expect(fr.calls).toHaveLength(0);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'group context cursor rollback recovery exhausted: phase=accepted requestId=accepted-exhausted attempts=6 state=exhausted',
+        ),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('排队任务的游标补偿失败时保留 execution，恢复前不丢任务引用', async () => {
     vi.useFakeTimers();
     try {
@@ -1899,6 +1951,65 @@ describe('dispatcher 核心语义', () => {
       );
       expect(log.warn).toHaveBeenCalledWith(
         expect.stringContaining('group context cursor rollback retained for retry'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('排队任务的游标补偿持续失败时有界结束账号边界且不启动旧任务', async () => {
+    vi.useFakeTimers();
+    try {
+      let beginDeactivation: () => Promise<void> = async () => undefined;
+      let deactivation: Promise<void> | null = null;
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const rollback = vi.fn(async () => {
+        throw new Error('database is readonly');
+      });
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({
+        runner: fr.runner,
+        log,
+        buildContextPrefix: async (payload) => ({
+          prefix: '<group_chat_context>背景</group_chat_context>',
+          commit:
+            payload.requestId === 'queued-exhausted'
+              ? async () => {
+                  queueMicrotask(() => {
+                    deactivation = beginDeactivation();
+                  });
+                  return { rollback };
+                }
+              : () => undefined,
+        }),
+      });
+      beginDeactivation = () => d.deactivateAccount();
+      const c = collector();
+      const externalKey = 'telegram:group:bot:-900:9:g0';
+
+      d.handleDispatch('conn-1', dispatch({ requestId: 'running-exhausted', externalKey }), c.send);
+      await tick();
+      d.handleDispatch('conn-1', dispatch({ requestId: 'queued-exhausted', externalKey }), c.send);
+      await tick();
+
+      fr.finish({ finalText: 'running done' });
+      for (let i = 0; i < 30 && rollback.mock.calls.length === 0; i += 1) {
+        await Promise.resolve();
+      }
+      expect(deactivation).not.toBeNull();
+
+      await vi.runAllTimersAsync();
+      await deactivation!;
+
+      expect(rollback).toHaveBeenCalledTimes(6);
+      expect(fr.calls).toHaveLength(1);
+      expect(c.ofType('turn.end').some((m) => m.payload.requestId === 'queued-exhausted')).toBe(
+        false,
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'group context cursor rollback recovery exhausted: phase=queued requestId=queued-exhausted attempts=6 state=exhausted',
+        ),
       );
     } finally {
       vi.useRealTimers();

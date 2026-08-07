@@ -383,9 +383,10 @@ const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 const REOPEN_TTL_MS = 24 * 60 * 60_000;
 /** 续跑记账条数上限(FIFO 淘汰最老), 同 ackHistory 语义: 防长驻进程无界增长。 */
 const MAX_PENDING_REOPENS = 200;
-/** 游标补偿已在共享核心内有界重试；dispatcher 继续保留任务并退避恢复。 */
+/** 游标补偿已在共享核心内有界重试；dispatcher 再保留任务做有限轮退避恢复。 */
 const CURSOR_ROLLBACK_RECOVERY_BASE_DELAY_MS = 25;
 const CURSOR_ROLLBACK_RECOVERY_MAX_DELAY_MS = 1_000;
+const CURSOR_ROLLBACK_RECOVERY_MAX_ATTEMPTS = 6;
 
 /**
  * 原对话不再落在工作目录映射内时(被移到映射外的项目, 或映射本身被改/删),
@@ -1501,9 +1502,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
   /**
    * 账号代次失效后，任务必须留在当前 admission/execution Promise 中，直到
-   * durable cursor 确认恢复。共享核心单次 rollback 已做有界重试；这里再以
-   * 退避循环承接持续 SQLite 故障，使 deactivateAccount() 继续等待该任务，
-   * 不会在补偿失败时清掉引用并让未执行消息永久越过游标。
+   * durable cursor 确认恢复或恢复预算耗尽。共享核心单次 rollback 已做有界
+   * 重试；这里再以有限轮退避承接短暂 SQLite 故障。持续故障必须进入可观测的
+   * exhausted 终态并释放账号生命周期，不能让停用、切换或退出永久等待。
    */
   async function recoverTaskContextCursor(
     receipt: ContextCursorReceipt | void,
@@ -1511,26 +1512,29 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     phase: 'accepted' | 'queued',
   ): Promise<void> {
     if (!receipt) return;
-    let failures = 0;
-    for (;;) {
+    for (let attempt = 1; attempt <= CURSOR_ROLLBACK_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
       try {
         await receipt.rollback();
-        if (failures > 0) {
+        if (attempt > 1) {
           log.info(
-            `group context cursor rollback recovered: phase=${phase} requestId=${task.requestId} attempts=${failures + 1}`,
+            `group context cursor rollback recovered: phase=${phase} requestId=${task.requestId} attempts=${attempt}`,
           );
         }
         return;
       } catch (error) {
-        failures += 1;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (attempt === CURSOR_ROLLBACK_RECOVERY_MAX_ATTEMPTS) {
+          log.warn(
+            `group context cursor rollback recovery exhausted: phase=${phase} requestId=${task.requestId} attempts=${attempt} state=exhausted error=${errorMessage}`,
+          );
+          return;
+        }
         const retryDelayMs = Math.min(
-          CURSOR_ROLLBACK_RECOVERY_BASE_DELAY_MS * 2 ** Math.min(failures - 1, 6),
+          CURSOR_ROLLBACK_RECOVERY_BASE_DELAY_MS * 2 ** Math.min(attempt - 1, 6),
           CURSOR_ROLLBACK_RECOVERY_MAX_DELAY_MS,
         );
         log.warn(
-          `group context cursor rollback retained for retry: phase=${phase} requestId=${task.requestId} retryInMs=${retryDelayMs} error=${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `group context cursor rollback retained for retry: phase=${phase} requestId=${task.requestId} retryInMs=${retryDelayMs} error=${errorMessage}`,
         );
         await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
       }
