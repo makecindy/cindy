@@ -34,20 +34,20 @@ vi.mock('../rpc-client.js', () => ({
       captured.instances.push(this.state);
       void opts.onEvent;
     }
-    async request(command: Record<string, unknown>): Promise<{ success: boolean; data?: unknown; error?: string }> {
+    async request(command: Record<string, unknown>): Promise<{ type?: string; command?: string; success: boolean; data?: unknown; error?: string }> {
       this.state.requests.push(command);
       if (command.type === 'get_state') {
         return { success: true, data: { sessionFile: `/mock/${this.state.sessionId || 'fork'}.jsonl`, model: { contextWindow: 200_000 } } };
       }
       if (command.type === 'get_commands') {
         if (captured.runtimeFailures.has(this.state.sessionId)) {
-          return { success: false, error: 'provider=/secret/path rejected' };
+          return { type: 'response', command: 'get_commands', success: false, error: 'provider=/secret/path rejected' };
         }
         if (captured.runtimeDeferred) {
           await new Promise<void>((resolve) => { captured.runtimeRelease = resolve; });
         }
         const data = captured.catalogs[this.state.sessionId] ?? { commands: [] };
-        return { success: true, data };
+        return { type: 'response', command: 'get_commands', success: true, data };
       }
       if (command.type === 'switch_session') return { success: true, data: {} };
       if (command.type === 'clone') return { success: true, data: {} };

@@ -33,12 +33,22 @@ describe('Pi runtime capability parsing', () => {
     ['missing commands', {}],
     ['duplicate names', { commands: [command, command] }],
     ['missing sourceInfo', { commands: [{ ...command, sourceInfo: undefined }] }],
+    ['invalid known sourceInfo field', { commands: [{ ...command, sourceInfo: { source: 'auto', scope: 1 } }] }],
     ['unknown command field', { commands: [{ ...command, extra: 'secret' }] }],
     ['unknown sourceInfo field', { commands: [{ ...command, sourceInfo: { ...command.sourceInfo, extra: 'secret' } }] }],
     ['unknown response field', { commands: [command], extra: 'secret' }],
     ['oversized payload', { commands: [{ ...command, description: 'x'.repeat(4_097) }] }],
   ])('rejects conservative malformed case: %s', (_name, data) => {
     expect(parsePiRuntimeCommands(data)).toEqual({ ok: false });
+  });
+
+  it('rejects a catalog whose total serialized payload is oversized', () => {
+    const commands = Array.from({ length: 100 }, (_, index) => ({
+      ...command,
+      name: `skill:fixture-${index}`,
+      description: 'x'.repeat(3_000),
+    }));
+    expect(parsePiRuntimeCommands({ commands })).toEqual({ ok: false });
   });
 
   it('redacts rpc failures and classifies unsupported/timeout as unknown', async () => {
@@ -100,5 +110,29 @@ describe('Pi runtime capability parsing', () => {
       'ready',
     );
     expect(rejectedExit).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
+
+    const spawnFailure = await capturePiRuntimeCapabilityManifest(
+      { request: async () => { throw new Error('pi process error: spawn ENOENT'); } },
+      { sessionId: 's1' },
+      5,
+      'ready',
+    );
+    expect(spawnFailure).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
+  });
+
+  it.each([
+    ['non-object', null],
+    ['missing type', { command: 'get_commands', success: true, data: { commands: [command] } }],
+    ['missing success', { type: 'response', command: 'get_commands', data: { commands: [command] } }],
+    ['wrong command', { type: 'response', command: 'get_state', success: true, data: { commands: [command] } }],
+    ['unknown envelope field', { type: 'response', command: 'get_commands', success: true, data: { commands: [command] }, extra: 'secret' }],
+  ])('rejects malformed RPC response envelope: %s', async (_name, response) => {
+    const manifest = await capturePiRuntimeCapabilityManifest(
+      { request: async () => response as never },
+      { sessionId: 's1' },
+      1,
+      'ready',
+    );
+    expect(manifest).toMatchObject({ status: 'failed', error: { code: 'malformed_response' } });
   });
 });

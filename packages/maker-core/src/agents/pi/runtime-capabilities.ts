@@ -15,6 +15,7 @@ const MAX_SOURCE_LENGTH = 128;
 const MAX_SOURCE_INFO_VALUE_LENGTH = 4_096;
 const MAX_ERROR_MESSAGE_LENGTH = 160;
 export const PI_RUNTIME_CAPABILITY_TIMEOUT_MS = 5_000;
+const PI_RPC_RESPONSE_KEYS = new Set(['type', 'id', 'command', 'success', 'data', 'error']);
 
 type RuntimeCommandParseResult =
   | { ok: true; commands: PiRuntimeCommand[] }
@@ -29,6 +30,11 @@ function parseSourceInfo(value: unknown): PiRuntimeCommandSourceInfo | undefined
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
   if (Object.keys(raw).some((key) => !['path', 'scope', 'baseDir', 'source', 'origin'].includes(key))) return undefined;
+  for (const key of ['path', 'scope', 'baseDir', 'source', 'origin'] as const) {
+    if (Object.hasOwn(raw, key) && !boundedString(raw[key], MAX_SOURCE_INFO_VALUE_LENGTH)) {
+      return undefined;
+    }
+  }
   const path = boundedString(raw.path, MAX_SOURCE_INFO_VALUE_LENGTH);
   const scope = boundedString(raw.scope, MAX_SOURCE_INFO_VALUE_LENGTH);
   const baseDir = boundedString(raw.baseDir, MAX_SOURCE_INFO_VALUE_LENGTH);
@@ -99,7 +105,14 @@ function classifyFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | '
   if (text.includes('timeout')) {
     return { code: 'timeout', message: 'Pi runtime command discovery timed out' };
   }
-  if (text.includes('already exited') || text.includes('process exited') || text.includes('not ready')) {
+  if (
+    text.includes('already exited')
+    || text.includes('process exited')
+    || text.includes('process error')
+    || text.includes('not ready')
+    || text.includes('spawn')
+    || text.includes('closed')
+  ) {
     return { code: 'process_unavailable', message: 'Pi process was unavailable for runtime command discovery' };
   }
   return { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' };
@@ -146,11 +159,37 @@ export async function capturePiRuntimeCapabilityManifest(
       { type: 'get_commands' },
       { timeoutMs: PI_RUNTIME_CAPABILITY_TIMEOUT_MS },
     );
-    if (!response || response.success !== true) {
-      const failure = classifyFailure(typeof response?.error === 'string' ? response.error : 'rpc rejected');
+    const rawResponse = response as unknown;
+    if (
+      typeof rawResponse !== 'object'
+      || rawResponse === null
+      || Array.isArray(rawResponse)
+    ) {
+      return errorManifest(identity, generation, stage, {
+        code: 'malformed_response',
+        message: 'Pi returned an invalid runtime command response',
+      }, 'failed');
+    }
+    const responseRecord = rawResponse as Record<string, unknown>;
+    if (
+      Object.keys(responseRecord).some((key) => !PI_RPC_RESPONSE_KEYS.has(key))
+      || responseRecord.type !== 'response'
+      || responseRecord.command !== 'get_commands'
+      || typeof responseRecord.success !== 'boolean'
+      || (responseRecord.id !== undefined && typeof responseRecord.id !== 'string')
+      || (responseRecord.error !== undefined && typeof responseRecord.error !== 'string')
+    ) {
+      return errorManifest(identity, generation, stage, {
+        code: 'malformed_response',
+        message: 'Pi returned an invalid runtime command response',
+      }, 'failed');
+    }
+    const typedResponse = responseRecord as unknown as PiRpcResponse;
+    if (!typedResponse.success) {
+      const failure = classifyFailure(typeof typedResponse.error === 'string' ? typedResponse.error : 'rpc rejected');
       return errorManifest(identity, generation, stage, failure, statusForFailureCode(failure.code));
     }
-    const parsed = parsePiRuntimeCommands(response.data);
+    const parsed = parsePiRuntimeCommands(typedResponse.data);
     if (!parsed.ok) {
       return errorManifest(identity, generation, stage, {
         code: 'malformed_response',
