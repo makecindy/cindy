@@ -41,6 +41,7 @@ import {
   StatusDot,
 } from '@/components/MobilePrimitives';
 import {
+  APP_BINARY_VERSION,
   AUTH_API_BASE_URL,
   AUTH_REGION,
   DESKTOP_PACKAGE_VERSION,
@@ -165,7 +166,11 @@ export default function SettingsScreen() {
     [auth.deviceId, auth.user?.email, auth.user?.id, auth.user?.name, deviceName, status, t],
   );
 
-  const appVersion = Constants.expoConfig?.version ?? '0.0.0';
+  // 整包版本必须读原生烧进的值(CFBundleShortVersionString / versionName):
+  // OTA 热更会把 manifest 里内嵌的 expoClient.version 覆盖给 Constants.expoConfig.version,
+  // 而热更不改原生包,若读 expoConfig 会在热更后回退成打热更时主仓 app.json 的旧值。
+  // APP_BINARY_VERSION 优先取原生层、热更后不漂移(与 mobileTapdb / env 上报同口径)。
+  const appVersion = APP_BINARY_VERSION || '0.0.0';
   const updatesEnabled = Updates.isEnabled;
   // 当前运行的 OTA bundle 信息(只读),折进「调试」分组,用于核验热更是否生效。
   const { currentlyRunning } = useUpdates();
