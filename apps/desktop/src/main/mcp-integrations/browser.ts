@@ -316,7 +316,28 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
-    createLocalPreviewUrl: (input) => localPreviewServer.createPreviewUrl(input),
+    createLocalPreviewUrl: async (input) => {
+      const { url } = await localPreviewServer.createPreviewUrl(input);
+      // The RSB partition is PERSISTENT: an earlier local service on the same
+      // 127.0.0.1:<port> may have left a scope=/ Service Worker registered on
+      // this origin. worker-src 'none' only stops NEW registrations; the stale
+      // SW would intercept /preview/<token>/... before the server responds and
+      // answer with a synthetic document without CSP (codex-connector P1,
+      // round 27). applyPreviewOrigins triggers the clear fire-and-forget, but
+      // that races the first navigation — await it here for THIS origin
+      // (bounded, best-effort) so the grant never resolves with the stale SW
+      // still able to pre-empt the initial load (Copilot P1, round 27d).
+      try {
+        const origin = new URL(url).origin;
+        await Promise.race([
+          clearStaleServiceWorkers([origin]),
+          new Promise((resolve) => setTimeout(resolve, 2000)),
+        ]);
+      } catch {
+        /* best-effort: the applyPreviewOrigins fire-and-forget clear still runs */
+      }
+      return { url };
+    },
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
     logger,
