@@ -207,6 +207,25 @@ describe('discord gateway pure logic', () => {
     await gateway.destroy();
   });
 
+  it('reuses the existing client while discord.js is reconnecting', async () => {
+    const { gateway, statuses } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    emitReady(client, 'helper#0000');
+
+    client.emit('shardReconnecting');
+    expect(gateway.ingressOpen).toBe(false);
+    expect(statuses.at(-1)).toEqual({ kind: 'connecting' });
+
+    await gateway.connect('token');
+
+    expect(discordMock.MockDiscordClient.instances).toHaveLength(1);
+    expect(gateway.client).toBe(client);
+
+    await gateway.destroy();
+  });
+
   it('releases the client after a terminal runtime disconnect', async () => {
     const { gateway, statuses } = createGatewayHarness();
 

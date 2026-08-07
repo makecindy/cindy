@@ -693,12 +693,19 @@ describe('DiscordIM inbound pipeline', () => {
     await handoff;
 
     expect(gateway.destroy).toHaveBeenCalledOnce();
-    expect(received).toHaveLength(1);
-    expect(received[0]).toMatchObject({
-      buttonId: 'control:start',
-      messageId: 'dm-1|msg-button',
-      payload: { source: 'accepted' },
-    });
+    expect(received).toHaveLength(2);
+    expect(received).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        buttonId: 'control:start',
+        messageId: 'dm-1|msg-button',
+        payload: { source: 'accepted' },
+      }),
+      expect.objectContaining({
+        buttonId: 'control:start',
+        messageId: 'dm-1|msg-late',
+        payload: { source: 'late' },
+      }),
+    ]));
   });
 
   it('keeps DMs received during a normal handoff in the drain queue', async () => {

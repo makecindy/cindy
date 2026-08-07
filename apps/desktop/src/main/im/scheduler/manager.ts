@@ -385,6 +385,12 @@ export class ImSchedulerManager {
     this.desired = 'active';
     this.desiredIdentity = identity;
     if (this.discord.isSchedulerTransportActive()) return;
+    // A live discord.js client can temporarily have no ingress while the
+    // Gateway is reconnecting. Do not create a second Client or mark the
+    // current winner as a failed activation; the existing client will report
+    // ShardReady/ShardResume when it recovers, or the reconnect grace will
+    // release it deterministically if it does not.
+    if (this.discord.isSchedulerTransportConnecting()) return;
     if (sameIntent && Date.now() - this.lastActivationAttemptAt < ACTIVATION_RETRY_MS) return;
     this.lastActivationAttemptAt = Date.now();
     const predecessor = this.runtimeGaps.get(identity)?.generation;
@@ -392,6 +398,7 @@ export class ImSchedulerManager {
     try {
       await this.discord.init();
       if (!this.discord.isSchedulerTransportActive()) {
+        if (this.discord.isSchedulerTransportConnecting()) return;
         this.markActivationFailure(identity);
         return;
       }
@@ -415,7 +422,10 @@ export class ImSchedulerManager {
     this.desired = 'standby';
     this.desiredIdentity = identity;
     this.lastActivationAttemptAt = 0;
-    if (!this.discord.isSchedulerTransportActive()) {
+    if (
+      !this.discord.isSchedulerTransportActive()
+      && !this.discord.isSchedulerTransportConnecting()
+    ) {
       // Provider-side teardown can publish idle/error before reconcile gets
       // here. Retire the runtime generation even when the Gateway is already
       // gone, otherwise peers keep seeing a stale active lease indefinitely.

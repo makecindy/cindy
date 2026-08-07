@@ -381,6 +381,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return this.gateway.client !== null && this.gateway.ingressOpen;
   }
 
+  /** A discord.js client may remain alive while its Gateway is reconnecting. */
+  isSchedulerTransportConnecting(): boolean {
+    return this.gateway.client !== null && !this.gateway.ingressOpen;
+  }
+
   async enterSchedulerStandby(options: {
     clearRuntimeActiveMarker?: boolean;
     closeIngress?: boolean;
@@ -1178,8 +1183,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     if (
       this.disposing
-      || (!this.schedulerTransportAllowed()
-        && !(this.schedulerHandoffDraining && this.acceptedTasks.size > 0))
+      || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining)
     ) {
       return Promise.resolve();
     }

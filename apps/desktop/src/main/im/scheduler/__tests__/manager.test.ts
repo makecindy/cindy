@@ -81,6 +81,7 @@ interface FakeDiscord {
   getSchedulerIdentity: ReturnType<typeof vi.fn>;
   hasPendingSchedulerOfflineNotice: ReturnType<typeof vi.fn>;
   isSchedulerTransportActive: ReturnType<typeof vi.fn>;
+  isSchedulerTransportConnecting: ReturnType<typeof vi.fn>;
   markSchedulerOfflineGap: ReturnType<typeof vi.fn>;
   onStatusChange: ReturnType<typeof vi.fn>;
   setSchedulerHooks: ReturnType<typeof vi.fn>;
@@ -91,22 +92,30 @@ function createDiscord(
   options: { activateOnInit?: boolean } = {},
 ): FakeDiscord {
   let active = false;
+  let connecting = false;
   let status: FakeDiscordStatus = { kind: 'idle' };
   let statusHandler: ((nextStatus: FakeDiscordStatus) => void) | null = null;
   return {
     emitStatus: (nextStatus) => {
       status = nextStatus;
+      connecting = nextStatus.kind === 'connecting';
       if (nextStatus.kind === 'error' || nextStatus.kind === 'standby' || nextStatus.kind === 'idle') {
         active = false;
       }
+      if (nextStatus.kind === 'connecting') active = false;
+      if (nextStatus.kind === 'connected') active = true;
       statusHandler?.(nextStatus);
     },
     getStatus: vi.fn(() => status),
     init: vi.fn(async () => { active = options.activateOnInit !== false; }),
-    enterSchedulerStandby: vi.fn(async () => { active = false; }),
+    enterSchedulerStandby: vi.fn(async () => {
+      active = false;
+      connecting = false;
+    }),
     getSchedulerIdentity: vi.fn(() => identity),
     hasPendingSchedulerOfflineNotice: vi.fn(() => false),
     isSchedulerTransportActive: vi.fn(() => active),
+    isSchedulerTransportConnecting: vi.fn(() => connecting),
     markSchedulerOfflineGap: vi.fn(),
     onStatusChange: vi.fn((handler) => {
       statusHandler = handler;
@@ -667,6 +676,25 @@ describe('Discord scheduler manager', () => {
         runtime: expect.objectContaining({ state: 'clean' }),
       }),
     );
+    await manager.stop();
+  });
+
+  it('does not start a second client while the active Gateway is reconnecting', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledTimes(1);
+
+    discord.emitStatus({ kind: 'connecting' });
+    await manager.reconcile();
+
+    expect(discord.isSchedulerTransportConnecting()).toBe(true);
+    expect(discord.init).toHaveBeenCalledTimes(1);
+    expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
+
     await manager.stop();
   });
 

@@ -111,6 +111,10 @@ class DiscordJsGateway implements DiscordGateway {
   async connect(token: string): Promise<void> {
     if (this.#connectPromise) return this.#connectPromise;
     if (this.#client?.isReady()) return;
+    // discord.js keeps the same Client while it performs automatic Gateway
+    // recovery. Reusing that client is essential: creating another one here
+    // would let the old reconnect and the replacement consume the same Bot.
+    if (this.#client) return;
 
     this.ev.onStatus({ kind: 'connecting' });
     this.#ingressOpen = true;
