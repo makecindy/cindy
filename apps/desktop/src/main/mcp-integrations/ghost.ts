@@ -916,6 +916,13 @@ export function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
+      const planSessionContext =
+        sessionIdForConfirm && sessionInstanceIdForGrant
+          ? {
+              sessionId: sessionIdForConfirm,
+              sessionInstanceId: sessionInstanceIdForGrant,
+            }
+          : null;
       // 目录级禁用兜底(防御线):花名册/ghost_list 已过滤,正常路径走不到
       // 这里——只有"会话开着时中途被禁"(快照已含自述)或模型凭上文记忆
       // 硬调才会命中。message 是可直达模型的人话:停手改道,不要自纠重试。
@@ -1359,6 +1366,7 @@ export function getCindyGhostsMcpDeps(
         tool,
         args: mergedArgs,
         callId,
+        ...(planSessionContext ? { sessionContext: planSessionContext } : {}),
       });
       // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层

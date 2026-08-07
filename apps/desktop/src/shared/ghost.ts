@@ -91,6 +91,10 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 注入 args.session_context。
  * 只注入宿主认证过的事实,插件与 agent 自报的同名字段一律被剥除;远程工作区
  * (workdir 不在本机)时 workdir_is_local=false,插件不得把它当本机路径用。
+ * 'plan' = 当前任务 Plan 投影(2026-08-05):插件可提交一份完整的 Codex
+ * update_plan 形状快照,由主机校验后投影到当前可信任务的 Plan UI。插件不能
+ * 指定 sessionId、不能读回 Plan 或调用独立清空命令,也不会因此获得启动 Agent
+ * 回合的能力；完整快照允许用 [] 表示零任务。
  * 'pick' = 目录选择(2026-07-23):插件经管子申请主机弹**系统级**选文件夹窗口,
  * 用户亲手选中即授权(与浏览器文件选择同一哲学:决定权在用户的点击上)。
  * 返回票据(dir_deposit,同 ghost_call dir 通道);声明了 node 槽的插件额外
@@ -126,6 +130,7 @@ export const GHOST_SLOTS = [
   'confirm',
   'fs',
   'session-context',
+  'plan',
   'pick',
   'preview',
   'skill',
@@ -1486,6 +1491,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'badge') keys.push('slotBadge');
     else if (slot === 'confirm') keys.push('slotConfirm');
     else if (slot === 'fs') keys.push('slotFs');
+    else if (slot === 'plan') keys.push('slotPlan');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
     else if (slot === 'skill') keys.push('slotSkill');
     else if (slot === 'workspace') keys.push('slotWorkspace');
@@ -1550,7 +1556,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'plan' | 'pick' | 'preview' | 'skill' | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1835,6 +1841,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'session-context',
       labelKey: 'sessionContext',
       detailKey: 'sessionContextDetail',
+    });
+  }
+  // plan 槽:插件只能把完整快照投影到当前可信任务,不能指定目标、读回、
+  // 清空或驱动计划生命周期。独立 key 让存量插件新增这一档时必经扩权确认。
+  if (manifest.slots.includes('plan')) {
+    items.push({
+      key: 'plan',
+      kind: 'plan',
+      labelKey: 'plan',
+      detailKey: 'planDetail',
     });
   }
   // preview 槽:白名单域名如实逐行列出(detail 原样展示作者声明,同 oauth
@@ -4483,6 +4499,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
  *
  * 上行(电子脑 → 主机,cindy.send(payload) = ipcRenderer.invoke):
  *   - tool-result:交卷。
+ *   - plan-create / plan-update:plan 槽创建或更新插件自己的完整 Plan 快照。
  *   - host-request:读取宿主公开上下文。目前只支持 app-context(region + locale),
  *     无需声明卡槽、无用户数据与凭证内容。
  *   - cindy-request(旧名 model-request 兼容):cindy 槽代办(意识请 Cindy 本体干活;invoke 的返回值即结果,
@@ -4526,6 +4543,136 @@ export type GhostPipeToolResult =
 export interface GhostPipeToolProgress {
   type: 'tool-progress';
   callId: string;
+}
+
+/** Codex update_plan 对外状态枚举；Ghost API 不暴露第二套命名。 */
+export const GHOST_PLAN_STATUSES = ['pending', 'in_progress', 'completed'] as const;
+export type GhostPlanStatus = (typeof GHOST_PLAN_STATUSES)[number];
+
+export interface GhostPlanItem {
+  step: string;
+  status: GhostPlanStatus;
+}
+
+/**
+ * 上行:把一份完整 Codex update_plan 快照投影到当前可信任务的 Plan UI。
+ * 目标任务只由 Host 当前上下文决定；payload 不接受 sessionId 或任何其它字段。
+ */
+export interface GhostPipePlanCreate {
+  type: 'plan-create';
+  explanation?: string;
+  plan: GhostPlanItem[];
+}
+
+export interface GhostPipePlanUpdate {
+  type: 'plan-update';
+  explanation?: string;
+  plan: GhostPlanItem[];
+}
+
+export type GhostPipePlanPayload = GhostPipePlanCreate | GhostPipePlanUpdate;
+
+export type GhostPipePlanResult =
+  | { ok: true }
+  | {
+      ok: false;
+      errorCode:
+        | 'INVALID_PARAMS'
+        | 'PERMISSION_DENIED'
+        | 'NO_SESSION_CONTEXT'
+        | 'HOST_NOT_READY'
+        | 'RATE_LIMITED'
+        | 'INTERNAL';
+      message: string;
+    };
+
+export type GhostPipePlanUpdateResult = GhostPipePlanResult;
+
+export type GhostPlanPayloadValidation =
+  | { ok: true; value: GhostPipePlanPayload }
+  | { ok: false; message: string };
+
+/** Plan UI 投影的资源边界；避免有权限的故障插件用超大快照阻塞 Main/Renderer。 */
+export const GHOST_PLAN_MAX_ITEMS = 100;
+export const GHOST_PLAN_MAX_EXPLANATION_CHARS = 4_000;
+export const GHOST_PLAN_MAX_STEP_CHARS = 4_000;
+export const GHOST_PLAN_MAX_TOTAL_TEXT_CHARS = 64_000;
+
+/** 运行期精确 schema 校验；拒绝增量 patch 与未声明字段，允许零任务完整快照。 */
+export function validateGhostPlanPayload(payload: unknown): GhostPlanPayloadValidation {
+  if (!isPlainObject(payload)) return { ok: false, message: 'Plan 载荷必须是对象' };
+  const allowedRootKeys = new Set(['type', 'explanation', 'plan']);
+  const extraRootKey = Object.keys(payload).find((key) => !allowedRootKeys.has(key));
+  if (extraRootKey) {
+    return {
+      ok: false,
+      message: `Plan 载荷不允许字段 ${JSON.stringify(extraRootKey)}`,
+    };
+  }
+  if (payload.type !== 'plan-create' && payload.type !== 'plan-update') {
+    return { ok: false, message: 'type 必须是 plan-create 或 plan-update' };
+  }
+  if (payload.explanation !== undefined && typeof payload.explanation !== 'string') {
+    return { ok: false, message: 'explanation 必须是字符串' };
+  }
+  if (
+    typeof payload.explanation === 'string' &&
+    payload.explanation.length > GHOST_PLAN_MAX_EXPLANATION_CHARS
+  ) {
+    return { ok: false, message: `explanation 最多 ${GHOST_PLAN_MAX_EXPLANATION_CHARS} 个字符` };
+  }
+  if (!Array.isArray(payload.plan)) {
+    return { ok: false, message: 'plan 必须是数组' };
+  }
+  if (payload.plan.length > GHOST_PLAN_MAX_ITEMS) {
+    return { ok: false, message: `plan 最多包含 ${GHOST_PLAN_MAX_ITEMS} 项` };
+  }
+
+  const plan: GhostPlanItem[] = [];
+  let totalTextChars = typeof payload.explanation === 'string' ? payload.explanation.length : 0;
+  for (let index = 0; index < payload.plan.length; index += 1) {
+    const item = payload.plan[index];
+    if (!isPlainObject(item)) return { ok: false, message: `plan[${index}] 必须是对象` };
+    const itemKeys = Object.keys(item);
+    if (itemKeys.some((key) => key !== 'step' && key !== 'status')) {
+      return { ok: false, message: `plan[${index}] 只允许 step 和 status` };
+    }
+    if (typeof item.step !== 'string') {
+      return { ok: false, message: `plan[${index}].step 必须是字符串` };
+    }
+    if (item.step.trim().length === 0) {
+      return { ok: false, message: `plan[${index}].step 不能为空` };
+    }
+    if (item.step.length > GHOST_PLAN_MAX_STEP_CHARS) {
+      return {
+        ok: false,
+        message: `plan[${index}].step 最多 ${GHOST_PLAN_MAX_STEP_CHARS} 个字符`,
+      };
+    }
+    totalTextChars += item.step.length;
+    if (totalTextChars > GHOST_PLAN_MAX_TOTAL_TEXT_CHARS) {
+      return { ok: false, message: `plan 文本总计最多 ${GHOST_PLAN_MAX_TOTAL_TEXT_CHARS} 个字符` };
+    }
+    if (
+      typeof item.status !== 'string' ||
+      !(GHOST_PLAN_STATUSES as readonly string[]).includes(item.status)
+    ) {
+      return {
+        ok: false,
+        message: `plan[${index}].status 必须是 ${GHOST_PLAN_STATUSES.join(' / ')}`,
+      };
+    }
+    plan.push({ step: item.step, status: item.status as GhostPlanStatus });
+  }
+
+  return {
+    ok: true,
+    value: {
+      type: payload.type,
+      ...(payload.explanation !== undefined ? { explanation: payload.explanation } : {}),
+      plan,
+    },
+  };
 }
 
 /**

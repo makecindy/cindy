@@ -61,6 +61,16 @@ describe('GhostPermissionList(装入全量清单)', () => {
     expect(screen.getByText('settings.ghosts.perm.codeDetail')).toBeTruthy(); // 主机固定说明走 i18n
   });
 
+  it('plan capability 在安装权限清单中明确展示', () => {
+    render(
+      <GhostPermissionList
+        items={ghostPermissionItems({ ...chip(), slots: [...chip().slots, 'plan'] })}
+      />,
+    );
+    expect(screen.getByText('settings.ghosts.perm.plan')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.planDetail')).toBeTruthy();
+  });
+
   it('安装简介过长时默认收起,可展开完整原文', () => {
     const description = '这是很长的意识介绍。'.repeat(20);
     const { container } = render(

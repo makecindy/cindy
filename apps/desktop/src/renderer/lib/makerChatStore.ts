@@ -39,7 +39,7 @@ import {
 import {
   applyCodexPlanSnapshotOnDone,
   getLatestMessageTodoState,
-  isAgentPlanToolName,
+  isPlanToolName,
 } from '@cindy/maker-shared/message-render';
 import {
   normalizeWorkflowProgressEntries,
@@ -14116,14 +14116,14 @@ function isNonAnchorHistoryRow(m: Message): boolean {
   return (
     m.role === 'tool_result' ||
     isHiddenThinkingRow(m) ||
-    isAgentPlanHistoryToolUseRow(m) ||
+    isPlanHistoryToolUseRow(m) ||
     isSyntheticTriggerRow(m)
   );
 }
 
-function isAgentPlanHistoryToolUseRow(m: Message): boolean {
+function isPlanHistoryToolUseRow(m: Message): boolean {
   if (m.role !== 'tool_use') return false;
-  return isAgentPlanToolName(historyToolName(m));
+  return isPlanToolName(historyToolName(m));
 }
 
 function historyToolName(m: Message): string | undefined {

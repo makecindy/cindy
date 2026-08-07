@@ -31,7 +31,7 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import { isAgentPlanToolName, isDeliveryProseText } from '@cindy/maker-shared/message-render';
+import { isPlanToolName, isDeliveryProseText } from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -1143,7 +1143,7 @@ export function buildRenderItems(
       // Plan tools (TodoWrite / update_plan / Task*) — swallowed like F7:
       // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(钉住式常驻面板),
       // 流内不再插卡;也不切段,周围工具保持聚组,如同调用不存在。
-      if (isAgentPlanToolName(toolName)) {
+      if (isPlanToolName(toolName)) {
         let j = i + 1;
         while (j < messages.length && messages[j].role === 'tool_result') j++;
         i = j;

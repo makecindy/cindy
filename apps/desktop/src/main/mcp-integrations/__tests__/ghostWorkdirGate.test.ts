@@ -564,6 +564,10 @@ describe('session-context 宿主铸造', () => {
 
     expect(dispatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        sessionContext: {
+          sessionId: 's1',
+          sessionInstanceId: 's1-instance',
+        },
         args: {
           session_context: {
             session_id: 's1',

@@ -329,12 +329,24 @@ async function projectAgentsDirs(workingDir: string): Promise<string[]> {
   if (!workingDir || !path.isAbsolute(workingDir)) return [];
   const dirs: string[] = [];
   let cur = workingDir;
+  let userHome = os.homedir();
   try {
     cur = await fs.realpath(workingDir);
   } catch {
     /* 保持字面路径 */
   }
+  try {
+    userHome = await fs.realpath(userHome);
+  } catch {
+    /* 保持字面路径 */
+  }
   for (;;) {
+    // `~/.claude/agents` 属于用户作用域，不能在从 home 以下的工作目录向上
+    // 查找时再作为项目作用域收集，否则会重复并错误地标记为 project。
+    const atUserHome = process.platform === 'win32'
+      ? cur.toLowerCase() === userHome.toLowerCase()
+      : cur === userHome;
+    if (atUserHome) break;
     const candidate = path.join(cur, '.claude', 'agents');
     if (await isDirectory(candidate)) dirs.push(candidate);
     const parent = path.dirname(cur);

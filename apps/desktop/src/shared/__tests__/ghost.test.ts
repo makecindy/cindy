@@ -4,6 +4,9 @@ import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   GHOST_CINDY_EMBED_MAX_TEXTS,
+  GHOST_PLAN_MAX_EXPLANATION_CHARS,
+  GHOST_PLAN_MAX_ITEMS,
+  GHOST_PLAN_MAX_STEP_CHARS,
   GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
@@ -28,6 +31,7 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateGhostPlanPayload,
   withGhostResolvedLocale,
   type GhostManifest,
 } from '../ghost';
@@ -120,6 +124,104 @@ describe('ghost · id 规则', () => {
     expect(parseGhostPartition('cindy-ghost-')).toBeNull();
     expect(parseGhostPartition('cindy-ghost-BAD_ID')).toBeNull();
     expect(parseGhostPartition(undefined)).toBeNull();
+  });
+});
+
+describe('ghost · plan-update 协议与 plan 权限槽', () => {
+  it('复用 Codex update_plan 完整快照形状并保留 in_progress', () => {
+    const payload = {
+      type: 'plan-update',
+      explanation: '开始实现',
+      plan: [
+        { step: '调查', status: 'completed' },
+        { step: '实现', status: 'in_progress' },
+        { step: '测试', status: 'pending' },
+      ],
+    };
+    expect(validateGhostPlanPayload(payload)).toEqual({ ok: true, value: payload });
+  });
+
+  it('允许零任务完整快照', () => {
+    const payload = {
+      type: 'plan-update',
+      plan: [],
+    };
+    expect(validateGhostPlanPayload(payload)).toEqual({ ok: true, value: payload });
+  });
+
+  it('接受显式开始新 Plan 生命周期的 plan-create', () => {
+    const payload = {
+      type: 'plan-create',
+      plan: [{ step: '开始新的工作阶段', status: 'in_progress' }],
+    };
+    expect(validateGhostPlanPayload(payload)).toEqual({ ok: true, value: payload });
+  });
+
+  it.each([
+    [{ type: 'plan-update' }, '必须是数组'],
+    [{ type: 'plan-update', plan: [{ step: '', status: 'pending' }] }, 'step 不能为空'],
+    [{ type: 'plan-update', plan: [{ step: '   ', status: 'pending' }] }, 'step 不能为空'],
+    [{ type: 'plan-update', plan: [{ step: '实现', status: 'running' }] }, 'status'],
+    [
+      { type: 'plan-update', plan: [{ step: '实现', status: 'pending', activeForm: '实现中' }] },
+      '只允许 step 和 status',
+    ],
+    [
+      { type: 'plan-update', sessionId: 'forged', plan: [{ step: '实现', status: 'pending' }] },
+      '不允许字段 "sessionId"',
+    ],
+  ])('拒绝越出精确 schema 的 payload %#', (payload, message) => {
+    const result = validateGhostPlanPayload(payload);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain(message);
+  });
+
+  it.each([
+    [
+      {
+        type: 'plan-update',
+        explanation: 'x'.repeat(GHOST_PLAN_MAX_EXPLANATION_CHARS + 1),
+        plan: [{ step: '实现', status: 'pending' }],
+      },
+      'explanation 最多',
+    ],
+    [
+      {
+        type: 'plan-update',
+        plan: Array.from({ length: GHOST_PLAN_MAX_ITEMS + 1 }, () => ({
+          step: '实现',
+          status: 'pending',
+        })),
+      },
+      'plan 最多包含',
+    ],
+    [
+      {
+        type: 'plan-update',
+        plan: [{ step: 'x'.repeat(GHOST_PLAN_MAX_STEP_CHARS + 1), status: 'pending' }],
+      },
+      '.step 最多',
+    ],
+  ])('拒绝超过 Plan 投影资源边界的 payload %#', (payload, message) => {
+    const result = validateGhostPlanPayload(payload);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain(message);
+  });
+
+  it('plan 是独立权限项；老清单不变，新增 plan 必须触发扩权确认', () => {
+    const before = validateGhostManifest(goodManifest());
+    const after = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'plan'] });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(ghostPermissionItems(before.manifest).map((item) => item.key)).not.toContain('plan');
+    expect(ghostPermissionItems(after.manifest).find((item) => item.key === 'plan')).toMatchObject({
+      kind: 'plan',
+      labelKey: 'plan',
+      detailKey: 'planDetail',
+    });
+    expect(ghostContentKeys(after.manifest)).toContain('slotPlan');
+    expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map((item) => item.key))
+      .toEqual(['plan']);
   });
 });
 

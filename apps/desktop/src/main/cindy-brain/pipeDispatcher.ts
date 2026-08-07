@@ -73,6 +73,13 @@ interface PendingCall {
   deadlineAt: number;
   /** 在途代办 hold 计数(同一卷可并发多单代办,全部收工才收窗)。 */
   holds: number;
+  /** Host 在 ghost_call 入口铸造的任务 incarnation；永不下发给插件。 */
+  sessionContext?: GhostPipeSessionContext;
+}
+
+export interface GhostPipeSessionContext {
+  sessionId: string;
+  sessionInstanceId: string;
 }
 
 /**
@@ -140,6 +147,8 @@ export class GhostPipeDispatcher {
     callId?: string;
     /** 仅供可信宿主内部调用方收短等待时间；插件不能控制该值。 */
     timeoutMs?: number;
+    /** 仅由 Host 调用入口附着；不会进入 tool-call payload。 */
+    sessionContext?: GhostPipeSessionContext;
   }): Promise<GhostToolCallResult> {
     const { ghostId, tool, args } = request;
 
@@ -185,6 +194,7 @@ export class GhostPipeDispatcher {
         timeoutExtensionsAllowed: request.timeoutMs === undefined,
         deadlineAt: startedAt + baseTimeoutMs,
         holds: 0,
+        ...(request.sessionContext ? { sessionContext: request.sessionContext } : {}),
       };
       this.pending.set(callId, entry);
       this.armTimer(callId, entry);
@@ -194,6 +204,29 @@ export class GhostPipeDispatcher {
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
       }
     });
+  }
+
+  /**
+   * 解析某 Ghost 当前唯一的已认证任务上下文。消息没有 callId，故只要存在
+   * 无上下文调用或多个不同 incarnation 就 fail closed，绝不猜测目标。
+   */
+  resolvePendingSessionForGhost(ghostId: string): GhostPipeSessionContext | null {
+    let resolved: GhostPipeSessionContext | null = null;
+    let found = false;
+    for (const entry of this.pending.values()) {
+      if (entry.ghostId !== ghostId) continue;
+      found = true;
+      const context = entry.sessionContext;
+      if (!context) return null;
+      if (!resolved) resolved = context;
+      else if (
+        resolved.sessionId !== context.sessionId ||
+        resolved.sessionInstanceId !== context.sessionInstanceId
+      ) {
+        return null;
+      }
+    }
+    return found ? resolved : null;
   }
 
   /**

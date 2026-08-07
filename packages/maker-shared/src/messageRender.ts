@@ -185,7 +185,10 @@ export type MessageRenderItem<
   | MessageRenderAgentTaskItem<TMessage>
   | MessageRenderWorkGroupItem<TMessage>;
 
-export type MessageRenderTodoSource = 'todo' | 'codex' | 'task';
+export type MessageRenderTodoSource = 'todo' | 'codex' | 'ghost' | 'task';
+
+/** Host-persisted Plan snapshot emitted by a Ghost plugin, not an agent event. */
+export const GHOST_PLAN_TOOL_NAME = 'ghost_plan_update';
 
 export interface MessageRenderTodoInsertion {
   key: string;
@@ -237,7 +240,7 @@ function buildLinearItems<
 ): MessageRenderItem<TMessage>[] {
   const sourceMessages = messages.map((message) => message.source);
   const todoInsertAt = findMessageTodoInsertions(sourceMessages);
-  const agentPlanToolUseIds = collectAgentPlanToolUseIds(sourceMessages);
+  const planToolUseIds = collectPlanToolUseIds(sourceMessages);
   const items: MessageRenderItem<TMessage>[] = [];
   // Keys (toolUseId / clientId / taskId / parentToolUseId) already surfaced as an inline
   // agent_task card, so the orphan-update sweep below doesn't render the same task twice.
@@ -278,7 +281,7 @@ function buildLinearItems<
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (message.kind === 'tool') {
-      if (isAgentPlanToolResult(message.source, agentPlanToolUseIds)) {
+      if (isPlanToolResult(message.source, planToolUseIds)) {
         continue;
       }
       const toolName = toolNameOf(message.source);
@@ -300,7 +303,7 @@ function buildLinearItems<
         });
         continue;
       }
-      if (isAgentPlanToolName(toolName)) {
+      if (isPlanToolName(toolName)) {
         const insertion = todoInsertAt.get(index);
         if (insertion) {
           flushTools();
@@ -433,7 +436,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    const source = agentPlanSource(toolNameOf(message));
+    const source = planSource(toolNameOf(message));
     if (!source) continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
@@ -483,8 +486,8 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 
 /**
  * 常驻计划面板(composer 上方钉住式)用:取整段会话里**最近一次更新**的 plan
- * session 快照 —— 跨 source(TodoWrite / update_plan / Task*)按 lastIndex 取
- * 最大者。面板只展示"当前计划"一份,历史 session 不再逐张呈现。
+ * session 快照 —— 跨 source(TodoWrite / update_plan / Ghost / Task*)按消息位置取最大者。
+ * 面板只展示"当前计划"一份,历史 session 不再逐张呈现。
  * 没有任何 plan 调用时返回 null(面板不渲染、不占位)。
  */
 export function findLatestMessageTodoInsertion<TMessage extends MessageRenderSourceMessageLike>(
@@ -502,7 +505,7 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   let latestPlanMessage: TMessage | null = null;
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    if (!isPlanToolName(toolNameOf(message))) continue;
     latestPlanIndex = index;
     latestPlanMessage = message;
   }
@@ -518,7 +521,7 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   const hasPlanEvent = latestPlanIndex >= 0;
   const latestTaskWindowResolved =
     latestPlanMessage === null ||
-    agentPlanSource(toolNameOf(latestPlanMessage)) !== 'task' ||
+    planSource(toolNameOf(latestPlanMessage)) !== 'task' ||
     isTaskPlanWindowResolved(
       messages,
       latestPlanIndex,
@@ -641,13 +644,18 @@ function samePlanSnapshot(left: unknown[], right: unknown[]): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function isAgentPlanToolName(toolName: string | undefined): boolean {
-  return toolName === 'TodoWrite' || toolName === 'update_plan' || Boolean(toolName && TASK_PLAN_TOOL_NAMES.has(toolName));
+export function isPlanToolName(toolName: string | undefined): boolean {
+  return (
+    toolName === 'TodoWrite'
+    || toolName === 'update_plan'
+    || toolName === GHOST_PLAN_TOOL_NAME
+    || Boolean(toolName && TASK_PLAN_TOOL_NAMES.has(toolName))
+  );
 }
 
 export function extractPlanTodos(toolName: string | undefined, toolInput: unknown): MessageRenderTodoItem[] | null {
   if (toolName === 'TodoWrite') return extractTodos(toolInput);
-  if (toolName !== 'update_plan') return null;
+  if (toolName !== 'update_plan' && toolName !== GHOST_PLAN_TOOL_NAME) return null;
 
   const input = readRecord(toolInput);
   const structured = extractStructuredPlanItems(input?.items) ?? extractStructuredPlanItems(input?.plan);
@@ -691,7 +699,7 @@ function isExplicitPlanClearEvent(message: MessageRenderSourceMessageLike): bool
   const toolName = toolNameOf(message);
   const input = readRecord(toolInputOf(message));
   if (toolName === 'TodoWrite') return Array.isArray(input?.todos) && input.todos.length === 0;
-  if (toolName === 'update_plan') {
+  if (toolName === 'update_plan' || toolName === GHOST_PLAN_TOOL_NAME) {
     return (
       (Array.isArray(input?.items) && input.items.length === 0) ||
       (Array.isArray(input?.plan) && input.plan.length === 0) ||
@@ -720,7 +728,7 @@ function latestTaskEventClearsPlan<TMessage extends MessageRenderSourceMessageLi
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
-    if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
+    if (planSource(toolNameOf(message)) !== 'task') continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const startsNewSession =
@@ -773,7 +781,7 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
-    if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
+    if (planSource(toolNameOf(message)) !== 'task') continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const resultTasks = taskRecordsFromResult(resultText);
@@ -860,30 +868,31 @@ function buildToolResultLookup<TMessage extends MessageRenderSourceMessageLike>(
   return out;
 }
 
-function collectAgentPlanToolUseIds<TMessage extends MessageRenderSourceMessageLike>(
+function collectPlanToolUseIds<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
 ): Set<string> {
   const out = new Set<string>();
   for (const message of messages) {
-    if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    if (!isPlanToolName(toolNameOf(message))) continue;
     const toolUseId = toolUseIdOf(message);
     if (toolUseId) out.add(toolUseId);
   }
   return out;
 }
 
-function isAgentPlanToolResult(
+function isPlanToolResult(
   message: MessageRenderSourceMessageLike,
-  agentPlanToolUseIds: ReadonlySet<string>,
+  planToolUseIds: ReadonlySet<string>,
 ): boolean {
   if (!isToolResultSource(message)) return false;
   const toolUseId = toolUseIdOf(message);
-  return Boolean(toolUseId && agentPlanToolUseIds.has(toolUseId));
+  return Boolean(toolUseId && planToolUseIds.has(toolUseId));
 }
 
-function agentPlanSource(toolName: string | undefined): MessageRenderTodoSource | null {
+function planSource(toolName: string | undefined): MessageRenderTodoSource | null {
   if (toolName === 'TodoWrite') return 'todo';
   if (toolName === 'update_plan') return 'codex';
+  if (toolName === GHOST_PLAN_TOOL_NAME) return 'ghost';
   if (toolName && TASK_PLAN_TOOL_NAMES.has(toolName)) return 'task';
   return null;
 }
