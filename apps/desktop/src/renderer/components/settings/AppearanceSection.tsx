@@ -813,7 +813,7 @@ export function AppearanceSection() {
         <div
           role="radiogroup"
           aria-label={t('settings.appearance.sidebarCardMode.aria')}
-          className="flex shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+          className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
         >
           {([
             { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList' },
@@ -827,7 +827,7 @@ export function AppearanceSection() {
               aria-checked={sidebarViewMode === opt.value}
               onClick={() => setSidebarViewMode(opt.value)}
               className={cn(
-                'rounded-md px-2.5 py-1 text-xs transition-colors',
+                'rounded-full px-2.5 py-1 text-xs transition-colors',
                 sidebarViewMode === opt.value
                   ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
                   : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
