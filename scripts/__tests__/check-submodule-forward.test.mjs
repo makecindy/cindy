@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import {
   classifyProtocolRelation,
+  validatePublishedProtocolHead,
   validateSubmoduleForward,
 } from '../check-submodule-forward.mjs';
 
@@ -51,6 +52,14 @@ function fixture() {
   git(repo, 'commit', '-m', 'fork');
   const fork = git(repo, 'rev-parse', 'HEAD');
   return { repo, one, two, fork };
+}
+
+function setPublishedMain(repo, oid) {
+  git(repo, 'update-ref', 'refs/remotes/origin/main', oid);
+}
+
+function setPublishedTag(repo, name, oid) {
+  git(repo, 'update-ref', `refs/tags/client-baseline-${name}`, oid);
 }
 
 test('classifies unchanged, forward, rollback and diverged protocol gitlinks', () => {
@@ -145,6 +154,63 @@ test('classifies reachable same-tree different-parent history as diverged', () =
   }
 });
 
+test('rejects a feature-only head before ancestry classification', () => {
+  const f = fixture();
+  try {
+    setPublishedMain(f.repo, f.two);
+    assert.throws(
+      () => validatePublishedProtocolHead(f.repo, f.fork, { ci: false }),
+      /未合入协议仓 main，也未打 client-baseline tag/,
+    );
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('allows a head published on protocol main', () => {
+  const f = fixture();
+  try {
+    setPublishedMain(f.repo, f.two);
+    assert.doesNotThrow(() =>
+      validatePublishedProtocolHead(f.repo, f.two, { ci: false }),
+    );
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('allows a head published only by a client-baseline tag', () => {
+  const f = fixture();
+  try {
+    setPublishedMain(f.repo, f.one);
+    setPublishedTag(f.repo, 'feature', f.fork);
+    assert.doesNotThrow(() =>
+      validatePublishedProtocolHead(f.repo, f.fork, { ci: false }),
+    );
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('falls back to local origin/main when baseline fetch is unavailable', () => {
+  const f = fixture();
+  try {
+    setPublishedMain(f.repo, f.two);
+    git(f.repo, 'remote', 'add', 'origin', '/definitely/missing/protocol.git');
+    const warnings = [];
+    assert.doesNotThrow(() =>
+      validatePublishedProtocolHead(f.repo, f.two, {
+        ci: false,
+        warn: (message) => warnings.push(message),
+      }),
+    );
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /退用本地 origin\/main/);
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
 test('fails closed when an unavailable base cannot be fetched', () => {
   const f = fixture();
   try {
@@ -175,6 +241,7 @@ test('validateSubmoduleForward does not treat a failed base fetch as forward', (
     git(protocol, 'add', '.');
     git(protocol, 'commit', '-m', 'head');
     const head = git(protocol, 'rev-parse', 'HEAD');
+    setPublishedMain(protocol, head);
     const base = 'd'.repeat(40);
     git(
       outer,
