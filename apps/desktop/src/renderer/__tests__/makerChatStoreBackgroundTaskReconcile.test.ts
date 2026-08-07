@@ -370,6 +370,33 @@ describe('活动熄灭触发的 stale running 对账', () => {
     }
   });
 
+  it('在飞窗口:快照响应落地前会话被识别为远程 → 丢弃本机快照,镜像 running 不被收口', async () => {
+    const sid = `inflight-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_agent' });
+      let resolveList!: (v: unknown) => void;
+      listTasks.mockReturnValue(
+        new Promise((r) => {
+          resolveList = r;
+        }),
+      );
+
+      emitActivity({ sessionId: sid, active: false });
+      // timer 到点:粘滞复查通过(此刻仍判本机)、候选捕获、请求发出
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(listTasks).toHaveBeenCalledWith(sid);
+
+      // 请求在飞期间远程注册表完成会话水合,随后本机空表才落地
+      transportMocks.dynamicRemoteIds.add(sid);
+      resolveList({ tasks: [] });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('t1')?.status).toBe('running');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
   it('远程会话豁免;无 running 条目不发 IPC', async () => {
     const remoteSid = 'remote-act3';
     const idleSid = `act4-${Math.random().toString(36).slice(2, 8)}`;

@@ -79,6 +79,28 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
   });
 
+  it('在飞窗口:响应落地前会话被识别为远程 → 整体丢弃本机快照,不收口', async () => {
+    const sid = 's5-inflight';
+    mocks.captureRunningClaudeTaskIds.mockReturnValue(new Set(['t-mirror']));
+    let resolveList!: (v: { tasks: unknown[] }) => void;
+    listTasks.mockReturnValue(
+      new Promise((r) => {
+        resolveList = r;
+      }),
+    );
+
+    renderHook(() => useBackgroundBashTasks(sid, new Map(), true));
+    await waitFor(() => expect(listTasks).toHaveBeenCalledWith(sid));
+
+    // 请求在飞期间远程注册表完成会话水合
+    mocks.stickyRemoteIds.add(sid);
+    resolveList({ tasks: [] });
+    await waitFor(() => expect(listTasks).toHaveBeenCalled());
+    await Promise.resolve();
+
+    expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
+  });
+
   it('重连窗口(非粘滞误判本机、粘滞仍认远程):只 seed 不对账,空快照不收口', async () => {
     const sid = 's4-blip';
     mocks.stickyRemoteIds.add(sid);
@@ -91,15 +113,12 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
     expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
 
-    // 快照非空(理论分支)时也只 seed、不带候选集
+    // 快照非空(理论分支:本机撞 id)同样整体丢弃 —— 本机来源快照对远程会话
+    // 无意义,响应侧粘滞复查统一拦截,不 seed。
     listTasks.mockResolvedValueOnce({ tasks: [{ taskId: 't-new' }] });
     renderHook(() => useBackgroundBashTasks(sid, new Map(), false));
-    await waitFor(() => {
-      expect(mocks.seedBackgroundTaskSnapshots).toHaveBeenCalledWith(
-        sid,
-        [{ taskId: 't-new' }],
-        undefined,
-      );
-    });
+    await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
   });
 });

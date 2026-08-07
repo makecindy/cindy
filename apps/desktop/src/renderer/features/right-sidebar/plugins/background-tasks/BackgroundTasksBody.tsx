@@ -547,13 +547,21 @@ export function BackgroundTasksBody({
     void listSessionBackgroundTasksFor(sessionId)
       .then(({ tasks }) => {
         if (disposed || !Array.isArray(tasks)) return;
-        if (tasks.length === 0 && !(staleRunningCandidates && staleRunningCandidates.size > 0)) {
+        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
+        // 快照实际来自本机 main(路由在发起时已定),「查无此会话」的空表不可
+        // 用于收口 → 丢弃候选集;seed 保留(远程会话的常规水合不受影响,该
+        // 空表本就 seed 不出东西)。
+        const candidates =
+          staleRunningCandidates && !isRemoteSessionSticky(sessionId)
+            ? staleRunningCandidates
+            : undefined;
+        if (tasks.length === 0 && !(candidates && candidates.size > 0)) {
           return;
         }
         makerChatStore.seedBackgroundTaskSnapshots(
           sessionId,
           tasks,
-          staleRunningCandidates ? { staleRunningCandidates } : undefined,
+          candidates ? { staleRunningCandidates: candidates } : undefined,
         );
       })
       .catch(() => {

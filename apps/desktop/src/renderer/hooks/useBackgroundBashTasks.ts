@@ -84,6 +84,10 @@ export function useBackgroundBashTasks(
       .listSessionBackgroundTasks(sessionId)
       .then(({ tasks }) => {
         if (disposed || !Array.isArray(tasks)) return;
+        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
+        // 本机 main「查无此会话」的空表不可再套用(候选集是按本机误判捕获的,
+        // 套用会误收镜像里真实在跑的任务)。本 hook 不服务远程会话,整体丢弃。
+        if (isRemoteSessionSticky(sessionId)) return;
         if (tasks.length === 0 && !(staleRunningCandidates && staleRunningCandidates.size > 0)) {
           return;
         }

@@ -5706,6 +5706,9 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
         .listSessionBackgroundTasks(sessionId)
         .then(({ tasks }) => {
           if (!Array.isArray(tasks)) return;
+          // 响应落地前再复查一次:请求在飞期间远程注册表才完成会话水合的话,
+          // 本机「查无此会话」的空表不可用于收口镜像任务。
+          if (isRemoteSessionSticky(sessionId)) return;
           makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, { staleRunningCandidates });
         })
         .catch(() => {
