@@ -92,8 +92,8 @@ type ExpoAudioPcm16ResampleState = {
 };
 
 const DEFAULT_NATIVE_AUDIO_BUFFER_SIZE = 4096;
-const EXPO_AUDIO_STREAM_STALL_TIMEOUT_MS = 5_000;
-const EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS = 1_000;
+const REALTIME_AUDIO_STALL_TIMEOUT_MS = 5_000;
+const REALTIME_AUDIO_WATCHDOG_INTERVAL_MS = 1_000;
 
 let nativeBinding: RealtimeAudioNativeBinding | null | undefined;
 let expoAudioNativeModule: ExpoAudioNativeModule | null | undefined;
@@ -146,8 +146,16 @@ async function startCustomNativeRealtimeAudio(
     bufferSize?: number;
   },
 ): Promise<() => Promise<void>> {
+  let stopped = false;
+  let failureReported = false;
+  let hasReceivedChunk = false;
+  let lastChunkAt = Date.now();
+  let watchdog: ReturnType<typeof setInterval> | null = null;
   const subscriptions: EventSubscription[] = [
     binding.module.addListener('onAudioChunk', (event) => {
+      if (stopped) return;
+      hasReceivedChunk = true;
+      lastChunkAt = Date.now();
       options.onChunk({
         pcm16: decodeBase64ToArrayBuffer(event.base64Pcm16),
         trace: {
@@ -160,9 +168,27 @@ async function startCustomNativeRealtimeAudio(
       });
     }),
     binding.module.addListener('onAudioError', (event) => {
-      options.onError?.(new Error(event.message));
+      reportFailure(new Error(event.message));
     }),
   ];
+
+  const stopCapture = async (): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    if (watchdog) {
+      clearInterval(watchdog);
+      watchdog = null;
+    }
+    subscriptions.forEach((subscription) => subscription.remove());
+    await binding.module.stop();
+  };
+
+  function reportFailure(error: Error): void {
+    if (stopped || failureReported) return;
+    failureReported = true;
+    void stopCapture().catch(() => undefined);
+    options.onError?.(error);
+  }
 
   try {
     await binding.module.start({
@@ -174,13 +200,16 @@ async function startCustomNativeRealtimeAudio(
     throw error;
   }
 
-  let stopped = false;
-  return async () => {
-    if (stopped) return;
-    stopped = true;
-    subscriptions.forEach((subscription) => subscription.remove());
-    await binding.module.stop();
-  };
+  if (!stopped) {
+    if (!hasReceivedChunk) lastChunkAt = Date.now();
+    watchdog = setInterval(() => {
+      if (Date.now() - lastChunkAt > REALTIME_AUDIO_STALL_TIMEOUT_MS) {
+        reportFailure(new Error(i18n.t('composer.voice.incomplete')));
+      }
+    }, REALTIME_AUDIO_WATCHDOG_INTERVAL_MS);
+  }
+
+  return stopCapture;
 }
 
 /**
@@ -282,10 +311,10 @@ async function startExpoAudioRealtimeAudio(
     streamStarted = true;
     lastChunkAt = Date.now();
     watchdog = setInterval(() => {
-      if (Date.now() - lastChunkAt > EXPO_AUDIO_STREAM_STALL_TIMEOUT_MS) {
+      if (Date.now() - lastChunkAt > REALTIME_AUDIO_STALL_TIMEOUT_MS) {
         reportFailure();
       }
-    }, EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS);
+    }, REALTIME_AUDIO_WATCHDOG_INTERVAL_MS);
   } catch (error) {
     stopStream();
     throw error;
