@@ -408,6 +408,9 @@ export class Scheduler extends EventEmitter {
 
   async start(): Promise<void> {
     if (this.started) return;
+    // 隔离名单只描述本次运行周期里看到的存量坏记录。stop() 后再 start()
+    // 必须从持久化事实重新判定，不能把已删除或已修正任务的 id 带进新周期。
+    this.invalidScheduleIds.clear();
     // 被动模式:不装 tick 时钟、不做僵尸清理(可能误伤另一个活跃实例正在跑的
     // run)、不预载 activeSchedules(反正不 tick)。CRUD / runNow 照常可用。
     if (this.passive) {
@@ -1216,6 +1219,10 @@ export class Scheduler extends EventEmitter {
     const now = this.clock.now();
     const id = this.generateId();
     const manual = input.manual ?? false;
+    // intervalMs 只决定下一次何时触发，不会让 cronExpr / timezone 变成可跳过的
+    // 元数据。否则用户能先持久化一个坏表达式，等未来清掉 intervalMs 时才在调度
+    // 路径报错。此处纯校验，不影响 interval 的 now + N 首次触发语义。
+    nextCronOrMonthlyFire(input.cronExpr, now, input.timezone);
     // 首次 nextFireAt：
     //   - manual → undefined（永不自动 fire）
     //   - intervalMs 设了 → createdAt + intervalMs（让"每 N 分钟"有 N 分钟暖场期）
@@ -1321,6 +1328,12 @@ export class Scheduler extends EventEmitter {
     if (shouldReactivateExpired) {
       updates.status = 'active';
     }
+    // cronExpr 即使暂时被 intervalMs 覆盖，也会在调用方显式清除 interval 后重新
+    // 成为调度依据。不能让一次 interval 模式更新把畸形 cron 持久化，留到以后才
+    // 在重排或启动时爆炸；timezone 变更同样需要验证现有表达式在新时区可解析。
+    if (patch.cronExpr !== undefined || patch.timezone !== undefined) {
+      nextCronOrMonthlyFire(candidate.cronExpr, now, candidate.timezone);
+    }
     // manual / intervalMs / cronExpr / timezone 任一变化，或 expired 恢复 active 时，
     // 都要重算 nextFireAt：
     //   - manual:true  → 强制清空 nextFireAt（不再自动 fire）
@@ -1423,6 +1436,9 @@ export class Scheduler extends EventEmitter {
     const existing = await this.storage.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
     const now = this.clock.now();
+    // 与 create/update 对齐：恢复 interval 任务前也验证它保留的 cron 元数据，不能
+    // 重新激活一条未来清 interval 后必坏的记录。
+    nextCronOrMonthlyFire(existing.cronExpr, now, existing.timezone);
     // resume 视作冷启动：interval 模式起新一轮 N 倒计时（从 now 起算，与 update() 一致）；
     // cron 模式找下一个壁钟槽位。不要复用 nextIntervalFire —— 它按 lastFinishedAt+N 尊重原
     // 节奏（restart 语义），会让「上次完成不到一个 N 就 resume」比冷启动更早触发。

@@ -785,6 +785,28 @@ describe('Scheduler', () => {
     expect(sch.intervalMs).toBe(5 * 60_000);
   });
 
+  it('create() rejects invalid cron metadata even when intervalMs controls the first fire', async () => {
+    await expect(h.scheduler.create({
+      ...baseInput,
+      cronExpr: '5abc * * * *',
+      intervalMs: 5 * 60_000,
+    })).rejects.toThrow();
+    expect(h.storage.schedules.size).toBe(0);
+  });
+
+  it('resume() keeps an interval schedule paused when legacy cron metadata is invalid', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+    await h.scheduler.pause(sch.id);
+    await h.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+
+    await expect(h.scheduler.resume(sch.id)).rejects.toThrow();
+    expect((await h.storage.get(sch.id))?.status).toBe('paused');
+  });
+
   it('intervalMs recurring fire schedules nextFireAt at finishedAt + intervalMs', async () => {
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 30 * 60_000 });
     // 触发到 next: 00:30:30, runner 立即 resolve（同一时刻 finishedAt = firedAt）
@@ -955,6 +977,22 @@ describe('Scheduler', () => {
     expect(after?.intervalMs).toBe(10 * 60_000);
     // 触发字段变了 → 按 interval 冷启动重排：now + 10min = 00:11:00（不是 */30 壁钟槽位）
     expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 11, 0));
+  });
+
+  it('rejects an invalid cronExpr update even when interval scheduling remains authoritative', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+
+    await expect(h.scheduler.update(sch.id, { cronExpr: '5abc * * * *' })).rejects.toThrow();
+
+    const stored = await h.storage.get(sch.id);
+    expect(stored).toMatchObject({
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
   });
 
   it('update(prompt only) leaves intervalMs and nextFireAt completely untouched', async () => {
