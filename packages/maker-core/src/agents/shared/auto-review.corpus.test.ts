@@ -317,6 +317,65 @@ describe('review 第三轮 — token/option 解析族', () => {
   });
 });
 
+/**
+ * 第四轮 review 的 5 条,同属「命令分类器的动态值 / 解释器选项 / xargs 占位符 /
+ * 绝对路径 executable / cd 快捷分支」这一族入口,一次覆盖完。全部是本 PR 引入的降级。
+ */
+describe('review 第四轮 — 分类器入口族', () => {
+  it('[P1] grep 的**动态**模式不能遮蔽凭证读取', () => {
+    // 命令替换会真的读凭证;变量展开会把令牌摊到命令行 —— 两类都不是纯数据。
+    expect(classifyShellCommand('grep "$(cat ~/.aws/credentials)" file', roots, opts)).toBe('prompt-each-time');
+    expect(classifyShellCommand('grep "$GITHUB_TOKEN" file', roots, opts)).toBe('prompt-each-time');
+    // 静态模式仍照常剥离,两个方向都不回退。
+    expect(classifyShellCommand('grep -Rni "foo|bar" src', roots, opts)).toBe('auto-approve');
+    expect(classifyShellCommand(
+      'git diff --name-only | grep -E "\\.env|\\.pem|credential|secret"', roots, opts,
+    )).toBe('auto-approve');
+  });
+
+  it('[P1] 未建模的 stdin 解释器同样 fail-closed(不只覆盖白名单里那几族)', () => {
+    for (const c of [
+      "printf '<?php echo 1;' | php -d display_errors=1",
+      'echo x | lua -v',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('[P1] xargs 裸 -i / --replace 用缺省占位符,不消费命令名', () => {
+    // `-I` 必带参数;`-i` / `--replace` 的参数**可选**,裸写时缺省 `{}`。
+    for (const c of [
+      'cat executor.txt | xargs -i env {} -rf /outside',
+      'cat e.txt | xargs --replace env {} -rf /outside',
+      'cat e.txt | xargs -I{} env {} -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 占位符只作参数时仍是普通数据。
+    expect(classifyShellCommand('cat list.txt | xargs -i grep {} src/x.ts', roots, opts)).toBe('prompt');
+  });
+
+  it('[P1] 绝对/相对路径调用 gh 仍命中令牌红线', () => {
+    for (const c of [
+      '/usr/bin/gh auth status -t',
+      '/opt/homebrew/bin/gh auth status --show-token',
+      '/usr/bin/gh auth token',
+      './bin/gh auth status -t',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('[P1] cd 区内的快捷放行不跳过副作用扫描', () => {
+    // 快捷放行只针对「切目录」这个动作本身,同段挂的重定向/命令替换必须照常判。
+    expect(classifyShellCommand('cd /repo > /tmp/out && ls', roots, opts)).toBe('prompt');
+    expect(classifyShellCommand('cd /repo/$(whoami) && ls', roots, opts)).toBe('prompt');
+    // 安全伪设备不算副作用,不因这道检查回退。
+    expect(classifyShellCommand('cd /repo 2>/dev/null && ls', roots, opts)).toBe('auto-approve');
+    expect(classifyShellCommand('cd /repo && git log --oneline | head', roots, opts)).toBe('auto-approve');
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [

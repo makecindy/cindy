@@ -618,8 +618,15 @@ function stripDataLiterals(command: string): string {
     .replace(
       new RegExp(String.raw`(\b(?:grep|egrep|fgrep|rg|ag)\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+)(${QUOTED})`, 'g'),
       (_m, prefix: string, literal: string) => (
+        // `-f`/`--file` 位置的值是模式**文件路径**;含 `$`/命令替换的模式是**动态值**——
+        // `grep "$(cat ~/.aws/credentials)" f` 会真的读凭证、`grep "$GITHUB_TOKEN" f` 会把
+        // 令牌摊到命令行。两类都必须原样留给红线扫描(review P1)。
+        // 不加「静态凭证路径」护栏:模式位是「要找什么」,不是「读哪个文件」(要读的文件是
+        // 后面的操作数,从不参与替换),加了会让 `grep -E "\.env|\.pem|credential"` 这条
+        // **防止**凭证误提交的扫描命令重新误报成红线。
         /(?:^|\s)(?:-[a-zA-Z]*f|--file)$/.test(prefix.trimEnd())
-          ? `${prefix}${literal}`   // 这是模式**文件路径**,保留给凭证红线扫描
+          || EXECUTABLE_INSIDE_QUOTES.test(literal)
+          ? `${prefix}${literal}`
           : `${prefix}DATA`
       ),
     );
@@ -635,9 +642,11 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // 短选项形态:`gh auth status -t` 与含 `t` 的簇写(`-wt`/`-tw`)是同一个 flag,只把它挡在
   // gh 只读白名单外不够 —— 落灰区就可能被轻量审阅器静默放行(review 三轮 P1)。`-t` 本身
   // 在别的命令里含义完全不同(`docker -t`、`tar -t`),所以**限定在 `gh auth` 命令位**上匹配。
-  /(?:^|\s)gh\s+auth\s+[a-z][\w-]*(?:\s+(?!-)\S+)*\s+-[a-zA-Z]*t[a-zA-Z]*(?![\w=-])/,
+  // `(?:\S*\/)?` 让绝对/相对路径调用同样命中(`/usr/bin/gh auth status -t`,review 四轮 P1)——
+  // 只匹配裸 `gh` 等于给一个换写法就绕过的口子。
+  /(?:^|\s)(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*(?:\s+(?!-)\S+)*\s+-[a-zA-Z]*t[a-zA-Z]*(?![\w=-])/,
   // `gh auth token` 直接把令牌打到 stdout,与 `--show-token` 同级(同族一次收完)。
-  /(?:^|\s)gh\s+auth\s+token\b/,
+  /(?:^|\s)(?:\S*\/)?gh\s+auth\s+token\b/,
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
   // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
   /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
@@ -780,6 +789,25 @@ function splitTopLevelSegments(command: string): string[] {
   // REVIEW_REQUIRED)都在**整条命令**的去引号变体上先跑(见 classifyShellCommand),藏在引号里的
   // 危险关键词照样命中;引号内容对真实 bash 也是数据,eval / `sh -c` 的执行面另有红线拦截。
   return splitExecutableSegments(command).map((s) => s.text);
+}
+
+/**
+ * 该段是否带**有副作用的**输出重定向或命令替换。
+ *
+ * 抽出来是因为它有两个调用点,漏任一个都是绕过:`classifyShellSegment` 的常规路径,以及
+ * `classifyShellCommand` 里 `cd <区内目录>` 的快捷放行分支 —— 后者原来直接 `continue`,
+ * 于是 `cd /repo > /tmp/out && ls` 整条被判 `auto-approve`,重定向从未被看到(review P1)。
+ *
+ * 判定前先去掉引号内容(引号内的 `>` 是数据,如 `git log --format='%h>%s'`),再抹掉指向
+ * 安全伪设备的重定向(`2>/dev/null`、`&>/dev/fd/1`):写伪设备等同丢弃、无落盘副作用,
+ * 与 `SAFE_DEVICE_PATH` / `isProtectedSystemPath` 的白名单同口径。`/dev/null/x`、
+ * `/dev/nullx` 等相近路径不匹配(`(?![\w/])`),仍按普通文件写升级。
+ */
+function segmentHasSideEffectRedirectOrSubstitution(segment: string): boolean {
+  const redirectScan = segment
+    .replace(/'[^']*'|"[^"]*"/g, '')
+    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)(?![\w/])/gi, '');
+  return OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment);
 }
 
 /** 轻量 shell tokenizer：引号外按空白切，拼接相邻的 quoted/unquoted 片段并保留反斜杠。 */
@@ -1378,14 +1406,18 @@ const INTERPRETER_VALUELESS_OPTIONS: readonly { match: RegExp; opts: ReadonlySet
  * 「stdin 即程序」处理。`--opt=value` 自带值,不吃后面的 token,单独放行。
  */
 function trustedScriptOperands(bin: string, args: readonly string[]): string[] {
+  // 表里没有这个解释器 ≠ 它的选项都不吃参数。**同一套解析对所有会执行 stdin 的解释器生效**:
+  // 未建模的族(php 的 `-d display_errors=1`、lua、pwsh、julia…)一样按「表外选项 → fail-closed」
+  // 处理,否则 `printf '<?php …' | php -d display_errors=1` 会把 `display_errors=1` 当脚本文件,
+  // 让 stdin 代码执行从红线降进灰区(review P1)。空集合 = 该族没有已知的无值开关。
   const entry = INTERPRETER_VALUELESS_OPTIONS.find((e) => e.match.test(bin));
-  if (!entry) return positionalOperands([...args]);
+  const valueless = entry?.opts ?? new Set<string>();
   const operands: string[] = [];
   for (const token of args) {
     if (token === '--') continue;
     if (token.startsWith('-')) {
       // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
-      if (entry.opts.has(token) || token.includes('=')) continue;
+      if (valueless.has(token) || token.includes('=')) continue;
       // 表外选项:可能吃掉下一个参数 → 无法证明后面还有真正的脚本文件,fail-closed。
       return [];
     }
@@ -1401,13 +1433,20 @@ function trustedScriptOperands(bin: string, args: readonly string[]): string[] {
  * 可执行文件名:`xargs -I{} env {} -rf /outside` 剥掉 `env` 后 bin 就是 `{}`(占位符本身)。
  */
 function xargsReplacementDrivesCommand(tokens: string[]): boolean {
+  // 占位符解析必须区分「吃下一个参数」和「用缺省 {}」两类,否则会把命令名当成占位符:
+  //   -I R / -I{}         GNU xargs 的 -I **必须**带参数(分离或紧贴);
+  //   -i / -i{}           已废弃的 -i,参数**可选**,裸写时缺省 `{}` —— 裸 `-i` 后面那个
+  //                       token 是命令名,不能当占位符消费(review P1:`xargs -i env {} -rf`
+  //                       原来把 `env` 认成占位符,判据整个失效);
+  //   --replace / --replace=R  同 -i,参数可选。
   let placeholder: string | null = null;
   for (let i = 1; i < tokens.length; i++) {
     const t = tokens[i] as string;
-    if (t === '-I' || t === '-i' || t === '--replace') placeholder = tokens[i + 1] ?? '{}';
-    else if (/^-I./.test(t)) placeholder = t.slice(2);            // `-I{}` 紧贴写法
-    else if (/^--replace=/.test(t)) placeholder = t.slice('--replace='.length);
-    else if (t === '--replace' || t === '-i') placeholder = '{}';  // 缺省占位符
+    if (t === '-I') placeholder = tokens[i + 1] ?? '{}';
+    else if (/^-I./.test(t)) placeholder = t.slice(2);
+    else if (t === '-i' || t === '--replace') placeholder = '{}';
+    else if (/^-i./.test(t)) placeholder = t.slice(2);
+    else if (t.startsWith('--replace=')) placeholder = t.slice('--replace='.length) || '{}';
     if (placeholder) break;
   }
   if (!placeholder) return false;
@@ -1553,8 +1592,13 @@ function xargsCommandTokens(tokens: string[]): string[] | null {
   const longFlags = new Set([
     '--null', '--no-run-if-empty', '--verbose', '--interactive', '--exit',
     '--show-limits', '--open-tty', '--help', '--version',
+    // `--replace` 的参数是**可选**的(等同已废弃的 `-i`),裸写时缺省 `{}` 而**不**消费
+    // 下一个 token —— 原来把它登记成「必带参数」,于是 `xargs --replace env {} -rf /outside`
+    // 里的命令名 `env` 被当成占位符吃掉,嵌套命令整个看不见(review P1)。
+    // 带值形态由下面的 `--replace=` 分支处理。
+    '--replace',
   ]);
-  const longWithValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)$/;
+  const longWithValue = /^(?:--arg-file|--delimiter|--eof|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)$/;
   const longAttachedValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)=/;
   let i = 1;
   while (i < tokens.length) {
@@ -2740,12 +2784,9 @@ function classifyShellSegment(
   // 等同丢弃、无落盘副作用,是实机语料里最高频的静音写法,不该把整段只读命令拖进灰区
   // (与 SAFE_DEVICE_PATH / isProtectedSystemPath 的伪设备白名单同口径)。`/dev/null/x`、
   // `/dev/nullx` 等相近路径不匹配(`(?![\w/])`),仍按普通文件写升级。
-  const redirectScan = segment
-    .replace(/'[^']*'|"[^"]*"/g, '')
-    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)(?![\w/])/gi, '');
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
-  if (OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
+  if (segmentHasSideEffectRedirectOrSubstitution(segment)) return 'prompt';
   // 带替换/默认值的参数展开(${X:-ec} 等)可代入任意文本、拼出危险 flag/命令,静态不可求值 → 升级
   // (codex 报:`-ex${UNSET:-ec}` 抹空后是 -ex、bash 代入 ec 成 -exec)。挡在 readonly/git/fetch 放行前。
   if (SUBSTITUTION_EXPANSION.test(segment)) return 'prompt';
@@ -2905,8 +2946,12 @@ export function classifyShellCommand(
       trackedCwdUnknown = next.cwdUnknown;
       if ((segBin === 'cd' || segBin === 'pushd')
         && !next.cwdUnknown && next.cwd
-        && isInsideWorkspace(next.cwd, workspaceRoots, aliasFirmlinks)) {
-        continue; // 区内目录切换:无写/无执行副作用,该段放行。
+        && isInsideWorkspace(next.cwd, workspaceRoots, aliasFirmlinks)
+        // 快捷放行只针对「切目录」这个动作本身。同一段里仍可能挂着输出重定向或命令替换
+        // (`cd /repo > /tmp/out`),那属于写文件/执行任意内容,不能被这条捷径绕过 ——
+        // 复用与 classifyShellSegment 同一份判据(安全伪设备已排除),review P1。
+        && !segmentHasSideEffectRedirectOrSubstitution(seg)) {
+        continue; // 区内目录切换且无副作用:该段放行。
       }
       needsPrompt = true; // 区外/动态目标、source/popd:与改动前同档(灰区)。
       continue;
