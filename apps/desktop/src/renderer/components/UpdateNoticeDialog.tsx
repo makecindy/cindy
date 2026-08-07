@@ -514,7 +514,8 @@ function AutoBody({
 
   // Fallback: when scrolled to the bottom, pick the last version so the header
   // badge updates even if the last version is too short to reach the observation
-  // zone at the top.
+  // zone at the top. When leaving the bottom, recompute the visible version so
+  // the badge doesn't stay stuck on the last version.
   const lastVersion = releaseNotes[releaseNotes.length - 1]?.version;
   const handleAutoScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -522,7 +523,20 @@ function AutoBody({
     // 1px tolerance for sub-pixel rounding in HiDPI.
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
       onStickyChange(lastVersion);
+      return;
     }
+    // Leaving the bottom: find the version block currently closest to the
+    // container top. This mirrors the IntersectionObserver's sticky-header
+    // logic but runs on every scroll event when not at the very bottom,
+    // clearing the bottom override that the IO cannot undo on its own.
+    const containerTop = el.getBoundingClientRect().top;
+    let best: { v: string; top: number } | null = null;
+    for (const [version, blockEl] of blockRefs.current.entries()) {
+      const top = blockEl.getBoundingClientRect().top;
+      if (top > containerTop) continue; // block is still below the container top
+      if (best === null || top > best.top) best = { v: version, top };
+    }
+    if (best) onStickyChange(best.v);
   }, [lastVersion, onStickyChange]);
 
   return (
@@ -759,7 +773,8 @@ function ManualBody({
 
   // Fallback: when scrolled to the bottom, pick the last version so the header
   // badge updates even if the last version is too short to reach the top
-  // observation zone.
+  // observation zone. When leaving the bottom, recompute the visible version so
+  // the badge doesn't stay stuck on the last version.
   const lastVersion = allVersions[allVersions.length - 1];
   const handleManualScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -767,7 +782,20 @@ function ManualBody({
     // 1px tolerance for sub-pixel rounding in HiDPI.
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
       onStickyChange(lastVersion);
+      return;
     }
+    // Leaving the bottom: find the version block currently closest to the
+    // container top. This mirrors the IntersectionObserver's sticky-header
+    // logic but runs on every scroll event when not at the very bottom,
+    // clearing the bottom override that the IO cannot undo on its own.
+    const containerTop = el.getBoundingClientRect().top;
+    let best: { v: string; top: number } | null = null;
+    for (const [version, blockEl] of blockRefs.current.entries()) {
+      const top = blockEl.getBoundingClientRect().top;
+      if (top > containerTop) continue; // block is still below the container top
+      if (best === null || top > best.top) best = { v: version, top };
+    }
+    if (best) onStickyChange(best.v);
   }, [lastVersion, onStickyChange]);
 
   // Programmatic jump handler exposed to parent (header dropdown).
