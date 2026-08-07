@@ -552,6 +552,44 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
+  it('retries an unbinding declaration until the peer view is confirmed', async () => {
+    vi.useFakeTimers();
+    let localIdentity: string | null = identity;
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () =>
+        localIdentity ? { channel: 'discord', identity: localIdentity } : null,
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    localIdentity = null;
+    manager.resetBindingDiscovery();
+    const probesAfterReset = harness.pushes.filter(
+      (push) => push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+    );
+    expect((probesAfterReset.at(-1)?.payload as { channels?: unknown }).channels).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const probesAfterRetry = harness.pushes.filter(
+      (push) => push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+    );
+    expect(probesAfterRetry.length).toBeGreaterThan(probesAfterReset.length);
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: null,
+      reason: 'missing-binding',
+    });
+    manager.stop();
+  });
+
   it('accepts a peer binding probe even when its remote clock moved backwards', () => {
     const harness = createTransport();
     const manager = new ImSchedulerManager({
