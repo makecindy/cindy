@@ -113,6 +113,50 @@ describe('dormant scheduler manager', () => {
     });
   });
 
+  it('rejects an untagged snapshot from before a relay disconnect', async () => {
+    vi.useFakeTimers();
+    let status: 'online' | 'offline' = 'online';
+    const harness = createTransport();
+    harness.transport.getStatus = () => status;
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 1 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+
+    status = 'offline';
+    harness.emit({ type: 'relay-status', status: 'offline' });
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
+    });
+    status = 'online';
+    harness.emit({ type: 'relay-status', status: 'online' });
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+
+    await vi.advanceTimersByTimeAsync(100);
+    const request = harness.snapshotRequests.at(-1);
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 1 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+    manager.stop();
+  });
+
   it('restarts the discovery round when ownership returns', () => {
     const owner = { value: false };
     const harness = createTransport();
