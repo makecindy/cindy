@@ -39,6 +39,13 @@ describe('parseCron', () => {
     expect(() => parseCron('* * * *')).toThrow();
     expect(() => parseCron('* * * * * *')).toThrow();
   });
+
+  it('rejects malformed numeric field segments instead of partially parsing them', () => {
+    expect(() => parseCron('5abc * * * *')).toThrow();
+    expect(() => parseCron('*/5abc * * * *')).toThrow();
+    expect(() => parseCron('1-2-3 * * * *')).toThrow();
+    expect(() => parseCron('1/2/3 * * * *')).toThrow();
+  });
 });
 
 describe('nextRun', () => {
