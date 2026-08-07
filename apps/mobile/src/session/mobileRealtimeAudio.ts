@@ -127,10 +127,18 @@ export async function startMobileRealtimeAudio(
     return startE2eMockRealtimeAudio(options);
   }
   const binding = getNativeBinding();
+  const expoAudioModule = getExpoAudioNativeModule();
+  // Current Apple builds contain both bindings. Prefer Expo AudioStream there:
+  // it creates a fresh AVAudioEngine for each run and uses the input-only
+  // `.record` session category, which keeps PCM flowing while iOS system screen
+  // recording is active. The retained custom play-and-record engine can start
+  // successfully in that state without ever delivering a tap buffer.
+  if (binding && expoAudioModule) {
+    return startExpoAudioRealtimeAudio(expoAudioModule, options);
+  }
   if (binding) {
     return startCustomNativeRealtimeAudio(binding, options);
   }
-  const expoAudioModule = getExpoAudioNativeModule();
   if (expoAudioModule) {
     return startExpoAudioRealtimeAudio(expoAudioModule, options);
   }
@@ -216,7 +224,9 @@ async function startCustomNativeRealtimeAudio(
  * Mobile already ships expo-audio for permission and audio-mode management.
  * SDK 56 also exposes the native SharedObject behind its public useAudioStream
  * hook. The voice controller is intentionally imperative, so construct that
- * same stream class directly rather than carrying a second AudioRecord stack.
+ * same stream class directly. Android uses it as its only PCM implementation;
+ * Apple builds prefer it over the legacy custom engine so system screen
+ * recording and voice input can remain active together.
  */
 async function startExpoAudioRealtimeAudio(
   module: ExpoAudioNativeModule,
@@ -334,6 +344,10 @@ async function startExpoAudioRealtimeAudio(
  */
 export function prewarmMobileRealtimeAudio(): void {
   if (isE2eMockRealtimeAudioEnabled()) return;
+  // AudioStream owns a fresh input-only engine and has no separate prepare
+  // phase. Prewarming the legacy play-and-record session before AudioStream
+  // starts would only force a second category/route reconfiguration.
+  if (getExpoAudioNativeModule()) return;
   const binding = getNativeBinding();
   if (!binding) return;
   void binding.module.prewarm().catch(() => undefined);

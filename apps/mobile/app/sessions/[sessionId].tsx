@@ -371,10 +371,7 @@ import {
   recordMobileVoiceInputHistoryForHost,
   updateMobileVoiceInputHistoryEntryForHost,
 } from '@/session/mobileVoiceHistoryStore';
-import {
-  hydrateMobileVoiceDictionary,
-  refreshMobileVoiceDictionary,
-} from '@/session/mobileVoiceDictionaryCache';
+import { refreshMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
 import {
   playMobileVoiceInputEndCue,
 } from '@/session/mobileVoiceCue';
@@ -4440,11 +4437,16 @@ export default function SessionScreen() {
       // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
       // 被控端)就用上次缓存,绝不为它推迟开麦。本次拉到的内容供下一次润色使用。
       void refreshMobileVoiceDictionary(deviceId, () => maker.getVoiceDictionary());
-      const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
-        takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),
-        getMobileVoiceInputHistoryForHost(deviceId),
-        hydrateMobileVoiceDictionary(deviceId),
-      ]);
+      // Claiming a prewarm must not await its in-flight WebSocket handshake:
+      // BufferedAsrProvider already lets capture start concurrently and replays
+      // the early PCM once the connection settles.
+      const prewarmedVoice = takePrewarmedMobileVoiceAsr(deviceId);
+      // History and dictionary enrich refinement only. Load both behind the mic
+      // start; the retained array is read when refinement actually runs.
+      const localVoiceInputHistory: string[] = [];
+      void getMobileVoiceInputHistoryForHost(deviceId)
+        .then((history) => localVoiceInputHistory.push(...history))
+        .catch(() => undefined);
       claimedPrewarm = prewarmedVoice;
       const credential = prewarmedVoice?.credential
         ?? createMobileCindyVoiceCredential(deviceId);

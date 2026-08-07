@@ -1113,8 +1113,9 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('getAccessToken: () => auth.getAccessToken(),');
     expect(newSource).toContain('refreshAccessToken: () => auth.refreshAccessToken(),');
     expect(newSource).toContain('apiFetch: auth.apiFetch,');
-    expect(newSource).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(newSource).toContain('takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null),');
+    expect(newSource).toContain('const prewarmedVoice = takePrewarmedMobileVoiceAsr(selectedDeviceId);');
+    expect(newSource).toContain('void getMobileVoiceInputHistoryForHost(selectedDeviceId)');
+    expect(newSource).not.toContain('await Promise.all([\n        takePrewarmedMobileVoiceAsr(selectedDeviceId)');
     expect(newSource).not.toContain('MobileVoiceServiceMode');
     expect(newSource).not.toContain('LiteLlm');
     expect(newSource).toContain('?? createMobileCindyVoiceCredential(selectedDeviceId);');

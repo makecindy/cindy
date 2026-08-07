@@ -524,8 +524,9 @@ describe('mobile session composer desktop-first surface', () => {
     // fresh (credential already resolved, WebSocket already connecting) and
     // falls back to building the managed credential itself otherwise. 手机语音
     // 只保留 Cindy 官方托管路径:BYOK/穿透已删除。
-    expect(source).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(source).toContain('takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),');
+    expect(source).toContain('const prewarmedVoice = takePrewarmedMobileVoiceAsr(deviceId);');
+    expect(source).toContain('void getMobileVoiceInputHistoryForHost(deviceId)');
+    expect(source).not.toContain('await Promise.all([\n        takePrewarmedMobileVoiceAsr(deviceId)');
     expect(source).not.toContain('MobileVoiceServiceMode');
     expect(source).not.toContain('LiteLlm');
     expect(source).toContain('?? createMobileCindyVoiceCredential(deviceId);');
@@ -538,7 +539,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
     expect(source).toContain('voiceContext.createRefinerTarget(providerId, options),');
     expect(source).toContain('voiceContext.warmRefiner(input),');
-    expect(source).toContain('getMobileVoiceInputHistoryForHost(deviceId),');
+    expect(source).toContain('void getMobileVoiceInputHistoryForHost(deviceId)');
     // Device link is opened non-blocking (not awaited): dictation goes through the
     // cloud ASR proxy and does not need the link, so it must not gate mic start.
     expect(source).toContain('void openLink(deviceId).catch(() => undefined);');
