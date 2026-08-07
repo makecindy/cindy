@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import type { MobileModelOption } from '@/session/agentCapabilities';
 import {
   DEFAULT_NEW_SESSION_DRAFT,
   NEW_SESSION_AGENT_OPTIONS,
@@ -744,6 +745,49 @@ describe('resolveNewSessionAutoDefault', () => {
 
   it('returns null when modelRows are not ready yet and there is no recent session (no premature set)', () => {
     expect(resolveNewSessionAutoDefault({ ...baseInput, sessions: [], modelRows: [] })).toBeNull();
+  });
+
+  it('applies the capabilities flat default when the catalog is explicitly unavailable (old host without provider:list, codex P2)', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      sessions: [],
+      modelRows: [],
+      catalogReady: false,
+      providersUnavailable: true,
+      availableModels: [
+        {
+          id: 'flat-default',
+          label: 'Flat Default',
+          efforts: ['medium'],
+          effortDisplayNames: {},
+          defaultEffort: 'medium',
+          supportsFastMode: false,
+          newSessionDefault: ['claude-code'],
+        } as MobileModelOption,
+      ],
+    });
+    // 目录明确不可用(旧被控端)→ 放行 capabilities 扁平回退;扁平列表无 provider 结构 → 默认路由
+    expect(result).toEqual({
+      appliedDeviceId: 'devA',
+      patch: {
+        model: 'flat-default',
+        effort: 'medium',
+        providerId: null,
+      },
+    });
+  });
+
+  it('does not fall back to flat defaults while the catalog is merely loading (error is empty, codex P2)', () => {
+    expect(resolveNewSessionAutoDefault({
+      ...baseInput,
+      sessions: [],
+      modelRows: [],
+      catalogReady: false,
+      providersUnavailable: false,
+      availableModels: [{
+        id: 'flat-default', label: 'Flat Default', efforts: ['medium'], effortDisplayNames: {}, defaultEffort: 'medium', supportsFastMode: false, newSessionDefault: ['claude-code'],
+      } as MobileModelOption],
+    })).toBeNull();
   });
 
   it('returns null when this device was already applied, and when no device is selected', () => {

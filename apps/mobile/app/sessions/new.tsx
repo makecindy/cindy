@@ -939,6 +939,9 @@ export default function NewRemoteSessionScreen() {
       // modelRows 按当前 draft.agentKind 构建;最近会话若是另一个 agent,纯函数内不做来源校验。
       rowsAgentKind: draft.agentKind,
       catalogReady: deviceProviders.ready,
+      // 目录明确不可用(error 非空,旧被控端无 provider:list 通道等)→ 放行扁平回退
+      // (codex review P2);加载中/切设备间隙 error 为空,维持既有「不动等重算」语义。
+      providersUnavailable: deviceProviders.error != null,
       // provider-aware 模式只用经过可见性过滤的 rows;目录确实不可用时才回退
       // capabilities(上游 main 移植,merge 2026-08-07)。
       availableModels: !deviceProviders.loading && modelSections.connected.length === 0

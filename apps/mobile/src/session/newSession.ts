@@ -665,6 +665,11 @@ export function resolveNewSessionAutoDefault(input: {
   rowsAgentKind: NewSessionAgentKind;
   /** 供应商目录是否已就绪;未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
   catalogReady: boolean;
+  /** 目录是否「明确不可用」(拉取失败,典型:旧被控端无 maker:provider:list 通道)。
+   *  与 catalogReady=false(仍在加载/切设备间隙)区分:仅明确不可用才放行
+   *  capabilities 扁平回退,否则回退被 !catalogReady 的 return null 挡死
+   *  (codex review P2)。 */
+  providersUnavailable?: boolean;
   /** 仅在 provider-aware 列表不可用时传入,避免绕过被控端的模型可见性设置(上游 main 移植)。 */
   availableModels?: readonly MobileModelOption[];
   currentEffort: string;
@@ -677,6 +682,7 @@ export function resolveNewSessionAutoDefault(input: {
     modelRows,
     rowsAgentKind,
     catalogReady,
+    providersUnavailable = false,
     availableModels = [],
     currentEffort,
   } = input;
@@ -716,8 +722,10 @@ export function resolveNewSessionAutoDefault(input: {
   // 无最近会话 → 区域默认标记优先;无 provider 结构时才信 capabilities 扁平标记
   // (上游 main 移植);provider-aware 列表由调用方传空 availableModels,避免区域
   // 默认绕过用户隐藏设置。目录未就绪(加载中/切设备间隙残留旧设备目录,
-  // ready=false)则不动,等就绪后 effect 重算(codex review P1)。
-  if (!catalogReady) return null;
+  // ready=false)则不动,等就绪后 effect 重算(codex review P1);目录「明确不可用」
+  // (旧被控端无 provider:list 通道或请求持续失败,error 非空)则放行扁平回退,
+  // 否则下方 availableModels 分支永远不可达(codex review P2)。
+  if (!catalogReady && !providersUnavailable) return null;
   const providerModel = modelRows.length > 0
     ? pickRegionalNewSessionDefault(modelRows.map((row) => row.model), rowsAgentKind) ?? modelRows[0].model
     : undefined;
