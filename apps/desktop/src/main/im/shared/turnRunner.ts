@@ -243,6 +243,8 @@ interface QueuedSend {
   /** Durable route side effects run only after provider acceptance, never on enqueue. */
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
+  protectedContent?: boolean;
 }
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
@@ -347,6 +349,14 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /**
+   * 这一轮的触发消息来自「禁止保存内容」的群。
+   *
+   * turn 照常跑 —— 用户 @ 机器人说的话是他此刻要说给 bot 的。但正文与附件
+   * **不写进会话存档**: 群历史池已在渠道侧拦下, 存档不能成为绕过保护边界的
+   * 第二条路径。缺省 = 未受保护(只有 Telegram 群会置它)。
+   */
+  protectedContent?: boolean;
 }
 
 export interface ImTurnTerminal {
@@ -750,6 +760,7 @@ export function createTurnRunner(
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(args.protectedContent === true ? { protectedContent: true } : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -931,11 +942,15 @@ export function createTurnRunner(
           // 路径直接 session.send,必须额外调这里,否则守卫额度恒 0,首次
           // silent-stop 就落"已耗尽"误导横幅且永不自动续跑)。
           noteSilentStopUserSend(rowId);
-          const persisted = await persistUserMessage({
-            sessionId: rowId,
-            text: item.text,
-            attachments: item.attachments,
-          });
+          // 受保护群的触发消息不进会话存档 —— 正文与附件都不落。turn 照常跑,
+          // agent 拿得到内容; 只是这一轮的输入不留在长期记录里。
+          const persisted = item.protectedContent
+            ? null
+            : await persistUserMessage({
+                sessionId: rowId,
+                text: item.text,
+                attachments: item.attachments,
+              });
           await adapter.onUserMessagePersisted?.({
             sessionId: rowId,
             userMessageId: item.turn.userMessageId,

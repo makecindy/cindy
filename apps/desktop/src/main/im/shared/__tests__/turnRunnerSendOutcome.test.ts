@@ -408,6 +408,7 @@ interface TurnOverrides {
   userMessageId?: string;
   text?: string;
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
+  protectedContent?: boolean;
 }
 
 async function runDefaultTurn(
@@ -431,6 +432,7 @@ async function startDefaultTurn(
     attachments: [],
     onTurnComplete,
     ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
+    ...(overrides.protectedContent === true ? { protectedContent: true } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -2668,6 +2670,27 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       await flushMicrotasks();
 
       expect(mocks.generateAndPersistFbotTitle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('受保护群的触发消息不进会话存档', () => {
+    // 群历史池已在渠道侧(emitGroupWindow)拦下, 但那只是第一条路径 —— 会话存档
+    // 同样会把正文与附件长期留下, 不挡就是绕过保护边界的旁路。
+    it('protectedContent 的消息不落库, 但照常派发给 agent', async () => {
+      const h = setupSession(async () => ({ accepted: true }));
+      mocks.persistUserMessage.mockClear();
+      await runDefaultTurn(vi.fn(), { protectedContent: true });
+      expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+      // 不留存不等于不响应: provider 照常收到了这一轮(session 已建立并接受派发)。
+      expect(h).toBeTruthy();
+      expect(mocks.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+    });
+  
+    it('未受保护的消息照常落库(既有行为不变)', async () => {
+      setupSession(async () => ({ accepted: true }));
+      mocks.persistUserMessage.mockClear();
+      await runDefaultTurn();
+      expect(mocks.persistUserMessage).toHaveBeenCalled();
     });
   });
 });

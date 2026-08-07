@@ -302,6 +302,9 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
     unsupported,
     threadTs: undefined,
     scopeKey: undefined,
+    // 受保护群的消息照常起 turn, 但不得进任何长期存档 —— 群历史池已在
+    // emitGroupWindow 处拦下, 这个标记是给业务层会话存档的第二道。
+    ...(m.has_protected_content === true ? { protectedContent: true } : {}),
     ...(reply
       ? {
           replyContext: {
