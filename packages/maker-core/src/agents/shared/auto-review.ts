@@ -624,7 +624,12 @@ function stripDataLiterals(command: string): string {
         // 不加「静态凭证路径」护栏:模式位是「要找什么」,不是「读哪个文件」(要读的文件是
         // 后面的操作数,从不参与替换),加了会让 `grep -E "\.env|\.pem|credential"` 这条
         // **防止**凭证误提交的扫描命令重新误报成红线。
-        /(?:^|\s)(?:-[a-zA-Z]*f|--file)$/.test(prefix.trimEnd())
+        // 文件型选项统一按「后面那个值是**被读取的路径**」处理:`-f`/`--file`(模式文件)、
+        // `--exclude-from`/`--include-from`(grep 的排除/包含清单)、`--ignore-file`(rg)。
+        // 判据取「以 file / from 结尾的长选项」+ 以 f 结尾的短选项簇,一次覆盖同族,
+        // 不逐个登记(review 五轮 P1:`grep --exclude-from "~/.ssh/id_rsa" foo src`
+        // 原来整条是 auto-approve)。
+        /(?:^|\s)(?:-[a-zA-Z]*f|--[\w-]*(?:file|from))$/.test(prefix.trimEnd())
           || EXECUTABLE_INSIDE_QUOTES.test(literal)
           ? `${prefix}${literal}`
           : `${prefix}DATA`
@@ -1360,7 +1365,7 @@ function isPipeExecutor(bin: string): boolean {
  * 全部误升。
  */
 const AWK_SCRIPT_EXECUTES_COMMANDS =
-  /\bsystem\s*\(|\bENVIRON\b|\bgetline\b|\bclose\s*\(|\|\s*["']|["']\s*\|/;
+  /\bsystem\s*\(|\bENVIRON\b|\bgetline\b|\bclose\s*\(|\|\s*["']|["']\s*\||\b(?:print|printf)\b[^;}\n]*\|/;
 
 /**
  * 解释器里**确定不吃参数**的开关。判据方向刻意反过来:登记「无值选项」,其余一律按
@@ -1405,7 +1410,10 @@ const INTERPRETER_VALUELESS_OPTIONS: readonly { match: RegExp; opts: ReadonlySet
  * 返回空数组 = 找不到可信脚本文件(要么本来就没有,要么被表外选项吃掉了)→ 调用方按
  * 「stdin 即程序」处理。`--opt=value` 自带值,不吃后面的 token,单独放行。
  */
-function trustedScriptOperands(bin: string, args: readonly string[]): string[] {
+function analyzeInterpreterArgs(
+  bin: string,
+  args: readonly string[],
+): { scriptOperands: string[]; usesModuleSelector: boolean } {
   // 表里没有这个解释器 ≠ 它的选项都不吃参数。**同一套解析对所有会执行 stdin 的解释器生效**:
   // 未建模的族(php 的 `-d display_errors=1`、lua、pwsh、julia…)一样按「表外选项 → fail-closed」
   // 处理,否则 `printf '<?php …' | php -d display_errors=1` 会把 `display_errors=1` 当脚本文件,
@@ -1416,22 +1424,36 @@ function trustedScriptOperands(bin: string, args: readonly string[]): string[] {
   for (const token of args) {
     if (token === '--') continue;
     if (token.startsWith('-')) {
+      // `-m` / `--module`:程序来自具名模块,不读 stdin。**必须在这次按位扫描里判**,
+      // 不能在外面对整串 args 做 `some(t => t === '-m')` —— `python3 -X -m` 里的 `-m` 是
+      // `-X` 的值而不是模块选择器,提前认定会跳过下面的 fail-closed(review 五轮 P1)。
+      if (token === '-m' || token === '--module') {
+        return { scriptOperands: operands, usesModuleSelector: true };
+      }
       // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
       if (valueless.has(token) || token.includes('=')) continue;
       // 表外选项:可能吃掉下一个参数 → 无法证明后面还有真正的脚本文件,fail-closed。
-      return [];
+      // 这一步同时吃掉「`-m` 是某个未知选项的值」那种形态:扫描在此终止,`-m` 永远走不到
+      // 上面的模块分支。
+      return { scriptOperands: [], usesModuleSelector: false };
     }
     operands.push(token);
   }
-  return operands;
+  return { scriptOperands: operands, usesModuleSelector: false };
 }
 
 /**
  * `xargs -I<占位符>` 的替换值是否落在**命令位**(而不是普通参数位)。
  *
- * 落在命令位 = stdin 决定跑哪个程序 = 动态代码执行,必须逐次确认。判据取包装器剥离后的
- * 可执行文件名:`xargs -I{} env {} -rf /outside` 剥掉 `env` 后 bin 就是 `{}`(占位符本身)。
+ * 落在命令位 = stdin 决定跑哪个程序 = 动态代码执行,必须逐次确认。两种形态都要认:
+ *  1. **占位符就是命令名**:`xargs -I{} env {} -rf /outside` —— 剥掉包装器 `env` 之后
+ *     bin 就是 `{}`;
+ *  2. **占位符被塞进会重新解析成命令的参数**:`xargs -I{} env -S "{}"` —— `env -S` 会把
+ *     整个字符串拆成命令再执行,占位符在参数位却仍是命令来源。只看剥离后的 bin 接不住
+ *     这一类(review 五轮 P1)。
  */
+/** 会把字符串参数**重新解析成命令**的包装器选项。占位符进到这些位置即动态执行。 */
+const STRING_REPARSING_WRAPPER_OPTIONS = /^(?:-S|--split-string(?:=.*)?|-c)$/;
 function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   // 占位符解析必须区分「吃下一个参数」和「用缺省 {}」两类,否则会把命令名当成占位符:
   //   -I R / -I{}         GNU xargs 的 -I **必须**带参数(分离或紧贴);
@@ -1452,8 +1474,21 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   if (!placeholder) return false;
   const nested = xargsCommandTokens(tokens);
   if (nested === null) return false;                              // 选项形态未知,交既有分支处理
-  const nestedBin = executableName(unwrapWrappers(nested)[0] ?? '');
-  return nestedBin === placeholder || nestedBin.includes(placeholder);
+  // 形态 2:占位符落进「会把字符串重新解析成命令」的选项值(`env -S "{}"`、`sh -c "{}"`)。
+  // 这类占位符虽在参数位,却仍是命令来源 —— 先判,因为剥离后的 bin 看不到它。
+  if (nested.some((t, i) => STRING_REPARSING_WRAPPER_OPTIONS.test(t)
+    && (nested[i + 1]?.includes(placeholder) === true || t.includes(placeholder)))) return true;
+  // 形态 1:占位符就是命令名(包装器剥离后的首个 token)。
+  // 比对**原 token 与归一化后的 bin 两者**:`executableName` 会做小写/取基名等归一化,
+  // 只比归一化结果时 `-I PH … PH`(大小写)与 `-I{} … {}`(特殊字符)会漏判 —— 实测
+  // 只有 `-I % … %` 这种恰好归一化不变的形态能命中,等于判据大半失效。
+  // 三种口径都比:未剥包装器的首 token、剥掉包装器后的首 token、以及归一化后的 bin。
+  // 少任何一种都有实测漏判 —— `executableName` 做小写/取基名归一化(`-I PH` 漏),
+  // `unwrapWrappers` 还会改写某些形态的首 token(`-I{}` 漏),只有 `-I %` 这种恰好三者
+  // 一致的形态能命中,等于判据大半失效。
+  const candidates = [nested[0] ?? '', unwrapWrappers(nested)[0] ?? ''];
+  return candidates.some((t) => t === placeholder || t.includes(placeholder)
+    || executableName(t) === placeholder || executableName(t).includes(placeholder));
 }
 
 function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
@@ -1469,13 +1504,9 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // `… | awk -f script.awk -` 会被误升成确定性红线)。
   if (bin === 'xargs' || bin === 'parallel') {
     if (tokens.slice(1).some((t) => SHELL_EXECUTORS.has(executableName(t)))) return true;
-    // `-I{}` 把 stdin 的每一行**替换进 INITIAL-ARGS**。若占位符正好落在**命令位**,
-    // 那 stdin 决定的就是「跑哪个程序」而不是「给什么参数」:
-    //     cat executor.txt | xargs -I{} env {} -rf /outside
-    // 文件里写 `/bin/rm` 就会执行区外递归删除。这里没有字面 shell executor,递归分析也只
-    // 看到未知的 `{}`,所以必须在这一层判定(review P1)。占位符只作**参数**时(如
-    // `xargs -I{} grep {} file`)仍是普通数据,不升级。
-    if (xargsReplacementDrivesCommand(tokens)) return true;
+    // 注:`-I` 占位符落在命令位的判定**不在这里** —— 本分支拿到的 tokens 已被
+    // `unwrapCommand` 剥掉 xargs 本身,挂在这里是死代码。真正的调用点在
+    // `highImpactExecutionNeedsConsent` 的 xargs 块(按 rawTokens 判)。
     return bin === 'parallel' && positionalOperands(tokens.slice(1)).length === 0;
   }
   // awk 家族:程序是第一个操作数或 -f 脚本文件,不可能来自 stdin —— **除非**那段字面脚本
@@ -1494,13 +1525,13 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   if (shellPayload !== null && shellPayload.trim() !== '-') return false;
   const inlineCode = interpreterInlineCodePayload(tokens);
   if (inlineCode !== null && inlineCode.trim() !== '-') return false;
-  // `python3 -m module`:具名模块,不读 stdin 当程序。
-  if (tokens.slice(1).some((t) => t === '-m' || t === '--module')) return false;
-  // 有脚本文件操作数 → 程序来自该文件。两点必须先处理干净,否则会把「stdin 即程序」误降:
-  //  - 吃参数的启动选项(`bash -O extglob`、`python -W ignore`)的**值**不是脚本文件;
-  //  - 裸 `-` 是 stdin 占位符,不算脚本文件(`curl … | python3 -` 仍必须是红线)。
-  const operands = trustedScriptOperands(bin, tokens.slice(1)).filter((t) => t !== '-');
-  if (operands.length > 0) return false;
+  // 选项与操作数**按位**解析一次,同时得出「有没有模块选择器」和「有没有可信脚本文件」——
+  // 两者必须同源,否则 `python3 -X -m` 里作为 `-X` 值的 `-m` 会被误当模块选择器,绕过
+  // fail-closed(review 五轮 P1)。裸 `-` 是 stdin 占位符,不算脚本文件
+  // (`curl … | python3 -` 仍必须是红线)。
+  const { scriptOperands, usesModuleSelector } = analyzeInterpreterArgs(bin, tokens.slice(1));
+  if (usesModuleSelector) return false;                 // `python3 -m json.tool`:具名模块
+  if (scriptOperands.filter((t) => t !== '-').length > 0) return false;
   return true;
 }
 
@@ -1748,6 +1779,13 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     if (unwrapped.wrapperUnresolved) return true;
     const bin = executableName(tokens[0] ?? '');
     const rawTokens = unwrapCommand(tokenize(text)).tokens;
+    // `xargs -I<占位符>` 的判定必须用**未剥包装器**的 token:`unwrapCommand` 会把 xargs 自己
+    // 剥掉(`tokens` / `rawTokens` 的首元素已经是内层命令),挂在剥离后的形态上就是死代码。
+    // 自查发现:`cat e.txt | xargs -I{} {} --version` 一直落灰区 —— 之前误以为已修,
+    // 那两条变红是被区外破坏目标与 wrapperUnresolved 撞上的,不是这条判据生效(review 五轮)。
+    const literalTokens = tokenize(text);
+    if (executableName(literalTokens[0] ?? '') === 'xargs'
+      && xargsReplacementDrivesCommand(literalTokens)) return true;
     // 去引号+去反斜杠的 normalized 会抹掉 Windows 盘符路径的 `\` 分隔符,令 `"C:\…\pwsh.exe"` 这类
     // 完整路径解释器识别不出(copilot 报)→ 额外用保留反斜杠的 rawTokens 求一次 bin,任一命中即算执行器。
     const rawBin = executableName(rawTokens[0] ?? '');

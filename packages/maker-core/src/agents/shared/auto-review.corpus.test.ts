@@ -376,6 +376,66 @@ describe('review 第四轮 — 分类器入口族', () => {
   });
 });
 
+/**
+ * 第五轮 review 的 4 条,同属「token/选项值解析与动态执行边界」这一族,一次覆盖完。
+ */
+describe('review 第五轮 — 选项值与动态执行', () => {
+  it('[P1] grep/rg 的文件型选项值是被读取的路径', () => {
+    // `-f`/`--file` 之外,`--exclude-from`/`--include-from`/`--ignore-file` 同族。
+    for (const c of [
+      'grep --exclude-from "~/.ssh/id_rsa" foo src',
+      'grep --include-from "~/.ssh/id_rsa" foo src',
+      'rg --ignore-file "~/.aws/credentials" foo',
+      'grep -f "~/.ssh/id_rsa" package.json',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 真正的搜索模式仍照常剥离。
+    expect(classifyShellCommand('grep -Rni "foo|bar" src', roots, opts)).toBe('auto-approve');
+    expect(classifyShellCommand(
+      'git diff --name-only | grep -E "\\.env|\\.pem|credential|secret"', roots, opts,
+    )).toBe('auto-approve');
+  });
+
+  it('[P1] awk 的输出管道目标是变量/表达式时同样是动态执行', () => {
+    for (const c of [
+      `printf 'x' | awk -v cmd=sh '{ print $0 | cmd }'`,
+      `printf 'x' | awk '{ printf "%s", $0 | cmd }'`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 正则 alternation 里的 `|` 在 print 之前,不误升。
+    expect(classifyShellCommand(
+      "grep -n 'x' a.ts | awk -F: '/foo|bar/ {print $1}'", roots, opts,
+    )).toBe('prompt');
+    expect(classifyShellCommand("cat d.txt | awk '{print $1}'", roots, opts)).toBe('prompt');
+  });
+
+  it('[P1] xargs 占位符落进命令位或被重解析成命令,各种写法都要命中', () => {
+    for (const c of [
+      'cat e.txt | xargs -I{} {} --version',        // 占位符直接作命令名
+      'cat e.txt | xargs -I % % --version',         // 另一种占位符
+      'cat e.txt | xargs -I PH PH --version',       // 大小写:不能只比归一化后的 bin
+      'cat e.txt | xargs -I{} env {} --version',    // 包装器之后
+      'cat e.txt | xargs -I{} env -S "{}"',         // env -S 把字符串重解析成命令
+      'cat e.txt | xargs -i env {} -rf /outside',   // 裸 -i 缺省占位符
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 占位符只作参数时仍是普通数据。
+    expect(classifyShellCommand(
+      'cat list.txt | xargs -I{} grep {} src/x.ts', roots, opts,
+    )).toBe('prompt');
+  });
+
+  it('[P1] `-m` 只有落在真实选项位才算模块选择器', () => {
+    // `python3 -X -m` 里的 `-m` 是 `-X` 的值,不能提前当模块选择器而跳过 fail-closed。
+    expect(classifyShellCommand("printf 'import os' | python3 -X -m", roots, opts)).toBe('prompt-each-time');
+    // 真正的模块选择器照常识别,不因这次调序误升。
+    expect(classifyShellCommand("printf 'x' | python3 -m json.tool", roots, opts)).toBe('prompt');
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [
