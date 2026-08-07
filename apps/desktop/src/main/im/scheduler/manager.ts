@@ -169,9 +169,11 @@ export class ImSchedulerManager {
       this.snapshotAccountGeneration = this.nonceFactory();
       this.resetSnapshotRequestState();
       this.requiresTaggedSnapshot = true;
-      this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
+      const currentIdentity = this.getLocalChannel()?.identity ?? null;
+      this.lastLocalIdentity = currentIdentity;
       this.rememberInvalidatedRuntimeGaps();
       this.runtimeGaps.clear();
+      if (currentIdentity) this.clearInvalidatedRuntimeGapIdentity(currentIdentity);
     } else {
       const currentIdentity = this.getLocalChannel()?.identity ?? null;
       if (this.lastLocalIdentity && this.lastLocalIdentity !== currentIdentity) {
