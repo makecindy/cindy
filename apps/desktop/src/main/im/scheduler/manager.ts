@@ -226,6 +226,7 @@ export class ImSchedulerManager {
         if (!isDesktopSchedulerPlatform(event.platform)) return;
         // Incremental presence is a signal to fetch a new full snapshot, not
         // an authoritative replacement for the existing membership view.
+        this.cancelDiscoveryRetry();
         this.snapshot = null;
         this.lastSnapshotObservedAt = null;
         this.resetSnapshotRequestState();
@@ -330,15 +331,19 @@ export class ImSchedulerManager {
       if (!this.started || nonce !== this.discoveryNonce || this.isDiscoveryComplete()) return;
       this.discoveryRetryAttempt += 1;
       const roundNonce = this.discoveryNonce;
-      this.requestSnapshot(true);
+      const requestId = this.requestSnapshot(true);
       if (!this.started || roundNonce !== this.discoveryNonce) return;
       this.publishProbeToVisiblePeers();
       if (this.discoveryRetryAttempt >= this.maxDiscoveryRetries) {
-        // Keep the final refresh request alive so its response can still
-        // replace the membership view. The new discovery round gets its own
-        // nonce and retry budget, while an older request id remains stale.
+        // Wait for the final refresh response before opening another round.
+        // A bounded timeout below keeps a lost response from blocking recovery.
         this.snapshotRefreshPending = false;
-        this.beginDiscoveryRound();
+        if (this.awaitingSnapshot && this.snapshotRequestId === requestId) {
+          this.scheduleFinalSnapshotTimeout(roundNonce, requestId);
+        } else {
+          this.resetSnapshotRequestState();
+          this.beginDiscoveryRound();
+        }
       } else {
         this.scheduleDiscoveryRetry();
       }
@@ -353,12 +358,32 @@ export class ImSchedulerManager {
     if (resetRetryAttempt) this.discoveryRetryAttempt = 0;
   }
 
-  private requestSnapshot(preserveRetryAttempt: boolean): void {
+  private requestSnapshot(preserveRetryAttempt: boolean): string {
     const requestId = this.nonceFactory();
     this.snapshotRequestId = requestId;
     this.awaitingSnapshot = this.transport.requestSnapshot !== undefined;
     this.snapshotRefreshPending = preserveRetryAttempt;
     this.transport.requestSnapshot?.(this.snapshotAccountGeneration, requestId);
+    return requestId;
+  }
+
+  private scheduleFinalSnapshotTimeout(roundNonce: string, requestId: string): void {
+    if (this.discoveryRetryTimer) clearTimeout(this.discoveryRetryTimer);
+    this.discoveryRetryTimer = setTimeout(() => {
+      this.discoveryRetryTimer = null;
+      if (
+        !this.started ||
+        roundNonce !== this.discoveryNonce ||
+        requestId !== this.snapshotRequestId ||
+        !this.awaitingSnapshot
+      ) {
+        return;
+      }
+      this.resetSnapshotRequestState();
+      this.beginDiscoveryRound();
+      this.reconcile();
+    }, this.discoveryRetryDelayMs);
+    this.discoveryRetryTimer.unref?.();
   }
 
   private resetSnapshotRequestState(): void {

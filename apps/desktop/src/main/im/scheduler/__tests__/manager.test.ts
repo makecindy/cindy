@@ -210,7 +210,7 @@ describe('dormant scheduler manager', () => {
           payload !== null &&
           (payload as { kind?: unknown }).kind === 'probe',
       );
-    expect(probes).toHaveLength(4);
+    expect(probes).toHaveLength(3);
     expect(new Set(probes.map((probe) => probe.nonce))).toEqual(new Set(['round-000000000000']));
     expect(harness.snapshotRequests).toHaveLength(2);
 
@@ -522,6 +522,34 @@ describe('dormant scheduler manager', () => {
       channel: { channel: 'discord', identity },
       reason: 'elected',
     });
+  });
+
+  it('starts a new discovery round when the final snapshot response times out', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    const pushesAtFinalRequest = harness.pushes.length;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.snapshotRequests).toHaveLength(1);
+    expect(harness.pushes.length).toBeGreaterThan(pushesAtFinalRequest);
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+    manager.stop();
   });
 
   it('accepts a peer binding probe even when its remote clock moved backwards', () => {
