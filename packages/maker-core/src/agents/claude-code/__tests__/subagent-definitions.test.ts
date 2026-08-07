@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   classifySubagentEntry,
@@ -135,6 +135,22 @@ describe('discoverSubagentDefinitions', () => {
 
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ name: 'u', scope: 'user', declaredModel: 'sonnet' });
+  });
+
+  it('不把用户主目录的 .claude 定义误判为项目作用域', async () => {
+    const home = path.join(root, 'home');
+    await writeAgent(path.join(home, '.claude', 'agents'), 'user-only.md', 'name: user-only');
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    try {
+      const found = await discoverSubagentDefinitions({
+        workingDir: path.join(home, 'project', 'nested'),
+        env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+      });
+
+      expect(found).toEqual([]);
+    } finally {
+      homeSpy.mockRestore();
+    }
   });
 
   // 回归:严格对齐 cc 的加载条件。cc 对缺 name 或缺 description 的文件直接 return null,

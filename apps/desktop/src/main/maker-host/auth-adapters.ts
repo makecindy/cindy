@@ -385,10 +385,16 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
  * Windows: 用 icacls 把文件权限收紧为"仅当前用户 Full"。
  * 失败仅 stderr 告警, 不抛 —— userData ACL + 0o600 已经是双保险, icacls 是第三道。
  */
+export function resolveWindowsAclPrincipal(env: NodeJS.ProcessEnv = process.env): string {
+  const username = env.USERNAME?.trim() || os.userInfo().username;
+  const domain = env.USERDOMAIN?.trim();
+  return domain ? `${domain}\\${username}` : username;
+}
+
 async function tightenAclWindows(file: string): Promise<void> {
-  const username = process.env.USERNAME ?? os.userInfo().username;
+  const principal = resolveWindowsAclPrincipal();
   try {
-    await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${username}:F`]);
+    await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${principal}:F`]);
   } catch (err) {
     credPathLog.warn('icacls failed', { file, error: (err as Error).message });
   }

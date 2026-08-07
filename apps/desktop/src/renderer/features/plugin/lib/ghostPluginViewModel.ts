@@ -73,14 +73,15 @@ export interface GhostPluginDetail extends GhostPluginListItem {
 /**
  * 展示投影只覆盖用户能看到的四个字段；运行时仍完全来自本地安装包。
  *
- * `iconDataUrl` 是有意要求存在的字段：市场项的 `icon: null` 也必须覆盖本地
- * 包图标，而不是因为缺少 URL 又显示旧图标。
+ * 服务端市场的 `icon: null` 必须覆盖本地包图标，而不是因为缺少 URL 又显示旧图标。
+ * 自定义市场没有可投影的远端图标 URL，故省略该字段以保留已安装包的本地图标。
  */
 export interface GhostPluginMarketPresentation {
   name: string;
   description: string;
   author: string | null;
-  iconDataUrl: string | undefined;
+  /** `null` means explicitly hide the local icon; `undefined` preserves it. */
+  iconDataUrl?: string | null;
 }
 
 /**
@@ -93,7 +94,14 @@ export function marketPresentationForInstalledGhost(
   marketItem:
     | Pick<
         PluginMarketItem,
-        'ghostId' | 'installState' | 'version' | 'name' | 'description' | 'author' | 'icon'
+        | 'ghostId'
+        | 'installState'
+        | 'version'
+        | 'name'
+        | 'description'
+        | 'author'
+        | 'icon'
+        | 'sourceType'
       >
     | null
     | undefined,
@@ -110,7 +118,9 @@ export function marketPresentationForInstalledGhost(
     name: marketItem.name,
     description: marketItem.description ?? '',
     author: marketItem.author,
-    iconDataUrl: marketItem.icon?.url,
+    ...(marketItem.sourceType === 'server'
+      ? { iconDataUrl: marketItem.icon?.url ?? null }
+      : {}),
   };
 }
 
@@ -242,8 +252,9 @@ export function toGhostPluginListItem(
   const display = presentation ?? {
     name: manifest.name,
     description: manifest.description ?? '',
-    iconDataUrl: ghost.iconDataUrl,
   };
+  const iconDataUrl =
+    presentation?.iconDataUrl === undefined ? ghost.iconDataUrl : presentation.iconDataUrl ?? undefined;
   return {
     id: manifest.id,
     name: display.name,
@@ -258,7 +269,7 @@ export function toGhostPluginListItem(
       publisherVerified: false,
       reviewed: false,
     },
-    ...(display.iconDataUrl !== undefined ? { iconDataUrl: display.iconDataUrl } : {}),
+    ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
   };
 }
 

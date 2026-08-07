@@ -257,6 +257,24 @@ describe('ghostPluginViewModel', () => {
     expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
   });
 
+  it('keeps an installed custom market plugin icon when its version is current', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const presentation = marketPresentationForInstalledGhost(
+      ghost,
+      marketItem({
+        icon: null,
+        sourceType: 'git-market',
+        sourceMarketName: 'team-market',
+      }),
+    );
+
+    expect(presentation).not.toBeNull();
+    expect(toGhostPluginListItem(ghost, presentation)).toMatchObject({
+      name: 'Mivo Studio',
+      iconDataUrl: 'data:image/png;base64,LOCAL',
+    });
+  });
+
   it.each([
     ['local market miss', null],
     ['not installed', marketItem({ installState: 'not-installed' })],
