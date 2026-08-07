@@ -549,24 +549,52 @@ export function isProtectedSystemPath(target: string): boolean {
  *
  * 只剥三类**结构上**可判定的数据位,不做「看起来像散文」这种启发式:
  *   1. 纯变量赋值的值(`NAME='…'` / `NAME="…"`);
- *   2. 消息类 flag 的值(`-m` / `--message` / `-F` / `--body`);
+ *   2. 消息**正文**类 flag 的值(`-m` / `--message` / `--body` / `--title`);
  *   3. grep 家族的搜索模式(要**找**的正则,不是要读的路径)。
  *
- * 安全性:真正的代码执行面不在这条链路上 —— `sh -c "…"`、`eval "…"`、管道到解释器
- * 都由更前面的 `highImpactExecutionNeedsConsent` 先行判定(它按引号外的真实执行结构
- * 分析,不受本函数影响)。这里剥掉的是纯粹的字符串实参。
+ * ## 两道安全护栏(缺一就是凭证绕过,review P1 实证)
+ *
+ * **护栏一:凭证路径永不被抹掉。** 第 1、2 类的值**可能是一个路径**,一旦抹掉,
+ * 「读凭证文件」这条红线就查不到证据。实证形态:
+ *
+ *     git commit -F "/home/user/.ssh/id_rsa"       ← 加引号 = 灰区(错)
+ *     git commit -F /home/user/.ssh/id_rsa         ← 不加引号 = 红线(对)
+ *
+ * 只差一对引号结论就反了。所以这两类走 `maskUnlessCredential`:字面量命中
+ * `isSensitiveCredentialPath` 时**原样保留**,让后面的 ALWAYS_ASK 照常命中。
+ * 第 3 类不加这道护栏 —— grep 的模式串结构上是「要找什么」,不是「要读哪个文件」,
+ * 它要读的文件是后面的操作数,那些从不参与本函数的替换(所以
+ * `grep -E "\.env|\.pem" ~/.ssh/id_rsa` 里的凭证路径仍然可见)。
+ *
+ * **护栏二:`-F` 不是消息正文 flag。** `git commit -F` 是 `--file`、
+ * `gh issue create -F` 是 `--body-file` —— 两个都是**从文件读正文**,值是路径。
+ * 把它当文案抹掉就是上面那条 P1 的直接成因。同理,`--body-file` / `--message-file`
+ * 一律不进这张表;进表的只有值**就是正文本身**的 flag。
+ *
+ * **执行面不在这条链路上**:`sh -c "…"`、`eval "…"`、管道到解释器都由更前面的
+ * `highImpactExecutionNeedsConsent` 判定(它按引号外的真实执行结构分析,不读本函数
+ * 的产物)。这里剥掉的只是纯字符串实参。
  */
 function stripDataLiterals(command: string): string {
   const QUOTED = String.raw`(?:"[^"]*"|'[^']*')`;
+  /** 抹成占位符,但**凭证路径原样留下** —— 值可能是路径,抹了红线就失去证据。 */
+  const maskUnlessCredential = (prefix: string, literal: string): string =>
+    (isSensitiveCredentialPath(literal) ? `${prefix}${literal}` : `${prefix}DATA`);
   return command
-    // 1) NAME='…' / NAME="…" —— 赋值的右值是数据。
-    .replace(new RegExp(String.raw`(^|[\s;&|(])([A-Za-z_]\w*)=${QUOTED}`, 'g'), '$1$2=DATA')
-    // 2) 消息类 flag 的值(提交说明 / PR 正文)。`--body-file` 等是**路径**,不在此列。
+    // 1) NAME='…' / NAME="…" —— 赋值的右值是数据(除非它是凭证路径)。
     .replace(
-      new RegExp(String.raw`(\s(?:-m|--message|-F|--body|--title)(?:=|\s+))${QUOTED}`, 'g'),
-      '$1DATA',
+      new RegExp(String.raw`(^|[\s;&|(])([A-Za-z_]\w*)=(${QUOTED})`, 'g'),
+      (_m, sep: string, name: string, literal: string) =>
+        maskUnlessCredential(`${sep}${name}=`, literal),
     )
-    // 3) grep 家族的搜索模式:要找的正则,不是要读的文件。
+    // 2) 消息**正文**类 flag 的值。只收「值就是正文」的 flag:`-F`/`--body-file`/
+    //    `--message-file` 的值是**路径**,不在此列(见上方护栏二)。
+    .replace(
+      new RegExp(String.raw`(\s(?:-m|--message|--body|--title)(?:=|\s+))(${QUOTED})`, 'g'),
+      (_m, prefix: string, literal: string) => maskUnlessCredential(prefix, literal),
+    )
+    // 3) grep 家族的搜索模式:要找的正则,不是要读的文件。要读的文件是后面的操作数,
+    //    不参与替换,所以这里不需要凭证护栏(加了反而会让「扫描凭证特征」的命令重新误报)。
     .replace(
       new RegExp(String.raw`(\b(?:grep|egrep|fgrep|rg|ag)\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+)${QUOTED}`, 'g'),
       '$1DATA',

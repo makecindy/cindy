@@ -115,6 +115,47 @@ describe('语料回归 — 修复源 4:静音重定向 2>/dev/null 不是文件�
   });
 });
 
+/**
+ * review P1 回归:`stripDataLiterals` 抹掉引号字面量时,**不得**把凭证路径一起抹掉。
+ *
+ * 实证缺陷:`-F` 被当成「消息正文 flag」收进了替换表,但 `git commit -F` 是 `--file`、
+ * `gh issue create -F` 是 `--body-file` —— 值是**路径**。于是
+ * `git commit -F "/home/user/.ssh/id_rsa"` 的凭证路径在扫描前就被换成 DATA,
+ * 「读凭证文件」红线拿不到证据、降进可被审阅器静默放行的灰区;而**同一条命令不加引号**
+ * 却仍是红线。判据不该由一对引号决定。
+ */
+describe('凭证路径不因数据位剥离而失去证据(review P1)', () => {
+  it('值是凭证路径时,加不加引号都必须是红线', () => {
+    for (const c of [
+      'git commit -F "/home/user/.ssh/id_rsa"',
+      "git commit -F '/home/user/.ssh/id_rsa'",
+      'git commit -F /home/user/.ssh/id_rsa',
+      'git notes add -F "/home/user/.ssh/id_rsa"',
+      'git commit --file="/home/user/.ssh/id_rsa"',
+      // 正文类 flag 同样兜住:值恰好是凭证路径时不抹。
+      'gh issue create --body "/home/user/.ssh/id_rsa"',
+      'git commit -m "/home/user/.ssh/id_rsa"',
+      // 变量赋值的右值同理。
+      'KEY="/home/user/.ssh/id_rsa" && cat "$KEY"',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('正常文件路径的 -F 不受影响(不因这道护栏反向误报)', () => {
+    expect(classifyShellCommand('git commit -F "/tmp/msg.txt"', roots, opts)).not.toBe('prompt-each-time');
+  });
+
+  it('grep 的搜索模式仍照常剥离(它是"找什么",不是"读哪个文件")', () => {
+    // 这条命令的用途正是阻止凭证被提交,不该因为 pattern 里写了这些词而变红线。
+    expect(classifyShellCommand(
+      'git diff --name-only | grep -E "\\.env|\\.pem|credential|secret"', roots, opts,
+    )).toBe('auto-approve');
+    // 但它要读的**文件操作数**从不参与剥离 —— 凭证路径仍然可见。
+    expect(classifyShellCommand('grep -E "foo|bar" ~/.ssh/id_rsa', roots, opts)).toBe('prompt-each-time');
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [
