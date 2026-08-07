@@ -279,8 +279,17 @@ export class ImSchedulerManager {
 
   async finishStop(options: { transportDisposed?: boolean } = {}): Promise<void> {
     if (!this.schedulerHooksInstalled) return;
+    // A reconnecting discord.js client has no open ingress, but it is still
+    // alive and can emit a late Resume/Ready. Treat that shutdown as dirty:
+    // close the scheduler path explicitly and preserve the next-owner
+    // compensation instead of advertising a falsely clean runtime.
+    const transportWasConnecting = this.discord.isSchedulerTransportConnecting();
     try {
-      if (!options.transportDisposed || this.discord.isSchedulerTransportActive()) {
+      if (
+        !options.transportDisposed
+        || this.discord.isSchedulerTransportActive()
+        || transportWasConnecting
+      ) {
         try {
           await this.discord.enterSchedulerStandby();
         } catch (error) {
@@ -288,7 +297,10 @@ export class ImSchedulerManager {
         }
       }
       if (this.localRuntime && !this.discord.isSchedulerTransportActive()) {
-        this.finishLocalRuntime(this.localRuntime.identity, options.transportDisposed === true);
+        this.finishLocalRuntime(
+          this.localRuntime.identity,
+          options.transportDisposed === true && !transportWasConnecting,
+        );
         // Device Link is intentionally still online during ordered shutdown,
         // so peers can distinguish a clean close from a crashed active lease.
         this.advertiseAll();

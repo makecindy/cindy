@@ -936,6 +936,37 @@ describe('Discord scheduler manager', () => {
     );
   });
 
+  it('closes a reconnecting Gateway and preserves a dirty runtime on shutdown', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.isSchedulerTransportActive()).toBe(true);
+    harness.peers = [{
+      deviceId: 'z',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+
+    discord.emitStatus({ kind: 'connecting' });
+    await manager.stop({ preserveTransportForDispose: true });
+    await manager.finishStop({ transportDisposed: true });
+
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledOnce();
+    expect(harness.sendPush.mock.calls.map(([, , payload]) => payload)).toContainEqual(
+      expect.objectContaining({
+        kind: 'advertisement',
+        runtime: expect.objectContaining({
+          identity: '12345678901234567',
+          state: 'dirty',
+        }),
+      }),
+    );
+  });
+
   it('does not advertise the previous account runtime after the scheduler restarts', async () => {
     harness.selfDeviceId = 'a';
     harness.peers = [{
