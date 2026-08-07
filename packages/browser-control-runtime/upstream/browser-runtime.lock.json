@@ -60,7 +60,7 @@
     },
     {
       "file": "extension/src/browser/pw-session.ts",
-      "desc": "remove the preview route guard when goto fails — the page did NOT land on the preview origin, so keeping the preview-only route would block the tab's normal navigations (codex-connector P1, round 18)"
+      "desc": "when goto fails on a preview target, remove the preview route guard AND close the page — the preview HTML may already be executing (slow-resource timeout) while the caller swallows non-policy errors and keeps the alive tab; a guard-less survivor would navigate unchecked (round 18 + Greptile P1, round 27)"
     },
     {
       "file": "extension/src/browser/pw-session.ts",
@@ -84,7 +84,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "d85073ee8ea520efcd1dc52b7fc77d631c226477aa174990ec8b28000b2c0c42",
+  "contentHash": "ef8cb00aefe077d46691a2f2cac63d7d07013ad33e28120c00edc866f1c6ab52",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

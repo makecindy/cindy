@@ -470,7 +470,7 @@ const LOCAL_PATCHES = {
         '    if (blockedError) {',
     },
     {
-      desc: 'remove the preview route guard when goto fails — the page did NOT land on the preview origin, so keeping the preview-only route would block the tab\'s normal navigations (codex-connector P1, round 18)',
+      desc: 'when goto fails on a preview target, remove the preview route guard AND close the page — the preview HTML may already be executing (slow-resource timeout) while the caller swallows non-policy errors and keeps the alive tab; a guard-less survivor would navigate unchecked (round 18 + Greptile P1, round 27)',
       find:
         '  } catch (err) {\n' +
         '    if (blockedError) {\n' +
@@ -484,9 +484,15 @@ const LOCAL_PATCHES = {
         '    // NOT land on the preview origin, so the preview-only route\n' +
         '    // guard must be removed; otherwise the tab\'s normal navigations\n' +
         '    // stay blocked by a stale guard (codex-connector P1, round 18).\n' +
+        '    // A preview-target failure can leave the untrusted HTML already\n' +
+        '    // executing (slow-resource timeout) while the caller swallows\n' +
+        '    // non-policy errors and keeps the alive tab: close the page so no\n' +
+        '    // guard-less survivor can navigate unchecked (Greptile P1,\n' +
+        '    // round 27). Non-preview failures keep round-18 behavior.\n' +
         '    if (previewOrigin !== null) {\n' +
         '      await opts.page.unroute("**", handler).catch(() => {});\n' +
         '      previewRouteGuards.delete(opts.page);\n' +
+        '      await opts.page.close().catch(() => {});\n' +
         '    }\n' +
         '    if (blockedError) {\n' +
         '      throw toLintErrorObject(blockedError, "Non-Error thrown");\n' +

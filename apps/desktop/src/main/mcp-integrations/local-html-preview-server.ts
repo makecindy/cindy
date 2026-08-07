@@ -132,6 +132,13 @@ const MIME: Record<string, string> = {
 const CSP =
   "default-src 'none'; " +
   "script-src 'self' 'unsafe-inline'; " +
+  // Service Worker scripts fall back to `script-src` when `worker-src` is
+  // absent: an untrusted preview script could then register a SW in the
+  // /preview/<token>/ scope and answer navigations with synthetic HTML that
+  // carries NO CSP (the SW response bypasses this server's headers) —
+  // escaping connect-src/sandbox and reading same-origin files. `worker-src
+  // 'none'` closes that channel (codex-connector P1, round 27).
+  "worker-src 'none'; " +
   "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; " +
   "font-src 'self' data:; " +

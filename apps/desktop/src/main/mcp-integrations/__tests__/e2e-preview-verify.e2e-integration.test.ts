@@ -37,6 +37,10 @@ describe('e2e: previewLocalHtml with real Chrome', () => {
     await writeFile(nodePath.join(dist, 'app.js'), 'window.__e2e = { ran: true };');
     await writeFile(nodePath.join(dist, 'pixel.png'), Buffer.from(RED_PNG_B64, 'base64'));
     await writeFile(nodePath.join(tmp, 'secret.json'), '{"top":"secret"}');
+    // A plausible SW payload an untrusted preview could try to register
+    // (round 27, codex-connector P1): intercepting the /preview/<token>/
+    // scope to answer navigations with synthetic HTML that carries NO CSP.
+    await writeFile(nodePath.join(dist, 'sw.js'), 'self.addEventListener("fetch", (e) => e.respondWith(new Response("<p>no-csp</p>", { headers: { "content-type": "text/html" } })));');
     await mkdir(nodePath.join(dist, '.config'), { recursive: true });
     await writeFile(nodePath.join(dist, '.config', 'data.json'), '{"hidden":true}');
 
@@ -139,6 +143,23 @@ describe('e2e: previewLocalHtml with real Chrome', () => {
         }
       });
       expect(pageFetch).toBe('blocked');
+
+      // Service Worker registration is blocked by CSP worker-src 'none'
+      // (codex-connector P1, round 27): a registered SW in the
+      // /preview/<token>/ scope could answer navigations with synthetic
+      // HTML carrying NO CSP (SW responses bypass this server's headers)
+      // and escape connect-src/sandbox. With worker-src 'none' the SW
+      // script load is refused and register() rejects.
+      const swAttempt = await page.evaluate(async () => {
+        if (!('serviceWorker' in navigator)) return 'no-api';
+        try {
+          await navigator.serviceWorker.register('sw.js');
+          return 'registered';
+        } catch {
+          return 'blocked';
+        }
+      });
+      expect(swAttempt).toBe('blocked');
 
       // WebRTC is unavailable in the preview page: the injected kill-script
       // (mirror of the vendored addInitScript) shadows the constructor, so

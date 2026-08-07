@@ -91,9 +91,10 @@ describe('exact-origin preview allowlist (navigation level)', () => {
  * short-lived guard (removed right after goto).
  */
 describe('persistent navigation guard (preview origin)', () => {
-  function fakePage() {
+  function fakePage(gotoImpl?: () => Promise<unknown>) {
     const unrouteCalls: Array<{ pattern: string; handler: unknown }> = [];
     const routedHandlers: Array<(route: unknown, request: unknown) => Promise<void>> = [];
+    const closeCalls: Array<unknown> = [];
     // mainFrame identity shared with fakeTopLevelRequest so the handler's
     // top-level detection (request.frame() === page.mainFrame()) matches.
     const mainFrame = {};
@@ -105,13 +106,17 @@ describe('persistent navigation guard (preview origin)', () => {
       unroute: async (pattern: string, handler: unknown) => {
         unrouteCalls.push({ pattern, handler });
       },
-      goto: async () => null,
+      goto: gotoImpl ?? (async () => null),
+      close: async () => {
+        closeCalls.push(true);
+      },
       addInitScript: async () => {},
     };
     return {
       unrouteCalls,
       patterns: () => unrouteCalls.map((c) => c.pattern),
       routedHandlers,
+      closeCalls,
       page: page as unknown as Parameters<typeof gotoPageWithNavigationGuard>[0]['page'],
     };
   }
@@ -259,5 +264,49 @@ describe('persistent navigation guard (preview origin)', () => {
       fakeTopLevelRequest(`${PREVIEW_ORIGIN}/preview/<token>/other.html`, page.mainFrame()),
     );
     expect(aborted).toEqual(['abort']);
+  });
+
+  it('closes the page when goto fails on a PREVIEW target (Greptile P1, round 27)', async () => {
+    // goto fails with a NON-policy error (slow-resource timeout etc.) after
+    // the untrusted HTML may already be executing. The guard is removed and
+    // the page MUST be closed — createPageViaPlaywright swallows non-policy
+    // errors and would otherwise return the alive, guard-less tab.
+    setBrowserRuntimeConfig({ browser: { ssrfPolicy: { allowedOrigins: [PREVIEW_ORIGIN] } } });
+    const { unrouteCalls, closeCalls, page } = fakePage(async () => {
+      throw new Error('Timeout 30000ms exceeded');
+    });
+    await expect(
+      gotoPageWithNavigationGuard({
+        cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+        page,
+        url: `${PREVIEW_ORIGIN}/preview/<token>/index.html`,
+        timeoutMs: 1000,
+        ssrfPolicy: POLICY,
+      }),
+    ).rejects.toThrow('Timeout');
+    expect(unrouteCalls).toHaveLength(1); // stale guard removed (round 18)
+    expect(closeCalls).toHaveLength(1); // no guard-less survivor (round 27)
+  });
+
+  it('keeps round-18 behavior when goto fails on a NON-preview target (no close)', async () => {
+    // A normal page whose goto failed must not be closed — the user may
+    // retry or inspect the error page. The finally-block cleanup (guard
+    // installed for the goto attempt, removed for a non-preview page) still
+    // runs, but the round-27 close must NOT: only preview-target failures
+    // close the page (untrusted HTML may already be executing).
+    const { unrouteCalls, closeCalls, page } = fakePage(async () => {
+      throw new Error('Timeout 30000ms exceeded');
+    });
+    await expect(
+      gotoPageWithNavigationGuard({
+        cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+        page,
+        url: 'https://example.com/slow',
+        timeoutMs: 1000,
+        ssrfPolicy: POLICY,
+      }),
+    ).rejects.toThrow('Timeout');
+    expect(unrouteCalls).toHaveLength(1); // finally cleanup, round 18 semantics
+    expect(closeCalls).toHaveLength(0); // no round-27 close for non-preview
   });
 });

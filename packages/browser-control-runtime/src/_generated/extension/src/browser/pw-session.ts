@@ -1512,9 +1512,15 @@ export async function gotoPageWithNavigationGuard(
     // NOT land on the preview origin, so the preview-only route
     // guard must be removed; otherwise the tab's normal navigations
     // stay blocked by a stale guard (codex-connector P1, round 18).
+    // A preview-target failure can leave the untrusted HTML already
+    // executing (slow-resource timeout) while the caller swallows
+    // non-policy errors and keeps the alive tab: close the page so no
+    // guard-less survivor can navigate unchecked (Greptile P1,
+    // round 27). Non-preview failures keep round-18 behavior.
     if (previewOrigin !== null) {
       await opts.page.unroute("**", handler).catch(() => {});
       previewRouteGuards.delete(opts.page);
+      await opts.page.close().catch(() => {});
     }
     if (blockedError) {
       throw toLintErrorObject(blockedError, "Non-Error thrown");

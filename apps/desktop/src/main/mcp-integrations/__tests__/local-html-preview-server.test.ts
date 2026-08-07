@@ -75,6 +75,12 @@ describe('local-html-preview-server', () => {
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("form-action 'none'");
     expect(csp).toContain('sandbox allow-scripts allow-same-origin');
+    // Service Worker script loads fall back to script-src when worker-src is
+    // absent; a registered SW could answer scope navigations with synthetic
+    // HTML carrying NO CSP (SW responses bypass this server's headers) and
+    // escape connect-src/sandbox — worker-src 'none' must be explicit
+    // (codex-connector P1, round 27).
+    expect(csp).toContain("worker-src 'none'");
     // DNS prefetch is not constrained by connect-src/CSP — the header must
     // close the dns-prefetch exfiltration channel (codex-connector P1, round 16).
     expect(res.headers.get('x-dns-prefetch-control')).toBe('off');
