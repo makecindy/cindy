@@ -144,11 +144,11 @@ export interface RegenerateTitleDeps {
 
 async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
   const [row] = await getDbClient()
-    .drizzle.select({ agentKind: sessions.agentKind })
+    .drizzle.select({ agentKind: sessions.agentKind, status: sessions.status })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  if (!row) return null;
+  if (!row || row.status === 'deleted') return null;
   return dbToMakerAgentKind(row.agentKind);
 }
 

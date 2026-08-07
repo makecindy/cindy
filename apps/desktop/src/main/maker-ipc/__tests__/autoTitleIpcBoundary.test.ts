@@ -282,6 +282,23 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     expect(h.drainPersistQueue).toHaveBeenCalledOnce();
   });
 
+  it('软删除任务按 NOT_FOUND 处理且不调用标题模型', async () => {
+    vi.mocked(getDbClient).mockReturnValue({
+      drizzle: {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: async () => [{ agentKind: 'codex', status: 'deleted' }],
+            }),
+          }),
+        }),
+      },
+    } as unknown as ReturnType<typeof getDbClient>);
+
+    await expect(invokeRegenerate('deleted')).rejects.toThrow(/\[NOT_FOUND\]/);
+    expect(h.generateTitleResult).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['unsupported-provider', 'TITLE_PROVIDER_UNSUPPORTED'],
     ['failed', 'INTERNAL'],
