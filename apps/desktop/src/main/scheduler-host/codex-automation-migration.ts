@@ -149,6 +149,7 @@ export function findDuplicateSchedule(
       samePreRunHook(schedule.preRunHook, input.preRunHook) &&
       (schedule.persistentSession ?? false) === (input.persistentSession ?? false) &&
       (schedule.silentWhenIdle ?? false) === (input.silentWhenIdle ?? false) &&
+      schedule.expireAt === input.expireAt &&
       schedule.notify.desktop === input.notify.desktop &&
       schedule.notify.feishu === input.notify.feishu &&
       (schedule.notify.wecomGroup ?? false) === (input.notify.wecomGroup ?? false)

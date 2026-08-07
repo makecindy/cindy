@@ -172,6 +172,23 @@ describe('CodexAutomationMigrationService', () => {
     expect(result.items[0]?.duplicate).toBe(false);
   });
 
+  it('does not treat expiration changes as duplicates', async () => {
+    const first = detail('one');
+    const { service, scheduler } = setup([first]);
+    scheduler.list.mockResolvedValueOnce([
+      {
+        id: 'existing',
+        ...inputFor(first),
+        status: 'active',
+        expireAt: Date.now() + 60_000,
+      } as Schedule,
+    ]);
+
+    const result = await service.preview();
+
+    expect(result.items[0]?.duplicate).toBe(false);
+  });
+
   it('does not treat script configuration changes as duplicates', () => {
     const first = detail('one');
     const input: CreateScheduleInput = {

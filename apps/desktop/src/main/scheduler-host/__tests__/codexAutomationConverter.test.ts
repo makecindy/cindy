@@ -42,6 +42,13 @@ describe('codexRruleToCron', () => {
     });
   });
 
+  it('converts monthly day-of-month lists exactly', () => {
+    expect(codexRruleToCron('FREQ=MONTHLY;BYMONTHDAY=1,15;BYHOUR=9;BYMINUTE=5')).toEqual({
+      cronExpr: '5 9 1,15 * *',
+      diagnostics: [],
+    });
+  });
+
   it('rejects monthly days that Cindy clamps in short months', () => {
     const result = codexRruleToCron('FREQ=MONTHLY;BYMONTHDAY=31;BYHOUR=9;BYMINUTE=5');
     expect(result.cronExpr).toBeUndefined();

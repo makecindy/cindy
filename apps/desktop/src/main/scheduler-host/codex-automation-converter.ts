@@ -103,22 +103,6 @@ function integerList(
   return [...new Set(parsed)].sort((a, b) => a - b);
 }
 
-function singleInteger(
-  values: Map<string, string>,
-  key: string,
-  min: number,
-  max: number,
-  diagnostics: string[],
-): number | undefined {
-  const parsed = integerList(values, key, min, max, diagnostics);
-  if (!parsed) return undefined;
-  if (parsed.length !== 1) {
-    diagnostics.push(`RRULE ${key} must contain one integer`);
-    return undefined;
-  }
-  return parsed[0];
-}
-
 function isAbsoluteWorkdir(value: string): boolean {
   return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value);
 }
@@ -172,16 +156,18 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
         'RRULE MONTHLY BYDAY is not supported; use BYMONTHDAY for Cindy cron conversion',
       );
     }
-    const monthDay = singleInteger(values, 'BYMONTHDAY', 1, 31, diagnostics);
-    if (monthDay !== undefined) {
+    const monthDays = integerList(values, 'BYMONTHDAY', 1, 31, diagnostics);
+    if (monthDays !== undefined) {
       // Cindy clamps monthly day 29/30/31 to short-month ends, while RFC 5545
-      // BYMONTHDAY skips dates that do not exist in the current month.
-      if (monthDay > 28) {
+      // BYMONTHDAY skips dates that do not exist in the current month. The
+      // clamp applies only to Cindy's single-day monthly preset; day lists
+      // use standard cron semantics and remain exact.
+      if (monthDays.length === 1 && monthDays[0] > 28) {
         diagnostics.push(
-          `RRULE MONTHLY BYMONTHDAY=${monthDay} cannot be represented exactly; Cindy clamps short months`,
+          `RRULE MONTHLY BYMONTHDAY=${monthDays[0]} cannot be represented exactly; Cindy clamps short months`,
         );
       } else {
-        dayOfMonth = String(monthDay);
+        dayOfMonth = monthDays.join(',');
       }
     }
   } else if (values.has('BYDAY') || values.has('BYMONTHDAY')) {
