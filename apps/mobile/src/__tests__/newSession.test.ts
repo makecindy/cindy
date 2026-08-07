@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import {
   DEFAULT_NEW_SESSION_DRAFT,
@@ -19,8 +19,9 @@ import {
   pickMostRecentSessionRuntime,
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
-  resolveGuardCatalog,
+  resolveSubmitGuardCatalog,
   sessionFromCreateResult,
+  compensatePrecreatedWorktree,
   reconcileEffortAfterFallback,
   serializeNewSessionDeviceOptions,
   summarizeNewSessionDraft,
@@ -28,6 +29,7 @@ import {
   validateNewSessionDraft,
   withAgentDefaults,
 } from '@/session/newSession';
+import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import type { ProviderModelRow } from '@/session/providerModelSections';
 import type { RemoteSession } from '@/session/types';
 
@@ -76,6 +78,15 @@ function remoteSession(id: string, patch: Partial<RemoteSession> = {}): RemoteSe
     ...patch,
   };
 }
+
+// 异步时序测试工具(文件级,供多个 describe 共用)。
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+const deferred = <T,>() => {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((r, j) => { resolve = r; reject = j; });
+  return { promise, resolve, reject };
+};
 
 describe('pickMostRecentSessionRuntime', () => {
   it('picks the most recent session runtime (agent+model+effort), cc → claude-code', () => {
@@ -178,35 +189,94 @@ describe('validateModelProviderId', () => {
   });
 });
 
-describe('resolveGuardCatalog —— 提交终检的目录取信口径(Greptile P1 旧设备残留 / Codex P2 失效代际残留)', () => {
-  const rendered = [modelRow('m-rendered')];
-  const cached = [modelRow('m-cached')];
+describe('resolveSubmitGuardCatalog —— 提交终检目录取信(代际安全,独立 review P1-1)', () => {
+  const rowsOf = (id: string) => [modelRow(id, ['low'], 'low')];
+  type TestPayload = { id: string; providers: never[] };
+  const payload = (id: string): TestPayload => ({ id, providers: [] });
+  const baseArgs = {
+    gen: () => 1,
+    cached: () => undefined as TestPayload | undefined,
+    fetch: () => Promise.resolve(payload('fetched')),
+    buildRows: (pl: DeviceProvidersPayload) => rowsOf((pl as TestPayload).id),
+  };
 
-  it('ready=true → 采信渲染期 rows(含 loaded-but-empty),catalogKnown 恒 true', () => {
-    expect(resolveGuardCatalog(true, rendered, () => cached))
-      .toEqual({ rows: rendered, catalogKnown: true });
-    // loaded-but-empty:渲染期空目录也是「已确认的目录」,不是「一无所知」
-    expect(resolveGuardCatalog(true, [], () => cached))
-      .toEqual({ rows: [], catalogKnown: true });
+  it('缓存命中 → 不 fetch,catalogKnown=true(缓存恒为当前代,含 loaded-but-empty)', async () => {
+    const fetchSpy = vi.fn(baseArgs.fetch);
+    const res = await resolveSubmitGuardCatalog({
+      ...baseArgs,
+      cached: () => payload('cached'),
+      fetch: fetchSpy,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ rows: rowsOf('cached'), catalogKnown: true });
   });
 
-  it('ready=true → 惰性求值:不触碰设备缓存重建', () => {
-    let called = false;
-    resolveGuardCatalog(true, rendered, () => { called = true; return cached; });
-    expect(called).toBe(false);
+  it('从未驱逐(gen=0)+ 无缓存 → 不 fetch,catalogKnown=false(冷启动信任,不加延迟)', async () => {
+    const fetchSpy = vi.fn(baseArgs.fetch);
+    const res = await resolveSubmitGuardCatalog({ ...baseArgs, gen: () => 0, fetch: fetchSpy });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ rows: [], catalogKnown: false });
   });
 
-  it('ready=false + 设备缓存有 rows → 只信缓存行,catalogKnown=true(渲染残留行被丢弃)', () => {
-    expect(resolveGuardCatalog(false, rendered, () => cached))
-      .toEqual({ rows: cached, catalogKnown: true });
+  it('曾驱逐(gen>0)+ 无缓存 → join 在途重拉,代际稳定时采信新 payload', async () => {
+    const res = await resolveSubmitGuardCatalog(baseArgs);
+    expect(res).toMatchObject({ rows: rowsOf('fetched'), catalogKnown: true });
   });
 
-  it('ready=false + 设备无缓存 → catalogKnown=false(一无所知才信任),即使渲染期 rows 非空', () => {
-    // 核心回归:切设备/驱逐空窗里渲染期仍握着旧设备目录,非空也不得充当就绪目录
-    expect(resolveGuardCatalog(false, rendered, () => []))
-      .toEqual({ rows: [], catalogKnown: false });
-    expect(resolveGuardCatalog(false, [], () => []))
-      .toEqual({ rows: [], catalogKnown: false });
+  it('await 期间二次驱逐(gen g1→g2)→ 弃用 g1 旧 promise 返回值,join 新代第二次 fetch', async () => {
+    // 独立 review P1-1 窗口:缓存层只拒绝旧响应回写、仍 resolve 旧 payload——
+    // 调用方不得消费它;必须核对代际后 join 新代。
+    let gen = 1;
+    const d1 = deferred<TestPayload>();
+    const fetchSpy = vi.fn(() => {
+      const g = gen;
+      return g === 1 ? d1.promise : Promise.resolve(payload('g2'));
+    });
+    const pending = resolveSubmitGuardCatalog({ ...baseArgs, gen: () => gen, fetch: fetchSpy });
+    await flush();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    gen = 2; // 二次驱逐
+    d1.resolve(payload('g1')); // g1 最后才 resolve → 返回值必须被弃用
+    const res = await pending;
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(res).toMatchObject({ rows: rowsOf('g2'), catalogKnown: true });
+  });
+
+  it('fetch 失败且代际稳定 → catalogKnown=false(unknown fail-open 信任)', async () => {
+    const res = await resolveSubmitGuardCatalog({
+      ...baseArgs,
+      fetch: () => Promise.reject(new Error('boom')),
+    });
+    expect(res).toMatchObject({ rows: [], catalogKnown: false });
+  });
+
+  it('fetch 失败但期间换代 → 重试 join 新代;第二次成功则采信', async () => {
+    let gen = 1;
+    const d1 = deferred<TestPayload>();
+    const fetchSpy = vi.fn(() => (gen === 1 ? d1.promise : Promise.resolve(payload('g2'))));
+    const pending = resolveSubmitGuardCatalog({ ...baseArgs, gen: () => gen, fetch: fetchSpy });
+    await flush();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    gen = 2; // 换代后再失败 → 旧代失败不终止,重试新代
+    d1.reject(new Error('boom'));
+    const res = await pending;
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(res).toMatchObject({ rows: rowsOf('g2'), catalogKnown: true });
+  });
+
+  it('代际持续抖动(循环上限)→ 放弃校验,catalogKnown=false(信任既有绑定)', async () => {
+    let gen = 1;
+    const d = deferred<TestPayload>();
+    const fetchSpy = vi.fn(() => {
+      gen += 1; // 每次 await 期间都换代
+      return d.promise;
+    });
+    const pending = resolveSubmitGuardCatalog({ ...baseArgs, gen: () => gen, fetch: fetchSpy });
+    await flush();
+    d.resolve(payload('stale'));
+    const res = await pending;
+    expect(fetchSpy).toHaveBeenCalledTimes(3); // 循环上限 3
+    expect(res).toMatchObject({ rows: [], catalogKnown: false });
   });
 });
 
@@ -1692,26 +1762,103 @@ describe('new session worktree wiring (source locks)', () => {
 
 describe('submit guard catalog wiring (source locks)', () => {
   // 提交终检目录取信的接线不变量(纯函数测试覆盖不到的 new.tsx 接线):
-  //  - 两处守卫(create / createGoalSession)都必须走 resolveGuardCatalog 按设备取信,
-  //    不得回退到「任何非空 rows 即就绪」(Greptile P1 旧设备残留 / Codex P2 失效代际残留);
-  //  - 守卫内所有 buildMobileModelSections 重建(evict 重拉 + cachedCatalogRows)都必须
-  //    传 selectedModelId/selectedProviderId —— 缺了就没有 keepSelected 豁免,被被控端
-  //    隐藏 override 的选中行会被过滤出终检 rows,手动选中的模型被静默联合回退(独立 review P2)。
+  //  - 两处守卫(create / createGoalSession)都必须走 resolveSubmitGuardCatalog
+  //    (代际安全:唯一数据源 = 设备缓存 + 代际,不再读渲染期 rows——catalogReadyRef
+  //    是渲染镜像,驱逐窗口内不可信,独立 review P1-1);
+  //  - 守卫内 buildRows 重建必须带 selectedModelId/selectedProviderId —— 缺了就没有
+  //    keepSelected 豁免,被被控端隐藏 override 的选中行会被过滤出终检 rows,
+  //    手动选中的模型被静默联合回退(独立 review P2);
+  //  - 两处守卫都必须全程设备守卫(切设备放弃创建,Greptile P1 跨设备混用):
+  //    deviceAtCreate 捕获 + ensureDeviceAlive/abortIfDeviceSwitched,handoff
+  //    (startNewSessionCreation / maker.createSession / goal.set)前必复核;
+  //    已 precreate 后失配必须走 ledger 补偿(forgetPendingPrecreatedWorktree)。
   const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
 
-  it('both submit guards resolve catalog trust via resolveGuardCatalog with device-tagged cache rebuild', () => {
-    const guardCalls = newSource.match(/resolveGuardCatalog\(\s*catalogReadyRef\.current,\s*modelRowsRef\.current,/g) ?? [];
+  it('both submit guards resolve catalog trust via the generation-safe helper', () => {
+    const guardCalls = newSource.match(/resolveSubmitGuardCatalog\(\{/g) ?? [];
     expect(guardCalls.length).toBe(2);
-    expect(newSource).toContain('getCachedDeviceProviders(deviceId)');
+    // 守卫不再消费渲染期 rows / catalogReadyRef
+    const staleReady = newSource.match(/resolveGuardCatalog\(\s*catalogReadyRef\.current,/g) ?? [];
+    expect(staleReady.length).toBe(0);
+    expect(newSource).toContain('getCachedDeviceProviders(guardDeviceId)');
+    expect(newSource).toContain('getDeviceProvidersGen(guardDeviceId)');
   });
 
   it('every catalog rebuild in the guards passes the keepSelected exemption pair', () => {
-    // 渲染期(1 处)+ cachedCatalogRows(1 处)+ create() evict 重拉(1 处)
-    // + createGoalSession() evict 重拉(1 处)= 4 处全带豁免对。
+    // 两处守卫内的 buildRows(2 处)带 effectiveDraft 豁免对 + 渲染期(1 处)带 draft = 3 处。
     const selectedModel = newSource.match(/selectedModelId: (effectiveDraft|draft|selected)\.model,/g) ?? [];
     const selectedProvider = newSource.match(/selectedProviderId: (effectiveDraft|draft|selected)\.providerId,/g) ?? [];
-    expect(selectedModel.length).toBe(4);
-    expect(selectedProvider.length).toBe(4);
+    expect(selectedModel.length).toBe(3);
+    expect(selectedProvider.length).toBe(3);
+  });
+
+  it('both guards are device-guarded through to the handoff, with ACK-gated ledger compensation after precreate', () => {
+    // 设备快照取自闭包 selectedDeviceId(独立 review P1-1)+ 入口立即与 ref 核对
+    expect(newSource.match(/const deviceAtCreate = selectedDeviceId;/g) ?? []).toHaveLength(2);
+    expect(newSource.match(/if \(selectedDeviceRef\.current !== deviceAtCreate\) return;/g) ?? []).toHaveLength(2);
+    expect(newSource.match(/const ensureDeviceAlive = \(\): boolean =>/g) ?? []).toHaveLength(2);
+    expect(newSource.match(/const abortIfDeviceSwitched = async/g) ?? []).toHaveLength(2);
+    expect(newSource.match(/compensatePrecreatedWorktree\(\{/g) ?? []).toHaveLength(2);
+    expect(newSource.match(/parseAck: parseDiscardPrecreatedAck,/g) ?? []).toHaveLength(2);
+    // 真局部 slice(独立 review round-22 Standards P1:全文件 indexOf 命中 create 首个
+    // 检查,Goal 检查删掉也照样绿)
+    const createSlice = newSource.slice(
+      newSource.indexOf('const create = useCallback'),
+      newSource.indexOf('const createGoalSession = useCallback'),
+    );
+    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    // 入口设备检查先于加锁(round-20 Standards P1 busy 泄漏):goal 的 setGoalBusy(true)
+    // 前必须有该 return(create() 的检查在 try 内,finally 兜底,不要求此序)
+    expect(goalSlice.indexOf('if (selectedDeviceRef.current !== deviceAtCreate) return;')).toBeLessThan(
+      goalSlice.indexOf('setGoalBusy(true)'),
+    );
+    // 有界稳定循环:两段各含「每轮 runGuard 后同步核对 genAt」+ 耗尽降 unknown/fail-open
+    expect(createSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(1);
+    // goal:prepare 循环(1)+ post-started 循环(前查 + 后查,2)
+    expect(goalSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(3);
+    const failOpen = 'rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),';
+    const failOpenCount = (slice: string): number =>
+      slice.split(failOpen).length - 1;
+    expect(failOpenCount(createSlice)).toBe(2); // 哨兵 + 耗尽
+    expect(failOpenCount(goalSlice)).toBe(3); // 哨兵 + prepare 耗尽 + started 后耗尽
+    // create:apply 后零 await 直至 handoff(同一 turn)
+    const createApply = createSlice.indexOf('applyGuard(guardResult);');
+    expect(createApply).toBeGreaterThan(0);
+    const createBetween = createSlice
+      .slice(createApply, createSlice.indexOf('startNewSessionCreation({'))
+      .replace(/\/\/[^\n]*/g, '');
+    expect(createBetween).not.toMatch(/await /);
+    // goal:最后核对后零 await 至 createSession(apply 前的 downgrade 分支是切换时早退,不在此段)
+    const goalApply = goalSlice.indexOf('applyGuard(guardResult);');
+    expect(goalApply).toBeGreaterThan(0);
+    const goalBetween = goalSlice
+      .slice(goalApply, goalSlice.indexOf('const created = await maker.createSession'))
+      .replace(/\/\/[^\n]*/g, '');
+    expect(goalBetween).not.toMatch(/await /);
+  });
+
+  it('goal commit segment: started 后无裸 return,goal.set 先于本地同步(round-22 Spec P1-2/P1-3)', () => {
+    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const iStarted = goalSlice.indexOf('sessionCreateStarted = true;');
+    const iCreate = goalSlice.indexOf('maker.createSession(');
+    expect(iStarted).toBeGreaterThan(0);
+    expect(iCreate).toBeGreaterThan(iStarted);
+    // started 可靠落账后到 createSession 之间:禁止 owner 中止与补偿式设备取消;
+    // 唯一的 return 必须是「降级成功才 return」(downgrade-or-commit,独立 review round-22)
+    const startedToCreate = goalSlice.slice(iStarted, iCreate);
+    expect(startedToCreate).not.toMatch(/isCurrentOwner\(\)\) return;|abortIfDeviceSwitched/);
+    expect(startedToCreate).toMatch(/if \(downgraded\) return;/);
+    expect(startedToCreate).toContain('applyGuard(guardResult);');
+    // 降级模式:started 失败与设备切换两处都 re-register phase precreated
+    // (goal 区 phase:'precreated' 共 4 处:precreate 写盘 ×2 + 降级 ×2)
+    expect(goalSlice.match(/phase: 'precreated',/g) ?? []).toHaveLength(4);
+    // goal.set 先于 subscribe(session:)(本地同步属 settle 段)
+    const iGoal = goalSlice.indexOf('maker.goal.set(');
+    expect(iGoal).toBeGreaterThan(iCreate);
+    expect(goalSlice.indexOf('subscribe(`session:${result.sessionId}`')).toBeGreaterThan(iGoal);
+    // createSession 与 goal.set 之间无任何 owner/设备中止
+    const between = goalSlice.slice(iCreate, iGoal);
+    expect(between).not.toMatch(/isCurrentOwner\(\)\) return;|ensureDeviceAlive|abortIfDeviceSwitched/);
   });
 });
 
@@ -1739,5 +1886,79 @@ describe('fast memory restore wiring (source locks)', () => {
     expect(newSource).toContain('draftMemory.getFast(draft.agentKind, draft.providerId, draft.model) !== true');
     expect(newSource).toContain('targetAgentHasFast(selectedDeviceId, draft.agentKind)');
     expect(newSource).toContain('current.providerId === draft.providerId');
+  });
+});
+
+describe('compensatePrecreatedWorktree —— 设备切换补偿分阶段(独立 review P1-3)', () => {
+  // 不得在远端目录已产生后只删账本(forget 删唯一 ledger 行 → 远端目录永久孤儿):
+  // precreated 阶段必须 discard 获严格 ACK 才 forget;ACK 失败/未知 → 保留 ledger。
+  const ack = { discarded: true as const };
+  const base = {
+    sessionId: 's1',
+    recoveryKey: 'rk1',
+    createdAt: 1,
+    discard: () => Promise.resolve(ack),
+    parseAck: (v: unknown) => (v && (v as { discarded?: boolean }).discarded === true ? { discarded: true as const } : null),
+    forget: () => Promise.resolve(),
+    release: null,
+  };
+
+  it('precreated + discard 严格 ACK → forget + release,返回 discarded', async () => {
+    const forget = vi.fn(() => Promise.resolve());
+    const release = vi.fn();
+    const res = await compensatePrecreatedWorktree({ ...base, phase: 'precreated', forget, release });
+    expect(res).toBe('discarded');
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('precreated + discard ACK 非严格({discarded:false})→ 保留 ledger(不 forget),返回 retained', async () => {
+    const forget = vi.fn(() => Promise.resolve());
+    const res = await compensatePrecreatedWorktree({
+      ...base,
+      phase: 'precreated',
+      discard: () => Promise.resolve({ discarded: false }),
+      forget,
+    });
+    expect(res).toBe('retained');
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it('precreated + discard 抛错 → 保留 ledger(不 forget),返回 retained', async () => {
+    const forget = vi.fn(() => Promise.resolve());
+    const res = await compensatePrecreatedWorktree({
+      ...base,
+      phase: 'precreated',
+      discard: () => Promise.reject(new Error('link down')),
+      forget,
+    });
+    expect(res).toBe('retained');
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it('precreated + ACK 延迟到达且有效 → discard 后才 forget(顺序由 deferred 保证)', async () => {
+    const d = deferred<unknown>();
+    const forget = vi.fn(() => Promise.resolve());
+    const pending = compensatePrecreatedWorktree({
+      ...base,
+      phase: 'precreated',
+      discard: () => d.promise,
+      forget,
+    });
+    await flush();
+    expect(forget).not.toHaveBeenCalled(); // ACK 未到,绝不提前删账
+    d.resolve(ack);
+    const res = await pending;
+    expect(res).toBe('discarded');
+    expect(forget).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserved(仅账本,无远端副作用)→ 直接 forget,不调 discard,返回 discarded', async () => {
+    const discard = vi.fn(() => Promise.resolve(ack));
+    const forget = vi.fn(() => Promise.resolve());
+    const res = await compensatePrecreatedWorktree({ ...base, phase: 'reserved', discard, forget });
+    expect(res).toBe('discarded');
+    expect(discard).not.toHaveBeenCalled();
+    expect(forget).toHaveBeenCalledTimes(1);
   });
 });

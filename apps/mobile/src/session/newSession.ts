@@ -2,6 +2,7 @@ import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
+import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
@@ -372,21 +373,96 @@ export function resolveRecentModelAndProvider(
 
 /**
  * 提交终检的目录取信口径(Greptile P1「旧设备目录通过终检」/ Codex P2「失效代际
- * 残留行当作就绪目录」):渲染期 rows 未绑定设备身份——设备切换后的重渲染空窗、或
- * 缓存被驱逐(同设备 provider:changed)后的重拉空窗里,渲染 rows 仍握着旧目录;若把
- * 「任何非空 rows」都当就绪目录,失效来源会凭残留行通过终检。故:
+ * 残留行当作就绪目录」/ Copilot P1「空缓存误判为一无所知」):渲染期 rows 未绑定
+ * 设备身份——设备切换后的重渲染空窗、或缓存被驱逐(同设备 provider:changed)后的
+ * 重拉空窗里,渲染 rows 仍握着旧目录;若把「任何非空 rows」都当就绪目录,失效来源
+ * 会凭残留行通过终检。三分:
  * - ready=true → 渲染期 rows 即当前设备已确认目录(含 loaded-but-empty),直接采信;
- * - ready=false → 只信按设备 id 从持久缓存重建的 rows(惰性求值,无缓存返回 []);
- * - 两者皆无 → catalogKnown=false(对当前设备一无所知)→ 信任既有 (model, providerId)。
+ * - ready=false + 设备缓存命中(哪怕该 agent rows 为空)→ 「已知目录」→ 校验
+ *   (空目录是确定知识:任何来源都不合法,必须走联合回退,不得落入信任);
+ * - ready=false + 无缓存 → catalogKnown=false(对当前设备一无所知)→ 信任既有
+ *   (model, providerId)。
  */
-export function resolveGuardCatalog(
-  ready: boolean,
-  renderedRows: readonly ProviderModelRow[],
-  getDeviceCachedRows: () => readonly ProviderModelRow[],
-): { rows: readonly ProviderModelRow[]; catalogKnown: boolean } {
-  if (ready) return { rows: renderedRows, catalogKnown: true };
-  const cachedRows = getDeviceCachedRows();
-  return { rows: cachedRows, catalogKnown: cachedRows.length > 0 };
+/**
+ * 提交终检的目录取信(代际安全版,独立 review P1-1):**唯一数据源 = 设备缓存 + 代际**,
+ * 不再读渲染期 rows——catalogReadyRef 是渲染期镜像,外部驱逐后要等下一渲染才失效,
+ * 渲染 rows 在该窗口内不可信(㉛ 分支此前因此被绕过)。缓存写入受代际门控
+ * (fetch 完成时代际已变则不回写),故缓存内容恒为「当前代最新一次完成的快照」,
+ * 缓存命中即当前代已确认目录(含 loaded-but-empty)。判定:
+ * - 缓存命中 → 采信(不 fetch,零额外往返);
+ * - 未命中 + 从未驱逐(gen=0,冷启动)→ 「一无所知」→ 信任(不加延迟,原语义);
+ * - 未命中 + 曾驱逐(gen>0,重拉窗口)→ await 在途重拉(缓存层 inflight 去重,join);
+ *   await **前后各核对一次代际**——期间换代则弃用旧 promise 返回值、join 新代
+ *   (循环 ≤3,防代际持续抖动死循环);重拉失败且代际稳定 → 未知 → 信任(fail-open)。
+ */
+export async function resolveSubmitGuardCatalog(args: {
+  /** 设备缓存读取(驱逐即清空;写入受代际门控)。 */
+  cached: () => DeviceProvidersPayload | undefined;
+  /** 当前设备缓存代际(驱逐 +1;0 = 从未驱逐)。 */
+  gen: () => number;
+  /** 拉取器(缓存层 inflight 去重)。 */
+  fetch: () => Promise<DeviceProvidersPayload>;
+  /** 把 payload 重建为守卫 rows(含 keepSelected 豁免)。 */
+  buildRows: (payload: DeviceProvidersPayload) => readonly ProviderModelRow[];
+}): Promise<{ rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number }> {
+  const { cached, gen, fetch, buildRows } = args;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const genAt = gen();
+    const hit = cached();
+    if (hit) return { rows: buildRows(hit), catalogKnown: true, genAt };
+    if (genAt === 0) return { rows: [], catalogKnown: false, genAt };
+    try {
+      const fresh = await fetch();
+      // await 期间换代 → 旧 promise 返回值已过期(缓存层只拒绝回写、仍 resolve),
+      // 弃用并 join 新代(下一轮循环重读缓存/新 inflight)。
+      if (gen() !== genAt) continue;
+      return { rows: buildRows(fresh), catalogKnown: true, genAt };
+    } catch {
+      if (gen() !== genAt) continue;
+      return { rows: [], catalogKnown: false, genAt };
+    }
+  }
+  return { rows: [], catalogKnown: false, genAt: gen() };
+}
+
+/**
+ * 设备切换时的预创建 worktree 补偿(独立 review P1-3):**不得在远端目录已产生后
+ * 只删账本**——forgetPendingPrecreatedWorktree 会删掉唯一 ledger 行,而远端目录
+ * 还在,恢复器从此找不到它 → 永久孤儿。分阶段:
+ * - phase='precreated'(远端目录已产生):先 discardPrecreated 获**严格 ACK**
+ *   (parseAck 返回 { discarded: true }),ACK 后才 forget + release;ACK 失败 /
+ *   未知 / discard 抛错 → **保留 ledger**(留给 recovery 对账回收)。注意 retained
+ *   分支本身不调 release——调用方的外层 finally 会兜底释放内存持有(volatile
+ *   镜像只挡本进程重复造孤儿,不冒充跨进程保证)。
+ * - phase='reserved'(仅账本,无远端副作用):直接 forget 安全。
+ * 返回 'discarded' = 远端与账本均已清理;'retained' = 账本保留待 recovery。
+ * deps 注入(含 parseAck)便于 node 单测覆盖各阶段时序。
+ */
+export async function compensatePrecreatedWorktree(args: {
+  sessionId: string;
+  recoveryKey: string;
+  createdAt: number;
+  phase: 'reserved' | 'precreated';
+  /** 远端 discard(被控端 worktree:discard-precreated)。 */
+  discard: () => Promise<unknown>;
+  /** 严格 ACK 解析(parseDiscardPrecreatedAck 同款口径,注入避免拉 React 依赖)。 */
+  parseAck: (value: unknown) => { discarded: true } | null;
+  forget: () => Promise<void>;
+  release: (() => void) | null;
+}): Promise<'discarded' | 'retained'> {
+  if (args.phase === 'precreated') {
+    try {
+      if (!args.parseAck(await args.discard())) return 'retained';
+      await args.forget();
+      args.release?.();
+      return 'discarded';
+    } catch {
+      return 'retained';
+    }
+  }
+  await args.forget();
+  args.release?.();
+  return 'discarded';
 }
 
 /**

@@ -72,7 +72,7 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
-import { fetchDeviceProviders, getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
+import { fetchDeviceProviders, getCachedDeviceProviders, getDeviceProvidersGen } from '@/device-link/deviceProvidersCache';
 import { evictDeviceProviders, useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useDeviceApiKeyStatus, useDeviceModelPricing } from '@/device-link/useDeviceModelMeta';
 import {
@@ -154,9 +154,10 @@ import {
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   sessionFromCreateResult,
+  compensatePrecreatedWorktree,
   reconcileEffortAfterFallback,
-  resolveGuardCatalog,
   resolveRecentModelAndProvider,
+  resolveSubmitGuardCatalog,
   validateNewSessionDraft,
   type NewSessionAgentKind,
   type NewSessionDraft,
@@ -326,31 +327,6 @@ const COMPOSER_RESIZE_CHROME_HEIGHT = 34;
 const COMPOSER_CARD_CHROME_HEIGHT = 78;
 // Android 的 SafeAreaView 已经包含状态栏顶部 inset，不能再叠加一档顶部留白。
 const NEW_SESSION_SCREEN_TOP_PADDING = Platform.OS === 'android' ? 0 : spacing.xl;
-
-/**
- * 按设备 id 从持久缓存重建提交终检用的目录 rows(无缓存 → [])。
- * 只供 resolveGuardCatalog 在 ready=false 时惰性调用——渲染期 rows 未绑定设备身份,
- * 切设备/缓存驱逐的空窗里必须改信这份按设备隔离的缓存(Greptile/Codex review)。
- * 选中行豁免(keepSelected)与渲染期口径一致:被被控端隐藏 override 的当前选中行
- * 不得被过滤出终检 rows,否则手动选中的模型会被静默联合回退(独立 review P2)。
- */
-function cachedCatalogRows(
-  deviceId: string,
-  agentKind: NewSessionAgentKind,
-  selected: { model: string; providerId: string | null },
-): ProviderModelRow[] {
-  const cached = getCachedDeviceProviders(deviceId);
-  if (!cached) return [];
-  return flattenProviderSections(
-    buildMobileModelSections({
-      providers: cached.providers,
-      agentKind,
-      visibilityOverrides: cached.modelVisibilityOverrides,
-      selectedModelId: selected.model,
-      selectedProviderId: selected.providerId,
-    }).sections,
-  );
-}
 
 /**
  * 目标 agent 的 Fast 能力门控取值:只认按 (设备, agent) 键控的缓存能力表——
@@ -3792,13 +3768,17 @@ export default function NewRemoteSessionScreen() {
     try {
       if (!isCurrentOwner()) return;
       let effectiveDraft = draft;
-      // 本调用内是否发生过供应商目录驱逐(鉴权门现拉后清缓存):发生后提交终检必须
-      // 等在途重拉、用新目录校验(codex review P1:代际通知只调度渲染,本轮 ref
-      // 仍是刚被驱逐的旧目录)。
-      let catalogEvictedThisCall = false;
+      // ㉙ 设备守卫全程化(独立 review P1-1/P1-2):设备快照必须取自**闭包**
+      // selectedDeviceId(真正会创建会话的目标设备)——selectedDeviceRef 是渲染后
+      // 的最新值,若用户在渲染与点击之间切了设备,ref 已属新设备而闭包 maker/目录
+      // 仍属旧设备,用它当快照会让守卫全程失明。入口立即与 ref 核对:已切走 → 放弃。
+      const deviceAtCreate = selectedDeviceId;
+      if (selectedDeviceRef.current !== deviceAtCreate) return;
+      const ensureDeviceAlive = (): boolean => selectedDeviceRef.current === deviceAtCreate;
       if (voiceRecordingActiveRef.current || voiceState === 'listening') {
         const latestDraftText = await finishVoiceRecording();
         if (!isCurrentOwner()) return;
+        if (!ensureDeviceAlive()) return;
         if (latestDraftText === null) return;
         effectiveDraft = { ...draft, firstMessage: latestDraftText };
       }
@@ -3807,6 +3787,7 @@ export default function NewRemoteSessionScreen() {
       // 此时不该带着残缺附件去开新会话。
       const { failedCount } = await waitForPendingUploads();
       if (!isCurrentOwner()) return;
+      if (!ensureDeviceAlive()) return;
       if (failedCount > 0) return;
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
       const sendAttachments = attachmentsRef.current;
@@ -3821,14 +3802,17 @@ export default function NewRemoteSessionScreen() {
       if (agentAuthVerdict === 'unauthenticated') {
         if (await confirmAgentUnauthenticated(effectiveDraft.agentKind)) {
           if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
           setError(agentAuthGateHint(effectiveDraft.agentKind));
           return;
         }
         if (!isCurrentOwner()) return;
-        catalogEvictedThisCall = true;
+        // 确认期间切设备 → 不再驱逐(驱逐的是旧设备缓存,继续创建也无意义)。
+        if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
       }
       if (!isCurrentOwner()) return;
+      if (!ensureDeviceAlive()) return;
       void saveNewSessionPreferences({
         agentKind: effectiveDraft.agentKind,
         device: {
@@ -3873,6 +3857,8 @@ export default function NewRemoteSessionScreen() {
           isCurrent: isCurrentOwner,
         });
         if (!isCurrentOwner()) return;
+        // ㉙ recovery await 期间切设备 → 放弃(独立 review P1-4:create 的 recovery 后漏 ensure)。
+        if (!ensureDeviceAlive()) return;
         if (
           !recovery.storageReadable
           || recovery.retained > 0
@@ -3896,6 +3882,34 @@ export default function NewRemoteSessionScreen() {
         originalWorkingDir: string;
         createdAt?: number;
       } | undefined;
+      // ㉙ 设备切换中止助手(独立 review P1-2/P1-3):检测到设备已切换 → 已产生远端
+      // 副作用(precreated)走 compensatePrecreatedWorktree——**先 discardPrecreated
+      // 获严格 ACK 才 forget**(forget 删唯一账本,未 discard 就删 = 永久孤儿),
+      // ACK 失败/未知保留 ledger 交 recovery;返回 true 供调用方 return。
+      const abortIfDeviceSwitched = async (): Promise<boolean> => {
+        if (ensureDeviceAlive()) return false;
+        if (precreatedWorktree) {
+          const pwt = precreatedWorktree;
+          await compensatePrecreatedWorktree({
+            sessionId,
+            recoveryKey: pwt.recoveryKey,
+            createdAt: pwt.createdAt ?? Date.now(),
+            phase: 'precreated',
+            discard: () => maker.worktree.discardPrecreated({
+              sessionId,
+              recoveryKey: pwt.recoveryKey,
+            }),
+            parseAck: parseDiscardPrecreatedAck,
+            forget: () => forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey: pwt.recoveryKey,
+              createdAt: pwt.createdAt ?? Date.now(),
+            }),
+            release: releasePrecreatedRegistration,
+          });
+        }
+        return true;
+      };
       // —— worktree 两步流第一步(对齐桌面远程流程 NewMakerDraftRoute:远程没有改已建
       // 会话 workingDir 的通道,顺序反过来 —— 先同步等工作端建好 worktree 拿路径,再以
       // 该路径 + 同一预生成 sessionId 走乐观管线)。worktree:create 对同 sessionId 重跑
@@ -3918,6 +3932,7 @@ export default function NewRemoteSessionScreen() {
             suggested = null;
           }
           if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
           if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
             setError(t('session.new.worktreeSettingsSaving'));
             return;
@@ -3939,6 +3954,16 @@ export default function NewRemoteSessionScreen() {
             },
           );
           if (!isCurrentOwner()) return;
+          // ㉙ 写盘 reservation 后切设备 → 清掉这份 obligation(reserved 无远端
+          // 目录,不产生孤儿,但会阻塞同设备下次创建的 recovery 直到被回收)。
+          if (!ensureDeviceAlive()) {
+            await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey,
+              createdAt,
+            }).catch(() => undefined);
+            return;
+          }
           if (!reservationRecorded) {
             setError(t('session.new.worktreeRecoveryStateFailed'));
             return;
@@ -3985,6 +4010,9 @@ export default function NewRemoteSessionScreen() {
             originalWorkingDir: effectiveDraft.workingDir,
             createdAt,
           };
+          // ㉙ 远端目录已产生 → 切设备必须走 ledger 补偿(forget + 释放内存持有,
+          // 远端目录留给下次 recovery 对账回收)。
+          if (await abortIfDeviceSwitched()) return;
           // 回包后尽力把 path 补到账本；即使这次更新失败，首次已确认落盘的
           // recoveryKey reservation 仍足够让重启后的进程从被控端解析真实路径。
           await registerPendingPrecreatedWorktree(worktreeAccountId, {
@@ -3996,6 +4024,7 @@ export default function NewRemoteSessionScreen() {
             phase: 'precreated',
           });
           if (!isCurrentOwner()) return;
+          if (await abortIfDeviceSwitched()) return;
           effectiveDraft = { ...effectiveDraft, workingDir: resp.meta.path };
         } catch {
           if (!isCurrentOwner()) return;
@@ -4008,50 +4037,71 @@ export default function NewRemoteSessionScreen() {
       // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
       // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并
       // 回退(其他来源顶替 / 首项 / 内置默认),并同步校准 effort、组合变化时 fastMode
-      // 保守置 false(codex review P2)。
-      // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
+      // 保守置 false(codex review P2)。代际安全版(独立 review P1-1):唯一数据源 =
+      // 设备缓存 + 代际,不再读渲染期 rows(catalogReadyRef 是渲染镜像,驱逐窗口内
+      // 不可信);缓存命中即当前代已确认目录;未命中且曾驱逐 → join 在途重拉,await
+      // 前后核对代际,换代即弃用旧返回值 join 新代;拉失败 → 未知 → 信任。await 期间
+      // 切设备 → 放弃(已 precreate 由 abortIfDeviceSwitched 补偿)。
       {
-        // ㉔㉗ 目录取信按设备隔离:ready → modelRowsRef(当前设备已确认目录);否则改信
-        // 按设备 id 取的持久缓存——渲染期 rows 未绑定设备身份,切设备/驱逐空窗里的残留
-        // 行不得充当就绪目录;对当前设备一无所知才真正落入信任。
-        let { rows: rowsForGuard, catalogKnown } = resolveGuardCatalog(
-          catalogReadyRef.current,
-          modelRowsRef.current,
-          () => cachedCatalogRows(selectedDeviceId, effectiveDraft.agentKind, {
-            model: effectiveDraft.model,
-            providerId: effectiveDraft.providerId,
-          }),
-        );
-        // ㉕ 本调用内发生过驱逐 → 等在途重拉,用新目录终检(缓存层 inflight 去重)。
-        if (catalogEvictedThisCall) {
-          try {
-            const fresh = await fetchDeviceProviders(selectedDeviceId, () => maker.listProviders());
-            rowsForGuard = flattenProviderSections(buildMobileModelSections({
-              providers: fresh.providers,
-              agentKind: effectiveDraft.agentKind,
-              visibilityOverrides: fresh.modelVisibilityOverrides,
-              // 选中行豁免与渲染期口径一致(同 cachedCatalogRows,独立 review P2)。
-              selectedModelId: effectiveDraft.model,
-              selectedProviderId: effectiveDraft.providerId,
-            }).sections);
-            catalogKnown = true;
-          } catch { /* 重拉失败:退回上面按设备取信的判定(无缓存即信任) */ }
-        }
-        const resolved = resolveRecentModelAndProvider(
-          rowsForGuard,
-          { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
-          effectiveDraft.agentKind,
-          catalogKnown,
-        );
-        const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
-        effectiveDraft = {
-          ...effectiveDraft,
-          ...resolved,
-          ...(pairChanged ? {
-            effort: reconcileEffortAfterFallback(rowsForGuard, resolved, effectiveDraft.effort),
-            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
-          } : {}),
+        // 独立 review round-21 Spec P1:所有可取消 await(abort)前置到终检循环之前;
+        // 终检循环每轮 await 返回后**同步**核对 genAt;最后一次核对后零 await 直至
+        // handoff(同一 turn)——杜绝「核对后让出微任务期间换代,再按旧目录应用」。
+        if (await abortIfDeviceSwitched()) return;
+        const guardDeviceId = deviceAtCreate;
+        const guardSelected = () => ({
+          model: effectiveDraft.model,
+          providerId: effectiveDraft.providerId,
+        });
+        const runGuard = () => resolveSubmitGuardCatalog({
+          cached: () => getCachedDeviceProviders(guardDeviceId),
+          gen: () => getDeviceProvidersGen(guardDeviceId),
+          fetch: () => fetchDeviceProviders(guardDeviceId, () => maker.listProviders()),
+          buildRows: (payload) => flattenProviderSections(buildMobileModelSections({
+            providers: payload.providers,
+            agentKind: effectiveDraft.agentKind,
+            visibilityOverrides: payload.modelVisibilityOverrides,
+            // 选中行豁免与渲染期口径一致(独立 review P2)。
+            selectedModelId: effectiveDraft.model,
+            selectedProviderId: effectiveDraft.providerId,
+          }).sections),
+        });
+        const applyGuard = (g: { rows: readonly ProviderModelRow[]; catalogKnown: boolean }): void => {
+          const resolved = resolveRecentModelAndProvider(
+            g.rows,
+            guardSelected(),
+            effectiveDraft.agentKind,
+            g.catalogKnown,
+          );
+          const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
+          effectiveDraft = {
+            ...effectiveDraft,
+            ...resolved,
+            ...(pairChanged ? {
+              effort: reconcileEffortAfterFallback(g.rows, resolved, effectiveDraft.effort),
+              ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+            } : {}),
+          };
         };
+        // 有界稳定循环:每轮 await 返回后同步核对 genAt,稳定才退出(≤3)。
+        // 哨兵初值必被首轮循环覆盖(for 循环体至少执行一次),消除 null 收窄。
+        let guardResult: { rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number } = {
+          rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+        };
+        for (let pass = 0; pass < 3; pass += 1) {
+          guardResult = await runGuard();
+          if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+        }
+        if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+          // 耗尽仍不稳定(独立 review round-22 Spec P1):不得采信最后已知 rows——
+          // 显式降为 unknown/fail-open(rows 空 + catalogKnown=false,信任既有绑定)。
+          guardResult = {
+            rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+          };
+        }
+        // 循环后同步设备复核(不让出微任务):已切换则放弃,precreated ledger 保留交
+        // recovery(不做 ACK 补偿,避免在循环末尾再引入可取消 await)。
+        if (!ensureDeviceAlive()) return;
+        applyGuard(guardResult);
       }
       const agentKindSnapshot = effectiveDraft.agentKind;
       const deviceIdSnapshot = selectedDeviceId;
@@ -4207,6 +4257,11 @@ export default function NewRemoteSessionScreen() {
       setGoalError(t('session.new.worktreeSettingsSaving'));
       return;
     }
+    // ㉙ 设备守卫入口(独立 review P1-1 + busy 泄漏):快照取自闭包 selectedDeviceId,
+    // 入口与 ref 核对必须发生在**加锁之前**——加锁后 return 会绕过 finally,busy
+    // 状态永久泄漏(独立 review round-20 Standards P1)。
+    const deviceAtCreate = selectedDeviceId;
+    if (selectedDeviceRef.current !== deviceAtCreate) return;
     creatingRef.current = true;
     setCreating(true);
     setGoalBusy(true);
@@ -4229,9 +4284,36 @@ export default function NewRemoteSessionScreen() {
       authOwnerAtCreate.accountId === accountIdAtCreate
       && isMobileAuthOwnerCurrent(authOwnerAtCreate)
     );
-    // 本调用内是否发生过供应商目录驱逐(鉴权门现拉后清缓存):发生后提交终检必须
-    // 等在途重拉、用新目录校验(同 create(),codex review P1)。
-    let catalogEvictedThisCall = false;
+    // ㉙ 设备守卫全程化(独立 review P1-1/P1-2):此后每次 await 后、每个 device-scoped
+    // 副作用前、最终 createSession 前复核。
+    const ensureDeviceAlive = (): boolean => selectedDeviceRef.current === deviceAtCreate;
+    // ㉙ 设备切换中止助手(独立 review P1-3):precreated 阶段先 discardPrecreated 获
+    // 严格 ACK 才 forget(forget 删唯一账本,未 discard 就删 = 永久孤儿);ACK 失败/
+    // 未知保留 ledger 交 recovery。reserved 阶段由各写盘点的内联 forget 处理。
+    const abortIfDeviceSwitched = async (): Promise<boolean> => {
+      if (ensureDeviceAlive()) return false;
+      if (precreatedWorktree) {
+        const pwt = precreatedWorktree;
+        await compensatePrecreatedWorktree({
+          sessionId: pwt.sessionId,
+          recoveryKey: pwt.recoveryKey,
+          createdAt: pwt.createdAt ?? Date.now(),
+          phase: 'precreated',
+          discard: () => maker.worktree.discardPrecreated({
+            sessionId: pwt.sessionId,
+            recoveryKey: pwt.recoveryKey,
+          }),
+          parseAck: parseDiscardPrecreatedAck,
+          forget: () => forgetPendingPrecreatedWorktree(worktreeAccountId, {
+            sessionId: pwt.sessionId,
+            recoveryKey: pwt.recoveryKey,
+            createdAt: pwt.createdAt ?? Date.now(),
+          }),
+          release: releasePrecreatedRegistration,
+        });
+      }
+      return true;
+    };
     try {
       if (!isCurrentOwner()) return;
       // 鉴权门禁(review P2:goal 模式与普通创建同屏同 agent,同样要拦):goal.set 会吞掉
@@ -4240,11 +4322,12 @@ export default function NewRemoteSessionScreen() {
       if (agentAuthVerdict === 'unauthenticated') {
         if (await confirmAgentUnauthenticated(draft.agentKind)) {
           if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
           setGoalError(agentAuthGateHint(draft.agentKind));
           return;
         }
         if (!isCurrentOwner()) return;
-        catalogEvictedThisCall = true;
+        if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
       }
       const freshUnauthenticated: Promise<boolean> = agentAuthVerdict === 'unauthenticated'
@@ -4256,10 +4339,12 @@ export default function NewRemoteSessionScreen() {
       // session path performs precreation before createSession.
       if (await freshUnauthenticated) {
         if (!isCurrentOwner()) return;
+        if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
         setGoalError(agentAuthGateHint(draft.agentKind));
         return;
       }
+      if (!ensureDeviceAlive()) return;
 
       // Worktree 预创建与普通创建保持同一 recovery 账本语义：先恢复旧
       // obligation，再把 reservation 写盘，最后才产生 worktree:create 副作用。
@@ -4295,6 +4380,7 @@ export default function NewRemoteSessionScreen() {
           isCurrent: isCurrentOwner,
         });
         if (!isCurrentOwner()) return;
+        if (!ensureDeviceAlive()) return;
         if (!recovery.storageReadable || recovery.retained > 0) {
           setGoalError(t('session.new.worktreeCleanupPending'));
           return;
@@ -4323,6 +4409,7 @@ export default function NewRemoteSessionScreen() {
             suggested = null;
           }
           if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
           if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
             setGoalError(t('session.new.worktreeSettingsSaving'));
             return;
@@ -4341,6 +4428,15 @@ export default function NewRemoteSessionScreen() {
             },
           );
           if (!isCurrentOwner()) return;
+          // ㉙ 写盘 reservation 后切设备 → 清掉这份 obligation(reserved 无远端目录)。
+          if (!ensureDeviceAlive()) {
+            await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey,
+              createdAt,
+            }).catch(() => undefined);
+            return;
+          }
           if (!reservationRecorded) {
             setGoalError(t('session.new.worktreeRecoveryStateFailed'));
             return;
@@ -4395,6 +4491,8 @@ export default function NewRemoteSessionScreen() {
             phase: 'precreated',
           });
           if (!isCurrentOwner()) return;
+          // ㉙ 远端目录已产生 → 切设备走 ledger 补偿。
+          if (await abortIfDeviceSwitched()) return;
           effectiveDraft = { ...draft, workingDir: response.meta.path };
         } catch {
           if (!isCurrentOwner()) return;
@@ -4411,54 +4509,47 @@ export default function NewRemoteSessionScreen() {
           name: selectedDeviceName || selectedDeviceId,
         },
       });
-      // 提交点联合终检(同 create()):守卫不依赖渲染后的清理 effect,来源失效时
-      // model 随之一并回退并同步校准 effort、组合变化时 fastMode 保守置 false;
-      // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
-      // ㉔㉕㉗ 同 create():目录取信按设备隔离(ready → modelRowsRef,否则按设备 id
-      // 取持久缓存,皆无才信任);本调用内发生过驱逐则等在途重拉。
-      let { rows: rowsForGuard, catalogKnown } = resolveGuardCatalog(
-        catalogReadyRef.current,
-        modelRowsRef.current,
-        () => cachedCatalogRows(selectedDeviceId, effectiveDraft.agentKind, {
-          model: effectiveDraft.model,
-          providerId: effectiveDraft.providerId,
-        }),
-      );
-      if (catalogEvictedThisCall) {
-        try {
-          const fresh = await fetchDeviceProviders(selectedDeviceId, () => maker.listProviders());
-          rowsForGuard = flattenProviderSections(buildMobileModelSections({
-            providers: fresh.providers,
-            agentKind: effectiveDraft.agentKind,
-            visibilityOverrides: fresh.modelVisibilityOverrides,
-            // 选中行豁免与渲染期口径一致(同 cachedCatalogRows,独立 review P2)。
-            selectedModelId: effectiveDraft.model,
-            selectedProviderId: effectiveDraft.providerId,
-          }).sections);
-          catalogKnown = true;
-        } catch { /* 重拉失败:退回上面按设备取信的判定(无缓存即信任) */ }
-      }
-      const resolved = resolveRecentModelAndProvider(
-        rowsForGuard,
-        { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
-        effectiveDraft.agentKind,
-        catalogKnown,
-      );
-      const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
-      const finalDraft = {
-        ...effectiveDraft,
-        ...resolved,
-        ...(pairChanged ? {
-          effort: reconcileEffortAfterFallback(rowsForGuard, resolved, effectiveDraft.effort),
-          ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
-        } : {}),
+      // 提交点联合终检(同 create(),代际安全版独立 review P1-1/P1-2):唯一数据源 =
+      // 设备缓存 + 代际;缓存命中即当前代已确认目录;未命中且曾驱逐 → join 在途重拉
+      // (await 前后核对代际);拉失败 → 未知 → 信任。await 期间切设备 → 放弃(已
+      // precreate 由 abortIfDeviceSwitched 补偿)。
+      if (!ensureDeviceAlive()) return;
+      const guardDeviceId = deviceAtCreate;
+      const guardSelected = () => ({
+        model: effectiveDraft.model,
+        providerId: effectiveDraft.providerId,
+      });
+      const runGuard = () => resolveSubmitGuardCatalog({
+        cached: () => getCachedDeviceProviders(guardDeviceId),
+        gen: () => getDeviceProvidersGen(guardDeviceId),
+        fetch: () => fetchDeviceProviders(guardDeviceId, () => maker.listProviders()),
+        buildRows: (payload) => flattenProviderSections(buildMobileModelSections({
+          providers: payload.providers,
+          agentKind: effectiveDraft.agentKind,
+          visibilityOverrides: payload.modelVisibilityOverrides,
+          // 选中行豁免与渲染期口径一致(独立 review P2)。
+          selectedModelId: effectiveDraft.model,
+          selectedProviderId: effectiveDraft.providerId,
+        }).sections),
+      });
+      const applyGuard = (g: { rows: readonly ProviderModelRow[]; catalogKnown: boolean }): void => {
+        const resolved = resolveRecentModelAndProvider(
+          g.rows,
+          guardSelected(),
+          effectiveDraft.agentKind,
+          g.catalogKnown,
+        );
+        const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
+        effectiveDraft = {
+          ...effectiveDraft,
+          ...resolved,
+          ...(pairChanged ? {
+            effort: reconcileEffortAfterFallback(g.rows, resolved, effectiveDraft.effort),
+            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+          } : {}),
+        };
       };
-      const createOpts = {
-        ...buildRemoteCreateSessionOptions(finalDraft),
-        // 与 worktree:create 共用预生成 id，确保被控端能把 managed path
-        // 绑定到这一个 Goal session，而不是另起一条 base-repo 会话。
-        id: sessionId,
-      };
+      // ── prepare 段(可取消):连接 + abort 前置,终检循环每轮 await 后同步核对 genAt ──
       await withTransientRemoteRetry(async () => {
         if (!isCurrentOwner()) return;
         await openLink(selectedDeviceId);
@@ -4467,8 +4558,26 @@ export default function NewRemoteSessionScreen() {
         if (!isCurrentOwner()) return;
       });
       if (!isCurrentOwner()) return;
+      if (await abortIfDeviceSwitched()) return; // 可取消 await 全部在此
+      // 有界稳定循环(独立 review round-21 Spec P1):每轮 await 返回后**同步**核对
+      // genAt,稳定才退出(≤3)。
+      // 哨兵初值必被首轮循环覆盖(for 循环体至少执行一次),消除 null 收窄。
+      let guardResult: { rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number } = {
+        rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+      };
+      for (let pass = 0; pass < 3; pass += 1) {
+        guardResult = await runGuard();
+        if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+      }
+      if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+        // 耗尽仍不稳定(独立 review round-22 Spec P1):显式降为 unknown/fail-open,
+        // 不采信最后已知 rows。
+        guardResult = {
+          rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+        };
+      }
+      // ── commit 段:started 写盘(await)后同步核对 genAt;此后无裸 return ──
       if (precreatedWorktree) {
-        if (!isCurrentOwner()) return;
         const startedRecorded = await registerPendingPrecreatedWorktree(
           worktreeAccountId,
           {
@@ -4480,16 +4589,62 @@ export default function NewRemoteSessionScreen() {
             phase: 'session-create-started',
           },
         );
-        if (!isCurrentOwner()) return;
         if (!startedRecorded) {
+          // 落账失败:register 在首个 await 前已把 volatile 升级为 started——
+          // 降级回 precreated(可回收阶段),避免 retain-only 卡死 recovery
+          // (独立 review round-21 Spec P1-3)。会话未创建,不得删账。
+          await registerPendingPrecreatedWorktree(worktreeAccountId, {
+            sessionId: precreatedWorktree.sessionId,
+            deviceId: selectedDeviceId,
+            path: precreatedWorktree.path,
+            recoveryKey: precreatedWorktree.recoveryKey,
+            createdAt: precreatedWorktree.createdAt ?? Date.now(),
+            phase: 'precreated',
+          }).catch(() => undefined);
           setGoalError(t('session.new.worktreeRecoveryStateFailed'));
           return;
         }
         sessionCreateStarted = true;
+        // started await 期间可能换代 → 每轮 await 后同步核对(≤2);耗尽仍不稳定
+        // → 显式降为 unknown/fail-open。
+        for (let pass = 0; pass < 2; pass += 1) {
+          if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+          guardResult = await runGuard();
+          if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+        }
+        if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+          guardResult = {
+            rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+          };
+        }
+        // started 可靠落账后设备切换:不裸 return(会留 started retain-only,recovery
+        // 对该 phase 拒绝 discard)——先 durable 降级回 precreated(可回收);降级失败
+        // 则继续用捕获设备完成 commit(动态 clientRef 跨设备残余已在 PR 风险节声明,
+        // 独立 review round-22 Spec P1-2)。
+        if (!ensureDeviceAlive()) {
+          const downgraded = await registerPendingPrecreatedWorktree(worktreeAccountId, {
+            sessionId: precreatedWorktree.sessionId,
+            deviceId: selectedDeviceId,
+            path: precreatedWorktree.path,
+            recoveryKey: precreatedWorktree.recoveryKey,
+            createdAt: precreatedWorktree.createdAt ?? Date.now(),
+            phase: 'precreated',
+          }).catch(() => false);
+          if (downgraded) return;
+        }
       }
-      if (!isCurrentOwner()) return;
+      // 同一 turn:同步应用 + createSession,零 await 间隔(独立 review round-21 Spec P1)。
+      applyGuard(guardResult);
+      const finalDraft = {
+        ...effectiveDraft,
+      };
+      const createOpts = {
+        ...buildRemoteCreateSessionOptions(finalDraft),
+        // 与 worktree:create 共用预生成 id，确保被控端能把 managed path
+        // 绑定到这一个 Goal session，而不是另起一条 base-repo 会话。
+        id: sessionId,
+      };
       const created = await maker.createSession(createOpts);
-      if (!isCurrentOwner()) return;
       const result = normalizeCreateSessionResult(created);
       if (!result) {
         throw new Error(t('session.new.noSessionIdReturned'));
@@ -4498,6 +4653,13 @@ export default function NewRemoteSessionScreen() {
         throw new Error(t('session.new.sessionIdNotAdopted'));
       }
       sessionClaimed = true;
+      // goal.set 前置(独立 review round-20 Spec P1-3):createSession 成功后立即完成
+      // goal.set,不留「已创建但无目标」的远端会话;本地同步/UI 属 settle 段,排在其后。
+      // 注(残余声明):maker 只绑定 deviceId 字符串,底层 invoke 每次读取
+      // clientRef.current——飞行中跨账号/设备切换时 createSession 与 goal.set 可能
+      // 落到不同 client,属已接受的传输层残余(host 原子 create-goal RPC 另列 issue)。
+      await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });
+      // ── settle 段(可降级):本地同步/UI,owner 检查恢复正常语义 ──
       if (!isCurrentOwner()) return;
       await subscribe(`session:${result.sessionId}`, selectedDeviceId, ['sessions', `session:${result.sessionId}`]).catch(() => undefined);
       if (!isCurrentOwner()) return;
@@ -4512,8 +4674,6 @@ export default function NewRemoteSessionScreen() {
       }
       if (!isCurrentOwner()) return;
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
-      if (!isCurrentOwner()) return;
-      await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });
       if (!isCurrentOwner()) return;
       // 目标流不带 composer 附件(与桌面一致),跳转即丢引用:已上传的中转对象在此
       // best-effort 回收,否则成为 OSS 孤儿直到桶生命周期清理(codex review #504)。
