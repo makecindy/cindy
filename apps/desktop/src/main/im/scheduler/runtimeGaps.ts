@@ -1,4 +1,4 @@
-import { MAX_RUNTIME_GAPS, type SchedulerRuntimeFrame } from './protocol';
+import { MAX_RUNTIME_GAPS, type SchedulerRuntimeFrame } from '@cindy/device-link';
 import { compareSchedulerStrings } from './state';
 
 /**
