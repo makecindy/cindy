@@ -74,15 +74,33 @@ function createDeps(overrides: Partial<AgentDeps> = {}): AgentDeps {
 }
 
 /** 最小可用的 SDK Query 假实现: 消息流永远挂起, 控制方法全部记录调用。 */
-function createFakeQuery() {
+function createFakeQuery(initMcpServerNames: readonly string[] = []) {
+  let initEmitted = false;
   return {
     [Symbol.asyncIterator]() {
-      // 消息流永远 pending — 这些用例只走控制面, 不消费流。
-      return { next: () => new Promise<IteratorResult<unknown>>(() => {}) };
+      return {
+        next: () => {
+          if (!initEmitted && initMcpServerNames.length > 0) {
+            initEmitted = true;
+            return Promise.resolve({
+              done: false as const,
+              value: {
+                type: 'system',
+                subtype: 'init',
+                session_id: 'sdk-plan-mode',
+                mcp_servers: initMcpServerNames.map((name) => ({ name, status: 'connected' })),
+              },
+            });
+          }
+          return new Promise<IteratorResult<unknown>>(() => {});
+        },
+      };
     },
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
+    mcpServerStatus: vi.fn(async () =>
+      initMcpServerNames.map((name) => ({ name, status: 'connected', scope: 'dynamic' }))),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -310,6 +328,51 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(starts).toHaveLength(1);
     expect(starts[0]?.mcpServers).toBeUndefined();
     expect(starts[0]?.permissionMode).toBe('auto');
+    await handle.close();
+  });
+
+  it('tracks a factory-injected MCP downgrade as already default', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery(['cindy_orca']);
+    fakeQuery.setPermissionMode.mockRejectedValue(new Error('remote control RPC failed'));
+    const oauthAuth: AuthAdapter = {
+      async getState() { return { authenticated: true, authSource: 'oauth' }; },
+      async triggerLogin() { return { authenticated: true }; },
+      async logout() {},
+      async getAuthEnv() { return {}; },
+    };
+    let proposedMode: unknown;
+
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth: oauthAuth,
+      resolveRemoteClaudeRoute: async () => ({
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+      }),
+      remoteCcQueryFactory: async (args) => {
+        proposedMode = args.startParams.permissionMode;
+        args.startParams.permissionMode = 'default';
+        args.startParams.mcpServers = {
+          cindy_orca: { type: 'http', url: 'http://127.0.0.1/mcp/cindy_orca' },
+        };
+        return fakeQuery as never;
+      },
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-factory-downgrade',
+      model: 'claude-opus-4-6',
+      providerId: 'anthropic',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(proposedMode).toBe('auto');
+    await vi.waitFor(() => expect(fakeQuery.mcpServerStatus).toHaveBeenCalled());
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
     await handle.close();
   });
 

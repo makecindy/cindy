@@ -2682,6 +2682,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
         registeredMcpServerNames = hostMcpServerNames;
         nonHarnessMcpServerNames = hostMcpServerNames;
+        // The factory may inject host HTTP MCPs and downgrade OAuth Auto to
+        // default before opening cc-manager. Track the post-factory mode so a
+        // later SDK init cannot repeat that downgrade and turn a harmless
+        // control-RPC failure into a fatal close.
+        const finalRemotePermissionMode =
+          (startParams.permissionMode as SdkPermissionMode | undefined) ?? remotePermissionMode;
+        sdkInPlanMode = finalRemotePermissionMode === 'plan';
         // 记入 closure: handle.close / U2 兜底需要 await remoteQuery.close()。
         activeRemoteQuery = remoteQuery as unknown as { close: () => Promise<void>; detach?: () => Promise<void> };
 
@@ -2717,7 +2724,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
         })().catch(() => undefined);
 
-        if (remotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
+        if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
         return remoteQuery;
       }
 
