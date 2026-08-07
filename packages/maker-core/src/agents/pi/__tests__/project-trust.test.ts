@@ -19,6 +19,7 @@ const identity: PiProjectIdentityResolution = {
 
 const discovered: PiProjectDiscoveredResources = {
   skills: ['/repo/.pi/skills/a', '/repo/.agents/skills/b'],
+  canonicalSkills: ['/repo/.pi/skills/a', '/repo/.agents/skills/b'],
   settings: ['/repo/.pi/settings.json'],
   packages: ['/repo/.pi/package.json'],
   extensions: ['/repo/.pi/extensions/x.ts'],
@@ -75,6 +76,61 @@ describe('Pi project trust contract', () => {
       allowPackages: false,
       allowExtensions: false,
     });
+  });
+
+  it('keeps skills discovered when canonical realpath evidence is missing', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: { ...discovered, canonicalSkills: undefined },
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.resources.skills).toBe('discovered');
+    expect(result.eligibleSkillPaths).toEqual([]);
+  });
+
+  it('rejects canonical skill paths that resolve outside the approved repo root', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        canonicalSkills: ['/outside/shared-skill', '/repo/.agents/skills/b'],
+      },
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.resources.skills).toBe('discovered');
+    expect(result.eligibleSkillPaths).toEqual([]);
+  });
+
+  it('rejects non-canonical traversal segments in canonical skill evidence', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        canonicalSkills: ['/repo/../outside/shared-skill', '/repo/.agents/skills/b'],
+      },
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.resources.skills).toBe('discovered');
+    expect(result.eligibleSkillPaths).toEqual([]);
+  });
+
+  it('fails closed when the working directory is outside the resolved repository root', () => {
+    const result = evaluatePiProjectTrust({
+      identity: {
+        ...identity,
+        canonicalWorkingDir: '/outside/worktree',
+      },
+      approval: approval({ scope: 'repo-root', scopeKey: '/repo' }),
+      discovered,
+      capabilities: { explicitSkills: true },
+    });
+    expect(result.status).toBe('unavailable');
+    expect(result.reason).toBe('working-dir-outside-repo-root');
+    expect(result.resources.skills).toBe('discovered');
+    expect(result.eligibleSkillPaths).toEqual([]);
   });
 
   it('keeps restrictive defaults when optional capability fields are undefined', () => {
@@ -525,7 +581,7 @@ describe('Pi project trust contract', () => {
     const second = evaluatePiProjectTrust({
       identity: { ...identity, canonicalWorkingDir: '/repo/other' },
       approval: approval({ scopeKey: '/repo\0/repo/other', revision: 'b' }),
-      discovered: { ...discovered, skills: ['/repo/other/.pi/skills/c'] },
+      discovered: { ...discovered, skills: ['/repo/other/.pi/skills/c'], canonicalSkills: ['/repo/other/.pi/skills/c'] },
       capabilities: { explicitSkills: true },
     });
     expect(first.approvalRevision).toBe('a');

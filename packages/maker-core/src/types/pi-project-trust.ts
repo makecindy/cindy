@@ -69,6 +69,8 @@ export type PiProjectApprovalSnapshot =
 
 export interface PiProjectDiscoveredResources {
   skills: readonly string[];
+  /** Host-realpath identities corresponding 1:1 to skills; required for eligibility. */
+  canonicalSkills?: readonly string[];
   settings: readonly string[];
   packages: readonly string[];
   extensions: readonly string[];

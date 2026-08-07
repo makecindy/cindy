@@ -25,7 +25,7 @@ function normalizePath(
   if (platform === 'posix') {
     // Canonical POSIX paths come from the host resolver. Preserve their literal
     // bytes so a valid path containing spaces or backslashes cannot alias another.
-    return value.startsWith('/') ? value : null;
+    return value.startsWith('/') && !hasDotSegments(value) ? value : null;
   }
 
   if (!value) return null;
@@ -50,6 +50,7 @@ function normalizePath(
   const slash = withForwardSlashes.startsWith('//')
     ? `//${withForwardSlashes.slice(2).replace(/\/+/g, '/')}`
     : withForwardSlashes.replace(/\/+/g, '/');
+  if (hasDotSegments(slash)) return null;
   if (platform === 'win32') {
     if (!/^(?:[A-Za-z]:\/|\/\/)/.test(slash)) return null;
     if (slash.startsWith('//') && !/^\/\/[^/]+\/[^/]+(?:\/|$)/.test(slash)) return null;
@@ -72,6 +73,15 @@ function hasLosslessCanonicalEncoding(
     : identity.platform === 'win32' &&
       identity.canonicalPathEncoding === 'utf16-lossless' &&
       (identity.windowsCaseComparison === 'ordinal-insensitive' || identity.windowsCaseComparison === 'case-sensitive');
+}
+
+function isPathWithinRoot(root: string, candidate: string): boolean {
+  const rootPrefix = root.endsWith('/') ? root : `${root}/`;
+  return candidate === root || candidate.startsWith(rootPrefix);
+}
+
+function hasDotSegments(value: string): boolean {
+  return value.split('/').some((segment) => segment === '.' || segment === '..');
 }
 
 export function piProjectKey(
@@ -110,6 +120,25 @@ function normalizeApprovalScopeKey(
   const repoRoot = normalizePath(value.slice(0, separator), platform, windowsCaseComparison);
   const workingDir = normalizePath(value.slice(separator + 1), platform, windowsCaseComparison);
   return repoRoot && workingDir ? `${repoRoot}\0${workingDir}` : null;
+}
+
+function canonicalEligibleSkillPaths(
+  identity: PiProjectIdentityResolution,
+  discovered: PiProjectDiscoveredResources,
+): readonly string[] {
+  const canonicalSkills = discovered.canonicalSkills;
+  if (!canonicalSkills || canonicalSkills.length !== discovered.skills.length || canonicalSkills.length === 0) return [];
+  const repoRoot = identity.canonicalRepoRoot &&
+    normalizePath(identity.canonicalRepoRoot, identity.platform, identity.windowsCaseComparison);
+  if (!repoRoot) return [];
+  const normalizedSkills = canonicalSkills.map((skillPath) =>
+    normalizePath(skillPath, identity.platform, identity.windowsCaseComparison),
+  );
+  const validSkills = normalizedSkills.filter((skillPath): skillPath is string => skillPath !== null);
+  if (validSkills.length !== normalizedSkills.length || new Set(validSkills).size !== validSkills.length) return [];
+  return validSkills.every((skillPath) => isPathWithinRoot(repoRoot, skillPath))
+    ? validSkills
+    : [];
 }
 
 function isPlainObject(values: unknown): values is Record<string, unknown> {
@@ -219,6 +248,11 @@ export function evaluatePiProjectTrust(input: {
   ) {
     return emptyDecision(identity, 'unavailable', 'project-identity-unavailable', null, discovered);
   }
+  const normalizedRepoRoot = normalizePath(identity.canonicalRepoRoot, identity.platform, identity.windowsCaseComparison);
+  const normalizedWorkingDir = normalizePath(identity.canonicalWorkingDir, identity.platform, identity.windowsCaseComparison);
+  if (!normalizedRepoRoot || !normalizedWorkingDir || !isPathWithinRoot(normalizedRepoRoot, normalizedWorkingDir)) {
+    return emptyDecision(identity, 'unavailable', 'working-dir-outside-repo-root', null, discovered);
+  }
   if (!approval) return emptyDecision(identity, 'unapproved', 'approval-missing', null, discovered);
   if (approval.status !== 'approved') {
     return emptyDecision(
@@ -259,12 +293,13 @@ export function evaluatePiProjectTrust(input: {
       ? projectionSnapshot
       : null;
   const settingsEligible = settingsProjection !== null;
+  const eligibleSkillPaths = capabilities.explicitSkills ? canonicalEligibleSkillPaths(identity, discovered) : [];
   return {
     ...emptyDecision(identity, 'approved', 'approval-matched', approval.revision, discovered, settingsProjection),
-    eligibleSkillPaths: capabilities.explicitSkills ? [...discovered.skills] : [],
+    eligibleSkillPaths,
     eligibleSettingsPaths: settingsProjection ? [settingsProjection.sourcePath] : [],
     resources: {
-      skills: capabilities.explicitSkills && discovered.skills.length ? 'eligible' : discovered.skills.length ? 'discovered' : 'blocked',
+      skills: eligibleSkillPaths.length ? 'eligible' : discovered.skills.length ? 'discovered' : 'blocked',
       settings: settingsEligible && discovered.settings.length ? 'eligible' : discovered.settings.length ? 'discovered' : 'blocked',
       packages: discovered.packages.length ? 'discovered' : 'blocked',
       extensions: discovered.extensions.length ? 'discovered' : 'blocked',
