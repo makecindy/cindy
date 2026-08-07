@@ -67,7 +67,10 @@ export function mergeCommands(
 }
 
 /**
- * 前缀过滤(case-insensitive); 与 F1 spec 对齐 —— 不做 fuzzy match, 只做 startsWith。
+ * 包含过滤(case-insensitive); 不做 fuzzy match。
+ *
+ * `/`、`$` 两类命令都复用这套筛选，输入命令中间的关键词也能命中，
+ * 与 `@` 资源面板的搜索体验保持一致。
  */
 export function filterSlashCommands(
   commands: UnifiedCommand[],
@@ -76,7 +79,7 @@ export function filterSlashCommands(
 ): UnifiedCommand[] {
   const q = query.trim().toLowerCase();
   const filtered = q
-    ? commands.filter((c) => c.name.toLowerCase().startsWith(q))
+    ? commands.filter((c) => c.name.toLowerCase().includes(q))
     : commands;
   return filtered.length > limit ? filtered.slice(0, limit) : filtered;
 }
