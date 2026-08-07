@@ -1910,8 +1910,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     for (let i = 0; i < absPaths.length; i += 10) {
       const group = absPaths.slice(i, i + 10);
       assertLive?.();
-      const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group, anchorReply));
-      if (!albumSent) {
+      // 单张不成相册, 直接走单发 —— 这条是正常路径, 不是相册失败。
+      const outcome =
+        group.length > 1 ? await this.sendPhotoAlbum(chatId, group, anchorReply) : 'rejected';
+      if (outcome === 'uncertain') continue; // 可能已经发出去了, 不补发
+      if (outcome === 'rejected') {
         for (const absPath of group) {
           assertLive?.();
           await this.sendSinglePhoto(chatId, absPath, anchorReply);
@@ -2004,14 +2007,22 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  /** 多图原生相册(attach:// 多部分上传)。返回 false = 整组失败, 调用方回落逐张。 */
+  /**
+   * 多图原生相册(attach:// 多部分上传)的结果。
+   *
+   * `rejected` 与 `uncertain` 的区别决定了能不能逐张重发:
+   * Telegram 没有发送端幂等键, 一次 sendMediaGroup 只要被服务端接受, 图片就
+   * 已经出现在聊天里 —— 哪怕响应在网络上丢了。此时逐张补发会让用户看到**两套**
+   * 同样的图, 而且无法分辨哪些是重复。只有 Telegram 明确回 400(确定性拒绝相册
+   * 形状, 一张都没接受)时, 逐张回落才是安全的 —— 与官方 bot 服务端同一判据。
+   */
   private async sendPhotoAlbum(
     chatId: string,
     absPaths: string[],
     anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
-  ): Promise<boolean> {
+  ): Promise<'sent' | 'rejected' | 'uncertain'> {
     const api = this.api;
-    if (!api) return false;
+    if (!api) return 'uncertain';
     try {
       const form = new FormData();
       form.set('chat_id', chatId);
@@ -2024,11 +2035,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         form.set(`photo${i}`, new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
       });
       await api.callForm('sendMediaGroup', form);
-      return true;
+      return 'sent';
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`telegram album upload failed, fallback to singles: ${msg}`);
-      return false;
+      // 400 = Telegram 读懂了请求并拒绝了相册形状(比如某张图不合法), 可以确定
+      // 一张都没进聊天; 逐张重发安全。网络错误 / 5xx / 429 都可能是「已被接受,
+      // 只是响应没回来」, 重发会造成重复相册 —— 宁可这一组丢失也不重复。
+      if (err instanceof TelegramApiError && err.errorCode === 400) {
+        this.log.warn(`telegram album rejected (400), fallback to singles: ${msg}`);
+        return 'rejected';
+      }
+      this.log.warn(`telegram album upload outcome unknown, not resending: ${msg}`);
+      return 'uncertain';
     }
   }
 

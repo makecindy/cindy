@@ -1420,6 +1420,65 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(1);
   });
 
+  describe('相册发送失败的回落判据', () => {
+    // Telegram 没有发送端幂等键: 一次 sendMediaGroup 只要被接受, 图片就已经在
+    // 聊天里了 —— 哪怕响应在网络上丢了。逐张补发会让用户看到两套同样的图, 且
+    // 无法分辨哪些是重复。只有 400(确定性拒绝相册形状)才可以安全回落。
+
+    function threeImages(): string[] {
+      return ['x1.png', 'x2.png', 'x3.png'].map((name) => {
+        const abs = path.join(tmpDir, name);
+        fs.writeFileSync(abs, 'fake-png');
+        return abs;
+      });
+    }
+
+    async function sendAlbumWith(
+      failure: unknown,
+    ): Promise<{ groups: number; singles: number }> {
+      await connect();
+      const originalForm = api.callForm.bind(api);
+      api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+        if (method === 'sendMediaGroup') throw failure;
+        return originalForm(method, form, signal);
+      }) as FakeApi['callForm'];
+      const handle = await im.startStreamingText(Number(OWNER_ID).toString());
+      for (const abs of threeImages()) handle.addExtraImageAbsPath?.(abs);
+      await handle.finalize('三张图的回答');
+      return {
+        groups: api.calls.filter((c) => c.method === 'sendMediaGroup').length,
+        singles: api.calls.filter((c) => c.method === 'sendPhoto').length,
+      };
+    }
+
+    it('400 拒绝 → 逐张回落(确定一张都没进聊天)', async () => {
+      const { singles } = await sendAlbumWith(
+        new TelegramApiError('sendMediaGroup', 400, 'Bad Request: wrong file identifier'),
+      );
+      expect(singles).toBe(3);
+    });
+
+    it('网络错误 → 不逐张补发(可能已经发出去了)', async () => {
+      const { singles } = await sendAlbumWith(new TypeError('fetch failed'));
+      // 这一组宁可丢失也不重复 —— 重复的图进了聊天记录就撤不回来了。
+      expect(singles).toBe(0);
+    });
+
+    it('5xx → 不逐张补发', async () => {
+      const { singles } = await sendAlbumWith(
+        new TelegramApiError('sendMediaGroup', 500, 'Internal Server Error'),
+      );
+      expect(singles).toBe(0);
+    });
+
+    it('429 限流 → 不逐张补发', async () => {
+      const { singles } = await sendAlbumWith(
+        new TelegramApiError('sendMediaGroup', 429, 'Too Many Requests', 3),
+      );
+      expect(singles).toBe(0);
+    });
+  });
+
   it('connect 后把命令菜单注册到 owner scope; disconnect 清理', async () => {
     await im.dispose();
     im = new TelegramIM(ctx.host, {
