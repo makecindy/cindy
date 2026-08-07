@@ -2505,7 +2505,13 @@ function routeExternalCodexClient(
   }
   const pathname = requestPathname(ctx.url);
   const method = ctx.method.toUpperCase();
-  if (method === 'GET' && /\/(v1\/)?models\/?$/.test(pathname)) {
+  // ⚠ 三条端点正则都必须 `^` 锚在**开头**(#1666 三轮 P2):只锚尾部时这是「后缀」判定,
+  //   `POST /foo/responses`、`/foo/v1/chat/completions` 同样能进外部路由分支;而 responses 这条是
+  //   透明转发(无 pathOverride → 原样转发 ctx.url),供应商侧就会收到这个未支持路径,却带着
+  //   buildRouteDecision 注入的真实凭证。锚定后对外端口只接受对外公布的那三个端点
+  //   (/responses、/v1/responses、/v1/chat/completions,及 /models 发现),并顺带挡掉
+  //   absolute-form 请求(`POST http://evil.example/responses`,此时 req.url 不以 `/` 开头)。
+  if (method === 'GET' && /^\/(v1\/)?models\/?$/.test(pathname)) {
     return {
       localHandler: async ({ res }) => {
         res.writeHead(200, {
@@ -2516,10 +2522,10 @@ function routeExternalCodexClient(
       },
     };
   }
-  if (method === 'POST' && /\/(v1\/)?chat\/completions\/?$/.test(pathname)) {
+  if (method === 'POST' && /^\/(v1\/)?chat\/completions\/?$/.test(pathname)) {
     return externalChatCompletionsDecision(externalToken);
   }
-  if (method === 'POST' && /\/(v1\/)?responses\/?$/.test(pathname)) {
+  if (method === 'POST' && /^\/(v1\/)?responses\/?$/.test(pathname)) {
     return resolveExternalCodexResponsesDecision(body);
   }
   return externalOpenAIError(400, 'unsupported_request', '不支持的外部请求。');

@@ -451,4 +451,43 @@ describe('cc routingTransform 外部路径白名单 (P2: 对外只服务 /v1/mes
     expect(status).toBe(404);
     expect(body?.error?.code).toBe('unsupported_path');
   });
+
+  // 开头锚定(#1666 三轮 P2):白名单不锚开头时是「包含」判定,带任意前缀的路径同样命中,而无
+  // pathOverride 时转发的是原样 ctx.url → 供应商侧收到未支持路径却带着 Cindy 注入的真实凭证。
+  // 这些路径都不含 dot-segment,所以只有开头锚定能挡住(与上面的穿越用例是两条独立防线)。
+  it.each([
+    ['POST', '/anything/v1/messages'],
+    ['POST', '/v2/v1/messages'],
+    ['POST', '/proxy/deep/v1/messages/count_tokens'],
+  ])('外部客户端 %s %s(带前缀绕过白名单)→ 404 unsupported_path', async (method, url) => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctx(method, url, { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
+
+  it('外部客户端 GET /anything/v1/models(带前缀)→ 不走本地清单,落 404 unsupported_path', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      {},
+      ctx('GET', '/anything/v1/models', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
+
+  // absolute-form 请求(HTTP/1.1 允许对代理发 `POST http://host/path`):此时 req.url 不以 `/` 开头,
+  // 开头锚定顺带把它挡在外面,不会因为「含 /v1/messages」而带凭证转发到别的 origin。
+  it('外部客户端 POST http://evil.example/v1/messages(absolute-form)→ 404 unsupported_path', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctx('POST', 'http://evil.example/v1/messages', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
 });

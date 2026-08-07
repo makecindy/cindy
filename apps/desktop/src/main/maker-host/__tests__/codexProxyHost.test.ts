@@ -4349,6 +4349,114 @@ describe('createExternalCodexRoutingTransform 对外端口有界拒绝 (P1: 只�
     const { status } = await drainCodexLocalHandler(decision);
     expect(status).toBe(200);
   });
+
+  // 端点正则开头锚定(#1666 三轮 P2):只锚尾部时是「后缀」判定,`/foo/responses` 之类带前缀的路径
+  // 也能进外部路由分支;responses 是透明转发(无 pathOverride → 原样转发 ctx.url),供应商侧就会
+  // 收到这个未支持路径却带着 buildRouteDecision 注入的真实凭证。必须落 400 unsupported_request。
+  it.each([
+    ['POST', '/foo/responses'],
+    ['POST', '/v2/v1/responses'],
+    ['POST', '/foo/v1/chat/completions'],
+    ['POST', '/anything/chat/completions'],
+  ])('命中本族 token 但路径带前缀(%s %s)→ 400 unsupported_request,不进转发分支', async (method, url) => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    externalAuthMock.matchToken = (t) => t === 'cindy-local-valid';
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method,
+          url,
+          headers: { authorization: 'Bearer cindy-local-valid' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(400);
+    expect(body?.error?.code).toBe('unsupported_request');
+  });
+
+  it('命中本族 token 但 GET /foo/models(带前缀)→ 不吐清单,落 400 unsupported_request', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    externalAuthMock.matchToken = (t) => t === 'cindy-local-valid';
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        undefined,
+        {
+          reqId: 1,
+          method: 'GET',
+          url: '/foo/models',
+          headers: { authorization: 'Bearer cindy-local-valid' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(400);
+    expect(body?.error?.code).toBe('unsupported_request');
+  });
+
+  // absolute-form 请求(HTTP/1.1 允许对代理发 `POST http://host/path`):req.url 不以 `/` 开头,
+  // 开头锚定顺带挡住,不会因为「以 /responses 结尾」而带凭证转发到别的 origin。
+  it('命中本族 token 但 absolute-form(http://evil.example/responses)→ 400 unsupported_request', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    externalAuthMock.matchToken = (t) => t === 'cindy-local-valid';
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: 'http://evil.example/responses',
+          headers: { authorization: 'Bearer cindy-local-valid' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(400);
+    expect(body?.error?.code).toBe('unsupported_request');
+  });
+
+  // 对照:公布的三个端点(及 /models 发现)必须照旧放行 —— 锚定只砍前缀绕过,不改正常用法。
+  // 自环 chat 端点打的就是对外端口自己的 `/responses`(见 externalChatCompletionsDecision)。
+  it.each([
+    ['POST', '/responses'],
+    ['POST', '/v1/responses'],
+    ['POST', '/v1/responses/'],
+  ])('公布端点 %s %s 照旧放行(不是 unsupported_request)', async (method, url) => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    externalAuthMock.matchToken = (t) => t === 'cindy-local-valid';
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method,
+          url,
+          headers: { authorization: 'Bearer cindy-local-valid' },
+        } as never,
+      ),
+    );
+
+    // 可能是转发决策,也可能是 400 no_provider_for_model 之类;但绝不是路径闸的 unsupported_request。
+    if ((decision as { localHandler?: unknown } | null)?.localHandler) {
+      const { body } = await drainCodexLocalHandler(decision);
+      expect(body?.error?.code).not.toBe('unsupported_request');
+    } else {
+      expect(decision).not.toBeNull();
+    }
+  });
 });
 
 describe('createModelRoutingTransform 内部端口(端口拆分后内部路由不再承担对外判定 #1666 Finding 2)', () => {

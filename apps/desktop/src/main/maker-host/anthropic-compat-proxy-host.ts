@@ -281,7 +281,7 @@ function routeExternalClient(
   if (pathnameHasDotSegments(pathname)) {
     return externalErrorDecision(404, 'unsupported_path', '对外 Anthropic 代理不支持该路径。');
   }
-  if (ctx.method.toUpperCase() === 'GET' && /\/v1\/models\/?$/.test(pathname)) {
+  if (ctx.method.toUpperCase() === 'GET' && /^\/v1\/models\/?$/.test(pathname)) {
     return {
       localHandler: async ({ res }) => {
         res.writeHead(200, {
@@ -298,7 +298,14 @@ function routeExternalClient(
   // 自定义供应商凭证注入并转发到调用方任意路径 —— 否则配了对外默认供应商时,一个不带 model 的
   // POST /v1/files 也足以借 Cindy 凭证打供应商任意 API。与 codex 侧只放行 /responses +
   // /v1/chat/completions 对称(#1666 review)。
-  if (!/\/v1\/messages(?:\/|$)/.test(pathname)) {
+  //
+  // ⚠ 必须 `^` 锚在**开头**(#1666 三轮 P2):不锚的话这是「包含」判定,`POST /anything/v1/messages`
+  //   同样命中白名单,而无 pathOverride 时转发的是原样 ctx.url → 供应商侧收到的是 /anything/v1/messages
+  //   这个未支持路径,却带着 buildRouteDecision 注入的真实凭证。锚定后也顺带挡掉 absolute-form 请求
+  //   (`POST http://evil.example/v1/messages`,此时 req.url 不以 `/` 开头)。
+  //   子路径放行(`(?:\/|$)`)是有意保留的:Claude Code 会打 /v1/messages/count_tokens,且同族推理
+  //   子路径向前兼容;越权风险来自**换顶级路径**(/v1/files 等),那已被开头锚定挡住。
+  if (!/^\/v1\/messages(?:\/|$)/.test(pathname)) {
     return externalErrorDecision(404, 'unsupported_path', '对外 Anthropic 代理不支持该路径。');
   }
   if (!isPlainObject(body)) {
