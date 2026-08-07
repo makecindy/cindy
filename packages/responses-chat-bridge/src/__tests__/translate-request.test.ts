@@ -349,6 +349,89 @@ describe('translateResponsesRequest', () => {
     }))).toThrowError(UnsupportedResponsesFeatureError);
   });
 
+  it('converts replayed agent messages to assistant text', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        {
+          type: 'agent_message',
+          author: 'researcher\r\nreviewer',
+          content: [
+            { type: 'output_text', text: '  Findings' },
+            { type: 'encrypted_content', encrypted_content: 'opaque' },
+          ],
+        },
+        {
+          type: 'agent_message',
+          author: 'reviewer',
+          content: [{ type: 'encrypted_content', encrypted_content: 'opaque' }],
+        },
+        {
+          type: 'agent_message',
+          author: 'observer',
+          content: [{ type: 'output_text', text: '   ' }],
+        },
+        { type: 'message', role: 'assistant', content: 'Final answer' },
+        { type: 'message', role: 'user', content: 'finish' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      {
+        role: 'assistant',
+        content: [
+          '[collab researcher reviewer]\n  Findings',
+          '[collab message from reviewer; encrypted payload omitted]',
+          '[collab message from observer; empty content]',
+        ].join('\n'),
+      },
+      { role: 'assistant', content: 'Final answer' },
+      { role: 'user', content: 'finish' },
+    ]);
+  });
+
+  it.each(['input_text', 'output_text', 'text'])(
+    'reports a malformed agent message %s part by path',
+    (type) => {
+      expect(() => translateResponsesRequest(base({
+        input: [{ type: 'agent_message', content: [{ type }] }],
+      }))).toThrow(`input[0].content.${type}`);
+    },
+  );
+
+  it('reports an unknown agent message part by path', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'agent_message', content: [{ type: 'image_url' }] }],
+    }))).toThrow('input[0].content.image_url');
+  });
+
+  it('keeps agent messages after the preceding tool result', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_1', name: 'shell', arguments: '{}' },
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          content: [{ type: 'output_text', text: 'Findings' }],
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'done' },
+      { role: 'assistant', content: '[collab researcher]\nFindings' },
+    ]);
+  });
+
   it('round-trips replayed Codex tool_search items without breaking tool-call merging', () => {
     const out = translateResponsesRequest(base({
       input: [

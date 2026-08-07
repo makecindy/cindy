@@ -45,6 +45,8 @@ export { TelegramIM, createTelegramIM } from './telegram/index.js';
 export type { TelegramIMOptions, TelegramGroupWindowEntry } from './telegram/index.js';
 export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
 export type { TelegramBehaviorConfig } from './telegram/index.js';
+export { TELEGRAM_PERSONAL_CAPABILITIES } from './telegram/presentationCapabilities.js';
+export type { TelegramDriverCapabilities } from './telegram/presentationCapabilities.js';
 export { WecomIM, createWecomIM } from './wecom/index.js';
 export type { WecomIMOptions } from './wecom/index.js';
 export {
@@ -53,7 +55,15 @@ export {
   chunkWecomMarkdown,
   escapeWecomMarkdown,
 } from './wecom/codec.js';
-export { stripXdtFileLinks, stripXdtImageLinks } from './xdtRefs.js';
+export {
+  collectXdtFileRefs,
+  collectXdtImageRefs,
+  normalizeXdtAbsPath,
+  stripXdtFileLinks,
+  stripXdtImageLinks,
+  transformXdtRefs,
+} from './xdtRefs.js';
+export type { XdtFileRef, XdtImageRef, XdtRefTransform } from './xdtRefs.js';
 export {
   decodeLaneUserId as decodeTelegramLaneUserId,
   encodeLaneUserId as encodeTelegramLaneUserId,

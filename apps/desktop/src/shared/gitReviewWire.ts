@@ -141,7 +141,7 @@ export interface Hunk {
 
 export interface FileDiff {
   id: string;
-  source: 'staged' | 'unstaged' | 'commit' | 'branch';
+  source: 'staged' | 'unstaged' | 'commit' | 'branch' | 'turn';
   path: string;
   oldPath: string | null;
   status: DiffChangeKind;

@@ -583,49 +583,66 @@ function sessionsSetStatus(readyDb, args) {
 // 会话分享(.xdtshare)导入落库: 与 worker/opHandlers/tx.ts 的同名 handler 保持一致。
 // 单事务插 session 行 + 全量 messages, 任一行非法整体回滚零写入;
 // session 已存在按 ALREADY_EXISTS 抛(并发双导入兜底)。
+// 协同包经可选 orca 段在同一事务追加 Worker 会话 + orca_teams/orca_workers 关系图。
 function sessionImportShare(readyDb, args) {
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
   const messages = expectArray(payload.messages, 'messages');
-  const sessionId = expectString(session.id, 'session.id');
+  const replaceSessions = payload.replaceSessions == null
+    ? []
+    : expectArray(payload.replaceSessions, 'replaceSessions').map((raw, i) => {
+        const replacement = asRecord(raw, 'replaceSessions[' + i + ']');
+        const status = expectString(replacement.status, 'replaceSessions[' + i + '].status');
+        if (status !== 'active' && status !== 'archived') {
+          throw new Error('replaceSessions[' + i + '].status must be active or archived');
+        }
+        return {
+          id: expectString(replacement.id, 'replaceSessions[' + i + '].id'),
+          status,
+        };
+      });
+  const orca = payload.orca == null ? null : asRecord(payload.orca, 'orca');
+  const insertSession = readyDb.prepare(
+    'INSERT INTO sessions (id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode, provider_id, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled, agent_kind, orca_role, source, extra_dirs, codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+  );
   const insertMessage = readyDb.prepare(
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
   );
-  const messageCount = readyDb.transaction(() => {
+  const insertSessionWithMessages = (rawSession, rawMessages) => {
+    const sessionId = expectString(rawSession.id, 'session.id');
     const existing = readyDb.prepare('SELECT id FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (existing) {
       throw Object.assign(new Error('session already exists: ' + sessionId), { code: 'ALREADY_EXISTS' });
     }
-    readyDb.prepare(
-      'INSERT INTO sessions (id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode, provider_id, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled, agent_kind, source, extra_dirs, codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    ).run(
+    insertSession.run(
       sessionId,
-      expectString(session.title, 'session.title'),
-      nullableString(session.workingDir),
-      expectString(session.workspaceKind, 'session.workspaceKind'),
-      nullableString(session.worktreePath),
-      expectString(session.model, 'session.model'),
-      expectString(session.effort, 'session.effort'),
-      expectString(session.permissionMode, 'session.permissionMode'),
-      nullableString(session.providerId),
-      expectString(session.status, 'session.status'),
-      nullableString(session.sdkSessionId),
-      expectNumber(session.totalTokenUsage, 'session.totalTokenUsage'),
-      expectNumber(session.totalCostUsd, 'session.totalCostUsd'),
-      expectNumber(session.contextTokens, 'session.contextTokens'),
-      expectNumber(session.contextWindow, 'session.contextWindow'),
-      session.fastMode ? 1 : 0,
-      session.planModeEnabled ? 1 : 0,
-      expectString(session.agentKind, 'session.agentKind'),
-      expectString(session.source, 'session.source'),
-      expectString(session.extraDirs, 'session.extraDirs'),
-      session.codexHistoryHasProductPrompt == null ? null : (session.codexHistoryHasProductPrompt ? 1 : 0),
-      nullableNumber(session.clearedAt),
-      nullableNumber(session.userSendAt),
-      expectNumber(session.createdAt, 'session.createdAt'),
-      expectNumber(session.updatedAt, 'session.updatedAt'),
+      expectString(rawSession.title, 'session.title'),
+      nullableString(rawSession.workingDir),
+      expectString(rawSession.workspaceKind, 'session.workspaceKind'),
+      nullableString(rawSession.worktreePath),
+      expectString(rawSession.model, 'session.model'),
+      expectString(rawSession.effort, 'session.effort'),
+      expectString(rawSession.permissionMode, 'session.permissionMode'),
+      nullableString(rawSession.providerId),
+      expectString(rawSession.status, 'session.status'),
+      nullableString(rawSession.sdkSessionId),
+      expectNumber(rawSession.totalTokenUsage, 'session.totalTokenUsage'),
+      expectNumber(rawSession.totalCostUsd, 'session.totalCostUsd'),
+      expectNumber(rawSession.contextTokens, 'session.contextTokens'),
+      expectNumber(rawSession.contextWindow, 'session.contextWindow'),
+      rawSession.fastMode ? 1 : 0,
+      rawSession.planModeEnabled ? 1 : 0,
+      expectString(rawSession.agentKind, 'session.agentKind'),
+      nullableString(rawSession.orcaRole),
+      expectString(rawSession.source, 'session.source'),
+      expectString(rawSession.extraDirs, 'session.extraDirs'),
+      rawSession.codexHistoryHasProductPrompt == null ? null : (rawSession.codexHistoryHasProductPrompt ? 1 : 0),
+      nullableNumber(rawSession.clearedAt),
+      nullableNumber(rawSession.userSendAt),
+      expectNumber(rawSession.createdAt, 'session.createdAt'),
+      expectNumber(rawSession.updatedAt, 'session.updatedAt'),
     );
-    for (const rawMessage of messages) {
+    for (const rawMessage of rawMessages) {
       const m = asRecord(rawMessage, 'message');
       insertMessage.run(
         expectString(m.id, 'message.id'),
@@ -640,7 +657,55 @@ function sessionImportShare(readyDb, args) {
         nullableNumber(m.rewindAt),
       );
     }
-    return messages.length;
+    return rawMessages.length;
+  };
+  const messageCount = readyDb.transaction(() => {
+    // 覆盖导入的替换必须与新图落库同事务:失败时旧 session 状态原子回滚。
+    // 不能走带异步资源清理副作用的 patchSessionMetaInDb。
+    const deleteReplacedSession = readyDb.prepare(
+      "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
+    );
+    const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
+    for (const replacedSession of replaceSessions) {
+      deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
+    }
+    let count = insertSessionWithMessages(session, messages);
+    if (orca) {
+      const team = asRecord(orca.team, 'orca.team');
+      readyDb.prepare(
+        'INSERT INTO orca_teams (id, lead_session_id, status, completed_at, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+      ).run(
+        expectString(team.id, 'orca.team.id'),
+        expectString(team.leadSessionId, 'orca.team.leadSessionId'),
+        expectString(team.status, 'orca.team.status'),
+        nullableNumber(team.completedAt),
+        expectNumber(team.createdAt, 'orca.team.createdAt'),
+        expectNumber(team.updatedAt, 'orca.team.updatedAt'),
+      );
+      const insertWorker = readyDb.prepare(
+        'INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,NULL,?,?,NULL,?,?)',
+      );
+      for (const rawWorker of expectArray(orca.workers, 'orca.workers')) {
+        const worker = asRecord(rawWorker, 'orca.workers[]');
+        const record = asRecord(worker.record, 'orca.workers[].record');
+        count += insertSessionWithMessages(
+          asRecord(worker.session, 'orca.workers[].session'),
+          expectArray(worker.messages, 'orca.workers[].messages'),
+        );
+        insertWorker.run(
+          expectString(record.id, 'orca.workers[].record.id'),
+          expectString(record.teamId, 'orca.workers[].record.teamId'),
+          expectString(record.sessionId, 'orca.workers[].record.sessionId'),
+          expectString(record.status, 'orca.workers[].record.status'),
+          nullableString(record.label),
+          expectString(record.role, 'orca.workers[].record.role'),
+          record.focused ? 1 : 0,
+          expectNumber(record.createdAt, 'orca.workers[].record.createdAt'),
+          expectNumber(record.updatedAt, 'orca.workers[].record.updatedAt'),
+        );
+      }
+    }
+    return count;
   })();
   return { messageCount };
 }

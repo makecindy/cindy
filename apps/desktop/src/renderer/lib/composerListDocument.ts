@@ -87,8 +87,7 @@ function parseListMarker(text: string): ListMarker | null {
       // CJK ordered markers are valid with or without a following space.
       // Keep that space in the item body so serialization preserves the
       // user's original form without adding another list attribute.
-      prefixLength:
-        marker === '、' ? ordered[1].length + marker.length : ordered[0].length,
+      prefixLength: marker === '、' ? ordered[1].length + marker.length : ordered[0].length,
       marker,
       separator: marker === '、' ? '' : ordered[3],
       start: Number(ordered[1]),
@@ -146,9 +145,7 @@ function listFromLines(
 
 function sameListMarker(left: ListMarker, right: ListMarker): boolean {
   return (
-    left.kind === right.kind &&
-    left.marker === right.marker &&
-    left.separator === right.separator
+    left.kind === right.kind && left.marker === right.marker && left.separator === right.separator
   );
 }
 
@@ -296,9 +293,7 @@ export function normalizeComposerDocumentJSON(document: JSONContent): JSONConten
   let fence: FenceState | null = null;
   for (const node of document.content) {
     const result: { blocks: JSONContent[]; fence: FenceState | null } =
-      node.type === 'paragraph'
-        ? paragraphToBlocks(node, fence)
-        : { blocks: [node], fence };
+      node.type === 'paragraph' ? paragraphToBlocks(node, fence) : { blocks: [node], fence };
     fence = result.fence;
     for (const block of result.blocks) {
       const previous = normalized.at(-1);
@@ -310,6 +305,58 @@ export function normalizeComposerDocumentJSON(document: JSONContent): JSONConten
     }
   }
   return { ...document, content: normalized };
+}
+
+export interface ComposerRestoreInsertion {
+  document: JSONContent;
+  insertedBlocks: JSONContent[];
+  nextInsertAt: number;
+}
+
+function emptyComposerParagraph(): JSONContent {
+  return { type: 'paragraph' };
+}
+
+/**
+ * Insert one failed optimistic send at a stable top-level block cursor.
+ *
+ * Each failed document contributes a trailing empty paragraph. It is the
+ * structural equivalent of Mobile's `\n\n` recovery separator and prevents a
+ * later editor hydration/normalization pass from merging compatible lists
+ * across FIFO message boundaries. When there is no newer draft, keep one extra
+ * empty tail paragraph so the user can type without mutating that separator.
+ */
+export function insertComposerDocumentForRestore(
+  failedSendDocument: JSONContent,
+  currentDraftDocument: JSONContent,
+  insertAt = 0,
+): ComposerRestoreInsertion {
+  const normalizedFailed = normalizeComposerDocumentJSON(failedSendDocument);
+  const normalizedCurrent = normalizeComposerDocumentJSON(currentDraftDocument);
+  const insertedBlocks =
+    normalizedFailed.type === 'doc' && Array.isArray(normalizedFailed.content)
+      ? [...normalizedFailed.content, emptyComposerParagraph()]
+      : [];
+  const normalizedCurrentBlocks =
+    normalizedCurrent.type === 'doc' && Array.isArray(normalizedCurrent.content)
+      ? normalizedCurrent.content
+      : [];
+  const currentBlocks =
+    normalizedCurrentBlocks.length > 0 ? normalizedCurrentBlocks : [emptyComposerParagraph()];
+  const boundedInsertAt = Math.max(0, Math.min(insertAt, currentBlocks.length));
+
+  return {
+    document: {
+      type: 'doc',
+      content: [
+        ...currentBlocks.slice(0, boundedInsertAt),
+        ...insertedBlocks,
+        ...currentBlocks.slice(boundedInsertAt),
+      ],
+    },
+    insertedBlocks,
+    nextInsertAt: boundedInsertAt + insertedBlocks.length,
+  };
 }
 
 /** Build a normalized composer document from plain clipboard/history text. */

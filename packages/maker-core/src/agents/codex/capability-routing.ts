@@ -47,6 +47,14 @@ function quoteTomlKeySegment(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+function renderThreadConfigKeySegment(value: string): string {
+  // app-server's thread config takes flattened paths, but unlike CLI `-c` it
+  // does not parse quotes around a bare-safe segment. Quoting `node_repl`
+  // therefore addresses a literal `"node_repl"` server and makes transport
+  // resolution fail. Keep quoting only for names that TOML cannot render bare.
+  return /^[A-Za-z0-9_-]+$/.test(value) ? value : quoteTomlKeySegment(value);
+}
+
 function isCodexHarnessPluginDirective(
   directive: CapabilityRouteOverride,
 ): boolean {
@@ -258,6 +266,15 @@ export function buildCodexCapabilityConfigOverrides(
     }
     if (
       directive.source.surface === 'mcp' &&
+      directive.invocation === 'disabled'
+    ) {
+      config[
+        `mcp_servers.${renderThreadConfigKeySegment(directive.source.id)}.enabled`
+      ] = false;
+      continue;
+    }
+    if (
+      directive.source.surface === 'mcp' &&
       directive.invocation === 'explicit-only' &&
       directive.source.containerId
     ) {
@@ -268,11 +285,11 @@ export function buildCodexCapabilityConfigOverrides(
         // same name. Disabling the original name also makes overlay failures
         // fail closed for the MCP surface.
         config[
-          `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${quoteTomlKeySegment(artifactId)}.enabled`
+          `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${renderThreadConfigKeySegment(artifactId)}.enabled`
         ] = false;
       }
       config[
-        `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${quoteTomlKeySegment(directive.source.id)}.default_tools_approval_mode`
+        `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${renderThreadConfigKeySegment(directive.source.id)}.default_tools_approval_mode`
       ] = 'prompt';
     }
   }

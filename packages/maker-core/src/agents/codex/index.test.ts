@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
+import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 
 import { CodexAgent } from './index.js';
 import { Method } from './app-server/protocol.js';
@@ -16,7 +17,7 @@ import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
 
-const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
+const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoisted(() => {
   type LineHandler = (line: string) => void;
   type StderrHandler = (line: string) => void;
   type CloseHandler = (info: { reason: string }) => void;
@@ -146,6 +147,16 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         this.emitLine({ id: req.id, result: { data: [], nextCursor: null } });
         return;
       }
+      if (req.method === 'mcpServerStatus/list') {
+        this.emitLine({
+          id: req.id,
+          result: {
+            data: [{ name: 'node_repl', tools: { js: { name: 'js' } } }],
+            nextCursor: null,
+          },
+        });
+        return;
+      }
       if (req.method === 'config/read') {
         this.emitLine({
           id: req.id,
@@ -221,11 +232,16 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
   }
 
   const createdTransports: MockCodexTransport[] = [];
-  return { MockCodexTransport, createdTransports };
+  const createdStdioOptions: Array<{
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }> = [];
+  return { MockCodexTransport, createdTransports, createdStdioOptions };
 });
 
 vi.mock('./app-server/stdioTransport.js', () => ({
-  createStdioTransport: () => {
+  createStdioTransport: (opts: { onProcessSpawned?: (pid: number) => void | (() => void) }) => {
+    createdStdioOptions.push(opts);
+    opts.onProcessSpawned?.(7_000 + createdStdioOptions.length);
     const transport = new MockCodexTransport();
     createdTransports.push(transport);
     return transport;
@@ -234,6 +250,7 @@ vi.mock('./app-server/stdioTransport.js', () => ({
 
 beforeEach(() => {
   createdTransports.length = 0;
+  createdStdioOptions.length = 0;
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
@@ -321,6 +338,9 @@ function installFakeHost(
   requestImpl?: (method: string, params: unknown) => Promise<unknown> | unknown,
   opts: {
     codexProxyActive?: boolean;
+    codexBrowserUseAvailable?: boolean;
+    codexBrowserUseVersion?: string;
+    codexBrowserMcpToolAvailable?: boolean;
     remoteCompactionProviderId?: string;
     userAgent?: string;
     codexHome?: string;
@@ -377,6 +397,15 @@ function installFakeHost(
   });
   const unsubscribeThread = vi.fn(async () => {});
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
+  const isCodexBrowserUseAvailable = vi.fn(
+    () => opts.codexBrowserUseAvailable === true,
+  );
+  const getCodexBrowserUseVersion = vi.fn(
+    () => opts.codexBrowserUseVersion ?? null,
+  );
+  const waitForMcpTool = vi.fn(async () => (
+    opts.codexBrowserMcpToolAvailable ?? opts.codexBrowserUseAvailable === true
+  ));
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const getSessionMcpConfig = vi.fn((sessionInstanceId?: string) =>
     opts.buildSessionMcpConfig?.(sessionInstanceId) ?? {},
@@ -390,10 +419,18 @@ function installFakeHost(
     subscribeThread,
     unsubscribeThread,
     isCodexProxyActive,
+    isCodexBrowserUseAvailable,
+    getCodexBrowserUseVersion,
+    waitForMcpTool,
     getRemoteCompactionProviderId,
     getSessionMcpConfig,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
+    // 0.145 不给 spawn 子线程发 thread/started,session 层改为从 spawn item 主动
+    // 登记血缘;fake 里只记录调用,路由行为由 host.test.ts 的真 transport 覆盖。
+    reserveDescendantLineage: vi.fn(),
+    registerDescendantLineage: vi.fn(),
+    discardPendingDescendantLineage: vi.fn(),
   };
 
   Object.defineProperty(agent, 'getHost', {
@@ -589,6 +626,160 @@ describe('CodexAgent capability routing', () => {
     ],
   } as const;
 
+  it('resolves workspace routing once from the frozen session context', async () => {
+    const resolveCapabilityRouting = vi.fn(() => ({
+      overrides: [
+        {
+          capabilityId: 'browser-use',
+          source: {
+            kind: 'harness-plugin' as const,
+            harness: 'codex',
+            surface: 'plugin' as const,
+            id: 'chrome@openai-bundled',
+          },
+          invocation: 'disabled' as const,
+        },
+      ],
+    }));
+    const agent = new CodexAgent(createDeps({}, { resolveCapabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      codexBrowserUseAvailable: true,
+      codexBrowserUseVersion: '26.727.51351',
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-scoped-capability-routing',
+      model: 'gpt-5.4',
+      workingDir: '/workspace/browser-off',
+      vendorOptions: { frozenDisabledPluginIds: ['browser'] },
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+
+    expect(resolveCapabilityRouting).toHaveBeenCalledOnce();
+    expect(resolveCapabilityRouting).toHaveBeenCalledWith({
+      workingDir: '/workspace/browser-off',
+      remoteHostId: undefined,
+      vendorOptions: { frozenDisabledPluginIds: ['browser'] },
+      codexBrowserUseProvisioned: true,
+      codexBrowserUseVersion: '26.727.51351',
+      ensureCodexBrowserUseReady: expect.any(Function),
+    });
+    expect(params.config).toMatchObject({
+      'plugins."chrome@openai-bundled".enabled': false,
+    });
+    expect(host.waitForMcpTool).not.toHaveBeenCalled();
+
+    await handle.close();
+  });
+
+  it('preserves the remote daemon Browser companion snapshot', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => {
+      expect(ctx?.remoteHostId).toBe('remote-browser-host');
+      return {
+        extraArgs: [],
+        extraEnv: {},
+        codexBrowserUseAvailable: true,
+        codexBrowserUseVersion: '26.727.51351',
+        codexBrowserUseStartupTimeoutMs: 120_000,
+      };
+    });
+    const remoteTransport = new MockCodexTransport();
+    const getRemoteCodexTransport = vi.fn(() => remoteTransport);
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexExtraSpawnConfig,
+      getRemoteCodexTransport,
+    }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-browser-companion',
+      model: 'gpt-5.4',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-browser-host',
+    });
+    const hosts = (agent as unknown as {
+      hosts: Map<string, {
+        isCodexBrowserUseAvailable(): boolean;
+        getCodexBrowserUseVersion(): string | null;
+      }>;
+    }).hosts;
+
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
+      remoteHostId: 'remote-browser-host',
+      credentialMode: undefined,
+    });
+    expect(getRemoteCodexTransport).toHaveBeenCalledWith('remote-browser-host');
+    expect([...hosts.values()]).toHaveLength(1);
+    expect([...hosts.values()][0]?.isCodexBrowserUseAvailable()).toBe(true);
+    expect([...hosts.values()][0]?.getCodexBrowserUseVersion()).toBe('26.727.51351');
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('fails closed when a provisioned companion does not publish the js tool', async () => {
+    let ready: boolean | undefined;
+    const resolveCapabilityRouting = vi.fn(async (
+      ctx: Parameters<NonNullable<AgentDeps['resolveCapabilityRouting']>>[0],
+    ) => {
+      ready = await ctx.ensureCodexBrowserUseReady();
+      return { overrides: [] };
+    });
+    const agent = new CodexAgent(createDeps({}, { resolveCapabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      codexBrowserUseAvailable: true,
+      codexBrowserMcpToolAvailable: false,
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-browser-companion-missing-tool',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(host.waitForMcpTool).toHaveBeenCalledWith('node_repl', 'js', {
+      timeoutMs: 2_000,
+    });
+    expect(host.waitForMcpTool).toHaveBeenCalledTimes(2);
+    expect(resolveCapabilityRouting).toHaveBeenCalledWith(expect.objectContaining({
+      codexBrowserUseProvisioned: true,
+    }));
+    expect(ready).toBe(false);
+
+    await handle.close();
+  });
+
+  it('retries a transient Browser companion readiness miss before freezing routing', async () => {
+    let ready: boolean | undefined;
+    const resolveCapabilityRouting = vi.fn(async (
+      ctx: Parameters<NonNullable<AgentDeps['resolveCapabilityRouting']>>[0],
+    ) => {
+      ready = await ctx.ensureCodexBrowserUseReady();
+      return { overrides: [] };
+    });
+    const agent = new CodexAgent(createDeps({}, { resolveCapabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      codexBrowserUseAvailable: true,
+    });
+    host.waitForMcpTool
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-browser-companion-transient-miss',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(host.waitForMcpTool).toHaveBeenCalledTimes(2);
+    expect(ready).toBe(true);
+
+    await handle.close();
+  });
+
   it('applies host-owned plugin policy to new and resumed Codex 0.145 threads', async () => {
     const listComputerUseSkill = (method: string, params: unknown) => {
       if (method !== Method.SkillsList) return undefined;
@@ -630,8 +821,8 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(startParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
       'skills.config': [
         {
@@ -665,8 +856,8 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(resumeParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
       'skills.config': [
         {
@@ -825,7 +1016,7 @@ describe('CodexAgent capability routing', () => {
       }],
     });
     expect(params.config).not.toHaveProperty(
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode',
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode',
     );
     expect(params.config).not.toHaveProperty(
       'plugins."computer-use@openai-bundled".enabled',
@@ -1459,6 +1650,204 @@ describe('CodexAgent capability routing', () => {
     } finally {
       vi.useRealTimers();
     }
+    await handle.close();
+  });
+
+  it('inherits capability routing into descendant MCP items and clears it at child terminal', async () => {
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => method === Method.TurnStart
+        ? { turn: { id: 'root-capability-turn' } }
+        : undefined,
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-capability-routing',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '请用 $feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification || !handlers.mcpServerElicitation) {
+      throw new Error('expected descendant capability handlers');
+    }
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'root-capability-turn',
+      item: {
+        id: 'root-spawn-capability',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-capability-thread',
+      },
+    });
+    handlers.descendantNotification('child-capability-thread', 'item/started', {
+      threadId: 'child-capability-thread',
+      turnId: 'child-capability-turn',
+      item: {
+        id: 'child-routed-mcp',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+
+    const childRequest = {
+      threadId: 'child-capability-thread',
+      turnId: 'child-capability-turn',
+      serverName: 'cindy-routed-feishu-delegate',
+      mode: 'form' as const,
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_name: 'feishu_read_messages',
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    };
+    await expect(handlers.mcpServerElicitation(childRequest)).resolves.toEqual({
+      action: 'accept',
+      content: null,
+      _meta: null,
+    });
+
+    // The same inherited selector must reach a nested grandchild as well.
+    handlers.descendantNotification('child-capability-thread', 'item/started', {
+      threadId: 'child-capability-thread',
+      turnId: 'child-capability-turn',
+      item: {
+        id: 'nested-capability-spawn',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'grandchild-capability-thread',
+      },
+    });
+    handlers.descendantNotification('grandchild-capability-thread', 'item/started', {
+      threadId: 'grandchild-capability-thread',
+      turnId: 'grandchild-capability-turn',
+      item: {
+        id: 'grandchild-routed-mcp',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    await expect(
+      handlers.mcpServerElicitation({
+        ...childRequest,
+        threadId: 'grandchild-capability-thread',
+        turnId: 'grandchild-capability-turn',
+      }),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+    handlers.descendantNotification('child-capability-thread', 'turn/completed', {
+      threadId: 'child-capability-thread',
+      turn: { id: 'child-capability-turn', status: 'completed' },
+    });
+    await expect(handlers.mcpServerElicitation(childRequest)).resolves.toEqual({
+      action: 'decline',
+      content: null,
+      _meta: null,
+    });
+
+    await handle.close();
+  });
+
+  it('falls back to inherited thread selection when a child item predates turn binding', async () => {
+    const pendingTurnStart = deferred<{ turn: { id: string } }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => method === Method.TurnStart ? pendingTurnStart.promise : undefined,
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-capability-race',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const sendPromise = handle.send({
+      type: 'user',
+      content: '请用 $feishu-delegate:message-feishu-coworkers 查消息',
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.descendantThreadStarted || !handlers.descendantNotification || !handlers.mcpServerElicitation) {
+      throw new Error('expected descendant capability handlers');
+    }
+
+    // The child route is known before the root turn/start response binds the
+    // root selector. Its first item therefore cannot bind a child turn yet.
+    handlers.descendantThreadStarted({
+      thread: {
+        id: 'race-child-thread',
+        parentThreadId: 'start-thread-id',
+        model: 'gpt-5.4-mini',
+      },
+    });
+    handlers.descendantNotification('race-child-thread', 'item/started', {
+      threadId: 'race-child-thread',
+      turnId: 'race-child-turn',
+      item: {
+        id: 'race-child-routed-mcp',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+
+    // This is the authoritative root acceptance, but it arrives after the
+    // child item. The child turn map remains empty; the thread map is not.
+    handlers.turnStarted({
+      threadId: 'start-thread-id',
+      turn: { id: 'race-root-turn' },
+    });
+    await expect(
+      handlers.mcpServerElicitation({
+        threadId: 'race-child-thread',
+        turnId: 'race-child-turn',
+        serverName: 'cindy-routed-feishu-delegate',
+        mode: 'form',
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+          tool_name: 'feishu_read_messages',
+        },
+        message: 'Allow tool call',
+        requestedSchema: {},
+      }),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+    pendingTurnStart.resolve({ turn: { id: 'race-root-turn' } });
+    await sendPromise;
     await handle.close();
   });
 });
@@ -2380,10 +2769,12 @@ describe('CodexAgent.refreshLocalModels', () => {
       extraEnv: {},
       codexProxyActive: ctx.credentialMode === 'provider-oauth',
     }));
+    const registerLocalCodexAppServerProcess = vi.fn();
     const agent = new CodexAgent(createDeps({}, {
       onCodexLocalModelsListed,
       prepareCodexLocalCredentialModeSwitch,
       prepareCodexExtraSpawnConfig,
+      registerLocalCodexAppServerProcess,
     }));
     const xaiHandle = await agent.startSession({
       sessionId: 'session-provider-oauth-before-openai-refresh',
@@ -2397,6 +2788,10 @@ describe('CodexAgent.refreshLocalModels', () => {
     ).resolves.toBe(true);
 
     expect(createdTransports).toHaveLength(2);
+    expect(registerLocalCodexAppServerProcess.mock.calls).toEqual([
+      [{ pid: 7_001, role: 'task-host' }],
+      [{ pid: 7_002, role: 'control-plane-service' }],
+    ]);
     expect(createdTransports[0].closed).toBe(false);
     expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
     expect(createdTransports[0].lines.some((line) => (
@@ -3774,6 +4169,30 @@ describe('CodexAgent send', () => {
 });
 
 describe('CodexAgent MCP thread context hooks', () => {
+  it('binds Browser companion availability to the concrete app-server host', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
+      extraArgs: [],
+      extraEnv: {},
+      codexBrowserUseAvailable: true,
+    }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-browser-companion-host-snapshot',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const hosts = (agent as unknown as {
+      hosts: Map<string, { isCodexBrowserUseAvailable(): boolean }>;
+    }).hosts;
+
+    expect([...hosts.values()]).toHaveLength(1);
+    expect([...hosts.values()][0]?.isCodexBrowserUseAvailable()).toBe(true);
+
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('passes target context to Codex extra spawn config and reuses the shared local host', async () => {
     const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
       extraArgs: ['-c', 'mcp_servers.cindy_test.url="http://127.0.0.1:1234/mcp/cindy_test"'],
@@ -3812,7 +4231,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports[0].closed).toBe(true);
   });
 
-  it('runs utility calls on the shared local host instead of spawning another local host', async () => {
+  it('keeps utility calls on the task host and account RPCs on an isolated control-plane host', async () => {
     const agent = new CodexAgent(createDeps());
 
     const handle = await agent.startSession({
@@ -3828,10 +4247,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       rateLimitsByLimitId: null,
       rateLimitResetCredits: { availableCount: 2, credits: null },
     };
-    createdTransports[0].setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
-    createdTransports[0].setMockResponse(Method.AccountRateLimitResetCreditConsume, {
-      result: { outcome: 'reset' },
-    });
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
+      transport.setMockResponse(Method.AccountRateLimitResetCreditConsume, {
+        result: { outcome: 'reset' },
+      });
+    };
 
     await agent.setMemory(true);
     const pushCountAfterSet = createdTransports[0].lines
@@ -3852,12 +4273,13 @@ describe('CodexAgent MCP thread context hooks', () => {
       creditId: 'credit-earliest',
     })).resolves.toEqual({ outcome: 'reset' });
 
-    expect(createdTransports).toHaveLength(1);
+    expect(createdTransports).toHaveLength(2);
     expect(createdTransports[0].lines.some((line) => line.includes('skills/list'))).toBe(true);
     expect(createdTransports[0].lines.some((line) => line.includes('config/read'))).toBe(true);
     expect(createdTransports[0].lines.some((line) => line.includes('memory/reset'))).toBe(true);
-    expect(createdTransports[0].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(true);
-    expect(createdTransports[0].lines.some((line) => (
+    expect(createdTransports[0].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(false);
+    expect(createdTransports[1].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(true);
+    expect(createdTransports[1].lines.some((line) => (
       line.includes('account/rateLimitResetCredit/consume')
       && line.includes('018f4ec7-c6d8-7f10-8d43-9f8791d33000')
       && line.includes('credit-earliest')
@@ -3942,7 +4364,15 @@ describe('CodexAgent MCP thread context hooks', () => {
         result: { outcome: 'reset' },
       });
     };
-    const agent = new CodexAgent(createDeps());
+    const registerLocalCodexAppServerProcess = vi.fn();
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
+      extraArgs: [],
+      extraEnv: {},
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      registerLocalCodexAppServerProcess,
+      prepareCodexExtraSpawnConfig,
+    }));
 
     await expect(agent.readAccountRateLimits()).resolves.toEqual(rateLimits);
     await expect(agent.consumeAccountRateLimitResetCredit({
@@ -3950,12 +4380,32 @@ describe('CodexAgent MCP thread context hooks', () => {
     })).resolves.toEqual({ outcome: 'reset' });
 
     expect(createdTransports).toHaveLength(1);
+    expect(registerLocalCodexAppServerProcess).toHaveBeenCalledWith({
+      pid: 7_001,
+      role: 'control-plane-service',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      hostPurpose: 'control-plane',
+    });
+    expect(Array.from(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+    )).toEqual(['local-control:oauth-bearer']);
     expect(createdTransports[0].lines[0]).toContain('initialize');
     expect(createdTransports[0].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(true);
     await agent.dispose();
   });
 
-  it('refuses account reset RPCs on a differently-authenticated active host', async () => {
+  it('keeps a differently-authenticated task host alive while account RPCs use control-plane', async () => {
+    const rateLimits = {
+      rateLimits: { planType: 'plus', primary: { usedPercent: 42, windowMinutes: 300 } },
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 1, credits: null },
+    };
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
+    };
     const agent = new CodexAgent(createDeps());
     const handle = await agent.startSession({
       sessionId: 'session-gateway-host',
@@ -3964,9 +4414,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
 
-    await expect(agent.readAccountRateLimits()).rejects.toThrow(/active Codex session/i);
-    expect(createdTransports).toHaveLength(1);
+    await expect(agent.readAccountRateLimits()).resolves.toEqual(rateLimits);
+    expect(createdTransports).toHaveLength(2);
     expect(createdTransports[0].closed).toBe(false);
+    expect(createdTransports[1].lines.some((line) => (
+      line.includes('account/rateLimits/read')
+    ))).toBe(true);
 
     await handle.close();
     await agent.dispose();
@@ -4096,6 +4549,198 @@ describe('CodexAgent MCP thread context hooks', () => {
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
     });
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('silently invalidates idle sessions when the local host is force-retired, while still notifying busy ones', async () => {
+    // 回归:切账号/auth 失效触发 force-retire 时,旧实现把终态 transport error 广播给
+    // 所有订阅者——闲置/已完成的会话也会收到永久红框(#1391 场景,用户侧实测:闲置
+    // 4 小时的已完成会话被写 app-server force-retired 错误)。修复后 host 发结构化
+    // hostForcedRetire 信号,由每个 session 按自身状态收口:空闲订阅者静默失效,
+    // 真实在飞的订阅者收到终态错误 + Done。
+    const agent = new CodexAgent(createDeps());
+
+    const idleHandle = await agent.startSession({
+      sessionId: 'session-force-retire-idle',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const busyHandle = await agent.startSession({
+      sessionId: 'session-force-retire-busy',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+
+    // 两个会话共用一个 app-server host(共享 codex app-server)。
+    expect(createdTransports).toHaveLength(1);
+    const transport = createdTransports[0];
+
+    const idleEvents: Array<Record<string, unknown>> = [];
+    const busyEvents: Array<Record<string, unknown>> = [];
+    const collectIdle = (async () => {
+      for await (const event of idleHandle.events()) idleEvents.push(event as Record<string, unknown>);
+    })();
+    const collectBusy = (async () => {
+      for await (const event of busyHandle.events()) busyEvents.push(event as Record<string, unknown>);
+    })();
+
+    // busy 会话先进入 in-flight turn;idle 会话保持空闲。
+    // threadSeq 从 1 递增:第一个 startSession(idle)拿到 thread-1,第二个(busy)拿到 thread-2。
+    transport.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-2', turn: { id: 'turn-forced-retire-busy' } },
+    });
+    await waitForExpectation(() => {
+      expect(busyHandle.isTurnRunning?.()).toBe(true);
+    });
+    expect(idleHandle.isTurnRunning?.()).toBe(false);
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with idle subscriber');
+
+    // busy 会话:照旧收到一次终态 transport error + Done,isTurnRunning 复位。
+    expect(busyHandle.isTurnRunning?.()).toBe(false);
+    await waitForExpectation(() => {
+      expect(busyEvents.some((e) => e.type === 'error')).toBe(true);
+      expect(busyEvents.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(true);
+    });
+
+    // idle 会话:不产生任何 error/终态事件(否则 UI 会留下永久红框)。
+    // 断言放在事件流结束后(await collectIdle 之后),不用固定 sleep 赌时序。
+    await idleHandle.close();
+    await busyHandle.close();
+    await collectIdle;
+    await collectBusy;
+    expect(idleEvents.some((e) => e.type === 'error')).toBe(false);
+    expect(idleEvents.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(false);
+
+    await agent.dispose();
+  });
+
+  it('idle session send after force-retire rejects with stale-host error', async () => {
+    // P2 (chatgpt-codex-connector on #1720): 静默失效的空闲会话在 force-retire 后
+    // 下次 send 会因 isCurrentHost()===false 抛 stale-host 错误, 不会透明重建。
+    // 这是本 PR 的已知边界: 透明重建(换 host + 重新 thread)属于独立改动, 这里
+    // 只把行为钉死, 防止未来无意的语义漂移。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-idle-then-send',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire idle then send');
+
+    await expect(
+      handle.send({ type: 'user', content: 'hello after retire' }),
+    ).rejects.toThrow(/Codex session expired/);
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('collapses a pending turn/start session with terminal error + Done when the local host is force-retired', async () => {
+    // 回归(Greptile P1 on #1720):空 turnId 的 transport error 无法收口
+    // turn/start pending 的会话(handler 的 targetsPendingTurn 要求非空 turnId),
+    // busy 会永久卡死。修复后由 hostForcedRetire 信号在 session 侧统一收口:
+    // 清理在途状态并推终态。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-pending-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    const transport = createdTransports[0];
+
+    // 模拟 turn/start 已发出但响应未回:send 前 handle 先推初始 status,
+    // 断言按顺序(初始 status → error → Done),不用 nextEvent 逐个取值。
+    const sendPromise = handle.send({ type: 'user', content: 'pending turn start' });
+    await waitForExpectation(() => {
+      expect(transport.lines.some((line) => line.includes('turn/start'))).toBe(true);
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with pending turn/start');
+
+    // pending turn/start 的会话必须收到一次终态 error + Done,且不残留 busy。
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await waitForExpectation(() => {
+      const errorIdx = events.findIndex((e) => e.type === 'error');
+      expect(errorIdx).toBeGreaterThan(0);
+      // 信号路径直接推 app-server-force-retired(reason 精确匹配);RPC 被 reject
+      // 时复用既有墓碑路径推 turn/start failed(无 reason 字段)。两者都必须是一次
+      // 终态,否则 UI 卡红框。willRetry 只有信号路径带 false,这里不强求。
+      expect(events[errorIdx]).toMatchObject({
+        type: 'error',
+        data: expect.objectContaining({ isTerminal: true }),
+      });
+      const doneIdx = events.findIndex((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done');
+      expect(doneIdx).toBeGreaterThan(errorIdx);
+      expect(events[doneIdx]).toMatchObject({
+        type: 'status',
+        data: expect.objectContaining({ status: 'Done', isRunning: false }),
+      });
+    });
+    expect(transport.closed).toBe(true);
+
+    await sendPromise.catch(() => undefined);
+    await collectEvents;
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('does not re-activate a force-retired session when a late turn/start success response arrives', async () => {
+    // 回归 (Greptile P1 on #1720): 强退发生在 turn/start 尚无 turnId 时, 迟到的
+    // 成功响应不得重新激活已终态收口的会话 (currentTurnId / isTurnInFlight 复活,
+    // 事件队列已 end → 上层 busy 永久卡死)。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-late-start-resp',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    const transport = createdTransports[0];
+
+    // turn/start 发出但响应不立即回 (挂起 RPC)。
+    const sendPromise = handle.send({ type: 'user', content: 'pending turn start' });
+    await waitForExpectation(() => {
+      expect(transport.lines.some((line) => line.includes('turn/start'))).toBe(true);
+    });
+
+    // 强退: notifySubscribersOfForcedRetire 同步执行 → quarantine + 终态收口。
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with late start response');
+
+    // 收口先发生: 终态 error + Done, 不再 busy。
+    await waitForExpectation(() => {
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+      expect(events.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(true);
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    // 迟到成功响应随后到达 (挂起 RPC 在 close/reject 之前 resolve 的竞态窗口)。
+    const line = transport.lines.find((l) => l.includes('turn/start'));
+    const req = line ? JSON.parse(line) : null;
+    if (req?.id !== undefined) {
+      transport.emitMockLine({ id: req.id, result: { turn: { id: 'late-success-turn' } } });
+    }
+    await sendPromise.catch(() => undefined);
+    // 事件流结束(collectEvents 完成)后再统一断言, 不用固定 sleep 赌时序:
+    // 全程只能有一次 error + 一次 Done, 迟到响应不得新增第二组终态。
+    await collectEvents;
+
+    // 不得复活 busy, 也不得新增第二组终态事件。
+    expect(handle.isTurnRunning?.()).toBe(false);
+    const errorCount = events.filter((e) => e.type === 'error').length;
+    expect(errorCount).toBe(1);
+    const doneCount = events.filter((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done').length;
+    expect(doneCount).toBe(1);
 
     await handle.close();
     await agent.dispose();
@@ -13729,6 +14374,161 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('registers buffered spawn lineage before slow turn reconciliation and replays child terminal state', async () => {
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        return attempt === 1 ? firstStart.promise : secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-subagent-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+
+    // 第一轮失败只用于武装既有的 pre-turn 对账路径。
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    });
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+
+    // 第二轮的 started 与 spawn item 都先于 turn/start response。spawn 的卡片处理
+    // 仍应排队,但 child 血缘必须立刻登记,不能等可能超过 5s 的对账完成。
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-buffered-spawn' } });
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-buffered-spawn',
+      item: {
+        id: 'spawn-buffered-v2',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-buffered-v2',
+        agentPath: '/root/slow-child',
+      },
+    });
+    expect(host.reserveDescendantLineage).toHaveBeenCalledWith(
+      'child-buffered-v2',
+      'start-thread-id',
+    );
+    expect(host.registerDescendantLineage).not.toHaveBeenCalled();
+    expect(events.some((event) => event.type === 'agent_task_update')).toBe(false);
+
+    // child 用量与终态在父 spawn 重放前到达:tracker 先缓冲,对账后必须和 spawn
+    // 同批重放,最终卡片直接收口 completed 而不是永久 running。
+    handlers.descendantNotification?.('child-buffered-v2', 'thread/tokenUsage/updated', {
+      threadId: 'child-buffered-v2',
+      tokenUsage: { total: { totalTokens: 7_777 } },
+    });
+    handlers.descendantNotification?.('child-buffered-v2', 'turn/completed', {
+      threadId: 'child-buffered-v2',
+      turn: { id: 'child-turn-buffered', status: 'completed' },
+    });
+
+    secondStart.resolve({ turn: { id: 'turn-buffered-spawn' } });
+    await send2;
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+      'child-buffered-v2',
+      'start-thread-id',
+    );
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as {
+          taskId?: string;
+          status?: string;
+          usage?: { totalTokens?: number };
+        })
+        .filter((update) => update.taskId === 'spawn-buffered-v2')
+        .at(-1);
+      expect(last?.status).toBe('completed');
+      expect(last?.usage?.totalTokens).toBe(7_777);
+    });
+
+    await handle.close();
+  });
+
+  it('discards provisional spawn lineage when turn reconciliation proves the parent orphan', async () => {
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        return attempt === 1 ? firstStart.promise : secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-orphaned-subagent-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    });
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-parent-turn' } });
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-parent-turn',
+      item: {
+        id: 'orphan-spawn',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'orphan-child-thread',
+      },
+    });
+    expect(host.reserveDescendantLineage).toHaveBeenCalledWith(
+      'orphan-child-thread',
+      'start-thread-id',
+    );
+    expect(host.registerDescendantLineage).not.toHaveBeenCalled();
+
+    // A different response proves the buffered parent turn is an orphan. Its child route
+    // must be discarded rather than left attached to the live replacement turn.
+    secondStart.resolve({ turn: { id: 'replacement-parent-turn' } });
+    await send2;
+    expect(host.discardPendingDescendantLineage).toHaveBeenCalledWith(
+      'orphan-child-thread',
+      'start-thread-id',
+    );
+    expect(host.registerDescendantLineage).not.toHaveBeenCalledWith(
+      'orphan-child-thread',
+      'start-thread-id',
+    );
+
+    await handle.close();
+  });
+
   it('holds a buffered turn approval request and declines it once the response proves the turn an orphan (codex R12 P1)', async () => {
     // 孤儿 turn 在对账前发审批请求: 请求挂起不上 UI; 响应证明孤儿 →
     // 按 decline 释放 — 用户不能为隐藏 turn 批准操作。
@@ -14256,6 +15056,127 @@ describe('CodexAgent turn lifecycle', () => {
       }),
     ).resolves.toEqual({ decision: 'decline' });
     expect(interactionResolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('keeps verified descendant server requests outside the root orphan gate', async () => {
+    const failedStart = deferred<unknown>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return failedStart.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-request-after-root-start-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+    const handlers = host.getThreadHandlers();
+    if (
+      !handlers?.commandExecutionApproval
+      || !handlers.fileChangeApproval
+      || !handlers.mcpServerElicitation
+      || !handlers.permissionsApproval
+      || !handlers.requestUserInput
+      || !handlers.dynamicToolCall
+    ) {
+      throw new Error('expected all descendant server request handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const resolver = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
+      if (request.kind === 'permission') {
+        return { kind: 'permission', behavior: 'allow' };
+      }
+      if (request.kind !== 'ask_user_question') {
+        throw new Error(`unexpected interaction kind: ${request.kind}`);
+      }
+      return {
+        kind: 'ask_user_question',
+        answers: { [request.questions[0]?.question ?? '']: 'Continue' },
+      };
+    });
+    handle.setInteractionResolver(resolver);
+
+    const send = handle.send({ type: 'user', content: 'start root turn' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    failedStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    const interruptsBeforeRequests = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnInterrupt,
+    ).length;
+    const child = { threadId: 'child-thread-id', turnId: 'child-turn-id' };
+
+    await expect(handlers.commandExecutionApproval({
+      ...child,
+      itemId: 'child-command',
+      command: 'pwd',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    await expect(handlers.fileChangeApproval({
+      ...child,
+      itemId: 'child-file-change',
+      grantRoot: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    await expect(handlers.mcpServerElicitation({
+      ...child,
+      serverName: 'cindy_contacts',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_params: { name: 'contacts_search', args: { query: 'Carol' } },
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    })).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+    await expect(handlers.permissionsApproval({
+      ...child,
+      itemId: 'child-permissions',
+      permissions: { network: true },
+    })).resolves.toEqual({ permissions: { network: true }, scope: 'turn' });
+    await expect(handlers.requestUserInput({
+      ...child,
+      itemId: 'child-input',
+      questions: [{
+        id: 'continue',
+        header: 'Continue',
+        question: 'Continue child task?',
+        isOther: false,
+        isSecret: false,
+        options: [],
+      }],
+    }, { requestId: 'child-input-request' })).resolves.toEqual({
+      answers: { continue: { answers: ['Continue'] } },
+    });
+    await expect(handlers.dynamicToolCall({
+      ...child,
+      callId: 'child-dynamic-call',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'direction',
+          header: 'Direction',
+          question: 'Choose child direction?',
+        }],
+      },
+    }, { requestId: 'child-dynamic-request' })).resolves.toMatchObject({
+      success: true,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(6);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnInterrupt,
+    )).toHaveLength(interruptsBeforeRequests);
     await handle.close();
   });
 
@@ -17815,7 +18736,8 @@ describe('CodexAgent reconnect-stall watchdog', () => {
 });
 
 describe('CodexAgent context window reporting', () => {
-  // agent 侧只负责两件事:按 turn 归属模型、把 host 给的已核实上限与上报值取小。
+  // agent 侧只负责两件事:按 turn 归属模型、已核实上限存在时优先用它(2026-08-04 起
+  // 不再与上报值取小,见 capContextWindow 注释)。
   // 「目录里这个窗口算不算已核实、该用哪条路由的」判定在 host
   // (apps/desktop/.../catalog-to-descriptors.ts 的 resolveVerifiedContextWindow,有独立用例)。
   const GATEWAY_MODEL = 'codex/gpt-5.6-sol';
@@ -17897,7 +18819,12 @@ describe('CodexAgent context window reporting', () => {
     ).toBe(372_000);
   });
 
-  it('上报值本来就更小时取上报值(路由真被降窗)', async () => {
+  // 2026-08-04 语义变更: 上报值更小时**不再**取上报值。原先的 min() 前提是「上报值可信,
+  // 只是可能虚高」, 实测证伪 —— 会话中途切模型后 codex 继续上报切换前那个模型的窗口
+  // (旧模型 258400 vs 新模型的真实窗口), min() 会把已核实的正确窗口拉回旧值, 上下文占比
+  // 与 memory flush 阈值全程按错的窗口走。「路由真被降窗」与「上报值陈旧」在协议上无法
+  // 区分(都只是一个更小的数字), 二选一时信我们自己按 (provider, model) 核实过的那份。
+  it('上报值更小时仍取已核实窗口(与陈旧上报值无法区分,不采信)', async () => {
     expect(
       await reportedContextWindow(
         agentWithWindows({ [GATEWAY_MODEL]: 372_000 }),
@@ -17905,7 +18832,37 @@ describe('CodexAgent context window reporting', () => {
         GATEWAY_MODEL,
         128_000,
       ),
-    ).toBe(128_000);
+    ).toBe(372_000);
+  });
+
+  // 本次故障的核心回归 (rollout 019fcd52 实测): 切模型后 codex 一直上报旧模型的
+  // 258400, 新模型的已核实窗口必须压过它 —— 否则整个会话按旧窗口核算上下文。
+  it('切模型后上游仍报旧模型窗口时,按新模型的已核实窗口核算', async () => {
+    const agent = agentWithVerified((_p, modelId) =>
+      modelId === 'claude-opus-5' ? 1_000_000 : 258_400,
+    );
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-model-switch',
+      model: GATEWAY_MODEL,
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.send({ type: 'user', content: 'go' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    pushUsage(handlers, 'turn-1', 258_400);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(258_400);
+
+    if (!handle.setModel) throw new Error('expected setModel support');
+    await handle.setModel('claude-opus-5');
+    // 切模型后的新 turn: 上游**仍**报 258400(这正是上游的 bug), 我们必须按新模型算。
+    await handle.send({ type: 'user', content: 'again' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+    pushUsage(handlers, 'turn-2', 258_400);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+    await handle.close();
   });
 
   // host 返回 null 覆盖了所有「不该收敛」的情形:目录未覆盖、只有派生兜底值(自定义 provider
@@ -18180,7 +19137,11 @@ describe('CodexAgent context window reporting', () => {
 
     // 映射已就位 → 子线程的实时事件应当当场路由成卡片更新,而不是被缓冲到 completed。
     handlers.descendantThreadStarted({
-      thread: { id: 'child-thread-1', parentThreadId: 'start-thread-id' },
+      thread: {
+        id: 'child-thread-1',
+        parentThreadId: 'start-thread-id',
+        model: 'codex/gpt-5.6-sol',
+      },
     });
     handlers.descendantNotification('child-thread-1', 'item/started', {
       threadId: 'child-thread-1',
@@ -18199,13 +19160,814 @@ describe('CodexAgent context window reporting', () => {
     });
     const updates = events
       .filter((e) => e.type === 'agent_task_update')
-      .map((e) => e.data as { taskId?: string; status?: string; usage?: { totalTokens?: number; toolUses?: number } });
+      .map((e) => e.data as {
+        taskId?: string;
+        status?: string;
+        model?: string;
+        usage?: { totalTokens?: number; toolUses?: number };
+      });
     // 运行期就能看到真实聚合(工具数与 token),不是等 completed 才补。
     expect(updates.some((u) => u.taskId === 'spawn-item-1')).toBe(true);
     const last = updates.filter((u) => u.taskId === 'spawn-item-1').at(-1);
     expect(last?.usage?.toolUses).toBe(1);
     expect(last?.usage?.totalTokens).toBe(4_242);
+    expect(last?.model).toBe('codex/gpt-5.6-sol');
     expect(last?.status).toBe('running');
+
+    await handle.close();
+  });
+
+  it('forwards root and descendant Codex diffs into one merged turn capture event', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-root-diff' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-root-diff',
+      diff: 'diff --git a/root.txt b/root.txt\n--- a/root.txt\n+++ b/root.txt\n@@ -1 +1 @@\n-old\n+root\n',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-diff-thread', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'grandchild-diff-thread', parentThreadId: 'child-diff-thread' },
+    });
+    handlers.descendantNotification('child-diff-thread', 'turn/diff/updated', {
+      threadId: 'child-diff-thread',
+      turnId: 'child-diff-turn',
+      diff: 'diff --git a/child.txt b/child.txt\n--- a/child.txt\n+++ b/child.txt\n@@ -1 +1 @@\n-old\n+child\n',
+    });
+    handlers.descendantNotification('grandchild-diff-thread', 'turn/diff/updated', {
+      threadId: 'grandchild-diff-thread',
+      turnId: 'grandchild-diff-turn',
+      diff: 'diff --git a/grandchild.txt b/grandchild.txt\n--- a/grandchild.txt\n+++ b/grandchild.txt\n@@ -1 +1 @@\n-old\n+grandchild\n',
+    });
+
+    await vi.waitFor(() => {
+      const diffs = events.filter((event) => event.type === 'turn_diff');
+      expect(diffs.length).toBeGreaterThanOrEqual(3);
+    });
+    const lastDiff = events.filter((event) => event.type === 'turn_diff').at(-1);
+    expect(lastDiff?.data).toMatchObject({ turnId: 'turn-root-diff', cwd: '/repo' });
+    expect((lastDiff?.data as { diff: string }).diff).toContain('root.txt');
+    expect((lastDiff?.data as { diff: string }).diff).toContain('child.txt');
+    expect((lastDiff?.data as { diff: string }).diff).toContain('grandchild.txt');
+
+    await handle.close();
+  });
+
+  it('ignores descendant diffs that arrive after the child turn is terminal', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-terminal-descendant-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-terminal-child' } });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-terminal-diff', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-terminal-diff', 'turn/diff/updated', {
+      threadId: 'child-terminal-diff',
+      turnId: 'child-terminal-turn',
+      diff: 'diff --git a/child.txt b/child.txt\n--- a/child.txt\n+++ b/child.txt\n@@ -1 +1 @@\n-old\n+child-final\n',
+    });
+    handlers.descendantNotification('child-terminal-diff', 'turn/completed', {
+      threadId: 'child-terminal-diff',
+      turn: { id: 'child-terminal-turn', status: 'completed' },
+    });
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      expect((last?.data as { diff?: string } | undefined)?.diff).toContain('+child-final');
+    });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-terminal-child', status: 'completed' },
+    });
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-after-terminal-child' },
+    });
+    handlers.descendantNotification('child-terminal-diff', 'turn/diff/updated', {
+      threadId: 'child-terminal-diff',
+      turnId: 'child-terminal-turn',
+      diff: 'diff --git a/child.txt b/child.txt\n--- a/child.txt\n+++ b/child.txt\n@@ -1 +1 @@\n-old\n+stale-late-child\n',
+    });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-after-terminal-child',
+      diff: 'diff --git a/root.txt b/root.txt\n--- a/root.txt\n+++ b/root.txt\n@@ -1 +1 @@\n-old\n+root-current\n',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      const diff = (last?.data as { diff?: string } | undefined)?.diff ?? '';
+      expect(last?.data).toMatchObject({ turnId: 'turn-after-terminal-child' });
+      expect(diff).toContain('+root-current');
+      expect(diff).not.toContain('+child-final');
+      expect(diff).not.toContain('+stale-late-child');
+    });
+
+    await handle.close();
+  });
+
+  it('merges same-file descendant hunks without duplicating the diff block', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-same-file-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-same-file' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-same-file',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1 +1 @@\n-old-root\n+root-change',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-same-file', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-same-file', 'turn/diff/updated', {
+      threadId: 'child-same-file',
+      turnId: 'child-same-file-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -20 +20 @@\n-old-child\n+child-change',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      const diff = (last?.data as { diff?: string } | undefined)?.diff ?? '';
+      expect(diff).toContain('+root-change');
+      expect(diff).toContain('+child-change');
+    });
+    const merged = (events.filter((event) => event.type === 'turn_diff').at(-1)?.data as { diff: string }).diff;
+    expect((merged.match(/^diff --git /gm) ?? []).length).toBe(1);
+    expect((merged.match(/^@@ /gm) ?? []).length).toBe(2);
+    expect(merged).not.toContain('+++ b/shared.txt\n\n@@');
+    expect(merged.endsWith('\n')).toBe(true);
+
+    await handle.close();
+  });
+
+  it('composes overlapping descendant hunks into the final same-file patch', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-overlapping-file-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-overlap' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-overlap',
+      diff: 'diff --git a/shared.txt b/shared.txt\nindex 1111111..2222222 100644\n--- a/shared.txt\n+++ b/shared.txt\n@@ -2,2 +2,2 @@\n-old-b\n+root-b\n tail',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-overlap', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-overlap', 'turn/diff/updated', {
+      threadId: 'child-overlap',
+      turnId: 'child-overlap-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\nindex 2222222..3333333 100644\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1,3 +1,3 @@\n head\n-root-b\n+child-b\n tail',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      const data = last?.data as { diff?: string; isComplete?: boolean } | undefined;
+      expect(data?.isComplete).toBe(true);
+      expect(data?.diff).toContain('-old-b');
+      expect(data?.diff).toContain('+child-b');
+    });
+    const merged = (events.filter((event) => event.type === 'turn_diff').at(-1)?.data as { diff: string }).diff;
+    expect((merged.match(/^diff --git /gm) ?? []).length).toBe(1);
+    expect((merged.match(/^@@ /gm) ?? []).length).toBe(1);
+    expect(merged).not.toContain('index ');
+    expect(merged).not.toContain('root-b');
+    expect(merged).toContain(' head');
+    expect(merged).toContain(' tail');
+    const original = 'head\nold-b\ntail\n';
+    const applied = applyPatch(original, merged);
+    expect(applied).toBe('head\nchild-b\ntail\n');
+    expect(applyPatch(applied as string, formatPatch(reversePatch(parsePatch(merged))))).toBe(original);
+
+    await handle.close();
+  });
+
+  it('composes overlapping descendant hunks with no-newline metadata', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-overlapping-no-newline-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-overlap-no-newline' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-overlap-no-newline',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+root\n\\ No newline at end of file',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-overlap-no-newline', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-overlap-no-newline', 'turn/diff/updated', {
+      threadId: 'child-overlap-no-newline',
+      turnId: 'child-overlap-no-newline-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1 +1 @@\n-root\n\\ No newline at end of file\n+child\n\\ No newline at end of file',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      const data = last?.data as { diff?: string; isComplete?: boolean } | undefined;
+      expect(data?.isComplete).toBe(true);
+      expect(data?.diff).toContain('-old');
+      expect(data?.diff).toContain('+child');
+    });
+
+    await handle.close();
+  });
+
+  it('composes an overlapping pure deletion at the preimage line', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-overlapping-delete-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-overlap-delete' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-overlap-delete',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -2 +2 @@\n-old\n+root',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-overlap-delete', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-overlap-delete', 'turn/diff/updated', {
+      threadId: 'child-overlap-delete',
+      turnId: 'child-overlap-delete-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -2 +1,0 @@\n-root',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      expect((last?.data as { isComplete?: boolean } | undefined)?.isComplete).toBe(true);
+    });
+    const merged = (events.filter((event) => event.type === 'turn_diff').at(-1)?.data as { diff: string }).diff;
+    expect(merged).toContain('@@ -2 +1,0 @@');
+    const original = 'head\nold\ntail\n';
+    const applied = applyPatch(original, merged);
+    expect(applied).toBe('head\ntail\n');
+    expect(applyPatch(applied as string, formatPatch(reversePatch(parsePatch(merged))))).toBe(original);
+    expect(merged).not.toContain('root');
+
+    await handle.close();
+  });
+
+  it('composes an overlapping pure insertion at the preimage boundary', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-overlapping-insert-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-overlap-insert' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-overlap-insert',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1,0 +2 @@\n+root',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-overlap-insert', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-overlap-insert', 'turn/diff/updated', {
+      threadId: 'child-overlap-insert',
+      turnId: 'child-overlap-insert-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -2 +2 @@\n-root\n+child',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      expect((last?.data as { isComplete?: boolean } | undefined)?.isComplete).toBe(true);
+    });
+    const merged = (events.filter((event) => event.type === 'turn_diff').at(-1)?.data as { diff: string }).diff;
+    expect(merged).toContain('@@ -1,0 +2 @@');
+    const original = 'head\ntail\n';
+    const applied = applyPatch(original, merged);
+    expect(applied).toBe('head\nchild\ntail\n');
+    expect(applyPatch(applied as string, formatPatch(reversePatch(parsePatch(merged))))).toBe(original);
+
+    await handle.close();
+  });
+
+  it('maps a non-overlapping pure deletion across an earlier insertion', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-shifted-delete-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-shifted-delete' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-shifted-delete',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1 +1,2 @@\n+inserted\n line-1',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-shifted-delete', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-shifted-delete', 'turn/diff/updated', {
+      threadId: 'child-shifted-delete',
+      turnId: 'child-shifted-delete-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -20 +19,0 @@\n-remove-me',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      expect((last?.data as { isComplete?: boolean } | undefined)?.isComplete).toBe(true);
+    });
+    const merged = (events.filter((event) => event.type === 'turn_diff').at(-1)?.data as { diff: string }).diff;
+    const original = `${Array.from({ length: 18 }, (_, index) => `line-${index + 1}`).join('\n')}\nremove-me\n`;
+    const expected = `inserted\n${Array.from({ length: 18 }, (_, index) => `line-${index + 1}`).join('\n')}\n`;
+    const applied = applyPatch(original, merged);
+    expect(applied).toBe(expected);
+    expect(applyPatch(applied as string, formatPatch(reversePatch(parsePatch(merged))))).toBe(original);
+    expect(merged).toContain('@@ -19 +19,0 @@');
+
+    await handle.close();
+  });
+
+  it('marks incompatible overlapping descendant hunks incomplete instead of publishing an invalid patch', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-conflicting-file-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-conflict' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-conflict',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1 +1 @@\n-old\n+root',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-conflict', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-conflict', 'turn/diff/updated', {
+      threadId: 'child-conflict',
+      turnId: 'child-conflict-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1 +1 @@\n-unrelated\n+child',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      const data = last?.data as { diff?: string; isComplete?: boolean } | undefined;
+      expect(data?.isComplete).toBe(false);
+      expect(data?.diff).toBe('');
+    });
+
+    await handle.close();
+  });
+
+  it('fails closed when same-file composition exceeds the hunk budget', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-over-budget-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+    const rootHunks = Array.from({ length: 512 }, (_, index) => {
+      const line = index * 10 + 1;
+      return `@@ -${line} +${line} @@\n-old-${index}\n+root-${index}`;
+    }).join('\n');
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-over-budget' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-over-budget',
+      diff: `diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n${rootHunks}`,
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-over-budget', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-over-budget', 'turn/diff/updated', {
+      threadId: 'child-over-budget',
+      turnId: 'child-over-budget-turn',
+      diff: 'diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -6000 +6000 @@\n-old-child\n+child',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      const data = last?.data as { diff?: string; isComplete?: boolean } | undefined;
+      expect(data?.isComplete).toBe(false);
+      expect(data?.diff).toBe('');
+    });
+
+    await handle.close();
+  });
+
+  it('clears an empty descendant snapshot from the merged turn diff', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-empty-descendant-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-empty-diff' } });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-empty-diff',
+      diff: 'diff --git a/root.txt b/root.txt\n--- a/root.txt\n+++ b/root.txt\n@@ -1 +1 @@\n-old\n+root',
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-empty-diff', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-empty-diff', 'turn/diff/updated', {
+      threadId: 'child-empty-diff',
+      turnId: 'child-empty-diff-turn',
+      diff: 'diff --git a/child.txt b/child.txt\n--- a/child.txt\n+++ b/child.txt\n@@ -1 +1 @@\n-old\n+child',
+    });
+    handlers.descendantNotification('child-empty-diff', 'turn/diff/updated', {
+      threadId: 'child-empty-diff',
+      turnId: 'child-empty-diff-turn',
+      diff: '',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      expect((last?.data as { diff?: string } | undefined)?.diff).toContain('root.txt');
+      expect((last?.data as { diff?: string } | undefined)?.diff).not.toContain('child.txt');
+    });
+    handlers.turnDiffUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-empty-diff',
+      diff: '',
+    });
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      expect((last?.data as { diff?: string } | undefined)?.diff).toBe('');
+    });
+
+    await handle.close();
+  });
+
+  it('completes the subagent card without any thread/started (codex 0.145 real behavior)', async () => {
+    // 生产实测(2026-08-04):0.145 只在显式 thread/start / fork RPC 时发
+    // thread/started,spawn 出的子线程从来不发。血缘必须在识别 spawn item 的那一刻
+    // 主动向 host 登记,子线程的实时用量与终态才路由得进来 —— 否则卡片停在 spawn
+    // 时的 running 帧,无用量、永不收口。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-no-thread-started',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-v2' } });
+
+    // V2 spawn:瞬时 subAgentActivity。识别即应向 host 登记血缘。
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-v2',
+      item: {
+        id: 'spawn-v2-1',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-thread-v2',
+        agentPath: '/root/scout',
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith('child-thread-v2', 'start-thread-id');
+
+    // 子线程全程只有 item / tokenUsage / turn 通知(0.145 真实形状),没有 thread/started。
+    handlers.descendantNotification('child-thread-v2', 'item/completed', {
+      threadId: 'child-thread-v2',
+      turnId: 'child-turn-v2',
+      item: { id: 'child-tool-v2', type: 'commandExecution' },
+    });
+    // 嵌套 spawn 只出现在子线程自己的流里 —— 必须也从 item 建立孙线程路由。
+    handlers.descendantNotification('child-thread-v2', 'item/started', {
+      threadId: 'child-thread-v2',
+      turnId: 'child-turn-v2',
+      item: {
+        id: 'spawn-v2-nested',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'grandchild-thread-v2',
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith('grandchild-thread-v2', 'child-thread-v2');
+    handlers.descendantNotification('grandchild-thread-v2', 'thread/tokenUsage/updated', {
+      threadId: 'grandchild-thread-v2',
+      tokenUsage: { total: { totalTokens: 1_000 } },
+    });
+    handlers.descendantNotification('grandchild-thread-v2', 'turn/completed', {
+      threadId: 'grandchild-thread-v2',
+      turn: { id: 'grandchild-turn', status: 'completed' },
+    });
+    handlers.descendantNotification('child-thread-v2', 'turn/completed', {
+      threadId: 'child-thread-v2',
+      turn: { id: 'child-turn-v2', status: 'completed' },
+    });
+
+    await vi.waitFor(() => {
+      const updates = events
+        .filter((e) => e.type === 'agent_task_update')
+        .map((e) => e.data as { taskId?: string; status?: string; usage?: { totalTokens?: number; toolUses?: number } })
+        .filter((u) => u.taskId === 'spawn-v2-1');
+      const last = updates.at(-1);
+      // 子线程 + 孙线程全部收口 → 卡片终态 completed,并带聚合用量。
+      expect(last?.status).toBe('completed');
+      expect(last?.usage?.toolUses).toBe(1);
+      expect(last?.usage?.totalTokens).toBe(1_000);
+    });
+
+    await handle.close();
+  });
+
+  it('does not keep failed nested spawn receiver ids running', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-failed-nested-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-root' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-root',
+      item: {
+        id: 'spawn-root',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-thread',
+      },
+    });
+
+    // V1 can report a failed nested spawn with receiver ids even though no
+    // receiver thread was actually started. It must be latched as failed, not
+    // attached as a running descendant that blocks the ancestor card forever.
+    handlers.descendantNotification('child-thread', 'item/completed', {
+      threadId: 'child-thread',
+      turnId: 'turn-child',
+      item: {
+        id: 'spawn-nested-failed',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'child-thread',
+        receiverThreadIds: ['phantom-grandchild'],
+        status: 'failed',
+        agentsStates: [],
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+      'phantom-grandchild',
+      'child-thread',
+    );
+
+    // Even a late lifecycle event cannot reopen the failed nested spawn.
+    handlers.descendantNotification('phantom-grandchild', 'turn/started', {
+      threadId: 'phantom-grandchild',
+      turn: { id: 'turn-phantom' },
+    });
+    handlers.descendantNotification('child-thread', 'turn/completed', {
+      threadId: 'child-thread',
+      turn: { id: 'turn-child', status: 'completed' },
+    });
+
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; status?: string })
+        .filter((update) => update.taskId === 'spawn-root')
+        .at(-1);
+      expect(last?.status).toBe('failed');
+    });
+
+    await handle.close();
+  });
+
+  it('registers a nested spawn completed after its parent turn already settled', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-late-nested-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-root' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-root',
+      item: {
+        id: 'spawn-root-late-nested',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-thread-late-nested',
+      },
+    });
+
+    handlers.descendantNotification('child-thread-late-nested', 'turn/completed', {
+      threadId: 'child-thread-late-nested',
+      turn: { id: 'child-turn-late-nested', status: 'completed' },
+    });
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; status?: string })
+        .filter((update) => update.taskId === 'spawn-root-late-nested')
+        .at(-1);
+      expect(last?.status).toBe('completed');
+    });
+
+    // App-server may deliver the spawning item's completed frame after the
+    // parent turn terminal. It remains authoritative for 0.145 lineage even
+    // though late tool provenance for the parent turn stays blocked.
+    handlers.descendantNotification('child-thread-late-nested', 'item/completed', {
+      threadId: 'child-thread-late-nested',
+      turnId: 'child-turn-late-nested',
+      item: {
+        id: 'spawn-grandchild-late',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'child-thread-late-nested',
+        receiverThreadIds: ['grandchild-thread-late'],
+        status: 'completed',
+        agentsStates: [],
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+      'grandchild-thread-late',
+      'child-thread-late-nested',
+    );
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; status?: string })
+        .filter((update) => update.taskId === 'spawn-root-late-nested')
+        .at(-1);
+      expect(last?.status).toBe('running');
+    });
+
+    handlers.descendantNotification('grandchild-thread-late', 'thread/tokenUsage/updated', {
+      threadId: 'grandchild-thread-late',
+      tokenUsage: { total: { totalTokens: 2_468 } },
+    });
+    handlers.descendantNotification('grandchild-thread-late', 'turn/completed', {
+      threadId: 'grandchild-thread-late',
+      turn: { id: 'grandchild-turn-late', status: 'completed' },
+    });
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as {
+          taskId?: string;
+          status?: string;
+          usage?: { totalTokens?: number };
+        })
+        .filter((update) => update.taskId === 'spawn-root-late-nested')
+        .at(-1);
+      expect(last?.status).toBe('completed');
+      expect(last?.usage?.totalTokens).toBe(2_468);
+    });
 
     await handle.close();
   });
@@ -18316,5 +20078,313 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
     await flush();
     expect(cardFrames()).toHaveLength(afterTerminal);
+  });
+});
+
+describe('CodexAgent compaction storm escalation', () => {
+  /**
+   * 复刻 rollout 019fcd52 (2026-08-04) 的故障:会话中途切模型后 codex 按旧模型窗口
+   * 反复压缩,每次压完水位纹丝不动。本仓修不了上游的窗口核算,但必须熔断并让用户看见。
+   */
+  function installStormHost(agent: CodexAgent) {
+    usageTotal = 0; // 每个用例独立累加,避免跨用例污染 total
+    let turnSeq = 0;
+    return installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.TurnInterrupt) return {};
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+  }
+
+  function collectEvents(handle: Awaited<ReturnType<CodexAgent['startSession']>>): AgentEvent[] {
+    const seen: AgentEvent[] = [];
+    void (async () => {
+      for await (const ev of handle.events()) seen.push(ev);
+    })();
+    return seen;
+  }
+
+  let usageTotal = 0;
+
+  function pushUsageTokens(
+    handlers: ThreadEventHandlers,
+    turnId: string,
+    inputTokens: number,
+  ): void {
+    usageTotal += inputTokens;
+    handlers.tokenUsageUpdated?.({
+      threadId: 'start-thread-id',
+      turnId,
+      tokenUsage: {
+        // total 是累加值,与 last 不同量级 —— 不把两者设成相同,否则测不出字段映射。
+        total: { inputTokens: usageTotal, cachedInputTokens: 0, outputTokens: 0 },
+        last: { inputTokens, cachedInputTokens: 0, outputTokens: 0 },
+        // 上游的 bug:切模型后仍报旧模型的 258400。
+        modelContextWindow: 258_400,
+      },
+    } as never);
+  }
+
+  /**
+   * 一轮真实压缩:压缩前水位 → contextCompaction → 一条 0(codex 的压缩完成标记)
+   * → 压缩后水位。实测每轮都是这个形状(rollout 019fcd52),那条 0 必须照实喂 ——
+   * 少了它,测的就是一个现实里不存在的时序。
+   */
+  function pushCompactionCycle(
+    handlers: ThreadEventHandlers,
+    turnId: string,
+    seq: number,
+    pre: number,
+    post: number,
+  ): void {
+    pushUsageTokens(handlers, turnId, pre);
+    handlers.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId,
+      item: { id: `compact-${seq}`, type: 'contextCompaction' },
+    } as never);
+    pushUsageTokens(handlers, turnId, 0);
+    pushUsageTokens(handlers, turnId, post);
+  }
+
+  /** 实测风暴的前四轮 (pre, post):历史已压到底只剩 30k,总量却仍是 326k。 */
+  const STORM_ROUNDS: ReadonlyArray<readonly [number, number]> = [
+    [176_539, 326_503],
+    [32_283, 325_868],
+    [30_544, 325_922],
+    [30_513, 327_909],
+  ];
+
+  /** 健康的长 turn:每轮都把 ~200k 的历史压回 30k 上下(floor 之间不单调下降)。 */
+  const HEALTHY_ROUNDS: ReadonlyArray<readonly [number, number]> = [
+    [210_000, 30_000],
+    [205_000, 31_000],
+    [198_000, 29_000],
+    [212_000, 32_000],
+    [207_000, 30_500],
+  ];
+
+  /** eventQueue 消费端是 async 迭代器,同步推完事件要让出两拍才收得到。 */
+  const flushEvents = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  /** 熔断有两条 reason(有无切模型证据),两条都要认。 */
+  const STORM_REASONS = [
+    'codex_compaction_not_converging',
+    'codex_compaction_not_converging_model_switch',
+  ];
+
+  function findStormError(seen: AgentEvent[]): AgentEvent | undefined {
+    return seen.find(
+      (ev) =>
+        ev.type === 'error' &&
+        STORM_REASONS.includes((ev.data as { reason?: string } | null)?.reason ?? ''),
+    );
+  }
+
+  it('连续无效压缩 → 推终态 error 并 interrupt turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-compaction-storm',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    // 实测风暴序列:把 30k 的历史压完,总量仍是 326k。
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+
+    await flushEvents();
+    const terminal = findStormError(seen);
+    expect(terminal).toBeDefined();
+    expect((terminal!.data as { isTerminal?: boolean }).isTerminal).toBe(true);
+    expect(
+      host.request.mock.calls.some(
+        ([method, params]) =>
+          method === Method.TurnInterrupt && (params as { turnId?: string }).turnId === 'turn-1',
+      ),
+    ).toBe(true);
+    await handle.close();
+  });
+
+  it('压缩确实生效时不熔断 —— 正常长会话不被误杀', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-compaction-healthy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    // 健康长 turn:每轮都把大历史压回 floor,floor 之间不要求单调下降。
+    for (const [i, [pre, post]] of HEALTHY_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+
+    await flushEvents();
+    expect(findStormError(seen)).toBeUndefined();
+    expect(
+      host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  /** 跑到熔断, 返回终态错误消息正文 (诊断文案由 modelSwitchRecord 决定)。 */
+  async function stormTerminalAfterSwitches(
+    sessionId: string,
+    switches: readonly string[],
+    /**
+     * server 把请求 id 规范化后的 wire 变体(如 'model-a-codex')。推一条
+     * thread/settings/updated 让 mutableModel 变成它 —— mutableCatalogModel 按设计
+     * 保持目录 id 不动。真实环境里 codex 就是这么干的,不模拟就测不到口径混用。
+     */
+    normalizedWireModel?: string,
+  ): Promise<{ message: string; reason: string }> {
+    const agent = new CodexAgent(createDeps());
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({ sessionId, model: 'model-a', workingDir: '/repo' });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    if (normalizedWireModel) {
+      handlers.threadSettingsUpdated?.({
+        threadId: 'start-thread-id',
+        threadSettings: { model: normalizedWireModel, serviceTier: 'default' },
+      } as never);
+    }
+
+    if (!handle.setModel) throw new Error('expected setModel support');
+    for (const m of switches) await handle.setModel(m);
+
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+    await flushEvents();
+    const terminal = findStormError(seen);
+    expect(terminal).toBeDefined();
+    await handle.close();
+    return terminal!.data as { message: string; reason: string };
+  }
+
+  // 回归 (Codex review, 2026-08-05): server 会把请求 id 规范化成只在 wire 上存在的
+  // 变体('model-a' → 'model-a-codex'), 而 threadSettingsUpdated 刻意只更新
+  // mutableModel、不动 mutableCatalogModel。切换记录若拿 mutableModel 当基准, A→B→A
+  // 时 'model-a' !== 'model-a-codex' 会导致记录清不掉 —— 熔断文案继续声称切换过模型,
+  // 还让用户"切回 model-a-codex"这个选择器里根本不存在的 id。
+  it('server 规范化 wire id 后, A→B→A 仍能正确清除记录', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-aba-wire',
+      ['model-b', 'model-a'],
+      'model-a-codex',
+    );
+    expect(reason).toBe('codex_compaction_not_converging');
+    expect(message).not.toContain('switched model');
+    // 尤其不能把 wire 变体透给用户 —— 它不在模型选择器里。
+    expect(message).not.toContain('model-a-codex');
+  });
+
+  it('server 规范化 wire id 后, A→B→C 的诊断仍用目录 id', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-abc-wire',
+      ['model-b', 'model-c'],
+      'model-a-codex',
+    );
+    expect(reason).toBe('codex_compaction_not_converging_model_switch');
+    expect(message).toContain('switched model from "model-a" to "model-c"');
+    expect(message).toContain('Switch back to "model-a"');
+    // wire 变体不得出现在给用户的文案里。
+    expect(message).not.toContain('model-a-codex');
+  });
+
+  // Codex review: A→B→A 原先会记成 {from:A,to:A}, 文案变成"从 A 切到 A, 请切回 A"。
+  // reason 也必须跟着退回通用那条 —— renderer 拿 reason 的本地化文案盖掉 message,
+  // 只把 message 改成不猜原因是没用的, 用户看到的仍是 reason 对应的那句。
+  it('A→B→A 切回原模型后不点名模型, 且用通用 reason', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-aba',
+      ['model-b', 'model-a'],
+    );
+    expect(reason).toBe('codex_compaction_not_converging');
+    expect(message).not.toContain('switched model');
+    // 落到不猜原因的兜底文案。
+    expect(message).toContain('system prompt and tool definitions');
+  });
+
+  // A→B→C: from 保持最初的 A(codex 一直按它算窗口), to 是最新的 C。
+  it('A→B→C 保留最初来源与最新目标, 且用切模型专用 reason', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-abc',
+      ['model-b', 'model-c'],
+    );
+    expect(reason).toBe('codex_compaction_not_converging_model_switch');
+    expect(message).toContain('switched model from "model-a" to "model-c"');
+    expect(message).toContain('Switch back to "model-a"');
+    expect(message).not.toContain('model-b');
+  });
+
+  it('开着 Maker Memory 时同样熔断(改成无条件回调没打断 flush 路径)', async () => {
+    // 上面两条用例走的是默认的 makerMemory 关闭态 —— 那正是改动前的空洞:
+    // onCompactBoundary 只在 memoryFlushController 存在时注册, 关掉 Maker Memory
+    // 的用户连压缩边界都收不到。这条补另一侧: 开着 memory 时熔断照旧, memory flush
+    // 的通知语义没被无条件化改坏。
+    // 记 debug 日志确认真的走进了 memory 开启分支 —— stub 形状不对时代码会静默
+    // 退回 controller=null, 这条用例就会悄悄退化成上面那条的副本。
+    const debugMessages: string[] = [];
+    const spyLogger: Logger = {
+      trace() {}, debug(msg: string) { debugMessages.push(msg); }, info() {},
+      warn() {}, error() {}, fatal() {},
+      child() { return spyLogger; },
+    };
+    const agent = new CodexAgent(
+      createDeps(
+        { makerMemoryEnabled: true },
+        {
+          logger: spyLogger,
+          makerMemory: {
+            async getStore() {
+              return { async getIndex() { return ''; } };
+            },
+          },
+        } as never,
+      ),
+    );
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-compaction-no-memory',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+
+    await flushEvents();
+    expect(debugMessages).toContain('maker memory loaded for session');
+    expect(findStormError(seen)).toBeDefined();
+    await handle.close();
   });
 });

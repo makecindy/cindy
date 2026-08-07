@@ -23,6 +23,11 @@ const h = vi.hoisted(() => ({
     })),
     writeMessages: vi.fn(async () => ({ invalidation: 0 })),
     readSessionList: vi.fn(async () => [] as unknown[]),
+    readSessionListWithInvalidation: vi.fn(async () => ({
+      devices: [] as unknown[],
+      ownerRoot: '/data/owners/x/device-link-mirror-cache',
+      accountCounter: 0,
+    })),
     writeSessionList: vi.fn(async () => undefined),
     clearDevice: vi.fn(async () => undefined),
     clearAll: vi.fn(async () => undefined),
@@ -41,6 +46,7 @@ vi.mock('../../logger', () => ({
 }));
 // 读路径要比对 owner 作用域路径(账号边界复核),这里给个稳定值即可。
 vi.mock('../../appSessionState', () => ({
+  activeOwnerScopeKey: (): string => 'cloud:owner-x:1',
   ownerScopedUserDataPath: (...parts: string[]): string => ['/data/owners/x', ...parts].join('/'),
 }));
 // 读路径还会查 purge 队列是否有待清记录;边界测试只关心授权,给"干净"。

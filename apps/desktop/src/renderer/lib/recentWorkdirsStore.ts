@@ -17,6 +17,8 @@
  * recent_workdirs 表。
  */
 
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+
 export interface RecentWorkdirEntry {
   /** 绝对路径(写入时已 trim,跟 sessions.workingDir 形态一致)。 */
   path: string;
@@ -121,7 +123,8 @@ if (typeof window !== 'undefined') {
   // 最便宜可靠 —— 表只有几行,IPC 开销可忽略。
   const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
   if (sessionsPush) {
-    sessionsPush.onCreated(() => {
+    sessionsPush.onCreated((_payload, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       void recentWorkdirsStore.forceRefresh().catch(() => {
         /* 静默:下次 ensure / 用户主动操作会再尝试 */
       });
@@ -132,7 +135,8 @@ if (typeof window !== 'undefined') {
   // 重拉一次幂等无害。
   const recentApi = window.electronAPI?.localDb?.recentWorkdirs;
   if (recentApi?.onChanged) {
-    recentApi.onChanged(() => {
+    recentApi.onChanged((_payload, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       void recentWorkdirsStore.forceRefresh().catch(() => {
         /* 静默:同上 */
       });

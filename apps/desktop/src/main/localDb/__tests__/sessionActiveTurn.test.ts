@@ -291,6 +291,29 @@ describe('sessionActiveTurn', () => {
     expect(notified[0]).toEqual(['s-notify', row!.last_turn_ended_at!]);
   });
 
+  it('freezes the notify context before an async barrier settles', async () => {
+    const { markSessionTurnEndedAfterBarrier, setOnSessionTurnEndedPersisted } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-notify-owner');
+    let currentOwner = 'owner-a';
+    const notifiedOwners: unknown[] = [];
+    setOnSessionTurnEndedPersisted(
+      (_sid, _endedAt, context) => notifiedOwners.push(context),
+      () => currentOwner,
+    );
+
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    markSessionTurnEndedAfterBarrier('s-notify-owner', barrier);
+    currentOwner = 'owner-b';
+    releaseBarrier();
+
+    await vi.waitFor(() => expect(notifiedOwners).toEqual(['owner-a']));
+  });
+
   it('notify carries the read-back MAX-guarded value, never a stale rewind', async () => {
     const { markSessionTurnEnded, setOnSessionTurnEndedPersisted } =
       await import('../sessionActiveTurn.js');

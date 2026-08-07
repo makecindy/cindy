@@ -263,6 +263,20 @@ export function createUtilityNodeWorkerProcess(
     'TMP',
     'LANG',
     'LC_ALL',
+    // 用户身份路径变量（是路径不是秘密）：gh / git 等 CLI 依赖它们定位用户级
+    // 配置。gh 会按 GH_CONFIG_DIR → XDG_CONFIG_HOME → 平台默认目录查找；
+    // Windows 上默认目录依赖 APPDATA / 用户目录，缺少这些变量会让 keyring 里明明
+    // 有登录的 gh 仍误报“未登录”。HOME 是 Unix 侧同义变量，一并透传。
+    'HOME',
+    'USERPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    // gh 允许用 GH_CONFIG_DIR 指定自定义配置目录；同属路径类变量，不含秘密。
+    'GH_CONFIG_DIR',
+    // XDG_CONFIG_HOME 也可指定 gh 配置目录，且在 Windows 上同样可能优先于 APPDATA。
+    'XDG_CONFIG_HOME',
   ] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,

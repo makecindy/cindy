@@ -73,8 +73,8 @@ describe('ChatInput steer shortcut contract', () => {
     // 回归防线:确认门相关符号不得重新出现在 ChatInput 里。
     const handleQueueSteerBlock = extractBetween(
       chatInputSource,
-      'const handleQueueSteer = useCallback(async (clientId: string) => {',
-      "const handleClickSend = useCallback(async (deliveryMode: MessageDeliveryMode = 'queue') => {",
+      'const handleQueueSteer = useCallback(',
+      'const handleClickSend = useCallback(',
     );
 
     expect(handleQueueSteerBlock).toContain('return onQueueSteer(clientId);');
@@ -83,8 +83,8 @@ describe('ChatInput steer shortcut contract', () => {
     expect(chatInputSource).not.toContain('confirmInterruptSteer');
     expect(chatInputSource).not.toContain('interruptConfirm');
     expect(pendingQueuePanelSource).toContain('turnRunning?: boolean;');
-    expect(pendingQueuePanelSource).toContain(
-      "const base = t(turnRunning ? 'newChat.pendingQueue.steerRunningTip' : 'newChat.pendingQueue.steerPausedTip');",
+    expect(pendingQueuePanelSource).toMatch(
+      /const base\s*=\s*t\(\s*turnRunning\s*\?\s*'newChat\.pendingQueue\.steerRunningTip'\s*:\s*'newChat\.pendingQueue\.steerPausedTip'/,
     );
   });
 

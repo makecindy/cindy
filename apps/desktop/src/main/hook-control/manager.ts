@@ -28,6 +28,7 @@ import {
   HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
   HOOK_FEATURE_SLACK_TOOLS,
+  HOOK_FEATURE_TURN_DELIVERY,
   makeBindRevoke,
   makeBindStart,
   makeHello,
@@ -93,6 +94,7 @@ import {
   groupLaneOf,
   recordGroupMessage,
   resetGroupContextCursors,
+  resetGroupContextCursorsSafely,
   sweepGroupWindowExpired,
 } from './groupWindow.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
@@ -751,6 +753,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_PROVIDER_BIND,
       HOOK_FEATURE_PROVIDER_PREFS,
       HOOK_FEATURE_SESSION_PICKER,
+      HOOK_FEATURE_TURN_DELIVERY,
     ],
     isEnabled: () => store.get().xEnabled,
     setEnabled: (enabled) => {
@@ -1518,7 +1521,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       drainLanePendingPrefs(lane);
       drainLanePendingBehavior(lane);
       if (lane.config.provider === 'telegram') {
-        resetGroupContextCursors();
+        resetGroupContextCursorsSafely();
         resetTelegramSpeakerRegistrationCache();
       }
     }
@@ -2305,6 +2308,21 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       );
       return;
     }
+    if (msg.type === 'turn.delivery') {
+      if (
+        expectedProvider !== 'x' ||
+        lane?.serverFeatures.includes(HOOK_FEATURE_TURN_DELIVERY) !== true
+      ) {
+        log.warn('turn.delivery ignored without negotiated X delivery ACK capability');
+        return;
+      }
+      if (dispatcher) {
+        dispatcher.handleTurnDelivery(dispatchId('x'), msg.payload);
+      } else {
+        log.warn('turn.delivery ignored (no dispatcher)');
+      }
+      return;
+    }
     if (msg.type === 'task.cancel') {
       log.info(`task.cancel received: requestId=${msg.payload.requestId}`);
       if (dispatcher) {
@@ -3078,7 +3096,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane.serverFeatures = [];
           lane.serverWelcomeReceived = false;
         }
-        resetGroupContextCursors();
+        // 普通账号边界只清内存热缓存；明确删除账号数据时才清官方群 durable cursor。
+        await resetGroupContextCursors({ clearPersisted: false });
         resetTelegramSpeakerRegistrationCache();
         notifySlackToolProviderEnabledIfChanged();
         notifyStatus(toView());

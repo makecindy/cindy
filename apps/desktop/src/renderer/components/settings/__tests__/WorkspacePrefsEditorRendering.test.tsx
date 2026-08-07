@@ -89,7 +89,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     triggerVariant?: string;
     maxVisibleModelRows?: number;
     disabled?: boolean;
-    onProviderChange?: (providerId: string | null, modelId?: string) => void;
+    onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
     onModelChange: (modelId: string) => void;
     reselectEmitsChange?: boolean;
     unknownModelLabel?: (modelId: string) => string;
@@ -111,7 +111,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       // 未知模型的 trigger 文案由调用方给出;这里回放它对一个不存在的 id 的结果。
       data-unknown-label={props.unknownModelLabel?.('ghost-model-1') ?? ''}
       onClick={() => props.onModelChange('gpt-5.5')}
-      // 分段行点击(供应商, 模型)原子选择 —— 回放 onProviderChange 的行为锁触发器。
+      // 分段行点击(供应商, 模型, effort)原子选择 —— 回放 onProviderChange 的行为锁触发器。
       onKeyDown={() => props.onProviderChange?.('anthropic', 'claude-opus-5')}
     />
   ),

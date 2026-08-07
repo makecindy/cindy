@@ -48,6 +48,7 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -863,7 +864,8 @@ function ExpandedView({
           off();
           if (timer) clearTimeout(timer);
         };
-        const off = window.electronAPI.maker.schedule.onEvent((raw) => {
+        const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
+          if (!isDataOwnerPushCurrent(ownerStamp)) return;
           const event = raw as SchedulerEvent;
           if (done) return;
           // 全局事件不含 scheduleId，提前过滤。
@@ -3762,7 +3764,7 @@ function RailPanels({
 
   const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-extrabold text-foreground">
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-foreground">
         {title}
       </span>
       <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">

@@ -11,8 +11,9 @@
  * (issue #882 第 3 点:网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent
  * availableModels,但仍在模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id
  * **首见胜出**去重（provider 序即 anthropic → openai → xd）。不可选来源不占 seen，同 id
- * 仍可由后续可用来源补上。唯一例外是 Pi 的同 id 冲突涉及 user provider：扁平能力没有
- * provider provenance，effort 必须收敛为各可选来源的交集，不能宣称某条实际路由不支持的档位。
+ * 仍可由后续可用来源补上。例外有两项：Pi 的同 id 冲突涉及 user provider 时，扁平能力没有
+ * provider provenance，effort 必须收敛为各可选来源的交集；后见 XD 条目携带当前 agent 的
+ * 区域默认标记时，把该标记并入首见 descriptor，避免跨 provider 去重吞掉服务端策略。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
  * （cc = 旧 CLAUDE_MODELS 序 then XD 追加序；codex = 旧 CODEX_MODELS 序 then 折扣追加序）。
@@ -80,8 +81,14 @@ function toDescriptor(
   // 默认可见性要透传：渲染层的种子默认模型取「排序第一**且默认可见**」的那个，没有它就会
   // 把默认收起的 legacy 模型选成默认 —— 用户在选择器里根本看不到自己的默认模型。
   if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
+  // 新对话默认种子标记要透传：渲染层 getDefaultModelForVendor 据它优先选中被标记的模型。
+  // pi tab 的条目多从 CC 投影而来，会带上 ['claude-code']，pi 侧按 'claude-code' 口径判定。
+  if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
+  const supportsImageInput = m.supportsImageInput
+    ?? (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
+  if (supportsImageInput !== undefined) d.supportsImageInput = supportsImageInput;
   return d;
 }
 
@@ -105,7 +112,29 @@ function intersectPiEffortCapabilities(
   return { ...first, efforts, defaultEffort };
 }
 
-/** 派生 availableModels：字段按 id 首见胜出；Pi + BYOM 同 id 时 effort 取安全交集。 */
+/**
+ * availableModels 按 id 拍平后仍要保留 XD 区域策略。展示/能力字段继续首见胜出；这里只把
+ * 当前 agent 对应的默认标记并到首见 descriptor。Pi 按既有协议复用 claude-code 标记。
+ */
+function mergeNewSessionDefaultMarker(
+  first: ModelDescriptor,
+  next: ModelDescriptor,
+  agent: AgentKind,
+): ModelDescriptor {
+  const marker = agent === 'pi' ? 'claude-code' : agent;
+  if (
+    next.newSessionDefault?.includes(marker) !== true ||
+    first.newSessionDefault?.includes(marker) === true
+  ) {
+    return first;
+  }
+  return {
+    ...first,
+    newSessionDefault: [...(first.newSessionDefault ?? []), marker],
+  };
+}
+
+/** 派生 availableModels：字段按 id 首见胜出；另收敛 Pi BYOM effort 与 XD 区域默认标记。 */
 export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): ModelDescriptor[] {
   const seen = new Map<string, SeenModelProjection>();
   const out: ModelDescriptor[] = [];
@@ -124,10 +153,17 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       });
       const previous = seen.get(m.id);
       if (previous) {
+        let merged = out[previous.index];
         if (agent === 'pi' && (previous.includesUserProvider || userProvider)) {
-          out[previous.index] = intersectPiEffortCapabilities(out[previous.index], descriptor);
+          merged = intersectPiEffortCapabilities(merged, descriptor);
           previous.includesUserProvider ||= userProvider;
         }
+        // 只有鉴权后的 XD /models 会被 active-catalog 投影成区域默认；公共 Registry 与
+        // user provider 均不能借同 id 碰撞改变默认策略。
+        if (provider.id === 'xd') {
+          merged = mergeNewSessionDefaultMarker(merged, descriptor, agent);
+        }
+        out[previous.index] = merged;
         continue;
       }
       seen.set(m.id, { index: out.length, includesUserProvider: userProvider });

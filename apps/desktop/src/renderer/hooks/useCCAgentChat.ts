@@ -126,6 +126,8 @@ interface UseCCAgentChatReturn {
       agentReferences?: AgentInputReference[];
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
+      beforeEnqueue?: () => Promise<boolean>;
+      onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
     },
   ) => Promise<boolean>;
   compactSession: (
@@ -149,6 +151,8 @@ interface UseCCAgentChatReturn {
       agentReferences?: AgentInputReference[];
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
+      beforeEnqueue?: () => Promise<boolean>;
+      onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
     },
   ) => Promise<boolean>;
   steerQueuedMessage: (clientId: string) => Promise<boolean>;
@@ -400,6 +404,8 @@ export function useCCAgentChat(
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
+        beforeEnqueue?: () => Promise<boolean>;
+        onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
       },
     ): Promise<boolean> => {
       if (!sessionId) return Promise.resolve(false);
@@ -454,6 +460,8 @@ export function useCCAgentChat(
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
+        beforeEnqueue?: () => Promise<boolean>;
+        onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
       },
     ) => {
       if (!sessionId) return Promise.resolve(false);
@@ -833,7 +841,9 @@ export function useCCAgentChat(
     errorReason:
       lightState.error != null
         ? (lightState.errorReason ?? null)
-        : (lightState.recoverableError != null ? (lightState.errorReason ?? null) : null),
+        : lightState.recoverableError != null
+          ? (lightState.errorReason ?? null)
+          : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,
@@ -841,8 +851,7 @@ export function useCCAgentChat(
     credentialSwitchWait: lightState.credentialSwitchWait,
     continuationInFlightClientId: lightState.continuationInFlightClientId,
     continuationTurnClientId: lightState.continuationTurnClientId,
-    continuationInFlightProjectionCapability:
-      lightState.continuationInFlightProjectionCapability,
+    continuationInFlightProjectionCapability: lightState.continuationInFlightProjectionCapability,
     loadOlderMessages,
     isLoadingMore: lightState.isLoadingMore,
     hasMoreMessages: lightState.hasMoreMessages,

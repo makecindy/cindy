@@ -154,6 +154,11 @@ config/endpoint.dev.json
 # 发布机本地地区 / 签名配置；仓库只保留对应的 .example 文件。
 apps/mobile/scripts/self-host-regions.json
 apps/desktop/scripts/release-regions.json
+# 客户端日志上报目标(SLS project / logstore / 区域)。真值唯一事实源在
+# cindy-build-scripts 仓根,打包机由 sync-desktop-release-kit.sh 拷回;
+# 仓内只保留 config/log-upload.json.example。缺失时 cn/global 打包会硬失败,
+# dev 缺失则该渠道的日志上报整体关闭。
+config/log-upload.json
 # 视觉基线截图是开发者本地对照数据(可能截到真实会话内容),不入仓;
 # 本地跑 visual-baseline-check 时会自动生成。
 apps/mobile/e2e/visual-baselines/

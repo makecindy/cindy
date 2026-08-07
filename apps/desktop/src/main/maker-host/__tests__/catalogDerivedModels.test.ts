@@ -177,6 +177,27 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  it('projects explicit provider-model image modalities and leaves unknown capability unset', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const xd = catalog.providers.find((provider) => provider.id === 'xd');
+    expect(xd).toBeDefined();
+    xd!.models.pi = [
+      model('gateway-vision', { modalities: { input: ['text', 'image'], output: ['text'] } }),
+      model('gateway-text', { modalities: { input: ['text'], output: ['text'] } }),
+      model('gateway-unknown'),
+    ];
+
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-vision')).toMatchObject({
+      supportsImageInput: true,
+    });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-text')).toMatchObject({
+      supportsImageInput: false,
+    });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-unknown')).not.toHaveProperty(
+      'supportsImageInput',
+    );
+  });
+
   it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
@@ -235,6 +256,39 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     ]);
     // 首见胜出:opus 取 anthropic 条目(supportsFastMode=true),不是 xd 的 false。
     expect(cc.find((m) => m.id === 'claude-opus-4-8')?.supportsFastMode).toBe(true);
+  });
+
+  it('同 id 首见胜出时仍合并 XD 对当前 agent 的区域默认标记', () => {
+    const catalog = injectedCatalog();
+    const anthropic = catalog.providers.find((provider) => provider.id === 'anthropic')!;
+    const xd = catalog.providers.find((provider) => provider.id === 'xd')!;
+
+    xd.models['claude-code'] = (xd.models['claude-code'] ?? []).map((entry) =>
+      entry.id === 'claude-opus-4-8'
+        ? { ...entry, newSessionDefault: ['claude-code', 'codex'] }
+        : entry,
+    );
+    xd.models.codex = (xd.models.codex ?? []).map((entry) =>
+      entry.id === 'gpt-5.5'
+        ? { ...entry, newSessionDefault: ['claude-code', 'codex'] }
+        : entry,
+    );
+    anthropic.models.pi = [model('shared-default')];
+    xd.models.pi = [
+      model('shared-default', { newSessionDefault: ['claude-code', 'codex'] }),
+    ];
+
+    expect(
+      deriveAvailableModels(catalog, 'claude-code').find(
+        (entry) => entry.id === 'claude-opus-4-8',
+      ),
+    ).toMatchObject({ supportsFastMode: true, newSessionDefault: ['claude-code'] });
+    expect(
+      deriveAvailableModels(catalog, 'codex').find((entry) => entry.id === 'gpt-5.5'),
+    ).toMatchObject({ contextWindow: 272_000, newSessionDefault: ['codex'] });
+    expect(
+      deriveAvailableModels(catalog, 'pi').find((entry) => entry.id === 'shared-default'),
+    ).toMatchObject({ newSessionDefault: ['claude-code'] });
   });
 
   it('per-agent 分叉透传:gpt-5.5 cc=1M / codex=272k', () => {

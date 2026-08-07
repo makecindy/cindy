@@ -126,6 +126,25 @@ export async function resolveReviewScope(
     fallbackWorktreePath,
     fallbackWorkingDir: row.workingDir,
   });
+  // The review panel is intentionally local-only. Keep this guard explicit so
+  // the shared session resolver can also represent SSH probes without widening
+  // ReviewScope's local source contract.
+  if (resolved.source === 'remote') {
+    return disabledScope(sessionId, {
+      workingDir: row.workingDir,
+      worktreePath: fallbackWorktreePath,
+      disabledReason: 'remote-session',
+      disabledMessage: 'Git review for remote sessions is not available yet',
+      resolutionChain: [
+        {
+          source: 'remote',
+          path: row.workingDir,
+          ok: false,
+          reason: row.remoteHostId ?? 'remote-resolver',
+        },
+      ],
+    });
+  }
   const resolutionChain = [
     { source: 'telemetry', path: resolved.source === 'telemetry' ? resolved.workdir : null, ok: resolved.source === 'telemetry' },
     { source: 'worktree', path: fallbackWorktreePath, ok: resolved.source === 'worktree' },

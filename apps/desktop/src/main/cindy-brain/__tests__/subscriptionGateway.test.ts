@@ -674,6 +674,76 @@ describe('GhostTurnTranslator(status/done/error → did-turn-*)', () => {
     expect(ends).toHaveLength(1);
   });
 
+  it('claimed SDK boundaries keep one plugin turn open and accumulate usage', () => {
+    const nowRef = { t: 0 };
+    const { tr, starts, ends } = makeTranslator(nowRef);
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+
+    nowRef.t = 300;
+    tr.handleEvent({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+      turnContinuationId: 7,
+    });
+    tr.handleEvent({
+      type: 'done',
+      data: { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 4 } },
+      turnContinuationId: 7,
+    });
+    expect(starts).toHaveLength(1);
+    expect(ends).toHaveLength(0);
+
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    expect(starts).toHaveLength(1);
+    nowRef.t = 900;
+    tr.handleEvent({ type: 'status', data: { status: 'Done', isRunning: false } });
+    tr.handleEvent({
+      type: 'done',
+      data: { usage: { input_tokens: 3, output_tokens: 2, cache_creation_input_tokens: 6 } },
+    });
+
+    expect(ends).toEqual([
+      {
+        sessionId: 's1',
+        agent: 'claude-code',
+        model: 'opus',
+        durationMs: 900,
+        endReason: 'completed',
+        usage: {
+          inputTokens: 13,
+          outputTokens: 7,
+          cacheReadTokens: 4,
+          cacheCreationTokens: 6,
+        },
+      },
+    ]);
+  });
+
+  it('does not emit an empty usage object for zero-value continuation segments', () => {
+    const nowRef = { t: 0 };
+    const { tr, ends } = makeTranslator(nowRef);
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    tr.handleEvent({
+      type: 'done',
+      data: { usage: { input_tokens: 0, output_tokens: 0 } },
+      turnContinuationId: 8,
+    });
+    tr.handleEvent({
+      type: 'done',
+      data: { usage: { input_tokens: 0, output_tokens: 0 } },
+    });
+
+    expect(ends).toEqual([
+      {
+        sessionId: 's1',
+        agent: 'claude-code',
+        model: 'opus',
+        durationMs: 0,
+        endReason: 'completed',
+      },
+    ]);
+  });
+
   it('status false 后宽限窗内无 done/error = interrupted;terminal error 定性 error', () => {
     const nowRef = { t: 0 };
     const { tr, ends } = makeTranslator(nowRef);

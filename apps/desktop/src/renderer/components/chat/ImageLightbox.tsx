@@ -226,7 +226,9 @@ function isDirectCacheable(src: string): boolean {
   if (/^https?:\/\//.test(src)) return true;
   if (DIRECT_CACHEABLE_DATA_RE.test(src)) return true;
   const localFilePath = xdtFileUrlToPath(src);
-  return localFilePath !== null && DIRECT_CACHEABLE_EXTS.has(extractExt(localFilePath).toLowerCase());
+  return (
+    localFilePath !== null && DIRECT_CACHEABLE_EXTS.has(extractExt(localFilePath).toLowerCase())
+  );
 }
 
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
@@ -283,11 +285,8 @@ const counterStyle: React.CSSProperties = {
  * 对应,activeIndex 才准。
  */
 function collectGallery(): { items: GalleryImage[]; activeIndex: number } {
-  const root: ParentNode =
-    document.querySelector('[data-scroll-container]') ?? document;
-  const els = Array.from(
-    root.querySelectorAll<HTMLElement>('[data-gallery-src]'),
-  );
+  const root: ParentNode = document.querySelector('[data-scroll-container]') ?? document;
+  const els = Array.from(root.querySelectorAll<HTMLElement>('[data-gallery-src]'));
   const items: GalleryImage[] = [];
   let activeIndex = -1;
   els.forEach((el, i) => {
@@ -299,11 +298,9 @@ function collectGallery(): { items: GalleryImage[]; activeIndex: number } {
 
 /** 清掉所有遗留的 `data-gallery-active` 临时标记(lightbox 读取起始下标后调用)。 */
 function clearGalleryActiveMarks(): void {
-  document
-    .querySelectorAll<HTMLElement>('[data-gallery-active]')
-    .forEach((el) => {
-      delete el.dataset.galleryActive;
-    });
+  document.querySelectorAll<HTMLElement>('[data-gallery-active]').forEach((el) => {
+    delete el.dataset.galleryActive;
+  });
 }
 
 /**
@@ -422,9 +419,7 @@ export function ImageLightbox({
   );
   // 已保存的笔迹起步(托盘编辑或历史图再编辑)——"撤销之前的编辑"就是从
   // 这里往回 pop。
-  const [strokes, setStrokes] = useState<AnnotationStroke[]>(() => [
-    ...baselineStrokesRef.current,
-  ]);
+  const [strokes, setStrokes] = useState<AnnotationStroke[]>(() => [...baselineStrokesRef.current]);
   const [draftStroke, setDraftStroke] = useState<AnnotationStroke | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   // 图片自然尺寸:SVG viewBox 与烧录 canvas 的坐标基准。onLoad 时设置。
@@ -790,9 +785,7 @@ export function ImageLightbox({
 
   // 打开期间锁住聊天滚动容器。
   useEffect(() => {
-    const container = document.querySelector(
-      '[data-scroll-container]',
-    ) as HTMLElement | null;
+    const container = document.querySelector('[data-scroll-container]') as HTMLElement | null;
     if (container) container.style.overflowY = 'hidden';
     return () => {
       if (container) container.style.overflowY = '';
@@ -822,7 +815,13 @@ export function ImageLightbox({
   })();
   const canRevealRemote = Boolean(chatSessionId && remoteWorkdirRelPath);
   const hasAnyAction =
-    canCopy || canReveal || canRevealRemote || canOpenWith || canSaveAs || canSendToChat || canOpenInBrowser;
+    canCopy ||
+    canReveal ||
+    canRevealRemote ||
+    canOpenWith ||
+    canSaveAs ||
+    canSendToChat ||
+    canOpenInBrowser;
 
   // 画笔入口:发送场景要求能发送到对话(标注的出口是发送);编辑场景(托盘)
   // 出口是保存,不要求会话。源条件 = 字节可达(五种来源全覆盖:http/remote
@@ -1036,12 +1035,16 @@ export function ImageLightbox({
         }
       }
       const existing = getDraft(chatSessionId);
-      saveDraft(chatSessionId, {
-        text: existing?.text ?? null,
-        attachments: [...(existing?.attachments ?? []), attached],
-        quotes: existing?.quotes ?? [],
-        browserComments: existing?.browserComments ?? [],
-      });
+      saveDraft(
+        chatSessionId,
+        {
+          text: existing?.text ?? null,
+          attachments: [...(existing?.attachments ?? []), attached],
+          quotes: existing?.quotes ?? [],
+          browserComments: existing?.browserComments ?? [],
+        },
+        { preserveRemoteOptimisticRecovery: true },
+      );
       toast.success(t('chat.media.sentToChat'));
       handleClose();
     } catch (err) {
@@ -1303,7 +1306,10 @@ export function ImageLightbox({
           )}
           onClick={(e) => e.stopPropagation()}
         >
-          <LightboxToolbarButton onClick={discardAnnotation} label={t('chat.media.annotateDiscard')}>
+          <LightboxToolbarButton
+            onClick={discardAnnotation}
+            label={t('chat.media.annotateDiscard')}
+          >
             <X className="h-4 w-4" />
           </LightboxToolbarButton>
           <LightboxToolbarButton onClick={undoLastStroke} label={t('chat.media.annotateUndo')}>
@@ -1344,7 +1350,10 @@ export function ImageLightbox({
             </LightboxToolbarButton>
           ) : null}
           {canOpenInBrowser ? (
-            <LightboxToolbarButton onClick={handleOpenInBrowser} label={t('chat.media.openInBrowser')}>
+            <LightboxToolbarButton
+              onClick={handleOpenInBrowser}
+              label={t('chat.media.openInBrowser')}
+            >
               <Globe className="h-4 w-4" />
             </LightboxToolbarButton>
           ) : null}

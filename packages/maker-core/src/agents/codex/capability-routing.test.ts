@@ -67,6 +67,25 @@ describe('buildCodexSessionCapabilityRoutingPolicy', () => {
 });
 
 describe('buildCodexCapabilityConfigOverrides', () => {
+  it('can fail closed a host MCP server for one thread', () => {
+    const policy = {
+      overrides: [{
+        capabilityId: 'browser-use',
+        source: {
+          kind: 'harness-plugin' as const,
+          harness: 'codex',
+          surface: 'mcp' as const,
+          id: 'node_repl',
+        },
+        invocation: 'disabled' as const,
+      }],
+    };
+
+    expect(buildCodexCapabilityConfigOverrides(policy)).toEqual({
+      'mcp_servers.node_repl.enabled': false,
+    });
+  });
+
   it('disables the selected Codex plugin with a per-thread config override', () => {
     const policy = {
       overrides: [
@@ -141,8 +160,8 @@ describe('buildCodexCapabilityConfigOverrides', () => {
     } as const satisfies CapabilityRoutingPolicy;
 
     expect(buildCodexCapabilityConfigOverrides(policy)).toEqual({
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
     });
   });

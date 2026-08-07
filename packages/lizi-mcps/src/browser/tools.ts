@@ -227,7 +227,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     category: 'browser',
     description:
       '浏览器自动化统一入口。通过 action 选择 status/start/tabs/navigate/snapshot/screenshot/act 等操作; ' +
-      '优先使用 snapshot 返回的 ref 执行 click/type/press,不要猜测 CSS selector。',
+      '优先使用 snapshot 返回的 ref 执行 click/type/press,不要猜测 CSS selector。' +
+      '注意:直接调用本工具时,wait/evaluate/saveResource 不是顶层 action(会报 INVALID_ARGS),它们只能作为 act 的 request.kind 子操作(配方 steps 里仅 wait/evaluate 是合法 DSL action,saveResource 在配方中同样不可用)。',
     rules: ['browser-workflow', 'recipe-author'],
     inputShape: {
       action: z.enum(ACTIONS).describe('浏览器操作类型'),

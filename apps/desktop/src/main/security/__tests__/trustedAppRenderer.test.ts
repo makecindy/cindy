@@ -18,6 +18,8 @@ import {
   isTrustedAppRendererEventForLocation,
   isTrustedAppRendererUrl,
   isTrustedAppRendererWindowForLocation,
+  isTrustedCindyRendererWindowForLocation,
+  isTrustedTopLevelCindyRendererEventForLocation,
 } from '../trustedAppRenderer';
 
 const packagedRendererFile = path.resolve('/Applications/Cindy/resources/app/renderer/index.html');
@@ -54,6 +56,28 @@ describe('trustedAppRenderer · URL', () => {
 });
 
 describe('trustedAppRenderer · sender frame', () => {
+  it('URL-only 顶层判据接受同源 utility renderer，但仍拒绝子 frame 与外部地址', () => {
+    electronMocks.fromWebContents.mockReturnValue({ isDestroyed: () => false });
+    const utilityEvent = fakeEvent(pathToFileURL(packagedRendererFile).toString());
+
+    expect(
+      isTrustedTopLevelCindyRendererEventForLocation(utilityEvent, packagedOptions),
+    ).toBe(true);
+    expect(isTrustedAppRendererEventForLocation(utilityEvent, packagedOptions)).toBe(false);
+    expect(
+      isTrustedTopLevelCindyRendererEventForLocation(
+        fakeEvent(pathToFileURL(packagedRendererFile).toString(), { child: true }),
+        packagedOptions,
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedTopLevelCindyRendererEventForLocation(
+        fakeEvent('https://attacker.example/'),
+        packagedOptions,
+      ),
+    ).toBe(false);
+  });
+
   it('登记过的 Cindy 窗口顶层 frame 才通过', () => {
     const win = { isDestroyed: () => false };
     markAppContentWindow(win as never);
@@ -94,7 +118,16 @@ describe('trustedAppRenderer · sender frame', () => {
  */
 describe('trustedAppRenderer · 窗口级判据(出站推送用)', () => {
   const fakeWindow = (url: string) =>
-    ({ isDestroyed: () => false, webContents: { mainFrame: { url } } }) as never;
+    ({
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, mainFrame: { url } },
+    }) as never;
+
+  it('URL-only 判据允许 Cindy utility 窗口，但不把它视为 app-content', () => {
+    const utility = fakeWindow(pathToFileURL(packagedRendererFile).toString());
+    expect(isTrustedCindyRendererWindowForLocation(utility, packagedOptions)).toBe(true);
+    expect(isTrustedAppRendererWindowForLocation(utility, packagedOptions)).toBe(false);
+  });
 
   it('登记过且停在 renderer 页的窗口才可收推送', () => {
     const win = fakeWindow(pathToFileURL(packagedRendererFile).toString());
@@ -114,7 +147,10 @@ describe('trustedAppRenderer · 窗口级判据(出站推送用)', () => {
 
     const destroyed = {
       isDestroyed: () => true,
-      webContents: { mainFrame: { url: pathToFileURL(packagedRendererFile).toString() } },
+      webContents: {
+        isDestroyed: () => false,
+        mainFrame: { url: pathToFileURL(packagedRendererFile).toString() },
+      },
     } as never;
     markAppContentWindow(destroyed);
     expect(isTrustedAppRendererWindowForLocation(destroyed, packagedOptions)).toBe(false);

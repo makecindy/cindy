@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 
 const log = createLogger('NavigationCommands');
 const SLASH_COMMAND_REGEX = /^\/(\S+)(?:\s+(.*))?$/s;
@@ -23,8 +24,12 @@ export async function tryHandleNavigationCommand(
   deps: {
     navigate: (to: string) => void;
     t: TFunction;
-    /** embedded 内容视图消费命令但不解析/改变窗口路由。 */
+    /** sidebar-embedded 内容视图消费命令但不解析/改变窗口路由。 */
     allowNavigation?: boolean;
+    /** split-pane 在改变窗口路由前报告来源 pane 的替换意图。 */
+    onSessionNavigate?: (targetSessionId: string, routeOwnerSessionId?: string) => void;
+    /** split-pane 来源 pane 卸载或切换后使仍在途的异步导航失效。 */
+    isNavigationCurrent?: () => boolean;
   },
 ): Promise<boolean> {
   const slashMatch = message.match(SLASH_COMMAND_REGEX);
@@ -36,6 +41,7 @@ export async function tryHandleNavigationCommand(
     log.info('[jump-session] navigation ignored by embedded session view');
     return true;
   }
+  if (deps.isNavigationCurrent && !deps.isNavigationCurrent()) return true;
 
   const sessionId = (slashMatch[2] ?? '').trim();
   if (!sessionId) {
@@ -45,16 +51,23 @@ export async function tryHandleNavigationCommand(
 
   try {
     const session = await sessionService.get(sessionId);
+    if (deps.isNavigationCurrent && !deps.isNavigationCurrent()) return true;
     if (!session || session.status === 'deleted') {
       toast.error(deps.t('ccAgent.jumpSession.notFound'));
       return true;
     }
+    const route = await resolveSessionRoute(sessionId, session);
+    if (deps.isNavigationCurrent && !deps.isNavigationCurrent()) return true;
+    deps.onSessionNavigate?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
+    deps.navigate(route);
   } catch (err) {
-    log.warn('[jump-session] session lookup failed', { sessionId, error: String(err) });
+    if (deps.isNavigationCurrent && !deps.isNavigationCurrent()) return true;
+    log.warn('[jump-session] navigation target resolution failed', {
+      sessionId,
+      error: String(err),
+    });
     toast.error(deps.t('ccAgent.jumpSession.notFound'));
     return true;
   }
-
-  deps.navigate(`/cc-agent/${sessionId}`);
   return true;
 }

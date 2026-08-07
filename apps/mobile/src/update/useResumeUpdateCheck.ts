@@ -7,9 +7,9 @@
 
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
-import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import {
+  APP_BINARY_VERSION,
   IS_OTA_SELFHOST,
   IS_TESTFLIGHT_BUILD,
   REVIEW_MODE,
@@ -44,7 +44,8 @@ export function useResumeUpdateCheck(isCanary = isCanaryChannel()): void {
         isCanary,
       ),
       getCurrentRuntimeVersion: () => Updates.runtimeVersion,
-      getCurrentVersion: () => Constants.expoConfig?.version ?? null,
+      // 与 useBundleUpdatePrompt / useForcedUpdateRecheck 同口径:强更比较按原生真值,热更后不漂移。
+      getCurrentVersion: () => APP_BINARY_VERSION || null,
       onForcedUpdate: promptBundleUpdate,
       now: () => Date.now(),
       isCurrent: () => current,

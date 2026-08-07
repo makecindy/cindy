@@ -6,8 +6,8 @@
 
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
-import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
+import { APP_BINARY_VERSION } from '@/config/env';
 import { fetchLatestRelease } from './fetchLatestRelease';
 import { createForcedUpdateRechecker } from './forcedUpdateRecheck';
 import {
@@ -32,7 +32,8 @@ export function useForcedUpdateRecheck(isCanary = isCanaryChannel()): void {
         isCanary,
       ),
       getCurrentRuntimeVersion: () => Updates.runtimeVersion,
-      getCurrentVersion: () => Constants.expoConfig?.version ?? null,
+      // 与 useBundleUpdatePrompt 同口径:强更解除也按原生真值比,热更后不漂移。
+      getCurrentVersion: () => APP_BINARY_VERSION || null,
       onCleared: clearForcedUpdate,
       // 仍强更时刷新目标(等值时 enterForcedUpdate 幂等,不会引发重渲染)。
       onStillForced: enterForcedUpdate,

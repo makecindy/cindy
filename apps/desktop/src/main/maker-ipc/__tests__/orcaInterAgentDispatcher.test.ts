@@ -82,6 +82,12 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     createDbMessage: vi.fn(async () => {
       order.push('db');
     }),
+    beginDirectTurnChangeSet: vi.fn(async () => {
+      order.push('change-set');
+    }),
+    abortDirectTurnChangeSet: vi.fn(() => {
+      order.push('abort-change-set');
+    }),
     resolveWorkerSenderLabel: vi.fn(async (_workerId, fallback) => fallback),
     isSessionRunningError: vi.fn((err) =>
       err instanceof Error && (err as { code?: string }).code === 'SESSION_RUNNING'
@@ -128,7 +134,9 @@ describe('Orca lead/worker dispatcher', () => {
       targetTitle: 'Target Session',
       targetLastUserSendAt: '2026-06-12T01:02:03.000Z',
     });
-    expect(h.order).toEqual(['send-called', 'db', 'accepted', 'vendor-released']);
+    expect(h.order).toEqual(['send-called', 'db', 'change-set', 'accepted', 'vendor-released']);
+    expect(h.deps.beginDirectTurnChangeSet).toHaveBeenCalledWith('target-session', 'client-1');
+    expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
     expect(h.deps.createDbMessage).toHaveBeenCalledWith('target-session', {
       clientId: 'client-1',
       role: 'user',
@@ -162,6 +170,7 @@ describe('Orca lead/worker dispatcher', () => {
     expect(result).toMatchObject({ ok: true, mode: 'queued' });
     expect(accepted).not.toHaveBeenCalled();
     expect(h.queuedItems).toHaveLength(1);
+    expect(h.deps.beginDirectTurnChangeSet).not.toHaveBeenCalled();
 
     await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', firstQueuedItem(h.queuedItems));
 
@@ -267,8 +276,39 @@ describe('Orca lead/worker dispatcher', () => {
         reason: 'cancelled-before-dispatch',
       },
     });
-    expect(h.order).toEqual(['send-called', 'db', 'accepted', 'send-returned-cancelled', 'rollback']);
+    expect(h.order).toEqual([
+      'send-called',
+      'db',
+      'change-set',
+      'accepted',
+      'send-returned-cancelled',
+      'abort-change-set',
+      'rollback',
+    ]);
+    expect(h.deps.abortDirectTurnChangeSet).toHaveBeenCalledWith('target-session');
     expect(rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves lazy-resume turn capture to sendToSessionInternal', async () => {
+    const h = createHarness({
+      getLiveSession: vi.fn(() => null),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Resume target',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'resume-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'target-session',
+      clientId: 'client-1',
+    }));
+    expect(h.deps.beginDirectTurnChangeSet).not.toHaveBeenCalled();
+    expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
   });
 
   it('rolls back queued accepted side effects when dispatch settles as not dispatched', async () => {

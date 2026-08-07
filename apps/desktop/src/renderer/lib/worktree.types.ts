@@ -14,7 +14,7 @@ export interface WorktreeMeta {
   path: string;
   /** baseRepo 根目录绝对路径（创建时所在 session 的 workingDir）。 */
   baseRepo: string;
-  /** main 侧固定前缀的分支名 `xdt/<name>`。 */
+  /** main 侧托管分支名；新建为 `cindy/<name>`，历史记录可能为 `xdt/<name>`。 */
   branch: string;
   /** 用户在创建时选择的源分支（如 `main`）。 */
   sourceBranch: string;
@@ -55,8 +55,7 @@ export interface CreateWorktreeReq {
 }
 
 export type CreateWorktreeResp =
-  | { ok: true; meta: WorktreeMeta }
-  | { ok: false; error: WorktreeError };
+  { ok: true; meta: WorktreeMeta } | { ok: false; error: WorktreeError };
 
 export interface DetectCwdResp {
   isGitRepo: boolean;

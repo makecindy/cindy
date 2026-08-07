@@ -10,11 +10,19 @@
  */
 
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, existsSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
@@ -30,6 +38,13 @@ const PI_BINARY = path.join(
   `${process.platform}-${process.arch}`,
   process.platform === 'win32' ? 'pi.exe' : 'pi',
 );
+const RIPGREP_DIR = path.join(
+  REPO_ROOT,
+  'apps',
+  'ripgrep-bin',
+  `${process.platform}-${process.arch}`,
+);
+const RIPGREP_BINARY = path.join(RIPGREP_DIR, process.platform === 'win32' ? 'rg.exe' : 'rg');
 const PREVIOUS_PI_BINARY = path.join(
   REPO_ROOT,
   'tools',
@@ -329,7 +344,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'test-key-123' }),
       },
-      runtimeConfig: { endpoint },
+      runtimeConfig: { endpoint, managedExecutablePaths: { ripgrep: RIPGREP_BINARY } },
       binaryPath: PI_BINARY,
       logger: noopLogger,
       capabilityAdditions: {
@@ -340,6 +355,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
+            // 网关图片门控(assertImageInputSupported)按目录能力放行;多模态用例
+            // 走的正是本模型,不标会在 send 前被 PiImageInputUnsupportedError 拒收。
+            supportsImageInput: true,
           },
         ],
       },
@@ -405,7 +423,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'rejects a turn permission policy (Pi cannot enforce it) and honors steer cancellation before RPC',
+    'accepts a turn permission policy in ask, rejects it in Full Access, and honors steer cancellation before RPC',
     { timeout: 60_000 },
     async () => {
       const agent = new PiAgent(buildDeps());
@@ -419,13 +437,20 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         const requestsBefore = seenRequests.length;
 
-        // turnPermissionPolicy(IM 群等)是 host 回调,Pi 无法在其独立进程的工具边界执行
-        // → fail-closed 拒绝(任何档位),防止群上下文不经 owner 确认执行破坏性工具。
+        // ask/auto 下 Pi bridge 会把受控工具冒泡给 host，policy turn 可以启动。
         const policy = {
           origin: { kind: 'im' as const, channel: 'telegram' as const },
           confirmationSurface: 'channel' as const,
           forceConfirmToolCall: () => true,
         };
+        await expect(
+          handle.send({ type: 'user', content: 'policy-safe turn' }, { turnPermissionPolicy: policy }),
+        ).resolves.toBeUndefined();
+        await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(requestsBefore));
+
+        // Full Access 下 bridge 不上报 tool_call，host 无法兑现每轮策略，必须 preflight 拒绝。
+        await handle.setPermissionMode?.('bypassPermissions');
+        const requestsBeforeFullAccess = seenRequests.length;
         await expect(
           handle.send({ type: 'user', content: 'destructive?' }, { turnPermissionPolicy: policy }),
         ).rejects.toBeInstanceOf(TurnPermissionPolicyUnsupportedError);
@@ -438,8 +463,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           handle.steer({ type: 'user', content: 'late steer' }, { signal: aborted.signal }),
         ).rejects.toThrow(/cancelled before acceptance/);
 
-        // 两次都在到达假网关前被拦下:没有新请求打到 pi。
-        expect(seenRequests.length).toBe(requestsBefore);
+        // Full Access policy 与 cancelled steer 都在到达假网关前被拦下。
+        expect(seenRequests.length).toBe(requestsBeforeFullAccess);
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -1142,6 +1167,92 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   }
 
   it(
+    'offline grep uses the host-managed ripgrep instead of falling back to bash',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-grep-'));
+      writeFileSync(path.join(workingDir, 'tool-target.ts'), 'needle-line\n');
+      const rogueRg = path.join(workingDir, process.platform === 'win32' ? 'rg.exe' : 'rg');
+      writeFileSync(rogueRg, process.platform === 'win32' ? 'not-an-executable' : '#!/bin/sh\nexit 42\n');
+      if (process.platform !== 'win32') chmodSync(rogueRg, 0o755);
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('grep', { pattern: 'needle-line', path: '.', literal: true }),
+          anthropicStreamBody('grep turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-grep',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('tool-target.ts:1: needle-line'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'offline find uses the Cindy ripgrep override without fd',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-find-'));
+      writeFileSync(path.join(workingDir, 'find-me.ts'), 'export {};\n');
+      writeFileSync(path.join(workingDir, 'skip-me.txt'), 'skip\n');
+      mkdirSync(path.join(workingDir, 'nested'));
+      writeFileSync(path.join(workingDir, 'nested', 'find-nested.ts'), 'export {};\n');
+      mkdirSync(path.join(workingDir, 'packages', 'foo', 'src'), { recursive: true });
+      writeFileSync(
+        path.join(workingDir, 'packages', 'foo', 'src', 'find-path.spec.ts'),
+        'export {};\n',
+      );
+      writeFileSync(path.join(workingDir, '.gitignore'), 'ignored-by-git.ts\n');
+      writeFileSync(path.join(workingDir, 'ignored-by-git.ts'), 'secret\n');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('find', { pattern: '*.ts', path: '.' }),
+          anthropicStreamBody('find turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-find',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('find-me.ts'))).toBe(true);
+        expect(followUp.some((body) => body.includes('find-nested.ts'))).toBe(true);
+        expect(followUp.some((body) => body.includes('skip-me.txt'))).toBe(false);
+        expect(followUp.some((body) => body.includes('ignored-by-git.ts'))).toBe(false);
+
+        scriptedResponses.push(
+          anthropicToolUseBody('find', { pattern: 'src/**/*.spec.ts', path: '.' }),
+          anthropicStreamBody('path find turn finished'),
+        );
+        const pathReqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-find-full-path',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const pathFollowUp = seenRequests.slice(pathReqBefore).map((request) => request.body);
+        expect(pathFollowUp.some((body) => body.includes('find-path.spec.ts'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
     'auto mode: safe bash executes end-to-end without prompting (real bridge intercept)',
     { timeout: 60_000 },
     async () => {
@@ -1190,7 +1301,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
               'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
-              'CINDY_PI_SECRET_ENV_NAMES',
+              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH',
               'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
               'done; printf "PI_ENV_CLEAN\\n"',

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   forkAtMessage: vi.fn(),
   navigate: vi.fn(),
   emitRefresh: vi.fn(),
+  reportSessionNavigation: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -44,6 +45,7 @@ vi.mock('@/features/device-link/refreshRemoteSessions', () => ({
 
 vi.mock('@/features/cc-agent/embeddedSessionNavigation', () => ({
   useSessionNavigationMode: () => 'route-owner',
+  useSessionNavigationIntent: () => mocks.reportSessionNavigation,
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -60,10 +62,12 @@ describe('useForkAtMessage introduction dialog', () => {
 
   it('introduces the feature and only creates a conversation after confirmation', async () => {
     mocks.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    const { result } = renderHook(() => useForkAtMessage({
-      sessionId: 'source-session',
-      messageClientId: 'message-1',
-    }));
+    const { result } = renderHook(() =>
+      useForkAtMessage({
+        sessionId: 'source-session',
+        messageClientId: 'message-1',
+      }),
+    );
 
     await act(async () => result.current());
     expect(mocks.confirm).toHaveBeenLastCalledWith({
@@ -78,6 +82,7 @@ describe('useForkAtMessage introduction dialog', () => {
     await act(async () => result.current());
     expect(mocks.forkAtMessage).toHaveBeenCalledWith('source-session', 'message-1');
     expect(mocks.emitRefresh).toHaveBeenCalledTimes(1);
+    expect(mocks.reportSessionNavigation).toHaveBeenCalledWith('new-session', 'new-session');
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new-session');
   });
 });

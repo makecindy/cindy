@@ -10,6 +10,10 @@ import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-co
 import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
 import type { RemoteSessionLiveActivity } from '@cindy/maker-shared/session-list';
 import { buildDeviceIdentity, resolveCanonicalDeviceId } from '@cindy/maker-shared/mobile-home';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
@@ -42,6 +46,16 @@ export interface RemoteNewMakerWorktreePreference {
 
 const EMPTY_NEW_MAKER_WORKTREE_PREFERENCE: RemoteNewMakerWorktreePreference =
   Object.freeze({ enabled: false, revision: 0 });
+
+/**
+ * 工作端拥有的 New Maker worktree 源分支镜像。null 表示该 device + canonical
+ * baseRepo 尚无显式选择；revision 完全采用工作端快照，手机不自行递增。
+ */
+export type RemoteNewMakerWorktreeBranchPreference = {
+  baseRepo: string;
+  sourceBranch: string;
+  revision: number;
+} | null;
 
 /**
  * 会话元数据在途写登记(app 级单例):首页乐观写(置顶/归档/删除/重命名)begin 时
@@ -114,8 +128,15 @@ const EMPTY_SESSION_RUN_STATUS: RemoteSessionRunStatus = Object.freeze({
 });
 
 const shards = new Map<string, DeviceShard>();
-// 工作端拥有的 New Maker worktree 偏好按设备隔离；push 属 sessions topic，无 sessionId。
+// 工作端拥有的 New Maker worktree 偏好按设备隔离；这里只是不持久化的显示镜像，
+// push 属 sessions topic，无 sessionId。唯一持久副本仍在被控端现有 Cindy 配置里。
 const newMakerWorktreePreferences = new Map<string, RemoteNewMakerWorktreePreference>();
+// deviceId → canonical baseRepo → 工作端权威分支快照。分支与 checkbox 是两份独立镜像；
+// 任一分支 pull / push / write-back 都不得改动 newMakerWorktreePreferences。
+const newMakerWorktreeBranchPreferences = new Map<
+  string,
+  Map<string, Exclude<RemoteNewMakerWorktreeBranchPreference, null>>
+>();
 const messages = new Map<string, RemoteMessage[]>();
 // The maker event is broadcast before its async DB create/update completes. Keep the latest
 // plan snapshot briefly in the session mirror so a late initial `messages:created` row cannot
@@ -1994,6 +2015,11 @@ export const remoteSessionStore = {
       if (enabled !== null) this.setNewMakerWorktreePreference(deviceId, enabled);
       return;
     }
+    if (channel === 'maker:new-maker-worktree-branch:changed') {
+      const snapshot = readPushedNewMakerWorktreeBranchPreference(payload);
+      if (snapshot !== null) this.setNewMakerWorktreeBranchPreference(deviceId, snapshot);
+      return;
+    }
     if (channel === 'local-db:sessions:created') {
       reseedHandlers.get(deviceId)?.forEach((handler) => handler());
       return;
@@ -2303,7 +2329,10 @@ export const remoteSessionStore = {
 
     // setSessionRunning owns the final flush/finalize and run-state transition;
     // keeping the done path in one call avoids notifying subscribers twice.
-    if (type === 'done' || isTerminalMakerErrorEvent(event)) {
+    if (
+      isProductTurnDoneEvent(event)
+      || (!isTurnContinuationBoundaryEvent(event) && isTerminalMakerErrorEvent(event))
+    ) {
       let terminalPlanChanged = false;
       if (type === 'done' && readString(event, 'source') === 'codex') {
         const data = isRecord(event.data) ? event.data : null;
@@ -2448,6 +2477,13 @@ export const remoteSessionStore = {
       const data = isRecord(event.data) ? event.data : null;
       const current = readSessionRunStatus(sessionId);
       const isRunning = typeof data?.isRunning === 'boolean' ? data.isRunning : current.isRunning;
+      if (!isRunning && isTurnContinuationBoundaryEvent(event)) {
+        // A claimed status(false) closes only the provider SDK segment. Keep the
+        // mobile product turn and its streaming projection alive until an
+        // unclaimed terminal event arrives, matching the desktop lifecycle.
+        if (textFlushed || reconnectCleared) emit();
+        return;
+      }
       const rawTokenUsage = readNumber(data, 'tokenUsage');
       const rawStatus = readString(data, 'status');
       // turn-start 检测用 maker 自己的边界(不用 current.isRunning):activity 推送 / 活跃
@@ -2529,6 +2565,7 @@ export const remoteSessionStore = {
   removeDevice(deviceId: string): void {
     const hadShard = shards.delete(deviceId);
     const hadWorktreePreference = newMakerWorktreePreferences.delete(deviceId);
+    const hadWorktreeBranchPreferences = newMakerWorktreeBranchPreferences.delete(deviceId);
     // Sweep per-session maps for this device regardless of whether the shard still exists, and
     // drop the index entries too — otherwise sessionDeviceIndex (and any maps it points at)
     // leak orphans when the shard was already pruned.
@@ -2566,7 +2603,12 @@ export const remoteSessionStore = {
         removedSession = true;
       }
     }
-    if (!hadShard && !removedSession && !hadWorktreePreference) return;
+    if (
+      !hadShard
+      && !removedSession
+      && !hadWorktreePreference
+      && !hadWorktreeBranchPreferences
+    ) return;
     bumpMessageVersion();
     recomputeSessions();
   },
@@ -2574,6 +2616,7 @@ export const remoteSessionStore = {
   clear(): void {
     shards.clear();
     newMakerWorktreePreferences.clear();
+    newMakerWorktreeBranchPreferences.clear();
     messages.clear();
     livePlanSnapshots.clear();
     pendingInteractions.clear();
@@ -2664,6 +2707,66 @@ export const remoteSessionStore = {
     if (!deviceId) return EMPTY_NEW_MAKER_WORKTREE_PREFERENCE;
     return newMakerWorktreePreferences.get(deviceId)
       ?? EMPTY_NEW_MAKER_WORKTREE_PREFERENCE;
+  },
+
+  setNewMakerWorktreeBranchPreference(
+    deviceId: string,
+    snapshot: RemoteNewMakerWorktreeBranchPreference,
+  ): void {
+    if (!deviceId || snapshot === null) return;
+    const baseRepo = snapshot.baseRepo.trim();
+    const sourceBranch = snapshot.sourceBranch.trim();
+    if (
+      !baseRepo
+      || !sourceBranch
+      || !Number.isInteger(snapshot.revision)
+      || snapshot.revision < 0
+    ) return;
+
+    let byRepo = newMakerWorktreeBranchPreferences.get(deviceId);
+    const current = byRepo?.get(baseRepo);
+    if (current) {
+      // revision 由 host 按 canonical repo 单调递增。旧快照不能覆盖；相等只接受
+      // 完全相同的幂等 echo，同 revision 的冲突值也必须拒绝。
+      if (snapshot.revision < current.revision) return;
+      if (snapshot.revision === current.revision) return;
+    }
+    if (!byRepo) {
+      byRepo = new Map();
+      newMakerWorktreeBranchPreferences.set(deviceId, byRepo);
+    }
+    byRepo.set(baseRepo, {
+      baseRepo,
+      sourceBranch,
+      revision: snapshot.revision,
+    });
+    // 同一 sourceBranch 的新 host revision 也必须发布：它给在途 pull / apply 回包做 fence。
+    emit();
+  },
+
+  /**
+   * GET 的 null 是工作端对该 repo「当前没有偏好」的权威回答，不是漏包。
+   * 桌面进程重启后 host revision 会从头开始；先删掉手机保存的旧高 revision，
+   * 后续 rev1 snapshot / push 才有资格成为新进程的真相。
+   */
+  clearNewMakerWorktreeBranchPreference(
+    deviceId: string,
+    baseRepo: string,
+  ): void {
+    const normalizedBaseRepo = baseRepo.trim();
+    if (!deviceId || !normalizedBaseRepo) return;
+    const byRepo = newMakerWorktreeBranchPreferences.get(deviceId);
+    if (!byRepo?.delete(normalizedBaseRepo)) return;
+    if (byRepo.size === 0) newMakerWorktreeBranchPreferences.delete(deviceId);
+    emit();
+  },
+
+  getNewMakerWorktreeBranchPreference(
+    deviceId: string | null | undefined,
+    baseRepo: string | null | undefined,
+  ): RemoteNewMakerWorktreeBranchPreference {
+    if (!deviceId || !baseRepo?.trim()) return null;
+    return newMakerWorktreeBranchPreferences.get(deviceId)?.get(baseRepo.trim()) ?? null;
   },
 
   getPendingInteractions(sessionId: string): PendingInteraction[] {
@@ -2974,6 +3077,28 @@ function readPushedNewMakerWorktreeEnabled(payload: unknown): boolean | null {
   return null;
 }
 
+function readPushedNewMakerWorktreeBranchPreference(
+  payload: unknown,
+): RemoteNewMakerWorktreeBranchPreference {
+  if (!isRecord(payload)) return null;
+  const baseRepo = payload.baseRepo;
+  const sourceBranch = payload.sourceBranch;
+  const revision = payload.revision;
+  if (
+    typeof baseRepo !== 'string'
+    || !baseRepo.trim()
+    || typeof sourceBranch !== 'string'
+    || !sourceBranch.trim()
+    || !Number.isInteger(revision)
+    || (revision as number) < 0
+  ) return null;
+  return {
+    baseRepo: baseRepo.trim(),
+    sourceBranch: sourceBranch.trim(),
+    revision: revision as number,
+  };
+}
+
 function hasDeviceLinkTruncationMarker(value: Record<string, unknown> | null): boolean {
   return value?.[DEVICE_LINK_TRUNCATED_FLAG] === true;
 }
@@ -3093,6 +3218,16 @@ export function useRemoteNewMakerWorktreePreference(
   return useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getNewMakerWorktreePreference(deviceId),
+  );
+}
+
+export function useRemoteNewMakerWorktreeBranchPreference(
+  deviceId: string | null | undefined,
+  baseRepo: string | null | undefined,
+): RemoteNewMakerWorktreeBranchPreference {
+  return useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.getNewMakerWorktreeBranchPreference(deviceId, baseRepo),
   );
 }
 

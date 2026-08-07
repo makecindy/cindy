@@ -75,3 +75,14 @@ describe('project automation WeCom group notification reconciliation', () => {
     ).toBe(false);
   });
 });
+
+describe('project automation provider reconciliation', () => {
+  it('passes an explicit provider through the loader input and detects changes', () => {
+    const config = projectConfig({ providerId: 'openai' });
+    const input = __testing.scheduleConfigToUpdateInput(config, workingDir);
+    expect(input.providerId).toBe('openai');
+    expect(
+      schedulesDiffer(projectSchedule({ desktop: true, feishu: false }), config, workingDir),
+    ).toBe(true);
+  });
+});

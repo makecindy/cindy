@@ -21,6 +21,7 @@ import {
   holdPrecreatedWorktreeRegistration,
   isPrecreatedWorktreeRegistrationInFlight,
   listPendingPrecreatedWorktrees,
+  parseDiscardPrecreatedAck,
   recoverPendingPrecreatedWorktrees,
   registerPendingPrecreatedWorktree,
 } from '@/session/precreatedWorktreeRecovery';
@@ -31,12 +32,14 @@ const RECORD = {
   deviceId: 'device-1',
   path: '/repo/.cindy-worktrees/auto-one',
   createdAt: Date.now() - 100,
+  phase: 'precreated' as const,
 };
 const RESERVATION = {
   sessionId: 'session-reserved',
   deviceId: 'device-1',
   recoveryKey: 'recovery-key-1234567890',
   createdAt: Date.now() - 100,
+  phase: 'reserved' as const,
 };
 
 describe('precreated worktree recovery ledger', () => {
@@ -168,6 +171,28 @@ describe('precreated worktree recovery ledger', () => {
       sessionId: RESERVATION.sessionId,
       recoveryKey: RESERVATION.recoveryKey,
     });
+  });
+
+  it('never lets an equal-time persisted phase downgrade a retain-only volatile phase', async () => {
+    const precreated = {
+      ...RESERVATION,
+      path: RECORD.path,
+      phase: 'precreated' as const,
+    };
+    await expect(registerPendingPrecreatedWorktree(ACCOUNT, precreated)).resolves.toBe(true);
+    asyncStorage.setItem.mockRejectedValueOnce(new Error('disk unavailable'));
+    const started = { ...precreated, phase: 'session-create-started' as const };
+    await expect(registerPendingPrecreatedWorktree(ACCOUNT, started)).resolves.toBe(false);
+
+    await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([started]);
+    const discardPrecreated = vi.fn(async () => ({ discarded: true }));
+    await expect(recoverPendingPrecreatedWorktrees(ACCOUNT, {
+      openLink: vi.fn(async () => undefined),
+      discardPrecreated,
+      isSessionClaimed: vi.fn(async () => false),
+      sleep: async () => undefined,
+    })).resolves.toMatchObject({ recovered: 0, retained: 1 });
+    expect(discardPrecreated).not.toHaveBeenCalled();
   });
 
   it('marks registration in flight so startup recovery cannot race the write', async () => {
@@ -411,7 +436,7 @@ describe('precreated worktree recovery ledger', () => {
     await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([]);
   });
 
-  it('retains unsupported records, but drops mismatched records and retains transient failures', async () => {
+  it('retains unsupported, mismatched, and transient cleanup failures', async () => {
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     await expect(
       recoverPendingPrecreatedWorktrees(ACCOUNT, {
@@ -441,8 +466,10 @@ describe('precreated worktree recovery ledger', () => {
         isSessionClaimed: vi.fn(async () => false),
         sleep: async () => undefined,
       }),
-    ).resolves.toMatchObject({ recovered: 1, retained: 0 });
-    await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([]);
+    ).resolves.toMatchObject({ recovered: 0, retained: 1 });
+    await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([
+      RECORD,
+    ]);
 
     await registerPendingPrecreatedWorktree(ACCOUNT, RECORD);
     await expect(
@@ -460,6 +487,128 @@ describe('precreated worktree recovery ledger', () => {
     await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([
       RECORD,
     ]);
+  });
+
+  it('never discards a session-create-started or legacy phase-less obligation', async () => {
+    const started = {
+      ...RECORD,
+      recoveryKey: 'recovery-key-started-123456',
+      phase: 'session-create-started' as const,
+    };
+    await registerPendingPrecreatedWorktree(ACCOUNT, started);
+    const discardPrecreated = vi.fn();
+    await expect(
+      recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        openLink: vi.fn(async () => undefined),
+        discardPrecreated,
+        isSessionClaimed: vi.fn(async () => false),
+        sleep: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ recovered: 0, retained: 1 });
+    expect(discardPrecreated).not.toHaveBeenCalled();
+
+    const key = __testing.storageKeyForAccount(ACCOUNT) as string;
+    const legacy = {
+      sessionId: 'legacy-session',
+      deviceId: 'device-1',
+      path: '/repo/.cindy-worktrees/legacy',
+      createdAt: Date.now(),
+    };
+    storage.set(key, JSON.stringify({ version: 1, records: [legacy] }));
+    __testing.resetVolatileLedgers();
+    await expect(
+      recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        openLink: vi.fn(async () => undefined),
+        discardPrecreated,
+        isSessionClaimed: vi.fn(async () => false),
+        sleep: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ recovered: 0, retained: 1, storageReadable: true });
+    expect(discardPrecreated).not.toHaveBeenCalled();
+    await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([
+      expect.objectContaining({
+        sessionId: 'legacy-session',
+        phase: 'session-create-started',
+      }),
+    ]);
+  });
+
+  it('requires a strict discard ACK and prefers recoveryKey over path', async () => {
+    const record = {
+      ...RECORD,
+      recoveryKey: 'recovery-key-preferred-123456',
+    };
+    await registerPendingPrecreatedWorktree(ACCOUNT, record);
+    const discardPrecreated = vi.fn(async () => ({}));
+    await expect(
+      recoverPendingPrecreatedWorktrees(ACCOUNT, {
+        openLink: vi.fn(async () => undefined),
+        discardPrecreated,
+        isSessionClaimed: vi.fn(async () => false),
+        sleep: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ recovered: 0, retained: 1 });
+    expect(discardPrecreated).toHaveBeenCalledWith('device-1', {
+      sessionId: record.sessionId,
+      recoveryKey: record.recoveryKey,
+    });
+    await expect(listPendingPrecreatedWorktrees(ACCOUNT)).resolves.toEqual([record]);
+  });
+
+  it('accepts only an unambiguous discard acknowledgement', () => {
+    expect(parseDiscardPrecreatedAck({ discarded: true })).toEqual({ discarded: true });
+    expect(parseDiscardPrecreatedAck({
+      discarded: true,
+      branchDeleted: false,
+    })).toEqual({ discarded: true, branchDeleted: false });
+    for (const value of [
+      null,
+      {},
+      { discarded: false },
+      { discarded: true, branchDeleted: 'yes' },
+      { discarded: true, error: { code: 'FAILED' } },
+      { discarded: true, ok: false },
+    ]) {
+      expect(parseDiscardPrecreatedAck(value)).toBeNull();
+    }
+  });
+
+  it('keeps valid JSON with an unknown version or malformed record unreadable and untouched', async () => {
+    const key = __testing.storageKeyForAccount(ACCOUNT) as string;
+    for (const payload of [
+      { version: 2, records: [RECORD] },
+      { version: 1, records: [{ ...RECORD, phase: 'corrupt-phase' }] },
+      {
+        version: 1,
+        records: [
+          { ...RECORD, phase: 'session-create-started' },
+          { ...RECORD, phase: 'precreated' },
+        ],
+      },
+      {
+        version: 1,
+        records: Array.from({ length: 33 }, (_, index) => ({
+          ...RECORD,
+          sessionId: `session-${index}`,
+          path: `/repo/.cindy-worktrees/${index}`,
+        })),
+      },
+    ]) {
+      const raw = JSON.stringify(payload);
+      storage.set(key, raw);
+      __testing.resetVolatileLedgers();
+      const discardPrecreated = vi.fn();
+      await expect(
+        recoverPendingPrecreatedWorktrees(ACCOUNT, {
+          openLink: vi.fn(),
+          discardPrecreated,
+          isSessionClaimed: vi.fn(),
+          sleep: async () => undefined,
+        }),
+      ).resolves.toMatchObject({ storageReadable: false, attempted: 0 });
+      expect(discardPrecreated).not.toHaveBeenCalled();
+      expect(storage.get(key)).toBe(raw);
+    }
   });
 
   it('cancels an old owner while retrying and lets the new owner recover its own ledger', async () => {

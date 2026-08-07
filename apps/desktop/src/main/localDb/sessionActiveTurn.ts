@@ -77,13 +77,41 @@ export function freezeSessionActiveTurnMarkers(): void {
  * 因为 ipc/sessions.ts 已 import 本模块(ack 路径),反向依赖会成环;注入也让单测
  * 无需 mock electron。回调异常吞掉,绝不影响写链。
  */
-let _onTurnEndedPersisted: ((sessionId: string, endedAt: number) => void) | null = null;
+let _onTurnEndedPersisted:
+  | ((sessionId: string, endedAt: number, context: unknown) => void)
+  | null = null;
+let _captureTurnEndedPersistedContext: (() => unknown) | null = null;
 
 /** 注入 ended 落库后的广播回调(传 null 清除;测试与 registerSessionIpc 用)。 */
 export function setOnSessionTurnEndedPersisted(
-  fn: ((sessionId: string, endedAt: number) => void) | null,
+  fn: ((sessionId: string, endedAt: number, context: unknown) => void) | null,
+  captureContext: (() => unknown) | null = null,
 ): void {
   _onTurnEndedPersisted = fn;
+  _captureTurnEndedPersistedContext = fn ? captureContext : null;
+}
+
+function captureTurnEndedPersistedContext(): unknown {
+  try {
+    return _captureTurnEndedPersistedContext?.();
+  } catch (err) {
+    log.warn('capture turn-ended notify context failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
+function notifyTurnEndedPersisted(sessionId: string, endedAt: number, context: unknown): void {
+  if (!_onTurnEndedPersisted) return;
+  try {
+    _onTurnEndedPersisted(sessionId, endedAt, context);
+  } catch (notifyErr) {
+    log.warn('onTurnEndedPersisted notify failed', {
+      sessionId,
+      error: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+    });
+  }
 }
 
 /** started / ended 的 per-session 写链:只做 UPDATE 排队保序,无读改写。 */
@@ -131,7 +159,12 @@ export function markSessionTurnStarted(sessionId: string): void {
  */
 export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number): void {
   if (_quitFrozen) return;
-  enqueueEndedWrite(sessionId, Math.min(endedAtOverride ?? Date.now(), Date.now()));
+  const notifyContext = captureTurnEndedPersistedContext();
+  enqueueEndedWrite(
+    sessionId,
+    Math.min(endedAtOverride ?? Date.now(), Date.now()),
+    notifyContext,
+  );
 }
 
 /**
@@ -146,9 +179,10 @@ export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number
 export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Promise<unknown>): void {
   if (_quitFrozen) return;
   const endedAt = Date.now();
+  const notifyContext = captureTurnEndedPersistedContext();
   void barrier.then(
-    () => enqueueEndedWrite(sessionId, endedAt),
-    () => enqueueEndedWrite(sessionId, endedAt),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
   );
 }
 
@@ -166,7 +200,8 @@ export async function ackSessionTurnEndedDurable(
   endedAtOverride?: number,
 ): Promise<number> {
   const endedAt = Math.min(endedAtOverride ?? Date.now(), Date.now());
-  if (!_quitFrozen) await enqueueEndedWrite(sessionId, endedAt);
+  const notifyContext = captureTurnEndedPersistedContext();
+  if (!_quitFrozen) await enqueueEndedWrite(sessionId, endedAt, notifyContext);
   return endedAt;
 }
 
@@ -188,6 +223,7 @@ export async function ackSessionTurnEndedIfUnchanged(
 ): Promise<boolean> {
   if (_quitFrozen) return false;
   const endedAt = Date.now();
+  const notifyContext = captureTurnEndedPersistedContext();
   let landed = false;
   await chainWrite(sessionId, async () => {
     try {
@@ -209,14 +245,7 @@ export async function ackSessionTurnEndedIfUnchanged(
         row.endedAt != null &&
         row.endedAt >= expectedStartedAt;
       if (landed && _onTurnEndedPersisted && row?.endedAt != null) {
-        try {
-          _onTurnEndedPersisted(sessionId, row.endedAt);
-        } catch (notifyErr) {
-          log.warn('onTurnEndedPersisted notify failed', {
-            sessionId,
-            error: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
-          });
-        }
+        notifyTurnEndedPersisted(sessionId, row.endedAt, notifyContext);
       }
     } catch (err) {
       log.warn('ackSessionTurnEndedIfUnchanged failed', {
@@ -229,7 +258,7 @@ export async function ackSessionTurnEndedIfUnchanged(
 }
 
 /** ended 写入的唯一落库实现:MAX 守卫 + per-session 链,见 markSessionTurnEnded 注释。 */
-function enqueueEndedWrite(sessionId: string, endedAt: number): Promise<void> {
+function enqueueEndedWrite(sessionId: string, endedAt: number, notifyContext: unknown): Promise<void> {
   return chainWrite(sessionId, async () => {
     try {
       const db = getDbClient().drizzle;
@@ -246,14 +275,7 @@ function enqueueEndedWrite(sessionId: string, endedAt: number): Promise<void> {
           .from(sessions)
           .where(eq(sessions.id, sessionId));
         if (row?.endedAt != null) {
-          try {
-            _onTurnEndedPersisted(sessionId, row.endedAt);
-          } catch (notifyErr) {
-            log.warn('onTurnEndedPersisted notify failed', {
-              sessionId,
-              error: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
-            });
-          }
+          notifyTurnEndedPersisted(sessionId, row.endedAt, notifyContext);
         }
       }
     } catch (err) {

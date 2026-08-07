@@ -121,6 +121,7 @@ function permissionItemIcon(item: GhostPermissionItem): LucideIcon {
   if (
     item.labelKey === 'networkSecret' ||
     item.labelKey === 'networkSecretOauth' ||
+    item.labelKey === 'networkSecretGhCli' ||
     item.labelKey === 'networkSecretIdentity'
   ) {
     return KeyRound;
@@ -165,8 +166,7 @@ export function GhostPluginDetailView({
   const primaryEnabled =
     enabled && (primaryAction === 'panel' || (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
-  const hasConfiguration =
-    detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
+  const hasConfiguration = detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
   /**
    * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
@@ -180,6 +180,7 @@ export function GhostPluginDetailView({
    * 普通第三方插件不受影响。
    */
   const localUpdateAvailable = import.meta.env.DEV || !isOfficialGhostId(detail.id);
+  const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
 
   useLayoutEffect(() => {
     setDescriptionExpanded(false);
@@ -368,7 +369,9 @@ export function GhostPluginDetailView({
                       {t('settings.ghosts.detail.exportPackage')}
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                  {hasAdditionalActions ? (
+                    <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                  ) : null}
                   <DropdownMenuItem
                     onSelect={onUninstall}
                     className="h-10 gap-2.5 rounded-lg px-3 text-13 text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg-strong)]"
@@ -480,11 +483,7 @@ export function OauthScopeStaleBadge() {
       role="status"
       className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full bg-[var(--warning-bg-soft)] px-3 py-1.5 text-12 leading-5 text-[var(--text-secondary)]"
     >
-      <AlertTriangle
-        size={13}
-        className="shrink-0 text-[var(--warning-fg)]"
-        aria-hidden="true"
-      />
+      <AlertTriangle size={13} className="shrink-0 text-[var(--warning-fg)]" aria-hidden="true" />
       <span>{t('settings.ghosts.detail.oauthScopeStale')}</span>
     </div>
   );
@@ -694,7 +693,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
 function PermissionDetailRow({ item }: { item: GhostPermissionItem }) {
   const { t } = useTranslation();
   const Icon = permissionItemIcon(item);
-  const hostDescription = item.detailKey ? t(`settings.ghosts.perm.${item.detailKey}`) : null;
+  const hostDescription = item.detailKey ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs) : null;
   return (
     <div className="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
       <Icon

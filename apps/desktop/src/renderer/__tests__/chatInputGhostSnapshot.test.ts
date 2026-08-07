@@ -25,8 +25,8 @@ describe('ChatInput Ghost snapshot contract', () => {
   it('uses the latest installed snapshot and workdir at send time', () => {
     expect(source).toContain('const installedGhostsRef = useRef(installedGhosts);');
     expect(source).toContain('installedGhostsRef.current = installedGhosts;');
-    expect(source).toContain(
-      'const eligibleGhosts = filterGhostsForWorkdir(\n        installedGhostsRef.current,\n        workingDirRef.current,\n      );',
+    expect(source).toMatch(
+      /const eligibleGhosts\s*=\s*filterGhostsForWorkdir\(\s*installedGhostsRef\.current,\s*workingDirRef\.current,\s*\);[\s\S]*?expandGhostCommand\(text,\s*eligibleGhosts\)/,
     );
   });
 
@@ -35,7 +35,7 @@ describe('ChatInput Ghost snapshot contract', () => {
       'if (deviceLinkDeviceId) return [];',
     );
     expect(source).toContain(
-      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds]',
+      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, t]',
     );
   });
 });

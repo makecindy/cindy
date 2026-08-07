@@ -206,6 +206,29 @@ export function MarketplaceSourcesDialog({
                     <span aria-hidden="true">·</span>
                     <span className="shrink-0">{formatSyncedAt(source.lastSyncedAt)}</span>
                   </div>
+                  {source.status === 'ok' ? (
+                    <div className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
+                      {source.pluginCount === 0 &&
+                      source.skippedCount === 0 &&
+                      source.unreadableCount === 0 ? (
+                        <p>{t('settings.ghosts.market.sources.empty')}</p>
+                      ) : null}
+                      {source.skippedCount > 0 ? (
+                        <p>
+                          {t('settings.ghosts.market.sources.skippedEntries', {
+                            count: source.skippedCount,
+                          })}
+                        </p>
+                      ) : null}
+                      {source.unreadableCount > 0 ? (
+                        <p className="text-[var(--warning-fg)]">
+                          {t('settings.ghosts.market.sources.unreadableEntries', {
+                            count: source.unreadableCount,
+                          })}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="mt-2.5 flex items-center justify-end gap-2">
                     <button
                       type="button"

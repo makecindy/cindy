@@ -59,3 +59,39 @@ export function parseNotificationDeepLink(data: unknown): string | null {
   if (deepLink.includes('://') || deepLink.startsWith('//')) return null;
   return deepLink;
 }
+
+function parseNotificationPayloadDeepLink(data: unknown): string | null {
+  const direct = parseNotificationDeepLink(data);
+  if (direct) return direct;
+  if (!data || typeof data !== 'object') return null;
+  const record = data as Record<string, unknown>;
+  // APNs relay implementations may wrap custom fields under `body` or `data`.
+  // Keep the fallback explicit rather than recursively walking untrusted payloads.
+  return parseNotificationDeepLink(record.body) ?? parseNotificationDeepLink(record.data);
+}
+
+/**
+ * 从 expo-notifications 的点击响应中解析任务深链。
+ *
+ * iOS 远程通知在 Expo 56 有两条数据出口：`content.data` 通常来自 APNs
+ * userInfo 的 `body` 字段，而完整的 APNs userInfo 保存在
+ * `request.trigger.payload`。两者都支持，避免 relay 的 payload 包装方式
+ * 让点击事件静默失效。
+ */
+export function parseNotificationResponseDeepLink(response: unknown): string | null {
+  if (!response || typeof response !== 'object') return null;
+  const notification = (response as Record<string, unknown>).notification;
+  if (!notification || typeof notification !== 'object') return null;
+  const request = (notification as Record<string, unknown>).request;
+  if (!request || typeof request !== 'object') return null;
+  const requestRecord = request as Record<string, unknown>;
+  const content = requestRecord.content;
+  if (content && typeof content === 'object') {
+    const contentData = (content as Record<string, unknown>).data;
+    const fromContent = parseNotificationPayloadDeepLink(contentData);
+    if (fromContent) return fromContent;
+  }
+  const trigger = requestRecord.trigger;
+  if (!trigger || typeof trigger !== 'object') return null;
+  return parseNotificationPayloadDeepLink((trigger as Record<string, unknown>).payload);
+}

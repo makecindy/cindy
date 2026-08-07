@@ -250,6 +250,7 @@ describe('SkillPublishService', () => {
       method: 'POST',
       body: { slug: 'lark-task', version: '1.1.0' },
       baseUrl: expect.any(Function),
+      logLabel: '/api/skills-hub', // 不外泄 skill 身份进 serverApiClient 日志(2026-08-06 review)
     });
     const initCall = vi.mocked(serverApiFetch).mock.calls.find(
       ([path]) => path === '/api/skills-hub/skills/publish/init',
@@ -322,6 +323,7 @@ describe('SkillPublishService', () => {
     expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
       method: 'POST',
       baseUrl: expect.any(Function),
+      logLabel: '/api/skills-hub',
       body: expect.objectContaining({
         displayName: 'Lark Task',
         summary: 'Publish summary',
@@ -395,6 +397,7 @@ describe('SkillPublishService', () => {
     expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
       method: 'POST',
       baseUrl: expect.any(Function),
+      logLabel: '/api/skills-hub',
       body: expect.objectContaining({
         categoryMode: 'auto',
         categories: [],
@@ -465,6 +468,7 @@ describe('SkillPublishService', () => {
     expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
       method: 'POST',
       baseUrl: expect.any(Function),
+      logLabel: '/api/skills-hub',
       body: expect.objectContaining({
         visibility: 'public',
         visibleSlugs: [],

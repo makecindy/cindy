@@ -128,4 +128,36 @@ describe('AgentTaskCard subagent model chip (codex collab)', () => {
     );
     expect(chipText(container)).toBe('claude-sonnet-5');
   });
+
+  it.each([
+    ['partial observation', 'codex/gpt-5.5', 'gpt-5.6-terra'],
+    ['conflicting observations', 'codex/gpt-5.5', 'codex/gpt-5.6-sol'],
+  ])(
+    'does not restore a cleared V1 multi-receiver model after reload (%s)',
+    (_caseName, firstObservedModel, spawnModel) => {
+      const toolCall = collabToolCall({
+        prompt: 'fan out',
+        receiverThreadIds: ['thread-a', 'thread-b'],
+        model: spawnModel,
+      });
+      const { container, rerender } = render(
+        <AgentTaskCard
+          toolCall={toolCall}
+          subagentModel={firstObservedModel}
+          update={{
+            provider: 'codex',
+            taskId: 'item_1',
+            status: 'running',
+            model: null,
+          }}
+        />,
+      );
+      expect(chipText(container)).toBeNull();
+
+      // agent_task_update 是 live-only;重载后 update 消失。多 receiver 的一致性
+      // 结论无法从首条子消息或 spawn 参数恢复,因此必须继续保持无徽标。
+      rerender(<AgentTaskCard toolCall={toolCall} subagentModel={firstObservedModel} />);
+      expect(chipText(container)).toBeNull();
+    },
+  );
 });
