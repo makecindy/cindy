@@ -1197,6 +1197,80 @@ describe('networkSlot · 登录邮箱派生凭证(source:login-email)', () => {
   });
 });
 
+describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
+  const GITHUB_URL = 'https://api.github.com/user';
+  const githubNetwork: GhostNetworkNeeds = {
+    hosts: ['api.github.com'],
+    secrets: [
+      {
+        key: 'github_pat',
+        label: 'GitHub authentication',
+        source: 'gh-cli',
+        inject: {
+          header: 'Authorization',
+          format: 'Bearer {value}',
+          hosts: ['api.github.com'],
+        },
+      },
+    ],
+  };
+
+  function makeGithubSlot(overrides: Partial<NetworkSlotDeps> = {}) {
+    return makeSlot({
+      getGhost: () => fakeGhost({ network: githubNetwork }),
+      readSecret: () => 'github_pat_fallback',
+      ...overrides,
+    });
+  }
+
+  it('本机 gh token 优先于保险库 PAT，且令牌不回流沙箱', async () => {
+    const readSecret = vi.fn(() => 'github_pat_fallback');
+    const { slot, fetchImpl } = makeGithubSlot({
+      readGhCliToken: async () => 'gho_from_cli',
+      readSecret,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(true);
+    expect(readSecret).not.toHaveBeenCalled();
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe(
+      'Bearer gho_from_cli',
+    );
+    expect(JSON.stringify(result)).not.toContain('gho_from_cli');
+  });
+
+  it('gh 未安装或未登录时回落到已保存 PAT', async () => {
+    const { slot, fetchImpl } = makeGithubSlot({ readGhCliToken: async () => null });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(true);
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe(
+      'Bearer github_pat_fallback',
+    );
+  });
+
+  it('gh 来源异常仍可回落 PAT；两边都不可用时才阻断并给出双路径指引', async () => {
+    const fallback = makeGithubSlot({
+      readGhCliToken: async () => {
+        throw new Error('spawn failed');
+      },
+    });
+    expect((await fallback.slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(
+      true,
+    );
+
+    const unavailable = makeGithubSlot({
+      readGhCliToken: async () => null,
+      readSecret: () => null,
+    });
+    const result = await unavailable.slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain('gh auth login');
+      expect(result.message).toContain('Personal Access Token');
+    }
+    expect(unavailable.fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
 describe('networkSlot · 目录上传(uploadDir,过户票据)', () => {
   const DEPLOY_URL = 'https://api.search.brave.com/deploy';
   const VALID_TOKEN = '11111111-2222-4333-8444-555555555555';

@@ -235,6 +235,7 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
@@ -3173,6 +3174,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
         return ghost ? { ...ghost, manifest: withRuntimeFiloGoogleClient(ghost.manifest) } : null;
       },
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
+      readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
       // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
@@ -3862,6 +3864,11 @@ export function registerGhostIpc(): void {
       key: s.key,
       saved: isConnectionSecretReady(s.inject.hosts ?? [], connectionResolution),
     }));
+    const ghCliSecretDecls = networkSecretDecls.filter((s) => s.source === 'gh-cli');
+    const ghCliAvailable =
+      ghCliSecretDecls.length > 0
+        ? (await getSharedGhCliTokenSource().readToken()) !== null
+        : false;
     return handleGhostSecretsRequest({
       method,
       pathname,
@@ -3869,6 +3876,11 @@ export function registerGhostIpc(): void {
       userSecretKeys,
       identitySecretKeys,
       managedSecretStates,
+      hostCredentialStates: ghCliSecretDecls.map((s) => ({
+        key: s.key,
+        source: 'gh-cli' as const,
+        available: ghCliAvailable,
+      })),
       getLoginEmail: () => getAuthState().user?.email ?? null,
       ghostId,
       vault: {

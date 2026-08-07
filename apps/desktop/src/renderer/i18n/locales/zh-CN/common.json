@@ -3428,6 +3428,8 @@
         "networkSecretGhostInputDetail": "凭证由这个插件自己的设置界面收集，录入时会经过插件页面；随后一次性交给主机加密保管，存入后插件无法读回，主机只在请求它声明的域名时注入。",
         "networkSecretIdentity": "将使用你的登录邮箱作为凭证「{{name}}」",
         "networkSecretIdentityDetail": "值取自当前登录账号的邮箱，请求时由主机自动派生注入；无需填写。插件可读取该邮箱，用于在它的设置界面里展示当前身份。",
+        "networkSecretGhCli": "将优先使用本机 GitHub CLI 登录作为凭证「{{name}}」",
+        "networkSecretGhCliDetail": "主机按需读取本机 gh 登录令牌，并且只注入 GitHub API 请求；插件代码无法读取或保存令牌。若 gh 不可用，可在插件设置中配置备用 Personal Access Token。",
         "networkSecretOrganizationIdentity": "将使用你的 Cindy 企业身份作为凭证「{{name}}」",
         "networkSecretOrganizationIdentityDetail": "Cindy 会按需签发短时身份断言，仅由主机发送给明确列出的服务域名；插件代码无法读取或保存令牌。",
         "networkSecretOauth": "将引导你在 {{host}} 完成 OAuth 授权({{name}})",
