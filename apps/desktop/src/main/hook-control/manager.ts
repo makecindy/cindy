@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
+  HOOK_FEATURE_MESSAGE_OPS,
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
@@ -679,6 +680,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_GROUP_RELAY,
       HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
       HOOK_FEATURE_PROVIDER_BEHAVIOR,
+      // 只给 Telegram 声明: msg.op 目前只有 Telegram 的执行器, X 的渲染路径
+      // 不接入(#1855 的红线之一)。
+      HOOK_FEATURE_MESSAGE_OPS,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -2042,6 +2046,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }
       notifyStatus(toView());
       log.info(`bind.state: ${snap.length} bindings`);
+      return;
+    }
+    if (msg.type === 'msg.op.result') {
+      // 表情回执: 纯装饰动作的结果, 失败只记一行 —— 不重试也不影响任务本身。
+      dispatcher?.onMessageOpResult(msg.payload);
       return;
     }
     if (msg.type === 'tool.response') {

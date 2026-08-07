@@ -40,6 +40,7 @@ import {
   makeInteractionCancel,
   makeInteractionRequest,
   makeTaskAck,
+  type MessageOpResultPayload,
   makeTurnEnd,
   makeTurnProgress,
   makeTurnReopen,
@@ -60,6 +61,7 @@ import {
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { isPathWithin } from './paths.js';
+import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
@@ -337,6 +339,11 @@ export interface HookDispatcher {
   ): void;
   /** transport 离线或失去已协商能力时调用，禁止继续向旧 socket 发送帧。 */
   onDisconnected(connectionId: string): void;
+  /**
+   * msg.op.result: 消息操作的回执。当前只有 ack 表情用它 —— 表情是纯装饰,
+   * 失败只记一行, 不重试、不影响任务本身。
+   */
+  onMessageOpResult(payload: MessageOpResultPayload): void;
   /**
    * task.cancel: 中断指定 requestId 的任务。排队中的直接摘除并回
    * turn.end(cancelled); 执行中的标记取消并 abort 对应 session, 收口时以
@@ -721,6 +728,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const cancelRequested = new Set<string>();
   /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
   const serverFeatures = new Map<string, readonly string[]>();
+  // 官方 bot 的 ack 表情(👀 → 👍/👎) —— 个人 bot 早有, 官方侧靠 msg.op 补上。
+  const ackReactions = createAckReactions({ serverFeatures, log });
   /**
    * 以失败收口、**还等着被续跑**的任务, 按 sessionId 记账(见协议阶段 18)。
    *
@@ -1022,6 +1031,19 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const oldest = ackHistory.keys().next().value;
       if (oldest !== undefined) ackHistory.delete(oldest);
     }
+  }
+
+  /**
+   * ack 表情要的三个字段。triggerMessageId 只有 server 下发了才有 —— 老 server
+   * 不发, 此时整个表情动作跳过(而不是猜一个 id)。
+   */
+  function ackTaskOf(task: PendingTask): AckReactionTask {
+    return {
+      connectionId: task.connectionId,
+      requestId: task.requestId,
+      externalKey: task.externalKey,
+      triggerMessageId: task.run.source?.triggerMessageId ?? null,
+    };
   }
 
   function reply(
@@ -1464,6 +1486,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       ack: task.ack,
       turnEnd: durableTurnEnd(turnEnd),
     });
+    // 表情换终态。发不出去就算了 —— 它是装饰, 任务的送达由上面的 outbox 保证。
+    // 连接断了就没有发送函数 —— 表情随之跳过, 与它「发不出去就算了」的语义一致。
+    const ackSend = sendFns.get(task.connectionId);
+    if (ackSend) ackReactions.onFinished(ackTaskOf(task), status, ackSend);
     running.delete(sessionId);
     // 失败收口 -> 记一笔"等着被续跑"。只有 error 记: cancelled 是用户按了停止,
     // ok 没什么可续的。用户之后在桌面端点「重试」时, 这一轮的进展与结果就能接回
@@ -2126,6 +2152,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           };
           const task: PendingTask = { ...taskBase, ack };
           reply(connectionId, send, ack);
+          ackReactions.onAccepted(ackTaskOf(task), send);
           startExecution(task);
         });
       } catch (err) {
@@ -2438,6 +2465,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       sendFns.clear();
       pendingTurnEnds.clear();
       for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
+    },
+    onMessageOpResult(payload: MessageOpResultPayload) {
+      ackReactions.onResult(payload);
     },
     onConnected(connectionId, send, features) {
       if (!accountActive) return;
