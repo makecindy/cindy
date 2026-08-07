@@ -83,7 +83,7 @@ describe('start_team tool', () => {
   });
 
   it.each(['USER_CANCELLED', 'CONFIRM_TIMEOUT'] as const)(
-    'preserves the host confirmation error %s without claiming the team started',
+    'maps host confirmation cancel/timeout to INTERNAL without claiming the team started',
     async (errorCode) => {
       const startTeam = vi.fn().mockResolvedValue({
         ok: false,
@@ -106,7 +106,7 @@ describe('start_team tool', () => {
 
       expect(parse(result)).toMatchObject({
         ok: false,
-        errorCode,
+        errorCode: 'INTERNAL',
       });
       expect(result.isError).toBe(true);
     },
