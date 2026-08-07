@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
-import type { SchedulerMcpDeps } from '../types.js';
+import type { CodexAutomationRecord, SchedulerMcpDeps } from '../types.js';
 import { buildJsonResult } from './_shared.js';
 import { classifySchedulerError } from './errors.js';
 
@@ -15,6 +15,12 @@ function errorResult(error: unknown) {
     },
     true,
   );
+}
+
+function withoutSourcePath(record: CodexAutomationRecord): Omit<CodexAutomationRecord, 'sourcePath'> {
+  const { sourcePath: _sourcePath, ...publicRecord } = record;
+  void _sourcePath;
+  return publicRecord;
 }
 
 export function registerCodexAutomationTools(
@@ -32,7 +38,8 @@ export function registerCodexAutomationTools(
     inputShape: {},
     handler: async () => {
       try {
-        return buildJsonResult({ ok: true, data: await service.list() });
+        const records = await service.list();
+        return buildJsonResult({ ok: true, data: records.map(withoutSourcePath) });
       } catch (error) {
         return errorResult(error);
       }
@@ -60,7 +67,7 @@ export function registerCodexAutomationTools(
             true,
           );
         }
-        return buildJsonResult({ ok: true, data: item });
+        return buildJsonResult({ ok: true, data: withoutSourcePath(item) });
       } catch (error) {
         return errorResult(error);
       }

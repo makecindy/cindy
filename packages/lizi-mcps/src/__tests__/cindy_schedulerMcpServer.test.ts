@@ -280,6 +280,8 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       sourcePath: 'C:\\Users\\XD\\.codex\\automations\\ddl\\automation.toml',
       diagnostics: [],
     };
+    const { sourcePath: _sourcePath, ...publicRecord } = record;
+    void _sourcePath;
     await h.cleanup();
     h = await makeHarness({
       codexAutomation: {
@@ -294,7 +296,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
         arguments: { name: 'codex_automation_list', args: {} },
       })) as { content: unknown[]; isError?: boolean },
     );
-    expect(listed.envelope).toEqual({ ok: true, data: [record] });
+    expect(listed.envelope).toEqual({ ok: true, data: [publicRecord] });
 
     const fetched = parseToolResult(
       (await h.client.callTool({
@@ -302,7 +304,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
         arguments: { name: 'codex_automation_get', args: { id: 'ddl' } },
       })) as { content: unknown[]; isError?: boolean },
     );
-    expect(fetched.envelope).toEqual({ ok: true, data: record });
+    expect(fetched.envelope).toEqual({ ok: true, data: publicRecord });
 
     const missing = parseToolResult(
       (await h.client.callTool({

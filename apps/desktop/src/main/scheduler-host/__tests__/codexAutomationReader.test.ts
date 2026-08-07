@@ -81,6 +81,28 @@ describe('createCodexAutomationReader', () => {
     expect(items[0].diagnostics.join(' ')).toContain('id');
   });
 
+  it('refuses non-regular automation.toml paths', async () => {
+    const root = await makeRoot();
+    await fs.mkdir(path.join(root, 'directory-file', 'automation.toml'), { recursive: true });
+
+    const reader = createCodexAutomationReader({ rootDir: root });
+    const item = await reader.get('directory-file');
+
+    expect(item?.diagnostics).toContain('automation.toml must be a regular file');
+  });
+
+  it('refuses oversized automation.toml files before parsing', async () => {
+    const root = await makeRoot();
+    const dir = path.join(root, 'oversized');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'automation.toml'), Buffer.alloc(1_000_001, 0x20));
+
+    const reader = createCodexAutomationReader({ rootDir: root });
+    const item = await reader.get('oversized');
+
+    expect(item?.diagnostics.join(' ')).toContain('exceeds 1000000 bytes');
+  });
+
   it('uses the directory name as the stable id when TOML declares a different id', async () => {
     const root = await makeRoot();
     await writeAutomation(

@@ -5,6 +5,7 @@ import { promises as fs } from 'node:fs';
 import { parse as parseToml } from 'smol-toml';
 
 export const DEFAULT_CODEX_AUTOMATIONS_ROOT = path.join(os.homedir(), '.codex', 'automations');
+const MAX_CODEX_AUTOMATION_FILE_BYTES = 1_000_000;
 
 export interface CodexAutomationTarget {
   type: string;
@@ -187,6 +188,17 @@ function parseAutomation(
 async function readAutomationFile(rootDir: string, id: string): Promise<CodexAutomationDetail> {
   const sourcePath = path.join(rootDir, id, 'automation.toml');
   try {
+    const stats = await fs.lstat(sourcePath);
+    if (stats.isSymbolicLink() || !stats.isFile()) {
+      return fallbackItem(id, sourcePath, 'automation.toml must be a regular file');
+    }
+    if (stats.size > MAX_CODEX_AUTOMATION_FILE_BYTES) {
+      return fallbackItem(
+        id,
+        sourcePath,
+        `automation.toml exceeds ${MAX_CODEX_AUTOMATION_FILE_BYTES} bytes`,
+      );
+    }
     const rawText = await fs.readFile(sourcePath, 'utf8');
     return parseAutomation(id, sourcePath, rawText);
   } catch (error) {
