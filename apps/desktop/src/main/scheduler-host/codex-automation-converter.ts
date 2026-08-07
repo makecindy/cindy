@@ -208,7 +208,7 @@ export function convertCodexAutomation(
   options: CodexAutomationConversionOptions = {},
 ): CodexAutomationConversion {
   const diagnostics = [...detail.diagnostics];
-  const blockingDiagnostics = [...detail.diagnostics];
+  const blockingDiagnostics: string[] = [];
   const status = statusForCodex(detail.status, diagnostics);
   if (!['ACTIVE', 'PAUSED', 'DISABLED', 'INACTIVE'].includes(detail.status.toUpperCase())) {
     blockingDiagnostics.push(`Codex status ${detail.status || '(empty)'} is not recognized`);

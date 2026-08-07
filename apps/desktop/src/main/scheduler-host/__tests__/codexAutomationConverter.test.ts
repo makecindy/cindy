@@ -154,6 +154,15 @@ describe('convertCodexAutomation', () => {
     expect(result.diagnostics.join(' ')).toContain('prompt');
   });
 
+  it('keeps informational reader diagnostics without blocking a valid import', () => {
+    const result = convertCodexAutomation(
+      detail({ diagnostics: ['id does not match its automation directory'] }),
+    );
+
+    expect(result.canImport).toBe(true);
+    expect(result.diagnostics).toContain('id does not match its automation directory');
+  });
+
   it('rejects an automation without a display name', () => {
     const result = convertCodexAutomation(detail({ name: '   ' }), { timezone: 'UTC' });
 
