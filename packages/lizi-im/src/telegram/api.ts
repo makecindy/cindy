@@ -123,6 +123,15 @@ export interface TgMessage {
   media_group_id?: string;
   /** 仅当消息真的属于某个 forum topic 时为 true — 普通回复也会带 thread_id。 */
   is_topic_message?: boolean;
+  /**
+   * 群开启「禁止保存内容」时 Telegram 给每条消息带上 true。
+   *
+   * 它是**隐私边界的唯一信号**: 带标的内容不得落进本地群历史池、不得进 prompt、
+   * 不得回流窗口 —— 与官方 bot 服务端「has_protected_content 的消息不中继」同一
+   * 语义(docs/telegram-hook-server.md「群消息中继」节)。字段缺失按未保护处理:
+   * Telegram 只在保护开启时下发它。
+   */
+  has_protected_content?: boolean;
   reply_to_message?: TgMessage;
   text?: string;
   caption?: string;
