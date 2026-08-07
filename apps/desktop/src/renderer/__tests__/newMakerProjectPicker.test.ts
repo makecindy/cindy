@@ -67,7 +67,7 @@ const scheduleChipsSource = readSource('features', 'scheduler', 'components', 'S
 
 const newGoalDialogSource = readSource('components', 'new-chat', 'NewGoalDialog.tsx');
 
-const extraDirsButtonSource = readSource('components', 'new-chat', 'ExtraDirsButton.tsx');
+const chatInputSource = readSource('components', 'new-chat', 'ChatInput.tsx');
 
 const sidebarUpperSource = readSource('features', 'cc-agent', 'CCAgentSidebarUpper.tsx');
 
@@ -1396,10 +1396,9 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
     );
-    // ExtraDirsButton 的契约:没有 onChange 就不渲染引用目录段(其余菜单项不受影响)。
-    expect(extraDirsButtonSource).toContain(
-      '未提供时只显示目标、计划模式或 Plugin 入口，不显示引用目录段',
-    );
+    // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
+    expect(chatInputSource).toContain('if (onExtraDirsChange) {');
+    expect(chatInputSource).toContain('hasReferenceDirs={onExtraDirsChange !== undefined}');
   });
 
   // #807 review 第二十四轮:`useAttachments.addFiles` 对未知扩展名要先 await peekFileHeader,附件是
@@ -1508,6 +1507,26 @@ describe('Shared create project picker', () => {
     expect((body.match(/resolveDeviceLinkDraftDefaults\(/g) ?? []).length).toBeGreaterThanOrEqual(
       3,
     );
+  });
+
+  it('reapplies refreshed regional defaults only while the remote runtime is untouched', () => {
+    const seed = newMakerDraftRouteSource.slice(
+      newMakerDraftRouteSource.indexOf('// seed dlSel:'),
+      newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
+    );
+    expect(seed).toContain('shouldReseedDeviceLinkDraftDefaults({');
+    expect(seed).toContain('capabilitiesChanged,');
+    expect(seed).toContain('if (!capabilities || capabilitiesLoading');
+    expect(seed).toContain('controllerTouched: dlRuntimeTouchedRef.current,');
+    expect(seed).toContain('remoteModelChosenByUser: remoteDraftState.value?.modelChosenByUser,');
+    expect(seed).toContain('modelChosenByUser: true,');
+    expect(seed).toContain('current.model,');
+
+    const runtimeHandlers = newMakerDraftRouteSource.slice(
+      newMakerDraftRouteSource.indexOf('const handleModelDidChange = useCallback('),
+      newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir'),
+    );
+    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(5);
   });
 
   // #807 review 第二十七轮:设备菜单行原来只有 hover / disabled 两态,且 outline-none 去掉了浏览器

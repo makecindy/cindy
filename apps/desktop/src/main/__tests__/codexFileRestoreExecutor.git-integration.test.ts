@@ -272,7 +272,8 @@ describe('executeCodexFileRestorePlan', () => {
     // 目录被清掉,原文件按基线内容重建。swap 已是文件,子路径 lstat 报 ENOTDIR。
     expect(await readFile('swap')).toBe('was a file\n');
     await expect(fs.lstat(path.join(repoPath, 'swap/child.txt'))).rejects.toMatchObject({
-      code: 'ENOTDIR',
+      // Windows may report ENOENT for a child below a path that is now a file.
+      code: expect.stringMatching(/^(?:ENOENT|ENOTDIR)$/),
     });
     expect(result?.restoredFiles).toContain('swap');
     expect(result?.deletedFiles).toContain('swap/child.txt');

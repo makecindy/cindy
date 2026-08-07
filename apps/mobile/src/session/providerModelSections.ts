@@ -179,7 +179,10 @@ export function isSelectedSourceDisconnected(args: {
  * 口径同 maker-shared `reconcileRuntimeDraftWithCapabilities`。仅供 flat 回退路径
  * (旧被控端无供应商结构、无记忆可用)消费;分段路径走 resolveRowSelection。
  */
-export function reconcileEffortForModel(model: SectionModel, currentEffort: string): string {
+export function reconcileEffortForModel(
+  model: { efforts: readonly string[]; defaultEffort: string | null },
+  currentEffort: string,
+): string {
   const efforts = model.efforts as readonly string[];
   if (efforts.length === 0) return '';
   if (efforts.includes(currentEffort)) return currentEffort;

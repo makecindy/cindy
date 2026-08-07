@@ -37,6 +37,8 @@ export interface SectionModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
+  /** 区域门控后的新对话默认标记；仅由可信的模型访问响应投影。 */
+  newSessionDefault?: CatalogModel['newSessionDefault'];
   /** 模型级 Codex bridge 协议；Provider 级协议仍从 section.provider.routing 读取。 */
   codexCompatibilityWireProtocol?: CatalogModel['codexCompatibilityWireProtocol'];
   contextWindow: number;
@@ -177,6 +179,7 @@ export function buildProviderSections(args: {
       if (m.description !== undefined) sm.description = m.description;
       if (m.effortDisplayNames !== undefined) sm.effortDisplayNames = m.effortDisplayNames;
       if (m.supportsFastMode !== undefined) sm.supportsFastMode = m.supportsFastMode;
+      if (m.newSessionDefault !== undefined) sm.newSessionDefault = m.newSessionDefault;
       if (m.codexCompatibilityWireProtocol !== undefined) {
         sm.codexCompatibilityWireProtocol = m.codexCompatibilityWireProtocol;
       }

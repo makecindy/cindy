@@ -53,6 +53,13 @@ describe('PiAgent capabilities contract', () => {
     expect(buildAgent().capabilities.hasFastMode).toBe(true);
   });
 
+  it('supports host turn policies in ask/auto but rejects Full Access', () => {
+    expect(buildAgent().capabilities.turnPermissionPolicy).toEqual({
+      supported: { supported: true },
+      unsupportedPermissionModes: ['bypassPermissions'],
+    });
+  });
+
   it('exposes Pi native minimal thinking', () => {
     expect(buildAgent().capabilities.effortLevels.map((level) => level.id)).toContain('minimal');
   });

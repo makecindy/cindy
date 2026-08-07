@@ -3,6 +3,7 @@ import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-pat
 import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
+import type { MobileModelOption } from './agentCapabilities';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
@@ -315,6 +316,25 @@ export interface NewSessionRuntime {
   providerId: string | null;
 }
 
+type NewSessionDefaultModel = {
+  id: string;
+  efforts: readonly string[];
+  defaultEffort: string | null;
+  newSessionDefault?: readonly ('claude-code' | 'codex')[];
+};
+
+function newSessionDefaultMarker(agentKind: NewSessionAgentKind): 'claude-code' | 'codex' {
+  return agentKind === 'codex' ? 'codex' : 'claude-code';
+}
+
+function pickRegionalNewSessionDefault<T extends NewSessionDefaultModel>(
+  models: readonly T[],
+  agentKind: NewSessionAgentKind,
+): T | undefined {
+  const marker = newSessionDefaultMarker(agentKind);
+  return models.find((model) => model.newSessionDefault?.includes(marker) === true);
+}
+
 /**
  * 校验 draft 里的来源(providerId)对当前 model 是否仍然有效:
  * - providerId 为空 → null(默认路由);
@@ -537,8 +557,8 @@ export function pickMostRecentSessionRuntime(
  * 与初始自动默认共用同一套 fallback 口径。纯函数:所有输入显式传入,不读 react / 设备状态。
  * model 优先级:
  *   1) 该 agent 的最近一次会话模型(pickMostRecentSessionRuntime,按 deviceId scope);
- *   2) 否则该 agent 的模型列表最上面那个(modelRows[0] —— providers 已加载时同步可得,
- *      与下拉渲染的第一项一致);
+ *   2) 否则取区域门控后的新任务默认；无标记再取该 agent 的模型列表最上面那个
+ *      (modelRows[0] —— providers 已加载时同步可得,与下拉渲染的第一项一致);
  *   3) 否则该 agent 的内置默认 DEFAULT_MODELS[agentKind]。
  * providerId 跟随 model 同源:
  *   1) 跟随最近会话 → 继承该会话的来源(validateModelProviderId 校验:目录已就绪且来源
@@ -576,8 +596,11 @@ export function pickAgentDefaultRuntime(args: {
   } else if (catalogReady && modelRows[0]) {
     // 首项分支只在目录就绪时取——切到未缓存设备瞬间旧设备目录会短暂残留
     // (ready=false),抄它的首项会把别设备的来源写进草稿(codex review P1)。
-    model = modelRows[0].model.id;
-    providerId = modelRows[0].provider.id;
+    // 区域默认标记优先(上游 main 移植):模型声明 newSessionDefault 时按 agent 门控。
+    const regional = pickRegionalNewSessionDefault(modelRows.map((row) => row.model), agentKind);
+    const chosen = regional ?? modelRows[0].model;
+    model = chosen.id;
+    providerId = modelRows.find((row) => row.model.id === chosen.id)?.provider.id ?? null;
   } else {
     model = DEFAULT_MODELS[agentKind];
     providerId = null;
@@ -595,8 +618,10 @@ export function pickAgentDefaultRuntime(args: {
  *   1) 有最近会话(按 selectedDeviceId scope)→ 整套跟随(agentKind + model + effort + providerId,
  *      effort reconcile 同 pickAgentDefaultRuntime 口径:SectionModel 按 (providerId, modelId)
  *      精确匹配;providerId 经 validateModelProviderId 校验后继承);
- *   2) 无最近会话但 modelRows 就绪 → 取列表最上面(model + effort reconcile + 该行 provider,不动 agentKind);
- *   3) 无最近会话且 modelRows 未就绪(providers 加载中)→ null(等下次 modelRows 就绪再设,绝不误设)。
+ *   2) 无最近会话 → 区域默认标记优先;无 provider 结构时才信 capabilities 扁平标记
+ *      (上游 main 移植);无标记再取 provider 列表最上面(model + effort reconcile + 该行
+ *      provider,不动 agentKind);
+ *   3) 无最近会话且目录未就绪 / 两份模型列表都未就绪 → null(等下次数据就绪再设,绝不误设)。
  * currentEffort = 当前 draft.effort,作为 reconcile 的 base(与 effect 里 setDraft updater 读 current.effort 等价)。
  */
 export function resolveNewSessionAutoDefault(input: {
@@ -610,9 +635,21 @@ export function resolveNewSessionAutoDefault(input: {
   rowsAgentKind: NewSessionAgentKind;
   /** 供应商目录是否已就绪;未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
   catalogReady: boolean;
+  /** 仅在 provider-aware 列表不可用时传入,避免绕过被控端的模型可见性设置(上游 main 移植)。 */
+  availableModels?: readonly MobileModelOption[];
   currentEffort: string;
 }): { patch: Partial<NewSessionDraft>; appliedDeviceId: string } | null {
-  const { userTouched, appliedDeviceId, selectedDeviceId, sessions, modelRows, rowsAgentKind, catalogReady, currentEffort } = input;
+  const {
+    userTouched,
+    appliedDeviceId,
+    selectedDeviceId,
+    sessions,
+    modelRows,
+    rowsAgentKind,
+    catalogReady,
+    availableModels = [],
+    currentEffort,
+  } = input;
   if (userTouched) return null;
   if (!selectedDeviceId) return null;
   if (appliedDeviceId === selectedDeviceId) return null;
@@ -646,16 +683,27 @@ export function resolveNewSessionAutoDefault(input: {
       },
     };
   }
-  // 无最近会话 → 列表最上面那个(与 UI 渲染第一项一致);目录未就绪(加载中/切设备间隙
-  // 残留旧设备目录,ready=false)则不动,等就绪后 effect 重算(codex review P1)。
-  const top = modelRows[0];
-  if (!top || !catalogReady) return null;
+  // 无最近会话 → 区域默认标记优先;无 provider 结构时才信 capabilities 扁平标记
+  // (上游 main 移植);provider-aware 列表由调用方传空 availableModels,避免区域
+  // 默认绕过用户隐藏设置。目录未就绪(加载中/切设备间隙残留旧设备目录,
+  // ready=false)则不动,等就绪后 effect 重算(codex review P1)。
+  if (!catalogReady) return null;
+  const providerModel = modelRows.length > 0
+    ? pickRegionalNewSessionDefault(modelRows.map((row) => row.model), rowsAgentKind) ?? modelRows[0].model
+    : undefined;
+  const flatDefault = providerModel
+    ? undefined
+    : pickRegionalNewSessionDefault(availableModels, rowsAgentKind);
+  const defaultModel = providerModel ?? flatDefault;
+  if (!defaultModel) return null;
+  const providerRow = modelRows.find((row) => row.model.id === defaultModel.id);
   return {
     appliedDeviceId: selectedDeviceId,
     patch: {
-      model: top.model.id,
-      effort: reconcileEffortForModel(top.model, currentEffort),
-      providerId: top.provider.id,
+      model: defaultModel.id,
+      effort: reconcileEffortForModel(defaultModel, currentEffort),
+      // 区域默认来自 provider 行 → 携带该行 provider(#1898);来自扁平列表 → 默认路由
+      providerId: providerRow ? providerRow.provider.id : null,
     },
   };
 }

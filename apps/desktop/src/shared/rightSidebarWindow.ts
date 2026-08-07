@@ -50,6 +50,14 @@ export type RsbWindowCommand =
       focusTaskId?: string | null;
     }
   | {
+      type: 'open-turn-review';
+      sessionId: string;
+      changeSetIds: string[];
+      selectedDiffId?: string | null;
+      selectedPath?: string | null;
+      requestNonce: number;
+    }
+  | {
       type: 'open-file-browser';
       sessionId: string;
       relPath: string;

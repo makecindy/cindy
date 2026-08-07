@@ -258,7 +258,11 @@ function killPosixProcessTree(pid: number, childrenByParent: Map<number, number[
   // rest still got the signal. Only treat hard process errors (above) as failure.
 }
 
-function killProcessTree(pid: number, childrenByParent: Map<number, number[]>): boolean {
+/**
+ * 杀掉一棵进程树,best-effort。除本收割器外,process-monitor 的「结束进程」
+ * 也复用这条路径(调用前必须已按 ppid + marker 独立校验归属)。
+ */
+export function killProcessTree(pid: number, childrenByParent: Map<number, number[]>): boolean {
   try {
     if (process.platform === 'win32') {
       killWindowsProcessTree(pid);

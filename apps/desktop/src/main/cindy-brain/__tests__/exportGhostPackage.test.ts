@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
 import { exportGhostPackage, sanitizeExportFileNamePart } from '../exportGhostPackage';
+import { MAX_BASIC_ZIP_ENTRIES } from '../GhostManager';
 import { signGhostPackage } from '../ghostSignature';
 
 /** 测试用发布者密钥对(每次进程一对,签名/验签都走真实 ed25519)。 */
@@ -36,6 +37,8 @@ const canSymlink = (() => {
 let workDir: string;
 let ghostDir: string;
 
+const FILE_WRITE_BATCH_SIZE = 16;
+
 beforeEach(async () => {
   workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-ghost-export-test-'));
   ghostDir = path.join(workDir, 'hello');
@@ -59,8 +62,26 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.promises.rm(workDir, { recursive: true, force: true });
+  await fs.promises.rm(workDir, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === 'win32' ? 5 : 0,
+    retryDelay: 20,
+  });
 });
+
+async function writeCacheFiles(count: number): Promise<void> {
+  for (let start = 0; start < count; start += FILE_WRITE_BATCH_SIZE) {
+    const batchSize = Math.min(FILE_WRITE_BATCH_SIZE, count - start);
+    const results = await Promise.allSettled(
+      Array.from({ length: batchSize }, (_, offset) =>
+        fs.promises.writeFile(path.join(ghostDir, `cache-${start + offset}.dat`), 'x'),
+      ),
+    );
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  }
+}
 
 function makeGhost(): InstalledGhost {
   return {
@@ -212,9 +233,7 @@ describe('exportGhostPackage', () => {
   it('目录内容超过装入侧条目上限:如实 too_large', async () => {
     // 普通(非 Node)插件装入上限 256 条目;运行期写入的杂散文件可能
     // 把目录撑过上限,导出不能成功却装不回。
-    for (let i = 0; i < 260; i++) {
-      await fs.promises.writeFile(path.join(ghostDir, `cache-${i}.dat`), 'x');
-    }
+    await writeCacheFiles(MAX_BASIC_ZIP_ENTRIES + 1);
     const result = await exportGhostPackage('hello', makeDeps());
     expect(result).toEqual({ status: 'error', code: 'too_large' });
   });

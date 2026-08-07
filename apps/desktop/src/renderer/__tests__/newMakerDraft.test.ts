@@ -168,6 +168,7 @@ describe('newMakerDraft store', () => {
           model: 'claude-opus-4-7',
           effort: 'high',
           fast: true,
+          workerPermissionMode: 'bypassPermissions',
           initialTask: '先跑一遍测试',
         },
       },
@@ -186,8 +187,33 @@ describe('newMakerDraft store', () => {
       model: 'claude-opus-4-7',
       effort: 'high',
       fast: true,
+      workerPermissionMode: 'bypassPermissions',
     });
     expect(wc?.initialTask).toBeUndefined();
+  });
+
+  it('另起干净任务时只关闭协同，不覆盖 Worker 创建偏好', async () => {
+    const { getDraft, patchDraft, resetDraftWorkspaceTargets } = await loadModule();
+    patchDraft({
+      collab: {
+        enabled: true,
+        worker: 'codex',
+        workerConfig: {
+          role: 'developer',
+          model: 'gpt-5.5',
+          workerPermissionMode: 'bypassPermissions',
+        },
+      },
+    });
+
+    resetDraftWorkspaceTargets();
+
+    expect(getDraft().collab.enabled).toBe(false);
+    expect(getDraft().collab.workerConfig).toMatchObject({
+      role: 'developer',
+      model: 'gpt-5.5',
+      workerPermissionMode: 'bypassPermissions',
+    });
   });
 
   it('patchDraft: Cindy worktree 路径会折回项目根目录', async () => {

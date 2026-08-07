@@ -46,6 +46,7 @@ function modelRow(
   id: string,
   efforts: readonly string[] = [],
   defaultEffort: string | null = null,
+  newSessionDefault?: readonly ('claude-code' | 'codex')[],
 ): ProviderModelRow {
   return {
     provider: { id: `prov-${id}`, name: id } as ProviderModelRow['provider'],
@@ -55,6 +56,7 @@ function modelRow(
       efforts: efforts as ProviderModelRow['model']['efforts'],
       defaultEffort: defaultEffort as ProviderModelRow['model']['defaultEffort'],
       contextWindow: 0,
+      ...(newSessionDefault ? { newSessionDefault: [...newSessionDefault] } : {}),
     },
   };
 }
@@ -418,6 +420,28 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: 'prov-gpt-5.4' });
   });
 
+  it('uses the regional default before the top row, with Pi sharing the claude-code marker', () => {
+    const rows = [
+      modelRow('top', ['low'], 'low'),
+      modelRow('regional', ['medium'], 'medium', ['claude-code']),
+    ];
+    // 区域默认来自 provider 行 → 携带该行 provider(#1898 语义,merge main 后适配)
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [],
+      modelRows: rows,
+      currentEffort: 'high',
+      catalogReady: true,
+    })).toEqual({ agentKind: 'claude-code', model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'pi',
+      sessions: [],
+      modelRows: rows,
+      currentEffort: 'high',
+      catalogReady: true,
+    })).toEqual({ agentKind: 'pi', model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+  });
+
   it('falls back to DEFAULT_MODELS and keeps current effort when providers are not loaded yet', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
@@ -488,6 +512,7 @@ describe('resolveNewSessionAutoDefault', () => {
     modelRows: [] as ProviderModelRow[],
     rowsAgentKind: 'claude-code' as const,
     catalogReady: true,
+    availableModels: [],
     currentEffort: 'medium',
   };
 
@@ -629,6 +654,39 @@ describe('resolveNewSessionAutoDefault', () => {
       modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'low')],
     });
     expect(result).toBeNull();
+  });
+
+  it('intent ②a: no recent session → regional default before the top row (upstream main 移植)', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      currentEffort: 'high',
+      modelRows: [
+        modelRow('top', ['low'], 'low'),
+        modelRow('regional', ['medium'], 'medium', ['claude-code']),
+      ],
+    });
+    // 区域默认来自 provider 行 → 携带该行 provider(#1898 语义)
+    expect(result?.patch).toEqual({ model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+  });
+
+  it('intent ②b: provider list unavailable → regional default from normalized capabilities (upstream main 移植)', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      currentEffort: 'high',
+      availableModels: [
+        {
+          id: 'regional',
+          label: 'Regional',
+          efforts: ['medium'],
+          effortDisplayNames: {},
+          defaultEffort: 'medium',
+          supportsFastMode: false,
+          newSessionDefault: ['claude-code'],
+        },
+      ],
+    });
+    // 扁平列表无 provider 行 → 默认路由
+    expect(result?.patch).toEqual({ model: 'regional', effort: 'medium', providerId: null });
   });
 
   it('intent ③: switching device (not manually touched) recomputes for the new device', () => {

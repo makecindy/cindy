@@ -31,6 +31,7 @@ import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
 import {
   createWechatTurnPermissionPolicyForMode,
+  WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
   WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED,
 } from './permissionPolicy';
 import {
@@ -94,6 +95,16 @@ interface ActiveTask {
   task: WechatTask;
   routeSessionId?: string;
   terminalCommitted: boolean;
+}
+
+function activePeerIdForSession<
+  T extends { routeSessionId?: string; task: { sessionId: string } },
+>(activeTasks: ReadonlyMap<string, T>, sessionId: string | undefined): string | null {
+  if (!sessionId) return null;
+  const peers = [...activeTasks.entries()]
+    .filter(([, active]) => (active.routeSessionId ?? active.task.sessionId) === sessionId)
+    .map(([peerId]) => peerId);
+  return peers.length === 1 ? peers[0]! : null;
 }
 
 interface PendingWechatInteraction {
@@ -466,18 +477,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   }
 
   getActivePeerIdForSession(sessionId: string | undefined): string | null {
-    if (!sessionId) return null;
-    const peers = [...this.#activeTasks.entries()]
-      .filter(
-        ([, active]) => (active.routeSessionId ?? active.task.sessionId) === sessionId,
-      )
-      .map(([peerId]) => peerId);
-    return peers.length === 1 ? peers[0]! : null;
+    return activePeerIdForSession(this.#activeTasks, sessionId);
   }
 
   async handleTextInteraction(
     userId: string,
     request: InteractionRequest,
+    options?: { timeoutMs?: number },
   ): Promise<InteractionDecision> {
     const previous = this.#pendingInteractions.get(userId);
     if (previous) {
@@ -492,7 +498,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const timer = setTimeout(() => {
       this.#pendingInteractions.delete(userId);
       resolvePending(defaultWechatInteractionDecision(request, 'wechat_interaction_timeout'));
-    }, 10 * 60_000);
+    }, options?.timeoutMs ?? WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS);
     timer.unref?.();
     this.#pendingInteractions.set(userId, { request, resolve: resolvePending, timer });
     try {
@@ -509,6 +515,24 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       );
     }
     return result;
+  }
+
+  /**
+   * Resolve only the exact pending request owned by the central interaction
+   * route. Request-id matching prevents a late timeout/release from cancelling
+   * a newer one-shot confirmation for the same WeChat peer.
+   */
+  cancelTextInteraction(
+    userId: string,
+    requestId: string,
+    decision: InteractionDecision,
+  ): boolean {
+    const pending = this.#pendingInteractions.get(userId);
+    if (!pending || pending.request.requestId !== requestId) return false;
+    clearTimeout(pending.timer);
+    this.#pendingInteractions.delete(userId);
+    pending.resolve(decision);
+    return true;
   }
 
   sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
@@ -1973,6 +1997,7 @@ function machineErrorCode(error: unknown): string {
 }
 
 export const __testing = {
+  activePeerIdForSession,
   acceptedPollTaskIds,
   authorizationCancelPhase,
   classifyOutboxSendError,

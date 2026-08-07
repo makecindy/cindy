@@ -38,6 +38,7 @@ vi.mock('../hooks/useOrcaWorkerSelection', () => ({
     handleCreateWorker: vi.fn(),
     handleSwitchFocus: vi.fn(),
     handleArchiveWorker: vi.fn(),
+    workerPermissionMode: 'auto',
   }),
 }));
 

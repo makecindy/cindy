@@ -194,7 +194,7 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: { agentText: string; commit?: () => void } | null = null;
+    let prepared: { agentText: string; commit?: () => void | Promise<void> } | null = null;
     if (adapter.prepareAgentTurnText) {
       try {
         prepared = await adapter.prepareAgentTurnText(event);
@@ -215,9 +215,11 @@ export function createMessageHandler(
         ...(prepared ? { agentText: prepared.agentText } : {}),
         ...(prepared?.commit
           ? {
-              // 路由解析成功 = 消息确定会被派发/排队 — 群窗口游标此刻才推进,
-              // 路由失败(鉴权缺失等)不推进, 上下文批次下次仍进 prompt。
-              onRouteResolved: () => prepared?.commit?.(),
+              // turnRunner 只在 provider 真正接受消息后调用；排队、停止与
+              // teardown 都不推进游标, 受理前失败时上下文批次下次仍进 prompt。
+              onRouteResolved: async () => {
+                await prepared?.commit?.();
+              },
             }
           : {}),
         attachments: event.attachments,

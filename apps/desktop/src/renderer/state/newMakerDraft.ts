@@ -24,6 +24,7 @@ import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
+import type { OrcaWorkerPermissionMode } from '../../shared/orca-worker-permission-mode';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths';
 
@@ -76,6 +77,8 @@ export interface CollabWorkerConfig {
   providerId?: string | null;
   /** 首条派工任务。一次性,故意不跨重启持久化(sanitize 加载时丢弃,见下方解析)。 */
   initialTask?: string;
+  /** 当前协同 Team 后续新 Worker 共用的默认权限。 */
+  workerPermissionMode?: OrcaWorkerPermissionMode;
 }
 
 export interface CollabDraft {
@@ -309,9 +312,11 @@ function sanitize(raw: unknown): NewMakerDraft {
         typeof wc.providerId === 'string' && wc.providerId.trim()
           ? wc.providerId.trim()
           : undefined,
+      workerPermissionMode:
+        wc.workerPermissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'auto',
       // initialTask 是一次性任务,**故意不跨重启持久化**(同 deviceLinkDeviceId 先例):
       // 重启后 Send/New Goal 会静默把过期任务当 delegateTask 发出去,而收起态 pill
-      // 无从看见/编辑(codex P2)。耐久保留的只有 role/model/effort/fast/providerId。
+      // 无从看见/编辑(codex P2)。其余 Worker 配置(含 Team 默认权限)可耐久保留。
     };
   })();
   const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };
