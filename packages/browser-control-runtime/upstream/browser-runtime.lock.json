@@ -44,6 +44,10 @@
     },
     {
       "file": "extension/src/browser/pw-session.ts",
+      "desc": "import the host-settable runtime config getter so the preview route guard can re-check the LIVE origin allowlist on every request (round 26: a revoked preview origin must stop being trusted immediately)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
       "desc": "compute the exact preview origin (if any) before installing the navigation route guard — drives both the persistent guard and exact-origin enforcement for preview pages"
     },
     {
@@ -80,7 +84,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "14043f6364697f0f87fc3a7398ba24031de8018869b10aba43e5e6a5a6607c43",
+  "contentHash": "d85073ee8ea520efcd1dc52b7fc77d631c226477aa174990ec8b28000b2c0c42",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

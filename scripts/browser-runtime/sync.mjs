@@ -366,6 +366,14 @@ const LOCAL_PATCHES = {
   ],
   'extension/src/browser/pw-session.ts': [
     {
+      desc: 'import the host-settable runtime config getter so the preview route guard can re-check the LIVE origin allowlist on every request (round 26: a revoked preview origin must stop being trusted immediately)',
+      find:
+        '} from "openclaw/plugin-sdk/number-runtime";',
+      replace:
+        '} from "openclaw/plugin-sdk/number-runtime";\n' +
+        'import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";',
+    },
+    {
       desc: 'compute the exact preview origin (if any) before installing the navigation route guard — drives both the persistent guard and exact-origin enforcement for preview pages',
       find:
         '  let blockedError: unknown = null;\n' +
@@ -407,8 +415,26 @@ const LOCAL_PATCHES = {
         '    // LOCAL PATCH (Cindy, via sync.mjs): preview pages navigate only\n' +
         '    // within their exact origin — any other destination (public\n' +
         '    // sites, other loopback services, file://) is aborted regardless\n' +
-        '    // of what the SSRF policy would allow.\n' +
+        '    // of what the SSRF policy would allow. The origin must also be\n' +
+        '    // STILL authorized by the LIVE host config (round 26): the guard\n' +
+        '    // captured `previewOrigin` at goto time, but the host may have\n' +
+        '    // revoked the preview since — a freed loopback port seized by\n' +
+        '    // another local process must never be loadable into a survivor\n' +
+        '    // tab, even via a same-origin navigation. Fail-closed: any read\n' +
+        '    // failure or missing allowlist entry aborts the navigation.\n' +
         '    if (previewOrigin !== null) {\n' +
+        '      let stillAuthorized = false;\n' +
+        '      try {\n' +
+        '        const liveOrigins =\n' +
+        '          getRuntimeConfig?.()?.browser?.ssrfPolicy?.allowedOrigins;\n' +
+        '        stillAuthorized = Array.isArray(liveOrigins) && liveOrigins.includes(previewOrigin);\n' +
+        '      } catch {\n' +
+        '        stillAuthorized = false;\n' +
+        '      }\n' +
+        '      if (!stillAuthorized) {\n' +
+        '        await route.abort().catch(() => {});\n' +
+        '        return;\n' +
+        '      }\n' +
         '      let sameOrigin = false;\n' +
         '      try {\n' +
         '        sameOrigin = new URL(request.url()).origin === previewOrigin;\n' +

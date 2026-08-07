@@ -14,6 +14,7 @@ import {
   parseFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "../../../../shim/number-runtime.js";
+import { getRuntimeConfig } from "../../../../shim/runtime-config-snapshot.js";
 import { normalizeOptionalString } from "../../../../shim/string-coerce-runtime.js";
 import type {
   Browser,
@@ -1396,8 +1397,26 @@ export async function gotoPageWithNavigationGuard(
     // LOCAL PATCH (Cindy, via sync.mjs): preview pages navigate only
     // within their exact origin — any other destination (public
     // sites, other loopback services, file://) is aborted regardless
-    // of what the SSRF policy would allow.
+    // of what the SSRF policy would allow. The origin must also be
+    // STILL authorized by the LIVE host config (round 26): the guard
+    // captured `previewOrigin` at goto time, but the host may have
+    // revoked the preview since — a freed loopback port seized by
+    // another local process must never be loadable into a survivor
+    // tab, even via a same-origin navigation. Fail-closed: any read
+    // failure or missing allowlist entry aborts the navigation.
     if (previewOrigin !== null) {
+      let stillAuthorized = false;
+      try {
+        const liveOrigins =
+          getRuntimeConfig?.()?.browser?.ssrfPolicy?.allowedOrigins;
+        stillAuthorized = Array.isArray(liveOrigins) && liveOrigins.includes(previewOrigin);
+      } catch {
+        stillAuthorized = false;
+      }
+      if (!stillAuthorized) {
+        await route.abort().catch(() => {});
+        return;
+      }
       let sameOrigin = false;
       try {
         sameOrigin = new URL(request.url()).origin === previewOrigin;

@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolveSsrFPolicyForUrl } from '../_generated/leaf/src/infra/net/ssrf.js';
 import { assertBrowserNavigationAllowed } from '../_generated/extension/src/browser/navigation-guard.js';
 import { gotoPageWithNavigationGuard } from '../_generated/extension/src/browser/pw-session.js';
+import { setBrowserRuntimeConfig } from '../shim/runtime-config-snapshot.js';
 import type { LookupFn } from '../_generated/leaf/src/infra/net/ssrf.js';
+
+afterEach(() => {
+  setBrowserRuntimeConfig({}); // reset the host-settable config between tests
+});
 
 const PREVIEW_ORIGIN = 'http://127.0.0.1:49152';
 const POLICY = { allowedOrigins: [PREVIEW_ORIGIN] };
@@ -88,8 +93,15 @@ describe('exact-origin preview allowlist (navigation level)', () => {
 describe('persistent navigation guard (preview origin)', () => {
   function fakePage() {
     const unrouteCalls: Array<{ pattern: string; handler: unknown }> = [];
+    const routedHandlers: Array<(route: unknown, request: unknown) => Promise<void>> = [];
+    // mainFrame identity shared with fakeTopLevelRequest so the handler's
+    // top-level detection (request.frame() === page.mainFrame()) matches.
+    const mainFrame = {};
     const page = {
-      route: async () => {},
+      mainFrame: () => mainFrame,
+      route: async (_pattern: string, handler: (route: unknown, request: unknown) => Promise<void>) => {
+        routedHandlers.push(handler);
+      },
       unroute: async (pattern: string, handler: unknown) => {
         unrouteCalls.push({ pattern, handler });
       },
@@ -99,6 +111,7 @@ describe('persistent navigation guard (preview origin)', () => {
     return {
       unrouteCalls,
       patterns: () => unrouteCalls.map((c) => c.pattern),
+      routedHandlers,
       page: page as unknown as Parameters<typeof gotoPageWithNavigationGuard>[0]['page'],
     };
   }
@@ -150,5 +163,101 @@ describe('persistent navigation guard (preview origin)', () => {
     });
     expect(patterns()).toEqual(['**', '**']);
     expect(unrouteCalls[0].handler).not.toBe(unrouteCalls[1].handler);
+  });
+
+  function fakeTopLevelRequest(url: string, mainFrame: unknown) {
+    // isTopLevelNavigationRequest needs request.frame() === page.mainFrame()
+    // and request.isNavigationRequest() to classify a top-level document
+    // navigation; without them the handler treats the request as a
+    // non-top-level subresource and continues it (not what we assert).
+    // `mainFrame` must be the SAME object the fake page reports. Playwright
+    // Request exposes url()/frame()/isNavigationRequest() as METHODS.
+    return {
+      url: () => url,
+      frame: () => mainFrame,
+      isNavigationRequest: () => true,
+      resourceType: () => 'document',
+    };
+  }
+
+  it('aborts a SAME-ORIGIN navigation after the host revokes the preview origin (round 26 live-config recheck)', async () => {
+    // The guard captured `previewOrigin` at goto time, but the host may have
+    // revoked the preview since (freed port, possibly seized by another local
+    // process). The persistent guard must re-check the LIVE config on every
+    // request: with the allowlist entry gone, even a same-origin navigation
+    // must abort — never load the seizer's content.
+    // Simulate the host flow: install the config BEFORE goto (the host calls
+    // setBrowserRuntimeConfig when granting the preview origin).
+    setBrowserRuntimeConfig({ browser: { ssrfPolicy: { allowedOrigins: [PREVIEW_ORIGIN] } } });
+    const { page, routedHandlers } = fakePage();
+    await gotoPageWithNavigationGuard({
+      cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+      page,
+      url: `${PREVIEW_ORIGIN}/preview/<token>/index.html`,
+      timeoutMs: 1000,
+      ssrfPolicy: POLICY,
+    });
+    expect(routedHandlers.length).toBe(1);
+    const handler = routedHandlers[0];
+
+    // With the origin still authorized, a same-origin navigation continues.
+    const aborted1: Array<unknown> = [];
+    await handler(
+      { abort: async () => aborted1.push('abort'), continue: async () => aborted1.push('continue') },
+      fakeTopLevelRequest(`${PREVIEW_ORIGIN}/preview/<token>/other.html`, page.mainFrame()),
+    );
+    expect(aborted1).toEqual(['continue']);
+
+    // Revoke: the host config no longer lists the origin → abort even though
+    // the URL is same-origin with the goto-time preview origin.
+    setBrowserRuntimeConfig({ browser: { ssrfPolicy: { allowedOrigins: [] } } });
+    const aborted2: Array<unknown> = [];
+    await handler(
+      { abort: async () => aborted2.push('abort'), continue: async () => aborted2.push('continue') },
+      fakeTopLevelRequest(`${PREVIEW_ORIGIN}/preview/<token>/other.html`, page.mainFrame()),
+    );
+    expect(aborted2).toEqual(['abort']);
+  });
+
+  it('aborts a cross-origin navigation after revocation (round 26)', async () => {
+    setBrowserRuntimeConfig({ browser: { ssrfPolicy: { allowedOrigins: [PREVIEW_ORIGIN] } } });
+    const { page, routedHandlers } = fakePage();
+    await gotoPageWithNavigationGuard({
+      cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+      page,
+      url: `${PREVIEW_ORIGIN}/preview/<token>/index.html`,
+      timeoutMs: 1000,
+      ssrfPolicy: POLICY,
+    });
+    const handler = routedHandlers[0];
+    setBrowserRuntimeConfig({ browser: { ssrfPolicy: { allowedOrigins: [] } } });
+    const aborted: Array<unknown> = [];
+    await handler(
+      { abort: async () => aborted.push('abort'), continue: async () => aborted.push('continue') },
+      fakeTopLevelRequest('https://evil.example/exfil', page.mainFrame()),
+    );
+    expect(aborted).toEqual(['abort']);
+  });
+
+  it('fail-closed on malformed config: missing browser slice aborts (round 26)', async () => {
+    setBrowserRuntimeConfig({ browser: { ssrfPolicy: { allowedOrigins: [PREVIEW_ORIGIN] } } });
+    const { page, routedHandlers } = fakePage();
+    await gotoPageWithNavigationGuard({
+      cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+      page,
+      url: `${PREVIEW_ORIGIN}/preview/<token>/index.html`,
+      timeoutMs: 1000,
+      ssrfPolicy: POLICY,
+    });
+    const handler = routedHandlers[0];
+    // Config replaced with something that has no browser slice — the live
+    // allowlist is unreadable → fail-closed (abort).
+    setBrowserRuntimeConfig({ gateway: {} } as never);
+    const aborted: Array<unknown> = [];
+    await handler(
+      { abort: async () => aborted.push('abort'), continue: async () => aborted.push('continue') },
+      fakeTopLevelRequest(`${PREVIEW_ORIGIN}/preview/<token>/other.html`, page.mainFrame()),
+    );
+    expect(aborted).toEqual(['abort']);
   });
 });
