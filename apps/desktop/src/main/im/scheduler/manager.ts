@@ -390,12 +390,36 @@ export class ImSchedulerManager {
   }
 
   private requestSnapshot(preserveRetryAttempt: boolean): string {
+    const accountGeneration = this.snapshotAccountGeneration;
     const requestId = this.nonceFactory();
     this.snapshotRequestId = requestId;
     this.awaitingSnapshot = true;
     this.snapshotRefreshPending = preserveRetryAttempt;
-    this.transport.requestSnapshot(this.snapshotAccountGeneration, requestId);
+    try {
+      const result = this.transport.requestSnapshot(accountGeneration, requestId);
+      void Promise.resolve(result).catch(() => {
+        this.handleSnapshotRequestFailure(accountGeneration, requestId);
+      });
+    } catch {
+      this.handleSnapshotRequestFailure(accountGeneration, requestId);
+    }
     return requestId;
+  }
+
+  private handleSnapshotRequestFailure(accountGeneration: string, requestId: string): void {
+    if (
+      !this.started ||
+      accountGeneration !== this.snapshotAccountGeneration ||
+      requestId !== this.snapshotRequestId ||
+      !this.awaitingSnapshot
+    ) {
+      return;
+    }
+    const retryExhausted = this.discoveryRetryAttempt >= this.maxDiscoveryRetries;
+    this.resetSnapshotRequestState();
+    this.requiresTaggedSnapshot = true;
+    if (retryExhausted) this.beginDiscoveryRound();
+    this.reconcile();
   }
 
   private scheduleFinalSnapshotTimeout(roundNonce: string, requestId: string): void {

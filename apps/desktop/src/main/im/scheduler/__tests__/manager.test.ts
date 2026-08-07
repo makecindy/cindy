@@ -10,6 +10,7 @@ function createTransport(
   overrides: Partial<{
     status: 'online' | 'offline';
     owner: boolean;
+    requestSnapshot: SchedulerTransport['requestSnapshot'];
   }> = {},
 ) {
   let listener: ((event: SchedulerTransportEvent) => void) | null = null;
@@ -27,8 +28,9 @@ function createTransport(
       };
     },
     sendPush: (peerDeviceId, payload) => pushes.push({ peerDeviceId, payload }),
-    requestSnapshot: (accountGeneration, requestId) =>
-      snapshotRequests.push({ accountGeneration, requestId }),
+    requestSnapshot:
+      overrides.requestSnapshot ??
+      ((accountGeneration, requestId) => snapshotRequests.push({ accountGeneration, requestId })),
   };
   return {
     transport,
@@ -176,6 +178,141 @@ describe('dormant scheduler manager', () => {
 
     await vi.advanceTimersByTimeAsync(100);
     expect(harness.snapshotRequests).toHaveLength(1);
+    manager.stop();
+  });
+
+  it('keeps bounded recovery alive when requestSnapshot throws synchronously', async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const harness = createTransport({
+      requestSnapshot: () => {
+        attempts += 1;
+        throw new Error('snapshot request failed');
+      },
+    });
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(attempts).toBe(1);
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: { channel: 'discord', identity },
+      reason: 'missing-snapshot',
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(attempts).toBeGreaterThan(1);
+    manager.stop();
+  });
+
+  it('consumes a rejected requestSnapshot promise and keeps retrying', async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const harness = createTransport({
+      requestSnapshot: () => {
+        attempts += 1;
+        return Promise.reject(new Error('snapshot request rejected'));
+      },
+    });
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+    expect(attempts).toBe(1);
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(attempts).toBeGreaterThan(1);
+    manager.stop();
+  });
+
+  it('does not let an older request rejection clear a newer account request', async () => {
+    vi.useFakeTimers();
+    const requests: Array<{
+      accountGeneration: string;
+      requestId: string;
+      resolve: () => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const harness = createTransport({
+      requestSnapshot: (accountGeneration, requestId) =>
+        new Promise<void>((resolve, reject) => {
+          requests.push({ accountGeneration, requestId, resolve, reject });
+        }),
+    });
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(requests).toHaveLength(1);
+
+    manager.resetAccountDiscovery();
+    expect(requests).toHaveLength(2);
+    requests[0].reject(new Error('stale snapshot request rejected'));
+    await Promise.resolve();
+
+    requests[1].resolve();
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: requests[1].accountGeneration,
+      requestId: requests[1].requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+    manager.stop();
+  });
+
+  it('does not clear a synchronously delivered snapshot after requestSnapshot returns', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport({
+      requestSnapshot: (accountGeneration, requestId) => {
+        // The callback is invoked only after createTransport has returned.
+        transportHarness.emit({
+          type: 'snapshot',
+          accountGeneration,
+          requestId,
+          snapshot: { selfDeviceId: 'z', peers: [], observedAt: 1 },
+        });
+      },
+    });
+    const transportHarness = harness;
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(manager.getDecision()).toEqual({
+      state: 'active',
+      channel: { channel: 'discord', identity },
+      reason: 'elected',
+    });
     manager.stop();
   });
 
