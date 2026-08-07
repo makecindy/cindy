@@ -88,6 +88,45 @@ export async function fetchDeviceProviders(
   return p;
 }
 
+/**
+ * 强制刷新取某被控设备的供应商目录(codex review P2):**跳过缓存命中短路**——
+ * 即使缓存仍存在也执行 fetcher 访问工作站,成功后回写缓存并推送 payload 订阅者。
+ * 用途:提交终检的 revalidate(缓存命中分支要拿到工作站当前真相,而不是旧目录),
+ * 与普通读取的 cache-first 语义区分。仍保留 inflight 去重与代际作废。
+ */
+export async function fetchDeviceProvidersFresh(
+  deviceId: string,
+  fetcher: DeviceProvidersFetcher,
+): Promise<DeviceProvidersPayload> {
+  const ip = inflight.get(deviceId);
+  if (ip) return ip;
+
+  const startGen = deviceGen.get(deviceId) ?? 0;
+  const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
+
+  const p = fetcher()
+    .then((res) => {
+      const payload: DeviceProvidersPayload = {
+        providers: res?.providers ?? [],
+        ...(res?.modelVisibilityOverrides !== undefined
+          ? { modelVisibilityOverrides: res.modelVisibilityOverrides }
+          : {}),
+      };
+      if (isCurrent()) {
+        cache.set(deviceId, payload);
+        inflight.delete(deviceId);
+        notifyDeviceProviders(deviceId, payload);
+      }
+      return payload;
+    })
+    .catch((e) => {
+      if (isCurrent()) inflight.delete(deviceId);
+      throw e;
+    });
+  inflight.set(deviceId, p);
+  return p;
+}
+
 /** device-link:被控设备切换 / 下线时驱逐其供应商缓存(只清该设备 + 代际自增作废在途)。 */
 export function evictDeviceProviders(deviceId: string): void {
   cache.delete(deviceId);
@@ -139,6 +178,10 @@ export function clearAllDeviceProviders(): void {
   for (const id of ids) {
     deviceGen.set(id, (deviceGen.get(id) ?? 0) + 1);
     notifyDeviceProvidersGen(id);
+    // 登出/切号也要清空 payload 订阅者(copilot review P2):只清 module 缓存 + 代际
+    // 通知,已挂载的 useDeviceProviders 仍保留旧 payload 在 React state——推送空
+    // payload 让 hook 立即清空,消除登出后短窗口残留上一账号供应商信息。
+    notifyDeviceProviders(id, { providers: [] });
   }
   cache.clear();
   inflight.clear();

@@ -42,6 +42,40 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it('fetchDeviceProvidersFresh:缓存命中也执行 fetcher 访问工作站,成功后回写缓存(codex P2)', async () => {
+    const fetcher = vi.fn(async () => result('dev-1-new'));
+    const mod = await import('@/device-link/deviceProvidersCache');
+    // 先普通读取填缓存(缓存命中不再发请求)
+    await mod.fetchDeviceProviders('dev-1', vi.fn(async () => result('dev-1-old')));
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-old-xd' }] });
+    // 强制刷新:即使缓存仍在,也必须访问工作站
+    const fresh = await mod.fetchDeviceProvidersFresh('dev-1', fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fresh).toEqual({ providers: [{ id: 'dev-1-new-xd' }] });
+    // 成功后回写缓存(后续普通读取拿新目录)
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-new-xd' }] });
+  });
+
+  it('fetchDeviceProvidersFresh 失败:不覆盖缓存,抛错由调用方回退', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    await mod.fetchDeviceProviders('dev-1', vi.fn(async () => result('dev-1-old')));
+    await expect(mod.fetchDeviceProvidersFresh('dev-1', () => Promise.reject(new Error('down'))))
+      .rejects.toThrow('down');
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-old-xd' }] });
+  });
+
+  it('clearAll:向已挂载 payload 订阅者推送空 payload,清掉登出残留(copilot P2)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    const f1 = vi.fn(async () => result('dev-1'));
+    await mod.fetchDeviceProviders('dev-1', f1);
+    const subscriber = vi.fn();
+    const unsub = mod.subscribeDeviceProviders('dev-1', subscriber);
+    mod.clearAllDeviceProviders();
+    // 订阅者收到空 payload(登出后不再残留上一账号的供应商信息)
+    expect(subscriber).toHaveBeenCalledWith({ providers: [] });
+    unsub();
+  });
+
   it('inflight 去重:同设备并发只发一次', async () => {
     const fetcher = vi.fn(async () => result('dev-1'));
     const mod = await import('@/device-link/deviceProvidersCache');

@@ -72,7 +72,7 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
-import { fetchDeviceProviders, getCachedDeviceProviders, getDeviceProvidersGen } from '@/device-link/deviceProvidersCache';
+import { fetchDeviceProviders, fetchDeviceProvidersFresh, getCachedDeviceProviders, getDeviceProvidersGen } from '@/device-link/deviceProvidersCache';
 import { evictDeviceProviders, useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useDeviceApiKeyStatus, useDeviceModelPricing } from '@/device-link/useDeviceModelMeta';
 import {
@@ -4117,7 +4117,9 @@ export default function NewRemoteSessionScreen() {
         const runGuard = () => resolveSubmitGuardCatalog({
           cached: () => getCachedDeviceProviders(guardDeviceId),
           gen: () => getDeviceProvidersGen(guardDeviceId),
-          fetch: () => fetchDeviceProviders(guardDeviceId, () => maker.listProviders()),
+          // 强制刷新(codex review P2):fetchDeviceProviders 缓存命中直接返回旧目录,
+          // revalidate 拿不到工作站真相——必须绕过缓存读,成功后缓存层回写。
+          fetch: () => fetchDeviceProvidersFresh(guardDeviceId, () => maker.listProviders()),
           buildRows: (payload) => flattenProviderSections(buildMobileModelSections({
             providers: payload.providers,
             agentKind: effectiveDraft.agentKind,
@@ -4585,7 +4587,8 @@ export default function NewRemoteSessionScreen() {
       const runGuard = () => resolveSubmitGuardCatalog({
         cached: () => getCachedDeviceProviders(guardDeviceId),
         gen: () => getDeviceProvidersGen(guardDeviceId),
-        fetch: () => fetchDeviceProviders(guardDeviceId, () => maker.listProviders()),
+        // 强制刷新(同 create() 口径,codex review P2):revalidate 必须访问工作站。
+        fetch: () => fetchDeviceProvidersFresh(guardDeviceId, () => maker.listProviders()),
         buildRows: (payload) => flattenProviderSections(buildMobileModelSections({
           providers: payload.providers,
           agentKind: effectiveDraft.agentKind,
