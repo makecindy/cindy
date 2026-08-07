@@ -161,6 +161,46 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
+  it('refreshes the authoritative snapshot after relay recovery', () => {
+    let status: 'online' | 'offline' = 'online';
+    const harness = createTransport();
+    harness.transport.getStatus = () => status;
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 1 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+
+    status = 'offline';
+    harness.emit({ type: 'relay-status', status: 'offline' });
+    status = 'online';
+    harness.emit({ type: 'relay-status', status: 'online' });
+    const request = harness.snapshotRequests.at(-1);
+    expect(request).toBeTruthy();
+
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
+      snapshot: {
+        selfDeviceId: 'z',
+        peers: [{ deviceId: 'a', platform: 'win32' }],
+        observedAt: 2,
+      },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+    manager.stop();
+  });
+
   it('refreshes the peer snapshot while the local Discord binding is absent', async () => {
     vi.useFakeTimers();
     const harness = createTransport();
