@@ -67,6 +67,7 @@ export class ImSchedulerManager {
   private snapshotAccountGeneration = '';
   private snapshotRequestId: string | null = null;
   private awaitingSnapshot = false;
+  private requiresTaggedSnapshot = false;
   private snapshotRefreshPending = false;
   private lastLocalIdentity: string | null = null;
   private discoveryNonce = '';
@@ -94,6 +95,7 @@ export class ImSchedulerManager {
     if (this.started) return;
     this.started = true;
     this.resetSnapshotRequestState();
+    this.requiresTaggedSnapshot = false;
     this.snapshotAccountGeneration = this.nonceFactory();
     this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
     this.unsubscribe = this.transport.subscribe((event) => this.handleEvent(event));
@@ -111,6 +113,7 @@ export class ImSchedulerManager {
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
     this.resetSnapshotRequestState();
+    this.requiresTaggedSnapshot = false;
     this.snapshotAccountGeneration = '';
     this.lastLocalIdentity = null;
     this.publishDecision({ state: 'standby', channel: null, reason: 'stopped' });
@@ -134,6 +137,7 @@ export class ImSchedulerManager {
       this.lastSnapshotObservedAt = null;
       this.snapshotAccountGeneration = this.nonceFactory();
       this.resetSnapshotRequestState();
+      this.requiresTaggedSnapshot = true;
       this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
       this.runtimeGaps.clear();
     } else {
@@ -165,6 +169,7 @@ export class ImSchedulerManager {
           this.snapshot = null;
           this.lastSnapshotObservedAt = null;
           this.resetSnapshotRequestState();
+          this.requiresTaggedSnapshot = true;
           this.peers.clear();
           this.confirmedPeers.clear();
         } else {
@@ -181,6 +186,12 @@ export class ImSchedulerManager {
         this.reconcile();
         return;
       case 'snapshot': {
+        if (
+          this.requiresTaggedSnapshot &&
+          (event.accountGeneration === undefined || event.requestId === undefined)
+        ) {
+          return;
+        }
         if (
           event.accountGeneration !== undefined &&
           event.accountGeneration !== this.snapshotAccountGeneration
@@ -200,6 +211,7 @@ export class ImSchedulerManager {
           // would allow a stale self row to keep the ingress active.
           this.snapshot = null;
           this.lastSnapshotObservedAt = null;
+          this.requiresTaggedSnapshot = true;
           this.peers.clear();
           this.confirmedPeers.clear();
           this.beginDiscoveryRound({ resetRetryAttempt: !preserveRetryAttempt });
@@ -218,6 +230,7 @@ export class ImSchedulerManager {
         }
         this.snapshot = event.snapshot;
         this.lastSnapshotObservedAt = event.snapshot.observedAt;
+        this.requiresTaggedSnapshot = false;
         this.beginDiscoveryRound({ resetRetryAttempt: !preserveRetryAttempt });
         this.reconcile();
         return;
@@ -230,6 +243,7 @@ export class ImSchedulerManager {
         this.snapshot = null;
         this.lastSnapshotObservedAt = null;
         this.resetSnapshotRequestState();
+        this.requiresTaggedSnapshot = true;
         if (!event.online) {
           this.peers.delete(event.deviceId);
           this.confirmedPeers.delete(event.deviceId);
