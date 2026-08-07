@@ -111,10 +111,34 @@ describe('local-html-preview-server', () => {
     // no longer resolves to the same canonical path → refuse (fail-closed).
     const entryDir = nodePath.join(workingDir, 'dist');
     const renamed = nodePath.join(workingDir, 'dist-renamed');
-    await import('node:fs/promises').then(({ rename }) => rename(entryDir, renamed));
+    // Windows cannot rename a directory while a file inside it is still
+    // open (EPERM); the just-served fd may not be released synchronously on
+    // the CI runner. Retry briefly so the test observes the rename semantics
+    // rather than the OS's handle-release timing (round 26 CI flake).
+    const { rename } = await import('node:fs/promises');
+    let renamedOk = false;
+    for (let attempt = 0; attempt < 20 && !renamedOk; attempt++) {
+      try {
+        await rename(entryDir, renamed);
+        renamedOk = true;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    expect(renamedOk).toBe(true);
     expect((await get(url)).status).toBe(404);
-    // cleanup so afterEach dispose doesn't hit a stale path
-    await import('node:fs/promises').then(({ rename }) => rename(renamed, entryDir));
+    // cleanup so afterEach dispose doesn't hit a stale path (same retry
+    // discipline for the rename-back)
+    let restoredOk = false;
+    for (let attempt = 0; attempt < 20 && !restoredOk; attempt++) {
+      try {
+        await rename(renamed, entryDir);
+        restoredOk = true;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    expect(restoredOk).toBe(true);
   });
 
   it('refuses a served fd whose dev/ino differs from the post-open path stat (swap-and-restore)', async () => {
