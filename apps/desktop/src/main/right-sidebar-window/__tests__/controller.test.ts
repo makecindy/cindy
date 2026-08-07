@@ -2,7 +2,7 @@
 //  - open / close / setDetached 的落盘 + 广播行为
 //  - 用户关窗(closed 事件)在 quitting / 非 quitting 下 lastOpen 的差异
 //  - ensureOpenForAutomation:非 detached no-op、开窗等 ready、超时、窗口先关
-//  - getHostWebContents 三态(detached+open → 子窗;否则主窗)
+//  - getHostWebContents 三态(detached+ready → 子窗;否则主窗)
 //  - setContext 缓存 + 仅窗口开着时转发;routeCommand 原子裁决宿主并处理 deferred intent
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -315,9 +315,11 @@ describe('getHostWebContents', () => {
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
   });
 
-  it('detached + 窗口开 → 子窗口 webContents;关窗后回落主窗', () => {
+  it('detached + 未 ready 回落主窗;ready 后使用子窗口;关窗后回落主窗', () => {
     const h = makeHarness({ detached: true });
     h.controller.open();
+    expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+    h.controller.markReady();
     expect(h.controller.getHostWebContents()).toBe(h.windows[0].webContents);
     h.windows[0].emitClosed();
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);

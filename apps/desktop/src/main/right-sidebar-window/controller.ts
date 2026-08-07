@@ -11,7 +11,7 @@
  *  - 偏好 / lastOpen 落盘(settings-store),状态变化广播所有窗口
  *  - 渲染上下文中转(主窗上报 → 缓存 → 转发子窗口)
  *  - RSB host webContents 解析(浏览器自动化 backend 的 tab-op / pin 通知路由):
- *    detached && 窗口开 → 子窗口,否则主窗
+ *    detached && renderer ready → 子窗口,否则主窗
  *  - ensureOpenForAutomation:agent tab-op 在 B 态时先开窗、等 renderer ready 握手
  *
  * 不直接 import electron —— BrowserWindow 的创建 / 主窗引用 / 广播全部由
@@ -339,11 +339,13 @@ export class RsbWindowController {
 
   /**
    * RSB host webContents —— rsb-browser-bridge 的 pin/unpin 通知与 tab-op dispatch
-   * 目标窗口。detached 且子窗口活着 → 子窗口;否则回落主窗(内嵌形态)。
+   * 目标窗口。detached 且子窗口已握手 ready → 子窗口;否则回落主窗(内嵌形态)。
+   * ready 前子 renderer 尚未挂完 popup 等一次性 push 的订阅,过早切 host 会丢消息。
    */
   getHostWebContents(): WebContents | null {
     if (
       this.deps.settings.read().detached &&
+      this.ready &&
       !this.closing &&
       this.winRef &&
       !this.winRef.isDestroyed()
