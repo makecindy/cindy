@@ -302,6 +302,7 @@ describe('Orca lead/worker dispatcher', () => {
 
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
+      teamId: 'team-1',
       rawContent: 'Resume target',
       source: 'lead',
       senderLabel: 'Lead',

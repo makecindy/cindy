@@ -124,7 +124,6 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 - `create_worker` / `create_workers` 省略权限参数，统一读取当前偏好；不继承 Lead 的 `sessions.permission_mode`，也不修改已经创建的 Worker。
 - device-link 新控制端只有在被控端 capabilities 明确声明支持 Worker 权限选择时才允许开启协同；已有旧版远程 Team 继续兼容旧创建行为，不宣称或回写该端不支持的偏好。
 `start_team` 的 active 状态真源是 host lifecycle service 查询到的 `orca_teams.status='active'`，不是 MCP context 中可能陈旧的 `vendorOptions.orcaRole='lead'`。工具侧只按 `orcaRole='worker'` 拒绝嵌套；Lead/普通 session 都必须调用 host，由 host 复用当前 active team 或创建新 team。这样旧 team 结束后即使 live context 尚未刷新，再次 `start_team` 也不会误报 already enabled。
-`start_team` 的 active 状态真源是 host lifecycle service 查询到的 `orca_teams.status='active'`，不是 MCP context 中可能陈旧的 `vendorOptions.orcaRole='lead'`。工具侧只按 `orcaRole='worker'` 拒绝嵌套；Lead/普通 session 都必须调用 host，由 host 复用当前 active team 或创建新 team。这样旧 team 结束后即使 live context 尚未刷新，再次 `start_team` 也不会误报 already enabled。
 
 工具注册是全局可见 + handler 拒绝：
 
