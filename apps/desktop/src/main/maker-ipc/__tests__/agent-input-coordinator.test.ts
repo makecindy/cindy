@@ -918,62 +918,6 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toBeNull();
   });
 
-  it('reconciles a stale busy boundary after repeated SESSION_RUNNING retries (done lost)', async () => {
-    vi.useFakeTimers();
-    const h = createHarness();
-    const sid = 'session-running-reconcile-after-threshold';
-    const first = makeItem('q-1', 'first');
-
-    h.sendToAgent.mockImplementation(async () => {
-      h.setRunning(true);
-      throw sessionRunningError();
-    });
-
-    h.coordinator.enqueue(sid, first);
-    await flush();
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-
-    // 默认 250ms 档,SESSION_RUNNING_RECONCILE_THRESHOLD=20 次 ≈ 5 秒。
-    // 推进 15 轮(远低于阈值)不触发 reconcile;继续推进到超过阈值后必须触发
-    // (fail-closed:false 不放行)。不绑定精确轮次——count 会因 enqueue 首轮
-    // drain / 隐式重试略有偏移,只验证「阈值内不触发、超阈值触发」的行为契约。
-    let reconcileCalls = 0;
-    h.reconcileTurnIdle.mockImplementation(() => {
-      reconcileCalls += 1;
-      return false; // live session 仍 busy,不校准
-    });
-    for (let i = 0; i < 15; i += 1) {
-      await vi.advanceTimersByTimeAsync(300);
-      await flush();
-    }
-    expect(reconcileCalls).toBe(0);
-    for (let i = 0; i < 10; i += 1) {
-      await vi.advanceTimersByTimeAsync(300);
-      await flush();
-    }
-    expect(reconcileCalls).toBeGreaterThanOrEqual(1);
-
-    // reconcile 返回 false 时不放行:消息仍排队、不重复派发。
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
-
-    // 之后 live session idle(reconcile 生效)→ drain 放行、消息派发。
-    // 换 mock 后 count 已清零,需再推进一轮阈值让 reconcile 生效并放行 drain。
-    h.reconcileTurnIdle.mockImplementation(() => {
-      h.setRunning(false);
-      return true;
-    });
-    h.sendToAgent.mockResolvedValueOnce(sendSuccess());
-    for (let i = 0; i < 25; i += 1) {
-      await vi.advanceTimersByTimeAsync(300);
-      await flush();
-    }
-    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    // 第二次派发的是队首原消息 first(而非别的)。
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'first' });
-    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
-  });
-
   it('keeps retrying a restored queue head when a late done arrives before SESSION_RUNNING clears', async () => {
     vi.useFakeTimers();
     const h = createHarness();

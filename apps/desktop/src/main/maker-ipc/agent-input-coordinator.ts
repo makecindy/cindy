@@ -573,8 +573,6 @@ interface SessionInputState {
   abortReconcileRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryGeneration: number | null;
-  /** SESSION_RUNNING 重试连续命中的次数;超阈值触发 reconcileTurnIdle 校准。 */
-  sessionRunningRetryCount: number;
   /** 当前 retry timer 绑定的队首/compact owner；队首变化时必须替换 timer policy。 */
   sessionRunningRetryOwnerKey: string | null;
   sessionRunningRetryDelayMs: number | null;
@@ -638,7 +636,6 @@ function createInitialInputState(
     abortReconcileRetryTimer: null,
     sessionRunningRetryTimer: null,
     sessionRunningRetryGeneration: null,
-    sessionRunningRetryCount: 0,
     sessionRunningRetryOwnerKey: null,
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
@@ -3570,16 +3567,6 @@ export class AgentInputCoordinator {
     this.scheduleSessionRunningRetry(sessionId, `send:${reason}`);
   }
 
-  /**
-   * SESSION_RUNNING 重试连续命中次数的阈值:超过后调一次 reconcileTurnIdle,
-   * 校准可能因 done 丢失而残留的 busy 边界(turn 实际已结束但事件流没送达,
-   * coordinator 与 live session 状态不一致)。reconcile 以 live Session
-   * isTurnRunning() 为权威——正在跑的 turn 不会被误清。
-   * 阈值是**重试次数**而非时长:普通档 250ms × 20 ≈ 5s,自动续跑 10s 档 × 20
-   * ≈ 200s。设计意图是「短重试窗口快速探测,长档不烧 token 也能兜底」。
-   */
-  private static readonly SESSION_RUNNING_RECONCILE_THRESHOLD = 20;
-
   private prependQueueHeadIfMissing(state: SessionInputState, item: AgentInputQueuedMessage): void {
     if (state.pendingQueue.some((q) => q.clientId === item.clientId)) return;
     state.pendingQueue = [item, ...state.pendingQueue];
@@ -3635,54 +3622,12 @@ export class AgentInputCoordinator {
       latest.sessionRunningRetryOwnerKey = null;
       latest.sessionRunningRetryDelayMs = null;
       latest.sessionRunningRetryToken = null;
-      // early-return 前必须重置 count:generation 变化(clearSession / stop /
-      // cancelPreSendActiveTurn)或队列已空意味着「当前边界」已结束,残留计数
-      // 会让下一次不相关的 SESSION_RUNNING 边界过早触发 reconcile。
-      if (latest.generation !== generation) {
-        latest.sessionRunningRetryCount = 0;
-        return;
-      }
-      if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) {
-        latest.sessionRunningRetryCount = 0;
-        return;
-      }
+      if (latest.generation !== generation) return;
+      if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
-        latest.sessionRunningRetryCount += 1;
-        // 兜底:done 丢失时 coordinator 的 busy 边界可能残留(live session 已
-        // idle 但终态事件没送达)。连续被 isTurnRunning 挡住的场景,调一次
-        // reconcile 以 live Session 为权威校准;正在跑的 turn 天然不被误清。
-        if (
-          latest.sessionRunningRetryCount >= AgentInputCoordinator.SESSION_RUNNING_RECONCILE_THRESHOLD
-        ) {
-          latest.sessionRunningRetryCount = 0;
-          // 防御式调用:reconcile 是 best-effort,依赖抛错绝不能中断重试链
-          // (与 abort reconcile 路径同款,见 reconcileTurnIdleAfterAbort)。
-          let reconciledIdle = false;
-          try {
-            reconciledIdle = this.deps.reconcileTurnIdle?.(sessionId) === true;
-          } catch (err) {
-            log.warn('reconcileTurnIdle after session-running retries failed', {
-              sessionId,
-              reason,
-              error: errorMessage(err),
-            });
-          }
-          if (reconciledIdle) {
-            log.warn('session-running retry reconciled stale busy boundary', {
-              sessionId,
-              retries: AgentInputCoordinator.SESSION_RUNNING_RECONCILE_THRESHOLD,
-              reason,
-            });
-            // reconcile 已确认 live session idle → 立刻 drain,不再等下一轮 retry
-            // delay(自动续跑 10s 档下避免额外 10s 等待)。
-            this.scheduleDrain(sessionId, `session-running-reconciled:${reason}`);
-            return;
-          }
-        }
         this.scheduleSessionRunningRetry(sessionId, reason);
         return;
       }
-      latest.sessionRunningRetryCount = 0;
       this.scheduleDrain(sessionId, `session-running-retry:${reason}`);
     }, policy.delayMs);
   }
@@ -3749,7 +3694,6 @@ export class AgentInputCoordinator {
     }
     state.sessionRunningRetryTimer = null;
     state.sessionRunningRetryGeneration = null;
-    state.sessionRunningRetryCount = 0;
     state.sessionRunningRetryOwnerKey = null;
     state.sessionRunningRetryDelayMs = null;
     state.sessionRunningRetryToken = null;
