@@ -70,16 +70,27 @@ async function probeFreePort(): Promise<number> {
  * LISTEN_FAILED 就是回归,必须原样交给断言。若也一并重试,换个端口跑一次碰巧成功
  * 就把回归掩盖掉了。所以 body 的第一个元素必须是"初始 bind 那一单"的结果。
  */
+type PinnedPortPicker = (attempt: number) => number | Promise<number>;
+
 async function pinnedPortCase<T extends readonly unknown[]>(
   body: (port: number) => Promise<T>,
   attempts = 5,
+  pickPort: PinnedPortPicker = () => probeFreePort(),
 ): Promise<T> {
   let last!: T;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    last = await body(await probeFreePort());
+    last = await body(await pickPort(attempt - 1));
     if (!isListenFailed(last[0])) return last;
   }
   return last;
+}
+
+/**
+ * 为需要固定端口交接的用例选 worker 级候选端口。低于常见系统动态端口范围,
+ * 避免其它 listen(0) 在前一单释放到下一单重绑的窗口随机拿走被测端口。
+ */
+function pickNonEphemeralPinnedPort(attempt: number): number {
+  return 20_000 + ((process.pid + attempt) % 10_000);
 }
 
 /** 只认引擎明确报出的 LISTEN_FAILED;形状不符的值一律不算"端口被抢"。 */
@@ -429,6 +440,8 @@ describe('startGhostOauthFlow', () => {
         });
         return [first, await secondDone, await thirdDone];
       },
+      5,
+      pickNonEphemeralPinnedPort,
     );
     expect(firstResult).toMatchObject({ ok: false, error: 'CANCELLED' });
     expect(secondResult).toMatchObject({ ok: false, error: 'CANCELLED' });
