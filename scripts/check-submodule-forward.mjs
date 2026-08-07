@@ -126,10 +126,20 @@ export function validatePublishedProtocolHead(
   headOid,
   { ci = Boolean(process.env.CI), warn = console.warn } = {},
 ) {
-  if (!hasCommit(protocolRepo, headOid)) {
-    throw new Error(`无法读取协议 head commit ${headOid}`);
-  }
   refreshPublishedBaselines(protocolRepo, { ci, warn });
+  if (!hasCommit(protocolRepo, headOid)) {
+    const headFetch = git(
+      protocolRepo,
+      ['fetch', '--no-tags', 'origin', headOid],
+      { allowFailure: true },
+    );
+    if (!hasCommit(protocolRepo, headOid)) {
+      const detail = (headFetch.stderr || headFetch.stdout || '').trim();
+      throw new Error(
+        `无法读取协议 head commit ${headOid}${detail ? `: ${detail}` : ''}`,
+      );
+    }
+  }
   const baselineRefs = readPublishedBaselineRefs(protocolRepo);
   if (baselineRefs.some((ref) => isAncestor(protocolRepo, headOid, ref))) {
     return;

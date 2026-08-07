@@ -192,6 +192,32 @@ test('allows a head published only by a client-baseline tag', () => {
   }
 });
 
+test('fetches a published head missing from the local protocol clone', () => {
+  const publisher = fixture();
+  const bare = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'cindy-protocol-published-'),
+  );
+  const local = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-protocol-local-'));
+  try {
+    git(bare, 'init', '--bare');
+    git(publisher.repo, 'remote', 'add', 'origin', bare);
+    git(publisher.repo, 'push', 'origin', 'main');
+    git(local, 'init', '-b', 'main');
+    git(local, 'remote', 'add', 'origin', bare);
+    git(local, 'fetch', 'origin', publisher.one);
+    assert.throws(() =>
+      git(local, 'cat-file', '-e', `${publisher.two}^{commit}`),
+    );
+    assert.doesNotThrow(() =>
+      validatePublishedProtocolHead(local, publisher.two, { ci: true }),
+    );
+  } finally {
+    fs.rmSync(publisher.repo, { recursive: true, force: true });
+    fs.rmSync(bare, { recursive: true, force: true });
+    fs.rmSync(local, { recursive: true, force: true });
+  }
+});
+
 test('falls back to local origin/main when baseline fetch is unavailable', () => {
   const f = fixture();
   try {
