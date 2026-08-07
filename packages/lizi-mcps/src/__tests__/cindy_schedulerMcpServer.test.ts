@@ -297,6 +297,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       })) as { content: unknown[]; isError?: boolean },
     );
     expect(listed.envelope).toEqual({ ok: true, data: [publicRecord] });
+    expect(JSON.stringify(listed.envelope)).not.toContain('sourcePath');
 
     const fetched = parseToolResult(
       (await h.client.callTool({
