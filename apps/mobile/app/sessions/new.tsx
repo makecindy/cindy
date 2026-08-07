@@ -960,12 +960,26 @@ export default function NewRemoteSessionScreen() {
       restoringRememberedChoice: storedPermissionMode !== undefined,
     }).then((confirmed) => {
       if (cancelled || userTouchedRuntimeRef.current) return;
-      setDraft((current) => ({
-        ...current,
-        ...result.patch,
-        // 自动恢复上次明确选择的权限不再重复确认；内置默认仍按升级规则确认。
-        permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
-      }));
+      setDraft((current) => {
+        // 自动默认重算(设备切换/最近会话变化)改了 (agent, model, providerId) 组合 →
+        // fastMode 按新组合重验(Codex review P2):A 设备记忆恢复的 fastMode:true 不得
+        // 随 `...current` 带进 B 的组合(若 B 的模型行不支持 Fast,终检/延迟恢复/能力
+        // 协调三条路径都不会处理它)。组合变化时保守关闭,由延迟恢复 effect 在 B 的
+        // 组合 + 能力就绪后按记忆重评(手动关过 → 记忆为 false,不会重新打开)。
+        const nextModel = result.patch.model ?? current.model;
+        const nextProviderId = result.patch.providerId ?? current.providerId;
+        const nextAgentKind = result.patch.agentKind ?? current.agentKind;
+        const comboChanged = nextModel !== current.model
+          || nextProviderId !== current.providerId
+          || nextAgentKind !== current.agentKind;
+        return {
+          ...current,
+          ...result.patch,
+          ...(comboChanged ? { fastMode: false } : {}),
+          // 自动恢复上次明确选择的权限不再重复确认；内置默认仍按升级规则确认。
+          permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
+        };
+      });
     });
     return () => {
       cancelled = true;
