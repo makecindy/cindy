@@ -56,6 +56,10 @@
     },
     {
       "file": "extension/src/browser/pw-session.ts",
+      "desc": "unregister stale Service Workers scoped to the preview origin BEFORE goto — worker-src blocks NEW registrations, but a persistent profile may hold a scope=/ SW from an earlier local service on the same 127.0.0.1:<port>, which would intercept /preview/<token>/... before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
       "desc": "keep the navigation route guard alive for exact-origin preview pages (sandboxed local HTML preview) so page-initiated navigations stay blocked after the initial goto"
     },
     {
@@ -84,7 +88,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "ef8cb00aefe077d46691a2f2cac63d7d07013ad33e28120c00edc866f1c6ab52",
+  "contentHash": "4e360a2c6420e08bf78f0e7528b67f5b293407cdd877abfe408b6dc5686d6a86",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

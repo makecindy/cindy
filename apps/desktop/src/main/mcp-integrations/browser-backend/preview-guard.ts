@@ -19,6 +19,13 @@ export function isPreviewUrl(u: string): boolean {
     return (
       parsed.protocol === 'http:' &&
       parsed.hostname === '127.0.0.1' &&
+      // The preview server NEVER issues userinfo URLs — reject them
+      // fail-closed so a `http://x@127.0.0.1:<port>/preview/...` variant
+      // (which keeps an authorized origin but changes the document's
+      // serialized href) is not treated as a preview page anywhere
+      // (codex-connector P1, round 27).
+      parsed.username === '' &&
+      parsed.password === '' &&
       /^\/preview\/[a-f0-9]{64}\//.test(parsed.pathname)
     );
   } catch {
@@ -119,7 +126,14 @@ export async function killPreviewWebRtc(wc: WebContents): Promise<boolean> {
       // was navigated to a WebRTC-dependent site) must keep RTCPeerConnection.
       source:
         'try {' +
-        "if (/^http:\\/\\/127\\.0\\.0\\.1:\\d+\\/preview\\/[a-f0-9]{64}\\//.test(location.href)) {" +
+        // Judge the PARSED URL, not the raw href: a userinfo variant
+        // (`http://x@127.0.0.1:<port>/preview/...`) keeps an authorized
+        // origin but its serialized href does not match an anchored regex,
+        // so an href-based test would silently skip the kill and leave
+        // RTCPeerConnection alive on a page that still counts as a preview
+        // (codex-connector P1, round 27).
+        'var __u = new URL(location.href);' +
+        "if (__u.protocol === 'http:' && __u.hostname === '127.0.0.1' && /^\\/preview\\/[a-f0-9]{64}\\//.test(__u.pathname)) {" +
         "Object.defineProperty(window, 'RTCPeerConnection', { value: undefined, configurable: true });" +
         "Object.defineProperty(window, 'webkitRTCPeerConnection', { value: undefined, configurable: true });" +
         '}' +

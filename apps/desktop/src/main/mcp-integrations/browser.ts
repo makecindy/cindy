@@ -8,7 +8,8 @@
 import './browser-runtime-env.js';
 import fs from 'node:fs';
 import nodePath from 'node:path';
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, session } from 'electron';
+import { BROWSER_PARTITION } from '../../shared/webviewPartition.js';
 import {
   createBrowserControlRuntime,
   setBrowserControlRuntimeConfig,
@@ -117,6 +118,17 @@ const localPreviewServer = createLocalPreviewServer({
     // treated as a live preview page (new Codex reviewer P0, round 23).
     setLivePreviewOrigin(previewOrigins[0] ?? null);
     setBrowserControlRuntimeConfig(buildManagedConfig({ previewOrigins }));
+    // The RSB partition is PERSISTENT: an earlier local service on the same
+    // 127.0.0.1:<port> may have left a scope=/ Service Worker registered on
+    // this origin. worker-src 'none' blocks NEW registrations but cannot
+    // unregister an existing one — the stale SW would intercept
+    // /preview/<token>/... before the server responds and answer with a
+    // synthetic document carrying NO CSP (codex-connector P1, round 27).
+    // Clear the partition's service workers for each granted origin; the
+    // vendored Chrome path unregisters via CDP before goto (sync.mjs patch).
+    if (previewOrigins.length > 0) {
+      void clearStaleServiceWorkers(previewOrigins);
+    }
     // Revocation (listener error/close, dispose) must close still-open
     // preview tabs at the SAME moment the grant disappears: the vendored
     // persistent guard cannot re-read the live policy, so a freed port
@@ -476,6 +488,27 @@ export async function openBrowserForLogin(): Promise<void> {
  * guard cannot re-read the live policy (policy is passed per-call), so the
  * host closes the tabs: the guard dies with the tab, closing the window.
  */
+/**
+ * Clear Service Worker registrations for the granted preview origins in the
+ * PERSISTENT RSB partition. worker-src 'none' only stops NEW registrations;
+ * a scope=/ SW an earlier local service left on the same 127.0.0.1:<port>
+ * would still intercept /preview/<token>/... before the server responds and
+ * return a synthetic document without CSP (codex-connector P1, round 27).
+ * Best-effort: a failed clear must not block the grant.
+ */
+async function clearStaleServiceWorkers(origins: string[]): Promise<void> {
+  try {
+    const rsbSession = session.fromPartition(BROWSER_PARTITION);
+    for (const origin of origins) {
+      // storages: ['serviceworkers'] clears only SW registrations/caches for
+      // the exact origin — cookies/localStorage (login state) are untouched.
+      await rsbSession.clearStorageData({ origin, storages: ['serviceworkers'] });
+    }
+  } catch {
+    /* best-effort: the vendored unregister (sync.mjs) still runs per-goto */
+  }
+}
+
 async function closePreviewTabs(): Promise<void> {
   await closePreviewTabsImpl({
     everCalled: () => vendoredRuntime.everCalled(),

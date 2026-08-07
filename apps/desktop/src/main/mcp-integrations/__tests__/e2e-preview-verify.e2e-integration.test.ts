@@ -76,7 +76,15 @@ describe('e2e: previewLocalHtml with real Chrome', () => {
         try {
           // Scoped to the preview origin — matches the vendored injection
           // (round-10 P2): non-preview pages keep RTCPeerConnection.
-          if (/^http:\/\/127\.0\.0\.1:\d+\/preview\/[a-f0-9]{64}\//.test(window.location.href)) {
+          // Judge the PARSED URL (round 27, codex-connector P1): a userinfo
+          // variant keeps an authorized origin but its href defeats an
+          // anchored regex, so the parsed hostname/pathname must be used.
+          const __u = new URL(window.location.href);
+          if (
+            __u.protocol === 'http:' &&
+            __u.hostname === '127.0.0.1' &&
+            /^\/preview\/[a-f0-9]{64}\//.test(__u.pathname)
+          ) {
             Object.defineProperty(window, 'RTCPeerConnection', {
               value: undefined,
               configurable: true,

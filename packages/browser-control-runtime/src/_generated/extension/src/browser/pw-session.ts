@@ -1472,10 +1472,18 @@ export async function gotoPageWithNavigationGuard(
     await opts.page
       .addInitScript(() => {
         try {
+          // Judge the PARSED URL, not the raw href: a userinfo
+          // variant (`http://x@127.0.0.1:<port>/preview/...`) keeps
+          // an authorized origin but its serialized href does not
+          // match an anchored regex, so an href-based test would
+          // silently skip the kill and leave RTCPeerConnection alive
+          // on a page that still counts as a preview (codex-connector
+          // P1, round 27).
+          const __u = new URL(window.location.href);
           if (
-            /^http:\/\/127\.0\.0\.1:\d+\/preview\/[a-f0-9]{64}\//.test(
-              window.location.href,
-            )
+            __u.protocol === "http:" &&
+            __u.hostname === "127.0.0.1" &&
+            /^\/preview\/[a-f0-9]{64}\//.test(__u.pathname)
           ) {
             Object.defineProperty(window, "RTCPeerConnection", {
               value: undefined,
@@ -1502,6 +1510,25 @@ export async function gotoPageWithNavigationGuard(
     }
   }
   try {
+    // LOCAL PATCH (Cindy, via sync.mjs): clear stale Service Worker
+    // registrations scoped to the preview origin BEFORE goto. A
+    // persistent profile may hold a scope=/ SW from an earlier local
+    // service on the same 127.0.0.1:<port>; worker-src 'none'
+    // only blocks NEW registrations, and the stale SW would
+    // intercept /preview/<token>/... before the server responds,
+    // answering with a synthetic document that carries NO CSP
+    // (codex-connector P1, round 27).
+    if (previewOrigin !== null) {
+      try {
+        const cdp = await opts.page.context().newCDPSession(opts.page);
+        await cdp.send("ServiceWorker.unregister", {
+          scopeURL: previewOrigin + "/",
+        });
+        await cdp.detach().catch(() => {});
+      } catch {
+        /* best-effort: a failed unregister must not block the navigation */
+      }
+    }
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {
       throw toLintErrorObject(blockedError, "Non-Error thrown");

@@ -451,6 +451,34 @@ const LOCAL_PATCHES = {
         '    try {',
     },
     {
+      desc: 'unregister stale Service Workers scoped to the preview origin BEFORE goto — worker-src blocks NEW registrations, but a persistent profile may hold a scope=/ SW from an earlier local service on the same 127.0.0.1:<port>, which would intercept /preview/<token>/... before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27)',
+      find:
+        '  try {\n' +
+        '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',
+      replace:
+        '  try {\n' +
+        '    // LOCAL PATCH (Cindy, via sync.mjs): clear stale Service Worker\n' +
+        '    // registrations scoped to the preview origin BEFORE goto. A\n' +
+        '    // persistent profile may hold a scope=/ SW from an earlier local\n' +
+        "    // service on the same 127.0.0.1:<port>; worker-src 'none'\n" +
+        '    // only blocks NEW registrations, and the stale SW would\n' +
+        '    // intercept /preview/<token>/... before the server responds,\n' +
+        '    // answering with a synthetic document that carries NO CSP\n' +
+        '    // (codex-connector P1, round 27).\n' +
+        '    if (previewOrigin !== null) {\n' +
+        '      try {\n' +
+        '        const cdp = await opts.page.context().newCDPSession(opts.page);\n' +
+        '        await cdp.send("ServiceWorker.unregister", {\n' +
+        '          scopeURL: previewOrigin + "/",\n' +
+        '        });\n' +
+        '        await cdp.detach().catch(() => {});\n' +
+        '      } catch {\n' +
+        '        /* best-effort: a failed unregister must not block the navigation */\n' +
+        '      }\n' +
+        '    }\n' +
+        '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',
+    },
+    {
       desc: 'keep the navigation route guard alive for exact-origin preview pages (sandboxed local HTML preview) so page-initiated navigations stay blocked after the initial goto',
       find:
         '  } finally {\n' +
@@ -560,10 +588,18 @@ const LOCAL_PATCHES = {
         '    await opts.page\n' +
         '      .addInitScript(() => {\n' +
         '        try {\n' +
+        '          // Judge the PARSED URL, not the raw href: a userinfo\n' +
+        '          // variant (`http://x@127.0.0.1:<port>/preview/...`) keeps\n' +
+        '          // an authorized origin but its serialized href does not\n' +
+        '          // match an anchored regex, so an href-based test would\n' +
+        '          // silently skip the kill and leave RTCPeerConnection alive\n' +
+        '          // on a page that still counts as a preview (codex-connector\n' +
+        '          // P1, round 27).\n' +
+        '          const __u = new URL(window.location.href);\n' +
         '          if (\n' +
-        '            /^http:\\/\\/127\\.0\\.0\\.1:\\d+\\/preview\\/[a-f0-9]{64}\\//.test(\n' +
-        '              window.location.href,\n' +
-        '            )\n' +
+        '            __u.protocol === "http:" &&\n' +
+        '            __u.hostname === "127.0.0.1" &&\n' +
+        '            /^\\/preview\\/[a-f0-9]{64}\\//.test(__u.pathname)\n' +
         '          ) {\n' +
         '            Object.defineProperty(window, "RTCPeerConnection", {\n' +
         '              value: undefined,\n' +

@@ -601,7 +601,16 @@ export function installBrowserGuestHandlers(
     // so the controlled-tab routing below stays intact for every other
     // page; replacing the handler from the RSB guard would bypass popup
     // routing entirely (round-6 review).
-    if (isPreviewUrl(guestContents.getURL?.() ?? '')) {
+    // Fail-closed: getURL throws on a destroyed/abnormal WebContents — the
+    // callback must not throw (it would break the popup routing/deny logic
+    // below), so an unreadable guest is denied (Copilot P1, round 27).
+    let guestUrl: string;
+    try {
+      guestUrl = guestContents.getURL?.() ?? '';
+    } catch {
+      return { action: 'deny' };
+    }
+    if (isPreviewUrl(guestUrl)) {
       return { action: 'deny' };
     }
     if (!isRoutablePopupUrl(details.url) && !isInitialBlankPopupUrl(details.url)) {
