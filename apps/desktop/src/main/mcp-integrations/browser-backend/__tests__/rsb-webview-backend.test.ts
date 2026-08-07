@@ -531,12 +531,17 @@ describe('preview page navigation guard (guardPreviewPageNavigation)', () => {
     // the kill-script must NOT be installed for an unauthorized preview URL
     expect(wc.debuggerMock.attachMock).not.toHaveBeenCalled();
 
-    // will-navigate: a stale preview page is NOT a live preview page — the
-    // guard leaves its navigations alone (nothing to protect).
+    // will-navigate: the CURRENT-page check is shape-based, not
+    // authorization-based (round 24, Greptile P1): a page whose URL still
+    // has the preview shape must NOT be allowed to navigate away, even when
+    // its origin is no longer authorized — the tab may be a revocation
+    // survivor (close failed, registration kept for retry) still showing
+    // workspace content, and the revoked grant does not revoke the page's
+    // ability to exfiltrate its DOM via location.href.
     const listener = wc.willNavigateListeners[0];
     let prevented = false;
     listener({ preventDefault: () => { prevented = true; } }, 'https://elsewhere.test/');
-    expect(prevented).toBe(false);
+    expect(prevented).toBe(true);
   });
 });
 

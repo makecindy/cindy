@@ -295,7 +295,14 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       return origin;
     })();
     try {
-      return await starting;
+      const result = await starting;
+      // Clear on success too (round 24, Copilot P1 companion): with dispose()
+      // no longer nulling `starting`, a RESOLVED promise left in place would
+      // make the next ensureStarted() return the stale origin instead of
+      // starting a fresh listener after dispose → new start (the reuse
+      // contract asserted by the "grants ... revokes on dispose" test).
+      starting = null;
+      return result;
     } catch (err) {
       starting = null;
       throw err;
@@ -615,7 +622,17 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     // quit path (the process may exit before it fires). The event handler
     // stays as an idempotent safety net for listener crashes.
     revokeOrigin();
-    starting = null;
+    // NOTE (round 24, Copilot P1): do NOT null `starting` here. If dispose
+    // runs while ensureStarted() is mid-startup, keeping the in-flight
+    // promise visible means a concurrent second ensureStarted() call sees
+    // `starting` still set, returns the SAME promise and does NOT reset
+    // `disposed` — so the first startup, when its listen() resolves, still
+    // observes `disposed` and fail-closes (no applyPreviewOrigins grant for
+    // a dead listener). Nulling it here would let the second call start a
+    // fresh round, reset disposed=false, and the first round would then
+    // authorize the SSRF origin it no longer owns. The in-flight promise
+    // clears itself in ensureStarted()'s catch after it settles, so the
+    // dispose → new start reuse contract is preserved.
     if (server) {
       server.close();
       server = null;

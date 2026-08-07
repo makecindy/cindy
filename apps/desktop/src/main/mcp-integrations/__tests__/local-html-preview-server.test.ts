@@ -276,6 +276,26 @@ describe('local-html-preview-server', () => {
     expect(previews.at(-1)).toEqual([expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/)]);
   });
 
+  it('concurrent requests share one in-flight startup, and dispose revocation stays the last grant (Copilot P1, round 24)', async () => {
+    // Two requests arriving while startup is still in flight must share the
+    // SAME `starting` promise (round 24: dispose no longer nulls it, and
+    // ensureStarted clears it only after settle) — one listener, one grant.
+    // This is the observable half of the Copilot P1 race: if a fresh round
+    // started per request (starting cleared early), the second request would
+    // reset `disposed` mid-flight and the first round could grant an origin
+    // it no longer owns.
+    const [a, b] = await Promise.all([createUrl(), createUrl()]);
+    const grants = previews.filter((p) => p.length > 0);
+    expect(grants.length).toBe(1);
+    expect(new URL(a.url).origin).toBe(new URL(b.url).origin);
+    // Dispose revocation is applied, and a subsequent request starts a
+    // FRESH listener with a new grant (reuse contract preserved).
+    server.dispose();
+    expect(previews.at(-1)).toEqual([]);
+    await createUrl();
+    expect(previews.at(-1)).toEqual([expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/)]);
+  });
+
   it('fails closed when the workingDir is missing', async () => {
     await expect(createUrl('dist/index.html', { workingDir: '' })).rejects.toThrow(/PATH_NOT_ALLOWED/);
   });

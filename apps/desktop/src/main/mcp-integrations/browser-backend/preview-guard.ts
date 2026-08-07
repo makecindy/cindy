@@ -160,11 +160,17 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   previewGuardedContents.add(wc);
   wc.on('will-navigate', (event, url) => {
     const current = currentUrlOf(wc);
-    // Shape check alone is not enough after a restart: a restored tab may sit
-    // on a stale preview URL whose port another local process seized. Only a
-    // URL authorized by the CURRENT server round is a live preview page
-    // (new Codex reviewer P0, round 23).
-    if (!isPreviewUrlAuthorized(current)) return; // not a live preview page
+    // Shape check on the CURRENT page only (round 24, Greptile P1): this
+    // guard's job is "a preview page must not navigate away". After the
+    // origin is revoked, `livePreviewOrigin` is cleared — but a preview tab
+    // whose close FAILED (round 22 keeps the registration for retry) still
+    // shows workspace content, and it must STILL be barred from escaping to
+    // an external origin (the revoked grant does not revoke the page's
+    // capability to exfiltrate its DOM via location.href). The
+    // authorization check stays on the did-start-navigation LOAD path
+    // (below), where its job is refusing to load content from a stale URL
+    // whose port another process may have seized.
+    if (!isPreviewUrl(current)) return; // not a preview page — leave it alone
     const currentOrigin = originOf(current);
     if (!currentOrigin || originOf(url) !== currentOrigin || !isPreviewUrl(url)) {
       event.preventDefault();
