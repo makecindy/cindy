@@ -657,7 +657,9 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // 只匹配裸 `gh` 等于给一个换写法就绕过的口子。
   // 子命令与 `-t` 之间允许**任意**中间参数:`gh auth status --hostname github.com -t` 是
   // 合法组合,原来只允许非选项 token 会漏(review 报)。用 `[^|;&\n]*?` 限定在同一段内。
-  /(?:^|\s)(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s-[a-zA-Z]*t[a-zA-Z]*(?![\w=-])/,
+  // 结尾的 `(?:=[^\s|;&]*)?` 覆盖 `-t=true` 这类**带等号的 truthy 布尔值** —— gh 照常接受,
+  // 而原来的 `(?![\w=-])` 把等号形态排除在外,令牌仍会被打进模型上下文(review 报)。
+  /(?:^|\s)(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s-[a-zA-Z]*t[a-zA-Z]*(?:=[^\s|;&]*)?(?![\w-])/,
   // `gh auth token` 直接把令牌打到 stdout,与 `--show-token` 同级(同族一次收完)。
   /(?:^|\s)(?:\S*\/)?gh\s+auth\s+token\b/,
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
@@ -1452,7 +1454,7 @@ function analyzeInterpreterArgs(
       // 字面量」。`python3 -X -c` 里的 `-c` 是 `-X` 的值 —— 按整串 argv 搜索会误判成源码
       // 选项、把 stdin 即程序降进灰区(review 报,与 `-m` 是同一类错误的另一半)。
       if (inlineCodeFlags.has(token.toLowerCase())) {
-        return { scriptOperands: operands, usesInlineCode: true };
+        return { scriptOperands: operands, usesModuleSelector: false, usesInlineCode: true };
       }
       // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
       if (valueless.has(token) || token.includes('=')) continue;
@@ -1623,7 +1625,8 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // `arg` 会被当脚本文件、把「stdin 即程序」降进灰区(review 报)。
   if (SHELL_EXECUTORS.has(bin)
     && tokens.slice(1).some((t) => /^-[a-zA-Z]*s[a-zA-Z]*$/.test(t))) return true;
-  const shellPayload = shellCommandPayload(tokens);
+  // 源码选择器必须按位解析:`bash --rcfile -c` 里的 `-c` 是 `--rcfile` 的值,shell 仍读 stdin。
+  const shellPayload = shellSourceSelectorPayload(tokens);
   if (shellPayload !== null && shellPayload.trim() !== '-') return false;
   // 选项与操作数**按位**解析一次,同时得出「有没有模块选择器」和「有没有可信脚本文件」——
   // 两者必须同源,否则 `python3 -X -m` 里作为 `-X` 值的 `-m` 会被误当模块选择器,绕过
@@ -1635,6 +1638,57 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   if (usesInlineCode) return false;                     // `python3 -c '…'`:程序是字面量
   if (scriptOperands.filter((t) => t !== '-').length > 0) return false;
   return true;
+}
+
+/**
+ * shell **不吃参数**的短选项字符 / 长选项。与解释器表同一个 fail-closed 方向:只登记确定
+ * 无值的,其余(`-o option`、`-O shopt`、`--rcfile FILE`、zsh `--emulate SHELL`…)一律当作
+ * 「可能吃掉下一个 token」。
+ */
+const SHELL_VALUELESS_SHORT_FLAGS: ReadonlySet<string> = new Set(
+  ['a', 'b', 'e', 'f', 'h', 'i', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'u', 'v', 'x',
+    'B', 'C', 'D', 'E', 'H', 'P', 'T'],
+);
+const SHELL_VALUELESS_LONG_OPTIONS: ReadonlySet<string> = new Set([
+  '--login', '--interactive', '--norc', '--noprofile', '--noediting', '--posix',
+  '--restricted', '--verbose', '--debug', '--debugger', '--dump-strings',
+  '--dump-po-strings', '--protected', '--pretty-print', '--no-rcs', '--no-globalrcs',
+  '--help', '--version',
+]);
+
+/**
+ * shell 的源码选择器(`-c`)是否落在**真实选项位**;落在选项位时返回它的命令字符串。
+ *
+ * 与 `analyzeInterpreterArgs` 同一套按位解析:`bash --rcfile -c` 里的 `-c` 是 `--rcfile`
+ * 的**值**,bash 仍然从 stdin 执行 —— 位置无关地搜 `-c` 会把这条「stdin 即程序」误判成
+ * 「程序是字面量」、从确定性必问降进灰区(review 报)。表外选项即 fail-closed 返回 null,
+ * 由调用方按「找不到可信的源码选择器」处理。
+ *
+ * 只服务于 stdin 判定;取**载荷**仍用 `shellCommandPayload`(那边的宽松搜索是为了把内层
+ * 命令递归交出去审,收紧它反而会漏掉内层红线)。
+ */
+function shellSourceSelectorPayload(tokens: string[]): string | null {
+  if (!SHELL_EXECUTORS.has(executableName(tokens[0] ?? ''))) return null;
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i] as string;
+    if (token === '--') return null;
+    if (token === '--command') return tokens[i + 1] ?? '';
+    if (token.startsWith('--')) {
+      if (token.includes('=') || SHELL_VALUELESS_LONG_OPTIONS.has(token)) continue;
+      return null;                                    // 表外长选项:可能吃掉下一个 token
+    }
+    if (!/^[-+][A-Za-z]+$/.test(token)) return null;  // 操作数位:后面不会再有选项
+    const chars = token.slice(1).split('');
+    const cAt = chars.indexOf('c');
+    // 簇写里只有 `c` **之前**全是无值开关时(`-lc` / `-xec`),下一个 token 才确定是命令字符串。
+    if (cAt >= 0) {
+      return chars.slice(0, cAt).every((ch) => SHELL_VALUELESS_SHORT_FLAGS.has(ch))
+        ? tokens[i + 1] ?? '' : null;
+    }
+    if (chars.every((ch) => SHELL_VALUELESS_SHORT_FLAGS.has(ch))) continue;
+    return null;                                      // 表外短选项:同样 fail-closed
+  }
+  return null;
 }
 
 /** shell 的 `-c` 可与其它短选项组合（如 `-lc` / `-xec`）；返回其命令字符串。 */

@@ -563,6 +563,52 @@ describe('review 第八轮 — 按位解析与 stdin 填补程序位', () => {
   });
 });
 
+/**
+ * 第九轮 review 的 2 条,都是「选项按位解析」这一族在 shell 与 gh 两侧的收口。
+ */
+describe('review 第九轮 — shell 源码选择器按位 / gh 令牌 flag 等号形态', () => {
+  it('`-c` 落在别的选项的值位上时,shell 仍从 stdin 读程序', () => {
+    // `bash --rcfile -c` 里的 `-c` 是 `--rcfile` 的**值**,不是源码选择器;位置无关地搜
+    // `-c` 会把这条「stdin 即程序」误判成「程序是字面量」、从确定性必问降进灰区。
+    for (const c of [
+      `printf 'touch /outside/pwn' | bash --rcfile -c`,
+      `printf 'rm -rf /outside' | sh --rcfile -c`,
+      `printf 'rm -rf /outside' | bash --init-file -c`,
+      `printf 'rm -rf /outside' | bash -o -c`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('真正落在选项位的 `-c`(含簇写)仍识别为字面量程序,不误升', () => {
+    for (const c of [
+      `printf 'x' | bash -c 'echo hi'`,
+      `printf 'x' | bash -lc 'echo hi'`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt');
+    }
+  });
+
+  it('`gh auth status -t=true` 等带等号的 truthy 值仍是确定性必问', () => {
+    // gh 照常接受等号形态,令牌一样会进模型上下文 —— 不能因为写法不同就落到灰区。
+    for (const c of [
+      'gh auth status -t=true',
+      'gh auth status -t=1',
+      'gh auth status --hostname github.com -t=true',
+      'gh auth status --show-token=true',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('别的命令里的 `-t` 不受影响', () => {
+    for (const c of ['tar -tf a.tar', 'docker build -t img .']) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt');
+    }
+    expect(classifyShellCommand('gh auth status', roots, opts)).toBe('auto-approve');
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [
