@@ -16,6 +16,10 @@ const sessionItemSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'SessionItem.tsx'),
   'utf8',
 );
+const sessionCardSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'SessionCard.tsx'),
+  'utf8',
+);
 
 function t(key: string, options?: Record<string, unknown>): string {
   const dict: Record<string, string> = {
@@ -67,15 +71,26 @@ describe('formatSidebarFutureTime', () => {
 });
 
 describe('SessionItem activity time', () => {
-  it('always renders the right-side activity time from the sidebar sort clock', () => {
+  it('renders the right-side activity time from the sidebar sort clock when enabled', () => {
     expect(sessionItemSource).not.toContain('SHOW_SIDEBAR_TIMESTAMPS');
     // activityIso uses max(userSendAt, updatedAt) to backfill pre-migration rows
     expect(sessionItemSource).toContain('const activityIso =');
     expect(sessionItemSource).toContain('session.updatedAt');
     expect(sessionItemSource).toContain('dateTime={activityIso}');
     expect(sessionItemSource).toContain('formatSidebarTime(activityIso, t)');
+    expect(sessionItemSource).toContain(') : showSessionTime ? (');
+    expect(sessionItemSource).toContain(') : null}');
     expect(sessionItemSource).toContain('text-sidebar-action-icon');
     expect(sessionItemSource).toContain('transition-opacity');
+  });
+
+  it('keeps the running status indicator independent from the time preference', () => {
+    expect(sessionItemSource).toContain('showRightStatus ? (');
+    expect(sessionItemSource).toContain('<SidebarRightStatusIndicator kind={rightStatusKind}');
+    expect(sessionItemSource).toContain("const { showSessionTime } = useSidebarSessionTimeVisibility();");
+    expect(sessionCardSource).toContain("const { showSessionTime } = useSidebarSessionTimeVisibility();");
+    expect(sessionCardSource).toContain('{showSessionTime && (');
+    expect(sessionCardSource).toContain('showSessionTime={showSessionTime}');
   });
 
   it('keeps the archive shortcut in the same right-side slot instead of crowding the time', () => {
