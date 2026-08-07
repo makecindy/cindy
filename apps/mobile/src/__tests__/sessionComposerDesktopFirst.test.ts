@@ -654,7 +654,7 @@ describe('mobile session composer desktop-first surface', () => {
     // pending 世代守卫:启动 Promise 早于首个 PCM 时不得收掉乐观胶囊,
     // 进入真实 listening 或终态后才收口。
     expect(source).toContain('shouldClearMobileVoiceStartPending');
-    expect(source).toContain('startupSettled: false');
+    expect(source).toContain('startupSettled: !voiceStartupInFlightRef.current');
     expect(source).toContain('startupSettled: true');
     expect(source).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
     // 手势被系统/滚动打断时撤销按下即录(review P1)。

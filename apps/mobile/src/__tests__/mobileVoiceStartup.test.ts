@@ -37,6 +37,15 @@ describe('mobileVoiceStartup', () => {
     })).toBe(false);
   });
 
+  it('clears a settled startup after cancellation releases the controller', () => {
+    expect(shouldClearMobileVoiceStartPending({
+      voiceState: 'idle',
+      startupSettled: true,
+      recordingActive: false,
+      hasController: false,
+    })).toBe(true);
+  });
+
   it.each(['listening', 'submitting', 'refining'] as const)(
     'clears the optimistic pill once voice state is %s',
     (voiceState) => {

@@ -992,7 +992,7 @@ describe('new session composer surface', () => {
     // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
     expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
     expect(newSource).toContain('shouldClearMobileVoiceStartPending');
-    expect(newSource).toContain('startupSettled: false');
+    expect(newSource).toContain('startupSettled: !voiceStartupInFlightRef.current');
     expect(newSource).toContain('startupSettled: true');
     expect(newSource).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
     // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,

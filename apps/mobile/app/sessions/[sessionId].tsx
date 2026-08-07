@@ -1916,7 +1916,7 @@ export default function SessionScreen() {
     if (!voiceStartPending) return;
     if (shouldClearMobileVoiceStartPending({
       voiceState,
-      startupSettled: false,
+      startupSettled: !voiceStartupInFlightRef.current,
       recordingActive: voiceRecordingActiveRef.current,
       hasController: Boolean(voiceControllerSessionRef.current),
     })) {
