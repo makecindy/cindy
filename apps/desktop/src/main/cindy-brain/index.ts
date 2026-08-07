@@ -4390,7 +4390,7 @@ export function registerGhostIpc(): void {
   // ── 管子(脑机接口)main 侧 handler(docs/dev-rules/plugin-security-and-authoring.md)──────────────
   // 身份不信任 sender 自报,一律按 webContents id 反查绑定表验身。
   // 上行白名单:tool-result(交卷,派发器配对验身)/ tool-progress(长任务
-  // 心跳续命,派发器配对验身)/ plan-update(当前可信任务 Plan 完整投影)/
+  // 心跳续命,派发器配对验身)/ plan-create 和 plan-update(当前可信任务 Plan 完整投影)/
   // host-request(公开宿主上下文)/ cindy-request(cindy 槽
   // 代办,返回值即结果)/ card-update(卡槽③供片,cardService 校验链)/
   // notify(系统提示,notifySlot 资格审+限速)/ fs-request(fs 槽代写文件,

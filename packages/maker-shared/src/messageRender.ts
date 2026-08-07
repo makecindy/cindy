@@ -240,7 +240,7 @@ function buildLinearItems<
 ): MessageRenderItem<TMessage>[] {
   const sourceMessages = messages.map((message) => message.source);
   const todoInsertAt = findMessageTodoInsertions(sourceMessages);
-  const agentPlanToolUseIds = collectAgentPlanToolUseIds(sourceMessages);
+  const planToolUseIds = collectPlanToolUseIds(sourceMessages);
   const items: MessageRenderItem<TMessage>[] = [];
   // Keys (toolUseId / clientId / taskId / parentToolUseId) already surfaced as an inline
   // agent_task card, so the orphan-update sweep below doesn't render the same task twice.
@@ -281,7 +281,7 @@ function buildLinearItems<
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (message.kind === 'tool') {
-      if (isAgentPlanToolResult(message.source, agentPlanToolUseIds)) {
+      if (isPlanToolResult(message.source, planToolUseIds)) {
         continue;
       }
       const toolName = toolNameOf(message.source);
@@ -303,7 +303,7 @@ function buildLinearItems<
         });
         continue;
       }
-      if (isAgentPlanToolName(toolName)) {
+      if (isPlanToolName(toolName)) {
         const insertion = todoInsertAt.get(index);
         if (insertion) {
           flushTools();
@@ -436,7 +436,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    const source = agentPlanSource(toolNameOf(message));
+    const source = planSource(toolNameOf(message));
     if (!source) continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
@@ -505,7 +505,7 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   let latestPlanMessage: TMessage | null = null;
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    if (!isPlanToolName(toolNameOf(message))) continue;
     latestPlanIndex = index;
     latestPlanMessage = message;
   }
@@ -513,13 +513,15 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   let latest: MessageRenderTodoInsertion | null = null;
   let latestIndex = -1;
   for (const [index, insertion] of findMessageTodoInsertions(messages, options)) {
-    latestIndex = index;
-    latest = insertion;
+    if (index > latestIndex) {
+      latestIndex = index;
+      latest = insertion;
+    }
   }
   const hasPlanEvent = latestPlanIndex >= 0;
   const latestTaskWindowResolved =
     latestPlanMessage === null ||
-    agentPlanSource(toolNameOf(latestPlanMessage)) !== 'task' ||
+    planSource(toolNameOf(latestPlanMessage)) !== 'task' ||
     isTaskPlanWindowResolved(
       messages,
       latestPlanIndex,
@@ -642,7 +644,7 @@ function samePlanSnapshot(left: unknown[], right: unknown[]): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function isAgentPlanToolName(toolName: string | undefined): boolean {
+export function isPlanToolName(toolName: string | undefined): boolean {
   return (
     toolName === 'TodoWrite'
     || toolName === 'update_plan'
@@ -726,7 +728,7 @@ function latestTaskEventClearsPlan<TMessage extends MessageRenderSourceMessageLi
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
-    if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
+    if (planSource(toolNameOf(message)) !== 'task') continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const startsNewSession =
@@ -779,7 +781,7 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
-    if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
+    if (planSource(toolNameOf(message)) !== 'task') continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const resultTasks = taskRecordsFromResult(resultText);
@@ -866,28 +868,28 @@ function buildToolResultLookup<TMessage extends MessageRenderSourceMessageLike>(
   return out;
 }
 
-function collectAgentPlanToolUseIds<TMessage extends MessageRenderSourceMessageLike>(
+function collectPlanToolUseIds<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
 ): Set<string> {
   const out = new Set<string>();
   for (const message of messages) {
-    if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    if (!isPlanToolName(toolNameOf(message))) continue;
     const toolUseId = toolUseIdOf(message);
     if (toolUseId) out.add(toolUseId);
   }
   return out;
 }
 
-function isAgentPlanToolResult(
+function isPlanToolResult(
   message: MessageRenderSourceMessageLike,
-  agentPlanToolUseIds: ReadonlySet<string>,
+  planToolUseIds: ReadonlySet<string>,
 ): boolean {
   if (!isToolResultSource(message)) return false;
   const toolUseId = toolUseIdOf(message);
-  return Boolean(toolUseId && agentPlanToolUseIds.has(toolUseId));
+  return Boolean(toolUseId && planToolUseIds.has(toolUseId));
 }
 
-function agentPlanSource(toolName: string | undefined): MessageRenderTodoSource | null {
+function planSource(toolName: string | undefined): MessageRenderTodoSource | null {
   if (toolName === 'TodoWrite') return 'todo';
   if (toolName === 'update_plan') return 'codex';
   if (toolName === GHOST_PLAN_TOOL_NAME) return 'ghost';

@@ -12,7 +12,7 @@ import { contextBridge, ipcRenderer } from 'electron';
  * - onHostMessage(cb):订阅主机下行(工具调用派发等,后续切片投递);
  * - send(payload):上行投递(工具结果/面板推送申请等;主机按 slots 白名单
  *   与消息类型路由,未开闸的类型一律拒);
- *   plan-update 也走本口,须声明 plan 槽；目标任务由主机当前可信上下文绑定,
+ *   plan-create 与 plan-update 都走本口,须声明 plan 槽；目标任务由主机当前可信上下文绑定,
  *   payload 不接受 sessionId,且与 tool-progress 超时保活机制完全无关。
  * - request(req):读取宿主公开上下文的便捷口——就是
  *   send({type:'host-request',…req}) 的语法糖;目前只支持 app-context(region),

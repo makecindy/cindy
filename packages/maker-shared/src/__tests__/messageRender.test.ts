@@ -853,6 +853,24 @@ describe('message render todo grouping', () => {
     expect(latest).toMatchObject({ key: 'todo-task1', source: 'task' });
   });
 
+  it('findLatestMessageTodoInsertion uses the greatest message index when source sessions interleave', () => {
+    const firstTodo = tool('todo1', 'TodoWrite', {
+      todos: [{ content: 'First todo source', status: 'in_progress' }],
+    });
+    const codex = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Middle Codex plan', status: 'in_progress' }],
+    });
+    const latestTodo = tool('todo2', 'TodoWrite', {
+      todos: [{ content: 'Latest todo source', status: 'in_progress' }],
+    });
+
+    expect(findLatestMessageTodoInsertion([firstTodo, codex, latestTodo])).toMatchObject({
+      key: 'todo-todo1',
+      source: 'todo',
+      todos: [{ content: 'Latest todo source', status: 'in_progress' }],
+    });
+  });
+
   it('renders a host-persisted Ghost Plan as an independent plan source', () => {
     const ghost = tool('ghost-plan', GHOST_PLAN_TOOL_NAME, {
       plan: [{ step: 'Sync plugin progress', status: 'in_progress' }],
