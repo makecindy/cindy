@@ -6,6 +6,7 @@ export type SchedulerRelayStatus = 'online' | 'offline';
 export type SchedulerTransportEvent =
   | { type: 'relay-status'; status: SchedulerRelayStatus }
   | { type: 'ownership'; owner: boolean }
+  /** null invalidates the previously accepted authoritative view. */
   | { type: 'snapshot'; snapshot: SchedulerDesktopDeviceSnapshot | null }
   | { type: 'peer-presence'; deviceId: string; platform: string; online: boolean }
   | { type: 'push'; sourceDeviceId: string; payload: unknown };

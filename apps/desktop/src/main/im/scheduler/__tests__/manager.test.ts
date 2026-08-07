@@ -157,6 +157,32 @@ describe('dormant scheduler manager', () => {
     });
   });
 
+  it('fails closed when the authoritative snapshot disappears', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 10 },
+    });
+    expect(manager.getDecision()).toEqual({
+      state: 'active',
+      channel: { channel: 'discord', identity },
+      reason: 'elected',
+    });
+
+    harness.emit({ type: 'snapshot', snapshot: null });
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: { channel: 'discord', identity },
+      reason: 'missing-snapshot',
+    });
+  });
+
   it('retries a lost discovery probe with the same nonce and stops at the bound', async () => {
     vi.useFakeTimers();
     const harness = createTransport();
