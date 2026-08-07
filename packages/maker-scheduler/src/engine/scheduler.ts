@@ -688,6 +688,22 @@ export class Scheduler extends EventEmitter {
         return;
       }
       schedule = claimed;
+      // The CAS protects the fire time, not the rest of the row. Another
+      // instance can therefore change cron metadata while retaining the same
+      // nextFireAt and still return its new row here. Validate the claimed
+      // source of truth before creating a run so that 30-second cache windows
+      // cannot execute a newly malformed schedule once.
+      try {
+        computeNextFireAt(schedule, this.clock.now());
+        this.invalidScheduleIds.delete(schedule.id);
+      } catch (err) {
+        this.invalidScheduleIds.add(schedule.id);
+        this.logger?.warn?.('scheduler: quarantined invalid schedule after due-fire claim', {
+          scheduleId: schedule.id,
+          error: String(err),
+        });
+        return;
+      }
     }
     this.updateInflightAttempt(runId, 'persisting');
     const firedAt = this.clock.now();
