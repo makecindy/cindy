@@ -286,6 +286,53 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('restarts discovery when an offline presence races the account snapshot', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    let resolveFirstSnapshot!: (snapshot: {
+      selfDeviceId: string;
+      peers: Array<{ deviceId: string; platform: string }>;
+    }) => void;
+    let resolveSecondSnapshot!: (snapshot: {
+      selfDeviceId: string;
+      peers: Array<{ deviceId: string; platform: string }>;
+    }) => void;
+    harness.fetchDeviceSnapshot
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstSnapshot = resolve;
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecondSnapshot = resolve;
+      }));
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    harness.peers = [];
+    harness.presenceHandler?.({
+      deviceId: 'a',
+      platform: 'darwin',
+      online: false,
+      lastSeenAt: Date.now(),
+    });
+    resolveFirstSnapshot({
+      selfDeviceId: 'z',
+      peers: [{ deviceId: 'a', platform: 'darwin' }],
+    });
+    await vi.waitFor(() => expect(harness.fetchDeviceSnapshot).toHaveBeenCalledTimes(2));
+    expect(discord.init).not.toHaveBeenCalled();
+
+    resolveSecondSnapshot({ selfDeviceId: 'z', peers: [] });
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledOnce();
+    await manager.stop();
+  });
+
   it('starts the deterministic winner and lets a standby take over after it goes offline', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [{
@@ -795,6 +842,35 @@ describe('Discord scheduler manager', () => {
     expect(discord.init).toHaveBeenCalledTimes(1);
     expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
 
+    await manager.stop();
+  });
+
+  it('withdraws a winner when initial Gateway activation exceeds its timeout', async () => {
+    harness.selfDeviceId = 'a';
+    const discord = createDiscord();
+    let releaseActivation!: () => void;
+    let resolveSnapshot!: (snapshot: {
+      selfDeviceId: string;
+      peers: Array<{ deviceId: string; platform: string }>;
+    }) => void;
+    harness.fetchDeviceSnapshot.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSnapshot = resolve;
+    }));
+    discord.init.mockImplementation(() => new Promise<void>((resolve) => {
+      releaseActivation = resolve;
+    }));
+    const manager = createManager(discord);
+
+    await manager.start();
+    resolveSnapshot({ selfDeviceId: 'a', peers: [] });
+    await vi.waitFor(() => expect(discord.init).toHaveBeenCalledOnce());
+
+    vi.advanceTimersByTime(15_000);
+    await vi.waitFor(() => expect(discord.enterSchedulerStandby).toHaveBeenCalledWith({ closeIngress: true }));
+
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+
+    releaseActivation();
     await manager.stop();
   });
 

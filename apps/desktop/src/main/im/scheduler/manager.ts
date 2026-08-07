@@ -34,6 +34,7 @@ const ADVERTISEMENT_INTERVAL_MS = 2_000;
 const PEER_STALE_MS = 8_000;
 const ACTIVATION_RETRY_MS = 10_000;
 const RUNTIME_RECONNECT_GRACE_MS = 15_000;
+const INITIAL_ACTIVATION_TIMEOUT_MS = 15_000;
 
 interface PeerAdvertisement {
   deviceId: string;
@@ -67,6 +68,8 @@ export class ImSchedulerManager {
   private discoveryNonce = '';
   private readonly confirmedPeers = new Set<string>();
   private readonly pendingProbePeers = new Set<string>();
+  private readonly liveDesktopPresence = new Map<string, string>();
+  private presenceMembershipVersion = 0;
   private authoritativeDesktopPeers: Map<string, string> | null = null;
   private snapshotRequest: { nonce: string; promise: Promise<void> } | null = null;
   private readonly resolvedRuntimeGenerations = new Set<string>();
@@ -89,6 +92,10 @@ export class ImSchedulerManager {
       onConfigurationChanged: () => this.notifyLocalConfigurationChanged(),
     });
     this.schedulerHooksInstalled = true;
+    this.liveDesktopPresence.clear();
+    for (const peer of this.listSchedulerPeers()) {
+      this.liveDesktopPresence.set(peer.deviceId, peer.platform);
+    }
     if (this.discord.getStatus().kind === 'connected') {
       this.connectedIdentity = this.discord.getSchedulerIdentity();
       if (this.connectedIdentity) this.beginLocalRuntime(this.connectedIdentity);
@@ -100,6 +107,15 @@ export class ImSchedulerManager {
       const eligibleDesktop = snapshot.online
         && isDesktopSchedulerPlatform(snapshot.platform)
         && !isDeviceRevoked(snapshot.deviceId);
+      const previousPlatform = this.liveDesktopPresence.get(snapshot.deviceId);
+      if (eligibleDesktop) {
+        if (previousPlatform !== snapshot.platform) {
+          this.liveDesktopPresence.set(snapshot.deviceId, snapshot.platform);
+          this.presenceMembershipVersion += 1;
+        }
+      } else if (this.liveDesktopPresence.delete(snapshot.deviceId)) {
+        this.presenceMembershipVersion += 1;
+      }
       const snapshotIncludedPeer = this.authoritativeDesktopPeers?.has(snapshot.deviceId) === true;
       if (
         this.authoritativeDesktopPeers
@@ -135,6 +151,10 @@ export class ImSchedulerManager {
         this.closeSchedulerIngressImmediately('relay-offline');
         this.adoptActiveRuntimeFromAllPeers();
         this.peers.clear();
+        if (this.liveDesktopPresence.size > 0) {
+          this.liveDesktopPresence.clear();
+          this.presenceMembershipVersion += 1;
+        }
         void this.ensureStandby();
       } else {
         this.beginDiscoveryGrace();
@@ -407,8 +427,30 @@ export class ImSchedulerManager {
     this.lastActivationAttemptAt = Date.now();
     const predecessor = this.runtimeGaps.get(identity)?.generation;
     if (predecessor) this.discord.markSchedulerOfflineGap();
+    const activation = this.discord.init();
+    let activationTimeout: ReturnType<typeof setTimeout> | null = null;
     try {
-      await this.discord.init();
+      const activationResult = await Promise.race([
+        activation.then(() => 'ready' as const),
+        new Promise<'timeout'>((resolve) => {
+          activationTimeout = setTimeout(() => resolve('timeout'), INITIAL_ACTIVATION_TIMEOUT_MS);
+        }),
+      ]);
+      if (activationResult === 'timeout') {
+        // The provider may still be waiting for the first Gateway handshake.
+        // Withdraw this winner and let a healthy peer take over instead of
+        // keeping reconcileTail occupied forever.
+        void activation.catch((error) => {
+          log.warn('discord scheduler activation timed out', error);
+        });
+        try {
+          await this.discord.enterSchedulerStandby({ closeIngress: true });
+        } catch (error) {
+          log.warn('discord scheduler activation timeout cleanup failed', error);
+        }
+        this.markActivationFailure(identity);
+        return;
+      }
       if (!this.discord.isSchedulerTransportActive()) {
         if (this.discord.isSchedulerTransportConnecting()) return;
         this.markActivationFailure(identity);
@@ -423,6 +465,8 @@ export class ImSchedulerManager {
     } catch (error) {
       log.warn('discord scheduler activation failed', error);
       this.markActivationFailure(identity);
+    } finally {
+      if (activationTimeout) clearTimeout(activationTimeout);
     }
   }
 
@@ -861,6 +905,8 @@ export class ImSchedulerManager {
     this.peers.clear();
     this.confirmedPeers.clear();
     this.pendingProbePeers.clear();
+    this.liveDesktopPresence.clear();
+    this.presenceMembershipVersion = 0;
     this.authoritativeDesktopPeers = null;
     this.snapshotRequest = null;
     this.resolvedRuntimeGenerations.clear();
@@ -883,6 +929,7 @@ export class ImSchedulerManager {
   private refreshAuthoritativeDesktopSnapshot(nonce = this.discoveryNonce): void {
     if (!this.started || !this.deviceLinkReady || !nonce) return;
     if (this.snapshotRequest?.nonce === nonce) return;
+    const presenceMembershipVersion = this.presenceMembershipVersion;
     const promise = fetchSchedulerDesktopDeviceSnapshot()
       .then((snapshot) => {
         if (!this.started || this.discoveryNonce !== nonce) return;
@@ -890,10 +937,18 @@ export class ImSchedulerManager {
         if (!self || snapshot.selfDeviceId !== self) {
           throw new Error('device-link snapshot does not match the current Desktop');
         }
+        if (this.presenceMembershipVersion !== presenceMembershipVersion) {
+          // A presence membership change can arrive while the REST request is
+          // in flight. Never publish that stale snapshot as authoritative;
+          // start a fresh nonce so the offline/online event cannot strand the
+          // scheduler in standby or authorize an old peer.
+          this.authoritativeDesktopPeers = null;
+          this.beginDiscoveryGrace();
+          return;
+        }
+        const visiblePeers = snapshot.peers.filter((peer) => !isDeviceRevoked(peer.deviceId));
         this.authoritativeDesktopPeers = new Map(
-          snapshot.peers
-            .filter((peer) => !isDeviceRevoked(peer.deviceId))
-            .map((peer) => [peer.deviceId, peer.platform]),
+          visiblePeers.map((peer) => [peer.deviceId, peer.platform]),
         );
         // The full account snapshot replaces the old fixed-delay assumption.
         // Once it includes this exact online Desktop, election may proceed as
