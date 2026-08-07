@@ -1,0 +1,34 @@
+# Cindy 管理的 Pi project trust 契约（#2013）
+
+本文件定义 PR4（#2014）可消费的输入/输出契约；本 Issue 不改变 Pi 运行时行为。
+
+## 真源与生命周期
+
+- trust 输入只能来自 Cindy 已有、可审计的项目 approval。当前 `origin/main` 尚未提供通用 project approval store，因此实现必须通过 host 注入 `PiProjectApprovalSnapshot`，不得把 `permissionMode`、工具审批、MCP approval、插件启用状态或 Pi 用户设置解释为项目 trust。
+- approval 在新建、重启、fork 或切换到新 `workingDir` 时重新求值；一个运行中的 Pi 进程使用启动时快照。撤销或失效对下一次新会话生效，不声称热卸载已加载资源。
+- `workingDir` 与 git repo root 必须先做 `realpath`/规范化，host 必须同时提供可信的 `platform`（`posix` / `win32`），不得从路径字符串猜测或缺省为 POSIX。POSIX canonical bytes 只有能无损往返 UTF-8 时才可标记 `utf8-lossless`；Windows canonical path 只有能无损往返 host Unicode string 时才可标记 `utf16-lossless`。编码标记与平台不匹配、含替换字符或无法证明无损时必须标记 `unavailable`，不得用有损字符串生成 approval key。解析失败、目录消失、repo 边界变化、symlink 指向变化均 fail closed。默认作用域是 `repo-root + workingDir`；只有 approval 明确声明 `repo-root` 才能让同一仓库的多个 workingDir 共享批准。`extraDirs`、引用目录和其他 workspace root 不继承。
+- `projectKey` 为 `${canonicalRepoRoot}\0${canonicalWorkingDir}`；Windows 比较折叠分隔符与大小写。approval 的 `scopeKey` 对 `repo-root` 是 canonical root，对 `working-dir` 是同样的复合 key。
+
+## 状态与资源边界
+
+纯函数输出的状态只有 `approved`、`unapproved`、`revoked`、`stale`、`unavailable`。文件存在或 scanner 命中只能形成资源 `discovered`，不能宣称 Pi `loaded`；`loaded` 只能由 #2011 的 `get_commands` runtime manifest 证明。
+
+批准决策只产生 PR4 的候选输入：
+
+- `skills`：在 pinned Pi v0.83.0 事实夹具验证通过后，可用显式 skill 路径装配；
+- `settings`：只有经字段白名单投影（输出 `settingsProjection.values`）且同时证明 packages/extensions 关闭时才可装配；本契约默认不允许原始 `.pi/settings.json`。当前白名单只允许 pinned Pi v0.83.0 的 `compaction.reserveTokens` / `compaction.keepRecentTokens` 非负安全整数；未知字段、未来新增字段、`defaultProjectTrust`、provider/auth、路径及资源加载配置均 fail closed。输出是深克隆并冻结的启动快照；`eligibleSettingsPaths` 仅为兼容字段，最多包含投影的 `sourcePath`，不能把发现到的原始 settings 路径当作可装配输入；空投影保持 `discovered`。
+- `packages` / `extensions`：始终 `discovered` 或 `blocked`，不得安装、加载或执行。
+
+## 启动与隔离不变量
+
+- 不传 `--approve`，不写用户 `~/.pi/agent/trust.json`，不设置 `defaultProjectTrust=always`；trust.json、`defaultProjectTrust` 或等效配置的装配属于 #2014。
+- 不写或复用整个用户 `~/.pi/agent`，不继承 auth/provider/settings/trust/凭证。每会话 `PI_CODING_AGENT_DIR` 隔离、临时目录和并发 session 输入隔离保持不变。
+- `launch` 输出固定为 `approve:false`、`writeTrustJson:false`、`inheritUserPiHome:false`、`allowPackages:false`、`allowExtensions:false`。纯函数不读配置、不写文件、不启动 Pi。
+- 如果 Pi 无法同时做到“信任 skills/settings 但阻止 packages/extensions”，#2014 必须缩小为显式 skills-only，或阻断项目 settings；不得用 `--approve` 绕过。
+
+## 与既有边界对照
+
+- #1729：只允许 Cindy 已批准项目映射；禁止无条件 `--approve`、复用整个用户 Pi 目录与默认开放 packages/extensions。
+- #1705：packages/extensions 在非 TUI 宿主下的执行与呈现契约仍未解决；本契约不重开该范围。
+- #1967：隔离 `PI_CODING_AGENT_DIR` 是有意的并发/凭证边界；本契约不通过复制或链接用户 Pi home 规避隔离。
+- #2030：以 Pi v0.83.0 `get_commands` 夹具作为资源发现事实基线；#2053/#2011 的 manifest 类型合入后，只需复核字段接线，不复制其未合入类型。

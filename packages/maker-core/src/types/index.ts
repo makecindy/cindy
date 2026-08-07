@@ -7,3 +7,4 @@ export * from './palette.js';
 export * from './customizations.js';
 export * from './memory.js';
 export * from './account-rate-limits.js';
+export * from './pi-project-trust.js';
