@@ -3,12 +3,13 @@ id: collaboration
 title: Collaboration mode (lead + workers)
 summary: Turn on Collab to bring one or more worker agents in beside your session and delegate tasks to them.
 ---
+
 Collaboration ("协同" / Collab) lets one session — the **lead** — bring in one or more **worker** agents to run alongside it (a "team"). The lead delegates tasks to workers through a built-in MCP, and you can watch and steer each worker.
 
 **Turning it on:**
 
 - In any regular project or dialogue session, open the composer's **+** menu and choose **Collaboration mode**. You can also choose it before sending the first message of a new task. Claude Code and Codex can lead locally or over SSH; Pi can lead in local sessions.
-- Pick the first worker's agent (Claude Code, Codex, or Pi), and optionally its role / model / effort / an initial task. SSH remote leads currently use Claude Code or Codex workers.
+- Pick the first worker's agent (Claude Code, Codex, or Pi), and optionally its role / model / effort / an initial task. SSH remote leads currently use Claude Code or Codex workers. If you have not chosen a Worker permission before, the initial default is **Full access** — it is a selectable default, not a fixed mode. You can choose **Auto-review** instead. Once you create a Worker with either mode, Cindy remembers that choice for the next Worker instead of replacing it with the product default.
 - Start. This creates the team plus that first worker.
 
 **Adding more workers:**
@@ -18,7 +19,7 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 
 **While collaborating:**
 
-- Each worker is a full session with its own history, tools, working directory, and model. New workers start in Auto-review mode: safe work can proceed automatically, while higher-risk actions may still be denied or require confirmation. They inherit the lead's working directory by default (or share the worktree when the lead uses one).
+- Each worker is a full session with its own history, tools, working directory, and model. **Full access** skips routine approvals; **Auto-review** lets safe work proceed automatically while higher-risk actions may still be denied or require confirmation. The Worker creation panel remembers your last permission choice alongside its Agent and model preferences. The same remembered choice is used when an agent tool creates a Worker; an explicit `start_team` permission updates that shared choice. Raising it from Auto-review to Full access waits for your confirmation first; cancelling or letting the confirmation time out leaves the preference and team unchanged. Changing it does not affect the lead or workers that already exist. Workers inherit the lead's working directory by default (or share the worktree when the lead uses one).
 - A worker's model defaults to your last new-session choice for that vendor, falling back to the lead's model.
 - Only one worker is **focused** (shown) at a time — switch between them with the worker tabs / dropdown. You can intervene in any worker directly, and archive workers individually.
 

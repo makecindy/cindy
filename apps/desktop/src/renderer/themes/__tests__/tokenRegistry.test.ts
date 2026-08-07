@@ -16,6 +16,14 @@ import { exportThemeColors } from '../theme-service';
  * 不允许再制造新的幽灵。清单随修复增补,删条目 = 该幽灵已注册。
  */
 const FORMER_GHOST_TOKENS = ['panel-bg', 'board'] as const;
+const PROCESS_ICON_TOKENS = [
+  'process-agent-task-icon',
+  'process-agent-service-icon',
+  'process-main-icon',
+  'process-renderer-icon',
+  'process-gpu-icon',
+  'process-utility-icon',
+] as const;
 
 describe('主题注册表 · 历史幽灵 token 补注册(D1 地基修复)', () => {
   it.each(FORMER_GHOST_TOKENS)(
@@ -43,6 +51,13 @@ describe('主题注册表 · 历史幽灵 token 补注册(D1 地基修复)', () 
     expect(dark['panel-bg']).toBe('var(--surface)');
     expect(light['board']).toBe('var(--border-default)');
     expect(dark['board']).toBe('var(--border-default)');
+  });
+});
+
+describe('主题注册表 · 资源用量进程图标', () => {
+  it.each(PROCESS_ICON_TOKENS)('"%s" 有 Light / Dark 双模式颜色', (id) => {
+    expect(colorRegistry.resolveDefault(id, 'light')).not.toBeNull();
+    expect(colorRegistry.resolveDefault(id, 'dark')).not.toBeNull();
   });
 });
 

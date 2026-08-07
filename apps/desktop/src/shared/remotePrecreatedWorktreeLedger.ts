@@ -8,6 +8,8 @@ interface PendingRemotePrecreatedWorktreeBase {
   deviceId: string;
   sessionId: string;
   createdAt: number;
+  /** Missing legacy values normalize to retain-only session-create-started. */
+  phase: 'reserved' | 'precreated' | 'session-create-started';
   /**
    * Cindy account/local-data owner that created the obligation.
    *
@@ -75,6 +77,16 @@ function readRecoveryKey(value: unknown): string | null {
     : null;
 }
 
+function readRecoveryPhase(
+  value: unknown,
+): PendingRemotePrecreatedWorktreeBase['phase'] | null {
+  if (value === undefined) return 'session-create-started';
+  return value === 'reserved' || value === 'precreated'
+    || value === 'session-create-started'
+    ? value
+    : null;
+}
+
 export function remotePrecreatedWorktreeRecordKey(
   record: Pick<PendingRemotePrecreatedWorktree, 'deviceId' | 'sessionId'> & {
     dataOwnerId?: string;
@@ -96,6 +108,7 @@ export function coercePendingRemotePrecreatedWorktree(
       : readString(value.dataOwnerId, MAX_DATA_OWNER_ID_LENGTH);
   const path = readString(value.path, MAX_PATH_LENGTH);
   const recoveryKey = readRecoveryKey(value.recoveryKey);
+  const phase = readRecoveryPhase(value.phase);
   const createdAt =
     typeof value.createdAt === 'number' && Number.isFinite(value.createdAt)
       ? value.createdAt
@@ -104,6 +117,7 @@ export function coercePendingRemotePrecreatedWorktree(
     !deviceId
     || !sessionId
     || (value.dataOwnerId !== undefined && !dataOwnerId)
+    || !phase
     || (!path && !recoveryKey)
     || createdAt <= 0
   ) return null;
@@ -113,6 +127,7 @@ export function coercePendingRemotePrecreatedWorktree(
     deviceId,
     sessionId,
     createdAt,
+    phase,
     ...(dataOwnerId ? { dataOwnerId } : {}),
   };
   if (path) {
@@ -124,6 +139,65 @@ export function coercePendingRemotePrecreatedWorktree(
   }
   if (!recoveryKey) return null;
   return { ...base, recoveryKey };
+}
+
+/**
+ * Strictly parse records read from durable storage.
+ *
+ * Old-but-well-formed records may be expired by normalizePending... below, but
+ * an unknown/malformed record makes the whole snapshot unreadable. Silently
+ * dropping a malformed cleanup obligation would allow the next remote create
+ * to proceed without proving that the prior worktree is safe.
+ */
+export function parsePersistedPendingRemotePrecreatedWorktreeRecords(
+  value: unknown,
+  now = Date.now(),
+): PendingRemotePrecreatedWorktree[] | null {
+  if (!Array.isArray(value) || value.length > MAX_RECORDS) return null;
+  const seenKeys = new Set<string>();
+  for (const raw of value) {
+    if (!isRecord(raw)) return null;
+    const deviceId = readString(raw.deviceId, MAX_DEVICE_ID_LENGTH);
+    const sessionId = readString(raw.sessionId, MAX_SESSION_ID_LENGTH);
+    const dataOwnerId = raw.dataOwnerId === undefined
+      ? undefined
+      : readString(raw.dataOwnerId, MAX_DATA_OWNER_ID_LENGTH);
+    const path = raw.path === undefined
+      ? null
+      : readString(raw.path, MAX_PATH_LENGTH);
+    const recoveryKey = raw.recoveryKey === undefined
+      ? null
+      : readRecoveryKey(raw.recoveryKey);
+    const createdAt =
+      typeof raw.createdAt === 'number' && Number.isFinite(raw.createdAt)
+        ? raw.createdAt
+        : 0;
+    if (
+      !deviceId
+      || !sessionId
+      || (raw.dataOwnerId !== undefined && !dataOwnerId)
+      || (raw.path !== undefined && !path)
+      || (raw.recoveryKey !== undefined && !recoveryKey)
+      || (!path && !recoveryKey)
+      || !readRecoveryPhase(raw.phase)
+      || createdAt <= 0
+      || createdAt > now + 5 * 60 * 1000
+    ) return null;
+    const key = `${dataOwnerId ?? 'legacy'}\u0000${deviceId}\u0000${sessionId}`;
+    if (seenKeys.has(key)) return null;
+    seenKeys.add(key);
+  }
+  return normalizePendingRemotePrecreatedWorktrees(value, now);
+}
+
+export function parseLegacyPendingRemotePrecreatedWorktreeLedger(
+  value: unknown,
+  now = Date.now(),
+): PendingRemotePrecreatedWorktree[] | null {
+  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.records)) {
+    return null;
+  }
+  return parsePersistedPendingRemotePrecreatedWorktreeRecords(value.records, now);
 }
 
 export function normalizePendingRemotePrecreatedWorktrees(
@@ -142,13 +216,28 @@ export function normalizePendingRemotePrecreatedWorktrees(
     if (!record) continue;
     const key = remotePrecreatedWorktreeRecordKey(record);
     const existing = byKey.get(key);
-    if (!existing || record.createdAt >= existing.createdAt) {
+    if (
+      !existing
+      || record.createdAt > existing.createdAt
+      || (
+        record.createdAt === existing.createdAt
+        && recoveryPhaseRank(record.phase) >= recoveryPhaseRank(existing.phase)
+      )
+    ) {
       byKey.set(key, record);
     }
   }
   return [...byKey.values()]
     .sort((left, right) => right.createdAt - left.createdAt)
     .slice(0, MAX_RECORDS);
+}
+
+function recoveryPhaseRank(
+  phase: PendingRemotePrecreatedWorktreeBase['phase'],
+): number {
+  if (phase === 'session-create-started') return 2;
+  if (phase === 'precreated') return 1;
+  return 0;
 }
 
 export function coercePendingRemotePrecreatedWorktreeTarget(

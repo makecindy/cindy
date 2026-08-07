@@ -14,7 +14,7 @@
  *   4. a version that is merely queued (idle) does not claim to be loading.
  */
 
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import '@/i18n';
@@ -142,5 +142,57 @@ describe('UpdateNoticeDialog 单栏版式', () => {
     expect(screen.getByText('v0.1.21')).toBeTruthy();
     // 标题栏右侧在单版本 auto 下不再显示日期或版本计数。
     expect(screen.queryByText(i18n.t('update.notice.versionsSpan', { count: 1 }))).toBeNull();
+  });
+
+  it('手动历史在切换语言后原地刷新所有已加载版本,不重置滚动位置', async () => {
+    await act(async () => { await i18n.changeLanguage('en'); });
+    vi.stubGlobal('IntersectionObserver', class {
+      private readonly callback: IntersectionObserverCallback;
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+      }
+      observe = (target: Element) => {
+        this.callback([{
+          isIntersecting: true,
+          target,
+          boundingClientRect: { top: 0 },
+        } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      };
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    });
+
+    const localized = (version: string): ReleaseNotes => ({
+      ...topicNotes(version, []),
+      topics: [{
+        title: `${i18n.language}-${version}`,
+        text: '正文。',
+        contributors: [],
+      }],
+    });
+    const loadVersion = vi.fn(async (version: string) => localized(version));
+    render(
+      <UpdateNoticeDialog
+        open
+        mode="manual"
+        releaseNotes={[localized('0.1.21')]}
+        allVersions={['0.1.21', '0.1.20']}
+        loadVersion={loadVersion}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    const oldLocaleTitle = await screen.findByText('en-0.1.20');
+    const scrollBody = oldLocaleTitle.closest('.overflow-y-auto') as HTMLDivElement;
+    scrollBody.scrollTop = 123;
+
+    await act(async () => { await i18n.changeLanguage('ja'); });
+    await waitFor(() => expect(screen.getByText('ja-0.1.20')).toBeTruthy());
+    expect(screen.getByText('ja-0.1.21')).toBeTruthy();
+    expect(scrollBody.scrollTop).toBe(123);
+
+    vi.unstubAllGlobals();
+    await act(async () => { await i18n.changeLanguage('en'); });
   });
 });

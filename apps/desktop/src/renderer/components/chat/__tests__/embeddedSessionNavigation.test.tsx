@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,6 +16,14 @@ const mocks = vi.hoisted(() => ({
   })),
   resolveSessionMessageText: vi.fn(async () => 'Target message\nfull text'),
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -33,9 +43,11 @@ vi.mock('@/lib/sessionMessageText', () => ({
 }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: mocks.resolveSessionRoute,
+  getSessionRouteOwnerId: (route: string) => /^\/cc-agent\/([^/?#]+)/.exec(route)?.[1] ?? null,
 }));
 
 import {
+  isInteractiveSessionNavigationMode,
   SessionNavigationModeProvider,
   useSidebarTargetSessionId,
 } from '@/features/cc-agent/embeddedSessionNavigation';
@@ -50,6 +62,17 @@ function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
       mode="sidebar-embedded"
       sidebarTargetSessionId={sidebarTargetSessionId}
     >
+      {children}
+    </SessionNavigationModeProvider>
+  );
+}
+
+function splitPane(
+  children: ReactNode,
+  onSessionNavigate: (targetSessionId: string, routeOwnerSessionId?: string) => void,
+) {
+  return (
+    <SessionNavigationModeProvider mode="split-pane" onSessionNavigate={onSessionNavigate}>
       {children}
     </SessionNavigationModeProvider>
   );
@@ -88,7 +111,72 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
-  it('shows the persisted reference range summary without changing the link label', () => {
+  it('reports split-pane session navigation before changing the route', async () => {
+    const onSessionNavigate = vi.fn();
+    render(
+      splitPane(
+        <SessionLinkChip href="xdt-maker://session/session-target" label="Session target" />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-target', undefined),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('session-target', 'session-target');
+    expect(onSessionNavigate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.navigate.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('reports the canonical Lead owner for a worker deep link', async () => {
+    mocks.resolveSessionRoute.mockResolvedValueOnce('/cc-agent/lead-target?worker=worker-target');
+    const onSessionNavigate = vi.fn();
+    render(
+      splitPane(
+        <SessionLinkChip href="xdt-maker://session/worker-target" label="Worker target" />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith(
+        '/cc-agent/lead-target?worker=worker-target',
+        undefined,
+      ),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
+  });
+
+  it('cancels pending split-pane link navigation after the source pane unmounts', async () => {
+    const pendingRoute = deferred<string>();
+    mocks.resolveSessionRoute.mockReturnValueOnce(pendingRoute.promise);
+    const onSessionNavigate = vi.fn();
+    const view = render(
+      splitPane(
+        <SessionLinkChip href="xdt-maker://session/session-target" label="Session target" />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target', null);
+    view.unmount();
+
+    await act(async () => {
+      pendingRoute.resolve('/cc-agent/session-target');
+      await pendingRoute.promise;
+    });
+
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('shows the persisted reference range summary without changing the link label', async () => {
     render(
       embedded(
         <SessionLinkChip
@@ -104,6 +192,9 @@ describe('sidebar-embedded session navigation boundary', () => {
         />,
       ),
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(screen.getByText('Session A')).toBeTruthy();
     expect(
@@ -113,7 +204,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     ).toBeTruthy();
   });
 
-  it('keeps the anchored pill and its range summary on a single line', () => {
+  it('keeps the anchored pill and its range summary on a single line', async () => {
     const { container } = render(
       <SessionLinkChip
         href="cindy://session/session-a?message=message-1"
@@ -127,6 +218,9 @@ describe('sidebar-embedded session navigation boundary', () => {
         }}
       />,
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     // 宽度上限必须留在 pill 一侧:加回外层会让 pill 与 summary 抢同一份 240px,
     // summary 被压成逐字竖排、pill 被 stretch 拉成大椭圆。
@@ -160,6 +254,60 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
+  it('reports the canonical Lead owner for a worker handoff', async () => {
+    mocks.resolveSessionRoute.mockResolvedValueOnce('/cc-agent/lead-target?worker=worker-target');
+    const onSessionNavigate = vi.fn();
+    render(
+      splitPane(
+        <SessionHandoffCard
+          sessionId="worker-target"
+          title="Worker target"
+          wake="resumed"
+          lastActive={null}
+        />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/lead-target?worker=worker-target', {
+        state: undefined,
+      }),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
+  });
+
+  it('cancels pending handoff navigation after the source pane unmounts', async () => {
+    const pendingRoute = deferred<string>();
+    mocks.resolveSessionRoute.mockReturnValueOnce(pendingRoute.promise);
+    const onSessionNavigate = vi.fn();
+    const view = render(
+      splitPane(
+        <SessionHandoffCard
+          sessionId="session-target"
+          title="Session target"
+          wake="resumed"
+          lastActive={null}
+        />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target');
+    view.unmount();
+
+    await act(async () => {
+      pendingRoute.resolve('/cc-agent/session-target');
+      await pendingRoute.promise;
+    });
+
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
   it('renders automation origins as static content without scheduling navigation', () => {
     render(
       embedded(
@@ -180,16 +328,128 @@ describe('sidebar-embedded session navigation boundary', () => {
 
   it('consumes /jump-session without resolving or navigating in embedded mode', async () => {
     const t = ((key: string) => key) as never;
+    const onSessionNavigate = vi.fn();
 
     await expect(
       tryHandleNavigationCommand('/jump-session session-c', {
         navigate: mocks.navigate,
         t,
         allowNavigation: false,
+        onSessionNavigate,
       }),
     ).resolves.toBe(true);
     expect(mocks.getSession).not.toHaveBeenCalled();
+    expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
+    expect(onSessionNavigate).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('reports /jump-session replacement before navigating from a split pane', async () => {
+    const t = ((key: string) => key) as never;
+    const onSessionNavigate = vi.fn();
+    mocks.resolveSessionRoute.mockResolvedValueOnce('/cc-agent/lead-target?worker=worker-target');
+
+    await expect(
+      tryHandleNavigationCommand('/jump-session worker-target', {
+        navigate: mocks.navigate,
+        t,
+        allowNavigation: true,
+        onSessionNavigate,
+      }),
+    ).resolves.toBe(true);
+
+    expect(mocks.getSession).toHaveBeenCalledWith('worker-target');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith(
+      'worker-target',
+      expect.objectContaining({ id: 'worker-target' }),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/lead-target?worker=worker-target');
+    expect(onSessionNavigate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.navigate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('cancels pending split-pane /jump-session navigation after the source becomes stale', async () => {
+    const pendingRoute = deferred<string>();
+    mocks.resolveSessionRoute.mockReturnValueOnce(pendingRoute.promise);
+    const onSessionNavigate = vi.fn();
+    let navigationCurrent = true;
+    const navigationPromise = tryHandleNavigationCommand('/jump-session session-target', {
+      navigate: mocks.navigate,
+      t: ((key: string) => key) as never,
+      allowNavigation: true,
+      onSessionNavigate,
+      isNavigationCurrent: () => navigationCurrent,
+    });
+
+    await waitFor(() => expect(mocks.resolveSessionRoute).toHaveBeenCalled());
+    navigationCurrent = false;
+    await act(async () => {
+      pendingRoute.resolve('/cc-agent/session-target');
+      await pendingRoute.promise;
+      await navigationPromise;
+    });
+
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('cancels stale /jump-session before resolving the route after target lookup', async () => {
+    const pendingSession = deferred<{
+      id: string;
+      title: string;
+      status: 'active';
+    }>();
+    mocks.getSession.mockReturnValueOnce(pendingSession.promise);
+    const onSessionNavigate = vi.fn();
+    let navigationCurrent = true;
+    const navigationPromise = tryHandleNavigationCommand('/jump-session session-target', {
+      navigate: mocks.navigate,
+      t: ((key: string) => key) as never,
+      allowNavigation: true,
+      onSessionNavigate,
+      isNavigationCurrent: () => navigationCurrent,
+    });
+
+    await waitFor(() => expect(mocks.getSession).toHaveBeenCalledWith('session-target'));
+    navigationCurrent = false;
+    await act(async () => {
+      pendingSession.resolve({ id: 'session-target', title: 'Session target', status: 'active' });
+      await pendingSession.promise;
+      await navigationPromise;
+    });
+
+    expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('wires split-pane /jump-session handling through the pane navigation reporter', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
+      'utf8',
+    );
+
+    expect(source).toContain('allowNavigation: canNavigateSession');
+    expect(source).toContain(
+      "onSessionNavigate: navigationMode === 'split-pane' ? onSessionNavigate : undefined",
+    );
+    expect(source).toContain(
+      'onSessionNavigate?.(parentSessionId, getSessionRouteOwnerId(target) ?? parentSessionId)',
+    );
+    expect(source).toContain(
+      'canNavigateSession && session?.parentSessionId && session.forkedAtMessageId',
+    );
+    expect(source).toContain('const sessionNavigationVersionRef = useRef(0);');
+    expect(source).toContain(
+      'if (sessionNavigationVersionRef.current !== navigationRequestVersion) return;',
+    );
+    expect(source).toContain(
+      'if (sessionNavigationVersionRef.current !== forkStripNavigationVersion) return;',
+    );
+    expect(source).toContain('isNavigationCurrent:');
+    expect(source).toContain('[navigationMode, sessionId],');
   });
 
   it('keeps route-owner session links interactive', async () => {
@@ -270,7 +530,9 @@ describe('sidebar-embedded session navigation boundary', () => {
         automationOrigin={{ kind: 'scheduler', scheduleId: 'schedule-2', scheduleName: 'Daily' }}
       />,
     );
-    fireEvent.click(screen.getByRole('button'));
+    const automationButton = screen.getByRole('button');
+    expect(automationButton.getAttribute('data-split-pane-route-action')).toBe('');
+    fireEvent.click(automationButton);
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/scheduled?focus=schedule-2');
   });
 
@@ -284,6 +546,20 @@ describe('sidebar-embedded session navigation boundary', () => {
     ).resolves.toBe(true);
 
     expect(mocks.getSession).toHaveBeenCalledWith('session-f');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith(
+      'session-f',
+      expect.objectContaining({ id: 'session-f' }),
+    );
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-f');
+  });
+});
+
+describe('session navigation interaction policy', () => {
+  it.each([
+    ['route-owner', true],
+    ['split-pane', true],
+    ['sidebar-embedded', false],
+  ] as const)('%s interactive=%s', (mode, expected) => {
+    expect(isInteractiveSessionNavigationMode(mode)).toBe(expected);
   });
 });

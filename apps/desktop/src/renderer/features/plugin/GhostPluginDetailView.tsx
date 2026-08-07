@@ -692,7 +692,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
 function PermissionDetailRow({ item }: { item: GhostPermissionItem }) {
   const { t } = useTranslation();
   const Icon = permissionItemIcon(item);
-  const hostDescription = item.detailKey ? t(`settings.ghosts.perm.${item.detailKey}`) : null;
+  const hostDescription = item.detailKey ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs) : null;
   return (
     <div className="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
       <Icon

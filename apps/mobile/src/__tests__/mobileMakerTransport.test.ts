@@ -47,6 +47,8 @@ describe('mobile maker transport', () => {
       'maker:apply-new-maker-draft-pref',
       'maker:get-new-maker-defaults',
       'maker:apply-new-maker-worktree-pref',
+      'maker:get-new-maker-worktree-branch-pref',
+      'maker:apply-new-maker-worktree-branch-pref',
       'maker:usage:model-pricing',
       'maker:usage:codex-rate-limits',
       'maker:usage:codex-rate-limit-reset',
@@ -111,6 +113,7 @@ describe('mobile maker transport', () => {
       'fs:stat-path',
       'fs:mkdir-p',
       'worktree:detect-cwd',
+      'worktree:list-branches',
       'worktree:suggest-name',
       'worktree:create',
       'worktree:discard-precreated',
@@ -359,7 +362,10 @@ describe('mobile maker transport', () => {
 
     await maker.getNewMakerDefaults('claude-code');
     await maker.applyNewMakerWorktreePref(true);
+    await maker.getNewMakerWorktreeBranchPref('/repo');
+    await maker.applyNewMakerWorktreeBranchPref('/repo', 'feature/mobile-sync');
     await maker.worktree.detectCwd('/repo/app');
+    await maker.worktree.listBranches('/repo');
     await maker.worktree.suggestName('/repo');
     await maker.worktree.create({
       sessionId: 'preset-session-1',
@@ -380,7 +386,13 @@ describe('mobile maker transport', () => {
     expect(calls.map((call) => [call.channel, call.args])).toEqual([
       ['maker:get-new-maker-defaults', ['claude-code']],
       ['maker:apply-new-maker-worktree-pref', [{ worktreeEnabled: true }]],
+      ['maker:get-new-maker-worktree-branch-pref', [{ baseRepo: '/repo' }]],
+      ['maker:apply-new-maker-worktree-branch-pref', [{
+        baseRepo: '/repo',
+        sourceBranch: 'feature/mobile-sync',
+      }]],
       ['worktree:detect-cwd', [{ cwd: '/repo/app' }]],
+      ['worktree:list-branches', [{ baseRepo: '/repo' }]],
       ['worktree:suggest-name', [{ baseRepo: '/repo' }]],
       ['worktree:create', [{
         sessionId: 'preset-session-1',

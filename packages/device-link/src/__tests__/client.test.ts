@@ -2978,7 +2978,13 @@ describe('DeviceLinkClient', () => {
     expect(h.current().sent.some((env) => env.kind === 'presence-set')).toBe(false);
 
     h.current().bufferedAmount = 0;
-    await tick(10);
+    for (
+      let attempt = 0;
+      attempt < 40 && !h.current().sent.some((env) => env.kind === 'presence-set');
+      attempt += 1
+    ) {
+      await tick(10);
+    }
     expect(h.current().sent.filter((env) => env.kind === 'presence-set')).toEqual([
       expect.objectContaining({
         payload: {

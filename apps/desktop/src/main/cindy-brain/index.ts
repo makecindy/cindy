@@ -240,19 +240,26 @@ import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import {
+  buildTextOneshotPinOptions,
+  encodeCatalogPin,
+  resolveOneshotCatalogModel,
+} from '../utility-model/textOneshotPinOptions.js';
+import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
+import {
   CINDY_CAPABILITY_KEYS,
-  cindyCapabilityValueDomain,
   readGhostCindyOverrides,
   readGhostCindyInflightLimit,
   writeGhostCindyOverride,
   type CindyCapabilityKey,
 } from './cindyPrefsStore.js';
+import { isCindyOverrideModelAllowed } from './cindyOverrideWhitelist.js';
 import {
   isGhostDisabledForWorkdir,
   listDisabledGhostIdsForWorkdir,
@@ -2805,7 +2812,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
-      oneshotText: async ({ prompt, maxTokens, timeoutMs, pinnedProfileId }) => {
+      oneshotText: async ({ prompt, maxTokens, timeoutMs, route }) => {
         const [{ requestUtilityText }, { getMaker }] = await Promise.all([
           import('../utility-model/oneShotCandidates.js'),
           import('../maker-host/index.js'),
@@ -2813,9 +2820,16 @@ export function getGhostCindySlot(): GhostCindySlot {
         const r = await requestUtilityText(getMaker(), prompt, {
           maxTokens,
           timeoutMs,
-          pinnedProfileId,
+          // 路由两形态:轻量档位键走链档钉(不认的值下游忽略回默认链);
+          // 目录钉走显式供应商路径(钉死,不回落)。
+          ...(route?.kind === 'utility-profile' ? { pinnedProfileId: route.profileId } : {}),
+          ...(route?.kind === 'catalog'
+            ? { providerId: route.providerId, agentKind: route.agentKind, model: route.model }
+            : {}),
         });
         if (r.ok) {
+          // 快问快答不设输出 token 上限:与宿主会话一致,用户主动使用插件的
+          // 成本由用户承担,宿主不额外钳制(2026-08-07 决策:全部限制拿掉)。
           return { ok: true, text: r.text, model: `${r.providerId}/${r.model}` };
         }
         log.warn('ghost oneshot_text utility chain failed', {
@@ -2834,6 +2848,16 @@ export function getGhostCindySlot(): GhostCindySlot {
         }
         return { ok: false, reason: 'failed', message: '快速通道各候选均失败,请稍后再试' };
       },
+      // 身份卡声明的偏好模型(cindy.oneshotModel)→ 当前目录里可路由且有凭证的
+      // 条目;目录没有/已停用/不可路由/未配置 = null,slot 层按未声明回落系统默认链。
+      resolveOneshotModel: (modelId) =>
+        resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          modelId,
+          readProviderOrder(),
+          hasOneshotProviderCredential,
+        ),
       // 管子续命挂钩:同步视频代办(署名单)在途期间替 tool-call 续命,
       // 免得分钟级生成被管子 330s 基础窗口掐掉(任务后台继续烧钱、结果作废)。
       // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。
@@ -4678,12 +4702,36 @@ export function registerGhostIpc(): void {
           standard === undefined ? null : (cfg.models.find((m) => m.id === standard) ?? null),
       };
     };
-    // 文本类(快问快答)的可选项不来自媒体目录,而是轻量任务模型链的档位表
-    // ——每一项就是一组供应商×模型。defaultModel = 当前"跟随默认"实际会用的
-    // 那一档(链首),让用户看得见跟的是谁。
+    // 文本类(快问快答)的可选项 = 当前供应商目录里的全部文本模型(2026-08-05
+    // 与刘佳黎定稿:安装插件即承担其成本,主机如实展示可选面)。每一项精确钉
+    // 一组 供应商×agent×模型(cat: 编码)。defaultModel = 系统默认链链首(轻量
+    // 档位),declaredModel = 身份卡声明的偏好(解析得到才给)——让"跟随默认"
+    // 行如实说出当前实际跟的是谁。
     const textChain = getUtilityModelChainProfiles();
-    const textOptions = utilityModelPinOptions();
     const textDefaultId = textChain[0]?.id ?? null;
+    const textDefaultLabel = textDefaultId === null
+      ? null
+      : (utilityModelPinOptions().find((o) => o.id === textDefaultId)?.label ?? textDefaultId);
+    const textOptions = buildTextOneshotPinOptions(
+      getActiveCatalog(),
+      readModelDisableOverrides(),
+      readProviderOrder(),
+      hasOneshotProviderCredential,
+    );
+    // 纯展示口径,不走 findAvailableGhost 的"当前会话可用"闸:插件被当前项目
+    // 停用时卡片的其余部分(overrides/options)照常渲染,声明偏好也不该凭空消失。
+    const declaredRaw = typeof ghostId === 'string'
+      ? getGhostManager().list().find((g) => g.manifest.id === ghostId)?.manifest.cindy?.oneshotModel
+      : undefined;
+    const declaredResolved = declaredRaw
+      ? resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          declaredRaw,
+          readProviderOrder(),
+          hasOneshotProviderCredential,
+        )
+      : null;
     event.returnValue = {
       overrides,
       image: byKind(getCatalogImageConfig()),
@@ -4691,7 +4739,18 @@ export function registerGhostIpc(): void {
       text: {
         options: textOptions,
         defaultModel:
-          textDefaultId === null ? null : (textOptions.find((o) => o.id === textDefaultId) ?? null),
+          textDefaultId === null || textDefaultLabel === null
+            ? null
+            : { id: textDefaultId, label: textDefaultLabel },
+        declaredModel: declaredResolved && declaredRaw
+          ? {
+              id: encodeCatalogPin(declaredResolved.providerId, declaredResolved.agentKind, declaredResolved.model),
+              label: declaredRaw,
+            }
+          : null,
+        // 存量轻量档位钉(目录扩展前钉下的合法值)的展示名表:渲染层据此给
+        // 老钉值回显友好名,而不是把合法档位钉当 stale 原样露出 id。
+        utilityProfiles: utilityModelPinOptions(),
       },
       // 向量类与图像/视频同源(都走目录派生),不同于文本类的轻量链档位。
       embed: byKind(getCatalogEmbedConfig()),
@@ -4737,23 +4796,22 @@ export function registerGhostIpc(): void {
     if (!(CINDY_CAPABILITY_KEYS as readonly string[]).includes(capability as string)) {
       throwIpcError('INVALID_PARAMS', `unknown capability: ${String(capability)}`);
     }
-    // 白名单按能力键的**取值域**取,映射由 cindyCapabilityValueDomain 穷举
-    // (漏一个类目 = 该类目的下拉界面上能选、一选就被别人的白名单拒掉、回滚成
-    // 一句通用 toast;PR #1707 review)。text.oneshot 的取值是轻量链档位键,
-    // 不在任何媒体目录里,必须对着 pin 选项校验。
-    const capKey = capability as CindyCapabilityKey;
-    const domain = cindyCapabilityValueDomain(capKey);
-    const allowed: ReadonlyArray<{ id: string; supportsEdit?: boolean }> =
-      domain === 'utilityChain'
-        ? utilityModelPinOptions()
-        : domain === 'video'
-          ? getCatalogVideoConfig().models
-          : domain === 'embed'
-            ? getCatalogEmbedConfig().models
-            : getCatalogImageConfig().models;
-    const isEditCap = capKey === 'image.edit';
-    if (model !== null && !allowed.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
-      throwIpcError('INVALID_PARAMS', 'model must be null or a catalog model of the capability category');
+    // 白名单按能力键类目分流:image.*/video.*/embed.* 钉各媒体目录模型 id;
+    // text.*(快问快答)钉轻量档位键或目录钉(cat: 编码)——与消费方(cindySlot
+    // route)同一判据,否则存进去的值链路不认。刻意不查凭证态(与清单的凭证
+    // 过滤不同):凭证是瞬态(可以后补/会过期),钉档是持久意图;执行侧
+    // fail-closed 兜底,不在这层把「暂时没配 key」当成非法值。
+    if (
+      !isCindyOverrideModelAllowed(capability as string, model, {
+        image: getCatalogImageConfig().models,
+        video: getCatalogVideoConfig().models,
+        embed: getCatalogEmbedConfig().models,
+        textPinIds: buildTextOneshotPinOptions(getActiveCatalog(), readModelDisableOverrides()).map(
+          (o) => o.id,
+        ),
+      })
+    ) {
+      throwIpcError('INVALID_PARAMS', 'model must be null or an allowed model of the capability category');
     }
     const overrides = writeGhostCindyOverride(
       ghostId,

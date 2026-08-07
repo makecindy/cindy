@@ -40,7 +40,11 @@ const SHELL_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp; label: string }> 
   { pattern: /\bgit\s+clean\s+-[a-zA-Z]*f/, label: 'git clean -f' },
 ];
 
-const SHELL_TOOL_NAMES = new Set(['Bash', 'PowerShell']);
+// 大小写不敏感:Claude 的 shell 工具名是 `Bash`,Pi 的内置工具全小写 `bash`
+// (见 packages/maker-core/src/agents/pi/auto-review-policy.ts)。集合按小写存,
+// 比较前把 toolName 归一化 —— 否则 `checkDestructiveToolCall('bash', {command:'rm -rf …'})`
+// 不命中任何规则,微信/Telegram 远程渠道对 Pi 的删除类命令红线被直接击穿。
+const SHELL_TOOL_NAMES = new Set(['bash', 'powershell']);
 
 export interface GuardResult {
   destructive: boolean;
@@ -62,8 +66,8 @@ export function checkDestructiveToolCall(
     return { destructive: true, reason: `tool name contains "${toolNameMatch[0]}"` };
   }
 
-  // 2. Bash / PowerShell 命令文本匹配
-  if (SHELL_TOOL_NAMES.has(toolName) && input && typeof input === 'object') {
+  // 2. Bash / PowerShell 命令文本匹配(工具名大小写不敏感:Claude `Bash` / Pi `bash`)
+  if (SHELL_TOOL_NAMES.has(toolName.toLowerCase()) && input && typeof input === 'object') {
     const cmd = (input as { command?: unknown }).command;
     if (typeof cmd === 'string' && cmd.length > 0) {
       for (const { pattern, label } of SHELL_COMMAND_PATTERNS) {
