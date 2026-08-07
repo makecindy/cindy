@@ -1128,9 +1128,12 @@ export class GoalController {
     // 手动 resumeGoal 会直接从旧生命周期跳到新 generation 的 turn-dispatched,
     // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑;
     // updated 为持久化后的 active 状态,非回合事件,不递增 turnIndex。
+    // generation 用随后 fireTurn 派发的同代(resetTurn 会在派发前 +1),否则按
+    // generation 聚合的消费者无法把恢复原因与首轮派发关联(reviewer P1)。
     this.recordRunEvent('resumed', sessionId, updated, {
       to: 'active',
       reason: opts?.auto ? 'auto-resume' : 'manual-resume',
+      generation: resumedBoundary.generation + 1,
     });
     if (!this.isBusy(sessionId)) {
       await this.fireTurn(sessionId);
@@ -1270,11 +1273,17 @@ export class GoalController {
         });
         continue;
       }
-      this.turns.set(state.sessionId, freshTurn());
+      const resumeBoundary = freshTurn();
+      this.turns.set(state.sessionId, resumeBoundary);
       this.attachListener(state.sessionId);
       this.emit(state);
-      // #2105 P0:启动/恢复扫描续跑。
-      this.recordRunEvent('resumed', state.sessionId, state, { to: 'active', reason: 'resumeActiveGoals' });
+      // #2105 P0:启动/恢复扫描续跑。generation 与随后的 fireTurn 派发同代
+      // (resetTurn 派发前 +1),保证恢复原因可关联到其触发的首轮派发。
+      this.recordRunEvent('resumed', state.sessionId, state, {
+        to: 'active',
+        reason: 'resumeActiveGoals',
+        generation: resumeBoundary.generation + 1,
+      });
       resumed += 1;
       if (!this.isBusy(state.sessionId)) {
         void this.fireTurn(state.sessionId);
@@ -1733,6 +1742,18 @@ export class GoalController {
       }
     }
 
+    // #2105 P0:quota override 改判后补 corrective 迁移事件(reviewer P1:verdict 应
+    // continue 时,turn-finalized 已在 quota 检查前发出 to:'active';这里状态被改写为
+    // usageLimited,事件流必须补一条真实迁移,否则审计看不到停止原因)。usageLimited
+    // 不是产品终态(到点自动续跑),只补 transition 不补 terminal。
+    if (status !== decision.status) {
+      this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+        from: decision.status,
+        to: status,
+        reason: lastReason,
+      });
+    }
+
     // 目标改写(Option 1):模型澄清含糊目标后,经 refined_objective 报回更具体的目标。
     // 仅在目标继续推进(shouldFire)且新目标非空、与当前不同时确定性改写 storage.objective,
     // 让 chip 更新、后续续轮按新目标跑。终止/暂停态不改写(避免停掉的目标文案被无意义重写)。
@@ -2000,6 +2021,20 @@ export class GoalController {
         }),
       );
       if (!isCurrentLifecycle()) return;
+      // #2105 P0:preflight 预算停止(reviewer P2:此路径写 budgetLimited 但此前无
+      // 审计事件——usage-resume 自动续跑 / continuation timer 撞预算时,事件流会漏掉
+      // 终态)。与 finalizeTurn 决策 budgetLimited 的语义对齐,补 budget-consumed + terminal。
+      if (limited) {
+        this.recordRunEvent('budget-consumed', sessionId, limited, {
+          from: state.status,
+          to: 'budgetLimited',
+          reason: limited.lastReason,
+        });
+        this.recordRunEvent('terminal', sessionId, limited, {
+          to: 'budgetLimited',
+          reason: limited.lastReason,
+        });
+      }
       this.stopSession(sessionId);
       if (limited) this.emit(limited);
       return;

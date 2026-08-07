@@ -9,24 +9,30 @@
  *  - recordRunEvent 是 GoalControllerDeps 的可选依赖(默认 no-op),不破坏现有测试。
  */
 
+import type { GoalStatus } from './types';
+
 export type GoalRunEventType =
   | 'turn-dispatched' // 本轮已派发给 agent(onDispatching 真实派发边界,accepted:false 不产生)
   | 'turn-finalized' // 本轮收口(finalizeTurn 决策后,含完整预算快照)
-  | 'state-transition' // 状态迁移(prev → next)
-  | 'budget-consumed' // 预算检查命中(超限转 budgetLimited)
+  | 'state-transition' // 状态迁移(prev → next,含 quota override 改判)
+  | 'budget-consumed' // 预算检查命中(超限转 budgetLimited,含 preflight 停止)
   | 'stall-detected' // 连续空轮撞 noProgressLimit
   | 'resumed' // 手动 resume / resumeActiveGoals 续跑
-  | 'terminal'; // 终态落盘(complete 达成记录 / blocked / budgetLimited / usageLimited)
+  | 'terminal'; // 终态落盘(仅 complete / budgetLimited;usageLimited 不是终态不发)
 
 export interface GoalRunEvent {
   type: GoalRunEventType;
   goalSessionId: string;
   /** 生命周期 generation —— 防 Stop/Resume 换代后旧事件串台(与 controller 同语义)。 */
   generation: number;
-  /** 本轮序号(1-based,= state.turnsUsed 快照;决策后事件为 turnsUsed+1)。 */
+  /**
+   * 回合序号:1-based,= 事件时刻的累计轮数。回合内事件(turn-dispatched /
+   * turn-finalized / state-transition / budget-consumed / stall-detected / terminal)
+   * 以决策后快照为准(turnIndex=本轮);非回合事件(resumed)保持不递增(可为 0)。
+   */
   turnIndex: number;
-  from?: string;
-  to?: string;
+  from?: GoalStatus;
+  to?: GoalStatus;
   /** verdict 原文 / 停滞原因 / 终态 reason。 */
   reason?: string;
   budget?: {

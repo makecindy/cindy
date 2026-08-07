@@ -3360,4 +3360,51 @@ describe('GoalController', () => {
     expect(await local.storage.get('s1')).toBeNull();
   });
 
+  it('records resumed with the same generation as the dispatch it triggers', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'paused', objective: 'resume me' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    const resumed = events.find((e) => e.type === 'resumed');
+    const dispatched = events.find((e) => e.type === 'turn-dispatched');
+    expect(resumed).toBeDefined();
+    expect(dispatched).toBeDefined();
+    // resumeGoal 的 resumed 必须与其触发的首轮派发同代(reviewer P1:此前 gen 0 vs gen 1 脱节)。
+    expect(resumed?.generation).toBe(dispatched?.generation);
+    expect(resumed?.generation).toBeGreaterThanOrEqual(1);
+  });
+
+  it('records a corrective state-transition when quota override moves active to usageLimited', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    local.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```', tokens: 30 });
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    const transitions = events.filter((e) => e.type === 'state-transition');
+    // verdict 应 continue,但 quota override 改写为 usageLimited——事件流必须补真实迁移。
+    expect(transitions.at(-1)).toMatchObject({
+      from: 'active',
+      to: 'usageLimited',
+      reason: 'usage limit reached',
+    });
+  });
+
+  it('records budget-consumed + terminal on preflight budget stop', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    // maxTurns 已耗尽:resumeActiveGoals → fireTurn 的 preflight 守卫撞线 → budgetLimited。
+    await local.storage.upsert(seededGoal({ status: 'active', turnsUsed: 5, maxTurns: 5, objective: 'preflight' }));
+    await local.controller.resumeActiveGoals();
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('budgetLimited');
+    expect(events.some((e) => e.type === 'budget-consumed')).toBe(true);
+    const terminal = events.find((e) => e.type === 'terminal');
+    expect(terminal).toMatchObject({ to: 'budgetLimited' });
+  });
+
 });
