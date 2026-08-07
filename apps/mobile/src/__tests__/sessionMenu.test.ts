@@ -172,6 +172,13 @@ describe('sessionMenu navigation', () => {
 });
 
 describe('sessionMenu ai rename failure text', () => {
+  it.each([
+    ['TITLE_NO_MATERIAL', '任务中还没有可用于命名的消息，请先发送消息。'],
+    ['TITLE_PROVIDER_UNSUPPORTED', '当前供应商暂不支持自动起名，请切换供应商后再试。'],
+  ])('maps remote IPC error %s to its actionable hint', (code, message) => {
+    expect(aiRenameFailureText(new Error(`[${code}] safe main-process message`))).toBe(message);
+  });
+
   it('maps outdated controlled devices to an upgrade hint', () => {
     expect(aiRenameFailureText(new Error("[CHANNEL_NOT_ALLOWED] channel 'maker:regenerate-title' not allowed")))
       .toBe('被控设备版本过旧，暂不支持自动起名。');
