@@ -174,6 +174,7 @@ const XD_PROVIDER: Provider = {
   videoModels: [
     { id: 'seedance-fast', name: 'Seedance 快速' },
     { id: 'seedance-pro', name: 'Seedance Pro' },
+    { id: 'bytedance/seedance-2.5', name: 'Seedance 2.5' },
     { id: 'happyhorse', name: 'HappyHorse 1.0' },
   ],
   videoDefaults: {

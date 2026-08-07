@@ -42,14 +42,7 @@ import {
   renderTextPermissionModeResult,
   resolvePermissionMode,
 } from './permissionModeControl';
-
-const INTERACTIVE_SLASH_COMMANDS = new Set([
-  '/model',
-  '/permission',
-  '/ctr',
-  '/session',
-  '/project',
-]);
+import { parsePersonalBotCommand } from './personalBotCommands';
 
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
@@ -98,13 +91,16 @@ export function createSlashHandlers(
   }
 
   async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
-    const [cmd, ...commandArgs] = text.trim().split(/\s+/);
-    log.info(`slash cmd=${cmd} userId=...${ctx.userId.slice(-8)}`);
+    const [invocation, ...fallbackArgs] = text.trim().split(/\s+/);
+    const registered = parsePersonalBotCommand(text);
+    const cmd = registered ? `/${registered.definition.command}` : invocation;
+    const commandArgs = registered?.args ?? fallbackArgs;
+    log.info(`slash cmd=${registered?.invocation ?? cmd} userId=...${ctx.userId.slice(-8)}`);
 
     const supportsTextPermissionCommand = channel === 'wecom' && cmd === '/permission';
     if (
       adapter.output.kind === 'chunked-text' &&
-      INTERACTIVE_SLASH_COMMANDS.has(cmd) &&
+      registered?.definition.interactive === true &&
       !supportsTextPermissionCommand
     ) {
       await safeSendText(
@@ -243,8 +239,7 @@ export function createSlashHandlers(
         return true;
       }
 
-      case '/exctr':
-      case '/exitctr': {
+      case '/exctr': {
         // thread 模型: 同一用户可能有多个接管 thread, 顶层 slash 不知道指哪个 —
         // 语义定为"全部退出"(单退走 thread root 卡片的退出按钮)。
         if (threadScoped && threadUi) {
@@ -260,7 +255,7 @@ export function createSlashHandlers(
               if (r.wasAttached) detached += 1;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              log.error(`${cmd} executeDetach(scope) threw: ${msg}`);
+              log.error(`${registered?.invocation ?? cmd} executeDetach(scope) threw: ${msg}`);
             }
           }
           await safeSendText(ctx.userId, threadUi.exctrAllDone(detached));
@@ -283,7 +278,7 @@ export function createSlashHandlers(
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.error(`${cmd} executeDetach threw: ${msg}`);
+          log.error(`${registered?.invocation ?? cmd} executeDetach threw: ${msg}`);
           await safeSendText(ctx.userId, `❌ 结束接管失败：${msg}`);
         }
         return true;

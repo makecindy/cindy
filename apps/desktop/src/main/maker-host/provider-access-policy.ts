@@ -17,6 +17,7 @@ const CINDY_AI_PROVIDER_ID = 'xd';
 const MAINLAND_VIDEO_MODEL_IDS: ReadonlySet<string> = new Set([
   'seedance-fast',
   'seedance-pro',
+  'bytedance/seedance-2.5',
 ]);
 
 function projectVideoDefaults(
