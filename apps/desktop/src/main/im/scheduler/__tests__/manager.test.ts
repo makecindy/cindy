@@ -224,6 +224,28 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
+  it('clamps a zero discovery retry limit to one recovery attempt', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 0,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.snapshotRequests).toHaveLength(1);
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+    manager.stop();
+  });
+
   it('recomputes election when an active peer advertises a newly bound channel', () => {
     const harness = createTransport();
     const manager = new ImSchedulerManager({

@@ -85,7 +85,7 @@ export class ImSchedulerManager {
       Math.floor(options.discoveryRetryDelayMs ?? DEFAULT_DISCOVERY_RETRY_DELAY_MS),
     );
     this.maxDiscoveryRetries = Math.max(
-      0,
+      1,
       Math.floor(options.maxDiscoveryRetries ?? DEFAULT_DISCOVERY_RETRY_LIMIT),
     );
   }
