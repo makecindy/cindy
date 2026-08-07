@@ -76,20 +76,18 @@ export interface PersistedTurnChangeSetV1 {
 }
 
 /**
- * Reasons that never justify a standalone zero-file review card. Either the
- * capture only "may not have seen everything" without evidence that a change
- * happened (opaque tools ran, the turn failed, another session overlapped), or
- * the affected paths are deliberately out of tracking scope ('outside-workspace':
- * agent temp files, symlink escapes and fail-closed foreign diff blocks all
- * concern content the review UI will never show). Reasons outside this set
- * (diff-too-large, sensitive-file, …) prove in-scope changes existed but were
- * not recorded.
+ * Reasons that only say "the capture may not have seen everything", without any
+ * evidence that a change actually happened (opaque tools ran, the turn failed, or
+ * another session overlapped). Reasons outside this set prove changes existed but
+ * were not recorded — including 'outside-workspace', which the store only records
+ * for suspicious cases (a workspace path whose realpath escapes via symlink, or a
+ * provider diff block rejected as unsafe); literal out-of-workspace targets are
+ * skipped at capture time without recording any reason.
  */
 const NO_CHANGE_EVIDENCE_REASONS: ReadonlySet<TurnChangeIncompleteReason> = new Set([
   'opaque-tool',
   'turn-failed',
   'concurrent-workspace',
-  'outside-workspace',
 ]);
 
 /**
