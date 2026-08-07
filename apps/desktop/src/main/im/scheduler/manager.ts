@@ -310,6 +310,7 @@ export class ImSchedulerManager {
   private isDiscoveryComplete(): boolean {
     return (
       this.snapshot !== null &&
+      this.snapshot.selfDeviceId === this.transport.selfDeviceId &&
       this.snapshot.peers.every((peer) => this.confirmedPeers.has(peer.deviceId))
     );
   }

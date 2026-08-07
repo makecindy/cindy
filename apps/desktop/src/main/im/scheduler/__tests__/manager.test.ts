@@ -184,6 +184,28 @@ describe('dormant scheduler manager', () => {
     });
   });
 
+  it('retries when an authoritative snapshot names a different self device', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'other', peers: [], observedAt: 1 },
+    });
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.snapshotRequests).toHaveLength(1);
+    manager.stop();
+  });
+
   it('retries a lost discovery probe and starts a fresh round after the bound', async () => {
     vi.useFakeTimers();
     const harness = createTransport();
