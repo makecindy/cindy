@@ -521,7 +521,14 @@ function AutoBody({
     const el = scrollRef.current;
     if (!el || !lastVersion) return;
     // 1px tolerance for sub-pixel rounding in HiDPI.
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable (scrollHeight > clientHeight).  Otherwise scrollTop is always 0
+    // and the condition would trivially hold at the top, causing the header to
+    // show the last version while the user is reading the newest announcement.
+    if (
+      el.scrollHeight > el.clientHeight &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+    ) {
       onStickyChange(lastVersion);
       return;
     }
@@ -780,7 +787,14 @@ function ManualBody({
     const el = scrollRef.current;
     if (!el || !lastVersion) return;
     // 1px tolerance for sub-pixel rounding in HiDPI.
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable (scrollHeight > clientHeight).  Otherwise scrollTop is always 0
+    // and the condition would trivially hold at the top, causing the header to
+    // show the last version while the user is reading the newest announcement.
+    if (
+      el.scrollHeight > el.clientHeight &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+    ) {
       onStickyChange(lastVersion);
       return;
     }
