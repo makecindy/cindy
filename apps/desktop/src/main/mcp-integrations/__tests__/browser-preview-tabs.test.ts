@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   closePreviewTabs,
+  registerRsbPreviewTab,
   type PreviewTabCloserDeps,
 } from '../browser-preview-tabs.js';
 
@@ -79,6 +80,20 @@ describe('closePreviewTabs (browser-preview-tabs)', () => {
   it('is best-effort: a throwing vendored probe does not abort the RSB sweep', async () => {
     const deps = fakeDeps({ listVendoredTabs: vi.fn(async () => Promise.reject(new Error('boom')) as never) });
     await expect(closePreviewTabs(deps)).resolves.toBeUndefined();
+    expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes registered preview tabs with NO live WebContents (LRU-evicted, round 21)', async () => {
+    // A preview tab that was LRU-evicted (or the detached sidebar closed)
+    // keeps its persisted store row but has no live WebContents — it never
+    // appears in listRsbTabs. The registration set must still close it.
+    registerRsbPreviewTab('s9', 'evicted-1');
+    const deps = fakeDeps({ listRsbTabs: vi.fn(() => []) });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
+    expect(deps.closeRsbTab).toHaveBeenCalledWith('s9', 'evicted-1');
+    // the set is drained after a sweep
+    await closePreviewTabs(deps);
     expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
   });
 });

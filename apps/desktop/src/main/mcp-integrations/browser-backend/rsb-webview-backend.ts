@@ -26,6 +26,7 @@ import type {
 } from '@cindy/browser-control-runtime';
 import { isPublicHttpResourceUrl } from '@cindy/browser-control-runtime';
 import { isPreviewUrl, killPreviewWebRtc } from './preview-guard.js';
+import { registerRsbPreviewTab } from '../browser-preview-tabs.js';
 import type { WebContents } from 'electron';
 
 import type { TabRegistry } from '../../rsb-browser-bridge/registry.js';
@@ -504,7 +505,14 @@ export class RsbWebviewBackend implements BrowserBackend {
     if (!result.ok) {
       return actionFailed(req.action, result.error);
     }
-    if (result.tabId) this.trackBackground(this.observeOpenedTab(result.tabId));
+    if (result.tabId) {
+      this.trackBackground(this.observeOpenedTab(result.tabId));
+      // Register preview tabs so revocation can close them even after LRU
+      // eviction dropped the live WebContents (round 21).
+      if (typeof url === 'string' && isPreviewUrl(url)) {
+        registerRsbPreviewTab(sessionId, result.tabId);
+      }
+    }
     return actionOk(req.action, {
       targetId: result.tabId,
       tabId: result.tabId,
@@ -557,6 +565,12 @@ export class RsbWebviewBackend implements BrowserBackend {
       this.automation.forgetTab(tabId);
       await this.tryObservePageSignals(resolved.wc, tabId);
       this.assertActive();
+      // Register preview tabs (reuse-existing-tab navigation onto a preview
+      // URL) so revocation can close them after LRU eviction (round 21).
+      if (isPreviewUrl(url)) {
+        const record = this.opts.registry.findByWebContentsId(resolved.wc.id);
+        if (record) registerRsbPreviewTab(record.sessionId, tabId);
+      }
       await loadUrlWithTimeout(
         resolved.wc,
         url,

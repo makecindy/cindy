@@ -15,6 +15,19 @@
  * live policy (policy is passed per-call), so the host closes the tabs:
  * the guard dies with the tab, closing the window.
  */
+/**
+ * RSB preview tabs registered at open/navigate time. Survives LRU eviction
+ * of the live WebContents: evicted tabs drop out of TabRegistry but keep
+ * their PERSISTENT store row, so revocation must close them from this set —
+ * the bridge close deletes the row regardless of liveness
+ * (codex-connector P1, round 21).
+ */
+const rsbPreviewTabs = new Set<string>(); // `${sessionId}:${tabId}`
+
+export function registerRsbPreviewTab(sessionId: string, tabId: string): void {
+  if (sessionId && tabId) rsbPreviewTabs.add(`${sessionId}:${tabId}`);
+}
+
 export interface PreviewTabCloserDeps {
   /** Whether the vendored browser runtime was ever used this session. */
   everCalled(): boolean;
@@ -79,6 +92,17 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
       if (!deps.isPreviewUrl(url)) continue;
       await deps.closeRsbTab(row.sessionId, row.tabId);
     }
+    // Rows with NO live WebContents (LRU-evicted / detached-closed) never
+    // appear in the registry: close them from the registration set — the
+    // bridge close deletes the persisted row regardless of liveness
+    // (codex-connector P1, round 21).
+    for (const key of rsbPreviewTabs) {
+      const sep = key.indexOf(':');
+      if (sep > 0) {
+        await deps.closeRsbTab(key.slice(0, sep), key.slice(sep + 1));
+      }
+    }
+    rsbPreviewTabs.clear();
   } catch {
     /* best-effort */
   }

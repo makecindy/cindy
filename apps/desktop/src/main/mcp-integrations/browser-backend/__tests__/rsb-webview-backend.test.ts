@@ -39,6 +39,7 @@ function fakeRegistry(rows: TabRecord[], wcMap: Map<string, WebContents>): FakeR
     listAll: () => rows.slice(),
     listBySession: (sid: string) => rows.filter((r) => r.sessionId === sid),
     getWebContentsByTabId: (tabId: string) => wcMap.get(tabId) ?? null,
+    findByWebContentsId: () => null,
     listPinned: () => (activePinLeases.size > 0 ? ['t1'] : []),
     isPinned: () => activePinLeases.size > 0,
     pin: (tabId: string) => {
