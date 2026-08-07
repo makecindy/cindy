@@ -156,7 +156,14 @@ export type IpcErrorCode =
   | 'THEME_CONTRAST_UNSUPPORTED' // 主题色板无法满足控件对比度约束
   | 'THEME_USES_INCLUDE' // VSCode 主题含 include(需基底才能完整解析)
   | 'THEME_WRITE_ERROR' // 落盘失败(权限/磁盘)
-  | 'THEME_IMPORT_INTERNAL'; // 意外异常
+  | 'THEME_IMPORT_INTERNAL' // 意外异常
+  // 客户端日志上报(log-upload:upload-now)。四种失败要能被 renderer 区分成不同文案:
+  // 「本构建没配上报目标」「还没同意隐私政策」「采到 0 条」「网络失败」是四种不同的用户处置。
+  | 'LOG_UPLOAD_UNAVAILABLE' // 本构建未配置上报目标 = 功能整体关闭
+  | 'PRIVACY_CONSENT_REQUIRED' // 未明示同意《隐私政策》
+  | 'LOG_UPLOAD_EMPTY' // 采集后没有任何可上报的记录
+  | 'LOG_UPLOAD_FAILED' // 上传失败(离线 / 被拒 / 超时)
+  | 'LOG_UPLOAD_BUSY'; // 已有一次上报在进行中
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -285,6 +292,11 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'THEME_USES_INCLUDE',
   'THEME_WRITE_ERROR',
   'THEME_IMPORT_INTERNAL',
+  'LOG_UPLOAD_UNAVAILABLE',
+  'PRIVACY_CONSENT_REQUIRED',
+  'LOG_UPLOAD_EMPTY',
+  'LOG_UPLOAD_FAILED',
+  'LOG_UPLOAD_BUSY',
 ]);
 
 export function isIpcErrorCode(code: unknown): code is IpcErrorCode {

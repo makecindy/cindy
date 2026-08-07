@@ -605,6 +605,57 @@ describe('ChatSseTranslator', () => {
     ]);
   });
 
+  it('maps DeepSeek cache-hit counters into Responses cached tokens', () => {
+    const translator = new ChatSseTranslator('deepseek-v4-pro');
+    const out = [
+      ...translator.push({
+        id: 'deepseek-cache',
+        choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }],
+        usage: {
+          prompt_tokens: 120_000,
+          prompt_cache_hit_tokens: 118_000,
+          prompt_cache_miss_tokens: 2_000,
+          completion_tokens: 500,
+          total_tokens: 120_500,
+        },
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    const response = (out.at(-1) as { response: { usage: Record<string, unknown> } }).response;
+    expect(response.usage).toEqual({
+      input_tokens: 120_000,
+      output_tokens: 500,
+      total_tokens: 120_500,
+      input_tokens_details: { cached_tokens: 118_000 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    });
+  });
+
+  it('reconstructs DeepSeek total input when only cache hit/miss counters are present', () => {
+    const translator = new ChatSseTranslator('deepseek-v4-flash');
+    const out = [
+      ...translator.push({
+        id: 'deepseek-cache-only',
+        choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }],
+        usage: {
+          prompt_cache_hit_tokens: 80_000,
+          prompt_cache_miss_tokens: 1_000,
+          completion_tokens: 250,
+        },
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+
+    const response = (out.at(-1) as { response: { usage: Record<string, unknown> } }).response;
+    expect(response.usage).toMatchObject({
+      input_tokens: 81_000,
+      output_tokens: 250,
+      total_tokens: 81_250,
+      input_tokens_details: { cached_tokens: 80_000 },
+    });
+  });
+
   it('preserves the provider service tier in the terminal Responses object', () => {
     const translator = new ChatSseTranslator('m');
     const out = [

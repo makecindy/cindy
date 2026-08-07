@@ -769,56 +769,23 @@ export function GhostPluginPage() {
     [t],
   );
 
-  /**
-   * 市场详情与真实下载包权限不一致时，展示 Main 验证后的真实权限并绑定重试。
-   * Renderer 只负责确认；包 SHA 和已装权限基线均由 Main 重新核对。
-   */
+  /** 真实包的追加确认由窗口级 Host 在这一次 install IPC 事务内完成。 */
   const installReviewedMarketPackage = useCallback(
     async (input: {
       detail: PluginMarketDetail;
       lease: { pluginId: string };
       options: PluginMarketInstallOptions;
     }): Promise<InstalledGhost | null> => {
-      const initial = await window.electronAPI.pluginMarket.install(
+      const result = await window.electronAPI.pluginMarket.install(
         input.detail.pluginId,
         input.options,
       );
-      if (initial.ghost !== undefined) return initial.ghost;
-      if (!isMarketBusyLeaseActive(input.lease)) return null;
-
-      const review = initial.reviewRequired;
-      if (!review) return null;
-      const approved = await confirm({
-        title: t('settings.ghosts.market.installConfirmTitle', {
-          name: input.detail.name,
-        }),
-        description: t('settings.ghosts.market.installConfirmDescription'),
-        content: <GhostPermissionList items={ghostPermissionItems(review.manifest)} />,
-        maxWidth: 520,
-        confirmText: t('settings.ghosts.market.install'),
-        cancelText: t('settings.ghosts.installConfirm.cancel'),
-        autoFocusConfirm: true,
-      });
-      if (!approved || !isMarketBusyLeaseActive(input.lease)) return null;
-
-      const retried = await window.electronAPI.pluginMarket.install(input.detail.pluginId, {
-        ...input.options,
-        allowPermissionExpansion: review.installedBaseline !== null,
-        reviewedBaseline: review.installedBaseline ?? undefined,
-        approvedPackageSha256: review.packageSha256,
-      });
-      if (retried.ghost !== undefined) return retried.ghost;
-
-      // 同一 release 的真实包不应漂移；再次要求复核说明已装基线在往返窗口内变化。
-      toast.error(t('settings.ghosts.market.errors.stateChanged'));
-      await refreshMarket();
-      return null;
+      return result.ghost ?? null;
     },
-    [confirm, isMarketBusyLeaseActive, refreshMarket, t],
+    [],
   );
 
-  // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
-  // 权限 diff,经用户确认后才安装,不做静默升级。
+  // 所有来源先展示详情清单；官方包下载后仍以真实包清单兜底发现额外权限。
   const handleMarketUpdate = useCallback(
     async (ghostId: string) => {
       const marketItem = marketByGhostId.get(ghostId);
@@ -846,19 +813,18 @@ export function GhostPluginPage() {
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
         if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        const options: PluginMarketInstallOptions = {
+          expectedReleaseId: next.releaseId,
+          expectedManifest: next.manifest,
+          allowPermissionExpansion: diff.added.length > 0,
+          ...(installedGhost
+            ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+            : {}),
+        };
         const ghost = await installReviewedMarketPackage({
           detail: next,
           lease: marketBusyLease,
-          options: {
-            expectedReleaseId: next.releaseId,
-            ...(next.sourceType !== 'server' ? { expectedManifest: next.manifest } : {}),
-            allowPermissionExpansion: diff.added.length > 0,
-            // 用户看确认框这段时间里已装 manifest 可能被换掉(如从文件更新);
-            // 把审阅基线交给 Main,在安装锁内复核后才放行扩权。
-            ...(installedGhost
-              ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-              : {}),
-          },
+          options,
         });
         if (!ghost) return;
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
@@ -1164,40 +1130,23 @@ export function GhostPluginPage() {
       // 详情页按钮在 update-available 态复用本入口,后端走原位更新并保留
       // 生效状态 —— 文案必须分支,不能对更新路径承诺"装完即开"(review P1)。
       const isUpdate = marketDetail.installState === 'update-available';
-      // 装完即开意味着"确认安装"就是运行授权,确认框里必须如实展示权限清单
-      // (与本地装入确认框同一信息量,review P1):首装展示完整清单,更新展示
-      // 与已装版本的权限 diff,并据此决定 allowPermissionExpansion(否则扩权
-      // 更新从本入口必被 main 的 PRECONDITION_FAILED 拦下)。更新详情来自 Main
-      // 的现查事实,renderer 的 ghosts 推送缓存可能短暂滞后;仅在 update 态且缓存
-      // 缺目标时,用既有 listSync 向 Main 现查一次。仍缺失说明状态已经变化,
-      // 让后端按原有校验拒绝,绝不能拿新清单和自己做 diff 吞掉新增权限。
-      let installedGhost =
-        ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
-      if (isUpdate && !installedGhost) {
-        try {
+      try {
+        let installedGhost =
+          ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+        if (isUpdate && !installedGhost) {
           installedGhost =
             window.electronAPI.ghosts
               .listSync()
               .ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
-        } catch {
-          // bridge 不可用/状态切换时保持 null;下面不展示伪造的空 diff,
-          // 安装调用也不放开 permission expansion,Main 会按真实状态 fail closed。
         }
-      }
-      if (isUpdate && !installedGhost) {
-        // detail 仍说可更新、Main 的实时已装清单却没有目标:这是明确的状态
-        // 变化,不要展示伪造的空 diff 后让用户确认一次必失败的更新。
-        if (isMarketBusyLeaseActive(marketBusyLease)) {
+        if (isUpdate && !installedGhost) {
           toast.error(t('settings.ghosts.market.errors.stateChanged'));
+          await refreshMarket();
+          return;
         }
-        releaseMarketBusy(marketBusyLease);
-        await refreshMarket();
-        return;
-      }
-      const diff = isUpdate
-        ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
-        : null;
-      try {
+        const diff = isUpdate
+          ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
+          : null;
         const confirmed = await confirm({
           title: isUpdate
             ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
@@ -1206,13 +1155,11 @@ export function GhostPluginPage() {
               }),
           description: isUpdate
             ? t('settings.ghosts.market.updateConfirmDescription')
-            : // 自定义市场未经服务端完整性校验，确认文案必须如实区分。
-              marketDetail.sourceType !== 'server'
-              ? t('settings.ghosts.market.customInstallConfirmDescription')
-              : t('settings.ghosts.market.installConfirmDescription'),
-          // 限高与滚动交给共享 ConfirmDialog(max-h-[85vh] + 内部滚动区 + 打开时
-          // 闪一下滚动条),这里不再自套一层 min(56vh,520px) —— 两层限高会让
-          // "到底了没有"取决于内外层谁先触底(2026-07-27 收口)。
+            : t(
+                marketDetail.sourceType === 'server'
+                  ? 'settings.ghosts.market.installConfirmDescription'
+                  : 'settings.ghosts.market.customInstallConfirmDescription',
+              ),
           content: isUpdate ? (
             <GhostUpdateReview diff={diff!} />
           ) : (
@@ -1228,25 +1175,22 @@ export function GhostPluginPage() {
           autoFocusConfirm: true,
         });
         if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        const options: PluginMarketInstallOptions = {
+          expectedReleaseId: marketDetail.releaseId,
+          expectedManifest: marketDetail.manifest,
+          ...(isUpdate && diff!.added.length > 0
+            ? {
+                allowPermissionExpansion: true,
+                ...(installedGhost
+                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+                  : {}),
+              }
+            : {}),
+        };
         const ghost = await installReviewedMarketPackage({
           detail: marketDetail,
           lease: marketBusyLease,
-          options: {
-            expectedReleaseId: marketDetail.releaseId,
-            ...(marketDetail.sourceType !== 'server'
-              ? { expectedManifest: marketDetail.manifest }
-              : {}),
-            ...(isUpdate && diff!.added.length > 0
-              ? {
-                  allowPermissionExpansion: true,
-                  // 确认框展示期间已装 manifest 可能被换掉;基线交由 Main 在
-                  // 安装锁内复核,不一致就拒绝这次批准而不是沿用旧同意。
-                  ...(installedGhost
-                    ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-                    : {}),
-                }
-              : {}),
-          },
+          options,
         });
         if (!ghost) return;
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;

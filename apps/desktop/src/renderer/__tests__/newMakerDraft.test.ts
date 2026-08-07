@@ -506,6 +506,20 @@ describe('newMakerDraft store', () => {
     }
   });
 
+  it('通用草稿 patch 不能改动 worktree 偏好', async () => {
+    vi.resetModules();
+    const { getDraft, patchDraft, setWorktreePreference } = await loadModule();
+
+    patchDraft({ worktreeEnabled: true, worktreePreferenceCustomized: true });
+    expect(getDraft().worktreeEnabled).toBe(false);
+    expect(getDraft().worktreePreferenceCustomized).toBe(false);
+
+    setWorktreePreference(true);
+    patchDraft({ worktreeEnabled: false, worktreePreferenceCustomized: false });
+    expect(getDraft().worktreeEnabled).toBe(true);
+    expect(getDraft().worktreePreferenceCustomized).toBe(true);
+  });
+
   it('旧 false 快照不固化默认,旧 true 迁移为显式 override', async () => {
     memStorage.setItem(
       'xdt:newMakerDraft:v1',

@@ -177,6 +177,27 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  it('projects explicit provider-model image modalities and leaves unknown capability unset', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const xd = catalog.providers.find((provider) => provider.id === 'xd');
+    expect(xd).toBeDefined();
+    xd!.models.pi = [
+      model('gateway-vision', { modalities: { input: ['text', 'image'], output: ['text'] } }),
+      model('gateway-text', { modalities: { input: ['text'], output: ['text'] } }),
+      model('gateway-unknown'),
+    ];
+
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-vision')).toMatchObject({
+      supportsImageInput: true,
+    });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-text')).toMatchObject({
+      supportsImageInput: false,
+    });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'gateway-unknown')).not.toHaveProperty(
+      'supportsImageInput',
+    );
+  });
+
   it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');

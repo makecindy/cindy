@@ -1293,6 +1293,39 @@
       "note": "Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。"
     },
     {
+      "id": "upload-code",
+      "status": "proposed",
+      "en": "Upload code",
+      "translations": {
+        "zh-CN": "上传编号",
+        "ja": "アップロード番号",
+        "ko": "업로드 번호"
+      },
+      "note": "客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。"
+    },
+    {
+      "id": "run-records",
+      "status": "proposed",
+      "en": "Run records",
+      "translations": {
+        "zh-CN": "运行记录",
+        "ja": "動作記録",
+        "ko": "실행 기록"
+      },
+      "note": "日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。"
+    },
+    {
+      "id": "crash",
+      "status": "proposed",
+      "en": "Crash",
+      "translations": {
+        "zh-CN": "崩溃",
+        "ja": "クラッシュ",
+        "ko": "크래시"
+      },
+      "note": "应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。"
+    },
+    {
       "id": "embedding",
       "status": "proposed",
       "en": "embedding",

@@ -155,6 +155,9 @@ describe('newSessionCreation pipeline', () => {
       's15',
       's16',
       's17',
+      's18',
+      's19',
+      's20',
     ]) dismissNewSessionCreation(id);
   });
 
@@ -436,7 +439,7 @@ describe('newSessionCreation pipeline', () => {
     expect(params.transport.openLink).toHaveBeenCalledWith('dev-1');
     expect(maker.worktree.discardPrecreated).toHaveBeenCalledWith({
       sessionId: 's13',
-      path: '/repo/.cindy-worktrees/auto-one',
+      recoveryKey: 'recovery-key-1234567890',
     });
 
     stashNewSessionDraftForEdit(prepared!);
@@ -579,6 +582,132 @@ describe('newSessionCreation pipeline', () => {
     expect(remoteSessionStore.getInputProjection('s16').pendingQueue).toHaveLength(0);
   });
 
+  it('managed create 的 wrong-id + malformed ownership probe 持久进入 retain-only，禁止重试或返回编辑删除', async () => {
+    const createdAt = Date.now();
+    const precreated = {
+      sessionId: 's18',
+      deviceId: 'dev-1',
+      path: '/repo/.cindy-worktrees/auto-unsafe',
+      recoveryKey: 'recovery-key-unsafe-123456',
+      createdAt,
+      phase: 'precreated' as const,
+    };
+    await registerPendingPrecreatedWorktree('owner-a', precreated);
+    const maker = makeMaker({
+      createSession: vi.fn(async () => ({ sessionId: 'wrong-session-id' })),
+      getSession: vi.fn(async () => null),
+    });
+    startNewSessionCreation(makeParams('s18', maker, {
+      draft: { ...DRAFT, workingDir: precreated.path },
+      precreatedWorktree: {
+        path: precreated.path,
+        recoveryKey: precreated.recoveryKey,
+        originalWorkingDir: '/repo',
+        createdAt,
+      },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+
+    expect(getNewSessionCreationTask('s18')).toMatchObject({
+      status: 'create-failed',
+    });
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    retryNewSessionCreation('s18');
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+    await expect(prepareNewSessionCreationForEdit('s18')).rejects.toThrow(
+      'worktree',
+    );
+    expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
+    await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([{
+      ...precreated,
+      phase: 'session-create-started',
+    }]);
+  });
+
+  it.each([
+    ['null', null],
+    ['empty object', {}],
+    ['wrong id', { id: 'another-session' }],
+  ])('managed create 丢 ACK 后 probe %s 仍 retain-only，不重建、不入队、不回收', async (_label, probeResult) => {
+    const createdAt = Date.now();
+    const precreated = {
+      sessionId: 's20',
+      deviceId: 'dev-1',
+      path: '/repo/.cindy-worktrees/auto-unknown',
+      recoveryKey: 'recovery-key-unknown-123456',
+      createdAt,
+      phase: 'precreated' as const,
+    };
+    await registerPendingPrecreatedWorktree('owner-a', precreated);
+    const maker = makeMaker({
+      createSession: vi.fn(async () => {
+        throw new Error('INVOKE_TIMEOUT');
+      }),
+      getSession: vi.fn(async () => probeResult),
+    });
+    startNewSessionCreation(makeParams('s20', maker, {
+      draft: { ...DRAFT, workingDir: precreated.path },
+      precreatedWorktree: {
+        path: precreated.path,
+        recoveryKey: precreated.recoveryKey,
+        originalWorkingDir: '/repo',
+        createdAt,
+      },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+
+    expect(getNewSessionCreationTask('s20')?.status).toBe('create-failed');
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+    expect(maker.getSession).toHaveBeenCalledTimes(1);
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    retryNewSessionCreation('s20');
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+    expect(maker.getSession).toHaveBeenCalledTimes(1);
+    await expect(prepareNewSessionCreationForEdit('s20')).rejects.toThrow('worktree');
+    expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
+    await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([{
+      ...precreated,
+      phase: 'session-create-started',
+    }]);
+  });
+
+  it.each([
+    ['null', null],
+    ['empty object', {}],
+    ['negative ACK', { discarded: false }],
+    ['invalid branchDeleted', { discarded: true, branchDeleted: 'yes' }],
+  ])('返回编辑只接受完整 discard ACK：%s 回包保留 task 与账本', async (_label, discardAck) => {
+    const createdAt = Date.now();
+    const maker = makeMaker({
+      worktree: {
+        discardPrecreated: vi.fn(async () => discardAck),
+      },
+    });
+    startNewSessionCreation(makeParams('s19', maker, {
+      draft: { ...DRAFT, workingDir: '/repo/.cindy-worktrees/auto-ack' },
+      precreatedWorktree: {
+        path: '/repo/.cindy-worktrees/auto-ack',
+        recoveryKey: 'recovery-key-ack-123456',
+        originalWorkingDir: '/repo',
+        createdAt,
+      },
+      precreatedWorktreeAccountId: 'owner-a',
+      confirmUnauthenticated: async () => true,
+    }));
+    await flushPipeline();
+    await expect(prepareNewSessionCreationForEdit('s19')).rejects.toThrow();
+    expect(getNewSessionCreationTask('s19')?.status).toBe('create-failed');
+    expect(maker.worktree.discardPrecreated).toHaveBeenCalledWith({
+      sessionId: 's19',
+      recoveryKey: 'recovery-key-ack-123456',
+    });
+  });
+
   it('账号在 create retry 等待期间切换时停止旧任务并保留旧账号 recovery ledger', async () => {
     const record = {
       sessionId: 's17',
@@ -586,6 +715,7 @@ describe('newSessionCreation pipeline', () => {
       path: '/repo/.cindy-worktrees/auto-owner-a',
       recoveryKey: 'recovery-key-owner-a-123456',
       createdAt: Date.now(),
+      phase: 'precreated' as const,
     };
     await expect(
       registerPendingPrecreatedWorktree('owner-a', record),
@@ -597,11 +727,9 @@ describe('newSessionCreation pipeline', () => {
         throw new Error('INVOKE_TIMEOUT');
       }),
       getSession: vi.fn(async () => {
+        currentOwner = 'owner-b';
         throw new Error('NOT_FOUND');
       }),
-    });
-    const sleep = vi.fn(async () => {
-      currentOwner = 'owner-b';
     });
 
     startNewSessionCreation(makeParams('s17', maker, {
@@ -614,7 +742,6 @@ describe('newSessionCreation pipeline', () => {
       },
       precreatedWorktreeAccountId: 'owner-a',
       isCurrentOwner: () => currentOwner === 'owner-a',
-      sleep,
     }));
     await flushPipeline();
 
@@ -623,6 +750,9 @@ describe('newSessionCreation pipeline', () => {
     expect(maker.input.enqueue).not.toHaveBeenCalled();
     expect(getNewSessionCreationTask('s17')).toBeNull();
     expect(remoteSessionStore.getSessions().find((session) => session.id === 's17')).toBeUndefined();
-    await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([record]);
+    await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([{
+      ...record,
+      phase: 'session-create-started',
+    }]);
   });
 });

@@ -1302,13 +1302,6 @@ export function getMaker(): Maker {
     // API 模式切换 / api_key 变更时 dispose 重建 app-server (单例进程, 配置 spawn 冻入)。
     _codexAgent = codexAgent;
 
-    // 用户自定义 MCP:把两个 agent 的 mcpProviders 数组注册进 registry，并立即尝试一次 refresh。
-    // localDb onReady 可能在 Maker 构造前就已触发（此时 registry 无数组，refresh 空跑）；
-    // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
-    // 此后每次 CRUD（mcpHandlers.afterChange）也会 refresh。
-    registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders);
-    _initialCustomMcpRefresh = refreshCustomMcpProviders();
-
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     attachAgentsToMakerMemory(makerMemoryManager, {
       'claude-code': claudeAgent,
@@ -1423,6 +1416,13 @@ export function getMaker(): Maker {
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
       orcaWorkerBridgeProvider,
     ];
+    // 用户自定义 MCP:三个 agent 都必须注册其实际持有的数组引用，再统一做初始 refresh。
+    // localDb onReady 可能在 Maker 构造前就已触发（此时 registry 无数组，refresh 空跑）；
+    // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
+    // 此后每次 CRUD（mcpHandlers.afterChange）也会原地刷新三份数组；运行中会话保持启动快照。
+    registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
+    _initialCustomMcpRefresh = refreshCustomMcpProviders();
+
     const piAgent = buildPiAgent({
       logger: desktopMakerLogger,
       reviewAutoPermissionAction,

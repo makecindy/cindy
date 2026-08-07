@@ -1,4 +1,5 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
+import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
@@ -276,8 +277,9 @@ export function buildRecentWorkspaceOptions(
     if (deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== deviceId) continue;
     if (session.status === 'deleted') continue;
     if (session.workspaceKind !== 'project') continue;
-    const workingDir = session.workingDir?.trim();
-    if (!workingDir) continue;
+    const rawWorkingDir = session.workingDir?.trim();
+    if (!rawWorkingDir) continue;
+    const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);
     const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
     const current = byPath.get(workingDir);
     if (!current) {

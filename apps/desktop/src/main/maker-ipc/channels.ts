@@ -134,9 +134,22 @@ export const MAKER_INVOKE = {
    * 被控端 handler 校验布尔后转发给**自身 renderer**(WORKTREE_PREF_APPLY),renderer
    * setWorktreePreference 按字段写真实草稿;变更经既有 SYNC_NEW_MAKER_DRAFT re-mirror +
    * NEW_MAKER_DRAFT_CHANGED 广播回控制端。入参 = { worktreeEnabled: boolean }。
-   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
+   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端保留最后一次宿主镜像,
+   * 不在控制端制造一份仅本次草稿生效的本地偏好。
    */
   APPLY_NEW_MAKER_WORKTREE_PREF: 'maker:apply-new-maker-worktree-pref',
+  /**
+   * 读取工作端某仓库的新建 worktree 源分支选择。分支是 repo-scoped,不能并入
+   * vendor/device 全局的 GET_NEW_MAKER_DEFAULTS。入参 = { baseRepo: string }；
+   * 未选择返回 null，否则返回 { baseRepo, sourceBranch, revision }。
+   */
+  GET_NEW_MAKER_WORKTREE_BRANCH_PREF: 'maker:get-new-maker-worktree-branch-pref',
+  /**
+   * 写穿工作端某仓库的新建 worktree 源分支选择。工作端接受后返回并广播权威
+   * { baseRepo, sourceBranch, revision }；同值写也推进该仓库 revision。
+   * 入参 = { baseRepo: string, sourceBranch: string }。
+   */
+  APPLY_NEW_MAKER_WORKTREE_BRANCH_PREF: 'maker:apply-new-maker-worktree-branch-pref',
   LIST_AVAILABLE_AGENTS: 'maker:list-available-agents',
   /**
    * Palette `/` 命令三源 (palette refactor):
@@ -792,6 +805,12 @@ export const MAKER_PUSH = {
    * 控制端直接复用 resolveDeviceLinkDraftDefaults)。本地窗口不消费(被控端是真相、不自镜像)。
    */
   NEW_MAKER_DRAFT_CHANGED: 'maker:new-maker-draft:changed',
+  /**
+   * 工作端某仓库的新建 worktree 源分支选择变化。payload =
+   * { baseRepo, sourceBranch, revision }。同时广播本地 renderer 与经 device-link
+   * sessions topic 订阅该设备的控制端；消费方必须按 device/baseRepo/revision 收敛。
+   */
+  NEW_MAKER_WORKTREE_BRANCH_CHANGED: 'maker:new-maker-worktree-branch:changed',
   /**
    * 被控端会话「非选中模型」effort/fast 变更广播。带 sessionId → session:<id> topic,转发给打开
    * 该远程会话的控制端,刷新其显示镜像。payload =

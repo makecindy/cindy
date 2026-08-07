@@ -16,6 +16,8 @@ type AgentProxyPrefPayload = import('../shared/agentProxyConfig').SshHostAgentPr
 type AgentProxyTunnelStatePayload = import('../shared/agentProxyConfig').AgentProxyTunnelState;
 type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatus;
 type AnalyticsSettingsPayload = import('../shared/analyticsSettings').AnalyticsSettingsPayload;
+type LogUploadSettingsPayload = import('../shared/logUpload').LogUploadSettingsPayload;
+type LogUploadResult = import('../shared/logUpload').LogUploadResult;
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
 type VoiceInputPowerStatePayload =
   import('../shared/voiceInputPowerIpc').VoiceInputPowerStatePayload;
@@ -43,6 +45,12 @@ type PendingRemotePrecreatedWorktreeTarget =
   import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktreeTarget;
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
+
+interface NewMakerWorktreeBranchPreferenceSnapshot {
+  baseRepo: string;
+  sourceBranch: string;
+  revision: number;
+}
 
 /* ── Environment check ── */
 
@@ -1471,6 +1479,15 @@ interface ElectronAPI {
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
+    onPackagePermissionReview: (
+      callback: (
+        request: import('../shared/pluginMarket').PluginMarketPackageReviewRequest,
+      ) => void,
+    ) => () => void;
+    resolvePackagePermissionReview: (
+      requestId: string,
+      confirmed: boolean,
+    ) => Promise<{ handled: boolean }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
     consumeRemovalNotice: () => Promise<
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
@@ -1848,6 +1865,23 @@ interface ElectronAPI {
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
   onAnalyticsSettingsChange: (callback: (payload: AnalyticsSettingsPayload) => void) => () => void;
 
+  // ── 客户端日志上报(设置 → 关于)──
+  // 只上报 App 自身的运行记录 + 设备环境信息;对话内容、文件内容、提示词、工作目录路径
+  // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
+  getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
+  setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
+  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  resetLogUploadCrashAuto: () => Promise<LogUploadSettingsPayload>;
+  /**
+   * 手动上传一次;成功返回可报的上传编号。失败以 IPC 错误码区分:
+   * `LOG_UPLOAD_UNAVAILABLE`(未配置目标)/ `PRIVACY_CONSENT_REQUIRED`(未同意)/
+   * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
+   */
+  uploadLogsNow: () => Promise<LogUploadResult>;
+  onLogUploadSettingsChange: (
+    callback: (payload: LogUploadSettingsPayload) => void,
+  ) => () => void;
+
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: () => Promise<{
     name: string;
@@ -2105,6 +2139,22 @@ interface ElectronAPI {
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」(patchDraft 写真实草稿)。 */
   onMakerWorktreePrefApply: (cb: (payload: { worktreeEnabled: boolean }) => void) => () => void;
+
+  /** 工作端 canonical baseRepo scoped 的新建 worktree 源分支；未选过返回 null。 */
+  getNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+  ) => Promise<NewMakerWorktreeBranchPreferenceSnapshot | null>;
+
+  /** 写穿本机工作端的源分支选择，返回 host 接受后的权威 snapshot。 */
+  applyNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+    sourceBranch: string,
+  ) => Promise<NewMakerWorktreeBranchPreferenceSnapshot>;
+
+  /** 本机或远程控制端改动本工作端源分支后的权威广播。 */
+  onNewMakerWorktreeBranchChanged: (
+    cb: (snapshot: NewMakerWorktreeBranchPreferenceSnapshot) => void,
+  ) => () => void;
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的会话「模型 effort/fast」pref(调本地 setter)。 */
   onMakerSessionPrefApply: (

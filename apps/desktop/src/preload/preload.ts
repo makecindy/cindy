@@ -31,6 +31,11 @@ import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
+import {
+  LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL,
+  type LogUploadResult,
+  type LogUploadSettingsPayload,
+} from '../shared/logUpload';
 import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
@@ -371,6 +376,9 @@ const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored')
 const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
   'plugin-market:removal-notice-available',
 );
+const fanOutPluginMarketPackagePermissionReview = createIpcFanOut(
+  'plugin-market:package-permission-review',
+);
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
@@ -601,6 +609,9 @@ const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:respo
 // 交给 renderer 调它原来的本地 setter。仅被控端进程会收到(控制端从不收 → 监听不误触发)。
 const fanOutMakerDraftPrefApply = createIpcFanOut('maker:draft-pref:apply');
 const fanOutMakerWorktreePrefApply = createIpcFanOut('maker:worktree-pref:apply');
+const fanOutNewMakerWorktreeBranchChanged = createIpcFanOut(
+  'maker:new-maker-worktree-branch:changed',
+);
 const fanOutMakerSessionPrefApply = createIpcFanOut('maker:session-pref:apply');
 const fanOutAppearanceSettingsChanged = createIpcFanOut('appearance-settings:changed');
 
@@ -1158,6 +1169,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ): Promise<import('../shared/pluginMarket').PluginMarketInstallResult> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
+    onPackagePermissionReview: fanOutPluginMarketPackagePermissionReview,
+    resolvePackagePermissionReview: (
+      requestId: string,
+      confirmed: boolean,
+    ): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke('plugin-market:resolve-package-permission-review', {
+        requestId,
+        confirmed,
+      }),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
     consumeRemovalNotice: (): Promise<
@@ -2005,6 +2025,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * renderer 收到后 patchDraft 写真实草稿。仅被控端进程消费。
    */
   onMakerWorktreePrefApply: fanOutMakerWorktreePrefApply,
+  /** 读取工作端 canonical baseRepo 对应的 live 源分支选择；未选择返回 null。 */
+  getNewMakerWorktreeBranchPreference: (baseRepo: string): Promise<{
+    baseRepo: string;
+    sourceBranch: string;
+    revision: number;
+  } | null> => ipcRenderer.invoke('maker:get-new-maker-worktree-branch-pref', { baseRepo }),
+  /** 写入工作端 repo-scoped 源分支选择并返回 host 接受后的权威 snapshot。 */
+  applyNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+    sourceBranch: string,
+  ): Promise<{ baseRepo: string; sourceBranch: string; revision: number }> =>
+    ipcRenderer.invoke('maker:apply-new-maker-worktree-branch-pref', {
+      baseRepo,
+      sourceBranch,
+    }),
+  /** 本机或任一 device-link 控制端改动该工作端分支选择后的权威广播。 */
+  onNewMakerWorktreeBranchChanged: fanOutNewMakerWorktreeBranchChanged,
   onMakerSessionPrefApply: fanOutMakerSessionPrefApply,
 
   binding: {
@@ -3214,6 +3251,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Open <userData>/logs in the OS file manager (Settings → About).
   openLogsDir: (): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('app:open-logs-dir'),
+
+  // ── 客户端日志上报(Settings → About)──
+  // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
+  // 判定,renderer 只消费结论。上传编号由 main 生成并回传,用户报障时口述给我们。
+  getLogUploadSettings: (): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:settings-get'),
+  setLogUploadCrashAuto: (enabled: boolean): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:set-crash-auto', enabled === true),
+  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:reset-crash-auto'),
+  /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
+  uploadLogsNow: (): Promise<LogUploadResult> => ipcRenderer.invoke('log-upload:upload-now'),
+  onLogUploadSettingsChange: (
+    callback: (payload: LogUploadSettingsPayload) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      // preload 是边界:逐字段校验后才放行,形状漂移时 renderer 不会拿到隐式 falsy 值。
+      if (!payload || typeof payload !== 'object') return;
+      const raw = payload as Record<string, unknown>;
+      if (
+        typeof raw.targetConfigured !== 'boolean' ||
+        typeof raw.privacyConsentAccepted !== 'boolean' ||
+        typeof raw.crashAutoUploadEnabled !== 'boolean' ||
+        typeof raw.crashAutoUploadCustomized !== 'boolean' ||
+        typeof raw.manualUploadAvailable !== 'boolean'
+      ) {
+        return;
+      }
+      callback({
+        targetConfigured: raw.targetConfigured,
+        privacyConsentAccepted: raw.privacyConsentAccepted,
+        crashAutoUploadEnabled: raw.crashAutoUploadEnabled,
+        crashAutoUploadCustomized: raw.crashAutoUploadCustomized,
+        manualUploadAvailable: raw.manualUploadAvailable,
+      });
+    };
+    ipcRenderer.on(LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL, handler);
+  },
 
   // Reveal a file in the OS file manager (Explorer / Finder).
   // Accepts either an xdt-image:// URL or an absolute file path.

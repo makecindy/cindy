@@ -106,8 +106,9 @@ export interface NewMakerDraft {
    * 语义是「这台工作端上新建会话时 worktree 开关的默认状态」——桌面本机草稿与手机 /
    * 桌面控制端远程草稿读写同一份(读经 maker:get-new-maker-defaults 镜像,写经
    * maker:apply-new-maker-worktree-pref 写穿)。
-   * 只在用户**显式**切换开关时写入;资格探测失败(非 git 仓库 / 已在 worktree 内等)
-   * 触发的自动关闭只改 UI 态、不写这里,避免环境因素抹掉用户偏好。
+   * 只在用户**显式**切换开关时写入;切项目、选分支、资格探测、重连等其它操作
+   * 一律保持原值,避免环境因素抹掉用户偏好。
+   * 直接复用 Cindy 现有 newMakerDraft 配置命名空间,不另建 worktree 专用配置。
    * 有效值由系统默认 + worktreePreferenceCustomized override 合成。
    */
   worktreeEnabled: boolean;
@@ -621,6 +622,10 @@ export function setWorktreePreference(enabled: boolean): void {
 
 export function patchDraft(patch: Partial<NewMakerDraft>): void {
   const normalizedPatch: Partial<NewMakerDraft> = { ...patch };
+  // worktree 偏好只能经 setWorktreePreference 写入。把这条约束放在 store 边界，
+  // 避免项目切换、草稿恢复或未来的通用 patch 调用方绕过「仅 checkbox 修改」契约。
+  delete normalizedPatch.worktreeEnabled;
+  delete normalizedPatch.worktreePreferenceCustomized;
   if ('workingDir' in normalizedPatch) {
     normalizedPatch.workingDir = normalizeDraftWorkingDir(normalizedPatch.workingDir);
   }
@@ -667,11 +672,7 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
   currentDraft = next;
-  scheduleWrite({
-    preserveStoredWorktreePreference:
-      !('worktreeEnabled' in patch)
-      && !('worktreePreferenceCustomized' in patch),
-  });
+  scheduleWrite({ preserveStoredWorktreePreference: true });
   emit();
 }
 

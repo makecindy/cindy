@@ -41,6 +41,7 @@ import {
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { getActiveAppSession, getActiveDataOwnerPushStamp } from '../appSessionState.js';
+import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
@@ -274,6 +275,10 @@ import {
   setNewMakerDraftCache,
   setProviderModelMemoryCache,
 } from '../maker-host/newMakerDefaultsCache.js';
+import {
+  applyNewMakerWorktreeBranchPreference,
+  getNewMakerWorktreeBranchPreference,
+} from '../maker-host/newMakerWorktreeBranchPreferenceCache.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { handleCloseSessionRequest } from './closeSessionRequest.js';
 import {
@@ -309,6 +314,7 @@ import {
   flushOrphanToolResults,
   getLastAssistantTranscriptUuid,
   getSessionDbAgentKind,
+  isSuccessfulCodexDoneEventData,
   markAssistantTurnCompleted,
   markAssistantTurnFailed,
   noteAgentMeta,
@@ -318,6 +324,7 @@ import {
   onAssistantTextEvent,
   onInteractionMessage,
   onInteractionResolved,
+  persistCodexPlanOnDone,
   onThinkingEvent,
   onToolResultEvent,
   onToolResultFullEvent,
@@ -446,6 +453,7 @@ import { validateHandoffWorkingDir } from './handoffWorkingDir.js';
 import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandlers.js';
 import { registerPrecreatedWorktreeDiscardHandler } from './precreatedWorktreeDiscardHandler.js';
 import { registerNewMakerWorktreePreferenceHandler } from './newMakerWorktreePreferenceHandler.js';
+import { registerNewMakerWorktreeBranchPreferenceHandler } from './newMakerWorktreeBranchPreferenceHandler.js';
 import {
   resolveFreshSourceBranch,
   restoreMissingManagedWorktreeForSession,
@@ -3675,7 +3683,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
           // 更新后的完整行。失败轮的 paired done 只复用 id 做 usage 记账，不能把
           // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
-          if (event.type !== 'done') {
+          // Codex 的 interrupted / failed 同样以 done 收尾；即使没有配套 error，也必须
+          // 写 false，避免历史计划兼容逻辑把用户主动停止的半截计划推成全部完成。
+          const isSuccessfulDone =
+            event.type === 'done' &&
+            (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data));
+          if (!isSuccessfulDone) {
             void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
           } else if (!isPairedFailedTurnDone) {
             void markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId);
@@ -3742,6 +3755,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // A claim-bearing done seals this SDK segment, but the product turn is
         // still running and may emit another continuation segment. Reset the
         // per-SDK-turn persistence maps while deferring the logical turn marker.
+        if (!isContinuationBoundary && event.source === 'codex' && event.type === 'done') {
+          // Renderer applies this terminal snapshot immediately. Persist the
+          // same state before sealing the persist queue and clearing the
+          // turn-owned lookup maps. The drain barrier below must include this
+          // write, otherwise app exit can still leave an in-progress plan.
+          persistCodexPlanOnDone(
+            session.id,
+            event.data as
+              | {
+                  plan?: unknown;
+                  raw?: { id?: unknown; status?: unknown };
+                }
+              | null
+              | undefined,
+          );
+        }
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
         }
@@ -4888,6 +4917,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     broadcast: broadcastToAllWindows,
   });
 
+  // worktree 源分支不是设备全局草稿字段，而是 canonical baseRepo scoped 的 host 真相。
+  // 本地 renderer 与 device-link 控制端共用 GET/APPLY；APPLY 先落 main 进程缓存，再把
+  // 权威 snapshot 同时广播给本地窗口和 sessions topic 订阅者。
+  registerNewMakerWorktreeBranchPreferenceHandler(createElectronIpcHandlerRegistry(), {
+    isDeviceLinkInvoke,
+    assertTrustedCaller: (event) =>
+      assertTrustedAppRendererEvent(
+        event as Parameters<typeof assertTrustedAppRendererEvent>[0],
+      ),
+    getPreference: getNewMakerWorktreeBranchPreference,
+    applyPreference: applyNewMakerWorktreeBranchPreference,
+    broadcast: broadcastToAllWindows,
+  });
+
   // 旧控制端的 device-link 会话模型预设写穿兼容入口。转发给被控端 renderer 后,renderer 将值
   // 收敛到 providerModelMemory 全局预设,同时经 SYNC_SESSION_MODEL_PREF 回流供旧控制端的
   // session-scoped 镜像显示。新控制端统一走 APPLY_NEW_MAKER_DRAFT_PREF。
@@ -5144,7 +5187,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     removeOAuthCredentials: (providerId) => removeGenericOAuthCredentialsReversibly(providerId),
   });
 
-  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新两个 agent 的 mcpProviders 数组
+  // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
     refreshProviders: () => refreshCustomMcpProviders(),
@@ -6078,40 +6121,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const makerSessionRegistry = createElectronIpcHandlerRegistry();
-  registerMakerSessionCreateHandler(makerSessionRegistry, {
-    // CREATE_SESSION 同样先走 remote ensure:remote draft (尤其 collab
-    // lead) 的 SSH 重连 / agent 安装 / codex daemon MCP 注入必须先于
-    // bootstrap, 否则 lead 首个 turn 没有 cindy_orca, 与 orca 架构文档的
-    // "session start/resume 前置" 契约不符。本地会话 ensure 内部直接返回。
-    bootstrapSession: async (co) => {
-      await ensureRemoteReadyForSessionStart({ createOpts: co });
-      return bootstrapSession(co);
+  registerMakerSessionCreateHandler(
+    makerSessionRegistry,
+    {
+      // CREATE_SESSION 同样先走 remote ensure:remote draft (尤其 collab
+      // lead) 的 SSH 重连 / agent 安装 / codex daemon MCP 注入必须先于
+      // bootstrap, 否则 lead 首个 turn 没有 cindy_orca, 与 orca 架构文档的
+      // "session start/resume 前置" 契约不符。本地会话 ensure 内部直接返回。
+      bootstrapSession: async (co) => {
+        await ensureRemoteReadyForSessionStart({ createOpts: co });
+        const result = await bootstrapSession(co);
+        // maker:create-session 是手机 / device-link 的创建入口，不经过
+        // local-db:sessions:create，因此后者维护 recent_workdirs 的逻辑不会运行。
+        // worktree 两步流此时 co.workingDir 已是隔离目录；picker 需要记住用户选的
+        // 项目根，而不是 auto-* 运行目录。worktreeStore 以同一预生成 sessionId
+        // 保存了权威 baseRepo。先完成 best-effort upsert 再让 handler 广播 created，
+        // 这样 renderer 收到广播重拉 recent 表时不会撞到写入竞态。
+        if (co.workspaceKind !== 'dialogue' && !co.remoteHostId) {
+          const recentProjectDir = worktreeStore.get(result.session.id)?.baseRepo
+            ?? getManagedWorktreeBasePath(co.workingDir)
+            ?? co.workingDir;
+          await upsertRecentWorkdir(recentProjectDir);
+        }
+        return result;
+      },
+      markOrcaRoleIfNeeded,
+      markKnownNonOrcaIfApplicable,
+      allocateDialogueWorkspace: ensureDialogueWorkspaceDir,
+      createSessionId: createId,
+      now: Date.now,
+      withSessionLock: withSendToSessionLock,
+      sendWorkerReadyMessage: (session) => {
+        // Orca worker 首次创建时发一条初始化消息，强制 codex 写 rollout 文件，
+        // 避免 app 重启后 thread/resume 因 rollout 缺失而失败。
+        observeFireAndForgetSendOutcome(
+          session.send({ type: 'user', content: ORCA_WORKER_READY_MESSAGE }, { planMode: false }),
+          {
+            owner: 'orca-worker-ready',
+            entrypoint: 'CREATE_SESSION',
+            sessionId: session.id,
+            agentKind: session.agentKind,
+            action: 'worker-ready-placeholder',
+            context: `CREATE_SESSION/${session.id}/worker-ready-placeholder`,
+          },
+        );
+      },
+      broadcastSessionCreated,
+      logCreateSession: (fields) => log.info('create-session invoked', fields),
+      warnStderr: (agentKind, line) => log.warn(`[${agentKind}/stderr] ${line}`),
     },
-    markOrcaRoleIfNeeded,
-    markKnownNonOrcaIfApplicable,
-    allocateDialogueWorkspace: ensureDialogueWorkspaceDir,
-    createSessionId: createId,
-    now: Date.now,
-    withSessionLock: withSendToSessionLock,
-    sendWorkerReadyMessage: (session) => {
-      // Orca worker 首次创建时发一条初始化消息，强制 codex 写 rollout 文件，
-      // 避免 app 重启后 thread/resume 因 rollout 缺失而失败。
-      observeFireAndForgetSendOutcome(
-        session.send({ type: 'user', content: ORCA_WORKER_READY_MESSAGE }, { planMode: false }),
-        {
-          owner: 'orca-worker-ready',
-          entrypoint: 'CREATE_SESSION',
-          sessionId: session.id,
-          agentKind: session.agentKind,
-          action: 'worker-ready-placeholder',
-          context: `CREATE_SESSION/${session.id}/worker-ready-placeholder`,
-        },
-      );
-    },
-    broadcastSessionCreated,
-    logCreateSession: (fields) => log.info('create-session invoked', fields),
-    warnStderr: (agentKind, line) => log.warn(`[${agentKind}/stderr] ${line}`),
-  });
+  );
 
   registerPrecreatedWorktreeDiscardHandler(makerSessionRegistry, {
     assertCaller: (event) => {
