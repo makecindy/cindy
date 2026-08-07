@@ -535,6 +535,44 @@ export function isProtectedSystemPath(target: string): boolean {
  * 无法由主 Agent 换安全做法绕开的高影响同意边界。命中才 `prompt-each-time`：
  * 提权 / 系统与磁盘控制 / 凭证访问 / fork bomb / 全局权限放宽。
  */
+/**
+ * 把「结构上确定是数据」的引号字面量替换成占位符,供确定性红线扫描使用。
+ *
+ * 背景:`ALWAYS_ASK_PATTERNS` 是在**整条命令去引号后**的字符串上扫的 —— 引号内的散文
+ * 因此被当代码看。实机语料里剩余红线的绝大多数由此产生,而且全是误报:
+ *   - `B1="……永久 link-close(收到对端 user/toggle-off/shutdown/revoked……)"`
+ *     —— PR 回复正文里的 `shutdown` 是一个**枚举值的名字**,被当成关机命令;
+ *   - `git commit -m "fix: …… 清理 ……"` —— 中文提交说明整段被当命令扫;
+ *   - `git diff --name-only | grep -E "\.env|\.pem|credential|secret"`
+ *     —— 这条命令的用途正是**阻止**把凭证提交上去,却因为 pattern 里写了这些词
+ *     被判成「读凭证文件」。
+ *
+ * 只剥三类**结构上**可判定的数据位,不做「看起来像散文」这种启发式:
+ *   1. 纯变量赋值的值(`NAME='…'` / `NAME="…"`);
+ *   2. 消息类 flag 的值(`-m` / `--message` / `-F` / `--body`);
+ *   3. grep 家族的搜索模式(要**找**的正则,不是要读的路径)。
+ *
+ * 安全性:真正的代码执行面不在这条链路上 —— `sh -c "…"`、`eval "…"`、管道到解释器
+ * 都由更前面的 `highImpactExecutionNeedsConsent` 先行判定(它按引号外的真实执行结构
+ * 分析,不受本函数影响)。这里剥掉的是纯粹的字符串实参。
+ */
+function stripDataLiterals(command: string): string {
+  const QUOTED = String.raw`(?:"[^"]*"|'[^']*')`;
+  return command
+    // 1) NAME='…' / NAME="…" —— 赋值的右值是数据。
+    .replace(new RegExp(String.raw`(^|[\s;&|(])([A-Za-z_]\w*)=${QUOTED}`, 'g'), '$1$2=DATA')
+    // 2) 消息类 flag 的值(提交说明 / PR 正文)。`--body-file` 等是**路径**,不在此列。
+    .replace(
+      new RegExp(String.raw`(\s(?:-m|--message|-F|--body|--title)(?:=|\s+))${QUOTED}`, 'g'),
+      '$1DATA',
+    )
+    // 3) grep 家族的搜索模式:要找的正则,不是要读的文件。
+    .replace(
+      new RegExp(String.raw`(\b(?:grep|egrep|fgrep|rg|ag)\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+)${QUOTED}`, 'g'),
+      '$1DATA',
+    );
+}
+
 const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
@@ -672,13 +710,13 @@ const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
 
 /** 顶层 shell 分隔符:`&&` `||` `;` `|` 换行,以及作为后台操作符的独立 `&`。 */
 function splitTopLevelSegments(command: string): string[] {
-  // 保守拆分:引号内的分隔符会被误切,但只导致"多切几段、每段各自判定"——对不确定 fail-closed,
-  // 过度拆分不放宽任何东西。独立 `&`(后台)才拆;`2>&1`/`>&`/`&>` 里的 `&` 是 fd 复制、不是
-  // 分隔符,用前后不邻接 `>`/`&` 的条件把它们排除,避免把 `ls 2>&1` 这类常见命令误切成碎段。
-  return command
-    .split(/&&|\|\||[;\n|]|(?<![>&])&(?![>&])/g)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  // 引号感知拆分(复用 splitExecutableSegments 的状态机):引号内的 `|`/`;`/`&` 是**数据**不是
+  // 分隔符 —— 旧的正则拆分会把 `grep "foo|bar" src` 切成 `grep "foo` + `bar" src` 两个碎段,
+  // 后者认不出命令名→整条落灰区,是实机语料里最大的误报源(grep/rg 的 alternation pattern)。
+  // 安全性不放宽:红线(highImpactExecutionNeedsConsent / ALWAYS_ASK / scopedDestruction /
+  // REVIEW_REQUIRED)都在**整条命令**的去引号变体上先跑(见 classifyShellCommand),藏在引号里的
+  // 危险关键词照样命中;引号内容对真实 bash 也是数据,eval / `sh -c` 的执行面另有红线拦截。
+  return splitExecutableSegments(command).map((s) => s.text);
 }
 
 /** 轻量 shell tokenizer：引号外按空白切，拼接相邻的 quoted/unquoted 片段并保留反斜杠。 */
@@ -1198,6 +1236,64 @@ function isPipeExecutor(bin: string): boolean {
     || /^(?:guile|racket)(?:-\d+(?:\.\d+)*)?$/.test(normalized);
 }
 
+/**
+ * 这个管道右侧的解释器会不会**把 stdin 当成程序执行**。
+ *
+ * 这是 `curl … | sh` 与 `grep … | awk '{print $1}'` 的本质区别,此前被压成同一条红线:
+ * 只要右侧 bin 在 PIPE_EXECUTORS 里就一律 `prompt-each-time`。实机语料实测,该判据产出的
+ * 65 条红线里**真正管道到 shell 的是 0 条** —— 46 条是 `| awk '字面脚本'`、
+ * `| python3 -m json.tool`、`| xargs grep -l foo` 这类日常数据处理被误判。
+ *
+ * 判据:程序来源是否为 stdin。
+ *  - `sh` / `bash`(无 `-c`)、裸 `python3` / `node` / `ruby`:stdin 就是源码 → **是**;
+ *  - `python3 -c '…'` / `node -e '…'` / `bash -c '…'`:程序是字面量参数,静态可见
+ *    (且各自另有 payload 递归审查)→ 否;
+ *  - `python3 -m json.tool`:程序是具名模块 → 否;
+ *  - `awk '脚本'` / `awk -f f.awk`:awk 的程序**永远**是显式操作数,从不来自 stdin → 否;
+ *  - `xargs` / `parallel`:stdin 变成的是**参数**而非程序,且下方有专门的 xargs 递归分析
+ *    (此前这条捷径把它抢先判红,专门分析根本跑不到)→ 否;
+ *  - 带脚本文件操作数(`python3 run.py`)→ 否。
+ *
+ * 安全性不放宽:凡「远端内容流进解释器」仍由调用点的 `pipeCarriesRemoteContent` 分支
+ * 保持红线 —— `curl … | python3 -c '…'` 照旧必问。本函数只负责把**本地**数据处理
+ * 从红线里摘出来。
+ */
+function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
+  const bin = executableName(tokens[0] ?? '');
+  if (!isPipeExecutor(bin)) return false;
+  // 裸 `-` 操作数是各解释器「从 stdin 读程序」的通用写法(`powershell -Command -`、
+  // `python3 -`、`sh -`):放在最前,不受下面任何「程序是字面量」判据影响。
+  if (tokens.slice(1).some((t) => t === '-')) return true;
+  // stdin → 参数(不是程序);真正要跑的命令交下方 xargsCommandTokens 递归审查。两个例外:
+  //  - `xargs sh -c`:stdin 直接变成 shell 的命令串 = 任意命令执行;
+  //  - 裸 `parallel`(无命令操作数):GNU parallel 把 stdin 的每一行**当命令执行**
+  //    (裸 `xargs` 不同,它缺省是 echo,无副作用)。
+  if (bin === 'xargs' || bin === 'parallel') {
+    if (tokens.slice(1).some((t) => SHELL_EXECUTORS.has(executableName(t)))) return true;
+    return bin === 'parallel' && positionalOperands(tokens.slice(1)).length === 0;
+  }
+  // awk 家族:程序是第一个操作数或 -f 脚本文件,不可能来自 stdin —— **除非**那段字面脚本
+  // 自己把数据交出去执行(`awk '{system($0)}'` 逐行当 shell 命令跑,`print | "sh"` 同理)。
+  // 脚本是静态可见的,直接查这几个出口即可,不必把整个 awk 打成红线。
+  if (/^(?:(?:g|m|n|go)?awk)\d*(?:\.\d+)*$/.test(bin)) {
+    return tokens.slice(1).some((t) => /\bsystem\s*\(|\bENVIRON\b|\|\s*["']|["']\s*\|/.test(t));
+  }
+  // 字面量程序(shell -c / 解释器 -e/-c/--eval):静态可见,且各自另有递归审查。
+  // 例外:载荷正好是 `-`(如 `powershell -Command -`、`python -c -`)是**从 stdin 读程序**
+  // 的标准写法,不是字面量代码 —— 放行它等于把 `下载 | 解释器` 整条漏掉。
+  const shellPayload = shellCommandPayload(tokens);
+  if (shellPayload !== null && shellPayload.trim() !== '-') return false;
+  const inlineCode = interpreterInlineCodePayload(tokens);
+  if (inlineCode !== null && inlineCode.trim() !== '-') return false;
+  // `python3 -m module`:具名模块,不读 stdin 当程序。
+  if (tokens.slice(1).some((t) => t === '-m' || t === '--module')) return false;
+  // 有脚本文件操作数 → 程序来自该文件。裸 `-` 是 stdin 占位符,不算脚本文件
+  // (`curl … | python3 -` 仍必须是红线)。
+  const operands = positionalOperands(tokens.slice(1)).filter((t) => t !== '-');
+  if (operands.length > 0) return false;
+  return true;
+}
+
 /** shell 的 `-c` 可与其它短选项组合（如 `-lc` / `-xec`）；返回其命令字符串。 */
 function shellCommandPayload(tokens: string[]): string | null {
   if (!SHELL_EXECUTORS.has(executableName(tokens[0] ?? ''))) return null;
@@ -1441,10 +1537,24 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     // 完整路径解释器识别不出(copilot 报)→ 额外用保留反斜杠的 rawTokens 求一次 bin,任一命中即算执行器。
     const rawBin = executableName(rawTokens[0] ?? '');
     if (fromPipe && !unwrapped.inspectionOnly) {
-      if (isPipeExecutor(bin) || isPipeExecutor(rawBin)) return true;
-      // An incomplete interpreter enum must never turn remote "download and
-      // execute" into a model-allowable gray action. Only consumers proven
-      // passive by the existing read-only classifier may keep the pipeline in Auto.
+      // 确定性红线只留一种形状:**stdin 就是被执行的程序**(`curl … | sh`)。
+      //
+      // 程序为字面量/具名模块/脚本文件的解释器(`| awk '…'`、`| python3 -m json.tool`、
+      // `| python3 -c '…'`、`| xargs grep`)一律降到灰区交审阅器判 —— 包括管道左侧是
+      // curl/wget 的情形。理由:
+      //  - 这一层是三个 harness 共用的 **fallback**,不是唯一防线;灰区背后有轻量审阅器,
+      //    「AI 看一眼」严格优于「不可跳过的硬弹窗」;
+      //  - 实机语料实测,这条规则产出的红线里真正管道到 shell 的是 0 条,却把
+      //    `curl 本机 devtools | python3 -m json.tool` 这类日常调试打成必问;
+      //  - 对照 Claude Code:它的 auto 档把判定整个交给分类器,本地**没有**任何
+      //    「下载即执行」确定性表,`Bash(curl *)` 还是官方示例里的常规放行规则。
+      if (interpreterReadsProgramFromStdin(tokens)
+        || interpreterReadsProgramFromStdin(rawTokens)) return true;
+      // 但「下载的内容喂给一个**无法证明是被动读取**的消费者」仍是红线:`curl … | ./run`、
+      // `xargs curl … | ./run` —— 消费者是未知可执行文件时,静态无从判断它拿 stdin 干什么。
+      // 只有被只读分类器证明为被动的消费者(jq / head / tee 之外的只读集)才留在灰区。
+      // 代价:`curl 本机 devtools | python3 -m json.tool` 这类仍必问(语料里 1 条),
+      // 换取「远端内容进未知消费者」这条边界不塌 —— 这是本次放宽里唯一保留的 curl 相关红线。
       if (pipeCarriesRemoteContent && !isSafeReadonlyBin(bin, normalized, tokens)) return true;
     }
     if (bin === 'eval' || rawBin === 'eval') return true;
@@ -1999,6 +2109,64 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
 }
 
 /**
+ * sed 的**纯读文件**形态(`sed -n 495,545p file`):agent 最高频的分页读文件方式,实机语料
+ * 里大量出现,不该每次都进灰区审阅。只放行静态可证只读的窄子集:
+ *   - flag 仅允许 -n/-E/-r(及其组合);-i/-e/-f/-s 等一律不放(改文件/多脚本/脚本文件);
+ *   - 脚本操作数必须是**纯数字地址 + p**(`1p`、`1,80p`、`10,$p`)—— 正则地址、s///、w、e 等
+ *     全部落灰区(w 写文件、e 执行命令,正则地址静态难证边界);
+ *   - 其余操作数是输入文件(读凭证文件由 ALWAYS_ASK_PATTERNS 在整条命令上先行拦截)。
+ */
+function isSafeReadonlySed(tokens: string[]): boolean {
+  let script: string | null = null;
+  for (const t of tokens.slice(1)) {
+    if (t === '--') continue;
+    if (t.startsWith('-')) {
+      if (!/^-[nEr]+$/.test(t)) return false;
+      continue;
+    }
+    if (script === null) {
+      script = t;
+      continue;
+    }
+    // 文件操作数:任意路径都可(只读);凭证路径已被整条命令级红线拦下。
+  }
+  return script !== null && /^\d+(?:,(?:\d+|\$))?p$/.test(script);
+}
+
+/**
+ * gh CLI 的只读子命令(`gh pr view` / `gh issue list` / `gh run list` 等):纯查询、不改远端
+ * 状态,实机语料的高频段。放行条件:
+ *   - `gh <command> <subcommand>` 精确命中白名单读操作对(`gh api` **不在列** —— 可发任意
+ *     mutation;`gh pr create/merge/close` 等写操作不在列);
+ *   - 不带 `--web`/`-w`(转浏览器打开,行为出静态审查面,fail-closed 不放)。
+ * 查询串发往 GitHub API 属用户自己账号的读操作,与 isSafeFetch 拦的「GET 查询串 exfil」
+ * 不同源(攻击者读不到用户的查询),不因带 --search 升级。
+ */
+const SAFE_GH_READONLY_SUBCOMMANDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['pr', new Set(['view', 'list', 'diff', 'checks', 'status'])],
+  ['issue', new Set(['view', 'list', 'status'])],
+  ['run', new Set(['view', 'list'])],
+  ['release', new Set(['view', 'list'])],
+  ['repo', new Set(['view'])],
+  ['workflow', new Set(['view', 'list'])],
+  ['label', new Set(['list'])],
+  ['gist', new Set(['view', 'list'])],
+  ['search', new Set(['repos', 'issues', 'prs', 'code', 'commits'])],
+  ['auth', new Set(['status'])],
+]);
+
+function isSafeReadonlyGh(tokens: string[]): boolean {
+  const command = tokens[1];
+  const sub = tokens[2];
+  if (!command || command.startsWith('-') || !sub || sub.startsWith('-')) return false;
+  const safeSubs = SAFE_GH_READONLY_SUBCOMMANDS.get(command.toLowerCase());
+  if (!safeSubs || !safeSubs.has(sub.toLowerCase())) return false;
+  // --web/-w 把结果转到浏览器打开;-w 可能与其它短选项簇写(如 -wL),按包含判定 fail-closed。
+  if (tokens.slice(3).some((t) => t === '--web' || /^-[a-zA-Z]*w/.test(t))) return false;
+  return true;
+}
+
+/**
  * curl/wget 的只读 GET → 放行(命令行浏览器场景;stdout 默认)。放行条件全部满足:
  *   - 无上传 / 非 GET 方法(bin 各自的 upload flag),无落盘到文件(-o/-O/--output);
  *   - **能认出一个 URL/host 目标**——认不出(无位置参数 / 参数不像 URL)一律 fail-closed 升级,
@@ -2389,7 +2557,13 @@ function classifyShellSegment(
   // 执行 flag 被藏在展开里、审查漏放行、bash 展开成空后才执行。flag/命令检测都在此串上跑。
   const deQuoted = stripExpansions(segment.replace(/['"\\]/g, ''));
   // 去引号内容:判重定向时引号内的 `>` 是数据不是重定向(如 git log --format='%h>%s')。
-  const redirectScan = segment.replace(/'[^']*'|"[^"]*"/g, '');
+  // 再抹掉指向安全伪设备的重定向(`2>/dev/null`、`>/dev/null`、`&>/dev/null`):写 /dev/null
+  // 等同丢弃、无落盘副作用,是实机语料里最高频的静音写法,不该把整段只读命令拖进灰区
+  // (与 SAFE_DEVICE_PATH / isProtectedSystemPath 的伪设备白名单同口径)。`/dev/null/x`、
+  // `/dev/nullx` 等相近路径不匹配(`(?![\w/])`),仍按普通文件写升级。
+  const redirectScan = segment
+    .replace(/'[^']*'|"[^"]*"/g, '')
+    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty)(?![\w/])/gi, '');
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
   if (OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
@@ -2426,6 +2600,10 @@ function classifyShellSegment(
   }
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
+  // sed 的纯数字地址打印(`sed -n 1,80p f`)与 gh 的只读查询子命令:实机语料的高频只读段,
+  // 静态可证安全,不进灰区(误报源自实机语料回归,见 auto-review.corpus 测试)。
+  if (bin === 'sed' && isSafeReadonlySed(tokens)) return 'auto-approve';
+  if (bin === 'gh' && isSafeReadonlyGh(tokens)) return 'auto-approve';
   // 其余(含所有写操作、未知命令)进入灰区，由轻量 reviewer 静默 allow/block/ask。
   return 'prompt';
 }
@@ -2435,6 +2613,29 @@ function classifyShellSegment(
  * 再拆顶层段,每段都要过 —— 任一段明确红线→prompt-each-time;任一段需 reviewer→prompt;
  * 全部只读→auto-approve。空/畸形命令 → prompt(交 reviewer，故障时静默 block)。
  */
+/**
+ * 一条命令实际会调起的**可执行文件名**集合(去包装器、去路径、含各管道/串联段)。
+ *
+ * 供批准记忆做「命令名级」规则用(对齐 Claude Code 的 `Bash(pnpm:*)`):用户批准过
+ * `cd /repo && pnpm test` 后,记住的是 {cd, pnpm} —— 后续 `cd /repo && pnpm build`
+ * 因为用到的可执行文件都在已批准集合里而直接放行,`cd /repo && rm -rf x` 则不在。
+ *
+ * 比 CC 的「取第一个词 + `:*`」更贴合真实用法:我们的命令大量以 `cd X && …` 开头,
+ * 按首词生成规则会变成 `cd:*`,那等于放行**所有** `cd X && 任意命令`。
+ */
+export function commandExecutableNames(command: string): string[] {
+  if (typeof command !== 'string' || command.trim().length === 0) return [];
+  const names = new Set<string>();
+  for (const { text } of splitExecutableSegments(command)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = executableName(tokens[0] ?? '');
+    // 环境变量赋值前缀(`NODE_OPTIONS=… pnpm …`)不是可执行文件,跳过它继续找真正的 bin。
+    if (!bin || /^[A-Za-z_]\w*=/.test(bin)) continue;
+    names.add(bin);
+  }
+  return [...names];
+}
+
 export function classifyShellCommand(
   command: string,
   workspaceRoots: string[],
@@ -2450,8 +2651,13 @@ export function classifyShellCommand(
   //    (greptile 报)。去掉 `[]{}` 让 `.ss[h]`→`.ssh`、`id_[r]sa`→`id_rsa` 现形;去 `*?` 让 `*.pem`
   //    等也归一。会造成个别良性命令过度升级(fail-closed 方向,可接受);`?`/`*` 作单字符替身的
   //    残口(`.ss?`→`.ss` 不复原)属静态不可闭合、极冷门,不追。
-  const deEscaped = command.replace(/['"\\]/g, '');
-  const quotesOnly = command.replace(/['"]/g, '');
+  // 确定性红线只扫**代码位**:结构上确定是数据的引号字面量(赋值右值 / 消息 flag 值 /
+  // grep 搜索模式)先换成占位符,否则中文提交说明与 PR 回复正文会被当命令扫(见
+  // stripDataLiterals)。执行面判定不用这份 —— highImpactExecutionNeedsConsent 已在上面
+  // 按引号外的真实结构判过。
+  const scannable = stripDataLiterals(command);
+  const deEscaped = scannable.replace(/['"\\]/g, '');
+  const quotesOnly = scannable.replace(/['"]/g, '');
   const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
   // deExpanded:抹掉参数展开(见 stripExpansions)—— 防 `s${X}udo`/`rm -r${X}f /` 这类把关键词拆开、
   // bash 展开成空后才成形的绕过。**必须从 deEscaped 派生**(保留 `${...}` 完整):若先去 glob 会把
@@ -2499,7 +2705,30 @@ export function classifyShellCommand(
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';
   let needsPrompt = false;
+  // 跨段跟踪 cd:`cd <区内目录> && <只读命令>` 是实机语料的最高频形态之一,此前 cd 段本身
+  // 认不出命令名→整条落灰区。**只放行**静态可证「目标落在工作区/只读引用目录内」的 cd/pushd
+  // 段(相对目标按跟踪 cwd 解析);目标区外/动态(`$VAR`、`~`、`-`)/source/popd 维持灰区不变。
+  // 安全性:破坏类(`cd /etc && cp payload hosts`)由前面的 scopedDestructionNeedsConsent 以
+  // 自己的跨段 cwd 跟踪先行拦截;这里只影响「全段只读」时 cd 段自身的档位。
+  let trackedCwd: string | undefined = opts.cwd ?? workspaceRoots[0];
+  let trackedCwdUnknown = opts.cwdUnknown === true;
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
   for (const seg of segments) {
+    const segTokens = stripShellControlTokens(tokenize(seg));
+    const dirChange = directoryChangeTarget(segTokens);
+    if (dirChange.changesDirectory) {
+      const segBin = executableName(segTokens[0] ?? '');
+      const next = resolveCwdTarget(dirChange.target, trackedCwd, trackedCwdUnknown);
+      trackedCwd = next.cwd;
+      trackedCwdUnknown = next.cwdUnknown;
+      if ((segBin === 'cd' || segBin === 'pushd')
+        && !next.cwdUnknown && next.cwd
+        && isInsideWorkspace(next.cwd, workspaceRoots, aliasFirmlinks)) {
+        continue; // 区内目录切换:无写/无执行副作用,该段放行。
+      }
+      needsPrompt = true; // 区外/动态目标、source/popd:与改动前同档(灰区)。
+      continue;
+    }
     const v = classifyShellSegment(seg, workspaceRoots, opts);
     if (v === 'prompt-each-time') return 'prompt-each-time';
     if (v === 'prompt') needsPrompt = true;
