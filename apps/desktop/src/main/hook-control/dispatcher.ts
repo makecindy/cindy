@@ -177,6 +177,11 @@ export interface HookRunRequest {
   /** IM 来源元数据(平台 + thread 上下文); 省略 = 旧 server 不发。 */
   source?: TaskSource;
   /**
+   * provider 已实际接受本次发送后的副作用。runner 只在 send outcome
+   * 确认为 dispatched 后 await；失败必须由调用方自行降级，不能反转已受理 turn。
+   */
+  onProviderAccepted?: () => void | Promise<void>;
+  /**
    * 执行中渲染快照回调(turn.progress 链路)。runner 合成「过程区时间线 +
    * 部分正文」的完整 markdown 快照并节流回调; dispatcher 注入的实现把它
    * 打成 turn.progress 帧发给 server。进度是尽力而为的装饰性信息 ——
@@ -237,8 +242,8 @@ export interface HookDispatcherDeps {
    * 可选: 为派发组装本地群上下文前缀(group-relay-v1 窗口, 生产为
    * groupWindow.buildGroupContextPrefix)。只影响发给 agent 的 prompt,
    * 不影响会话标题与 UI 渲染(二者用 source.userText / 原始 prompt);
-   * 失败或空装配 = 无前缀, 绝不因上下文拒单。accepted 任务在 ACK 前提交；
-   * queued 任务把 commit 延迟到真正开始执行, 拒单/取消/清队列都不推进窗口游标。
+   * 失败或空装配 = 无前缀, 绝不因上下文拒单。两条路径都只在 provider
+   * 实际受理后提交；拒单、取消或清队列都不推进窗口游标。
    */
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
@@ -383,11 +388,6 @@ const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 const REOPEN_TTL_MS = 24 * 60 * 60_000;
 /** 续跑记账条数上限(FIFO 淘汰最老), 同 ackHistory 语义: 防长驻进程无界增长。 */
 const MAX_PENDING_REOPENS = 200;
-/** 游标补偿已在共享核心内有界重试；dispatcher 再保留任务做有限轮退避恢复。 */
-const CURSOR_ROLLBACK_RECOVERY_BASE_DELAY_MS = 25;
-const CURSOR_ROLLBACK_RECOVERY_MAX_DELAY_MS = 1_000;
-const CURSOR_ROLLBACK_RECOVERY_MAX_ATTEMPTS = 6;
-
 /**
  * 原对话不再落在工作目录映射内时(被移到映射外的项目, 或映射本身被改/删),
  * 回给渠道的一次性说明(Slack / Telegram 侧文案不进 locale, 与 interactions.ts
@@ -516,7 +516,7 @@ interface PendingTask {
   externalKey: string;
   run: HookRunRequest;
   accountGeneration: number;
-  /** 群上下文游标提交回调;排队任务仅在真正开始执行前调用。 */
+  /** 群上下文游标提交回调；仅在 provider 实际受理后调用。 */
   commitContextCursor?: ContextCursorCommit;
   /** 会话定位阶段产生的一次性说明, 前置到本次 turn.end 的 finalText。 */
   notice?: string;
@@ -634,7 +634,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (keyChains.get(key) === stored) keyChains.delete(key);
     });
   }
-  /** 同一 session 的受理段串行化，避免不同 externalKey 在 commit await 期间同时占槽。 */
+  /** 同一 session 的受理段串行化，避免不同 externalKey 并发判断空闲并同时占槽。 */
   const sessionAdmissionChains = new Map<string, Promise<void>>();
   async function serializeSessionAdmission(
     sessionId: string,
@@ -708,6 +708,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
   const runningByRequest = new Map<string, { sessionId: string; connectionId: string }>();
+  /**
+   * 已开始执行但 provider 尚未受理的 Telegram 群任务。账号边界必须把其
+   * accepted / queued ACK 收成 cancelled；accepted=true 后消息已交给 agent，
+   * 不再按未受理任务处理。
+   */
+  const pendingGroupAdmissions = new Map<
+    string,
+    { task: PendingTask; accepted: boolean; cancelled: boolean }
+  >();
   /** 已请求取消的 connectionId + requestId(execute 收口时据此把结果改写为 cancelled)。 */
   const cancelRequested = new Set<string>();
   /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
@@ -1324,10 +1333,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       running.delete(sessionId);
       return;
     }
-    if (!(await commitTaskContextCursor(task))) {
-      running.delete(sessionId);
-      return;
-    }
+    const pendingGroupAdmission = task.commitContextCursor
+      ? { task, accepted: false, cancelled: false }
+      : null;
+    if (pendingGroupAdmission) pendingGroupAdmissions.set(requestKey, pendingGroupAdmission);
     // 这条消息线交给新任务了: 撤掉上一轮失败留下的续跑观察与记账。连接还在, 所以要
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
@@ -1392,6 +1401,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           onProgress,
           onInteraction,
           onInteractionCancel,
+          ...(task.commitContextCursor
+            ? {
+                onProviderAccepted: async () => {
+                  if (pendingGroupAdmission?.cancelled) return;
+                  if (pendingGroupAdmission) pendingGroupAdmission.accepted = true;
+                  await commitTaskContextCursor(task);
+                },
+              }
+            : {}),
           // runner 建/取到 session 后, 拿它真正要跑的那个目录回来问一次 ——
           // 那个目录可能与这里校验过的不是同一个(见 isDirAuthorized 的说明)。
           isDirAuthorized: (dir) => dirStillAllowed(task.connectionId, dir),
@@ -1406,6 +1424,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }
     }
     runningByRequest.delete(requestKey);
+    pendingGroupAdmissions.delete(requestKey);
     if (!isCurrentGeneration(task.accountGeneration)) {
       cancelRequested.delete(requestKey);
       running.delete(sessionId);
@@ -1501,72 +1520,42 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   }
 
   /**
-   * 账号代次失效后，任务必须留在当前 admission/execution Promise 中，直到
-   * durable cursor 确认恢复或恢复预算耗尽。共享核心单次 rollback 已做有界
-   * 重试；这里再以有限轮退避承接短暂 SQLite 故障。持续故障必须进入可观测的
-   * exhausted 终态并释放账号生命周期，不能让停用、切换或退出永久等待。
+   * provider 已受理后才推进 durable cursor。此时即使账号代次随后失效，消息也
+   * 已交给 agent，游标前移是正确的；持久化失败则保留旧游标，下次最多重复携带，
+   * 不能为了游标写入失败反转一个已经受理的 turn。
    */
-  async function recoverTaskContextCursor(
-    receipt: ContextCursorReceipt | void,
-    task: { requestId: string; run: { sessionId: string } },
-    phase: 'accepted' | 'queued',
+  async function commitTaskContextCursor(
+    task: Pick<PendingTask, 'requestId' | 'commitContextCursor'>,
   ): Promise<void> {
-    if (!receipt) return;
-    for (let attempt = 1; attempt <= CURSOR_ROLLBACK_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        await receipt.rollback();
-        if (attempt > 1) {
-          log.info(
-            `group context cursor rollback recovered: phase=${phase} requestId=${task.requestId} attempts=${attempt}`,
-          );
-        }
-        return;
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (attempt === CURSOR_ROLLBACK_RECOVERY_MAX_ATTEMPTS) {
-          log.warn(
-            `group context cursor rollback recovery exhausted: phase=${phase} requestId=${task.requestId} attempts=${attempt} state=exhausted error=${errorMessage}`,
-          );
-          return;
-        }
-        const retryDelayMs = Math.min(
-          CURSOR_ROLLBACK_RECOVERY_BASE_DELAY_MS * 2 ** Math.min(attempt - 1, 6),
-          CURSOR_ROLLBACK_RECOVERY_MAX_DELAY_MS,
-        );
-        log.warn(
-          `group context cursor rollback retained for retry: phase=${phase} requestId=${task.requestId} retryInMs=${retryDelayMs} error=${errorMessage}`,
-        );
-        await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
-      }
-    }
-  }
-
-  /**
-   * 排队任务只有在真正开始执行时才推进群上下文游标。账号代次若在提交
-   * await 期间失效，保留任务直到补偿成功，再按账号边界丢弃尚未开始的任务。
-   */
-  async function commitTaskContextCursor(task: PendingTask): Promise<boolean> {
-    if (!task.commitContextCursor) return true;
-    if (!isCurrentGeneration(task.accountGeneration)) return false;
-    let receipt: ContextCursorReceipt | void;
+    if (!task.commitContextCursor) return;
     try {
-      // dispatcher owns the post-write generation check so a successful write
-      // always returns its receipt to the recovery loop instead of losing it in
-      // the shared core's optional guard compensation path.
-      receipt = await task.commitContextCursor();
+      await task.commitContextCursor();
     } catch (error) {
-      // The production group-window commit keeps persistence failures non-fatal;
-      // retain the same queue liveness for injected/legacy callbacks.
       log.warn(
-        `queued group context cursor commit failed: ${
+        `group context cursor commit failed after provider acceptance: requestId=${task.requestId} error=${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return isCurrentGeneration(task.accountGeneration);
     }
-    if (isCurrentGeneration(task.accountGeneration)) return true;
-    await recoverTaskContextCursor(receipt, task, 'queued');
-    return false;
+  }
+
+  /** 已回 ACK 的任务在取消或账号边界被清掉时必须有 durable 终态。 */
+  function finishTaskAsCancelled(task: PendingTask): void {
+    const turnEnd: TurnEndPayload = {
+      requestId: task.requestId,
+      externalKey: task.externalKey,
+      sessionId: task.run.sessionId,
+      status: 'cancelled',
+      finalText: '',
+      errorMessage: null,
+      usage: { durationMs: null },
+    };
+    sendOrBuffer(task.connectionId, makeTurnEnd(turnEnd), {
+      connectionId: task.connectionId,
+      requestId: task.requestId,
+      ack: task.ack,
+      turnEnd: durableTurnEnd(turnEnd),
+    });
   }
 
   /**
@@ -2084,6 +2073,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           },
           accountGeneration: admittedGeneration,
           reopenCapable: supportsReopen(connectionId),
+          ...((payload.externalKey.startsWith('telegram:group:') ||
+            payload.externalKey.startsWith('telegram:topic:')) &&
+          commitContextCursor
+            ? { commitContextCursor }
+            : {}),
           ...(resolved.notice ? { notice: resolved.notice } : {}),
           ...(resolved.cleanupWorktree ? { cleanupWorktree: resolved.cleanupWorktree } : {}),
         };
@@ -2099,7 +2093,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             return;
           }
 
-          // 排队任务只保存 commit 回调；它尚未受理，不得提前推进 durable cursor。
+          // 排队任务只保存 commit 回调；provider 尚未受理，不得提前推进 durable cursor。
           const queue = queues.get(sessionId) ?? [];
           if (running.has(sessionId) || runner.isBusy(sessionId) || queue.length > 0) {
             const ack: TaskAckPayload = {
@@ -2112,7 +2106,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             const task: PendingTask = {
               ...taskBase,
               ack,
-              ...(commitContextCursor ? { commitContextCursor } : {}),
             };
             queue.push(task);
             queues.set(sessionId, queue);
@@ -2120,17 +2113,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
             // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
             if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
-            return;
-          }
-
-          // Preserve the direct accepted path's pre-ACK generation fence: a
-          // boundary racing the durable write must roll back and emit no ACK.
-          // Do not pass the optional shared-core guard here: dispatcher must
-          // retain the returned receipt so a failed compensation can keep this
-          // admission alive and retry instead of losing the unaccepted task.
-          const cursorCommit = await commitContextCursor?.();
-          if (!isCurrentGeneration(admittedGeneration)) {
-            await recoverTaskContextCursor(cursorCommit, taskBase, 'accepted');
             return;
           }
 
@@ -2205,6 +2187,18 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
       for (const timer of drainPolls.values()) clearTimeout(timer);
       drainPolls.clear();
+      for (const admission of pendingGroupAdmissions.values()) {
+        if (admission.accepted || admission.cancelled) continue;
+        admission.cancelled = true;
+        finishTaskAsCancelled(admission.task);
+      }
+      // 只收口本 PR 新增的“携带群上下文 commit”任务；Slack/X 普通队列保持
+      // 既有账号 teardown 语义。终态必须在 sendFns / delivery buffer 清理前落下。
+      for (const queue of queues.values()) {
+        for (const task of queue) {
+          if (task.commitContextCursor) finishTaskAsCancelled(task);
+        }
+      }
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
@@ -2240,6 +2234,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         inflightRequests.clear();
         running.clear();
         runningByRequest.clear();
+        pendingGroupAdmissions.clear();
         cancelRequested.clear();
         // 切账号时 execute() 会在代际检查处提前 return, 走不到收口那行删除 ——
         // 不在这里清的话, 每次切账号都永久留下一条 sessionId + 完整工作目录路径
@@ -2380,21 +2375,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (idx >= 0) {
           const [task] = queue.splice(idx, 1);
           if (queue.length === 0) queues.delete(sessionId);
-          const turnEnd: TurnEndPayload = {
-            requestId: task.requestId,
-            externalKey: task.externalKey,
-            sessionId: task.run.sessionId,
-            status: 'cancelled',
-            finalText: '',
-            errorMessage: null,
-            usage: { durationMs: null },
-          };
-          sendOrBuffer(connectionId, makeTurnEnd(turnEnd), {
-            connectionId,
-            requestId: task.requestId,
-            ack: task.ack,
-            turnEnd: durableTurnEnd(turnEnd),
-          });
+          finishTaskAsCancelled(task);
           log.info(`hook task ${requestId} cancelled while queued`);
           return;
         }

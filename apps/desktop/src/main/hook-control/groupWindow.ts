@@ -142,7 +142,7 @@ const NO_CONTEXT: GroupContextAssembly = { prefix: '', commit: () => undefined }
 
 /**
  * 为一次 hook 派发组装本地群上下文前缀。非群 lane / 窗口为空返回空装配。
- * 只读窗口; 游标推进延迟到 commit(由 dispatcher 在任务受理后调用)。
+ * 只读窗口; 游标推进延迟到 commit(由 dispatcher 在 provider 实际受理后调用)。
  */
 export async function buildGroupContextPrefix(
   payload: TaskDispatchPayload,

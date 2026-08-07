@@ -423,7 +423,7 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
-  it('切账号清排队时不提交未开始任务的群游标', async () => {
+  it('切账号清排队时不提交未受理群游标，并为已 queued 任务补 cancelled 终态', async () => {
     const fr = fakeRunner();
     const rollbacks: string[] = [];
     let commitCount = 0;
@@ -443,10 +443,11 @@ describe('dispatcher 核心语义', () => {
       }),
     });
     const c = collector();
-    const externalKey = 'team-slack:C1:1.1';
+    const externalKey = 'telegram:group:bot:-900:9:g0';
 
     d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
     await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
     d.handleDispatch('conn-1', dispatch({ requestId: 'queued-1', externalKey }), c.send);
     await tick();
     d.handleDispatch('conn-1', dispatch({ requestId: 'queued-2', externalKey }), c.send);
@@ -463,6 +464,12 @@ describe('dispatcher 核心语义', () => {
 
     expect(commitCount).toBe(1);
     expect(rollbacks).toEqual([]);
+    expect(
+      c.ofType('turn.end').map((message) => [message.payload.requestId, message.payload.status]),
+    ).toEqual([
+      ['queued-1', 'cancelled'],
+      ['queued-2', 'cancelled'],
+    ]);
   });
 
   it('收口期间的重新激活会被后到的关闭请求作废', async () => {
@@ -1716,6 +1723,7 @@ describe('dispatcher 核心语义', () => {
 
     d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
     await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
     d.handleDispatch('conn-1', dispatch({ requestId: 'queued-a', externalKey }), c.send);
     await tick();
     d.handleDispatch('conn-1', dispatch({ requestId: 'queued-b', externalKey }), c.send);
@@ -1729,6 +1737,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: 'running done' });
     await tick();
     expect(fr.calls).toHaveLength(2);
+    await fr.calls[1]?.onProviderAccepted?.();
     expect(committed).toEqual(['running', 'queued-b']);
 
     fr.finish({ finalText: 'queued b done' });
@@ -1740,280 +1749,152 @@ describe('dispatcher 核心语义', () => {
     ]);
   });
 
-  it('群游标 commit 返回后账号代次失效时回滚且不确认受理', async () => {
-    let beginDeactivation: () => Promise<void> = async () => undefined;
-    let deactivation: Promise<void> | null = null;
+  it('已出队但 provider 未受理的群任务在切账号时 cancelled 且不提交游标', async () => {
+    const committed: string[] = [];
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      abortSession: async () => undefined,
+      buildContextPrefix: async (payload) => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit: async () => {
+          committed.push(payload.requestId);
+        },
+      }),
+    });
+    const c = collector();
+    const externalKey = 'telegram:group:bot:-900:9:g0';
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
+    await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-inflight', externalKey }), c.send);
+    await tick();
+
+    fr.finish({ finalText: 'running done' });
+    await tick();
+    expect(fr.calls).toHaveLength(2);
+    expect(committed).toEqual(['running']);
+
+    const draining = d.deactivateAccount();
+    await tick();
+    expect(
+      c.ofType('turn.end').find((message) => message.payload.requestId === 'queued-inflight')
+        ?.payload,
+    ).toMatchObject({ status: 'cancelled' });
+
+    fr.finish({ finalText: 'must not cross account boundary' });
+    await draining;
+    expect(committed).toEqual(['running']);
+  });
+
+  it('直达任务 provider 未受理前账号失效不提交游标，并补 cancelled 终态', async () => {
     const rollback = vi.fn(async () => undefined);
+    const commit = vi.fn(async () => ({ rollback }));
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      abortSession: async () => undefined,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit,
+      }),
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'not-accepted', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    await tick();
+    expect(c.last('task.ack')?.payload.result).toBe('accepted');
+    expect(fr.calls).toHaveLength(1);
+    expect(commit).not.toHaveBeenCalled();
+
+    const draining = d.deactivateAccount();
+    fr.finish({ finalText: '旧账号任务' });
+    await draining;
+
+    expect(commit).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(
+      c.ofType('turn.end').filter((message) => message.payload.requestId === 'not-accepted'),
+    ).toHaveLength(1);
+    expect(
+      c.ofType('turn.end').find((message) => message.payload.requestId === 'not-accepted')?.payload,
+    ).toMatchObject({ status: 'cancelled' });
+  });
+
+  it('直达任务只在 provider 受理后提交一次群游标', async () => {
+    const commit = vi.fn(async () => undefined);
     const fr = fakeRunner();
     const { d } = makeDispatcher({
       runner: fr.runner,
       buildContextPrefix: async () => ({
         prefix: '<group_chat_context>背景</group_chat_context>',
-        commit: async () => {
-          // commit 已完成；让账号边界微任务先于 dispatcher 的 await continuation
-          // 失效，钉住“返回后、ACK 前”的窄竞态。
-          queueMicrotask(() => {
-            deactivation = beginDeactivation();
-          });
-          return { rollback };
-        },
+        commit,
       }),
     });
-    beginDeactivation = () => d.deactivateAccount();
     const c = collector();
 
     d.handleDispatch(
       'conn-1',
-      dispatch({ requestId: 'stale-commit', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      dispatch({ requestId: 'accepted-once', externalKey: 'telegram:group:bot:-900:9:g0' }),
       c.send,
     );
-    for (let i = 0; i < 30 && deactivation === null; i += 1) await Promise.resolve();
-    expect(deactivation).not.toBeNull();
-    await deactivation!;
     await tick();
+    expect(commit).not.toHaveBeenCalled();
 
-    expect(rollback).toHaveBeenCalledTimes(1);
-    expect(c.ofType('task.ack')).toHaveLength(0);
-    expect(fr.calls).toHaveLength(0);
+    await fr.calls[0]?.onProviderAccepted?.();
+    expect(commit).toHaveBeenCalledTimes(1);
+
+    fr.finish({ finalText: 'done' });
+    await tick();
+    expect(c.last('turn.end')?.payload).toMatchObject({
+      requestId: 'accepted-once',
+      status: 'ok',
+    });
   });
 
-  it('直达受理的游标补偿失败时保留 admission，恢复后才结束账号边界', async () => {
-    vi.useFakeTimers();
-    try {
-      let beginDeactivation: () => Promise<void> = async () => undefined;
-      let deactivation: Promise<void> | null = null;
-      let rollbackAttempts = 0;
-      const log = { info: vi.fn(), warn: vi.fn() };
-      const rollback = vi.fn(async () => {
-        rollbackAttempts += 1;
-        if (rollbackAttempts === 1) throw new Error('sqlite busy');
-      });
-      const fr = fakeRunner();
-      const { d } = makeDispatcher({
-        runner: fr.runner,
-        log,
-        buildContextPrefix: async () => ({
-          prefix: '<group_chat_context>背景</group_chat_context>',
-          commit: async () => {
-            queueMicrotask(() => {
-              deactivation = beginDeactivation();
-            });
-            return { rollback };
-          },
-        }),
-      });
-      beginDeactivation = () => d.deactivateAccount();
-      const c = collector();
+  it('provider 受理后的群游标持久化失败不反转任务，旧游标留待下次重带', async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const commit = vi.fn(async () => {
+      throw new Error('database is readonly');
+    });
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit,
+      }),
+    });
+    const c = collector();
 
-      d.handleDispatch(
-        'conn-1',
-        dispatch({ requestId: 'accepted-recovery', externalKey: 'telegram:group:bot:-900:9:g0' }),
-        c.send,
-      );
-      for (let i = 0; i < 30 && rollbackAttempts === 0; i += 1) await Promise.resolve();
-      expect(deactivation).not.toBeNull();
-      expect(rollback).toHaveBeenCalledTimes(1);
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'persist-failed', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
 
-      let deactivated = false;
-      void deactivation!.then(() => {
-        deactivated = true;
-      });
-      await tick();
-      expect(deactivated).toBe(false);
-      expect(c.ofType('task.ack')).toHaveLength(0);
-      expect(fr.calls).toHaveLength(0);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'group context cursor commit failed after provider acceptance: requestId=persist-failed',
+      ),
+    );
 
-      await vi.advanceTimersByTimeAsync(25);
-      await deactivation!;
-      expect(rollback).toHaveBeenCalledTimes(2);
-      expect(deactivated).toBe(true);
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining('group context cursor rollback retained for retry'),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('直达受理的游标补偿持续失败时有界结束账号边界并记录失败终态', async () => {
-    vi.useFakeTimers();
-    try {
-      let beginDeactivation: () => Promise<void> = async () => undefined;
-      let deactivation: Promise<void> | null = null;
-      const log = { info: vi.fn(), warn: vi.fn() };
-      const rollback = vi.fn(async () => {
-        throw new Error('disk full');
-      });
-      const fr = fakeRunner();
-      const { d } = makeDispatcher({
-        runner: fr.runner,
-        log,
-        buildContextPrefix: async () => ({
-          prefix: '<group_chat_context>背景</group_chat_context>',
-          commit: async () => {
-            queueMicrotask(() => {
-              deactivation = beginDeactivation();
-            });
-            return { rollback };
-          },
-        }),
-      });
-      beginDeactivation = () => d.deactivateAccount();
-      const c = collector();
-
-      d.handleDispatch(
-        'conn-1',
-        dispatch({ requestId: 'accepted-exhausted', externalKey: 'telegram:group:bot:-900:9:g0' }),
-        c.send,
-      );
-      for (let i = 0; i < 30 && rollback.mock.calls.length === 0; i += 1) {
-        await Promise.resolve();
-      }
-      expect(deactivation).not.toBeNull();
-
-      await vi.runAllTimersAsync();
-      await deactivation!;
-
-      expect(rollback).toHaveBeenCalledTimes(6);
-      expect(c.ofType('task.ack')).toHaveLength(0);
-      expect(fr.calls).toHaveLength(0);
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          'group context cursor rollback recovery exhausted: phase=accepted requestId=accepted-exhausted attempts=6 state=exhausted',
-        ),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('排队任务的游标补偿失败时保留 execution，恢复前不丢任务引用', async () => {
-    vi.useFakeTimers();
-    try {
-      let beginDeactivation: () => Promise<void> = async () => undefined;
-      let deactivation: Promise<void> | null = null;
-      let rollbackAttempts = 0;
-      const log = { info: vi.fn(), warn: vi.fn() };
-      const rollback = vi.fn(async () => {
-        rollbackAttempts += 1;
-        if (rollbackAttempts === 1) throw new Error('sqlite busy');
-      });
-      const fr = fakeRunner();
-      const { d } = makeDispatcher({
-        runner: fr.runner,
-        log,
-        buildContextPrefix: async (payload) => ({
-          prefix: '<group_chat_context>背景</group_chat_context>',
-          commit:
-            payload.requestId === 'queued-recovery'
-              ? async () => {
-                  queueMicrotask(() => {
-                    deactivation = beginDeactivation();
-                  });
-                  return { rollback };
-                }
-              : () => undefined,
-        }),
-      });
-      beginDeactivation = () => d.deactivateAccount();
-      const c = collector();
-      const externalKey = 'telegram:group:bot:-900:9:g0';
-
-      d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
-      await tick();
-      d.handleDispatch('conn-1', dispatch({ requestId: 'queued-recovery', externalKey }), c.send);
-      await tick();
-      expect(c.last('task.ack')?.payload).toMatchObject({
-        requestId: 'queued-recovery',
-        result: 'queued',
-      });
-
-      fr.finish({ finalText: 'running done' });
-      for (let i = 0; i < 30 && rollbackAttempts === 0; i += 1) await Promise.resolve();
-      expect(deactivation).not.toBeNull();
-      expect(rollback).toHaveBeenCalledTimes(1);
-      expect(fr.calls).toHaveLength(1);
-
-      let deactivated = false;
-      void deactivation!.then(() => {
-        deactivated = true;
-      });
-      await tick();
-      expect(deactivated).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(25);
-      await deactivation!;
-      expect(rollback).toHaveBeenCalledTimes(2);
-      expect(deactivated).toBe(true);
-      expect(fr.calls).toHaveLength(1);
-      expect(c.ofType('turn.end').some((m) => m.payload.requestId === 'queued-recovery')).toBe(
-        false,
-      );
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining('group context cursor rollback retained for retry'),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('排队任务的游标补偿持续失败时有界结束账号边界且不启动旧任务', async () => {
-    vi.useFakeTimers();
-    try {
-      let beginDeactivation: () => Promise<void> = async () => undefined;
-      let deactivation: Promise<void> | null = null;
-      const log = { info: vi.fn(), warn: vi.fn() };
-      const rollback = vi.fn(async () => {
-        throw new Error('database is readonly');
-      });
-      const fr = fakeRunner();
-      const { d } = makeDispatcher({
-        runner: fr.runner,
-        log,
-        buildContextPrefix: async (payload) => ({
-          prefix: '<group_chat_context>背景</group_chat_context>',
-          commit:
-            payload.requestId === 'queued-exhausted'
-              ? async () => {
-                  queueMicrotask(() => {
-                    deactivation = beginDeactivation();
-                  });
-                  return { rollback };
-                }
-              : () => undefined,
-        }),
-      });
-      beginDeactivation = () => d.deactivateAccount();
-      const c = collector();
-      const externalKey = 'telegram:group:bot:-900:9:g0';
-
-      d.handleDispatch('conn-1', dispatch({ requestId: 'running-exhausted', externalKey }), c.send);
-      await tick();
-      d.handleDispatch('conn-1', dispatch({ requestId: 'queued-exhausted', externalKey }), c.send);
-      await tick();
-
-      fr.finish({ finalText: 'running done' });
-      for (let i = 0; i < 30 && rollback.mock.calls.length === 0; i += 1) {
-        await Promise.resolve();
-      }
-      expect(deactivation).not.toBeNull();
-
-      await vi.runAllTimersAsync();
-      await deactivation!;
-
-      expect(rollback).toHaveBeenCalledTimes(6);
-      expect(fr.calls).toHaveLength(1);
-      expect(c.ofType('turn.end').some((m) => m.payload.requestId === 'queued-exhausted')).toBe(
-        false,
-      );
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          'group context cursor rollback recovery exhausted: phase=queued requestId=queued-exhausted attempts=6 state=exhausted',
-        ),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    fr.finish({ finalText: '磁盘失败也要继续' });
+    await tick();
+    expect(c.last('turn.end')?.payload).toMatchObject({
+      requestId: 'persist-failed',
+      status: 'ok',
+      finalText: '磁盘失败也要继续',
+    });
   });
 
   it('runner 失败 -> turn.end status=error 且 errorMessage 非空', async () => {
@@ -2038,7 +1919,7 @@ describe('dispatcher 核心语义', () => {
     // 同一同步 tick 内连发(ws 同步 emit 场景) —— 修复前会各开一个新 session
     d.handleDispatch('conn-1', dispatch({ requestId: 'r1' }), c.send);
     d.handleDispatch('conn-1', dispatch({ requestId: 'r2' }), c.send);
-    // 受理前会等待 durable-context commit；多给几轮微任务，不改变 FIFO 语义。
+    // 会话定位与受理链含多个微任务；多给几轮，不改变 FIFO 语义。
     await tick(30);
 
     const acks = c.ofType('task.ack').map((m) => m.payload);
@@ -2343,7 +2224,7 @@ describe('dispatcher 核心语义', () => {
     await tick();
     for (let i = 0; i < 21; i++) {
       d.handleDispatch('conn-1', dispatch({ requestId: `q${i}` }), c.send);
-      // 受理前会等待 durable-context commit；多给几轮微任务，不改变 FIFO 语义。
+      // 会话定位与受理链含多个微任务；多给几轮，不改变 FIFO 语义。
       await tick(30);
     }
     const acks = c.ofType('task.ack').map((m) => m.payload);
