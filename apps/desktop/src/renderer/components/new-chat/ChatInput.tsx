@@ -140,6 +140,10 @@ import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton
 import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
+import {
+  addPlanModeComposerCommand,
+  consumePlanModeComposerCommand,
+} from './planModeComposerCommand';
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
@@ -3397,6 +3401,15 @@ export function ChatInput({
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
   const [mergedCommands, setMergedCommands] = useState<UnifiedCommand[]>([]);
+  const planModeCommandAvailable = planModeEntry !== undefined;
+  const composerSlashCommands = useMemo(
+    () =>
+      addPlanModeComposerCommand(
+        mergedCommands,
+        planModeCommandAvailable ? t('planMode.menuItem') : null,
+      ),
+    [mergedCommands, planModeCommandAvailable, t],
+  );
   const paletteAgentKind = agentKind ?? 'claude-code';
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
@@ -3441,8 +3454,8 @@ export function ChatInput({
   // Slash 指令与 $意识一致:doc 保持可逐字编辑的普通文本,完整命中当前 roster
   // 时才由 decoration 显示确认胶囊。异步 roster 刷新不进入 keystroke 热路径。
   useEffect(() => {
-    setSlashCommandRoster(editor, mergedCommands);
-  }, [editor, mergedCommands]);
+    setSlashCommandRoster(editor, composerSlashCommands);
+  }, [editor, composerSlashCommands]);
   // 意识指令源($ 触发):复用窗口级已装意识快照,避免输入触发符时同步扫盘。
   // 目录级禁用同判:被禁用的意识不进 $ 菜单(与胶囊 / 发送期展开同源)。
   const isGhostSigil = trigger.kind === 'slash' && trigger.sigil === '$';
@@ -3460,7 +3473,7 @@ export function ChatInput({
       );
   }, [ghostsForCommand, isGhostSigil, t]);
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
-  const paletteCommands = isGhostSigil ? ghostCommandItems : mergedCommands;
+  const paletteCommands = isGhostSigil ? ghostCommandItems : composerSlashCommands;
   const filteredCommands = useMemo(
     () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
     [paletteCommands, trigger],
@@ -3815,6 +3828,7 @@ export function ChatInput({
   useEffect(() => {
     panelBridgeRef.current = {
       captureKey: (e) => {
+        if (e.isComposing) return false;
         if (!slashOpen && !atOpen) return false;
         switch (e.key) {
           case 'ArrowDown':
@@ -3907,10 +3921,19 @@ export function ChatInput({
         }
         runEnd = parentStart + childOffset + text.length;
       });
-      editor
+      let planModeCommandConsumed = false;
+      const applied = editor
         .chain()
         .focus()
         .command(({ tr }) => {
+          planModeCommandConsumed = consumePlanModeComposerCommand(
+            tr,
+            from,
+            runEnd,
+            cmd,
+            planModeCommandAvailable && trigger.sigil === '/',
+          );
+          if (planModeCommandConsumed) return true;
           if (trigger.sigil === '$') {
             // 意识指令:纯文本 `$命令 `(不建 chip)——发送期由 expandGhostCommand
             // 识别并追加机器指令,序列化零特判。
@@ -3923,8 +3946,11 @@ export function ChatInput({
           return true;
         })
         .run();
+      if (applied && planModeCommandConsumed) {
+        planModeEntry?.onToggle(!planModeEntry.enabled);
+      }
     },
-    [editor, trigger],
+    [editor, planModeCommandAvailable, planModeEntry, trigger],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
