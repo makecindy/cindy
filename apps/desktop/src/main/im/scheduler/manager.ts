@@ -128,6 +128,11 @@ export class ImSchedulerManager {
     this.offStatus = onDeviceLinkStatusChanged((status) => {
       this.deviceLinkReady = status === 'online';
       if (!this.deviceLinkReady) {
+        // Relay loss can happen while the serialized reconcile tail is
+        // waiting for a long handoff drain. Close the Gateway ingress first,
+        // otherwise a peer may take over after our presence expires while
+        // this process still receives Discord events.
+        this.closeSchedulerIngressImmediately('relay-offline');
         this.adoptActiveRuntimeFromAllPeers();
         this.peers.clear();
         void this.ensureStandby();
@@ -197,9 +202,7 @@ export class ImSchedulerManager {
         // handoff drain. Close this process's Gateway ingress immediately so
         // a same-device replacement can never overlap that drain; the queued
         // reconcile still performs the ordered runtime cleanup afterwards.
-        void this.discord.closeSchedulerIngress().catch((error) => {
-          log.warn('discord scheduler ownership-loss ingress close failed', error);
-        });
+        this.closeSchedulerIngressImmediately('ownership-loss');
       }
       void this.reconcile();
     });
@@ -465,6 +468,12 @@ export class ImSchedulerManager {
     } catch (error) {
       log.warn('discord scheduler standby failed', error);
     }
+  }
+
+  private closeSchedulerIngressImmediately(reason: string): void {
+    void this.discord.closeSchedulerIngress().catch((error) => {
+      log.warn(`discord scheduler ${reason} ingress close failed`, error);
+    });
   }
 
   private notifyLocalConfigurationChanged(): void {

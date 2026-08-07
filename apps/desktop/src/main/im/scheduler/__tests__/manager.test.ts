@@ -938,6 +938,42 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('closes ingress immediately when the relay goes offline during a handoff drain', async () => {
+    harness.selfDeviceId = 'z';
+    const discord = createDiscord();
+    let releaseHandoff!: () => void;
+    const handoffGate = new Promise<void>((resolve) => {
+      releaseHandoff = resolve;
+    });
+    discord.enterSchedulerStandby.mockImplementation(async () => {
+      await handoffGate;
+      discord.emitStatus({ kind: 'standby', appId: '12345678901234567' });
+    });
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    harness.presenceHandler?.(harness.peers[0]);
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await vi.waitFor(() => expect(discord.enterSchedulerStandby).toHaveBeenCalledOnce());
+
+    harness.deviceLinkStatus = 'offline';
+    harness.statusHandler?.('offline');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(discord.closeSchedulerIngress).toHaveBeenCalledOnce();
+
+    releaseHandoff();
+    await manager.reconcile();
+    await manager.stop();
+  });
+
   it('stays fail-closed when an online legacy peer cannot confirm the scheduler protocol', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [{
