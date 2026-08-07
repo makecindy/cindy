@@ -179,7 +179,7 @@ export class ImSchedulerManager {
       if (this.lastLocalIdentity && this.lastLocalIdentity !== currentIdentity) {
         this.invalidateRuntimeGapIdentity(this.lastLocalIdentity);
       }
-      if (currentIdentity && currentIdentity !== this.lastLocalIdentity) {
+      if (currentIdentity) {
         this.clearRuntimeGapIdentity(currentIdentity);
       }
       if (currentIdentity) this.clearInvalidatedRuntimeGapIdentity(currentIdentity);
@@ -477,7 +477,15 @@ export class ImSchedulerManager {
       this.discoveryRetryAttempt += 1;
       const roundNonce = this.discoveryNonce;
       const requestId = this.requestSnapshot(true);
-      if (!this.started || roundNonce !== this.discoveryNonce) return;
+      if (!this.started) return;
+      if (roundNonce !== this.discoveryNonce) {
+        if (!this.isDiscoveryComplete() && this.discoveryRetryAttempt >= this.maxDiscoveryRetries) {
+          this.discoveryRetryAttempt = 0;
+          this.scheduleDiscoveryRetry();
+        }
+        this.reconcile();
+        return;
+      }
       this.publishProbeToVisiblePeers();
       if (this.discoveryRetryAttempt >= this.maxDiscoveryRetries) {
         // Wait for the final refresh response before opening another round.

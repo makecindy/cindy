@@ -432,8 +432,11 @@ describe('dormant scheduler manager', () => {
       type: 'snapshot',
       snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
     });
+    const oldGap = { identity, generation: 'a'.repeat(32), state: 'dirty' as const };
+    manager.getRuntimeGaps().adopt(oldGap);
 
     manager.resetBindingDiscovery();
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
     const probe = [...harness.pushes]
       .reverse()
       .find(
@@ -449,11 +452,77 @@ describe('dormant scheduler manager', () => {
         sentAt: 2,
         channels: [{ channel: 'discord', identity }],
         inReplyTo: probe?.nonce,
+        runtimeGaps: [oldGap],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 3,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
         runtimeGaps: [refreshedGap],
       },
     });
 
     expect(manager.getRuntimeGaps().values()).toEqual([refreshedGap]);
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 4,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [oldGap],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([refreshedGap]);
+    manager.stop();
+  });
+
+  it('continues bounded discovery after a synchronous final snapshot with unresolved peers', async () => {
+    vi.useFakeTimers();
+    let requestCount = 0;
+    const harness = createTransport({
+      requestSnapshot: (accountGeneration, requestId) => {
+        requestCount += 1;
+        harness.emit({
+          type: 'snapshot',
+          accountGeneration,
+          requestId,
+          snapshot: {
+            selfDeviceId: 'z',
+            peers: [{ deviceId: 'a', platform: 'win32' }],
+            observedAt: requestCount + 1,
+          },
+        });
+      },
+    });
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `round-${String(++count).padStart(14, '0')}`;
+      })(),
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(requestCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(requestCount).toBe(2);
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
     manager.stop();
   });
 
