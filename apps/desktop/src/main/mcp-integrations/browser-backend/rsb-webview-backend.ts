@@ -26,7 +26,7 @@ import type {
 } from '@cindy/browser-control-runtime';
 import { isPublicHttpResourceUrl } from '@cindy/browser-control-runtime';
 import { isPreviewUrl, killPreviewWebRtc } from './preview-guard.js';
-import { registerRsbPreviewTab } from '../browser-preview-tabs.js';
+import { registerRsbPreviewTab, unregisterRsbPreviewTab } from '../browser-preview-tabs.js';
 import type { WebContents } from 'electron';
 
 import type { TabRegistry } from '../../rsb-browser-bridge/registry.js';
@@ -549,6 +549,8 @@ export class RsbWebviewBackend implements BrowserBackend {
     );
     if (!result.ok) return actionFailed(req.action, result.error);
     this.automation.forgetTab(tabId);
+    // Manual close unregisters the preview registration (symmetric, round 22).
+    unregisterRsbPreviewTab(tabId);
     return actionOk(req.action, { tabId });
   }
 
@@ -565,18 +567,22 @@ export class RsbWebviewBackend implements BrowserBackend {
       this.automation.forgetTab(tabId);
       await this.tryObservePageSignals(resolved.wc, tabId);
       this.assertActive();
-      // Register preview tabs (reuse-existing-tab navigation onto a preview
-      // URL) so revocation can close them after LRU eviction (round 21).
-      if (isPreviewUrl(url)) {
-        const record = this.opts.registry.findByWebContentsId(resolved.wc.id);
-        if (record) registerRsbPreviewTab(record.sessionId, tabId);
-      }
       await loadUrlWithTimeout(
         resolved.wc,
         url,
         req.timeoutMs ?? DEFAULT_NAVIGATION_TIMEOUT_MS,
         this.lifecycleAbort.signal,
       );
+      // Register preview tabs only AFTER the navigation succeeded (round 22:
+      // a failed navigation must not register); navigating AWAY from a
+      // preview URL unregisters — symmetric, so revocation never closes a
+      // tab that now shows a normal page (new Codex reviewer, round 22).
+      if (isPreviewUrl(url)) {
+        const record = this.opts.registry.findByWebContentsId(resolved.wc.id);
+        if (record) registerRsbPreviewTab(record.sessionId, tabId);
+      } else {
+        unregisterRsbPreviewTab(tabId);
+      }
       return actionOk(req.action, { tabId, url });
     });
   }

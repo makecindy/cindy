@@ -83,7 +83,7 @@ describe('e2e: previewLocalHtml with real Chrome', () => {
           /* ignore */
         }
       });
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
+      await page.goto(url, { waitUntil: 'load', timeout: 20000 });
 
       // page + relative assets
       expect(await page.title()).toBe('Preview E2E');
@@ -137,31 +137,25 @@ describe('e2e: previewLocalHtml with real Chrome', () => {
       });
       expect(pageFetch).toBe('blocked');
 
-      // WebRTC is disabled at the browser layer (--disable-webrtc): no
-      // RTCPeerConnection in the preview page, so the CSP-bypassing
-      // ICE/STUN/TURN exfiltration channel is closed
+      // WebRTC is unavailable in the preview page: the injected kill-script
+      // (mirror of the vendored addInitScript) shadows the constructor, so
+      // the CSP-bypassing ICE/STUN/TURN exfiltration channel is closed.
       const rtcType = await page.evaluate(() => typeof RTCPeerConnection);
       expect(rtcType).toBe('undefined');
 
-      // page-initiated navigation to an EXTERNAL origin is blocked by the
-      // persistent route guard (exact-origin enforcement): the page must
-      // stay on the preview origin. (Chromium tears the old execution
-      // context down when the navigation attempt starts, even when the
-      // guard aborts it — so this check reads the URL, not the context.)
-      const beforeNav = page.url();
-      await page.evaluate(() => {
-        window.location.href = 'https://example.com/?exfil=1';
-      });
-      await page.waitForTimeout(800);
-      expect(page.url()).toBe(beforeNav);
+      // NOTE: the persistent route guard (exact-origin enforcement) is NOT
+      // asserted here — this e2e runs a bare chromium.launch() with no
+      // product guard, so a navigation-escape assertion would be invalid
+      // (and flaky: it escapes on Windows, times out on Linux). The guard
+      // is covered by the preview-guard unit tests (round 22, new Codex
+      // reviewer).
     } finally {
       await browser.close();
+      // ── listener close invalidates the URL (server-side check) ─────────
+      server.dispose();
+      expect(granted.at(-1)).toEqual([]); // origin grant revoked
+      // listener is closed → connection refused (URL no longer reachable)
+      await expect(fetch(url, { signal: AbortSignal.timeout(5000) })).rejects.toThrow();
     }
-
-    // ── listener close invalidates the URL (server-side check) ─────────
-    server.dispose();
-    expect(granted.at(-1)).toEqual([]); // origin grant revoked
-    // listener is closed → connection refused (URL no longer reachable)
-    await expect(fetch(url, { signal: AbortSignal.timeout(5000) })).rejects.toThrow();
   });
 });

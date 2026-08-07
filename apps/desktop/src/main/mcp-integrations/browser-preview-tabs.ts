@@ -21,11 +21,26 @@
  * their PERSISTENT store row, so revocation must close them from this set —
  * the bridge close deletes the row regardless of liveness
  * (codex-connector P1, round 21).
+ *
+ * tabId → sessionId map (not a joined string: sessionId is an opaque string
+ * and may contain colons — round 22, new Codex reviewer). Entries are added
+ * only AFTER a preview navigation succeeded and removed on navigate-away /
+ * manual close / successful revocation close, so a tab showing a normal
+ * page is never closed by revocation.
  */
-const rsbPreviewTabs = new Set<string>(); // `${sessionId}:${tabId}`
+const rsbPreviewTabs = new Map<string, string>();
 
 export function registerRsbPreviewTab(sessionId: string, tabId: string): void {
-  if (sessionId && tabId) rsbPreviewTabs.add(`${sessionId}:${tabId}`);
+  if (sessionId && tabId) rsbPreviewTabs.set(tabId, sessionId);
+}
+
+export function unregisterRsbPreviewTab(tabId: string): void {
+  rsbPreviewTabs.delete(tabId);
+}
+
+/** Test-only: reset the registration set (module state is shared across tests). */
+export function _resetRsbPreviewTabsForTests(): void {
+  rsbPreviewTabs.clear();
 }
 
 export interface PreviewTabCloserDeps {
@@ -43,8 +58,14 @@ export interface PreviewTabCloserDeps {
     sessionId: string;
     wc: { getURL?(): string; isDestroyed(): boolean };
   }>;
-  /** Close an RSB tab through the renderer bridge (removes the persistent store row). */
-  closeRsbTab(sessionId: string, tabId: string): Promise<void>;
+  /**
+   * Close an RSB tab through the renderer bridge (removes the persistent
+   * store row). Resolves true when the row was removed; false on rejection
+   * OR business failure (ok:false after the caller's retry) — a false
+   * result keeps the registration so the next revocation retries it.
+   * MUST NOT throw (round 22 contract).
+   */
+  closeRsbTab(sessionId: string, tabId: string): Promise<boolean>;
   isPreviewUrl(u: string): boolean;
 }
 
@@ -95,14 +116,16 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
     // Rows with NO live WebContents (LRU-evicted / detached-closed) never
     // appear in the registry: close them from the registration set — the
     // bridge close deletes the persisted row regardless of liveness
-    // (codex-connector P1, round 21).
-    for (const key of rsbPreviewTabs) {
-      const sep = key.indexOf(':');
-      if (sep > 0) {
-        await deps.closeRsbTab(key.slice(0, sep), key.slice(sep + 1));
-      }
-    }
-    rsbPreviewTabs.clear();
+    // (round 21). Closes run in parallel (bounded by the caller's race);
+    // a failed close (false) KEEPS the entry for the next revocation
+    // (round 22).
+    const entries = [...rsbPreviewTabs.entries()];
+    const results = await Promise.all(
+      entries.map(([tabId, sessionId]) => deps.closeRsbTab(sessionId, tabId)),
+    );
+    entries.forEach(([tabId], i) => {
+      if (results[i]) rsbPreviewTabs.delete(tabId);
+    });
   } catch {
     /* best-effort */
   }

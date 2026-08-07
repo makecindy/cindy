@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  _resetRsbPreviewTabsForTests,
   closePreviewTabs,
   registerRsbPreviewTab,
+  unregisterRsbPreviewTab,
   type PreviewTabCloserDeps,
 } from '../browser-preview-tabs.js';
+
+afterEach(() => {
+  _resetRsbPreviewTabsForTests();
+});
 
 const PREVIEW_URL =
   'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
@@ -21,7 +27,7 @@ function fakeDeps(overrides: Partial<PreviewTabCloserDeps> = {}): PreviewTabClos
     { suggestedTargetId: 't2', url: OTHER_URL },
   ]);
   const closeVendoredTab = vi.fn(async () => {});
-  const closeRsbTab = vi.fn(async () => {});
+  const closeRsbTab = vi.fn(async () => true);
   const rsbPreviewWc = { getURL: () => PREVIEW_URL, isDestroyed: () => false };
   const rsbOtherWc = { getURL: () => OTHER_URL, isDestroyed: () => false };
   const listRsbTabs = vi.fn(() => [
@@ -92,8 +98,29 @@ describe('closePreviewTabs (browser-preview-tabs)', () => {
     await closePreviewTabs(deps);
     expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
     expect(deps.closeRsbTab).toHaveBeenCalledWith('s9', 'evicted-1');
-    // the set is drained after a sweep
+    // the entry is drained after a successful sweep
     await closePreviewTabs(deps);
     expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the registration when the bridge close fails (round 22)', async () => {
+    registerRsbPreviewTab('s9', 'sticky-1');
+    const deps = fakeDeps({
+      listRsbTabs: vi.fn(() => []),
+      closeRsbTab: vi.fn(async () => false),
+    });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
+    // failed close keeps the entry → next revocation retries
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).toHaveBeenCalledTimes(2);
+  });
+
+  it('unregistered tabs are not closed (navigate-away / manual close, round 22)', async () => {
+    registerRsbPreviewTab('s9', 'gone-1');
+    unregisterRsbPreviewTab('gone-1');
+    const deps = fakeDeps({ listRsbTabs: vi.fn(() => []) });
+    await closePreviewTabs(deps);
+    expect(deps.closeRsbTab).not.toHaveBeenCalled();
   });
 });

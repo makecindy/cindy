@@ -49,7 +49,6 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { disposeAndroidAdb } from './mcp-integrations/android';
-import { revokePreviewState } from './mcp-integrations/browser.js';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
 
@@ -1017,7 +1016,16 @@ async function forceQuit(): Promise<void> {
   // 关闭,否则外置 Chrome 会保留指向已释放端口的预览标签、RSB 持久记录
   // 也会在重启后恢复旧 URL (codex-connector P1, round 19)。有界等待清理
   // 完成:更新脚本轮询 PID 消失,等待必须短且有界 (round 20)。
-  const previewCleanup = revokePreviewState();
+  // 动态 import:静态导入 browser.ts 会把整个浏览器运行时(含 sharp)拉进
+  // 更新器依赖链,导致 updateService 单元测试在 Windows CI 全挂
+  // (round 22, 新 Codex 审查者发现)。
+  let previewCleanup: Promise<void> = Promise.resolve();
+  try {
+    const { revokePreviewState } = await import('./mcp-integrations/browser.js');
+    previewCleanup = revokePreviewState();
+  } catch (err) {
+    log.warn('revokePreviewState unavailable at force-quit:', err);
+  }
   await Promise.race([
     previewCleanup.catch(() => {}),
     new Promise((resolve) => setTimeout(resolve, 1000)),
