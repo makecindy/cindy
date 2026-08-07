@@ -599,8 +599,14 @@ function stripDataLiterals(command: string): string {
     // 1) NAME='…' / NAME="…" —— 赋值的右值是数据(除非它是凭证路径)。
     .replace(
       new RegExp(String.raw`(^|[\s;&|(])([A-Za-z_]\w*)=(${QUOTED})`, 'g'),
-      (_m, sep: string, name: string, literal: string) =>
-        maskUnlessCredential(`${sep}${name}=`, literal),
+      (_m, sep: string, name: string, literal: string) => {
+        // 同一条命令里若之后又把这个变量**展开**出来(`CMD="sudo"; $CMD cat /etc/shadow`),
+        // 那个值就不是纯数据 —— shell 会把它展开成真实命令,遮蔽后红线只看到 `$CMD`。
+        // 被引用就整段保留给红线扫描(review 报:字面 `sudo` 原本逐次确认,遮蔽后降灰区)。
+        const referenced = new RegExp(String.raw`\$\{?${name}\b`).test(command);
+        if (referenced) return `${sep}${name}=${literal}`;
+        return maskUnlessCredential(`${sep}${name}=`, literal);
+      },
     )
     // 2) 消息**正文**类 flag 的值。只收「值就是正文」的 flag:`-F`/`--body-file`/
     //    `--message-file` 的值是**路径**,不在此列(见上方护栏二)。
@@ -649,7 +655,9 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // 在别的命令里含义完全不同(`docker -t`、`tar -t`),所以**限定在 `gh auth` 命令位**上匹配。
   // `(?:\S*\/)?` 让绝对/相对路径调用同样命中(`/usr/bin/gh auth status -t`,review 四轮 P1)——
   // 只匹配裸 `gh` 等于给一个换写法就绕过的口子。
-  /(?:^|\s)(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*(?:\s+(?!-)\S+)*\s+-[a-zA-Z]*t[a-zA-Z]*(?![\w=-])/,
+  // 子命令与 `-t` 之间允许**任意**中间参数:`gh auth status --hostname github.com -t` 是
+  // 合法组合,原来只允许非选项 token 会漏(review 报)。用 `[^|;&\n]*?` 限定在同一段内。
+  /(?:^|\s)(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s-[a-zA-Z]*t[a-zA-Z]*(?![\w=-])/,
   // `gh auth token` 直接把令牌打到 stdout,与 `--show-token` 同级(同族一次收完)。
   /(?:^|\s)(?:\S*\/)?gh\s+auth\s+token\b/,
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
@@ -1413,7 +1421,7 @@ const INTERPRETER_VALUELESS_OPTIONS: readonly { match: RegExp; opts: ReadonlySet
 function analyzeInterpreterArgs(
   bin: string,
   args: readonly string[],
-): { scriptOperands: string[]; usesModuleSelector: boolean } {
+): { scriptOperands: string[]; usesModuleSelector: boolean; usesInlineCode?: boolean } {
   // 表里没有这个解释器 ≠ 它的选项都不吃参数。**同一套解析对所有会执行 stdin 的解释器生效**:
   // 未建模的族(php 的 `-d display_errors=1`、lua、pwsh、julia…)一样按「表外选项 → fail-closed」
   // 处理,否则 `printf '<?php …' | php -d display_errors=1` 会把 `display_errors=1` 当脚本文件,
@@ -1423,6 +1431,9 @@ function analyzeInterpreterArgs(
   // 只有 python 家族的 `-m` 是「用具名模块当程序」;其它解释器的同名短选项各有各的含义
   // (bash `-m` = job control),不能共用一套判据。
   const supportsModuleStartup = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin);
+  // 该解释器承载「程序正文」的 flag 集合。取自 interpreterInlineCodePayload 的同一份口径,
+  // 这里只需要名字(用来判**位置**),载荷本身仍由那个函数取。
+  const inlineCodeFlags = new Set(INTERPRETER_INLINE_CODE_FLAGS(bin).map((f) => f.toLowerCase()));
   const operands: string[] = [];
   for (const token of args) {
     if (token === '--') continue;
@@ -1436,6 +1447,12 @@ function analyzeInterpreterArgs(
       //    `python3 -X -m` 里的 `-m` 是 `-X` 的值而不是选项位(review 五轮 P1)。
       if (supportsModuleStartup && (token === '-m' || token === '--module')) {
         return { scriptOperands: operands, usesModuleSelector: true };
+      }
+      // 内联代码 flag(`-c` / `-e` / `--eval` …)同样只有落在**真实选项位**才代表「程序是
+      // 字面量」。`python3 -X -c` 里的 `-c` 是 `-X` 的值 —— 按整串 argv 搜索会误判成源码
+      // 选项、把 stdin 即程序降进灰区(review 报,与 `-m` 是同一类错误的另一半)。
+      if (inlineCodeFlags.has(token.toLowerCase())) {
+        return { scriptOperands: operands, usesInlineCode: true };
       }
       // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
       if (valueless.has(token) || token.includes('=')) continue;
@@ -1488,6 +1505,40 @@ function xargsPlaceholderFeedsInterpreterSource(argv: string[], placeholder: str
   }
   return false;
 }
+/**
+ * 不用 `-I` 也能让 stdin 决定跑什么:xargs 把输入项**追加**到 `COMMAND [INITIAL-ARGS]` 后面。
+ * 如果命令末尾正好是一个「等着接程序正文」的选项,那个空位就由 stdin 补上:
+ *
+ *     printf 'touch /outside/pwn' | xargs env -S       ← 输入被 env -S 拆成命令执行
+ *     printf 'evilmod'            | xargs python3 -m   ← 输入选择跑哪个模块
+ *     printf '…'                  | xargs node -e      ← 输入就是源码
+ *
+ * 判据仍复用同一份真源:`interpreterInlineCodePayload` / `shellCommandPayload` 在 flag 存在
+ * 但**没有值**时返回空串 —— 那正是「值等着 stdin 来填」的信号(review 报的新变体)。
+ */
+function xargsStdinFillsProgramSlot(tokens: string[]): boolean {
+  const nested = xargsCommandTokens(tokens);
+  if (nested === null || nested.length === 0) return false;
+  const variants = [nested, unwrapWrappers(nested)];
+  for (let i = 0; i < nested.length; i++) {
+    if (isPipeExecutor(executableName(nested[i] ?? ''))) variants.push(nested.slice(i));
+  }
+  for (const argv of variants) {
+    const last = argv[argv.length - 1] ?? '';
+    // `env -S` / `--split-string` 结尾:stdin 被当命令串拆开执行。
+    if (STRING_REPARSING_WRAPPER_OPTIONS.test(last)) return true;
+    // 内联代码 / shell -c flag 存在但缺值 → 空位由 stdin 填。
+    const inlineCode = interpreterInlineCodePayload(argv);
+    if (inlineCode === '') return true;
+    const shellPayload = shellCommandPayload(argv);
+    if (shellPayload === '') return true;
+    // `python3 -m` 结尾:模块名由 stdin 决定。
+    if ((last === '-m' || last === '--module')
+      && /^(?:python|pypy)\d*(?:\.\d+)*$/.test(executableName(argv[0] ?? ''))) return true;
+  }
+  return false;
+}
+
 function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   // 占位符解析必须区分「吃下一个参数」和「用缺省 {}」两类,否则会把命令名当成占位符:
   //   -I R / -I{}         GNU xargs 的 -I **必须**带参数(分离或紧贴);
@@ -1567,16 +1618,21 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // 字面量程序(shell -c / 解释器 -e/-c/--eval):静态可见,且各自另有递归审查。
   // 例外:载荷正好是 `-`(如 `powershell -Command -`、`python -c -`)是**从 stdin 读程序**
   // 的标准写法,不是字面量代码 —— 放行它等于把 `下载 | 解释器` 整条漏掉。
+  // shell 的 `-s`(含簇写)= **强制从 stdin 读脚本**,后面的操作数只是位置参数、不是脚本
+  // 文件。必须在操作数判定之前直接收口,否则 `printf 'rm -rf /outside' | bash -s arg` 里的
+  // `arg` 会被当脚本文件、把「stdin 即程序」降进灰区(review 报)。
+  if (SHELL_EXECUTORS.has(bin)
+    && tokens.slice(1).some((t) => /^-[a-zA-Z]*s[a-zA-Z]*$/.test(t))) return true;
   const shellPayload = shellCommandPayload(tokens);
   if (shellPayload !== null && shellPayload.trim() !== '-') return false;
-  const inlineCode = interpreterInlineCodePayload(tokens);
-  if (inlineCode !== null && inlineCode.trim() !== '-') return false;
   // 选项与操作数**按位**解析一次,同时得出「有没有模块选择器」和「有没有可信脚本文件」——
   // 两者必须同源,否则 `python3 -X -m` 里作为 `-X` 值的 `-m` 会被误当模块选择器,绕过
   // fail-closed(review 五轮 P1)。裸 `-` 是 stdin 占位符,不算脚本文件
   // (`curl … | python3 -` 仍必须是红线)。
-  const { scriptOperands, usesModuleSelector } = analyzeInterpreterArgs(bin, tokens.slice(1));
+  const { scriptOperands, usesModuleSelector, usesInlineCode } =
+    analyzeInterpreterArgs(bin, tokens.slice(1));
   if (usesModuleSelector) return false;                 // `python3 -m json.tool`:具名模块
+  if (usesInlineCode) return false;                     // `python3 -c '…'`:程序是字面量
   if (scriptOperands.filter((t) => t !== '-').length > 0) return false;
   return true;
 }
@@ -1594,11 +1650,14 @@ function shellCommandPayload(tokens: string[]): string | null {
   return null;
 }
 
-/** 常见解释器把下一参数当源码执行的 flag / 子命令。 */
-function interpreterInlineCodePayload(tokens: string[]): string | null {
-  const bin = executableName(tokens[0] ?? '');
-  if (bin === 'deno' && tokens[1]?.toLowerCase() === 'eval') return tokens[2] ?? '';
-  const flags = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin) ? ['-c']
+/**
+ * 各解释器「把下一参数当源码执行」的 flag 名。抽成单点是因为有两个消费者:
+ * `interpreterInlineCodePayload` 取**载荷**,`analyzeInterpreterArgs` 判**位置**
+ * (`python3 -X -c` 里的 `-c` 是 `-X` 的值,不是源码选项)。两边必须同源,否则又会出现
+ * 「一个位置无关、一个位置相关」的错配。
+ */
+function INTERPRETER_INLINE_CODE_FLAGS(bin: string): string[] {
+  return /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin) ? ['-c']
     : /^(?:node|nodejs|bun)$/.test(bin) ? ['-e', '--eval', '-p', '--print']
       : /^(?:ruby|lua|luajit)\d*(?:\.\d+)*$/.test(bin) ? ['-e']
         : bin === 'perl' ? ['-e', '-E']
@@ -1606,6 +1665,13 @@ function interpreterInlineCodePayload(tokens: string[]): string | null {
             : /^(?:pwsh|powershell)$/.test(bin) ? ['-c', '-command', '-e', '-encodedcommand']
               : /^(?:r|rscript|julia|groovy|swift|osascript)$/.test(bin) ? ['-e', '--eval']
                 : [];
+}
+
+/** 常见解释器把下一参数当源码执行的 flag / 子命令。 */
+function interpreterInlineCodePayload(tokens: string[]): string | null {
+  const bin = executableName(tokens[0] ?? '');
+  if (bin === 'deno' && tokens[1]?.toLowerCase() === 'eval') return tokens[2] ?? '';
+  const flags = INTERPRETER_INLINE_CODE_FLAGS(bin);
   // 两遍扫描:**先把所有 flag 的精确匹配试完,再试紧贴值形态**。
   // 单遍按 flag 顺序会让短选项的紧贴分支抢在长选项的精确匹配之前 —— pwsh 的 `-Command`
   // 被 `-c` 当成「紧贴值 `ommand`」吃掉,于是拿不到真正的载荷,
@@ -1840,7 +1906,8 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     // 那两条变红是被区外破坏目标与 wrapperUnresolved 撞上的,不是这条判据生效(review 五轮)。
     const literalTokens = tokenize(text);
     if (executableName(literalTokens[0] ?? '') === 'xargs'
-      && xargsReplacementDrivesCommand(literalTokens)) return true;
+      && (xargsReplacementDrivesCommand(literalTokens)
+        || xargsStdinFillsProgramSlot(literalTokens))) return true;
     // 去引号+去反斜杠的 normalized 会抹掉 Windows 盘符路径的 `\` 分隔符,令 `"C:\…\pwsh.exe"` 这类
     // 完整路径解释器识别不出(copilot 报)→ 额外用保留反斜杠的 rawTokens 求一次 bin,任一命中即算执行器。
     const rawBin = executableName(rawTokens[0] ?? '');

@@ -507,6 +507,62 @@ describe('review 第五轮 — 选项值与动态执行', () => {
   });
 });
 
+/**
+ * 第八轮 review 的 5 条,同属「选项按位解析 / stdin 填补程序位 / 赋值遮蔽」这一族。
+ * 全部是本 PR 引入的降级。
+ */
+describe('review 第八轮 — 按位解析与 stdin 填补程序位', () => {
+  it('[P1] 不用 -I 时,stdin 会填补命令末尾缺失的程序参数', () => {
+    // xargs 把输入项**追加**到 COMMAND 后面;末尾正好是等着接程序正文的选项时,
+    // 那个空位由 stdin 补上 —— 与 `-I` 占位符同级。
+    for (const c of [
+      `printf 'touch /outside/pwn' | xargs env -S`,
+      `printf 'evilmod' | xargs python3 -m`,
+      `printf 'x' | xargs node -e`,
+      `printf 'x' | xargs sh -c`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 普通 xargs 输入仍是数据。
+    expect(classifyShellCommand('cat list.txt | xargs grep foo', roots, opts)).toBe('prompt');
+  });
+
+  it('[P1] 内联代码选项也要按位解析(与模块选择器同口径)', () => {
+    // `python3 -X -c` 里的 `-c` 是 `-X` 的值,按整串 argv 搜索会误判成源码选项。
+    expect(classifyShellCommand("printf 'x' | python3 -X -c", roots, opts)).toBe('prompt-each-time');
+    // 真正落在选项位的内联代码照常识别为「程序是字面量」。
+    expect(classifyShellCommand(`printf 'x' | python3 -c 'print(1)'`, roots, opts)).toBe('prompt');
+  });
+
+  it('[P1] 随后被展开到命令位的赋值不遮蔽', () => {
+    // shell 会把 `$CMD` 展开成真实命令,遮蔽后红线只看到 `$CMD`。
+    expect(classifyShellCommand('CMD="sudo"; $CMD cat /etc/shadow', roots, opts)).toBe('prompt-each-time');
+    expect(classifyShellCommand('X="sudo rm -rf /" && $X', roots, opts)).toBe('prompt-each-time');
+    // 没被引用的赋值仍照常遮蔽,中文提交说明不因此回退成红线。
+    expect(classifyShellCommand('MSG="hello world" && echo done', roots, opts)).toBe('prompt');
+    expect(classifyShellCommand(
+      'git commit -s -m "fix: 收到 user/toggle-off/shutdown/revoked 后清理"', roots, opts,
+    )).toBe('prompt');
+  });
+
+  it('[P1] gh auth status 的 -t 可以出现在其它选项之后', () => {
+    expect(classifyShellCommand(
+      'gh auth status --hostname github.com -t', roots, opts,
+    )).toBe('prompt-each-time');
+    expect(classifyShellCommand('gh auth status', roots, opts)).toBe('auto-approve');
+  });
+
+  it('[P1] shell 的 -s 强制从 stdin 读脚本,后面的操作数不是脚本文件', () => {
+    for (const c of [
+      `printf 'rm -rf /outside' | bash -s arg`,
+      `printf 'rm -rf /outside' | bash -es arg`,
+      `printf 'rm -rf /outside' | sh -s -- a b`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [
