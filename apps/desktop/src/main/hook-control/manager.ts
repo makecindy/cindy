@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
+  DEFAULT_TELEGRAM_BEHAVIOR,
   HOOK_FEATURE_MESSAGE_OPS,
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
@@ -54,6 +55,7 @@ import {
   type ProviderBindStatusPayload,
   type ProviderBehaviorSetPayload,
   type ProviderBehaviorStatePayload,
+  type TelegramEmojiReactions,
   type QuerySessionEntry,
 } from '@cindy/slack-hook-protocol';
 
@@ -1092,6 +1094,15 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       lane.pendingBehavior.set(requestId, { bindingId, resolve, reject, timer });
     });
   }
+
+  /**
+   * 最近一次 provider.behavior.state 的表情档位。
+   *
+   * 之前这个状态只广播给界面, main 侧没留 —— 于是 ack 表情读不到用户的
+   * off / minimal / expressive 选择。缓存在这里而不是塞进 lane: 它是 per-binding
+   * 的全局开关, 而 Telegram lane 与 binding 一一对应。
+   */
+  let telegramEmojiReactions: TelegramEmojiReactions = DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions;
 
   function telegramBehaviorView(payload: ProviderBehaviorStatePayload): TelegramHookBehaviorState {
     return {
@@ -2177,6 +2188,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           return;
         }
         const view = telegramBehaviorView(msg.payload);
+        telegramEmojiReactions = view.emojiReactions;
+        dispatcher?.setEmojiReactionsMode(telegramEmojiReactions);
         pending.resolve(view);
         notifyTelegramBehavior?.(view);
         return;
@@ -2185,7 +2198,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         log.warn('stale provider behavior push for a different binding, dropped');
         return;
       }
-      notifyTelegramBehavior?.(telegramBehaviorView(msg.payload));
+      const pushedView = telegramBehaviorView(msg.payload);
+      telegramEmojiReactions = pushedView.emojiReactions;
+      dispatcher?.setEmojiReactionsMode(telegramEmojiReactions);
+      notifyTelegramBehavior?.(pushedView);
       return;
     }
     if (msg.type === 'bind.update') {

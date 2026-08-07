@@ -9,6 +9,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_MESSAGE_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
@@ -171,6 +172,25 @@ function dispatch(overrides: Partial<TaskDispatchPayload> = {}): TaskDispatchPay
     prompt: '干活',
     ...overrides,
   };
+}
+
+/**
+ * 官方 bot 的 ack 表情走 msg.op。用 Telegram 的 lane key + 触发消息 id 构造
+ * 一条会真的产生表情的派发(Slack 的固件不带 source.triggerMessageId, 表情整体
+ * 跳过)。
+ */
+function telegramDispatch(overrides: Partial<TaskDispatchPayload> = {}): TaskDispatchPayload {
+  return dispatch({
+    externalKey: 'telegram:group:bot:-100200:user-7:g1',
+    source: { im: 'telegram', triggerMessageId: '55' },
+    ...overrides,
+  });
+}
+
+function reactionEmojis(sent: readonly HookMessage[]): string[] {
+  return sent
+    .filter((m) => m.type === 'msg.op')
+    .map((m) => (m.payload as { action: { emoji?: string } }).action.emoji ?? '');
 }
 
 async function tick(times = 10): Promise<void> {
@@ -4152,5 +4172,43 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
     expect(sig.listenerCount()).toBe(1);
     d.dispose();
     expect(sig.listenerCount()).toBe(0);
+  });
+});
+
+describe('官方 bot ack 表情(msg.op)', () => {
+  it('排队的任务也要给 👀 —— 用户分不清是在排队还是丢了', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first' }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued-one' }), c.send);
+    await tick();
+
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
+    // 两条各一次 👀: 立即受理的那条 + 排队的那条; 出队启动时不重复补发。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']);
+  });
+
+  it('老 server 没宣告 msg-op-v1 → 一帧 msg.op 都不发', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send); // 不带 features
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'no-cap' }), c.send);
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+  });
+
+  it('server 没下发触发消息 id → 跳过, 不猜一个 id', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.handleDispatch('conn-1', dispatch({ requestId: 'no-trigger' }), c.send);
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
   });
 });

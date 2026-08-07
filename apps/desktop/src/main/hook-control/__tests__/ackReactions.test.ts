@@ -8,7 +8,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { HOOK_FEATURE_MESSAGE_OPS, type HookMessage } from '@cindy/slack-hook-protocol';
+import {
+  HOOK_FEATURE_MESSAGE_OPS,
+  type HookMessage,
+  type TelegramEmojiReactions,
+} from '@cindy/slack-hook-protocol';
+import { EXPRESSIVE_DONE_POOL, EXPRESSIVE_ERROR_POOL } from '@cindy/im';
 
 import { createAckReactions, type AckReactionTask } from '../ackReactions';
 
@@ -20,7 +25,11 @@ const TASK: AckReactionTask = {
   triggerMessageId: '55',
 };
 
-function harness(features: readonly string[] = [HOOK_FEATURE_MESSAGE_OPS]) {
+function harness(
+  features: readonly string[] = [HOOK_FEATURE_MESSAGE_OPS],
+  emojiReactions: TelegramEmojiReactions = 'minimal',
+  random: () => number = () => 0,
+) {
   const sent: HookMessage[] = [];
   const send = vi.fn((m: HookMessage) => {
     sent.push(m);
@@ -29,6 +38,8 @@ function harness(features: readonly string[] = [HOOK_FEATURE_MESSAGE_OPS]) {
   const warn = vi.fn();
   const reactions = createAckReactions({
     serverFeatures: new Map([[CONN, features]]),
+    emojiReactions: () => emojiReactions,
+    random,
     log: { info: () => undefined, warn },
   });
   return { reactions, send, sent, warn };
@@ -95,6 +106,50 @@ describe('官方 bot ack 表情', () => {
     const h = harness();
     h.reactions.onAccepted(TASK, h.send);
     expect(opOf(h.sent[0]).scope).toEqual({ externalKey: TASK.externalKey });
+  });
+
+  describe('表情档位(与个人 bot 的三档同语义)', () => {
+    it('off: 一个表情都不发, 含 👀 与终态', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'off');
+      h.reactions.onAccepted(TASK, h.send);
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      expect(h.send).not.toHaveBeenCalled();
+    });
+
+    it('minimal: 固定 👀 → 👍 / 👎', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal');
+      h.reactions.onAccepted(TASK, h.send);
+      h.reactions.onFinished(TASK, 'error', h.send);
+      expect(opOf(h.sent[0]).action.emoji).toBe('👀');
+      expect(opOf(h.sent[1]).action.emoji).toBe('👎');
+    });
+
+    it('expressive: 终态取变体池, ack 仍是 👀 且正负池不串', () => {
+      // 生动档也不拿开场表情做文章 —— 与个人 bot 一致。正负分开是底线:
+      // 成功不能随机出 👎 一类。
+      const ok = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
+      ok.reactions.onAccepted(TASK, ok.send);
+      ok.reactions.onFinished(TASK, 'ok', ok.send);
+      expect(opOf(ok.sent[0]).action.emoji).toBe('👀');
+      expect(EXPRESSIVE_DONE_POOL).toContain(opOf(ok.sent[1]).action.emoji);
+
+      const failed = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
+      failed.reactions.onFinished(TASK, 'error', failed.send);
+      expect(EXPRESSIVE_ERROR_POOL).toContain(opOf(failed.sent[0]).action.emoji);
+    });
+
+    it('未收到服务端下发时按协议基线 minimal', () => {
+      const sent: HookMessage[] = [];
+      const reactions = createAckReactions({
+        serverFeatures: new Map([[CONN, [HOOK_FEATURE_MESSAGE_OPS]]]),
+        log: { info: () => undefined, warn: vi.fn() },
+      });
+      reactions.onFinished(TASK, 'ok', (m) => {
+        sent.push(m);
+        return true;
+      });
+      expect(opOf(sent[0]).action.emoji).toBe('👍');
+    });
   });
 
   it('回执失败只记一行, 不抛不重试(表情是装饰, 不能影响任务)', () => {

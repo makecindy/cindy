@@ -41,6 +41,7 @@ import {
   makeInteractionRequest,
   makeTaskAck,
   type MessageOpResultPayload,
+  type TelegramEmojiReactions,
   makeTurnEnd,
   makeTurnProgress,
   makeTurnReopen,
@@ -344,6 +345,11 @@ export interface HookDispatcher {
    * 失败只记一行, 不重试、不影响任务本身。
    */
   onMessageOpResult(payload: MessageOpResultPayload): void;
+  /**
+   * 用户的表情档位(off / minimal / expressive)。服务端经 provider.behavior.state
+   * 下发, manager 收到即转告 —— 没收到之前按协议基线 minimal。
+   */
+  setEmojiReactionsMode(mode: TelegramEmojiReactions): void;
   /**
    * task.cancel: 中断指定 requestId 的任务。排队中的直接摘除并回
    * turn.end(cancelled); 执行中的标记取消并 abort 对应 session, 收口时以
@@ -729,7 +735,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
   const serverFeatures = new Map<string, readonly string[]>();
   // 官方 bot 的 ack 表情(👀 → 👍/👎) —— 个人 bot 早有, 官方侧靠 msg.op 补上。
-  const ackReactions = createAckReactions({ serverFeatures, log });
+  let emojiReactionsMode: TelegramEmojiReactions = 'minimal';
+  const ackReactions = createAckReactions({
+    serverFeatures,
+    emojiReactions: () => emojiReactionsMode,
+    log,
+  });
   /**
    * 以失败收口、**还等着被续跑**的任务, 按 sessionId 记账(见协议阶段 18)。
    *
@@ -2136,6 +2147,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             queue.push(task);
             queues.set(sessionId, queue);
             reply(connectionId, send, ack);
+            // 排队也要给 👀: 用户看到的是「消息发出去了但没人理」, 分不清是在
+            // 排队还是丢了。表情只在**进队列这一刻**发一次 —— 出队启动走的是
+            // startExecution, 那里不再补发, 否则同一条消息会被打两次。
+            ackReactions.onAccepted(ackTaskOf(task), send);
             // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
             // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
             if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
@@ -2468,6 +2483,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     },
     onMessageOpResult(payload: MessageOpResultPayload) {
       ackReactions.onResult(payload);
+    },
+    setEmojiReactionsMode(mode: TelegramEmojiReactions) {
+      emojiReactionsMode = mode;
     },
     onConnected(connectionId, send, features) {
       if (!accountActive) return;

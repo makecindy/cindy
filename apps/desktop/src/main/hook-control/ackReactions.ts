@@ -15,13 +15,20 @@
  */
 
 import {
+  DEFAULT_TELEGRAM_BEHAVIOR,
   HOOK_FEATURE_MESSAGE_OPS,
   makeMessageOp,
   type HookMessage,
   type MessageOpResultPayload,
+  type TelegramEmojiReactions,
 } from '@cindy/slack-hook-protocol';
+import {
+  EXPRESSIVE_DONE_POOL,
+  EXPRESSIVE_ERROR_POOL,
+  pickExpressiveReaction,
+} from '@cindy/im';
 
-/** 与个人 bot 的 minimal 档一致 —— 两个 bot 的表情语义不该各说各话。 */
+/** minimal 档 —— 与个人 bot 逐个对齐, 两个 bot 的表情语义不该各说各话。 */
 const ACK_EMOJI = '👀';
 const OK_EMOJI = '👍';
 const FAIL_EMOJI = '👎';
@@ -51,9 +58,19 @@ export interface AckReactions {
 
 export function createAckReactions(deps: {
   serverFeatures: ReadonlyMap<string, readonly string[]>;
+  /**
+   * 当前生效的表情档位。服务端经 provider.behavior.state 下发, 尚未到达时按
+   * 协议基线(minimal)——与个人 bot 出厂行为同值。
+   */
+  emojiReactions?: () => TelegramEmojiReactions;
+  /** 测试注入随机源, 让 expressive 档可确定化。 */
+  random?: () => number;
   log: { info(msg: string): void; warn(msg: string): void };
 }): AckReactions {
   const { serverFeatures, log } = deps;
+  const modeOf = (): TelegramEmojiReactions =>
+    deps.emojiReactions?.() ?? DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions;
+  const random = deps.random ?? Math.random;
 
   function supports(connectionId: string): boolean {
     return serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_MESSAGE_OPS) === true;
@@ -67,6 +84,8 @@ export function createAckReactions(deps: {
   ): void {
     if (task.triggerMessageId === null) return;
     if (!supports(task.connectionId)) return;
+    // off 档一个表情都不发(含 👀 ack 与终态)—— 与个人 bot 的 off 同语义。
+    if (modeOf() === 'off') return;
     // 发不出去就算了: 表情是「正在做」的提示, 补发一个迟到的 👀 只会更奇怪。
     // 任务本身的送达由 turn.end 的 outbox 保证, 与这里无关。
     send(
@@ -85,7 +104,16 @@ export function createAckReactions(deps: {
       react(task, 'ack', ACK_EMOJI, send);
     },
     onFinished(task, status, send) {
-      react(task, 'final', status === 'error' ? FAIL_EMOJI : OK_EMOJI, send);
+      const failed = status === 'error';
+      // expressive 只影响**终态**: ack 恒为 👀(与个人 bot 一致 —— 生动档也不
+      // 拿开场表情做文章), 正负池分开取, 成功不会随机出 👎 一类。
+      const emoji =
+        modeOf() === 'expressive'
+          ? pickExpressiveReaction(failed ? EXPRESSIVE_ERROR_POOL : EXPRESSIVE_DONE_POOL, random)
+          : failed
+            ? FAIL_EMOJI
+            : OK_EMOJI;
+      react(task, 'final', emoji, send);
     },
     onResult(payload) {
       if (payload.ok) return;
