@@ -1420,14 +1420,21 @@ function analyzeInterpreterArgs(
   // 让 stdin 代码执行从红线降进灰区(review P1)。空集合 = 该族没有已知的无值开关。
   const entry = INTERPRETER_VALUELESS_OPTIONS.find((e) => e.match.test(bin));
   const valueless = entry?.opts ?? new Set<string>();
+  // 只有 python 家族的 `-m` 是「用具名模块当程序」;其它解释器的同名短选项各有各的含义
+  // (bash `-m` = job control),不能共用一套判据。
+  const supportsModuleStartup = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin);
   const operands: string[] = [];
   for (const token of args) {
     if (token === '--') continue;
     if (token.startsWith('-')) {
-      // `-m` / `--module`:程序来自具名模块,不读 stdin。**必须在这次按位扫描里判**,
-      // 不能在外面对整串 args 做 `some(t => t === '-m')` —— `python3 -X -m` 里的 `-m` 是
-      // `-X` 的值而不是模块选择器,提前认定会跳过下面的 fail-closed(review 五轮 P1)。
-      if (token === '-m' || token === '--module') {
+      // `-m` / `--module`:程序来自具名模块,不读 stdin。两重限定缺一不可:
+      //  - **只对真正支持模块启动的解释器生效**(python / pypy)。`bash -m` 是 job control
+      //    开关、`node -m` / `ruby -m` 根本没有模块启动语义 —— 一律按模块选择器处理会让
+      //    `printf 'rm -rf /outside' | bash -m` 这条 stdin 即程序的命令从红线降进灰区
+      //    (review 六轮 P1)。
+      //  - **必须在这次按位扫描里判**,不能在外面对整串 args 做 `some(t => t === '-m')`:
+      //    `python3 -X -m` 里的 `-m` 是 `-X` 的值而不是选项位(review 五轮 P1)。
+      if (supportsModuleStartup && (token === '-m' || token === '--module')) {
         return { scriptOperands: operands, usesModuleSelector: true };
       }
       // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。

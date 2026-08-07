@@ -428,11 +428,23 @@ describe('review 第五轮 — 选项值与动态执行', () => {
     )).toBe('prompt');
   });
 
-  it('[P1] `-m` 只有落在真实选项位才算模块选择器', () => {
-    // `python3 -X -m` 里的 `-m` 是 `-X` 的值,不能提前当模块选择器而跳过 fail-closed。
+  it('[P1] `-m` 只有落在真实选项位、且解释器真支持模块启动才算模块选择器', () => {
+    // 位置:`python3 -X -m` 里的 `-m` 是 `-X` 的值,不能提前当模块选择器而跳过 fail-closed。
     expect(classifyShellCommand("printf 'import os' | python3 -X -m", roots, opts)).toBe('prompt-each-time');
-    // 真正的模块选择器照常识别,不因这次调序误升。
+    // 解释器:`bash -m` 是 job control 开关,`node`/`ruby` 根本没有模块启动语义 ——
+    // 按模块选择器处理会把「stdin 即程序」降进灰区(review 六轮 P1)。
+    for (const c of [
+      "printf 'rm -rf /outside' | bash -m",
+      "printf 'rm -rf /outside' | sh -m",
+      "printf 'x' | zsh -m",
+      "printf 'x' | node -m",
+      "printf 'x' | ruby -m",
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // python 家族的真模块选择器照常识别,两个方向都不回退。
     expect(classifyShellCommand("printf 'x' | python3 -m json.tool", roots, opts)).toBe('prompt');
+    expect(classifyShellCommand("printf 'x' | python3 -m mymod", roots, opts)).toBe('prompt');
   });
 });
 
