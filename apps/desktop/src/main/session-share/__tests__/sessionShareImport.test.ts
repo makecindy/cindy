@@ -31,6 +31,16 @@ const dbMock = vi.hoisted(() => ({
 const codexMock = vi.hoisted(() => ({
   importCalls: [] as unknown[],
   removeCalls: [] as unknown[],
+  importResult: {
+    rolloutPath: '',
+    rolloutWritten: true,
+    stateWritten: true,
+    previousState: null as null | {
+      dbPath: string;
+      values: Record<string, string | number | null>;
+    },
+    statePresent: true,
+  },
 }));
 const cindyMediaMock = vi.hoisted(() => ({
   ingestCalls: [] as Array<{ buffer: Buffer; mimeType: string; refs: Array<Record<string, unknown>> }>,
@@ -85,10 +95,9 @@ vi.mock('../../maker-host/codex-local-sessions.js', () => ({
   importSharedCodexThread: async (params: unknown) => {
     codexMock.importCalls.push(params);
     return {
-      rolloutPath: path.join(tmpRoot, 'landed-rollout.jsonl'),
-      rolloutWritten: true,
-      stateWritten: true,
-      statePresent: true,
+      ...codexMock.importResult,
+      rolloutPath:
+        codexMock.importResult.rolloutPath || path.join(tmpRoot, 'landed-rollout.jsonl'),
     };
   },
   removeSharedCodexThread: async (threadId: string, written: unknown) => {
@@ -403,6 +412,13 @@ describe('sessionShareImport', () => {
     dbMock.txError = null;
     codexMock.importCalls = [];
     codexMock.removeCalls = [];
+    codexMock.importResult = {
+      rolloutPath: '',
+      rolloutWritten: true,
+      stateWritten: true,
+      previousState: null,
+      statePresent: true,
+    };
     cindyMediaMock.ingestCalls = [];
     cindyMediaMock.removeSessionRefsCalls = [];
     cindyMediaMock.removeSessionRefsErrorFor = null;
@@ -788,6 +804,42 @@ describe('sessionShareImport', () => {
     ).rejects.toMatchObject({ code: 'SHARE_IMPORT_FAILED' });
     // codex 写入被逆序回滚
     expect(codexMock.removeCalls).toHaveLength(1);
+  });
+
+  it('tx failure rolls back a pre-existing codex thread state snapshot', async () => {
+    dbMock.txError = new Error('disk full');
+    codexMock.importResult = {
+      rolloutPath: path.join(tmpRoot, 'existing-rollout.jsonl'),
+      rolloutWritten: false,
+      stateWritten: false,
+      previousState: {
+        dbPath: path.join(tmpRoot, 'state.sqlite'),
+        values: {
+          cwd: path.join(tmpRoot, 'old-workdir'),
+          rollout_path: path.join(tmpRoot, 'existing-rollout.jsonl'),
+        },
+      },
+      statePresent: true,
+    };
+    const filePath = await writeBundleFile(await buildBundle({ agentKind: 'codex' }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+
+    await expect(
+      commitShareImport({
+        draftId: inspect.draftId,
+        workingDir: newWorkdir,
+        projectsRootOverride: projectsRoot,
+        sharedMediaRootOverride: sharedMediaRoot,
+      }),
+    ).rejects.toMatchObject({ code: 'SHARE_IMPORT_FAILED' });
+
+    expect(codexMock.removeCalls).toEqual([
+      {
+        threadId: SID,
+        written: codexMock.importResult,
+      },
+    ]);
   });
 
   it('rejects transcript sdkSessionId containing path traversal', async () => {
