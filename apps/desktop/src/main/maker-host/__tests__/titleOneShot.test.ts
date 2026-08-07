@@ -915,6 +915,51 @@ describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱
     }
   });
 
+  it('供应商路由 authStrategy 不受支持 → unsupported-provider(不是 failed)', async () => {
+    // 与通用层对齐:gateway-key / oauth-passthrough 等策略不适用于标题通道,
+    // 视为不可路由而不是凭证缺失。
+    mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+    const deepseek: Provider = {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      source: 'user',
+      agents: ['claude-code', 'codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': { upstream: 'https://api.deepseek.com/anthropic', authStrategy: 'gateway-key' },
+      },
+      models: {
+        'claude-code': [{
+          id: 'deepseek-v4-flash',
+          name: 'DeepSeek V4 Flash',
+          contextWindow: 1_000_000,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        }],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== 'deepseek'), deepseek];
+    setActiveCatalog(catalog);
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: {} }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds4', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'unsupported-provider' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it('自动起名旧入口仍折叠为 null(启发式回退契约不变)', async () => {
     await withDeepSeekCatalog(async () => {
       mockReadCustomProviderKey.mockReturnValueOnce(null);

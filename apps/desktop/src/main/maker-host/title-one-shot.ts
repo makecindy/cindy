@@ -349,6 +349,15 @@ async function tryCustomProviderTitle(
   if (!routing || routing.disabled || !routing.upstream) {
     return { status: 'unsupported-provider' };
   }
+  // 与通用层 requestExplicitProviderText 对齐:不支持的 authStrategy 视为不可路由,
+  // 归类 unsupported-provider(而非凭证缺失的 failed)。
+  if (
+    routing.authStrategy !== 'api-key-header'
+    && routing.authStrategy !== 'oauth-token'
+    && routing.authStrategy !== 'none'
+  ) {
+    return { status: 'unsupported-provider' };
+  }
   const model = pickCheapestChatModel(provider, args.agentKind);
   if (!model) return { status: 'unsupported-provider' };
 
