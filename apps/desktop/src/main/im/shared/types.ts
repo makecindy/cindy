@@ -116,6 +116,11 @@ export interface ImChannelAdapter {
    */
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
   /**
+   * 交互被作废(turn 收口 / session 清理 / 抢跑)时, 把它那张卡片正文改写成的失效
+   * 提示。缺省 = 不改写(该渠道保持原行为)。
+   */
+  interactionExpiredNotice?: string;
+  /**
    * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
    * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
    * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
@@ -140,7 +145,21 @@ export interface ImChannelAdapter {
    * Text-only channels can still resolve agent interactions without rich cards.
    * The callback owns channel-specific correlation and parsing.
    */
-  handleTextInteraction?(userId: string, request: InteractionRequest): Promise<InteractionDecision>;
+  handleTextInteraction?(
+    userId: string,
+    request: InteractionRequest,
+    options?: { timeoutMs?: number },
+  ): Promise<InteractionDecision>;
+  /**
+   * Cancel a channel-owned text interaction when the central route times out,
+   * the turn stops, or the session closes. Return true when the adapter found
+   * and resolved the matching pending request itself.
+   */
+  cancelTextInteraction?(
+    userId: string,
+    requestId: string,
+    decision: InteractionDecision,
+  ): boolean;
   /** Durable channels may promote task-scoped attachments after message persistence succeeds. */
   onUserMessagePersisted?(args: {
     sessionId: string;
@@ -150,13 +169,13 @@ export interface ImChannelAdapter {
   /**
    * 送模型正文的改写钩子(群上下文拼装等): 返回 agentText 替换发给 agent 的
    * 文本 —— 落库与标题生成仍用渠道原文, 桌面 transcript 不被上下文前缀污染。
-   * commit 在路由解析成功(消息确定会被派发/排队)时调用, 是群窗口游标推进的
-   * 时机锚点; 路由失败(如鉴权缺失)不调用, 这批上下文下次仍会进入 prompt。
+   * commit 在消息完成鉴权、session wiring 且确定被派发/排队后调用, 是群窗口
+   * 游标推进的时机锚点; 受理前失败不调用, 这批上下文下次仍会进入 prompt。
    * 返回 null = 不改写。钩子抛错按"不改写"降级, 不阻断消息。
    */
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
-    commit?: () => void;
+    commit?: () => void | Promise<void>;
   } | null>;
   /**
    * 按入站事件给该轮挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用

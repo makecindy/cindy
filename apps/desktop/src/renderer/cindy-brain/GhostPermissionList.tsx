@@ -81,7 +81,7 @@ function itemIcon(item: GhostPermissionItem): LucideIcon {
   return KIND_ICON[item.kind];
 }
 
-function PermRow({ item, badge }: { item: GhostPermissionItem; badge?: 'added' | 'removed' }) {
+function PermRow({ item, badge }: { item: GhostPermissionItem; badge?: 'added' | 'removed' | 'updated' }) {
   const { t } = useTranslation();
   const Icon = itemIcon(item);
   // 主机固定说明(detailKey)与作者自由文本(detail)可以并存(oauth 凭证:
@@ -122,13 +122,14 @@ function PermRow({ item, badge }: { item: GhostPermissionItem; badge?: 'added' |
       </div>
       {badge && (
         // diff 语义豁免色(docs/design-rules/cindy-design-system.md §2 / 规则 16):权限新增/移除就是一次 diff,
-        // 用 GitHub diff 红绿 token,跨主题一致;徽章是 chrome,select-none。
+        // 用 GitHub diff 红绿 token,跨主题一致;「更新」(同 key 说明变化)既不是纯增也不是纯减,
+        // 用中性 chip,不占用 diff 色。徽章是 chrome,select-none。
         <span
           className={cn(
             'mt-[2px] shrink-0 select-none rounded px-1.5 py-px text-11 font-medium',
-            badge === 'added'
-              ? 'bg-[var(--diff-add-bg)] text-[var(--diff-add-fg)]'
-              : 'bg-[var(--diff-del-bg)] text-[var(--diff-del-fg)]',
+            badge === 'added' && 'bg-[var(--diff-add-bg)] text-[var(--diff-add-fg)]',
+            badge === 'removed' && 'bg-[var(--diff-del-bg)] text-[var(--diff-del-fg)]',
+            badge === 'updated' && 'bg-[var(--surface-chip)] text-[var(--text-secondary)]',
           )}
         >
           {t(`settings.ghosts.perm.${badge}`)}
@@ -351,8 +352,21 @@ export function GhostPermissionDiffView({ diff }: { diff: GhostPermissionDiff })
     );
   }
   const isTool = (item: GhostPermissionItem) => item.kind === 'tool';
-  const addedSensitive = diff.added.filter((item) => !isTool(item));
-  const removedSensitive = diff.removed.filter((item) => !isTool(item));
+  // 同 key 同时出现在 added 与 removed = 内容变化(工具说明重写、固定说明
+  // detailKey/detailArgs 随声明变化——如新增 network 槽后 code 的说明换版本)。
+  // 渲染成「移除+新增」两条会误读成权限被撤销又重加;配对成一条「更新」行,
+  // 仍然亮在第一屏(说明变化也是权限面变化,要知情),但语义如实。
+  const removedSensitiveByKey = new Map(
+    diff.removed.filter((item) => !isTool(item)).map((item) => [item.key, item] as const),
+  );
+  const updatedSensitive: GhostPermissionItem[] = [];
+  const addedSensitive: GhostPermissionItem[] = [];
+  for (const item of diff.added) {
+    if (isTool(item)) continue;
+    if (removedSensitiveByKey.delete(item.key)) updatedSensitive.push(item);
+    else addedSensitive.push(item);
+  }
+  const removedSensitive = [...removedSensitiveByKey.values()];
   const addedTools = diff.added.filter(isTool);
   const removedTools = diff.removed.filter(isTool);
   const toolChangeCount = addedTools.length + removedTools.length;
@@ -360,6 +374,9 @@ export function GhostPermissionDiffView({ diff }: { diff: GhostPermissionDiff })
     <div>
       {addedSensitive.map((item) => (
         <PermRow key={`added:${item.key}`} item={item} badge="added" />
+      ))}
+      {updatedSensitive.map((item) => (
+        <PermRow key={`updated:${item.key}`} item={item} badge="updated" />
       ))}
       {removedSensitive.map((item) => (
         <PermRow key={`removed:${item.key}`} item={item} badge="removed" />

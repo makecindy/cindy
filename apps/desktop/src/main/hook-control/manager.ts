@@ -94,6 +94,7 @@ import {
   groupLaneOf,
   recordGroupMessage,
   resetGroupContextCursors,
+  resetGroupContextCursorsSafely,
   sweepGroupWindowExpired,
 } from './groupWindow.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
@@ -1520,7 +1521,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       drainLanePendingPrefs(lane);
       drainLanePendingBehavior(lane);
       if (lane.config.provider === 'telegram') {
-        resetGroupContextCursors();
+        resetGroupContextCursorsSafely();
         resetTelegramSpeakerRegistrationCache();
       }
     }
@@ -3095,7 +3096,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane.serverFeatures = [];
           lane.serverWelcomeReceived = false;
         }
-        resetGroupContextCursors();
+        // 普通账号边界只清内存热缓存；明确删除账号数据时才清官方群 durable cursor。
+        await resetGroupContextCursors({ clearPersisted: false });
         resetTelegramSpeakerRegistrationCache();
         notifySlackToolProviderEnabledIfChanged();
         notifyStatus(toView());

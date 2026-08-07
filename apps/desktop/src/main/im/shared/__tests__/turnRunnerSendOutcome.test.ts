@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   AgentEvent,
+  InteractionDecision,
+  InteractionRequest,
   MakerEvent,
   Session,
   SessionSendResult,
@@ -42,11 +44,15 @@ const mocks = vi.hoisted(() => ({
   persistUserMessage: vi.fn(),
   persistAssistantMessage: vi.fn(),
   wireSessionToIpcExternal: vi.fn(),
+  beginTurnChangeSetAtDispatch: vi.fn(async () => undefined),
+  clearPendingTurnChangeSets: vi.fn(),
   noteSilentStopUserSend: vi.fn(),
   noteSilentStopSessionReset: vi.fn(),
   onSilentStopSettled: vi.fn(() => vi.fn()),
   installDesktopInteractionListener: vi.fn(),
   takePendingInteractionsForSession: vi.fn(),
+  // 取消不到时返回 null(取消到了返回 { messageId }, 调用方据此收口卡片)。
+  cancelPending: vi.fn(() => null),
   rejectAllPending: vi.fn(),
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
@@ -122,6 +128,7 @@ vi.mock('../../binding', () => ({
 }));
 
 vi.mock('../../../maker-ipc/register', () => ({
+  beginTurnChangeSetAtDispatch: mocks.beginTurnChangeSetAtDispatch,
   wireSessionToIpcExternal: mocks.wireSessionToIpcExternal,
   installDesktopInteractionListener: mocks.installDesktopInteractionListener,
   takePendingInteractionsForSession: mocks.takePendingInteractionsForSession,
@@ -130,7 +137,13 @@ vi.mock('../../../maker-ipc/register', () => ({
   onSilentStopSettled: mocks.onSilentStopSettled,
 }));
 
+vi.mock('../../../turn-change-set/store', () => ({
+  clearPendingTurnChangeSets: mocks.clearPendingTurnChangeSets,
+}));
+
 vi.mock('../pendingInteractions', () => ({
+  // route 释放会走它收口卡片 — 缺了这条 mock，release 路径会炸在 undefined 上。
+  cancelPending: mocks.cancelPending,
   registerPending: mocks.registerPending,
   registerPendingExternal: mocks.registerPendingExternal,
   rejectAllPending: mocks.rejectAllPending,
@@ -170,7 +183,10 @@ interface SessionHarness {
   isTurnRunning: ReturnType<typeof vi.fn>;
   /** maker-core Session.abort 的 mock — !stop 中止路径断言用。 */
   abort: ReturnType<typeof vi.fn>;
+  acquireTurnLease: ReturnType<typeof vi.fn>;
+  releaseTurnLease: ReturnType<typeof vi.fn>;
   emit(event: AgentEvent): void;
+  dispatchInteraction(request: InteractionRequest): Promise<InteractionDecision>;
 }
 
 function createSessionHarness(
@@ -192,12 +208,16 @@ function createSessionHarness(
   });
   const isTurnRunning = vi.fn(() => false);
   const abort = vi.fn(async () => undefined);
+  const releaseTurnLease = vi.fn();
+  const acquireTurnLease = vi.fn(() => releaseTurnLease);
+  let interactionListener: Parameters<Session['setInteractionListener']>[0] = null;
   const session = {
     id: sessionId,
     agentKind: 'claude-code',
     send,
     isTurnRunning,
     abort,
+    acquireTurnLease,
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
       return () => {
@@ -205,7 +225,9 @@ function createSessionHarness(
         if (index >= 0) listeners.splice(index, 1);
       };
     },
-    setInteractionListener: vi.fn(),
+    setInteractionListener: vi.fn((listener) => {
+      interactionListener = listener;
+    }),
     close: vi.fn(async () => undefined),
   } as unknown as Session;
 
@@ -214,8 +236,14 @@ function createSessionHarness(
     send,
     isTurnRunning,
     abort,
+    acquireTurnLease,
+    releaseTurnLease,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
+    },
+    async dispatchInteraction(request) {
+      if (!interactionListener) throw new Error('interaction listener not installed');
+      return interactionListener(request);
     },
   };
 }
@@ -372,6 +400,7 @@ function setupSessionWithId(
 interface TurnOverrides {
   userMessageId?: string;
   text?: string;
+  onRouteResolved?: (sessionId: string) => void | Promise<void>;
 }
 
 async function runDefaultTurn(
@@ -394,6 +423,7 @@ async function startDefaultTurn(
     text: overrides.text ?? 'PROMPT_SECRET full user message TOKEN_VALUE file body',
     attachments: [],
     onTurnComplete,
+    ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -506,6 +536,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       close: vi.fn(),
     });
     mocks.takePendingInteractionsForSession.mockReturnValue([]);
+    mocks.cancelPending.mockReturnValue(null);
     mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
     mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
   });
@@ -544,6 +575,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       'ou_user',
       expect.stringContaining('错误'),
       expect.anything(),
+    );
+  });
+
+  it('anchors direct IM capture to the durable accepted user message', async () => {
+    mocks.persistUserMessage.mockResolvedValue({ clientId: 'im-anchor-client' });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+
+    expect(mocks.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      h.session,
+      'im-anchor-client',
     );
   });
 
@@ -606,6 +649,260 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await flushMicrotasks();
     expect(isHeadlessGhostSetupTurn('feishu-session')).toBe(false);
   });
+
+  it('holds a host turn lease and applies channel policy timeout/state metadata', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const handleTextInteraction = vi.fn(async () => ({
+      kind: 'permission',
+      behavior: 'allow',
+    } as const));
+    const commitFinal = vi.fn(async () => undefined);
+    const channelAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      channel: 'wechat',
+      output: {
+        kind: 'chunked-text',
+        im: mocks.feishuIm as unknown as ChannelIM,
+        commitFinal,
+      },
+      handleTextInteraction,
+    };
+    const localRunner = createTurnRunner(channelAdapter, fakeRepo, fakeCards);
+    const states: string[] = [];
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-policy',
+        text: 'run with policy',
+        attachments: [],
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-policy' },
+          confirmationSurface: 'channel',
+          confirmationTimeoutMs: 12_345,
+          onInteractionStateChange: (state) => states.push(state),
+          forceConfirmToolCall: () => true,
+        },
+      });
+
+      expect(h.acquireTurnLease).toHaveBeenCalledOnce();
+      const request: InteractionRequest = {
+        kind: 'permission',
+        requestId: 'interaction-policy',
+        toolName: 'bash',
+        input: { command: 'pnpm test' },
+      };
+      await expect(h.dispatchInteraction(request)).resolves.toEqual({
+        kind: 'permission',
+        behavior: 'allow',
+      });
+      expect(handleTextInteraction).toHaveBeenCalledWith('ou_user', request, {
+        timeoutMs: 12_345,
+      });
+      expect(states).toEqual(['waiting', 'resolved']);
+
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(h.releaseTurnLease).toHaveBeenCalledOnce());
+    } finally {
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('hard-denies destructive actions nested inside a channel dispatch wrapper', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    mocks.checkDestructiveToolCall.mockImplementation((toolName, input) =>
+      toolName === 'bash' &&
+      input &&
+      typeof input.command === 'string' &&
+      /\brm\b/.test(input.command)
+        ? { destructive: true, reason: 'shell command contains `rm`' }
+        : { destructive: false },
+    );
+    const handleTextInteraction = vi.fn(async () => ({
+      kind: 'permission',
+      behavior: 'allow',
+    } as const));
+    const channelAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      channel: 'wechat',
+      output: {
+        kind: 'chunked-text',
+        im: mocks.feishuIm as unknown as ChannelIM,
+        commitFinal: vi.fn(async () => undefined),
+      },
+      handleTextInteraction,
+    };
+    const localRunner = createTurnRunner(channelAdapter, fakeRepo, fakeCards);
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-policy-hard-deny',
+        text: 'run with policy',
+        attachments: [],
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-hard-deny' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall: () => true,
+        },
+      });
+
+      const decision = await h.dispatchInteraction({
+        kind: 'permission',
+        requestId: 'interaction-hard-deny',
+        toolName: 'mcp__cindy__ghost_call',
+        input: {
+          ghost_id: 'files',
+          tool: 'call_tool',
+          args: { name: 'bash', args: { command: 'rm -rf generated' } },
+        },
+      });
+      expect(decision).toMatchObject({
+        kind: 'permission',
+        behavior: 'deny',
+      });
+      expect(handleTextInteraction).not.toHaveBeenCalled();
+    } finally {
+      h.emit({ type: 'done', data: {} });
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it('cancels channel-owned text confirmation and releases its lease on session cleanup', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    let resolveTextInteraction!: (decision: InteractionDecision) => void;
+    const handleTextInteraction = vi.fn(
+      async () => new Promise<InteractionDecision>((resolve) => {
+        resolveTextInteraction = resolve;
+      }),
+    );
+    const cancelTextInteraction = vi.fn(
+      (_userId: string, _requestId: string, decision: InteractionDecision) => {
+        resolveTextInteraction(decision);
+        return true;
+      },
+    );
+    const channelAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      channel: 'wechat',
+      output: {
+        kind: 'chunked-text',
+        im: mocks.feishuIm as unknown as ChannelIM,
+        commitFinal: vi.fn(async () => undefined),
+      },
+      handleTextInteraction,
+      cancelTextInteraction,
+    };
+    const localRunner = createTurnRunner(channelAdapter, fakeRepo, fakeCards);
+
+    await localRunner.runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-policy-cleanup',
+      text: 'run with policy',
+      attachments: [],
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'wechat', taskId: 'task-policy-cleanup' },
+        confirmationSurface: 'channel',
+        confirmationTimeoutMs: 30_000,
+        forceConfirmToolCall: () => true,
+      },
+    });
+    const request: InteractionRequest = {
+      kind: 'permission',
+      requestId: 'interaction-cleanup',
+      toolName: 'bash',
+      input: { command: 'pnpm test' },
+    };
+    const decision = h.dispatchInteraction(request);
+    await waitForAssertion(() => expect(handleTextInteraction).toHaveBeenCalledOnce());
+
+    await localRunner.disposeAllSessions();
+    await expect(decision).resolves.toMatchObject({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'session_cleanup',
+    });
+    expect(cancelTextInteraction).toHaveBeenCalledWith(
+      'ou_user',
+      'interaction-cleanup',
+      expect.objectContaining({ behavior: 'deny', reason: 'session_cleanup' }),
+    );
+    expect(h.releaseTurnLease).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: 'returns false',
+      createCancelTextInteraction: () => vi.fn(() => false),
+    },
+    {
+      label: 'is not implemented',
+      createCancelTextInteraction: () => undefined,
+    },
+  ])(
+    'preserves the router cancellation reason when channel cancelTextInteraction $label',
+    async ({ createCancelTextInteraction }) => {
+      const h = setupSession(async () => ({ accepted: true }));
+      const handleTextInteraction = vi.fn(
+        async () => new Promise<InteractionDecision>(() => undefined),
+      );
+      const cancelTextInteraction = createCancelTextInteraction();
+      const channelAdapter: ImChannelAdapter = {
+        ...fakeAdapter,
+        channel: 'wechat',
+        output: {
+          kind: 'chunked-text',
+          im: mocks.feishuIm as unknown as ChannelIM,
+          commitFinal: vi.fn(async () => undefined),
+        },
+        handleTextInteraction,
+        ...(cancelTextInteraction ? { cancelTextInteraction } : {}),
+      };
+      const localRunner = createTurnRunner(channelAdapter, fakeRepo, fakeCards);
+
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-policy-fallback',
+        text: 'run with policy',
+        attachments: [],
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-policy-fallback' },
+          confirmationSurface: 'channel',
+          confirmationTimeoutMs: 30_000,
+          forceConfirmToolCall: () => true,
+        },
+      });
+      const decision = h.dispatchInteraction({
+        kind: 'permission',
+        requestId: 'interaction-fallback',
+        toolName: 'bash',
+        input: { command: 'pnpm test' },
+      });
+      await waitForAssertion(() => expect(handleTextInteraction).toHaveBeenCalledOnce());
+
+      await localRunner.disposeAllSessions();
+      await expect(decision).resolves.toMatchObject({
+        kind: 'permission',
+        behavior: 'deny',
+        reason: 'session_cleanup',
+      });
+      expect(mocks.cancelPending).toHaveBeenCalledWith(
+        'interaction-fallback',
+        'session_cleanup',
+      );
+      expect(mocks.cancelPending).toHaveBeenCalledOnce();
+      if (cancelTextInteraction) {
+        expect(cancelTextInteraction).toHaveBeenCalledWith(
+          'ou_user',
+          'interaction-fallback',
+          expect.objectContaining({ behavior: 'deny', reason: 'session_cleanup' }),
+        );
+      }
+      expect(h.releaseTurnLease).toHaveBeenCalledOnce();
+    },
+  );
 
   it('does not reacquire attached IM headless state from a late acceptance callback', async () => {
     let lateOnAccepted: NonNullable<Parameters<Session['send']>[1]>['onAccepted'];
@@ -854,6 +1151,50 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendText).toHaveBeenCalledTimes(1);
   });
 
+  it('releases the policy route and host lease when beforeProviderStart fails', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const policy = {
+      origin: { kind: 'im', channel: 'feishu', taskId: 'task-pre-dispatch-failure' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => true,
+    } as const;
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+
+    const failed = await localRunner.dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-pre-dispatch-failure',
+      text: 'first policy turn',
+      attachments: [],
+      queueMode: 'external',
+      turnPermissionPolicy: policy,
+      beforeProviderStart: async () => {
+        throw new Error('provider setup failed');
+      },
+    });
+
+    expect(failed).toMatchObject({ kind: 'rejected', reason: 'Error' });
+    expect(h.acquireTurnLease).toHaveBeenCalledOnce();
+    expect(h.releaseTurnLease).toHaveBeenCalledOnce();
+
+    const recovered = await localRunner.dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-pre-dispatch-recovery',
+      text: 'second policy turn',
+      attachments: [],
+      queueMode: 'external',
+      turnPermissionPolicy: policy,
+      beforeProviderStart: async () => undefined,
+    });
+
+    expect(recovered.kind).toBe('accepted');
+    expect(h.acquireTurnLease).toHaveBeenCalledTimes(2);
+    h.emit({ type: 'done', data: {} });
+    if (recovered.kind === 'accepted') await recovered.terminal;
+    expect(h.releaseTurnLease).toHaveBeenCalledTimes(2);
+  });
+
   it('waits for ack removal before callback and failure notification on pre-dispatch failure', async () => {
     const order: string[] = [];
     let resolveReaction: ((reactionId: string) => void) | undefined;
@@ -991,11 +1332,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const busy = new CredentialModeSwitchBusyError(['busy-session']);
     mocks.getMaker.mockReturnValue(createMakerCreateSessionFailureHarness(busy));
     const onTurnComplete = vi.fn();
+    const onRouteResolved = vi.fn();
 
-    await runDefaultTurn(onTurnComplete);
+    await runDefaultTurn(onTurnComplete, { onRouteResolved });
     await flushMicrotasks();
 
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(onRouteResolved).not.toHaveBeenCalled();
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', 'reaction-1');
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
       'ou_user',
@@ -1013,18 +1356,23 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.reactToMessage.mockImplementation(async (messageId: string) => `reaction-${messageId}`);
     const h = setupSession(async () => ({ accepted: true }));
     const firstComplete = vi.fn();
+    const firstRouteResolved = vi.fn();
     await runDefaultTurn(firstComplete, {
       userMessageId: 'msg-first',
       text: 'first user message',
+      onRouteResolved: firstRouteResolved,
     });
 
     expect(firstComplete).not.toHaveBeenCalled();
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(firstRouteResolved).toHaveBeenCalledTimes(1);
 
     const secondComplete = vi.fn();
+    const secondRouteResolved = vi.fn();
     await runDefaultTurn(secondComplete, {
       userMessageId: 'msg-second',
       text: 'second user message',
+      onRouteResolved: secondRouteResolved,
     });
     await flushMicrotasks();
 
@@ -1034,6 +1382,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
     expect(secondComplete).not.toHaveBeenCalled();
+    expect(secondRouteResolved).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
 
     h.emit({
@@ -1053,6 +1402,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
 
     expect(firstComplete).toHaveBeenCalledTimes(1);
+    expect(secondRouteResolved).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-first', 'reaction-msg-first');
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(2);
     // assistant 落库收口在 messagePersistBroadcaster(经 wireSessionToIpcExternal),
@@ -1203,7 +1553,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
-  it('reports the attached Desktop route before provider startup', async () => {
+  it('reports the attached Desktop route only after provider startup is accepted', async () => {
     const h = setupAttachedSession(async () => ({ accepted: true }));
     const onRouteResolved = vi.fn();
     const beforeProviderStart = vi.fn(async () => undefined);
@@ -1221,7 +1571,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     expect(dispatch.kind).toBe('accepted');
     expect(onRouteResolved).toHaveBeenCalledWith('desktop-attached-session');
-    expect(onRouteResolved.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(onRouteResolved.mock.invocationCallOrder[0]).toBeGreaterThan(
       beforeProviderStart.mock.invocationCallOrder[0]!,
     );
 
@@ -1835,7 +2185,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('does not report route resolution before auth passes on an existing route', async () => {
     // 群窗口游标的 commit 挂在 onRouteResolved 上(prepareAgentTurnText 契约):
-    // 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标永久跳过。
+    // 受理前鉴权失败若先触发它, 这批群上下文会被游标永久跳过。
     mocks.readXdGatewayApiKey.mockReturnValue(null);
     mocks.findActiveSession.mockResolvedValue({
       id: 'feishu-session',
@@ -1939,10 +2289,22 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       async (messageId: string) => `reaction-${messageId}`,
     );
     const h = setupSession(async () => ({ accepted: true }));
-    await runDefaultTurn(vi.fn(), { userMessageId: 'msg-first', text: 'first user message' });
-    await runDefaultTurn(vi.fn(), { userMessageId: 'msg-second', text: 'second user message' });
+    const firstRouteResolved = vi.fn();
+    await runDefaultTurn(vi.fn(), {
+      userMessageId: 'msg-first',
+      text: 'first user message',
+      onRouteResolved: firstRouteResolved,
+    });
+    const secondRouteResolved = vi.fn();
+    await runDefaultTurn(vi.fn(), {
+      userMessageId: 'msg-second',
+      text: 'second user message',
+      onRouteResolved: secondRouteResolved,
+    });
     await flushMicrotasks();
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(firstRouteResolved).toHaveBeenCalledTimes(1);
+    expect(secondRouteResolved).not.toHaveBeenCalled();
 
     const result = await getRunner().stopActiveTurn({
       botContextId: 'cli_test_bot',
@@ -1958,6 +2320,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         'reaction-msg-second',
       );
     });
+    expect(secondRouteResolved).not.toHaveBeenCalled();
 
     // abort 触发的 done 不得把已丢弃的排队消息派发出去
     h.emit({ type: 'done', data: {} });

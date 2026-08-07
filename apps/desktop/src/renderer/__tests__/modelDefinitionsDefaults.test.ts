@@ -23,7 +23,12 @@ interface StubModel {
   defaultEffort: string;
   sortOrder?: number;
   defaultEnabled?: boolean;
+  /** 新对话默认种子标记(与 sortOrder 解耦);pi 按 'claude-code' 口径判定。 */
+  newSessionDefault?: ('claude-code' | 'codex')[];
 }
+
+/** pi 也是一个 vendor;缺省的 agent 一律回落空清单。 */
+type StubByAgent = Partial<Record<'claude-code' | 'codex' | 'pi', StubModel[]>>;
 
 function model(id: string, over: Partial<StubModel> = {}): StubModel {
   return {
@@ -36,9 +41,9 @@ function model(id: string, over: Partial<StubModel> = {}): StubModel {
   };
 }
 
-function stubCapabilities(byAgent: Record<'claude-code' | 'codex', StubModel[]>): void {
-  const getCapabilities = vi.fn(async (kind: 'claude-code' | 'codex') => ({
-    availableModels: byAgent[kind],
+function stubCapabilities(byAgent: StubByAgent): void {
+  const getCapabilities = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi') => ({
+    availableModels: byAgent[kind] ?? [],
     hasFastMode: false,
     effortLevels: [],
     permissionModes: [],
@@ -46,7 +51,7 @@ function stubCapabilities(byAgent: Record<'claude-code' | 'codex', StubModel[]>)
   vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities } } });
 }
 
-async function loadWith(byAgent: Record<'claude-code' | 'codex', StubModel[]>) {
+async function loadWith(byAgent: StubByAgent) {
   stubCapabilities(byAgent);
   const caps = await import('@/hooks/useAgentCapabilities');
   const md = await import('@/lib/modelDefinitions');
@@ -57,7 +62,10 @@ async function loadWith(byAgent: Record<'claude-code' | 'codex', StubModel[]>) {
 describe('getDefaultModelForVendor', () => {
   it('取 sortOrder 最小的模型，而不是清单里排前面的', async () => {
     const md = await loadWith({
-      'claude-code': [model('first-in-list', { sortOrder: 30 }), model('flagship', { sortOrder: 0 })],
+      'claude-code': [
+        model('first-in-list', { sortOrder: 30 }),
+        model('flagship', { sortOrder: 0 }),
+      ],
       codex: [model('gpt-old', { sortOrder: 20 }), model('gpt-new', { sortOrder: 17 })],
     });
 
@@ -173,6 +181,129 @@ describe('getDefaultModelForVendor', () => {
     expect(entry?.defaultEnabled).not.toBe(false);
     expect(entry?.group).not.toBe('gpt-budget');
     expect(md.getDefaultModelForVendor('codex').label).toBe(entry?.name);
+  });
+});
+
+describe('newSessionDefault（专用默认种子标记）', () => {
+  it('被标记的模型优先，即便 sortOrder 不是最小', async () => {
+    const md = await loadWith({
+      'claude-code': [
+        model('flagship-by-order', { sortOrder: 0 }),
+        model('deepseek', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+      ],
+      codex: [
+        model('gpt-first', { sortOrder: 0 }),
+        model('deepseek', { sortOrder: 44, newSessionDefault: ['claude-code', 'codex'] }),
+      ],
+    });
+
+    expect(md.getDefaultModelForVendor('cc').id).toBe('deepseek');
+    expect(md.getDefaultModelForVendor('codex').id).toBe('deepseek');
+    expect(md.newSessionDefaultModelId('cc')).toBe('deepseek');
+    expect(md.newSessionDefaultModelId('codex')).toBe('deepseek');
+  });
+
+  it('没有任何标记时逐字节回退到「排序第一可见」', async () => {
+    const md = await loadWith({
+      'claude-code': [model('a', { sortOrder: 5 }), model('b', { sortOrder: 1 })],
+    });
+
+    expect(md.getDefaultModelForVendor('cc').id).toBe('b');
+    expect(md.newSessionDefaultModelId('cc')).toBeNull();
+  });
+
+  it('标记只对声明的 agent 生效（只标 claude-code 时 codex 不选它）', async () => {
+    const md = await loadWith({
+      codex: [
+        model('gpt-first', { sortOrder: 0 }),
+        model('cc-only-default', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+      ],
+    });
+
+    expect(md.getDefaultModelForVendor('codex').id).toBe('gpt-first');
+    expect(md.newSessionDefaultModelId('codex')).toBeNull();
+  });
+
+  it('被标记但默认收起(defaultEnabled:false)时不选，回退排序第一', async () => {
+    const md = await loadWith({
+      'claude-code': [
+        model('visible', { sortOrder: 5 }),
+        model('hidden-flagged', {
+          sortOrder: 0,
+          defaultEnabled: false,
+          newSessionDefault: ['claude-code'],
+        }),
+      ],
+    });
+
+    expect(md.getDefaultModelForVendor('cc').id).toBe('visible');
+    expect(md.newSessionDefaultModelId('cc')).toBeNull();
+  });
+
+  it('多个被标记时按 sortOrder 决胜', async () => {
+    const md = await loadWith({
+      'claude-code': [
+        model('flag-hi', { sortOrder: 40, newSessionDefault: ['claude-code'] }),
+        model('flag-lo', { sortOrder: 10, newSessionDefault: ['claude-code'] }),
+      ],
+    });
+
+    expect(md.getDefaultModelForVendor('cc').id).toBe('flag-lo');
+  });
+
+  it('省略 sortOrder 永远排在任意有限数值之后', async () => {
+    const md = await loadWith({
+      'claude-code': [
+        model('flag-omitted', { newSessionDefault: ['claude-code'] }),
+        model('flag-large-finite', {
+          sortOrder: Number.MAX_SAFE_INTEGER + 1,
+          newSessionDefault: ['claude-code'],
+        }),
+      ],
+    });
+
+    expect(md.getDefaultModelForVendor('cc').id).toBe('flag-large-finite');
+  });
+
+  it.each([
+    {
+      label: '相同 sortOrder',
+      models: [
+        model('flag-first', { sortOrder: 10, newSessionDefault: ['claude-code'] }),
+        model('flag-second', { sortOrder: 10, newSessionDefault: ['claude-code'] }),
+      ],
+    },
+    {
+      label: '都省略 sortOrder',
+      models: [
+        model('flag-first', { newSessionDefault: ['claude-code'] }),
+        model('flag-second', { newSessionDefault: ['claude-code'] }),
+      ],
+    },
+  ])('$label 时保留 ListModels 响应顺序', async ({ models }) => {
+    const md = await loadWith({ 'claude-code': models });
+
+    expect(md.getDefaultModelForVendor('cc').id).toBe('flag-first');
+  });
+
+  it('pi 按 claude-code 口径判定：标了 claude-code 的模型成为 pi 的默认', async () => {
+    const md = await loadWith({
+      pi: [
+        model('sonnet', { sortOrder: 0 }),
+        model('deepseek', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+      ],
+    });
+
+    expect(md.getDefaultModelForVendor('pi').id).toBe('deepseek');
+    expect(md.newSessionDefaultModelId('pi')).toBe('deepseek');
+  });
+
+  it('pi 未标记时冷启动占位是 claude-sonnet-5（不再错落到 cc 的 opus-5）', async () => {
+    stubCapabilities({});
+    const md = await import('@/lib/modelDefinitions');
+
+    expect(md.coldStartModelIdForVendor('pi')).toBe('claude-sonnet-5');
+    expect(md.getDefaultModelForVendor('pi').id).toBe('claude-sonnet-5');
   });
 });
 

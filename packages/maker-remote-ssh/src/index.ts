@@ -82,9 +82,10 @@ export {
   upsertHost,
   updateHostFields,
   removeHost,
+  expandHome,
 } from './sshConfig.js';
 
-export { defaultAgentEndpoint, resolveAuth } from './credentials.js';
+export { defaultAgentEndpoint, resolveAuth, KEY_FILE_NOT_FOUND_CODE } from './credentials.js';
 export type { ResolvedAuth } from './credentials.js';
 
 export type {

@@ -58,6 +58,7 @@ import type {
 } from '@/lib/gitReview.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 import { makerChatStore } from '@/lib/makerChatStore';
+import type { TurnChangeSetDetail } from '../../../../../shared/turnChangeSet';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
@@ -366,7 +367,143 @@ export function useClearReviewOperationNoticeOnSourceChange(
   }, [clearOperationNotice, source]);
 }
 
-export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
+export function ReviewTabBody(props: ReviewTabBodyProps) {
+  if (props.state.turnTarget) return <TurnChangeSetReviewBody {...props} />;
+  return <GitReviewTabBody {...props} />;
+}
+
+function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
+  const { t } = useTranslation();
+  const target = state.turnTarget;
+  const [changeSets, setChangeSets] = useState<TurnChangeSetDetail[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const targetIdsKey = target?.changeSetIds.join('\0') ?? '';
+  const diffs = useMemo(() => changeSets.flatMap((set) => set.diffs), [changeSets]);
+  const isPartial = changeSets.some((set) => set.state === 'partial');
+  const collapsedSet = useMemo(() => new Set(state.collapsedPaths ?? []), [state.collapsedPaths]);
+  const visibleDiffs = useMemo(
+    () => filterWhitespaceHiddenDiffs(diffs, state.hideWhitespace ?? false),
+    [diffs, state.hideWhitespace],
+  );
+  const expandedSet = useMemo(
+    () => getExpandedDiffSet(visibleDiffs, collapsedSet),
+    [collapsedSet, visibleDiffs],
+  );
+
+  useEffect(() => {
+    if (!targetIdsKey) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    if (ctx.remoteHostId !== null || ctx.deviceLinkDeviceId !== null) {
+      setChangeSets([]);
+      setError(t('rightSidebar.review.turn.localOnly'));
+      setLoading(false);
+      return;
+    }
+    void window.electronAPI.maker.getTurnChangeSets(ctx.sessionId, targetIdsKey.split('\0'))
+      .then((sets) => {
+        if (cancelled) return;
+        setChangeSets(sets);
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setError(extractIpcError(reason)?.message ?? (reason instanceof Error ? reason.message : String(reason)));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx.deviceLinkDeviceId, ctx.remoteHostId, ctx.sessionId, reloadToken, t, targetIdsKey]);
+
+  const selectedDiff = target?.selectedDiffId
+    ? visibleDiffs.find((diff) => diff.id === target.selectedDiffId)
+    : target?.selectedPath
+      ? visibleDiffs.find((diff) => diff.path === target.selectedPath || diff.oldPath === target.selectedPath)
+      : null;
+  const jumpRequest = selectedDiff && target
+    ? { id: selectedDiff.id, nonce: target.requestNonce }
+    : null;
+  const togglePath = useCallback((id: string) => {
+    const next = new Set(collapsedSet);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    ctx.patchState({ collapsedPaths: Array.from(next) });
+  }, [collapsedSet, ctx]);
+  const totalAdd = visibleDiffs.reduce((sum, diff) => sum + diff.additions, 0);
+  const totalDel = visibleDiffs.reduce((sum, diff) => sum + diff.deletions, 0);
+  const unavailablePreview = useCallback(() => Promise.reject(new Error('Historical preview unavailable')), []);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
+      <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 py-2">
+        <FileDiffIcon size={15} className="shrink-0 text-[var(--text-secondary)]" />
+        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[var(--text-primary)]">
+          {t('rightSidebar.review.turn.title')}
+        </span>
+        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
+          <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
+          <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => ctx.patchState({ turnTarget: null })}
+          className="h-7 shrink-0 rounded-full px-2 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+        >
+          {t('rightSidebar.review.turn.currentWorkspace')}
+        </button>
+      </header>
+      {!loading && !error && isPartial && (
+        <div className="flex shrink-0 items-start gap-2 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
+          <span>{t('rightSidebar.review.turn.partialNotice')}</span>
+        </div>
+      )}
+      {loading ? (
+        <CenteredState icon={<Spinner size={24} />} title={t('rightSidebar.review.loadingTitle')} desc={t('rightSidebar.review.loadingDesc')} />
+      ) : error ? (
+        <CenteredState
+          icon={<AlertTriangle size={24} />}
+          title={t('rightSidebar.review.errorTitle')}
+          desc={error}
+          actionLabel={t('rightSidebar.review.refresh')}
+          onAction={() => setReloadToken((value) => value + 1)}
+        />
+      ) : visibleDiffs.length === 0 ? (
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.turn.emptyTitle')}
+          desc={t('rightSidebar.review.turn.emptyDesc')}
+        />
+      ) : (
+        <DiffList
+          diffs={visibleDiffs}
+          expandedSet={expandedSet}
+          onToggleDiff={togglePath}
+          onRefresh={() => setReloadToken((value) => value + 1)}
+          refreshPending={loading}
+          viewMode={state.diffViewMode ?? 'unified'}
+          onViewModeChange={(diffViewMode) => ctx.patchState({ diffViewMode })}
+          onRichMarkdownPreviewChange={(richMarkdownPreview) => ctx.patchState({ richMarkdownPreview })}
+          wordWrap={state.wordWrap ?? false}
+          wordDiff={state.wordDiff ?? true}
+          fileTreeVisible={state.fileTreeVisible ?? false}
+          jumpRequest={jumpRequest}
+          loadImagePreview={unavailablePreview}
+          loadMarkdownPreview={unavailablePreview}
+          richMarkdownPreview={false}
+          onOpenFile={() => undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const sessionId = ctx.sessionId || null;

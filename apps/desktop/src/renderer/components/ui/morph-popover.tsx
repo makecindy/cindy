@@ -111,6 +111,8 @@ interface MorphPopoverProps {
   wrapperClassName?: string;
   /** 面板 aria-label(容器为 group 语义时可选)。 */
   panelAriaLabel?: string;
+  /** 打开完成后的外部焦点目标；未提供时按面板内默认规则聚焦。 */
+  autoFocusTarget?: () => HTMLElement | null;
 }
 
 /** 是否处于 reduced-motion(SSR/jsdom 无 matchMedia 时按 false) */
@@ -137,6 +139,7 @@ export function MorphPopover({
   panelClassName,
   wrapperClassName,
   panelAriaLabel,
+  autoFocusTarget,
 }: MorphPopoverProps) {
   // mounted 独立于 open:关闭时先播收合动画,动画完再卸载 portal
   const [mounted, setMounted] = useState(false);
@@ -154,8 +157,8 @@ export function MorphPopover({
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
   const settledRef = useRef(false);
-  // 指针选择菜单动作时不把焦点归还 trigger:否则 trigger 的 focus tooltip 会压在
-  // 动作打开的下一层弹窗上。键盘关闭仍按 §14.2 回焦。
+  // 指针驱动的关闭(菜单动作、trigger toggle、outside 交接)不把焦点归还 trigger:
+  // 否则旧层会在收合结束时抢走下一层交互面的焦点。键盘关闭仍按 §14.2 回焦。
   const pointerInteractionRef = useRef(false);
 
   const requestClose = useCallback(() => onOpenChange(false), [onOpenChange]);
@@ -321,6 +324,7 @@ export function MorphPopover({
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
         syncPanelToContent();
         const target =
+          autoFocusTarget?.() ??
           panel.querySelector<HTMLElement>('[data-morph-autofocus]:not([disabled])') ??
           panel.querySelector<HTMLElement>('input, textarea') ??
           panel.querySelector<HTMLElement>(
@@ -394,7 +398,17 @@ export function MorphPopover({
       if (openRaf1Ref.current !== null) cancelAnimationFrame(openRaf1Ref.current);
       if (openRaf2Ref.current !== null) cancelAnimationFrame(openRaf2Ref.current);
     };
-  }, [mounted, open, measure, applyChipGeometry, dockedAnchor, endBg, endBorderColor, syncPanelToContent]);
+  }, [
+    mounted,
+    open,
+    measure,
+    applyChipGeometry,
+    dockedAnchor,
+    endBg,
+    endBorderColor,
+    syncPanelToContent,
+    autoFocusTarget,
+  ]);
 
   /** 打开稳定后跟随内容尺寸变化(搜索过滤 / Edit 面板展宽),同曲线平滑过渡 */
   useEffect(() => {
@@ -423,12 +437,26 @@ export function MorphPopover({
   /** 打开期间的全局关闭手势:outside pointerdown / Esc(分层) / 窗口 resize */
   useEffect(() => {
     if (!mounted || !open) return;
+    const isWithinExternalFocusTarget = (target: Node): boolean => {
+      const externalFocusTarget = autoFocusTarget?.();
+      return Boolean(
+        externalFocusTarget &&
+          (externalFocusTarget === target || externalFocusTarget.contains(target)),
+      );
+    };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (panelRef.current?.contains(t) || wrapRef.current?.contains(t)) return;
       // 面板内容可能再弹 Radix 浮层(portal 到 body,如模型行的 effort/Fast 配置
       // 子面板)——点它不算 outside,否则子面板永远点不了(整个面板会先被关掉)
       if ((t as Element).closest?.('[data-radix-popper-content-wrapper]')) return;
+      // autoFocusTarget 是当前交互层的一部分(例如统一建议面板外的 composer)。
+      // 指针在该目标内调整光标时也不应按 outside pointerdown 收起。
+      if (isWithinExternalFocusTarget(t)) return;
+      // outside pointerdown 也是鼠标关闭。目标控件可能 preventDefault 阻止默认聚焦
+      // (如 AgentSelect 为维持 composer focus-within),不能因此把旧层误判成键盘关闭、
+      // 在收合结束后延迟抢回旧 trigger 焦点并关掉刚打开的相邻弹层。
+      pointerInteractionRef.current = true;
       requestClose();
     };
     const onKeyDown = (e: KeyboardEvent) => {
@@ -450,6 +478,10 @@ export function MorphPopover({
       if (!(target instanceof Node) || target === document.body) return;
       if (panelRef.current?.contains(target) || wrapRef.current?.contains(target)) return;
       if ((target as Element).closest?.('[data-radix-popper-content-wrapper]')) return;
+      // 某些 MorphPopover（如 composer 的统一建议面板）有意把焦点留在
+      // 面板外的编辑器上，以便打开后直接输入筛选。这个显式目标仍属于当前
+      // 交互层，不能被“焦点离开即关闭”误判；其它外部焦点照常关闭。
+      if (isWithinExternalFocusTarget(target)) return;
       requestClose();
     };
     const onResize = () => requestClose();
@@ -463,7 +495,7 @@ export function MorphPopover({
       document.removeEventListener('focusin', onFocusIn, true);
       window.removeEventListener('resize', onResize);
     };
-  }, [mounted, open, requestClose]);
+  }, [autoFocusTarget, mounted, open, requestClose]);
 
   return (
     <>

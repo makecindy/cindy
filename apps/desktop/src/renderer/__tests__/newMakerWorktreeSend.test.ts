@@ -15,7 +15,7 @@ const sessionViewSource = readFileSync(
 
 describe('NewMakerDraftRoute worktree send flow', () => {
   it('enters a real session before creating the worktree in the background', () => {
-    // 2026-07-29 状态契约:生效条件 = 勾选 && baseRepo 就绪(不合格静默普通启动)。
+    // 发送门已保证用户勾选时资格就绪；副作用分支仍以勾选 + baseRepo 双重防御。
     const worktreeBranch = source.indexOf(
       'if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo) {',
     );
@@ -33,6 +33,24 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(statusCard).toBeGreaterThan(touchUserSend);
     expect(navigate).toBeGreaterThan(statusCard);
     expect(worktreeCreate).toBeGreaterThan(navigate);
+  });
+
+  it('never silently downgrades an explicit worktree request to a normal session', () => {
+    const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
+    const guard = source.indexOf(
+      'if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {',
+      selected,
+    );
+    const markInFlight = source.indexOf('markSendInFlight(true);', guard);
+    const guardedSource = source.slice(guard, markInFlight);
+
+    expect(selected).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(selected);
+    expect(markInFlight).toBeGreaterThan(guard);
+    expect(guardedSource).toContain('!selectedWorktree.baseRepo');
+    expect(guardedSource).toContain('!selectedWorktree.branchPreferenceReady');
+    expect(guardedSource).toContain('selectedWorktree.supportsRecoveryKeyDiscard !== true');
+    expect(guardedSource).toContain('return false;');
   });
 
   it('keeps the first message as a session draft when background worktree creation fails', () => {
@@ -108,7 +126,12 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(reservationGuard).toBeGreaterThan(retainedGuard);
     expect(worktreeCreate).toBeGreaterThan(reservationGuard);
     expect(worktreeCreate).toBeGreaterThan(retainedGuard);
-    expect(source.slice(worktreeCreate, worktreeCreate + 420)).toContain('recoveryKey,');
+    const createRequest = source.lastIndexOf(
+      'const createRequest: RemoteWorktreeCreateRequest = {',
+      worktreeCreate,
+    );
+    expect(createRequest).toBeGreaterThan(reservationGuard);
+    expect(source.slice(createRequest, worktreeCreate)).toContain('recoveryKey,');
     expect(ledgerRegistration).toBeGreaterThan(worktreeCreate);
     expect(source.slice(ledgerRegistration, ledgerRegistration + 220)).toContain('deviceId,');
   });

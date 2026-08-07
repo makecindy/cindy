@@ -55,6 +55,7 @@ import {
   rebroadcastAgentSwitchBoundary,
 } from './messages';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -153,9 +154,12 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
  * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
  */
-function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
+export async function recycleSessionWorktreeForStatusChange(
+  sessionId: string,
+  status: unknown,
+): Promise<void> {
   if (status !== 'deleted' && status !== 'archived') return;
-  void (async () => {
+  try {
     const [mh, recycle, routeLock] = await Promise.all([
       import('../../maker-host/index.js'),
       import('../../worktree/sessionRemovalRecycle.js'),
@@ -170,16 +174,18 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
         .catch(() => undefined);
     });
     await recycle.recycleWorktreeForRemovedSession(sessionId);
-  })()
-    .catch((err) => {
-      log.warn('worktree recycle after session status change failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    })
-    .finally(() => {
-      broadcastWorktreeChanged(sessionId);
+  } catch (err) {
+    log.warn('worktree recycle after session status change failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    broadcastWorktreeChanged(sessionId);
+  }
+}
+
+function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
+  void recycleSessionWorktreeForStatusChange(sessionId, status);
 }
 
 // shadow savepoint 链(refs/cindy/savepoints/<sid>)刻意**不**挂 status 变化
@@ -795,6 +801,14 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .limit(1);
   const effectiveClearedAt = updated?.clearedAt ?? ts;
   const effectiveUpdatedAt = updated?.updatedAt ?? effectiveClearedAt;
+  try {
+    await removeTurnChangeSetsForSession(sessionId);
+  } catch (error) {
+    log.warn('turn change-set cleanup after clear failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(
@@ -1609,6 +1623,15 @@ export async function setSessionsStatusInDb(
  */
 function removeHookAttachmentDir(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
+  if (status === 'deleted') {
+    void removeTurnChangeSetsForSession(sessionId)
+      .catch((err) => {
+        log.warn('turn change-set cleanup failed', {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
   const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
   const attachDir = path.join(attachRoot, sessionId);
   if (!attachDir.startsWith(attachRoot + path.sep)) return;

@@ -86,12 +86,14 @@ import { persistUserMessage } from '../messagePersistence';
 import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
 import {
+  beginTurnChangeSetAtDispatch,
   wireSessionToIpcExternal,
   takePendingInteractionsForSession,
   noteSilentStopUserSend,
   noteSilentStopSessionReset,
   onSilentStopSettled,
 } from '../../maker-ipc/register';
+import { clearPendingTurnChangeSets } from '../../turn-change-set/store';
 import {
   beginInteractionRoute,
   type InteractionRouteLease,
@@ -104,7 +106,7 @@ import {
   registerPendingExternal,
   rejectAllPending,
 } from './pendingInteractions';
-import { checkDestructiveToolCall } from '../../destructiveGuard';
+import { checkChannelDestructiveToolCall } from './channelToolPolicy';
 import { readXdGatewayApiKey } from './apiKey';
 import {
   hasAuthForImRoute,
@@ -200,6 +202,14 @@ interface TurnState {
   releaseHeadlessSetupTurn: (() => void) | null;
   /** Active central interaction route; acquired at beforeProviderStart. */
   interactionRouteLease: InteractionRouteLease | null;
+  /**
+   * Host turn lease held for the duration of a per-turn permission policy turn.
+   * While held, session.setPermissionMode() blocks any switch into a mode the
+   * agent lists as turnPermissionPolicy-unsupported (e.g. Pi Full Access),
+   * closing the hot-switch bypass window. Released on every terminal / requeue /
+   * cleanup path via releaseTurnInteractionRoute. Null when the turn has no policy.
+   */
+  hostTurnLeaseRelease: (() => void) | null;
   /** Terminal classification consumed by chunked-text commitFinal. */
   terminalKind: 'done' | 'aborted' | 'error';
   terminalErrorCode: string | null;
@@ -225,6 +235,8 @@ interface QueuedSend {
   notified: boolean;
   queueMode: 'internal' | 'external';
   beforeProviderStart?: () => Promise<void>;
+  /** Durable route side effects run only after provider acceptance, never on enqueue. */
+  onRouteResolved?: (sessionId: string) => void | Promise<void>;
   turnPermissionPolicy?: TurnPermissionPolicy;
 }
 
@@ -324,8 +336,8 @@ export interface ImRunAgentTurnArgs {
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
-  /** Reports the concrete channel/default or attached Desktop session before provider startup. */
-  onRouteResolved?: (sessionId: string) => void;
+  /** Reports the concrete session only after the provider accepts this message. */
+  onRouteResolved?: (sessionId: string) => void | Promise<void>;
   /** Keep fire-and-forget work inside the ingress account's drain boundary. */
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
@@ -597,10 +609,6 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'missing_auth' };
       }
     }
-    // onRouteResolved 必须在鉴权通过之后才算"路由解析成功" —— 群窗口游标的
-    // commit 挂在它上面, 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标
-    // 永久跳过(prepareAgentTurnText 的契约: 路由失败不推进游标)。
-    args.onRouteResolved?.(row.id);
     // ── thread 名片卡(threadScoped 新 thread 会话)─────────────────────────
     // 在 bot 第一条回复之前发进 thread, 让用户第一眼理解"这个 thread = 一条
     // 独立会话";首条消息的 oneshot 标题生成完成后, 名片原地升级为正式标题
@@ -663,6 +671,7 @@ export function createTurnRunner(
       headlessSetupClosed: false,
       releaseHeadlessSetupTurn: null,
       interactionRouteLease: null,
+      hostTurnLeaseRelease: null,
       terminalKind: 'done',
       terminalErrorCode: null,
       chunkedReplyBegun: false,
@@ -742,6 +751,7 @@ export function createTurnRunner(
       notified: false,
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
+      ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
     };
 
@@ -812,6 +822,7 @@ export function createTurnRunner(
       `enqueued turn for session=${rowId.slice(-8)} queueDepth=${state.queue.length} pendingSends=${state.sendQueue.length}`,
     );
     let acceptedAt = 0;
+    let turnChangeSetStarted = false;
 
     let releaseAgentSwitchLock = (): void => {};
     try {
@@ -848,6 +859,13 @@ export function createTurnRunner(
         planMode: false,
         ...(item.turnPermissionPolicy ? { turnPermissionPolicy: item.turnPermissionPolicy } : {}),
         beforeProviderStart: async () => {
+          // 策略轮持一张 host turn lease:期间 setPermissionMode 切到 agent 声明为
+          // turnPermissionPolicy-unsupported 的档位(如 Pi Full Access)会被阻塞到本轮
+          // 终态,堵死"热切到 bypass 让 bridge 直接放行、策略连冒泡机会都没有"的绕过。
+          // 两个 surface 都需要:channel 与 desktop 的策略同样必须扛住热切。
+          if (item.turnPermissionPolicy) {
+            item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
+          }
           item.turn.interactionRouteLease =
             item.turnPermissionPolicy?.confirmationSurface === 'desktop'
               ? beginInteractionRoute(state.makerSession, {
@@ -872,11 +890,31 @@ export function createTurnRunner(
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
-                    origin: { kind: 'im', channel },
+                    origin: item.turnPermissionPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
+                    ...(item.turnPermissionPolicy?.confirmationTimeoutMs
+                      ? { timeoutMs: item.turnPermissionPolicy.confirmationTimeoutMs }
+                      : {}),
+                    ...(item.turnPermissionPolicy?.onInteractionStateChange
+                      ? { onStateChange: item.turnPermissionPolicy.onInteractionStateChange }
+                      : {}),
                   },
-                  handle: handleInteractionFor(rowId, userId, state.scopeKey),
-                  onCancel: (requestId) => cancelPending(requestId, 'interaction_route_released'),
+                  handle: handleInteractionFor(
+                    rowId,
+                    userId,
+                    state.scopeKey,
+                    item.turnPermissionPolicy?.confirmationTimeoutMs,
+                  ),
+                  // 文本渠道自己认领掉的不动卡片(它本来就没有卡);其余走
+                  // dropInteractionCard —— 作废 pending 的同时把那张卡收口。
+                  onCancel: (requestId, decision) =>
+                    adapter.cancelTextInteraction?.(userId, requestId, decision) === true
+                    || dropInteractionCard(
+                      requestId,
+                      'reason' in decision
+                        ? decision.reason ?? 'interaction_route_released'
+                        : 'interaction_route_released',
+                    ),
                 });
           await item.beforeProviderStart?.();
           acceptedAt = Date.now();
@@ -904,6 +942,10 @@ export function createTurnRunner(
             userMessageId: item.turn.userMessageId,
             persisted: persisted !== null,
           });
+          if (persisted) {
+            await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
+            turnChangeSetStarted = true;
+          }
         },
       });
       if (pendingHandoff && sendResult.accepted) {
@@ -914,6 +956,7 @@ export function createTurnRunner(
         context: buildSendContext(rowId),
       });
       if (!outcome.dispatched) {
+        if (turnChangeSetStarted) clearPendingTurnChangeSets(rowId);
         await handleSendPreDispatchFailure(state, userId, {
           turn: item.turn,
           source: outcome.source,
@@ -922,8 +965,21 @@ export function createTurnRunner(
         });
         return { kind: 'rejected', reason: outcome.reason };
       }
+      // Route side effects include the durable group cursor commit. The
+      // provider has accepted this send now; invoking the callback here keeps
+      // queued teardown and SESSION_RUNNING requeue paths from advancing it.
+      try {
+        await item.onRouteResolved?.(rowId);
+      } catch (err) {
+        log.warn(
+          `route-resolved callback failed for session=${rowId.slice(-8)}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
       return { kind: 'accepted', acceptedAt: acceptedAt || Date.now() };
     } catch (err) {
+      if (turnChangeSetStarted) clearPendingTurnChangeSets(rowId);
       const normalized = normalizeSendError(err);
       if (normalized.reason === 'SESSION_RUNNING') {
         releaseTurnInteractionRoute(item.turn, 'session_running_race');
@@ -2026,6 +2082,34 @@ export function createTurnRunner(
     const lease = turn.interactionRouteLease;
     turn.interactionRouteLease = null;
     lease?.release(reason);
+    // Release the host turn lease on the same terminal / requeue / cleanup paths
+    // so an unsupported permission-mode switch can proceed once the policy turn ends.
+    const releaseHostLease = turn.hostTurnLeaseRelease;
+    turn.hostTurnLeaseRelease = null;
+    releaseHostLease?.();
+  }
+
+  /**
+   * 交互被作废(turn 收口 / session 清理 / 抢跑)时把它的卡片一起收口。
+   *
+   * 只删 pending 不动卡片, 卡片就会带着可点按钮留在会话里, 而它背后的交互已经
+   * 没了 —— 用户点下去不会有任何反应, 也没有任何提示。群里的授权卡转投宿主私聊
+   * 后这条路径尤其致命: 群里那轮已经收口, 私聊里的卡片却看不出任何变化。
+   */
+  function dropInteractionCard(requestId: string, reason: string): boolean {
+    const cancelled = cancelPending(requestId, reason);
+    // 返回值是 router 的契约: true = 渠道侧已收口这次交互, router 不再自行 cancel。
+    // 丢掉它会让同一个 requestId 被取消两次(第二次落到 SDK 的默认拒绝路径)。
+    if (!cancelled) return false;
+    const notice = adapter.interactionExpiredNotice;
+    if (!notice || !richIm) return true;
+    void richIm
+      .updateInteractiveCard(cancelled.messageId, cards.buildResolvedCard(notice))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`dropped interaction card cleanup failed (non-fatal): ${msg}`);
+      });
+    return true;
   }
 
   function settleTurnTerminal(turn: TurnState): void {
@@ -2526,7 +2610,12 @@ export function createTurnRunner(
 
   // ── interaction handling ────────────────────────────────────────────────────
 
-  function handleInteractionFor(localSessionId: string, userId: string, scopeKey?: string) {
+  function handleInteractionFor(
+    localSessionId: string,
+    userId: string,
+    scopeKey?: string,
+    confirmationTimeoutMs?: number,
+  ) {
     return async (req: InteractionRequest): Promise<InteractionDecision> => {
       log.info(
         `interaction request kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
@@ -2535,7 +2624,7 @@ export function createTurnRunner(
       if (output.kind === 'chunked-text') {
         if (adapter.handleTextInteraction) {
           if (req.kind === 'permission') {
-            const guard = checkDestructiveToolCall(req.toolName, req.input);
+            const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
             if (guard.destructive) {
               log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
               return {
@@ -2545,7 +2634,9 @@ export function createTurnRunner(
               };
             }
           }
-          return adapter.handleTextInteraction(userId, req);
+          return adapter.handleTextInteraction(userId, req, {
+            ...(confirmationTimeoutMs ? { timeoutMs: confirmationTimeoutMs } : {}),
+          });
         }
         if (req.kind === 'ask_user_question') {
           return { kind: 'ask_user_question', answers: {} };
@@ -2573,7 +2664,7 @@ export function createTurnRunner(
       // Bash/PowerShell 命令含 rm/del/Remove-Item/find -delete/git clean -f 等。
       // 模型收到 deny 后通常会改用 AskUserQuestion 跟用户沟通。
       if (req.kind === 'permission') {
-        const guard = checkDestructiveToolCall(req.toolName, req.input);
+        const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
         if (guard.destructive) {
           log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
           return {

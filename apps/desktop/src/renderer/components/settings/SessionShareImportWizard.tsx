@@ -60,6 +60,7 @@ export function SessionShareImportWizard({
     sessionId: string;
     fidelity: 'full' | 'partial' | 'db-only';
     notes: string[];
+    orcaWorkers: number;
   } | null>(null);
   const startedRef = useRef(false);
   const draftIdRef = useRef<string | null>(null);
@@ -331,6 +332,11 @@ export function SessionShareImportWizard({
                     exportedAt: new Date(preview.exportedAt).toLocaleString(),
                   })}
                 </p>
+                {preview.orcaWorkerCount > 0 && (
+                  <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+                    {t('sessionShare.import.previewOrca', { count: preview.orcaWorkerCount })}
+                  </p>
+                )}
                 <p className="mt-1 text-xs text-[var(--text-tertiary)]">
                   {t(`sessionShare.fidelity.${preview.fidelity}`)}
                 </p>
@@ -425,6 +431,11 @@ export function SessionShareImportWizard({
               <p className="text-sm text-[var(--confirm-desc)]">
                 {t(`sessionShare.fidelityResult.${result.fidelity}`)}
               </p>
+              {result.orcaWorkers > 0 && (
+                <p className="text-sm text-[var(--confirm-desc)]">
+                  {t('sessionShare.import.doneOrca', { count: result.orcaWorkers })}
+                </p>
+              )}
               {result.notes.map((note) => (
                 <p key={note} className="text-xs text-[var(--text-tertiary)]">
                   {t(`sessionShare.note.${note}`, note)}

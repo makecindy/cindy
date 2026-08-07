@@ -202,16 +202,23 @@ import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
 import {
-  AT_FILE_PICKER_RESOURCE,
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
-  createAtResourceFromNativePath,
   getAtDirectoryCompletionQuery,
   mergeAtResourceItems,
   scanAtResources,
-  filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
-import { isAtResourceInsertTargetCurrent } from '@/lib/atResourceInsertionGuard';
+import {
+  buildComposerSuggestionEntries,
+  firstEnabledSuggestionIndex,
+  isComposerSuggestionEntryDisabled,
+  nextEnabledSuggestionIndex,
+  resolveComposerAtActivation,
+  type ComposerPluginSuggestion,
+  type ComposerSuggestionAction,
+  type ComposerSuggestionEntry,
+} from '@/lib/composerSuggestion';
+import { MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -878,6 +885,38 @@ function detectTrigger(editor: Editor): TriggerState {
   return { kind: 'none' };
 }
 
+/**
+ * 合成激活(「+」按钮打开统一建议面板,Codex 模式)的 query 推导:
+ * 不向文档插入 `@`,query = 锚点→光标之间的纯文本。返回 null 表示锚点失效
+ * (光标移到锚点前 / 跨段落 / 中间出现空白、chip 或换行),此时
+ * ChatInput 会清掉合成锚点、关闭面板。
+ */
+function deriveSyntheticAtQuery(editor: Editor, anchor: number, rangeEnd: number): string | null {
+  const { state } = editor;
+  const { selection, doc } = state;
+  // 点击「+」前可能已有文本选区。synthetic anchor 就落在 selection.from，
+  // 选区未变化时仍是空查询；用户继续输入后 ProseMirror 会自然替换选区并折叠光标，
+  // 后续字符再按 anchor → caret 推导 query。
+  if (!selection.empty) return selection.from === anchor ? '' : null;
+  const pos = selection.from;
+  if (pos < anchor || pos > rangeEnd || anchor > doc.content.size || rangeEnd > doc.content.size) {
+    return null;
+  }
+  let $anchor;
+  let $pos;
+  try {
+    $anchor = doc.resolve(anchor);
+    $pos = doc.resolve(pos);
+  } catch {
+    return null;
+  }
+  if ($anchor.parent.type.name !== 'paragraph' || $anchor.parent !== $pos.parent) return null;
+  // textBetween 用占位符替换非文本节点(chip / hardBreak),含占位符或空白即失效。
+  const text = doc.textBetween(anchor, pos, '￼', '￼');
+  if (/[\s￼]/.test(text)) return null;
+  return text;
+}
+
 export function ChatInput({
   onSend,
   sessionId,
@@ -1156,6 +1195,43 @@ export function ChatInput({
     remoteHostId,
     deviceLinkDeviceId,
   });
+  const suggestionFileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── 「+」合成打开统一建议面板(Codex 模式)────────────────────────────
+  // state 在 at-panel 区声明;editor 回调(render gate / blur)先于 state 声明
+  // 创建,通过 ref 读最新锚点。锚点 = 打开面板那一刻的光标位,query = 锚点→光标
+  // 纯文本(deriveSyntheticAtQuery)。
+  const syntheticAtAnchorRef = useRef<number | null>(null);
+  // synthetic query 的真实替换终点跟随 ProseMirror transaction mapping；它与
+  // 当前光标位置分离，因此光标移回 query 中间时仍能删除完整 filter，同时不会
+  // 吞掉「+」激活前就存在于锚点后的连续文本。
+  const syntheticAtRangeEndRef = useRef<number | null>(null);
+  const [syntheticAtAnchor, setSyntheticAtAnchorState] = useState<number | null>(null);
+  const setSyntheticAtAnchor = useCallback((next: number | null) => {
+    const previous = syntheticAtAnchorRef.current;
+    syntheticAtAnchorRef.current = next;
+    if (next === null) {
+      syntheticAtRangeEndRef.current = null;
+    } else if (previous !== next || syntheticAtRangeEndRef.current === null) {
+      syntheticAtRangeEndRef.current = next;
+    }
+    setSyntheticAtAnchorState(next);
+  }, []);
+  // render gate 的 trigger 快照:typed 触发优先;合成激活期间以 pseudo-at 快照
+  // 参与 diff,保证「+」打开后继续打字仍能触发 React 刷新(否则 gate 会把
+  // trigger:none 的普通输入吞掉,面板不过滤)。锚点失效时返回哨兵 query,
+  // 放行一次刷新让清锚点 effect 跑掉。
+  const composerTriggerSnapshotOf = (ed: Editor): TriggerState => {
+    const typed = detectTrigger(ed);
+    if (typed.kind !== 'none') return typed;
+    const anchor = syntheticAtAnchorRef.current;
+    if (anchor != null) {
+      const rangeEnd = syntheticAtRangeEndRef.current;
+      const q = rangeEnd == null ? null : deriveSyntheticAtQuery(ed, anchor, rangeEnd);
+      return { kind: 'at', query: q ?? '__synthetic_invalid__', from: anchor };
+    }
+    return typed;
+  };
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -2124,7 +2200,11 @@ export function ChatInput({
       },
     },
     // Tick state on every update so triggerState below recomputes.
-    onUpdate: ({ editor: ed }) => {
+    onUpdate: ({ editor: ed, transaction }) => {
+      const syntheticRangeEnd = syntheticAtRangeEndRef.current;
+      if (syntheticRangeEnd !== null && transaction.docChanged) {
+        syntheticAtRangeEndRef.current = transaction.mapping.map(syntheticRangeEnd, 1);
+      }
       if (
         !suppressListNormalizationRef.current &&
         !ed.view.composing &&
@@ -2140,7 +2220,7 @@ export function ChatInput({
         });
       }
       const nextRenderSnapshot = composerRenderSnapshot(
-        detectTrigger(ed),
+        composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
@@ -2205,7 +2285,7 @@ export function ChatInput({
     },
     onSelectionUpdate: ({ editor: ed }) => {
       const nextRenderSnapshot = composerRenderSnapshot(
-        detectTrigger(ed),
+        composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
@@ -2233,6 +2313,9 @@ export function ChatInput({
           const t = detectTrigger(ed);
           if (t.kind === 'slash') setSuppressedSlashAt(t.from);
           else if (t.kind === 'at') setSuppressedAtAt(t.from);
+          // 合成打开的统一面板同样随失焦关闭(「+」按钮本身 mousedown
+          // preventDefault 不夺焦,不会触发这里)。
+          setSyntheticAtAnchor(null);
         }
       }, 0);
     },
@@ -2392,36 +2475,43 @@ export function ChatInput({
       ),
     [ghostsForCommand],
   );
-  const atPluginItems = useMemo<AtResourceItem[]>(
+  // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
+  // 未生效项保留展示但置灰(entry 级 disabled + 原因)。
+  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(
     () => {
       // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
       // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
       if (deviceLinkDeviceId) return [];
-      return pluginsForMenu
-        .filter((ghost) => pluginAvailableIds.has(ghost.manifest.id) && ghost.manifest.command)
-        .map((ghost) => ({
-          type: 'plugin-command',
-          name: ghost.manifest.name,
-          relPath: ghost.manifest.command!,
-          pluginId: ghost.manifest.id,
-          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-          sourceLabel: ghost.manifest.command!,
-          _nameLower: `${ghost.manifest.name} ${ghost.manifest.command}`.toLowerCase(),
-          _relPathLower: `${ghost.manifest.command} ${ghost.manifest.id}`.toLowerCase(),
-        }));
+      return pluginsForMenu.map((ghost) => {
+        const hasCommand = !!ghost.manifest.command;
+        const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasCommand;
+        return {
+          item: {
+            type: 'plugin-command' as const,
+            name: ghost.manifest.name,
+            relPath: ghost.manifest.command ?? `cindy://plugin/${ghost.manifest.id}`,
+            pluginId: ghost.manifest.id,
+            ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+            sourceLabel: ghost.manifest.command ?? '',
+            _nameLower: `${ghost.manifest.name} ${ghost.manifest.command ?? ''}`.toLowerCase(),
+            _relPathLower: `${ghost.manifest.command ?? ''} ${ghost.manifest.id}`.toLowerCase(),
+          },
+          ...(selectable
+            ? {}
+            : {
+                disabled: true,
+                disabledReason: t(
+                  hasCommand ? 'extraDirs.pluginDisabled' : 'extraDirs.pluginNoCommand',
+                ),
+              }),
+        };
+      });
     },
-    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds],
+    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, t],
   );
   useEffect(() => {
     setGhostCommandRoster(editor, ghostsForCommand);
   }, [editor, ghostsForCommand]);
-  const handlePluginSelect = useCallback(
-    (ghost: (typeof pluginsForMenu)[number]) => {
-      if (!editor || editor.isDestroyed) return;
-      placeGhostAtComposerStart(editor, ghost, installedGhosts);
-    },
-    [editor, installedGhosts],
-  );
 
   const handleVoiceInputPermissionRequired = useCallback(async () => {
     const confirmed = await confirmDialog({
@@ -3371,25 +3461,34 @@ export function ChatInput({
 
   const runAtScan = useCallback(
     (query?: string, reservedSeq?: number) => {
-      // SSH 远端会话不扫 @ 资源(无隧道);atOpen 也已对其关闭面板,这里再兜一层。
-      if (isRemoteSession) return;
+      // SSH 远端会话不扫 @ 资源(无隧道)。统一面板仍可打开(动作 + 插件条目),
+      // 资源区直接置空 ready,不能留 loading 骨架。
+      if (isRemoteSession) {
+        atScanSeqRef.current += 1;
+        setAtState({ kind: 'ready', items: [], truncated: false });
+        return;
+      }
       // device-link 远程会话:带 deviceId 经隧道在被控端扫描(workingDir 是被控端路径);
       // 本机会话 deviceId 为 undefined → 本地扫描。
       // 远程**草稿**(NewMakerDraftRoute)此时 sessionId 还是 undefined、但 deviceLinkDeviceId prop 已设——
       // 必须优先用 prop,否则 @ 扫描落到控制端本机 FS(扫到同名目录的错文件),插进首条远程消息的 mention 不可用。
       const remoteDeviceId =
         deviceLinkDeviceId ?? (sessionId ? getSessionDeviceId(sessionId) : undefined);
+      const normalizedQuery = query?.trim() ?? '';
+      // device-link 纯远程草稿尚未选 workspace 时不能把空路径发给被控端扫描。
+      // 空查询仅清空资源区；非空查询仍可经隧道搜索被控端任务历史。
+      if (remoteDeviceId && !workingDir?.trim() && !normalizedQuery) {
+        atScanSeqRef.current += 1;
+        setAtState({ kind: 'ready', items: [], truncated: false });
+        return;
+      }
       const seq = reservedSeq ?? ++atScanSeqRef.current;
       if (atScanSeqRef.current !== seq) return;
-      const normalizedQuery = query?.trim() ?? '';
       const preservePreviousItems = reservedSeq !== undefined && !!normalizedQuery;
       atLastScanQueryRef.current = normalizedQuery;
       setAtState((prev) => {
         if (prev.kind === 'ready' && normalizedQuery) {
           return { ...prev, searching: true };
-        }
-        if (atPluginItems.length > 0) {
-          return { kind: 'ready', items: atPluginItems, truncated: false, searching: true };
         }
         return { kind: 'loading' };
       });
@@ -3409,8 +3508,8 @@ export function ChatInput({
             setAtState((prev) => ({
               kind: 'ready',
               items: preservePreviousItems && prev.kind === 'ready'
-                ? mergeAtResourceItems(prev.items, [...atPluginItems, ...partial.items])
-                : [...atPluginItems, ...partial.items],
+                ? mergeAtResourceItems(prev.items, partial.items)
+                : partial.items,
               truncated: partial.truncated || (prev.kind === 'ready' && prev.truncated),
               searching: true,
             }));
@@ -3420,16 +3519,14 @@ export function ChatInput({
         .then((res) => {
           if (atScanSeqRef.current !== seq) return;
           if (!res.success) {
-            if (atPluginItems.length > 0) {
-              setAtState({ kind: 'ready', items: atPluginItems, truncated: false });
-            } else {
-              setAtState({ kind: 'error', message: res.error ?? 'scan failed' });
-            }
+            // 扫描失败不再整面板报错兜底插件:插件/动作条目独立于 atState,
+            // 面板在有其它条目时把错误降级为底部一行 + 重试。
+            setAtState({ kind: 'error', message: res.error ?? 'scan failed' });
             return;
           }
           setAtState({
             kind: 'ready',
-            items: [...atPluginItems, ...res.items],
+            items: res.items,
             truncated: res.truncated,
           });
         })
@@ -3439,27 +3536,167 @@ export function ChatInput({
           setAtState({ kind: 'error', message: m });
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, t, atPluginItems],
+    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, t],
   );
 
-  const atQuery = trigger.kind === 'at' ? trigger.query : '';
+  const syntheticAtQuery = useMemo(
+    () =>
+      editor && syntheticAtAnchor !== null
+        ? (() => {
+            const rangeEnd = syntheticAtRangeEndRef.current;
+            return rangeEnd == null
+              ? null
+              : deriveSyntheticAtQuery(editor, syntheticAtAnchor, rangeEnd);
+          })()
+        : null,
+    [editor, syntheticAtAnchor, trigger],
+  );
+  useEffect(() => {
+    if (syntheticAtAnchor === null || syntheticAtQuery !== null) return;
+    setSyntheticAtAnchor(null);
+  }, [setSyntheticAtAnchor, syntheticAtAnchor, syntheticAtQuery]);
+
+  // synthetic 是一次显式激活：打开期间即使光标前仍能匹配 `/` / `@` typed run，
+  // 也应继续由「+」锚点解释 query；否则刚打开就会被旧 trigger 抢回并立即收起。
+  const effectiveAt = resolveComposerAtActivation({
+    typed: trigger.kind === 'at' ? { from: trigger.from, query: trigger.query } : null,
+    syntheticAnchor: syntheticAtAnchor,
+    syntheticQuery: syntheticAtQuery,
+  });
+  const atQuery = effectiveAt?.query ?? '';
+
+  const runNewGoalAction = useCallback(() => {
+    const activeEditor = editorRef.current;
+    const draftText =
+      activeEditor && !activeEditor.isDestroyed
+        ? serializeEditorContent(activeEditor).text.trim()
+        : '';
+    if (inSessionGoalEnabled) {
+      setNewGoalInitial(draftText);
+      setNewGoalOpen(true);
+      return;
+    }
+    onNewGoal?.(draftText);
+  }, [inSessionGoalEnabled, onNewGoal]);
+
+  const composerSuggestionActions = useMemo<ComposerSuggestionAction[]>(() => {
+    const actions: ComposerSuggestionAction[] = [];
+    if (localAttachmentPickerEnabled) {
+      actions.push({
+        id: 'attach-files',
+        label: t('extraDirs.addFiles'),
+        disabled: composerMutationLocked,
+        run: () => suggestionFileInputRef.current?.click(),
+      });
+    }
+    if (inSessionGoalEnabled || onNewGoal) {
+      actions.push({
+        id: 'new-goal',
+        label: t('goal.newGoalMenuItem'),
+        disabled: composerMutationLocked,
+        run: runNewGoalAction,
+      });
+    }
+    if (planModeEntry) {
+      actions.push({
+        id: 'plan-mode',
+        label: t('planMode.menuItem'),
+        checked: planModeEntry.enabled,
+        disabled: composerMutationLocked,
+        run: () => planModeEntry.onToggle(!planModeEntry.enabled),
+      });
+    }
+    if (collaboration) {
+      const policyDisabled = collaboration.disabled === true;
+      const retryable = policyDisabled && !!collaboration.onDisabledActivate;
+      actions.push({
+        id: 'collaboration',
+        label: t('newChat.collaboration.modeLabel'),
+        checked: collaboration.enabled,
+        disabled: composerMutationLocked || (policyDisabled && !retryable),
+        disabledReason: collaboration.disabledReason,
+        run: () => {
+          if (policyDisabled) {
+            collaboration.onDisabledActivate?.();
+            return;
+          }
+          if (collaboration.enabled) {
+            collaboration.onChange({ enabled: false, worker: collaboration.worker });
+            return;
+          }
+          if (collaboration.onOpenDetails) {
+            collaboration.onOpenDetails();
+            return;
+          }
+          collaboration.onChange({ enabled: true, worker: collaboration.worker });
+        },
+      });
+    }
+    if (onExtraDirsChange) {
+      const currentExtraDirs = extraDirs ?? [];
+      actions.push({
+        id: 'add-extra-dir',
+        label:
+          currentExtraDirs.length >= MAX_EXTRA_DIRS
+            ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
+            : t('extraDirs.add'),
+        disabled: composerMutationLocked || currentExtraDirs.length >= MAX_EXTRA_DIRS,
+        run: () => {
+          void pickAndAddExtraDir({
+            extraDirs: currentExtraDirs,
+            workingDir,
+            onChange: onExtraDirsChange,
+            confirm: confirmDialog,
+            parentDirectoryConfirm: {
+              title: t('extraDirs.parentConfirmTitle'),
+              description: (path) => t('extraDirs.parentConfirmDescription', { path }),
+              confirmText: t('extraDirs.parentConfirmAccept'),
+              cancelText: t('extraDirs.parentConfirmCancel'),
+            },
+          });
+        },
+      });
+    }
+    return actions;
+  }, [
+    collaboration,
+    composerMutationLocked,
+    confirmDialog,
+    extraDirs,
+    inSessionGoalEnabled,
+    localAttachmentPickerEnabled,
+    onExtraDirsChange,
+    onNewGoal,
+    planModeEntry,
+    runNewGoalAction,
+    t,
+    workingDir,
+  ]);
+
+  const atResources = useMemo(
+    () => (atState.kind === 'ready' ? atState.items : []),
+    [atState],
+  );
+
+  const filteredAt = useMemo(
+    () =>
+      effectiveAt
+        ? buildComposerSuggestionEntries({
+            query: atQuery,
+            actions: composerSuggestionActions,
+            resources: atResources,
+            plugins: pluginSuggestions,
+          })
+        : [],
+    [atQuery, atResources, composerSuggestionActions, effectiveAt, pluginSuggestions],
+  );
 
   // When `@` panel opens, rescan so newly created files/agents show immediately.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 首次打开只按 activation/from/context 扫一次；query 变化由下方 debounce effect 独立负责，避免每次按键立即重复扫描。
   useEffect(() => {
-    if (trigger.kind !== 'at') return;
-    runAtScan();
-  }, [trigger.kind, workingDir, runAtScan]);
-
-  // Derive query string for stable memo deps — avoids re-filtering on
-  // every editor tick when only the caret moved but the query didn't change.
-  const filteredAt = useMemo(() => {
-    if (!atQuery && trigger.kind !== 'at') return [];
-    if (atState.kind !== 'ready') return [];
-    const items = workingDir && localAttachmentPickerEnabled
-      ? [AT_FILE_PICKER_RESOURCE, ...atState.items]
-      : atState.items;
-    return filterAtResources(items, atQuery);
-  }, [atState, atQuery, trigger.kind, workingDir, localAttachmentPickerEnabled]);
+    if (!effectiveAt) return;
+    runAtScan(atQuery);
+  }, [effectiveAt?.activation, effectiveAt?.from, runAtScan, workingDir]);
 
   // Focused row index for each palette
   const [slashFocus, setSlashFocus] = useState(0);
@@ -3470,14 +3707,19 @@ export function ChatInput({
     if (slashFocus >= filteredCommands.length) setSlashFocus(0);
   }, [filteredCommands.length, slashFocus]);
   useEffect(() => {
-    if (atFocus >= filteredAt.length) setAtFocus(0);
-  }, [filteredAt.length, atFocus]);
+    if (
+      atFocus >= filteredAt.length ||
+      (filteredAt[atFocus] && isComposerSuggestionEntryDisabled(filteredAt[atFocus]))
+    ) {
+      setAtFocus(firstEnabledSuggestionIndex(filteredAt));
+    }
+  }, [filteredAt, atFocus]);
   useEffect(() => {
     if (atQueryScanTimerRef.current !== null) {
       window.clearTimeout(atQueryScanTimerRef.current);
       atQueryScanTimerRef.current = null;
     }
-    if (trigger.kind !== 'at') return;
+    if (!effectiveAt) return;
     const normalizedQuery = atQuery.trim();
     if (normalizedQuery === atLastScanQueryRef.current) return;
     atLastScanQueryRef.current = normalizedQuery;
@@ -3495,7 +3737,7 @@ export function ChatInput({
         atQueryScanTimerRef.current = null;
       }
     };
-  }, [trigger.kind, workingDir, atQuery, runAtScan]);
+  }, [effectiveAt?.activation, effectiveAt?.from, workingDir, atQuery, runAtScan]);
 
   // ── Panel-close flags (Esc cancelation) ────────────────────────────
   // Once the user cancels a panel (Esc), we must NOT reopen it until the
@@ -3521,8 +3763,20 @@ export function ChatInput({
   }, [trigger, suppressedSlashAt, suppressedAtAt]);
 
   const slashOpen = trigger.kind === 'slash' && suppressedSlashAt !== trigger.from;
-  const atOpen =
-    trigger.kind === 'at' && !isRemoteSession && suppressedAtAt !== trigger.from;
+  const typedAtOpen =
+    effectiveAt?.activation === 'typed' &&
+    !isRemoteSession &&
+    suppressedAtAt !== effectiveAt.from;
+  const syntheticAtOpen = effectiveAt?.activation === 'synthetic';
+  const atOpen = typedAtOpen || syntheticAtOpen;
+
+  const closeAtPanel = useCallback(() => {
+    if (effectiveAt?.activation === 'typed') {
+      setSuppressedAtAt(effectiveAt.from);
+    } else {
+      setSyntheticAtAnchor(null);
+    }
+  }, [effectiveAt, setSyntheticAtAnchor]);
 
   useEffect(() => {
     if (!slashOpen) return;
@@ -3547,7 +3801,7 @@ export function ChatInput({
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
-              setAtFocus((i) => (i + 1) % filteredAt.length);
+              setAtFocus((i) => nextEnabledSuggestionIndex(filteredAt, i, 1));
               return true;
             }
             return false;
@@ -3557,7 +3811,7 @@ export function ChatInput({
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
-              setAtFocus((i) => (i - 1 + filteredAt.length) % filteredAt.length);
+              setAtFocus((i) => nextEnabledSuggestionIndex(filteredAt, i, -1));
               return true;
             }
             return false;
@@ -3567,8 +3821,12 @@ export function ChatInput({
               insertSlashCommand(filteredCommands[slashFocus]);
               return true;
             }
-            if (atOpen && filteredAt[atFocus]) {
-              insertAtResource(filteredAt[atFocus]);
+            if (
+              atOpen &&
+              filteredAt[atFocus] &&
+              !isComposerSuggestionEntryDisabled(filteredAt[atFocus])
+            ) {
+              void handleComposerSuggestionSelect(filteredAt[atFocus]);
               return true;
             }
             return false;
@@ -3577,13 +3835,18 @@ export function ChatInput({
               setSuppressedSlashAt(trigger.from);
               return true;
             }
-            if (atOpen && trigger.kind === 'at') {
-              setSuppressedAtAt(trigger.from);
+            if (atOpen) {
+              closeAtPanel();
+              return true;
+            }
+            return false;
+          case 'Backspace':
+            if (syntheticAtOpen && !atQuery) {
+              closeAtPanel();
               return true;
             }
             return false;
           case 'ArrowLeft':
-          case 'Backspace':
             return false;
           default:
             return false;
@@ -3642,72 +3905,63 @@ export function ChatInput({
     [editor, trigger],
   );
 
-  const insertAtResource = useCallback(
-    async (item: AtResourceItem) => {
-      if (!editor || trigger.kind !== 'at') return;
-      const { from } = trigger;
-      // Extend replace-range to the end of the @-run (up to whitespace /
-      // chip boundary / end of paragraph). Same reasoning as
-      // insertSlashCommand — the caret may sit inside the run.
-      const $from = editor.state.doc.resolve(from);
-      const parent = $from.parent;
-      const parentStart = $from.start();
-      let runEnd = from + 1;
-      const offset = from - parentStart + 1;
-      let stopped = false;
-      parent.forEach((child, childOffset) => {
-        if (stopped || childOffset + child.nodeSize <= offset) return;
-        if (child.type.name === 'mentionChip' || !child.isText) {
+  const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
+    if (!editor || !effectiveAt) return null;
+    const { from } = effectiveAt;
+
+    // synthetic query 没有文档内触发符，替换范围由 transaction mapping 单独跟踪。
+    // 不能像 typed `@` 一样向后扫到空白，否则在已有单词中间激活并输入过滤词时
+    // 会把激活前就存在的单词后缀一起删除。
+    if (effectiveAt.activation === 'synthetic') {
+      const to = syntheticAtRangeEndRef.current;
+      return to !== null && to >= from ? { from, to } : null;
+    }
+
+    // Extend replace-range to the end of the complete query run (up to
+    // whitespace / chip boundary / end of paragraph). The caret may sit
+    // inside either a typed `@query` or a synthetic `query`; selecting an
+    // entry must not leave the suffix after the caret behind.
+    let $from;
+    try {
+      $from = editor.state.doc.resolve(from);
+    } catch {
+      return null;
+    }
+    const parent = $from.parent;
+    const parentStart = $from.start();
+    const triggerOffset = 1;
+    let runEnd = from + triggerOffset;
+    const offset = from - parentStart + triggerOffset;
+    let stopped = false;
+    parent.forEach((child, childOffset) => {
+      if (stopped || childOffset + child.nodeSize <= offset) return;
+      if (child.type.name === 'mentionChip' || !child.isText) {
+        stopped = true;
+        return;
+      }
+      const localStart = Math.max(0, offset - childOffset);
+      const text = child.text ?? '';
+      for (let i = localStart; i < text.length; i++) {
+        if (/\s/.test(text[i])) {
+          runEnd = parentStart + childOffset + i;
           stopped = true;
           return;
         }
-        const localStart = Math.max(0, offset - childOffset);
-        const text = child.text ?? '';
-        for (let i = localStart; i < text.length; i++) {
-          if (/\s/.test(text[i])) {
-            runEnd = parentStart + childOffset + i;
-            stopped = true;
-            return;
-          }
-        }
-        runEnd = parentStart + childOffset + text.length;
-      });
-      const to = runEnd;
-      let selectedItem = item;
-      let selectedByNativePicker = false;
-      if (selectedItem.type === 'file-picker') {
-        const originDoc = editor.state.doc;
-        const originStorageKey = storageKey;
-        try {
-          const picked = await window.electronAPI.dialog.showOpenResource(
-            workingDir ? { defaultPath: workingDir } : undefined,
-          );
-          if (!picked.success || !picked.path || !picked.kind) return;
-          if (!isAtResourceInsertTargetCurrent(
-            editor,
-            editorRef.current,
-            originDoc,
-            originStorageKey,
-            currentStorageKeyRef.current,
-          )) return;
-          const nativeResource = createAtResourceFromNativePath(
-            picked.path,
-            picked.kind,
-            workingDir,
-          );
-          if (!nativeResource) return;
-          selectedItem = nativeResource;
-          selectedByNativePicker = true;
-        } catch (error) {
-          log.warn(
-            'native @ file picker failed:',
-            error instanceof Error ? error.message : String(error),
-          );
-          return;
-        }
       }
-      // The synthetic action must always resolve to a concrete file/directory
-      // before it can reach mention serialization.
+      runEnd = parentStart + childOffset + text.length;
+    });
+    return { from, to: runEnd };
+  }, [editor, effectiveAt]);
+
+  const insertAtResource = useCallback(
+    (selectedItem: AtResourceItem) => {
+      if (!editor || !effectiveAt) return;
+      const range = resolveEffectiveAtRange();
+      if (!range) return;
+      const { from, to } = range;
+      // `file-picker` remains in the shared AtResourceItem protocol for
+      // compatibility, but the unified composer no longer assembles that
+      // duplicate row. Keep a defensive guard for exhaustive type narrowing.
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
@@ -3724,21 +3978,26 @@ export function ChatInput({
           })
           .run();
         placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
-        setSuppressedAtAt(from);
+        closeAtPanel();
         return;
       }
-      const directoryQuery = selectedByNativePicker
-        ? null
-        : getAtDirectoryCompletionQuery(selectedItem);
+      const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
       if (directoryQuery) {
         editor
           .chain()
           .focus()
           .command(({ tr }) => {
-            tr.replaceWith(from, to, editor.schema.text(`@${directoryQuery}`));
+            tr.replaceWith(
+              from,
+              to,
+              editor.schema.text(
+                effectiveAt.activation === 'typed' ? `@${directoryQuery}` : directoryQuery,
+              ),
+            );
             return true;
           })
           .run();
+        if (effectiveAt.activation === 'synthetic') setSyntheticAtAnchor(from);
         setAtFocus(0);
         return;
       }
@@ -3775,8 +4034,64 @@ export function ChatInput({
           return true;
         })
         .run();
+      closeAtPanel();
     },
-    [editor, trigger, workingDir, storageKey],
+    [
+      closeAtPanel,
+      editor,
+      effectiveAt,
+      resolveEffectiveAtRange,
+      setSyntheticAtAnchor,
+    ],
+  );
+
+  const handleComposerSuggestionSelect = useCallback(
+    (entry: ComposerSuggestionEntry) => {
+      if (isComposerSuggestionEntryDisabled(entry)) return;
+      if (entry.kind === 'resource') {
+        void insertAtResource(entry.item);
+        return;
+      }
+      if (!editor) return;
+      const range = resolveEffectiveAtRange();
+      if (!range) return;
+      editor
+        .chain()
+        .focus()
+        .command(({ tr }) => {
+          tr.delete(range.from, range.to);
+          return true;
+        })
+        .run();
+      closeAtPanel();
+      entry.action.run();
+    },
+    [closeAtPanel, editor, insertAtResource, resolveEffectiveAtRange],
+  );
+
+  const handleComposerSuggestionOpenChange = useCallback((nextOpen: boolean) => {
+    if (!nextOpen) {
+      setSyntheticAtAnchor(null);
+      return;
+    }
+    if (!editor || editor.isDestroyed || composerMutationLocked) return;
+    if (trigger.kind === 'slash') {
+      setSuppressedSlashAt(trigger.from);
+    } else if (trigger.kind === 'at') {
+      setSuppressedAtAt(trigger.from);
+    }
+    setSyntheticAtAnchor(editor.state.selection.from);
+    setAtFocus(0);
+    editor.commands.focus();
+  }, [
+    composerMutationLocked,
+    editor,
+    setSyntheticAtAnchor,
+    trigger,
+  ]);
+  const composerSuggestionFocusTarget = useCallback(
+    () => editor?.view.dom ?? null,
+    [editor],
   );
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
@@ -3841,14 +4156,15 @@ export function ChatInput({
           }
           serializedContent = serializeEditorContent(editor);
         }
-        let {
+        const {
           text: editorText,
           mentions,
           hasQuotes,
-          agentReferences,
+          agentReferences: serializedAgentReferences,
           pastedTextRanges,
           slashCommandRanges,
         } = serializedContent;
+        let agentReferences = serializedAgentReferences;
         const attachmentsForSend = optimisticallyClearRemoteComposer
           ? attachmentsBeforeOptimisticClear
           : [...latestAttachmentsRef.current];
@@ -6248,36 +6564,52 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划/协同模式、
-                Plugin、引用目录按各自能力与接线显示。远程会话不能把控制端绝对路径
-                交给远端 agent,因此不接本机文件选择器。 */}
+                {localAttachmentPickerEnabled && (
+                  <input
+                    ref={suggestionFileInputRef}
+                    type="file"
+                    multiple
+                    disabled={composerMutationLocked}
+                    className="hidden"
+                    onChange={(event) => {
+                      const files = Array.from(event.currentTarget.files ?? []);
+                      event.currentTarget.value = '';
+                      if (files.length > 0) void addFiles(files);
+                    }}
+                  />
+                )}
+                {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
-                  extraDirs={extraDirs ?? []}
-                  workingDir={workingDir}
-                  onAddFiles={
-                    localAttachmentPickerEnabled && !composerMutationLocked ? addFiles : undefined
-                  }
-                  planMode={planModeEntry}
-                  collaboration={collaboration}
-                  plugins={pluginsForMenu}
-                  pluginAvailableIds={pluginAvailableIds}
-                  onPluginSelect={handlePluginSelect}
-                  onChange={onExtraDirsChange}
-                  onNewGoal={
-                    inSessionGoalEnabled || onNewGoal
-                      ? () => {
-                          // 把输入框当前文字(去空白)作为目标默认内容。
-                          const ed = editorRef.current;
-                          const draftText =
-                            ed && !ed.isDestroyed ? serializeEditorContent(ed).text.trim() : '';
-                          if (inSessionGoalEnabled) {
-                            setNewGoalInitial(draftText);
-                            setNewGoalOpen(true);
-                          } else {
-                            onNewGoal?.(draftText);
-                          }
-                        }
-                      : undefined
+                  extraDirsCount={(extraDirs ?? []).length}
+                  hasReferenceDirs={onExtraDirsChange !== undefined}
+                  open={syntheticAtOpen}
+                  onOpenChange={handleComposerSuggestionOpenChange}
+                  autoFocusTarget={composerSuggestionFocusTarget}
+                  panel={
+                    <AtMentionPanel
+                      embedded
+                      query={atQuery}
+                      state={atState}
+                      entries={filteredAt}
+                      focusedIndex={atFocus}
+                      onFocusedIndexChange={setAtFocus}
+                      onSelect={handleComposerSuggestionSelect}
+                      onClose={closeAtPanel}
+                      onRetry={() => runAtScan(atQuery)}
+                      referenceDirs={
+                        onExtraDirsChange
+                          ? {
+                              dirs: extraDirs ?? [],
+                              onRemove: (path) => {
+                                void onExtraDirsChange(
+                                  (extraDirs ?? []).filter((item) => item !== path),
+                                );
+                              },
+                            }
+                          : null
+                      }
+                      maxHeight={paletteMaxHeight}
+                    />
                   }
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
@@ -6497,19 +6829,26 @@ export function ChatInput({
           )}
 
           {/* At-mention panel */}
-          {atOpen && trigger.kind === 'at' && (
+          {typedAtOpen && effectiveAt && (
             <AtMentionPanel
-              query={trigger.query}
+              query={atQuery}
               state={atState}
+              entries={filteredAt}
               focusedIndex={atFocus}
               onFocusedIndexChange={setAtFocus}
-              onSelect={(item) => insertAtResource(item)}
-              onClose={() => {
-                if (trigger.kind !== 'at') return;
-                setSuppressedAtAt(trigger.from);
-              }}
+              onSelect={handleComposerSuggestionSelect}
+              onClose={closeAtPanel}
               onRetry={() => runAtScan(atQuery)}
-              filePickerEnabled={!!workingDir && localAttachmentPickerEnabled}
+              referenceDirs={
+                onExtraDirsChange
+                  ? {
+                      dirs: extraDirs ?? [],
+                      onRemove: (path) => {
+                        void onExtraDirsChange((extraDirs ?? []).filter((item) => item !== path));
+                      },
+                    }
+                  : null
+              }
               maxHeight={paletteMaxHeight}
             />
           )}
