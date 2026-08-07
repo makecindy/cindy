@@ -23,7 +23,9 @@ vi.mock('@/lib/logger', () => ({
 
 const enableOrca = vi.fn();
 const listWorkersByLead = vi.fn();
+const getCapabilities = vi.fn();
 vi.mock('@/lib/makerTransport', () => ({
+  agentCapabilitiesForDevice: (...a: unknown[]) => getCapabilities(...a),
   makerApiForDevice: () => ({ enableOrca: (...a: unknown[]) => enableOrca(...a) }),
   orcaWorkflowsForDevice: () => ({ listWorkersByLead: (...a: unknown[]) => listWorkersByLead(...a) }),
 }));
@@ -42,9 +44,20 @@ const timeoutError = () => new Error('[DEVICE_LINK_TIMEOUT] waiting for remote r
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
+  getCapabilities.mockResolvedValue({ supportsOrcaWorkerPermissionMode: true });
 });
 
 describe('enableRemoteCollabForSession', () => {
+  it('真正 mutation 前重新确认被控端支持 Team Worker 权限模式', async () => {
+    getCapabilities.mockResolvedValue({ supportsOrcaWorkerPermissionMode: false });
+
+    await expect(enableRemoteCollabForSession(params)).rejects.toThrow(
+      'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+    );
+    expect(getCapabilities).toHaveBeenCalledWith('dev-1', 'codex');
+    expect(enableOrca).not.toHaveBeenCalled();
+  });
+
   it('成功路径:回传 worker session,并 fire-and-forget 刷镜像', async () => {
     enableOrca.mockResolvedValue({ workerSessionId: 'worker-1' });
 

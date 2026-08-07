@@ -1074,9 +1074,10 @@ my-ghost/
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3 */ ],
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
-  // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
-  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1)。按需申请,
-  // 每条都会在装入确认框里单独列给用户看。
+  // 类目按需申请:image / video 的动作是 "generate" | "edit";media 只有
+  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1);
+  // text 只有 "oneshot";search 只有 "web"(Cindy 托管公网搜索)。每条都会
+  // 在装入确认框里单独列给用户看。
   "panel": { "title": "面板标题", "html": "panel.html", "position": "left",
              "minWidth": 240, "defaultFraction": 0.24,
              "systemButtons": { "maximize": false } },
@@ -1239,9 +1240,11 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 文生视频 / \`edit\`=图生视频,参考图怎么用由 \`refMode\` 决定:首尾帧 1–2 张,
 或多张参考图,详见 §4 的 cindy-request 视频段)、\`media\`(\`deposit\`=把手里的
 媒体字节存进媒体库,§4.0.1)、\`text\`(\`oneshot\`=快问快答,§4.0.2)、
-\`embed\`(\`text\`=文本转向量,§4.0.3)。
+\`embed\`(\`text\`=文本转向量,§4.0.3)、\`search\`(\`web\`=Cindy 托管
+公网搜索,见 §4 的 \`search_web\` 段)。
 详单里没申请的动作,运行时点单直接被拒;声明了 cindy 槽却漏写详单 = 零能力,
-别漏。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
+别漏。\`search.web\` 只能由真实 tool-call 触发,还必须同时声明 \`tool\` 槽和
+至少一个工具。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
 
 **network 详单**(声明了 network 槽时必写,详见 §4.7):
 
@@ -1471,10 +1474,25 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //     聊天卡片时用它按比例精确声明卡高(见 §4.5),别拿去写进交卷文案。
 // 图像可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 后端自定:
 //   { kind: 'gen_image', prompt: '一只猫', aspectRatio: '3:2' }
+
 //   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素
 //   以返回的 width/height 为准。**图像类专用**(gen_image 与 edit_image 都收;
 //   改图不传 = 跟随源图画幅);视频画幅是另一个参数 ratio,值域不同,带错会被拒。
 //   用户没提横竖要求时别自作主张,不传让后端自定。
+//
+// Cindy 托管 Web Search(需声明 cindy.search:["web"]):
+// provider 固定为 cindy,主机固定 Anthropic Messages 搜索模型与上游凭证;
+// 不接受 api_base/header/key/model/tool。
+const search = await cindy.send({
+  type: 'cindy-request',
+  kind: 'search_web',
+  query: 'Cindy 最新版本',
+  limit: 5,                       // 可选,1–10,缺省 5
+  provider: 'cindy',
+  callId: msg.callId,             // 搜索只由 tool-call 触发,必须透传
+  callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
+});
+// search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
 // 改图(需详单含 "edit";源图必须是本意识名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }

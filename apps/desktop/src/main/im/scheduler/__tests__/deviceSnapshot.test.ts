@@ -29,6 +29,7 @@ describe('Discord scheduler account device snapshot', () => {
         { deviceId: 'peer-linux', platform: 'linux', online: true, isSelf: false },
         { deviceId: 'offline', platform: 'darwin', online: false, isSelf: false },
         { deviceId: 'mobile', platform: 'ios', online: true, isSelf: false },
+        { deviceId: 'unknown', platform: null, online: true, isSelf: false },
       ],
     });
 

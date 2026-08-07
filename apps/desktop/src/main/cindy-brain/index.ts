@@ -265,6 +265,7 @@ import {
 } from './ghostRecentUsageStore.js';
 import { createXaiImageChannel } from './xaiImageClient.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
+import { getCindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
@@ -2795,6 +2796,10 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 在途并发上限:用户级隐藏配置(ghost-cindy-prefs.json 的 inflightLimits),
       // 缺省 null = 不限并发;每单现读,改配置即生效。
       getInflightLimit: (ghostId) => readGhostCindyInflightLimit(ghostId),
+      // Web Search:固定走主机托管的 LiteLLM /v1/messages。endpoint/key 与
+      // model-access 下发值同源，模型别名和 Claude 原生 Web Search 工具定义
+      // 留在主机侧，意识只拿规范化结果。
+      searchWeb: (params) => getCindyProxySearchService().search(params),
       // 快问快答(text.oneshot):走轻量任务模型链(与会话起标题/任务摘要
       // 同一条,用户在设置里配置)。动态 import:utility-model 的传递依赖在
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
@@ -2834,6 +2839,30 @@ export function getGhostCindySlot(): GhostCindySlot {
       // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。
       holdPipeCall: (ghostId, callId, budgetMs) => getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
       releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
+      claimPipeCall: (ghostId, callId, callerTool, binding, requestKey) =>
+        getGhostPipeDispatcher().claimPendingCall(
+          ghostId,
+          callId,
+          callerTool,
+          binding,
+          requestKey,
+        ),
+      settlePipeCallClaim: (
+        ghostId,
+        callId,
+        callerTool,
+        binding,
+        requestKey,
+        allowRetry,
+      ) =>
+        getGhostPipeDispatcher().settlePendingCallClaim(
+          ghostId,
+          callId,
+          callerTool,
+          binding,
+          requestKey,
+          allowRetry,
+        ),
       // 视频型号预期耗时(registry 登记值;hold 预算与异步受理返回共用)。
       // registry 缺席/型号查无 → null,cindySlot 用自己的缺省。
       videoExpectedSeconds: (model) => {

@@ -75,6 +75,26 @@ describe('WechatIM host boundary', () => {
     ).toBe(true);
   });
 
+  it('排队等待 provider 受理时按 task session 回退微信 peer', () => {
+    const activeTasks = new Map<
+      string,
+      { routeSessionId?: string; task: { sessionId: string } }
+    >([
+      ['peer-queued', { task: { sessionId: 'wechat-task-session' } }],
+      ['peer-other', { task: { sessionId: 'other-session' } }],
+    ]);
+
+    expect(__testing.activePeerIdForSession(activeTasks, 'wechat-task-session')).toBe(
+      'peer-queued',
+    );
+
+    activeTasks.get('peer-queued')!.routeSessionId = 'accepted-route-session';
+    expect(__testing.activePeerIdForSession(activeTasks, 'wechat-task-session')).toBeNull();
+    expect(__testing.activePeerIdForSession(activeTasks, 'accepted-route-session')).toBe(
+      'peer-queued',
+    );
+  });
+
   it('keeps staged files only for accepted poll tasks', () => {
     const accepted = __testing.acceptedPollTaskIds({
       committed: true,

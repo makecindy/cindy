@@ -177,6 +177,11 @@ export interface HookRunRequest {
   /** IM 来源元数据(平台 + thread 上下文); 省略 = 旧 server 不发。 */
   source?: TaskSource;
   /**
+   * provider 已实际接受本次发送后的副作用。runner 只在 send outcome
+   * 确认为 dispatched 后 await；失败必须由调用方自行降级，不能反转已受理 turn。
+   */
+  onProviderAccepted?: () => void | Promise<void>;
+  /**
    * 执行中渲染快照回调(turn.progress 链路)。runner 合成「过程区时间线 +
    * 部分正文」的完整 markdown 快照并节流回调; dispatcher 注入的实现把它
    * 打成 turn.progress 帧发给 server。进度是尽力而为的装饰性信息 ——
@@ -237,12 +242,18 @@ export interface HookDispatcherDeps {
    * 可选: 为派发组装本地群上下文前缀(group-relay-v1 窗口, 生产为
    * groupWindow.buildGroupContextPrefix)。只影响发给 agent 的 prompt,
    * 不影响会话标题与 UI 渲染(二者用 source.userText / 原始 prompt);
-   * 失败或空装配 = 无前缀, 绝不因上下文拒单。commit 在任务被受理
-   * (accepted/queued)后由本模块调用, 拒单不推进窗口游标。
+   * 失败或空装配 = 无前缀, 绝不因上下文拒单。两条路径都只在 provider
+   * 实际受理后提交；拒单、取消或清队列都不推进窗口游标。
    */
-  buildContextPrefix?: (
-    payload: TaskDispatchPayload,
-  ) => Promise<{ prefix: string; commit: () => void }>;
+  buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
+    prefix: string;
+    commit: (
+      guard?: () => boolean | Promise<boolean>,
+    ) =>
+      | void
+      | { rollback(): void | Promise<void> }
+      | Promise<void | { rollback(): void | Promise<void> }>;
+  }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
    * dispatch 时解析当前 data owner 的 app 托管目录根，allocateDir 为新会话
@@ -377,7 +388,6 @@ const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 const REOPEN_TTL_MS = 24 * 60 * 60_000;
 /** 续跑记账条数上限(FIFO 淘汰最老), 同 ackHistory 语义: 防长驻进程无界增长。 */
 const MAX_PENDING_REOPENS = 200;
-
 /**
  * 原对话不再落在工作目录映射内时(被移到映射外的项目, 或映射本身被改/删),
  * 回给渠道的一次性说明(Slack / Telegram 侧文案不进 locale, 与 interactions.ts
@@ -492,6 +502,11 @@ export function buildHookSessionTitle(
   return `[${contextTag}${displayProvider}${dmTag}] ${snippet}`;
 }
 
+type ContextCursorReceipt = { rollback(): void | Promise<void> };
+type ContextCursorCommit = (
+  guard?: () => boolean | Promise<boolean>,
+) => void | ContextCursorReceipt | Promise<void | ContextCursorReceipt>;
+
 /** 待执行任务(定位已完成, 排队即执行参数就绪)。 */
 interface PendingTask {
   connectionId: string;
@@ -501,6 +516,8 @@ interface PendingTask {
   externalKey: string;
   run: HookRunRequest;
   accountGeneration: number;
+  /** 群上下文游标提交回调；仅在 provider 实际受理后调用。 */
+  commitContextCursor?: ContextCursorCommit;
   /** 会话定位阶段产生的一次性说明, 前置到本次 turn.end 的 finalText。 */
   notice?: string;
   /**
@@ -617,6 +634,34 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (keyChains.get(key) === stored) keyChains.delete(key);
     });
   }
+  /** 同一 session 的受理段串行化，避免不同 externalKey 并发判断空闲并同时占槽。 */
+  const sessionAdmissionChains = new Map<string, Promise<void>>();
+  async function serializeSessionAdmission(
+    sessionId: string,
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    const previous = sessionAdmissionChains.get(sessionId);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stored = previous
+      ? previous.then(
+          () => current,
+          () => current,
+        )
+      : current;
+    sessionAdmissionChains.set(sessionId, stored);
+    try {
+      if (previous !== undefined) await previous;
+      await fn();
+    } finally {
+      release();
+      if (sessionAdmissionChains.get(sessionId) === stored) {
+        sessionAdmissionChains.delete(sessionId);
+      }
+    }
+  }
   /** 每连接当前发送函数(transport 重建后由 onConnected / handleDispatch 刷新)。 */
   const sendFns = new Map<string, (m: HookMessage) => boolean>();
   /** 离线积压的 turn.end, 按连接缓存; durable terminal 先记 pending, 发送成功后标 sent。 */
@@ -663,6 +708,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
   const runningByRequest = new Map<string, { sessionId: string; connectionId: string }>();
+  /**
+   * 已开始执行但 provider 尚未受理的 Telegram 群任务。账号边界必须把其
+   * accepted / queued ACK 收成 cancelled；accepted=true 后消息已交给 agent，
+   * 不再按未受理任务处理。
+   */
+  const pendingGroupAdmissions = new Map<
+    string,
+    { task: PendingTask; accepted: boolean; cancelled: boolean }
+  >();
   /** 已请求取消的 connectionId + requestId(execute 收口时据此把结果改写为 cancelled)。 */
   const cancelRequested = new Set<string>();
   /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
@@ -1279,6 +1333,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       running.delete(sessionId);
       return;
     }
+    const pendingGroupAdmission = task.commitContextCursor
+      ? { task, accepted: false, cancelled: false }
+      : null;
+    if (pendingGroupAdmission) pendingGroupAdmissions.set(requestKey, pendingGroupAdmission);
     // 这条消息线交给新任务了: 撤掉上一轮失败留下的续跑观察与记账。连接还在, 所以要
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
@@ -1343,6 +1401,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           onProgress,
           onInteraction,
           onInteractionCancel,
+          ...(task.commitContextCursor
+            ? {
+                onProviderAccepted: async () => {
+                  if (pendingGroupAdmission?.cancelled) return;
+                  if (pendingGroupAdmission) pendingGroupAdmission.accepted = true;
+                  await commitTaskContextCursor(task);
+                },
+              }
+            : {}),
           // runner 建/取到 session 后, 拿它真正要跑的那个目录回来问一次 ——
           // 那个目录可能与这里校验过的不是同一个(见 isDirAuthorized 的说明)。
           isDirAuthorized: (dir) => dirStillAllowed(task.connectionId, dir),
@@ -1357,6 +1424,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }
     }
     runningByRequest.delete(requestKey);
+    pendingGroupAdmissions.delete(requestKey);
     if (!isCurrentGeneration(task.accountGeneration)) {
       cancelRequested.delete(requestKey);
       running.delete(sessionId);
@@ -1449,6 +1517,45 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const promise = execute(task);
     executing.add(promise);
     void promise.finally(() => executing.delete(promise));
+  }
+
+  /**
+   * provider 已受理后才推进 durable cursor。此时即使账号代次随后失效，消息也
+   * 已交给 agent，游标前移是正确的；持久化失败则保留旧游标，下次最多重复携带，
+   * 不能为了游标写入失败反转一个已经受理的 turn。
+   */
+  async function commitTaskContextCursor(
+    task: Pick<PendingTask, 'requestId' | 'commitContextCursor'>,
+  ): Promise<void> {
+    if (!task.commitContextCursor) return;
+    try {
+      await task.commitContextCursor();
+    } catch (error) {
+      log.warn(
+        `group context cursor commit failed after provider acceptance: requestId=${task.requestId} error=${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /** 已回 ACK 的任务在取消或账号边界被清掉时必须有 durable 终态。 */
+  function finishTaskAsCancelled(task: PendingTask): void {
+    const turnEnd: TurnEndPayload = {
+      requestId: task.requestId,
+      externalKey: task.externalKey,
+      sessionId: task.run.sessionId,
+      status: 'cancelled',
+      finalText: '',
+      errorMessage: null,
+      usage: { durationMs: null },
+    };
+    sendOrBuffer(task.connectionId, makeTurnEnd(turnEnd), {
+      connectionId: task.connectionId,
+      requestId: task.requestId,
+      ack: task.ack,
+      turnEnd: durableTurnEnd(turnEnd),
+    });
   }
 
   /**
@@ -1929,7 +2036,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
-        let commitContextCursor: () => void = () => undefined;
+        let commitContextCursor: ContextCursorCommit | undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
@@ -1966,48 +2073,61 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           },
           accountGeneration: admittedGeneration,
           reopenCapable: supportsReopen(connectionId),
+          ...((payload.externalKey.startsWith('telegram:group:') ||
+            payload.externalKey.startsWith('telegram:topic:')) &&
+          commitContextCursor
+            ? { commitContextCursor }
+            : {}),
           ...(resolved.notice ? { notice: resolved.notice } : {}),
           ...(resolved.cleanupWorktree ? { cleanupWorktree: resolved.cleanupWorktree } : {}),
         };
         const sessionId = resolved.run.sessionId;
-        const queue = queues.get(sessionId) ?? [];
-
-        if (running.has(sessionId) || runner.isBusy(sessionId) || queue.length > 0) {
-          if (queue.length >= MAX_QUEUE_PER_SESSION) {
+        await serializeSessionAdmission(sessionId, async () => {
+          if (!isCurrentGeneration(admittedGeneration)) return;
+          const initialQueue = queues.get(sessionId) ?? [];
+          const initiallyBusy =
+            running.has(sessionId) || runner.isBusy(sessionId) || initialQueue.length > 0;
+          if (initiallyBusy && initialQueue.length >= MAX_QUEUE_PER_SESSION) {
             reply(connectionId, send, rejected(payload.requestId, 'invalid'));
             log.warn(`dispatch queue overflow: session=${sessionId}`);
             return;
           }
+
+          // 排队任务只保存 commit 回调；provider 尚未受理，不得提前推进 durable cursor。
+          const queue = queues.get(sessionId) ?? [];
+          if (running.has(sessionId) || runner.isBusy(sessionId) || queue.length > 0) {
+            const ack: TaskAckPayload = {
+              requestId: payload.requestId,
+              result: 'queued',
+              reason: null,
+              sessionId,
+              queuePosition: queue.length,
+            };
+            const task: PendingTask = {
+              ...taskBase,
+              ack,
+            };
+            queue.push(task);
+            queues.set(sessionId, queue);
+            reply(connectionId, send, ack);
+            // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
+            // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
+            if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
+            return;
+          }
+
+          running.add(sessionId);
           const ack: TaskAckPayload = {
             requestId: payload.requestId,
-            result: 'queued',
+            result: 'accepted',
             reason: null,
             sessionId,
-            queuePosition: queue.length,
+            queuePosition: null,
           };
           const task: PendingTask = { ...taskBase, ack };
-          queue.push(task);
-          queues.set(sessionId, queue);
-          commitContextCursor();
           reply(connectionId, send, ack);
-          // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
-          // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
-          if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
-          return;
-        }
-
-        running.add(sessionId);
-        commitContextCursor();
-        const ack: TaskAckPayload = {
-          requestId: payload.requestId,
-          result: 'accepted',
-          reason: null,
-          sessionId,
-          queuePosition: null,
-        };
-        const task: PendingTask = { ...taskBase, ack };
-        reply(connectionId, send, ack);
-        startExecution(task);
+          startExecution(task);
+        });
       } catch (err) {
         if (!isCurrentGeneration(admittedGeneration)) return;
         log.warn(`handleDispatch failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -2067,6 +2187,18 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
       for (const timer of drainPolls.values()) clearTimeout(timer);
       drainPolls.clear();
+      for (const admission of pendingGroupAdmissions.values()) {
+        if (admission.accepted || admission.cancelled) continue;
+        admission.cancelled = true;
+        finishTaskAsCancelled(admission.task);
+      }
+      // 只收口本 PR 新增的“携带群上下文 commit”任务；Slack/X 普通队列保持
+      // 既有账号 teardown 语义。终态必须在 sendFns / delivery buffer 清理前落下。
+      for (const queue of queues.values()) {
+        for (const task of queue) {
+          if (task.commitContextCursor) finishTaskAsCancelled(task);
+        }
+      }
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
@@ -2095,13 +2227,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
         }
         await Promise.allSettled(aborts);
-        await Promise.allSettled([...keyChains.values()]);
+        await Promise.allSettled([...keyChains.values(), ...sessionAdmissionChains.values()]);
         await Promise.allSettled([...executing]);
 
         ackHistory.clear();
         inflightRequests.clear();
         running.clear();
         runningByRequest.clear();
+        pendingGroupAdmissions.clear();
         cancelRequested.clear();
         // 切账号时 execute() 会在代际检查处提前 return, 走不到收口那行删除 ——
         // 不在这里清的话, 每次切账号都永久留下一条 sessionId + 完整工作目录路径
@@ -2109,6 +2242,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         awaitingPersist.clear();
         staleTakeoverReplacements.clear();
         keyChains.clear();
+        sessionAdmissionChains.clear();
       })();
       accountDeactivation = drain.finally(() => {
         accountDeactivation = null;
@@ -2241,21 +2375,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (idx >= 0) {
           const [task] = queue.splice(idx, 1);
           if (queue.length === 0) queues.delete(sessionId);
-          const turnEnd: TurnEndPayload = {
-            requestId: task.requestId,
-            externalKey: task.externalKey,
-            sessionId: task.run.sessionId,
-            status: 'cancelled',
-            finalText: '',
-            errorMessage: null,
-            usage: { durationMs: null },
-          };
-          sendOrBuffer(connectionId, makeTurnEnd(turnEnd), {
-            connectionId,
-            requestId: task.requestId,
-            ack: task.ack,
-            turnEnd: durableTurnEnd(turnEnd),
-          });
+          finishTaskAsCancelled(task);
           log.info(`hook task ${requestId} cancelled while queued`);
           return;
         }

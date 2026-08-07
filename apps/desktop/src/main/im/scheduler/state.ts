@@ -15,8 +15,10 @@ export interface SchedulerDevice {
 
 const DESKTOP_PLATFORMS = new Set(['darwin', 'linux', 'win32']);
 
-export function isDesktopSchedulerPlatform(platform: string): boolean {
-  return DESKTOP_PLATFORMS.has(platform);
+export function isDesktopSchedulerPlatform(
+  platform: string | null | undefined,
+): platform is string {
+  return typeof platform === 'string' && DESKTOP_PLATFORMS.has(platform);
 }
 
 /** Deterministic ingress election; no clock or random tie-breaker. */
