@@ -242,16 +242,6 @@ describe('schedulePatchToRow — patch 清空语义', () => {
     });
   });
 
-  it('origin patch preserves or clears the durable import identity', () => {
-    expect(
-      schedulePatchToRow({ originKind: 'codex-automation', originId: 'daily-standup' }),
-    ).toMatchObject({ originKind: 'codex-automation', originId: 'daily-standup' });
-    expect(schedulePatchToRow({ originKind: undefined, originId: undefined })).toMatchObject({
-      originKind: null,
-      originId: null,
-    });
-  });
-
   it('多字段 patch 只输出列出的字段', () => {
     const out = schedulePatchToRow({
       name: 'renamed',

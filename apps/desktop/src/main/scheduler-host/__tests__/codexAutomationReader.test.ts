@@ -81,6 +81,27 @@ describe('createCodexAutomationReader', () => {
     expect(items[0].diagnostics.join(' ')).toContain('id');
   });
 
+  it('reports string length violations accurately', async () => {
+    const root = await makeRoot();
+    await writeAutomation(
+      root,
+      'length-limits',
+      [
+        'version = 1',
+        'id = "length-limits"',
+        `prompt = ${JSON.stringify('p'.repeat(200_001))}`,
+        `model = ${JSON.stringify('m'.repeat(1_001))}`,
+        'status = "ACTIVE"',
+        'rrule = "FREQ=DAILY;BYHOUR=9;BYMINUTE=0"',
+      ].join('\n'),
+    );
+
+    const item = await createCodexAutomationReader({ rootDir: root }).get('length-limits');
+
+    expect(item?.diagnostics).toContain('prompt exceeds maximum length of 200000 characters');
+    expect(item?.diagnostics).toContain('model exceeds maximum length of 1000 characters');
+  });
+
   it('refuses non-regular automation.toml paths', async () => {
     const root = await makeRoot();
     await fs.mkdir(path.join(root, 'directory-file', 'automation.toml'), { recursive: true });

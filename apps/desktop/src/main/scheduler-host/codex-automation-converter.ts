@@ -239,7 +239,7 @@ export function convertCodexAutomation(
     blockingDiagnostics.push(message);
   }
   if (detail.cwds.length > 1) {
-    const message = 'automation has multiple cwds; Cindy can import only the first cwd';
+    const message = 'automation has multiple cwds; only the first cwd will be imported';
     diagnostics.push(message);
     blockingDiagnostics.push(message);
   }

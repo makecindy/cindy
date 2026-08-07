@@ -48,8 +48,12 @@ function isRecord(value: unknown): value is RawRecord {
 
 function stringField(raw: RawRecord, key: string, fallback: string, diagnostics: string[]): string {
   const value = raw[key];
-  if (typeof value === 'string' && value.length <= 200_000) return value;
-  if (value !== undefined) diagnostics.push(`${key} must be a string`);
+  if (typeof value === 'string') {
+    if (value.length <= 200_000) return value;
+    diagnostics.push(`${key} exceeds maximum length of 200000 characters`);
+  } else if (value !== undefined) {
+    diagnostics.push(`${key} must be a string`);
+  }
   return fallback;
 }
 
@@ -60,8 +64,12 @@ function optionalStringField(
 ): string | undefined {
   const value = raw[key];
   if (value === undefined) return undefined;
-  if (typeof value === 'string' && value.length <= 1_000) return value;
-  diagnostics.push(`${key} must be a string`);
+  if (typeof value === 'string') {
+    if (value.length <= 1_000) return value;
+    diagnostics.push(`${key} exceeds maximum length of 1000 characters`);
+  } else {
+    diagnostics.push(`${key} must be a string`);
+  }
   return undefined;
 }
 
