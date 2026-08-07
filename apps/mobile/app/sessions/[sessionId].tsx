@@ -841,6 +841,14 @@ export default function SessionScreen() {
   // 新建页 goal.set 失败接回时经路由参数带入(见 new.tsx 创建流程);
   // 平时无参 → null,与旧行为一致。
   const [goalError, setGoalError] = useState<string | null>(() => readRouteParam(params.goalError));
+  // goal.set 失败接回(codex review P2):仅初始化 error 不打开面板,用户跳转后
+  // 看不到目标设置失败——带入错误时自动打开 Goal 视图,让失败提示可见。
+  useEffect(() => {
+    if (goalError) {
+      setContextSheetView('goal');
+      setContextSheetOpen(true);
+    }
+  }, [goalError]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   // 圈点标注接线 api 的 ref 中转:hook 实例声明在 removeRemoteFileAttachment 之后
   // (依赖它做再编辑替换),而 onUploaded 闭包在此之前就要引用 decorate——回调

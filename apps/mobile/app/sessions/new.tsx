@@ -1709,8 +1709,36 @@ export default function NewRemoteSessionScreen() {
   // fastEditable 门控重评一次,通过才把 fastMode 打开。手动开关会写 draftMemory:
   // 用户主动关过 → 记忆为 false → 本 effect 不会重新打开;创建路径拿到的 fastMode
   // 永远已过目标 agent 门控,不会发出目标不支持的 fastMode:true。
+  // 关闭方向(codex review P2):已开启的 fastMode 在 (provider, model) 组合失去
+  // Fast 支持(provider revision 下架 / caps 撤销 hasFastMode)时必须同步关闭——
+  // 否则 UI 的 rowFastEditable 已显示关、创建仍发 fastMode:true 被拒。仅能力表
+  // 与目录均就绪时判定(缓存缺失/加载中不动作,避免切设备瞬间误关)。
   useEffect(() => {
-    if (!selectedDeviceId || draft.fastMode || !draft.providerId) return;
+    if (!selectedDeviceId || !draft.providerId) return;
+    const capsKnown = getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(selectedDeviceId, draft.agentKind)) !== undefined;
+    if (draft.fastMode) {
+      if (
+        capsKnown
+        && catalogReadyRef.current
+        && !isFastRestorable(
+          draft.agentKind,
+          draft.providerId,
+          draft.model,
+          modelRowsRef.current,
+          targetAgentHasFast(selectedDeviceId, draft.agentKind),
+        )
+      ) {
+        setDraft((current) => (
+          current.fastMode
+          && current.agentKind === draft.agentKind
+          && current.model === draft.model
+          && current.providerId === draft.providerId
+            ? { ...current, fastMode: false }
+            : current
+        ));
+      }
+      return;
+    }
     if (draftMemory.getFast(draft.agentKind, draft.providerId, draft.model) !== true) return;
     if (!isFastRestorable(
       draft.agentKind,
@@ -1727,10 +1755,11 @@ export default function NewRemoteSessionScreen() {
         ? { ...current, fastMode: true }
         : current
     ));
-    // capabilities 是本 effect 的触发信号(任何能力表变化都重评);目标归属由
-    // targetAgentHasFast 的 (设备, agent) 键控缓存校验,不靠 state 身份判断。
+    // capabilities / modelRows / deviceProviders.ready 是触发信号(能力表或目录变化
+    // 都重评);目标归属由 targetAgentHasFast 的 (设备, agent) 键控缓存校验,不靠
+    // state 身份判断。判定体内经 catalogReadyRef 读最新就绪态。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [capabilities, draft.agentKind, draft.model, draft.providerId, draft.fastMode, selectedDeviceId, draftMemory]);
+  }, [capabilities, draft.agentKind, draft.model, draft.providerId, draft.fastMode, selectedDeviceId, draftMemory, modelRows, deviceProviders.ready]);
 
   // 拉被控端 runtime 已注册的 agent 集合(过滤新建 agent 入口)。fail-open:失败/无设备时置 null
   // (不过滤),真正的兜底是被控端 requireAgent。窗口/设备切换重拉,让按需下载补齐的 Pi 及时出现。
