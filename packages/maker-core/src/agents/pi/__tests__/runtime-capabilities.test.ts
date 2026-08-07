@@ -99,23 +99,63 @@ describe('Pi runtime capability parsing', () => {
       3,
       'ready',
     );
-    expect(rejectedTimeout).toMatchObject({ status: 'unknown', error: { code: 'timeout' } });
+    expect(rejectedTimeout).toMatchObject({ status: 'failed', error: { code: 'rpc_failed' } });
 
-    const rejectedExit = await capturePiRuntimeCapabilityManifest(
+    const rejectedProcessText = await capturePiRuntimeCapabilityManifest(
       { request: async () => ({ type: 'response', command: 'get_commands', success: false, error: 'process already exited' }) },
       { sessionId: 's1' },
       4,
       'ready',
     );
-    expect(rejectedExit).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
+    expect(rejectedProcessText).toMatchObject({ status: 'failed', error: { code: 'rpc_failed' } });
 
-    const spawnFailure = await capturePiRuntimeCapabilityManifest(
-      { request: async () => { throw new Error('pi process error: spawn ENOENT'); } },
+    const rejectedClosed = await capturePiRuntimeCapabilityManifest(
+      { request: async () => ({ type: 'response', command: 'get_commands', success: false, error: 'account closed' }) },
       { sessionId: 's1' },
       5,
       'ready',
     );
-    expect(spawnFailure).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
+    expect(rejectedClosed).toMatchObject({ status: 'failed', error: { code: 'rpc_failed' } });
+
+    const rejectedSpawn = await capturePiRuntimeCapabilityManifest(
+      { request: async () => ({ type: 'response', command: 'get_commands', success: false, error: 'extension spawn policy rejected' }) },
+      { sessionId: 's1' },
+      6,
+      'ready',
+    );
+    expect(rejectedSpawn).toMatchObject({ status: 'failed', error: { code: 'rpc_failed' } });
+
+    const writeFailure = await capturePiRuntimeCapabilityManifest(
+      { request: async () => { throw new Error('pi rpc write failed: EPIPE'); } },
+      { sessionId: 's1' },
+      7,
+      'ready',
+    );
+    expect(writeFailure).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
+
+    const processError = await capturePiRuntimeCapabilityManifest(
+      { request: async () => { throw new Error('pi process error: spawn ENOENT'); } },
+      { sessionId: 's1' },
+      8,
+      'ready',
+    );
+    expect(processError).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
+
+    const processExit = await capturePiRuntimeCapabilityManifest(
+      { request: async () => { throw new Error('pi process exited (code=1, signal=null)'); } },
+      { sessionId: 's1' },
+      9,
+      'ready',
+    );
+    expect(processExit).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
+
+    const alreadyExited = await capturePiRuntimeCapabilityManifest(
+      { request: async () => { throw new Error('pi process already exited'); } },
+      { sessionId: 's1' },
+      10,
+      'ready',
+    );
+    expect(alreadyExited).toMatchObject({ status: 'unknown', error: { code: 'process_unavailable' } });
   });
 
   it.each([

@@ -97,21 +97,24 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
   return { ok: true, commands: parsed };
 }
 
-function classifyFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {
+function classifyExplicitRpcFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {
   const text = raw.toLowerCase();
   if (text.includes('unknown command') || text.includes('unsupported') || text.includes('not supported')) {
     return { code: 'unsupported', message: 'Pi does not support runtime command discovery' };
   }
-  if (text.includes('timeout')) {
+  return { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' };
+}
+
+function classifyTransportFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {
+  const text = raw.toLowerCase();
+  if (text.startsWith('pi rpc timeout after ')) {
     return { code: 'timeout', message: 'Pi runtime command discovery timed out' };
   }
   if (
-    text.includes('already exited')
-    || text.includes('process exited')
-    || text.includes('process error')
-    || text.includes('not ready')
-    || text.includes('spawn')
-    || text.includes('closed')
+    text.startsWith('pi process already exited')
+    || text.startsWith('pi process exited (')
+    || text.startsWith('pi process error:')
+    || text.startsWith('pi rpc write failed:')
   ) {
     return { code: 'process_unavailable', message: 'Pi process was unavailable for runtime command discovery' };
   }
@@ -186,7 +189,7 @@ export async function capturePiRuntimeCapabilityManifest(
     }
     const typedResponse = responseRecord as unknown as PiRpcResponse;
     if (!typedResponse.success) {
-      const failure = classifyFailure(typeof typedResponse.error === 'string' ? typedResponse.error : 'rpc rejected');
+      const failure = classifyExplicitRpcFailure(typeof typedResponse.error === 'string' ? typedResponse.error : 'rpc rejected');
       return errorManifest(identity, generation, stage, failure, statusForFailureCode(failure.code));
     }
     const parsed = parsePiRuntimeCommands(typedResponse.data);
@@ -206,7 +209,7 @@ export async function capturePiRuntimeCapabilityManifest(
       commands: parsed.commands,
     };
   } catch (error) {
-    const failure = classifyFailure(error instanceof Error ? error.message : 'rpc failed');
+    const failure = classifyTransportFailure(error instanceof Error ? error.message : 'rpc failed');
     return errorManifest(identity, generation, stage, failure, statusForFailureCode(failure.code));
   }
 }
