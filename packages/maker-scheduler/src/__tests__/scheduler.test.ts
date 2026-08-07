@@ -648,7 +648,7 @@ describe('Scheduler', () => {
     await h.scheduler.stop();
   });
 
-  it('start() isolates legacy invalid cron records instead of blocking valid schedules', async () => {
+  it('start() isolates legacy invalid interval cron records instead of blocking valid schedules', async () => {
     const warn = vi.fn();
     const local = makeHarness({ logger: { warn } });
     local.storage.schedules.set('legacy-invalid', {
@@ -660,6 +660,7 @@ describe('Scheduler', () => {
       timezone: 'UTC',
       recurring: true,
       manual: false,
+      intervalMs: 5 * 60_000,
       agentKind: 'claude-code',
       workspaceKind: 'project',
       useWorktree: false,
@@ -736,7 +737,7 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
-  it('quarantines an invalid cron first discovered during periodic DB sync', async () => {
+  it('quarantines an invalid interval cron first discovered during periodic DB sync', async () => {
     const local = makeHarness({ logger: { warn: vi.fn() } });
     await local.scheduler.start();
     local.storage.schedules.set('late-invalid', {
@@ -748,6 +749,7 @@ describe('Scheduler', () => {
       timezone: 'UTC',
       recurring: true,
       manual: false,
+      intervalMs: 5 * 60_000,
       agentKind: 'claude-code',
       workspaceKind: 'project',
       useWorktree: false,

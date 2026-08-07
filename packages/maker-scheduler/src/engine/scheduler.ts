@@ -2788,6 +2788,10 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
   // manual schedule 永远不参与自动触发，跳过 cron 计算（runNow 是单独路径）
   if (schedule.manual) return undefined;
   if (!schedule.recurring && schedule.lastFiredAt !== undefined) return undefined;
+  // interval schedules still persist cron metadata. Validate it before taking
+  // the interval fast path so legacy rows accepted by older parsers cannot
+  // evade startup/DB-sync quarantine and fire from a stale nextFireAt.
+  nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
   if (schedule.intervalMs !== undefined) {
     // 冷启动：基线取 lastFinishedAt（跑过）或 createdAt（没跑过），再 max(base+N, now+N)
     // —— 漏掉的不补发，重新起 N 倒计时。
