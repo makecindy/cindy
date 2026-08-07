@@ -118,6 +118,8 @@ export function _resetRsbPreviewTabsForTests(): void {
 export interface PreviewTabCloserDeps {
   /** Whether the vendored browser runtime was ever used this session. */
   everCalled(): boolean;
+  /** The origin being revoked, or null when none (dispose / quit: close ALL preview tabs). */
+  revokedOrigin?: string | null;
   /** List external-Chrome tabs (`action: 'tabs'` → `data.tabs`). */
   listVendoredTabs(): Promise<
     Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> | null | undefined
@@ -153,6 +155,21 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
   // after this point carry the new generation, and the sweep below must not
   // leave them behind (new Codex reviewer P1, round 23).
   beginPreviewRevocation();
+  // Match ONLY preview tabs on the REVOKED origin. Without this, a
+  // fire-and-forget closePreviewTabs still running when the NEXT preview
+  // round starts would close the NEW round's freshly-opened tabs — the
+  // shape check (isPreviewUrl) alone matches any preview origin (Greptile
+  // P1, round 27h). null revokedOrigin = dispose/quit: close every preview
+  // tab regardless of origin (no next round exists).
+  const matchesRevoked = (u: string): boolean => {
+    if (!deps.isPreviewUrl(u)) return false;
+    if (deps.revokedOrigin == null) return true;
+    try {
+      return new URL(u).origin === deps.revokedOrigin;
+    } catch {
+      return false;
+    }
+  };
   // Skip the vendored tabs probe entirely when the runtime was never used:
   // a bare `tabs` call would BOOT the browser control service during quit —
   // the exact startup quit-time teardown exists to avoid (round 16). The RSB
@@ -183,7 +200,7 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
       // times; a tab that appeared after the previous snapshot is caught by
       // the re-enumeration. Permanently-failing closes are bounded by the
       // round cap (stale-lock recovery on next launch covers orphans).
-      const previewTabs = tabs.filter((tab) => deps.isPreviewUrl(tab.url ?? ''));
+      const previewTabs = tabs.filter((tab) => matchesRevoked(tab.url ?? ''));
       if (previewTabs.length === 0) break;
       for (const tab of previewTabs) {
         const targetId = tab.suggestedTargetId ?? tab.targetId;
@@ -221,7 +238,7 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
         } catch {
           return false;
         }
-        return deps.isPreviewUrl(url);
+        return matchesRevoked(url);
       });
     const liveResults = await Promise.all(
       liveRows.map((row) => deps.closeRsbTab(row.sessionId, row.tabId).then((ok) => ({ row, ok }))),

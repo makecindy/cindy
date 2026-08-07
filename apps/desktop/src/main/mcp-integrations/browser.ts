@@ -136,12 +136,21 @@ const localPreviewServer = createLocalPreviewServer({
     // preview tabs at the SAME moment the grant disappears: the vendored
     // persistent guard cannot re-read the live policy, so a freed port
     // could otherwise be seized by another local process and the stale tab
-    // would load same-origin content (Copilot P1, round 13).
+    // would load same-origin content (Copilot P1, round 13). Pass the
+    // REVOKED origin so the close only touches tabs of that origin — a
+    // fire-and-forget close still running when the next preview round starts
+    // must not close the NEW round's tabs (Greptile P1, round 27h).
     if (previewOrigins.length === 0) {
-      void closePreviewTabs();
+      void closePreviewTabs(lastGrantedPreviewOrigin);
+      lastGrantedPreviewOrigin = null;
+    } else {
+      lastGrantedPreviewOrigin = previewOrigins[0] ?? null;
     }
   },
 });
+
+/** Last origin granted to the preview guard, for origin-scoped tab cleanup on revocation. */
+let lastGrantedPreviewOrigin: string | null = null;
 
 const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
 
@@ -534,8 +543,9 @@ async function clearStaleServiceWorkers(origins: string[]): Promise<void> {
   }
 }
 
-async function closePreviewTabs(): Promise<void> {
+async function closePreviewTabs(revokedOrigin?: string | null): Promise<void> {
   await closePreviewTabsImpl({
+    revokedOrigin,
     everCalled: () => vendoredRuntime.everCalled(),
     listVendoredTabs: async () => {
       const tabsRes = await vendoredRuntime.call({ action: 'tabs' });

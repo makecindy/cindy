@@ -226,6 +226,31 @@ describe('closePreviewTabs (browser-preview-tabs)', () => {
     await closePreviewTabs(deps);
     expect(deps.closeRsbTab).toHaveBeenCalledTimes(1); // one pass, then no progress → stop
   });
+
+  it('still closes SAME-origin preview tabs when revokedOrigin is given (round 27h)', async () => {
+    const deps = fakeDeps({ revokedOrigin: 'http://127.0.0.1:49152' });
+    await closePreviewTabs(deps);
+    expect(deps.closeVendoredTab).toHaveBeenCalledWith('t1'); // 49152 preview closed
+    expect(deps.closeRsbTab).toHaveBeenCalledWith('s1', 'r1'); // 49152 RSB preview closed
+  });
+
+  it('does NOT close a NEW round preview tab on a different origin (revokedOrigin, round 27h)', async () => {
+    // Greptile P1: a fire-and-forget closePreviewTabs still running when the
+    // NEXT preview round starts must not close the new round's tabs. The
+    // close is scoped to the REVOKED origin (49152); a tab on a DIFFERENT
+    // preview origin (the new round, e.g. 49200) is left alone.
+    const NEW_PREVIEW_URL = PREVIEW_URL.replace(':49152', ':49200');
+    const deps = fakeDeps({
+      revokedOrigin: 'http://127.0.0.1:49152',
+      listVendoredTabs: vi.fn(async () => [{ targetId: 'new1', url: NEW_PREVIEW_URL }]),
+      listRsbTabs: vi.fn(() => [{ tabId: 'r1', sessionId: 's1', wc: { getURL: () => NEW_PREVIEW_URL, isDestroyed: () => false } }]),
+    });
+    await closePreviewTabs(deps);
+    // the new-origin vendored tab is NOT closed
+    expect(deps.closeVendoredTab).not.toHaveBeenCalledWith('new1');
+    // the new-origin RSB tab is NOT closed either
+    expect(deps.closeRsbTab).not.toHaveBeenCalledWith('s1', 'r1');
+  });
 });
 
 describe('trackPreviewTabNavigation (address-bar provenance, round 23 P0)', () => {
