@@ -443,7 +443,30 @@ export class Scheduler extends EventEmitter {
       // 节奏（cron 后续怎么改都不生效）。迁移已于 2026-05 上线并跑了一个月，存量
       // 老任务均已转换完，该逻辑只剩误伤，故移除。
       let current = sch;
-      const next = computeNextFireAt(current, now);
+      let next: number | undefined;
+      try {
+        next = computeNextFireAt(current, now);
+      } catch (err) {
+        // 旧版本曾接受 parseInt 可部分解析的畸形 cron（例如 `5abc * * * *`）。
+        // 升级后严格解析会拒绝它们，但一条存量坏记录不能让整个 scheduler 启动失败。
+        // 清空旧的 nextFireAt，保留记录供用户修正；内存副本同样禁用，避免陈旧时间误触发。
+        this.logger?.warn?.('scheduler: skipped invalid active schedule during startup', {
+          scheduleId: current.id,
+          error: String(err),
+        });
+        try {
+          const updated = await this.storage.update(current.id, { nextFireAt: undefined });
+          current = updated ?? { ...current, nextFireAt: undefined };
+        } catch (clearErr) {
+          current = { ...current, nextFireAt: undefined };
+          this.logger?.warn?.('scheduler: failed to clear invalid schedule nextFireAt', {
+            scheduleId: current.id,
+            error: String(clearErr),
+          });
+        }
+        this.activeSchedules.set(current.id, current);
+        continue;
+      }
       if (next !== current.nextFireAt) {
         const updated = await this.storage.update(current.id, { nextFireAt: next });
         if (updated) current = updated;
