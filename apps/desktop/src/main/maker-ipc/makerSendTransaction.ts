@@ -104,6 +104,7 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  isSessionSendFenced?(sessionId: string): boolean;
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
@@ -573,6 +574,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      if (deps.isSessionSendFenced?.(sessionId)) {
+        return toCompatibleMakerSendResult(
+          createHostSendFailure(
+            'SESSION_NOT_FOUND',
+            `Session ${sessionId} is closed because its Orca team ended`,
+          ),
+        );
+      }
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。

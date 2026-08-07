@@ -529,6 +529,12 @@ import {
   type WorkerQueuedMessageControlResult,
 } from './orcaTeamService.js';
 import {
+  closeOrcaWorkerRuntimeWhileLocked,
+  fenceOrcaWorkerSessionsForDisable,
+  isOrcaWorkerSessionDisableFenced,
+  withOrcaWorkerSessionLocks,
+} from './orcaDisableWorkerRuntime.js';
+import {
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
   providerRouteRequiresExplicitSelection,
@@ -7952,38 +7958,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
-    for (const w of activeWorkers) {
-      orcaTeamService.clearAutoBridgeState(w.sessionId);
-      const sess = maker.getSession(w.sessionId);
-      if (sess) {
-        try {
-          if (sess.isTurnRunning?.()) {
-            await sess.abort();
-          }
-        } catch (err) {
-          log.warn('disableOrca: abort failed (continuing to close)', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
+    fenceOrcaWorkerSessionsForDisable(activeWorkers.map((worker) => worker.sessionId));
+    await withOrcaWorkerSessionLocks(
+      withSendToSessionLock,
+      activeWorkers.map((worker) => worker.sessionId),
+      async () => {
+        for (const w of activeWorkers) {
+          await closeOrcaWorkerRuntimeWhileLocked(
+            {
+              getSession: (sessionId) => maker.getSession(sessionId),
+              closeSession: (sessionId) => maker.closeSession(sessionId),
+              beforeClose: () => orcaTeamService.clearAutoBridgeState(w.sessionId),
+              afterClose: () => {
+                cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
+                forgetKnownOrcaWorkerSession(w.sessionId);
+              },
+              log,
+            },
+            w.sessionId,
+          );
         }
-        try {
-          await maker.closeSession(w.sessionId);
-        } catch (err) {
-          log.warn('disableOrca: closeSession failed', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
-      forgetKnownOrcaWorkerSession(w.sessionId);
-    }
 
-    await markTeamEnded(team.id, 'completed');
-    await markWorkersStatusByTeam(team.id, 'done');
-    await archiveWorkersByTeam(team.id);
+        // Keep every Worker route locked until the ended/archived state is
+        // durable. Otherwise a queued send could recreate a runtime in the gap
+        // after closeSession and before these writes complete.
+        await markTeamEnded(team.id, 'completed');
+        await markWorkersStatusByTeam(team.id, 'done');
+        await archiveWorkersByTeam(team.id);
 
-    await clearLeadOrcaRoleState(leadSessionId);
+        await clearLeadOrcaRoleState(leadSessionId);
+      },
+    );
 
     log.info('disableOrca done', {
       leadSessionId,
@@ -8865,6 +8870,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
+    isSessionSendFenced: isOrcaWorkerSessionDisableFenced,
     getSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),

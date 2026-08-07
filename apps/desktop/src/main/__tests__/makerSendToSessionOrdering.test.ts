@@ -667,7 +667,8 @@ describe('sendToSession ordering', () => {
     expect(orcaWorkerCreationServiceSource).toContain(
       "return agent === 'codex' || agent === 'pi';",
     );
-    expect(orcaLifecycleServiceSource).toContain('createWorkerInTeam({ ...params, teamId: team.id })');
+    expect(orcaLifecycleServiceSource).toContain('const created = await deps.createWorkerInTeam({');
+    expect(orcaLifecycleServiceSource).toContain('teamId: team.id,');
   });
 
   it('delegates worker terminal runtime to OrcaTeamService', () => {
@@ -758,15 +759,37 @@ describe('sendToSession ordering', () => {
       'async function disableOrcaInternal',
       'ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA',
     );
+    const activeDisableBlock = disableBlock.slice(disableBlock.indexOf('const workers ='));
     const serviceArchiveBlock = extractBetween(
       orcaTeamServiceSource,
       'async function archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult> {',
       'return {',
     );
 
-    expect(disableBlock).toContain('orcaTeamService.clearAutoBridgeState(w.sessionId);');
-    expect(disableBlock).not.toContain('clearWorkerAutoBridgeState(w.sessionId);');
-    expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await sess.abort();');
+    expect(activeDisableBlock).toContain('fenceOrcaWorkerSessionsForDisable(');
+    expect(activeDisableBlock).toContain('beforeClose: () => orcaTeamService.clearAutoBridgeState(w.sessionId),');
+    expect(activeDisableBlock).not.toContain('clearWorkerAutoBridgeState(w.sessionId);');
+    expect(activeDisableBlock).toContain('await withOrcaWorkerSessionLocks(');
+    expect(activeDisableBlock).toContain('withSendToSessionLock,');
+    expect(activeDisableBlock).toContain('await closeOrcaWorkerRuntimeWhileLocked(');
+    expect(activeDisableBlock).toContain("cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');");
+    expect(activeDisableBlock).toContain('forgetKnownOrcaWorkerSession(w.sessionId);');
+    expectOrder(
+      activeDisableBlock,
+      'fenceOrcaWorkerSessionsForDisable(',
+      'await withOrcaWorkerSessionLocks(',
+    );
+    expectOrder(
+      activeDisableBlock,
+      'await closeOrcaWorkerRuntimeWhileLocked(',
+      "await markTeamEnded(team.id, 'completed');",
+    );
+    expectOrder(
+      activeDisableBlock,
+      "await archiveWorkersByTeam(team.id);",
+      'await clearLeadOrcaRoleState(leadSessionId);',
+    );
+    expect(source).toContain('isSessionSendFenced: isOrcaWorkerSessionDisableFenced,');
     expect(source).toContain('archiveWorker: (params) => orcaTeamService.archiveWorker(params),');
     expect(serviceArchiveBlock).toContain('clearRuntimeState(worker.sessionId);');
     expect(serviceArchiveBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');");
