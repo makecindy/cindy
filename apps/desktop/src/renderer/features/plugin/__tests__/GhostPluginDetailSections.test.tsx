@@ -29,9 +29,12 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.closeDialog': 'Close dialog',
         'settings.ghosts.perm.networkHost': `Access ${String(options?.host ?? '')}`,
         'settings.ghosts.perm.networkHostDetail': 'Can access this declared domain.',
+        'settings.ghosts.perm.cindyTextOneshotModelDetail':
+          `Takes effect when the model (${String(options?.model ?? '')}) is available in the catalog.`,
         'settings.ghosts.perm.command': `Command ${String(options?.command ?? '')}`,
         'settings.ghosts.perm.tool': `Tool ${String(options?.name ?? '')}`,
         'settings.ghosts.perm.cindyImageGenerate': 'Generate images',
+        'settings.ghosts.perm.cindyTextOneshot': 'Quick Q&A',
         'settings.ghosts.detail.infoTitle': 'Details',
         'settings.ghosts.detail.byAuthor': `By ${String(options?.author ?? '')}`,
         'settings.ghosts.detail.infoVersion': 'Version',
@@ -94,6 +97,13 @@ const permissions: GhostPermissionItem[] = [
     key: 'cindy:image.generate',
     kind: 'cindy',
     labelKey: 'cindyImageGenerate',
+  },
+  {
+    key: 'cindy:text.oneshot',
+    kind: 'cindy',
+    labelKey: 'cindyTextOneshot',
+    detailKey: 'cindyTextOneshotModelDetail',
+    detailArgs: { model: 'codex/gpt-5.5' },
   },
 ];
 
@@ -833,6 +843,11 @@ describe('Ghost plugin detail sections', () => {
     expect(within(dialog).getByText('Command render')).toBeTruthy();
     expect(within(dialog).queryByText('Tool render')).toBeNull();
     expect(within(dialog).getByText('Generate images')).toBeTruthy();
+    // detailArgs 的 model 插值必须替换占位符,不能显示裸 {{model}}(Greptile 2026-08-07)。
+    expect(
+      within(dialog).getByText('Takes effect when the model (codex/gpt-5.5) is available in the catalog.'),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/Takes effect when the model \(\{\{model\}\}\)/)).toBeNull();
   });
 
   it('uses the same elevated theme surface for Tool bubbles and Permission cards', () => {
