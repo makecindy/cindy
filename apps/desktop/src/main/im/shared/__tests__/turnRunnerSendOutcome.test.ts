@@ -51,7 +51,8 @@ const mocks = vi.hoisted(() => ({
   onSilentStopSettled: vi.fn(() => vi.fn()),
   installDesktopInteractionListener: vi.fn(),
   takePendingInteractionsForSession: vi.fn(),
-  cancelPending: vi.fn(() => false),
+  // 取消不到时返回 null(取消到了返回 { messageId }, 调用方据此收口卡片)。
+  cancelPending: vi.fn(() => null),
   rejectAllPending: vi.fn(),
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
@@ -141,6 +142,7 @@ vi.mock('../../../turn-change-set/store', () => ({
 }));
 
 vi.mock('../pendingInteractions', () => ({
+  // route 释放会走它收口卡片 — 缺了这条 mock，release 路径会炸在 undefined 上。
   cancelPending: mocks.cancelPending,
   registerPending: mocks.registerPending,
   registerPendingExternal: mocks.registerPendingExternal,
@@ -534,7 +536,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       close: vi.fn(),
     });
     mocks.takePendingInteractionsForSession.mockReturnValue([]);
-    mocks.cancelPending.mockReturnValue(false);
+    mocks.cancelPending.mockReturnValue(null);
     mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
     mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
   });
