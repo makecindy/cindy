@@ -6,7 +6,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
-import { GhostManager } from '../GhostManager';
+import { CINDY_OFFICIAL_GHOST_TRUST, GhostManager } from '../GhostManager';
 
 /** 每个用例独立的临时仓库根 + 源文件目录(规则 23:测试路径一律 os.tmpdir)。 */
 let workDir: string;
@@ -235,6 +235,33 @@ describe('GhostManager · install', () => {
     expect(manager.list().map((c) => c.manifest.id)).toEqual(['hello']);
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(onChanged.mock.calls[0][0].map((c: InstalledGhost) => c.manifest.id)).toEqual(['hello']);
+  });
+
+  it('本地包仅自报 cindy-github 不会获得官方 trust；Host override 才能写官方 receipt', async () => {
+    const local = await makeCindy('github-local.cindy', goodManifest('cindy-github'));
+    const localResult = await manager.install(local);
+    expect(localResult).toMatchObject({ ghost: { trust: { level: 'unverified' } } });
+    await fs.promises.rm(path.join(rootDir, 'cindy-github'), { recursive: true, force: true });
+
+    const officialResult = await manager.install(local, { trustOverride: 'cindy-official' });
+    expect(officialResult).toMatchObject({ ghost: { trust: { level: 'cindy-official' } } });
+    const receipt = JSON.parse(
+      await fs.promises.readFile(path.join(rootDir, 'cindy-github', '.cindy-trust.json'), 'utf8'),
+    ) as { level?: unknown };
+    expect(receipt.level).toBe('cindy-official');
+    expect(receipt).toMatchObject(CINDY_OFFICIAL_GHOST_TRUST);
+    expect(manager.list()[0].trust).toEqual(CINDY_OFFICIAL_GHOST_TRUST);
+  });
+
+  it('残缺的官方 receipt 不会被投影为可用的官方 trust', async () => {
+    const local = await makeCindy('github-incomplete-receipt.cindy', goodManifest('cindy-github'));
+    await manager.install(local, { trustOverride: 'cindy-official' });
+    const metadataPath = path.join(rootDir, 'cindy-github', '.cindy-trust.json');
+    const metadata = JSON.parse(await fs.promises.readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+    delete metadata.publisherName;
+    await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
+
+    expect(manager.list()[0]?.trust).toBeUndefined();
   });
 
   it('@ 资源入口必须命中主机安装 receipt，旧安装元数据不会在升级后自动扩权', async () => {

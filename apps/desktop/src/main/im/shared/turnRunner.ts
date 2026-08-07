@@ -67,11 +67,13 @@ import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import {
+  isTerminalAgentErrorEvent,
+  TurnPermissionPolicyUnsupportedError,
+} from '@cindy/maker-core';
 import type {
   AgentEvent,
   AgentKind,
-  Capabilities,
   InteractionDecision,
   InteractionRequest,
   PermissionMode,
@@ -126,6 +128,7 @@ import {
   type TurnActivityState,
 } from './turnActivity';
 import { terminalErrorText, turnRetryNotice } from './turnRetryNotice';
+import { createTurnPresenter, DEFAULT_PRESENTER_POLICY, type TurnPresenter } from './turnPresenter';
 import {
   toCoreAgentKind,
   readPermissionMode,
@@ -161,15 +164,17 @@ interface TurnState {
    * Without it we get one card per delta — a flood of orphan cards.
    */
   streamingHandlePromise: Promise<StreamingTextHandle> | null;
-  /** Real assistant text accumulated this turn. */
-  buffer: string;
+  /**
+   * 呈现大脑(正文累积 / 过程区合成), 与官方 bot 共用 im/shared/turnPresenter。
+   * buffer-replace 策略: 保留个人 IM 渠道现有行为 —— isFinal 用该条全文整体替换
+   * 累积缓冲, 流式增量追加。过程区时间线状态经 presenter.activity 暴露。
+   */
+  presenter: TurnPresenter;
   /** Managed images discovered in tool output for durable text channels. */
   mediaAbsPaths: string[];
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
   done: boolean;
-  /** 过程展示(tool_use 时间线)状态 — 见 turnActivity.ts。 */
-  activity: TurnActivityState;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
   outputCardMessageId: string | null;
@@ -342,11 +347,6 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
-  /** Resolve a channel safety policy after the concrete session route is known. */
-  turnPermissionPolicyForRoute?(
-    row: ImSessionRow,
-    capabilities: Capabilities,
-  ): TurnPermissionPolicy | undefined;
 }
 
 export interface ImTurnTerminal {
@@ -440,8 +440,11 @@ export function createTurnRunner(
    * patchMarkdownCard 的尾随节流间隔 — 对齐渠道 streamingText 的安全水位
    * (slack chat.update 1.3s / feishu patch 1.5s, 取保守值)。此前这里每个
    * delta 直接打一次 patch, 文本快答没事, 接入过程事件后会撞渠道限流。
+   *
+   * #1855 L1: 引用 PresenterPolicy 的单一出处 —— 与官方 turnObserver 的
+   * trailing-edge 发射器同值同语义, 不再各写一个 1500 magic number。
    */
-  const CARD_PATCH_THROTTLE_MS = 1500;
+  const CARD_PATCH_THROTTLE_MS = DEFAULT_PRESENTER_POLICY.intermediateThrottleMs;
 
   const log = createLogger(`im:${channel}:turn`);
 
@@ -656,11 +659,10 @@ export function createTurnRunner(
       initialMessageText: text,
       streamingHandle: null,
       streamingHandlePromise: null,
-      buffer: '',
+      presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
       workingDir: row.workingDir,
       done: false,
-      activity: createTurnActivity(Date.now()),
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
       outputCardPrefix: args.outputCardPrefix ?? '',
@@ -737,11 +739,6 @@ export function createTurnRunner(
       startBackgroundTask(() => maybeGenerateImSessionTitle(row.id, text, threadHeaderCardId));
     }
 
-    const turnPermissionPolicy =
-      args.turnPermissionPolicyForRoute?.(
-        row,
-        getMaker().getCapabilities(row.agentKind),
-      ) ?? args.turnPermissionPolicy;
     const item: QueuedSend = {
       turn,
       userMessage: buildImUserMessage(args.agentText ?? text, attachments, target.attached),
@@ -752,7 +749,7 @@ export function createTurnRunner(
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
-      ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
+      ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -816,7 +813,7 @@ export function createTurnRunner(
     await beginChunkedReply(item.turn);
     // 过程区耗时基准取真实派发时刻 — TurnState 创建时可能还要在 sendQueue 里
     // 等上一轮跑完, 排队等待不该计入"第 N 步 · 耗时"显示
-    item.turn.activity.startedAt = Date.now();
+    item.turn.presenter.activity.startedAt = Date.now();
     state.queue.push(item.turn);
     log.info(
       `enqueued turn for session=${rowId.slice(-8)} queueDepth=${state.queue.length} pendingSends=${state.sendQueue.length}`,
@@ -845,6 +842,7 @@ export function createTurnRunner(
       } else {
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       }
+
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入自己接——切换后首条消息若来自 IM 渠道,新引擎同样需要交接上下文
       // (2026-07-20 审计)。落库(persistUserMessage)仍是渠道原文。
@@ -855,6 +853,7 @@ export function createTurnRunner(
             pendingHandoff,
           )
         : item.userMessage;
+
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         ...(item.turnPermissionPolicy ? { turnPermissionPolicy: item.turnPermissionPolicy } : {}),
@@ -980,6 +979,16 @@ export function createTurnRunner(
       return { kind: 'accepted', acceptedAt: acceptedAt || Date.now() };
     } catch (err) {
       if (turnChangeSetStarted) clearPendingTurnChangeSets(rowId);
+      const turnPolicyFailureReason = classifyTurnPermissionPolicySendFailure(err, item, state);
+      if (turnPolicyFailureReason) {
+        await handleSendPreDispatchFailure(state, userId, {
+          turn: item.turn,
+          source: `${channel}-runner`,
+          reason: turnPolicyFailureReason,
+          context: buildSendContext(rowId),
+        });
+        return { kind: 'rejected', reason: turnPolicyFailureReason };
+      }
       const normalized = normalizeSendError(err);
       if (normalized.reason === 'SESSION_RUNNING') {
         releaseTurnInteractionRoute(item.turn, 'session_running_race');
@@ -1030,6 +1039,21 @@ export function createTurnRunner(
     } finally {
       releaseAgentSwitchLock();
     }
+  }
+
+  function classifyTurnPermissionPolicySendFailure(
+    error: unknown,
+    item: QueuedSend,
+    state: SessionState,
+  ): string | null {
+    if (!(error instanceof TurnPermissionPolicyUnsupportedError) || !item.turnPermissionPolicy) {
+      return null;
+    }
+    const failureKind =
+      state.makerSession.capabilities.turnPermissionPolicy?.supported?.supported === true
+        ? 'mode'
+        : 'agent';
+    return `${error.code}:${failureKind}:${error.permissionMode}`;
   }
 
   async function beginChunkedReply(turn: TurnState): Promise<void> {
@@ -1826,30 +1850,21 @@ export function createTurnRunner(
    * 纯文本快答没有 tool_use, renderActivity 返回空串, 视图与旧行为逐字一致。
    */
   function composeStreamingView(turn: TurnState): string {
-    const rawBody = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
+    const rawBody = turn.outputCardPrefix
+      ? turn.outputCardPrefix + turn.presenter.wholeText()
+      : turn.presenter.wholeText();
     // External-channel safeguard: maker-core normally strips these tokens,
     // while this boundary also protects old continuations and future adapters.
     const body = stripInternalWebCitations(rawBody);
     if (turn.done) return body;
-    const act = renderActivity(turn.activity, Date.now());
-    if (!act) return body;
-    return body ? `${act}\n\n${body}` : act;
+    // 过程区在上、正文在下的合成骨架与官方 bot 共用(presenter.composeRunning →
+    // composeProgressView); 纯文本快答无 tool_use 时过程区为空, 视图与旧行为逐字一致。
+    return turn.presenter.composeRunning(body);
   }
 
   /** tool_use → 过程区时间线推进 + 卡片刷新(渠道 handle 自带节流兜底)。 */
   function handleToolUseEvent(turn: TurnState, event: AgentEvent): void {
-    const data = event.data as {
-      toolName?: unknown;
-      toolUseId?: unknown;
-      input?: unknown;
-    } | null;
-    if (!data || typeof data.toolName !== 'string') return;
-    pushToolStep(
-      turn.activity,
-      data.toolName,
-      data.input,
-      typeof data.toolUseId === 'string' ? data.toolUseId : undefined,
-    );
+    if (!turn.presenter.applyToolUse(event)) return;
     ensureActivityTicker(turn);
     void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
   }
@@ -1867,9 +1882,7 @@ export function createTurnRunner(
    * 同一张卡上, 重试耗尽时 handleTurnErrorAsync 会把它 finalize 成失败说明。
    */
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
-    const notice = turnRetryNotice(event.data);
-    if (notice === null) return;
-    if (!setActivityNotice(turn.activity, notice)) return;
+    if (!turn.presenter.applyRetryNotice(event)) return;
     ensureActivityTicker(turn);
     void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
   }
@@ -2118,7 +2131,7 @@ export function createTurnRunner(
     turn.resolveTerminal = null;
     resolve({
       kind: turn.terminalKind,
-      text: turn.buffer,
+      text: turn.presenter.wholeText(),
       completedAt: Date.now(),
       ...(turn.terminalErrorCode ? { errorCode: turn.terminalErrorCode } : {}),
     });
@@ -2314,20 +2327,12 @@ export function createTurnRunner(
   }
 
   function handleTextEvent(turn: TurnState, event: AgentEvent): void {
-    const data = event.data as { text?: string; isFinal?: boolean } | null;
-    if (!data || typeof data.text !== 'string') return;
-    markActivityWriting(turn.activity);
-    if (data.isFinal) {
-      // Final block — replace buffer with canonical text. 也立刻 replace 卡片 ——
-      // 之前依赖 done 时 finalize 才把内容写进卡片, 但 SDK 在某些场景 (短回复 /
-      // reasoning models / oneshot summary) 只会发 isFinal=true 不走 deltas,
-      // 这时卡片会一直停在 "灵感正在路上..." placeholder 直到 done; done 之间
-      // 几秒延迟里用户看着像 stuck。replace 一次保证用户即时看到回复内容。
-      turn.buffer = data.text;
-      void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
-      return;
-    }
-    turn.buffer += data.text;
+    // 正文累积(isFinal 用该条全文整体替换缓冲 / 增量追加)与 markActivityWriting
+    // 都在 presenter 的 buffer-replace 策略里。也立刻 replace 卡片 —— SDK 在某些
+    // 场景(短回复 / reasoning models / oneshot summary)只发 isFinal=true 不走
+    // deltas, 这时卡片会一直停在 "灵感正在路上..." placeholder 直到 done; done 之间
+    // 几秒延迟里用户看着像 stuck。replace 一次保证用户即时看到回复内容。
+    if (!turn.presenter.applyText(event)) return;
     void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
   }
 
@@ -2459,7 +2464,7 @@ export function createTurnRunner(
           `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    } else if (turn.buffer.length === 0) {
+    } else if (turn.presenter.wholeText().length === 0) {
       // No streamed text at all — send a one-shot text so the user knows the
       // turn ended. (Rare; normally agents emit at least one text block.)
       try {
@@ -2517,7 +2522,7 @@ export function createTurnRunner(
     // 清掉"正在自动重试"这类瞬态说明：重试耗尽后走到这里时它还挂在 activity 上，
     // 而下面 composeStreamingView 会把它一起写进 finalize 的正文——最终卡片会在
     // 失败说明的正上方永久显示"仍在重试"（review #844 codex P1）。
-    if (turn) setActivityNotice(turn.activity, null);
+    if (turn) setActivityNotice(turn.presenter.activity, null);
     if (turn) await materializeTurnLocalImages(state, turn);
     // 建卡请求可能还在飞: 过载重试提示会惰性建一张进度卡(handleRetryNoticeEvent),
     // 而终态错误可能恰好在 startStreamingText 回来之前到达。此时 streamingHandle
@@ -2567,16 +2572,16 @@ export function createTurnRunner(
   }
 
   async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (output.kind !== 'chunked-text' || !turn.buffer.includes('![')) return;
+    if (output.kind !== 'chunked-text' || !turn.presenter.wholeText().includes('![')) return;
     try {
       const materialized = await materializeLocalMarkdownImages({
-        text: turn.buffer,
+        text: turn.presenter.wholeText(),
         workingDir: state.workingDir,
         sessionId: state.makerSession.id,
         maxImages: 4,
         existingAbsPaths: [...turn.mediaAbsPaths],
       });
-      turn.buffer = materialized.text;
+      turn.presenter.replaceBody(materialized.text);
       for (const absPath of materialized.absPaths) {
         if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
       }
@@ -2789,7 +2794,7 @@ export function createTurnRunner(
     }
     turn.streamingHandle = null;
     turn.streamingHandlePromise = null;
-    turn.buffer = '';
+    turn.presenter.replaceBody('');
   }
 
   // ── cleanup (binding detach / dispose) ──────────────────────────────────────

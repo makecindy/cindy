@@ -53,6 +53,12 @@ import {
   type TelegramGroupWindowEntry,
 } from './inbound.js';
 import { markdownToTelegramHtml, stripTelegramHtmlTags } from './markdown.js';
+import { TELEGRAM_PERSONAL_CAPABILITIES } from './presentationCapabilities.js';
+import {
+  EXPRESSIVE_DONE_POOL,
+  EXPRESSIVE_ERROR_POOL,
+  pickExpressiveReaction,
+} from './reactionPool.js';
 import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
@@ -100,10 +106,17 @@ function retryAfterWaitMs(retryAfterSec: number | undefined): number {
 }
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
-/** typing 状态原生只持续 ~5s — 按 4.5s 续命直到首条真实消息发出。 */
-const TYPING_REFRESH_MS = 4_500;
-/** typing 循环兜底上限(turn 异常悬挂时不无限打 API)。 */
-const TYPING_LOOP_MAX_MS = 5 * 60_000;
+/**
+ * typing 续命间隔/上限:引用呈现能力契约的**单一出处**(#1855 L1),不再本地
+ * 硬编码 —— 与 desktop turnPresenter re-export 的 PERSONAL_DRIVER_CAPABILITIES 同源。
+ * (原生 typing 只持续 ~5s,按 keepaliveMs 续命;keepaliveMaxMs 是异常悬挂兜底上限。)
+ */
+const TYPING_REFRESH_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMs;
+const TYPING_LOOP_MAX_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMaxMs;
+/** link preview 关闭:全档出站/编辑共用,取自能力契约单一出处(见 linkPreviewDisabled)。 */
+const LINK_PREVIEW_OPTIONS = {
+  is_disabled: TELEGRAM_PERSONAL_CAPABILITIES.linkPreviewDisabled,
+} as const;
 const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
 const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
@@ -227,22 +240,6 @@ export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
   replyQuoteGroup: 'first',
   replyQuoteDm: 'off',
 };
-
-/**
- * 生动档变体池 — Telegram bot 可用标准 reaction 全集按语义分池(Chris:
- * 能用的都随便用)。正/负分开是底线: 成功不能随机出 💩/🤡。选中表情在该
- * 群被限制时(available_reactions), setMessageReaction 会 400 — 回落基础款
- * 重试一次。
- */
-const EXPRESSIVE_DONE_POOL = [
-  '👍', '❤', '🔥', '🥰', '👏', '😁', '🎉', '🤩', '🙏', '👌',
-  '😍', '❤‍🔥', '💯', '🤣', '⚡', '🏆', '🍾', '🤗', '🫡', '😇',
-  '🤝', '💅', '🆒', '💘', '😎', '🦄', '🕊', '🐳', '🍓', '💋',
-  '😘', '🎃', '👾', '🍌', '🌭',
-] as const;
-const EXPRESSIVE_ERROR_POOL = [
-  '👎', '😱', '😢', '💔', '😨', '🤯', '🥴', '🙈', '😐', '🗿',
-] as const;
 
 export interface TelegramIMOptions {
   /** cindy-media:// / xdt-image:// → 本地绝对路径(出站图片上传用)。 */
@@ -932,10 +929,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (behavior.emojiReactions === 'expressive') {
         // 终态用变体池(生动档); ack(👀)保持稳重不随机。
         if (emoji === '👍') {
-          effective = EXPRESSIVE_DONE_POOL[Math.floor(Math.random() * EXPRESSIVE_DONE_POOL.length)];
+          effective = pickExpressiveReaction(EXPRESSIVE_DONE_POOL);
         } else if (emoji === '👎') {
-          effective =
-            EXPRESSIVE_ERROR_POOL[Math.floor(Math.random() * EXPRESSIVE_ERROR_POOL.length)];
+          effective = pickExpressiveReaction(EXPRESSIVE_ERROR_POOL);
         }
       }
       const { chatId, messageId: nativeId } = decodeMessageId(messageId);
@@ -1780,7 +1776,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         ...replyParams,
         text: html || '…',
         parse_mode: 'HTML',
-        link_preview_options: { is_disabled: true },
+        link_preview_options: LINK_PREVIEW_OPTIONS,
       });
     } catch (err) {
       if (err instanceof TelegramApiError && err.errorCode === 400) {
@@ -1788,7 +1784,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           ...target,
           ...replyParams,
           text: markdownChunk || '…',
-          link_preview_options: { is_disabled: true },
+          link_preview_options: LINK_PREVIEW_OPTIONS,
         });
       } else {
         throw err;
@@ -1813,7 +1809,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         ...target,
         ...replyParams,
         text: chunk || '…',
-        link_preview_options: { is_disabled: true },
+        link_preview_options: LINK_PREVIEW_OPTIONS,
       });
       if (!firstMessageId) {
         this.commitReplyTarget(lease);
@@ -1836,7 +1832,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         message_id: Number(nativeMessageId),
         text: html || '…',
         parse_mode: 'HTML',
-        link_preview_options: { is_disabled: true },
+        link_preview_options: LINK_PREVIEW_OPTIONS,
         ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
       });
     } catch (err) {
@@ -1847,7 +1843,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           chat_id: chatId,
           message_id: Number(nativeMessageId),
           text: stripTelegramHtmlTags(html) || '…',
-          link_preview_options: { is_disabled: true },
+          link_preview_options: LINK_PREVIEW_OPTIONS,
           // 同样要带上 reply_markup: 走到这条 fallback 时若省略, 清空键盘的意图会被丢掉。
           ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
         }).catch((fallbackErr) => {

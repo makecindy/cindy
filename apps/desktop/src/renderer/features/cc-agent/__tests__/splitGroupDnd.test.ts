@@ -52,6 +52,17 @@ describe('splitGroupDnd', () => {
     ).toBe(true);
   });
 
+  it('项目子任务被 data-no-drag 隔离时仍可作为分屏拖拽源', () => {
+    expect(
+      isSplitGroupDragSource({
+        editing: false,
+        orcaRole: null,
+        inSortableContainer: true,
+        sortableDragBlocked: true,
+      }),
+    ).toBe(true);
+  });
+
   it('编辑态、Orca worker 与 Sortable 容器内的行不充当拖拽源', () => {
     expect(
       isSplitGroupDragSource({ editing: true, orcaRole: null, inSortableContainer: false }),

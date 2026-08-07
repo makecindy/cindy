@@ -5,13 +5,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TurnPermissionPolicyUnsupportedError } from '@cindy/maker-core';
 import type {
   AgentEvent,
+  Capabilities,
   InteractionDecision,
   InteractionRequest,
   MakerEvent,
   Session,
   SessionSendResult,
+  TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
 
@@ -194,6 +197,9 @@ function createSessionHarness(
     message: Parameters<Session['send']>[0],
   ) => Promise<SessionSendResult>,
   sessionId = 'feishu-session',
+  options: {
+    capabilities?: Capabilities;
+  } = {},
 ): SessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
   // onAccepted 仅在消息真被接受时触发 — 对齐 maker-core Session.send 语义;
@@ -214,6 +220,7 @@ function createSessionHarness(
   const session = {
     id: sessionId,
     agentKind: 'claude-code',
+    capabilities: options.capabilities ?? ({} as Capabilities),
     send,
     isTurnRunning,
     abort,
@@ -925,6 +932,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('applies a deferred switch and sends the first queued IM message through the refreshed session', async () => {
     const order: string[] = [];
+    const turnPermissionPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
     const oldSession = createSessionHarness(async () => ({
       accepted: false,
       reason: 'cancelled-before-dispatch',
@@ -980,17 +992,74 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         userMessageId: 'msg-agent-switch',
         text: 'send after switch',
         attachments: [],
+        turnPermissionPolicy,
       });
 
       expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('feishu-session');
       expect(oldSession.send).not.toHaveBeenCalled();
-      expect(switchedSession.send).toHaveBeenCalledTimes(1);
+      expect(switchedSession.send).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ turnPermissionPolicy }),
+      );
       expect(mocks.wireSessionToIpcExternal).toHaveBeenLastCalledWith(switchedSession.session);
       expect(order).toEqual(['apply', 'send', 'release']);
       expect(localRunner.getMakerSessionById('feishu-session')).toBeNull();
     } finally {
       localRunner.disposeAllSessions();
     }
+  });
+
+  it.each([
+    {
+      label: 'Agent capability is unavailable',
+      capabilities: {} as Capabilities,
+      mode: 'ask' as const,
+      failureKind: 'agent',
+    },
+    {
+      label: 'only the final permission mode is unsupported',
+      capabilities: {
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      } as unknown as Capabilities,
+      mode: 'bypassPermissions' as const,
+      failureKind: 'mode',
+    },
+  ])('classifies final turn-policy rejection when $label', async ({
+    capabilities,
+    mode,
+    failureKind,
+  }) => {
+    const h = createSessionHarness(
+      async () => {
+        throw new TurnPermissionPolicyUnsupportedError('claude-code', mode);
+      },
+      'feishu-session',
+      { capabilities },
+    );
+    mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: `msg-policy-${failureKind}`,
+      text: 'policy failure',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart: vi.fn(async () => undefined),
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'wechat' },
+        confirmationSurface: 'channel',
+        forceConfirmToolCall: () => false,
+      },
+    });
+
+    expect(dispatch).toEqual({
+      kind: 'rejected',
+      reason: `TURN_PERMISSION_POLICY_UNSUPPORTED:${failureKind}:${mode}`,
+    });
   });
 
   it('does not suppress a requested close during no-op switch acquisition', async () => {
@@ -1274,6 +1343,72 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // #1855 L1 契约锚定: 终态 reaction 替换失败必须回落撤销 ack(👀), 否则眼睛永久卡住。
+  // fakeAdapter 无 terminalReactionEmoji(上面的用例走"直接撤 ack"分支); 这里用带
+  // terminalReactionEmoji 的变体 adapter 精确覆盖"替换成功不撤 / 替换失败撤"两条分支。
+  describe('终态 reaction 替换与撤眼睛(terminalReactionEmoji 分支)', () => {
+    const terminalAdapter: ImChannelAdapter = {
+      ...fakeAdapter,
+      terminalReactionEmoji: (kind) => (kind === 'done' ? '👍' : kind === 'error' ? '👎' : null),
+    };
+
+    async function runTerminalTurn(): Promise<{
+      localRunner: ImTurnRunner;
+      onTurnComplete: ReturnType<typeof vi.fn>;
+      h: SessionHarness;
+    }> {
+      const localRunner = createTurnRunner(terminalAdapter, fakeRepo, fakeCards);
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+      const turnPromise = localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-user',
+        text: 'hi',
+        attachments: [],
+        onTurnComplete,
+      });
+      await turnPromise;
+      h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+      return { localRunner, onTurnComplete, h };
+    }
+
+    it('替换成功(渠道放行)时顶掉 ack, 不再撤销', async () => {
+      // ack 用 processingEmoji(SMUG)拿 token; 终态 👍 替换返回 token = 顶掉成功。
+      mocks.feishuIm.reactToMessage.mockImplementation(async (_id: string, emoji: string) =>
+        emoji === 'SMUG' ? 'ack-eyes' : 'done-token',
+      );
+      const { localRunner, onTurnComplete } = await runTerminalTurn();
+      try {
+        await waitForAssertion(() => expect(onTurnComplete).toHaveBeenCalledTimes(1));
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenCalledWith('msg-user', '👍');
+        // 替换成功 → 绝不再撤 ack(否则会把刚放上去的结果表情也撤了)。
+        expect(mocks.feishuIm.removeMessageReaction).not.toHaveBeenCalled();
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    it('替换失败(渠道拒放, 返回 null)时回落撤销 ack, 不让 👀 卡住', async () => {
+      // ack 拿 token; 终态 👍 替换返回 null(如 turn 进行中被切到 emoji off)。
+      mocks.feishuIm.reactToMessage.mockImplementation(async (_id: string, emoji: string) =>
+        emoji === 'SMUG' ? 'ack-eyes' : null,
+      );
+      const { localRunner, onTurnComplete } = await runTerminalTurn();
+      try {
+        await waitForAssertion(() => expect(onTurnComplete).toHaveBeenCalledTimes(1));
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenCalledWith('msg-user', '👍');
+        // 替换失败 → 回落撤掉原始 ack token(撤眼睛)。
+        await waitForAssertion(() =>
+          expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', 'ack-eyes'),
+        );
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
   });
 
   it('redacts user identity from send failure log session fields', async () => {

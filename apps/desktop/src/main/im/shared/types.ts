@@ -235,6 +235,18 @@ export interface ImUiTextPack {
     unsupportedOnly: (entries: IMUnsupportedEntry[]) => string;
     unsupportedNotice: (entries: IMUnsupportedEntry[]) => string;
   };
+  /**
+   * 派发前失败文案。agentUnsupported 用于「所选 Agent 无法提供渠道所需的
+   * 逐条权限确认」(如 Pi 在个人微信),permissionModeUnsupported 用于
+   * 「当前权限模式在该 Agent 的 turnPermissionPolicy 排除清单里」。
+   * 可选:仅需要细分文案的渠道实现,其余渠道可不提供。
+   */
+  error?: {
+    agentUnsupported: string;
+    permissionModeUnsupported: string;
+    /** 换 Agent 后仍可能不兼容的权限模式(bypassPermissions / acceptEdits)时附加。 */
+    agentSwitchAlsoCheckPermissionMode?: string;
+  };
   cards: {
     permission: {
       title: (toolName: string) => string;
