@@ -6292,6 +6292,7 @@
       "actionUnavailable": "This message includes file changes that cannot be safely undone",
       "actionFailed": "The changes could not be applied. Try again",
       "partial": "Only the changes captured exactly are shown",
+      "partialNone": "Files were changed, but their contents could not be recorded, so they cannot be reviewed or undone here",
       "partialReversible": "Only exactly captured changes can be undone or reapplied; uncaptured changes are not handled",
       "partialActionHint": "Only undo or reapply exactly captured file changes",
       "showMore": "Show {{count}} more files",

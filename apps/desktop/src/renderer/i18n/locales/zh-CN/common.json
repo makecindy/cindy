@@ -6289,6 +6289,7 @@
       "actionUnavailable": "本条消息包含无法安全撤销的文件变更",
       "actionFailed": "未能应用本条消息的改动，请重试",
       "partial": "仅记录了可精确捕获的部分变更",
+      "partialNone": "有文件被更改，但内容未能记录，无法在此审查或撤销",
       "partialReversible": "仅撤销或重新应用已精确记录的变更；未记录的改动不会由此操作处理",
       "partialActionHint": "仅撤销或重新应用已精确记录的文件变更",
       "showMore": "再显示 {{count}} 个文件",

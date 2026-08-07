@@ -233,6 +233,32 @@ describe('TurnChangesCard file actions', () => {
     ));
   });
 
+  it('renders a zero-file evidence card as a pure warning without +0 -0 or dead-end actions', () => {
+    // 零文件但带变更证据(如 sensitive-file / diff-too-large)的卡:内容没录下,
+    // +0 -0 会被误读成「没有变化」,「审查」必然打开空面板。只保留警示文案。
+    render(
+      <TurnChangesCard
+        sessionId="session-1"
+        changeSet={{
+          ...CHANGE_SET,
+          state: 'partial',
+          isReversible: false,
+          incompleteReasons: ['sensitive-file'],
+          files: [],
+          fileCount: 0,
+          additions: 0,
+          deletions: 0,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('chat.turnChanges.partialTitle')).toBeTruthy();
+    expect(screen.getByText('chat.turnChanges.partialNone')).toBeTruthy();
+    expect(screen.queryByText(/\+0/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.turnChanges.review' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.turnChanges.undoAria' })).toBeNull();
+  });
+
   it('does not offer undo for a non-reversible patch', () => {
     render(
       <TurnChangesCard
