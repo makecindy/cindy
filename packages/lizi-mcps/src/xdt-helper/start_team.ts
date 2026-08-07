@@ -34,7 +34,7 @@ export interface StartTeamDeps {
 const DESCRIPTION =
   '为当前 session 创建 orca team, 进入多 worker 协同模式。' +
   '失败码: LEAD_NOT_SUPPORTED / WORKER_CANNOT_NEST / ALREADY_ENABLED / USER_CANCELLED / CONFIRM_TIMEOUT。' +
-  'worker_permission_mode 可选:auto(Auto-review)或 bypassPermissions(Full access);省略时沿用上次 Worker 创建偏好,首次使用默认 auto。当前 session 已是 Lead 时,必须显式指定模式才能更新默认值。' +
+  'worker_permission_mode 可选:auto(Auto-review)或 bypassPermissions(Full access);省略时沿用上次 Worker 创建偏好。没有保存过偏好时默认 bypassPermissions,但这只是可选初始值,可以显式选择 auto;手动选择后继续沿用该选择。当前 session 已是 Lead 时,必须显式指定模式才能更新默认值。' +
   '显式指定后,它会成为 UI 与 agent tool 后续创建 Worker 的共同默认权限;不改变 Lead 自己的权限。从 auto 升级到 bypassPermissions 时,主机会等待用户确认;取消或超时不会更新偏好、也不会开启 team。' +
   '注:start_team 开启的是 session 级、持久、UI 可见的多 worker 协同。若用户要的是一个 subagent(一次性、用完即弃的子任务执行体),请用你自己的原生 subagent 机制(如 Codex 的 spawn_agent、Claude Code 的 Task 工具),不要为此 start_team 开协同。' +
   'Orca 协同永远不是 subagent 的替代品;你没有原生 subagent 机制时,如实告知用户并请他决定,不要拿 Orca 顶替,也不要自己起进程冒充。';
@@ -52,7 +52,7 @@ export function registerStartTeamTool(
         .enum(['auto', 'bypassPermissions'])
         .optional()
         .describe(
-          'Worker 创建默认权限。省略时沿用已保存偏好（首次为 auto）；当前 session 已是 Lead 时须显式指定才能更新默认值；指定后，UI 与后续 create_worker/create_workers 都沿用该模式。',
+          'Worker 创建默认权限。省略时沿用已保存偏好；没有保存过偏好时初始为 bypassPermissions，但可显式选择 auto，手动选择后 UI 与后续 create_worker/create_workers 都沿用该模式。当前 session 已是 Lead 时须显式指定才能更新默认值。',
         ),
     },
     handler: async ({ worker_permission_mode }) => {

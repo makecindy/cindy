@@ -666,7 +666,7 @@ export default function NewRemoteSessionScreen() {
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
   const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(false);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
-  // 自动默认运行配置(跟随最近会话 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
+  // 自动默认运行配置(跟随最近会话 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
   // 只保护当前页面刚从 provider 目录显式选中的模型，避免旧 capabilities 在途结果误回退；
@@ -866,8 +866,8 @@ export default function NewRemoteSessionScreen() {
     };
   }, [draft.agentKind, draft.permissionMode, newSessionPreferences, newSessionPreferencesLoaded]);
 
-  // 新建任务默认运行配置 = 跟随最近一次会话(整套 agent+model+effort,按所选设备 scope);没有最近会话则用
-  // 模型列表最上面那个(列表异步就绪后再设)。一旦用户手动选过模型即不再覆盖;切设备(未手动选过)按新设备重算。
+  // 新建任务默认运行配置 = 跟随最近一次会话(整套 agent+model+effort,按所选设备 scope);没有最近会话则
+  // 优先区域默认、再用模型列表最上面那个。一旦用户手动选过模型即不再覆盖;切设备(未手动选过)按新设备重算。
   // 决策逻辑全在纯函数 resolveNewSessionAutoDefault 里(便于单测);此 effect 只负责"调纯函数 → setDraft + 更新 ref"。
   // 最近会话路径同步可得(sessions 在内存);列表最上面依赖 providers 异步,故 modelRows 就绪后此 effect 再触发。
   useEffect(() => {
@@ -878,6 +878,11 @@ export default function NewRemoteSessionScreen() {
       selectedDeviceId,
       sessions,
       modelRows,
+      // provider-aware 模式只用经过可见性过滤的 rows；目录确实不可用时才回退 capabilities。
+      availableModels: !deviceProviders.loading && modelSections.connected.length === 0
+        ? capabilities?.availableModels
+        : undefined,
+      agentKind: draft.agentKind,
       currentEffort: draft.effort,
     });
     if (!result) return;
@@ -904,7 +909,7 @@ export default function NewRemoteSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [draft.effort, draft.permissionMode, draft.agentKind, modelRows, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
+  }, [capabilities?.availableModels, deviceProviders.loading, draft.effort, draft.permissionMode, draft.agentKind, modelRows, modelSections.connected.length, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
   const draftContent = useMemo(
     // pending(乐观上传中)也算数:拍完照立刻点创建是常见路径,create() 里会等它们落定。
     () => ({ attachmentCount: attachments.length + pendingUploads.length }),

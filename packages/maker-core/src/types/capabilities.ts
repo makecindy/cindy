@@ -264,6 +264,13 @@ export interface ModelDescriptor {
   */
   defaultEnabled?: boolean;
   /**
+   * 该模型是哪些 agent 的**新对话默认种子**（源自目录 `CatalogModel.newSessionDefault`，
+   * host 派生时透传）。与 sortOrder / defaultEnabled 独立；渲染层选新对话默认时优先取被
+   * 标记且可用可见的模型（见 modelDefinitions getDefaultModelForVendor）。取值仅 wire agent
+   * （pi 由客户端从 'claude-code' 投影）。maker-core 运行时不读它。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
+  /**
    * 模型计费($/1M tokens,源自目录/网关刷新,host 派生时透传)。pi 用它生成
    * models.json 的 cost 让 pi 自行计价;缺省按 0 计(用量页不显示钱数)。
    */

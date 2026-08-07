@@ -273,6 +273,7 @@ import {
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import {
   getRemoteNewMakerDefaults,
+  getRemoteNewMakerDefaultsByVendor,
   getWorkerDefaultsFromNewMaker,
   getWorkerPermissionModeFromCreationPrefs,
   type NewMakerDraftSnapshot,
@@ -4795,7 +4796,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // ── newMakerDraft 缓存同步 ──────────────────────────────────────────────
   // Renderer push (fire-and-forget) → main 内存缓存; collab spawn worker 时
   // 读这份缓存决定 model/effort/fastMode。startup 立刻推一次 + 用户每次改 New
-  // Maker 偏好时增量推, payload 形态严格按 newMakerDefaultsCache.NewMakerDraftSnapshot。
+  // Maker 偏好时增量推（含每个 vendor 的显式模型选择状态），payload 形态严格按
+  // newMakerDefaultsCache.NewMakerDraftSnapshot。
   // 校验失败 (payload 不是 object / 缺字段) → no-op, 缓存维持上一次值, 避免脏数据污染。
   ipcMain.on(MAKER_SEND.SYNC_NEW_MAKER_DRAFT, (_e, payload: unknown) => {
     if (!payload || typeof payload !== 'object') return;
@@ -4811,6 +4813,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return;
     setNewMakerDraftCache({
       lastByVendor: p.lastByVendor,
+      ...(p.modelChosenByVendor && typeof p.modelChosenByVendor === 'object'
+        ? { modelChosenByVendor: p.modelChosenByVendor }
+        : {}),
       fastModeByModel: p.fastModeByModel,
       effortByModel: p.effortByModel,
       // worktree 勾选记忆(vendor 无关根字段):旧 renderer 不推此字段 → false 兜底。
@@ -5062,7 +5067,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // device-link 远程草稿镜像(只读):返回某 vendor 在 New Maker 草稿里的当前完整选择
-  // (model/effort/fast/permission/source)。控制端经隧道调用 → seed 远程项目草稿。
+  // (model/effort/fast/permission/source/是否显式选过模型)。控制端经隧道调用 → seed 远程项目草稿。
   // 缓存未就绪 / 该 vendor 无草稿 model → 返回 {},控制端按 capabilities 默认兜底。
   ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, (_e, agentKind: unknown) => {
     return getRemoteNewMakerDefaults(requireAgentKind(agentKind));
@@ -12797,9 +12802,9 @@ function broadcastNewMakerDraftChanged(): void {
   draftChangedScheduled = true;
   setTimeout(() => {
     draftChangedScheduled = false;
-    tapWindowBroadcast(MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED, {
-      claudeCode: getRemoteNewMakerDefaults('claude-code'),
-      codex: getRemoteNewMakerDefaults('codex'),
-    });
+    tapWindowBroadcast(
+      MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED,
+      getRemoteNewMakerDefaultsByVendor(),
+    );
   }, 0);
 }

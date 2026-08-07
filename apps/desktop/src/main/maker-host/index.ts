@@ -101,6 +101,7 @@ import {
 import {
   buildDesktopClaudeRuntimeConfig,
   desktopCodexRuntimeConfig,
+  ensureBundledRipgrepReady,
 } from './runtime-configs.js';
 import { getClaudeEndpoint, setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthSpawnChecker } from './anthropic-compat-proxy-host.js';
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
@@ -598,6 +599,12 @@ export function getMaker(): Maker {
     if (!codexPath) {
       throw new Error('getMaker: Codex binary not provisioned (bootstrap must run agent-binaries.prepare("codex") before getMaker)');
     }
+    // bundled ripgrep 检查与上面 claude/codex 二进制同层:真正的启动期 fail-fast
+    // 在 splash check-environment(Phase 2.5,缺 rg 时 splash 进失败态可重试);
+    // 这里是防御性断言 —— 走到本函数说明 bootstrap 已完成环境检查,缺 rg 即顺序
+    // 错误,早抛比 spawn 时再炸清晰(throw 会被 bootstrap 的 register catch 兜住
+    // 并留 ERROR 日志,与 claude/codex 缺失的处理一致)。
+    ensureBundledRipgrepReady();
 
     // 图片送进模型前的 last-mile resize (省 vision token)。host 注入 logger
     // 让 sharp 失败 / 超时 / LRU 淘汰等告警进项目日志, 而不是默默丢黑洞。

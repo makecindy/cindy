@@ -50,6 +50,12 @@ export interface ModelDescriptor {
    * 消费点见 modelDefinitions.getDefaultModelForVendor:种子默认只从默认可见的模型里取。
    */
   defaultEnabled?: boolean;
+  /**
+   * 该模型是哪些 wire agent 的**新对话默认种子**(源自目录 newSessionDefault,与 sortOrder
+   * 解耦;生产环境 XD 网关由服务端按区域下发)。消费点见 modelDefinitions.newSessionDefaultModelId
+   * 与 draftModelCalibration:被标记且可用的模型优先作新对话默认。pi 按 'claude-code' 口径判定。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
 }
 
 export interface EffortDescriptor {
@@ -138,6 +144,20 @@ function isOptionalStringRecord(value: unknown): boolean {
   );
 }
 
+/** 与 protocol newSessionDefault 约束一致:可选;存在时非空、wire agent、无重复。 */
+function isOptionalNewSessionDefault(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  if (
+    value.some(
+      (agent) => agent !== 'claude-code' && agent !== 'codex',
+    )
+  ) {
+    return false;
+  }
+  return new Set(value).size === value.length;
+}
+
 function isModelDescriptor(value: unknown): value is ModelDescriptor {
   if (!isRecord(value)) return false;
   const efforts = value.efforts;
@@ -159,7 +179,8 @@ function isModelDescriptor(value: unknown): value is ModelDescriptor {
     isOptionalStringRecord(value.effortDisplayNames) &&
     isOptionalBoolean(value.supportsFastMode) &&
     isOptionalFiniteNumber(value.sortOrder) &&
-    isOptionalBoolean(value.defaultEnabled)
+    isOptionalBoolean(value.defaultEnabled) &&
+    isOptionalNewSessionDefault(value.newSessionDefault)
   );
 }
 

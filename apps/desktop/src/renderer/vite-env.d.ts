@@ -59,6 +59,8 @@ interface EnvCheckResult {
   codex: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
   /** pi 可选实验 agent:failed 不影响 allPassed；本次启动会禁用 pi。 */
   pi?: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
+  /** bundled ripgrep(必需):failed 时 allPassed=false,splash 进失败态可重试 (#1956)。 */
+  ripgrep?: { status: 'passed' | 'failed' | 'skipped'; error?: string };
   allPassed: boolean;
   platform: 'darwin' | 'win32' | 'linux';
 }
@@ -2101,6 +2103,8 @@ interface ElectronAPI {
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
+    /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */

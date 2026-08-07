@@ -161,6 +161,23 @@ describe('buildProviderSections', () => {
     expect('icon' in (models.find((m) => m.id === 'gpt-5.5') ?? {})).toBe(false);
   });
 
+  it('区域门控后的新对话默认标记透传进 SectionModel;缺省不带字段', () => {
+    const withDefault = provider('xd', 'XD', [
+      { ...model('deepseek/deepseek-v4-pro', 'DeepSeek V4 Pro'), newSessionDefault: ['claude-code'] },
+      model('gpt-5.5', 'GPT-5.5'),
+    ]);
+    const sections = buildProviderSections({
+      providers: [withDefault],
+      agent: 'claude-code',
+      isVisible: () => true,
+    });
+    const models = sections[0].models;
+    expect(models.find((m) => m.id === 'deepseek/deepseek-v4-pro')?.newSessionDefault).toEqual([
+      'claude-code',
+    ]);
+    expect('newSessionDefault' in (models.find((m) => m.id === 'gpt-5.5') ?? {})).toBe(false);
+  });
+
   it('模型级 Codex bridge 协议透传进 SectionModel;缺省不带字段', () => {
     const bridged = provider('xd', 'XD', [
       {

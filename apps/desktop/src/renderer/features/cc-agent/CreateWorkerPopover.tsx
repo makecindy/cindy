@@ -48,7 +48,7 @@ import {
 import { selectWorkerModels } from './workerModelAvailability';
 
 const PREDEFINED_ROLES = ['developer', 'designer', 'reviewer', 'tester', 'merger'] as const;
-const AUTO_ONLY_WORKER_PERMISSION_MODES = [DEFAULT_ORCA_WORKER_PERMISSION_MODE] as const;
+const AUTO_ONLY_WORKER_PERMISSION_MODES = ['auto'] as const;
 
 export interface CreateWorkerForm {
   role: string;
@@ -289,9 +289,9 @@ export function CreateWorkerPopover({
   useEffect(() => {
     if (
       !supportsWorkerPermissionModeSelection
-      && selectedWorkerPermissionMode !== DEFAULT_ORCA_WORKER_PERMISSION_MODE
+      && selectedWorkerPermissionMode !== 'auto'
     ) {
-      setSelectedWorkerPermissionMode(DEFAULT_ORCA_WORKER_PERMISSION_MODE);
+      setSelectedWorkerPermissionMode('auto');
     }
   }, [selectedWorkerPermissionMode, supportsWorkerPermissionModeSelection]);
 

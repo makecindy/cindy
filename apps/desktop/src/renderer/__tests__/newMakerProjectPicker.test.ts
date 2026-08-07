@@ -1510,6 +1510,26 @@ describe('Shared create project picker', () => {
     );
   });
 
+  it('reapplies refreshed regional defaults only while the remote runtime is untouched', () => {
+    const seed = newMakerDraftRouteSource.slice(
+      newMakerDraftRouteSource.indexOf('// seed dlSel:'),
+      newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
+    );
+    expect(seed).toContain('shouldReseedDeviceLinkDraftDefaults({');
+    expect(seed).toContain('capabilitiesChanged,');
+    expect(seed).toContain('if (!capabilities || capabilitiesLoading');
+    expect(seed).toContain('controllerTouched: dlRuntimeTouchedRef.current,');
+    expect(seed).toContain('remoteModelChosenByUser: remoteDraftState.value?.modelChosenByUser,');
+    expect(seed).toContain('modelChosenByUser: true,');
+    expect(seed).toContain('current.model,');
+
+    const runtimeHandlers = newMakerDraftRouteSource.slice(
+      newMakerDraftRouteSource.indexOf('const handleModelDidChange = useCallback('),
+      newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir'),
+    );
+    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(5);
+  });
+
   // #807 review 第二十七轮:设备菜单行原来只有 hover / disabled 两态,且 outline-none 去掉了浏览器
   // 默认焦点圈 —— 键盘走这个菜单时完全看不出焦点落在哪一行。
   it('shows a token-backed focus ring on device menu rows', () => {

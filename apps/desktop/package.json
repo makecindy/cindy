@@ -48,6 +48,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@cindy/auth-client": "workspace:*",
+    "@cindy/model-access-protocol": "workspace:*",
     "@cindy/plugin-protocol": "workspace:*",
     "@cindy/slack-hook-protocol": "workspace:*",
     "@codemirror/commands": "^6.10.3",

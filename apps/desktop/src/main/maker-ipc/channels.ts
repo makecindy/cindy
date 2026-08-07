@@ -112,8 +112,8 @@ export const MAKER_INVOKE = {
   GET_CAPABILITIES: 'maker:get-capabilities',
   /**
    * device-link 远程草稿镜像:控制端为被控设备新建项目草稿时,经隧道读被控端**当前
-   * New Maker 草稿**在某 vendor 的完整选择(model/effort/fast/permission/source),1:1 seed
-   * 控制端草稿(绝不取控制端本地)。只读、无 sender 依赖、语义在被控端执行 → 进 device-link
+   * New Maker 草稿**在某 vendor 的完整选择(model/effort/fast/permission/source/是否显式
+   * 选过模型),1:1 seed 控制端草稿(绝不取控制端本地)。只读、无 sender 依赖、语义在被控端执行 → 进 device-link
    * allowlist。数据源 = newMakerDefaultsCache(renderer 经 SYNC_NEW_MAKER_DRAFT 推)。
    * 旧版被控端无此 channel → 控制端收 CHANNEL_NOT_ALLOWED → 回退被控端 capabilities 默认。
    */
@@ -697,8 +697,8 @@ export const MAKER_SEND = {
    */
   COMPUTER_PERMISSION_APP_DRAG_START: 'maker:computer:permission-app-drag-start',
   /**
-   * 把 renderer `newMakerDraft` 的关键子集 (lastByVendor / fastModeByModel /
-   * effortByModel) 同步给 main 缓存 (newMakerDefaultsCache)。collab mode spawn
+   * 把 renderer `newMakerDraft` 的关键子集 (lastByVendor / modelChosenByVendor /
+   * fastModeByModel / effortByModel) 同步给 main 缓存 (newMakerDefaultsCache)。collab mode spawn
    * worker (enableOrcaInternal / orca-bridge.create_worker) 读这份缓存决定 worker
    * 的 model / effort / fastMode, 让 worker 默认 = "用户在 New Maker 面板该 vendor
    * 当前的选择"。startup 时推一次 + draft 变化时增量推, fire-and-forget。
@@ -810,8 +810,8 @@ export const MAKER_PUSH = {
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。
-   * payload = { claudeCode: RemoteNewMakerDefaults, codex: RemoteNewMakerDefaults }(per-vendor,
-   * 控制端直接复用 resolveDeviceLinkDraftDefaults)。本地窗口不消费(被控端是真相、不自镜像)。
+   * payload = { claudeCode, codex, pi }(每项均为 RemoteNewMakerDefaults，控制端直接复用
+   * resolveDeviceLinkDraftDefaults)。本地窗口不消费(被控端是真相、不自镜像)。
    */
   NEW_MAKER_DRAFT_CHANGED: 'maker:new-maker-draft:changed',
   /**
