@@ -184,7 +184,10 @@ export function classifySshError(err: unknown): ClassifiedSshError {
     case 'SSH_KEY_FILE_NOT_FOUND':
       return {
         errorCode: 'SSH_KEY_FILE_NOT_FOUND',
-        hint: `配置的私钥文件在本机磁盘上不存在/不可读（本机路径问题，不是网络或服务端错误）：${detail}。请到「设置 → 远程连接」重新选择私钥或编辑主机的 Identity file 路径。`,
+        // Strip the raw-error prefix (identity file not found: ) so the hint
+        // doesn't mix an English prefix into the localized message — same
+        // treatment the renderer toast applies.
+        hint: `配置的私钥文件在本机磁盘上不存在/不可读（本机路径问题，不是网络或服务端错误）：${detail.replace(/^identity file not found:\s*/, '')}。请到「设置 → 远程连接」重新选择私钥或编辑主机的 Identity file 路径。`,
       };
     default:
       return {
