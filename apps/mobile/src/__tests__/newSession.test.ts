@@ -20,6 +20,7 @@ import {
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   resolveSubmitGuardCatalog,
+  resolveStartedDowngradeOrCommit,
   sessionFromCreateResult,
   compensatePrecreatedWorktree,
   reconcileEffortAfterFallback,
@@ -1866,31 +1867,39 @@ describe('submit guard catalog wiring (source locks)', () => {
     );
     const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
     // 入口设备检查先于加锁(round-20 Standards P1 busy 泄漏):goal 的 setGoalBusy(true)
-    // 前必须有该 return(create() 的检查在 try 内,finally 兜底,不要求此序)
-    expect(goalSlice.indexOf('if (selectedDeviceRef.current !== deviceAtCreate) return;')).toBeLessThan(
-      goalSlice.indexOf('setGoalBusy(true)'),
-    );
+    // 前必须有该 return(create() 的检查在 try 内,finally 兜底,不要求此序)。
+    // Standards P1:先断言 needle 存在(indexOf=-1 会让 -1<X 假通过)。
+    const goalEntryCheck = goalSlice.indexOf('if (selectedDeviceRef.current !== deviceAtCreate) return;');
+    const goalSetBusy = goalSlice.indexOf('setGoalBusy(true)');
+    expect(goalEntryCheck).toBeGreaterThan(-1);
+    expect(goalSetBusy).toBeGreaterThan(-1);
+    expect(goalEntryCheck).toBeLessThan(goalSetBusy);
     // 有界稳定循环:两段各含「每轮 runGuard 后同步核对 genAt」+ 耗尽降 unknown/fail-open
     expect(createSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(1);
-    // goal:prepare 循环(1)+ post-started 循环(前查 + 后查,2)
-    expect(goalSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(3);
+    // goal:prepare 循环(1)+ post-started 循环(前查 + 后查,2)+ 降级失败后 re-fence(1)
+    expect(goalSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(4);
     const failOpen = 'rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),';
     const failOpenCount = (slice: string): number =>
       slice.split(failOpen).length - 1;
     expect(failOpenCount(createSlice)).toBe(2); // 哨兵 + 耗尽
-    expect(failOpenCount(goalSlice)).toBe(3); // 哨兵 + prepare 耗尽 + started 后耗尽
-    // create:apply 后零 await 直至 handoff(同一 turn)
+    expect(failOpenCount(goalSlice)).toBe(4); // 哨兵 + prepare 耗尽 + started 后耗尽 + re-fence 耗尽
+    // create:apply 后零 await 直至 handoff(同一 turn)。Standards P1:endpoint 必须
+    // 在 apply 之后(endpoint 前移会让空 slice 假通过零 await)。
     const createApply = createSlice.indexOf('applyGuard(guardResult);');
-    expect(createApply).toBeGreaterThan(0);
+    const createHandoff = createSlice.indexOf('startNewSessionCreation({');
+    expect(createApply).toBeGreaterThan(-1);
+    expect(createHandoff).toBeGreaterThan(createApply);
     const createBetween = createSlice
-      .slice(createApply, createSlice.indexOf('startNewSessionCreation({'))
+      .slice(createApply, createHandoff)
       .replace(/\/\/[^\n]*/g, '');
     expect(createBetween).not.toMatch(/await /);
     // goal:最后核对后零 await 至 createSession(apply 前的 downgrade 分支是切换时早退,不在此段)
     const goalApply = goalSlice.indexOf('applyGuard(guardResult);');
-    expect(goalApply).toBeGreaterThan(0);
+    const goalCreate = goalSlice.indexOf('const created = await maker.createSession');
+    expect(goalApply).toBeGreaterThan(-1);
+    expect(goalCreate).toBeGreaterThan(goalApply);
     const goalBetween = goalSlice
-      .slice(goalApply, goalSlice.indexOf('const created = await maker.createSession'))
+      .slice(goalApply, goalCreate)
       .replace(/\/\/[^\n]*/g, '');
     expect(goalBetween).not.toMatch(/await /);
   });
@@ -1905,7 +1914,10 @@ describe('submit guard catalog wiring (source locks)', () => {
     // 唯一的 return 必须是「降级成功才 return」(downgrade-or-commit,独立 review round-22)
     const startedToCreate = goalSlice.slice(iStarted, iCreate);
     expect(startedToCreate).not.toMatch(/isCurrentOwner\(\)\) return;|abortIfDeviceSwitched/);
-    expect(startedToCreate).toMatch(/if \(downgraded\) return;/);
+    expect(startedToCreate).toMatch(/if \(decision === 'downgraded'\) return;/);
+    // started commit 段唯一的 return 必须是 downgraded 分支(枚举全部 return)
+    const returns = startedToCreate.match(/return;/g) ?? [];
+    expect(returns).toHaveLength(1);
     expect(startedToCreate).toContain('applyGuard(guardResult);');
     // 降级模式:started 失败与设备切换两处都 re-register phase precreated
     // (goal 区 phase:'precreated' 共 4 处:precreate 写盘 ×2 + 降级 ×2)
@@ -2018,5 +2030,57 @@ describe('compensatePrecreatedWorktree —— 设备切换补偿分阶段(独立
     expect(res).toBe('discarded');
     expect(discard).not.toHaveBeenCalled();
     expect(forget).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveStartedDowngradeOrCommit —— started 落账后设备切换处置(round-23 Spec P1-1/P1-2)', () => {
+  // 降级成功 → 'downgraded'(recovery 可回收);降级失败 → 恢复 volatile 回 started
+  // 后 'commit'——防 recovery 读到可 discard 的 precreated 对未知创建做 destructive
+  // discard(破坏「started 绝不回收未知创建」不变量)。
+  const base = {
+    downgrade: () => Promise.resolve(true),
+    restoreStarted: () => Promise.resolve(),
+  };
+
+  it('downgrade 成功 → downgraded,不调 restoreStarted', async () => {
+    const restoreStarted = vi.fn(() => Promise.resolve());
+    const res = await resolveStartedDowngradeOrCommit({ ...base, restoreStarted });
+    expect(res).toBe('downgraded');
+    expect(restoreStarted).not.toHaveBeenCalled();
+  });
+
+  it('downgrade 返回 false → commit,且恢复 volatile started', async () => {
+    const restoreStarted = vi.fn(() => Promise.resolve());
+    const res = await resolveStartedDowngradeOrCommit({
+      downgrade: () => Promise.resolve(false),
+      restoreStarted,
+    });
+    expect(res).toBe('commit');
+    expect(restoreStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('downgrade 抛错 → commit,且恢复 volatile started', async () => {
+    const restoreStarted = vi.fn(() => Promise.resolve());
+    const res = await resolveStartedDowngradeOrCommit({
+      downgrade: () => Promise.reject(new Error('storage down')),
+      restoreStarted,
+    });
+    expect(res).toBe('commit');
+    expect(restoreStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('downgrade 延迟到达且为 false → 恢复在决策后才发生(顺序由 deferred 保证)', async () => {
+    const d = deferred<boolean>();
+    const restoreStarted = vi.fn(() => Promise.resolve());
+    const pending = resolveStartedDowngradeOrCommit({
+      downgrade: () => d.promise,
+      restoreStarted,
+    });
+    await flush();
+    expect(restoreStarted).not.toHaveBeenCalled();
+    d.resolve(false);
+    const res = await pending;
+    expect(res).toBe('commit');
+    expect(restoreStarted).toHaveBeenCalledTimes(1);
   });
 });

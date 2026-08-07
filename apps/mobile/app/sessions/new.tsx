@@ -157,6 +157,7 @@ import {
   compensatePrecreatedWorktree,
   reconcileEffortAfterFallback,
   resolveRecentModelAndProvider,
+  resolveStartedDowngradeOrCommit,
   resolveSubmitGuardCatalog,
   validateNewSessionDraft,
   type NewSessionAgentKind,
@@ -4044,8 +4045,9 @@ export default function NewRemoteSessionScreen() {
       // 保守置 false(codex review P2)。代际安全版(独立 review P1-1):唯一数据源 =
       // 设备缓存 + 代际,不再读渲染期 rows(catalogReadyRef 是渲染镜像,驱逐窗口内
       // 不可信);缓存命中即当前代已确认目录;未命中且曾驱逐 → join 在途重拉,await
-      // 前后核对代际,换代即弃用旧返回值 join 新代;拉失败 → 未知 → 信任。await 期间
-      // 切设备 → 放弃(已 precreate 由 abortIfDeviceSwitched 补偿)。
+      // 前后核对代际,换代即弃用旧返回值 join 新代;拉失败 → 未知 → 信任。
+      // 设备/代际复核均已完成(abort 前置),循环后同步 ensureDeviceAlive 兜底——
+      // 已切换则放弃,precreated ledger 保留交 recovery(不做 ACK 补偿)。
       {
         // 独立 review round-21 Spec P1:所有可取消 await(abort)前置到终检循环之前;
         // 终检循环每轮 await 返回后**同步**核对 genAt;最后一次核对后零 await 直至
@@ -4515,8 +4517,9 @@ export default function NewRemoteSessionScreen() {
       });
       // 提交点联合终检(同 create(),代际安全版独立 review P1-1/P1-2):唯一数据源 =
       // 设备缓存 + 代际;缓存命中即当前代已确认目录;未命中且曾驱逐 → join 在途重拉
-      // (await 前后核对代际);拉失败 → 未知 → 信任。await 期间切设备 → 放弃(已
-      // precreate 由 abortIfDeviceSwitched 补偿)。
+      // (await 前后核对代际);拉失败 → 未知 → 信任。started 落账后设备切换 →
+      // resolveStartedDowngradeOrCommit(降级成功 return / 失败恢复 volatile 后
+      // 重跑 guard 继续 commit);apply 后零 await 至 createSession。
       if (!ensureDeviceAlive()) return;
       const guardDeviceId = deviceAtCreate;
       const guardSelected = () => ({
@@ -4622,19 +4625,42 @@ export default function NewRemoteSessionScreen() {
           };
         }
         // started 可靠落账后设备切换:不裸 return(会留 started retain-only,recovery
-        // 对该 phase 拒绝 discard)——先 durable 降级回 precreated(可回收);降级失败
-        // 则继续用捕获设备完成 commit(动态 clientRef 跨设备残余已在 PR 风险节声明,
-        // 独立 review round-22 Spec P1-2)。
+        // 对该 phase 拒绝 discard)——走 resolveStartedDowngradeOrCommit:
+        // 降级成功 → return(recovery 可回收);降级失败 → 恢复 volatile 回 started
+        // 后继续用捕获设备完成 commit(round-23 Spec P1-2:防 recovery 读到
+        // precreated 对未知创建做 destructive discard;动态 clientRef 残余已声明)。
         if (!ensureDeviceAlive()) {
-          const downgraded = await registerPendingPrecreatedWorktree(worktreeAccountId, {
-            sessionId: precreatedWorktree.sessionId,
-            deviceId: selectedDeviceId,
-            path: precreatedWorktree.path,
-            recoveryKey: precreatedWorktree.recoveryKey,
-            createdAt: precreatedWorktree.createdAt ?? Date.now(),
-            phase: 'precreated',
-          }).catch(() => false);
-          if (downgraded) return;
+          const pwt = precreatedWorktree;
+          const decision = await resolveStartedDowngradeOrCommit({
+            downgrade: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId: pwt.sessionId,
+              deviceId: selectedDeviceId,
+              path: pwt.path,
+              recoveryKey: pwt.recoveryKey,
+              createdAt: pwt.createdAt ?? Date.now(),
+              phase: 'precreated',
+            }),
+            restoreStarted: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId: pwt.sessionId,
+              deviceId: selectedDeviceId,
+              path: pwt.path,
+              recoveryKey: pwt.recoveryKey,
+              createdAt: pwt.createdAt ?? Date.now(),
+              phase: 'session-create-started',
+            }),
+          });
+          if (decision === 'downgraded') return;
+          // 降级失败 → commit;降级 await 窗口可能换代(round-23 Spec P1-1)→ 重跑
+          // 有界 guard,耗尽降 unknown/fail-open;此后零 await 应用 + createSession。
+          for (let pass = 0; pass < 2; pass += 1) {
+            guardResult = await runGuard();
+            if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+          }
+          if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+            guardResult = {
+              rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+            };
+          }
         }
       }
       // 同一 turn:同步应用 + createSession,零 await 间隔(独立 review round-21 Spec P1)。

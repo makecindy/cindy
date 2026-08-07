@@ -392,18 +392,6 @@ export function resolveRecentModelAndProvider(
 }
 
 /**
- * 提交终检的目录取信口径(Greptile P1「旧设备目录通过终检」/ Codex P2「失效代际
- * 残留行当作就绪目录」/ Copilot P1「空缓存误判为一无所知」):渲染期 rows 未绑定
- * 设备身份——设备切换后的重渲染空窗、或缓存被驱逐(同设备 provider:changed)后的
- * 重拉空窗里,渲染 rows 仍握着旧目录;若把「任何非空 rows」都当就绪目录,失效来源
- * 会凭残留行通过终检。三分:
- * - ready=true → 渲染期 rows 即当前设备已确认目录(含 loaded-but-empty),直接采信;
- * - ready=false + 设备缓存命中(哪怕该 agent rows 为空)→ 「已知目录」→ 校验
- *   (空目录是确定知识:任何来源都不合法,必须走联合回退,不得落入信任);
- * - ready=false + 无缓存 → catalogKnown=false(对当前设备一无所知)→ 信任既有
- *   (model, providerId)。
- */
-/**
  * 提交终检的目录取信(代际安全版,独立 review P1-1):**唯一数据源 = 设备缓存 + 代际**,
  * 不再读渲染期 rows——catalogReadyRef 是渲染期镜像,外部驱逐后要等下一渲染才失效,
  * 渲染 rows 在该窗口内不可信(㉛ 分支此前因此被绕过)。缓存写入受代际门控
@@ -458,6 +446,28 @@ export async function resolveSubmitGuardCatalog(args: {
  * 返回 'discarded' = 远端与账本均已清理;'retained' = 账本保留待 recovery。
  * deps 注入(含 parseAck)便于 node 单测覆盖各阶段时序。
  */
+/**
+ * started 落账后的设备切换处置(独立 review round-23 Spec P1-1/P1-2):
+ * 设备已切换 → 尝试把账本 durable 降级回 precreated(可回收阶段):
+ * - 降级成功 → 返回 'downgraded'(调用方 return,recovery 可回收);
+ * - 降级失败(读/写异常或返回 false)→ **恢复 volatile 回 started** 后返回
+ *   'commit'——register 在首个 await 前已同步把 volatile 升为 precreated,若不
+ *   恢复,recovery 会读到可 discard 的 precreated,对「createSession 结果未知」
+ *   的会话做 destructive discard,绕过「started 绝不回收未知创建」不变量。
+ *   调用方收到 'commit' 后必须重跑有界 guard(降级 await 窗口可能换代)再零
+ *   await 应用 + createSession。
+ * deps 注入便于 deferred 行为测试。
+ */
+export async function resolveStartedDowngradeOrCommit(args: {
+  downgrade: () => Promise<boolean>;
+  restoreStarted: () => Promise<unknown>;
+}): Promise<'downgraded' | 'commit'> {
+  const downgraded = await args.downgrade().catch(() => false);
+  if (downgraded) return 'downgraded';
+  await args.restoreStarted().catch(() => undefined);
+  return 'commit';
+}
+
 export async function compensatePrecreatedWorktree(args: {
   sessionId: string;
   recoveryKey: string;
