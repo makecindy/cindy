@@ -14,7 +14,7 @@ function createTransport(
 ) {
   let listener: ((event: SchedulerTransportEvent) => void) | null = null;
   const pushes: Array<{ peerDeviceId: string; payload: unknown }> = [];
-  const snapshotRequests: string[] = [];
+  const snapshotRequests: Array<{ accountGeneration: string; requestId: string }> = [];
   const transport: SchedulerTransport = {
     selfDeviceId: 'z',
     platform: 'darwin',
@@ -27,7 +27,8 @@ function createTransport(
       };
     },
     sendPush: (peerDeviceId, payload) => pushes.push({ peerDeviceId, payload }),
-    requestSnapshot: (requestId) => snapshotRequests.push(requestId),
+    requestSnapshot: (accountGeneration, requestId) =>
+      snapshotRequests.push({ accountGeneration, requestId }),
   };
   return {
     transport,
@@ -382,8 +383,8 @@ describe('dormant scheduler manager', () => {
     expect(manager.getDecision().state).toBe('active');
 
     manager.resetAccountDiscovery();
-    const requestId = harness.snapshotRequests.at(-1);
-    expect(requestId).toBeTruthy();
+    const request = harness.snapshotRequests.at(-1);
+    expect(request).toBeTruthy();
     expect(manager.getDecision().reason).toBe('missing-snapshot');
 
     harness.emit({
@@ -395,7 +396,8 @@ describe('dormant scheduler manager', () => {
 
     harness.emit({
       type: 'snapshot',
-      requestId,
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
       snapshot: { selfDeviceId: 'z', peers: [], observedAt: 3 },
     });
     expect(manager.getDecision().state).toBe('active');
@@ -445,5 +447,154 @@ describe('dormant scheduler manager', () => {
       },
     });
     expect(harness.pushes).toHaveLength(before);
+  });
+
+  it('ignores a late snapshot after a discovery retry starts a new round', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    const request = harness.snapshotRequests[0];
+    expect(request).toBeTruthy();
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request.accountGeneration,
+      requestId: request.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+    manager.stop();
+  });
+
+  it('accepts a current snapshot after the observed clock moves backwards', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 10 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+
+    harness.emit({ type: 'peer-presence', deviceId: 'a', platform: 'win32', online: true });
+    const request = harness.snapshotRequests.at(-1);
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 5 },
+    });
+    expect(manager.getDecision()).toEqual({
+      state: 'active',
+      channel: { channel: 'discord', identity },
+      reason: 'elected',
+    });
+  });
+
+  it('accepts a peer binding probe even when its remote clock moved backwards', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    const probe = harness.pushes.find((push) => push.peerDeviceId === 'a')?.payload as {
+      nonce?: string;
+    };
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 100,
+        channels: [],
+        inReplyTo: probe?.nonce,
+      },
+    });
+    expect(manager.getDecision().state).toBe('active');
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'probe',
+        sentAt: 10,
+        nonce: 'round-peer-00000',
+        channels: [{ channel: 'discord', identity }],
+      },
+    });
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: { channel: 'discord', identity },
+      reason: 'peer-won',
+    });
+  });
+
+  it('keeps overlapping snapshot responses isolated by request id', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 10 },
+    });
+    harness.emit({ type: 'peer-presence', deviceId: 'a', platform: 'win32', online: true });
+    const first = harness.snapshotRequests.at(-1);
+    harness.emit({ type: 'peer-presence', deviceId: 'b', platform: 'win32', online: true });
+    const second = harness.snapshotRequests.at(-1);
+    expect(first?.requestId).not.toBe(second?.requestId);
+
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: first?.accountGeneration,
+      requestId: first?.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 11 },
+    });
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: second?.accountGeneration,
+      requestId: second?.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 5 },
+    });
+    expect(manager.getDecision().state).toBe('active');
   });
 });
