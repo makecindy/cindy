@@ -520,13 +520,13 @@ function AutoBody({
   const handleAutoScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || !lastVersion) return;
-    // 1px tolerance for sub-pixel rounding in HiDPI.
-    // Guard: only apply the bottom override when the content is actually
-    // scrollable (scrollHeight > clientHeight).  Otherwise scrollTop is always 0
-    // and the condition would trivially hold at the top, causing the header to
-    // show the last version while the user is reading the newest announcement.
+				// Guard: only apply the bottom override when the content is actually
+				// scrollable.  Use +2 px threshold so that sub-pixel rounding at non-integer
+				// zoom cannot make scrollHeight − clientHeight = 1 while the content is
+				// visually unscrollable; otherwise scrollTop is always 0 and the condition
+				// would trivially hold at the top, causing the header to show the last
     if (
-      el.scrollHeight > el.clientHeight &&
+      el.scrollHeight > el.clientHeight + 1 &&
       el.scrollTop + el.clientHeight >= el.scrollHeight - 1
     ) {
       onStickyChange(lastVersion);
@@ -786,13 +786,13 @@ function ManualBody({
   const handleManualScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || !lastVersion) return;
-    // 1px tolerance for sub-pixel rounding in HiDPI.
-    // Guard: only apply the bottom override when the content is actually
-    // scrollable (scrollHeight > clientHeight).  Otherwise scrollTop is always 0
-    // and the condition would trivially hold at the top, causing the header to
-    // show the last version while the user is reading the newest announcement.
+				// Guard: only apply the bottom override when the content is actually
+				// scrollable.  Use +2 px threshold so that sub-pixel rounding at non-integer
+				// zoom cannot make scrollHeight − clientHeight = 1 while the content is
+				// visually unscrollable; otherwise scrollTop is always 0 and the condition
+				// would trivially hold at the top, causing the header to show the last
     if (
-      el.scrollHeight > el.clientHeight &&
+      el.scrollHeight > el.clientHeight + 1 &&
       el.scrollTop + el.clientHeight >= el.scrollHeight - 1
     ) {
       onStickyChange(lastVersion);
