@@ -855,9 +855,10 @@ export class GhostCindySlot {
     }
 
     // 画面参数按**解析出的型号**二次校验:协议层值域是所有 provider 的
-    // 交集,单个型号支持的时长/帧率差异很大(seedance 4/6/8/10 秒,
-    // happyhorse 只有 5 秒)。不支持即明拒并列出该型号的可用值,不做最近似
-    // 降级——静默改成别的档位会让意识以为自己的参数生效了。
+    // 交集,单个型号支持的时长/帧率差异很大(seedance 2.0 是 4/6/8/10 秒,
+    // seedance 2.5 是 4–30 秒且没有 1080p,happyhorse 只有 5 秒)。不支持即
+    // 明拒并列出该型号的可用值,不做最近似降级——静默改成别的档位会让意识
+    // 以为自己的参数生效了。
     if (info.category === 'video' && presentVideoKeys.length > 0) {
       const caps = this.deps.videoCapabilities?.(model) ?? null;
       if (caps) {
