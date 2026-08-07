@@ -1001,10 +1001,13 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('const clearVoiceStartPending = useCallback(() => {');
     expect(newSource).toContain('voiceRecordingActiveRef.current = false;\n    clearVoiceStartPending();\n    setComposerVoiceHoldArmed(false);');
     // Controller 异步报错可能发生在 start() 已 resolve 之后；页面必须立即释放
-    // 本轮 owner refs/pending，不能等一个不会再触发的 voiceState effect。
+    // 本轮 owner refs/pending，且旧 controller 的迟到错误不得覆盖当前录音状态。
     expect(newSource).toContain('const failedController = createdController;');
-    expect(newSource).toContain('voiceControllerSessionRef.current === failedController');
-    expect(newSource).toContain('voiceStartupInFlightRef.current = false;\n            voiceStopInFlightRef.current = false;\n            voiceRecordingActiveRef.current = false;\n            clearVoiceStartPending();');
+    expect(newSource).toContain(
+      'if (!failedController || voiceControllerSessionRef.current !== failedController) return;\n'
+      + '          voiceStartupSeqRef.current += 1;',
+    );
+    expect(newSource).toContain('voiceStartupInFlightRef.current = false;\n          voiceStopInFlightRef.current = false;\n          voiceRecordingActiveRef.current = false;\n          clearVoiceStartPending();');
     // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,
     // 否则按钮可点但必失败):点创建 = 停录并用最终转写创建(review 二轮收窄)。
     // 判定必须是结构化的 isNewSessionDraftMissingPayloadOnly,禁止比对本地化
