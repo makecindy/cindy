@@ -6847,37 +6847,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
             resolvedWorkDir = checked.dir;
           }
-          // useWorktree:为新 session 预建正规 session worktree(与 UI 新会话勾选
-          // worktree 同类:worktreeStore 绑定 + 关闭时 auto-stash 清理),新 session 的
-          // id 必须用预生成的那个(worktree 绑定已按它登记)。失败硬报 WORKTREE_UNAVAILABLE
-          // ——调用方显式要隔离,静默降级会让新 session 落在共享工作树里(dispatcher 若在
-          // ephemeral worktree 里跑,新 session 还会随那个 worktree 一起被回收)。
-          if (useWorktree) {
-            const prep = await prepareHandoffWorktree(
-              {
-                getForSession: worktreeManager.getForSession,
-                listAll: worktreeManager.listAll,
-                detectCwd: worktreeManager.detectCwd,
-                suggestName: worktreeManager.suggestName,
-                listBranches: worktreeManager.listBranches,
-                resolveCommit: worktreeManager.revParseCommit,
-                createWorktree: worktreeManager.createWorktree,
-                createId: () => randomUUID(),
-                resolveFreshSource: resolveFreshSourceBranch,
-              },
-              // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
-              // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
-              // dispatcher worktree 树内的**嵌套独立仓库**,捷径会跳过 detectCwd、
-              // 误用 dispatcher 的 baseRepo。去掉捷径后 detectCwd 按目录自身探测
-              // git 根;覆盖目录落在登记过的 worktree 内时,listAll 反查分支仍生效。
-              workingDirOverride !== undefined ? undefined : dispatcherSessionId,
-              resolvedWorkDir,
-            );
-            if (!prep.ok) {
-              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prep.message };
-            }
-            handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta };
-          }
           const [row] = await db
             .select()
             .from(sessions)
@@ -6935,6 +6904,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             };
           } else {
             inherited = inheritedBase;
+          }
+          // 所有可能提前失败的 workingDir / 执行配置校验完成后才创建 worktree，
+          // 避免非法 agent/model/effort/Fast 组合留下无主目录与 store 绑定。
+          // useWorktree:为新 session 预建正规 session worktree(与 UI 新会话勾选
+          // worktree 同类:worktreeStore 绑定 + 关闭时 auto-stash 清理),新 session 的
+          // id 必须用预生成的那个(worktree 绑定已按它登记)。失败硬报 WORKTREE_UNAVAILABLE
+          // ——调用方显式要隔离,静默降级会让新 session 落在共享工作树里(dispatcher 若在
+          // ephemeral worktree 里跑,新 session 还会随那个 worktree 一起被回收)。
+          if (useWorktree) {
+            const prep = await prepareHandoffWorktree(
+              {
+                getForSession: worktreeManager.getForSession,
+                listAll: worktreeManager.listAll,
+                detectCwd: worktreeManager.detectCwd,
+                suggestName: worktreeManager.suggestName,
+                listBranches: worktreeManager.listBranches,
+                resolveCommit: worktreeManager.revParseCommit,
+                createWorktree: worktreeManager.createWorktree,
+                createId: () => randomUUID(),
+                resolveFreshSource: resolveFreshSourceBranch,
+              },
+              // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
+              // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
+              // dispatcher worktree 树内的**嵌套独立仓库**,捷径会跳过 detectCwd、
+              // 误用 dispatcher 的 baseRepo。去掉捷径后 detectCwd 按目录自身探测
+              // git 根;覆盖目录落在登记过的 worktree 内时,listAll 反查分支仍生效。
+              workingDirOverride !== undefined ? undefined : dispatcherSessionId,
+              resolvedWorkDir,
+            );
+            if (!prep.ok) {
+              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prep.message };
+            }
+            handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta };
           }
         } else {
           if (useWorktree) {
