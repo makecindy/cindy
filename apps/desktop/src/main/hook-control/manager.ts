@@ -937,6 +937,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function activateCurrentAccount(): void {
     if (accountActive || disposed) return;
     accountActive = true;
+    // 新账号的档位要重新拉 —— 沿用上一位主人的选择就是串台。
+    resetTelegramEmojiReactions();
     // 群窗口生命周期兼容入口(永久保留模式下是 no-op)。仍纳入
     // pendingAccountOps，保证未来若恢复本地维护动作也受账号 DB 边界保护。
     trackAccountOp(sweepGroupWindowExpired());
@@ -1103,6 +1105,45 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
    * 的全局开关, 而 Telegram lane 与 binding 一一对应。
    */
   let telegramEmojiReactions: TelegramEmojiReactions = DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions;
+
+  /**
+   * 把最新档位落进缓存并转告 dispatcher(ack 表情按它决定发什么、发不发)。
+   */
+  function adoptTelegramEmojiReactions(next: TelegramEmojiReactions): void {
+    telegramEmojiReactions = next;
+    dispatcher?.setEmojiReactionsMode(next);
+  }
+
+  /**
+   * 账号切换/停用时回到协议基线。
+   *
+   * 档位是 per-binding 的用户设置 —— 换个账号还沿用上一位主人的选择就是串台。
+   * 与 serverFeatures 的清理同理由: 留着比没有更糟。
+   */
+  function resetTelegramEmojiReactions(): void {
+    adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions);
+  }
+
+  /**
+   * 连接就绪即主动拉一次表情档位。
+   *
+   * 之前只在收到 provider.behavior.state 时才更新 —— 那要等用户打开 Settings
+   * 页面, 或等服务端主动推。在那之前的每一次派发都按 minimal 发表情, 用户明明
+   * 关掉了却照发。绑定未确认 / 服务端不支持 behavior 时静默跳过(getTelegramBehavior
+   * 自己会短路)。
+   */
+  function primeTelegramEmojiReactions(): void {
+    const bindingId =
+      telegramLane.binding?.state === 'confirmed' ? telegramLane.binding.bindingId : null;
+    if (bindingId === null) return;
+    void sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
+      makeProviderBehaviorGet({
+        requestId,
+        provider: 'telegram',
+        bindingId: currentBindingId,
+      }),
+    ).catch(() => undefined);
+  }
 
   function telegramBehaviorView(payload: ProviderBehaviorStatePayload): TelegramHookBehaviorState {
     return {
@@ -2188,8 +2229,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           return;
         }
         const view = telegramBehaviorView(msg.payload);
-        telegramEmojiReactions = view.emojiReactions;
-        dispatcher?.setEmojiReactionsMode(telegramEmojiReactions);
+        adoptTelegramEmojiReactions(view.emojiReactions);
         pending.resolve(view);
         notifyTelegramBehavior?.(view);
         return;
@@ -2199,8 +2239,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return;
       }
       const pushedView = telegramBehaviorView(msg.payload);
-      telegramEmojiReactions = pushedView.emojiReactions;
-      dispatcher?.setEmojiReactionsMode(telegramEmojiReactions);
+      adoptTelegramEmojiReactions(pushedView.emojiReactions);
       notifyTelegramBehavior?.(pushedView);
       return;
     }
@@ -2659,6 +2698,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           // deploy without another status transition.
           const t = created;
           dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
+          if (provider === 'telegram') primeTelegramEmojiReactions();
         }
         notifyStatus(toView());
       },
@@ -2674,6 +2714,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         if (s === 'connected' && laneCapabilityReady(lane)) {
           const t = created;
           dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
+          if (provider === 'telegram') primeTelegramEmojiReactions();
         }
         notifyStatus(toView());
       },
@@ -3095,6 +3136,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // when another caller is already waiting on the same physical drain.
       accountActive = false;
       accountGeneration += 1;
+      resetTelegramEmojiReactions();
       for (const lane of lanes) {
         lane.openRequestId = null;
         lane.bindRequest = null;

@@ -2488,7 +2488,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
     },
     onMessageOpResult(payload: MessageOpResultPayload) {
-      ackReactions.onResult(payload);
+      // 带上按连接取发送函数的钩子: 群限制了可用表情时要用基础款回落一次,
+      // 而该发到哪条连接由 ackReactions 自己记的 task 决定。
+      ackReactions.onResult(payload, (connectionId) => sendFns.get(connectionId));
     },
     setEmojiReactionsMode(mode: TelegramEmojiReactions) {
       emojiReactionsMode = mode;
@@ -2499,6 +2501,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 老实例不宣告 turn.reopen 时必须立刻停用回流, 不能拿上一次的快照发帧。
       serverFeatures.set(connectionId, features ? [...features] : []);
       sendFns.set(connectionId, send);
+      // 断线时没送出去的终态表情在这里补 —— 否则那条消息永远挂着 👀。
+      // opId 由 requestId 派生, 服务端按它去重, 补发不会打出第二个。
+      ackReactions.onReconnected(connectionId, send);
       const deliveryAck = supportsDeliveryAck(connectionId);
       for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
         if (pending.connectionId !== connectionId) continue;

@@ -152,6 +152,66 @@ describe('官方 bot ack 表情', () => {
     });
   });
 
+  describe('断线与受限表情', () => {
+    it('终态送不出去 → 重连时补发, 不让消息永远挂着 👀', () => {
+      const h = harness();
+      const offline = vi.fn(() => false);
+      h.reactions.onAccepted(TASK, h.send);
+      h.reactions.onFinished(TASK, 'ok', offline); // 断线
+      expect(h.sent).toHaveLength(1); // 只有 👀
+
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.sent).toHaveLength(2);
+      expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+      // 幂等键不变 —— 服务端据此去重, 补发不会打出第二个表情。
+      expect(opOf(h.sent[1]).opId).toBe('req-1:final');
+    });
+
+    it('补发只补自己那条连接的, 且只补一次', () => {
+      const h = harness();
+      h.reactions.onFinished(TASK, 'ok', vi.fn(() => false));
+      h.reactions.onReconnected('another-conn', h.send);
+      expect(h.send).not.toHaveBeenCalled();
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.sent).toHaveLength(1);
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.sent).toHaveLength(1);
+    });
+
+    it('expressive 的表情被群拒绝 → 换新幂等键回落基础款', () => {
+      // 群可以限制 available_reactions, 随机出的那款可能不在名单里。沿用旧
+      // opId 会被服务端当成重复直接返回上一次的失败, 所以必须换键。
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      const firstOpId = opOf(h.sent[0]).opId;
+      h.reactions.onResult({ opId: firstOpId, ok: false, error: 'REACTION_INVALID' }, () => h.send);
+      expect(h.sent).toHaveLength(2);
+      expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+      expect(opOf(h.sent[1]).opId).toBe('req-1:final-fallback');
+      expect(opOf(h.sent[1]).opId).not.toBe(firstOpId);
+    });
+
+    it('基础款再被拒就认了 —— 不无限回落', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      const firstOpId = opOf(h.sent[0]).opId;
+      h.reactions.onResult({ opId: firstOpId, ok: false, error: 'x' }, () => h.send);
+      h.reactions.onResult(
+        { opId: 'req-1:final-fallback', ok: false, error: 'x' },
+        () => h.send,
+      );
+      expect(h.sent).toHaveLength(2);
+    });
+
+    it('minimal 档的失败不回落 —— 基础款没有更基础的可退', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal');
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      h.reactions.onResult({ opId: 'req-1:final', ok: false, error: 'x' }, () => h.send);
+      expect(h.sent).toHaveLength(1);
+      expect(h.warn).toHaveBeenCalled();
+    });
+  });
+
   it('回执失败只记一行, 不抛不重试(表情是装饰, 不能影响任务)', () => {
     const h = harness();
     h.reactions.onResult({ opId: 'req-1:ack', ok: false, error: 'message not in lane' });
