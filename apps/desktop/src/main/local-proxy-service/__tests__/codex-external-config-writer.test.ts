@@ -21,6 +21,7 @@ import {
 } from '../codex-external-config-writer';
 
 const URL = 'http://127.0.0.1:51888';
+// test fixture — not a real token. 虚构的 Cindy 本地代理 token 占位值,仅供单测。
 const TOKEN = 'cindy-local-abcdef';
 
 let dir: string;
@@ -114,7 +115,9 @@ describe('codex-external-config-writer — preview', () => {
   // Finding G:proposedToml 只回 Cindy 会改动的两处片段,绝不把用户既有的其它 provider / MCP
   // 凭证 merge 进去回给 renderer。受注入的渲染进程只要调预览就能读走整份配置里的密文。
   it('proposedToml 不含用户既有的其它 provider 块及其密文(只含 cindy_external)', () => {
-    const OTHER_PROVIDER_SECRET = 'sk-other-provider-secret-key';
+    // test fixture — not a real key. 虚构占位值,仅用于断言预览会把「用户既有的其它 provider
+    // 密文」剔除(见下方 not.toContain 断言);sk- 前缀纯为触发/模拟真实密钥形状,并非真实凭证。
+    const OTHER_PROVIDER_SECRET = 'sk-not-a-real-key-test-fixture';
     writeFileSync(
       configPath(),
       [
@@ -126,14 +129,15 @@ describe('codex-external-config-writer — preview', () => {
         `api_key = "${OTHER_PROVIDER_SECRET}"`,
         '',
         '[mcp_servers.secret_tool]',
-        'auth_token = "mcp-secret-token-xyz"',
+        // test fixture — not a real token. 同上,虚构值,用于断言 MCP 段密文不进预览。
+        'auth_token = "not-a-real-token-test-fixture"',
       ].join('\n'),
       'utf8',
     );
     const preview = previewCodexConfig(URL, TOKEN);
     // 既有密文绝不出现在预览里。
     expect(preview.proposedToml).not.toContain(OTHER_PROVIDER_SECRET);
-    expect(preview.proposedToml).not.toContain('mcp-secret-token-xyz');
+    expect(preview.proposedToml).not.toContain('not-a-real-token-test-fixture');
     expect(preview.proposedToml).not.toContain('model_providers.other');
     expect(preview.proposedToml).not.toContain('mcp_servers');
     // 只含 Cindy 会写的那两处。
