@@ -256,6 +256,23 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('does not close an already-default host-MCP session when SDK init reports settings MCPs', async () => {
+    const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      mcpProviderNames: ['cindy_orca'],
+      initMcpServerNames: ['cindy_orca', 'settings_prompt_mcp'],
+      blockMcpServerStatus: true,
+      rejectPermissionModeChange: true,
+    });
+
+    expect(queryPermissionMode).toBe('default');
+    await vi.waitFor(() => expect(fakeQuery.mcpServerStatus).toHaveBeenCalled());
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('uses SDK default for official Claude OAuth when a host MCP is registered', async () => {
     const { handle, canUseTool, queryPermissionMode, seen } = await startSession('auto', {
       providerId: 'anthropic',
