@@ -149,7 +149,13 @@ async function searchLike(
     excludeMatch === null
       ? ''
       : `AND m.id NOT IN (
-           SELECT rowid FROM ${FTS_TABLE} WHERE ${FTS_TABLE} MATCH ?
+           SELECT ${FTS_TABLE}.rowid
+             FROM ${FTS_TABLE}
+             JOIN hook_group_messages matched ON matched.id = ${FTS_TABLE}.rowid
+            WHERE ${FTS_TABLE} MATCH ?
+              AND matched.provider = ?
+              AND matched.chat_id = ?
+              AND matched.thread_id = ?
          )`;
   const sql = `
     SELECT m.id AS id,
@@ -173,7 +179,7 @@ async function searchLike(
      ORDER BY m.sent_at DESC, m.id DESC
      LIMIT ?`;
   const params: unknown[] = [lane.provider, lane.chatId, lane.threadId, pattern, pattern, pattern];
-  if (excludeMatch !== null) params.push(excludeMatch);
+  if (excludeMatch !== null) params.push(excludeMatch, lane.provider, lane.chatId, lane.threadId);
   params.push(limit);
   const rows = await getDbClient().query<SearchRow>(sql, params);
   return mapRows(rows, 'like');

@@ -1,7 +1,8 @@
 /**
  * groupWindow(group-relay-v1 本地群窗口)单测: 入窗幂等、永久留存、lane 解析、
  * 上下文拼装(trigger 剔重 / 游标增量 / 字符预算)。DB 用内存 better-sqlite3
- * 直接执行 0083 + 0086 migration SQL, 经 drizzle 同步 driver 假装成 DbClient。
+ * 直接执行 0083 / 0086 / 0087 / 0088 migration SQL, 经 drizzle 同步 driver
+ * 假装成 DbClient。
  */
 
 import fs from 'node:fs';
@@ -40,7 +41,7 @@ function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../drizzle');
-  return ['0083_', '0086_']
+  return ['0083_', '0086_', '0087_', '0088_']
     .map((prefix) => {
       const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
       if (!file) throw new Error(`${prefix} migration not found`);

@@ -2,10 +2,14 @@
 
 import { createHash } from 'node:crypto';
 
-import { count, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, lt, notExists } from 'drizzle-orm';
 
 import { getDbClient } from '../../localDb/client/current';
-import { hookGroupContextCursors, hookGroupMessages } from '../../localDb/schema';
+import {
+  hookGroupContextCursors,
+  hookGroupMessages,
+  hookGroupMessageStats,
+} from '../../localDb/schema';
 import { createLogger } from '../../logger';
 
 export const GROUP_WINDOW_ENTRY_TEXT_MAX_BYTES = 16 * 1024;
@@ -64,11 +68,12 @@ export async function getGroupWindowNamespaceStats(
 ): Promise<{ rows: number; textBytes: number }> {
   const [row] = await getDbClient()
     .drizzle.select({
-      rows: count(),
-      textBytes: sql<number>`coalesce(sum(length(CAST(${hookGroupMessages.text} AS BLOB))), 0)`,
+      rows: hookGroupMessageStats.rowCount,
+      textBytes: hookGroupMessageStats.textBytes,
     })
-    .from(hookGroupMessages)
-    .where(eq(hookGroupMessages.provider, provider));
+    .from(hookGroupMessageStats)
+    .where(eq(hookGroupMessageStats.provider, provider))
+    .limit(1);
   return { rows: Number(row?.rows ?? 0), textBytes: Number(row?.textBytes ?? 0) };
 }
 
@@ -99,11 +104,25 @@ export async function maybeLogGroupWindowNamespaceStats(
 }
 
 export async function sweepExpiredGroupWindowCursors(now = Date.now()): Promise<number> {
-  const removed = await getDbClient()
-    .drizzle.delete(hookGroupContextCursors)
-    .where(lt(hookGroupContextCursors.updatedAt, now - GROUP_CONTEXT_CURSOR_RETENTION_MS))
-    .returning({ cursorKey: hookGroupContextCursors.cursorKey });
-  return removed.length;
+  const db = getDbClient().drizzle;
+  const result = await db
+    .delete(hookGroupContextCursors)
+    .where(
+      and(
+        lt(hookGroupContextCursors.updatedAt, now - GROUP_CONTEXT_CURSOR_RETENTION_MS),
+        // cursor_key 是各车道的稳定 opaque scope，不能可靠反解 chat/thread。
+        // 只在整个 provider 已无消息时清理，避免永久历史或官方保留窗口重启后重放。
+        notExists(
+          db
+            .select({ id: hookGroupMessages.id })
+            .from(hookGroupMessages)
+            .where(eq(hookGroupMessages.provider, hookGroupContextCursors.provider))
+            .limit(1),
+        ),
+      ),
+    )
+    .run();
+  return result.changes;
 }
 
 export async function maybeSweepExpiredGroupWindowCursors(now = Date.now()): Promise<void> {

@@ -5,7 +5,10 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const holder = vi.hoisted(() => ({ client: null as unknown }));
+const holder = vi.hoisted(() => ({
+  client: null as unknown,
+  queries: [] as Array<{ sql: string; params: unknown[] }>,
+}));
 
 vi.mock('../../../localDb/client/current', () => ({
   getDbClient: () => holder.client,
@@ -15,6 +18,7 @@ vi.mock('../../../localDb/client/current', () => ({
 import {
   GROUP_CONTEXT_CURSOR_RETENTION_MS,
   GROUP_WINDOW_ENTRY_TEXT_MAX_BYTES,
+  assembleGroupWindowContext,
   getGroupWindowNamespaceStats,
   recordGroupWindowEntry,
   sweepExpiredGroupWindowCursors,
@@ -35,9 +39,16 @@ let rawSequence = 0;
 function installClient(): void {
   holder.client = {
     drizzle: drizzle(sqlite),
-    query: async <T>(sql: string, params: unknown[] = []) =>
-      sqlite.prepare(sql).all(...params) as T[],
+    query: async <T>(sql: string, params: unknown[] = []) => {
+      holder.queries.push({ sql, params });
+      return sqlite.prepare(sql).all(...params) as T[];
+    },
   };
+}
+
+function installGroupHistoryMigrations(): void {
+  sqlite.exec(readMigration('0087_'));
+  sqlite.exec(readMigration('0088_'));
 }
 
 function insertRaw(
@@ -84,6 +95,8 @@ beforeEach(() => {
   sqlite = new Database(':memory:');
   sqlite.exec(readMigration('0083_'));
   sqlite.exec(readMigration('0086_'));
+  rawSequence = 0;
+  holder.queries = [];
   installClient();
 });
 
@@ -92,15 +105,19 @@ afterEach(() => sqlite.close());
 describe('group history FTS', () => {
   it('migration 回填老行，并用仓内 LIKE 兜底召回中文子串', async () => {
     insertRaw({ messageId: 'legacy', text: '发布边界索引配置说明' });
-    sqlite.exec(readMigration('0087_'));
+    installGroupHistoryMigrations();
 
     const hits = await searchGroupHistory({ lane: LANE, query: '边界' });
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ messageId: 'legacy', source: 'like' });
+    await expect(getGroupWindowNamespaceStats(LANE.provider)).resolves.toEqual({
+      rows: 1,
+      textBytes: Buffer.byteLength('发布边界索引配置说明', 'utf8'),
+    });
   });
 
   it('MATCH 与 LIKE 都在 SQL 内强制 provider/chat/thread lane 隔离', async () => {
-    sqlite.exec(readMigration('0087_'));
+    installGroupHistoryMigrations();
     insertRaw({ messageId: 'allowed', text: 'deploy rollback checklist' });
     insertRaw({
       provider: 'telegram:owner-b',
@@ -132,6 +149,17 @@ describe('group history FTS', () => {
     const cjkHits = await searchGroupHistory({ lane: LANE, query: '边界' });
     expect(cjkHits.map((hit) => hit.messageId)).toEqual(['allowed-cjk']);
     expect(cjkHits[0]?.source).toBe('like');
+    const likeQuery = holder.queries.findLast(({ sql }) => sql.includes('NOT IN'));
+    expect(likeQuery?.sql).toContain('matched.provider = ?');
+    expect(likeQuery?.sql).toContain('matched.chat_id = ?');
+    expect(likeQuery?.sql).toContain('matched.thread_id = ?');
+    expect(likeQuery?.params.slice(-5)).toEqual([
+      '"边界"',
+      LANE.provider,
+      LANE.chatId,
+      LANE.threadId,
+      8,
+    ]);
 
     await expect(
       searchGroupHistory({ lane: { ...LANE, provider: '' }, query: 'rollback' }),
@@ -139,7 +167,7 @@ describe('group history FTS', () => {
   });
 
   it('insert/update/delete 触发器保持派生索引同步', async () => {
-    sqlite.exec(readMigration('0087_'));
+    installGroupHistoryMigrations();
     await recordGroupWindowEntry({
       ...LANE,
       messageId: 'live',
@@ -162,6 +190,7 @@ describe('group history FTS', () => {
 
 describe('group window storage guardrails', () => {
   it('正文按 UTF-8 约 16KB 硬上限安全截断，统计按命名空间给出行数与字节', async () => {
+    installGroupHistoryMigrations();
     const text = '中'.repeat(6_000);
     await recordGroupWindowEntry({
       ...LANE,
@@ -181,28 +210,84 @@ describe('group window storage guardrails', () => {
     });
   });
 
-  it('游标 retention 只删除 180 天未更新行', async () => {
+  it('容量统计由 migration 回填和触发器增量维护，不扫描永久历史', async () => {
+    let expectedBytes = 0;
+    const insertHistory = sqlite.transaction(() => {
+      for (let index = 0; index < 1_000; index += 1) {
+        const text = `永久历史-${index}`;
+        expectedBytes += Buffer.byteLength(text, 'utf8');
+        insertRaw({ text });
+      }
+    });
+    insertHistory();
+    installGroupHistoryMigrations();
+
+    await expect(getGroupWindowNamespaceStats(LANE.provider)).resolves.toEqual({
+      rows: 1_000,
+      textBytes: expectedBytes,
+    });
+
+    await recordGroupWindowEntry({
+      ...LANE,
+      messageId: 'incremental',
+      author: { name: 'alice' },
+      text: '新增正文',
+      sentAt: Date.now(),
+    });
+    expectedBytes += Buffer.byteLength('新增正文', 'utf8');
+    await expect(getGroupWindowNamespaceStats(LANE.provider)).resolves.toEqual({
+      rows: 1_001,
+      textBytes: expectedBytes,
+    });
+
+    sqlite.prepare('DELETE FROM hook_group_messages WHERE message_id = ?').run('incremental');
+    await expect(getGroupWindowNamespaceStats(LANE.provider)).resolves.toEqual({
+      rows: 1_000,
+      textBytes: expectedBytes - Buffer.byteLength('新增正文', 'utf8'),
+    });
+    const plan = sqlite
+      .prepare(
+        'EXPLAIN QUERY PLAN SELECT row_count, text_bytes FROM hook_group_message_stats WHERE provider = ?',
+      )
+      .all(LANE.provider) as Array<{ detail: string }>;
+    expect(plan.some(({ detail }) => detail.includes('SEARCH hook_group_message_stats'))).toBe(
+      true,
+    );
+  });
+
+  it('仍有历史时保留过期高水位，重启或内存淘汰后不重复回放', async () => {
+    installGroupHistoryMigrations();
+    insertRaw({ messageId: 'before-restart', text: '已经消费的群历史' });
+    const cursorKey = 'stable-lane';
+    const assemble = (cursors: Map<string, number>) =>
+      assembleGroupWindowContext({
+        ...LANE,
+        cursors,
+        cursorKey,
+        triggerMessageId: null,
+        neutralize: (value) => value,
+        log: { info: vi.fn(), warn: vi.fn() } as never,
+      });
+
+    const initial = await assemble(new Map());
+    expect(initial.prefix).toContain('已经消费的群历史');
+    await initial.commit();
+
     const now = Date.now();
     sqlite
-      .prepare(
-        `INSERT INTO hook_group_context_cursors (provider, cursor_key, cursor_id, updated_at)
-         VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
-      )
-      .run(
-        LANE.provider,
-        'stale',
-        1,
-        now - GROUP_CONTEXT_CURSOR_RETENTION_MS - 1,
-        LANE.provider,
-        'fresh',
-        2,
-        now - GROUP_CONTEXT_CURSOR_RETENTION_MS + 1,
-      );
+      .prepare('UPDATE hook_group_context_cursors SET updated_at = ? WHERE cursor_key = ?')
+      .run(now - GROUP_CONTEXT_CURSOR_RETENTION_MS - 1, cursorKey);
 
+    await expect(sweepExpiredGroupWindowCursors(now)).resolves.toBe(0);
+    const restarted = await assemble(new Map());
+    expect(restarted.prefix).toBe('');
+
+    sqlite.prepare('DELETE FROM hook_group_messages WHERE provider = ?').run(LANE.provider);
     await expect(sweepExpiredGroupWindowCursors(now)).resolves.toBe(1);
-    const rows = sqlite
-      .prepare('SELECT cursor_key AS cursorKey FROM hook_group_context_cursors ORDER BY cursor_key')
-      .all() as Array<{ cursorKey: string }>;
-    expect(rows).toEqual([{ cursorKey: 'fresh' }]);
+    expect(
+      sqlite
+        .prepare('SELECT count(*) AS count FROM hook_group_context_cursors WHERE provider = ?')
+        .get(LANE.provider),
+    ).toEqual({ count: 0 });
   });
 });
