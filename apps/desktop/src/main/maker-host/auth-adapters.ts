@@ -386,9 +386,14 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
  * 失败仅 stderr 告警, 不抛 —— userData ACL + 0o600 已经是双保险, icacls 是第三道。
  */
 async function tightenAclWindows(file: string): Promise<void> {
-  const username = process.env.USERNAME ?? os.userInfo().username;
   try {
-    await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${username}:F`]);
+    // `USERNAME` 是裸名；在域/沙箱账号下 icacls 可能把它解析成不完整的
+    // `DOMAIN\\` SID，反而让刚登录写入的 auth.json 无法再读写。whoami 给出
+    // icacls 能稳定解析的完整 Windows principal（例如 DOMAIN\\user）。
+    const { stdout } = await execFileP('whoami');
+    const principal = String(stdout).trim();
+    if (!principal) throw new Error('whoami returned an empty principal');
+    await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${principal}:F`]);
   } catch (err) {
     credPathLog.warn('icacls failed', { file, error: (err as Error).message });
   }

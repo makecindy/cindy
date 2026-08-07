@@ -5372,9 +5372,6 @@ interface ElectronAPI {
       cb: (data: unknown, ownerStamp?: unknown) => void,
     ) => () => void;
     onEvent: (cb: (data: unknown) => void) => () => void;
-    onSessionProgressChanged: (
-      cb: (data: import('../shared/ghost').GhostPlanProgressSnapshot) => void,
-    ) => () => void;
     onStatusChanged: (cb: (data: unknown) => void) => () => void;
     onInteractionRequest: (cb: (data: unknown) => void) => () => void;
     onInteractionDismissed: (cb: (data: unknown) => void) => () => void;

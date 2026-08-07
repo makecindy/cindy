@@ -57,7 +57,7 @@ describe('PlanSlot', () => {
   it('把合法 plan-update 投影到 Host 当前可信任务', async () => {
     const { slot, projector } = harness();
     await expect(slot.handleUpdate('planner', valid)).resolves.toEqual({ ok: true });
-    expect(projector).toHaveBeenCalledWith(trustedContext, {
+    expect(projector).toHaveBeenCalledWith('update', 'planner', trustedContext, {
       explanation: valid.explanation,
       plan: valid.plan,
     });
@@ -80,7 +80,7 @@ describe('PlanSlot', () => {
     const { slot, projector } = harness();
     const empty = { type: 'plan-update', plan: [] } as const;
     await expect(slot.handleUpdate('planner', empty)).resolves.toEqual({ ok: true });
-    expect(projector).toHaveBeenCalledWith(trustedContext, { plan: [] });
+    expect(projector).toHaveBeenCalledWith('update', 'planner', trustedContext, { plan: [] });
   });
 
   it('未声明 plan capability 时拒绝', async () => {
@@ -166,11 +166,11 @@ describe('PlanSlot', () => {
     } as const;
     await slot.handleUpdate('planner', replacement);
 
-    expect(projector).toHaveBeenNthCalledWith(1, trustedContext, {
+    expect(projector).toHaveBeenNthCalledWith(1, 'update', 'planner', trustedContext, {
       explanation: valid.explanation,
       plan: valid.plan,
     });
-    expect(projector).toHaveBeenNthCalledWith(2, trustedContext, {
+    expect(projector).toHaveBeenNthCalledWith(2, 'update', 'planner', trustedContext, {
       plan: replacement.plan,
     });
   });
@@ -185,7 +185,27 @@ describe('PlanSlot', () => {
       ],
     } as const;
     await expect(slot.handleUpdate('planner', completed)).resolves.toEqual({ ok: true });
-    expect(projector).toHaveBeenCalledWith(trustedContext, { plan: completed.plan });
+    expect(projector).toHaveBeenCalledWith('update', 'planner', trustedContext, { plan: completed.plan });
+  });
+
+  it('plan-create 显式请求开始新的 Plan 生命周期', async () => {
+    const { slot, projector } = harness();
+    const created = { ...valid, type: 'plan-create' } as const;
+
+    await expect(slot.handleCreate('planner', created)).resolves.toEqual({ ok: true });
+    expect(projector).toHaveBeenCalledWith('create', 'planner', trustedContext, {
+      explanation: created.explanation,
+      plan: created.plan,
+    });
+  });
+
+  it('create/update 入口拒绝另一种操作的 payload', async () => {
+    const { slot, projector } = harness();
+    await expect(slot.handleCreate('planner', valid)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_PARAMS',
+    });
+    expect(projector).not.toHaveBeenCalled();
   });
 
   it('限制单个 Ghost 紧循环更新 Plan', async () => {

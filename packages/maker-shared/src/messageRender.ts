@@ -185,7 +185,10 @@ export type MessageRenderItem<
   | MessageRenderAgentTaskItem<TMessage>
   | MessageRenderWorkGroupItem<TMessage>;
 
-export type MessageRenderTodoSource = 'todo' | 'codex' | 'task';
+export type MessageRenderTodoSource = 'todo' | 'codex' | 'ghost' | 'task';
+
+/** Host-persisted Plan snapshot emitted by a Ghost plugin, not an agent event. */
+export const GHOST_PLAN_TOOL_NAME = 'ghost_plan_update';
 
 export interface MessageRenderTodoInsertion {
   key: string;
@@ -483,7 +486,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 
 /**
  * 常驻计划面板(composer 上方钉住式)用:取整段会话里**最近一次更新**的 plan
- * session 快照 —— 跨 source(TodoWrite / update_plan / Task*)按消息位置取最大者。
+ * session 快照 —— 跨 source(TodoWrite / update_plan / Ghost / Task*)按消息位置取最大者。
  * 面板只展示"当前计划"一份,历史 session 不再逐张呈现。
  * 没有任何 plan 调用时返回 null(面板不渲染、不占位)。
  */
@@ -640,12 +643,17 @@ function samePlanSnapshot(left: unknown[], right: unknown[]): boolean {
 }
 
 export function isAgentPlanToolName(toolName: string | undefined): boolean {
-  return toolName === 'TodoWrite' || toolName === 'update_plan' || Boolean(toolName && TASK_PLAN_TOOL_NAMES.has(toolName));
+  return (
+    toolName === 'TodoWrite'
+    || toolName === 'update_plan'
+    || toolName === GHOST_PLAN_TOOL_NAME
+    || Boolean(toolName && TASK_PLAN_TOOL_NAMES.has(toolName))
+  );
 }
 
 export function extractPlanTodos(toolName: string | undefined, toolInput: unknown): MessageRenderTodoItem[] | null {
   if (toolName === 'TodoWrite') return extractTodos(toolInput);
-  if (toolName !== 'update_plan') return null;
+  if (toolName !== 'update_plan' && toolName !== GHOST_PLAN_TOOL_NAME) return null;
 
   const input = readRecord(toolInput);
   const structured = extractStructuredPlanItems(input?.items) ?? extractStructuredPlanItems(input?.plan);
@@ -689,7 +697,7 @@ function isExplicitPlanClearEvent(message: MessageRenderSourceMessageLike): bool
   const toolName = toolNameOf(message);
   const input = readRecord(toolInputOf(message));
   if (toolName === 'TodoWrite') return Array.isArray(input?.todos) && input.todos.length === 0;
-  if (toolName === 'update_plan') {
+  if (toolName === 'update_plan' || toolName === GHOST_PLAN_TOOL_NAME) {
     return (
       (Array.isArray(input?.items) && input.items.length === 0) ||
       (Array.isArray(input?.plan) && input.plan.length === 0) ||
@@ -882,6 +890,7 @@ function isAgentPlanToolResult(
 function agentPlanSource(toolName: string | undefined): MessageRenderTodoSource | null {
   if (toolName === 'TodoWrite') return 'todo';
   if (toolName === 'update_plan') return 'codex';
+  if (toolName === GHOST_PLAN_TOOL_NAME) return 'ghost';
   if (toolName && TASK_PLAN_TOOL_NAMES.has(toolName)) return 'task';
   return null;
 }

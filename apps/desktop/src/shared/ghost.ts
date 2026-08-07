@@ -4499,7 +4499,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
  *
  * 上行(电子脑 → 主机,cindy.send(payload) = ipcRenderer.invoke):
  *   - tool-result:交卷。
- *   - plan-update:plan 槽把完整 Codex update_plan 快照投影到当前可信任务。
+ *   - plan-create / plan-update:plan 槽创建或更新插件自己的完整 Plan 快照。
  *   - host-request:读取宿主公开上下文。目前只支持 app-context(region + locale),
  *     无需声明卡槽、无用户数据与凭证内容。
  *   - cindy-request(旧名 model-request 兼容):cindy 槽代办(意识请 Cindy 本体干活;invoke 的返回值即结果,
@@ -4558,25 +4558,21 @@ export interface GhostPlanItem {
  * 上行:把一份完整 Codex update_plan 快照投影到当前可信任务的 Plan UI。
  * 目标任务只由 Host 当前上下文决定；payload 不接受 sessionId 或任何其它字段。
  */
+export interface GhostPipePlanCreate {
+  type: 'plan-create';
+  explanation?: string;
+  plan: GhostPlanItem[];
+}
+
 export interface GhostPipePlanUpdate {
   type: 'plan-update';
   explanation?: string;
   plan: GhostPlanItem[];
 }
 
-/**
- * Host-owned, in-memory projection of a plugin progress update. This is a UI
- * push payload, not a conversation message or persistence contract.
- */
-export interface GhostPlanProgressSnapshot {
-  sessionId: string;
-  sessionInstanceId: string;
-  explanation?: string;
-  plan: GhostPlanItem[];
-  updatedAtMs: number;
-}
+export type GhostPipePlanPayload = GhostPipePlanCreate | GhostPipePlanUpdate;
 
-export type GhostPipePlanUpdateResult =
+export type GhostPipePlanResult =
   | { ok: true }
   | {
       ok: false;
@@ -4590,8 +4586,10 @@ export type GhostPipePlanUpdateResult =
       message: string;
     };
 
+export type GhostPipePlanUpdateResult = GhostPipePlanResult;
+
 export type GhostPlanPayloadValidation =
-  | { ok: true; value: GhostPipePlanUpdate }
+  | { ok: true; value: GhostPipePlanPayload }
   | { ok: false; message: string };
 
 /** Plan UI 投影的资源边界；避免有权限的故障插件用超大快照阻塞 Main/Renderer。 */
@@ -4601,17 +4599,19 @@ export const GHOST_PLAN_MAX_STEP_CHARS = 4_000;
 export const GHOST_PLAN_MAX_TOTAL_TEXT_CHARS = 64_000;
 
 /** 运行期精确 schema 校验；拒绝增量 patch 与未声明字段，允许零任务完整快照。 */
-export function validateGhostPlanUpdatePayload(payload: unknown): GhostPlanPayloadValidation {
-  if (!isPlainObject(payload)) return { ok: false, message: 'plan-update 载荷必须是对象' };
+export function validateGhostPlanPayload(payload: unknown): GhostPlanPayloadValidation {
+  if (!isPlainObject(payload)) return { ok: false, message: 'Plan 载荷必须是对象' };
   const allowedRootKeys = new Set(['type', 'explanation', 'plan']);
   const extraRootKey = Object.keys(payload).find((key) => !allowedRootKeys.has(key));
   if (extraRootKey) {
     return {
       ok: false,
-      message: `plan-update 不允许字段 ${JSON.stringify(extraRootKey)}`,
+      message: `Plan 载荷不允许字段 ${JSON.stringify(extraRootKey)}`,
     };
   }
-  if (payload.type !== 'plan-update') return { ok: false, message: 'type 必须是 plan-update' };
+  if (payload.type !== 'plan-create' && payload.type !== 'plan-update') {
+    return { ok: false, message: 'type 必须是 plan-create 或 plan-update' };
+  }
   if (payload.explanation !== undefined && typeof payload.explanation !== 'string') {
     return { ok: false, message: 'explanation 必须是字符串' };
   }
@@ -4668,7 +4668,7 @@ export function validateGhostPlanUpdatePayload(payload: unknown): GhostPlanPaylo
   return {
     ok: true,
     value: {
-      type: 'plan-update',
+      type: payload.type,
       ...(payload.explanation !== undefined ? { explanation: payload.explanation } : {}),
       plan,
     },

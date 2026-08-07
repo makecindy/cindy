@@ -560,7 +560,6 @@ const fanOutHookControlWorkspaceProviderSource = createIpcFanOut(
 
 // ─── Maker Core 一阶段重构（新链路）── 与 cc-agent:* / codex:* 双轨并行 ─────
 const fanOutMakerEvent = createIpcFanOut('maker:event');
-const fanOutMakerSessionProgressChanged = createIpcFanOut('maker:session-progress-changed');
 const fanOutMakerTurnChangeSetUpdated = createIpcFanOut('maker:turn-change-set:updated');
 const fanOutMakerStatusChanged = createIpcFanOut('maker:status-changed');
 const fanOutMakerInputProjection = createIpcFanOut('maker:input:projection');
@@ -5751,7 +5750,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 事件订阅
     onEvent: fanOutMakerEvent,
-    onSessionProgressChanged: fanOutMakerSessionProgressChanged,
     onTurnChangeSetUpdated: fanOutMakerTurnChangeSetUpdated,
     onStatusChanged: fanOutMakerStatusChanged,
     onInputProjection: fanOutMakerInputProjection,

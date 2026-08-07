@@ -1,21 +1,23 @@
 /**
- * planSlot.ts — Ghost `plan-update` 接口槽。
+ * planSlot.ts — Ghost Plan 接口槽。
  *
- * 插件只提交完整 Codex update_plan 快照；目标任务来自 Host 当前可信上下文。
+ * 插件提交完整 Plan 快照；目标任务来自 Host 当前可信上下文。
  * 本槽不保存 Plan、不做推理，也不提供读取、独立清空命令或任意 session 控制能力；
  * 零任务数组仍是一份合法的完整快照。
  */
 
 import {
-  type GhostPipePlanUpdate,
+  type GhostPipePlanPayload,
   type GhostPipePlanUpdateResult,
   type InstalledGhost,
-  validateGhostPlanUpdatePayload,
+  validateGhostPlanPayload,
 } from '../../shared/ghost.js';
 
-export type PlanUpdateProjector = (
+export type PlanProjector = (
+  operation: 'create' | 'update',
+  ghostId: string,
   sessionContext: PlanUpdateSessionContext,
-  update: Omit<GhostPipePlanUpdate, 'type'>,
+  update: Omit<GhostPipePlanPayload, 'type'>,
 ) => void | Promise<void>;
 
 export interface PlanUpdateSessionContext {
@@ -27,30 +29,42 @@ export interface PlanSlotDeps {
   getGhost(id: string): InstalledGhost | null;
   getCurrentSessionContext(ghostId: string): PlanUpdateSessionContext | null;
   isTrustedSessionContext(context: PlanUpdateSessionContext): boolean | Promise<boolean>;
-  projector?: PlanUpdateProjector | null;
+  projector?: PlanProjector | null;
   now?: () => number;
   log?: {
     warn(message: string, meta?: Record<string, unknown>): void;
   };
 }
 
-/** 每个插件允许短时连发，但拒绝无界紧循环发送 plan-update。 */
+/** 每个插件允许短时连发，但拒绝无界紧循环发送 Plan 更新。 */
 export const PLAN_UPDATE_RATE_WINDOW_MS = 1_000;
 export const PLAN_UPDATE_RATE_MAX_UPDATES = 20;
 
 export class PlanSlot {
-  private projector: PlanUpdateProjector | null;
+  private projector: PlanProjector | null;
   private readonly acceptedAtByGhost = new Map<string, number[]>();
 
   constructor(private readonly deps: PlanSlotDeps) {
     this.projector = deps.projector ?? null;
   }
 
-  setProjector(projector: PlanUpdateProjector | null): void {
+  setProjector(projector: PlanProjector | null): void {
     this.projector = projector;
   }
 
   async handleUpdate(ghostId: string, payload: unknown): Promise<GhostPipePlanUpdateResult> {
+    return this.handle('update', ghostId, payload);
+  }
+
+  async handleCreate(ghostId: string, payload: unknown): Promise<GhostPipePlanUpdateResult> {
+    return this.handle('create', ghostId, payload);
+  }
+
+  private async handle(
+    operation: 'create' | 'update',
+    ghostId: string,
+    payload: unknown,
+  ): Promise<GhostPipePlanUpdateResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || !ghost.manifest.slots.includes('plan')) {
       return {
@@ -95,7 +109,7 @@ export class PlanSlot {
       };
     }
 
-    const validated = validateGhostPlanUpdatePayload(payload);
+    const validated = validateGhostPlanPayload(payload);
     if (!validated.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: validated.message };
     }
@@ -107,14 +121,19 @@ export class PlanSlot {
       };
     }
 
-    const update: Omit<GhostPipePlanUpdate, 'type'> = {
+    if (validated.value.type !== `plan-${operation}`) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: `type 必须是 plan-${operation}` };
+    }
+    const update: Omit<GhostPipePlanPayload, 'type'> = {
       ...(validated.value.explanation !== undefined
         ? { explanation: validated.value.explanation }
         : {}),
       plan: validated.value.plan,
     };
     try {
-      await this.projector(sessionContext, update);
+      // Plan 是会话级 UI；create 强制开始新生命周期，update 的覆盖规则由
+      // Host 按当前置顶 Plan 统一决定，插件不提供可碰撞的更新键。
+      await this.projector(operation, ghostId, sessionContext, update);
       return { ok: true };
     } catch (error) {
       this.deps.log?.warn('plan-update projection failed', {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GHOST_PLAN_TOOL_NAME,
   buildMessageRenderItems,
   dedupeToolMediaByUrl,
   extractPlanTodos,
@@ -850,6 +851,18 @@ describe('message render todo grouping', () => {
     ]);
 
     expect(latest).toMatchObject({ key: 'todo-task1', source: 'task' });
+  });
+
+  it('renders a host-persisted Ghost Plan as an independent plan source', () => {
+    const ghost = tool('ghost-plan', GHOST_PLAN_TOOL_NAME, {
+      plan: [{ step: 'Sync plugin progress', status: 'in_progress' }],
+    }, 'plan:ghost:planner:abc');
+
+    expect(findLatestMessageTodoInsertion([ghost])).toMatchObject({
+      key: 'todo-ghost-plan',
+      source: 'ghost',
+      todos: [{ content: 'Sync plugin progress', status: 'in_progress' }],
+    });
   });
 
   it('findLatestMessageTodoInsertion returns the merged session snapshot with the FIRST call key', () => {

@@ -31,7 +31,7 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
-  validateGhostPlanUpdatePayload,
+  validateGhostPlanPayload,
   withGhostResolvedLocale,
   type GhostManifest,
 } from '../ghost';
@@ -138,7 +138,7 @@ describe('ghost · plan-update 协议与 plan 权限槽', () => {
         { step: '测试', status: 'pending' },
       ],
     };
-    expect(validateGhostPlanUpdatePayload(payload)).toEqual({ ok: true, value: payload });
+    expect(validateGhostPlanPayload(payload)).toEqual({ ok: true, value: payload });
   });
 
   it('允许零任务完整快照', () => {
@@ -146,7 +146,15 @@ describe('ghost · plan-update 协议与 plan 权限槽', () => {
       type: 'plan-update',
       plan: [],
     };
-    expect(validateGhostPlanUpdatePayload(payload)).toEqual({ ok: true, value: payload });
+    expect(validateGhostPlanPayload(payload)).toEqual({ ok: true, value: payload });
+  });
+
+  it('接受显式开始新 Plan 生命周期的 plan-create', () => {
+    const payload = {
+      type: 'plan-create',
+      plan: [{ step: '开始新的工作阶段', status: 'in_progress' }],
+    };
+    expect(validateGhostPlanPayload(payload)).toEqual({ ok: true, value: payload });
   });
 
   it.each([
@@ -163,7 +171,7 @@ describe('ghost · plan-update 协议与 plan 权限槽', () => {
       '不允许字段 "sessionId"',
     ],
   ])('拒绝越出精确 schema 的 payload %#', (payload, message) => {
-    const result = validateGhostPlanUpdatePayload(payload);
+    const result = validateGhostPlanPayload(payload);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toContain(message);
   });
@@ -195,7 +203,7 @@ describe('ghost · plan-update 协议与 plan 权限槽', () => {
       '.step 最多',
     ],
   ])('拒绝超过 Plan 投影资源边界的 payload %#', (payload, message) => {
-    const result = validateGhostPlanUpdatePayload(payload);
+    const result = validateGhostPlanPayload(payload);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toContain(message);
   });

@@ -211,7 +211,7 @@ import {
 import { GhostFsSlot } from './fsSlot.js';
 import {
   PlanSlot,
-  type PlanUpdateProjector,
+  type PlanProjector,
   type PlanUpdateSessionContext,
 } from './planSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
@@ -1823,8 +1823,8 @@ export function getPlanSlot(): PlanSlot {
   return planSlotSingleton;
 }
 
-/** maker-ipc 初始化后注入 Cindy 现有 update_plan 信号入口。 */
-export function setPlanUpdateProjector(projector: PlanUpdateProjector | null): void {
+/** maker-ipc 初始化后注入 Ghost Plan 消息投影。 */
+export function setPlanProjector(projector: PlanProjector | null): void {
   getPlanSlot().setProjector(projector);
 }
 
@@ -4424,8 +4424,11 @@ export function registerGhostIpc(): void {
       if (!outcome.accepted) log.warn('ghost tool-progress rejected', { id, reason: outcome.reason });
       return { ok: true };
     }
-    // plan-update = 当前可信任务的完整 Codex update_plan 快照。与 tool-progress
-    // 完全独立:不接 callId、不续命、不接受 sessionId,结构化拒因原样回给作者。
+    // Plan = 当前可信任务的完整快照。create 强制开始新的 Plan 生命周期；update
+    // 由 Host 按当前置顶 Plan 的归属决定覆盖或新建；两者都不接 callId、不续命。
+    if (type === 'plan-create') {
+      return getPlanSlot().handleCreate(id, payload);
+    }
     if (type === 'plan-update') {
       return getPlanSlot().handleUpdate(id, payload);
     }

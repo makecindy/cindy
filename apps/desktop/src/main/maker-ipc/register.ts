@@ -758,11 +758,12 @@ import {
   setGhostAgentTurnRunner,
   setGhostErrandRunner,
   setPlanUpdateLiveSessionValidator,
-  setPlanUpdateProjector,
+  setPlanProjector,
   setGhostWorkspaceSessionService,
   notifyGhostSessionEvent,
   getInstalledGhostName,
 } from '../cindy-brain/index.js';
+import { projectGhostPlan } from '../cindy-brain/ghostPlanMessageProjector.js';
 import {
   readGhostErrandConfig,
   readGhostErrandSessionId,
@@ -7431,31 +7432,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return tracked;
   }
 
-  // plan 槽只负责接口守门；投影是本地临时进度状态，不是 agent 消息。
+  // plan 槽只负责接口守门；Ghost Plan 走受控消息投影，不伪造 Codex agent event。
   setPlanUpdateLiveSessionValidator((context) =>
     maker.getSession(context.sessionId)?.instanceId === context.sessionInstanceId,
   );
-  setPlanUpdateProjector((context, update) => {
-    // 不伪造 agent tool_use，因此不会落库、进入消息流或经 device-link 转发；
-    // 新窗口和刷新后的恢复也不在这个插件接口内。
-    const snapshot = {
-      sessionId: context.sessionId,
-      sessionInstanceId: context.sessionInstanceId,
-      ...update,
-      updatedAtMs: Date.now(),
-    };
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.isDestroyed()) continue;
-      try {
-        win.webContents.send(MAKER_PUSH.SESSION_PROGRESS_CHANGED, snapshot);
-      } catch (error) {
-        log.warn('broadcast session progress to window failed', {
-          sessionId: context.sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  });
+  setPlanProjector(projectGhostPlan);
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
