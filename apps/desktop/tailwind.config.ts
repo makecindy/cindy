@@ -57,9 +57,8 @@ const config: Config = {
       fontFamily: {
         mono: ['var(--app-font-code, var(--app-font-code-default))'],
       },
-      // DESIGN.md §3 numeric 字号白名单的 Tailwind 来源。四个权威来源
-      // （规范、本配置、globals.css 默认值、useFontSettings 运行时注册表）
-      // 由守卫互验；lib/utils.ts 是消费端去重列表，需同步 numeric 档位。
+      // DESIGN.md §3 numeric 字号白名单的 Tailwind 权威来源之一。规范正本
+      // 与三处权威来源代码由守卫互验；lib/utils.ts 是单独校验的消费端去重列表。
       fontSize: {
         xs: ['var(--text-xs)', { lineHeight: 'var(--text-xs-line-height)' }],
         sm: ['var(--text-sm)', { lineHeight: 'var(--text-sm-line-height)' }],

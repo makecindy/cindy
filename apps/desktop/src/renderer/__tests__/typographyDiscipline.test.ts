@@ -33,9 +33,11 @@ import { describe, expect, it } from 'vitest';
  *     `*` 起头行仅在**非选择器形态**时按 jsdoc 跳过(`* {` / `*{` 照常受检)。
  *  6. 同一行 / 同一文件多个违规逐个计数(occurrence 级)—— 在已豁免文件里
  *     追加新违规同样会红。
- *  7. numeric 白名单的四个权威来源互验:DESIGN.md ↔ tailwind.config.ts
- *     fontSize ↔ globals.css 默认值 ↔ useFontSettings.ts 运行时注册表;
- *     lib/utils.ts 的 tailwind-merge 字号组是一个消费端一致性守卫。
+ *  7. numeric 白名单镜像断言覆盖规范正本 DESIGN.md §3 与三处权威来源代码:
+ *     tailwind.config.ts fontSize ↔ globals.css 默认值 ↔ useFontSettings.ts
+ *     UI_TEXT_TOKEN_SIZES;lib/utils.ts 的 tailwind-merge 字号组另作消费端
+ *     一致性校验,不计入镜像。SCALED_TAILWIND_TOKENS 只负责语义类运行时缩放,
+ *     与 numeric 白名单无关,不计入任何计数。
  *     配置中仍保留 xl..5xl 语义映射(源码零使用),不可简单删除:它们挂在
  *     theme.extend 下,删除会静默回退到不跟随用户缩放的 Tailwind 默认值;
  *     守卫在源码侧拒绝 xl..9xl,配置清理留待后续改成显式 numeric 档位。
@@ -572,7 +574,7 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     expect(exemptionDrift).toEqual([]);
   });
 
-  it('mirrors numeric size ladder across four authorities plus one consumer', () => {
+  it('mirrors numeric ladder from the spec through authoritative sources and checks the consumer', () => {
     const expected = [...SIZE_WHITELIST].sort((a, b) => a - b);
     const expectedSemantic = { xs: 12, sm: 14, base: 16, lg: 18 };
 
