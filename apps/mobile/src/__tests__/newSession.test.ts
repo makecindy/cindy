@@ -476,6 +476,29 @@ describe('pickAgentDefaultRuntime', () => {
     })).toEqual({ agentKind: 'pi', model: 'regional', effort: 'medium', providerId: 'prov-regional' });
   });
 
+  it('keeps the marked provider row when another provider offers the same modelId earlier (codex P2)', () => {
+    const shared = (providerId: string, marked: boolean, efforts: readonly string[], defaultEffort: string): ProviderModelRow => ({
+      provider: { id: providerId, name: providerId } as ProviderModelRow['provider'],
+      model: {
+        id: 'shared-model',
+        displayName: 'shared-model',
+        efforts: efforts as ProviderModelRow['model']['efforts'],
+        defaultEffort: defaultEffort as ProviderModelRow['model']['defaultEffort'],
+        contextWindow: 0,
+        ...(marked ? { newSessionDefault: ['claude-code'] } : {}),
+      },
+    });
+    // [A/foo(无标记), B/foo(标记)]:必须在行层面选中 B,携带 B 的来源并按其档位表校准
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [],
+      modelRows: [shared('provA', false, ['low'], 'low'), shared('provB', true, ['high', 'xhigh'], 'high')],
+      currentEffort: 'high',
+      catalogReady: true,
+    });
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'high', providerId: 'provB' });
+  });
+
   it('falls back to DEFAULT_MODELS and keeps current effort when providers are not loaded yet', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
@@ -701,6 +724,27 @@ describe('resolveNewSessionAutoDefault', () => {
     });
     // 区域默认来自 provider 行 → 携带该行 provider(#1898 语义)
     expect(result?.patch).toEqual({ model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+  });
+
+  it('intent ②a: keeps the marked provider row when another provider offers the same modelId earlier (codex P2)', () => {
+    const shared = (providerId: string, marked: boolean, efforts: readonly string[], defaultEffort: string): ProviderModelRow => ({
+      provider: { id: providerId, name: providerId } as ProviderModelRow['provider'],
+      model: {
+        id: 'shared-model',
+        displayName: 'shared-model',
+        efforts: efforts as ProviderModelRow['model']['efforts'],
+        defaultEffort: defaultEffort as ProviderModelRow['model']['defaultEffort'],
+        contextWindow: 0,
+        ...(marked ? { newSessionDefault: ['claude-code'] } : {}),
+      },
+    });
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      currentEffort: 'high',
+      modelRows: [shared('provA', false, ['low'], 'low'), shared('provB', true, ['high', 'xhigh'], 'high')],
+    });
+    // 同 modelId 多来源时必须在行层面选中带标记的 provB,并按其档位表校准 effort
+    expect(result?.patch).toEqual({ model: 'shared-model', effort: 'high', providerId: 'provB' });
   });
 
   it('intent ②b: provider list unavailable → regional default from normalized capabilities (upstream main 移植)', () => {

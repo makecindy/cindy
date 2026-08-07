@@ -623,10 +623,14 @@ export function pickAgentDefaultRuntime(args: {
     // 首项分支只在目录就绪时取——切到未缓存设备瞬间旧设备目录会短暂残留
     // (ready=false),抄它的首项会把别设备的来源写进草稿(codex review P1)。
     // 区域默认标记优先(上游 main 移植):模型声明 newSessionDefault 时按 agent 门控。
-    const regional = pickRegionalNewSessionDefault(modelRows.map((row) => row.model), agentKind);
-    const chosen = regional ?? modelRows[0].model;
-    model = chosen.id;
-    providerId = modelRows.find((row) => row.model.id === chosen.id)?.provider.id ?? null;
+    // 在 ProviderModelRow 层面选行,保留来源身份(codex review P2):同 modelId
+    // 多 provider 时按 id 回查会把标记行错绑到首见 provider;标记行优先、无标记
+    // 取首行,模型与 provider 同源。
+    const marker = newSessionDefaultMarker(agentKind);
+    const chosenRow = modelRows.find((row) => row.model.newSessionDefault?.includes(marker) === true)
+      ?? modelRows[0];
+    model = chosenRow.model.id;
+    providerId = chosenRow.provider.id;
   } else {
     model = DEFAULT_MODELS[agentKind];
     providerId = null;
@@ -726,15 +730,18 @@ export function resolveNewSessionAutoDefault(input: {
   // (旧被控端无 provider:list 通道或请求持续失败,error 非空)则放行扁平回退,
   // 否则下方 availableModels 分支永远不可达(codex review P2)。
   if (!catalogReady && !providersUnavailable) return null;
-  const providerModel = modelRows.length > 0
-    ? pickRegionalNewSessionDefault(modelRows.map((row) => row.model), rowsAgentKind) ?? modelRows[0].model
+  // 在 ProviderModelRow 层面选行,保留来源身份(codex review P2):同 modelId 多
+  // provider 时按 id 回查会把标记行错绑到首见 provider;标记行优先、无标记取
+  // 首行,模型与 provider 同源。modelRows 为空(旧被控端/目录不可用)才走扁平回退。
+  const providerRow = modelRows.length > 0
+    ? modelRows.find((row) => row.model.newSessionDefault?.includes(newSessionDefaultMarker(rowsAgentKind)) === true)
+      ?? modelRows[0]
     : undefined;
-  const flatDefault = providerModel
+  const flatDefault = providerRow
     ? undefined
     : pickRegionalNewSessionDefault(availableModels, rowsAgentKind);
-  const defaultModel = providerModel ?? flatDefault;
+  const defaultModel = providerRow?.model ?? flatDefault;
   if (!defaultModel) return null;
-  const providerRow = modelRows.find((row) => row.model.id === defaultModel.id);
   return {
     appliedDeviceId: selectedDeviceId,
     patch: {
