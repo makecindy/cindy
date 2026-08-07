@@ -125,9 +125,11 @@ function withImportLock<T>(task: () => Promise<T>): Promise<T> {
 export function findDuplicateSchedule(
   schedules: Schedule[],
   input: CreateScheduleInput,
+  desiredStatus: Schedule['status'] = 'active',
 ): Schedule | undefined {
   return schedules.find((schedule) => {
     return (
+      schedule.status === desiredStatus &&
       normalized(schedule.name) === normalized(input.name) &&
       normalized(schedule.prompt) === normalized(input.prompt) &&
       schedule.kind === input.kind &&
@@ -148,6 +150,7 @@ export function findDuplicateSchedule(
       sameScriptConfig(schedule.scriptConfig, input.scriptConfig) &&
       samePreRunHook(schedule.preRunHook, input.preRunHook) &&
       (schedule.persistentSession ?? false) === (input.persistentSession ?? false) &&
+      schedule.targetSessionId === input.targetSessionId &&
       (schedule.silentWhenIdle ?? false) === (input.silentWhenIdle ?? false) &&
       schedule.expireAt === input.expireAt &&
       schedule.notify.desktop === input.notify.desktop &&
@@ -199,7 +202,7 @@ export function createCodexAutomationMigrationService(
     const items = details.map((detail) => {
       const converted = converter(detail);
       const duplicate = converted.input
-        ? findDuplicateSchedule(schedules, converted.input)
+        ? findDuplicateSchedule(schedules, converted.input, converted.status)
         : undefined;
       return toPreviewItem(detail, converted, duplicate?.id);
     });
@@ -258,7 +261,11 @@ export function createCodexAutomationMigrationService(
             });
             continue;
           }
-          const duplicate = findDuplicateSchedule(knownSchedules, converted.input);
+          const duplicate = findDuplicateSchedule(
+            knownSchedules,
+            converted.input,
+            converted.status,
+          );
           if (duplicate) {
             skipped.push({
               sourceId,

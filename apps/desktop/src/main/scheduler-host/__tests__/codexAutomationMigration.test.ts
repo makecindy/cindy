@@ -189,6 +189,35 @@ describe('CodexAutomationMigrationService', () => {
     expect(result.items[0]?.duplicate).toBe(false);
   });
 
+  it('does not treat a schedule with a different status as a duplicate', async () => {
+    const first = detail('one');
+    const { service, scheduler } = setup([first]);
+    scheduler.list.mockResolvedValueOnce([
+      {
+        id: 'existing',
+        ...inputFor(first),
+        status: 'paused',
+      } as Schedule,
+    ]);
+
+    const result = await service.preview();
+
+    expect(result.items[0]?.duplicate).toBe(false);
+  });
+
+  it('does not treat a schedule bound to another session as a duplicate', () => {
+    const first = detail('one');
+    const input = inputFor(first);
+    const existing = {
+      id: 'existing',
+      ...input,
+      status: 'active',
+      targetSessionId: 'session-1',
+    } as Schedule;
+
+    expect(findDuplicateSchedule([existing], input)).toBeUndefined();
+  });
+
   it('does not treat script configuration changes as duplicates', () => {
     const first = detail('one');
     const input: CreateScheduleInput = {

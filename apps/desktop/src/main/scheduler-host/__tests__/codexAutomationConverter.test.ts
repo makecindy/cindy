@@ -55,6 +55,13 @@ describe('codexRruleToCron', () => {
     expect(result.diagnostics.join(' ')).toContain('clamps short months');
   });
 
+  it('keeps monthly high-day rules exact when hours are listed', () => {
+    expect(codexRruleToCron('FREQ=MONTHLY;BYMONTHDAY=31;BYHOUR=8,9;BYMINUTE=5')).toEqual({
+      cronExpr: '5 8,9 31 * *',
+      diagnostics: [],
+    });
+  });
+
   it('rejects an every-other-week rule instead of changing its meaning', () => {
     const result = codexRruleToCron('FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=15;BYMINUTE=0');
     expect(result.cronExpr).toBeUndefined();

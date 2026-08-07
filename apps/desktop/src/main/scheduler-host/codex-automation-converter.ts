@@ -162,7 +162,12 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
       // BYMONTHDAY skips dates that do not exist in the current month. The
       // clamp applies only to Cindy's single-day monthly preset; day lists
       // use standard cron semantics and remain exact.
-      if (monthDays.length === 1 && monthDays[0] > 28) {
+      if (
+        monthDays.length === 1 &&
+        hours?.length === 1 &&
+        minutes?.length === 1 &&
+        monthDays[0] > 28
+      ) {
         diagnostics.push(
           `RRULE MONTHLY BYMONTHDAY=${monthDays[0]} cannot be represented exactly; Cindy clamps short months`,
         );
