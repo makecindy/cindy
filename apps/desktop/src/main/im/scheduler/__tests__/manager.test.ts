@@ -280,6 +280,7 @@ describe('dormant scheduler manager', () => {
       getLocalChannel: () => ({ channel: 'discord', identity }),
       nonceFactory: () => 'round-000000000000',
       discoveryRetryDelayMs: 100,
+      snapshotResponseTimeoutMs: 100,
       maxDiscoveryRetries: 2,
     });
     manager.start();
@@ -645,6 +646,7 @@ describe('dormant scheduler manager', () => {
         return () => `nonce-${String(++count).padStart(14, '0')}`;
       })(),
       discoveryRetryDelayMs: 100,
+      snapshotResponseTimeoutMs: 100,
       maxDiscoveryRetries: 1,
     });
     manager.start();
@@ -658,6 +660,86 @@ describe('dormant scheduler manager', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(harness.snapshotRequests).toHaveLength(1);
     expect(harness.pushes.length).toBeGreaterThan(pushesAtFinalRequest);
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+    manager.stop();
+  });
+
+  it('accepts a slow final snapshot response before its independent timeout', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `nonce-${String(++count).padStart(14, '0')}`;
+      })(),
+      discoveryRetryDelayMs: 100,
+      snapshotResponseTimeoutMs: 300,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    const request = harness.snapshotRequests.at(-1);
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+    manager.stop();
+  });
+
+  it('continues discovery when one peer probe send throws', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const sendPush = harness.transport.sendPush;
+    harness.transport.sendPush = (peerDeviceId, payload) => {
+      if (peerDeviceId === 'a') throw new Error('peer queue closed');
+      sendPush(peerDeviceId, payload);
+    };
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      discoveryRetryDelayMs: 100,
+      snapshotResponseTimeoutMs: 300,
+      maxDiscoveryRetries: 1,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: {
+        selfDeviceId: 'z',
+        peers: [
+          { deviceId: 'a', platform: 'win32' },
+          { deviceId: 'b', platform: 'darwin' },
+        ],
+        observedAt: 1,
+      },
+    });
+    expect(
+      harness.pushes.filter(
+        (push) =>
+          push.peerDeviceId === 'b' && (push.payload as { kind?: unknown }).kind === 'probe',
+      ),
+    ).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.snapshotRequests).toHaveLength(1);
+    expect(
+      harness.pushes.filter(
+        (push) =>
+          push.peerDeviceId === 'b' && (push.payload as { kind?: unknown }).kind === 'probe',
+      ),
+    ).toHaveLength(2);
     expect(manager.getDecision().reason).toBe('incomplete-peer-view');
     manager.stop();
   });
