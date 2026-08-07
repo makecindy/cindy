@@ -9,7 +9,15 @@
  * 插件页独占承载,入口只在 /plugins。
  */
 
-import { ChevronRight, FileDiff, FolderOpen, Globe, ListTodo, Terminal } from 'lucide-react';
+import {
+  Activity,
+  ChevronRight,
+  FileDiff,
+  FolderOpen,
+  Globe,
+  ListTodo,
+  Terminal,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
@@ -20,6 +28,7 @@ interface EmptyStateProps {
   onAddTerminalTab: () => void;
   onAddReviewTab: () => void;
   onAddBackgroundTasksTab: () => void;
+  onAddResourceUsageTab: () => void;
 }
 
 export function EmptyState({
@@ -28,10 +37,11 @@ export function EmptyState({
   onAddTerminalTab,
   onAddReviewTab,
   onAddBackgroundTasksTab,
+  onAddResourceUsageTab,
 }: EmptyStateProps) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-1 flex-col items-start gap-8 px-10 pb-8 pt-16">
+    <div className="flex min-h-0 flex-1 flex-col items-start gap-8 overflow-y-auto px-10 pb-8 pt-16">
       <div className="flex w-full flex-col gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
           {t('rightSidebar.tabs.empty.eyebrow')}
@@ -66,6 +76,13 @@ export function EmptyState({
           label={t('rightSidebar.tabs.empty.openBackgroundTasks')}
           sub={t('rightSidebar.tabs.empty.backgroundTasksSub')}
           onClick={onAddBackgroundTasksTab}
+        />
+        {/* 资源用量 order=18，紧跟 background-tasks=17，顺序与 + 菜单一致。 */}
+        <ActionRow
+          icon={Activity}
+          label={t('rightSidebar.tabs.empty.openResourceUsage')}
+          sub={t('rightSidebar.tabs.kinds.resourceUsage')}
+          onClick={onAddResourceUsageTab}
         />
         <ActionRow
           icon={Globe}

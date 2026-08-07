@@ -97,6 +97,9 @@ importers:
       '@cindy/mcps':
         specifier: workspace:*
         version: link:../../packages/lizi-mcps
+      '@cindy/model-access-protocol':
+        specifier: workspace:*
+        version: link:../../cindy-protocol/packages/model-access-protocol
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
@@ -1094,6 +1097,9 @@ importers:
       '@cindy/maker-shared':
         specifier: workspace:*
         version: link:../maker-shared
+      diff:
+        specifier: ^8.0.4
+        version: 8.0.4
       better-sqlite3:
         specifier: '*'
         version: 12.11.1

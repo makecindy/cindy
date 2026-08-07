@@ -4376,6 +4376,7 @@
         "terminal": "Terminal",
         "review": "Review",
         "backgroundTasks": "Background tasks",
+        "resourceUsage": "Resource Usage",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel"
@@ -4394,13 +4395,14 @@
       "empty": {
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
-        "desc": "Open a file tree, review, built-in browser, or terminal here to work alongside the chat on the left.",
+        "desc": "Open files, review, resource usage, a built-in browser, or a terminal here to work alongside the chat on the left.",
         "openFile": "Open files",
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
         "openBackgroundTasks": "Open background tasks",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "Open Resource Usage",
         "openBrowser": "Open browser",
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
@@ -4475,6 +4477,14 @@
       "spawnFailed": "Failed to start terminal: {{detail}}"
     },
     "review": {
+      "turn": {
+        "title": "Changes from this message",
+        "currentWorkspace": "Current workspace",
+        "localOnly": "Exact message changes are not available for remote sessions yet.",
+        "partialNotice": "This message includes command or tool writes that could not be tracked exactly. Only the captured subset is shown; it is not a complete patch.",
+        "emptyTitle": "No recorded changes",
+        "emptyDesc": "The recorded patch for this message has no displayable file changes."
+      },
       "fileCount_one": "{{count}} file",
       "fileCount_other": "{{count}} files",
       "emptyTitle": "No changes yet",
@@ -4769,6 +4779,53 @@
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
       "noProgress": "No progress details yet"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent Processes",
+        "app": "App Processes"
+      },
+      "columns": {
+        "process": "Process",
+        "cpu": "CPU",
+        "memory": "Memory",
+        "pid": "PID"
+      },
+      "kinds": {
+        "main": "Main process",
+        "renderer": "UI process",
+        "gpu": "GPU process",
+        "utility": "Service process"
+      },
+      "agentRoles": {
+        "codexTask": "Codex Task",
+        "codexService": "Codex Service"
+      },
+      "agentRoleDetails": {
+        "task": "Task runtime",
+        "service": "Accounts and models"
+      },
+      "services": {
+        "audio": "Audio Service",
+        "network": "Network Service",
+        "storage": "Storage Service",
+        "videoCapture": "Video Capture"
+      },
+      "processCount_one": "Process tree: {{count}} process",
+      "processCount_other": "Process tree: {{count}} processes",
+      "agentsEmpty": "No agent processes are running. Start a task and its usage will show up here.",
+      "tableLabel": "Resource Usage by Process",
+      "sortBy": "Sort by {{column}}",
+      "loading": "Reading resource usage…",
+      "remoteUnavailableTitle": "Unavailable for remote sessions",
+      "remoteUnavailableDescription": "This panel only reads processes on this device. It is available only for local sessions running on this device.",
+      "selectHint": "Select a process",
+      "readOnlyHint": "Only Agent processes used for tasks can be stopped",
+      "terminate": "Stop Process",
+      "terminateConfirmTitle": "Stop {{name}} process?",
+      "terminateConfirmDescription": "This force-stops the Agent process. Every task using this process will be interrupted; send another message in an affected task to start an Agent again.",
+      "terminated": "Stopped the {{name}} process",
+      "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample."
     }
   },
   "update": {
@@ -5671,6 +5728,24 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details"
     },
+    "shareImage": {
+      "entry": "Share as Image",
+      "title": "Share Conversation",
+      "subtitle_one": "{{count}} message selected",
+      "subtitle_other": "{{count}} messages selected",
+      "selectAll": "Select All",
+      "clearAll": "Deselect All",
+      "checkboxLabel": "Select this message",
+      "cancel": "Cancel",
+      "download": "Save Image",
+      "copy": "Copy Image",
+      "generating": "Generating…",
+      "copied": "Image copied",
+      "saved": "Image saved",
+      "notMounted": "Some selected messages are not currently visible. Scroll back to show them, then try again",
+      "tooLarge": "The selection is too long or wide. Select less content and try again",
+      "failed": "Couldn't generate the image — try again"
+    },
     "errorBanner": {
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
@@ -6194,8 +6269,34 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
     },
     "generatedFiles": {
-      "title": "Files created this turn",
+      "title": "Files created this message",
       "showMore": "Show {{count}} more",
+      "showLess": "Show less"
+    },
+    "turnChanges": {
+      "title": "Changed {{count}} files",
+      "partialTitle": "File changes were not fully captured",
+      "review": "Review",
+      "undo": "Undo",
+      "undoAria": "Undo changes from this message",
+      "undoPartialAria": "Undo exactly captured changes from this message",
+      "reapply": "Reapply",
+      "reapplyAria": "Reapply changes from this message",
+      "reapplyPartialAria": "Reapply exactly captured changes from this message",
+      "undoSuccess": "Changes from this message were undone",
+      "reapplySuccess": "Changes from this message were reapplied",
+      "undoPartialSuccess": "Exactly captured changes were undone; uncaptured changes were not undone",
+      "reapplyPartialSuccess": "Exactly captured changes were reapplied; uncaptured changes were not reapplied",
+      "actionRunning": "Wait for the current response to finish before changing the workspace",
+      "gitUnavailable": "Git was not detected. Install Git, make sure it is on the system PATH, and restart Cindy to use the full Undo and Reapply functionality.",
+      "actionConflict": "The workspace has changed, so this patch cannot be applied safely. Review the current changes first",
+      "actionUnavailable": "This message includes file changes that cannot be safely undone",
+      "actionFailed": "The changes could not be applied. Try again",
+      "partial": "Only the changes captured exactly are shown",
+      "partialReversible": "Only exactly captured changes can be undone or reapplied; uncaptured changes are not handled",
+      "partialActionHint": "Only undo or reapply exactly captured file changes",
+      "showMore": "Show {{count}} more files",
+      "reviewRemaining": "Review {{count}} more files",
       "showLess": "Show less"
     },
     "agentActions": {
@@ -6411,6 +6512,7 @@
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
       "piRemoteUnsupported": "Pi runs locally only and can't use SSH remote hosts. Switch to Claude or Codex to use this host.",
+      "localWorktreeCleanupPending": "The previous local worktree session is still awaiting cleanup. Try again after cleanup finishes.",
       "remoteWorktreeCleanupPending": "The previous remote worktree is still awaiting cleanup. Reconnect the device and try again.",
       "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
@@ -8532,7 +8634,11 @@
     "empty": "No reference directories yet",
     "add": "Add directory…",
     "atLimit": "Limit reached ({{max}})",
-    "remove": "Remove {{name}}"
+    "remove": "Remove {{name}}",
+    "parentConfirmTitle": "Add a parent directory?",
+    "parentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. This expands the Agent's visible scope beyond the working directory.\n\nAdd it anyway?\n\n{{path}}",
+    "parentConfirmAccept": "Add anyway",
+    "parentConfirmCancel": "Cancel"
   },
   "commands": {
     "toast": {
@@ -8703,6 +8809,7 @@
       "passwordPlaceholder": "Password",
       "unlock": "Unlock",
       "previewMeta": "{{agent}} · {{count}} messages · exported {{exportedAt}}",
+      "previewOrca": "Collaboration task · includes {{count}} Workers",
       "riskWarning": "This file was shared from outside — make sure you trust its source. The imported history may influence the AI's future behavior, and if you continue the chat, the AI can still read and write local files and run commands.",
       "workdirHint": "The original working directory was {{originalDir}}. Choose the matching directory on this machine.",
       "workdirEmpty": "No directory selected",
@@ -8714,6 +8821,7 @@
       "close": "Close",
       "openSession": "Open session",
       "doneTitle": "Import complete",
+      "doneOrca": "Also imported {{count}} collaboration Workers",
       "conflictTitle": "This session already exists",
       "conflictBody": "A session with the same identifier already exists on this device (it was imported before, or it originated here). Importing again will overwrite the existing session with the contents of this share file.",
       "conflictOverwrite": "Overwrite & import",

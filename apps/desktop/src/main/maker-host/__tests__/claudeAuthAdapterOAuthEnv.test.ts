@@ -28,10 +28,8 @@ const h = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   app: {
     getPath: () => '/tmp/xdt-test-userdata-nonexistent',
-    getAppPath: () => '/tmp/xdt-test-userdata-nonexistent',
-    // isPackaged=false:runtime-configs 模块级的 bundledRipgrepDir 在 packaged 分支
-    // 依赖 process.resourcesPath(测试进程为 undefined,直接抛)——走 dev 分支绕开。
-    isPackaged: false,
+    // ripgrep 探测已惰性化(issue #1956):runtime-configs import 期不再读
+    // getAppPath / isPackaged,这里无需再补。
   },
   safeStorage: { isEncryptionAvailable: () => h.encryptionAvailable },
 }));

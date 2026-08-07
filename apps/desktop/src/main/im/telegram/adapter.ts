@@ -139,7 +139,9 @@ export function buildTelegramAdapter(
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
         agentText: `${persona}${ambientBlock}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
-        commit: assembly.commit,
+        commit: async () => {
+          await assembly.commit();
+        },
       };
     },
   };

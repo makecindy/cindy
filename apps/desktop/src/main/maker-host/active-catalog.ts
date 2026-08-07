@@ -112,6 +112,11 @@ export interface XdGatewayModelInfo {
   supportsFastMode?: boolean;
   /** 默认可见性;缺省按 true。 */
   defaultEnabled?: boolean;
+  /**
+   * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。仅 wire agent;
+   * pi 由 xdGatewayTargetAgents 投影进 pi tab 后,按 'claude-code' 口径判定默认。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
   modalities?: { input: string[]; output: string[] };
@@ -684,6 +689,9 @@ function computeMerged(): Catalog {
           ...(gm.description !== undefined ? { description: gm.description } : {}),
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
+          ...(gm.newSessionDefault !== undefined
+            ? { newSessionDefault: gm.newSessionDefault }
+            : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),

@@ -239,6 +239,10 @@ WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Micros
 
 右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。
 
+### Process
+
+OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
+
 ### Region badge
 
 桌面登录页标题旁的品牌红胶囊（DESIGN.md §16.3），指徽标这个 UI 元素本身。徽标上的标签值另立条目（region-code-cn / region-code-dev）——本条 en 为 Region badge、各语言译文均非英文原词，caseStandardFor 天然返回 null，所以本条约束不到标签值，也无需写 checkCase。作为待产品裁决术语登记：尚未拍板是否改为可译文案（如「中国大陆版 / Mainland China」），先登记以免后续界面自造“国内版／中国版／开发版”等多套说法。
@@ -254,6 +258,10 @@ WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Micros
 dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。
 
 已确定禁用：`开发版（仅当英文含 Dev）`（zh-CN）、`開発版（仅当英文含 Dev）`（ja）、`개발판（仅当英文含 Dev）`（ko）
+
+### Resource usage
+
+右栏「资源用量」面板(对标 Chromium 任务管理器,展示本机进程 CPU/内存并可终止 Agent 进程)。命名裁决:不可叫「任务管理器」——Session→任务 已 decided,「任务管理器」会被读成管理左侧任务列表;「监控/监视」有隐私负面语感判例(见 shortcut listener permission 条目),弃用。「用量」对齐已裁决的 Usage→用量。
 
 ### Run records
 

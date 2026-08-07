@@ -70,6 +70,7 @@ import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -1125,6 +1126,15 @@ export function UserMessage({
     insertSessionLinkIntoComposer({ targetSessionId: sessionId, href: messageDeepLink });
   }, [messageDeepLink, sessionId]);
 
+  // 分享为图片:进入选择模式并预选本条(入口那条天然该已勾选,省一次点击)。
+  const handleShareAsImage = useMemo(
+    () =>
+      sessionId && messageClientId
+        ? () => shareSelectionStore.enter(sessionId, messageClientId)
+        : undefined,
+    [messageClientId, sessionId],
+  );
+
   // fork-from-here: only wire when both sessionId + messageClientId are
   // present (older code paths that render UserMessage without these props
   // simply won't show the Fork button). 流程收敛在 useForkAtMessage —
@@ -1255,6 +1265,17 @@ export function UserMessage({
   // 稳定引用:内联箭头会让 EditBox 的 doCommit(依赖 onSent)每次父组件
   // 重渲都重建,连带"等待停止接力" effect 无谓重跑(bot review 指出)。
   const exitEditing = useCallback(() => setEditing(false), []);
+
+  // 分享选择模式只克隆已发送消息的只读 DOM。仅在本条实际处于编辑态时订阅
+  // share store,避免让所有 user 消息都因选择模式切换而重渲染。
+  useEffect(() => {
+    if (!editing || !sessionId) return;
+    const exitWhenSharing = () => {
+      if (shareSelectionStore.isActive(sessionId)) exitEditing();
+    };
+    exitWhenSharing();
+    return shareSelectionStore.subscribe(exitWhenSharing);
+  }, [editing, exitEditing, sessionId]);
 
   // 编辑期间会话来了新消息(自动化任务注入等) → 本条不再是最后一条,继续
   // 发送会把那条新消息一起回退掉。直接退出编辑态(文本是从原消息预填的,
@@ -1693,6 +1714,7 @@ export function UserMessage({
                   hovered={hovered}
                   onFork={!isBlocked && canFork ? handleFork : undefined}
                   onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
+                  onShareAsImage={handleShareAsImage}
                   onDelete={!isBlocked && sessionId && messageClientId ? handleDelete : undefined}
                   onEdit={canEdit ? handleEdit : undefined}
                   onRewind={!isBlocked && canRewind ? handleRewind : undefined}

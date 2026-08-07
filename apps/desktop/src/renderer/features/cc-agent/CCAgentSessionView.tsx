@@ -71,6 +71,11 @@ import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
 import { MessageStream } from '@/components/chat/MessageStream';
+import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
+import {
+  shareSelectionStore,
+  useShareSelectionActive,
+} from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
   ErrorTailErrorBanner,
@@ -188,7 +193,10 @@ import {
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
-import { consumePendingRemoteCollab } from './remoteCollabHandoff';
+import {
+  consumePendingRemoteCollab,
+  enableRemoteCollabForSession,
+} from './remoteCollabHandoff';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
@@ -233,11 +241,10 @@ import {
   ackInterruptedTurnFor,
   goalApiFor,
   makerApiFor,
-  makerApiForSticky,
   orcaWorkflowsFor,
 } from '@/lib/makerTransport';
-// 协同 mutation 的归属取粘滞值(见 makerApiForSticky):瞬断窗口内误判本机会在控制端
-// 建出/销毁 team,而入口本身是按粘滞 remoteDeviceId 渲染的。
+// 协同 mutation 的归属取粘滞值:瞬断窗口内误判本机会在控制端建出/销毁 team,
+// 而入口本身是按粘滞 remoteDeviceId 渲染的。
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 // fork / orca 在被控端建新 session 后,navigate 前先把该设备会话列表重拉进 store(避免 404 破窗)。
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
@@ -2075,7 +2082,7 @@ export function CCAgentSessionView({
         // 粘滞归属(codex review P2):入口与协同策略查询都按粘滞 remoteDeviceId 指向被控端,
         // mutation 必须同口径 —— 非粘滞的 makerApiFor 在 relay 瞬断窗口内会退回本机
         // enableOrca,在**控制端**建出一个 team(本机恰有同 id 会话时还会操作错对象)。
-        await makerApiForSticky(collabSessionId).enableOrca(collabSessionId, {
+        const enableOptions = {
           workerAgent,
           role: form.role,
           label: createWorkerLabel(form.role, []),
@@ -2086,13 +2093,24 @@ export function CCAgentSessionView({
           // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
           providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
-        });
+          workerPermissionMode: form.workerPermissionMode,
+        };
+        const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
+        if (orcaDeviceId) {
+          await enableRemoteCollabForSession({
+            deviceId: orcaDeviceId,
+            leadSessionId: collabSessionId,
+            options: enableOptions,
+            logTag: 'session enable collab',
+          });
+        } else {
+          await window.electronAPI.maker.enableOrca(collabSessionId, enableOptions);
+        }
         void sessionsStore.forceRefresh('active');
         // 远程会话:enableOrca 在被控端起了 worker session,先把该设备会话列表重拉进 store
         // (注册 worker sessionId),否则 orca split 视图按 ?worker= 加载会 404。
         // 归属同样取粘滞值:上面这次 enableOrca 已经按粘滞路由发到了被控端,这里若用非粘滞
         // 判定会在瞬断窗口内解析成 undefined、跳过回流,worker 永远进不了控制端注册表。
-        const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) await refreshRemoteDeviceSessions(orcaDeviceId);
         await revealWorkersTab;
       } catch (err) {
@@ -3131,6 +3149,33 @@ export function CCAgentSessionView({
     </>
   );
 
+  // ── 分享为图片:选择模式 ──
+  // 底部操作条与 ChatInput 互斥(挑消息时不该还能发消息),所以状态在这里读一次,
+  // 供下方输入区的 ternary 链分流。
+  const shareSelectionActive = useShareSelectionActive(sessionId);
+  // 输入区被更高优先级的态占走(远程接管 / 会话准备中 / 任何 pending 交互)时,
+  // 底部操作条会随之卸载 —— 那样用户就失去了退出选择模式的入口(Esc 监听在条上)。
+  // 所以这些态一出现就主动退出:分享是轻量的一次性动作,重新点一次即可。
+  const shareSelectionBlocked =
+    Boolean(sessionBinding.attached) ||
+    worktreePreparing ||
+    Boolean(
+      pendingPlanReview ||
+        pendingPermission ||
+        pendingAskUser ||
+        pendingPluginSetup ||
+        pendingIssueConfirm ||
+        pendingRenameSessionsConfirm ||
+        pendingGhostGrantConfirm,
+    );
+  useEffect(() => {
+    if (shareSelectionActive && shareSelectionBlocked) shareSelectionStore.exit();
+  }, [shareSelectionActive, shareSelectionBlocked]);
+  // 切会话不保留选择态(分享没有跨会话恢复语义)。
+  useEffect(() => {
+    shareSelectionStore.exitIfNotSession(sessionId);
+  }, [sessionId]);
+
   // MessageStream 提成变量:perf/session-switch 的 <Profiler> 是纯诊断,只在 DEV
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
   const messageStreamEl = (
@@ -3717,6 +3762,12 @@ export function CCAgentSessionView({
                 />
               ) : worktreePreparing && smoothedBranchName ? (
                 <WorktreeCreatingOverlay branchName={smoothedBranchName} />
+              ) : shareSelectionActive && sessionId ? (
+                <ShareSelectionBar
+                  sessionId={sessionId}
+                  contentWidth={messageWidth}
+                  barWidth={inputWidth}
+                />
               ) : (
                 <ChatInput
                   onSend={handleSend}
@@ -4041,6 +4092,7 @@ export function CCAgentSessionView({
         onCreate={requestEnableCollab}
         title={t('orca.createWorker.enableCollabTitle')}
         submitLabel={t('orca.createWorker.enableCollabSubmit')}
+        requireWorkerPermissionModeSupport
         deviceId={remoteDeviceId}
         // SSH 远程 Lead:worker 在远端 spawn,模型清单按 SSH 口径过滤(订阅直连 /
         // openai-chat 桥接 Codex 只挂在本地 proxy),与 main 侧 remote-worker

@@ -46,6 +46,12 @@ type PendingRemotePrecreatedWorktreeTarget =
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
 
+interface NewMakerWorktreeBranchPreferenceSnapshot {
+  baseRepo: string;
+  sourceBranch: string;
+  revision: number;
+}
+
 /* ── Environment check ── */
 
 interface EnvCheckResult {
@@ -53,6 +59,8 @@ interface EnvCheckResult {
   codex: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
   /** pi 可选实验 agent:failed 不影响 allPassed；本次启动会禁用 pi。 */
   pi?: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
+  /** bundled ripgrep(必需):failed 时 allPassed=false,splash 进失败态可重试 (#1956)。 */
+  ripgrep?: { status: 'passed' | 'failed' | 'skipped'; error?: string };
   allPassed: boolean;
   platform: 'darwin' | 'win32' | 'linux';
 }
@@ -127,6 +135,8 @@ interface SessionSharePreview {
   fidelity: 'full' | 'partial' | 'db-only';
   messageCount: number;
   mediaCount: number;
+  /** 协同包携带的 Worker 会话数;普通包为 0。 */
+  orcaWorkerCount: number;
 }
 
 interface LocalSshKeyInfo {
@@ -551,6 +561,7 @@ interface OrcaTeamRecord {
   id: string;
   leadSessionId: string;
   status: 'active' | 'completed' | 'cancelled' | 'failed';
+  workerPermissionMode: 'auto' | 'bypassPermissions';
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -2094,10 +2105,17 @@ interface ElectronAPI {
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
+    /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
     worktreeEnabled: boolean;
+  }) => void;
+
+  /** Renderer localStorage workerCreationPrefs → main 内存镜像。 */
+  syncWorkerCreationPrefs: (snapshot: {
+    workerPermissionMode: 'auto' | 'bypassPermissions';
   }) => void;
 
   /** 被控端 renderer → 自身 main:providerModelMemory 全量快照镜像(草稿列表行真实读源)。 */
@@ -2133,6 +2151,27 @@ interface ElectronAPI {
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」(patchDraft 写真实草稿)。 */
   onMakerWorktreePrefApply: (cb: (payload: { worktreeEnabled: boolean }) => void) => () => void;
+
+  /** 工作端 canonical baseRepo scoped 的新建 worktree 源分支；未选过返回 null。 */
+  getNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+  ) => Promise<NewMakerWorktreeBranchPreferenceSnapshot | null>;
+
+  /** 写穿本机工作端的源分支选择，返回 host 接受后的权威 snapshot。 */
+  applyNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+    sourceBranch: string,
+  ) => Promise<NewMakerWorktreeBranchPreferenceSnapshot>;
+
+  /** 本机或远程控制端改动本工作端源分支后的权威广播。 */
+  onNewMakerWorktreeBranchChanged: (
+    cb: (snapshot: NewMakerWorktreeBranchPreferenceSnapshot) => void,
+  ) => () => void;
+
+  /** Orca tool 显式修改 Worker 默认权限后，回写 renderer localStorage。 */
+  onWorkerCreationPrefsApply: (
+    cb: (payload: { workerPermissionMode: 'auto' | 'bypassPermissions' }) => void,
+  ) => () => void;
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的会话「模型 effort/fast」pref(调本地 setter)。 */
   onMakerSessionPrefApply: (
@@ -4097,6 +4136,8 @@ interface ElectronAPI {
             fidelity: 'full' | 'partial' | 'db-only';
             missingTranscripts: string[];
             mediaMissing: number;
+            /** 随包携带的协同 Worker 会话数(非协同包为 0)。 */
+            orcaWorkers: number;
           }
         | { status: 'canceled' }
         | { status: 'oversize'; totalBytes: number; mediaBytes: number; limitBytes: number }
@@ -4129,6 +4170,8 @@ interface ElectronAPI {
         sessionId: string;
         fidelity: 'full' | 'partial' | 'db-only';
         notes: string[];
+        /** 随协同包一并导入的 Worker 会话数;普通包为 0。 */
+        orcaWorkers: number;
       }>;
       cancel: (request: { draftId: string }) => Promise<{ ok: boolean }>;
       classifyPath: (request: {
@@ -4307,6 +4350,21 @@ interface ElectronAPI {
     /** main → renderer:资源看门狗事件(evict-request / kill-notice / cpu-alert)。 */
     onResourceEvent: (
       cb: (event: import('../shared/rsbBrowserBridge').RsbBrowserBridgeResourceEvent) => void,
+    ) => () => void;
+  };
+
+  /**
+   * 资源用量面板(process-monitor):订阅期间 main 才采样;terminate 只对
+   * 本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
+   */
+  processMonitor: {
+    subscribe: () => Promise<void>;
+    unsubscribe: () => Promise<void>;
+    terminate: (
+      request: import('../shared/processMonitor').TerminateAgentProcessRequest,
+    ) => Promise<import('../shared/processMonitor').TerminateAgentProcessResult>;
+    onSample: (
+      cb: (sample: import('../shared/processMonitor').ProcessMonitorSample) => void,
     ) => () => void;
   };
 
@@ -4743,8 +4801,15 @@ interface ElectronAPI {
         fast?: boolean;
         /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
         providerId?: string | null;
+        /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
+        workerPermissionMode?: 'auto' | 'bypassPermissions';
       },
-    ) => Promise<{ teamId: string; workerSessionId: string; workerId: string }>;
+    ) => Promise<{
+      teamId: string;
+      workerSessionId: string;
+      workerId: string;
+      workerPermissionMode: 'auto' | 'bypassPermissions';
+    }>;
 
     /**
      * F-COLLAB: 关闭 lead session 当前的协同 workflow。
@@ -5271,6 +5336,21 @@ interface ElectronAPI {
     xaiOAuthCancel: () => Promise<{ authorized: boolean }>;
 
     // Push channels
+    listTurnChangeSets: (
+      sessionId: string,
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeSetSummary[]>;
+    getTurnChangeSets: (
+      sessionId: string,
+      ids: string[],
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeSetDetail[]>;
+    applyTurnChangeSet: (
+      sessionId: string,
+      id: string,
+      action: import('../shared/turnChangeSet').TurnChangeAction,
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeActionResult>;
+    onTurnChangeSetUpdated: (
+      cb: (data: unknown, ownerStamp?: unknown) => void,
+    ) => () => void;
     onEvent: (cb: (data: unknown) => void) => () => void;
     onStatusChanged: (cb: (data: unknown) => void) => () => void;
     onInteractionRequest: (cb: (data: unknown) => void) => () => void;

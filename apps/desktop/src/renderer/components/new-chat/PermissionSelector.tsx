@@ -49,6 +49,8 @@ interface PermissionSelectorProps {
   ariaContext?: string;
   /** Disable individual modes without forking the shared permission picker. */
   disabledModes?: Partial<Record<PermissionMode, string>>;
+  /** Restrict the shared picker to a smaller product-approved subset. */
+  allowedModes?: readonly PermissionMode[];
 }
 
 /**
@@ -108,6 +110,7 @@ export function PermissionSelector({
   triggerVariant = 'chip',
   ariaContext,
   disabledModes,
+  allowedModes,
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -117,7 +120,9 @@ export function PermissionSelector({
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
 
-  const options: PermissionModeDescriptor[] = capabilities?.permissionModes ?? [];
+  const options: PermissionModeDescriptor[] = (capabilities?.permissionModes ?? []).filter(
+    (option) => allowedModes === undefined || allowedModes.includes(option.id),
+  );
   const effectiveMode =
     options.length > 0 ? normalizeMode(permissionMode, options) : permissionMode;
   const current = options.find((o) => o.id === effectiveMode);

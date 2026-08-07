@@ -21,13 +21,11 @@ describe('ChatInput voice lifecycle locks', () => {
   it('keeps attachments locked while leaving permission mode available', () => {
     const extraDirsStart = chatInputSource.indexOf('<ExtraDirsButton');
     expect(extraDirsStart).toBeGreaterThanOrEqual(0);
-    const extraDirsEnd = chatInputSource.indexOf('/>', extraDirsStart);
-    expect(extraDirsEnd).toBeGreaterThan(extraDirsStart);
-    const extraDirsBlock = chatInputSource.slice(extraDirsStart, extraDirsEnd);
-    expect(extraDirsBlock).toContain('disabled={composerMutationLocked}');
-
     const permissionStart = chatInputSource.indexOf('<PermissionSelector');
     expect(permissionStart).toBeGreaterThanOrEqual(0);
+    const extraDirsBlock = chatInputSource.slice(extraDirsStart, permissionStart);
+    expect(extraDirsBlock).toContain('disabled={composerMutationLocked}');
+
     const permissionEnd = chatInputSource.indexOf('/>', permissionStart);
     expect(permissionEnd).toBeGreaterThan(permissionStart);
     const permissionBlock = chatInputSource.slice(permissionStart, permissionEnd);

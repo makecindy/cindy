@@ -1335,6 +1335,28 @@
         "ko": "벡터"
       },
       "note": "文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。"
+    },
+    {
+      "id": "resource-usage",
+      "status": "proposed",
+      "en": "Resource usage",
+      "translations": {
+        "zh-CN": "资源用量",
+        "ja": "リソース使用量",
+        "ko": "리소스 사용량"
+      },
+      "note": "右栏「资源用量」面板(对标 Chromium 任务管理器,展示本机进程 CPU/内存并可终止 Agent 进程)。命名裁决:不可叫「任务管理器」——Session→任务 已 decided,「任务管理器」会被读成管理左侧任务列表;「监控/监视」有隐私负面语感判例(见 shortcut listener permission 条目),弃用。「用量」对齐已裁决的 Usage→用量。"
+    },
+    {
+      "id": "process",
+      "status": "proposed",
+      "en": "Process",
+      "translations": {
+        "zh-CN": "进程",
+        "ja": "プロセス",
+        "ko": "프로세스"
+      },
+      "note": "OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。"
     }
   ]
 }

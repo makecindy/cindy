@@ -306,7 +306,9 @@ export function registerMakerAuthHandlers(
     if (kind === 'codex' && result.authenticated && result.authSource === 'oauth') {
       let liveModelsApplied = false;
       try {
-        liveModelsApplied = await maker.refreshAgentLocalModels('codex');
+        liveModelsApplied = await maker.refreshAgentLocalModels('codex', {
+          credentialMode: 'oauth-bearer',
+        });
       } catch (e) {
         // 登录本身已成功；实时模型发现失败时由 host 回退磁盘快照，不能把登录判失败。
         // 但记异常原因(原先静默吞掉,首登无模型时无从诊断是 app-server 起不来还是

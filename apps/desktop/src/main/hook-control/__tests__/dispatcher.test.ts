@@ -184,6 +184,7 @@ function makeDispatcher(overrides?: {
   terminalLedger?: HookRequestLedger;
   config?: HookConnectionConfig | null;
   prepareWorktree?: HookDispatcherDeps['prepareWorktree'];
+  buildContextPrefix?: HookDispatcherDeps['buildContextPrefix'];
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
   subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
@@ -204,6 +205,7 @@ function makeDispatcher(overrides?: {
     terminalLedger: overrides?.terminalLedger,
     runner,
     prepareWorktree: overrides?.prepareWorktree,
+    buildContextPrefix: overrides?.buildContextPrefix,
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
     subscribeUiContinuation: overrides?.subscribeUiContinuation,
@@ -419,6 +421,55 @@ describe('dispatcher 核心语义', () => {
       requestId: 'new-account',
       finalText: 'new account result',
     });
+  });
+
+  it('切账号清排队时不提交未受理群游标，并为已 queued 任务补 cancelled 终态', async () => {
+    const fr = fakeRunner();
+    const rollbacks: string[] = [];
+    let commitCount = 0;
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit: async () => {
+          commitCount += 1;
+          const label = `commit-${commitCount}`;
+          return {
+            rollback: async () => {
+              rollbacks.push(label);
+            },
+          };
+        },
+      }),
+    });
+    const c = collector();
+    const externalKey = 'telegram:group:bot:-900:9:g0';
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
+    await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-1', externalKey }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-2', externalKey }), c.send);
+    await tick();
+
+    expect(c.ofType('task.ack').map((message) => message.payload.result)).toEqual([
+      'accepted',
+      'queued',
+      'queued',
+    ]);
+    const draining = d.deactivateAccount();
+    fr.finish({ finalText: '旧账号任务' });
+    await draining;
+
+    expect(commitCount).toBe(1);
+    expect(rollbacks).toEqual([]);
+    expect(
+      c.ofType('turn.end').map((message) => [message.payload.requestId, message.payload.status]),
+    ).toEqual([
+      ['queued-1', 'cancelled'],
+      ['queued-2', 'cancelled'],
+    ]);
   });
 
   it('收口期间的重新激活会被后到的关闭请求作废', async () => {
@@ -1655,6 +1706,197 @@ describe('dispatcher 核心语义', () => {
     ]);
   });
 
+  it('排队任务只在真正开始时 commit, 取消队列前项不丢后项上下文', async () => {
+    const fr = fakeRunner();
+    const committed: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async (payload) => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit: () => {
+          committed.push(payload.requestId);
+        },
+      }),
+    });
+    const c = collector();
+    const externalKey = 'telegram:group:bot:-900:9:g0';
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
+    await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-a', externalKey }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-b', externalKey }), c.send);
+    await tick();
+
+    expect(committed).toEqual(['running']);
+    d.cancel('conn-1', 'queued-a');
+    await tick();
+    expect(committed).toEqual(['running']);
+
+    fr.finish({ finalText: 'running done' });
+    await tick();
+    expect(fr.calls).toHaveLength(2);
+    await fr.calls[1]?.onProviderAccepted?.();
+    expect(committed).toEqual(['running', 'queued-b']);
+
+    fr.finish({ finalText: 'queued b done' });
+    await tick();
+    expect(c.ofType('turn.end').map((m) => m.payload.requestId)).toEqual([
+      'queued-a',
+      'running',
+      'queued-b',
+    ]);
+  });
+
+  it('已出队但 provider 未受理的群任务在切账号时 cancelled 且不提交游标', async () => {
+    const committed: string[] = [];
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      abortSession: async () => undefined,
+      buildContextPrefix: async (payload) => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit: async () => {
+          committed.push(payload.requestId);
+        },
+      }),
+    });
+    const c = collector();
+    const externalKey = 'telegram:group:bot:-900:9:g0';
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
+    await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'queued-inflight', externalKey }), c.send);
+    await tick();
+
+    fr.finish({ finalText: 'running done' });
+    await tick();
+    expect(fr.calls).toHaveLength(2);
+    expect(committed).toEqual(['running']);
+
+    const draining = d.deactivateAccount();
+    await tick();
+    expect(
+      c.ofType('turn.end').find((message) => message.payload.requestId === 'queued-inflight')
+        ?.payload,
+    ).toMatchObject({ status: 'cancelled' });
+
+    fr.finish({ finalText: 'must not cross account boundary' });
+    await draining;
+    expect(committed).toEqual(['running']);
+  });
+
+  it('直达任务 provider 未受理前账号失效不提交游标，并补 cancelled 终态', async () => {
+    const rollback = vi.fn(async () => undefined);
+    const commit = vi.fn(async () => ({ rollback }));
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      abortSession: async () => undefined,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit,
+      }),
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'not-accepted', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    await tick();
+    expect(c.last('task.ack')?.payload.result).toBe('accepted');
+    expect(fr.calls).toHaveLength(1);
+    expect(commit).not.toHaveBeenCalled();
+
+    const draining = d.deactivateAccount();
+    fr.finish({ finalText: '旧账号任务' });
+    await draining;
+
+    expect(commit).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(
+      c.ofType('turn.end').filter((message) => message.payload.requestId === 'not-accepted'),
+    ).toHaveLength(1);
+    expect(
+      c.ofType('turn.end').find((message) => message.payload.requestId === 'not-accepted')?.payload,
+    ).toMatchObject({ status: 'cancelled' });
+  });
+
+  it('直达任务只在 provider 受理后提交一次群游标', async () => {
+    const commit = vi.fn(async () => undefined);
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit,
+      }),
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'accepted-once', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    await tick();
+    expect(commit).not.toHaveBeenCalled();
+
+    await fr.calls[0]?.onProviderAccepted?.();
+    expect(commit).toHaveBeenCalledTimes(1);
+
+    fr.finish({ finalText: 'done' });
+    await tick();
+    expect(c.last('turn.end')?.payload).toMatchObject({
+      requestId: 'accepted-once',
+      status: 'ok',
+    });
+  });
+
+  it('provider 受理后的群游标持久化失败不反转任务，旧游标留待下次重带', async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const commit = vi.fn(async () => {
+      throw new Error('database is readonly');
+    });
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit,
+      }),
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'persist-failed', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    await tick();
+    await fr.calls[0]?.onProviderAccepted?.();
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'group context cursor commit failed after provider acceptance: requestId=persist-failed',
+      ),
+    );
+
+    fr.finish({ finalText: '磁盘失败也要继续' });
+    await tick();
+    expect(c.last('turn.end')?.payload).toMatchObject({
+      requestId: 'persist-failed',
+      status: 'ok',
+      finalText: '磁盘失败也要继续',
+    });
+  });
+
   it('runner 失败 -> turn.end status=error 且 errorMessage 非空', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
@@ -1677,7 +1919,8 @@ describe('dispatcher 核心语义', () => {
     // 同一同步 tick 内连发(ws 同步 emit 场景) —— 修复前会各开一个新 session
     d.handleDispatch('conn-1', dispatch({ requestId: 'r1' }), c.send);
     d.handleDispatch('conn-1', dispatch({ requestId: 'r2' }), c.send);
-    await tick(6);
+    // 会话定位与受理链含多个微任务；多给几轮，不改变 FIFO 语义。
+    await tick(30);
 
     const acks = c.ofType('task.ack').map((m) => m.payload);
     expect(acks).toHaveLength(2);
@@ -1981,7 +2224,8 @@ describe('dispatcher 核心语义', () => {
     await tick();
     for (let i = 0; i < 21; i++) {
       d.handleDispatch('conn-1', dispatch({ requestId: `q${i}` }), c.send);
-      await tick();
+      // 会话定位与受理链含多个微任务；多给几轮，不改变 FIFO 语义。
+      await tick(30);
     }
     const acks = c.ofType('task.ack').map((m) => m.payload);
     const overflow = acks[acks.length - 1];

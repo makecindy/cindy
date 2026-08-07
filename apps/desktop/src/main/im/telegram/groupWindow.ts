@@ -24,6 +24,7 @@ import {
   createFenceNeutralizer,
   GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS,
   recordGroupWindowEntry,
+  resetGroupWindowCursors,
   type GroupContextAssembly,
 } from '../shared/groupWindowCore';
 import { getDbClient } from '../../localDb/client/current';
@@ -69,8 +70,8 @@ export async function recordTelegramGroupMessage(entry: TelegramGroupWindowEntry
 }
 
 /**
- * 每 lane 的增量游标(上次拼装到的窗口行 id)。内存态: 重启后首次触发会
- * 重新包含整个窗口(一次性冗余, 可接受), 之后恢复增量语义。
+ * 每 lane 的增量游标(上次拼装到的窗口行 id)。内存态只作热缓存, 持久事实在
+ * hook_group_context_cursors; 重启后首次触发从本地 DB 恢复增量语义。
  */
 const contextCursors = new Map<string, number>();
 
@@ -134,9 +135,16 @@ export async function buildTelegramGroupContextPrefix(args: {
   });
 }
 
-/** 测试与登出清理: 重置内存游标(窗口行随账号 DB 生命周期)。 */
-export function resetTelegramGroupContextCursors(): void {
-  contextCursors.clear();
+/** 测试与登出清理: 只清理个人 Telegram provider 的内存态与持久游标。 */
+export function resetTelegramGroupContextCursors(options?: {
+  clearPersisted?: boolean;
+}): Promise<void> {
+  return resetGroupWindowCursors({
+    cursors: contextCursors,
+    providerPrefixes: ['telegram-personal:'],
+    providerNames: [TELEGRAM_PERSONAL_WINDOW_PROVIDER],
+    ...(options?.clearPersisted === false ? { clearPersisted: false } : {}),
+  });
 }
 
 /**

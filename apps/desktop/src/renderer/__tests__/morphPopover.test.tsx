@@ -105,6 +105,51 @@ describe('MorphPopover interaction contract', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Morph panel' })).toBeNull());
   });
 
+  it('允许显式的外部 autofocus 目标保持焦点且不误关闭面板', async () => {
+    function ExternalFocusHarness() {
+      const [open, setOpen] = useState(false);
+      const composerRef = useRef<HTMLTextAreaElement>(null);
+      return (
+        <>
+          <textarea ref={composerRef} aria-label="Composer" />
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            autoFocusTarget={() => composerRef.current}
+            panelAriaLabel="External focus panel"
+            trigger={
+              <button type="button" onClick={() => setOpen(true)}>
+                Open with composer focus
+              </button>
+            }
+          >
+            <button type="button">Suggestion</button>
+          </MorphPopover>
+          <button type="button">Unrelated control</button>
+        </>
+      );
+    }
+
+    render(<ExternalFocusHarness />);
+    const trigger = screen.getByRole('button', { name: 'Open with composer focus' });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const panel = await screen.findByRole('group', { name: 'External focus panel' });
+    const composer = screen.getByLabelText('Composer');
+    await waitFor(() => expect(document.activeElement).toBe(composer));
+    expect(panel).toBeTruthy();
+
+    // autoFocusTarget 属于当前交互层:点击编辑器调整光标时不能被 outside pointerdown 收起。
+    fireEvent.pointerDown(composer);
+    expect(screen.getByRole('group', { name: 'External focus panel' })).toBeTruthy();
+
+    act(() => screen.getByRole('button', { name: 'Unrelated control' }).focus());
+    await waitFor(() =>
+      expect(screen.queryByRole('group', { name: 'External focus panel' })).toBeNull(),
+    );
+  });
+
   it('动作把焦点交接到别处时不抢回 trigger(焦点已在面板外)', async () => {
     function FocusHandoffHarness() {
       const [open, setOpen] = useState(false);
@@ -225,6 +270,74 @@ describe('MorphPopover interaction contract', () => {
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Open dialog' })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Dialog field' }));
+  });
+
+  it('outside pointerdown 交接给相邻 MorphPopover 时旧层不延迟抢回焦点', async () => {
+    setReducedMotion(false);
+
+    function SiblingHandoffHarness() {
+      const [modelOpen, setModelOpen] = useState(false);
+      const [agentOpen, setAgentOpen] = useState(false);
+      return (
+        <>
+          <MorphPopover
+            open={modelOpen}
+            onOpenChange={setModelOpen}
+            panelAriaLabel="Model panel"
+            trigger={
+              <button type="button" aria-expanded={modelOpen} onClick={() => setModelOpen(true)}>
+                Model
+              </button>
+            }
+          >
+            <input aria-label="Search models" />
+          </MorphPopover>
+          <MorphPopover
+            open={agentOpen}
+            onOpenChange={setAgentOpen}
+            panelAriaLabel="Agent panel"
+            trigger={
+              <button
+                type="button"
+                aria-expanded={agentOpen}
+                // AgentSelect 为保持 composer focus-within 视觉会阻止鼠标默认聚焦。
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setAgentOpen(true)}
+              >
+                Agent
+              </button>
+            }
+          >
+            <button type="button" data-morph-autofocus>
+              Current agent
+            </button>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<SiblingHandoffHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+    const search = await screen.findByRole('textbox', { name: 'Search models' });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+
+    const agentTrigger = screen.getByRole('button', { name: 'Agent' });
+    // 真实点击从 pointerdown 到 click 有按压时长。旧层从 pointerdown 起计 240ms 收合，
+    // 新层到 click 才开始 220ms autofocus；按压超过 20ms 时旧层会先走到回焦终点。
+    fireEvent.pointerDown(agentTrigger);
+    fireEvent.mouseDown(agentTrigger);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 40));
+    });
+    fireEvent.mouseUp(agentTrigger);
+    fireEvent.click(agentTrigger);
+    expect(agentTrigger.getAttribute('aria-expanded')).toBe('true');
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
+    });
+    expect(agentTrigger.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Current agent' }));
   });
 
   it('嵌套 Radix portal 内 pointerdown 不算 outside;真正 outside pointerdown 关闭', async () => {
