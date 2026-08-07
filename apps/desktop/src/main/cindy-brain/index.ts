@@ -49,6 +49,7 @@ import {
 import { getLayoutStore } from '../layout/index.js';
 import {
   GhostManager,
+  isCindyOfficialTrustInfo,
   type GhostHostTrustOverride,
   type InstallRejection,
   type UninstallRejection,
@@ -4010,7 +4011,7 @@ export function registerGhostIpc(): void {
       saved: isConnectionSecretReady(s.inject.hosts ?? [], connectionResolution),
     }));
     const isOfficialCindyGithub =
-      ghost.manifest.id === 'cindy-github' && ghost.trust?.level === 'cindy-official';
+      ghost.manifest.id === 'cindy-github' && isCindyOfficialTrustInfo(ghost.trust);
     const ghCliSecretDecls = isOfficialCindyGithub
       ? networkSecretDecls.filter((s) => s.source === 'gh-cli')
       : [];

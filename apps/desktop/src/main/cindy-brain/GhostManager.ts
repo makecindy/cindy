@@ -58,19 +58,32 @@ export const CINDY_OFFICIAL_GHOST_TRUST: GhostTrustInfo = Object.freeze({
 
 export type GhostHostTrustOverride = 'cindy-official';
 
+/**
+ * 判断一个已投影的 trust 是否确实来自完整官方 receipt。
+ *
+ * 这是 gh-cli 凭证路径的共同安全谓词：不能只看 level，否则残缺或被篡改
+ * 的 `.cindy-trust.json` 可能被误当成官方插件。其它 trust level 仍保留其
+ * 原有兼容字段语义；只有官方 level 要求这组不可缺省的完整字段。
+ */
+export function isCindyOfficialTrustInfo(
+  trust: GhostTrustInfo | null | undefined,
+): boolean {
+  return (
+    trust?.level === CINDY_OFFICIAL_GHOST_TRUST.level &&
+    trust.publisherSigned === CINDY_OFFICIAL_GHOST_TRUST.publisherSigned &&
+    trust.publisherVerified === CINDY_OFFICIAL_GHOST_TRUST.publisherVerified &&
+    trust.reviewed === CINDY_OFFICIAL_GHOST_TRUST.reviewed &&
+    trust.publisherName === CINDY_OFFICIAL_GHOST_TRUST.publisherName
+  );
+}
+
 /** 完整校验官方 Host receipt；只看 level 会把损坏 receipt 误当成已回填。 */
 export function hasCindyOfficialTrustMetadata(dir: string): boolean {
   try {
     const bytes = readBoundedFileNoFollowSync(path.join(dir, TRUST_METADATA_FILE), 64 * 1024);
     if (bytes === null) return false;
     const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
-    return (
-      raw.level === CINDY_OFFICIAL_GHOST_TRUST.level &&
-      raw.publisherSigned === CINDY_OFFICIAL_GHOST_TRUST.publisherSigned &&
-      raw.publisherVerified === CINDY_OFFICIAL_GHOST_TRUST.publisherVerified &&
-      raw.reviewed === CINDY_OFFICIAL_GHOST_TRUST.reviewed &&
-      raw.publisherName === CINDY_OFFICIAL_GHOST_TRUST.publisherName
-    );
+    return isCindyOfficialTrustInfo(raw as unknown as GhostTrustInfo);
   } catch {
     return false;
   }
@@ -310,6 +323,10 @@ export class GhostManager {
         ...(typeof raw.reviewerName === 'string' ? { reviewerName: raw.reviewerName } : {}),
         ...(typeof raw.unknownReviewer === 'boolean' ? { unknownReviewer: raw.unknownReviewer } : {}),
       };
+      // Official trust is a capability-bearing identity. A malformed receipt is
+      // not downgraded into a partially trusted official object; it disappears
+      // from the projection so every consumer fails closed.
+      if (trust.level === 'cindy-official' && !isCindyOfficialTrustInfo(trust)) return null;
       const approval = raw.approvedAtResourceProvider;
       const approvedAtResourceProviderTool =
         approval

@@ -1229,6 +1229,7 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
           publisherSigned: true,
           publisherVerified: true,
           reviewed: true,
+          publisherName: 'Cindy Plugin Market',
         },
       }),
       readSecret: () => 'github_pat_fallback',
@@ -1295,6 +1296,57 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     expect(result.ok).toBe(false);
     expect(readGhCliToken).not.toHaveBeenCalled();
     expect(readSecret).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('官方 trust receipt 缺少 publisherName 时 fail-closed，不读取 gh token 也不发请求', async () => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const readSecret = vi.fn(() => 'github_pat_fallback');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({
+        id: 'cindy-github',
+        network: githubNetwork,
+        trust: {
+          level: 'cindy-official',
+          publisherSigned: true,
+          publisherVerified: true,
+          reviewed: true,
+        },
+      }),
+      readGhCliToken,
+      readSecret,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
+    expect(readSecret).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['publisherSigned', { publisherSigned: false }],
+    ['publisherVerified', { publisherVerified: false }],
+    ['reviewed', { reviewed: false }],
+  ])('官方 trust receipt 的 %s 被篡改时 fail-closed', async (_field, override) => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({
+        id: 'cindy-github',
+        network: githubNetwork,
+        trust: {
+          level: 'cindy-official',
+          publisherSigned: true,
+          publisherVerified: true,
+          reviewed: true,
+          publisherName: 'Cindy Plugin Market',
+          ...override,
+        },
+      }),
+      readGhCliToken,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

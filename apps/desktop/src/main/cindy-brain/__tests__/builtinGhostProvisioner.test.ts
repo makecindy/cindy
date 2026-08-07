@@ -90,6 +90,7 @@ describe('builtinGhostProvisioner locale validation', () => {
     const trustPath = path.join(repoRoot, 'cindy-github', '.cindy-trust.json');
     expect(JSON.parse(await fs.promises.readFile(trustPath, 'utf8'))).toMatchObject({
       level: 'cindy-official',
+      publisherName: 'Cindy Plugin Market',
     });
 
     await fs.promises.writeFile(path.join(repoRoot, 'cindy-github', '.disabled'), '');
@@ -108,6 +109,7 @@ describe('builtinGhostProvisioner locale validation', () => {
       publisherSigned: true,
       publisherVerified: true,
       reviewed: true,
+      publisherName: 'Cindy Plugin Market',
     });
     expect(fs.existsSync(path.join(repoRoot, 'cindy-github', '.disabled'))).toBe(true);
     expect(await fs.promises.readFile(path.join(repoRoot, 'cindy-github', 'main.js'), 'utf8'))
