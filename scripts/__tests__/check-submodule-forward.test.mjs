@@ -259,10 +259,16 @@ test('validateSubmoduleForward does not treat a failed base fetch as forward', (
       `160000,${head},cindy-protocol`,
     );
     git(outer, 'commit', '-m', 'head');
+    const warnings = [];
     assert.throws(
-      () => validateSubmoduleForward(outer, 'HEAD~1', 'HEAD'),
+      () =>
+        validateSubmoduleForward(outer, 'HEAD~1', 'HEAD', {
+          ci: false,
+          warn: (message) => warnings.push(message),
+        }),
       /无法读取协议 base commit/,
     );
+    assert.equal(warnings.length, 1);
   } finally {
     fs.rmSync(outer, { recursive: true, force: true });
   }

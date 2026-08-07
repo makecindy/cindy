@@ -250,14 +250,19 @@ function ensureCommit(
   );
 }
 
-export function validateSubmoduleForward(repoRoot, baseRef, headRef = 'HEAD') {
+export function validateSubmoduleForward(
+  repoRoot,
+  baseRef,
+  headRef = 'HEAD',
+  options = {},
+) {
   const baseOid = readGitlink(repoRoot, baseRef);
   const headOid = readGitlink(repoRoot, headRef);
   const protocolRepo = path.join(repoRoot, SUBMODULE_PATH);
   const unchangedHistoricalBaseline =
     baseOid === headOid && UNREACHABLE_BASE_COMMITS.has(headOid);
   if (!unchangedHistoricalBaseline) {
-    validatePublishedProtocolHead(protocolRepo, headOid);
+    validatePublishedProtocolHead(protocolRepo, headOid, options);
   }
   ensureCommit(protocolRepo, baseOid, { allowUnreachableBase: true });
   if (!ensureCommit(protocolRepo, headOid)) {
