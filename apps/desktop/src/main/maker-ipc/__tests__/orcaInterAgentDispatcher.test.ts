@@ -401,6 +401,45 @@ describe('Orca lead/worker dispatcher', () => {
     expect(accepted).not.toHaveBeenCalled();
   });
 
+  it('discards an unaccepted queued callback for a host-send inactive-team failure with [CODE] prefix', async () => {
+    const accepted = vi.fn();
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+    });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Queued stale report',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'host-send-inactive-team-prefix-test' },
+      onAccepted: accepted,
+    });
+
+    const queued = firstQueuedItem(h.queuedItems);
+    await h.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
+      'target-session',
+      {
+        persistUserMessage: {
+          clientId: queued.clientId,
+          content: queued.persistedContent,
+          delivery: 'turn',
+        },
+      },
+      {
+        kind: 'host-send',
+        source: 'maker-ipc',
+        code: 'SEND_FAILED',
+        message: '[PRECONDITION_FAILED] ORCA_TEAM_INACTIVE: team team-1 has already ended',
+        context: 'orca-host-send',
+      },
+    );
+
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', queued);
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
   it('does not treat an incidental inactive-team substring as a lifecycle failure', async () => {
     const accepted = vi.fn();
     const h = createHarness({

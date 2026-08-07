@@ -27,9 +27,14 @@ const defaultLog = createLogger('maker-ipc');
 
 type OrcaInterAgentDispatchMode = 'dispatched' | 'queued';
 
+function stripIpcErrorPrefix(message: string): string {
+  const match = message.match(/^\[[^\]]+\]\s*(.*)$/);
+  return match?.[1] ?? message;
+}
+
 function isInactiveOrcaTeamSendFailure(result: AgentInputSendResult): boolean {
   if (result.kind === 'host-send') {
-    return result.message.startsWith('ORCA_TEAM_INACTIVE:');
+    return stripIpcErrorPrefix(result.message).startsWith('ORCA_TEAM_INACTIVE:');
   }
   return (
     !result.dispatched &&
