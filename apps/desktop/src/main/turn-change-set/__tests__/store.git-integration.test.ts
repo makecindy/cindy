@@ -1203,6 +1203,103 @@ describe('turn change-set sidecar store', () => {
     });
   });
 
+  it('skips known writes literally outside the workspace without marking the capture incomplete', async () => {
+    const inWorkspace = path.join(workdir, 'kept.txt');
+    const outside = path.join(root, 'agent-temp.md');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    // Deliberate scope exclusion: temp files outside the workspace tree are not
+    // tracked and must not degrade the in-workspace capture to partial.
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: outside,
+    });
+    await fs.writeFile(outside, 'temp\n', 'utf8');
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'kept.txt',
+    });
+    await fs.writeFile(inWorkspace, 'kept\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'complete',
+      incompleteReasons: [],
+      fileCount: 1,
+    });
+    expect(summary?.files[0]?.path).toBe('kept.txt');
+  });
+
+  it('drops a turn whose only known write was outside the workspace', async () => {
+    const outside = path.join(root, 'agent-temp.md');
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: outside,
+    });
+    await fs.writeFile(outside, 'temp\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+
+    expect(await listTurnChangeSets('session-1')).toHaveLength(0);
+  });
+
+  it('still marks the capture incomplete when an in-workspace path escapes via symlink', async () => {
+    const escapeTarget = path.join(root, 'escape-target');
+    await fs.mkdir(escapeTarget);
+    await fs.writeFile(path.join(escapeTarget, 'secret.txt'), 'secret\n', 'utf8');
+    await fs.symlink(
+      escapeTarget,
+      path.join(workdir, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'claude-code',
+      cwd: workdir,
+    });
+    // Literally inside the workspace, resolves outside: the workspace tree looks
+    // touched, so the incomplete reason must stay.
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'link/secret.txt',
+    });
+    const inWorkspace = path.join(workdir, 'kept.txt');
+    await captureKnownFileBefore({
+      sessionId: 'session-1',
+      provider: 'claude-code',
+      cwd: workdir,
+      targetPath: 'kept.txt',
+    });
+    await fs.writeFile(inWorkspace, 'kept\n', 'utf8');
+    await finalizeTurnChangeSet('session-1', null, 'complete');
+
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'partial',
+      incompleteReasons: expect.arrayContaining(['outside-workspace']),
+      fileCount: 1,
+    });
+  });
+
   it.each([
     ['absolute path', 'diff --git /outside.txt /outside.txt'],
     ['parent traversal', 'diff --git a/../escape.txt b/../escape.txt'],

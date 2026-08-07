@@ -346,11 +346,12 @@ describe('buildRenderItems — key stability', () => {
       additions: 0,
       deletions: 0,
     };
-    // Only "we might not have seen everything" reasons: review pane would be empty.
+    // Only "we might not have seen everything" or out-of-tracking-scope reasons:
+    // review pane would be empty.
     const noEvidence: TurnChangeSetSummary = {
       ...base,
       id: 'cs-noise',
-      incompleteReasons: ['opaque-tool', 'turn-failed', 'concurrent-workspace'],
+      incompleteReasons: ['opaque-tool', 'turn-failed', 'concurrent-workspace', 'outside-workspace'],
     };
     // Proof that real changes existed but were not recorded: card must stay.
     const truncated: TurnChangeSetSummary = {
