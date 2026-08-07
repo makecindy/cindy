@@ -4738,15 +4738,13 @@ export default function NewRemoteSessionScreen() {
       // 注(残余声明):maker 只绑定 deviceId 字符串,底层 invoke 每次读取
       // clientRef.current——飞行中跨账号/设备切换时 createSession 与 goal.set 可能
       // 落到不同 client,属已接受的传输层残余(host 原子 create-goal RPC 另列 issue)。
-      // 瞬断失败自动重试(同一 sessionId,带退避);重试耗尽仍失败 → 不留在表单
-      // (重试会生成新 sessionId,遗留无目标任务,codex review P2)——接回已创建
-      // 会话:继续 settle 落账并跳转,目标未设置经 goalError 路由参数在会话页呈现。
+      // 不做自动重试(codex review P2):goal.set 非幂等(被控端无请求幂等键,二次
+      // 调用进「编辑已有目标」分支会重落目标消息、停/重启轮次并重置计数)——仅
+      // 当首次请求确认未执行才可重试,故失败直接进入接回:继续 settle 落账并跳转,
+      // 目标未设置经 goalError 路由参数在会话页呈现,用户可在会话内重试设置目标。
       let goalSetError: string | null = null;
       try {
-        await withTransientRemoteRetry(
-          () => maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) }),
-          { maxAttempts: 3 },
-        );
+        await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });
       } catch (goalErr) {
         goalSetError = formatRemoteError(goalErr);
       }
