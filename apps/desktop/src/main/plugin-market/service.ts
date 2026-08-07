@@ -459,7 +459,15 @@ export class PluginMarketService {
       }
       const compatible = validateGhostManifest(plugin.currentRelease.manifest);
       if (!compatible.ok) {
-        throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+        // 服务端 release 已过市场协议层的清单校验、包体由 SHA-256 钉死,走到这里
+        // 的失败只剩一种真实成因:该 release 使用了比本 Cindy 构建更新的清单特性
+        // (schema 前向偏移)。按「版本不支持」呈现,而不是「包无效」——后者会误导
+        // 用户去卸载仍在正常工作的已装旧版本(装回时又被同一道校验拒绝)。
+        log.warn('market release manifest not supported by this Cindy build', {
+          pluginId,
+          reason: compatible.reason,
+        });
+        throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
       }
       if (!manifestSupportsCurrentCindy(compatible.manifest)) {
         throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
@@ -1470,7 +1478,14 @@ export class PluginMarketService {
           assertDetailMatchesSummary(summary, detail);
           const reviewedManifest = validateGhostManifest(detail.currentRelease.manifest);
           if (!reviewedManifest.ok) {
-            throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+            // 与 detail() 同一判定:协议层已放行的 release 在本地校验失败,说明它
+            // 需要更新的 Cindy,按「版本不支持」跳过本轮默认安装(外层 catch 记日志)。
+            throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
+          }
+          if (!manifestSupportsCurrentCindy(reviewedManifest.manifest)) {
+            // 手动 detail()/install() 都会拒绝低于 minCindyVersion 的宿主,
+            // 默认安装不能绕过同一道门。
+            throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
           }
           // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
           await this.installDetail(

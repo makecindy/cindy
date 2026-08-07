@@ -551,6 +551,71 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  // 复现 2026-08-07 cindy-github 1.2.6 事故:服务端 release 用了本构建校验器
+  // 尚不认识的清单特性(network.secrets[].source: "gh-cli")。协议层放行、本地
+  // validateGhostManifest 拒绝——必须按「版本不支持」呈现,不能报「包无效」。
+  function mockDetailWithManifestOnce(
+    h: ReturnType<typeof harness>,
+    item: VisiblePluginSummary,
+    manifestOverride: Record<string, unknown>,
+  ) {
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: {
+        ...item.currentRelease,
+        manifest: manifestOverride,
+      },
+    } as unknown as Awaited<ReturnType<ReturnType<typeof harness>['api']['detail']>>);
+  }
+
+  function schemaForwardManifest(): Record<string, unknown> {
+    return {
+      ...manifest(),
+      slots: ['notify', 'network'],
+      network: {
+        hosts: ['api.github.com'],
+        secrets: [{ key: 'github_pat', label: 'GitHub 登录', source: 'gh-cli' }],
+      },
+    };
+  }
+
+  it('treats a schema-forward official release as version-gated, not an invalid package', async () => {
+    const item = summary();
+    const h = harness([item]);
+    mockDetailWithManifestOnce(h, item, schemaForwardManifest());
+
+    const failure = await h.service.detail(item.id).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(String(failure)).toContain('[NOT_FOUND]');
+    expect(String(failure)).not.toContain('GHOST_FILE_INVALID');
+  });
+
+  it('skips defaultInstall of a schema-forward release without failing the snapshot', async () => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    mockDetailWithManifestOnce(h, item, schemaForwardManifest());
+
+    const snapshot = await h.service.snapshot();
+
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(snapshot.items[0]?.installState).toBe('not-installed');
+    expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
+  });
+
+  it('does not defaultInstall a release above minCindyVersion', async () => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    mockDetailWithManifestOnce(h, item, { ...manifest(), minCindyVersion: '2.0.0' });
+
+    const snapshot = await h.service.snapshot();
+
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(snapshot.items[0]?.installState).toBe('not-installed');
+    expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
+  });
+
   // 2026-07-26 定案:市场首装一律装完即开,手动安装与 defaultInstall 归一,
   // 不再向装入入口透传 initiallyEnabled(启用语义收敛在市场装入入口本身)。
   it('manual market install goes through the auto-enable install entry', async () => {
