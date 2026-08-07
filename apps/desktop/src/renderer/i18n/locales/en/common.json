@@ -252,7 +252,8 @@
             "listAgent": "List currently loaded keys:",
             "linuxStart": "Start a user-local ssh-agent (add this line to ~/.bashrc / ~/.zshrc to persist):",
             "win32Enable": "Enable the ssh-agent service (run as Administrator in PowerShell):"
-          }
+          },
+          "noSuchFileFix": "This path does not exist on disk. Go back to the host settings and re-select the correct private key, or double-check the Identity file path (the ~/.ssh/… form is supported and expands to your home directory)."
         }
       },
       "add": {
@@ -370,7 +371,8 @@
         "codexSyncDone": "Codex credentials pushed to remote",
         "codexSyncDoneDaemonRestartFailed": "Codex credentials pushed, but the old daemon did not restart — reconnect to the remote / restart the daemon before retrying",
         "codexSyncFailed": "Codex credentials sync failed",
-        "codexSyncNoLocal": "No local Codex credentials found — log in to Codex in {{appName}} first"
+        "codexSyncNoLocal": "No local Codex credentials found — log in to Codex in {{appName}} first",
+        "connectKeyFileMissing": "Private key file not found or unreadable: {{detail}}. Check the path, or re-select the key in the host settings."
       },
       "silentInstall": {
         "starting": "Installing {{agent}} on remote {{hostId}}…",

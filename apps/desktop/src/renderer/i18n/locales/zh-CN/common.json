@@ -252,7 +252,8 @@
             "listAgent": "查看 agent 当前加载了哪些密钥：",
             "linuxStart": "启动一个用户级 ssh-agent(把这行加到 ~/.bashrc / ~/.zshrc 让它持久)：",
             "win32Enable": "启用 ssh-agent 服务(在管理员 PowerShell 里执行)："
-          }
+          },
+          "noSuchFileFix": "这个路径在磁盘上找不到。请回到主机设置重新选择正确的私钥，或核对“私钥文件路径”是否填写正确（支持 ~/.ssh/… 写法，会自动展开到你的用户目录）。"
         }
       },
       "add": {
@@ -370,7 +371,8 @@
         "codexSyncDone": "已把 Codex 凭证推送到远端",
         "codexSyncDoneDaemonRestartFailed": "Codex 凭证已推送到远端，但旧 daemon 没重启 — 请重连远端 / 重启 daemon 后再用",
         "codexSyncFailed": "Codex 凭证同步失败",
-        "codexSyncNoLocal": "本机找不到 Codex 凭证 — 先在 {{appName}} 里登录 Codex"
+        "codexSyncNoLocal": "本机找不到 Codex 凭证 — 先在 {{appName}} 里登录 Codex",
+        "connectKeyFileMissing": "私钥文件不存在或无法读取：{{detail}}。请检查路径，或在主机设置里重新选择密钥。"
       },
       "silentInstall": {
         "starting": "正在远端 {{hostId}} 安装 {{agent}}…",

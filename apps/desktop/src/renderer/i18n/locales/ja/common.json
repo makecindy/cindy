@@ -252,7 +252,8 @@
             "listAgent": "agent に現在登録されている鍵を一覧表示:",
             "linuxStart": "ユーザーローカルの ssh-agent を起動(永続化したい場合は ~/.bashrc / ~/.zshrc に追記):",
             "win32Enable": "ssh-agent サービスを有効化(管理者 PowerShell で実行):"
-          }
+          },
+          "noSuchFileFix": "このパスはディスク上に存在しません。ホスト設定に戻って正しい秘密鍵を選び直すか、「Identity file パス」の入力を確認してください（~/.ssh/… 形式に対応し、ホームディレクトリに展開されます）。"
         }
       },
       "add": {
@@ -370,7 +371,8 @@
         "codexSyncDone": "Codex 認証情報をリモートに送りました",
         "codexSyncDoneDaemonRestartFailed": "Codex 認証情報はリモートに送信されましたが、古い daemon が再起動されませんでした — リモートに再接続してから再試行してください",
         "codexSyncFailed": "Codex 認証情報の同期に失敗",
-        "codexSyncNoLocal": "ローカルに Codex 認証情報が見つかりません — まず {{appName}} で Codex にログインしてください"
+        "codexSyncNoLocal": "ローカルに Codex 認証情報が見つかりません — まず {{appName}} で Codex にログインしてください",
+        "connectKeyFileMissing": "秘密鍵ファイルが見つからないか読み込めません: {{detail}}。パスを確認するか、ホスト設定で鍵を選び直してください。"
       },
       "silentInstall": {
         "starting": "リモート {{hostId}} に {{agent}} をインストール中…",
