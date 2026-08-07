@@ -1430,7 +1430,10 @@ export interface InstalledGhost {
   };
 }
 
-/** 插件包的来源与审核等级；决定 UI 徽标，不改变运行时 slot 权限。 */
+/**
+ * 插件包的来源与审核等级；通常只决定 UI 徽标。保留的 gh-cli 凭证来源还会
+ * 要求 cindy-github 具备 cindy-official Host receipt，防止第三方仅自报 id。
+ */
 export type GhostTrustLevel =
   | 'cindy-official'
   | 'reviewed'
@@ -1751,8 +1754,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     // 来源分档文案:登录邮箱派生 vs 用户自填(意识 settingsHtml 收单——宿主
     // 凭证渲染已退役,user 凭证只剩这一档)。收单档文案不许说"意识代码无法
     // 读取"这种过头话:录入瞬间明文经过意识页面,知情同意面要如实。
-    // user/login-email/oauth 保持历史 key,不影响存量插件;gh-cli / 企业身份
-    // 是新的 Host 托管来源,单独带 source 后缀,从其它来源切换时必须重新确认。
+    // user/login-email/oauth/gh-cli 保持历史 key,不影响存量插件；gh-cli
+    // 只改变 Host 来源文案，不把“自动复用 gh”误报成新增权限确认。
     if (secret.source === 'oauth' && secret.oauth) {
       // OAuth 凭证:展示授权域名 + scopes 全量如实列出(通用声明式的知情
       // 同意面——平台不预设 provider,用户看到的就是全部授权事实)。detail
@@ -1787,7 +1790,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (secret.source === 'gh-cli') {
       items.push({
-        key: `network:secret:${secret.key}:gh-cli`,
+        key: `network:secret:${secret.key}`,
         kind: 'network',
         labelKey: 'networkSecretGhCli',
         labelArgs: { name: secret.label },

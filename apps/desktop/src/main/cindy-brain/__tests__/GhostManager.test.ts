@@ -237,6 +237,20 @@ describe('GhostManager · install', () => {
     expect(onChanged.mock.calls[0][0].map((c: InstalledGhost) => c.manifest.id)).toEqual(['hello']);
   });
 
+  it('本地包仅自报 cindy-github 不会获得官方 trust；Host override 才能写官方 receipt', async () => {
+    const local = await makeCindy('github-local.cindy', goodManifest('cindy-github'));
+    const localResult = await manager.install(local);
+    expect(localResult).toMatchObject({ ghost: { trust: { level: 'unverified' } } });
+    await fs.promises.rm(path.join(rootDir, 'cindy-github'), { recursive: true, force: true });
+
+    const officialResult = await manager.install(local, { trustOverride: 'cindy-official' });
+    expect(officialResult).toMatchObject({ ghost: { trust: { level: 'cindy-official' } } });
+    const receipt = JSON.parse(
+      await fs.promises.readFile(path.join(rootDir, 'cindy-github', '.cindy-trust.json'), 'utf8'),
+    ) as { level?: unknown };
+    expect(receipt.level).toBe('cindy-official');
+  });
+
   it('@ 资源入口必须命中主机安装 receipt，旧安装元数据不会在升级后自动扩权', async () => {
     const cindy = await makeCindy('at-resource.cindy', atResourceManifest());
     const installed = await manager.install(cindy);

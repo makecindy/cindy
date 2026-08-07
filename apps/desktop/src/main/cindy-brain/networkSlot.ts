@@ -1014,6 +1014,13 @@ export class GhostNetworkSlot {
     if (!net || (net.hosts.length === 0 && connectionDecls.length === 0)) {
       return { ok: false, message: '本意识未声明域名白名单(身份卡缺 network.hosts),请意识作者更新声明' };
     }
+    const ghCliSecrets = net.secrets?.filter((secret) => secret.source === 'gh-cli') ?? [];
+    if (
+      ghCliSecrets.length > 0 &&
+      (ghost.manifest.id !== 'cindy-github' || ghost.trust?.level !== 'cindy-official')
+    ) {
+      return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };
+    }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。
     const connectionHosts =

@@ -21,8 +21,10 @@ import {
 
 function fakeGhost(
   overrides: {
+    id?: string;
     enabled?: boolean;
     slots?: string[];
+    trust?: InstalledGhost['trust'];
     /** null = 有槽无详单(老包语义);undefined = 默认 brave+tavily 双域名。 */
     network?: GhostNetworkNeeds | null;
   } = {},
@@ -45,7 +47,7 @@ function fakeGhost(
   return {
     manifest: {
       schemaVersion: 2,
-      id: 'web-search',
+      id: overrides.id ?? 'web-search',
       name: '搜索',
       version: '1.0.0',
       kind: 'chip',
@@ -56,6 +58,7 @@ function fakeGhost(
     },
     dir: '/fake/brain/web-search',
     enabled: overrides.enabled ?? true,
+    ...(overrides.trust ? { trust: overrides.trust } : {}),
   } as InstalledGhost;
 }
 
@@ -1218,7 +1221,16 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
 
   function makeGithubSlot(overrides: Partial<NetworkSlotDeps> = {}) {
     return makeSlot({
-      getGhost: () => fakeGhost({ network: githubNetwork }),
+      getGhost: () => fakeGhost({
+        id: 'cindy-github',
+        network: githubNetwork,
+        trust: {
+          level: 'cindy-official',
+          publisherSigned: true,
+          publisherVerified: true,
+          reviewed: true,
+        },
+      }),
       readSecret: () => 'github_pat_fallback',
       ...overrides,
     });
@@ -1269,6 +1281,33 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
       expect(result.message).toContain('Personal Access Token');
     }
     expect(unavailable.fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('仅自报 cindy-github 但没有 Host 官方 trust 时 fail-closed，不读取 gh token 也不发请求', async () => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const readSecret = vi.fn(() => 'github_pat_fallback');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({ id: 'cindy-github', network: githubNetwork }),
+      readGhCliToken,
+      readSecret,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
+    expect(readSecret).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('保留 ID 检查之外，非 cindy-github 也不能借 gh-cli trust', async () => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({ id: 'third-party', network: githubNetwork }),
+      readGhCliToken,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

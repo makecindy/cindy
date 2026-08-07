@@ -2283,10 +2283,35 @@ describe('ghost · network 详单校验', () => {
     expect(valid.ok, valid.ok ? '' : valid.reason).toBe(true);
     if (valid.ok) {
       const item = ghostPermissionItems(valid.manifest).find(
-        (entry) => entry.key === 'network:secret:github_pat:gh-cli',
+        (entry) => entry.key === 'network:secret:github_pat',
       );
       expect(item?.labelKey).toBe('networkSecretGhCli');
       expect(item?.detailKey).toBe('networkSecretGhCliDetail');
+
+      const prior = validateGhostManifest({
+        ...goodManifest(),
+        id: 'cindy-github',
+        slots: ['panel', 'network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.github.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub authentication',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                hosts: ['api.github.com'],
+              },
+            },
+          ],
+        },
+      });
+      expect(prior.ok).toBe(true);
+      if (prior.ok) {
+        expect(diffGhostPermissionItems(prior.manifest, valid.manifest).added).toEqual([]);
+      }
     }
 
     for (const fixture of [
