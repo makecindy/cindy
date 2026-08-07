@@ -3504,9 +3504,9 @@
       },
       "connections": {
         "confirmTitle": "Add connection address",
-        "confirmMessage": "Plugin \"{{name}}\" requests to add the connection address {{host}}",
+        "confirmMessage": "Requests to add the connection address {{host}}",
         "confirmDetail": "If allowed, this plugin can reach this address via the host ({{label}}); the credential you provide is injected only into requests to this address.",
-        "confirmAllow": "Allow",
+        "confirmAllow": "Allow access",
         "confirmCancel": "Cancel"
       },
       "errors": {

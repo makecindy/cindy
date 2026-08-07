@@ -1441,6 +1441,10 @@ interface ElectronAPI {
         ghostName: string;
         iconDataUrl?: string;
         body: string;
+        /** 可选第二段正文(宿主受信确认的补充说明;插件 confirm 槽不传)。 */
+        detail?: string;
+        /** 可选标题覆盖(宿主受信确认用固定标题;插件 confirm 槽不传)。 */
+        title?: string;
         confirmText: string | null;
         cancelText: string | null;
         danger: boolean;

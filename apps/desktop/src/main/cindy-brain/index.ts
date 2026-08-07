@@ -2136,19 +2136,43 @@ export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
  * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
  * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
  */
+/**
+ * 确保确认弹窗桥已初始化并返回单例。幂等:已初始化直接返回。
+ *
+ * 不只 confirm 槽需要它——插件连接授权确认(confirmAddHost)也复用这条桥,
+ * 而连接请求可能在 confirm 槽从未被调用过时到达。启动时(registerGhostIpc)
+ * 调用一次,保证两条路径都能拿到已初始化的桥,不会因「confirm 槽没被用过」
+ * 而回退到系统原生弹窗。
+ */
+function ensureGhostConfirmDialogBridge(): ReturnType<typeof initGhostConfirmDialogBridge> {
+  return (
+    getGhostConfirmDialogBridge() ??
+    initGhostConfirmDialogBridge({
+      sendToWindow: (payload) => {
+        // 只投**挂了完整主壳**的窗口:确认框由 GhostConfirmDialogHost 渲染,它
+        // 挂在主壳的 ConfirmDialogProvider 里;词典提示窗 / 权限引导窗等辅助
+        // 窗口没挂这个 host,投过去用户看不到、请求白等 90 秒超时按拒绝
+        // (Greptile 2026-08-07 P1)。判据与 schedule 槽同款(isMainShellWindowUrl)。
+        const candidates = BrowserWindow.getAllWindows().filter(
+          (window) => !window.isDestroyed() && isMainShellWindowUrl(window.webContents.getURL()),
+        );
+        const focused = BrowserWindow.getFocusedWindow();
+        const win =
+          focused && !focused.isDestroyed() && candidates.includes(focused)
+            ? focused
+            : candidates[0];
+        if (!win) return false;
+        sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
+        return true;
+      },
+      log,
+    })
+  );
+}
+
 export function getGhostConfirmSlot(): GhostConfirmSlot {
   if (!confirmSlotSingleton) {
-    const bridge =
-      getGhostConfirmDialogBridge() ??
-      initGhostConfirmDialogBridge({
-        sendToWindow: (payload) => {
-          const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-          if (!win || win.isDestroyed()) return false;
-          sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
-          return true;
-        },
-        log,
-      });
+    const bridge = ensureGhostConfirmDialogBridge();
     confirmSlotSingleton = new GhostConfirmSlot({
       getGhost: findAvailableGhost,
       showConfirm: (params) =>
@@ -3892,6 +3916,10 @@ function spawnIfResident(ghost: InstalledGhost): void {
 export function registerGhostIpc(): void {
   if (ipcRegistered) return;
   ipcRegistered = true;
+  // 确认弹窗桥(confirm 槽 + 插件连接授权确认共用)启动即初始化:连接确认
+  // 可能在 confirm 槽从未被调用过时到达,依赖"首次 use 才 init"会让它回退
+  // 到系统原生弹窗(2026-08-07 实测确认)。
+  ensureGhostConfirmDialogBridge();
   const manager = getGhostManager();
   const runtime = getGhostRuntime();
   // 启动即对账一次 skill 槽链接:上次会话崩溃/异常退出留下的悬空链接、
@@ -4066,28 +4094,57 @@ export function registerGhostIpc(): void {
       decls,
       manager: getGhostConnectionManager(),
       ghostId,
-      // 受信确认:main 侧系统模态(对照 bootstrap 的 moveToApplications 弹窗
-      // 用法),默认落在「取消」上防误触;意识名从在装清单现查。
+      // 受信确认:优先走主机同款 Cindy 风格确认框(复用 confirm 槽的 bridge,
+      // renderer 用 ConfirmDialogProvider 渲染,语义 token 明暗两档自动跟随)。
+      // 文案仍由 main 侧固定拼死(t()),插件只影响 ghostName/host/declLabel 三个
+      // 插值占位,无法注入任意内容。默认落在「取消」防误触;意识名从在装清单现查。
       confirmAddHost: async (declLabel, host) => {
         const ghostName =
           findAvailableGhost(ghostId)?.manifest.name ?? ghostId;
-        // main 迷你 i18n 只内置 {{appName}} 插值,其余变量按其约定在调用点
-        // 自行 replace(对照 bootstrap 菜单的用法)。
-        const { response } = await dialog.showMessageBox({
-          type: 'question',
-          title: t('settings.ghosts.connections.confirmTitle'),
-          message: t('settings.ghosts.connections.confirmMessage')
-            .replaceAll('{{name}}', ghostName)
-            .replaceAll('{{host}}', host),
-          detail: t('settings.ghosts.connections.confirmDetail').replaceAll('{{label}}', declLabel),
-          buttons: [
-            t('settings.ghosts.connections.confirmAllow'),
-            t('settings.ghosts.connections.confirmCancel'),
-          ],
-          defaultId: 1,
-          cancelId: 1,
-        });
-        return response === 0;
+        const message = t('settings.ghosts.connections.confirmMessage')
+          .replaceAll('{{host}}', host);
+        const detail = t('settings.ghosts.connections.confirmDetail').replaceAll('{{label}}', declLabel);
+        const confirmText = t('settings.ghosts.connections.confirmAllow');
+        const cancelText = t('settings.ghosts.connections.confirmCancel');
+        // 弹确认框前捕获当前 dataOwner:确认框等待期间(异步,最长 90s)用户可能
+        // 切账号,确认后 upsert 落错 owner 的存储路径(secret 归到新账号)。
+        // 用户点「允许」后校验 owner 未变才放行,变了按拒绝(Codex 2026-08-07 P1)。
+        const ownerStamp = getGhostOwnerPushStamp();
+        // 桥由启动时初始化(ensureGhostConfirmDialogBridge),连接请求随时可用。
+        // 严格 fail closed:桥投不出确认框(无窗口等)一律拒绝,绝不降级到其它
+        // 可放行的路径(2026-08-07 安全评审)——「问不出来」不等于「用户同意」。
+        const bridge = ensureGhostConfirmDialogBridge();
+        try {
+          const allowed = await bridge.request({
+            ghostId,
+            ghostName,
+            // 标题合并插件名:「添加连接地址 · 心动小镇知识库」。renderer 据此
+            // 判断是宿主受信确认,不重复身份头文字。
+            title: `${t('settings.ghosts.connections.confirmTitle')} · ${ghostName}`,
+            body: message,
+            detail,
+            confirmText,
+            cancelText,
+            danger: false,
+          });
+          if (!allowed) return false;
+          // 用户确认了但 owner 已变:拒绝本次写入,避免 secret 落错账号。
+          if (!isGhostOwnerStampCurrent(ownerStamp)) {
+            log.warn('ghost connection confirm owner changed after dialog (treated as declined)', {
+              ghostId,
+            });
+            return false;
+          }
+          return true;
+        } catch (err) {
+          // 投不出确认框(无窗口等):按「没同意」拒绝,不降级放行。留痕便于排查,
+          // 不记 host/label 等敏感信息。
+          log.warn('ghost connection confirm dialog unavailable (treated as declined)', {
+            ghostId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+          return false;
+        }
       },
       onChanged: (declKey) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'connection', ref: declKey });

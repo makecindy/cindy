@@ -3503,9 +3503,9 @@
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
-        "confirmMessage": "플러그인 \"{{name}}\"이(가) 연결 주소 {{host}} 추가를 요청합니다",
+        "confirmMessage": "연결 주소 {{host}} 추가를 요청합니다",
         "confirmDetail": "허용하면 이 플러그인은 호스트를 통해 이 주소에 접근할 수 있습니다({{label}}). 입력한 자격 증명은 이 주소로의 요청에만 주입됩니다.",
-        "confirmAllow": "허용",
+        "confirmAllow": "액세스 허용",
         "confirmCancel": "취소"
       },
       "errors": {
