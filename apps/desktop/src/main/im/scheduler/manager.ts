@@ -64,7 +64,9 @@ export class ImSchedulerManager {
   private unsubscribe: (() => void) | null = null;
   private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
   private lastSnapshotObservedAt: number | null = null;
+  private snapshotAccountGeneration = '';
   private snapshotRequestId: string | null = null;
+  private awaitingSnapshot = false;
   private snapshotRefreshPending = false;
   private lastLocalIdentity: string | null = null;
   private discoveryNonce = '';
@@ -91,8 +93,8 @@ export class ImSchedulerManager {
   start(): void {
     if (this.started) return;
     this.started = true;
-    this.snapshotRequestId = null;
-    this.snapshotRefreshPending = false;
+    this.resetSnapshotRequestState();
+    this.snapshotAccountGeneration = this.nonceFactory();
     this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
     this.unsubscribe = this.transport.subscribe((event) => this.handleEvent(event));
     this.beginDiscoveryRound();
@@ -108,8 +110,8 @@ export class ImSchedulerManager {
     this.runtimeGaps.clear();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
-    this.snapshotRequestId = null;
-    this.snapshotRefreshPending = false;
+    this.resetSnapshotRequestState();
+    this.snapshotAccountGeneration = '';
     this.lastLocalIdentity = null;
     this.publishDecision({ state: 'standby', channel: null, reason: 'stopped' });
   }
@@ -130,8 +132,8 @@ export class ImSchedulerManager {
     if (scope === 'account') {
       this.snapshot = null;
       this.lastSnapshotObservedAt = null;
-      this.snapshotRequestId = this.nonceFactory();
-      this.snapshotRefreshPending = false;
+      this.snapshotAccountGeneration = this.nonceFactory();
+      this.resetSnapshotRequestState();
       this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
       this.runtimeGaps.clear();
     } else {
@@ -161,8 +163,8 @@ export class ImSchedulerManager {
         if (event.status === 'offline') {
           this.cancelDiscoveryRetry();
           this.snapshot = null;
-          this.snapshotRequestId = null;
-          this.snapshotRefreshPending = false;
+          this.lastSnapshotObservedAt = null;
+          this.resetSnapshotRequestState();
           this.peers.clear();
           this.confirmedPeers.clear();
         } else {
@@ -179,12 +181,19 @@ export class ImSchedulerManager {
         this.reconcile();
         return;
       case 'snapshot': {
-        if (this.snapshotRequestId !== null && event.requestId !== this.snapshotRequestId) {
+        if (
+          event.accountGeneration !== undefined &&
+          event.accountGeneration !== this.snapshotAccountGeneration
+        ) {
           return;
         }
-        if (event.requestId !== undefined) this.snapshotRequestId = event.requestId;
+        const pendingRequestId = this.snapshotRequestId;
+        if (event.requestId !== undefined && event.requestId !== pendingRequestId) return;
+        if (this.awaitingSnapshot && event.requestId === undefined) return;
+        const isCurrentRequest =
+          event.requestId !== undefined && event.requestId === pendingRequestId;
         const preserveRetryAttempt = this.snapshotRefreshPending;
-        this.snapshotRefreshPending = false;
+        this.resetSnapshotRequestState();
         if (event.snapshot === null) {
           // A null authoritative snapshot means the transport can no longer
           // prove that this Desktop is present. Retaining the previous view
@@ -198,6 +207,7 @@ export class ImSchedulerManager {
           return;
         }
         if (
+          !isCurrentRequest &&
           this.lastSnapshotObservedAt !== null &&
           event.snapshot.observedAt < this.lastSnapshotObservedAt
         ) {
@@ -217,14 +227,15 @@ export class ImSchedulerManager {
         // Incremental presence is a signal to fetch a new full snapshot, not
         // an authoritative replacement for the existing membership view.
         this.snapshot = null;
-        this.snapshotRequestId = this.nonceFactory();
-        this.snapshotRefreshPending = false;
+        this.lastSnapshotObservedAt = null;
+        this.resetSnapshotRequestState();
         if (!event.online) {
           this.peers.delete(event.deviceId);
           this.confirmedPeers.delete(event.deviceId);
         } else {
           this.beginDiscoveryRound();
         }
+        this.requestSnapshot(false);
         this.reconcile();
         return;
       case 'push':
@@ -241,11 +252,8 @@ export class ImSchedulerManager {
       return;
     }
     if (payload.inReplyTo !== this.discoveryNonce) return;
-    const previous = this.peers.get(sourceDeviceId);
     this.confirmedPeers.add(sourceDeviceId);
-    if (!previous || payload.sentAt >= previous.sentAt) {
-      this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
-    }
+    this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
     for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
       if (runtime?.state === 'dirty') this.runtimeGaps.adopt(runtime);
     }
@@ -261,19 +269,16 @@ export class ImSchedulerManager {
     sourceDeviceId: string,
     payload: Extract<ImSchedulerFrame, { kind: 'probe' }>,
   ): void {
-    const previous = this.peers.get(sourceDeviceId);
-    if (!previous || payload.sentAt >= previous.sentAt) {
-      this.peers.set(sourceDeviceId, {
+    this.peers.set(sourceDeviceId, {
+      sentAt: payload.sentAt,
+      frame: {
+        kind: 'advertisement',
         sentAt: payload.sentAt,
-        frame: {
-          kind: 'advertisement',
-          sentAt: payload.sentAt,
-          channels: payload.channels,
-          ...(payload.runtime ? { runtime: payload.runtime } : {}),
-          ...(payload.runtimeGaps ? { runtimeGaps: payload.runtimeGaps } : {}),
-        },
-      });
-    }
+        channels: payload.channels,
+        ...(payload.runtime ? { runtime: payload.runtime } : {}),
+        ...(payload.runtimeGaps ? { runtimeGaps: payload.runtimeGaps } : {}),
+      },
+    });
     for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
       if (runtime?.state === 'dirty') this.runtimeGaps.adopt(runtime);
     }
@@ -329,7 +334,7 @@ export class ImSchedulerManager {
       if (!this.started || roundNonce !== this.discoveryNonce) return;
       this.publishProbeToVisiblePeers();
       if (this.discoveryRetryAttempt >= this.maxDiscoveryRetries) {
-        this.snapshotRefreshPending = false;
+        this.resetSnapshotRequestState();
         this.beginDiscoveryRound();
       } else {
         this.scheduleDiscoveryRetry();
@@ -346,10 +351,17 @@ export class ImSchedulerManager {
   }
 
   private requestSnapshot(preserveRetryAttempt: boolean): void {
-    const requestId = this.snapshotRequestId ?? this.nonceFactory();
+    const requestId = this.nonceFactory();
     this.snapshotRequestId = requestId;
+    this.awaitingSnapshot = this.transport.requestSnapshot !== undefined;
     this.snapshotRefreshPending = preserveRetryAttempt;
-    this.transport.requestSnapshot?.(requestId);
+    this.transport.requestSnapshot?.(this.snapshotAccountGeneration, requestId);
+  }
+
+  private resetSnapshotRequestState(): void {
+    this.snapshotRequestId = null;
+    this.awaitingSnapshot = false;
+    this.snapshotRefreshPending = false;
   }
 
   private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {

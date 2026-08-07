@@ -10,6 +10,7 @@ export type SchedulerTransportEvent =
   | {
       type: 'snapshot';
       snapshot: SchedulerDesktopDeviceSnapshot | null;
+      accountGeneration?: string;
       requestId?: string;
     }
   | { type: 'peer-presence'; deviceId: string; platform: string; online: boolean }
@@ -27,5 +28,5 @@ export interface SchedulerTransport {
   subscribe(listener: (event: SchedulerTransportEvent) => void): () => void;
   sendPush(peerDeviceId: string, payload: ImSchedulerFrame): void;
   /** Optional REST/presence refresh hook used by bounded discovery retries. */
-  requestSnapshot?: (requestId: string) => void;
+  requestSnapshot?: (accountGeneration: string, requestId: string) => void;
 }
