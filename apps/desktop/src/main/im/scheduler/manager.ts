@@ -6,7 +6,7 @@ import {
   isImSchedulerFrame,
   type ImSchedulerFrame,
   type SchedulerAdvertisementFrame,
-} from './protocol';
+} from '@cindy/device-link';
 import { RuntimeGapSet } from './runtimeGaps';
 import {
   isDesktopSchedulerPlatform,
@@ -64,6 +64,8 @@ export class ImSchedulerManager {
   private unsubscribe: (() => void) | null = null;
   private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
   private lastSnapshotObservedAt: number | null = null;
+  private snapshotRequestId: string | null = null;
+  private snapshotRefreshPending = false;
   private lastLocalIdentity: string | null = null;
   private discoveryNonce = '';
   private discoveryRetryAttempt = 0;
@@ -89,6 +91,8 @@ export class ImSchedulerManager {
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.snapshotRequestId = null;
+    this.snapshotRefreshPending = false;
     this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
     this.unsubscribe = this.transport.subscribe((event) => this.handleEvent(event));
     this.beginDiscoveryRound();
@@ -104,6 +108,8 @@ export class ImSchedulerManager {
     this.runtimeGaps.clear();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
+    this.snapshotRequestId = null;
+    this.snapshotRefreshPending = false;
     this.lastLocalIdentity = null;
     this.publishDecision({ state: 'standby', channel: null, reason: 'stopped' });
   }
@@ -124,6 +130,8 @@ export class ImSchedulerManager {
     if (scope === 'account') {
       this.snapshot = null;
       this.lastSnapshotObservedAt = null;
+      this.snapshotRequestId = this.nonceFactory();
+      this.snapshotRefreshPending = false;
       this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
       this.runtimeGaps.clear();
     } else {
@@ -134,6 +142,7 @@ export class ImSchedulerManager {
       this.lastLocalIdentity = currentIdentity;
     }
     this.beginDiscoveryRound();
+    if (scope === 'account') this.requestSnapshot(false);
     this.reconcile();
   }
 
@@ -152,6 +161,8 @@ export class ImSchedulerManager {
         if (event.status === 'offline') {
           this.cancelDiscoveryRetry();
           this.snapshot = null;
+          this.snapshotRequestId = null;
+          this.snapshotRefreshPending = false;
           this.peers.clear();
           this.confirmedPeers.clear();
         } else {
@@ -167,7 +178,13 @@ export class ImSchedulerManager {
         }
         this.reconcile();
         return;
-      case 'snapshot':
+      case 'snapshot': {
+        if (this.snapshotRequestId !== null && event.requestId !== this.snapshotRequestId) {
+          return;
+        }
+        if (event.requestId !== undefined) this.snapshotRequestId = event.requestId;
+        const preserveRetryAttempt = this.snapshotRefreshPending;
+        this.snapshotRefreshPending = false;
         if (event.snapshot === null) {
           // A null authoritative snapshot means the transport can no longer
           // prove that this Desktop is present. Retaining the previous view
@@ -176,7 +193,7 @@ export class ImSchedulerManager {
           this.lastSnapshotObservedAt = null;
           this.peers.clear();
           this.confirmedPeers.clear();
-          this.beginDiscoveryRound();
+          this.beginDiscoveryRound({ resetRetryAttempt: !preserveRetryAttempt });
           this.reconcile();
           return;
         }
@@ -191,14 +208,18 @@ export class ImSchedulerManager {
         }
         this.snapshot = event.snapshot;
         this.lastSnapshotObservedAt = event.snapshot.observedAt;
-        this.beginDiscoveryRound();
+        this.beginDiscoveryRound({ resetRetryAttempt: !preserveRetryAttempt });
         this.reconcile();
         return;
+      }
       case 'peer-presence':
+        if (!isDesktopSchedulerPlatform(event.platform)) return;
         // Incremental presence is a signal to fetch a new full snapshot, not
         // an authoritative replacement for the existing membership view.
         this.snapshot = null;
-        if (!event.online || !isDesktopSchedulerPlatform(event.platform)) {
+        this.snapshotRequestId = this.nonceFactory();
+        this.snapshotRefreshPending = false;
+        if (!event.online) {
           this.peers.delete(event.deviceId);
           this.confirmedPeers.delete(event.deviceId);
         } else {
@@ -216,6 +237,7 @@ export class ImSchedulerManager {
     if (payload.kind === 'probe') {
       this.observePeerProbe(sourceDeviceId, payload);
       this.sendAdvertisement(sourceDeviceId, payload.nonce);
+      this.reconcile();
       return;
     }
     if (payload.inReplyTo !== this.discoveryNonce) return;
@@ -257,10 +279,10 @@ export class ImSchedulerManager {
     }
   }
 
-  private beginDiscoveryRound(): void {
-    this.cancelDiscoveryRetry();
+  private beginDiscoveryRound(options: { resetRetryAttempt?: boolean } = {}): void {
+    this.cancelDiscoveryRetry(false);
+    if (options.resetRetryAttempt !== false) this.discoveryRetryAttempt = 0;
     this.discoveryNonce = this.nonceFactory();
-    this.discoveryRetryAttempt = 0;
     this.peers.clear();
     this.confirmedPeers.clear();
     this.publishProbeToVisiblePeers();
@@ -302,18 +324,32 @@ export class ImSchedulerManager {
       this.discoveryRetryTimer = null;
       if (!this.started || nonce !== this.discoveryNonce || this.isDiscoveryComplete()) return;
       this.discoveryRetryAttempt += 1;
-      this.transport.requestSnapshot?.();
+      const roundNonce = this.discoveryNonce;
+      this.requestSnapshot(true);
+      if (!this.started || roundNonce !== this.discoveryNonce) return;
       this.publishProbeToVisiblePeers();
-      this.scheduleDiscoveryRetry();
+      if (this.discoveryRetryAttempt >= this.maxDiscoveryRetries) {
+        this.snapshotRefreshPending = false;
+        this.beginDiscoveryRound();
+      } else {
+        this.scheduleDiscoveryRetry();
+      }
       this.reconcile();
     }, this.discoveryRetryDelayMs);
     this.discoveryRetryTimer.unref?.();
   }
 
-  private cancelDiscoveryRetry(): void {
+  private cancelDiscoveryRetry(resetRetryAttempt = true): void {
     if (this.discoveryRetryTimer) clearTimeout(this.discoveryRetryTimer);
     this.discoveryRetryTimer = null;
-    this.discoveryRetryAttempt = 0;
+    if (resetRetryAttempt) this.discoveryRetryAttempt = 0;
+  }
+
+  private requestSnapshot(preserveRetryAttempt: boolean): void {
+    const requestId = this.snapshotRequestId ?? this.nonceFactory();
+    this.snapshotRequestId = requestId;
+    this.snapshotRefreshPending = preserveRetryAttempt;
+    this.transport.requestSnapshot?.(requestId);
   }
 
   private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {
@@ -328,7 +364,6 @@ export class ImSchedulerManager {
 
   private reconcile(): void {
     const channel = this.getLocalChannel();
-    if (channel) this.lastLocalIdentity = channel.identity;
     if (!this.started) return;
     if (this.transport.getStatus() !== 'online') {
       this.cancelDiscoveryRetry();

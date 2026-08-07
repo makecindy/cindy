@@ -14,7 +14,7 @@ function createTransport(
 ) {
   let listener: ((event: SchedulerTransportEvent) => void) | null = null;
   const pushes: Array<{ peerDeviceId: string; payload: unknown }> = [];
-  const snapshotRequests: number[] = [];
+  const snapshotRequests: string[] = [];
   const transport: SchedulerTransport = {
     selfDeviceId: 'z',
     platform: 'darwin',
@@ -27,7 +27,7 @@ function createTransport(
       };
     },
     sendPush: (peerDeviceId, payload) => pushes.push({ peerDeviceId, payload }),
-    requestSnapshot: () => snapshotRequests.push(Date.now()),
+    requestSnapshot: (requestId) => snapshotRequests.push(requestId),
   };
   return {
     transport,
@@ -183,7 +183,7 @@ describe('dormant scheduler manager', () => {
     });
   });
 
-  it('retries a lost discovery probe with the same nonce and stops at the bound', async () => {
+  it('retries a lost discovery probe and starts a fresh round after the bound', async () => {
     vi.useFakeTimers();
     const harness = createTransport();
     const manager = new ImSchedulerManager({
@@ -209,13 +209,62 @@ describe('dormant scheduler manager', () => {
           payload !== null &&
           (payload as { kind?: unknown }).kind === 'probe',
       );
-    expect(probes).toHaveLength(3);
+    expect(probes).toHaveLength(4);
     expect(new Set(probes.map((probe) => probe.nonce))).toEqual(new Set(['round-000000000000']));
     expect(harness.snapshotRequests).toHaveLength(2);
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(harness.pushes.filter((push) => push.peerDeviceId === 'a')).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(50);
+    const secondRoundCount = harness.pushes.filter((push) => push.peerDeviceId === 'a').length;
+    expect(secondRoundCount).toBeGreaterThan(probes.length);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.pushes.filter((push) => push.peerDeviceId === 'a').length).toBeGreaterThan(
+      secondRoundCount,
+    );
     manager.stop();
+  });
+
+  it('recomputes election when an active peer advertises a newly bound channel', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    const probe = harness.pushes.find((push) => push.peerDeviceId === 'a')?.payload as {
+      nonce?: string;
+    };
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 2,
+        channels: [],
+        inReplyTo: probe?.nonce,
+      },
+    });
+    expect(manager.getDecision().state).toBe('active');
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'probe',
+        sentAt: 3,
+        nonce: 'round-peer-00000',
+        channels: [{ channel: 'discord', identity }],
+      },
+    });
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: { channel: 'discord', identity },
+      reason: 'peer-won',
+    });
   });
 
   it('propagates a binding change in the next peer probe and scopes runtime gaps', () => {
@@ -251,6 +300,23 @@ describe('dormant scheduler manager', () => {
       .getRuntimeGaps()
       .adopt({ identity: nextIdentity, generation: 'b'.repeat(32), state: 'dirty' });
     manager.resetAccountDiscovery();
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+  });
+
+  it('retains the previous binding identity until its reset clears old gaps', () => {
+    let localIdentity = identity;
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity: localIdentity }),
+      nonceFactory: () => 'round-000000000000',
+    });
+    manager.start();
+    manager.getRuntimeGaps().adopt({ identity, generation: 'a'.repeat(32), state: 'dirty' });
+
+    localIdentity = nextIdentity;
+    harness.emit({ type: 'ownership', owner: true });
+    manager.resetBindingDiscovery();
     expect(manager.getRuntimeGaps().values()).toEqual([]);
   });
 
@@ -297,6 +363,61 @@ describe('dormant scheduler manager', () => {
       state: 'standby',
       channel: { channel: 'discord', identity: nextIdentity },
       reason: 'peer-won',
+    });
+  });
+
+  it('ignores snapshot responses from before an account reset', () => {
+    let round = 0;
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => `nonce-${String(++round).padStart(14, '0')}`,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 1 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+
+    manager.resetAccountDiscovery();
+    const requestId = harness.snapshotRequests.at(-1);
+    expect(requestId).toBeTruthy();
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+
+    harness.emit({
+      type: 'snapshot',
+      requestId: 'nonce-old-account',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
+    });
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+
+    harness.emit({
+      type: 'snapshot',
+      requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 3 },
+    });
+    expect(manager.getDecision().state).toBe('active');
+  });
+
+  it('ignores presence changes for non-Desktop devices', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 1 },
+    });
+    harness.emit({ type: 'peer-presence', deviceId: 'phone', platform: 'ios', online: false });
+    expect(manager.getDecision()).toEqual({
+      state: 'active',
+      channel: { channel: 'discord', identity },
+      reason: 'elected',
     });
   });
 

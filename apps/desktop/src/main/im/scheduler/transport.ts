@@ -1,5 +1,5 @@
 import type { SchedulerDesktopDeviceSnapshot } from './deviceSnapshot';
-import type { ImSchedulerFrame } from './protocol';
+import type { ImSchedulerFrame } from '@cindy/device-link';
 
 export type SchedulerRelayStatus = 'online' | 'offline';
 
@@ -7,7 +7,11 @@ export type SchedulerTransportEvent =
   | { type: 'relay-status'; status: SchedulerRelayStatus }
   | { type: 'ownership'; owner: boolean }
   /** null invalidates the previously accepted authoritative view. */
-  | { type: 'snapshot'; snapshot: SchedulerDesktopDeviceSnapshot | null }
+  | {
+      type: 'snapshot';
+      snapshot: SchedulerDesktopDeviceSnapshot | null;
+      requestId?: string;
+    }
   | { type: 'peer-presence'; deviceId: string; platform: string; online: boolean }
   | { type: 'push'; sourceDeviceId: string; payload: unknown };
 
@@ -23,5 +27,5 @@ export interface SchedulerTransport {
   subscribe(listener: (event: SchedulerTransportEvent) => void): () => void;
   sendPush(peerDeviceId: string, payload: ImSchedulerFrame): void;
   /** Optional REST/presence refresh hook used by bounded discovery retries. */
-  requestSnapshot?: () => void;
+  requestSnapshot?: (requestId: string) => void;
 }

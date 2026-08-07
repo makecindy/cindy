@@ -1,12 +1,10 @@
 /** Pure state and deterministic election rules for the dormant Discord ingress scheduler. */
 
-export type SchedulerPlatform = 'darwin' | 'linux' | 'win32';
+import type { SchedulerChannelIdentity } from '@cindy/device-link';
 
-export interface SchedulerChannelIdentity {
-  channel: 'discord';
-  /** Discord application id only; credentials never belong in this type. */
-  identity: string;
-}
+export type { SchedulerChannelIdentity } from '@cindy/device-link';
+
+export type SchedulerPlatform = 'darwin' | 'linux' | 'win32';
 
 export interface SchedulerDevice {
   deviceId: string;

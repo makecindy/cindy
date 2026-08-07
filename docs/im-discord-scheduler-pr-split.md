@@ -33,29 +33,33 @@ PR #1861 已经累积了大量 review 轮次和增量修复，导致调度基础
 保留或新增：
 
 - `apps/desktop/src/main/im/scheduler/transport.ts`
-- `apps/desktop/src/main/im/scheduler/protocol.ts`
+- `packages/device-link/src/discordSchedulerProtocol.ts`
+- `packages/device-link/src/__tests__/discordSchedulerProtocol.test.ts`
 - `apps/desktop/src/main/im/scheduler/state.ts`
 - `apps/desktop/src/main/im/scheduler/deviceSnapshot.ts`
 - `apps/desktop/src/main/im/scheduler/runtimeGaps.ts`
 - `apps/desktop/src/main/im/scheduler/manager.ts`
-- `apps/desktop/src/main/im/scheduler/__tests__/protocol.test.ts`
 - `apps/desktop/src/main/im/scheduler/__tests__/state.test.ts`
 - `apps/desktop/src/main/im/scheduler/__tests__/deviceSnapshot.test.ts`
 - `apps/desktop/src/main/im/scheduler/__tests__/runtimeGaps.test.ts`
 - `apps/desktop/src/main/im/scheduler/__tests__/manager.test.ts`
 
 Device Link 的具体 host/client 接线全部延后到 PR-B。PR-A 只在
-`scheduler/transport.ts` 定义适配接口和事件形状，不修改现有 Device Link host、client 或 wire
-协议；这样 PR-A 可以在不启动任何 IM 的前提下独立审查和测试。
+`packages/device-link/src/discordSchedulerProtocol.ts` 定义这条 Discord-only 隧道 payload
+的共享形状，并在 `scheduler/transport.ts` 定义适配接口和事件形状；不修改 relay envelope、
+`cindy-protocol` 或现有 Device Link host/client 行为。这样 PR-A 可以在不启动任何 IM 的前提下
+独立审查和测试。
 
 ### PR-A 必须覆盖的状态不变量
 
 - relay 不在线、ownership 不成立、self Desktop 不在权威快照中时 fail-closed。
 - peer presence 必须有当前 discovery round 的确认，不能把空视图当作完整视图。
 - discovery probe 使用 nonce 绑定的有界 retry/refresh；完成、停止、重置或快照世代变化时取消旧轮。
+- 单轮 retry 耗尽后启动新的 discovery round，避免永久停在 incomplete-peer-view；刷新响应保留当前轮计数。
+- snapshot refresh 使用 request id 绑定账号/请求世代，账号切换后拒绝旧响应；null snapshot 撤销旧权威视图。
 - 选主必须是确定性的，同一 `(channel, non-secret identity)` 同一时刻最多一个赢家。
 - 所有选主、快照和 gap 裁剪排序使用 locale-independent comparator；设备成员变化、时钟回拨、账号切换会使旧 discovery/runtime 视图失效。
-- 只有当前权威 Desktop 快照中的 peer 能参与 probe/advertisement；binding 变化会在下一轮 probe 中传播当前非敏感 identity。
+- 只有当前权威 Desktop 快照中的 peer 能参与 probe/advertisement；binding 变化会在下一轮 probe 中传播当前非敏感 identity，并立即重算本地选举。
 - runtime gap 以 identity 归属、generation 去重并有确定性上限；不携带 token 或 secret。
 - PR-A 的 manager 不被任何现有 IM 启动路径调用。
 
@@ -68,6 +72,7 @@ Device Link 的具体 host/client 接线全部延后到 PR-B。PR-A 只在
 - `packages/lizi-im/src/channelIM.ts`、全局 `IMStatus` 扩展
 - preload、renderer、设置页和 i18n
 - 其他 IM provider 文件
+- 通用 Device Link 重构；仅新增上述 Discord scheduler payload 共享契约
 - Discord Gateway 生命周期、handoff drain 和 offline notice 消费
 
 ## PR-B：Discord Gateway 接入
