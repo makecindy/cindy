@@ -1377,6 +1377,14 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([1, 1, 2]);
   });
 
+  it('counts rendered block separators when bounding text runs by text length', () => {
+    const blocks = parseMobileMarkdown(['aaaa', '', 'bbbb'].join('\n'));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run']);
+    expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([1, 1]);
+  });
+
   it('splits a single oversized text block by rendered inline text length', () => {
     const blocks = parseMobileMarkdown('a'.repeat(21));
     const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
@@ -1407,6 +1415,35 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     ));
     expect(chunkText).toEqual(['a'.repeat(7), '😀b']);
     expect(chunkText.join('')).toBe(text);
+  });
+
+  it('splits oversized non-direct image alt text by rendered inline text length', () => {
+    const blocks = parseMobileMarkdown(`![${'a'.repeat(21)}](docs/local-image.png)`);
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+    const imageInlines = chunks.flatMap((block) => block.inlines.filter((inline) => inline.type === 'image'));
+
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
+    expect(imageInlines.map((inline) => inline.alt)).toEqual([
+      'a'.repeat(8),
+      'a'.repeat(8),
+      'a'.repeat(5),
+    ]);
+    expect(imageInlines.every((inline) => inline.url === 'docs/local-image.png')).toBe(true);
+    expect(chunks.map((block) => block.textRunContinuation === true)).toEqual([false, true, true]);
+  });
+
+  it('does not split surrogate pairs in oversized image alt text', () => {
+    const alt = `${'a'.repeat(7)}😀b`;
+    const blocks = parseMobileMarkdown(`![${alt}](docs/local-image.png)`);
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+    const imageAltChunks = chunks.flatMap((block) => (
+      block.inlines.filter((inline) => inline.type === 'image').map((inline) => inline.alt)
+    ));
+
+    expect(imageAltChunks).toEqual(['a'.repeat(7), '😀b']);
+    expect(imageAltChunks.join('')).toBe(alt);
   });
 
   it('counts rendered list marker spaces when splitting long list items', () => {

@@ -429,6 +429,8 @@ export interface MobileMarkdownTextRunGroupingOptions {
   maxTextRunUtf16Length?: number;
 }
 
+const MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH = 2;
+
 export function groupMobileMarkdownSelectableBlocks(
   blocks: readonly MobileMarkdownBlock[],
   options?: MobileMarkdownTextRunGroupingOptions,
@@ -453,17 +455,23 @@ export function groupMobileMarkdownSelectableBlocks(
     if (isTextRunBlock(block)) {
       for (const chunk of splitOversizedTextRunBlock(block, maxTextRunUtf16Length)) {
         const blockTextLength = mobileMarkdownTextRunBlockLength(chunk);
+        const separatorLength = run.length > 0 && !chunk.textRunContinuation
+          ? MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH
+          : 0;
         if (
           run.length > 0
           && (
             run.length >= maxTextRunBlocks
-            || runTextLength + blockTextLength > maxTextRunUtf16Length
+            || runTextLength + separatorLength + blockTextLength > maxTextRunUtf16Length
           )
         ) {
           flushRun();
         }
+        const pushedSeparatorLength = run.length > 0 && !chunk.textRunContinuation
+          ? MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH
+          : 0;
         run.push(chunk);
-        runTextLength += blockTextLength;
+        runTextLength += pushedSeparatorLength + blockTextLength;
       }
     } else {
       flushRun();
@@ -531,36 +539,36 @@ function splitOversizedTextRunBlock(
     current = [];
     currentTextLength = 0;
   };
-
-  for (const inline of block.inlines) {
-    if (inline.type === 'image') {
-      const inlineLength = mobileMarkdownInlineTextLength(inline);
-      if (current.length > 0 && currentTextLength + inlineLength > currentLimit()) {
-        flushCurrent();
-      }
-      current.push(inline);
-      currentTextLength += inlineLength;
-      if (currentTextLength >= currentLimit()) flushCurrent();
-      continue;
-    }
-
+  const appendInlineTextChunks = (
+    text: string,
+    buildInline: (text: string) => MobileMarkdownInline,
+  ) => {
     let start = 0;
-    while (start < inline.text.length) {
+    while (start < text.length) {
       if (currentTextLength >= currentLimit()) flushCurrent();
       const capacity = currentLimit() - currentTextLength;
       if (
         currentTextLength > 0
         && capacity === 1
-        && startsWithSurrogatePair(inline.text, start)
+        && startsWithSurrogatePair(text, start)
       ) {
         flushCurrent();
         continue;
       }
-      const end = safeUtf16SliceEnd(inline.text, start, capacity);
-      current.push({ ...inline, text: inline.text.slice(start, end) });
+      const end = safeUtf16SliceEnd(text, start, capacity);
+      current.push(buildInline(text.slice(start, end)));
       currentTextLength += end - start;
       start = end;
     }
+  };
+
+  for (const inline of block.inlines) {
+    if (inline.type === 'image') {
+      appendInlineTextChunks(inline.alt, (alt) => ({ ...inline, alt }));
+      continue;
+    }
+
+    appendInlineTextChunks(inline.text, (text) => ({ ...inline, text }));
   }
   flushCurrent();
 
