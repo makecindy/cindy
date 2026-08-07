@@ -1758,10 +1758,14 @@ function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
   };
 }
 
-function createXaiResponsesCompatTransform(): RequestTransform {
+function createXaiResponsesCompatTransform(external = false): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
-    const sessionId = sessionIdFromTransformCtx(ctx);
+    // 对外端口无 session 语义:external 时绝不读(外部客户端可伪造的)session header 去
+    // getSessionProvider,只按请求自身的 body.model 推断供应商——与 resolveExternalCodexRoute
+    // 的模型推断同源。否则伪造 session 可让 xAI schema 改写错误地施加到非 xAI 外部路由,或反过来
+    // 被跳过(#1666 review:external-safe chain)。
+    const sessionId = external ? undefined : sessionIdFromTransformCtx(ctx);
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const inferredProviderId =
       explicitProviderId ?? (typeof body.model === 'string' ? inferProviderIdForModel(body.model, 'codex') : null);
@@ -1786,7 +1790,9 @@ function createXaiResponsesCompatTransform(): RequestTransform {
     // 保证注入项不会被同一轮的裁剪逻辑改形或丢掉。
     // Guardian must retain xAI's schema/input compatibility, but it must not
     // gain provider-hosted search tools while reviewing another action.
-    if (!guardianParentThreadIdFromHeaders(ctx.headers)) {
+    // 对外端口同样不注入服务端 search 工具:与不注入 gateway web_search 对称,外部客户端没主动
+    // 要就不改其请求语义/计费(#1666 review)——仍保留 xAI 的 schema/input 归一化,请求照样可用。
+    if (!external && !guardianParentThreadIdFromHeaders(ctx.headers)) {
       const withServerSideTools = ensureXaiServerSideTools(current);
       if (withServerSideTools) {
         current = withServerSideTools;
@@ -1922,6 +1928,19 @@ function createProviderModelRewriteTransform(): RequestTransform {
     if (sessionId && explicitProviderId) return rewriteSessionModelIdForRoute(sessionId, 'codex', body);
     return rewriteImplicitModelIdForRoute('codex', body);
   };
+}
+
+/**
+ * 对外端口专用 model 改写:只做**隐式**(按请求自身 model 命名空间前缀)改写,绝不读 session。
+ *
+ * 内部端口的 createProviderModelRewriteTransform 在有 session + 显式供应商时会走
+ * rewriteSessionModelIdForRoute,按内部会话选定的供应商改写 model。对外端口若沿用它,外部客户端
+ * 只要伪造 x-codex-session-id 之类的 header 就能触发「按 Cindy 内部会话」的 model 改写,把内部
+ * 会话状态带进外部请求(#1666 review)。对外只按请求自身的 model 前缀改写,与
+ * resolveExternalCodexRoute 的模型推断同源,不受任何 client 提供的 session/thread header 影响。
+ */
+function createExternalCodexModelRewriteTransform(): RequestTransform {
+  return (body) => rewriteImplicitModelIdForRoute('codex', body);
 }
 
 function createDumpTransform(): RequestTransform {
@@ -2660,6 +2679,7 @@ export function createModelRoutingTransform(
 
 function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  external = false,
 ): RequestTransform[] {
   const transforms: RequestTransform[] = [
     createActiveStripTransform({
@@ -2672,20 +2692,32 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
-    createCodexTransform(),
-    // Guardian uses an isolated child thread. Resolve its parent business
-    // session and select that session's real provider model before provider
-    // compatibility transforms inspect the request.
-    createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
-    createGatewayNativeWebSearchTransform(),
+    // instructions 注入 / Guardian / gateway-native web_search 三条都耦合 Cindy 内部 session、
+    // 内部 thread registry 或 spawn 形态,对外端口一律不挂(#1666 review:external-safe chain):
+    //   - createCodexTransform 按**客户端提供的** thread-id header 查内部 instructions registry。
+    //     该 registry 只由内部 codex 会话的 registerComposed 写入,外部客户端不可能合法命中;挂着
+    //     只意味着伪造/猜中 thread-id 就能把 Cindy 的内部产品提示词拼进外部请求发往上游。
+    //   - Guardian(createProviderAwareGuardianReviewerTransform)是内部子线程概念,靠 thread→
+    //     session 反解 + authInjection 选内部会话的真实供应商模型;外部客户端没有 guardian 父会话,
+    //     只会让伪造的 thread header 触发按内部会话的 prompt/model 改写。
+    //   - createGatewayNativeWebSearchTransform 会在内部 authInjection==='env-key' 时给 gpt-5.6*
+    //     注入 web_search,哪怕外部路由选的是不支持它的自定义/非网关供应商 → 不支持工具报错。
+    ...(external
+      ? []
+      : [
+          createCodexTransform(),
+          createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
+          createGatewayNativeWebSearchTransform(),
+        ]),
     // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),
     createStrictGatewayHistoryCompatTransform(),
-    createXaiResponsesCompatTransform(),
+    createXaiResponsesCompatTransform(external),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
-    createProviderModelRewriteTransform(),
+    // 对外端口用隐式(按 body.model 前缀)model 改写,绝不读 session;内部端口保持会话感知改写。
+    external ? createExternalCodexModelRewriteTransform() : createProviderModelRewriteTransform(),
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -2797,7 +2829,7 @@ function createCodexProxyHandle(
     ...(port && port > 0 ? { port } : {}),
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection),
+    transformRequest: createTransformRequestChain(frozenAuthInjection, external),
     // external=true:对外端口,只认 B 族对外 token 的独立路由(createExternalCodexRoutingTransform),
     // 绝不回落内部默认路由/网关 key。external=false:常规 session proxy 读当前全局 spawn 形态;
     // control-plane proxy 在创建时冻结自己的形态,两个 app-server 并行时不会互相改写路由。

@@ -1907,6 +1907,75 @@ describe('codex proxy host', () => {
     ).toBeNull();
   });
 
+  it('对外 transformRequest 链不含 instructions 注入 / Guardian / gateway web_search(#1666 review external-safe chain)', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) })
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:51999', dispose: vi.fn(async () => undefined) });
+
+    await host.ensureCodexProxyReady();
+    const internalInjectionTransformCalls = mockState.createInstructionsInjectionTransform.mock.calls.length;
+    await host.ensureCodexExternalProxyReady();
+
+    const internalOpts = mockState.createAnthropicCompatProxy.mock.calls[0]![0] as {
+      transformRequest: unknown[];
+    };
+    const externalOpts = mockState.createAnthropicCompatProxy.mock.calls.at(-1)![0] as {
+      transformRequest: unknown[];
+    };
+
+    // 内部链保持原样(instructions 注入 + Guardian + gateway web_search 三条内部态耦合 transform
+    // 在内);对外链去掉这三条,长度恰好少 3,且末尾仍是纯 body 归一化的 stripNonAnthropicFields。
+    expect(externalOpts.transformRequest.length).toBe(internalOpts.transformRequest.length - 3);
+    expect(externalOpts.transformRequest.at(-1)).toBe(mockState.stripNonAnthropicFields);
+    // 对外 handle 根本没构造 instructions 注入 transform —— 内部 thread registry 不出现在对外链里,
+    // 伪造 thread-id 也拼不到 Cindy 的内部产品提示词。
+    expect(mockState.createInstructionsInjectionTransform.mock.calls.length).toBe(
+      internalInjectionTransformCalls,
+    );
+  });
+
+  it('对外链在内部 env-key 态下也绝不给 gpt-5.6 注入 gateway web_search(#1666 review)', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) })
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:51999', dispose: vi.fn(async () => undefined) });
+
+    await host.ensureCodexProxyReady();
+    await host.ensureCodexExternalProxyReady();
+
+    // 内部 spawn 处于 env-key:对内部链这会给 gpt-5.6 的 /responses 补 web_search 工具(gateway 原生
+    // 搜索能力);对外链必须不受该内部态影响——外部路由可能选不支持它的自定义供应商 → 不支持工具报错。
+    host.setCodexProxyAuthInjection('env-key');
+
+    const internalChain = (mockState.createAnthropicCompatProxy.mock.calls[0]![0] as {
+      transformRequest: Array<(body: unknown, ctx: unknown) => unknown>;
+    }).transformRequest;
+    const externalChain = (mockState.createAnthropicCompatProxy.mock.calls.at(-1)![0] as {
+      transformRequest: Array<(body: unknown, ctx: unknown) => unknown>;
+    }).transformRequest;
+
+    const ctx = { reqId: 1, method: 'POST', url: '/v1/responses', headers: {} };
+    const runChain = async (
+      chain: Array<(body: unknown, ctx: unknown) => unknown>,
+    ): Promise<Record<string, unknown>> => {
+      let current: Record<string, unknown> = { model: 'gpt-5.6', input: [], tools: [] };
+      for (const transform of chain) {
+        const next = await Promise.resolve(transform(current, ctx));
+        if (next != null) current = next as Record<string, unknown>;
+      }
+      return current;
+    };
+    const hasWebSearch = (body: Record<string, unknown>) =>
+      Array.isArray(body.tools) &&
+      body.tools.some((tool) => tool && typeof tool === 'object' && (tool as { type?: unknown }).type === 'web_search');
+
+    // 对照:内部链确实注入了 web_search(证明该 transform 生效、对外剔除是有意义的)。
+    expect(hasWebSearch(await runChain(internalChain))).toBe(true);
+    // 对外链绝不注入。
+    expect(hasWebSearch(await runChain(externalChain))).toBe(false);
+  });
+
   it('declines the next websocket upgrade after a body recovery error is armed', async () => {
     const host = await freshCodexProxyHost();
     const disconnectWebSocketsForThread = vi.fn(() => 2);
