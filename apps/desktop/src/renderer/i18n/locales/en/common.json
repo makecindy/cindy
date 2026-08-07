@@ -6572,7 +6572,7 @@
       "loadingDialogues": "Loading…",
       "noDialogues": "No sessions",
       "dialogueSettings": "Organize Chat",
-      "dialogueSettingsAria": "Organize Chat (Sort by: {{sortBy}})",
+      "dialogueSettingsAria": "Organize Chat (Status: {{status}}, Sort by: {{sortBy}})",
       "dialogueSortHeading": "Sort by",
       "dialogueSort": {
         "recency": "Recent first",

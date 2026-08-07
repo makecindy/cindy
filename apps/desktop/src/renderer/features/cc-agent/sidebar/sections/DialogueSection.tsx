@@ -27,6 +27,7 @@ import {
 import { sessionActivityMs } from '../../lib/dateSessionGrouping';
 import { SectionCollapse } from '../SectionCollapse';
 import { getDialogueCollapseLimit } from '../../lib/sidebarCollapseConfig';
+import type { FilterStatus } from '../../hooks/useSidebarFilter';
 import { SessionEntryList } from '../SessionEntryList';
 import type { SessionClickHandler } from '../SessionItem';
 import type {
@@ -53,6 +54,16 @@ const DIALOGUE_SORT_OPTIONS: ReadonlyArray<{
   { value: 'recency', labelKey: 'ccAgent.sidebar.dialogueSort.recency' },
   { value: 'time', labelKey: 'ccAgent.sidebar.dialogueSort.time' },
   { value: 'title', labelKey: 'ccAgent.sidebar.dialogueSort.title' },
+];
+
+/** 状态筛选选项复用 SidebarFilterPopover 的全局 Status 语义（active/archived/all）。 */
+const DIALOGUE_STATUS_OPTIONS: ReadonlyArray<{
+  value: FilterStatus;
+  labelKey: string;
+}> = [
+  { value: 'active', labelKey: 'ccAgent.sidebar.filterStatus.active' },
+  { value: 'archived', labelKey: 'ccAgent.sidebar.filterStatus.archived' },
+  { value: 'all', labelKey: 'ccAgent.sidebar.filterStatus.all' },
 ];
 
 const HEADER_HOVER_ACTION_CLASS = cn(
@@ -87,6 +98,10 @@ export interface DialogueSectionProps {
    *  排序(否则折叠后面板前 N 条与展开态刚排好的顺序不一致,codex review)。 */
   sortBy: DialogueSortBy;
   onSortByChange: (value: DialogueSortBy) => void;
+  /** 状态筛选受控化:复用全局 SidebarFilter 的 status 语义,入口驱动同一份筛选
+   *  状态,避免 Dialogue 区与 Projects 区维护两套不同步的归档视图。 */
+  status: FilterStatus;
+  onStatusChange: (status: FilterStatus) => void;
 }
 
 function statusRank(session: Session): number {
@@ -132,6 +147,8 @@ export function DialogueSection({
   onCreateDialogue,
   sortBy,
   onSortByChange,
+  status,
+  onStatusChange,
 }: DialogueSectionProps) {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
@@ -142,6 +159,10 @@ export function DialogueSection({
   const sortByLabel = t(
     DIALOGUE_SORT_OPTIONS.find((option) => option.value === sortBy)?.labelKey ??
       'ccAgent.sidebar.dialogueSort.recency',
+  );
+  const statusLabel = t(
+    DIALOGUE_STATUS_OPTIONS.find((option) => option.value === status)?.labelKey ??
+      'ccAgent.sidebar.filterStatus.active',
   );
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
   const toggleLabel = collapsed
@@ -186,7 +207,10 @@ export function DialogueSection({
               <Tip text={t('ccAgent.sidebar.dialogueSettings')} side="bottom">
                 <button
                   type="button"
-                  aria-label={t('ccAgent.sidebar.dialogueSettingsAria', { sortBy: sortByLabel })}
+                  aria-label={t('ccAgent.sidebar.dialogueSettingsAria', {
+                    status: statusLabel,
+                    sortBy: sortByLabel,
+                  })}
                   className={cn(
                     'flex h-7 w-7 items-center justify-center rounded-md',
                     'text-[var(--sidebar-list-muted)]',
@@ -206,6 +230,38 @@ export function DialogueSection({
               <div className="px-2 py-1.5 text-xs font-medium text-[var(--cmd-palette-item-meta)]">
                 {t('ccAgent.sidebar.dialogueSettings')}
               </div>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
+                  <span className="truncate">{t('ccAgent.sidebar.filterStatusHeading')}</span>
+                  <span className="ml-auto max-w-[80px] truncate text-right text-[var(--cmd-palette-item-meta)]">
+                    {statusLabel}
+                  </span>
+                  <ChevronRight
+                    size={14}
+                    className="shrink-0 text-[var(--cmd-palette-item-meta)]"
+                  />
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent
+                  sideOffset={8}
+                  className={cn(MENU_SUB_CONTENT_CLASS, 'w-[180px]')}
+                >
+                  {DIALOGUE_STATUS_OPTIONS.map((option) => (
+                    <DropdownMenuItem
+                      key={option.value}
+                      onSelect={() => onStatusChange(option.value)}
+                      className={MENU_ITEM_CLASS}
+                    >
+                      <span className="truncate">{t(option.labelKey)}</span>
+                      {status === option.value && (
+                        <Check
+                          size={15}
+                          className="ml-auto shrink-0 text-[var(--msg-assistant-text)]"
+                        />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
                   <span className="truncate">{t('ccAgent.sidebar.dialogueSortHeading')}</span>

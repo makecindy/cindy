@@ -3083,6 +3083,8 @@ function ExpandedView({
                     onCreateDialogue={handleCreateDialogue}
                     sortBy={dialogueSortBy}
                     onSortByChange={setDialogueSortBy}
+                    status={filter.status}
+                    onStatusChange={filter.setStatus}
                   />
                 </>
               )}
