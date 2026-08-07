@@ -313,13 +313,14 @@ describe('capabilities refresh clamp contract', () => {
     refreshed.availableModels = [
       {
         id: 'claude-haiku-4-5',
-        label: 'Haiku',
+        displayName: 'Haiku',
+        contextWindow: 200_000,
         efforts: ['low'],
         defaultEffort: 'low',
         supportsFastMode: false,
       },
     ];
-    refreshed.permissionModes = [{ id: 'default', label: 'Default' }];
+    refreshed.permissionModes = [{ id: 'default', displayName: 'Default' }];
 
     expect(
       resolveDeviceLinkDraftDefaults(
