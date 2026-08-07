@@ -1630,7 +1630,9 @@ const r = await cindy.send({
   prompt: '把下面的反馈按情绪分成 正面/负面/中性,只回类别词:\\n' + feedback,
   // expectJson: true,     // 可选:要求只输出 JSON,主机校验可解析
   // maxTokens: 256,       // 可选:输出自限上限(1–81920)。缺省不设输出上限——按所选
-                          // 供应商/模型的自然输出,主机 60s 超时是实际边界;担心成本的插件应显式传值自限
+                          // 供应商/模型的自然输出,主机 60s 超时是实际边界;担心成本的插件应显式传值自限。
+                          // 按量计费路由严格生效;ChatGPT 订阅路由(Codex 档位 / OpenAI)上游拒绝该参数,
+                          // 宿主按 maxTokens×4 字符做近似钳制兑现契约
   callId: msg.callId,      // tool-call 触发时务必带上(归因)
 });
 // 成功:{ ok:true, text:'…', model:'…' }(model = 实际应答的通道/型号,仅诊断)

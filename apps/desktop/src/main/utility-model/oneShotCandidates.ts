@@ -40,6 +40,34 @@ export function agentSupportsOneShot(agentKind: AgentKind): boolean {
   return ONESHOT_CAPABLE_AGENTS.has(agentKind);
 }
 
+/**
+ * 该 (transport, providerId) 路由能否在**服务端**落实 maxTokens。返回 false =
+ * 无法落实,调用方(快问快答 wiring)需在宿主侧按字符上界钳制兑现契约。
+ *
+ * 未落实集合:Codex 快速通道档位(codex-responses 经 OpenAI 订阅,
+ * maker.oneShot 忽略 maxTokens)与 OpenAI 目录钉(supportsMaxOutputTokens:
+ * false,上游 chatgpt.com/backend-api/codex 对 max_output_tokens 返回 400,
+ * 见 anthropic-responses-bridge/src/translate-request.ts:290)。xAI 虽同为
+ * codex-responses transport,但 max_output_tokens 已实际下发,不在此列。
+ */
+export function oneshotRouteCannotEnforceMaxTokens(
+  transport: string | undefined,
+  providerId: string,
+): boolean {
+  return transport === 'codex-responses' && providerId !== 'xai';
+}
+
+/**
+ * 快问快答在无法服务端落实 maxTokens 的路由上做**宿主侧输出钳制**:
+ * 按 token 上限 ×4 字符的宽松上界截断(英文约 1 token≈4 字符、中文更密,
+ * ×4 只拦明显越界),与按量供应商 max_tokens 命中 finish_reason:length 的
+ * 行为一致(跨路由一致性)。
+ */
+export function clampOneshotTextOutput(text: string, maxTokens: number): string {
+  const ceilingChars = maxTokens * 4;
+  return text.length > ceilingChars ? text.slice(0, ceilingChars) : text;
+}
+
 export type UtilityTextCapability = {
   transports: readonly UtilityModelTransport[];
 };
