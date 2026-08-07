@@ -85,15 +85,12 @@ export function terminateSafePosixProcessTree(
       for (const expected of frontier) {
         const current = rowsByPid.get(expected.pid);
         if (expected.root && (!current || !isExpectedRoot(current))) {
-          // SIGSTOP 与复核之间若根 PID 已被另一实例复用，rootStateBeforeStop 属于旧
-          // Agent，不能据此判断替代进程原本是否暂停。只要替代实例仍存在，就必须
-          // SIGCONT 撤销我们刚发出的 SIGSTOP，避免把未授权进程永久冻结。
-          if (
-            current &&
-            current.startIdentity !== expected.startIdentity &&
-            !resumeOnFailurePids.includes(rootPid)
-          ) {
-            resumeOnFailurePids.push(rootPid);
+          // 复核时若根 PID 已是另一个出生身份，就不能再对该 PID 发 SIGCONT：
+          // SIGSTOP 可能命中的是随后退出的旧实例，而当前 PID 已属于未授权替代进程。
+          // 从恢复集合移除根 PID，保持失败关闭，避免跨越进程归属边界。
+          if (current && current.startIdentity !== expected.startIdentity) {
+            const recoveryIndex = resumeOnFailurePids.indexOf(rootPid);
+            if (recoveryIndex >= 0) resumeOnFailurePids.splice(recoveryIndex, 1);
           }
           return 'root-not-found';
         }
@@ -122,9 +119,7 @@ export function terminateSafePosixProcessTree(
               // 子进程可能在本次快照之后 fork 后代再退出；即使旧快照里没有
               // 已知后代，也不能证明该分支已清空。父链失效后必须失败关闭，
               // 由外层恢复已冻结进程，等待用户基于新鲜归属快照重试。
-              throw new Error(
-                `process exited before its descendants could be frozen: ${childPid}`,
-              );
+              throw new Error(`process exited before its descendants could be frozen: ${childPid}`);
             }
             throw error;
           }

@@ -86,26 +86,26 @@ describe('terminateSafePosixProcessTree', () => {
     ]);
   });
 
-  it('旧根原本已暂停但 PID 被新实例复用时仍恢复替代进程', () => {
-    const replacement = row(100, 10, 'T');
-    replacement.startIdentity = 'start:replacement';
-    const signal = vi.fn();
+  it.each(['S', 'T'])(
+    '根进程原状态为 %s 但 PID 已被新实例复用时不向替代进程发 SIGCONT',
+    (rootStateBeforeStop) => {
+      const replacement = row(100, 10, 'T');
+      replacement.startIdentity = 'start:replacement';
+      const signal = vi.fn();
 
-    expect(
-      terminateSafePosixProcessTree({
-        rootPid: 100,
-        rootStartIdentity: 'start:original',
-        rootStateBeforeStop: 'T',
-        scan: () => snapshot([replacement]),
-        signal,
-        isExpectedRoot: (candidate) => candidate.startIdentity === 'start:original',
-      }),
-    ).toBe('root-not-found');
-    expect(signal.mock.calls).toEqual([
-      [100, 'SIGSTOP'],
-      [100, 'SIGCONT'],
-    ]);
-  });
+      expect(
+        terminateSafePosixProcessTree({
+          rootPid: 100,
+          rootStartIdentity: 'start:original',
+          rootStateBeforeStop,
+          scan: () => snapshot([replacement]),
+          signal,
+          isExpectedRoot: (candidate) => candidate.startIdentity === 'start:original',
+        }),
+      ).toBe('root-not-found');
+      expect(signal.mock.calls).toEqual([[100, 'SIGSTOP']]);
+    },
+  );
 
   it('SIGSTOP 后根或子进程仍在运行时拒绝枚举/终止并恢复已暂停节点', () => {
     const rootSignal = vi.fn();

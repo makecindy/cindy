@@ -175,7 +175,9 @@ describe('terminate ownership validation', () => {
       scanOsProcessesSync: vi.fn(() => {
         scanCount += 1;
         const rows =
-          scanCount === 1 ? ownedRows : ownedRows.map((candidate) => ({ ...candidate, state: 'T' }));
+          scanCount === 1
+            ? ownedRows
+            : ownedRows.map((candidate) => ({ ...candidate, state: 'T' }));
         return { rows, childrenByParent: buildChildrenByParent(rows) };
       }),
       classify,
@@ -237,10 +239,11 @@ describe('terminate ownership validation', () => {
         cmdLineLower: 'claude-marker main',
         startIdentity: 'start:new',
       }),
+      false,
     ],
-    ['父进程改变', osRow({ pid: 900, ppid: 1, cmdLineLower: 'claude-marker main' })],
-    ['marker 消失', osRow({ pid: 900, ppid: SELF_PID, cmdLineLower: 'replacement process' })],
-  ])('POSIX 暂停后复核发现根进程%s时拒绝终止', (_description, recheckedRoot) => {
+    ['父进程改变', osRow({ pid: 900, ppid: 1, cmdLineLower: 'claude-marker main' }), true],
+    ['marker 消失', osRow({ pid: 900, ppid: SELF_PID, cmdLineLower: 'replacement process' }), true],
+  ])('POSIX 暂停后复核发现根进程%s时拒绝终止', (_description, recheckedRoot, shouldResume) => {
     const first = { rows: ownedRows, childrenByParent: buildChildrenByParent(ownedRows) };
     const secondRows = [recheckedRoot, ...ownedRows.filter((row) => row.pid !== 900)];
     const second = { rows: secondRows, childrenByParent: buildChildrenByParent(secondRows) };
@@ -256,10 +259,14 @@ describe('terminate ownership validation', () => {
       ),
     ).toThrow('NOT_FOUND');
     expect(kill).not.toHaveBeenCalled();
-    expect(signal.mock.calls).toEqual([
-      [900, 'SIGSTOP'],
-      [900, 'SIGCONT'],
-    ]);
+    expect(signal.mock.calls).toEqual(
+      shouldResume
+        ? [
+            [900, 'SIGSTOP'],
+            [900, 'SIGCONT'],
+          ]
+        : [[900, 'SIGSTOP']],
+    );
   });
 
   it('POSIX 暂停后的扫描失败时恢复根进程并返回 INTERNAL', () => {
@@ -373,9 +380,7 @@ describe('terminate ownership validation', () => {
     ['控制面服务', 'control-plane-service' as const],
     ['角色未知', null],
   ])('Codex %s 即使归属校验通过也不可终止', async (_description, role) => {
-    const rows = [
-      osRow({ pid: 970, ppid: SELF_PID, cmdLineLower: 'codex-marker service' }),
-    ];
+    const rows = [osRow({ pid: 970, ppid: SELF_PID, cmdLineLower: 'codex-marker service' })];
     const kill = vi.fn().mockReturnValue(true);
     register({
       scanOsProcessesSync: vi.fn().mockReturnValue({
