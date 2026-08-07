@@ -21,6 +21,7 @@ const discovered: PiProjectDiscoveredResources = {
   skills: ['/repo/.pi/skills/a', '/repo/.agents/skills/b'],
   canonicalSkills: ['/repo/.pi/skills/a', '/repo/.agents/skills/b'],
   settings: ['/repo/.pi/settings.json'],
+  canonicalSettings: [{ discoveredPath: '/repo/.pi/settings.json', canonicalPath: '/repo/.pi/settings.json' }],
   packages: ['/repo/.pi/package.json'],
   extensions: ['/repo/.pi/extensions/x.ts'],
 };
@@ -152,6 +153,23 @@ describe('Pi project trust contract', () => {
     expect(result.launch.allowExtensions).toBe(false);
   });
 
+  it('treats truthy non-boolean capability values as false', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered,
+      capabilities: {
+        explicitSkills: 1 as unknown as boolean,
+        projectedSettings: 'true' as unknown as boolean,
+        packagesDisabled: 1 as unknown as boolean,
+        extensionsDisabled: 'true' as unknown as boolean,
+      },
+      settingsProjection: projection,
+    });
+    expect(result.eligibleSkillPaths).toEqual([]);
+    expectSettingsDiscovered(result);
+  });
+
   it.each([
     ['missing', null, 'unapproved', 'approval-missing'],
     ['unapproved', { status: 'unapproved', reason: 'user-denied' } as PiProjectApprovalSnapshot, 'unapproved', 'user-denied'],
@@ -180,11 +198,17 @@ describe('Pi project trust contract', () => {
 
   it('fails closed when realpath or repository root resolution is unavailable', () => {
     const result = evaluatePiProjectTrust({
-      identity: { ...identity, canonicalRepoRoot: null, repoRootStatus: 'unavailable' },
+      identity: {
+        ...identity,
+        canonicalRepoRoot: '/repo/old-root',
+        canonicalWorkingDir: '/repo/old-root/packages/app',
+        repoRootStatus: 'unavailable',
+      },
       approval: approval(),
       discovered,
     });
     expect(result.status).toBe('unavailable');
+    expect(result.projectKey).toBeNull();
     expect(result.resources.skills).toBe('discovered');
   });
 
@@ -331,6 +355,70 @@ describe('Pi project trust contract', () => {
       settingsProjection: projection,
     });
     expectSettingsDiscovered(result);
+  });
+
+  it('keeps settings discovered when canonical realpath evidence is missing', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: { ...discovered, canonicalSettings: undefined },
+      capabilities: provenSettingsCapabilities,
+      settingsProjection: projection,
+    });
+    expectSettingsDiscovered(result);
+  });
+
+  it.each([
+    ['outside the repo root', ['/outside/settings.json']],
+    ['non-canonical', ['/repo/../outside/settings.json']],
+  ])('keeps settings discovered when canonical settings evidence is %s', (_label, canonicalSettings) => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        canonicalSettings: canonicalSettings.map((canonicalPath) => ({
+          discoveredPath: '/repo/.pi/settings.json',
+          canonicalPath,
+        })),
+      },
+      capabilities: provenSettingsCapabilities,
+      settingsProjection: projection,
+    });
+    expectSettingsDiscovered(result);
+  });
+
+  it('rejects settings evidence whose discovered path does not match by position', () => {
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        canonicalSettings: [{ discoveredPath: '/outside/settings.json', canonicalPath: '/repo/.pi/settings.json' }],
+      },
+      capabilities: provenSettingsCapabilities,
+      settingsProjection: projection,
+    });
+    expectSettingsDiscovered(result);
+  });
+
+  it('emits the canonical settings path for a reviewed in-repo symlink target', () => {
+    const sourcePath = '/repo/.pi/settings-link.json';
+    const canonicalPath = '/repo/.pi/settings.json';
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered: {
+        ...discovered,
+        settings: [sourcePath],
+        canonicalSettings: [{ discoveredPath: sourcePath, canonicalPath }],
+      },
+      capabilities: provenSettingsCapabilities,
+      settingsProjection: { ...projection, sourcePath },
+    });
+    expect(result.resources.settings).toBe('eligible');
+    expect(result.settingsProjection?.sourcePath).toBe(canonicalPath);
+    expect(result.eligibleSettingsPaths).toEqual([canonicalPath]);
   });
 
   it('exposes a non-empty reviewed settings projection after every hard gate is proven', () => {

@@ -16,8 +16,8 @@
 
 批准决策只产生 PR4 的候选输入：
 
-- `skills`：只有调用方显式证明 `explicitSkills: true`，且为每条发现路径提供 1:1 的 canonical realpath 证据并验证其位于批准 repo root 内时，才可用单独 skill 路径装配；host 必须先从 `discovered.skills` 中排除 user、`extraDirs`、引用目录和其他 workspace root，canonical evidence 不能替代该 provenance 过滤。缺少证据、仓库外 symlink 目标或非 canonical 路径时保持 `discovered`。能力位缺省为 false。它不代表 Pi 已经 `loaded` 这些资源；
-- `settings`：只有经字段白名单投影（输出 `settingsProjection.values`）且同时证明 packages/extensions 关闭时才可装配；本契约默认不允许原始 `.pi/settings.json`。当前白名单只允许 pinned Pi v0.83.0 的 `compaction.reserveTokens` / `compaction.keepRecentTokens` 非负安全整数；未知字段、未来新增字段、`defaultProjectTrust`、provider/auth、路径及资源加载配置均 fail closed。输出是深克隆并冻结的启动快照；`eligibleSettingsPaths` 仅为兼容字段，最多包含投影的 `sourcePath`，不能把发现到的原始 settings 路径当作可装配输入；空投影保持 `discovered`。
+- `skills`：只有调用方显式证明 `explicitSkills: true`，且为每条发现路径提供 1:1 的 canonical realpath 证据并验证其位于批准 repo root 内时，才可用单独 skill 路径装配；host 必须先从 `discovered.skills` 中排除 user、`extraDirs`、引用目录和其他 workspace root，canonical evidence 不能替代该 provenance 过滤。缺少证据、仓库外 symlink 目标或非 canonical 路径时保持 `discovered`。能力位只有严格的布尔 `true` 才生效，缺省或其他 truthy 值均为 false。它不代表 Pi 已经 `loaded` 这些资源；
+- `settings`：只有经字段白名单投影（输出 `settingsProjection.values`）、为每条发现路径提供带 exact `discoveredPath`/`canonicalPath` 配对的 1:1 realpath evidence 并验证 canonical path 位于批准 repo root 内，且同时证明 packages/extensions 关闭时才可装配；缺少 evidence、配对不一致、仓库外 symlink 目标或非 canonical 路径时保持 `discovered`。本契约默认不允许原始 `.pi/settings.json`。当前白名单只允许 pinned Pi v0.83.0 的 `compaction.reserveTokens` / `compaction.keepRecentTokens` 非负安全整数；未知字段、未来新增字段、`defaultProjectTrust`、provider/auth、路径及资源加载配置均 fail closed。输出是深克隆并冻结的启动快照；`eligibleSettingsPaths` 仅为兼容字段，包含投影使用的 canonical `sourcePath`，不能把发现到的原始 settings 路径当作可装配输入；空投影保持 `discovered`。
 - `packages` / `extensions`：始终 `discovered` 或 `blocked`，不得安装、加载或执行。
 
 ## 启动与隔离不变量

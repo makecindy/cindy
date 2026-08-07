@@ -9,13 +9,6 @@ import type {
   PiProjectWindowsCaseComparison,
 } from '../../types/pi-project-trust.js';
 
-const DEFAULT_CAPABILITIES: PiProjectTrustCapabilities = {
-  explicitSkills: false,
-  projectedSettings: false,
-  packagesDisabled: false,
-  extensionsDisabled: false,
-};
-
 function normalizePath(
   value: string,
   platform: 'posix' | 'win32',
@@ -141,6 +134,26 @@ function canonicalEligibleSkillPaths(
     : [];
 }
 
+function canonicalEligibleSettingsPaths(
+  identity: PiProjectIdentityResolution,
+  discovered: PiProjectDiscoveredResources,
+): readonly string[] {
+  const settingsEvidence = discovered.canonicalSettings;
+  if (!settingsEvidence || settingsEvidence.length !== discovered.settings.length || settingsEvidence.length === 0) return [];
+  if (settingsEvidence.some((evidence, index) => evidence.discoveredPath !== discovered.settings[index])) return [];
+  const repoRoot = identity.canonicalRepoRoot &&
+    normalizePath(identity.canonicalRepoRoot, identity.platform, identity.windowsCaseComparison);
+  if (!repoRoot) return [];
+  const normalizedSettings = settingsEvidence.map((evidence) =>
+    normalizePath(evidence.canonicalPath, identity.platform, identity.windowsCaseComparison),
+  );
+  const validSettings = normalizedSettings.filter((settingsPath): settingsPath is string => settingsPath !== null);
+  if (validSettings.length !== normalizedSettings.length || new Set(validSettings).size !== validSettings.length) return [];
+  return validSettings.every((settingsPath) => isPathWithinRoot(repoRoot, settingsPath))
+    ? validSettings
+    : [];
+}
+
 function isPlainObject(values: unknown): values is Record<string, unknown> {
   if (typeof values !== 'object' || values === null || Array.isArray(values)) return false;
   const prototype = Object.getPrototypeOf(values);
@@ -201,7 +214,7 @@ function emptyDecision(
 ): PiProjectTrustDecision {
   return {
     status,
-    projectKey: piProjectKey(identity),
+    projectKey: status === 'unavailable' ? null : piProjectKey(identity),
     canonicalWorkingDir: identity.canonicalWorkingDir,
     canonicalRepoRoot: identity.canonicalRepoRoot,
     approvalRevision,
@@ -276,21 +289,26 @@ export function evaluatePiProjectTrust(input: {
   }
 
   const capabilities: PiProjectTrustCapabilities = {
-    explicitSkills: input.capabilities?.explicitSkills ?? DEFAULT_CAPABILITIES.explicitSkills,
-    projectedSettings: input.capabilities?.projectedSettings ?? DEFAULT_CAPABILITIES.projectedSettings,
-    packagesDisabled: input.capabilities?.packagesDisabled ?? DEFAULT_CAPABILITIES.packagesDisabled,
-    extensionsDisabled: input.capabilities?.extensionsDisabled ?? DEFAULT_CAPABILITIES.extensionsDisabled,
+    explicitSkills: input.capabilities?.explicitSkills === true,
+    projectedSettings: input.capabilities?.projectedSettings === true,
+    packagesDisabled: input.capabilities?.packagesDisabled === true,
+    extensionsDisabled: input.capabilities?.extensionsDisabled === true,
   };
   const suppliedProjection = input.settingsProjection;
   const projectionSnapshot = suppliedProjection ? snapshotSettingsProjection(suppliedProjection) : null;
+  const eligibleCanonicalSettings = canonicalEligibleSettingsPaths(identity, discovered);
+  const settingsSourceIndex = projectionSnapshot ? discovered.settings.indexOf(projectionSnapshot.sourcePath) : -1;
+  const canonicalSettingsSource = settingsSourceIndex >= 0 ? eligibleCanonicalSettings[settingsSourceIndex] : undefined;
   const settingsProjection =
     capabilities.projectedSettings &&
     capabilities.packagesDisabled &&
     capabilities.extensionsDisabled &&
     projectionSnapshot &&
-    discovered.settings.includes(projectionSnapshot.sourcePath) &&
+    settingsSourceIndex >= 0 &&
+    eligibleCanonicalSettings.length === discovered.settings.length &&
+    canonicalSettingsSource !== undefined &&
     projectionSnapshot.sourcePath.length > 0
-      ? projectionSnapshot
+      ? snapshotSettingsProjection({ ...projectionSnapshot, sourcePath: canonicalSettingsSource })
       : null;
   const settingsEligible = settingsProjection !== null;
   const eligibleSkillPaths = capabilities.explicitSkills ? canonicalEligibleSkillPaths(identity, discovered) : [];

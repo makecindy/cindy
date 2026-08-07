@@ -72,8 +72,17 @@ export interface PiProjectDiscoveredResources {
   /** Host-realpath identities corresponding 1:1 to skills; required for eligibility. */
   canonicalSkills?: readonly string[];
   settings: readonly string[];
+  /** Host evidence pairing each discovered settings path with its realpath. */
+  canonicalSettings?: readonly PiProjectCanonicalPathEvidence[];
   packages: readonly string[];
   extensions: readonly string[];
+}
+
+export interface PiProjectCanonicalPathEvidence {
+  /** Exact lexical path present in the corresponding discovered array entry. */
+  readonly discoveredPath: string;
+  /** Host-resolved realpath used for repo-boundary checks and assembly. */
+  readonly canonicalPath: string;
 }
 
 /** Capabilities proven by the pinned Pi fixture and the PR4 assembler. */
