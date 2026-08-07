@@ -56,7 +56,10 @@ export function isSchedulerRuntimeFrame(value: unknown): value is SchedulerRunti
   ].includes(key))) return false;
   if (typeof runtime.identity !== 'string' || !DISCORD_ID_PATTERN.test(runtime.identity)) return false;
   if (typeof runtime.generation !== 'string' || !RUNTIME_GENERATION_PATTERN.test(runtime.generation)) return false;
-  if (!['active', 'dirty', 'clean'].includes(String(runtime.state))) return false;
+  if (
+    typeof runtime.state !== 'string'
+    || !['active', 'dirty', 'clean'].includes(runtime.state)
+  ) return false;
   if (
     runtime.predecessor !== undefined
     && (runtime.state !== 'active'

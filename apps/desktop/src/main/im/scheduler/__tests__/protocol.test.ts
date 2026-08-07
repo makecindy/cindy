@@ -59,6 +59,16 @@ describe('Discord scheduler protocol', () => {
       },
     })).toBe(false);
     expect(isImSchedulerFrame({
+      kind: 'advertisement',
+      sentAt: 1,
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      runtime: {
+        identity: '12345678901234567',
+        generation: 'a'.repeat(32),
+        state: { toString: () => 'active' },
+      },
+    })).toBe(false);
+    expect(isImSchedulerFrame({
       kind: 'probe',
       sentAt: 1,
       nonce: '1234567890abcdef',
