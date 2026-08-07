@@ -30,7 +30,7 @@ function fakeDeps(overrides: Partial<PreviewTabCloserDeps> = {}): PreviewTabClos
     { targetId: 't1', url: PREVIEW_URL },
     { suggestedTargetId: 't2', url: OTHER_URL },
   ]);
-  const closeVendoredTab = vi.fn(async () => {});
+  const closeVendoredTab = vi.fn(async () => true);
   const closeRsbTab = vi.fn(async () => true);
   const rsbPreviewWc = { getURL: () => PREVIEW_URL, isDestroyed: () => false };
   const rsbOtherWc = { getURL: () => OTHER_URL, isDestroyed: () => false };
@@ -51,12 +51,15 @@ function fakeDeps(overrides: Partial<PreviewTabCloserDeps> = {}): PreviewTabClos
 
 describe('closePreviewTabs (browser-preview-tabs)', () => {
   it('closes preview tabs on BOTH backends when the vendored runtime was used', async () => {
+    // The vendored sweep re-enumerates up to 3 rounds; the fake keeps
+    // returning the same snapshot (a tab that never actually disappears),
+    // so the preview tab is closed on every round until the cap. The
+    // invariant under test is: only preview-URL tabs are closed, the
+    // non-preview tab is never touched, and the RSB sweep also runs.
     const deps = fakeDeps();
     await closePreviewTabs(deps);
-    expect(deps.listVendoredTabs).toHaveBeenCalledOnce();
-    // only the preview URL tab is closed
-    expect(deps.closeVendoredTab).toHaveBeenCalledTimes(1);
     expect(deps.closeVendoredTab).toHaveBeenCalledWith('t1');
+    expect(deps.closeVendoredTab).not.toHaveBeenCalledWith('t2');
     // RSB sweep also runs: preview tab closed through the bridge, other tab untouched
     expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
     expect(deps.closeRsbTab).toHaveBeenCalledWith('s1', 'r1');
@@ -76,6 +79,58 @@ describe('closePreviewTabs (browser-preview-tabs)', () => {
     await closePreviewTabs(deps);
     expect(deps.closeVendoredTab).not.toHaveBeenCalled();
     expect(deps.closeRsbTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-sweeps a vendored preview tab whose close failed, retrying until the tab disappears (round 25 Greptile P1)', async () => {
+    // A preview tab whose close FAILED keeps its vendored guard trusting the
+    // stale preview origin (the guard captured it at goto time and cannot
+    // re-read the host policy) — the sweep must re-enumerate and retry it.
+    // Sequence: round 1 close fails (tab still listed) → round 2 close
+    // succeeds (tab gone) → round 3 enumeration sees no preview tab and
+    // stops. So: 2 close calls, 3 enumerations (the last one empty).
+    const listVendoredTabs = vi
+      .fn()
+      .mockResolvedValueOnce([{ targetId: 't1', url: PREVIEW_URL }])
+      .mockResolvedValueOnce([{ targetId: 't1', url: PREVIEW_URL }])
+      .mockResolvedValueOnce([]);
+    const closeVendoredTab = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const deps = fakeDeps({ listVendoredTabs, closeVendoredTab });
+    await closePreviewTabs(deps);
+    expect(closeVendoredTab).toHaveBeenCalledTimes(2);
+    expect(closeVendoredTab).toHaveBeenCalledWith('t1');
+    expect(listVendoredTabs).toHaveBeenCalledTimes(3);
+  });
+
+  it('re-sweep catches a preview tab that appeared AFTER the first snapshot (round 25)', async () => {
+    // A tab opened concurrently with the revocation misses the first tabs
+    // snapshot; the re-sweep enumerates again and closes it. Round 1 closes
+    // t1 (gone from round 2), round 2 closes the late t3 (gone from round 3),
+    // round 3 sees no preview tab and stops.
+    const listVendoredTabs = vi
+      .fn()
+      .mockResolvedValueOnce([{ targetId: 't1', url: PREVIEW_URL }])
+      .mockResolvedValueOnce([{ targetId: 't3', url: PREVIEW_URL }])
+      .mockResolvedValueOnce([]);
+    const closeVendoredTab = vi.fn(async () => true);
+    const deps = fakeDeps({ listVendoredTabs, closeVendoredTab });
+    await closePreviewTabs(deps);
+    expect(closeVendoredTab).toHaveBeenCalledWith('t1');
+    expect(closeVendoredTab).toHaveBeenCalledWith('t3');
+    expect(closeVendoredTab).toHaveBeenCalledTimes(2);
+    expect(listVendoredTabs).toHaveBeenCalledTimes(3);
+  });
+
+  it('bounded re-sweep: a permanently-failing close stops after MAX rounds, not forever', async () => {
+    const listVendoredTabs = vi.fn(async () => [{ targetId: 't1', url: PREVIEW_URL }]);
+    const closeVendoredTab = vi.fn(async () => false);
+    const deps = fakeDeps({ listVendoredTabs, closeVendoredTab });
+    await closePreviewTabs(deps);
+    // 3 sweeps × 1 tab = 3 close attempts, then the round cap stops the loop.
+    expect(closeVendoredTab).toHaveBeenCalledTimes(3);
+    expect(listVendoredTabs).toHaveBeenCalledTimes(3);
   });
 
   it('skips destroyed RSB WebContents', async () => {

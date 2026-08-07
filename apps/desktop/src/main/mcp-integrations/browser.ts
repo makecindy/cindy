@@ -488,7 +488,15 @@ async function closePreviewTabs(): Promise<void> {
       )?.tabs;
     },
     closeVendoredTab: async (targetId) => {
-      await vendoredRuntime.call({ action: 'close', targetId }).catch(() => {});
+      try {
+        await vendoredRuntime.call({ action: 'close', targetId });
+        return true;
+      } catch {
+        // The re-sweep (browser-preview-tabs, round 25) will re-enumerate and
+        // retry a tab whose close failed, so the survivor cannot keep
+        // trusting the stale preview origin.
+        return false;
+      }
     },
     listRsbTabs: () => {
       const registry = getRsbBrowserBridge();

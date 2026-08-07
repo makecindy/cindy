@@ -110,8 +110,15 @@ export interface PreviewTabCloserDeps {
   listVendoredTabs(): Promise<
     Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> | null | undefined
   >;
-  /** Close one vendored tab by targetId. */
-  closeVendoredTab(targetId: string): Promise<void>;
+  /**
+   * Close one vendored tab by targetId. Resolves true when the close call
+   * succeeded (the tab is expected to be gone); false when the call failed
+   * or threw — the caller then re-sweeps to re-enumerate and retry, so a
+   * preview tab whose close failed (or which appeared after the previous
+   * snapshot) is not left trusting a stale preview origin
+   * (Greptile P1, round 25). MUST NOT throw.
+   */
+  closeVendoredTab(targetId: string): Promise<boolean>;
   /** Enumerate RSB registry rows with a live WebContents handle. */
   listRsbTabs(): Array<{
     tabId: string;
@@ -139,22 +146,42 @@ export async function closePreviewTabs(deps: PreviewTabCloserDeps): Promise<void
   // the exact startup quit-time teardown exists to avoid (round 16). The RSB
   // registry sweep below stays unconditional (it boots nothing).
   if (deps.everCalled()) {
-    try {
-      const tabs = await deps.listVendoredTabs();
+    // Bounded re-sweep (round 25, Greptile P1): a preview tab whose close
+    // FAILED — or which appeared AFTER this pass's tabs snapshot — keeps its
+    // vendored navigation guard trusting the OLD preview origin (the guard
+    // captured it at goto time and cannot re-read the host policy), so a
+    // freed loopback port seized by another local process could be loaded
+    // into the survivor. Re-enumerate and retry closes until no preview tabs
+    // remain, up to MAX_VENDORED_SWEEPS rounds (a close that keeps failing
+    // must not spin forever; the stale-lock recovery on next launch covers
+    // orphaned Chrome state).
+    const MAX_VENDORED_SWEEPS = 3;
+    for (let round = 0; round < MAX_VENDORED_SWEEPS; round++) {
+      let tabs: Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> | null | undefined;
+      try {
+        tabs = await deps.listVendoredTabs();
+      } catch {
+        break; // enumeration failed — nothing more we can do this round
+      }
       // NOTE: no early `return` here — a failed/empty vendored response must
       // still fall through to the RSB registry sweep below (round 17).
-      if (Array.isArray(tabs)) {
-        for (const tab of tabs) {
-          if (!deps.isPreviewUrl(tab.url ?? '')) continue;
-          const targetId = tab.suggestedTargetId ?? tab.targetId;
-          if (targetId) {
-            await deps.closeVendoredTab(targetId);
-          }
+      if (!Array.isArray(tabs)) break;
+      // Stop once no preview tabs remain. A FAILED close keeps the tab in
+      // the next enumeration, so it is retried up to MAX_VENDORED_SWEEPS
+      // times; a tab that appeared after the previous snapshot is caught by
+      // the re-enumeration. Permanently-failing closes are bounded by the
+      // round cap (stale-lock recovery on next launch covers orphans).
+      const previewTabs = tabs.filter((tab) => deps.isPreviewUrl(tab.url ?? ''));
+      if (previewTabs.length === 0) break;
+      for (const tab of previewTabs) {
+        const targetId = tab.suggestedTargetId ?? tab.targetId;
+        if (!targetId) continue;
+        try {
+          await deps.closeVendoredTab(targetId);
+        } catch {
+          /* next sweep retries */
         }
       }
-    } catch {
-      /* best-effort: the origin grant is already revoked; stale-lock recovery
-         on next launch covers orphaned Chrome state */
     }
   }
   // RSB webview tabs (round 15): revocation must cover BOTH backends — an
