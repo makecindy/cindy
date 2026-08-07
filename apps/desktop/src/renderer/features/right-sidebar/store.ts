@@ -64,6 +64,13 @@ function isSandboxPreviewUrl(u: string): boolean {
     return (
       parsed.protocol === 'http:' &&
       parsed.hostname === '127.0.0.1' &&
+      // The preview server never issues userinfo URLs — reject them so a
+      // `http://x@127.0.0.1:<port>/preview/...` variant is not mis-marked
+      // as a preview tab (ephemeral / hydrate-purge decisions) — mirrors
+      // the main-side isPreviewUrl (codex-connector P1, round 27i;
+      // Copilot P2, round 27l).
+      parsed.username === '' &&
+      parsed.password === '' &&
       /^\/preview\/[a-f0-9]{64}\//.test(parsed.pathname)
     );
   } catch {

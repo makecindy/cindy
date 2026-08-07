@@ -345,8 +345,16 @@ export function getBrowserMcpDeps(): {
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
         ]);
       } catch {
+        // Fail-closed AND revoke: ensureStarted() already published the
+        // origin via applyPreviewOrigins() before we awaited the SW clear —
+        // if the clear failed, leaving the grant up would let a stale scope=/
+        // SW intercept /preview/<64hex>/... before the server validates the
+        // token and answer with a no-CSP page. dispose() triggers revokeOrigin
+        // → applyPreviewOrigins([]) and closes the listener (codex-connector
+        // P1, round 27l).
+        localPreviewServer.dispose();
         throw new Error(
-          `preview origin ${origin} not granted: failed to clear stale Service Workers (fail-closed)`,
+          `preview origin ${origin} not granted: failed to clear stale Service Workers (fail-closed, grant revoked)`,
         );
       }
       return { url };
