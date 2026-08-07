@@ -419,6 +419,29 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'xhigh', providerId: 'provB' });
   });
 
+  it('keeps the recent effort untouched when the catalog is not ready and only a stale same-model row exists (codex P2)', () => {
+    const shared = (providerId: string, efforts: readonly string[], defaultEffort: string): ProviderModelRow => ({
+      provider: { id: providerId, name: providerId } as ProviderModelRow['provider'],
+      model: {
+        id: 'shared-model',
+        displayName: 'shared-model',
+        efforts: efforts as ProviderModelRow['model']['efforts'],
+        defaultEffort: defaultEffort as ProviderModelRow['model']['defaultEffort'],
+        contextWindow: 0,
+      },
+    });
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [remoteSession('s', { agentKind: 'cc', model: 'shared-model', providerId: 'provB', effort: 'xhigh', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      // 目录未就绪时的残留行:只有 provA 提供同 modelId,provB 不在其中
+      modelRows: [shared('provA', ['low'], 'low')],
+      currentEffort: 'medium',
+      catalogReady: false,
+    });
+    // 目录未知 → 不得用残留 provA 行的档位表把 xhigh 降档;保留最近任务的 effort
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'xhigh', providerId: 'provB' });
+  });
+
   it('falls back to the top of the target agent\'s model list when it has no recent session', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',

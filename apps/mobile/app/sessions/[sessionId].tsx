@@ -739,6 +739,7 @@ export default function SessionScreen() {
     deviceId?: string;
     deviceName?: string;
     draft?: string;
+    goalError?: string;
     focusClientId?: string;
     focusComposerRequestKey?: string;
     focusRequestKey?: string;
@@ -837,7 +838,9 @@ export default function SessionScreen() {
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
   const [composerPreviewAttachmentId, setComposerPreviewAttachmentId] = useState<string | null>(null);
   const [goalBusy, setGoalBusy] = useState(false);
-  const [goalError, setGoalError] = useState<string | null>(null);
+  // 新建页 goal.set 失败接回时经路由参数带入(见 new.tsx 创建流程);
+  // 平时无参 → null,与旧行为一致。
+  const [goalError, setGoalError] = useState<string | null>(() => readRouteParam(params.goalError));
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   // 圈点标注接线 api 的 ref 中转:hook 实例声明在 removeRemoteFileAttachment 之后
   // (依赖它做再编辑替换),而 onUploaded 闭包在此之前就要引用 decorate——回调

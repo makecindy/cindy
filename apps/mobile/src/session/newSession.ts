@@ -631,7 +631,11 @@ export function pickAgentDefaultRuntime(args: {
     model = DEFAULT_MODELS[agentKind];
     providerId = null;
   }
-  const sectionModel = findSectionModelRow(modelRows, model, providerId)?.model;
+  // 目录未就绪时不做 effort 校准:catalogReady=false 时 modelRows 可能是上一设备
+  // 的残留行,findSectionModelRow 的 modelId 回退会按错误来源校准 effort;新目录
+  // 确认原 (provider, model) 有效后组合未变化又不再重校准,用户可能在能力表到达前
+  // 提交该来源不支持的档位(codex review P2)。未就绪时保留最近任务的 effort。
+  const sectionModel = catalogReady ? findSectionModelRow(modelRows, model, providerId)?.model : undefined;
   const effort = sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : baseEffort;
   return { agentKind, model, effort, providerId };
 }
