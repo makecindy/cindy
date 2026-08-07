@@ -1946,10 +1946,15 @@ export function GhostPluginCard({
   const unread = useGhostUnread(item.id);
   const unreadSummary = useGhostUnreadSummary(item.id);
 
-  // 右侧图标与动作:停用不显示图标;未配置显示 Link→配置,就绪显示 MessageCircle→对话。
+  // 右侧图标与动作:
+  // - 未配置显示 Link→配置
+  // - 可对话/可使用显示 MessageCircle→对话/使用
+  // - 纯工具型插件不显示右侧图标(只能由 Agent 自动调用,不能对话)
+  // - 停用不显示图标
   const needsAttention = item.hasSetupRequirements && !item.setupReady;
+  const isActionable = item.canUse || item.tabPanel;
   const rightAction = needsAttention ? onConfigure : onChat;
-  const showRightIcon = enabled;
+  const showRightIcon = enabled && (needsAttention || isActionable);
 
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
