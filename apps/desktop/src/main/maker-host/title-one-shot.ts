@@ -295,7 +295,8 @@ function pickCheapestChatModel(provider: Provider, agentKind: AgentKind): Catalo
     if (!c) return Number.POSITIVE_INFINITY;
     return (typeof c.input === 'number' ? c.input : 0) + (typeof c.output === 'number' ? c.output : 0);
   };
-  return [...candidates].sort((a, b) => costRank(a) - costRank(b))[0];
+  // 全无 cost 时 costRank 差为 NaN（Infinity - Infinity）：显式 tie-break 按 id 排序，避免随机选模型。
+  return [...candidates].sort((a, b) => costRank(a) - costRank(b) || a.id.localeCompare(b.id))[0];
 }
 
 /**

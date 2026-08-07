@@ -928,6 +928,48 @@ describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱
       expect(title).toBeNull();
     });
   });
+
+  it('多个无 cost 的候选模型 → 按 id 稳定取第一个（tie-break，避免 NaN 排序）', async () => {
+    const deepseek: Provider = {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      source: 'user',
+      agents: ['claude-code'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': { upstream: 'https://api.deepseek.com/anthropic', authStrategy: 'api-key-header' },
+      },
+      models: {
+        'claude-code': [
+          { id: 'zeta-model', name: 'Zeta', contextWindow: 1000, efforts: [], defaultEffort: null, status: 'active' },
+          { id: 'alpha-model', name: 'Alpha', contextWindow: 1000, efforts: [], defaultEffort: null, status: 'active' },
+        ],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== 'deepseek'), deepseek];
+    setActiveCatalog(catalog);
+    mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { content: [{ type: 'text', text: 'tie-break title' }] },
+      }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds-tie', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'ok', title: 'tie-break title' });
+      const [, init] = vi.mocked(fetchImpl).mock.calls[0] as [string, { body: string }];
+      expect(JSON.parse(init.body).model).toBe('alpha-model');
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
 });
 
 // ── parseResponsesSse ─────────────────────────────────────────────────────

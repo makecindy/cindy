@@ -1159,6 +1159,12 @@ export async function requestCustomProviderText(input: {
     ...(input.headers ?? {}),
     'Content-Type': 'application/json',
   };
+  // buildUserProvider 会省略与 agent 默认一致的 wireProtocol（Pi 默认 openai-chat，
+  // 见 packages/model-providers/src/user-provider.ts 的 defaultWireProtocol）；
+  // undefined 时按 agent 默认补全，避免 Pi 的 BYOM 本地端点（Ollama/vLLM 的
+  // /v1/chat/completions）被误当成 Responses 打到 /responses。
+  const effectiveWireProtocol =
+    input.wireProtocol ?? (input.agentKind === 'pi' ? 'openai-chat' : 'openai-responses');
   // safeStorage 有当前凭证时覆盖历史 header；没有时仅 api-key 策略允许保留旧版
   // header-only 配置，以便用户升级后继续可用。OAuth 与 none 仍必须清掉复制进来的凭证头。
   const preserveLegacyApiKeyHeaders =
@@ -1175,17 +1181,13 @@ export async function requestCustomProviderText(input: {
       headers['x-api-key'] = input.credential;
     }
   }
-  if (input.agentKind === 'claude-code') {
+  if (input.agentKind === 'claude-code' || effectiveWireProtocol === 'anthropic-messages') {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
   }
-  // buildUserProvider 会省略与 agent 默认一致的 wireProtocol（Pi 默认 openai-chat，
-  // 见 packages/model-providers/src/user-provider.ts 的 defaultWireProtocol）；
-  // undefined 时按 agent 默认补全，避免 Pi 的 BYOM 本地端点（Ollama/vLLM 的
-  // /v1/chat/completions）被误当成 Responses 打到 /responses。
-  const effectiveWireProtocol =
-    input.wireProtocol ?? (input.agentKind === 'pi' ? 'openai-chat' : 'openai-responses');
+  // wire 显式声明 anthropic-messages 时（自定义 Codex/Pi 供应商也允许，见
+  // custom-provider-store.ts）→ 走 Anthropic wire，与 agentKind 无关（review 反馈）。
   const wire: ProviderWire =
-    input.agentKind === 'claude-code'
+    effectiveWireProtocol === 'anthropic-messages' || input.agentKind === 'claude-code'
       ? 'anthropic-messages'
       : effectiveWireProtocol === 'openai-chat'
         ? 'chat-completions'
