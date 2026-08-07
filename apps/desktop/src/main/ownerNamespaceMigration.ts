@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import { createLogger } from './logger.js';
 import {
   GHOST_MANIFEST_FILE,
   isOfficialGhostId,
+  isValidGhostId,
   validateGhostManifest,
 } from '../shared/ghost.js';
 import {
@@ -16,6 +18,7 @@ import {
 } from '../shared/legacyGhostRecovery.js';
 
 const CLAIM_MARKER = '.owner-namespace-claim-v1.json';
+const LEGACY_GHOST_RECOVERY_MARKER = '.legacy-ghost-recovery-v1.json';
 const BUILTIN_PROVISIONING_STATE_FILE = '.builtin-provisioning.json';
 const LEGACY_PATHS = [
   'ghost-kv',
@@ -54,12 +57,30 @@ interface ClaimMarker {
   complete: boolean;
 }
 
+interface LegacyGhostRecoveryMarker {
+  version: 1;
+  ownerKey: string;
+  pendingIds: string[];
+  /** Deterministic content failures remain inside the frozen id whitelist. */
+  failedIds?: string[];
+}
+
+type LegacyGhostRecoveryMarkerRead =
+  | { kind: 'ready'; marker: LegacyGhostRecoveryMarker }
+  | { kind: 'missing' }
+  | { kind: 'deferred' }
+  | { kind: 'invalid' };
+
 interface MigrationDeps {
   userDataDir(): string;
   readFile(file: string): Promise<string>;
   writeFileExclusive(file: string, text: string): Promise<void>;
   writeFile(file: string, text: string): Promise<void>;
-  lstat(file: string): Promise<{ isDirectory(): boolean }>;
+  lstat(file: string): Promise<{
+    isDirectory(): boolean;
+    isFile?: () => boolean;
+    isSymbolicLink?: () => boolean;
+  }>;
   readdir(dir: string): Promise<string[]>;
   mkdir(dir: string): Promise<void>;
   rename(source: string, target: string): Promise<void>;
@@ -74,7 +95,8 @@ interface MigrationDeps {
 /** claim 被推迟(而非放弃)的原因;下次独占启动时自然重试完成。 */
 export type OwnerNamespaceClaimDeferredReason =
   | 'passive-shared-user-data'
-  | 'concurrent-live-instances';
+  | 'concurrent-live-instances'
+  | 'legacy-discovery-incomplete';
 
 export interface OwnerNamespaceMigrationResult {
   status: 'skipped' | 'deferred' | 'claimed-by-other-owner' | 'migrated' | 'partial';
@@ -82,6 +104,8 @@ export interface OwnerNamespaceMigrationResult {
   conflicts: number;
   provisioningStateMoved?: boolean;
   deferredReason?: OwnerNamespaceClaimDeferredReason;
+  /** Ghost directories moved before approval backfill; durable across restart. */
+  recoveredIds?: string[];
 }
 
 const log = createLogger('ownerNamespaceMigration');
@@ -143,6 +167,60 @@ async function readMarker(deps: MigrationDeps, markerPath: string): Promise<Clai
     if (isMissing(error)) return null;
     throw error;
   }
+}
+
+async function readLegacyGhostRecoveryMarker(
+  deps: MigrationDeps,
+  markerPath: string,
+): Promise<LegacyGhostRecoveryMarkerRead> {
+  let text: string;
+  try {
+    text = await deps.readFile(markerPath);
+  } catch (error) {
+    return isMissing(error) ? { kind: 'missing' } : { kind: 'deferred' };
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<LegacyGhostRecoveryMarker>;
+    const failedIds = parsed.failedIds ?? [];
+    if (
+      parsed.version === 1 &&
+      typeof parsed.ownerKey === 'string' &&
+      Array.isArray(parsed.pendingIds) &&
+      parsed.pendingIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      Array.isArray(failedIds) &&
+      failedIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      failedIds.every((id) => parsed.pendingIds?.includes(id))
+    ) {
+      const marker: LegacyGhostRecoveryMarker = {
+        version: 1,
+        ownerKey: parsed.ownerKey,
+        pendingIds: [...new Set(parsed.pendingIds)],
+        ...(failedIds.length > 0 ? { failedIds: [...new Set(failedIds)] } : {}),
+      };
+      return { kind: 'ready', marker };
+    }
+    return { kind: 'invalid' };
+  } catch {
+    return { kind: 'invalid' };
+  }
+}
+
+async function writeLegacyGhostRecoveryMarker(
+  deps: MigrationDeps,
+  markerPath: string,
+  marker: LegacyGhostRecoveryMarker,
+): Promise<void> {
+  await writeJsonAtomically(deps, markerPath, marker);
+}
+
+async function writeJsonAtomically(
+  deps: MigrationDeps,
+  targetPath: string,
+  value: unknown,
+): Promise<void> {
+  const tempPath = `${targetPath}.${randomUUID()}.tmp`;
+  await deps.writeFile(tempPath, JSON.stringify(value));
+  await deps.rename(tempPath, targetPath);
 }
 
 function isPidAliveDefault(pid: number): boolean {
@@ -284,21 +362,62 @@ interface LegacyGhostDir {
   id: string;
   dir: string;
   command: string | null;
+  rootStats: fsSync.Stats;
+  dirStats: fsSync.Stats;
+  rootRealPath: string;
+  dirRealPath: string;
 }
 
-function readValidLegacyGhostDir(
+interface LegacyGhostDiscovery {
+  ghosts: LegacyGhostDir[];
+  deferredRoots: string[];
+  deferredIds: string[];
+  invalidIds: string[];
+}
+
+type LegacyGhostManifestRead =
+  | { kind: 'ready'; command: string | null }
+  | { kind: 'deferred' }
+  | { kind: 'invalid' };
+
+function sameLegacyDirectoryIdentity(expected: fsSync.Stats, current: fsSync.Stats): boolean {
+  if (!current.isDirectory() || current.isSymbolicLink()) return false;
+  if (expected.dev !== 0 || expected.ino !== 0 || current.dev !== 0 || current.ino !== 0) {
+    return expected.dev === current.dev && expected.ino === current.ino;
+  }
+  return expected.birthtimeMs === current.birthtimeMs && expected.ctimeMs === current.ctimeMs;
+}
+
+function sameLegacyCanonicalPath(left: string, right: string): boolean {
+  const fold = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  return fold(path.resolve(left)) === fold(path.resolve(right));
+}
+
+function isLegacyPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative.length > 0 && !path.isAbsolute(relative) &&
+    relative !== '..' && !relative.startsWith(`..${path.sep}`);
+}
+
+function readLegacyGhostManifest(
   dir: string,
   expectedId: string,
-): Pick<LegacyGhostDir, 'command'> | null {
+): LegacyGhostManifestRead {
+  let text: string;
+  try {
+    text = fsSync.readFileSync(path.join(dir, GHOST_MANIFEST_FILE), 'utf-8');
+  } catch (error) {
+    return isMissing(error) ? { kind: 'invalid' } : { kind: 'deferred' };
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(fsSync.readFileSync(path.join(dir, GHOST_MANIFEST_FILE), 'utf-8'));
+    raw = JSON.parse(text);
   } catch {
-    return null;
+    return { kind: 'invalid' };
   }
   const parsed = validateGhostManifest(raw);
-  if (!parsed.ok || parsed.manifest.id !== expectedId) return null;
-  return { command: parsed.manifest.command ?? null };
+  if (!parsed.ok || parsed.manifest.id !== expectedId) return { kind: 'invalid' };
+  return { kind: 'ready', command: parsed.manifest.command ?? null };
 }
 
 function pathExistsNoFollowSync(
@@ -333,21 +452,85 @@ function ownerScopedLegacyGhostRootDir(userDataDir: string, ownerKey: string): s
   return path.join(userDataDir, 'owners', ownerKey, 'brain');
 }
 
-function listLegacyGhostDirsInRoots(
-  roots: string[],
-): LegacyGhostDir[] {
-  const result: LegacyGhostDir[] = [];
-  for (const root of roots) {
+const OWNER_STORAGE_KEY_RE = /^[a-f0-9]{20}$/;
+
+/** All legacy/content and approval projection roots that must be revoked at an owner boundary. */
+export function listLegacyOwnerProjectionRoots(userDataDir: string): string[] {
+  const ownersRoot = path.join(userDataDir, 'owners');
+  const roots = [
+    ...sharedLegacyGhostRootDirs(userDataDir),
+  ];
+  let entries: fsSync.Dirent[];
+  try {
+    entries = fsSync.readdirSync(ownersRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return roots;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!OWNER_STORAGE_KEY_RE.test(entry.name)) continue;
+    const ownerRoot = path.join(ownersRoot, entry.name);
+    let ownerStat: fsSync.Stats;
     try {
-      const stats = fsSync.lstatSync(root);
-      if (!stats.isDirectory() || stats.isSymbolicLink()) continue;
-    } catch {
+      // Dirent.d_type is not authoritative on network/special filesystems. A
+      // missed owner directory would bypass the next account-boundary retry.
+      ownerStat = fsSync.lstatSync(ownerRoot);
+    } catch (error) {
+      if (isMissing(error)) continue;
+      throw error;
+    }
+    if (!ownerStat.isDirectory() || ownerStat.isSymbolicLink()) {
+      throw new Error(`owner projection namespace is not a regular directory: ${ownerRoot}`);
+    }
+    roots.push(
+      path.join(ownerRoot, 'brain'),
+      path.join(ownerRoot, 'cindy-brain'),
+      path.join(ownerRoot, 'ghost-install-state'),
+    );
+  }
+  return roots;
+}
+
+function scanLegacyGhostDirsInRoots(
+  roots: string[],
+): LegacyGhostDiscovery {
+  const result: LegacyGhostDiscovery = {
+    ghosts: [],
+    deferredRoots: [],
+    deferredIds: [],
+    invalidIds: [],
+  };
+  for (const root of roots) {
+    let rootStats: fsSync.Stats;
+    let rootRealPath: string;
+    try {
+      rootStats = fsSync.lstatSync(root);
+      if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+        result.invalidIds.push(root);
+        continue;
+      }
+      rootRealPath = fsSync.realpathSync.native(root);
+    } catch (error) {
+      if (!isMissing(error)) result.deferredRoots.push(root);
       continue;
     }
     let entries: fsSync.Dirent[];
     try {
       entries = fsSync.readdirSync(root, { withFileTypes: true });
+    } catch (error) {
+      if (!isMissing(error)) result.deferredRoots.push(root);
+      continue;
+    }
+    try {
+      const rootAfterRead = fsSync.lstatSync(root);
+      const rootRealAfterRead = fsSync.realpathSync.native(root);
+      if (!sameLegacyDirectoryIdentity(rootStats, rootAfterRead) ||
+          !sameLegacyCanonicalPath(rootRealPath, rootRealAfterRead)) {
+        result.deferredRoots.push(root);
+        continue;
+      }
     } catch {
+      result.deferredRoots.push(root);
       continue;
     }
     for (const entry of entries) {
@@ -356,15 +539,82 @@ function listLegacyGhostDirsInRoots(
       let dirStats: fsSync.Stats;
       try {
         dirStats = fsSync.lstatSync(dir);
-      } catch {
+      } catch (error) {
+        if (!isMissing(error)) result.deferredIds.push(entry.name);
         continue;
       }
-      if (!dirStats.isDirectory() || dirStats.isSymbolicLink()) continue;
-      const valid = readValidLegacyGhostDir(dir, entry.name);
-      if (valid) result.push({ root, id: entry.name, dir, command: valid.command });
+      if (!dirStats.isDirectory() || dirStats.isSymbolicLink()) {
+        result.invalidIds.push(entry.name);
+        continue;
+      }
+      let dirRealPath: string;
+      try {
+        dirRealPath = fsSync.realpathSync.native(dir);
+        if (!isLegacyPathInside(rootRealPath, dirRealPath)) {
+          result.invalidIds.push(entry.name);
+          continue;
+        }
+      } catch (error) {
+        if (!isMissing(error)) result.deferredIds.push(entry.name);
+        continue;
+      }
+      const manifest = readLegacyGhostManifest(dir, entry.name);
+      if (manifest.kind === 'deferred') {
+        result.deferredIds.push(entry.name);
+      } else if (manifest.kind === 'invalid') {
+        result.invalidIds.push(entry.name);
+      } else {
+        try {
+          const rootAfterManifest = fsSync.lstatSync(root);
+          const dirAfterManifest = fsSync.lstatSync(dir);
+          const rootRealAfterManifest = fsSync.realpathSync.native(root);
+          const dirRealAfterManifest = fsSync.realpathSync.native(dir);
+          if (!sameLegacyDirectoryIdentity(rootStats, rootAfterManifest) ||
+              !sameLegacyDirectoryIdentity(dirStats, dirAfterManifest) ||
+              !sameLegacyCanonicalPath(rootRealPath, rootRealAfterManifest) ||
+              !sameLegacyCanonicalPath(dirRealPath, dirRealAfterManifest) ||
+              !isLegacyPathInside(rootRealAfterManifest, dirRealAfterManifest)) {
+            result.deferredIds.push(entry.name);
+            continue;
+          }
+        } catch {
+          result.deferredIds.push(entry.name);
+          continue;
+        }
+        result.ghosts.push({
+          root,
+          id: entry.name,
+          dir,
+          command: manifest.command,
+          rootStats,
+          dirStats,
+          rootRealPath,
+          dirRealPath,
+        });
+      }
     }
   }
   return result;
+}
+
+function listLegacyGhostDirsInRoots(roots: string[]): LegacyGhostDir[] {
+  return scanLegacyGhostDirsInRoots(roots).ghosts;
+}
+
+function hasStableLegacyGhostSourceSync(legacy: LegacyGhostDir): boolean {
+  try {
+    const currentRoot = fsSync.lstatSync(legacy.root);
+    const currentDir = fsSync.lstatSync(legacy.dir);
+    const currentRootReal = fsSync.realpathSync.native(legacy.root);
+    const currentDirReal = fsSync.realpathSync.native(legacy.dir);
+    return sameLegacyDirectoryIdentity(legacy.rootStats, currentRoot) &&
+      sameLegacyDirectoryIdentity(legacy.dirStats, currentDir) &&
+      sameLegacyCanonicalPath(legacy.rootRealPath, currentRootReal) &&
+      sameLegacyCanonicalPath(legacy.dirRealPath, currentDirReal) &&
+      isLegacyPathInside(currentRootReal, currentDirReal);
+  } catch {
+    return false;
+  }
 }
 
 function listSharedLegacyGhostDirs(
@@ -418,8 +668,20 @@ export function listLegacyGhostTombstoneRoots(
 ): string[] {
   const ownerKey = dataOwnerStorageKey(ownerId);
   const targetRoot = path.join(userDataDir, 'owners', ownerKey, 'cindy-brain');
-  const sharedLegacyGhosts = listSharedLegacyGhostDirs(userDataDir);
-  const scopedLegacyGhosts = listOwnerScopedLegacyGhostDirs(userDataDir, ownerKey);
+  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedLegacyGhostRootDirs(userDataDir));
+  const scopedDiscovery = scanLegacyGhostDirsInRoots([
+    ownerScopedLegacyGhostRootDir(userDataDir, ownerKey),
+  ]);
+  if (
+    sharedDiscovery.deferredRoots.length > 0 ||
+    sharedDiscovery.deferredIds.length > 0 ||
+    scopedDiscovery.deferredRoots.length > 0 ||
+    scopedDiscovery.deferredIds.length > 0
+  ) {
+    return [];
+  }
+  const sharedLegacyGhosts = sharedDiscovery.ghosts;
+  const scopedLegacyGhosts = scopedDiscovery.ghosts;
   const markerRead = readMarkerSync(userDataDir);
   const sharedRecoveryBlocked =
     sharedLegacyGhosts.length > 0 &&
@@ -493,15 +755,99 @@ export function getLegacyGhostRecoveryStatus(
 
   const root = userDataDir ?? app.getPath('userData');
   const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
-  const sharedLegacyGhosts = listSharedLegacyGhostDirs(root);
-  const scopedLegacyGhosts = listOwnerScopedLegacyGhostDirs(root, ownerKey);
+  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedLegacyGhostRootDirs(root));
+  const scopedDiscovery = scanLegacyGhostDirsInRoots([
+    ownerScopedLegacyGhostRootDir(root, ownerKey),
+  ]);
+  const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+  const targetDiscovery = scanLegacyGhostDirsInRoots([targetRoot]);
+  const sharedLegacyGhosts = sharedDiscovery.ghosts;
+  const scopedLegacyGhosts = scopedDiscovery.ghosts;
   const legacyGhosts = [...sharedLegacyGhosts, ...scopedLegacyGhosts];
-  const legacyPluginCount = legacyGhosts.length;
+  const recoveryMarkerRead = readLegacyGhostRecoveryMarkerSync(root, ownerKey);
+  const recoveryMarker = recoveryMarkerRead.kind === 'ready'
+    ? recoveryMarkerRead.marker
+    : null;
+  const sourceDiscoveryProblemIds = new Set([
+    ...sharedDiscovery.deferredIds,
+    ...sharedDiscovery.invalidIds,
+    ...scopedDiscovery.deferredIds,
+    ...scopedDiscovery.invalidIds,
+  ]);
+  const targetInvalidIds = new Set(
+    targetDiscovery.invalidIds.filter((id) => recoveryMarker?.pendingIds.includes(id)),
+  );
+  const discoveryDeferred =
+    sharedDiscovery.deferredRoots.length > 0 ||
+    sharedDiscovery.deferredIds.length > 0 ||
+    scopedDiscovery.deferredRoots.length > 0 ||
+    scopedDiscovery.deferredIds.length > 0 ||
+    targetDiscovery.deferredRoots.length > 0 ||
+    targetDiscovery.deferredIds.length > 0;
+  const discoveryHasInvalid =
+    sourceDiscoveryProblemIds.size > 0 || targetDiscovery.invalidIds.length > 0;
+  const installedTargetIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
+  const legacySourceIds = new Set(legacyGhosts.map((ghost) => ghost.id));
+  const knownDiscoveryIds = new Set([
+    ...legacySourceIds,
+    ...sourceDiscoveryProblemIds,
+    ...targetInvalidIds,
+    ...(recoveryMarker?.pendingIds ?? []),
+  ]);
+  const deferredRootCount =
+    sharedDiscovery.deferredRoots.length +
+    scopedDiscovery.deferredRoots.length +
+    targetDiscovery.deferredRoots.length;
+  const knownDiscoveryCount = knownDiscoveryIds.size + deferredRootCount;
+  if (recoveryMarkerRead.kind === 'invalid') {
+    return {
+      state: 'partial',
+      legacyPluginCount: Math.max(1, knownDiscoveryCount),
+      canRetry: false,
+    };
+  }
+  if (recoveryMarkerRead.kind === 'deferred' || discoveryDeferred) {
+    return {
+      state: 'deferred',
+      legacyPluginCount: Math.max(1, knownDiscoveryCount),
+      canRetry: process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      deferredReason: 'legacy-discovery-incomplete',
+    };
+  }
+  const recoveredIds = (recoveryMarker?.pendingIds ?? []).filter(
+    (id) => installedTargetIds.has(id) && !legacySourceIds.has(id),
+  );
+  const unexpectedFrozenIds = recoveryMarker
+    ? legacyGhosts.map((ghost) => ghost.id).filter((id) => !recoveryMarker.pendingIds.includes(id))
+    : [];
+  const legacyPluginCount = new Set([
+    ...legacyGhosts.map((ghost) => ghost.id),
+    ...sourceDiscoveryProblemIds,
+    ...targetInvalidIds,
+    ...recoveredIds,
+    ...(recoveryMarker?.pendingIds ?? []),
+  ]).size;
+  if (discoveryHasInvalid && targetDiscovery.invalidIds.length > 0) {
+    return { state: 'partial', legacyPluginCount: Math.max(1, legacyPluginCount), canRetry: false };
+  }
   if (legacyPluginCount === 0) return NO_LEGACY_GHOST_RECOVERY;
   if (process.env.XDT_PASSIVE_SHARED_USER_DATA === '1') {
     return { state: 'deferred', legacyPluginCount, canRetry: false };
   }
 
+  if (recoveredIds.length > 0) {
+    if (hasConcurrentLiveInstanceSync(root, isPidAlive)) {
+      return { state: 'deferred', legacyPluginCount, canRetry: false };
+    }
+    return { state: 'partial', legacyPluginCount, canRetry: true };
+  }
+  if (unexpectedFrozenIds.length > 0) {
+    return { state: 'partial', legacyPluginCount, canRetry: false };
+  }
+
+  if (discoveryHasInvalid && legacyGhosts.length === 0) {
+    return { state: 'partial', legacyPluginCount, canRetry: false };
+  }
   const markerRead = readMarkerSync(root);
   const sharedRecoveryBlocked =
     sharedLegacyGhosts.length > 0 &&
@@ -517,13 +863,13 @@ export function getLegacyGhostRecoveryStatus(
     return { state: 'deferred', legacyPluginCount, canRetry: false };
   }
 
-  const eligibleLegacyGhosts = sharedRecoveryBlocked ? scopedLegacyGhosts : legacyGhosts;
-  const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+  const eligibleLegacyGhosts = (sharedRecoveryBlocked ? scopedLegacyGhosts : legacyGhosts)
+    .filter((ghost) => !recoveryMarker || recoveryMarker.pendingIds.includes(ghost.id));
   if (!hasSafeRecoveryTargetChainSync(root, targetRoot)) {
     return { state: 'partial', legacyPluginCount, canRetry: false };
   }
   const occupiedCommands = new Set(
-    listLegacyGhostDirsInRoots([targetRoot])
+    targetDiscovery.ghosts
       .map((legacy) => legacy.command?.toLowerCase() ?? null)
       .filter((command): command is string => command !== null),
   );
@@ -577,8 +923,41 @@ export async function recoverLegacyGhostPlugins(
   const userDataDir = deps.userDataDir();
   const ownerKey = dataOwnerStorageKey(ownerId);
   const markerPath = path.join(userDataDir, CLAIM_MARKER);
-  const sharedLegacyGhosts = listSharedLegacyGhostDirs(userDataDir);
-  const scopedLegacyGhosts = listOwnerScopedLegacyGhostDirs(userDataDir, ownerKey);
+  const recoveryMarkerPath = path.join(
+    userDataDir,
+    'owners',
+    ownerKey,
+    LEGACY_GHOST_RECOVERY_MARKER,
+  );
+  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedLegacyGhostRootDirs(userDataDir));
+  const scopedDiscovery = scanLegacyGhostDirsInRoots([
+    ownerScopedLegacyGhostRootDir(userDataDir, ownerKey),
+  ]);
+  const targetRoot = path.join(userDataDir, 'owners', ownerKey, 'cindy-brain');
+  const targetDiscovery = scanLegacyGhostDirsInRoots([targetRoot]);
+  const sharedLegacyGhosts = sharedDiscovery.ghosts;
+  const scopedLegacyGhosts = scopedDiscovery.ghosts;
+  const discoveryDeferred =
+    sharedDiscovery.deferredRoots.length > 0 ||
+    sharedDiscovery.deferredIds.length > 0 ||
+    scopedDiscovery.deferredRoots.length > 0 ||
+    scopedDiscovery.deferredIds.length > 0 ||
+    targetDiscovery.deferredRoots.length > 0 ||
+    targetDiscovery.deferredIds.length > 0;
+  const discoveryInvalidCount = new Set([
+    ...sharedDiscovery.invalidIds,
+    ...scopedDiscovery.invalidIds,
+  ]).size;
+  if (discoveryDeferred) {
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'deferred',
+      moved: 0,
+      conflicts: discoveryInvalidCount,
+      deferredReason: 'legacy-discovery-incomplete',
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
   let marker: ClaimMarker | null = null;
   let eligibleSharedGhosts = sharedLegacyGhosts;
   let sharedRecoveryBlocked = false;
@@ -597,6 +976,66 @@ export async function recoverLegacyGhostPlugins(
       });
     }
   }
+  const recoveryMarkerRead = await readLegacyGhostRecoveryMarker(deps, recoveryMarkerPath);
+  if (recoveryMarkerRead.kind === 'deferred') {
+    log.warn('legacy ghost recovery deferred: durable recovery marker temporarily unreadable');
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'legacy-discovery-incomplete',
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
+  if (recoveryMarkerRead.kind === 'invalid') {
+    log.warn('legacy ghost recovery blocked: durable recovery marker is invalid');
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'partial',
+      moved: 0,
+      conflicts: sharedLegacyGhosts.length + scopedLegacyGhosts.length,
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
+  const recoveryMarker = recoveryMarkerRead.kind === 'ready'
+    ? recoveryMarkerRead.marker
+    : null;
+  let recoveryMarkerPersisted = recoveryMarker !== null;
+  if (recoveryMarker && recoveryMarker.ownerKey !== ownerKey) {
+    log.warn('legacy ghost recovery blocked: durable recovery marker owner mismatch', {
+      expectedOwnerKey: ownerKey,
+      actualOwnerKey: recoveryMarker.ownerKey,
+    });
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'partial',
+      moved: 0,
+      conflicts: sharedLegacyGhosts.length + scopedLegacyGhosts.length,
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
+  const sourceDiscoveryIds = new Set([
+    ...sharedLegacyGhosts.map((ghost) => ghost.id),
+    ...scopedLegacyGhosts.map((ghost) => ghost.id),
+    ...[...sharedDiscovery.invalidIds, ...scopedDiscovery.invalidIds]
+      .filter((id) => isValidGhostId(id)),
+  ]);
+  const targetDiscoveryIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
+  const pendingRecoveryIds = new Set(recoveryMarker?.pendingIds ?? sourceDiscoveryIds);
+  const failedRecoveryIds = new Set(
+    recoveryMarker?.failedIds ??
+      [...sourceDiscoveryIds].filter((id) =>
+        [...sharedDiscovery.invalidIds, ...scopedDiscovery.invalidIds].includes(id),
+      ),
+  );
+  for (const id of [...sharedDiscovery.invalidIds, ...scopedDiscovery.invalidIds]) {
+    if (isValidGhostId(id) && pendingRecoveryIds.has(id)) failedRecoveryIds.add(id);
+  }
+  const movedThisRun = new Set<string>();
+  const recoveredTargetIds = (): string[] => [...pendingRecoveryIds]
+    .filter((id) => movedThisRun.has(id) || (targetDiscoveryIds.has(id) && !sourceDiscoveryIds.has(id)))
+    .sort();
   if (
     sharedRecoveryBlocked &&
     scopedLegacyGhosts.length === 0 &&
@@ -611,26 +1050,59 @@ export async function recoverLegacyGhostPlugins(
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
   }
-
-  const targetRoot = path.join(userDataDir, 'owners', ownerKey, 'cindy-brain');
   let movableLegacyGhosts: ReturnType<typeof listLegacyGhostDirs> = [];
-  let conflicts = sharedRecoveryBlocked ? sharedLegacyGhosts.length : 0;
+  const unexpectedFrozenIds = recoveryMarker
+    ? [...sourceDiscoveryIds].filter((id) => !pendingRecoveryIds.has(id))
+    : [];
+  let conflicts = (sharedRecoveryBlocked ? sharedLegacyGhosts.length : 0) +
+    discoveryInvalidCount + unexpectedFrozenIds.length;
+  const movableById = new Map<string, ReturnType<typeof listLegacyGhostDirs>>();
   for (const legacy of [...eligibleSharedGhosts, ...scopedLegacyGhosts]) {
+    if (recoveryMarker && !pendingRecoveryIds.has(legacy.id)) {
+      continue;
+    }
+    if (failedRecoveryIds.has(legacy.id)) {
+      // A formerly invalid id may be retried after its manifest is repaired,
+      // but it remains inside the original frozen whitelist.
+      failedRecoveryIds.delete(legacy.id);
+    }
     if (options.rejectReservedIds && isOfficialGhostId(legacy.id)) {
       conflicts += 1;
       continue;
     }
     if ((await pathType(deps, path.join(targetRoot, legacy.id))) === 'missing') {
-      movableLegacyGhosts.push(legacy);
+      const siblings = movableById.get(legacy.id) ?? [];
+      siblings.push(legacy);
+      movableById.set(legacy.id, siblings);
     } else {
       conflicts += 1;
     }
   }
+  for (const siblings of movableById.values()) {
+    if (siblings.length === 1) {
+      movableLegacyGhosts.push(siblings[0]);
+    } else {
+      // Same id in multiple legacy roots is ambiguous legacy state. Do not
+      // move one copy and leave the other behind: that would create a target
+      // which can never be safely backfilled or retried.
+      conflicts += siblings.length;
+    }
+  }
+  const activePendingIds = new Set([
+    ...pendingRecoveryIds,
+  ].filter((id) => sourceDiscoveryIds.has(id) || recoveredTargetIds().includes(id)));
+  if (activePendingIds.size > 0) {
+    movableLegacyGhosts = movableLegacyGhosts.filter((legacy) =>
+      activePendingIds.has(legacy.id),
+    );
+  }
   if (movableLegacyGhosts.length === 0) {
+    const recoveredIds = recoveredTargetIds();
     const result: OwnerNamespaceMigrationResult = {
-      status: conflicts > 0 ? 'partial' : 'skipped',
+      status: conflicts > 0 || recoveredIds.length > 0 ? 'partial' : 'skipped',
       moved: 0,
       conflicts,
+      ...(recoveredIds.length > 0 ? { recoveredIds } : {}),
     };
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
@@ -672,6 +1144,19 @@ export async function recoverLegacyGhostPlugins(
     return result;
   }
 
+  // Freeze the recovery whitelist only after passive/concurrent ownership has
+  // been ruled out. A deferred instance must not write durable recovery state.
+  if (!recoveryMarkerPersisted && pendingRecoveryIds.size > 0 && !sharedRecoveryBlocked) {
+    await deps.mkdir(path.dirname(recoveryMarkerPath));
+    await writeLegacyGhostRecoveryMarker(deps, recoveryMarkerPath, {
+      version: 1,
+      ownerKey,
+      pendingIds: [...pendingRecoveryIds].sort(),
+      ...(failedRecoveryIds.size > 0 ? { failedIds: [...failedRecoveryIds].sort() } : {}),
+    });
+    recoveryMarkerPersisted = true;
+  }
+
   if (options.shouldAbort?.()) return { status: 'deferred', moved: 0, conflicts: 0 };
   await deps.mkdir(userDataDir);
   const sharedDirs = new Set(sharedLegacyGhosts.map((legacy) => legacy.dir));
@@ -705,16 +1190,18 @@ export async function recoverLegacyGhostPlugins(
     );
   }
   if (movableLegacyGhosts.length === 0) {
+    const recoveredIds = recoveredTargetIds();
     const result: OwnerNamespaceMigrationResult = {
-      status: conflicts > 0 ? 'partial' : 'skipped',
+      status: conflicts > 0 || recoveredIds.length > 0 ? 'partial' : 'skipped',
       moved: 0,
       conflicts,
+      ...(recoveredIds.length > 0 ? { recoveredIds } : {}),
     };
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
   }
   const occupiedCommands = new Set(
-    listLegacyGhostDirsInRoots([targetRoot])
+    targetDiscovery.ghosts
       .map((legacy) => legacy.command?.toLowerCase() ?? null)
       .filter((command): command is string => command !== null),
   );
@@ -733,10 +1220,12 @@ export async function recoverLegacyGhostPlugins(
   }
   movableLegacyGhosts = commandSafeLegacyGhosts;
   if (movableLegacyGhosts.length === 0) {
+    const recoveredIds = recoveredTargetIds();
     const result: OwnerNamespaceMigrationResult = {
-      status: conflicts > 0 ? 'partial' : 'skipped',
+      status: conflicts > 0 || recoveredIds.length > 0 ? 'partial' : 'skipped',
       moved: 0,
       conflicts,
+      ...(recoveredIds.length > 0 ? { recoveredIds } : {}),
     };
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
@@ -768,6 +1257,26 @@ export async function recoverLegacyGhostPlugins(
         movableLegacyGhosts = scopedMovableGhosts;
       }
     }
+  }
+  if (pendingRecoveryIds.size > 0) {
+    if (!hasSafeRecoveryTargetChainSync(userDataDir, targetRoot)) {
+      const result: OwnerNamespaceMigrationResult = {
+        status: 'partial',
+        moved: 0,
+        conflicts: conflicts + movableLegacyGhosts.length,
+      };
+      recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+      return result;
+    }
+    await deps.mkdir(path.dirname(recoveryMarkerPath));
+    const nextRecoveryMarker: LegacyGhostRecoveryMarker = {
+      version: 1,
+      ownerKey,
+      pendingIds: [...pendingRecoveryIds].sort(),
+      ...(failedRecoveryIds.size > 0 ? { failedIds: [...failedRecoveryIds].sort() } : {}),
+    };
+    await writeLegacyGhostRecoveryMarker(deps, recoveryMarkerPath, nextRecoveryMarker);
+    recoveryMarkerPersisted = true;
   }
   const targetRootWasMissing = (await pathType(deps, targetRoot)) === 'missing';
   await deps.mkdir(targetRoot);
@@ -919,9 +1428,18 @@ export async function recoverLegacyGhostPlugins(
       });
       break;
     }
+    if (!hasStableLegacyGhostSourceSync(legacy)) {
+      failed = true;
+      conflicts += 1;
+      log.warn('legacy ghost recovery refused source whose root or directory changed', {
+        id: legacy.id,
+      });
+      continue;
+    }
     try {
       await deps.rename(legacy.dir, target);
       moved += 1;
+      movedThisRun.add(legacy.id);
     } catch (error) {
       failed = true;
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
@@ -990,6 +1508,7 @@ export async function recoverLegacyGhostPlugins(
       }
     }
   }
+  const recoveredIds = recoveredTargetIds();
   const result: OwnerNamespaceMigrationResult = {
     status: failed || conflicts > 0 ? 'partial' : 'migrated',
     moved,
@@ -998,17 +1517,107 @@ export async function recoverLegacyGhostPlugins(
     ...(concurrentRecoveryInterrupted
       ? { deferredReason: 'concurrent-live-instances' as const }
       : {}),
+    ...(recoveredIds.length > 0 ? { recoveredIds } : {}),
   };
   recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
   return result;
 }
 
+function readLegacyGhostRecoveryMarkerSync(
+  userDataDir: string,
+  ownerKey: string,
+): LegacyGhostRecoveryMarkerRead {
+  let text: string;
+  try {
+    text = fsSync.readFileSync(
+      path.join(
+        userDataDir,
+        'owners',
+        ownerKey,
+        LEGACY_GHOST_RECOVERY_MARKER,
+      ),
+      'utf-8',
+    );
+  } catch (error) {
+    return isMissing(error) ? { kind: 'missing' } : { kind: 'deferred' };
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<LegacyGhostRecoveryMarker>;
+    const failedIds = parsed.failedIds ?? [];
+    if (
+      parsed.version === 1 &&
+      parsed.ownerKey === ownerKey &&
+      Array.isArray(parsed.pendingIds) &&
+      parsed.pendingIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      Array.isArray(failedIds) &&
+      failedIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      failedIds.every((id) => parsed.pendingIds?.includes(id))
+    ) {
+      return { kind: 'ready', marker: {
+          version: 1,
+          ownerKey,
+          pendingIds: [...new Set(parsed.pendingIds)],
+          ...(failedIds.length > 0 ? { failedIds: [...new Set(failedIds)] } : {}),
+        } };
+    }
+    return { kind: 'invalid' };
+  } catch {
+    return { kind: 'invalid' };
+  }
+}
+
+/**
+ * Acknowledge only Ghost ids whose approval backfill finished. Keeping the
+ * marker until this point closes the rename -> receipt crash window.
+ */
+export async function acknowledgeRecoveredLegacyGhosts(
+  ownerId: string,
+  ids: readonly string[],
+  deps: MigrationDeps = productionDeps,
+): Promise<void> {
+  if (ids.length === 0) return;
+  const ownerKey = dataOwnerStorageKey(ownerId);
+  const markerPath = path.join(
+    deps.userDataDir(),
+    'owners',
+    ownerKey,
+    LEGACY_GHOST_RECOVERY_MARKER,
+  );
+  const markerRead = await readLegacyGhostRecoveryMarker(deps, markerPath);
+  if (markerRead.kind === 'missing') return;
+  if (markerRead.kind === 'deferred') {
+    throw new Error('legacy ghost recovery marker temporarily unreadable');
+  }
+  if (markerRead.kind === 'invalid') {
+    throw new Error('invalid legacy ghost recovery marker');
+  }
+  const marker = markerRead.marker;
+  if (marker.ownerKey !== ownerKey) {
+    throw new Error('legacy ghost recovery marker owner mismatch');
+  }
+  const acknowledged = new Set(ids);
+  const pendingIds = marker.pendingIds.filter((id) => !acknowledged.has(id));
+  if (pendingIds.length === marker.pendingIds.length) return;
+  await writeLegacyGhostRecoveryMarker(deps, markerPath, {
+    version: 1,
+    ownerKey,
+    pendingIds,
+    ...(marker.failedIds?.length
+      ? { failedIds: marker.failedIds.filter((id) => !acknowledged.has(id)) }
+      : {}),
+  });
+}
+
 async function pathType(
   deps: MigrationDeps,
   file: string,
-): Promise<'missing' | 'directory' | 'other'> {
+): Promise<'missing' | 'directory' | 'file' | 'link' | 'other'> {
   try {
-    return (await deps.lstat(file)).isDirectory() ? 'directory' : 'other';
+    const stat = await deps.lstat(file);
+    if (stat.isSymbolicLink?.()) return 'link';
+    if (stat.isDirectory()) return 'directory';
+    if (stat.isFile?.()) return 'file';
+    return 'other';
   } catch (error) {
     if (isMissing(error)) return 'missing';
     throw error;
@@ -1038,13 +1647,21 @@ async function moveWithoutOverwrite(
   source: string,
   target: string,
   abortCheck?: () => Promise<void>,
+  assertTargetChain?: () => void,
 ): Promise<{ moved: number; conflicts: number }> {
   const sourceType = await pathType(deps, source);
   if (sourceType === 'missing') return { moved: 0, conflicts: 0 };
+  // Legacy links and special files are not migratable data.  Do not rename
+  // them into the owner namespace where later consumers could follow them.
+  if (sourceType === 'link' || sourceType === 'other') {
+    return { moved: 0, conflicts: 1 };
+  }
 
   const targetType = await pathType(deps, target);
   if (targetType === 'missing') {
+    assertTargetChain?.();
     await deps.mkdir(path.dirname(target));
+    assertTargetChain?.();
     try {
       await deps.rename(source, target);
       return { moved: 1, conflicts: 0 };
@@ -1069,6 +1686,7 @@ async function moveWithoutOverwrite(
       path.join(source, name),
       path.join(target, name),
       abortCheck,
+      assertTargetChain,
     );
     moved += result.moved;
     conflicts += result.conflicts;
@@ -1250,6 +1868,22 @@ export async function claimLegacyOwnerNamespace(
   }
 
   await deps.mkdir(userDataDir);
+  if (!hasSafeRecoveryTargetChainSync(userDataDir, targetRoot)) {
+    const existingLegacyPathCount = (
+      await Promise.all(
+        LEGACY_PATHS.map(async (relativePath) =>
+          (await pathType(deps, path.join(userDataDir, relativePath))) !== 'missing',
+        ),
+      )
+    ).filter(Boolean).length;
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'partial',
+      moved: 0,
+      conflicts: existingLegacyPathCount,
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
   let marker = existingMarker;
   if (!marker) {
     marker = { version: 1, ownerKey, complete: false };
@@ -1322,6 +1956,11 @@ export async function claimLegacyOwnerNamespace(
         source,
         path.join(targetRoot, relativePath),
         throttledAbortCheck,
+        () => {
+          if (!hasSafeRecoveryTargetChainSync(userDataDir, targetRoot)) {
+            throw new Error('owner namespace claim target chain is not link-free');
+          }
+        },
       );
       moved += result.moved;
       conflicts += result.conflicts;
@@ -1368,7 +2007,7 @@ export async function claimLegacyOwnerNamespace(
     }
   }
   if (!failed) {
-    await deps.writeFile(markerPath, JSON.stringify({ ...marker, complete: true }));
+    await writeJsonAtomically(deps, markerPath, { ...marker, complete: true });
   }
   log.info('legacy owner namespace claim completed', {
     ownerKey,
@@ -1381,6 +2020,7 @@ export async function claimLegacyOwnerNamespace(
 
 export const __testing = {
   CLAIM_MARKER,
+  LEGACY_GHOST_RECOVERY_MARKER,
   LEGACY_PATHS,
   isSameUserDataDir,
   pathExistsNoFollowSync,

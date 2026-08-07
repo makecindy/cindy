@@ -31,6 +31,7 @@ export interface AccountDeletionIpcDeps {
   clearReceipt(): void;
   consumeRestoredNotice(): boolean;
   isConfirmedLocalSessionCurrent(): boolean;
+  beginAccountBoundary(): () => void;
   teardownAccountBoundary(): Promise<void>;
   clearLocalSession(): boolean;
   logWarn(message: string, error?: unknown): void;
@@ -108,15 +109,23 @@ export function createAccountDeletionIpcHandlers(
           return { success: true, value: status };
         }
 
-        // Teardown failures are non-fatal here: keeping the initiator logged in
-        // would be more misleading and less safe than completing local logout.
+        // Hold the owner boundary across both teardown and the session commit.
+        // Otherwise a new owner-bound mutation can start after teardown's
+        // waitForIdle and race with clearLocalSession switching the namespace.
+        const releaseBoundary = deps.beginAccountBoundary();
         try {
-          await deps.teardownAccountBoundary();
-        } catch (error) {
-          deps.logWarn('account boundary teardown after deletion failed (non-fatal)', error);
-        }
-        if (!deps.clearLocalSession()) {
-          deps.logWarn('local auth identity changed during account deletion teardown; skip clear');
+          // Teardown failures are non-fatal here: keeping the initiator logged in
+          // would be more misleading and less safe than completing local logout.
+          try {
+            await deps.teardownAccountBoundary();
+          } catch (error) {
+            deps.logWarn('account boundary teardown after deletion failed (non-fatal)', error);
+          }
+          if (!deps.clearLocalSession()) {
+            deps.logWarn('local auth identity changed during account deletion teardown; skip clear');
+          }
+        } finally {
+          releaseBoundary();
         }
         return { success: true, value: status };
       })();

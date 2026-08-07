@@ -690,6 +690,7 @@ import {
   getGhostCindySlot,
   getGhostManager,
   getGhostSessionActivityTracker,
+  interruptGhostCallsForAccountBoundary,
   isGhostAvailableForActiveSession,
   refreshGhostLocalization,
   registerGhostIpc,
@@ -1070,8 +1071,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
   // the auth-change activation pass after the new boundary is committed.
+  await interruptGhostCallsForAccountBoundary();
   await waitForGhostMutations();
-  suspendAllGhosts();
+  await suspendAllGhosts();
   // Personal IM channels have the same DB boundary. Relogin restarts them from
   // the next owner DB-ready callback; app:ready-for-bot remains a compatibility
   // retry after the new DbClient is ready.
@@ -3951,6 +3953,7 @@ const registerIpcHandlers = () => {
     clearReceipt: () => authManager.clearAccountDeletionReceipt(),
     consumeRestoredNotice: () => authManager.consumeAccountDeletionRestoredNotice(),
     isConfirmedLocalSessionCurrent: () => authManager.isConfirmedAccountDeletionSessionCurrent(),
+    beginAccountBoundary: beginAppSessionBoundary,
     teardownAccountBoundary: () => teardownAuthAccountBoundary('account-deletion'),
     clearLocalSession: () => authManager.clearLocalSessionAfterAccountDeletion(),
     logWarn: (message, error) => accountDeletionLog.warn(message, error),

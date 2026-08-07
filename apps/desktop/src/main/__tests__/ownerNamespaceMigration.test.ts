@@ -1,13 +1,16 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { dataOwnerStorageKey } from '../appSessionState.js';
 import {
+  acknowledgeRecoveredLegacyGhosts,
   claimLegacyOwnerNamespace,
   getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
+  listLegacyOwnerProjectionRoots,
   listLegacyGhostTombstoneRoots,
   recoverLegacyGhostPlugins,
   __testing,
@@ -19,6 +22,21 @@ async function tempRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'owner-namespace-migration-'));
   roots.push(root);
   return root;
+}
+
+async function canCreateFileSymlink(): Promise<boolean> {
+  const probeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'owner-namespace-symlink-probe-'));
+  try {
+    const target = path.join(probeRoot, 'target.txt');
+    const link = path.join(probeRoot, 'link.txt');
+    await fs.writeFile(target, 'probe');
+    await fs.symlink(target, link, process.platform === 'win32' ? 'file' : undefined);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await fs.rm(probeRoot, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -119,6 +137,16 @@ describe('claimLegacyOwnerNamespace', () => {
     // 文件留在原地、marker 未创建:被动实例保持只读,不打断共享同一 userData 的旧版本实例。
     await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
     await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
+    await expect(
+      fs.access(
+        path.join(
+          root,
+          'owners',
+          dataOwnerStorageKey('cloud-a'),
+          __testing.LEGACY_GHOST_RECOVERY_MARKER,
+        ),
+      ),
+    ).rejects.toThrow();
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(false);
   });
 
@@ -446,9 +474,372 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
     expect(hasLegacyOwnerNamespaceClaim('cloud-b', root)).toBe(false);
   });
+  it('keeps the claim marker valid if the completion rename fails', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const markerPath = path.join(root, __testing.CLAIM_MARKER);
+    await fs.writeFile(path.join(root, 'ghost-workdir-prefs.json'), 'legacy-prefs');
+    let failCompletionRename = true;
+
+    await expect(
+      claimLegacyOwnerNamespace(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root, {}, {
+          rename: async (source: string, target: string) => {
+            if (target === markerPath && failCompletionRename) {
+              failCompletionRename = false;
+              throw Object.assign(new Error('simulated completion failure'), { code: 'EIO' });
+            }
+            return fs.rename(source, target);
+          },
+        }),
+      ),
+    ).rejects.toThrow('simulated completion failure');
+    await expect(fs.readFile(markerPath, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      version: 1,
+      ownerKey: dataOwnerStorageKey(ownerId),
+      complete: false,
+    });
+  });
+
+  it('does not move a symlinked legacy credential into the owner namespace', async () => {
+    if (!(await canCreateFileSymlink())) return;
+    const root = await tempRoot();
+    const external = await tempRoot();
+    const source = path.join(root, 'model-access-credentials.json');
+    await fs.writeFile(path.join(external, 'credentials.json'), '{"secret":"external"}');
+    await fs.symlink(
+      path.join(external, 'credentials.json'),
+      source,
+      process.platform === 'win32' ? 'file' : undefined,
+    );
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root),
+    );
+    const target = path.join(
+      root,
+      'owners',
+      dataOwnerStorageKey('cloud-a'),
+      'model-access-credentials.json',
+    );
+
+    expect(result).toMatchObject({ status: 'migrated', moved: 0, conflicts: 1 });
+    expect((await fs.lstat(source)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(target)).rejects.toThrow();
+  });
+
+  it('does not write legacy data through a linked owner target root', async () => {
+    const root = await tempRoot();
+    const external = await tempRoot();
+    const ownerKey = dataOwnerStorageKey('cloud-a');
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await fs.mkdir(path.join(root, 'owners'), { recursive: true });
+    await fs.symlink(
+      external,
+      path.join(root, 'owners', ownerKey),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root),
+    );
+
+    expect(result).toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf8')).resolves.toBe('legacy-hook');
+    await expect(fs.access(path.join(external, 'slack-hook.json'))).rejects.toThrow();
+  });
+});
+
+it('fails closed when owner projection roots cannot be enumerated', () => {
+  const readdir = vi.spyOn(fsSync, 'readdirSync').mockImplementationOnce(() => {
+    throw Object.assign(new Error('denied'), { code: 'EACCES' });
+  });
+  try {
+    expect(() => listLegacyOwnerProjectionRoots('C:\\cindy-user-data')).toThrow('denied');
+  } finally {
+    readdir.mockRestore();
+  }
+});
+
+it('lstats owner projection namespaces when readdir returns unknown Dirent types', async () => {
+  const root = await tempRoot();
+  const ownerKey = dataOwnerStorageKey('cloud-a');
+  await fs.mkdir(path.join(root, 'owners', ownerKey), { recursive: true });
+  const directoryType = vi.spyOn(fsSync.Dirent.prototype, 'isDirectory').mockReturnValue(false);
+  try {
+    expect(listLegacyOwnerProjectionRoots(root)).toEqual(expect.arrayContaining([
+      path.join(root, 'owners', ownerKey, 'brain'),
+      path.join(root, 'owners', ownerKey, 'cindy-brain'),
+      path.join(root, 'owners', ownerKey, 'ghost-install-state'),
+    ]));
+  } finally {
+    directoryType.mockRestore();
+  }
+});
+
+it('fails closed when an owner projection namespace is replaced by a link', async () => {
+  const root = await tempRoot();
+  const external = await tempRoot();
+  const ownerKey = dataOwnerStorageKey('cloud-a');
+  await fs.mkdir(path.join(root, 'owners'), { recursive: true });
+  try {
+    await fs.symlink(
+      external,
+      path.join(root, 'owners', ownerKey),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+  } catch {
+    return;
+  }
+  expect(() => listLegacyOwnerProjectionRoots(root)).toThrow(
+    'owner projection namespace is not a regular directory',
+  );
 });
 
 describe('legacy Ghost plugin recovery', () => {
+  it('persists a durable backfill queue before moving a legacy plugin', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const source = path.join(root, 'brain', 'legacy-plugin');
+    const target = path.join(root, 'owners', ownerKey, 'cindy-brain', 'legacy-plugin');
+    const markerPath = path.join(
+      root,
+      'owners',
+      ownerKey,
+      __testing.LEGACY_GHOST_RECOVERY_MARKER,
+    );
+    await writeGhostDirAtPath(source, 'legacy-plugin');
+    let interrupted = false;
+    let markerPendingAtRename: string[] | null = null;
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root, {}, {
+        rename: async (from: string, to: string) => {
+          if (from === source && to === target) {
+            markerPendingAtRename = (
+              JSON.parse(await fs.readFile(markerPath, 'utf-8')) as {
+                pendingIds: string[];
+              }
+            ).pendingIds;
+          }
+          await fs.rename(from, to);
+          if (from === source && to === target && !interrupted) {
+            interrupted = true;
+            throw Object.assign(new Error('simulated process interruption'), { code: 'EIO' });
+          }
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'partial',
+      moved: 0,
+    });
+    expect(markerPendingAtRename).toEqual(['legacy-plugin']);
+    await expect(fs.access(source)).rejects.toThrow();
+    await expect(fs.readFile(path.join(target, 'ghost.json'), 'utf-8')).resolves.toContain(
+      '"id":"legacy-plugin"',
+    );
+    const marker = JSON.parse(
+      await fs.readFile(
+        markerPath,
+        'utf-8',
+      ),
+    ) as { ownerKey: string; pendingIds: string[] };
+    expect(marker).toEqual({
+      version: 1,
+      ownerKey,
+      pendingIds: ['legacy-plugin'],
+    });
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({
+      state: 'partial',
+      legacyPluginCount: 1,
+      canRetry: true,
+    });
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({
+      status: 'partial',
+      moved: 0,
+      recoveredIds: ['legacy-plugin'],
+    });
+  });
+
+  it('does not backfill a target that appeared while the legacy source still exists', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const source = path.join(root, 'brain', 'legacy-plugin');
+    const target = path.join(root, 'owners', ownerKey, 'cindy-brain', 'legacy-plugin');
+    await writeGhostDirAtPath(source, 'legacy-plugin');
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root, {}, {
+        rename: async (from: string, to: string) => {
+          if (from === source && to === target) {
+            await writeGhostDirAtPath(target, 'legacy-plugin');
+            throw Object.assign(new Error('target appeared before rename'), { code: 'EEXIST' });
+          }
+          await fs.rename(from, to);
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'partial', moved: 0 });
+    expect(result.recoveredIds).toBeUndefined();
+    await expect(fs.access(source)).resolves.toBeUndefined();
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0 });
+  });
+
+  it('does not let a stale pending id expand the frozen recovery whitelist', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const markerPath = path.join(
+      root,
+      'owners',
+      ownerKey,
+      __testing.LEGACY_GHOST_RECOVERY_MARKER,
+    );
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({ version: 1, ownerKey, pendingIds: ['stale-plugin'] }),
+    );
+    await writeGhostDirAtPath(path.join(root, 'brain', 'new-plugin'), 'new-plugin');
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0 });
+    await expect(
+      fs.access(path.join(root, 'brain', 'new-plugin')),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.readFile(markerPath, 'utf8').then(JSON.parse),
+    ).resolves.toEqual({
+      version: 1,
+      ownerKey,
+      pendingIds: ['stale-plugin'],
+    });
+  });
+
+  it('continues a mixed recovery marker when one id is already in the target', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const markerPath = path.join(
+      root,
+      'owners',
+      ownerKey,
+      __testing.LEGACY_GHOST_RECOVERY_MARKER,
+    );
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({ version: 1, ownerKey, pendingIds: ['already-moved', 'still-legacy'] }),
+    );
+    await writeGhostDirAtPath(
+      path.join(root, 'owners', ownerKey, 'cindy-brain', 'already-moved'),
+      'already-moved',
+    );
+    await writeGhostDirAtPath(path.join(root, 'brain', 'still-legacy'), 'still-legacy');
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({
+      status: 'migrated',
+      moved: 1,
+      recoveredIds: ['already-moved', 'still-legacy'],
+    });
+    await expect(
+      fs.access(path.join(root, 'owners', ownerKey, 'cindy-brain', 'still-legacy')),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not pick one of duplicate legacy sources for the same id', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDirAtPath(path.join(root, 'brain', 'duplicate-plugin'), 'duplicate-plugin');
+    await writeGhostDirAtPath(
+      path.join(root, 'owners', ownerKey, 'brain', 'duplicate-plugin'),
+      'duplicate-plugin',
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 2 });
+    await expect(fs.access(path.join(root, 'brain', 'duplicate-plugin'))).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(root, 'owners', ownerKey, 'brain', 'duplicate-plugin')),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(root, 'owners', ownerKey, 'cindy-brain', 'duplicate-plugin')),
+    ).rejects.toThrow();
+  });
+
+  it('acknowledges only completed durable backfill ids', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const markerPath = path.join(
+      root,
+      'owners',
+      ownerKey,
+      __testing.LEGACY_GHOST_RECOVERY_MARKER,
+    );
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({
+        version: 1,
+        ownerKey,
+        pendingIds: ['completed-plugin', 'retry-plugin'],
+      }),
+    );
+
+    await acknowledgeRecoveredLegacyGhosts(
+      ownerId,
+      ['completed-plugin'],
+      realFsDeps(root),
+    );
+
+    await expect(fs.readFile(markerPath, 'utf-8').then(JSON.parse)).resolves.toEqual({
+      version: 1,
+      ownerKey,
+      pendingIds: ['retry-plugin'],
+    });
+  });
+
   it('does not follow a linked legacy repository root', async () => {
     const root = await tempRoot();
     const externalRoot = await tempRoot();
@@ -467,7 +858,7 @@ describe('legacy Ghost plugin recovery', () => {
         { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
         realFsDeps(root),
       ),
-    ).resolves.toEqual({ status: 'skipped', moved: 0, conflicts: 0 });
+    ).resolves.toEqual({ status: 'partial', moved: 0, conflicts: 1 });
     await expect(
       fs.readFile(path.join(externalRoot, 'external-plugin', 'ghost.json'), 'utf-8'),
     ).resolves.toContain('"id":"external-plugin"');
@@ -501,7 +892,7 @@ describe('legacy Ghost plugin recovery', () => {
         { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
         realFsDeps(root),
       ),
-    ).resolves.toEqual({ status: 'skipped', moved: 0, conflicts: 0 });
+    ).resolves.toEqual({ status: 'partial', moved: 0, conflicts: 1 });
     await expect(
       fs.readFile(path.join(linkedPlugin, 'ghost.json'), 'utf-8'),
     ).resolves.toContain('"id":"linked-plugin"');
@@ -926,7 +1317,8 @@ describe('legacy Ghost plugin recovery', () => {
       {},
       {
         rename: (source: string, target: string) =>
-          path.basename(source) === '.builtin-provisioning.json'
+          path.basename(source) === '.builtin-provisioning.json' ||
+          path.basename(target) === __testing.LEGACY_GHOST_RECOVERY_MARKER
             ? fs.rename(source, target)
             : Promise.reject(Object.assign(new Error('rename denied'), { code: 'EACCES' })),
       },
@@ -969,7 +1361,7 @@ describe('legacy Ghost plugin recovery', () => {
     );
 
     const targetRoot = path.join(root, 'owners', dataOwnerStorageKey(ownerId));
-    expect(result).toMatchObject({ status: 'migrated', moved: 1, conflicts: 0 });
+    expect(result).toMatchObject({ status: 'partial', moved: 1, conflicts: 1 });
     await expect(
       fs.readFile(path.join(targetRoot, 'cindy-brain', 'valid-plugin', 'ghost.json'), 'utf-8'),
     ).resolves.toContain('"id":"valid-plugin"');
@@ -993,8 +1385,10 @@ describe('legacy Ghost plugin recovery', () => {
       root,
       {},
       {
-        rename: () =>
-          Promise.reject(Object.assign(new Error('rename denied'), { code: 'EACCES' })),
+        rename: (source: string, target: string) =>
+          path.basename(target) === __testing.LEGACY_GHOST_RECOVERY_MARKER
+            ? fs.rename(source, target)
+            : Promise.reject(Object.assign(new Error('rename denied'), { code: 'EACCES' })),
       },
     );
 
@@ -1057,11 +1451,135 @@ describe('legacy Ghost plugin recovery', () => {
       realFsDeps(root),
     );
 
-    expect(result).toEqual({ status: 'skipped', moved: 0, conflicts: 0 });
+    expect(result).toEqual({ status: 'partial', moved: 0, conflicts: 1 });
     await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
     await expect(fs.readFile(path.join(root, 'dialogues', 'session.json'), 'utf-8')).resolves.toBe(
       'legacy-dialogue',
     );
+  });
+
+  it('defers the whole recovery when a legacy root cannot be enumerated', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDir(root, 'cindy-brain', 'ready-plugin');
+    await writeGhostDir(root, 'brain', 'unreadable-plugin');
+    const blockedRoot = path.join(root, 'brain');
+    const originalReaddir = fsSync.readdirSync.bind(fsSync);
+    const readdirSpy = vi.spyOn(fsSync, 'readdirSync').mockImplementation((dir, options) => {
+      if (path.resolve(String(dir)) === path.resolve(blockedRoot)) {
+        throw Object.assign(new Error('scan denied'), { code: 'EACCES' });
+      }
+      return originalReaddir(dir as never, options as never) as never;
+    });
+    try {
+      expect(
+        getLegacyGhostRecoveryStatus(
+          { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+          root,
+        ),
+      ).toEqual({
+        state: 'deferred',
+        legacyPluginCount: 2,
+        canRetry: true,
+        deferredReason: 'legacy-discovery-incomplete',
+      });
+      await expect(
+        recoverLegacyGhostPlugins(
+          { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+          realFsDeps(root),
+        ),
+      ).resolves.toEqual({
+        status: 'deferred',
+        moved: 0,
+        conflicts: 0,
+        deferredReason: 'legacy-discovery-incomplete',
+      });
+    } finally {
+      readdirSpy.mockRestore();
+    }
+    await expect(
+      fs.readFile(path.join(root, 'cindy-brain', 'ready-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"ready-plugin"');
+    await expect(
+      fs.access(path.join(root, 'owners', dataOwnerStorageKey(ownerId), 'cindy-brain')),
+    ).rejects.toThrow();
+  });
+
+  it('defers recovery when a legacy manifest is temporarily unreadable', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDir(root, 'cindy-brain', 'unreadable-manifest');
+    const manifestPath = path.join(root, 'cindy-brain', 'unreadable-manifest', 'ghost.json');
+    const originalReadFile = fsSync.readFileSync.bind(fsSync);
+    const readFileSpy = vi.spyOn(fsSync, 'readFileSync').mockImplementation((file, options) => {
+      if (path.resolve(String(file)) === path.resolve(manifestPath)) {
+        throw Object.assign(new Error('manifest locked'), { code: 'EACCES' });
+      }
+      return originalReadFile(file as never, options as never) as never;
+    });
+    try {
+      expect(
+        getLegacyGhostRecoveryStatus(
+          { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+          root,
+        ),
+      ).toMatchObject({
+        state: 'deferred',
+        legacyPluginCount: 1,
+        canRetry: true,
+        deferredReason: 'legacy-discovery-incomplete',
+      });
+      await expect(
+        recoverLegacyGhostPlugins(
+          { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+          realFsDeps(root),
+        ),
+      ).resolves.toMatchObject({
+        status: 'deferred',
+        moved: 0,
+        deferredReason: 'legacy-discovery-incomplete',
+      });
+    } finally {
+      readFileSpy.mockRestore();
+    }
+    await expect(fs.access(manifestPath)).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(root, 'owners', dataOwnerStorageKey(ownerId), 'cindy-brain')),
+    ).rejects.toThrow();
+  });
+
+  it('defers and keeps the queue when the recovery marker is temporarily unreadable', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const markerPath = path.join(
+      root,
+      'owners',
+      ownerKey,
+      __testing.LEGACY_GHOST_RECOVERY_MARKER,
+    );
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({ version: 1, ownerKey, pendingIds: ['queued-plugin'] }),
+    );
+    await writeGhostDir(root, 'brain', 'queued-plugin');
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root, {}, {
+        readFile: (file: string) =>
+          path.resolve(file) === path.resolve(markerPath)
+            ? Promise.reject(Object.assign(new Error('marker locked'), { code: 'EACCES' }))
+            : fs.readFile(file, 'utf8'),
+      }),
+    );
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'legacy-discovery-incomplete',
+    });
+    await expect(fs.access(path.join(root, 'brain', 'queued-plugin'))).resolves.toBeUndefined();
   });
 
   it('consolidates plugins left in the current owner scoped brain directory', async () => {
@@ -1288,6 +1806,49 @@ describe('legacy Ghost plugin recovery', () => {
     ).resolves.toContain('"id":"second-plugin"');
     await expect(fs.access(path.join(root, 'cindy-brain'))).resolves.toBeUndefined();
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(false);
+  });
+
+  it('keeps a pending but invalid moved target visible for recovery', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const markerPath = path.join(root, 'owners', ownerKey, __testing.LEGACY_GHOST_RECOVERY_MARKER);
+    const targetDir = path.join(root, 'owners', ownerKey, 'cindy-brain', 'broken-plugin');
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(targetDir, 'ghost.json'), '{ broken');
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({ version: 1, ownerKey, pendingIds: ['broken-plugin'] }),
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toMatchObject({ state: 'partial', legacyPluginCount: 1, canRetry: false });
+  });
+
+  it('keeps pending recovery visible when the target root itself becomes invalid', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const ownerRoot = path.join(root, 'owners', ownerKey);
+    const markerPath = path.join(ownerRoot, __testing.LEGACY_GHOST_RECOVERY_MARKER);
+    await fs.mkdir(ownerRoot, { recursive: true });
+    await fs.writeFile(path.join(ownerRoot, 'cindy-brain'), 'replaced target root');
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify({ version: 1, ownerKey, pendingIds: ['moved-plugin'] }),
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({ state: 'partial', legacyPluginCount: 1, canRetry: false });
   });
 
   it('reports claimed-by-other-owner and never moves plugins across accounts', async () => {

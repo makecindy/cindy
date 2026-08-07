@@ -55,6 +55,8 @@ function sanitizeInstallDetail(message: string): string {
 export async function installCustomMarketPlugin(input: {
   pluginDir: string;
   expected: GhostManifest;
+  /** 更新时把审阅所绑定的 Host receipt token 贯穿到最终安装出口。 */
+  expectedInstalledApproval?: string;
   /**
    * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
    * 自定义市场按调用方捕获的账户审阅 manifest;打包是异步的,装出前必须
@@ -167,6 +169,9 @@ export async function installCustomMarketPlugin(input: {
       const installed = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: validated.manifest.id,
         version: validated.manifest.version,
+        ...(input.expectedInstalledApproval
+          ? { expectedInstalledApproval: input.expectedInstalledApproval }
+          : {}),
       });
       // 溯源写入与落位同锁(见 afterCommit 注释)。
       await input.afterCommit?.();

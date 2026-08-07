@@ -113,8 +113,22 @@ const DEFAULT_TERMINAL_GRACE_MS = 700;
 
 export class GhostSetupCoordinator {
   private readonly actionFlights = new Map<string, Promise<GhostSetupActionResult>>();
+  private readonly activeActions = new Set<Promise<unknown>>();
 
   constructor(private readonly deps: GhostSetupCoordinatorDeps) {}
+
+  /** Account-boundary drain for Host actions that outlive a cancelled setup card. */
+  async waitForActionsIdle(): Promise<void> {
+    while (this.activeActions.size > 0) {
+      await Promise.allSettled([...this.activeActions]);
+    }
+  }
+
+  private trackAction<T>(promise: Promise<T>): Promise<T> {
+    this.activeActions.add(promise);
+    void promise.finally(() => this.activeActions.delete(promise)).catch(() => undefined);
+    return promise;
+  }
 
   async ensureReady(request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> {
     let assessment: GhostSetupAssessment;
@@ -359,14 +373,16 @@ export class GhostSetupCoordinator {
         const flightKey = `${request.ghostId}\u0000${action.id}\u0000${flightScope}`;
         let flight = this.actionFlights.get(flightKey);
         if (!flight) {
-          flight = this.deps
-            .executeAction({
-              sessionId,
-              ghostId: request.ghostId,
-              action,
-              ...(responseTarget ? { responseTarget } : {}),
-            })
-            .finally(() => this.actionFlights.delete(flightKey));
+          flight = this.trackAction(
+            this.deps
+              .executeAction({
+                sessionId,
+                ghostId: request.ghostId,
+                action,
+                ...(responseTarget ? { responseTarget } : {}),
+              })
+              .finally(() => this.actionFlights.delete(flightKey)),
+          );
           this.actionFlights.set(flightKey, flight);
         }
         let result: GhostSetupActionResult;
@@ -444,12 +460,14 @@ export class GhostSetupCoordinator {
         let result: GhostSetupActionResult;
         try {
           result = this.deps.executeInlineAction
-            ? await this.deps.executeInlineAction({
-                sessionId,
-                ghostId: request.ghostId,
-                action,
-                value: submit.value,
-              })
+            ? await this.trackAction(
+                this.deps.executeInlineAction({
+                  sessionId,
+                  ghostId: request.ghostId,
+                  action,
+                  value: submit.value,
+                }),
+              )
             : {
                 ok: false,
                 errorCode: 'INLINE_UNAVAILABLE',

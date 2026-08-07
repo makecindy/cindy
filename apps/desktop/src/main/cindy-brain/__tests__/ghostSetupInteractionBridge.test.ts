@@ -155,6 +155,30 @@ describe('GhostSetupInteractionBridge', () => {
     });
   });
 
+  it('turns account-boundary cleanup into cancel commands for every session', async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+    bridge.open('session-1', snapshot(4), first);
+    bridge.open('session-2', { ...snapshot(7), requestId: 'request-2' }, second);
+
+    bridge.cleanupAll('session_aborted');
+    await Promise.resolve();
+
+    expect(first).toHaveBeenCalledWith({
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: 4,
+      cleanupReason: 'session_aborted',
+    });
+    expect(second).toHaveBeenCalledWith({
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: 7,
+      cleanupReason: 'session_aborted',
+    });
+  });
+
   it('rolls back pending state when the initial broadcast fails', () => {
     const bridge = new GhostSetupInteractionBridge({
       broadcast: () => {

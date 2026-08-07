@@ -79,6 +79,10 @@ export interface PluginMarketInstallOptions {
   allowPermissionExpansion?: boolean;
   /** 用户审阅目标权限时的已装权限基线。 */
   reviewedBaseline?: string;
+  /**
+   * receipt 模型的并发护栏：receipt 派生 token。确认与落位之间批准状态若变化即拒绝。
+   */
+  expectedInstalledApproval?: string;
 }
 
 /** 安装成功，或用户在事务内取消真实包权限确认。 */

@@ -3319,6 +3319,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "需要重新确认权限",
+        "action": "重新确认权限",
+        "actionAria": "重新确认插件「{{name}}」的权限",
+        "noticeTitle": "需要重新确认权限",
+        "bodyLegacy": "Cindy 没有这个插件的权限确认记录，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyInvalid": "这个插件的权限确认记录已损坏，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyBuiltinRestart": "这个内置插件的权限记录出了点问题。重启 Cindy 即可自动恢复，无需其他操作。"
+      },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
       "emptyHint": "可从插件市场安装，或点击右上角导入 .cindy 文件",
@@ -3373,6 +3382,7 @@
         "uninstalled": "已卸载「{{name}}」",
         "installedAsleep": "已安装「{{name}}」(未生效，可在此开启)",
         "updated": "「{{name}}」已更新到 v{{version}}",
+        "reapproved": "已恢复「{{name}}」",
         "exported": "已导出「{{name}}」的 .cindy 文件",
         "exportFailed": "导出「{{name}}」失败，请重试",
         "projectDisabled": "已在此项目停用「{{name}}」",
@@ -3507,6 +3517,7 @@
       "errors": {
         "fileInvalid": "不是合法的 .cindy 插件文件",
         "alreadyInstalled": "这个插件已经安装",
+        "approvalRequired": "需要重新确认这个插件的权限后才能继续",
         "commandConflict": "它的指令和已装插件撞名了，先卸载占用方或让作者改名",
         "idReserved": "该 id 使用了官方保留前缀 cindy-，仅随应用内置的插件可用",
         "sourceMissing": "找不到所选文件",
@@ -3615,6 +3626,11 @@
         "body": "版本 {{from}} → {{to}}。将替换现有版本；生效状态与面板位置保持不变。",
         "confirm": "更新",
         "cancel": "取消"
+      },
+      "reapproveConfirm": {
+        "title": "重新确认「{{name}}」的权限？",
+        "body": "按下方清单重新授权这个已安装的插件，无需重新提供安装包文件。",
+        "confirm": "确认并恢复"
       },
       "pick": {
         "dialogTitle": "选择文件夹",

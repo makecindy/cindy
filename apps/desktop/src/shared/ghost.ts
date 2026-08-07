@@ -21,6 +21,8 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './local
 
 /** 清单文件名(zip 根部)。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
+/** Maximum manifest bytes accepted by both Forge and package ingestion. */
+export const GHOST_MANIFEST_MAX_BYTES = 256 * 1024;
 
 /**
  * 安装器读取包内 ghost.json 的硬上限。源码目录的发现/预读取可以使用更宽的
@@ -1403,16 +1405,50 @@ export interface GhostManifestLocaleResource {
 /** 单个插件 locale JSON 的字节上限。Forge 与装入侧共用，避免两端契约漂移。 */
 export const GHOST_LOCALE_MAX_BYTES = 64 * 1024;
 
-/** 已装入主机的意识(清单 + 安装位置 + 启用态)。 */
+/**
+ * Host 对插件安装状态的批准结论。
+ *
+ * `approved` 的 revision 由 Main 在一次完整安装/更新确认事务中生成；另外两态
+ * 都不构成运行授权，更新 UI 必须把目标包的全部权限按新增项重新展示。
+ */
+export type GhostInstallApproval =
+  | { state: 'approved'; revision: string }
+  | { state: 'legacy-unapproved' }
+  | { state: 'invalid' };
+
+/** 把批准态投影成跨进程更新事务使用的稳定 token。 */
+export function ghostInstallApprovalToken(approval: GhostInstallApproval | undefined): string {
+  if (approval?.state === 'approved') return `approved:${approval.revision}`;
+  return approval?.state ?? 'legacy-unapproved';
+}
+
+/** 更新 IPC 只接受 Host 列表曾下发过的批准态 token。 */
+export function isGhostInstallApprovalToken(value: unknown): value is string {
+  return (
+    value === 'legacy-unapproved' ||
+    value === 'invalid' ||
+    (typeof value === 'string' &&
+      /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        value,
+      ))
+  );
+}
+
+/** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id>)。 */
   dir: string;
   /**
-   * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但意识仍装着、
-   * 布局位置保留;重新启用即恢复。真身是安装目录里的 `.disabled` 标记文件。
+   * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但插件仍装着、
+   * 布局位置保留;重新启用即恢复。批准安装的真身在 Host receipt 中；
+   * 安装目录里的 `.disabled` 只保留为旧版本兼容镜像。
    */
   enabled: boolean;
+  /** Host 是否持有一次明确安装/更新确认形成的批准快照。 */
+  approval: GhostInstallApproval;
+  /** Host-owned approval-revision snapshot root for approved skill directories. */
+  approvedSkillRoot?: string;
   /** 安装时由主机验出的来源/签名等级；作者清单不能自报。 */
   trust?: GhostTrustInfo;
   /**
@@ -1420,6 +1456,12 @@ export interface InstalledGhost {
    * 文件缺失或超限时缺省)。renderer 直接作 <img src> 用,无需 loading 态。
    */
   iconDataUrl?: string;
+  /**
+   * 是否随包内置插件(id 在随包种子清单里,由 main 投影;renderer 不自判前缀 ——
+   * 企业种子不带 `cindy-` 前缀)。批准态异常时 UI 据此换文案:随包插件由启动对账
+   * 自动补批准,「重启应用即恢复」,不走人工重新确认。
+   */
+  builtin?: boolean;
   /** 插件详情页宿主角标所需的最小陈旧授权投影；不含账号或 scope 明细。 */
   oauthScopeStale?: {
     secretKey: string;
@@ -1599,6 +1641,47 @@ function formatGhostQuotaSize(bytes: number): string {
  * 顺序即展示顺序:Cindy 代办 → 注册工具 → 聊天指令 → 面板 → 订阅/卡片 →
  * 可执行代码(先能力后载体,与权限展示契约一致)。
  */
+/**
+ * 权限投影的规范化指纹:两份 manifest「用户在确认卡上看到的权限内容」是否逐字
+ * 相同的唯一判据。
+ *
+ * **只比 `key` 是不够的**:同一个 key 下还有会呈现给用户、并构成授权语义的字段 ——
+ * `labelArgs`(preview 的 hosts、工具名等)、`detail`(作者自由文本,OAuth scopes /
+ * node secret 绑定方式等都经它展示)、`detailKey`/`detailArgs`。市场确认拿服务端
+ * 清单给用户看、拿下载包装入,两份清单在这些字段上不同而 key 相同时,用户看的是 A、
+ * receipt 钉的是 B。字段序列化按固定字段序 + labelArgs/detailArgs 键排序,与对象
+ * 构造顺序无关。
+ */
+function ghostPermissionProjectionTuple(item: GhostPermissionItem): unknown[] {
+  const sortRecord = (record: Record<string, string> | undefined): [string, string][] =>
+    Object.entries(record ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return [
+    item.key,
+    item.kind,
+    item.labelKey,
+    sortRecord(item.labelArgs),
+    item.detail ?? null,
+    item.detailKey ?? null,
+    sortRecord(item.detailArgs),
+  ];
+}
+
+function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
+  return JSON.stringify(ghostPermissionProjectionTuple(item));
+}
+
+export function ghostPermissionProjectionFingerprint(manifest: GhostManifest): string {
+  return JSON.stringify(
+    ghostPermissionItems(manifest)
+      .map(ghostPermissionProjectionTuple)
+      .sort((a, b) => {
+        const ka = JSON.stringify(a);
+        const kb = JSON.stringify(b);
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      }),
+  );
+}
+
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
   for (const [category, actions] of Object.entries(manifest.cindy ?? {})) {
@@ -1972,8 +2055,8 @@ export interface GhostPermissionDiff {
 }
 
 /**
- * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(key + detail)。
- * 与 diffGhostPermissionItems 同口径(按 key 对齐、detail 变化算差异),
+ * 权限审阅基线指纹：同一份 manifest 推导出的完整用户可见权限投影。
+ * 与 diffGhostPermissionItems 同口径（按稳定 key 对齐、任一展示字段变化算差异），
  * 所以"指纹相同"等价于"权限面没变",可安全沿用先前的审阅结论。
  *
  * renderer 审阅时记录基线并随安装请求回传,main 在安装锁内用**当前**已装
@@ -1981,10 +2064,7 @@ export interface GhostPermissionDiff {
  * 每项 JSON 编码后排序拼接,全可打印、无拼接歧义。
  */
 export function ghostPermissionBaselineKey(manifest: GhostManifest): string {
-  return ghostPermissionItems(manifest)
-    .map((item) => JSON.stringify([item.key, item.detail ?? '']))
-    .sort()
-    .join('\n');
+  return ghostPermissionProjectionFingerprint(manifest);
 }
 
 export function diffGhostPermissionItems(
@@ -1995,14 +2075,19 @@ export function diffGhostPermissionItems(
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
-  const prevDetailByKey = new Map(prevItems.map((i) => [i.key, i.detail ?? '']));
+  const prevProjectionByKey = new Map(
+    prevItems.map((item) => [item.key, ghostPermissionProjectionKey(item)]),
+  );
+  const nextProjectionByKey = new Map(
+    nextItems.map((item) => [item.key, ghostPermissionProjectionKey(item)]),
+  );
   const added: GhostPermissionItem[] = [];
   const removed: GhostPermissionItem[] = [];
   const unchanged: GhostPermissionItem[] = [];
   for (const item of nextItems) {
     if (!prevKeys.has(item.key)) {
       added.push(item);
-    } else if ((item.detail ?? '') !== prevDetailByKey.get(item.key)) {
+    } else if (ghostPermissionProjectionKey(item) !== prevProjectionByKey.get(item.key)) {
       added.push(item);
     } else {
       unchanged.push(item);
@@ -2011,26 +2096,54 @@ export function diffGhostPermissionItems(
   for (const item of prevItems) {
     if (!nextKeys.has(item.key)) {
       removed.push(item);
-    } else if ((item.detail ?? '') !== (nextItems.find((n) => n.key === item.key)?.detail ?? '')) {
+    } else if (ghostPermissionProjectionKey(item) !== nextProjectionByKey.get(item.key)) {
       removed.push(item);
     }
   }
   return { added, removed, unchanged };
 }
 
-/** 返回真实包中既未在安装前展示、也未被当前已装版本覆盖的权限。 */
+/**
+ * Compare an installed Plugin with a candidate package without trusting a
+ * mutable live manifest. Legacy or invalid installs have no approved baseline,
+ * so every permission in the candidate must be reviewed as newly requested.
+ */
+export function diffInstalledGhostPermissionItems(
+  installed: InstalledGhost,
+  next: GhostManifest,
+): GhostPermissionDiff {
+  if (installed.approval.state === 'approved') {
+    return diffGhostPermissionItems(installed.manifest, next);
+  }
+  return {
+    added: ghostPermissionItems(next),
+    removed: [],
+    unchanged: [],
+  };
+}
+
+/**
+ * 返回未被发布清单或已批准旧版本覆盖的包权限。
+ *
+ * 第二个来源用于兼容旧市场元数据：旧详情投影可能漏掉已存在的权限，
+ * 但这些权限此前已经被用户批准，更新时应继续保留。
+ *
+ * 注(receipt 模型整合):receipt 模型下"已批准的旧版本清单"即 receipt 的 manifest,
+ * 由整合任务①在 packagePermissionReview 落点用 receipt 已批准 manifest 作 baseline;
+ * 保留本函数以支持 main 现有 market 调用点,不额外引入 previouslyInstalled 认证路径。
+ */
 export function unreviewedGhostPermissionItems(
   reviewed: GhostManifest,
   previouslyInstalled: GhostManifest | undefined,
   actual: GhostManifest,
 ): GhostPermissionItem[] {
-  const approvalKey = (item: GhostPermissionItem): string =>
-    JSON.stringify([item.key, item.detail ?? '']);
-  const approved = new Set(ghostPermissionItems(reviewed).map(approvalKey));
+  const approved = new Set(ghostPermissionItems(reviewed).map(ghostPermissionProjectionKey));
   for (const item of ghostPermissionItems(previouslyInstalled ?? reviewed)) {
-    approved.add(approvalKey(item));
+    approved.add(ghostPermissionProjectionKey(item));
   }
-  return ghostPermissionItems(actual).filter((item) => !approved.has(approvalKey(item)));
+  return ghostPermissionItems(actual).filter(
+    (item) => !approved.has(ghostPermissionProjectionKey(item)),
+  );
 }
 
 /**

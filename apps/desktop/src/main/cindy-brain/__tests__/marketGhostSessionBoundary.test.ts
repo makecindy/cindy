@@ -58,4 +58,16 @@ describe('market Ghost session boundary', () => {
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
     expect(body).toContain('releaseMutation?.();');
   });
+
+  it('fails owner-scoped plugin reads closed while an account boundary is pending', () => {
+    const start = source.indexOf('function availableGhosts(): InstalledGhost[] {');
+    const end = source.indexOf('\n}', start);
+    const body = source.slice(start, end);
+    expect(body).toContain('if (isAppSessionBoundaryPending()) return [];');
+    expect(source).toContain(
+      'return availableGhosts().find((ghost) => ghost.manifest.id === id) ?? null;',
+    );
+    expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(source).toContain('return findAvailableGhost(id)?.manifest.name ?? null;');
+  });
 });

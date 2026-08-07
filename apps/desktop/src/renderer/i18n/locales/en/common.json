@@ -3320,6 +3320,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "Permission review needed",
+        "action": "Review Permissions",
+        "actionAria": "Review permissions for plugin {{name}}",
+        "noticeTitle": "Permission review needed",
+        "bodyLegacy": "Cindy has no record of a permission review for this plugin, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
+        "bodyInvalid": "The permission review record for this plugin is damaged, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
+        "bodyBuiltinRestart": "Something went wrong with this built-in plugin's approval record. Restart Cindy to recover automatically — no other action needed."
+      },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
       "emptyHint": "Install from the market, or import a .cindy file from the menu above",
@@ -3374,6 +3383,7 @@
         "uninstalled": "Uninstalled \"{{name}}\"",
         "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
+        "reapproved": "\"{{name}}\" restored",
         "exported": "Exported the .cindy file for \"{{name}}\"",
         "exportFailed": "Couldn't export \"{{name}}\" — try again",
         "projectDisabled": "Turned off \"{{name}}\" for this project",
@@ -3508,6 +3518,7 @@
       "errors": {
         "fileInvalid": "Not a valid .cindy plugin file",
         "alreadyInstalled": "This plugin is already installed",
+        "approvalRequired": "This plugin's permissions must be reviewed again before continuing.",
         "commandConflict": "Its command conflicts with an installed plugin. Uninstall the other one or rename the command.",
         "idReserved": "This id uses the reserved official prefix cindy-; it is only available to plugins bundled with the app",
         "sourceMissing": "The selected file could not be found",
@@ -3616,6 +3627,11 @@
         "body": "Version {{from}} → {{to}}. This replaces the installed version; enabled state and panel position are preserved.",
         "confirm": "Update",
         "cancel": "Cancel"
+      },
+      "reapproveConfirm": {
+        "title": "Re-approve permissions for \"{{name}}\"?",
+        "body": "Review the permissions below to re-approve this installed plugin — no install file needed.",
+        "confirm": "Approve & Restore"
       },
       "pick": {
         "dialogTitle": "Choose a folder",

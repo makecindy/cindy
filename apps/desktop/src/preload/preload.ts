@@ -984,8 +984,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:install', lizFilePath, opts),
     update: (
       lizFilePath: string,
-      opts: { expectedPackageSha256: string },
-    ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
+      opts: {
+        expectedPackageSha256: string;
+        expectedInstalledApproval: string;
+      },
+    ): Promise<{ ghost: unknown }> =>
+      ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
     cindyPrefsSync: (
       id: string,
     ): {
@@ -1037,6 +1041,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
       packageSha256: string;
       iconDataUrl?: string;
     }> => ipcRenderer.invoke('ghosts:inspect', lizFilePath),
+    /** 本地包第三条恢复路径:从已装目录读确认卡事实(零副作用)。 */
+    reapproveInspect: (id: string): Promise<{
+      manifest: unknown;
+      trust: unknown;
+      manifestSha256: string;
+      approvalProjectionSha256: string;
+      previouslyEnabled: boolean;
+      inspectTicket: string;
+    }> => ipcRenderer.invoke('ghosts:reapprove-inspect', id),
+    /** 确认卡点过同意后开 receipt;sha + 一次性票据绑定确认时的事实与 owner。 */
+    reapproveInstalled: (
+      id: string,
+      opts: {
+        enable: boolean;
+        expectedManifestSha256: string;
+        expectedApprovalProjectionSha256: string;
+        expectedInstalledApproval: string;
+        inspectTicket: string;
+      },
+    ): Promise<{ ghost: unknown }> =>
+      ipcRenderer.invoke('ghosts:reapprove-installed', id, opts),
     uninstall: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke('ghosts:uninstall', id),
     /** 详情页「导出 .cindy」:main 打包安装目录 → 系统保存对话框落盘。 */
     export: (

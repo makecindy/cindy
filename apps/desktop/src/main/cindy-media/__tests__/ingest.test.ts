@@ -25,9 +25,8 @@ const schema = await import('../../localDb/schema');
 const ingest = await import('../ingest');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const migration0071 = require('../../../../drizzle/scripts/0071_bright_ultron.ts') as {
-  run: (db: Database.Database) => void;
+const { default: migration0071 } = (await import('../../../../drizzle/scripts/0071_bright_ultron')) as {
+  default: { run: (db: Database.Database) => void };
 };
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7]);

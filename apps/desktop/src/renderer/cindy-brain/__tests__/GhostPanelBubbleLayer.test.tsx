@@ -36,7 +36,12 @@ function ghost(id: string, enabled = true): InstalledGhost {
     slots: ['panel'],
     panel: { title: `${id} 面板`, html: 'panel.html' },
   };
-  return { manifest, dir: `/fake/${id}`, enabled };
+  return {
+    manifest,
+    dir: `/fake/${id}`,
+    enabled,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+  };
 }
 
 function stubGhostsBridge(ghosts: InstalledGhost[]): void {

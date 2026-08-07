@@ -21,10 +21,9 @@ const schema = await import('../../localDb/schema');
 const ledger = await import('../ledger');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
-// 0071 的加列在配套脚本里(SQL 是占位),与生产同源经 CommonJS require 加载。
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const migration0071 = require('../../../../drizzle/scripts/0071_bright_ultron.ts') as {
-  run: (db: Database.Database) => void;
+// 0071 的加列在配套脚本里(SQL 是占位),与生产同源；通过 Vitest 转换 TS helper。
+const { default: migration0071 } = (await import('../../../../drizzle/scripts/0071_bright_ultron')) as {
+  default: { run: (db: Database.Database) => void };
 };
 
 const HASH_A = 'a'.repeat(64);

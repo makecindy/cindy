@@ -202,7 +202,7 @@ describe('GhostPermissionDiffView(更新权限 diff)', () => {
     render(<GhostPermissionDiffView diff={diffGhostPermissionItems(prev, next)} />);
     // 真正的权限变化(新增网络域名)仍在折叠区之外,第一屏就能看到。
     expect(screen.getByText(/perm\.networkHost:.*api\.example\.com/)).toBeTruthy();
-    expect(screen.getByText('settings.ghosts.perm.added')).toBeTruthy();
+    expect(screen.getAllByText('settings.ghosts.perm.added')).toHaveLength(2);
     // 4 条工具行收进一个折叠组,原文默认不渲染。
     expect(screen.getByText(/perm\.itemCount:.*"count":4/)).toBeTruthy();
     expect(screen.queryByText('新说明 A（整段接口文档）')).toBeNull();
