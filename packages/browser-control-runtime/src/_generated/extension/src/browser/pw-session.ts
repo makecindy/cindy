@@ -1511,22 +1511,25 @@ export async function gotoPageWithNavigationGuard(
   }
   try {
     // LOCAL PATCH (Cindy, via sync.mjs): clear stale Service Worker
-    // registrations scoped to the preview origin BEFORE goto. A
-    // persistent profile may hold a scope=/ SW from an earlier local
-    // service on the same 127.0.0.1:<port>; worker-src 'none'
-    // only blocks NEW registrations, and the stale SW would
-    // intercept /preview/<token>/... before the server responds,
-    // answering with a synthetic document that carries NO CSP
-    // (codex-connector P1, round 27).
+    // storage for the preview origin BEFORE goto. A persistent
+    // profile may hold an old SW from an earlier local service on the
+    // same 127.0.0.1:<port>; worker-src 'none' only blocks NEW
+    // registrations, and the stale SW would intercept
+    // /preview/<token>/... before the server responds, answering with
+    // a synthetic document that carries NO CSP. Clearing the whole
+    // origin's service-worker storage (Storage.clearDataForOrigin)
+    // covers ANY registration scope (/, /preview/, ...), not just a
+    // hard-coded root scope (codex-connector P1, round 27 + 27e).
     if (previewOrigin !== null) {
       try {
         const cdp = await opts.page.context().newCDPSession(opts.page);
-        await cdp.send("ServiceWorker.unregister", {
-          scopeURL: previewOrigin + "/",
+        await cdp.send("Storage.clearDataForOrigin", {
+          origin: previewOrigin,
+          storageTypes: "service_workers",
         });
         await cdp.detach().catch(() => {});
       } catch {
-        /* best-effort: a failed unregister must not block the navigation */
+        /* best-effort: a failed clear must not block the navigation */
       }
     }
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });

@@ -56,7 +56,7 @@
     },
     {
       "file": "extension/src/browser/pw-session.ts",
-      "desc": "unregister stale Service Workers scoped to the preview origin BEFORE goto — worker-src blocks NEW registrations, but a persistent profile may hold a scope=/ SW from an earlier local service on the same 127.0.0.1:<port>, which would intercept /preview/<token>/... before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27)"
+      "desc": "clear stale Service Worker storage for the preview origin BEFORE goto — worker-src blocks NEW registrations, but a persistent profile may hold an old SW (scope / or /preview/ or any other scope covering /preview/<token>/) from an earlier local service on the same 127.0.0.1:<port>, which would intercept the preview load before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27; widened from root-scope unregister to whole-origin SW storage clear, round 27e)"
     },
     {
       "file": "extension/src/browser/pw-session.ts",
@@ -88,7 +88,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "4e360a2c6420e08bf78f0e7528b67f5b293407cdd877abfe408b6dc5686d6a86",
+  "contentHash": "54bb2f09c9845b1ccadf985519c6cb7ce7b723160ef95b601d6ae497ac65834a",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

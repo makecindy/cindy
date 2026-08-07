@@ -451,29 +451,32 @@ const LOCAL_PATCHES = {
         '    try {',
     },
     {
-      desc: 'unregister stale Service Workers scoped to the preview origin BEFORE goto — worker-src blocks NEW registrations, but a persistent profile may hold a scope=/ SW from an earlier local service on the same 127.0.0.1:<port>, which would intercept /preview/<token>/... before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27)',
+      desc: 'clear stale Service Worker storage for the preview origin BEFORE goto — worker-src blocks NEW registrations, but a persistent profile may hold an old SW (scope / or /preview/ or any other scope covering /preview/<token>/) from an earlier local service on the same 127.0.0.1:<port>, which would intercept the preview load before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27; widened from root-scope unregister to whole-origin SW storage clear, round 27e)',
       find:
         '  try {\n' +
         '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',
       replace:
         '  try {\n' +
         '    // LOCAL PATCH (Cindy, via sync.mjs): clear stale Service Worker\n' +
-        '    // registrations scoped to the preview origin BEFORE goto. A\n' +
-        '    // persistent profile may hold a scope=/ SW from an earlier local\n' +
-        "    // service on the same 127.0.0.1:<port>; worker-src 'none'\n" +
-        '    // only blocks NEW registrations, and the stale SW would\n' +
-        '    // intercept /preview/<token>/... before the server responds,\n' +
-        '    // answering with a synthetic document that carries NO CSP\n' +
-        '    // (codex-connector P1, round 27).\n' +
+        '    // storage for the preview origin BEFORE goto. A persistent\n' +
+        '    // profile may hold an old SW from an earlier local service on the\n' +
+        "    // same 127.0.0.1:<port>; worker-src 'none' only blocks NEW\n" +
+        '    // registrations, and the stale SW would intercept\n' +
+        '    // /preview/<token>/... before the server responds, answering with\n' +
+        '    // a synthetic document that carries NO CSP. Clearing the whole\n' +
+        "    // origin's service-worker storage (Storage.clearDataForOrigin)\n" +
+        '    // covers ANY registration scope (/, /preview/, ...), not just a\n' +
+        '    // hard-coded root scope (codex-connector P1, round 27 + 27e).\n' +
         '    if (previewOrigin !== null) {\n' +
         '      try {\n' +
         '        const cdp = await opts.page.context().newCDPSession(opts.page);\n' +
-        '        await cdp.send("ServiceWorker.unregister", {\n' +
-        '          scopeURL: previewOrigin + "/",\n' +
+        '        await cdp.send("Storage.clearDataForOrigin", {\n' +
+        '          origin: previewOrigin,\n' +
+        '          storageTypes: "service_workers",\n' +
         '        });\n' +
         '        await cdp.detach().catch(() => {});\n' +
         '      } catch {\n' +
-        '        /* best-effort: a failed unregister must not block the navigation */\n' +
+        '        /* best-effort: a failed clear must not block the navigation */\n' +
         '      }\n' +
         '    }\n' +
         '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',

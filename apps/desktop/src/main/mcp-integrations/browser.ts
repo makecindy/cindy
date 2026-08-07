@@ -124,10 +124,13 @@ const localPreviewServer = createLocalPreviewServer({
     // unregister an existing one — the stale SW would intercept
     // /preview/<token>/... before the server responds and answer with a
     // synthetic document carrying NO CSP (codex-connector P1, round 27).
-    // Clear the partition's service workers for each granted origin; the
-    // vendored Chrome path unregisters via CDP before goto (sync.mjs patch).
+    // Clear the partition's service workers for each granted origin. This
+    // fire-and-forget is a FALLBACK for non-createLocalPreviewUrl grant
+    // paths; the primary await + fail-closed path is inside
+    // createLocalPreviewUrl (Codex P1, round 27d). The vendored Chrome path
+    // clears via CDP before goto (sync.mjs patch).
     if (previewOrigins.length > 0) {
-      void clearStaleServiceWorkers(previewOrigins);
+      void clearStaleServiceWorkers(previewOrigins).catch(() => {});
     }
     // Revocation (listener error/close, dispose) must close still-open
     // preview tabs at the SAME moment the grant disappears: the vendored
@@ -323,18 +326,20 @@ export function getBrowserMcpDeps(): {
       // this origin. worker-src 'none' only stops NEW registrations; the stale
       // SW would intercept /preview/<token>/... before the server responds and
       // answer with a synthetic document without CSP (codex-connector P1,
-      // round 27). applyPreviewOrigins triggers the clear fire-and-forget, but
-      // that races the first navigation — await it here for THIS origin
-      // (bounded, best-effort) so the grant never resolves with the stale SW
-      // still able to pre-empt the initial load (Copilot P1, round 27d).
+      // round 27). The grant must NOT resolve while a stale SW can still
+      // pre-empt the first navigation — await the clear for THIS origin
+      // (bounded) and FAIL CLOSED if it fails or times out (Codex P1,
+      // round 27d/27e).
+      const origin = new URL(url).origin;
       try {
-        const origin = new URL(url).origin;
         await Promise.race([
           clearStaleServiceWorkers([origin]),
-          new Promise((resolve) => setTimeout(resolve, 2000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
         ]);
       } catch {
-        /* best-effort: the applyPreviewOrigins fire-and-forget clear still runs */
+        throw new Error(
+          `preview origin ${origin} not granted: failed to clear stale Service Workers (fail-closed)`,
+        );
       }
       return { url };
     },
@@ -515,18 +520,17 @@ export async function openBrowserForLogin(): Promise<void> {
  * a scope=/ SW an earlier local service left on the same 127.0.0.1:<port>
  * would still intercept /preview/<token>/... before the server responds and
  * return a synthetic document without CSP (codex-connector P1, round 27).
- * Best-effort: a failed clear must not block the grant.
+ *
+ * Rejects on failure — callers decide the policy: createLocalPreviewUrl
+ * treats a failed clear as fail-closed (refuse the preview), the
+ * applyPreviewOrigins fallback swallows it (Codex P1, round 27d/27e).
  */
 async function clearStaleServiceWorkers(origins: string[]): Promise<void> {
-  try {
-    const rsbSession = session.fromPartition(BROWSER_PARTITION);
-    for (const origin of origins) {
-      // storages: ['serviceworkers'] clears only SW registrations/caches for
-      // the exact origin — cookies/localStorage (login state) are untouched.
-      await rsbSession.clearStorageData({ origin, storages: ['serviceworkers'] });
-    }
-  } catch {
-    /* best-effort: the vendored unregister (sync.mjs) still runs per-goto */
+  const rsbSession = session.fromPartition(BROWSER_PARTITION);
+  for (const origin of origins) {
+    // storages: ['serviceworkers'] clears only SW registrations/caches for
+    // the exact origin — cookies/localStorage (login state) are untouched.
+    await rsbSession.clearStorageData({ origin, storages: ['serviceworkers'] });
   }
 }
 

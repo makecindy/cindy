@@ -97,6 +97,7 @@ describe('persistent navigation guard (preview origin)', () => {
     const closeCalls: Array<unknown> = [];
     const swUnregisterCalls: Array<string> = [];
     const cdpSends: Array<{ method: string; params?: unknown }> = [];
+    const clearedStorageOrigins: Array<string> = [];
     // mainFrame identity shared with fakeTopLevelRequest so the handler's
     // top-level detection (request.frame() === page.mainFrame()) matches.
     const mainFrame = {};
@@ -117,8 +118,9 @@ describe('persistent navigation guard (preview origin)', () => {
         newCDPSession: async () => ({
           send: async (method: string, params?: unknown) => {
             cdpSends.push({ method, params });
-            if (method === 'ServiceWorker.unregister') {
-              swUnregisterCalls.push((params as { scopeURL: string }).scopeURL);
+            if (method === 'Storage.clearDataForOrigin') {
+              clearedStorageOrigins.push((params as { origin: string }).origin);
+              swUnregisterCalls.push((params as { origin: string }).origin);
             }
             return {};
           },
@@ -133,6 +135,7 @@ describe('persistent navigation guard (preview origin)', () => {
       closeCalls,
       swUnregisterCalls,
       cdpSends,
+      clearedStorageOrigins,
       page: page as unknown as Parameters<typeof gotoPageWithNavigationGuard>[0]['page'],
     };
   }
@@ -326,13 +329,14 @@ describe('persistent navigation guard (preview origin)', () => {
     expect(closeCalls).toHaveLength(0); // no round-27 close for non-preview
   });
 
-  it('unregisters a stale scope=/ SW on the preview origin BEFORE goto (round 27)', async () => {
+  it('clears the whole origin SW storage on the preview origin BEFORE goto (round 27/27e)', async () => {
     // worker-src 'none' only blocks NEW registrations; a persistent profile
-    // may hold a scope=/ SW from an earlier local service on the same
-    // 127.0.0.1:<port>, which would intercept /preview/<token>/... before
-    // the server responds and answer with a synthetic document carrying no
-    // CSP (codex-connector P1, round 27). The CDP unregister must run for
-    // the preview origin, before the navigation proceeds.
+    // may hold an old SW (scope /, /preview/, or any other scope covering
+    // /preview/<token>/...) from an earlier local service on the same
+    // 127.0.0.1:<port>, which would intercept the preview before the server
+    // responds with a synthetic document carrying no CSP (codex-connector
+    // P1, round 27 + 27e). Clearing the whole origin's SW storage
+    // (Storage.clearDataForOrigin) must run before the navigation proceeds.
     const { swUnregisterCalls, cdpSends, page } = fakePage();
     await gotoPageWithNavigationGuard({
       cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
@@ -341,12 +345,12 @@ describe('persistent navigation guard (preview origin)', () => {
       timeoutMs: 1000,
       ssrfPolicy: POLICY,
     });
-    expect(swUnregisterCalls).toEqual([`${PREVIEW_ORIGIN}/`]);
-    const unregister = cdpSends.find((s) => s.method === 'ServiceWorker.unregister');
-    expect(unregister?.params).toEqual({ scopeURL: `${PREVIEW_ORIGIN}/` });
+    expect(swUnregisterCalls).toEqual([PREVIEW_ORIGIN]);
+    const clear = cdpSends.find((s) => s.method === 'Storage.clearDataForOrigin');
+    expect(clear?.params).toEqual({ origin: PREVIEW_ORIGIN, storageTypes: 'service_workers' });
   });
 
-  it('does NOT unregister SW for non-preview targets (round 27)', async () => {
+  it('does NOT clear SW storage for non-preview targets (round 27)', async () => {
     const { swUnregisterCalls, page } = fakePage();
     await gotoPageWithNavigationGuard({
       cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
