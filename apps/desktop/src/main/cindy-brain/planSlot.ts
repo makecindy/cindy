@@ -87,7 +87,7 @@ export class PlanSlot {
       !sessionContext ||
       !checkedContext ||
       contextAfterCheck?.sessionId !== sessionContext.sessionId ||
-      contextAfterCheck.sessionInstanceId !== sessionContext.sessionInstanceId
+      contextAfterCheck?.sessionInstanceId !== sessionContext.sessionInstanceId
     ) {
       return {
         ok: false,
