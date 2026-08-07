@@ -27,8 +27,10 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   readLocalProxyExternalToken,
   writeLocalProxyExternalToken,
+  removeLocalProxyExternalToken,
   readLocalProxyCodexExternalToken,
   writeLocalProxyCodexExternalToken,
+  removeLocalProxyCodexExternalToken,
 } from '../secrets/providerSecretStore.js';
 import {
   isExternalAccessEnabled as isAnthropicEnabledFromStore,
@@ -61,6 +63,8 @@ interface TokenFamily {
   id: string;
   read: () => string | null;
   write: (value: string) => boolean;
+  /** 删除物理持久 token(轮换失败兜底时用来消除旧值遮挡)。 */
+  remove: () => void;
   isEnabled: () => boolean;
 }
 
@@ -104,10 +108,33 @@ function getOrCreateToken(family: TokenFamily): string {
   return next;
 }
 
-/** 重新生成并覆盖 token(旧 token 立即失效);返回新 token 明文。 */
+/**
+ * 重新生成并覆盖 token(旧 token 立即失效);返回新 token 明文。
+ *
+ * 轮换不变量(勿弱化):**轮换后 `effectiveRead` 必须返回新值**,旧 token 不得再命中。
+ * 轮换常因旧 token 疑似泄漏而触发,若旧值仍能鉴权而 IPC 谎报成功,泄漏的 token 会继续放行。
+ * 因此顺序是:先把新值写进内存兜底 → 清掉旧物理值(消除「物理旧值遮挡内存新值」)→ 写新物理值。
+ *   - write 成功:清掉内存兜底,以物理新值为准。
+ *   - remove 成功但 write 失败(safeStorage 不可用):物理已空,effectiveRead 回内存新值,旧值已失效。
+ *   - remove 与 write 均失败:物理旧值仍在并遮挡新值 → 抛错,绝不谎报成功(旧 token 仍有效这一
+ *     事实必须让调用方/用户知道,而非静默保留)。
+ */
 function regenerateToken(family: TokenFamily): string {
   const next = generateTokenValue();
-  persistToken(family, next);
+  memoryFallbackTokens.set(family.id, next);
+  family.remove();
+  const ok = family.write(next);
+  if (ok) {
+    memoryFallbackTokens.delete(family.id);
+  }
+  if (effectiveRead(family) !== next) {
+    // 旧物理值既没被 remove 掉、新值又没写进去 —— 无法让新值生效。回滚不可能生效的内存兜底并抛错,
+    // 让 regenerate IPC 报失败,而不是让旧(可能已泄漏的)token 继续鉴权、新 token 反而不可用。
+    memoryFallbackTokens.delete(family.id);
+    throw new Error(
+      'local proxy external token rotation failed: the previous token could not be invalidated',
+    );
+  }
   return next;
 }
 
@@ -144,6 +171,9 @@ const anthropicFamily: TokenFamily = {
   id: 'anthropic',
   read: readLocalProxyExternalToken,
   write: writeLocalProxyExternalToken,
+  remove: () => {
+    removeLocalProxyExternalToken();
+  },
   isEnabled: isAnthropicEnabledFromStore,
 };
 
@@ -179,6 +209,9 @@ const codexFamily: TokenFamily = {
   id: 'codex',
   read: readLocalProxyCodexExternalToken,
   write: writeLocalProxyCodexExternalToken,
+  remove: () => {
+    removeLocalProxyCodexExternalToken();
+  },
   isEnabled: isCodexEnabledFromStore,
 };
 

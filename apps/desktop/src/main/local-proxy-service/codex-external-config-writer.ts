@@ -40,12 +40,17 @@ export function resolveCodexConfigPath(): string {
 }
 
 /** 待写入 `[model_providers.cindy_external]` 的键值(**不含 token** —— 走 env_key)。 */
-function buildProviderBlock(codexUrl: string): Record<string, string> {
+function buildProviderBlock(codexUrl: string): Record<string, string | boolean> {
   return {
     name: 'Cindy',
     base_url: codexUrl,
     wire_api: 'responses',
     env_key: CINDY_TOKEN_ENV_KEY,
+    // 安全(#1666 review):必须冻成 false,与内部 cindy_gateway(codex-gateway-config.ts)对称。
+    // 外部 loopback 代理要整段 JSON.parse 请求体才能跑对外 token 判定与头 strip;若放任 Codex CLI
+    // 开 Responses WebSocket,proxy 的 upgrade 处理会把连接连同入站头(含 CINDY_LOCAL_TOKEN)直送
+    // 固定上游,绕过 createExternalCodexRoutingTransform 的鉴权/strip = 凭证透传上游 + 路由绕过。
+    supports_websockets: false,
   };
 }
 
@@ -114,7 +119,7 @@ function mergeConfig(root: Record<string, unknown>, codexUrl: string): Record<st
   };
 }
 
-/** 收集会被覆盖的同名冲突项(root.model_provider 与 provider 块内四个键)。 */
+/** 收集会被覆盖的同名冲突项(root.model_provider 与 provider 块内 Cindy 管理的各键)。 */
 function collectConflicts(
   root: Record<string, unknown>,
   codexUrl: string,
@@ -127,8 +132,17 @@ function collectConflicts(
   const existing = existingProviderBlock(root);
   for (const [key, next] of Object.entries(buildProviderBlock(codexUrl))) {
     const current = existing[key];
-    if (typeof current === 'string' && current !== next) {
-      conflicts.push({ key: `model_providers.${CINDY_PROVIDER_ID}.${key}`, current, next });
+    // 现值为 string / boolean(如已有 supports_websockets=true)且与将写入值不同 → 暴露冲突,
+    // 让用户在确认前看到会被覆盖的键(尤其 supports_websockets:true→false 属安全性强制覆盖)。
+    if (
+      (typeof current === 'string' || typeof current === 'boolean') &&
+      current !== next
+    ) {
+      conflicts.push({
+        key: `model_providers.${CINDY_PROVIDER_ID}.${key}`,
+        current: String(current),
+        next: String(next),
+      });
     }
   }
   return conflicts;

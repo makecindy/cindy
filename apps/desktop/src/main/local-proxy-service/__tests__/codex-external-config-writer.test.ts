@@ -98,6 +98,19 @@ describe('codex-external-config-writer — preview', () => {
     expect(previewCodexConfig(URL, TOKEN).conflicts).toEqual([]);
   });
 
+  it('已有 supports_websockets=true(boolean)→ 报告为将被覆盖成 false 的冲突', () => {
+    writeFileSync(
+      configPath(),
+      ['[model_providers.cindy_external]', 'supports_websockets = true'].join('\n'),
+      'utf8',
+    );
+    expect(previewCodexConfig(URL, TOKEN).conflicts).toContainEqual({
+      key: 'model_providers.cindy_external.supports_websockets',
+      current: 'true',
+      next: 'false',
+    });
+  });
+
   // Finding G:proposedToml 只回 Cindy 会改动的两处片段,绝不把用户既有的其它 provider / MCP
   // 凭证 merge 进去回给 renderer。受注入的渲染进程只要调预览就能读走整份配置里的密文。
   it('proposedToml 不含用户既有的其它 provider 块及其密文(只含 cindy_external)', () => {
@@ -152,7 +165,29 @@ describe('codex-external-config-writer — write（非破坏性 merge）', () =>
       base_url: URL,
       wire_api: 'responses',
       env_key: 'CINDY_LOCAL_TOKEN',
+      // 安全(#1666 review):必须写死 false,否则外部 Codex CLI 一开 Responses WebSocket,
+      // proxy 的 upgrade 处理会连同 CINDY_LOCAL_TOKEN 头直送固定上游,绕过对外鉴权/strip。
+      supports_websockets: false,
     });
+  });
+
+  it('写入的 cindy_external 必带 supports_websockets=false(禁 WS,与内部 cindy_gateway 对称)', () => {
+    writeCodexConfig(URL);
+    const parsed = parseToml(readFileSync(configPath(), 'utf8')) as Record<string, unknown>;
+    const providers = parsed.model_providers as Record<string, Record<string, unknown>>;
+    expect(providers.cindy_external.supports_websockets).toBe(false);
+  });
+
+  it('用户已有 supports_websockets=true → 被强制覆盖为 false', () => {
+    writeFileSync(
+      configPath(),
+      ['[model_providers.cindy_external]', 'supports_websockets = true'].join('\n'),
+      'utf8',
+    );
+    writeCodexConfig(URL);
+    const parsed = parseToml(readFileSync(configPath(), 'utf8')) as Record<string, unknown>;
+    const providers = parsed.model_providers as Record<string, Record<string, unknown>>;
+    expect(providers.cindy_external.supports_websockets).toBe(false);
   });
 
   it('保留其它顶层字段与其它 provider 块,只动 model_provider 与 cindy_external', () => {

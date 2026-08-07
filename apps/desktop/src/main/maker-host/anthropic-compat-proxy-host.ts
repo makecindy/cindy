@@ -108,6 +108,12 @@ const log = createMakerLogger('cc-proxy');
 let _handle: ProxyHandle | null = null;
 let _initialized = false;
 
+// 对外 loopback 代理(端口拆分,#1666 Finding 1):与内部 _handle 完全独立的第二个 handle,
+// 绑用户在设置里固定的端口,只挂 createExternalRoutingTransform(无条件要求命中不可伪造的对外
+// token)。_externalStartPromise 做并发去重,避免 boot 与 set-enabled 同时拉起两个。
+let _externalHandle: ProxyHandle | null = null;
+let _externalStartPromise: Promise<void> | null = null;
+
 // gateway api key reader —— 由 host 注入(readClaudeApiKey),避免 proxy-host 直接 import
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
 // 复刻 codex-proxy-host.ts 的 setCodexProxyGatewayKeyReader 套路。
@@ -262,6 +268,15 @@ function routeExternalClient(
       },
     };
   }
+  // 路径白名单(P2):对外 Anthropic 代理只服务推理端点 /v1/messages(及其子路径,如
+  // /v1/messages/count_tokens)——外加上方 GET /v1/models 发现。其余路径(/v1/files、
+  // /v1/complete、任意非模型控制面 API)一律 404,绝不在解析出(默认)供应商后把 Cindy 的网关/
+  // 自定义供应商凭证注入并转发到调用方任意路径 —— 否则配了对外默认供应商时,一个不带 model 的
+  // POST /v1/files 也足以借 Cindy 凭证打供应商任意 API。与 codex 侧只放行 /responses +
+  // /v1/chat/completions 对称(#1666 review)。
+  if (!/\/v1\/messages(?:\/|$)/.test(pathname)) {
+    return externalErrorDecision(404, 'unsupported_path', '对外 Anthropic 代理不支持该路径。');
+  }
   if (!isPlainObject(body)) {
     // 非 JSON 的外部请求(非 /models 的控制面调用等):不识别就拒绝,绝不带着 token 透传上游。
     return externalErrorDecision(400, 'unsupported_request', '不支持的外部请求。');
@@ -306,6 +321,36 @@ function createExternalModelRewriteTransform(): RequestTransform {
 }
 
 /**
+ * 对外端口专用路由 transform(端口拆分,#1666 Finding 1)。绑在**独立的对外 loopback 端口**上
+ * (见 ensureAnthropicExternalProxyReady),只服务用户自己的 Claude Code CLI:
+ *   - `x-api-key` 命中 A 族对外 token → routeExternalClient(GET /v1/models 发现、/v1/messages
+ *     白名单、按模型 / 对外默认供应商解析)。命中判定与 enabled 无关;enabled 与否由
+ *     routeExternalClient 内决定放行 / 401。
+ *   - 带 `cindy-local-` 前缀但不命中(已重置 / 跨族拿 B 族 token / 已失效)→ 401 invalid_external_token,
+ *     绝不把它当作 x-api-key 透传上游。
+ *   - 其余(无 token / 伪造任意 header)→ 401 external_token_required。
+ * **无 session-header 启发式、无内部默认路由回落**——放行的唯一条件是命中不可伪造的对外 token,
+ * 因此在此端口上伪造 x-claude-code-session-id / authorization 毫无作用(彻底消除 Finding 1 的
+ * 可伪造绕过面)。export 供单测。
+ */
+export function createExternalRoutingTransform(): RoutingTransform {
+  return (body, ctx) => {
+    const externalApiKey = headerValue(ctx.headers, 'x-api-key');
+    if (matchesExternalToken(externalApiKey)) {
+      return routeExternalClient(body, ctx);
+    }
+    if (isCindyLocalToken(externalApiKey)) {
+      return externalErrorDecision(401, 'invalid_external_token', 'Cindy 对外访问 token 无效或已失效。');
+    }
+    return externalErrorDecision(
+      401,
+      'external_token_required',
+      'Cindy 对外模型代理需要有效的访问 token。',
+    );
+  };
+}
+
+/**
  * per-request 路由 transform。两段:
  *   ① 会话显式选了供应商 → 据 catalog 统一路由(per-session,取代全局开关推断)。
  *   ② 未显式选 → 据**请求实际携带的凭证**判定 spawn 形态:
@@ -323,19 +368,11 @@ function createExternalModelRewriteTransform(): RequestTransform {
  */
 export function createModelRoutingTransform(): RoutingTransform {
   const route: RoutingTransform = (body, ctx) => {
-    // ⓪ 对外模型代理:x-api-key 命中已存对外 token → 外部客户端,走独立无会话分支。
-    //    放在最前:优先级高于 Pi / per-session / spawn 默认路由。命中判定与 enabled 无关
-    //    (matchesExternalToken 只比 token),enabled 与否在 routeExternalClient 内决定放行/401。
-    //    未命中(Cindy 自家子进程 / 无 token)→ 落到下方现有逻辑,字节级不变。
-    const externalApiKey = headerValue(ctx.headers, 'x-api-key');
-    if (matchesExternalToken(externalApiKey)) {
-      return routeExternalClient(body, ctx);
-    }
-    // 带 `cindy-local-` 前缀但不命中 A 族 token(已重置 / 跨族拿 B 族 token 打 A 族 loopback /
-    // 已失效)→ 明确 401,绝不落到下方内部路由把这个对外 token 当 x-api-key 透传上游。
-    if (isCindyLocalToken(externalApiKey)) {
-      return externalErrorDecision(401, 'invalid_external_token', 'Cindy 对外访问 token 无效或已失效。');
-    }
+    // 本 transform 只服务 Cindy 自家内部流量(cc 子进程 / Pi)。对外客户端(用户自己的
+    // Claude Code CLI)走**独立的对外 loopback 端口**,由 createExternalRoutingTransform 处理
+    // ——那条路径无条件要求命中不可伪造的对外 token,绝不落到这里。端口拆分见
+    // ensureAnthropicExternalProxyReady(#1666 Finding 1:同端口上的 session-header 启发式可被
+    // 本机进程伪造绕过 → 白嫖网关 key;拆端口后此 transform 不再承担任何对外判定)。
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
     if (
       claimedPiSessionId
@@ -470,28 +507,8 @@ export function createModelRoutingTransform(): RoutingTransform {
       }
       return null;
     }
-    // 有界拒绝(P1):对外访问开启时,这个端口被公布给外部 CLI。走到这里的请求既没有可用
-    // x-api-key(上面已判)、又没有可解析 session、又不带 x-claude-code-session-id 头 —— 它不是
-    // Cindy 自家 cc 子进程(任何 cc 子进程,含注册时序窗口内会话反解不出的 oauth-spawn,都带
-    // x-claude-code-session-id;gateway-spawn 带可用 x-api-key 已在上面 return),而是本机某个直接
-    // 打这个对外端口、连对外 token 都省了的匿名客户端。放行会让它经 gatewayDefaultRouteDecision
-    // 白嫖 Cindy 的网关 key。故 401,不落默认路由。
-    // ⚠ 不以 authorization 头作豁免:内部子进程靠 x-claude-code-session-id 头(而非是否带 bearer)
-    //   与外部区分;若把「带 authorization」当豁免,本机进程随手伪造一个 `Bearer anything`(既无
-    //   x-api-key 也无会话头)即可跳过此闸,落到 gatewayDefaultRouteDecision 白嫖网关 key —— 假
-    //   bearer 绝不能绕过对外 token 要求(#1666 review)。loopback 本身仍不是鉴权边界,彻底隔离需
-    //   把对外监听与内部子进程代理拆到不同端口;未开启对外访问时不启用此闸,内部流量字节级不变。
-    if (
-      isExternalAccessEnabled()
-      && sessionId === null
-      && !sdkSessionId
-    ) {
-      return externalErrorDecision(
-        401,
-        'external_token_required',
-        'Cindy 对外模型代理需要有效的访问 token。',
-      );
-    }
+    // 端口拆分后此处不再承担任何对外判定(#1666 Finding 1):对外监听已挪到独立端口,
+    // 走到这里的一定是 Cindy 自家内部流量,按内部默认路由处理,字节级与加对外功能前一致。
     const decision = gatewayDefaultRouteDecision(requestAgent, gatewayKey);
     if (decision) {
       // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
@@ -544,27 +561,21 @@ export function createModelRoutingTransform(): RoutingTransform {
 }
 
 /**
- * 启动本地代理。幂等 —— 重复调用直接返回已缓存 handle。
- *
- * 即使代理启动失败,也会把 _initialized 置 true,后续 getClaudeEndpoint()
- * 直接 fallback 到真上游 URL,不会反复重试拖慢启动。
+ * 构造 anthropic-compat-proxy 的启动 options。**每次调用产出全新的 transform 实例** ——
+ * routingTransform / transformRequest 里含按 reqId 预留状态的有状态 transform(子代理 usage、
+ * fast mode 等),内部端口与对外端口必须各自持有独立实例,绝不共享同一个。
+ *   - external=false:内部端口(cc 子进程 / Pi),行为与加对外功能前字节级一致(随机端口)。
+ *   - external=true :对外端口,挂 createExternalRoutingTransform + 命名空间 model 改写(固定端口)。
  */
-export async function ensureAnthropicCompatProxyReady(): Promise<void> {
-  if (_initialized) return;
-  _initialized = true;
-
-  // 对外模型代理的端口策略:默认随机;用户在设置里开启对外服务时会捕获当前端口并持久化
-  // (见 local-proxy IPC)。持久化了(>0)就固定绑该端口,让外部 CLI 的 ANTHROPIC_BASE_URL 稳定;
-  // 固定端口被占用则 fallback 随机并回写新端口(UI 始终显示当前实际 url)。
-  const pinnedPort = loadLocalProxySettings().port;
-  try {
+function buildAnthropicProxyOptions(external: boolean) {
     const proxyOptions = {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
-      // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
-      // 'gateway' 模式恒返 null,字节级行为与扩展前一致。
-      routingTransform: createModelRoutingTransform(),
+      // 内部端口:'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway
+      // 换 key),'gateway' 模式恒返 null,字节级行为与扩展前一致。对外端口:只认对外 token 的
+      // 独立路由,绝不回落内部默认路由(见 createExternalRoutingTransform)。
+      routingTransform: external ? createExternalRoutingTransform() : createModelRoutingTransform(),
       // 只读响应观察器(组合三个,互不感知):
       //   - fast mode 链路核验:tee SSE 抽上游 usage.speed(debug-gated);
       //   - 订阅余量旁路:读 anthropic-ratelimit-unified-* headers(仅订阅直连响应,
@@ -601,9 +612,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         }),
       ),
       transformRequest: [
-        // 对外模型代理:外部客户端带命名空间前缀的 model 在发往上游前剥成裸 id(仅外部请求生效)。
+        // 对外端口:外部客户端带命名空间前缀的 model 在发往上游前剥成裸 id(仅对外 handle 挂载)。
         // 放最前:后续 strip/修复 transform 看到的就是最终 model,与路由 transform 用原始 model 推断供应商互补。
-        createExternalModelRewriteTransform(),
+        // 内部端口不挂它(external=false)—— 内部流量的 model 由内部路由链处理,保持字节级不变。
+        ...(external ? [createExternalModelRewriteTransform()] : []),
         // 子代理 usage 在请求阶段预留 taskId，后续用同一 reqId 关联响应，避免响应乱序交换归因。
         createClaudeSubagentUsageRequestTransform(),
         // 开头:fast mode 请求侧核验(passthrough 不改写,放最前先记 cc 实际发出的 speed/beta)。
@@ -691,25 +703,22 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
       resolveOutboundProxy: resolveDesktopOutboundProxy,
     };
-    try {
-      _handle = await createAnthropicCompatProxy(
-        pinnedPort > 0 ? { ...proxyOptions, port: pinnedPort } : proxyOptions,
-      );
-    } catch (err) {
-      // 固定端口不可用时 fallback 随机端口重试,并把持久化端口回写成实际绑定值,避免下次启动
-      // 又撞同一个坏端口。三类可 fallback:被占用(EADDRINUSE)/ 无权限(EACCES)/ 落在 Fetch
-      // 屏蔽端口(包内直接抛,SDK 连不上)。其它错误照抛给外层兜底。
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      const fetchBlocked = isFetchBlockedPort(pinnedPort);
-      if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES' || fetchBlocked)) {
-        log.error('固定的对外代理端口不可用,fallback 随机端口', { pinnedPort, code, fetchBlocked });
-        _handle = await createAnthropicCompatProxy(proxyOptions);
-        const actual = portFromProxyUrl(_handle.url);
-        if (actual) setLocalProxyPort(actual);
-      } else {
-        throw err;
-      }
-    }
+  return proxyOptions;
+}
+
+/**
+ * 启动**内部** loopback 代理(cc 子进程 / Pi 用)。幂等 —— 重复调用直接返回已缓存 handle。
+ * 绑随机端口(不对用户公布;端口在 spawn 时经 env 注入给子进程)。对外访问是**独立** handle,
+ * 绑固定端口,见 ensureAnthropicExternalProxyReady —— 端口拆分后内部端口不再承担任何对外判定。
+ *
+ * 即使代理启动失败,也会把 _initialized 置 true,后续 getClaudeEndpoint() 直接 fallback 到真
+ * 上游 URL,不会反复重试拖慢启动。
+ */
+export async function ensureAnthropicCompatProxyReady(): Promise<void> {
+  if (_initialized) return;
+  _initialized = true;
+  try {
+    _handle = await createAnthropicCompatProxy(buildAnthropicProxyOptions(false));
     log.debug('proxy ready', { url: _handle.url, upstream: claudeUpstreamEndpoint() });
   } catch (err) {
     _handle = null;
@@ -718,6 +727,52 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       fallbackEndpoint: claudeUpstreamEndpoint(),
     });
   }
+}
+
+/**
+ * 启动**对外** loopback 代理(给用户自己电脑上的 Claude Code CLI 用)。只在用户开启 A 族对外
+ * 访问时由 IPC / boot 拉起。端口策略:绑持久化的固定端口(loadLocalProxySettings().port),让外部
+ * CLI 的 ANTHROPIC_BASE_URL 稳定;端口被占用(EADDRINUSE / EACCES / 落在 Fetch 屏蔽端口)则
+ * fallback 随机并回写新端口(UI 始终显示当前实际 url)。并发去重(_externalStartPromise),启动
+ * 失败不抛 —— getExternalProxyUrl() 保持 null,UI 据此提示未就绪。
+ */
+export async function ensureAnthropicExternalProxyReady(): Promise<void> {
+  if (_externalHandle) return;
+  if (_externalStartPromise) return _externalStartPromise;
+  _externalStartPromise = (async () => {
+    const pinnedPort = loadLocalProxySettings().port;
+    try {
+      const options = buildAnthropicProxyOptions(true);
+      try {
+        _externalHandle = await createAnthropicCompatProxy(
+          pinnedPort > 0 ? { ...options, port: pinnedPort } : options,
+        );
+      } catch (err) {
+        // 固定端口不可用时 fallback 随机端口重试,并把持久化端口回写成实际绑定值,避免下次启动
+        // 又撞同一个坏端口。三类可 fallback:被占用(EADDRINUSE)/ 无权限(EACCES)/ 落在 Fetch
+        // 屏蔽端口(包内直接抛,SDK 连不上)。其它错误照抛给外层兜底。
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        const fetchBlocked = isFetchBlockedPort(pinnedPort);
+        if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES' || fetchBlocked)) {
+          log.error('固定的对外代理端口不可用,fallback 随机端口', { pinnedPort, code, fetchBlocked });
+          _externalHandle = await createAnthropicCompatProxy(options);
+          const actual = portFromProxyUrl(_externalHandle.url);
+          if (actual) setLocalProxyPort(actual);
+        } else {
+          throw err;
+        }
+      }
+      log.info('anthropic external proxy ready', { url: _externalHandle.url });
+    } catch (err) {
+      _externalHandle = null;
+      log.error('anthropic external proxy failed to start', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      _externalStartPromise = null;
+    }
+  })();
+  return _externalStartPromise;
 }
 
 /** 从 loopback proxy url(`http://127.0.0.1:<port>`)取端口;解析失败返回 null。 */
@@ -730,9 +785,18 @@ export function portFromProxyUrl(url: string): number | null {
   }
 }
 
-/** 当前代理是否就绪且其 url;供 IPC get-state 展示 127.0.0.1 地址与端口。未就绪返回 null。 */
+/** 内部代理(cc 子进程 / Pi)当前 url;供内部重启 / 诊断用。未就绪返回 null。 */
 export function getLocalProxyUrl(): string | null {
   return _handle?.url ?? null;
+}
+
+/**
+ * **对外**代理当前 url;供 IPC get-state / copy / preview / write 展示给外部 CLI 的
+ * 127.0.0.1 地址与端口。只有开启了 A 族对外访问并 ensureAnthropicExternalProxyReady 成功后才非
+ * null;未就绪返回 null,UI 据此提示未就绪。
+ */
+export function getExternalProxyUrl(): string | null {
+  return _externalHandle?.url ?? null;
 }
 
 /**
@@ -744,6 +808,16 @@ export async function restartAnthropicCompatProxy(): Promise<string | null> {
   await disposeAnthropicCompatProxy();
   await ensureAnthropicCompatProxyReady();
   return getLocalProxyUrl();
+}
+
+/**
+ * 重建**对外**代理以让新的固定端口生效(用户在设置里改端口后调用)。返回重建后的实际 url。
+ * 会中断当前经对外代理的 in-flight 请求 —— 仅在用户显式改端口时用。
+ */
+export async function restartAnthropicExternalProxy(): Promise<string | null> {
+  await disposeAnthropicExternalProxy();
+  await ensureAnthropicExternalProxyReady();
+  return getExternalProxyUrl();
 }
 
 /**
@@ -790,7 +864,7 @@ export function getClaudeEndpoint(): string {
 }
 
 /**
- * 优雅关闭。注册到 bootstrap-electron 的 onQuit('async') 阶段。
+ * 优雅关闭内部代理。注册到 bootstrap-electron 的 onQuit('async') 阶段(该阶段也会关对外代理)。
  */
 export async function disposeAnthropicCompatProxy(): Promise<void> {
   if (!_handle) return;
@@ -801,5 +875,27 @@ export async function disposeAnthropicCompatProxy(): Promise<void> {
     await h.dispose();
   } catch (err) {
     log.warn('proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * 优雅关闭**对外**代理(关闭 A 族对外访问 / 改端口 / 退出时)。先等待 in-flight 的启动去重
+ * Promise 结算,避免与并发的 ensure 抢 _externalHandle。
+ */
+export async function disposeAnthropicExternalProxy(): Promise<void> {
+  if (_externalStartPromise) {
+    try {
+      await _externalStartPromise;
+    } catch {
+      // 启动失败已在 ensure 内部记日志;这里只是确保不在启动中途 dispose。
+    }
+  }
+  if (!_externalHandle) return;
+  const h = _externalHandle;
+  _externalHandle = null;
+  try {
+    await h.dispose();
+  } catch (err) {
+    log.warn('external proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
   }
 }

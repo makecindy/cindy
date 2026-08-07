@@ -125,7 +125,7 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
 // 单测按需翻开 codexEnabled / matchToken 覆盖有界拒绝(P1)分支。
 const externalAuthMock = vi.hoisted(() => ({
   codexEnabled: false,
-  matchToken: (_token: string) => false,
+  matchToken: (_token: string): boolean => false,
 }));
 
 vi.mock('../local-proxy-external-auth.js', () => ({
@@ -4093,51 +4093,171 @@ describe('codex proxy host', () => {
   });
 });
 
-describe('createModelRoutingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网关 key)', () => {
-  // 调用 externalOpenAIError 决策的 localHandler,抓取写出的状态码与错误信封。
-  async function drainLocalHandler(
-    decision: unknown,
-  ): Promise<{ status: number; body: { error?: { code?: string } } | null }> {
-    let status = 0;
-    let raw = '';
-    const res = {
-      writeHead: (s: number) => {
-        status = s;
-        return res;
-      },
-      end: (chunk?: string) => {
-        if (chunk) raw = chunk;
-      },
-    };
-    const handler = (decision as { localHandler?: (arg: { res: unknown }) => Promise<void> })
-      .localHandler;
-    if (!handler) throw new Error('decision 不含 localHandler');
-    await handler({ res });
-    return { status, body: raw ? JSON.parse(raw) : null };
-  }
+// 调用 externalOpenAIError 决策的 localHandler,抓取写出的状态码与错误信封。
+async function drainCodexLocalHandler(
+  decision: unknown,
+): Promise<{ status: number; body: { error?: { code?: string } } | null }> {
+  let status = 0;
+  let raw = '';
+  const res = {
+    writeHead: (s: number) => {
+      status = s;
+      return res;
+    },
+    end: (chunk?: string) => {
+      if (chunk) raw = chunk;
+    },
+  };
+  const handler = (decision as { localHandler?: (arg: { res: unknown }) => Promise<void> })
+    .localHandler;
+  if (!handler) throw new Error('decision 不含 localHandler');
+  await handler({ res });
+  return { status, body: raw ? JSON.parse(raw) : null };
+}
 
-  it('对外开启 + 无会话 + 无 Authorization → 401 external_token_required', async () => {
+describe('createExternalCodexRoutingTransform 对外端口有界拒绝 (P1: 只认不可伪造的 B 族 token #1666 Finding 2)', () => {
+  // 端口拆分后对外判定全落在这个**独立对外端口**的 transform 上:放行的唯一条件是 Bearer 命中 B 族
+  // 对外 token,伪造任何 header(session / thread-id / 非本族 bearer)都拦。内部端口不再承担对外判定。
+  it('无 Authorization → 401 external_token_required', async () => {
     const host = await freshCodexProxyHost();
     externalAuthMock.codexEnabled = true;
-    host.setCodexProxyAuthInjection('env-key');
 
     const decision = await Promise.resolve(
-      host.createModelRoutingTransform()(
+      host.createExternalCodexRoutingTransform()(
         { model: 'codex/gpt-5' },
         { reqId: 1, method: 'POST', url: '/responses', headers: {} } as never,
       ),
     );
 
-    const { status, body } = await drainLocalHandler(decision);
+    const { status, body } = await drainCodexLocalHandler(decision);
     expect(status).toBe(401);
     expect(body?.error?.code).toBe('external_token_required');
   });
 
-  it('内部 codex 子进程(带 thread-id 身份头)即使会话未解析也不被有界拒绝命中', async () => {
+  it('伪造 Bearer + codex/* 模型 + oauth-bearer → 401(假 bearer 不得白嫖网关 key)', async () => {
     const host = await freshCodexProxyHost();
     externalAuthMock.codexEnabled = true;
-    // 内部子进程的真凭 = 带 spawn bearer + thread-id 身份头(注册时序窗口内 session 尚未绑上)。
-    // 关键:内部身份靠 thread-id 头证明,而非「带了个 bearer」。
+    // 对外端口的 transform 不看 injection 形态;哪怕内部是 oauth-bearer,伪造 bearer 也只得到 401。
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { authorization: 'Bearer anything-forged' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+  });
+
+  it('伪造非 Bearer 方案(Basic xxx)→ 仍 401(bearerToken 不回落原值)', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { authorization: 'Basic dXNlcjpwYXNz' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+  });
+
+  it('带 cindy-local- 前缀但不命中本族 token → 401 invalid_external_token(跨族 / 已失效)', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    // matchToken 仍返回 false(非本族);但前缀判别器认得它是 Cindy 本地 token → 明确 401,不透传上游。
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { authorization: 'Bearer cindy-local-stale-or-crossfamily' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('invalid_external_token');
+  });
+
+  it('provider-oauth + GET /models + 伪造 Bearer → 401,绝不注入 Cindy 供应商 OAuth token', async () => {
+    const host = await freshCodexProxyHost();
+    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+    externalAuthMock.codexEnabled = true;
+    // 即使配了真 xAI OAuth token,对外端口的 transform 也在命中 token 前就 401,永不触及 provider-oauth
+    // 控制面路由 → 该 token 无从泄漏。
+    setProviderOAuthTokenReader((providerId, agent) =>
+      providerId === 'xai' && agent === 'codex' ? 'xai-live-token-must-not-leak' : null,
+    );
+    host.setCodexProxyAuthInjection('provider-oauth');
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        undefined,
+        {
+          reqId: 1,
+          method: 'GET',
+          url: '/models',
+          headers: { authorization: 'Bearer anything-forged' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+    expect(JSON.stringify(decision)).not.toContain('xai-live-token-must-not-leak');
+
+    setProviderOAuthTokenReader(() => null);
+  });
+
+  it('命中本族 token + GET /models → 放行到 routeExternalCodexClient(200,非 401)', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    externalAuthMock.matchToken = (t) => t === 'cindy-local-valid';
+
+    const decision = await Promise.resolve(
+      host.createExternalCodexRoutingTransform()(
+        undefined,
+        {
+          reqId: 1,
+          method: 'GET',
+          url: '/models',
+          headers: { authorization: 'Bearer cindy-local-valid' },
+        } as never,
+      ),
+    );
+
+    // 命中 token → routeExternalCodexClient 的 GET /models 分支从 Cindy catalog 吐 OpenAI 形状清单。
+    const { status } = await drainCodexLocalHandler(decision);
+    expect(status).toBe(200);
+  });
+});
+
+describe('createModelRoutingTransform 内部端口(端口拆分后内部路由不再承担对外判定 #1666 Finding 2)', () => {
+  it('内部 codex 子进程(带 thread-id 身份头)按内部默认路由,不被对外判定干扰', async () => {
+    const host = await freshCodexProxyHost();
+    // 内部端口绑随机口、不公布;codexEnabled 与它无关。env-key + 非 codex/ 模型 → decideCodexRoute null。
+    externalAuthMock.codexEnabled = true;
     host.setCodexProxyAuthInjection('env-key');
 
     const decision = await Promise.resolve(
@@ -4152,88 +4272,10 @@ describe('createModelRoutingTransform 有界拒绝 (P1: 匿名客户端不得白
       ),
     );
 
-    // 未落到 401 有界拒绝:env-key + 非 codex/ 模型 → decideCodexRoute 返回 null(默认上游 passthrough)。
     expect(decision).toBeNull();
   });
 
-  it('伪造 Bearer + codex/* 模型 + oauth-bearer + 无会话 + 无 thread-id → 401(假 bearer 不得白嫖网关 key #1666)', async () => {
-    const host = await freshCodexProxyHost();
-    externalAuthMock.codexEnabled = true;
-    // oauth-bearer 态 + codex/* 模型 = 会经 decideCodexRoute 注入 Cindy 网关 key 的泄漏路径。
-    host.setCodexProxyAuthInjection('oauth-bearer');
-
-    const decision = await Promise.resolve(
-      host.createModelRoutingTransform()(
-        { model: 'codex/gpt-5' },
-        {
-          reqId: 1,
-          method: 'POST',
-          url: '/responses',
-          headers: { authorization: 'Bearer anything-forged' },
-        } as never,
-      ),
-    );
-
-    const { status, body } = await drainLocalHandler(decision);
-    expect(status).toBe(401);
-    expect(body?.error?.code).toBe('external_token_required');
-  });
-
-  it('伪造非 Bearer 方案(Basic xxx)+ 无会话 → 仍 401(bearerToken 不回落原值 #1666)', async () => {
-    const host = await freshCodexProxyHost();
-    externalAuthMock.codexEnabled = true;
-    host.setCodexProxyAuthInjection('oauth-bearer');
-
-    const decision = await Promise.resolve(
-      host.createModelRoutingTransform()(
-        { model: 'codex/gpt-5' },
-        {
-          reqId: 1,
-          method: 'POST',
-          url: '/responses',
-          headers: { authorization: 'Basic dXNlcjpwYXNz' },
-        } as never,
-      ),
-    );
-
-    const { status, body } = await drainLocalHandler(decision);
-    expect(status).toBe(401);
-    expect(body?.error?.code).toBe('external_token_required');
-  });
-
-  it('对外开启 + provider-oauth + GET /models + 伪造 Bearer(无 model/无 thread-id)→ 401,不注入 Cindy 供应商 OAuth token(#1666 二轮 Finding H)', async () => {
-    const host = await freshCodexProxyHost();
-    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
-    externalAuthMock.codexEnabled = true;
-    // provider-oauth 控制面桶③ 会经 resolveProviderOAuthControlRouteDecision 注入真实供应商 OAuth token。
-    // 若放行伪造 Bearer 的匿名 GET /models,未鉴权者就借 Cindy 的 xAI 凭证打 /models,对外 token 形同虚设。
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'xai' && agent === 'codex' ? 'xai-live-token-must-not-leak' : null,
-    );
-    host.setCodexProxyAuthInjection('provider-oauth');
-
-    const decision = await Promise.resolve(
-      host.createModelRoutingTransform()(
-        undefined,
-        {
-          reqId: 1,
-          method: 'GET',
-          url: '/models',
-          headers: { authorization: 'Bearer anything-forged' },
-        } as never,
-      ),
-    );
-
-    // 绝不返回注入 xai token 的 headerOverride 决策;必须是 401 有界拒绝的 localHandler。
-    const { status, body } = await drainLocalHandler(decision);
-    expect(status).toBe(401);
-    expect(body?.error?.code).toBe('external_token_required');
-    expect(JSON.stringify(decision)).not.toContain('xai-live-token-must-not-leak');
-
-    setProviderOAuthTokenReader(() => null);
-  });
-
-  it('对外关闭时不启用闸:匿名无会话请求按内部默认路由,字节级不变', async () => {
+  it('匿名无会话请求按内部默认路由,字节级不变(内部端口无对外闸)', async () => {
     const host = await freshCodexProxyHost();
     externalAuthMock.codexEnabled = false;
     host.setCodexProxyAuthInjection('env-key');

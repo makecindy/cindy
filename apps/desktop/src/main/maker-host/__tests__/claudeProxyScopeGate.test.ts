@@ -47,7 +47,7 @@ vi.mock('../claude-fast-mode-log', () => ({
 // 有界拒绝(P1)用例按需把 externalEnabled 翻开。
 const externalAuthMock = vi.hoisted(() => ({
   externalEnabled: false,
-  matchToken: (_token: string) => false,
+  matchToken: (_token: string): boolean => false,
 }));
 vi.mock('../local-proxy-external-auth', () => ({
   isCindyLocalToken: (token: unknown) =>
@@ -57,6 +57,7 @@ vi.mock('../local-proxy-external-auth', () => ({
 }));
 
 import {
+  createExternalRoutingTransform,
   createModelRoutingTransform,
   setClaudeProxyGatewayKeyReader,
   setClaudeProxySessionIdResolver,
@@ -240,7 +241,9 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
   });
 });
 
-describe('cc routingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网关 key)', () => {
+describe('cc 对外端口有界拒绝 (P1: 匿名/伪造客户端不得白嫖网关 key,#1666 端口拆分)', () => {
+  // 端口拆分后,对外判定全部落在**独立对外端口**的 createExternalRoutingTransform 上:放行的
+  // 唯一条件是命中不可伪造的对外 token;伪造 session-header / authorization 在此端口上毫无作用。
   async function drainLocalHandler(
     decision: unknown,
   ): Promise<{ status: number; body: { error?: { code?: string } } | null }> {
@@ -265,9 +268,9 @@ describe('cc routingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网�
     externalAuthMock.externalEnabled = false;
   });
 
-  it('对外开启 + 无会话 + 无 x-api-key + 无 authorization + 无会话头 → 401 external_token_required', async () => {
+  it('对外端口:无 x-api-key + 无 authorization + 无会话头 → 401 external_token_required', async () => {
     externalAuthMock.externalEnabled = true;
-    const decision = await Promise.resolve(createModelRoutingTransform()(
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
       { model: 'claude-opus-4-8' },
       ctxWith({}),
     ));
@@ -276,34 +279,43 @@ describe('cc routingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网�
     expect(body?.error?.code).toBe('external_token_required');
   });
 
-  it('伪造 authorization bearer + 无 x-api-key + 无会话头 → 仍 401(假 bearer 不得绕过 #1666)', async () => {
+  it('对外端口:伪造 authorization bearer + 无 x-api-key + 无会话头 → 仍 401(假 bearer 不得绕过 #1666)', async () => {
     externalAuthMock.externalEnabled = true;
-    // 本机进程随手编一个 Bearer:既没有可用 x-api-key,也没有 x-claude-code-session-id 会话头。
-    // 修复前「带 authorization 即豁免」会放它落到 gatewayDefaultRouteDecision 白嫖网关 key;
-    // 修复后 authorization 不再作豁免,仍按匿名客户端拒绝。
-    const decision = await Promise.resolve(createModelRoutingTransform()(
+    // 本机进程随手编一个 Bearer:既没有可用 x-api-key,也没有命中的对外 token。对外端口无 session
+    // 启发式,放行只认对外 token,故仍按匿名客户端拒绝 —— 假 bearer / 伪造会话头都绕不过去。
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
       { model: 'claude-opus-4-8' },
-      ctxWith({ authorization: 'Bearer anything' }),
+      ctxWith({ authorization: 'Bearer anything', 'x-claude-code-session-id': 'forged' }),
     ));
     const { status, body } = await drainLocalHandler(decision);
     expect(status).toBe(401);
     expect(body?.error?.code).toBe('external_token_required');
   });
+});
 
-  it('内部 oauth-spawn 子进程(带 authorization bearer + 会话头)不被有界拒绝命中', async () => {
+describe('cc 内部端口 (端口拆分后内部路由不再承担对外判定,字节级不变)', () => {
+  beforeEach(() => {
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    setClaudeProxySessionIdResolver(() => null);
+  });
+
+  afterEach(() => {
+    externalAuthMock.externalEnabled = false;
+  });
+
+  it('内部 oauth-spawn 子进程(带 authorization bearer + 会话头)→ ② 段默认路由换网关 key', async () => {
+    // 对外访问开启也不影响内部端口:内部 transform 不再有对外闸,走 ② 段默认路由。
     externalAuthMock.externalEnabled = true;
-    // 带 x-claude-code-session-id(任何 cc 子进程都带)+ OAuth bearer,但会话解析不出(注册时序窗口)。
     const decision = await Promise.resolve(createModelRoutingTransform()(
       { model: 'claude-opus-4-8' },
       ctxWith({ 'x-claude-code-session-id': 'sdk-unresolved', authorization: 'Bearer sk-ant-oat01' }),
     ));
-    // 不是 401 有界拒绝:落到 ② 段默认路由,oauth-spawn 换网关 key。
     expect(decision).toEqual({
       headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
     });
   });
 
-  it('对外关闭时不启用闸:匿名请求按内部默认路由(oauth-spawn 无 key)→ 直连订阅,字节级不变', async () => {
+  it('内部匿名请求(oauth-spawn 无 key)→ 直连订阅,字节级不变', async () => {
     externalAuthMock.externalEnabled = false;
     setClaudeProxyGatewayKeyReader(() => null);
     const decision = await Promise.resolve(createModelRoutingTransform()(
@@ -311,5 +323,100 @@ describe('cc routingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网�
       ctxWith({ authorization: 'Bearer sk-ant-oat01' }),
     ));
     expect(decision).toEqual({ upstreamOverride: 'https://api.anthropic.com' });
+  });
+});
+
+describe('cc routingTransform 外部路径白名单 (P2: 对外只服务 /v1/messages + GET /v1/models, #1666)', () => {
+  const GOOD_TOKEN = 'cindy-local-good-external-token';
+
+  async function drainLocalHandler(
+    decision: unknown,
+  ): Promise<{ status: number; body: { error?: { code?: string } } | null }> {
+    const res = {
+      status: 0,
+      raw: '',
+      writeHead(status: number) { this.status = status; },
+      end(chunk: string) { this.raw = chunk; },
+    };
+    await (decision as { localHandler?: (arg: { res: unknown }) => Promise<void> })
+      .localHandler?.({ res } as never);
+    return { status: res.status, body: res.raw ? JSON.parse(res.raw) : null };
+  }
+
+  function ctx(method: string, url: string, headers: Record<string, string>) {
+    return { reqId: 1, method, url, headers } as never;
+  }
+
+  beforeEach(() => {
+    // 命中对外 token → 判定外部客户端;开启对外访问,让请求进入 routeExternalClient。
+    externalAuthMock.externalEnabled = true;
+    externalAuthMock.matchToken = (token: string) => token === GOOD_TOKEN;
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    setClaudeProxySessionIdResolver(() => null);
+  });
+
+  afterEach(() => {
+    externalAuthMock.externalEnabled = false;
+    externalAuthMock.matchToken = () => false;
+  });
+
+  it('外部客户端 POST /v1/files → 404 unsupported_path(绝不带 Cindy 凭证转发到任意路径)', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctx('POST', '/v1/files', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
+
+  it('外部客户端 POST /v1/complete(不带 model 的控制面调用)→ 404 unsupported_path', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      {},
+      ctx('POST', '/v1/complete', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
+
+  it('外部客户端 POST /v1/messages → 通过白名单(不是 unsupported_path)', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctx('POST', '/v1/messages', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    // 可能路由成功(headerOverride/upstreamOverride)或 400 no_provider_for_model,
+    // 但绝不是路径白名单的 404 —— 证明 /v1/messages 过闸。
+    const asErr = decision as { localHandler?: unknown };
+    if (asErr.localHandler) {
+      const { body } = await drainLocalHandler(decision);
+      expect(body?.error?.code).not.toBe('unsupported_path');
+    } else {
+      // 直接返回转发决策(headerOverride 等),显然不是 404。
+      expect(decision).not.toBeNull();
+    }
+  });
+
+  it('外部客户端 POST /v1/messages/count_tokens(子路径)→ 通过白名单', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctx('POST', '/v1/messages/count_tokens', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const asErr = decision as { localHandler?: unknown };
+    if (asErr.localHandler) {
+      const { body } = await drainLocalHandler(decision);
+      expect(body?.error?.code).not.toBe('unsupported_path');
+    } else {
+      expect(decision).not.toBeNull();
+    }
+  });
+
+  it('外部客户端 GET /v1/models → 本地吐清单(200,不受路径白名单影响)', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      {},
+      ctx('GET', '/v1/models', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status } = await drainLocalHandler(decision);
+    expect(status).toBe(200);
   });
 });

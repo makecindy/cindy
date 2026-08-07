@@ -113,6 +113,13 @@ const _controlPlaneStartPromises = new Map<CodexProxyAuthInjection, Promise<void
 let _disposeGeneration = 0;
 let dumpSeq = 0;
 
+// 对外(B 族 = Codex/OpenAI)loopback 代理:与内部 _handle 分处**不同端口**(#1666 Finding 2 端口
+// 拆分)。绑用户在设置里固定的 codexPort,只挂 createExternalCodexRoutingTransform(无条件要求命中
+// 不可伪造的 B 族对外 token)。_externalStartPromise 做并发去重,避免 boot 与 set-codex-enabled 同时
+// 拉起两个。内部 _handle 回到加对外功能前的行为(随机端口、不承担任何对外判定)。
+let _externalHandle: ProxyHandle | null = null;
+let _externalStartPromise: Promise<void> | null = null;
+
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
 const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
@@ -2317,7 +2324,10 @@ function externalChatCompletionsDecision(externalToken: string): RoutingDecision
         writeExternalOpenAIError(res, 400, 'invalid_request', 'chat completions 请求缺少 messages。');
         return;
       }
-      const proxyUrl = getCodexProxyUrl();
+      // 自环 re-POST 必须打**对外**端口自己的 `/responses`:那条路由挂 createExternalCodexRoutingTransform,
+      // 会用 B 族 token 命中 → routeExternalCodexClient 的 responses 分派(单一事实源)。内部端口(_handle)
+      // 端口拆分后已不再认对外 token,打它会落到内部路由 → 误路由/凭证误用。
+      const proxyUrl = getCodexExternalProxyUrl();
       if (!proxyUrl) {
         writeExternalOpenAIError(res, 503, 'proxy_unavailable', 'Cindy Codex proxy 尚未就绪。');
         return;
@@ -2496,23 +2506,41 @@ function routeExternalCodexClient(
   return externalOpenAIError(400, 'unsupported_request', '不支持的外部请求。');
 }
 
-export function createModelRoutingTransform(
-  frozenAuthInjection?: CodexProxyAuthInjection,
-): RoutingTransform {
+/**
+ * 对外端口专用路由 transform(端口拆分,#1666 Finding 2)。绑在**独立的对外 loopback 端口**上
+ * (见 ensureCodexExternalProxyReady),只服务用户自己的 Codex / OpenAI CLI:
+ *   - `Authorization: Bearer` 命中 B 族对外 token → routeExternalCodexClient(GET /models 发现、
+ *     POST /responses 按模型解析、POST /v1/chat/completions 自环)。命中判定与 codexEnabled 无关;
+ *     enabled 与否由 routeExternalCodexClient 内决定放行 / 401。
+ *   - 带 `cindy-local-` 前缀但不命中(已重置 / 跨族拿 A 族 token 打 B 族 loopback / 已失效)→ 401
+ *     invalid_external_token,绝不把它当 Authorization 透传上游。
+ *   - 其余(无 token / 伪造任意 header)→ 401 external_token_required。
+ * **无 thread-id / session 启发式、无内部默认路由回落**——放行的唯一条件是命中不可伪造的对外 token,
+ * 因此在此端口上伪造 thread-id / x-client-request-id 毫无作用(彻底消除 Finding 2 的可伪造绕过面)。
+ * export 供单测。
+ */
+export function createExternalCodexRoutingTransform(): RoutingTransform {
   return (body, ctx) => {
-    // ⓪ 对外模型代理:`Authorization: Bearer` 命中已存对外 token → 外部客户端,走独立无会话分支。
-    //    放在最前:优先级高于 per-session / spawn 默认路由。命中判定与 enabled 无关(matchesCodexExternalToken
-    //    只比 B 族 token),enabled 与否在 routeExternalCodexClient 内决定放行/401。未命中(Cindy 自家 codex
-    //    子进程 / 无 token)→ 落到下方现有逻辑,字节级不变。
     const externalToken = bearerToken(ctx.headers);
     if (externalToken && matchesCodexExternalToken(externalToken)) {
       return routeExternalCodexClient(body, ctx, externalToken);
     }
-    // 带 `cindy-local-` 前缀但不命中本族 token(已重置 / 跨族拿 A 族 token 打 B 族 loopback /
-    // 已失效)→ 明确 401,绝不落到下方内部路由把这个对外 token 当 Authorization 透传上游。
     if (externalToken && isCindyLocalToken(externalToken)) {
       return externalOpenAIError(401, 'invalid_external_token', 'Cindy 对外访问 token 无效或已失效。');
     }
+    return externalOpenAIError(401, 'external_token_required', 'Cindy 对外模型代理需要有效的访问 token。');
+  };
+}
+
+export function createModelRoutingTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RoutingTransform {
+  return (body, ctx) => {
+    // 本 transform 只服务 Cindy 自家内部流量(codex 子进程 / collab spawn / 控制面)。对外客户端
+    //(用户自己的 Codex / OpenAI CLI)走**独立的对外 loopback 端口**,由 createExternalCodexRoutingTransform
+    // 处理——那条路径无条件要求命中不可伪造的 B 族对外 token,绝不落到这里。端口拆分见
+    // ensureCodexExternalProxyReady(#1666 Finding 2:同端口上的 thread-id / session 启发式可被本机进程
+    // 伪造绕过 → 白嫖网关 key;拆端口后此 transform 不再承担任何对外判定)。
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
     const gatewayKey = _readGatewayKey();
@@ -2523,38 +2551,6 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
-    // 内部身份信号:任何 Cindy 自家 codex 子进程的请求都带 thread-id / x-client-request-id 头
-    //(缺失才是 'unknown'),即便 threadToSession 还没在注册时序窗口内把它绑上 session 也带着它。
-    // 这与 anthropic 侧靠 x-claude-code-session-id 区分内外同构 —— 光「带了个 bearer」不算内部身份。
-    // 注:collab spawn(x-openai-subagent=collab-spawn)也带 thread-id,故 hasInternalCodexIdentity 为真,
-    // 会跳过下方 401 闸,落到再下方的 collab-spawn 分支 —— 内部协同 spawn 不受对外闸影响。
-    const hasInternalCodexIdentity = threadId !== 'unknown';
-    // 有界拒绝(P1):对外访问开启时,这个 codex loopback 端口被公布给外部 CLI。走到这里的请求上面
-    // 既没命中本族对外 token(否则已在 ⓪ 段被 routeExternalCodexClient 接走)、又不带 `cindy-local-`
-    // 前缀(否则已 401)、又解析不出会话、又不带内部 thread-id / x-client-request-id 身份头 —— 它不是
-    // Cindy 自家 codex 子进程,而是本机某个直接打对外端口的客户端。一律 401(带不带 model、带不带
-    // 伪造 bearer 都拦):
-    //   · 带 model:放行会经下方 decideCodexRoute(oauth-bearer + codex/* + gatewayKey)白嫖 Cindy 网关 key。
-    //   · 无 model(控制面,如 codex models-manager 的 `GET /models` 轮询):放行会经下方桶③,在
-    //     provider-oauth 态经 resolveProviderOAuthControlRouteDecision 把 Cindy 的供应商 OAuth token 注入
-    //     上游 —— 未鉴权者借 Cindy 凭证打供应商 /models,使对外 token 形同虚设(#1666 review 二轮 Finding H)。
-    // ⚠ 关键:内部身份只认 thread-id / x-client-request-id 头,绝不把「带了个 bearer」当豁免 —— 伪造一个
-    //   非本族 `Bearer anything` 既冒充不了内部,也不能让对外 token 变可选。合法外部客户端的 /models 由
-    //   ⓪ 段 routeExternalCodexClient 用本族 token 命中后从 Cindy catalog 返回,根本不依赖桶③,故这里
-    //   收紧不影响它。代价:对外开启期间,内部无 thread-id 的控制面轮询也一并被拦(与本就被拦的匿名
-    //   轮询同权衡;Cindy 自有 catalog,退化有界)。
-    // ⚠ 残留:存心伪造一个假 thread-id 身份头的本机进程仍能溜过(loopback 非鉴权边界,与 anthropic 侧
-    //   伪造会话头同权衡);彻底隔离需把对外监听与内部子进程代理拆到不同端口。未开启对外时不启用此闸,
-    //   内部无 thread-id 的控制面轮询照旧走桶③。
-    // 置于 collab-spawn 分支之前:合法 collab spawn 必带 thread-id(hasInternalCodexIdentity 为真)会跳过
-    // 本闸;而伪造 collab-spawn 头却不带 thread-id 的对外客户端会被这里 401,不至于蹭到下方 collab 分支。
-    if (
-      isCodexExternalAccessEnabled()
-      && !sessionId
-      && !hasInternalCodexIdentity
-    ) {
-      return externalOpenAIError(401, 'external_token_required', 'Cindy 对外模型代理需要有效的访问 token。');
-    }
     if (!sessionId && isCollabSpawnRequest(ctx.headers)) {
       return unresolvedCollabSpawnRouteDecision();
     }
@@ -2793,6 +2789,7 @@ export function withCodexUpstreamRecording(
 function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
   port?: number,
+  external = false,
 ): Promise<ProxyHandle> {
   return createAnthropicCompatProxy({
     // 对外模型代理:给定固定端口(仅 loopback)时绑它,让外部 CLI 的 OPENAI_BASE_URL 稳定;
@@ -2801,10 +2798,11 @@ function createCodexProxyHandle(
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
     transformRequest: createTransformRequestChain(frozenAuthInjection),
-    // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
-    // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
+    // external=true:对外端口,只认 B 族对外 token 的独立路由(createExternalCodexRoutingTransform),
+    // 绝不回落内部默认路由/网关 key。external=false:常规 session proxy 读当前全局 spawn 形态;
+    // control-plane proxy 在创建时冻结自己的形态,两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      createModelRoutingTransform(frozenAuthInjection),
+      external ? createExternalCodexRoutingTransform() : createModelRoutingTransform(frozenAuthInjection),
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
@@ -2860,7 +2858,10 @@ function createCodexProxyHandle(
 }
 
 /**
- * 启动本地 Codex prompt proxy。幂等 —— 重复调用直接返回已缓存状态。
+ * 启动**内部** Codex prompt proxy(codex 子进程 / collab spawn / 控制面用)。幂等 —— 重复调用直接
+ * 返回已缓存状态。绑**随机端口**(不对用户公布;端口在 spawn 时经 env 注入给子进程)。对外访问是
+ * **独立** handle,绑固定 codexPort,见 ensureCodexExternalProxyReady —— 端口拆分(#1666 Finding 2)后
+ * 内部端口不再承担任何对外判定。
  *
  * `_startPromise` 去重并发启动;`_handle` 为空时 getCodexProxyEndpoint()
  * 直接 fallback 到真上游 URL。
@@ -2872,30 +2873,7 @@ export async function ensureCodexProxyReady(): Promise<void> {
   const generation = _disposeGeneration;
   _startPromise = (async () => {
     try {
-      // 对外模型代理端口策略(与 anthropic host 同):用户开启对外服务时捕获并持久化 codexPort;
-      // 持久化了(>0)就固定绑,固定端口不可用则 fallback 随机并回写实际值,避免下次又撞同一个坏
-      // 端口。三类可 fallback:被占用(EADDRINUSE)/ 无权限(EACCES)/ 落在 Fetch 屏蔽端口(包内
-      // 直接抛,SDK 连不上)。其它错误照抛给外层兜底。
-      const pinnedPort = loadLocalProxySettings().codexPort;
-      let handle: ProxyHandle;
-      try {
-        handle = await createCodexProxyHandle(undefined, pinnedPort > 0 ? pinnedPort : undefined);
-      } catch (bindErr) {
-        const code = (bindErr as NodeJS.ErrnoException | undefined)?.code;
-        const fetchBlocked = isFetchBlockedPort(pinnedPort);
-        if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES' || fetchBlocked)) {
-          log.error('固定的 codex 对外代理端口不可用,fallback 随机端口', {
-            pinnedPort,
-            code,
-            fetchBlocked,
-          });
-          handle = await createCodexProxyHandle();
-          const actual = codexPortFromProxyUrl(handle.url);
-          if (actual) setLocalProxyCodexPort(actual);
-        } else {
-          throw bindErr;
-        }
-      }
+      const handle = await createCodexProxyHandle();
       if (generation !== _disposeGeneration) {
         await handle.dispose().catch((err) => {
           log.warn('codex proxy start raced with dispose; disposing fresh handle failed', {
@@ -3011,21 +2989,111 @@ export function codexPortFromProxyUrl(url: string): number | null {
 }
 
 /**
- * codex loopback proxy 当前的实际 url —— **不回落远程网关**(与 getCodexProxyEndpoint 相反)。
- * 供 IPC get-state 展示 127.0.0.1 地址,以及 chat-completions 自环 re-POST 用。未就绪返回 null。
+ * **内部** codex loopback proxy 当前的实际 url —— **不回落远程网关**(与 getCodexProxyEndpoint
+ * 相反)。供内部重启 / 诊断用。未就绪返回 null。对外展示 / 自环请用 getCodexExternalProxyUrl。
  */
 export function getCodexProxyUrl(): string | null {
   return _handle?.url ?? null;
 }
 
 /**
- * 重建 codex proxy 以让新的固定端口生效(用户在设置里改端口后调用)。会中断当前经代理的内部
- * codex in-flight 请求 —— 仅在用户显式改端口时用,不做常态调用。返回重建后的实际 url。
+ * 重建**内部** codex proxy 以让新配置生效。会中断当前经代理的内部 codex in-flight 请求 —— 仅在
+ * 显式需要时用,不做常态调用。返回重建后的实际 url。
  */
 export async function restartCodexProxy(): Promise<string | null> {
   await disposeCodexProxy();
   await ensureCodexProxyReady();
   return getCodexProxyUrl();
+}
+
+/**
+ * 启动**对外**(B 族 = Codex/OpenAI)loopback 代理(给用户自己电脑上的 Codex / OpenAI CLI 用)。
+ * 只在用户开启 B 族对外访问时由 IPC / boot 拉起。端口策略:绑持久化的固定 codexPort
+ * (loadLocalProxySettings().codexPort),让外部 CLI 的 OPENAI_BASE_URL 稳定;端口被占用
+ * (EADDRINUSE / EACCES / 落在 Fetch 屏蔽端口)则 fallback 随机并回写新端口(UI 始终显示实际 url)。
+ * 并发去重(_externalStartPromise),启动失败不抛 —— getCodexExternalProxyUrl() 保持 null。
+ */
+export async function ensureCodexExternalProxyReady(): Promise<void> {
+  if (_externalHandle) return;
+  if (_externalStartPromise) return _externalStartPromise;
+  _externalStartPromise = (async () => {
+    const pinnedPort = loadLocalProxySettings().codexPort;
+    try {
+      try {
+        _externalHandle = await createCodexProxyHandle(
+          undefined,
+          pinnedPort > 0 ? pinnedPort : undefined,
+          true,
+        );
+      } catch (bindErr) {
+        // 固定端口不可用时 fallback 随机端口重试,并把持久化端口回写成实际绑定值,避免下次启动
+        // 又撞同一个坏端口。三类可 fallback:被占用(EADDRINUSE)/ 无权限(EACCES)/ 落在 Fetch
+        // 屏蔽端口(包内直接抛,SDK 连不上)。其它错误照抛给外层兜底。
+        const code = (bindErr as NodeJS.ErrnoException | undefined)?.code;
+        const fetchBlocked = isFetchBlockedPort(pinnedPort);
+        if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES' || fetchBlocked)) {
+          log.error('固定的 codex 对外代理端口不可用,fallback 随机端口', { pinnedPort, code, fetchBlocked });
+          _externalHandle = await createCodexProxyHandle(undefined, undefined, true);
+          const actual = codexPortFromProxyUrl(_externalHandle.url);
+          if (actual) setLocalProxyCodexPort(actual);
+        } else {
+          throw bindErr;
+        }
+      }
+      log.info('codex external proxy ready', { url: _externalHandle.url });
+    } catch (err) {
+      _externalHandle = null;
+      log.error('codex external proxy failed to start', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      _externalStartPromise = null;
+    }
+  })();
+  return _externalStartPromise;
+}
+
+/**
+ * **对外** codex 代理当前 url;供 IPC get-state / copy / preview / write 展示给外部 CLI 的
+ * 127.0.0.1 地址与端口,以及 chat-completions 自环 re-POST 用。只有开启了 B 族对外访问并
+ * ensureCodexExternalProxyReady 成功后才非 null;未就绪返回 null。
+ */
+export function getCodexExternalProxyUrl(): string | null {
+  return _externalHandle?.url ?? null;
+}
+
+/**
+ * 重建**对外** codex 代理以让新的固定端口生效(用户在设置里改端口后调用)。返回重建后的实际 url。
+ * 会中断当前经对外代理的 in-flight 请求 —— 仅在用户显式改端口时用。
+ */
+export async function restartCodexExternalProxy(): Promise<string | null> {
+  await disposeCodexExternalProxy();
+  await ensureCodexExternalProxyReady();
+  return getCodexExternalProxyUrl();
+}
+
+/**
+ * 优雅关闭**对外** codex 代理(关闭 B 族对外访问 / 改端口 / 退出时)。先等待 in-flight 的启动去重
+ * Promise 结算,避免与并发的 ensure 抢 _externalHandle。
+ */
+export async function disposeCodexExternalProxy(): Promise<void> {
+  if (_externalStartPromise) {
+    try {
+      await _externalStartPromise;
+    } catch {
+      // 启动失败已在 ensure 内部记日志;这里只是确保不在启动中途 dispose。
+    }
+  }
+  if (!_externalHandle) return;
+  const h = _externalHandle;
+  _externalHandle = null;
+  try {
+    await h.dispose();
+  } catch (err) {
+    log.warn('codex external proxy dispose failed', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

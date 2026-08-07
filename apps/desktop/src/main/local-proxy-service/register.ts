@@ -28,15 +28,18 @@ import {
 } from './preview-masking.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
-  getLocalProxyUrl,
+  disposeAnthropicExternalProxy,
+  ensureAnthropicExternalProxyReady,
+  getExternalProxyUrl,
   portFromProxyUrl,
-  restartAnthropicCompatProxy,
+  restartAnthropicExternalProxy,
 } from '../maker-host/anthropic-compat-proxy-host.js';
 import {
   codexPortFromProxyUrl,
-  ensureCodexProxyReady,
-  getCodexProxyUrl,
-  restartCodexProxy,
+  disposeCodexExternalProxy,
+  ensureCodexExternalProxyReady,
+  getCodexExternalProxyUrl,
+  restartCodexExternalProxy,
 } from '../maker-host/codex-proxy-host.js';
 import { listExternalRoutableProviders } from '../maker-host/provider-route.js';
 import {
@@ -53,6 +56,7 @@ import {
 import { addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import {
   isCodexExternalAccessEnabled,
+  isExternalAccessEnabled,
   isValidLocalProxyPortOrAuto,
   loadLocalProxySettings,
   setLocalProxyCodexDefaultProviderId,
@@ -76,7 +80,7 @@ function buildState(): LocalProxyServiceState {
   const settings = loadLocalProxySettings();
   return {
     enabled: settings.enabled,
-    url: getLocalProxyUrl(),
+    url: getExternalProxyUrl(),
     port: settings.port,
     hasToken: hasExternalToken(),
     maskedToken: getExternalTokenMasked(),
@@ -86,7 +90,7 @@ function buildState(): LocalProxyServiceState {
     codexEnabled: settings.codexEnabled,
     codexHasToken: hasCodexExternalToken(),
     codexMaskedToken: getCodexExternalTokenMasked(),
-    codexUrl: getCodexProxyUrl(),
+    codexUrl: getCodexExternalProxyUrl(),
     codexPort: settings.codexPort,
     codexProviders: listExternalRoutableProviders('codex'),
     codexDefaultProviderId: settings.codexDefaultProviderId,
@@ -112,9 +116,11 @@ export function registerLocalProxyServiceIpc(): void {
   ipcMain.handle('local-proxy:get-state', async (): Promise<LocalProxyServiceState> =>
     buildState());
 
-  // 开启 A 族(Anthropic / Claude Code)对外服务:①确保已有 A 族 token;②捕获当前正在跑的
-  // (默认随机)端口并持久化,让外部 CLI 的 ANTHROPIC_BASE_URL 从此稳定。关闭则仅置
-  // enabled=false(端口保留,下次开启复用同一端口)。B 族(Codex)有独立开关,互不影响。
+  // 开启 A 族(Anthropic / Claude Code)对外服务:①确保已有 A 族 token;②拉起**独立的对外
+  // loopback 端口**(端口拆分,#1666:内部 cc 子进程代理与对外端口不再共用一个 handle);③未固定
+  // 端口时捕获其实际端口并持久化,让外部 CLI 的 ANTHROPIC_BASE_URL 从此稳定。关闭则置
+  // enabled=false 并**关掉对外端口**(不再监听公开端口,外部直接连不上;端口设置保留,下次开启复用)。
+  // B 族(Codex)有独立开关,互不影响。
   ipcMain.handle(
     'local-proxy:set-enabled',
     async (event, enabled: unknown): Promise<LocalProxyMutationResult> => {
@@ -124,21 +130,29 @@ export function registerLocalProxyServiceIpc(): void {
       }
       if (enabled) {
         getOrCreateExternalToken();
-        // 未固定端口时,捕获当前实际端口固定下来(proxy 已在随机端口上跑)。
-        if (loadLocalProxySettings().port <= 0) {
-          const url = getLocalProxyUrl();
-          const running = url ? portFromProxyUrl(url) : null;
-          if (running) setLocalProxyPort(running);
+        try {
+          await ensureAnthropicExternalProxyReady();
+          // 未固定端口时,捕获对外 handle 的实际(随机)端口固定下来。
+          if (loadLocalProxySettings().port <= 0) {
+            const url = getExternalProxyUrl();
+            const running = url ? portFromProxyUrl(url) : null;
+            if (running) setLocalProxyPort(running);
+          }
+        } catch {
+          // 对外端口起不来不阻断开关置位;url 会保持 null,UI 侧据此提示未就绪。
         }
+      } else {
+        await disposeAnthropicExternalProxy();
       }
       setLocalProxyEnabled(enabled);
       return { success: true, state: buildState() };
     },
   );
 
-  // 开启 B 族(Codex / 通用 OpenAI)对外服务:①确保已有 B 族独立 token;②codex loopback 可能
-  // 尚未起(纯外部用法、无内部 codex 会话),显式 ensureCodexProxyReady() 拉起;③捕获其当前
-  // 端口固定下来,让外部 codex/OpenAI 客户端 base_url 稳定。关闭则仅置 codexEnabled=false。
+  // 开启 B 族(Codex / 通用 OpenAI)对外服务:①确保已有 B 族独立 token;②拉起**独立的对外 codex
+  // loopback 端口**(端口拆分,#1666 Finding 2:内部 codex 子进程代理与对外端口不再共用一个 handle);
+  // ③未固定端口时捕获其实际端口并持久化,让外部 codex/OpenAI 客户端 base_url 稳定。关闭则置
+  // codexEnabled=false 并**关掉对外端口**(端口设置保留,下次开启复用)。A 族(Anthropic)有独立开关。
   ipcMain.handle(
     'local-proxy:set-codex-enabled',
     async (event, enabled: unknown): Promise<LocalProxyMutationResult> => {
@@ -149,15 +163,17 @@ export function registerLocalProxyServiceIpc(): void {
       if (enabled) {
         getOrCreateCodexExternalToken();
         try {
-          await ensureCodexProxyReady();
+          await ensureCodexExternalProxyReady();
           if (loadLocalProxySettings().codexPort <= 0) {
-            const codexUrl = getCodexProxyUrl();
+            const codexUrl = getCodexExternalProxyUrl();
             const codexRunning = codexUrl ? codexPortFromProxyUrl(codexUrl) : null;
             if (codexRunning) setLocalProxyCodexPort(codexRunning);
           }
         } catch {
-          // codex loopback 起不来不阻断开关置位;codexUrl 会保持 null,UI 侧据此提示未就绪。
+          // codex 对外端口起不来不阻断开关置位;codexUrl 会保持 null,UI 侧据此提示未就绪。
         }
+      } else {
+        await disposeCodexExternalProxy();
       }
       setLocalProxyCodexEnabled(enabled);
       return { success: true, state: buildState() };
@@ -187,7 +203,12 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:regenerate-token',
     async (event): Promise<LocalProxyMutationResult> => {
       assertTrustedAppRendererEvent(event);
-      regenerateExternalToken();
+      try {
+        regenerateExternalToken();
+      } catch (err) {
+        // 轮换失败(旧物理 token 无法失效)→ 如实回失败,别谎报成功让旧 token 继续鉴权。
+        return { success: false, error: (err as Error).message, state: buildState() };
+      }
       return { success: true, state: buildState() };
     },
   );
@@ -197,7 +218,11 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:regenerate-codex-token',
     async (event): Promise<LocalProxyMutationResult> => {
       assertTrustedAppRendererEvent(event);
-      regenerateCodexExternalToken();
+      try {
+        regenerateCodexExternalToken();
+      } catch (err) {
+        return { success: false, error: (err as Error).message, state: buildState() };
+      }
       return { success: true, state: buildState() };
     },
   );
@@ -213,7 +238,7 @@ export function registerLocalProxyServiceIpc(): void {
       }
       setLocalProxyPort(port);
       try {
-        await restartAnthropicCompatProxy();
+        await restartAnthropicExternalProxy();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, error: message, state: buildState() };
@@ -227,7 +252,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:copy-token',
     async (event): Promise<LocalProxyCopyResult> => {
       assertTrustedAppRendererEvent(event);
-      if (!getLocalProxyUrl()) return { success: false, error: 'proxy not ready' };
+      if (!getExternalProxyUrl()) return { success: false, error: 'proxy not ready' };
       return copyToClipboardInMain(getOrCreateExternalToken());
     },
   );
@@ -239,7 +264,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:copy-env',
     async (event): Promise<LocalProxyCopyResult> => {
       assertTrustedAppRendererEvent(event);
-      const url = getLocalProxyUrl();
+      const url = getExternalProxyUrl();
       if (!url) return { success: false, error: 'proxy not ready' };
       const token = getOrCreateExternalToken();
       return copyToClipboardInMain(
@@ -254,7 +279,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:preview-external-config',
     async (event): Promise<LocalProxyConfigPreviewResult> => {
       assertTrustedAppRendererEvent(event);
-      const url = getLocalProxyUrl();
+      const url = getExternalProxyUrl();
       if (!url) {
         return { success: false, error: 'proxy not ready' };
       }
@@ -273,7 +298,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:write-external-config',
     async (event): Promise<LocalProxyConfigWriteResult> => {
       assertTrustedAppRendererEvent(event);
-      const url = getLocalProxyUrl();
+      const url = getExternalProxyUrl();
       if (!url) {
         return { success: false, error: 'proxy not ready' };
       }
@@ -304,8 +329,8 @@ export function registerLocalProxyServiceIpc(): void {
     },
   );
 
-  // 手改 codex loopback 固定端口:校验 → 持久化 → 重建 codex proxy 让新端口生效
-  // (会中断经该 loopback 的内部 codex in-flight 请求;被占用时 host 内部 fallback 随机并回写)。
+  // 手改 codex 对外 loopback 固定端口:校验 → 持久化 → 重建**对外** codex proxy 让新端口生效
+  // (会中断经该对外 loopback 的 in-flight 请求;被占用时 host 内部 fallback 随机并回写)。
   ipcMain.handle(
     'local-proxy:set-codex-port',
     async (event, port: unknown): Promise<LocalProxyMutationResult> => {
@@ -315,7 +340,7 @@ export function registerLocalProxyServiceIpc(): void {
       }
       setLocalProxyCodexPort(port);
       try {
-        await restartCodexProxy();
+        await restartCodexExternalProxy();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, error: message, state: buildState() };
@@ -329,7 +354,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:copy-codex-token',
     async (event): Promise<LocalProxyCopyResult> => {
       assertTrustedAppRendererEvent(event);
-      if (!getCodexProxyUrl()) return { success: false, error: 'codex proxy not ready' };
+      if (!getCodexExternalProxyUrl()) return { success: false, error: 'codex proxy not ready' };
       return copyToClipboardInMain(getOrCreateCodexExternalToken());
     },
   );
@@ -339,7 +364,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:copy-codex-env',
     async (event): Promise<LocalProxyCopyResult> => {
       assertTrustedAppRendererEvent(event);
-      const url = getCodexProxyUrl();
+      const url = getCodexExternalProxyUrl();
       if (!url) return { success: false, error: 'codex proxy not ready' };
       const token = getOrCreateCodexExternalToken();
       return copyToClipboardInMain(
@@ -354,7 +379,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:copy-codex-token-export',
     async (event): Promise<LocalProxyCopyResult> => {
       assertTrustedAppRendererEvent(event);
-      if (!getCodexProxyUrl()) return { success: false, error: 'codex proxy not ready' };
+      if (!getCodexExternalProxyUrl()) return { success: false, error: 'codex proxy not ready' };
       return copyToClipboardInMain(`export CINDY_LOCAL_TOKEN=${getOrCreateCodexExternalToken()}`);
     },
   );
@@ -365,7 +390,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:preview-codex-config',
     async (event): Promise<LocalProxyCodexConfigPreviewResult> => {
       assertTrustedAppRendererEvent(event);
-      const url = getCodexProxyUrl();
+      const url = getCodexExternalProxyUrl();
       if (!url) {
         return { success: false, error: 'codex proxy not ready' };
       }
@@ -384,7 +409,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:write-codex-config',
     async (event): Promise<LocalProxyConfigWriteResult> => {
       assertTrustedAppRendererEvent(event);
-      const url = getCodexProxyUrl();
+      const url = getCodexExternalProxyUrl();
       if (!url) {
         return { success: false, error: 'codex proxy not ready' };
       }
@@ -392,12 +417,18 @@ export function registerLocalProxyServiceIpc(): void {
     },
   );
 
-  // boot 期:B 族(Codex)独立开启时,codex loopback 应在启动时就绪(而非等下次点开关)——
-  // 与「每族可独立开」一致。仅 codexEnabled 为真才拉起;fire-and-forget,起不来不阻断 IPC 注册
-  // (UI 侧据 codexUrl=null 提示未就绪)。A 族的 loopback 由 anthropic host 在 boot 常驻,无需此处。
+  // boot 期:两族各自独立开启时,对应的对外 loopback 应在启动时就绪(而非等下次点开关)——
+  // 与「每族可独立开」一致。端口拆分后 A 族对外端口是独立 handle(不再随内部 cc 代理常驻),
+  // 故 A 族也要在此按 enabled 拉起。fire-and-forget,起不来不阻断 IPC 注册(UI 侧据 url/codexUrl=null
+  // 提示未就绪)。内部 cc 子进程代理仍由 anthropic host 在 boot 常驻,与此处的对外端口无关。
+  if (isExternalAccessEnabled()) {
+    void ensureAnthropicExternalProxyReady().catch(() => {
+      // 对外端口起不来不阻断启动;url 保持 null,UI 侧提示未就绪。
+    });
+  }
   if (isCodexExternalAccessEnabled()) {
-    void ensureCodexProxyReady().catch(() => {
-      // codex loopback 起不来不阻断启动;codexUrl 保持 null,UI 侧提示未就绪。
+    void ensureCodexExternalProxyReady().catch(() => {
+      // codex 对外端口起不来不阻断启动;codexUrl 保持 null,UI 侧提示未就绪。
     });
   }
 }

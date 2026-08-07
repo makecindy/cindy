@@ -9,6 +9,8 @@ const codexEnabledBox = vi.hoisted(() => ({ value: false }));
 // safeStorage 是否可落盘;置 false 模拟 safeStorage 不可用(write 返回 false),
 // 用来验证进程内兜底缓存路径。
 const writableBox = vi.hoisted(() => ({ value: true }));
+// remove 是否生效;置 false 模拟 safeStorage 不可用时旧物理值删不掉(轮换失败路径)。
+const removableBox = vi.hoisted(() => ({ value: true }));
 
 vi.mock('../../secrets/providerSecretStore', () => ({
   readLocalProxyExternalToken: () => tokenBox.value,
@@ -17,11 +19,21 @@ vi.mock('../../secrets/providerSecretStore', () => ({
     tokenBox.value = v;
     return true;
   },
+  removeLocalProxyExternalToken: () => {
+    if (!removableBox.value) return { success: false, error: 'unavailable' };
+    tokenBox.value = null;
+    return { success: true };
+  },
   readLocalProxyCodexExternalToken: () => codexTokenBox.value,
   writeLocalProxyCodexExternalToken: (v: string) => {
     if (!writableBox.value) return false;
     codexTokenBox.value = v;
     return true;
+  },
+  removeLocalProxyCodexExternalToken: () => {
+    if (!removableBox.value) return { success: false, error: 'unavailable' };
+    codexTokenBox.value = null;
+    return { success: true };
   },
 }));
 
@@ -53,6 +65,8 @@ beforeEach(() => {
   codexTokenBox.value = null;
   codexEnabledBox.value = false;
   writableBox.value = true;
+  removableBox.value = true;
+  clearExternalTokenMemoryFallback();
 });
 
 describe('local proxy external token auth (A 族 = Anthropic)', () => {
@@ -293,5 +307,41 @@ describe('in-process fallback when safeStorage write fails', () => {
     expect(matchesCodexExternalToken(b)).toBe(true);
     expect(matchesCodexExternalToken(a)).toBe(false);
     expect(matchesExternalToken(b)).toBe(false);
+  });
+});
+
+describe('regenerate rotation integrity (旧物理 token 删不掉时必须报失败,不谎报成功)', () => {
+  it('throws when the previous physical token can neither be removed nor overwritten', () => {
+    // 先在可落盘时存一个旧物理 token。
+    const stale = getOrCreateExternalToken();
+    expect(tokenBox.value).toBe(stale);
+    // 模拟 safeStorage 变得不可用:remove 删不掉旧值、write 也写不进新值。
+    removableBox.value = false;
+    writableBox.value = false;
+    // 轮换无法让新值生效(effectiveRead 仍读到旧物理值)→ 抛错,绝不谎报成功。
+    expect(() => regenerateExternalToken()).toThrow(/rotation failed/i);
+    // 旧物理 token 仍在,但轮换抛错让 IPC 层如实回失败(旧 token 仍有效必须让调用方知道)。
+    expect(tokenBox.value).toBe(stale);
+    // 内存兜底已回滚,不残留一个既写不进物理、又被旧物理值遮挡的新值。
+    expect(matchesExternalToken(stale)).toBe(true);
+  });
+
+  it('codex family throws on the same rotation failure independently', () => {
+    const stale = getOrCreateCodexExternalToken();
+    removableBox.value = false;
+    writableBox.value = false;
+    expect(() => regenerateCodexExternalToken()).toThrow(/rotation failed/i);
+    expect(codexTokenBox.value).toBe(stale);
+  });
+
+  it('rotation succeeds via remove even when write fails (safeStorage clears but cannot persist)', () => {
+    const stale = getOrCreateExternalToken();
+    // remove 能删掉旧物理值,但 write 写不进 —— effectiveRead 落到内存新值,旧值已失效。
+    writableBox.value = false;
+    const next = regenerateExternalToken();
+    expect(next).not.toBe(stale);
+    expect(tokenBox.value).toBeNull(); // 旧物理值被 remove 清掉
+    expect(matchesExternalToken(stale)).toBe(false); // 旧 token 失效
+    expect(matchesExternalToken(next)).toBe(true); // 新 token 经内存兜底命中
   });
 });
