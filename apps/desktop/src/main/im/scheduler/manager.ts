@@ -234,7 +234,7 @@ export class ImSchedulerManager {
           this.requiresTaggedSnapshot = true;
           this.peers.clear();
           this.confirmedPeers.clear();
-          this.beginDiscoveryRound({ resetRetryAttempt: !preserveRetryAttempt });
+          this.beginDiscoveryRound();
           this.reconcile();
           return;
         }
