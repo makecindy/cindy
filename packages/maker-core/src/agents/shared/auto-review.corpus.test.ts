@@ -160,17 +160,62 @@ describe('凭证路径不因数据位剥离而失去证据(review P1)', () => {
  * 第一轮 review 的其余修复(全部由 bot 定位、逐条实测确认成立)。
  */
 describe('review 第一轮 — 其余修复', () => {
-  it('[P1] gh auth status --show-token 不放行(会把可复用令牌打进模型上下文)', () => {
+  it('[P1] --show-token 是凭证读取,确定性必问(不能只挡在白名单外)', () => {
+    // 只做到「不 auto-approve」不够:落灰区意味着可能被轻量审阅器静默放行
+    // (`gh auth status` 看起来就是一条状态查询)。等号形态是二轮 review 补的绕过。
     for (const c of [
       'gh auth status --show-token',
-      'gh auth status -t',
-      'gh auth status -wt',
+      'gh auth status --show-token=true',
       'gh pr view 1 --show-token',
     ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 短选项簇写至少不进只读白名单。
+    for (const c of ['gh auth status -t', 'gh auth status -wt']) {
       expect(classifyShellCommand(c, roots, opts), c).not.toBe('auto-approve');
     }
     // 不带该 flag 的照常放行,不因这道护栏反向误报。
     expect(classifyShellCommand('gh auth status', roots, opts)).toBe('auto-approve');
+  });
+
+  it('[P1] 解释器的「吃参数选项」的值不是脚本文件(stdin 仍是程序)', () => {
+    // `bash -O extglob` 里 extglob 是 -O 的值;当成脚本文件会把 stdin 代码执行降进灰区。
+    for (const c of [
+      "printf 'rm -rf /outside' | bash -O extglob",
+      "echo 'import os' | python3 -W ignore",
+      'echo x | node -r module',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 真有脚本文件操作数时仍不算 stdin 即程序。
+    expect(classifyShellCommand('echo x | python3 run.py', roots, opts)).not.toBe('prompt-each-time');
+  });
+
+  it('[P1] 引号里的 $ 展开保留给红线扫描(不当纯数据剥离)', () => {
+    for (const c of [
+      'git commit -m "$GITHUB_TOKEN"',
+      'B="$AWS_SECRET_ACCESS_KEY" && echo ok',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 不含 $ 的散文仍照常剥离,不回退。
+    expect(classifyShellCommand(
+      'git commit -s -m "fix: 收到 user/toggle-off/shutdown/revoked 后清理"', roots, opts,
+    )).toBe('prompt');
+  });
+
+  it('[P1] awk 的动态管道形态也算「把数据交出去执行」', () => {
+    for (const c of [
+      "cat commands.txt | awk '$0 | getline'",
+      `cat x | awk '{"date" | getline d; print d}'`,
+      "cat d.txt | awk '{system($0)}'",
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+    // 但正则 alternation 不是管道,不因这道护栏误升成红线。
+    expect(classifyShellCommand(
+      "grep -n 'x' a.ts | awk -F: '/foo|bar/ {print $1}'", roots, opts,
+    )).toBe('prompt');
   });
 
   it('[P1] 含命令替换的引号值不当纯数据剥离(双引号里的 $() 会执行)', () => {

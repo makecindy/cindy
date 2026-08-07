@@ -580,13 +580,16 @@ function stripDataLiterals(command: string): string {
   /**
    * 抹成占位符,但两种情况原样留下:
    *  - **凭证路径**:值可能是一个路径,抹了红线就失去证据(护栏一);
-   *  - **含命令替换的双引号值**:双引号里的 `$(…)` / 反引号 / `<(…)` **会执行**,不是纯数据。
-   *    `git commit -m "$(cat ~/.aws/credentials)"` 把凭证明文写进 commit,抹掉整个值会让
-   *    替换体里的凭证路径消失(替换体的递归检查只查执行类红线,不查凭证路径)—— review P1。
-   *    单引号里的 `$(…)` 不执行,但这里不区分引号种类:多留几个字面量进扫描面是 fail-closed
-   *    方向,代价只是极少数误报。
+   *  - **含 `$` 展开或命令替换的双引号值**:双引号里的 `$(…)` / 反引号 / `<(…)` **会执行**,
+   *    `$VAR` / `${VAR}` **会展开**,都不是纯数据:
+   *      · `git commit -m "$(cat ~/.aws/credentials)"` 把凭证明文写进 commit,抹掉整个值
+   *        会让替换体里的凭证路径消失(替换体的递归检查只查执行类红线,不查凭证路径);
+   *      · `git commit -m "$GITHUB_TOKEN"` 同理 —— 敏感环境变量名是后面红线的判据,
+   *        抹成 DATA 之后那条正则什么也看不到(review 二轮 P1)。
+   *    单引号里这些不生效,但这里不区分引号种类:多留几个字面量进扫描面是 fail-closed
+   *    方向,代价只是极少数误报(含 `$` 的散文不再被剥离)。
    */
-  const EXECUTABLE_INSIDE_QUOTES = /\$\(|`|<\(/;
+  const EXECUTABLE_INSIDE_QUOTES = /\$|`|<\(/;
   const maskUnlessCredential = (prefix: string, literal: string): string => (
     isSensitiveCredentialPath(literal) || EXECUTABLE_INSIDE_QUOTES.test(literal)
       ? `${prefix}${literal}`
@@ -615,6 +618,11 @@ function stripDataLiterals(command: string): string {
 
 const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
+  // `--show-token` = 把**可复用的凭证**打进 stdout,从而进模型上下文与会话记录。等同于
+  // 读凭证文件,按凭证同级作**确定性必问** —— 只把它挡在 gh 只读白名单外还不够:落灰区
+  // 意味着可能被轻量审阅器静默放行(`gh auth status` 看起来就是一条状态查询)。
+  // 覆盖 `--show-token` / `--show-token=true` 两种形态(review 二轮 P1)。
+  /(?:^|\s)--show-token(?:$|[\s=])/,
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
   // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
   /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
@@ -1298,6 +1306,52 @@ function isPipeExecutor(bin: string): boolean {
  * 保持红线 —— `curl … | python3 -c '…'` 照旧必问。本函数只负责把**本地**数据处理
  * 从红线里摘出来。
  */
+/**
+ * awk 字面脚本里「把数据交出去执行」的出口。命中即按「stdin 会被当命令跑」处理。
+ *
+ * `system(…)` 与 `print … | "cmd"` 只是其中两种;review 指出 `awk '$0 | getline'` 同样
+ * 把每一行当 shell 命令执行(GNU awk 实测有真实文件副作用),而它既没有 `system(` 也没有
+ * 引号紧邻的 `|`。凡是 `getline` / `close(` 参与的形态都可能接管道命令,一并纳入 ——
+ * 代价是 `awk '{getline; print}'` 这类纯读下一行也会落红线(fail-closed 方向,可接受)。
+ * 刻意**不**用「脚本里出现任意 `|`」作判据:那会把 `awk '/foo|bar/'` 这种正则 alternation
+ * 全部误升。
+ */
+const AWK_SCRIPT_EXECUTES_COMMANDS =
+  /\bsystem\s*\(|\bENVIRON\b|\bgetline\b|\bclose\s*\(|\|\s*["']|["']\s*\|/;
+
+/**
+ * 解释器里「会吃掉下一个参数」的选项 —— 判断有没有脚本文件操作数之前必须先跳过它们的值。
+ *
+ * review 实证:`printf 'rm -rf /outside' | bash -O extglob` 里 `extglob` 是 `-O` 的值,
+ * 通用 `positionalOperands` 把它当成脚本文件 → 认定「程序来自文件」→ 这条**stdin 即程序**
+ * 的命令从红线降进灰区。Python 的 `-W`/`-X`、node 的 `-r` 等同理。
+ * 表按解释器族维护;`--opt=value` 形态自带值不需要登记。
+ */
+const INTERPRETER_VALUE_TAKING_OPTIONS: readonly { match: RegExp; opts: ReadonlySet<string> }[] = [
+  // shell:-O/+O shopt 名、-o/+o set 选项名、--rcfile/--init-file 路径。
+  { match: /^(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)$/, opts: new Set(['-O', '+O', '-o', '+o', '--rcfile', '--init-file']) },
+  { match: /^(?:python|pypy)\d*(?:\.\d+)*$/, opts: new Set(['-W', '-X', '--check-hash-based-pycs']) },
+  { match: /^(?:node|nodejs|bun|deno)$/, opts: new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--conditions']) },
+  { match: /^perl$/, opts: new Set(['-I', '-i', '-x']) },
+  { match: /^ruby\d*(?:\.\d+)*$/, opts: new Set(['-I', '-r', '-E', '-C']) },
+];
+
+/** 跳过「吃下一个参数」的选项及其值之后,剩下的真实操作数。 */
+function operandsSkippingInterpreterOptionValues(bin: string, args: readonly string[]): string[] {
+  const entry = INTERPRETER_VALUE_TAKING_OPTIONS.find((e) => e.match.test(bin));
+  if (!entry) return positionalOperands([...args]);
+  const kept: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i] as string;
+    if (entry.opts.has(token)) {
+      i += 1; // 连同它的值一起跳过 —— 那不是脚本文件。
+      continue;
+    }
+    kept.push(token);
+  }
+  return positionalOperands(kept);
+}
+
 function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   const bin = executableName(tokens[0] ?? '');
   if (!isPipeExecutor(bin)) return false;
@@ -1317,7 +1371,7 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // 自己把数据交出去执行(`awk '{system($0)}'` 逐行当 shell 命令跑,`print | "sh"` 同理)。
   // 脚本是静态可见的,直接查这几个出口即可,不必把整个 awk 打成红线。
   if (/^(?:(?:g|m|n|go)?awk)\d*(?:\.\d+)*$/.test(bin)) {
-    return tokens.slice(1).some((t) => /\bsystem\s*\(|\bENVIRON\b|\|\s*["']|["']\s*\|/.test(t));
+    return tokens.slice(1).some((t) => AWK_SCRIPT_EXECUTES_COMMANDS.test(t));
   }
   // 裸 `-` 操作数是各解释器「从 stdin 读**程序**」的通用写法(`powershell -Command -`、
   // `python3 -`、`sh -`)。放在 awk/xargs/parallel 之后:对它们 `-` 是数据占位符。
@@ -1331,9 +1385,11 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   if (inlineCode !== null && inlineCode.trim() !== '-') return false;
   // `python3 -m module`:具名模块,不读 stdin 当程序。
   if (tokens.slice(1).some((t) => t === '-m' || t === '--module')) return false;
-  // 有脚本文件操作数 → 程序来自该文件。裸 `-` 是 stdin 占位符,不算脚本文件
-  // (`curl … | python3 -` 仍必须是红线)。
-  const operands = positionalOperands(tokens.slice(1)).filter((t) => t !== '-');
+  // 有脚本文件操作数 → 程序来自该文件。两点必须先处理干净,否则会把「stdin 即程序」误降:
+  //  - 吃参数的启动选项(`bash -O extglob`、`python -W ignore`)的**值**不是脚本文件;
+  //  - 裸 `-` 是 stdin 占位符,不算脚本文件(`curl … | python3 -` 仍必须是红线)。
+  const operands = operandsSkippingInterpreterOptionValues(bin, tokens.slice(1))
+    .filter((t) => t !== '-');
   if (operands.length > 0) return false;
   return true;
 }
@@ -2210,8 +2266,8 @@ function isSafeReadonlyGh(tokens: string[]): boolean {
     if (t === '--web') return false;
     // `gh auth status --show-token` 会把**可复用的 GitHub 令牌**打进工具输出、进而进模型
     // 上下文 —— 这是凭证读取,必须逐次确认,不能因为 `auth status` 在只读表里就放行
-    // (review P1)。同族的 `--jq`/`--template` 不涉及,单独点名这两个。
-    if (t === '--show-token') return false;
+    // (review P1)。等号形态 `--show-token=true` 是同一个 flag,必须一并拦(review 二轮)。
+    if (/^--show-token(?:$|=)/.test(t)) return false;
     // 短选项可簇写(`-wt`、`-tw`),按**包含**判定 fail-closed:`w` = --web,`t` = --show-token。
     if (/^-[a-zA-Z]*[wt]/.test(t)) return false;
     return true;
