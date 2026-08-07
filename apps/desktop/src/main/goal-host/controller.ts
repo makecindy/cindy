@@ -1678,6 +1678,9 @@ export class GoalController {
       // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
       // 防止旧目标的删除迟到并抹掉新目标。
       const elapsedMs = Math.max(0, this.now() - state.startedAt);
+      // 捕获完成轮次的 generation(reviewer P2:await 期间 pause/clear/新 /goal 可能替换
+      // this.turns,事件若读当前 boundary 会被盖上新生命周期的 generation)。
+      const completedGeneration = this.turns.get(sessionId)?.generation ?? 0;
       await this.trackCompletion(
         turn,
         (async () => {
@@ -1705,15 +1708,21 @@ export class GoalController {
         from: state.status,
         to: 'complete',
         reason: decision.lastReason,
+        generation: completedGeneration,
       });
       if (decision.status !== state.status) {
         this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
           from: state.status,
           to: 'complete',
           reason: decision.lastReason,
+          generation: completedGeneration,
         });
       }
-      this.recordRunEvent('terminal', sessionId, postDecisionCounts, { to: 'complete', reason: decision.lastReason });
+      this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
+        to: 'complete',
+        reason: decision.lastReason,
+        generation: completedGeneration,
+      });
       if (isCurrentTurn()) this.stopSession(sessionId);
       return;
     }
@@ -2031,7 +2040,12 @@ export class GoalController {
 
   private async fireTurn(sessionId: string): Promise<void> {
     const lifecycleBoundary = this.turns.get(sessionId);
-    if (!lifecycleBoundary || lifecycleBoundary.cancelled) return;
+    if (!lifecycleBoundary || lifecycleBoundary.cancelled) {
+      // 生命周期已接管(cancelled / 无 owner):清除恢复标记,防同 session 新目标误消费
+      // (reviewer P2:此 early return 早于 preflight/finally 的清理路径)。
+      this.pendingResumeEvents.delete(sessionId);
+      return;
+    }
     const lifecycleGeneration = lifecycleBoundary.generation;
     const isCurrentLifecycle = (): boolean =>
       this.turns.get(sessionId) === lifecycleBoundary &&
@@ -2043,7 +2057,11 @@ export class GoalController {
       !state ||
       state.status !== 'active' ||
       !isCurrentLifecycle()
-    ) return;
+    ) {
+      // 状态/owner 不符即放弃本次派发:清除恢复标记(与 lifecycle 早退一致)。
+      this.pendingResumeEvents.delete(sessionId);
+      return;
+    }
     // preflight 预算守卫:用户可能把 maxTurns/budgetTokens 调小到已超当前用量(updateGoal 会即时
     // 转 budgetLimited,但调度链上可能仍有在途 fireTurn / continuation timer 指向旧 active 状态)。
     // 超(新)预算就转 budgetLimited 并停,绝不越过新上限再发一轮(reviewer #354)。
