@@ -90,7 +90,19 @@ interface NavigationTrackTarget {
  * round 23). did-navigate fires on the committed main-frame URL, which is
  * exactly the provenance source the reviewer asked for.
  */
+/**
+ * Tabs whose navigation tracking is already installed — makes tracking
+ * idempotent per WebContents (P2, round 26): handleNavigate/handleOpen call
+ * this on EVERY navigate, and without dedup a reused tab would accumulate
+ * duplicate did-navigate/destroyed listeners (EventEmitter
+ * MaxListenersExceededWarning + duplicated unregister logic on every later
+ * navigation).
+ */
+const trackedPreviewWebContents = new WeakSet<NavigationTrackTarget>();
+
 export function trackPreviewTabNavigation(wc: NavigationTrackTarget, tabId: string): void {
+  if (trackedPreviewWebContents.has(wc)) return;
+  trackedPreviewWebContents.add(wc);
   const onDidNavigate = (_event: unknown, url: string) => {
     if (!isPreviewUrl(url)) unregisterRsbPreviewTab(tabId);
   };

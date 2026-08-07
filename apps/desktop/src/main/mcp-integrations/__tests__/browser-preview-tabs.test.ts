@@ -272,4 +272,19 @@ describe('trackPreviewTabNavigation (address-bar provenance, round 23 P0)', () =
     await closePreviewTabs(deps);
     expect(deps.closeRsbTab).toHaveBeenCalledWith('s1', 't1');
   });
+
+  it('installs the navigation listener only ONCE per WebContents (idempotent, P2 round 26)', async () => {
+    // handleNavigate/handleOpen call trackPreviewTabNavigation on EVERY
+    // navigate; a reused tab must not accumulate duplicate did-navigate /
+    // destroyed listeners (EventEmitter MaxListenersExceededWarning + the
+    // unregister logic running N times per later navigation).
+    const wc = fakeWc();
+    const listenerCount = () => wc.ee.listenerCount('did-navigate');
+    trackPreviewTabNavigation(wc, 't1');
+    const afterFirst = listenerCount();
+    trackPreviewTabNavigation(wc, 't1');
+    trackPreviewTabNavigation(wc, 't1');
+    expect(listenerCount()).toBe(afterFirst); // no accumulation
+    expect(afterFirst).toBe(1);
+  });
 });

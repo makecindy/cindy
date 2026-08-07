@@ -222,6 +222,21 @@ describe('local-html-preview-server', () => {
     expect((await get(`${base}/link.html`)).status).toBe(404);
   });
 
+  it('refuses an ENTRY whose realpath target is NOT an HTML file, even when the symlink name ends in .html (P2, round 26)', async () => {
+    // `index.html -> app.js`: the lexical check passes on the link name, but
+    // the REAL entry is a plain JS file — serving it would violate the
+    // .html/.htm-only entry contract (and its dir would become the root).
+    await writeFile(nodePath.join(workingDir, 'dist', 'app.js'), 'export const x = 1;');
+    const linkPath = nodePath.join(workingDir, 'dist', 'index.html');
+    try {
+      await symlink('app.js', linkPath, 'file');
+    } catch {
+      // Platform without symlink permission: nothing to assert.
+      return;
+    }
+    await expect(createUrl('dist/index.html')).rejects.toThrow(/UNSUPPORTED_FILE/);
+  });
+
   it('refuses an ENTRY that resolves into a hidden directory via an ordinary-named symlink (codex-connector P1, round 17)', async () => {
     // `public -> .private` passes the lexical hidden-segment check, but the
     // REAL entry path lands in a hidden directory which would become the

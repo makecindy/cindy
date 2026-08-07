@@ -252,16 +252,24 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
           }
         });
       });
+      // The callbacks must revoke only the origin of THIS start round
+      // (P2, round 26): dispose() → immediate reuse starts a NEW listener
+      // with a NEW origin; the OLD listener's delayed 'close'/'error' event
+      // must not drop the new round's grant (otherwise the fresh grant
+      // disappears and its preview tabs get closed). `roundOrigin` is set
+      // after a successful bind; before that no grant exists to revoke.
+      let roundOrigin: string | null = null;
       srv.on('error', (err) => {
         logger?.error?.(`[local-preview] listener error: ${String(err)}`);
         failed = true;
-        revokeOrigin();
+        if (roundOrigin && origin === roundOrigin) revokeOrigin();
       });
       srv.on('close', () => {
         // Covers normal dispose AND listener crash — never leave the SSRF
         // policy trusting a port nobody is serving (a local process could
-        // otherwise bind the freed port and intercept the token URL).
-        revokeOrigin();
+        // otherwise bind the freed port and intercept the token URL). Only
+        // revoke when this round still owns the grant.
+        if (roundOrigin && origin === roundOrigin) revokeOrigin();
       });
       await new Promise<void>((resolve, reject) => {
         srv.once('error', reject);
@@ -289,6 +297,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       }
       server = srv;
       origin = `http://127.0.0.1:${addr.port}`;
+      roundOrigin = origin; // this round's close/error events revoke only this
       logger?.info?.(`[local-preview] listening at ${origin}`);
       // Grant the SSRF exception ONLY after a successful bind.
       applyPreviewOrigins([origin]);
@@ -587,6 +596,18 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const entryRel = nodePath.relative(rootAnchor, entryReal);
     if (entryRel.split(nodePath.sep).some((s) => s.length > 0 && s.startsWith('.'))) {
       throw new LocalPreviewError('PATH_NOT_ALLOWED', '入口不能位于隐藏目录内');
+    }
+    // Re-check the HTML extension on the REAL entry path (P2, round 26): a
+    // workspace entry named `index.html` that is a symlink to a plain
+    // `.js`/`.json` file passes the lexical check above; after realpath the
+    // entry would be served as non-HTML, violating the .html/.htm-only
+    // contract (and its directory would become the serving root).
+    const realExt = nodePath.extname(entryReal).toLowerCase();
+    if (!ENTRY_EXTENSIONS.has(realExt)) {
+      throw new LocalPreviewError(
+        'UNSUPPORTED_FILE',
+        `入口真实文件不是 HTML 文件(仅支持 .html/.htm, 收到 "${realExt || '(无扩展名)'}")`,
+      );
     }
     return entryReal;
   }
