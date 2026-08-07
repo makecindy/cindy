@@ -113,7 +113,7 @@ interface Exemption {
 }
 
 const EXEMPTIONS: Exemption[] = [
-  // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五种形态
+  // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五处形态
   // (238 直接字面量、290 filled/error 三元、300/310 focus/blur style 赋值、748 内联 style)。
   {
     file: 'src/renderer/components/login/LoginControls.tsx',
