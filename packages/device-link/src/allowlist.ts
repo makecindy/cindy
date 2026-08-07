@@ -222,15 +222,29 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // UI 副作用);回读经 maker:get-new-maker-defaults + NEW_MAKER_DRAFT_CHANGED 回流。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
   'maker:apply-new-maker-worktree-pref',
+  // device-link 新建 worktree 源分支镜像:branch 选择属于被控端 canonical baseRepo,
+  // 控制端先按 repo 拉取、显式选择时写穿，被控端返回/广播带 revision 的权威 snapshot。
+  // GET 只读 main 内存镜像；APPLY 只更新该 repo 的 future-session 偏好，不执行 git/fs。
+  'maker:get-new-maker-worktree-branch-pref',
+  'maker:apply-new-maker-worktree-branch-pref',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
+  // 会话标题旁的 Git / GitHub 上下文(分支、PR 引用与实时状态)必须在被控端查询,
+  // 因为控制端本地没有远端 session 的 DB、工作目录或 gh 登录态。
+  'git-context:get-for-session',
+  'git-context:pr-refs:list',
+  'git-context:pr-status',
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',
+  // Read-only indexed task search for the remote Composer @ palette. Older
+  // controlled clients reject this channel and the controller falls back to
+  // the bounded legacy sessions:list projection.
+  'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
@@ -521,6 +535,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →
   // topics.ts 的 ACCOUNT_CHANNELS 把它并入 `sessions` topic(控制端按设备订阅 sessions)。
   'maker:new-maker-draft:changed',
+  // 被控端 repo-scoped worktree 源分支选择变化；无 sessionId，topics.ts 按账号级
+  // 并入 sessions topic，控制端再按来源 deviceId + payload.baseRepo 精确消费。
+  'maker:new-maker-worktree-branch:changed',
   // 被控端会话「非选中模型」effort/fast 变更:被控端本地改 / 应用控制端写后广播,带 sessionId →
   // 默认路由到 session:<id> topic;控制端打开该远程会话时已订阅,据此刷新显示镜像。
   'maker:session-model-pref:changed',

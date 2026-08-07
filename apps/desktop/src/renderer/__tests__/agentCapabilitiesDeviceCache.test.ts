@@ -201,6 +201,36 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
   });
 
+  it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {
+    const explicitPiCaps: Caps = {
+      ...caps('dev-1:pi'),
+      availableModels: [
+        {
+          id: 'reasoner',
+          displayName: 'Reasoner',
+          contextWindow: 200_000,
+          efforts: ['low', 'high'],
+          defaultEffort: 'high',
+        },
+      ],
+    };
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) =>
+      args[0] === 'pi' ? explicitPiCaps : caps(`dev-1:${String(args[0])}`),
+    );
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('pi', 'dev-1')?.availableModels[0]?.efforts).toEqual([
+      'low',
+      'high',
+    ]);
+  });
+
   it('非法 capabilities 响应进入 error，不得发布 ready 或落缓存', async () => {
     const invoke = vi.fn(async () => null);
     const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
@@ -240,6 +270,37 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       error: 'Invalid agent capabilities response',
     });
     expect(mod.getCachedCapabilities('codex', 'dev-invalid-item')).toBeNull();
+  });
+
+  it.each([
+    { label: '空数组', value: [] },
+    { label: '未知 agent', value: ['pi'] },
+    { label: '重复 agent', value: ['codex', 'codex'] },
+  ])('newSessionDefault 非法（$label）时整份 capabilities fail closed', async ({ value }) => {
+    const invoke = vi.fn(async () => ({
+      ...caps('invalid-default'),
+      availableModels: [
+        {
+          ...caps('invalid-default').availableModels[0],
+          newSessionDefault: value,
+        },
+      ],
+    }));
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid-default', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid-default');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-default')).toBeNull();
   });
 
   it('模型默认 effort 不在可用列表中时不得落缓存', async () => {

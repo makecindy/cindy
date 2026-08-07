@@ -27,7 +27,7 @@
  * 跳过避免双重 load。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -39,6 +39,7 @@ import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
+import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
 import {
   forceKillBrowserTab,
   setForegroundBrowserTab,
@@ -46,6 +47,7 @@ import {
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
+import { useNativePopupSurface } from '../../hooks/useNativePopupSurface';
 import type { TabKindHostContext } from '../../types';
 
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
@@ -93,11 +95,27 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 真实可见性:顶层 active tab 且整个侧栏展开。shellVisible 缺省(旧宿主 /
   // 测试)按可见处理,与 active 的既有缺省语义一致。
   const tabVisible = active === true && shellVisible !== false;
+  const [chromeOverlayOpen, setChromeOverlayOpen] = useState(false);
   // BrowserChrome 的 imperative ref —— Cmd/Ctrl+L 快捷键调它的 focusUrlBar()。
   const chromeRef = useRef<BrowserChromeHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
-  const browser = useBrowserWebview(tabId, sessionId, tabVisible);
+  // hydrateState runs before every TabBody render and intentionally strips
+  // persisted native ids (surfaces do not survive restart). Recover the live
+  // id from the process-local tab↔surface relation registered in the same
+  // optimistic tick as addTab.
+  const nativePopupSurfaceId =
+    findNativePopupSurfaceForTab(tabId)?.surfaceId ?? state.nativePopupSurfaceId;
+  const isNativePopup = Boolean(nativePopupSurfaceId);
+  const webviewBrowser = useBrowserWebview(tabId, sessionId, tabVisible, !isNativePopup);
+  const nativeBrowser = useNativePopupSurface(
+    nativePopupSurfaceId,
+    sessionId,
+    tabId,
+    slotRef,
+    tabVisible && !chromeOverlayOpen,
+  );
+  const browser = isNativePopup ? nativeBrowser : webviewBrowser;
   const lastNavigatedWrapperRef = useRef<HTMLDivElement | null>(null);
   const stateUrlRef = useRef(state.url);
   const browserUrlRef = useRef(browser.url);
@@ -122,12 +140,15 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   });
 
   // 把 pool 的 wrapper 挂进 slot —— useLayoutEffect(在 paint 前移 DOM,避免闪)。
-  // 卸载时把 wrapper 挪回 pool 的 off-screen container 保活 webContents。
-  // 切到不同 tabId 时:wrapper 引用变,effect 重跑,旧 wrapper 自动回 parking 区。
+  // Shell 会常驻挂载所有 TabBody，并用父节点 display:none 隐藏后台 tab；wrapper
+  // 一旦进入自己的 slot 就不要再随 active 切换搬回 parking。Electron 的 webview
+  // 在跨父节点 reparent 时可能重建 guest WebContents，这会销毁 window.open 的
+  // opener browsing context，连带 outlivesOpener:false 的原生 popup 一起销毁。
+  // 只有 TabBody 真正卸载或 wrapper 代际变化时 effect cleanup 才停回 parking。
   useLayoutEffect(() => {
     const slot = slotRef.current;
     const wrapper = browser.wrapper;
-    if (!tabVisible || !slot || !wrapper) return;
+    if (!slot || !wrapper) return;
     slot.appendChild(wrapper);
     return () => {
       // release / LRU 淘汰后的旧 wrapper 已不再属于 Pool，不能因 React effect
@@ -143,7 +164,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         wrapper.remove();
       }
     };
-  }, [browser.wrapper, tabId, tabVisible]);
+  }, [browser.wrapper, tabId]);
 
   // hook 事件 → patchState。注意 onPatchState 引用稳定,这里只在 url / title /
   // favicon 真实改变(由 webview 推上来)时才写回,不会无限循环。
@@ -202,7 +223,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 是空的,必须重新用持久化 URL 驱动一次加载(review P1:淘汰后空壳)。
   useEffect(() => {
     const wrapper = browser.wrapper;
-    if (!tabVisible || !wrapper || lastNavigatedWrapperRef.current === wrapper) return;
+    if (isNativePopup || !tabVisible || !wrapper || lastNavigatedWrapperRef.current === wrapper)
+      return;
     lastNavigatedWrapperRef.current = wrapper;
     const nextUrl = stateUrlRef.current || 'about:blank';
     const currentUrl = browserUrlRef.current;
@@ -210,7 +232,14 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     // about:blank 默认状态下也要 navigate,确保 webview 真的处于 about:blank,
     // 不会停留在 pool 创建时未 setAttribute('src') 的"未初始化"状态。
     navigateRef.current(nextUrl);
-  }, [tabId, browser.wrapper, tabVisible]);
+  }, [tabId, browser.wrapper, isNativePopup, tabVisible]);
+
+  useEffect(() => {
+    if (!isNativePopup || !nativeBrowser.closed) return;
+    void closeTab(sessionId, tabId).catch((err) => {
+      log.warn('close native popup tab after guest window.close failed', err);
+    });
+  }, [isNativePopup, nativeBrowser.closed, sessionId, tabId]);
 
   const reloadRef = useRef(browser.reload);
   const goBackRef = useRef(browser.goBack);
@@ -334,8 +363,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         if (canGoForwardRef.current) goForwardRef.current();
       } else if (command === 'close-tab') {
         // guest 内 ⌘W / Ctrl+W:关掉本 tab,与焦点在 host 侧右侧栏内按 ⌘W 的
-        // 行为对齐(store.closeTab 同路径,BrowserTabBody unmount 时 effect
-        // cleanup 释放 pool entry)。
+        // 行为对齐(store.closeTab 同路径；确认关闭后由 store 释放 pool entry)。
         void closeTab(sessionId, tabId).catch((err) => {
           log.warn('close tab via guest shortcut failed', err);
         });
@@ -345,19 +373,6 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     });
     return off;
   }, [active, sessionId, tabId]);
-
-  // tab 关闭 / 整个 plugin 卸载时,显式释放 pool entry。
-  // 注意:tabId 切换不应释放(切只是 hook 重新 acquire 别的 entry,旧 entry 保活)。
-  // 这里只在 BrowserTabBody 真正 unmount(tab 被关闭)时 cleanup —— 用 effect
-  // 空 deps,React 会在组件 unmount 时跑 cleanup。但如果 tabId 是 prop,React
-  // 不知道"换 tabId == 换 tab",得手动同步当前 tabId 给 cleanup 闭包。
-  const releaseTabIdRef = useRef(tabId);
-  releaseTabIdRef.current = tabId;
-  useEffect(() => {
-    return () => {
-      browserWebviewPool.release(releaseTabIdRef.current);
-    };
-  }, []);
 
   // 截图:main 端对当前 tab 的 webview capturePage → 系统剪贴板。
   // 反馈只用 toast(成功 / 失败各一条),不做视觉动画。
@@ -474,6 +489,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         canOpenInSystemBrowser={canOpenInSystemBrowser}
         onOpenInSystemBrowser={handleOpenInSystemBrowser}
         onCopyLink={handleCopyLink}
+        onOverlayOpenChange={setChromeOverlayOpen}
       />
       {/* webview slot:flex-1 占满剩余空间。pool 的 wrapper 用 100% width/height
           填满,所以这里不需要再设尺寸。

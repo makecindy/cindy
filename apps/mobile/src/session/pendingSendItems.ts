@@ -16,9 +16,16 @@
  * —— outbox 是最晚发出的。
  */
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
-import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import {
+  parseChatQuoteSegments,
+  stripChatQuoteMarkerLines,
+} from '@cindy/maker-shared/chat-quotes';
 import { i18n } from '@/i18n';
 import type { MobileOutboxDisplayItem, MobileOutboxThumb } from '@/session/sessionOutbox';
+import {
+  buildVisibleSentInlineTokens,
+  type SentInlineToken,
+} from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
 
 export type MobilePendingSendPhase =
@@ -48,6 +55,8 @@ export interface MobilePendingSendItem {
   key: string;
   clientId: string;
   text: string;
+  /** Structured quote / pasted-text / Slash atoms used by the optimistic renderer. */
+  sentInlineTokens: SentInlineToken[];
   phase: MobilePendingSendPhase;
   /** 队列序号(从 1 起,用于无障碍播报);不在队列里的条目为 null。 */
   queueIndex: number | null;
@@ -82,6 +91,32 @@ export function pendingSendBubbleText(
   if (kind === 'continue') return i18n.t('message.queue.continueSystemInstruction');
   if (kind === 'generic') return i18n.t('message.queue.systemInstruction');
   return visibleText;
+}
+
+function buildPendingSentInlineTokens(input: {
+  text: string;
+  quotesEncoded?: boolean;
+  pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
+  slashCommandRanges?: Array<{ start: number; end: number }>;
+}): SentInlineToken[] {
+  const quoteSegments = input.quotesEncoded === true && input.text
+    ? parseChatQuoteSegments(input.text)
+    : [];
+  const visibleText = input.quotesEncoded === true
+    ? stripChatQuoteMarkerLines(input.text)
+    : input.text;
+  // 合成 UI 指令(「失败后继续」等)在正式消息流里会被隐藏。即使发送链路意外
+  // 给它带了 Slash range，乐观气泡也不能把裸指令重新泄露出来。
+  if (syntheticTriggerKind(visibleText)) return [];
+  const segments = quoteSegments.length > 0
+    ? quoteSegments
+    : input.text ? [{ kind: 'text' as const, text: input.text }] : [];
+  return buildVisibleSentInlineTokens(
+    input.text,
+    segments,
+    input.pastedTextRanges,
+    input.slashCommandRanges,
+  );
 }
 
 /**
@@ -161,6 +196,12 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       key: pendingSendItemKey(item.clientId),
       clientId: item.clientId,
       text: pendingSendBubbleText(item),
+      sentInlineTokens: buildPendingSentInlineTokens({
+        text: item.text,
+        quotesEncoded: item.chatMessage.quotesEncoded,
+        pastedTextRanges: item.chatMessage.pastedTextRanges,
+        slashCommandRanges: item.chatMessage.slashCommandRanges,
+      }),
       phase,
       queueIndex,
       thumbs: attachments.thumbs,
@@ -196,6 +237,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       key: pendingSendItemKey(item.clientId),
       clientId: item.clientId,
       text: item.quotesEncoded ? stripChatQuoteMarkerLines(item.text) : item.text,
+      sentInlineTokens: buildPendingSentInlineTokens(item),
       phase: item.failed ? 'failed' : uploadsPending ? 'uploading' : 'sending',
       queueIndex: null,
       thumbs: item.thumbnails,

@@ -28,6 +28,7 @@ const CALL_TIMEOUT_MS = 45_000;
 const LIGHTWEIGHT_CALL_TIMEOUT_MS = 10_000;
 const CLI_FALLBACK_TIMEOUT_MS = 8_000;
 const WINDOWS_WIN32_FALLBACK_TIMEOUT_MS = 4_000;
+const AT_MENTION_WINDOW_CACHE_MS = 3_000;
 // 安装/更新超时按「活动」而非总时长计:上游安装脚本要从 GitHub Releases
 // 下载数十 MB 二进制,慢网下总时长不可预算(2026-07-02 实测固定 180s 超时
 // 误杀安装、还把内层脚本的安装锁留成死锁)。活动信号 = stdout/stderr 输出
@@ -117,13 +118,15 @@ const CLI_FALLBACK_TOOL_NAMES = new Set<ComputerMcpToolName>([
   'get_screen_size',
   'get_cursor_position',
 ]);
-const TAPTAP_CURSOR_STYLE = {
-  gradient_colors: ['#00D9C5', '#000050'],
-  bloom_color: '#00D9C5',
+// The out-of-process driver cannot consume renderer theme tokens, so keep the
+// concrete Cindy brand palette here in sync with DESIGN.md §15.1 / §15.7.
+const CINDY_CURSOR_STYLE = {
+  gradient_colors: ['#DF0C27', '#A61629'],
+  bloom_color: '#DF0C27',
 } as const;
-const TAPTAP_CURSOR_MOTION = {
+const CINDY_CURSOR_MOTION = {
   cursor_icon: 'arrow',
-  cursor_color: '#00D9C5',
+  cursor_color: '#DF0C27',
   cursor_label: BRAND_NAME,
   cursor_size: 30,
   cursor_opacity: 0.96,
@@ -154,6 +157,8 @@ export function getComputerDriverAppBundlePath(): string | null {
 
 const WINDOWS_WIN32_WINDOW_SNAPSHOT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 Add-Type -TypeDefinition @'
 using System;
 using System.Text;
@@ -275,8 +280,12 @@ interface CuaMcpSessionEntry {
   transport: StdioClientTransport;
   ready: Promise<void>;
   driverSessionId: string;
-  styled: boolean;
+  cursorSetup: {
+    motion: CursorSetupState;
+    style: CursorSetupState;
+  };
 }
+type CursorSetupState = 'pending' | 'applied' | 'unavailable';
 
 interface ProcessSnapshotEntry {
   pid: number;
@@ -308,6 +317,8 @@ let cachedProcessSnapshot: {
   expiresAt: number;
   result: ProcessSnapshotResult;
 } | null = null;
+
+let cachedAtMentionWindows: { expiresAt: number; result: unknown } | null = null;
 
 function clearProcessSnapshotCache(): void {
   cachedProcessSnapshot = null;
@@ -1762,6 +1773,66 @@ async function buildWindowsWin32ListAppsFallback(): Promise<unknown> {
   };
 }
 
+/**
+ * Cheap, read-only window catalog for the Composer's `@` palette.
+ *
+ * Windows uses the bounded Win32 snapshot directly instead of starting a CUA
+ * MCP session. On macOS a cold app cache first refreshes permission state via
+ * the driver's strictly read-only status command; unsupported/older drivers
+ * fail closed, so opening the palette can never become a permission prompt.
+ * Results are briefly cached because the palette rescans while the user types.
+ */
+export async function listComputerWindowsForAtMention(): Promise<unknown> {
+  const now = Date.now();
+  if (cachedAtMentionWindows && cachedAtMentionWindows.expiresAt > now) {
+    return cachedAtMentionWindows.result;
+  }
+
+  let result: unknown;
+  if (process.platform === 'win32') {
+    result = await buildWindowsWin32ListWindowsFallback({});
+  } else {
+    if (process.platform === 'darwin' && cachedPermissionProbe === null) {
+      // App restarts clear the in-memory permission cache even when TCC still
+      // grants Accessibility. Bootstrap it once through the read-only status
+      // command; older drivers fail closed without probing or prompting.
+      await getComputerDriverStatus({
+        passivePermissionProbeOnly: true,
+      });
+    }
+    if (
+      process.platform === 'darwin'
+      && cachedPermissionProbe?.state.accessibility !== 'granted'
+    ) {
+      result = { ok: true, windows: [] };
+    } else {
+      const response = await runDriver(
+        ['call', 'list_windows'],
+        WINDOWS_WIN32_FALLBACK_TIMEOUT_MS,
+        { stdin: '{}\n' },
+      );
+      if (response.exitCode !== 0) {
+        throw new ComputerDriverError(
+          response.stderr.trim()
+          || response.stdout.trim()
+          || `cua-driver call list_windows exited ${response.exitCode}`,
+        );
+      }
+      result = parseJsonOutput(response.stdout);
+    }
+  }
+
+  cachedAtMentionWindows = {
+    expiresAt: Date.now() + AT_MENTION_WINDOW_CACHE_MS,
+    result,
+  };
+  return result;
+}
+
+export function resetAtMentionWindowCacheForTests(): void {
+  cachedAtMentionWindows = null;
+}
+
 function normalizeToolArgsForDriver(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
@@ -2004,7 +2075,10 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
     client,
     transport,
     driverSessionId: getDriverSessionId(sessionId),
-    styled: false,
+    cursorSetup: {
+      motion: 'pending',
+      style: 'pending',
+    },
     ready: withTimeout(
       client.connect(transport),
       MCP_STARTUP_TIMEOUT_MS,
@@ -2152,28 +2226,33 @@ async function initializeDefaultCursorStyle(
   session: string,
 ): Promise<void> {
   if (!CURSOR_STYLED_TOOL_NAMES.has(name)) return;
-  if (entry.styled) return;
 
-  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [
+  const calls: Array<{
+    stateKey: keyof CuaMcpSessionEntry['cursorSetup'];
+    tool: string;
+    args: Record<string, unknown>;
+  }> = [
     {
+      stateKey: 'motion',
       tool: 'set_agent_cursor_motion',
       args: {
         cursor_id: session,
-        ...TAPTAP_CURSOR_MOTION,
+        ...CINDY_CURSOR_MOTION,
       },
     },
     {
+      stateKey: 'style',
       tool: 'set_agent_cursor_style',
       args: {
         cursor_id: session,
-        gradient_colors: TAPTAP_CURSOR_STYLE.gradient_colors,
-        bloom_color: TAPTAP_CURSOR_STYLE.bloom_color,
+        gradient_colors: CINDY_CURSOR_STYLE.gradient_colors,
+        bloom_color: CINDY_CURSOR_STYLE.bloom_color,
       },
     },
   ];
 
-  let styled = true;
   for (const call of calls) {
+    if (entry.cursorSetup[call.stateKey] !== 'pending') continue;
     try {
       await callCuaMcpTool(
         entry,
@@ -2181,17 +2260,36 @@ async function initializeDefaultCursorStyle(
         call.args,
         STATUS_TIMEOUT_MS,
       );
+      entry.cursorSetup[call.stateKey] = 'applied';
     } catch (err) {
-      styled = false;
+      const message = err instanceof Error ? err.message : String(err);
+      if (isCursorSetupUnavailableError(message)) {
+        entry.cursorSetup[call.stateKey] = 'unavailable';
+        logger.info('cua-driver cursor setup unavailable; continuing without it', {
+          tool: name,
+          cursorTool: call.tool,
+          session,
+          error: message,
+        });
+        continue;
+      }
       logger.warn('failed to apply default cua-driver cursor style', {
         tool: name,
         cursorTool: call.tool,
         session,
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
       });
     }
   }
-  entry.styled = styled;
+}
+
+/**
+ * Driver capability/policy failures cannot recover while the same MCP process
+ * remains alive. Remember them on the session entry so an optional cursor
+ * decoration never adds a rejected tool call to every real computer action.
+ */
+function isCursorSetupUnavailableError(message: string): boolean {
+  return /has no reviewed risk classification|method not found|unknown tool|tool .+ not found/i.test(message);
 }
 
 function readBooleanGrant(value: unknown): ComputerDriverPermissionGrant {

@@ -39,21 +39,21 @@ vi.mock('@/lib/logger', () => ({
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
   }),
 }));
 
-const isRemoteSession = vi.fn((_sessionId: string) => false);
-vi.mock('@/lib/makerTransport', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  isRemoteSession: (id: string) => isRemoteSession(id),
-}));
-
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as sessionService from '@/lib/sessionService';
+import type { Session } from '@/lib/ccAgent.types';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import {
+  __resetStickySessionOriginForTest,
+  getStickySessionDeviceId,
+} from '@/features/device-link/stickySessionOrigin';
 
 const SESSION_ID = 'auto-name-session';
 
@@ -65,10 +65,11 @@ const flushPromises = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  isRemoteSession.mockReturnValue(false);
   autoTitle.mockResolvedValue({ applied: true, done: true });
   makerChatStore.__resetAutoNameStateForTest();
   remoteProjectsStore.clear();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
+  __resetStickySessionOriginForTest();
   remoteProjectsStore.__resetPendingTitlePreviewForTest();
   const w = globalThis as unknown as { window: Record<string, unknown> };
   w.window = { electronAPI: { maker: { autoTitle } } };
@@ -267,12 +268,18 @@ describe('makerChatStore auto-name — 本机会话', () => {
     // 早的那次失败若按 sessionId 直接撤回,会把仍在飞的那次的预览一起revoke,标题白闪
     // 一次「未命名任务」。
     let failFirst: (v: { applied: boolean; done: boolean }) => void = () => {};
-    autoTitle.mockImplementationOnce(() => new Promise((resolve) => {
-      failFirst = resolve;
-    }));
-    autoTitle.mockImplementationOnce(() => new Promise(() => {
-      /* 第二次一直在飞 */
-    }));
+    autoTitle.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          failFirst = resolve;
+        }),
+    );
+    autoTitle.mockImplementationOnce(
+      () =>
+        new Promise(() => {
+          /* 第二次一直在飞 */
+        }),
+    );
 
     makerChatStore.autoNameSession(SESSION_ID, '第一句', 'claude-code');
     makerChatStore.autoNameSession(SESSION_ID, '第二句', 'claude-code');
@@ -348,7 +355,17 @@ describe('makerChatStore auto-name — 本机会话', () => {
       'medium',
       'default',
       '/tmp/wd',
-      [{ id: 'f1', name: '设计稿-v3.png', path: '/tmp/设计稿-v3.png', ext: '.png', size: 1, category: 'image', mimeType: 'image/png' }],
+      [
+        {
+          id: 'f1',
+          name: '设计稿-v3.png',
+          path: '/tmp/设计稿-v3.png',
+          ext: '.png',
+          size: 1,
+          category: 'image',
+          mimeType: 'image/png',
+        },
+      ],
     );
     await flushPromises();
 
@@ -441,7 +458,8 @@ describe('makerChatStore auto-name — 本机会话', () => {
 
 describe('makerChatStore auto-name — device-link 远程会话', () => {
   beforeEach(() => {
-    isRemoteSession.mockReturnValue(true);
+    remoteProjectsStore.setDeviceSessions('dev-auto', 'Mac', [{ id: SESSION_ID } as Session]);
+    expect(getStickySessionDeviceId(SESSION_ID)).toBe('dev-auto');
   });
 
   it('不发起名 IPC(权威标题由被控端写),只登记投影层预览', async () => {
@@ -476,6 +494,18 @@ describe('makerChatStore auto-name — device-link 远程会话', () => {
     expect(setPreview).toHaveBeenCalledWith(SESSION_ID, '这个报错怎么修', true);
     expect(autoTitle).not.toHaveBeenCalled();
     expect(sessionService.get).not.toHaveBeenCalled();
+    setPreview.mockRestore();
+  });
+
+  it('mirror 清空后仍沿用最后已知设备,不回退本机起名 IPC', async () => {
+    remoteProjectsStore.clear();
+    const setPreview = vi.spyOn(remoteProjectsStore, 'setPendingTitlePreview');
+
+    makerChatStore.autoNameSession(SESSION_ID, '断线期间的第一句话', 'codex');
+    await flushPromises();
+
+    expect(setPreview).toHaveBeenCalledWith(SESSION_ID, '断线期间的第一句话', true);
+    expect(autoTitle).not.toHaveBeenCalled();
     setPreview.mockRestore();
   });
 });

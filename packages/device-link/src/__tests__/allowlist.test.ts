@@ -33,11 +33,22 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
       'local-db:sessions:list',
+      'local-db:conversations:search',
       DL_HISTORY_MESSAGES_CHANNEL,
       'local-db:messages:list',
       'local-db:messages:around',
       'local-db:messages:around-client-id',
       'maker:message:delete',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
+    }
+  });
+
+  it('允许远程会话读取被控端 Git / GitHub 上下文', () => {
+    for (const ch of [
+      'git-context:get-for-session',
+      'git-context:pr-refs:list',
+      'git-context:pr-status',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
@@ -71,6 +82,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:orca-workflows:list-workers-by-leads')).toBe(false);
   });
 
   it('放行 workflow 逐 agent 进度树只读(记录文件真相在被控端 HOME,控制端本机读必落空)', () => {
@@ -95,10 +107,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行 device-link 远程草稿镜像只读读(控制端 seed 被控端当前 New Maker 草稿)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-new-maker-defaults')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-new-maker-worktree-branch-pref')).toBe(true);
   });
 
   it('放行 device-link 模型列表 effort/fast 写穿(草稿 + 会话非选中,控制端→被控端)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:apply-new-maker-draft-pref')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:apply-new-maker-worktree-branch-pref')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:set-session-model-pref')).toBe(true);
   });
 
@@ -320,6 +334,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
 
   it('转发 device-link 模型列表变更(草稿全量 + 会话非选中)', () => {
     expect(PUSH_FORWARD_ALLOWLIST.has('maker:new-maker-draft:changed')).toBe(true);
+    expect(PUSH_FORWARD_ALLOWLIST.has('maker:new-maker-worktree-branch:changed')).toBe(true);
     expect(PUSH_FORWARD_ALLOWLIST.has('maker:session-model-pref:changed')).toBe(true);
   });
 

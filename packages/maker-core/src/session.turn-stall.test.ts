@@ -304,6 +304,10 @@ describe('Session turn stall watchdog', () => {
       await session.send('go');
       await vi.advanceTimersByTimeAsync(STALL_MS + 1);
       expect(stub.abort).toHaveBeenCalledTimes(1);
+      // 正常 provider 会在 interrupt 后补 terminal done；先排空它，才能单独验证
+      // “abort 没真正让 handle idle”这条 10s recovery。
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' });
+      await vi.advanceTimersByTimeAsync(0);
       // 宽限期内不急着关:interrupt 成功后 turn 的终态事件要走一圈才让 isTurnRunning 翻假
       expect(session.getStatus()).not.toBe('closed');
 
@@ -328,6 +332,8 @@ describe('Session turn stall watchdog', () => {
       await session.send('go');
       await vi.advanceTimersByTimeAsync(STALL_MS + 1);
       expect(stub.abort).toHaveBeenCalledTimes(1);
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' });
+      await vi.advanceTimersByTimeAsync(0);
       expect(session.getStatus()).not.toBe('closed');
 
       await vi.advanceTimersByTimeAsync(STALL_ABORT_RECOVERY_GRACE_MS + 1);
@@ -351,13 +357,70 @@ describe('Session turn stall watchdog', () => {
       await vi.advanceTimersByTimeAsync(STALL_MS + 1);
       expect(stub.abort).toHaveBeenCalledTimes(1);
 
-      // 宽限没走完就起了新 turn(abort 已生效,isTurnRunning 已翻假,send 不会被拒)
+      // 旧 turn 的 terminal tail 先排空；之后宽限没走完就起新 turn。
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' });
+      await vi.advanceTimersByTimeAsync(0);
       await session.send('next');
       await vi.advanceTimersByTimeAsync(STALL_ABORT_RECOVERY_GRACE_MS + 1);
 
       // 新 turn 还在跑 —— 绝不能因为"有 turn 在跑"就把会话关掉
       expect(session.getStatus()).not.toBe('closed');
       expect(session.isTurnRunning()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('超时 turn 的迟到 done 不冒领宽限期内新 turn 的 attempt token', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((event) => seen.push({ ...event }));
+
+      await session.send('first', { turnAttemptToken: 1 });
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+
+      await expect(session.send('second', { turnAttemptToken: 2 })).rejects.toMatchObject({
+        code: 'SESSION_RUNNING',
+      });
+      stub.pushEvent({ type: 'done', data: { reason: 'first-tail' }, source: 'claude-code' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await session.send('second', { turnAttemptToken: 2 });
+
+      stub.endTurn();
+      stub.pushEvent({
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'claude-code',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const terminalEvents = seen.filter((event) => event.type === 'error' || event.type === 'done');
+      expect(terminalEvents.map((event) => event.type)).toEqual(['error', 'done', 'error']);
+      expect(terminalEvents.map((event) => event.turnAttemptToken)).toEqual([1, undefined, 2]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('abort 已 idle 但没有 terminal tail 时关闭旧 Session 供 Maker 重建', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      session.onEvent(() => {});
+
+      await session.send('go');
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+      expect(session.getStatus()).not.toBe('closed');
+
+      await vi.advanceTimersByTimeAsync(300);
+      expect(session.getStatus()).toBe('closed');
     } finally {
       vi.useRealTimers();
     }
@@ -372,6 +435,8 @@ describe('Session turn stall watchdog', () => {
 
       await session.send('go');
       await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' });
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(STALL_ABORT_RECOVERY_GRACE_MS + 1);
 
       expect(stub.abort).toHaveBeenCalledTimes(1);

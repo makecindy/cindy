@@ -8,8 +8,9 @@
  * **自定义供应商**:用户在本机配置的 user provider(见 custom-provider-store)经
  * `buildUserProvider` 展开成标准 `Provider` 后由 `setCustomProviders` 注入,**追加在内置之后**。
  * `getActiveCatalog()` 返回 base + custom 的合并结果——下游(路由 / 选择器 / listProviders)
- * 不区分内置 / 自定义,统一消费。custom 追加在后:`deriveAvailableModels` first-wins 去重
- * 保证与内置同名 id 时内置元数据胜出,不冲突。
+ * 不区分内置 / 自定义,统一消费。custom 追加在后:`deriveAvailableModels` 保持内置同名 id
+ * 的首见展示元数据；Pi 的扁平 capability 另对涉及 custom 的 effort 做交集，避免旧消费者
+ * 在丢失 provider provenance 后展示某条实际路由不支持的档位。
  *
  * 所有消费方统一读 `getActiveCatalog()`,而非各自 import `BUNDLED_CATALOG`:
  *   - maker availableModels 派生(maker-host/index.ts)
@@ -111,6 +112,11 @@ export interface XdGatewayModelInfo {
   supportsFastMode?: boolean;
   /** 默认可见性;缺省按 true。 */
   defaultEnabled?: boolean;
+  /**
+   * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。仅 wire agent;
+   * pi 由 xdGatewayTargetAgents 投影进 pi tab 后,按 'claude-code' 口径判定默认。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
   modalities?: { input: string[]; output: string[] };
@@ -683,6 +689,9 @@ function computeMerged(): Catalog {
           ...(gm.description !== undefined ? { description: gm.description } : {}),
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
+          ...(gm.newSessionDefault !== undefined
+            ? { newSessionDefault: gm.newSessionDefault }
+            : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),

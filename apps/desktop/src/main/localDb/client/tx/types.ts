@@ -320,55 +320,94 @@ export interface SessionsSetStatusResultItem {
   status: 'active' | 'archived';
 }
 
+/** session.importShare 的单条 session 行(lead 与协同 Worker 共用形状)。 */
+export interface SessionImportShareSessionRow {
+  id: string;
+  title: string;
+  workingDir: string | null;
+  workspaceKind: string;
+  /** 导入时勾选"在 worktree 中创建"产出的 worktree 路径快照;null = 未用 worktree。 */
+  worktreePath: string | null;
+  model: string;
+  effort: string;
+  permissionMode: string;
+  /** 来源(供应商)显式选择;null = 跟随该 agent 默认路由。与 sessions.provider_id 同语义。 */
+  providerId: string | null;
+  status: string;
+  sdkSessionId: string | null;
+  totalTokenUsage: number;
+  totalCostUsd: number;
+  contextTokens: number;
+  contextWindow: number;
+  fastMode: boolean;
+  planModeEnabled: boolean;
+  agentKind: string;
+  /** Orca 角色标记:协同包导入时 lead='lead'、Worker='worker';普通导入缺省(NULL)。 */
+  orcaRole?: 'lead' | 'worker' | null;
+  source: string;
+  extraDirs: string;
+  codexHistoryHasProductPrompt: boolean | null;
+  /** /clear 边界(unix ms):不携带会让导入端把 pre-clear 历史重新显示出来。 */
+  clearedAt: number | null;
+  userSendAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SessionImportShareMessageRow {
+  id: string;
+  clientId: string;
+  role: string;
+  content: string;
+  toolUseId: string | null;
+  agentMeta: string | null;
+  /** 产出该行的 agent；旧分享包缺失时导入为 NULL。 */
+  agentKind?: string | null;
+  createdAt: number;
+  rewindAt: number | null;
+}
+
 /**
  * 会话分享(.xdtshare)导入落库:单事务插入 session 行 + 全量 messages。
  * session id / message id 均由 main 侧预生成(message id 重新生成防 PK 撞库);
  * content / agentMeta 传已完成媒体 URL 重写的 JSON 字符串,事务体不再加工。
  * 任一行非法或 PK/UNIQUE 冲突 → 整体回滚,零写入。
+ * 协同包经可选 orca 段把 Worker 会话 + orca_teams/orca_workers 关系图放进
+ * 同一事务:任一子会话失败整包回滚,不留半截协同。
  */
 export interface SessionImportShareArgs {
-  session: {
-    id: string;
-    title: string;
-    workingDir: string | null;
-    workspaceKind: string;
-    /** 导入时勾选"在 worktree 中创建"产出的 worktree 路径快照;null = 未用 worktree。 */
-    worktreePath: string | null;
-    model: string;
-    effort: string;
-    permissionMode: string;
-    /** 来源(供应商)显式选择;null = 跟随该 agent 默认路由。与 sessions.provider_id 同语义。 */
-    providerId: string | null;
-    status: string;
-    sdkSessionId: string | null;
-    totalTokenUsage: number;
-    totalCostUsd: number;
-    contextTokens: number;
-    contextWindow: number;
-    fastMode: boolean;
-    planModeEnabled: boolean;
-    agentKind: string;
-    source: string;
-    extraDirs: string;
-    codexHistoryHasProductPrompt: boolean | null;
-    /** /clear 边界(unix ms):不携带会让导入端把 pre-clear 历史重新显示出来。 */
-    clearedAt: number | null;
-    userSendAt: number | null;
-    createdAt: number;
-    updatedAt: number;
+  session: SessionImportShareSessionRow;
+  messages: SessionImportShareMessageRow[];
+  /**
+   * 覆盖导入命中的完整旧会话图（冲突会话 + 若其为 Orca lead，则含 team Workers）。
+   * 与新会话/消息/Orca 关系在同一事务先标 deleted；事务失败时旧状态自动回滚。
+   */
+  replaceSessions?: Array<{ id: string; status: 'active' | 'archived' }>;
+  orca?: {
+    team: {
+      id: string;
+      leadSessionId: string;
+      status: string;
+      completedAt: number | null;
+      createdAt: number;
+      updatedAt: number;
+    };
+    workers: Array<{
+      record: {
+        id: string;
+        teamId: string;
+        sessionId: string;
+        status: string;
+        label: string | null;
+        role: string;
+        focused: boolean;
+        createdAt: number;
+        updatedAt: number;
+      };
+      session: SessionImportShareSessionRow;
+      messages: SessionImportShareMessageRow[];
+    }>;
   };
-  messages: Array<{
-    id: string;
-    clientId: string;
-    role: string;
-    content: string;
-    toolUseId: string | null;
-    agentMeta: string | null;
-    /** 产出该行的 agent；旧分享包缺失时导入为 NULL。 */
-    agentKind?: string | null;
-    createdAt: number;
-    rewindAt: number | null;
-  }>;
 }
 
 /**

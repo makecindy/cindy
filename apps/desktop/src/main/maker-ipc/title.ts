@@ -21,7 +21,6 @@ import { eq } from 'drizzle-orm';
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
 
-import type { SupportedLocale } from '../../shared/locale.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
@@ -34,9 +33,10 @@ import {
 } from '../localDb/latestMessageText.js';
 import { createLogger } from '../logger.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { TITLE_LANGUAGE_BY_LOCALE, buildRegenerateTitlePrompt } from './title-prompt.js';
+import { buildAutoTitlePrompt, buildRegenerateTitlePrompt } from './title-prompt.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import {
@@ -47,14 +47,8 @@ import {
 
 const log = createLogger('maker-ipc/title');
 
-const TITLE_PROMPT_TEMPLATE = (msg: string, locale: SupportedLocale) =>
-  [
-    'Generate a concise title for the user message below.',
-    `Write the title in ${TITLE_LANGUAGE_BY_LOCALE[locale]}.`,
-    'Use at most 20 characters. Output only the title, without quotation marks or ending punctuation.',
-    '',
-    msg.slice(0, 200),
-  ].join('\n');
+/** 自动起名素材截断长度(UTF-16 code unit,`String.slice` 口径;仅约束 prompt 素材上限,不是用户可见的"字数")。 */
+const AUTO_TITLE_MESSAGE_SLICE = 200;
 
 /** regenerate 素材窗口:最近 N 条非空 user/assistant 消息(不含被过滤的工具行)。 */
 const REGENERATE_RECENT_WINDOW = 8;
@@ -113,7 +107,10 @@ export async function generateMakerSessionTitle(
     {
       sessionId: sessionId ?? '',
       agentKind,
-      prompt: TITLE_PROMPT_TEMPLATE(trimmed, getResolvedMainLocale()),
+      prompt: buildAutoTitlePrompt(
+        trimmed.slice(0, AUTO_TITLE_MESSAGE_SLICE),
+        getResolvedMainLocale(),
+      ),
     },
     {
       readSessionProviderId: readSessionProviderIdFromDb,
@@ -219,6 +216,67 @@ const AUTO_TITLE_TEXT_MAX = 2000;
 /** sessionId 长度上限(UUID / cuid 都远小于此)。 */
 const SESSION_ID_MAX = 128;
 
+const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const satisfies readonly AgentKind[];
+
+interface GenerateTitleRequest {
+  message: string;
+  agentKind: AgentKind;
+  sessionId?: string;
+}
+
+interface RegenerateTitleRequest {
+  sessionId: string;
+}
+
+function parseSessionId(raw: unknown, optional = false): string | undefined {
+  if (optional && raw === undefined) return undefined;
+  if (typeof raw !== 'string' || !raw || raw.length > SESSION_ID_MAX) {
+    throwIpcError('INVALID_PARAMS', 'invalid sessionId');
+  }
+  return raw;
+}
+
+function parseAgentKind(raw: unknown): AgentKind {
+  if (!TITLE_AGENT_KINDS.includes(raw as AgentKind)) {
+    throwIpcError('INVALID_PARAMS', 'invalid agentKind');
+  }
+  return raw as AgentKind;
+}
+
+/**
+ * `generate-title` / `regenerate-title` 可经 device-link allowlist 从受控设备调用。
+ * 远程来源只信主进程 AsyncLocalStorage 上下文,不信 payload 自报；本机调用仍要求真实
+ * Electron 顶层 Renderer sender。
+ */
+function assertTitleIpcCaller(event: Electron.IpcMainInvokeEvent): void {
+  if (!isDeviceLinkInvoke()) {
+    assertTrustedAppRendererEvent(event);
+  }
+}
+
+function parseGenerateTitleRequest(raw: unknown): GenerateTitleRequest {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throwIpcError('INVALID_PARAMS', 'generate-title request required');
+  }
+  const { message, agentKind, sessionId } = raw as Record<string, unknown>;
+  if (typeof message !== 'string') {
+    throwIpcError('INVALID_PARAMS', 'invalid message');
+  }
+  const parsedSessionId = parseSessionId(sessionId, true);
+  return {
+    message: message.slice(0, AUTO_TITLE_TEXT_MAX),
+    agentKind: parseAgentKind(agentKind),
+    ...(parsedSessionId === undefined ? {} : { sessionId: parsedSessionId }),
+  };
+}
+
+function parseRegenerateTitleRequest(raw: unknown): RegenerateTitleRequest {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throwIpcError('INVALID_PARAMS', 'regenerate-title request required');
+  }
+  return { sessionId: parseSessionId((raw as Record<string, unknown>).sessionId)! };
+}
+
 /**
  * 运行期校验 `maker:auto-title` 的 payload。结构、长度、枚举值不合法一律按
  * INVALID_PARAMS 拒绝,不让畸形值进到会改写标题 / 调用付费模型的副作用路径。
@@ -228,23 +286,17 @@ function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
     throwIpcError('INVALID_PARAMS', 'auto-title request required');
   }
   const { sessionId, text, agentKind, isUserText } = raw as Record<string, unknown>;
-  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > SESSION_ID_MAX) {
-    throwIpcError('INVALID_PARAMS', 'invalid sessionId');
-  }
   if (typeof text !== 'string') {
     throwIpcError('INVALID_PARAMS', 'invalid text');
-  }
-  if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
-    throwIpcError('INVALID_PARAMS', 'invalid agentKind');
   }
   if (isUserText !== undefined && typeof isUserText !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'invalid isUserText');
   }
   return {
-    sessionId,
+    sessionId: parseSessionId(sessionId)!,
     // 截断而非拒绝:超长正文是正常输入,标题只需要开头一小段。
     text: (text as string).slice(0, AUTO_TITLE_TEXT_MAX),
-    agentKind,
+    agentKind: parseAgentKind(agentKind),
     ...(isUserText === undefined ? {} : { isUserText }),
   };
 }
@@ -256,20 +308,17 @@ export interface RegisterMakerTitleIpcOptions {
 
 export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}): void {
   // 这两条通道读供应商快照时会放行本机绑定自愈(写绑定文件、并为 Anthropic 起一次带凭证的
-  // 清单发现),与下面的 AUTO_TITLE 同属特权入口,守卫口径也应当一致 —— 原先只有 AUTO_TITLE
-  // 做了 sender 断言(PR #548 review)。两者都不在 device-link allowlist 里,可以直接用会抛的
-  // 守卫。
+  // 清单发现),因此本机调用必须守住真实 Renderer sender。它们同时是 device-link allowlist
+  // 的既有远程能力:远程身份由 dispatch 的开关 / 撤销 / allowlist 三道 gate + invoke async
+  // context 证明；合成 event 没有 Electron sender,不能再重复套本机 sender 判据。
   ipcMain.handle(
     MAKER_INVOKE.GENERATE_TITLE,
     async (
       event: Electron.IpcMainInvokeEvent,
-      {
-        message,
-        agentKind,
-        sessionId,
-      }: { message: string; agentKind: AgentKind; sessionId?: string },
+      rawRequest: unknown,
     ): Promise<{ title: string | null }> => {
-      assertTrustedAppRendererEvent(event);
+      assertTitleIpcCaller(event);
+      const { message, agentKind, sessionId } = parseGenerateTitleRequest(rawRequest);
       return { title: await generateMakerSessionTitle(message, agentKind, sessionId) };
     },
   );
@@ -277,9 +326,10 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
     MAKER_INVOKE.REGENERATE_TITLE,
     async (
       event: Electron.IpcMainInvokeEvent,
-      { sessionId }: { sessionId: string },
+      rawRequest: unknown,
     ): Promise<{ title: string | null }> => {
-      assertTrustedAppRendererEvent(event);
+      assertTitleIpcCaller(event);
+      const { sessionId } = parseRegenerateTitleRequest(rawRequest);
       // Snapshot on both sides of the durable FIFO. The pre-drain value preserves
       // a pending terminal boundary that settles while we wait; the post-drain
       // value catches a new turn that starts during the same window. OR keeps
@@ -290,8 +340,7 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
       let pendingCompletionObserved = pendingCompletionBeforeDrain;
       const latestTurnIsPendingCompletion = (): boolean => {
         if (!pendingCompletionObserved) {
-          pendingCompletionObserved =
-            options.isSessionTurnPendingCompletion?.(sessionId) === true;
+          pendingCompletionObserved = options.isSessionTurnPendingCompletion?.(sessionId) === true;
         }
         return pendingCompletionObserved;
       };

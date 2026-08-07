@@ -100,10 +100,14 @@ export async function attachGhostMediaToSession(
 /** 把一条附件合入会话草稿(托盘可见;其余草稿字段原样保留)。 */
 function appendDraftAttachment(sessionId: string, attached: AttachedFile): void {
   const existing = getDraft(sessionId);
-  saveDraft(sessionId, {
-    text: existing?.text ?? null,
-    attachments: [...(existing?.attachments ?? []), attached],
-    quotes: existing?.quotes ?? [],
-    browserComments: existing?.browserComments ?? [],
-  });
+  saveDraft(
+    sessionId,
+    {
+      text: existing?.text ?? null,
+      attachments: [...(existing?.attachments ?? []), attached],
+      quotes: existing?.quotes ?? [],
+      browserComments: existing?.browserComments ?? [],
+    },
+    { preserveRemoteOptimisticRecovery: true },
+  );
 }

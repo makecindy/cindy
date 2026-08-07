@@ -21,8 +21,10 @@ import {
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
+  HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
   HOOK_FEATURE_SLACK_TOOLS,
+  HOOK_FEATURE_TURN_DELIVERY,
   makeBindState,
   makeBindUpdate,
   makePing,
@@ -33,6 +35,7 @@ import {
   makeProviderPrefsState,
   makeQueryRequest,
   makeTaskDispatch,
+  makeTurnDelivery,
   makeToolResponse,
   makeWelcome,
   parseHookMessage,
@@ -68,6 +71,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     bindingsCache: initial.bindingsCache ?? [],
     lifecycleAnnouncementOverride: initial.lifecycleAnnouncementOverride ?? null,
     telegramBindingCache: initial.telegramBindingCache ?? null,
+    telegramDefaultWorkspace: initial.telegramDefaultWorkspace ?? null,
     xBindingCache: initial.xBindingCache ?? null,
     xDefaultWorkspace: initial.xDefaultWorkspace ?? null,
   };
@@ -115,8 +119,11 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
           : { ...state, telegramBindingCache: entry ? { ...entry } : null };
       return state;
     },
-    setXDefaultWorkspace(alias) {
-      state = { ...state, xDefaultWorkspace: alias };
+    setProviderDefaultWorkspace(provider: 'telegram' | 'x', alias: string | null) {
+      state =
+        provider === 'x'
+          ? { ...state, xDefaultWorkspace: alias }
+          : { ...state, telegramDefaultWorkspace: alias };
       return state;
     },
   };
@@ -171,6 +178,63 @@ afterEach(() => {
 });
 
 describe('hook-control runtime capability gate', () => {
+  it('X hello 声明 delivery ACK，且只在 welcome 双向协商后把回执路由给 dispatcher', () => {
+    const transportOpts: HookTransportOpts[] = [];
+    const handleTurnDelivery = vi.fn();
+    const dispatcher = {
+      handleDispatch: vi.fn(),
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      cancel: vi.fn(),
+      handleSessionArchive: vi.fn(),
+      handleInteractionDecision: vi.fn(),
+      handleTurnDelivery,
+      activateAccount: vi.fn(),
+      deactivateAccount: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as NonNullable<HookControlManagerDeps['dispatcher']>;
+    const manager = makeManager(
+      memoryStore({ url: 'wss://unused.example', enabled: false, xEnabled: true }),
+      {
+        dispatcher,
+        getXUrl: () => 'wss://x-hook.example',
+        createTransport: (opts) => {
+          transportOpts.push(opts);
+          return { send: () => true, dispose: () => {} };
+        },
+      },
+    );
+    manager.sync();
+    const opts = transportOpts[0];
+    if (opts === undefined) throw new Error('X transport was not created');
+    expect(opts.buildHello().features).toContain(HOOK_FEATURE_TURN_DELIVERY);
+
+    const delivery = makeTurnDelivery({
+      requestId: 'x:999:post-1',
+      state: 'accepted',
+      attempt: 0,
+      retryAt: null,
+      error: null,
+    });
+    opts.onMessage(delivery, () => true);
+    expect(handleTurnDelivery).not.toHaveBeenCalled();
+
+    opts.onWelcome?.({
+      serverName: 'x-hook',
+      features: [
+        HOOK_FEATURE_PROVIDER_BIND,
+        HOOK_FEATURE_PROVIDER_PREFS,
+        HOOK_FEATURE_SESSION_PICKER,
+        HOOK_FEATURE_PROVIDER_X,
+        HOOK_FEATURE_TURN_DELIVERY,
+      ],
+    });
+    opts.onStatus('connected', null);
+    opts.onMessage(delivery, () => true);
+    expect(handleTurnDelivery).toHaveBeenCalledWith(expect.stringMatching(/:x$/), delivery.payload);
+    manager.dispose();
+  });
+
   it('keeps an enabled cloud preference disconnected when the capability is unavailable', () => {
     const createTransport = vi.fn(() => {
       throw new Error('transport must not start');
@@ -1520,6 +1584,7 @@ describe('Telegram provider capability, binding and prefs', () => {
       cancel: vi.fn(),
       handleSessionArchive: vi.fn(),
       handleInteractionDecision: vi.fn(),
+      handleTurnDelivery: vi.fn(),
       activateAccount: vi.fn(),
       deactivateAccount: vi.fn(async () => undefined),
       dispose: vi.fn(),
@@ -1745,6 +1810,51 @@ describe('Telegram provider capability, binding and prefs', () => {
         lastError: 'Telegram service endpoint is not configured',
       },
     });
+  });
+
+  it('provider lane 的 hello 各带自己那份默认工作目录, 互不串', async () => {
+    // 目录清单是设备级共享的同一份, 但默认值按 provider 各存一份 —— 泛化前只有
+    // 一个 xDefaultWorkspace 字段, 很容易写成两条 lane 共用同一个值。
+    const { wss, url } = await startServer();
+    const store = memoryStore({
+      url,
+      enabled: false,
+      telegramEnabled: true,
+      workspaces: WORKSPACES,
+      telegramDefaultWorkspace: 'blog',
+      xDefaultWorkspace: 'xdmaker',
+    });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+    const hello = await server.waitFor('hello');
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect(hello.payload.defaultWorkspace).toBe('blog');
+  });
+
+  it('未设默认工作目录时 hello 不带该字段(而不是带 null)', async () => {
+    // 协议上"没有默认值"就是字段缺省; 显式送 null 会让老 server 的校验分叉。
+    const { wss, url } = await startServer();
+    const store = memoryStore({
+      url,
+      enabled: false,
+      telegramEnabled: true,
+      workspaces: WORKSPACES,
+    });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+    const hello = await server.waitFor('hello');
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect('defaultWorkspace' in hello.payload).toBe(false);
   });
 
   it('账号 drain 等待 recent-session 查询，并丢弃旧代 query.response', async () => {
@@ -2570,9 +2680,7 @@ describe('Telegram provider capability, binding and prefs', () => {
     const server = collectFrames(sock);
     const hello = await server.waitFor('hello');
     if (hello.type !== 'hello') throw new Error('unreachable');
-    expect(hello.payload.features).toEqual(
-      expect.arrayContaining(TELEGRAM_FEATURES),
-    );
+    expect(hello.payload.features).toEqual(expect.arrayContaining(TELEGRAM_FEATURES));
     sock.send(
       serializeHookMessage(
         makeWelcome({ serverName: 'telegram-server', features: TELEGRAM_FEATURES }),

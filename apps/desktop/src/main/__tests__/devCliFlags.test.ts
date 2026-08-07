@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -206,7 +206,9 @@ describe('resolveDevCliFlags', () => {
           });
           expect(viaLink.isolatedDirIsEpochDerived).toBe(true);
         } finally {
-          rmSync(linkAncestor, { force: true });
+          // Node 24 rejects rmSync(link-to-directory) without recursive; unlink
+          // removes the symlink itself on every supported Node version.
+          unlinkSync(linkAncestor);
         }
       }
       // TOCTOU 稳定性:目录被并发进程创建前后,同一写法的判定结果一致——

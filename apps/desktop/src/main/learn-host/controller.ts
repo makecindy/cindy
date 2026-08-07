@@ -18,6 +18,8 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+
 import {
   LEARN_TERMINAL_STATUSES,
   type LearnEventPayload,
@@ -79,7 +81,7 @@ export interface LearnSessionLike {
     message: { type: 'user'; content: string },
     opts?: { onAccepted?: () => Promise<void> | void },
   ): Promise<LearnSessionSendResult>;
-  onEvent(listener: (ev: { type: string; data?: unknown }) => void): () => void;
+  onEvent(listener: (ev: { type: string; data?: unknown; turnContinuationId?: number }) => void): () => void;
   abort(): Promise<void>;
 }
 
@@ -534,6 +536,7 @@ export class LearnController {
           return;
         }
         if (ev.type === 'done') {
+          if (isTurnContinuationBoundaryEvent(ev)) return;
           off();
           resolve();
         } else if (this.deps.isTerminalErrorEvent(ev)) {
@@ -705,6 +708,7 @@ export class LearnController {
         if (isRevisionTurnActivityEvent(ev)) this.revisionTurnActive.add(runId);
         return;
       }
+      if (isTurnContinuationBoundaryEvent(ev)) return;
       this.revisionTurnActive.delete(runId);
       scheduleRescan();
     });

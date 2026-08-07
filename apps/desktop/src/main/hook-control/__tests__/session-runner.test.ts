@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
+import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const h = vi.hoisted(() => {
@@ -38,6 +38,10 @@ const h = vi.hoisted(() => {
     createMessage: vi.fn(async () => {
       calls.push('createMessage');
     }),
+    beginTurnChangeSetAtDispatch: vi.fn(async (session: { id: string }, anchorClientId: string) => {
+      calls.push(`beginChangeSet:${session.id}:${anchorClientId}`);
+    }),
+    clearPendingTurnChangeSets: vi.fn(),
     setSessionProviderIdInDb: vi.fn(async (id: string, providerId: string) => {
       calls.push(`providerDb:${id}:${providerId}`);
     }),
@@ -54,15 +58,7 @@ const h = vi.hoisted(() => {
     useActualDefaults: false,
     /** 每个 fake session 的事件监听回调(emit done 用)。 */
     statusCbs: new Map<string, (status: 'active' | 'aborting' | 'closed' | 'error') => void>(),
-    eventCbs: new Map<
-      string,
-      (ev: {
-        type: string;
-        data: unknown;
-        source?: string;
-        agentMeta?: Record<string, unknown>;
-      }) => void
-    >(),
+    eventCbs: new Map<string, (ev: AgentEvent) => void>(),
     /** 每个 fake session 被装上的 interaction listener(交互测试驱动用)。 */
     interactionListeners: new Map<string, (req: unknown) => Promise<unknown>>(),
     headlessDuringSend: [] as boolean[],
@@ -92,6 +88,7 @@ vi.mock('electron', () => ({
 vi.mock('@cindy/maker-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/maker-core')>();
   return {
+    isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
@@ -99,14 +96,19 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 vi.mock('../../maker-ipc/register.js', () => ({
+  beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: () => false,
   installDesktopInteractionListener: h.installDesktopInteractionListener,
   noteSilentStopUserSend: vi.fn(),
   onSilentStopSettled: vi.fn(() => () => {}),
+}));
+vi.mock('../../turn-change-set/store.js', () => ({
+  clearPendingTurnChangeSets: h.clearPendingTurnChangeSets,
 }));
 vi.mock('../../maker-host/send-outcome.js', () => ({
   toDesktopSessionDispatchOutcome: () => ({ dispatched: true as const }),
@@ -116,6 +118,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: vi.fn(async () => null),
+  getSessionRowSnapshotStrict: vi.fn(async () => null),
   setSessionProviderIdInDb: h.setSessionProviderIdInDb,
   setSessionSourceInDb: h.setSessionSourceInDb,
   setWorktreePathInDb: vi.fn(async () => undefined),
@@ -379,6 +382,21 @@ beforeEach(() => {
 });
 
 describe('hook session 精确接管边界', () => {
+  it('inspect 的数据库读取失败向上抛出, 不伪装成不存在', async () => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockRejectedValueOnce(new Error('database unavailable'));
+    const runner = createMakerHookSessionRunner({ log });
+
+    await expect(runner.inspect('session-under-test')).rejects.toThrow('database unavailable');
+  });
+
+  it('inspect 的 maker metadata 读取失败向上抛出, 不伪装成不存在', async () => {
+    fakeMaker.getSessionMeta.mockRejectedValueOnce(new Error('metadata unavailable'));
+    const runner = createMakerHookSessionRunner({ log });
+
+    await expect(runner.inspect('session-under-test')).rejects.toThrow('metadata unavailable');
+  });
+
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
     const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshot)
@@ -484,6 +502,23 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(h.calls).not.toContain('created:sess-old');
     expect(h.touchUserSendInDb).toHaveBeenCalledTimes(1);
     expect(h.touchUserSendInDb).toHaveBeenCalledWith('sess-old');
+  });
+
+  it('provider 接受后才执行回调，回调失败不反转已受理 turn', async () => {
+    const onProviderAccepted = vi.fn(async () => {
+      h.calls.push('providerAccepted');
+      throw new Error('cursor db unavailable');
+    });
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ onProviderAccepted }));
+
+    expect(outcome.status).toBe('ok');
+    expect(onProviderAccepted).toHaveBeenCalledTimes(1);
+    expect(h.calls.indexOf('createMessage')).toBeLessThan(h.calls.indexOf('providerAccepted'));
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('provider-accepted callback failed for session=sess-new'),
+    );
   });
 
   it('入站图片附件:ingest 进媒体总仓挂 session-attachment 引用,喂 agent 用 blob 绝对路径,落库用 cindy-media url', async () => {
@@ -745,9 +780,27 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
 });
 
 describe('进度快照(turn.progress 链路)', () => {
+  type ManualContinuation = {
+    id: number;
+    state: 'awaiting' | 'active' | 'cancelled';
+    cancel?: () => void;
+  };
+
   /** 不自动 done 的 fake session: 测试手动驱动事件流。 */
-  function makeManualSession(id: string) {
+  function makeManualSession(id: string, continuation?: ManualContinuation) {
     const permission = makePermissionModeFake();
+    const continuationListeners = new Set<(
+      continuationId: number,
+      state: 'awaiting' | 'active' | 'cancelled',
+    ) => void>();
+    if (continuation) {
+      continuation.cancel = () => {
+        continuation.state = 'cancelled';
+        for (const listener of [...continuationListeners]) {
+          listener(continuation.id, 'cancelled');
+        }
+      };
+    }
     return {
       ...permission,
       get permissionModeState() {
@@ -774,6 +827,17 @@ describe('进度快照(turn.progress 链路)', () => {
           h.statusCbs.delete(id);
         };
       },
+      beginTurnContinuationWait: (continuationId?: number) => {
+        if (!continuation || continuationId !== continuation.id) return null;
+        return continuation.state;
+      },
+      onTurnContinuationChange: (listener: (
+        continuationId: number,
+        state: 'awaiting' | 'active' | 'cancelled',
+      ) => void) => {
+        continuationListeners.add(listener);
+        return () => continuationListeners.delete(listener);
+      },
       setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
         h.interactionListeners.set(id, listener);
       },
@@ -799,7 +863,7 @@ describe('进度快照(turn.progress 链路)', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
-  it('多消息 turn: isFinal 逐条追加不整体替换, 先答一句再思考再终答两段都保留', async () => {
+  it('完成态复用桌面分组: 动作前的短旁白折叠，只保留动作后的正式答复', async () => {
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -823,9 +887,221 @@ describe('进度快照(turn.progress 链路)', () => {
 
       const outcome = await p;
       expect(outcome.status).toBe('ok');
-      // 两段都在, 且以定稿顺序拼接 —— 整体替换语义会丢掉其中一段。
-      expect(outcome.finalText).toContain('我正在追溯');
-      expect(outcome.finalText).toContain('PR #527');
+      expect(outcome.finalText).toBe('查到了: 是 PR #527 引入的。');
+      expect(outcome.finalText).not.toContain('我正在追溯');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('完成态复用桌面分组: 较早的交付正文即使后面还有收尾动作也保持展开', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+      const delivery = '# 调查结论\n\n- 根因已确认\n- 影响范围明确\n- 修复方案可实施';
+
+      cb({ type: 'text', data: { text: delivery, isFinal: true } });
+      cb({ type: 'tool_use', data: { toolName: 'Bash', toolUseId: 'u1', input: {} } });
+      cb({ type: 'text', data: { text: '已完成收尾。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe(`${delivery}\n\n已完成收尾。`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('thinking 不切断同一条 assistant 流，前后 delta 在 done 时保持完整', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-thinking'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '完整答案的前半，', isFinal: false } });
+      cb({
+        type: 'thinking',
+        data: { stage: 'start', blockId: 'think-1', startedAt: Date.now() },
+      });
+      cb({
+        type: 'thinking',
+        data: { stage: 'delta', blockId: 'think-1', text: '检查一下' },
+      });
+      cb({
+        type: 'thinking',
+        data: { stage: 'final', blockId: 'think-1', text: '检查一下', durationMs: 12 },
+      });
+      cb({ type: 'text', data: { text: '以及后半。', isFinal: false } });
+      cb({ type: 'done', data: null });
+
+      await expect(pending).resolves.toMatchObject({
+        status: 'ok',
+        finalText: '完整答案的前半，以及后半。',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('running 的任务卡不阻塞 done；只有 provider 明确的 continuation 才等待下一 turn', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const immediate = runner.run(baseReq({}));
+      await flush();
+      let cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'agent_task_update',
+        data: { provider: 'codex', taskId: 'card-1', status: 'running' },
+      });
+      cb({ type: 'text', source: 'codex', data: { text: '完成。', isFinal: true } });
+      cb({ type: 'done', data: null });
+      await expect(immediate).resolves.toMatchObject({ status: 'ok', finalText: '完成。' });
+
+      const continuation: ManualContinuation = { id: 7, state: 'awaiting' };
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-y', continuation),
+      );
+      const waiting = runner.run(baseReq({ sessionId: 'sess-y' }));
+      await flush();
+      cb = h.eventCbs.get('sess-y')!;
+      let settled = false;
+      void waiting.then(() => {
+        settled = true;
+      });
+
+      cb({ type: 'text', data: { text: '等待后台结果。', isFinal: true } });
+      cb({ type: 'done', data: null, turnContinuationId: continuation.id });
+      await flush();
+      expect(settled).toBe(false);
+
+      continuation.state = 'active';
+      cb({ type: 'text', data: { text: '最终结论。', isFinal: true } });
+      cb({ type: 'done', data: null });
+      await expect(waiting).resolves.toMatchObject({ status: 'ok' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('continuation task stopped after done 收到 provider cancellation 后立即收口', async () => {
+    vi.useFakeTimers();
+    try {
+      const continuation: ManualContinuation = { id: 9, state: 'awaiting' };
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-stop', continuation),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'text', data: { text: '等待后台任务。', isFinal: true } });
+      cb({ type: 'done', data: null, turnContinuationId: continuation.id });
+      await flush();
+
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      expect(settled).toBe(false);
+      continuation.cancel?.();
+
+      await expect(pending).resolves.toMatchObject({
+        status: 'ok',
+        finalText: '等待后台任务。',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('host 消费父 done 前 continuation 已 active，仍等待第二个 done', async () => {
+    vi.useFakeTimers();
+    try {
+      const continuation: ManualContinuation = { id: 11, state: 'active' };
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-active', continuation),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+      let settled = false;
+      void pending.then(() => { settled = true; });
+
+      cb({ type: 'text', data: { text: '父 turn 已结束。', isFinal: true } });
+      cb({ type: 'done', data: null, turnContinuationId: continuation.id });
+      await flush();
+      expect(settled).toBe(false);
+
+      cb({ type: 'text', data: { text: '自动续 turn 的最终结果。', isFinal: true } });
+      cb({ type: 'done', data: null });
+      await expect(pending).resolves.toMatchObject({ status: 'ok' });
+      const outcome = await pending;
+      expect(outcome.finalText).toContain('自动续 turn 的最终结果。');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('没有 continuation claim ID 的 done 一律收口，不采样 live task 状态', async () => {
+    vi.useFakeTimers();
+    try {
+      const unrelatedClaim: ManualContinuation = { id: 12, state: 'awaiting' };
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-unclaimed', unrelatedClaim),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '这个 done 没有续跑边界。', isFinal: true } });
+      cb({ type: 'done', data: null });
+      await expect(pending).resolves.toMatchObject({
+        status: 'ok',
+        finalText: '这个 done 没有续跑边界。',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('status.isRunning=false 只是展示状态，不能替代 done 提前收口', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      let settled = false;
+      void p.then(() => {
+        settled = true;
+      });
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '最终答复。', isFinal: true } });
+      cb({ type: 'status', data: { status: 'Done', isRunning: false } });
+      await flush();
+      expect(settled).toBe(false);
+
+      cb({ type: 'done', data: null });
+      await expect(p).resolves.toMatchObject({ status: 'ok', finalText: '最终答复。' });
     } finally {
       vi.useRealTimers();
     }
@@ -900,7 +1176,65 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
-  it('X: 回帖只取最后一条助手消息, 过程叙述不进公开时间线', async () => {
+  it('Claude 同 uuid 跨 tool 边界不得回写旧 assistant 消息', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'text',
+        source: 'claude-code',
+        agentMeta: { uuid: 'same-message' },
+        data: { text: '先说一句。', isFinal: true },
+      });
+      cb({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'read-1', input: {} } });
+      cb({
+        type: 'text',
+        source: 'claude-code',
+        agentMeta: { uuid: 'same-message' },
+        data: { text: '最终结论。', isFinal: true },
+      });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('最终结论。');
+      expect(outcome.finalText).not.toContain('先说一句');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('delta-only assistant 在 tool 前先封存，tool 后的 canonical 文本不覆盖它', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({}));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '过程旁白。', isFinal: false } });
+      cb({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'read-1', input: {} } });
+      cb({ type: 'text', source: 'codex', data: { text: '最终结论。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('最终结论。');
+      expect(outcome.finalText).not.toContain('过程旁白');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('X: 只发送一条回帖, 正文仍按桌面规则折叠短过程旁白', async () => {
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -925,8 +1259,8 @@ describe('进度快照(turn.progress 链路)', () => {
 
       const outcome = await p;
       expect(outcome.status).toBe('ok');
-      // 整轮拼接(上面「多消息 turn」用例里 Slack 的正确行为)会把过程叙述原样
-      // 发到公开时间线, 稀释最终结论 —— X 只发最后一条。
+      // X 只有一条公开回帖, 但正文仍走桌面版完成态规则: 短过程旁白折叠,
+      // 正式结论保留。
       expect(outcome.finalText).toBe('结论: 该库已停止维护。');
       expect(outcome.finalText).not.toContain('我先看看');
       expect(outcome.finalText).not.toContain('\uE200');
@@ -935,7 +1269,37 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
-  it('X: 最后一条收口时仍在流(无 isFinal)也只取它, 不带上一条', async () => {
+  it('X: 一条回帖仍保留标题/长正文等桌面版正式内容', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'x' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+      const report = `# 交付报告\n\n${'这部分是需要保留的正式分析内容。'.repeat(80)}`;
+
+      cb({ type: 'text', data: { text: '我先核对一下。', isFinal: true } });
+      cb({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'read-report', input: {} } });
+      cb({ type: 'text', data: { text: report, isFinal: true } });
+      cb({ type: 'text', data: { text: '已完成。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+      // X 仍只有一条公开消息; 这里断言的是那条消息的正文内容, 而不是消息数量。
+      expect(outcome.finalText).toContain('# 交付报告');
+      expect(outcome.finalText).toContain('这部分是需要保留的正式分析内容。');
+      expect(outcome.finalText).toContain('已完成。');
+      expect(outcome.finalText).not.toContain('我先核对一下。');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('X: 最后一条收口时仍在流(无 isFinal)也纳入同一条正式正文', async () => {
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -947,14 +1311,13 @@ describe('进度快照(turn.progress 链路)', () => {
       const cb = h.eventCbs.get('sess-new')!;
 
       cb({ type: 'text', data: { text: '先查一下提交记录。', isFinal: true } });
-      // 最后一条只流增量、没等到 isFinal 就 done —— 此时 streamTail 本身就是
-      // 完整的最后一条, 不能和上一条定稿段拼起来。
+      // 最后一条只流增量、没等到 isFinal 就 done —— done 会把尾巴封成
+      // assistant message, 再由桌面规则决定它和前一段是否属于正式正文。
       cb({ type: 'text', data: { text: '答案是 42。', isFinal: false } });
       cb({ type: 'done', data: null });
 
       const outcome = await p;
-      expect(outcome.finalText).toBe('答案是 42。');
-      expect(outcome.finalText).not.toContain('先查一下');
+      expect(outcome.finalText).toBe('先查一下提交记录。\n\n答案是 42。');
     } finally {
       vi.useRealTimers();
     }
@@ -962,8 +1325,8 @@ describe('进度快照(turn.progress 链路)', () => {
 
   it('X: envelope 缺 uuid 时按 requestId 认消息边界, 多 block 消息不被截半句', async () => {
     // uuid 是 envelope 顶层的**可选**字段, 确实会缺。缺了又没有回退的话, 一条含
-    // 多个 text block 的消息会被拆成多条"消息", 而 X 只发最后一段 —— 用户拿到
-    // 半句话(PR #1272 review 指出)。requestId 是 Anthropic 的 message id,
+    // 多个 text block 的消息会被拆成多条"消息", 正文投影就可能从中间截半句。
+    // requestId 是 Anthropic 的 message id,
     // 同一条消息的各 block 共享、不同消息不同, 正好是这里要的语义。
     vi.useFakeTimers();
     try {
@@ -998,19 +1361,18 @@ describe('进度快照(turn.progress 链路)', () => {
       cb({ type: 'done', data: null });
 
       const outcome = await p;
-      // 同一条消息的两个 block 必须都在, 且不带上一条的过程叙述。
-      expect(outcome.finalText).toBe('结论: 分成两块说。第二块也属于同一条。');
-      expect(outcome.finalText).not.toContain('我先看看');
+      // 同一条消息的两个 block 必须都在。前一条没有动作边界,按桌面规则也是
+      // 正文消息,因此不会凭空套用「只取最后一条」的 X 特殊启发式。
+      expect(outcome.finalText).toBe('我先看看。\n\n结论: 分成两块说。第二块也属于同一条。');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('X: claude 的 fallbackTail 自成一段, 旁白不被粘进公开回帖', async () => {
+  it('X: claude 的 fallbackTail 自成一段, 短旁白不被粘进公开正文', async () => {
     // fallbackTail 刻意不带 agentMeta, hook 层拿不到它属于哪条消息。translator
     // 点名覆盖的场景是「前面 call 推过旁白、最后一次 call 的最终回复被截断」——
-    // 即尾段是**新的一条**。并入上一条会把旁白和终答一起发到公开时间线
-    // (PR #1272 review 指出, 推翻了上一版的无条件并入)。
+    // 即尾段是**新的一条**。并入上一条会破坏消息边界, 让旁白影响正文折叠。
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -1032,16 +1394,15 @@ describe('进度快照(turn.progress 链路)', () => {
       cb({ type: 'done', data: null });
 
       const outcome = await p;
-      expect(outcome.finalText).toBe('结论: 已修复。');
-      expect(outcome.finalText).not.toContain('我先去看看');
+      expect(outcome.finalText).toBe('我先去看看。\n\n结论: 已修复。');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('X: 正文只取末段, 但附件引用仍按整轮扫描(贴在中间那条的图不能丢)', async () => {
+  it('X: 正文按桌面规则投影, 但附件引用仍按整轮扫描(工作过程里的图不能丢)', async () => {
     // agent 的常态是"中间那条贴图 -> 最后一条只写结论"。正文范围和引用扫描范围
-    // 绑在一起的话, 只取末段会把那些图静默丢掉(PR #1272 review 指出)。
+    // 绑在一起的话, 被折叠的工作过程里的图会静默丢掉(PR #1272 review 指出)。
     // 这里让 resolveSafe 抛错 -> 收集失败计数 -> 正文追加"附件未送达"警告:
     // 这条警告本身就是"引用确实被扫到了"的证据。修复前它压根不会出现。
     vi.useFakeTimers();
@@ -1063,9 +1424,11 @@ describe('进度快照(turn.progress 链路)', () => {
 
       const outcome = await p;
       expect(outcome.status).toBe('ok');
-      // 公开正文仍然只有最后一条 + 收集失败的警告, 不带上一条的过程叙述。
+      // 公开正文按桌面规则保留可见正文; 引用扫描仍覆盖整轮, 所以中间图片会
+      // 被转换为可读标签, 并在收集失败时追加警告。
       expect(outcome.finalText).toContain('结论: 趋势向上。');
-      expect(outcome.finalText).not.toContain('图在这里');
+      expect(outcome.finalText).toContain('图在这里');
+      expect(outcome.finalText).toContain('🖼️ _图_');
       expect(outcome.finalText).toContain('Attachment delivery incomplete');
     } finally {
       vi.mocked(resolveXdtImage).mockReset();
@@ -1073,7 +1436,7 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
-  it('X: 最后一条是空白时回退整轮正文, 不发空回帖', async () => {
+  it('X: 正式正文为空时回退整轮正文, 不发空回帖', async () => {
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -1089,7 +1452,7 @@ describe('进度快照(turn.progress 链路)', () => {
       cb({ type: 'done', data: null });
 
       const outcome = await p;
-      // 公开回帖宁可带上过程, 也不能因为末条是空白就发成空。
+      // 公开回帖宁可带上整轮内容, 也不能因为正文投影为空就发成空。
       expect(outcome.finalText).toContain('结论: 已修复。');
     } finally {
       vi.useRealTimers();
@@ -1262,7 +1625,7 @@ describe('进度快照(turn.progress 链路)', () => {
     expect(session.setPermissionModeTracked).not.toHaveBeenCalled();
   });
 
-  it('thinking/tool_use/text 驱动友好快照,过程文字持续保留;done 后停止', async () => {
+  it('thinking/tool_use/text 驱动友好快照,运行中只保留最后一段文字;done 后停止', async () => {
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -1316,13 +1679,23 @@ describe('进度快照(turn.progress 链路)', () => {
       expect(emitted[2]).toContain('> ▸ 搜索 onProgress');
       expect(emitted[2]).toContain('结论是……');
 
+      // 新 assistant 消息出现后，之前那段不再在运行中快照里重复铺开。
+      cb({ type: 'text', data: { text: '结论是……', isFinal: true } });
+      cb({ type: 'text', data: { text: '最终结果。', isFinal: false } });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted).toHaveLength(4);
+      expect(emitted[3]).toContain('最终结果。');
+      expect(emitted[3]).not.toContain('结论是……');
+
       // 收口: done 之后即使时间继续流逝也不再发射
       cb({ type: 'done', data: null });
       await vi.advanceTimersByTimeAsync(20_000);
       const outcome = await p;
       expect(outcome.status).toBe('ok');
-      expect(outcome.finalText).toBe('结论是……');
-      expect(emitted).toHaveLength(3);
+      // 两条 assistant 之间没有新的真实动作，桌面端把它们视为同一个连续正式
+      // 答复；运行中只显示后一条，完成态则一次性替换为完整正式答复。
+      expect(outcome.finalText).toBe('结论是……\n\n最终结果。');
+      expect(emitted).toHaveLength(4);
     } finally {
       vi.useRealTimers();
     }
@@ -1610,6 +1983,285 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       ),
     };
   }
+
+  it('等授权期间过程区挂一行状态, 决策回流后摘掉', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const cards: Array<{ interactionId: string }> = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: (card: { interactionId: string }) => void cards.push(card),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const listener = h.interactionListeners.get('sess-new')!;
+      const decisionPromise = listener({
+        kind: 'ask_user_question',
+        requestId: 'int-notice',
+        questions: [{ question: '继续吗?', options: [{ label: '继续' }] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cards).toHaveLength(1);
+      // 卡片发出的同时过程区出现状态行: 挂起期间没有任何 agent 事件, 渠道那条消息会
+      // 彻底静止, 而卡片可能根本不在这个会话里(群里的授权卡改投宿主私聊)。
+      // 它只改已经在发的那条快照, 不新增任何渠道消息。
+      // **文案按交互类型分**: 这是问答, 说"等待授权"就把它说成了权限请求。
+      expect(emitted.at(-1)).toContain('等待回答');
+      expect(emitted.at(-1)).not.toContain('等待授权');
+
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-notice', 'ask:0')).toBe(true);
+      await decisionPromise;
+      // 授权通过、agent 继续干活: 后续快照不得再带那行状态(否则它会一直挂在过程区
+      // 顶上, 与 review #844 里"重试提示留在终稿正上方"是同一个坑)。
+      h.eventCbs.get('sess-new')!({
+        type: 'tool_use',
+        data: { toolUseId: 'after-1', toolName: 'Read', input: { file_path: '/tmp/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 a.ts');
+      expect(emitted.at(-1)).not.toContain('等待授权');
+
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('过程区状态行按交互类型分: 授权/问答/计划审阅各自措辞', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const [request, expected] of [
+        [
+          {
+            kind: 'permission' as const,
+            requestId: 'int-perm',
+            toolName: 'file_change',
+            input: {},
+          },
+          '等待授权',
+        ],
+        [
+          {
+            kind: 'plan_review' as const,
+            requestId: 'int-plan',
+            plan: '第一步…',
+          },
+          '等待审阅',
+        ],
+      ] as const) {
+        fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+          makeInteractiveSession(opts.id ?? 'sess-x'),
+        );
+        const emitted: string[] = [];
+        const runner = createMakerHookSessionRunner({ log });
+        const p = runner.run(
+          baseReq({
+            onProgress: (t: string) => emitted.push(t),
+            onInteraction: () => {},
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        const listener = h.interactionListeners.get('sess-new')!;
+        void listener(request as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitted.at(-1)).toContain(expected);
+        h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+        await p.catch(() => undefined);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('待决交互期间的正常进展事件不得抹掉等待提示', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: () => {},
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const listener = h.interactionListeners.get('sess-new')!;
+      const pending = listener({
+        kind: 'permission',
+        requestId: 'int-progress',
+        toolName: 'file_change',
+        input: {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      // 挂起期间 agent 的其它子任务照样吐事件。这些走的是 clearNotice ——
+      // 若等待提示与瞬态 notice 共用一个字段, 每一条都会把它抹掉, 于是剩下的
+      // 授权最长要等 30 分钟而过程区一个字都不提。
+      const emit = h.eventCbs.get('sess-new')!;
+      emit({ type: 'thinking', data: { blockId: 'b1', text: '再查一处引用' } });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      emit({
+        type: 'tool_use',
+        data: { toolUseId: 'bg-1', toolName: 'Read', input: { file_path: '/tmp/bg.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 bg.ts');
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      emit({ type: 'text', data: { text: '我先读了这个文件' } });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      // 收口后才摘掉
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-progress', 'perm:allow')).toBe(true);
+      await pending;
+      emit({
+        type: 'tool_use',
+        data: { toolUseId: 'bg-2', toolName: 'Read', input: { file_path: '/tmp/after.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 after.ts');
+      expect(emitted.at(-1)).not.toContain('等待授权');
+
+      emit({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('并发交互: 其中一个收口不摘掉状态行, 最后一个结束才摘', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: () => {},
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // agent 并行发起两个交互: 各自独立挂起, 共用过程区那一行状态。**两者措辞不同**,
+      // 这样"回落到仍在等的那条"表现为文字变化 —— 用 tool_use 逼快照反而不行:
+      // 真实进展本身就会作废状态行(clearNotice), 那条断言对两种实现都成立。
+      const listener = h.interactionListeners.get('sess-new')!;
+      const first = listener({
+        kind: 'permission',
+        requestId: 'int-par-1',
+        toolName: 'file_change',
+        input: {},
+      });
+      const second = listener({
+        kind: 'ask_user_question',
+        requestId: 'int-par-2',
+        questions: [{ question: '继续吗?', options: [{ label: '继续' }] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // 挂起时新卡片覆盖状态行 —— 最新那条(问答)在上。
+      expect(emitted.at(-1)).toContain('等待回答');
+
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-par-2', 'ask:0')).toBe(true);
+      await second;
+      await vi.advanceTimersByTimeAsync(1500);
+      // 权限请求还在等 —— 状态行必须回落到它, 不能整行摘掉: 摘了群里的进度消息又变回
+      // 静止, 而剩下那个交互最长要等 30 分钟。
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      expect(resolveHookInteraction('int-par-1', 'perm:allow')).toBe(true);
+      await first;
+      h.eventCbs.get('sess-new')!({
+        type: 'tool_use',
+        data: { toolUseId: 'after-par', toolName: 'Read', input: { file_path: '/tmp/b.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 b.ts');
+      expect(emitted.at(-1)).not.toContain('等待');
+
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('并发交互的 notice 回退不是新消息边界，不折叠期间的 assistant 正文', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const pendingRun = runner.run(
+        baseReq({
+          onProgress: () => {},
+          onInteraction: () => {},
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const listener = h.interactionListeners.get('sess-new')!;
+      const first = listener({
+        kind: 'permission',
+        requestId: 'int-boundary-1',
+        toolName: 'file_change',
+        input: {},
+      });
+      const second = listener({
+        kind: 'ask_user_question',
+        requestId: 'int-boundary-2',
+        questions: [{ question: '继续吗?', options: [{ label: '继续' }] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const emit = h.eventCbs.get('sess-new')!;
+      emit({ type: 'text', data: { text: '并行分支 A 已给出结果。', isFinal: true } });
+
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-boundary-2', 'ask:0')).toBe(true);
+      await second;
+      // 这里只是状态行从「等待回答」回退到仍在等待的「等待授权」，不是新交互。
+      emit({ type: 'text', data: { text: '并行分支 B 继续补充。', isFinal: true } });
+
+      expect(resolveHookInteraction('int-boundary-1', 'perm:allow')).toBe(true);
+      await first;
+      emit({ type: 'done', data: null });
+
+      const outcome = await pendingRun;
+      expect(outcome.finalText).toBe(
+        '并行分支 A 已给出结果。\n\n并行分支 B 继续补充。',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('ask 请求 -> 中央 Router 发卡 -> 按钮决策回流 resolve; 收口后释放 route', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -2048,6 +2700,23 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     );
   });
 
+  it('交互边界会把交互前短旁白折叠，不与交互后的最终答复连成一段', async () => {
+    const session = makeManualSession('sess-interaction-boundary');
+    const observer = observeHookTurn(session as never, {
+      onSilentStopSettled: () => () => {},
+      log,
+    });
+    const cb = h.eventCbs.get('sess-interaction-boundary')!;
+    cb({ type: 'text', data: { text: '我先确认一下。', isFinal: true } });
+    observer.markInteractionBoundary();
+    observer.setNotice('等待你的确认');
+    cb({ type: 'text', data: { text: '确认后结论。', isFinal: true } });
+    cb({ type: 'done', data: null });
+
+    await expect(observer.finished).resolves.toBeUndefined();
+    expect(observer.finalText()).toBe('确认后结论。');
+  });
+
   it('会话不在进程里 -> 立刻 onAbandon(dispatcher 会把记账还回去), 撤销函数不炸', () => {
     // 本调用发生在 vendor dispatch **之前**, live session 正常必然已就绪, 所以这是
     // 兜底而非常规路径。放弃是安全方向, 且 dispatcher 收到 onAbandon 会还记账 ——
@@ -2325,5 +2994,25 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(events.at(-1)).toBe('end:error');
     expect(ends[0]?.errorMessage).toContain('no activity');
     expect(h.eventCbs.has('sess-live')).toBe(false);
+  });
+});
+
+describe('hook turn change-set anchor', () => {
+  it('uses the durable accepted user message client id', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({}));
+
+    expect(outcome.status).toBe('ok');
+    const [, message] = h.createMessage.mock.calls[0] as unknown as [
+      string,
+      { clientId: string },
+    ];
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-new' }),
+      message.clientId,
+    );
+    expect(h.calls.indexOf('createMessage')).toBeLessThan(
+      h.calls.indexOf(`beginChangeSet:sess-new:${message.clientId}`),
+    );
   });
 });

@@ -140,6 +140,19 @@ const MIME_BY_EXT: Record<string, string> = {
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg',
   '.flac': 'audio/flac',
+  // HTML 预览的同目录资源(review P1):手机端 htmlLocalResources 接受这些扩展名并把它们
+  // 内联成 data: URI,本表若不同步,SSH 会话下最常见的 `<link href="assets/style.css">`
+  // 会直接 415 —— 本地会话有样式、SSH 会话必然缺样式。
+  // 只放宽「类型」,不放宽「范围」:路径仍由上面的 toWorkdirRelPosix 约束在 SSH 工作目录内。
+  '.css': 'text/css',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.json': 'application/json',
+  '.avif': 'image/avif',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
   '.opus': 'audio/ogg',
 };
 
@@ -202,11 +215,42 @@ export async function materializeSshRemoteMedia(
   origin: { remoteHostId: string; workdir: string },
   origUrl: string,
   deps: SshMediaDeps = defaultDeps(),
+  /**
+   * 取件方带来的额外约束(HTML 资源透传专用;省略 = 只受既有 workdir 限界约束)。
+   *
+   * 两项都必须在**拉取之前**判:本函数 stat 完就会把整份文件分片拉进 Desktop 磁盘缓存,
+   * 拉完再判等于 SSH 流量与磁盘已经花掉(review P2)。
+   *
+   * `baseDir` 在 SSH 分支只能做**词法**包含判定 —— 远端路径的 realpath 要多一次 RPC,而
+   * file-service 现在没有暴露 realpath;这条限制与既有 SSH 媒体边界(toWorkdirRelPosix
+   * 也是词法的、侧边栏文件浏览器共用)同级,不是本次新引入的缺口。
+   */
+  limits?: { baseDir?: string; maxBytes?: number },
 ): Promise<MaterializedSshRemoteMedia> {
   const abs = extractMediaPathQuery(origUrl);
   if (!abs) return { ok: false, status: 400, message: '媒体 URL 缺少路径语义' };
   const relPath = toWorkdirRelPosix(origin.workdir, abs);
   if (!relPath) return { ok: false, status: 403, message: '媒体路径不在 SSH 会话工作目录内' };
+
+  const baseDir = limits?.baseDir;
+  if (baseDir) {
+    // baseDir == workdir 本身是合法的(HTML 就在工作目录根),但 toWorkdirRelPosix 对
+    // 「workdir 自身」按约定回 null(它服务的是"目录内的某个文件"),所以这里先单独判等,
+    // 判等成立就不再额外收窄 —— 既有的 workdir 限界已经等价。
+    const normWorkdir = origin.workdir.replace(/\/+$/, '');
+    const normBaseDir = baseDir.replace(/\/+$/, '');
+    if (normBaseDir !== normWorkdir) {
+      const baseRel = toWorkdirRelPosix(origin.workdir, normBaseDir);
+      // 基目录自己必须也在 workdir 内,否则这条约束无从谈起。
+      if (baseRel === null) {
+        return { ok: false, status: 403, message: '资源基目录不在 SSH 会话工作目录内' };
+      }
+      // 按**路径段**比,不是字符串前缀:`out2/a.png` 以 `out` 开头但不在 `out/` 内。
+      if (!relPath.startsWith(`${baseRel}/`)) {
+        return { ok: false, status: 403, message: '资源不在允许的基目录内' };
+      }
+    }
+  }
 
   const ext = path.posix.extname(relPath).toLowerCase();
   const mime = MIME_BY_EXT[ext];
@@ -219,6 +263,14 @@ export async function materializeSshRemoteMedia(
       { workdir: origin.workdir, relPath },
     );
     if (stat.type !== 'file') return { ok: false, status: 404, message: 'SSH 媒体文件不存在' };
+    const maxBytes = limits?.maxBytes;
+    if (maxBytes !== undefined && stat.size > maxBytes) {
+      return {
+        ok: false,
+        status: 403,
+        message: `资源超出取件大小上限(${stat.size} > ${maxBytes} 字节)`,
+      };
+    }
 
     const cachePath = await deps.fetchToCache(
       {

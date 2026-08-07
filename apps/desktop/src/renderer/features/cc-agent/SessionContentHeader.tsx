@@ -62,7 +62,7 @@ import {
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
 import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { orcaWorkflowsFor } from '@/lib/makerTransport';
+import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
@@ -152,8 +152,12 @@ export function SessionContentHeader({
   // 「移动到项目」/「导出会话…」可见性与 SessionItem 同条件。
   const canMoveToProject =
     !isEmpty && !session.remoteHostId && !session.deviceLinkDeviceId && !isArchived;
+  // Orca lead 可导出(整个协同随包);Worker 会话流不走此 header 菜单,双保险仍排除。
   const canExportShare =
-    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+    !isEmpty &&
+    !session.remoteHostId &&
+    session.orcaRole !== 'worker' &&
+    !session.deviceLinkDeviceId;
   // 导出 HTML:pi 原生 export_html。仅当前打开的本地 pi 会话(需 live 进程应答 RPC),
   // 排除空会话 / 远程 / device-link / archived(archived 无 live 进程)。
   const canExportHtml =
@@ -319,8 +323,8 @@ export function SessionContentHeader({
       // worker 列表,避免依赖挂载初期尚未加载完成的订阅态(Codex review P2)。
       // 查询失败时不阻断,与 sidebar map 拉取失败(空集合)的行为一致。
       if (isOrcaLeadSession(session)) {
-        const workers = await orcaWorkflowsFor(session.id)
-          .listWorkersByLead(session.id)
+        const workers = await revalidateWorkersProjection(session.id)
+          .then((result) => (result.status === 'applied' ? result.workers : []))
           .catch(() => []);
         if (workers.some((worker) => runningSessionIds.has(worker.sessionId))) {
           toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRunningBlocked'));

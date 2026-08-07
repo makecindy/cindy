@@ -139,6 +139,18 @@ export interface CodexModelListParams {
   includeHidden?: boolean | null;
 }
 
+/** Minimal subset of `mcpServerStatus/list` used for post-start capability gates. */
+export interface CodexMcpServerStatus {
+  name: string;
+  tools: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export interface CodexMcpServerStatusListResponse {
+  data: CodexMcpServerStatus[];
+  nextCursor: string | null;
+}
+
 export interface CodexModelListResponse {
   data: CodexModelListItem[];
   nextCursor: string | null;
@@ -790,6 +802,11 @@ export interface TurnStartedNotification {
   params: { threadId: string; turn: { id: string; [k: string]: unknown }; [k: string]: unknown };
 }
 
+export interface TurnDiffUpdatedNotification {
+  method: 'turn/diff/updated';
+  params: { threadId: string; turnId: string; diff: string; [k: string]: unknown };
+}
+
 /**
  * v2.rs TurnCompletedNotification: { thread_id, turn: Turn }
  * Turn 包含 status (TurnStatus enum: completed/interrupted/failed/inProgress)
@@ -1142,6 +1159,7 @@ export interface ItemEnvelope {
 export type ServerNotification =
   | ThreadStartedNotification
   | TurnStartedNotification
+  | TurnDiffUpdatedNotification
   | TurnCompletedNotification
   | ThreadTokenUsageUpdatedNotification
   | ItemStartedNotification
@@ -1164,6 +1182,7 @@ export type ServerNotification =
 export const Method = {
   Initialize: 'initialize',
   ModelList: 'model/list',
+  McpServerStatusList: 'mcpServerStatus/list',
   SkillsList: 'skills/list',
   ThreadStart: 'thread/start',
   ThreadResume: 'thread/resume',

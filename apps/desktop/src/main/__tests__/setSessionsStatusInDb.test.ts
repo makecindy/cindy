@@ -41,7 +41,12 @@ vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ tx: h.tx }) 
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
-vi.mock('../device-link/broadcast-tap', () => ({ tapWindowBroadcast: h.tapWindowBroadcast }));
+vi.mock('../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => true),
+  tapWindowBroadcast: h.tapWindowBroadcast,
+}));
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => h.agentIslandService,
 }));
@@ -57,7 +62,10 @@ vi.mock('../worktree/sessionRemovalRecycle.js', () => ({
   recycleWorktreeForRemovedSession: h.recycleWorktreeForRemovedSession,
 }));
 
-import { setSessionsStatusInDb } from '../localDb/ipc/sessions.js';
+import {
+  recycleSessionWorktreeForStatusChange,
+  setSessionsStatusInDb,
+} from '../localDb/ipc/sessions.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -215,8 +223,29 @@ describe('setSessionsStatusInDb', () => {
       'utf8',
     );
     const batchBody = source.match(
-      /export async function setSessionsStatusInDb[\s\S]*?return applied\.map/,
+      /export async function setSessionsStatusInDb[\s\S]*return applied\.map/,
     )?.[0];
     expect(batchBody).toContain('scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status)');
+  });
+});
+
+describe('recycleSessionWorktreeForStatusChange', () => {
+  it('awaits the shared close and worktree recycle chain for deleted sessions', async () => {
+    await recycleSessionWorktreeForStatusChange('s1', 'deleted');
+
+    expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
+    expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(2);
+    expect(h.closeSession).toHaveBeenCalledWith('s1');
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith('s1');
+    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
+  });
+
+  it('does not touch the runtime or worktree for active sessions', async () => {
+    await recycleSessionWorktreeForStatusChange('s1', 'active');
+
+    expect(h.isSessionStillRemovable).not.toHaveBeenCalled();
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 });

@@ -1,13 +1,14 @@
 /**
  * art/video/providers/seedance.ts
  * ---------------------------------------------------------------------------
- * VideoProvider implementation for Volcengine ARK doubao-seedance-2-0,
+ * VideoProvider implementation for Volcengine ARK Doubao Seedance 2.x models,
  * routed through XD Gateway's `/volcengine/api/v3/contents/generations/tasks`
  * passthrough.
  *
- * Two model tiers exposed:
+ * Three model choices exposed:
  *   - 'seedance-fast' → doubao-seedance-2-0-fast-260128 (≈2min, default)
  *   - 'seedance-pro'  → doubao-seedance-2-0-260128       (≈5min, quality tier)
+ *   - 'bytedance/seedance-2.5' → doubao-seedance-2-5-260628 (explicit opt-in)
  *
  * API quirks worth knowing:
  *   - Submit body uses Volcengine's chat-style `content` array:
@@ -67,6 +68,11 @@ const CAPABILITIES: VideoProviderCapabilities = {
       summary: '精(~5min) - 用户显式要"高质量"再选',
       internalModel: 'doubao-seedance-2-0-260128',
     },
+    {
+      alias: 'bytedance/seedance-2.5',
+      summary: 'Seedance 2.5(~5min) - 用户显式点名 2.5 再选',
+      internalModel: 'doubao-seedance-2-5-260628',
+    },
   ],
   supportedDurations: [4, 6, 8, 10],
   supportedResolutions: ['480p', '720p', '1080p'],
@@ -90,6 +96,7 @@ const CAPABILITIES: VideoProviderCapabilities = {
   expectedSecondsByAlias: {
     'seedance-fast': 120,
     'seedance-pro': 300,
+    'bytedance/seedance-2.5': 300,
   },
   defaults: {
     duration: 4,

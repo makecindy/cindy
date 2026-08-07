@@ -7,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { UseBrowserWebviewResult } from '../../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../../types';
+import {
+  _resetNativePopupTabsForTests,
+  registerNativePopupTab,
+} from '../../../lib/nativePopupTabs';
+import { browserWebviewPool } from '../../../lib/browserWebviewPool';
 import { BrowserTabBody } from '../BrowserTabBody';
 import { useLocalHtmlAutoReload } from '../useLocalHtmlAutoReload';
 
@@ -17,6 +22,7 @@ const toastMocks = vi.hoisted(() => ({
 
 const browserNavigate = vi.fn();
 let browserState: UseBrowserWebviewResult;
+const nativePopupHook = vi.hoisted(() => vi.fn());
 
 const poolMocks = vi.hoisted(() => ({
   currentWrapper: null as HTMLDivElement | null,
@@ -33,8 +39,28 @@ vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 vi.mock('@/components/ui/dropdown-menu', () => {
   const react = require('react') as typeof import('react');
   return {
-    DropdownMenu: ({ children }: { children: React.ReactNode }) =>
-      react.createElement(react.Fragment, null, children),
+    DropdownMenu: ({
+      children,
+      onOpenChange,
+    }: {
+      children: React.ReactNode;
+      onOpenChange?: (open: boolean) => void;
+    }) =>
+      react.createElement(
+        react.Fragment,
+        null,
+        react.createElement('button', {
+          type: 'button',
+          'aria-label': 'mock.dropdown.open',
+          onClick: () => onOpenChange?.(true),
+        }),
+        react.createElement('button', {
+          type: 'button',
+          'aria-label': 'mock.dropdown.close',
+          onClick: () => onOpenChange?.(false),
+        }),
+        children,
+      ),
     DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) =>
       react.createElement(react.Fragment, null, children),
     DropdownMenuContent: ({ children }: { children: React.ReactNode }) =>
@@ -58,6 +84,10 @@ vi.mock('@/components/ui/dropdown-menu', () => {
 
 vi.mock('../../../hooks/useBrowserWebview', () => ({
   useBrowserWebview: () => browserState,
+}));
+
+vi.mock('../../../hooks/useNativePopupSurface', () => ({
+  useNativePopupSurface: (...args: unknown[]) => nativePopupHook(...args),
 }));
 
 vi.mock('../useLocalHtmlAutoReload', () => ({
@@ -144,6 +174,11 @@ function renderBrowserTab(
 
 describe('BrowserTabBody navigation', () => {
   beforeEach(() => {
+    _resetNativePopupTabsForTests();
+    nativePopupHook.mockReturnValue({
+      ...makeBrowserState({ wrapper: null, webview: null, url: 'about:blank' }),
+      closed: false,
+    });
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -158,6 +193,7 @@ describe('BrowserTabBody navigation', () => {
 
   afterEach(() => {
     cleanup();
+    _resetNativePopupTabsForTests();
     poolMocks.currentWrapper = null;
     document.getElementById('browser-webview-pool')?.remove();
     vi.clearAllMocks();
@@ -166,7 +202,48 @@ describe('BrowserTabBody navigation', () => {
     browserState = makeBrowserState();
   });
 
-  it('keeps an eagerly created hidden wrapper parked without navigating', () => {
+  it('recovers a live native popup surface after plugin hydration strips its id', () => {
+    registerNativePopupTab('tab-browser', 'session-a', 'surface-oauth');
+    browserState = makeBrowserState({ wrapper: sharedWrapper, url: 'about:blank' });
+
+    render(renderBrowserTab('about:blank'));
+
+    expect(nativePopupHook).toHaveBeenLastCalledWith(
+      'surface-oauth',
+      'session-a',
+      'tab-browser',
+      expect.any(Object),
+      true,
+    );
+    expect(sharedWrapper.isConnected).toBe(false);
+    expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  it('hides a native popup view while the renderer more-menu portal is open', () => {
+    registerNativePopupTab('tab-browser', 'session-a', 'surface-oauth');
+    browserState = makeBrowserState({ wrapper: sharedWrapper, url: 'about:blank' });
+    render(renderBrowserTab('about:blank'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'mock.dropdown.open' }));
+    expect(nativePopupHook).toHaveBeenLastCalledWith(
+      'surface-oauth',
+      'session-a',
+      'tab-browser',
+      expect.any(Object),
+      false,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'mock.dropdown.close' }));
+    expect(nativePopupHook).toHaveBeenLastCalledWith(
+      'surface-oauth',
+      'session-a',
+      'tab-browser',
+      expect.any(Object),
+      true,
+    );
+  });
+
+  it('keeps a hidden wrapper in its tab slot without navigating or reparenting on activation', () => {
     const parking = document.createElement('div');
     parking.id = 'browser-webview-pool';
     document.body.appendChild(parking);
@@ -176,14 +253,30 @@ describe('BrowserTabBody navigation', () => {
 
     const view = render(renderBrowserTab('https://example.com/persisted', vi.fn(), false));
 
-    expect(sharedWrapper.parentElement).toBe(parking);
+    const hiddenSlot = sharedWrapper.parentElement;
+    expect(hiddenSlot).not.toBe(parking);
     expect(browserNavigate).not.toHaveBeenCalled();
 
     view.rerender(renderBrowserTab('https://example.com/persisted', vi.fn(), true));
 
-    expect(sharedWrapper.parentElement).not.toBe(parking);
+    expect(sharedWrapper.parentElement).toBe(hiddenSlot);
     expect(browserNavigate).toHaveBeenCalledOnce();
     expect(browserNavigate).toHaveBeenCalledWith('https://example.com/persisted');
+  });
+
+  it('parks an opener webview without releasing it when the shell unmounts', () => {
+    const parking = document.createElement('div');
+    parking.id = 'browser-webview-pool';
+    document.body.appendChild(parking);
+    parking.appendChild(sharedWrapper);
+    poolMocks.currentWrapper = sharedWrapper;
+    browserState = makeBrowserState({ wrapper: sharedWrapper });
+    const view = render(renderBrowserTab('https://www.taptap.cn/'));
+
+    view.unmount();
+
+    expect(sharedWrapper.parentElement).toBe(parking);
+    expect(browserWebviewPool.release).not.toHaveBeenCalled();
   });
 
   it('does not reconnect a released wrapper when a replacement arrives', () => {

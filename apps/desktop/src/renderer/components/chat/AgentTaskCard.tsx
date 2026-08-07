@@ -29,7 +29,7 @@ import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNav
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
-import { subagentSpawnReceiptName } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_TOOL_NAME, subagentSpawnReceiptName } from '@cindy/maker-shared/agent-task';
 
 // 徽标可显示的思考强度档:协议全部合法档(效果词表 effortLevels 四语齐)。
 const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
@@ -59,6 +59,13 @@ function readInputString(input: unknown, keys: string[]): string | undefined {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+function readInputStringArray(input: unknown, key: string): string[] {
+  if (!input || typeof input !== 'object') return [];
+  const value = (input as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
 }
 
 function compactText(text: string | undefined, max = 260): string | undefined {
@@ -134,9 +141,20 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // subagent-model-chip: 子代理模型 —— 实时态优先 update.model(progress 事件
   // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel;两者皆无时
   // 再回退 spawn 参数里显式指定的 model(codex collab 卡,translator 透传
-  // item.model)。默认继承主模型时 spawn 无 model 字段——不猜继承值,不渲染。
+  // item.model)。`model: null` 是实时聚合卡的显式清除指令,不能再落到历史/输入兜底,
+  // 否则多 receiver 模型冲突时旧徽标会被重新显示。V1 多 receiver 的实时聚合结论
+  // 不落库;重载后既无法证明所有 receiver 都已上报、也无法证明模型一致,所以历史态
+  // 同样不从首条子消息或 spawn 参数猜回单一徽标。默认继承主模型时 spawn 无 model
+  // 字段——不猜继承值,不渲染。
+  const receiverThreadIds = readInputStringArray(toolCall?.toolInput, 'receiverThreadIds');
+  const ambiguousMultiReceiverHistory =
+    !update && toolCall?.toolName?.startsWith('collab:') === true && receiverThreadIds.length > 1;
   const modelLabel = formatModelShortLabel(
-    update?.model ?? subagentModel ?? readInputString(toolCall?.toolInput, ['model']),
+    update?.model === null
+      ? undefined
+      : update?.model ?? (ambiguousMultiReceiverHistory
+        ? undefined
+        : subagentModel ?? readInputString(toolCall?.toolInput, ['model'])),
   );
   // codex spawn 可为子代理显式指定思考强度(translator 透传 reasoningEffort);
   // 已知档位才走 effortLevels 词表,未知值不显示。CC 无此参数,行为不变。
@@ -209,18 +227,31 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // 原文),用户可见句子在这里按 locale 组装。判据与 mobile 卡模型共用
   // maker-shared 的 subagentSpawnReceiptName,不在端上内联复制。
   const spawnReceiptName = subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result);
+  // 判据与抑制规则同 maker-shared 的 buildAgentTaskCardModel:有 live update 时不显示
+  // 「已启动」句子(title + 状态已表达),否则 codex 卡会比 Claude 卡多一行冗余文案。
   const summary = spawnReceiptName
-    ? t('chat.agentTask.subagentStarted', { name: spawnReceiptName })
+    ? (update
+        ? detailText(update.summary)
+        : t('chat.agentTask.subagentStarted', { name: spawnReceiptName }))
     : detailText(result, update?.summary);
   const duration = formatDuration(update?.usage?.durationMs);
-  const provider = update?.provider ?? (toolCall?.toolName?.startsWith('collab:') ? 'codex' : 'claude-code');
+  // provider 推断与 maker-shared 的 buildAgentTaskCardModel 同口径(裸 `subagent` 是 pi
+  // 扩展注册的工具名);历史回放没有 live update 时也不会把 pi 卡标成 Claude。
+  const provider = update?.provider
+    ?? (toolCall?.toolName?.startsWith('collab:')
+      ? 'codex'
+      : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME
+        ? 'pi'
+        : 'claude-code');
   const providerLabel = isWorkflow
     ? t('chat.agentTask.provider.workflow')
     : isBash
       ? t('chat.agentTask.provider.shell')
       : provider === 'codex'
         ? t('chat.agentTask.provider.codex')
-        : t('chat.agentTask.provider.claude');
+        : provider === 'pi'
+          ? t('chat.agentTask.provider.pi')
+          : t('chat.agentTask.provider.claude');
 
   // 停止按钮:running + 本会话可定位 + claude-code(codex 无 stopTask 通道)。
   // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification 事件流收口

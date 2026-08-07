@@ -11,6 +11,10 @@ import {
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
+import {
+  isProductTurnCompletionTailEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import type { ApplicationMenuCommand } from '../../shared/applicationMenuCommands.js';
 
 import { hasSessionAttention as hasAppBadgeSessionAttention } from '../appBadgeService.js';
@@ -967,6 +971,7 @@ export class AgentIslandService {
   }
 
   private prunePermissionRequestsForAgentEvent(sessionId: string, event: AgentEvent): void {
+    if (isTurnContinuationBoundaryEvent(event)) return;
     if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
       this.deletePermissionRequestsForSession(sessionId);
       return;
@@ -2216,13 +2221,11 @@ function getAgentIslandSoundEventForTransition(
 }
 
 function isCompletionDoneEvent(event: AgentEvent): boolean {
-  if (event.type === 'done') return true;
-  if (event.type !== 'status') return false;
-  const data = event.data as { isRunning?: unknown; status?: unknown } | undefined;
-  return data?.isRunning === false && data.status === 'Done';
+  return isProductTurnCompletionTailEvent(event);
 }
 
 function isCancelledTerminalEvent(event: AgentEvent): boolean {
+  if (isTurnContinuationBoundaryEvent(event)) return false;
   if (event.type !== 'done' && event.type !== 'status') return false;
   const data = event.data as { cancelled?: unknown } | undefined;
   return data?.cancelled === true;

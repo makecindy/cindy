@@ -35,6 +35,10 @@ interface Harness {
     runtimeStateOf: ReturnType<typeof vi.fn>;
     spawn: ReturnType<typeof vi.fn>;
     sendToGhost: ReturnType<typeof vi.fn>;
+    log: {
+      info: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
   };
   sent: GhostPipeToolCall[];
 }
@@ -53,6 +57,10 @@ function makeHarness(opts: {
       sent.push(payload);
       return true;
     }),
+    log: {
+      info: vi.fn(),
+      warn: vi.fn(),
+    },
   };
   const dispatcher = new GhostPipeDispatcher({
     ...deps,
@@ -189,6 +197,37 @@ describe('配对交卷', () => {
     expect(h.dispatcher.pendingCount()).toBe(0);
   });
 
+  it('完成日志只含元数据，不记录参数或返回内容', async () => {
+    const h = makeHarness();
+    const secretArg = 'must-not-log-argument';
+    const secretResult = 'must-not-log-result';
+    const p = h.dispatcher.callGhostTool({
+      ...CALL,
+      args: { prompt: secretArg },
+      callId: 'observable-call',
+    });
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    h.dispatcher.handleToolResult('art', {
+      type: 'tool-result',
+      callId: 'observable-call',
+      ok: true,
+      result: { value: secretResult },
+    });
+    await expect(p).resolves.toMatchObject({ ok: true });
+
+    expect(h.deps.log.info).toHaveBeenCalledTimes(1);
+    expect(h.deps.log.info).toHaveBeenCalledWith('ghost tool call completed', {
+      ghostId: 'art',
+      tool: 'gen_image',
+      callId: 'observable-call',
+      ok: true,
+      totalMs: expect.any(Number),
+    });
+    const logs = JSON.stringify(h.deps.log.info.mock.calls);
+    expect(logs).not.toContain(secretArg);
+    expect(logs).not.toContain(secretResult);
+  });
+
   it('意识侧报错 → INTERNAL 透传 message', async () => {
     const h = makeHarness();
     const p = h.dispatcher.callGhostTool(CALL);
@@ -258,6 +297,151 @@ describe('配对交卷', () => {
   });
 });
 
+describe('tool-call 宿主能力绑定', () => {
+  it('按 ghostId + callId + callerTool 验身，同请求只允许一次暂态重试', async () => {
+    const h = makeHarness();
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const callId = h.sent[0].callId;
+
+    expect(
+      h.dispatcher.claimPendingCall(
+        'evil-ghost',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(false);
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'other_tool',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(false);
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(true);
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(false);
+    expect(
+      h.dispatcher.settlePendingCallClaim(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-b',
+      ),
+    ).toBe(false);
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(true);
+    expect(
+      h.dispatcher.settlePendingCallClaim(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(false);
+
+    h.dispatcher.handleToolResult('art', {
+      type: 'tool-result',
+      callId,
+      ok: true,
+      result: 'done',
+    });
+    await expect(pending).resolves.toMatchObject({ ok: true });
+  });
+
+  it('成功或不可重试结果会永久消费 binding', async () => {
+    const h = makeHarness();
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const callId = h.sent[0].callId;
+
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(true);
+    expect(
+      h.dispatcher.settlePendingCallClaim(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      h.dispatcher.claimPendingCall(
+        'art',
+        callId,
+        'gen_image',
+        'cindy.search.web',
+        'request-a',
+      ),
+    ).toBe(false);
+
+    h.dispatcher.handleToolResult('art', {
+      type: 'tool-result',
+      callId,
+      ok: true,
+      result: 'done',
+    });
+    await expect(pending).resolves.toMatchObject({ ok: true });
+  });
+});
+
 describe('超时与收卷', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -275,6 +459,24 @@ describe('超时与收卷', () => {
       result: 'too late',
     });
     expect(late.accepted).toBe(false);
+  });
+
+  it('可信宿主可为 UI 查询单独收短超时，不改变普通调用默认档', async () => {
+    const h = makeHarness({ timeoutMs: 1000 });
+    const short = h.dispatcher.callGhostTool({ ...CALL, timeoutMs: 50 });
+    const normal = h.dispatcher.callGhostTool(CALL);
+    expect(h.sent).toHaveLength(2);
+
+    vi.advanceTimersByTime(40);
+    expect(h.dispatcher.handleToolProgress('art', {
+      callId: h.sent[0].callId,
+    }).accepted).toBe(true);
+    vi.advanceTimersByTime(10);
+    await expect(short).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
+    expect(h.dispatcher.pendingCount()).toBe(1);
+
+    vi.advanceTimersByTime(950);
+    await expect(normal).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
   });
 
   it('崩溃收卷 → GHOST_CRASHED;熄灯收卷 → GHOST_ASLEEP;只收本意识的', async () => {

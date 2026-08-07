@@ -19,6 +19,7 @@ import {
   isPopupSpawnedTab,
   markPopupSpawnedTab,
 } from '../lib/popupTabs';
+import { browserWebviewPool } from '../lib/browserWebviewPool';
 import type { TabKindPlugin } from '../types';
 
 // device-link origin 注册表桩:'remote-' 前缀的 sessionId 视为远程会话。
@@ -98,6 +99,7 @@ describe('RSB store', () => {
     store._resetStore();
     _resetTabKindRegistry();
     _resetPopupTabsForTests();
+    vi.restoreAllMocks();
   });
 
   describe('getBucket', () => {
@@ -458,6 +460,16 @@ describe('RSB store', () => {
   });
 
   describe('closeTab', () => {
+    it('releases an ordinary browser WebView only after its tab is really closed', async () => {
+      const release = vi.spyOn(browserWebviewPool, 'release').mockImplementation(() => undefined);
+      const tab = await store.addTab('s1', 'web-browser', null);
+
+      await store.closeTab('s1', tab.id);
+
+      expect(release).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledWith(tab.id);
+    });
+
     it('清掉 tabId 上的 popup 来源标记(任何关闭入口,不只 guest 自关)', async () => {
       const tab = await store.addTab('s1', 'web-browser', null, {
         onOptimisticAdd: markPopupSpawnedTab,

@@ -288,6 +288,10 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   //    根字段。老被控端 CHANNEL_NOT_ALLOWED → 吞掉降级(勾选仅本次草稿生效)。
   'maker:get-new-maker-defaults',
   'maker:apply-new-maker-worktree-pref',
+  // 工作端 canonical baseRepo scoped 的 worktree 源分支 live 镜像。GET 未命中返回 null；
+  // APPLY 返回并广播 { baseRepo, sourceBranch, revision }，同值写也推进 revision。
+  'maker:get-new-maker-worktree-branch-pref',
+  'maker:apply-new-maker-worktree-branch-pref',
   // 模型选择列表元信息:被控端视角的模型单价表(只读;拉不到 → 隐藏价格)。
   'maker:usage:model-pricing',
   // Codex app-server 官方控制面:只读额度/reset 次数 + 人工确认后的单次 reset。
@@ -359,6 +363,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'fs:mkdir-p',
   // —— Worktree(新建会话前在工作端预建隔离 worktree;git/fs 全在被控端执行)——
   //  - detect-cwd:资格探测(git 已装 / 是 git 仓库 / 未在 worktree 内)+ repoRoot/currentBranch;
+  //  - list-branches:工作端返回本地分支列表 + 当前分支,供控制端选择 sourceBranch;
   //  - suggest-name:工作端按仓库上下文生成 worktree 名;
   //  - create:两步建会话第一步——同预生成 sessionId 先建 worktree 拿路径,再以该路径调
   //    maker:create-session(与桌面控制端 NewMakerDraftRoute 的远程流程同构)；
@@ -367,6 +372,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // INVOKE_TIMEOUT_OVERRIDES_MS,移动端 invoke 必须带同一映射)。
   // 老被控端无这些 channel → CHANNEL_NOT_ALLOWED → 手机端按「worktree 不可用」降级。
   'worktree:detect-cwd',
+  'worktree:list-branches',
   'worktree:suggest-name',
   'worktree:create',
   'worktree:discard-precreated',
@@ -445,7 +451,8 @@ export type DeviceLinkConnectionIssueKind =
   | 'auth-failed'
   | 'replaced'
   | 'too-many-connections'
-  | 'version-mismatch';
+  | 'version-mismatch'
+  | 'unstable';
 
 /** 连接问题标题(手机端直出文案;桌面端走 i18n,不用这组)。 */
 export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): string {
@@ -458,6 +465,8 @@ export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): strin
       return '连接数已达上限';
     case 'version-mismatch':
       return '版本不匹配';
+    case 'unstable':
+      return '连接反复断开';
   }
 }
 
@@ -472,6 +481,8 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
       return '当前账号同时在线的设备过多，请断开其它设备后重试。';
     case 'version-mismatch':
       return '当前 App 版本与服务端协议不一致，请升级到最新版本。';
+    case 'unstable':
+      return '本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。';
   }
 }
 

@@ -10,9 +10,11 @@ import { describe, expect, it } from 'vitest';
  * ## 规则(值白名单制:值出梯即红,豁免须在下方 EXEMPTIONS 四元登记)
  *  1. Tailwind 字重类只许 font-normal / font-medium / font-semibold;
  *     font-bold 及以上、以下与任意值 font-[...] 一律禁止(豁免域除外)。
- *  2. Tailwind 任意值字号 text-[N<unit>] 零容忍:px/em/rem/pt/pc/ch/ex/q/
- *     cm/mm/in/vw/vh/vmin/vmax 全单位、大小写不敏感、含小数与 .75 形态与
- *     length: 前缀;token 类 text-<n> 的 <n> 必须在白名单内。
+ *  2. Tailwind 任意值字号 text-[N<unit>] 与 text-[length:<function>] 零容忍:
+ *     px/em/rem/pt/pc/ch/ex/q/cm/mm/in/vw/vh/vmin/vmax 全单位、大小写不敏感、
+ *     含小数与 .75 形态、length: 前缀及 calc()/var() 函数均命中;已登记的
+ *     code-font/compact 派生值只能按具体文件 + 具体命中精确豁免。token 类
+ *     text-<n> 的 <n> 必须在白名单内,语义类只收编 xs/sm/base/lg。
  *  3. fontWeight / fontSize 的值片段(冒号、JSX 属性 =、style 赋值、三元两臂,
  *     **允许跨行**)必须落梯:weight 任意数字字面量 ∈ {400,500,600}(550/650
  *     中间值与 <100/>1000 越界值同判),bold/bolder/lighter 关键字大小写
@@ -31,11 +33,12 @@ import { describe, expect, it } from 'vitest';
  *     `*` 起头行仅在**非选择器形态**时按 jsdoc 跳过(`* {` / `*{` 照常受检)。
  *  6. 同一行 / 同一文件多个违规逐个计数(occurrence 级)—— 在已豁免文件里
  *     追加新违规同样会红。
- *  7. 镜像检查:tailwind.config.ts fontSize 档 ↔ globals.css --text-<n> ↔
- *     DESIGN.md §3 白名单,三处必须一致 —— 改档必须三处同步。
+ *  7. 五处镜像检查:DESIGN.md 白名单 ↔ tailwind.config.ts fontSize ↔
+ *     globals.css 默认值 ↔ useFontSettings.ts 运行时注册表 ↔
+ *     lib/utils.ts tailwind-merge 字号组;各处档位、映射值与去重列表必须一致。
  *
- * ## 豁免(四元绑定:文件 + 规则 + 理由 + 期望命中次数)
- *  命中次数多于登记 = 有人蹭豁免;少于登记 = 豁免已过期,两者都红。
+ * ## 豁免(精确绑定:文件 + 规则 + 理由 + 具体合法命中及期望次数)
+ *  每条豁免按具体 match 签名计数;新增 font-black 或 800 即使总数不变也红。
  *  豁免域清单与理由正本见 DESIGN.md §3「排版豁免登记表」;下表是其中
  *  落到静态扫描命中的子集(外部页注入的字体族、手机 WebView 生成器、紧凑
  *  派生值等域由「合法值 / SKIP / 手机侧守卫」承接,天然无命中,不在此表)。
@@ -89,19 +92,37 @@ interface Exemption {
   rule: string;
   /** 理由(正本在 DESIGN.md §3 排版豁免登记表)。 */
   reason: string;
-  /** 期望命中次数(occurrence 计数):多 = 蹭豁免,少 = 豁免过期,均判红。 */
-  expected: number;
+  /** 允许的具体命中及 occurrence 期望次数;未登记 match 一律不享有豁免。 */
+  signatures: ReadonlyArray<{ match: string; expected: number }>;
 }
 
 const EXEMPTIONS: Exemption[] = [
   // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五处形态
   // (238 直接字面量、290 filled/error 三元、300/310 focus/blur style 赋值、748 内联 style)。
-  { file: 'src/renderer/components/login/LoginControls.tsx', rule: 'tw-weight', reason: '登录品牌画布 Bold(§16)', expected: 7 },
-  { file: 'src/renderer/components/login/LoginControls.tsx', rule: 'inline-weight', reason: '登录品牌画布 Bold(§16,含 filled/focus 态三元与 style 赋值)', expected: 5 },
-  { file: 'src/renderer/components/auth/LegacyMigrationDialog.tsx', rule: 'inline-weight', reason: '登录品牌画布家族(680→490 缩放),字重按 #1505 拍板豁免', expected: 2 },
-  { file: 'src/renderer/components/markdown/codemirrorGithubTheme.ts', rule: 'inline-weight', reason: 'markdown 内容域:编辑器 strong 语法节点(§3 豁免表「markdown 内容」行)', expected: 1 },
-  { file: 'src/main/oauthResultPage.ts', rule: 'string-weight', reason: '登录品牌画布家族(自包含品牌页生成器,§3 豁免表)', expected: 2 },
-  { file: 'src/renderer/styles/globals.css', rule: 'css-weight', reason: 'hljs 语法高亮主题移植(§3 豁免表,保真优先)', expected: 4 },
+  { file: 'src/renderer/components/login/LoginControls.tsx', rule: 'tw-weight', reason: '登录品牌画布 Bold(§16)', signatures: [{ match: 'font-bold', expected: 7 }] },
+  { file: 'src/renderer/components/login/LoginControls.tsx', rule: 'inline-weight', reason: '登录品牌画布 Bold(§16,含 filled/focus 态三元与 style 赋值)', signatures: [{ match: 'fontWeight …700', expected: 5 }] },
+  { file: 'src/renderer/components/auth/LegacyMigrationDialog.tsx', rule: 'inline-weight', reason: '登录品牌画布家族(680→490 缩放),字重按 #1505 拍板豁免', signatures: [{ match: 'fontWeight …700', expected: 2 }] },
+  { file: 'src/renderer/components/markdown/codemirrorGithubTheme.ts', rule: 'inline-weight', reason: 'markdown 内容域:编辑器 strong 语法节点(§3 豁免表「markdown 内容」行)', signatures: [{ match: 'fontWeight …bold', expected: 1 }] },
+  { file: 'src/main/oauthResultPage.ts', rule: 'string-weight', reason: '登录品牌画布家族(自包含品牌页生成器,§3 豁免表)', signatures: [{ match: 'font-weight:700', expected: 2 }] },
+  { file: 'src/renderer/styles/globals.css', rule: 'css-weight', reason: 'hljs 语法高亮主题移植(§3 豁免表,保真优先)', signatures: [{ match: 'font-weight: bold', expected: 4 }] },
+  // 紧凑代码字号是 DESIGN.md §3 已登记的机制本体;只允许这些现有文件/具体类。
+  { file: 'src/renderer/components/chat/AgentActionRow.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
+  { file: 'src/renderer/components/chat/DiffView.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
+  { file: 'src/renderer/components/chat/GhostSummonCard.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
+  { file: 'src/renderer/components/chat/MarkdownDiffBlock.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
+  { file: 'src/renderer/components/chat/MarkdownMermaidBlock.tsx', rule: 'arb-size', reason: '代码字号变量', signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }] },
+  { file: 'src/renderer/components/chat/MarkdownRenderer.tsx', rule: 'arb-size', reason: '代码字号变量', signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }] },
+  { file: 'src/renderer/components/chat/SystemCard.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [
+    { match: 'text-[length:calc(var(--app-code-font-size)_-_1.5px)]', expected: 1 },
+    { match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 },
+  ] },
+  { file: 'src/renderer/components/chat/ToolCallCard.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 }] },
+  { file: 'src/renderer/components/chat/ToolPayloadLightbox.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 3 }] },
+  { file: 'src/renderer/components/chat/UserMessage.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_2px)]', expected: 1 }] },
+  { file: 'src/renderer/components/markdown/MermaidSourceEditor.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
+  { file: 'src/renderer/components/new-chat/PermissionPrompt.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
+  { file: 'src/renderer/features/skillhub/PublishDialog.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_3px)]', expected: 1 }] },
+  { file: 'src/renderer/features/skillhub/SkillhubDetailView.tsx', rule: 'arb-size', reason: '代码字号变量', signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 1 }] },
 ];
 
 // ── 预处理 ──────────────────────────────────────────────────────────
@@ -148,7 +169,7 @@ export function findTwWeightViolations(text: string): Hit[] {
 export function findArbitrarySizes(text: string): Hit[] {
   return [
     ...text.matchAll(
-      /\btext-\[(?:length:)?(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax)\]/gi,
+      /\btext-\[(?:length:[^\]\n]+|(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax))\]/gi,
     ),
   ].map((m) => ({ match: m[0], index: m.index ?? 0 }));
 }
@@ -158,6 +179,11 @@ export function findOffLadderTokenSizes(text: string): Hit[] {
   const hits: Hit[] = [];
   for (const m of text.matchAll(/\btext-(\d+)\b/g)) {
     if (!SIZE_SET.has(Number(m[1]))) hits.push({ match: m[0], index: m.index ?? 0 });
+  }
+  // DESIGN.md 只收编 xs/sm/base/lg; Tailwind 默认仍提供 xl..9xl,
+  // 所以必须显式拦截这些可用但白名单外的语义类。
+  for (const m of text.matchAll(/\btext-(xl|[2-9]xl)\b/g)) {
+    hits.push({ match: m[0], index: m.index ?? 0 });
   }
   return hits;
 }
@@ -352,6 +378,20 @@ function scan(): Violation[] {
   return violations;
 }
 
+/** 镜像解析器保持 key 与实际映射值成对返回，不能只看变量名档位。 */
+export function parseNumericConfigMappings(config: string): Array<readonly [number, number]> {
+  const fontSizeBlock = /fontSize:\s*\{([\s\S]*?)^\s*\},\s*borderRadius:/m.exec(config)?.[1] ?? '';
+  return [...fontSizeBlock.matchAll(/^\s*(\d+):\s*['"]var\(--text-(\d+)\)['"]/gm)]
+    .map((m) => [Number(m[1]), Number(m[2])] as const)
+    .sort(([a], [b]) => a - b);
+}
+
+export function parseNumericCssMappings(css: string): Array<readonly [number, number]> {
+  return [...css.matchAll(/--text-(\d+):\s*(\d+)px;/g)]
+    .map((m) => [Number(m[1]), Number(m[2])] as const)
+    .sort(([a], [b]) => a - b);
+}
+
 // ── 主守卫 ──────────────────────────────────────────────────────────
 
 describe('typography discipline (DESIGN.md §3, #1505)', () => {
@@ -361,13 +401,19 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     const keyOf = (file: string, rule: string) => `${file} ${rule}`;
     const exemptionByKey = new Map(EXEMPTIONS.map((e) => [keyOf(e.file, e.rule), e]));
 
-    const counts = new Map<string, Violation[]>();
+    const counts = new Map<string, Map<string, number>>();
     const unexempted: string[] = [];
     for (const v of violations) {
       const key = keyOf(v.file, v.rule);
-      if (exemptionByKey.has(key)) {
-        const bucket = counts.get(key) ?? [];
-        bucket.push(v);
+      const exemption = exemptionByKey.get(key);
+      if (exemption) {
+        const signature = exemption.signatures.find((s) => s.match === v.match);
+        if (!signature) {
+          unexempted.push(`${v.file}:${v.line} [${v.rule}] ${v.match}（未登记的豁免命中）`);
+          continue;
+        }
+        const bucket = counts.get(key) ?? new Map<string, number>();
+        bucket.set(v.match, (bucket.get(v.match) ?? 0) + 1);
         counts.set(key, bucket);
       } else {
         unexempted.push(`${v.file}:${v.line} [${v.rule}] ${v.match}`);
@@ -376,12 +422,15 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
 
     const exemptionDrift: string[] = [];
     for (const e of EXEMPTIONS) {
-      const hits = counts.get(keyOf(e.file, e.rule))?.length ?? 0;
-      if (hits !== e.expected) {
-        exemptionDrift.push(
-          `${e.file} [${e.rule}] 登记 ${e.expected} 次,实测 ${hits} 次 —— ` +
-            (hits > e.expected ? '有人蹭豁免,新增处必须自证或归梯' : '豁免已过期,请同步删登记'),
-        );
+      const actual = counts.get(keyOf(e.file, e.rule)) ?? new Map<string, number>();
+      for (const signature of e.signatures) {
+        const hits = actual.get(signature.match) ?? 0;
+        if (hits !== signature.expected) {
+          exemptionDrift.push(
+            `${e.file} [${e.rule}] ${signature.match} 登记 ${signature.expected} 次,实测 ${hits} 次 —— ` +
+              (hits > signature.expected ? '有人蹭豁免,新增处必须自证或归梯' : '豁免已过期,请同步删登记'),
+          );
+        }
       }
     }
 
@@ -389,20 +438,44 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     expect(exemptionDrift).toEqual([]);
   });
 
-  it('mirrors the size ladder across tailwind.config.ts, globals.css and DESIGN.md', () => {
+  it('mirrors the size ladder across all five implementation sources and DESIGN.md', () => {
     const expected = [...SIZE_WHITELIST].sort((a, b) => a - b);
+    const expectedSemantic = { xs: 12, sm: 14, base: 16, lg: 18 };
 
     const config = readFileSync(join(ROOT, 'tailwind.config.ts'), 'utf8');
-    const fontSizeBlock = /fontSize:\s*\{([^}]*)\}/.exec(config)?.[1] ?? '';
-    const configTiers = [...fontSizeBlock.matchAll(/^\s*(\d+):/gm)].map((m) => Number(m[1])).sort((a, b) => a - b);
-    expect(configTiers).toEqual(expected);
+    const fontSizeBlock = /fontSize:\s*\{([\s\S]*?)^\s*\},\s*borderRadius:/m.exec(config)?.[1] ?? '';
+    const configNumeric = parseNumericConfigMappings(config);
+    expect(configNumeric).toEqual(expected.map((n) => [n, n]));
+    const configSemantic = Object.fromEntries(
+      [...fontSizeBlock.matchAll(/^\s*(xs|sm|base|lg):\s*\[['"]var\(--text-\1\)['"]/gm)].map((m) => [m[1], expectedSemantic[m[1] as keyof typeof expectedSemantic]]),
+    );
+    expect(configSemantic).toEqual(expectedSemantic);
 
     const css = readFileSync(join(ROOT, 'src/renderer/styles/globals.css'), 'utf8');
-    const cssTiers = [...css.matchAll(/--text-(\d+):\s*\d+px;/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
-    expect(cssTiers).toEqual(expected);
+    const cssNumeric = parseNumericCssMappings(css);
+    expect(cssNumeric).toEqual(expected.map((n) => [n, n]));
+    const cssSemantic = Object.fromEntries(
+      [...css.matchAll(/--text-(xs|sm|base|lg):\s*(\d+)px;/g)].map((m) => [m[1], Number(m[2])]),
+    );
+    expect(cssSemantic).toEqual(expectedSemantic);
 
-    // DESIGN.md §3「桌面 UI 字号白名单」小节的两个 {…} 集合。改白名单必须同步
-    // 本测试的 SIZE_WHITELIST 与上面两处 —— 这正是镜像检查存在的意义。
+    const hook = readFileSync(join(ROOT, 'src/renderer/hooks/useFontSettings.ts'), 'utf8');
+    const runtimeBlock = /UI_TEXT_TOKEN_SIZES\s*=\s*\[([^\]]+)\]/s.exec(hook)?.[1] ?? '';
+    const runtimeNumeric = [...runtimeBlock.matchAll(/\b\d+\b/g)].map((m) => Number(m[0])).sort((a, b) => a - b);
+    expect(runtimeNumeric).toEqual(expected);
+    expect(hook).toMatch(/for \(const tokenSize of UI_TEXT_TOKEN_SIZES\)[\s\S]*?set\(`--text-\$\{tokenSize\}`, `\$\{Math\.round\(tokenSize \* scale\)\}px`\)/);
+    const semanticBlock = /SCALED_TAILWIND_TOKENS\s*=\s*\{([^}]+)\}/s.exec(hook)?.[1] ?? '';
+    const runtimeSemantic = Object.fromEntries(
+      [...semanticBlock.matchAll(/^\s*(xs|sm|base|lg):\s*(\d+),/gm)].map((m) => [m[1], Number(m[2])]),
+    );
+    expect(runtimeSemantic).toEqual(expectedSemantic);
+
+    const mergeUtils = readFileSync(join(ROOT, 'src/renderer/lib/utils.ts'), 'utf8');
+    const mergeBlock = /font-size'[\s\S]*?text:\s*\[([^\]]+)\]/.exec(mergeUtils)?.[1] ?? '';
+    const mergeNumeric = [...mergeBlock.matchAll(/['"](\d+)['"]/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
+    expect(mergeNumeric).toEqual(expected);
+
+    // DESIGN.md §3「桌面 UI 字号白名单」小节的两个 {…} 集合。
     const design = readFileSync(DESIGN_MD, 'utf8');
     const section = design.split('### 桌面 UI 字号白名单')[1]?.split('###')[0] ?? '';
     const sets = [...section.matchAll(/\{([\d\s,、]+)\}/g)];
@@ -426,10 +499,21 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       // 全单位 / 大小写 / 无整数部分小数(三轮加固)
       expect(findArbitrarySizes('text-[0.75rem]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[.75rem]')).toHaveLength(1);
+      // 函数形式不能因 `[` 后不是数字而绕过守卫(P1)
+      expect(findArbitrarySizes('text-[length:calc(9px+1vw)]')).toHaveLength(1);
+      expect(findArbitrarySizes('text-[length:var(--app-code-font-size)]')).toHaveLength(1);
+      // 省略前导零的小数必须按完整 0.12px 识别(P2)
+      expect(findArbitrarySizes('text-[.12px]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[12PX]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[17pt]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[length:.75rem]')).toHaveLength(1);
       expect(matches(findOffLadderTokenSizes('className="text-17 font-medium"'))).toEqual(['text-17']);
+      expect(matches(findOffLadderTokenSizes('text-xl text-2xl text-3xl text-9xl'))).toEqual([
+        'text-xl',
+        'text-2xl',
+        'text-3xl',
+        'text-9xl',
+      ]);
       expect(findInlineWeightViolations('fontWeight: 700,')).toHaveLength(1);
       expect(findInlineWeightViolations("fontWeight: 'bold' }")).toHaveLength(1);
       // 中间值与越界值(不只认整百)
@@ -503,13 +587,22 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findFontShorthands('font: +700 medium serif;')).toHaveLength(1);
       expect(findStringWeightViolations('font-weight: +700;')).toHaveLength(1);
       expect(findStringWeightViolations('font-weight: .5;')).toHaveLength(1);
+      // 错误映射 fixture:只改右侧映射值也必须被镜像解析抓住(P1)
+      expect(
+        parseNumericConfigMappings(`fontSize: {\n  12: 'var(--text-9)',\n},\nborderRadius: {}`),
+      ).not.toEqual([[12, 12]]);
+      expect(parseNumericCssMappings(':root { --text-12: 9px; }')).not.toEqual([[12, 12]]);
+      // 删除档位后仍残留静态变量也必须被镜像检查抓住，而不是被白名单过滤吞掉。
+      expect(parseNumericCssMappings(':root { --text-12: 12px; --text-17: 17px; }')).not.toEqual([
+        [12, 12],
+      ]);
     });
 
     it('passes green samples', () => {
       expect(findTwWeightViolations('className="font-medium font-semibold font-normal"')).toEqual([]);
-      expect(findArbitrarySizes('text-[length:var(--app-code-font-size)]')).toEqual([]);
       expect(findArbitrarySizes('text-[var(--md-h1-fg)]')).toEqual([]);
-      expect(findOffLadderTokenSizes('className="text-12 text-28"')).toEqual([]);
+      expect(findArbitrarySizes('text-[var(--app-code-font-size)]')).toEqual([]);
+      expect(findOffLadderTokenSizes('className="text-xs text-sm text-base text-lg text-12 text-28"')).toEqual([]);
       expect(findInlineWeightViolations('fontWeight: 500,')).toEqual([]);
       expect(findInlineWeightViolations('fontWeight: active ? 600 : 500,')).toEqual([]);
       // 片段截断:同对象里的后续属性数字不误报为字重

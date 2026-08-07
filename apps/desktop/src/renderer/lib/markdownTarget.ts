@@ -10,6 +10,14 @@ import {
 const HTTP_URL_RE = /^https?:\/\//i;
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_ABSOLUTE_PATH_RE = /^[a-z]:[\\/]/i;
+/**
+ * `sandbox:` 前缀 + 斜杠若干 + 绝对路径(Windows 盘符或 POSIX)。LLM 受
+ * ChatGPT 代码沙箱习惯影响,会把本地生成文件写成 `sandbox:/C:/…/报告.xlsx`
+ * 或 `sandbox:/mnt/data/a.csv`(Issue #1811 实例)。捕获组 1 = 盘符路径,
+ * 捕获组 2 = POSIX 路径(含前导 `/`)。只认这两种绝对路径形态——`sandbox:foo`
+ * 之类的相对形态没有可靠语义,维持 unsupported-scheme 纯文本。
+ */
+const SANDBOX_HREF_RE = /^sandbox:\/*(?:([a-z]:[\\/][^\n]*)|(\/[^\n]*))$/i;
 const URL_WITH_DOUBLE_SLASH_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const BARE_FILE_REF_RE = /^[^\s:<>()[\]{}"'`]+?\.[a-z0-9]{1,10}$/i;
 /**
@@ -115,6 +123,19 @@ function hasUnsupportedScheme(value: string): boolean {
   if (WINDOWS_ABSOLUTE_PATH_RE.test(value)) return false;
   if (value.toLowerCase().startsWith('file://')) return false;
   return SCHEME_RE.test(value);
+}
+
+/**
+ * 把 `sandbox:/C:/…` / `sandbox:///mnt/…` 形态的链接剥成裸绝对路径,其余输入
+ * 原样返回。剥完后走与直写路径完全相同的 candidate → 存在性/workdir 解析链路,
+ * 所以这里**只做词法转换,不做任何信任判断**——不存在或越界的路径仍会在解析层
+ * 落回纯文本(Issue #1811;非特权 Markdown 面由 stripPrivilegedMarkdownTarget
+ * 继续兜底降级,不受影响)。
+ */
+export function normalizeSandboxHref(raw: string): string {
+  const m = raw.match(SANDBOX_HREF_RE);
+  if (!m) return raw;
+  return m[1] ?? m[2] ?? raw;
 }
 
 function decodeAnchorId(value: string): string {
@@ -241,7 +262,9 @@ export function classifyMarkdownLinkTarget(
   href: string | undefined,
   files?: readonly KnownLocalFileRef[],
 ): MarkdownTarget {
-  const raw = href?.trim() ?? '';
+  // sandbox: 前缀在进任何 scheme 判定前先剥掉——它只是 LLM 对本地路径的一种
+  // 拼写习惯,剥完后与作者直写 `[x](C:/…)` 走同一条链路(含存在性校验)。
+  const raw = normalizeSandboxHref(href?.trim() ?? '');
   if (!raw) return { kind: 'plain-text', href: raw, reason: 'empty' };
 
   if (raw.startsWith('#')) return { kind: 'anchor', id: decodeAnchorId(raw.slice(1)), href: raw };

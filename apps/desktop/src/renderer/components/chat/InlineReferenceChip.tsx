@@ -33,6 +33,8 @@ export interface InlineReferenceChipProps {
   ariaLabel?: string;
   className?: string;
   labelClassName?: string;
+  /** 标记会话路由动作，分屏 pane 不应在点击前抢走路由主权。 */
+  splitPaneRouteAction?: boolean;
   /**
    * chip 文字能否被 selection 选中并进入剪贴板。默认 `true`——已发送消息里的
    * chip 必须能跟着正文一起复制出去。composer 里的 ProseMirror atomic node 传
@@ -55,6 +57,7 @@ export function InlineReferenceChip({
   ariaLabel,
   className,
   labelClassName,
+  splitPaneRouteAction = false,
   textSelectable = true,
 }: InlineReferenceChipProps) {
   const interactive = Boolean(onClick || onContextMenu);
@@ -107,6 +110,7 @@ export function InlineReferenceChip({
       className={sharedClassName}
       style={style}
       data-inline-reference-chip=""
+      data-split-pane-route-action={splitPaneRouteAction ? '' : undefined}
     >
       {contents}
     </span>

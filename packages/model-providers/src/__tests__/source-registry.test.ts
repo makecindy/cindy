@@ -240,6 +240,30 @@ describe('mergeWithBundled', () => {
     expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
   });
 
+  it('旧远端未声明向量清单时继承 bundled;显式空清单仍是停用语义', () => {
+    // 与 xai 图像清单同一个道理(PR #1707 review):向量清单是客户端新增的 bundled
+    // 元数据,远端 / 本地目录里同 id 的 xd 可能还是升级前的结构。primary 整体优先
+    // 会让旧结构把新字段整段遮掉 → 目录派生空清单 → 设置页"无可用模型"、所有
+    // embed_text 直接 NO_CANDIDATE,能力等于没上线。
+    const bundledXd = BUNDLED_CATALOG.providers.find((p) => p.id === 'xd')!;
+    const oldRemoteXd = JSON.parse(JSON.stringify(bundledXd)) as Provider;
+    delete oldRemoteXd.embeddingModels;
+    delete oldRemoteXd.embeddingDefaults;
+    const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXd] });
+    const inheritedXd = inherited.providers.find((p) => p.id === 'xd');
+    expect(inheritedXd?.embeddingModels).toEqual(bundledXd.embeddingModels);
+    expect(inheritedXd?.embeddingDefaults).toEqual(bundledXd.embeddingDefaults);
+
+    // 显式 `[]` = "这个供应商不提供向量",不能被 bundled 顶回来。
+    const explicitlyDisabled = mergeWithBundled({
+      version: '2',
+      providers: [{ ...oldRemoteXd, embeddingModels: [] }],
+    });
+    expect(
+      explicitlyDisabled.providers.find((p) => p.id === 'xd')?.embeddingModels,
+    ).toEqual([]);
+  });
+
   it('旧远端改变鉴权或路由形状时不继承 bundled 图像能力', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
@@ -393,6 +417,7 @@ describe('loadCatalog', () => {
 
   it('keeps a newer cached modelRegistry when a valid remote Catalog is stale', async () => {
     const url = 'https://catalog.example.test/providers.json';
+    const newerUpdatedAt = '2099-08-02T00:00:00.000Z';
     const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
     const xai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!xai) throw new Error('missing bundled xAI provider');
@@ -412,7 +437,7 @@ describe('loadCatalog', () => {
       providers: [...MINIMAL.providers, { ...xai, name: 'NEWER-LKG-XAI' }],
       modelRegistry: {
         ...registry,
-        updatedAt: '2026-08-02T00:00:00.000Z',
+        updatedAt: newerUpdatedAt,
         models: registry.models.map((entry: { id: string }) => (
           entry.id === 'openai/gpt-5.6-sol' ? { ...entry, name: 'NEWER-LKG' } : entry
         )),
@@ -431,14 +456,14 @@ describe('loadCatalog', () => {
 
     expect(loaded.source).toBe('remote');
     expect(loaded.catalog.providers[0]?.name).toBe(MINIMAL.providers[0]?.name);
-    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-02T00:00:00.000Z');
+    expect(loaded.catalog.modelRegistry?.updatedAt).toBe(newerUpdatedAt);
     expect(
       loaded.catalog.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol')?.name,
     ).toBe('NEWER-LKG');
     expect(loaded.catalog.providers.find((provider) => provider.id === 'xai')?.name)
       .toBe('NEWER-LKG-XAI');
     const persisted = JSON.parse(writeCache.mock.calls[0]![1]);
-    expect(persisted.modelRegistry.updatedAt).toBe('2026-08-02T00:00:00.000Z');
+    expect(persisted.modelRegistry.updatedAt).toBe(newerUpdatedAt);
     expect(persisted.providers.find((provider: Provider) => provider.id === 'xai')?.name)
       .toBe('NEWER-LKG-XAI');
   });
@@ -481,12 +506,13 @@ describe('loadCatalog', () => {
 
   it('adopts the newer snapshot returned by a serialized LKG commit', async () => {
     const url = 'https://catalog.example.test/providers.json';
+    const newerUpdatedAt = '2099-08-01T00:00:00.000Z';
     const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
     const newer: Catalog = {
       ...MINIMAL,
       modelRegistry: {
         ...registry,
-        updatedAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: newerUpdatedAt,
       },
     };
     const older: Catalog = {
@@ -506,7 +532,7 @@ describe('loadCatalog', () => {
     );
 
     expect(loaded.source).toBe('remote');
-    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(loaded.catalog.modelRegistry?.updatedAt).toBe(newerUpdatedAt);
   });
 
   it('reads LKG even when the startup network budget is zero and rejects bad cache', async () => {

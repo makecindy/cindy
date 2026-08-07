@@ -14,6 +14,7 @@ import { findLatestMessageTodoInsertion } from '@cindy/maker-shared/message-rend
 
 import { TodoListCard } from '@/components/chat/TodoListCard';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { cn } from '@/lib/utils';
 
 const COMPLETED_PLAN_VISIBLE_MS = 2_000;
 
@@ -24,16 +25,18 @@ export function PinnedPlanPanel({
   width,
   taskHistoryMayBeIncomplete = false,
   visible = true,
+  className,
 }: {
   sessionId: string | null;
   messages: readonly ChatMessage[];
-  /** 会话仍在流式时进行中项呼吸/旋转;停止后冻结。 */
+  /** 保留旧调用方的兼容参数;计划胶囊现在始终使用静态灰度进度环。 */
   animated: boolean;
   /** 与 composer 同宽(inputWidth),胶囊在该宽度内居中,浮层不超出。 */
   width: number;
   taskHistoryMayBeIncomplete?: boolean;
   /** 交互卡接管底部区域时只隐藏视图,保留完成后的计时与已收起状态。 */
   visible?: boolean;
+  className?: string;
 }): React.ReactElement | null {
   const insertion = useMemo(
     () => findLatestMessageTodoInsertion(messages, { taskHistoryMayBeIncomplete }),
@@ -46,9 +49,7 @@ export function PinnedPlanPanel({
   );
   const completedAtMs = insertion?.updatedAtMs ?? Date.parse(insertion?.createdAt ?? '');
   const persistedCompletionDeadlineMs =
-    allDone && Number.isFinite(completedAtMs)
-      ? completedAtMs + COMPLETED_PLAN_VISIBLE_MS
-      : null;
+    allDone && Number.isFinite(completedAtMs) ? completedAtMs + COMPLETED_PLAN_VISIBLE_MS : null;
   const [fallbackCompletionVisibility, setFallbackCompletionVisibility] = useState<{
     identity: string;
     deadlineMs: number;
@@ -103,7 +104,10 @@ export function PinnedPlanPanel({
     return null;
 
   return (
-    <div className="mb-1.5 max-w-full" style={{ width }}>
+    <div
+      data-pinned-plan="true"
+      className={cn('mb-1.5 flex h-8 w-auto max-w-full shrink-0 items-center', className)}
+    >
       {/* key 按 plan session 锚定:新计划重挂载,浮层/进度从头开始。 */}
       <TodoListCard
         key={insertion.key}

@@ -203,3 +203,96 @@ describe('serveSshRemoteMedia', () => {
     expect(r.status).toBe(502);
   });
 });
+
+/**
+ * HTML 资源透传的两项约束(mediaFetch 透传下来)。两项都必须在**拉取之前**生效:
+ * 本函数 stat 完就会把整份文件分片拉进 Desktop 磁盘缓存,拉完再判等于 SSH 流量
+ * 与磁盘已经花掉(review P2)。
+ */
+describe('materializeSshRemoteMedia — baseDir / maxBytes 约束', () => {
+  const origin = { remoteHostId: 'host-1', workdir: '/home/u/proj' };
+  const urlFor = (p: string): string => `xdt-file://open?path=${encodeURIComponent(p)}`;
+
+  function makeDeps(size = 4): { deps: SshMediaDeps; fetchToCache: ReturnType<typeof vi.fn> } {
+    const fetchToCache = vi.fn(async () => {
+      const p = path.join(tmpDir, 'cached.png');
+      await writeFile(p, Buffer.from([1, 2, 3, 4]));
+      return p;
+    });
+    return {
+      fetchToCache,
+      deps: {
+        request: vi.fn(async () => ({ type: 'file', size, mtimeMs: 1 })) as unknown as SshMediaDeps['request'],
+        fetchToCache: fetchToCache as unknown as SshMediaDeps['fetchToCache'],
+      },
+    };
+  }
+
+  it('baseDir 内 → 放行', async () => {
+    const { deps } = makeDeps();
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/a.png'), deps, {
+      baseDir: '/home/u/proj/out',
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('baseDir 外 → 403,且不拉字节', async () => {
+    const { deps, fetchToCache } = makeDeps();
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/other/a.png'), deps, {
+      baseDir: '/home/u/proj/out',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.status).toBe(403);
+    expect(fetchToCache).not.toHaveBeenCalled();
+  });
+
+  it('兄弟目录前缀相似(out2 vs out)不算在内', async () => {
+    const { deps } = makeDeps();
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out2/a.png'), deps, {
+      baseDir: '/home/u/proj/out',
+    });
+    expect(r.ok === false && r.status).toBe(403);
+  });
+
+  it('baseDir 就是 workdir 根 → 不额外收窄(workdir 内一律放行)', async () => {
+    const { deps } = makeDeps();
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/anywhere/a.png'), deps, {
+      baseDir: '/home/u/proj',
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('baseDir 落在 workdir 外 → 403', async () => {
+    const { deps, fetchToCache } = makeDeps();
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/a.png'), deps, {
+      baseDir: '/etc',
+    });
+    expect(r.ok === false && r.status).toBe(403);
+    expect(fetchToCache).not.toHaveBeenCalled();
+  });
+
+  it('maxBytes:远端 stat 超限 → 403,且不把文件拉进 Desktop 缓存', async () => {
+    const { deps, fetchToCache } = makeDeps(5_000_000);
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/big.css'), deps, {
+      maxBytes: 2 * 1024 * 1024,
+    });
+    expect(r.ok === false && r.status).toBe(403);
+    expect(r.ok === false && r.message).toMatch(/超出取件大小上限/);
+    expect(fetchToCache).not.toHaveBeenCalled();
+  });
+
+  it('maxBytes 内 → 正常拉取', async () => {
+    const { deps, fetchToCache } = makeDeps(1024);
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/a.css'), deps, {
+      maxBytes: 2 * 1024 * 1024,
+    });
+    expect(r.ok).toBe(true);
+    expect(fetchToCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('不传 limits → 行为不变', async () => {
+    const { deps } = makeDeps(5_000_000);
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/big.css'), deps);
+    expect(r.ok).toBe(true);
+  });
+});

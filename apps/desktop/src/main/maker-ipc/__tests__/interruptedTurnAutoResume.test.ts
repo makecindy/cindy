@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+  INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
   InterruptedTurnAutoResumeGuard,
   interruptedTurnResumeDelayMs,
   isAutoResumeUserMessage,
@@ -281,8 +282,8 @@ function runInterruptedTurn(g: ReturnType<typeof createGuard>): number {
   return g.now();
 }
 
-// 额度模型的核心不变量:连续 N 次重连都没让模型产出任何东西 → 停下等人;中间只要有
-// 一次产出就归零重来;会话累计不设上限(只要任务还在推进就一直自愈)。
+// 额度模型的核心不变量:连续 N 次零产出会停；即使每次都有一点产出，同一次真人介入
+// 之后也受 episode 硬上限保护，绝不无限自动循环。
 describe('InterruptedTurnAutoResumeGuard', () => {
   it('grants up to MAX consecutive attempts, then stops and waits for the user', () => {
     const g = createGuard();
@@ -297,20 +298,25 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     }
     expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g))).toEqual({
       action: 'exhausted',
+      reason: 'consecutive',
       consecutiveAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
     });
   });
 
   it('model output resets the consecutive counter (但会话累计只增)', () => {
     const g = createGuard();
+    let lastAttemptToken = 0;
     // 先耗光连续额度。
     for (let i = 0; i < INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; i++) {
-      expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g)).action).toBe('resume');
+      const granted = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+      expect(granted.action).toBe('resume');
+      if (granted.action === 'resume') lastAttemptToken = granted.attemptToken;
     }
     expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g)).action).toBe('exhausted');
 
     // 连上了、模型有输出 → 归零,又能再来一整轮。
-    g.guard.noteProgress(SID);
+    expect(g.guard.noteProgress(SID, lastAttemptToken)).toBe(true);
     const decision = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
     expect(decision.action).toBe('resume');
     if (decision.action === 'resume') {
@@ -320,17 +326,23 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     }
   });
 
-  it('会话累计不设上限:只要有进展就能一直自愈', () => {
+  it('即使每次都有进展,同一人工介入周期仍受硬总上限保护', () => {
     const g = createGuard();
-    let total = 0;
-    // 反复「重连一次 → 有产出」十轮,远超单轮上限,不该出现 exhausted。
-    for (let round = 0; round < 10; round++) {
+    for (let round = 0; round < INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS; round++) {
       const decision = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
       expect(decision.action).toBe('resume');
-      total += 1;
-      if (decision.action === 'resume') expect(decision.sessionTotal).toBe(total);
-      g.guard.noteProgress(SID);
+      if (decision.action === 'resume') {
+        expect(decision.episodeAttempt).toBe(round + 1);
+        expect(decision.sessionTotal).toBe(round + 1);
+        expect(g.guard.noteProgress(SID, decision.attemptToken)).toBe(true);
+      }
     }
+    expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g))).toEqual({
+      action: 'exhausted',
+      reason: 'episode',
+      consecutiveAttempts: 0,
+      episodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
+    });
   });
 
   it('noteProgress 在没有失败计数时是 no-op(热路径每条消息都会调)', () => {
@@ -344,12 +356,38 @@ describe('InterruptedTurnAutoResumeGuard', () => {
 
   it('真实用户消息也重置连续计数(人工介入是新起点)', () => {
     const g = createGuard();
-    for (let i = 0; i < INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; i++) {
-      g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    for (let i = 0; i < INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS; i++) {
+      const decision = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+      expect(decision.action).toBe('resume');
+      if (decision.action === 'resume') {
+        expect(g.guard.noteProgress(SID, decision.attemptToken)).toBe(true);
+      }
     }
     expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g)).action).toBe('exhausted');
     g.guard.noteUserSend(SID);
-    expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g)).action).toBe('resume');
+    const decision = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(decision.action).toBe('resume');
+    if (decision.action === 'resume') {
+      expect(decision.episodeAttempt).toBe(1);
+      expect(decision.attempt).toBe(1);
+    }
+  });
+
+  it('真人接管后拒绝旧 attempt 的迟到进展', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') return;
+
+    g.guard.noteUserSend(SID);
+
+    expect(g.guard.noteProgress(SID, first.attemptToken)).toBe(false);
+    const next = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(next.action).toBe('resume');
+    if (next.action === 'resume') {
+      expect(next.attempt).toBe(1);
+      expect(next.episodeAttempt).toBe(1);
+    }
   });
 
   it('每次重连都带退避,连续重试不被最小间隔掐死', () => {
@@ -370,14 +408,114 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     expect(g.guard.onInterruptedTurn(SID, erroredAt)).toEqual({ action: 'skip', why: 'pending' });
   });
 
+  it('迟到的旧 status 起始事件不会清掉已排期的自动续跑', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected first resume');
+
+    // terminal error 后 provider 可能补发旧 status(isRunning=true)。它没有 host token，
+    // 不能冒领下一次自动续跑的 pending；只有 tokened event / 显式失败路径才能清理。
+    g.guard.noteTurnStarted(SID, { clearPending: false });
+    expect(g.guard.onInterruptedTurn(SID, g.now())).toEqual({ action: 'skip', why: 'pending' });
+    expect(g.guard.noteAttemptEvent(SID, first.attemptToken)).toBe(true);
+  });
+
   it('noteResumeSendFailed clears pending so the next error can be decided again', () => {
     const g = createGuard();
-    expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g)).action).toBe('resume');
-    g.guard.noteResumeSendFailed(SID);
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected resume');
+    expect(g.guard.noteResumeSendFailed(SID, first.attemptToken)).toBe(true);
     const again = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
     expect(again.action, '不再卡在 pending').toBe('resume');
     // 计数不回退(安全方向):失败的那次仍然算一次。
     if (again.action === 'resume') expect(again.attempt).toBe(2);
+  });
+
+  it('派发失败后 token 失效，后续无 token 的自动 turn 产出仍能重置连续计数', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected first resume');
+
+    expect(g.guard.noteResumeSendFailed(SID, first.attemptToken)).toBe(true);
+    expect(g.guard.noteProgress(SID)).toBe(true);
+    const next = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(next.action).toBe('resume');
+    if (next.action === 'resume') expect(next.attempt).toBe(1);
+  });
+
+  it('a tokened provider event clears pending even without status(isRunning=true)', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected first resume');
+
+    expect(g.guard.noteAttemptEvent(SID, first.attemptToken)).toBe(true);
+    const second = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(second.action).toBe('resume');
+    if (second.action === 'resume') expect(second.attempt).toBe(2);
+  });
+
+  it('retires a settled attempt owner before accepting untagged automatic progress', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected first resume');
+
+    expect(g.guard.noteAttemptEvent(SID, first.attemptToken)).toBe(true);
+    expect(g.guard.noteAttemptSettled(SID, first.attemptToken)).toBe(true);
+    expect(g.guard.noteProgress(SID, first.attemptToken)).toBe(false);
+    expect(g.guard.noteProgress(SID)).toBe(true);
+
+    const next = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(next.action).toBe('resume');
+    if (next.action === 'resume') expect(next.attempt).toBe(1);
+  });
+
+  it('allows consecutive terminal-only failures to consume the budget', () => {
+    const g = createGuard();
+    const attempts: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const decision = g.guard.onInterruptedTurn(SID, g.now());
+      expect(decision.action).toBe('resume');
+      if (decision.action !== 'resume') return;
+      attempts.push(decision.attempt);
+      // Simulate a provider that reports terminal error directly and never emits status(true).
+      g.guard.noteAttemptEvent(SID, decision.attemptToken);
+    }
+    expect(attempts).toEqual([1, 2, 3]);
+  });
+
+  it('ignores a stale tokened event after a newer attempt or user intervention', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected first resume');
+    g.guard.noteAttemptEvent(SID, first.attemptToken);
+
+    g.guard.noteUserSend(SID);
+    expect(g.guard.noteAttemptEvent(SID, first.attemptToken)).toBe(false);
+    const fresh = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(fresh.action).toBe('resume');
+    if (fresh.action === 'resume') expect(fresh.attempt).toBe(1);
+  });
+
+  it('迟到的旧 attempt 不能清掉当前新 attempt', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected first resume');
+
+    g.guard.noteTurnStarted(SID);
+    const second = g.guard.onInterruptedTurn(SID, g.now());
+    expect(second.action).toBe('resume');
+    if (second.action !== 'resume') throw new Error('expected second resume');
+
+    expect(g.guard.noteResumeSendFailed(SID, first.attemptToken)).toBe(false);
+    expect(g.guard.isCurrentAttempt(SID, second.attemptToken)).toBe(true);
+    expect(g.guard.noteResumeSendFailed(SID, second.attemptToken)).toBe(true);
   });
 
   it('skips when the user already sent something after the error (绝不插队)', () => {

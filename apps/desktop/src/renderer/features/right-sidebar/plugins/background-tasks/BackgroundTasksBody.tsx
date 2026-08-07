@@ -15,7 +15,8 @@
  *  - 面板不可见(非激活 tab / 壳子隐藏)时订阅挂空,恢复可见时重订阅自动补读。
  *  - 快照水合:挂载时对本机会话调一次 listSessionBackgroundTasks 经
  *    seedBackgroundTaskSnapshots 补存量(与 useBackgroundBashTasks 同口径,只复用
- *    store 公开函数);device-link 远程会话跳过(main 拿不到 handle,快照必空)。
+ *    store 公开函数);本机会话同一次快照兼做 stale running 对账(终态事件丢失
+ *    的自愈),device-link 远程会话只 seed 不对账(降级空表不可当权威)。
  *  - wf 文件辅源:详情视图挂载时拉一次 getWorkflowProgressFor,任务从 running 翻
  *    终态时再拉一次;不轮询。远程/老被控端自动降级返回 null。
  *  - 停止:gating = running + claude-code + 有 taskId + 非远程会话;在飞防连点、
@@ -507,8 +508,10 @@ export function BackgroundTasksBody({
   // 整段缺失。该函数幂等(historyLoaded / in-flight 双守卫),主窗口场景是 no-op。
   useEffect(() => {
     if (!sessionId) return;
+    const dispose = visible ? makerChatStore.enterView(sessionId) : undefined;
     makerChatStore.ensureInitialMessages(sessionId);
-  }, [sessionId]);
+    return dispose;
+  }, [sessionId, visible]);
 
   // 快照水合:挂载 / 切会话时拉一次存量后台任务(订阅前已启动 / 重载清空
   // taskUpdates 后事件流看不到的任务)。listSessionBackgroundTasksFor 按会话来源
@@ -534,13 +537,35 @@ export function BackgroundTasksBody({
   useEffect(() => {
     if (!sessionId) return;
     let disposed = false;
+    // 同一次快照兼做 stale running 对账(终态事件丢失的自愈)。候选集在发起
+    // 请求前捕获(时序论证见 store 的 reconcileStaleRunningTasks);仅本机会话
+    // 参与 —— device-link 远程快照有老被控端降级空表窗口,无法与「没有任务」
+    // 区分,不可当权威(粘滞判定与 Stop gating 同口径)。
+    const staleRunningCandidates = isRemoteSessionSticky(sessionId)
+      ? undefined
+      : makerChatStore.captureRunningClaudeTaskIds(sessionId);
     void listSessionBackgroundTasksFor(sessionId)
       .then(({ tasks }) => {
-        if (disposed || !Array.isArray(tasks) || tasks.length === 0) return;
-        makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks);
+        if (disposed || !Array.isArray(tasks)) return;
+        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
+        // 快照实际来自本机 main(路由在发起时已定),「查无此会话」的空表不可
+        // 用于收口 → 丢弃候选集;seed 保留(远程会话的常规水合不受影响,该
+        // 空表本就 seed 不出东西)。
+        const candidates =
+          staleRunningCandidates && !isRemoteSessionSticky(sessionId)
+            ? staleRunningCandidates
+            : undefined;
+        if (tasks.length === 0 && !(candidates && candidates.size > 0)) {
+          return;
+        }
+        makerChatStore.seedBackgroundTaskSnapshots(
+          sessionId,
+          tasks,
+          candidates ? { staleRunningCandidates: candidates } : undefined,
+        );
       })
       .catch(() => {
-        // 静默:与 useBackgroundBashTasks 的快照失败同口径。
+        // 静默:与 useBackgroundBashTasks 的快照失败同口径(失败不对账)。
       });
     return () => {
       disposed = true;

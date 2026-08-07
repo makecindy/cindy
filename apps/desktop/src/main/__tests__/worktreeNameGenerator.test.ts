@@ -5,10 +5,15 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  blocksManagedWorktreeBranchNamespace,
   generateRawName,
   avoidCollision,
   generateUniqueName,
   getBranchName,
+  getManagedWorktreeBranchCandidates,
+  getManagedWorktreeNameFromBranch,
+  getManagedWorktreeReservedName,
+  isManagedWorktreeBranchForName,
   validateWorktreeName,
 } from '../worktree/nameGenerator';
 
@@ -44,9 +49,33 @@ describe('nameGenerator', () => {
     expect(avoidCollision('Jolly-Turing', ['JOLLY-TURING'])).toBe('Jolly-Turing-2');
   });
 
-  it('getBranchName prefixes xdt/', () => {
-    expect(getBranchName('jolly-turing')).toBe('xdt/jolly-turing');
-    expect(getBranchName('foo-bar-3')).toBe('xdt/foo-bar-3');
+  it('getBranchName prefixes new branches with cindy/', () => {
+    expect(getBranchName('jolly-turing')).toBe('cindy/jolly-turing');
+    expect(getBranchName('foo-bar-3')).toBe('cindy/foo-bar-3');
+  });
+
+  it('keeps recognizing legacy xdt/ branches without writing new ones', () => {
+    expect(getManagedWorktreeBranchCandidates('jolly-turing')).toEqual([
+      'cindy/jolly-turing',
+      'xdt/jolly-turing',
+    ]);
+    expect(getManagedWorktreeNameFromBranch('cindy/jolly-turing')).toBe('jolly-turing');
+    expect(getManagedWorktreeNameFromBranch('xdt/jolly-turing')).toBe('jolly-turing');
+    expect(getManagedWorktreeNameFromBranch('cindy/jolly-turing/child')).toBeNull();
+    expect(getManagedWorktreeNameFromBranch('xdt/jolly-turing/child')).toBeNull();
+    expect(getManagedWorktreeNameFromBranch('feature/jolly-turing')).toBeNull();
+    expect(isManagedWorktreeBranchForName('cindy/jolly-turing', 'jolly-turing')).toBe(true);
+    expect(isManagedWorktreeBranchForName('xdt/jolly-turing', 'jolly-turing')).toBe(true);
+    expect(isManagedWorktreeBranchForName('main', 'jolly-turing')).toBe(false);
+  });
+
+  it('reserves ref ancestors and descendants that would block cindy/<name>', () => {
+    expect(blocksManagedWorktreeBranchNamespace('cindy')).toBe(true);
+    expect(blocksManagedWorktreeBranchNamespace('xdt')).toBe(false);
+    expect(getManagedWorktreeReservedName('cindy/foo')).toBe('foo');
+    expect(getManagedWorktreeReservedName('cindy/foo/bar')).toBe('foo');
+    expect(getManagedWorktreeReservedName('xdt/foo')).toBe('foo');
+    expect(getManagedWorktreeReservedName('xdt/foo/bar')).toBeNull();
   });
 
   it('generateUniqueName always returns a name not in taken (after retries + suffix)', () => {

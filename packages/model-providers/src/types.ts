@@ -25,6 +25,10 @@ export type AgentKind = 'claude-code' | 'codex' | 'pi';
 /** 推理强度档位 —— 与 maker-core Effort 对齐。 */
 export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
+/** Pi 原生支持的 reasoning/thinking 档位（Pi 不支持 Cindy 的 ultra 档）。 */
+export const PI_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
+
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
   | 'anthropic-messages'
@@ -346,6 +350,17 @@ export interface CatalogModel {
    */
   defaultEnabled?: boolean;
   /**
+   * 该模型是哪些 agent 的**新对话默认种子**（cold-start seed），与 `sortOrder`（只管选择器
+   * 陈列顺序）和 `defaultEnabled`（只管可见性）独立。桌面运行时只从**区域门控后的**
+   * model-access `/models` v2 响应写入本字段；公共 Registry 的同名策略字段由 server 消费，
+   * `modelPlanePolicy` 刻意不把它投影进 CatalogModel，避免 Global 绕过区域门。
+   *
+   * 渲染层优先取被标记、当前可用且默认可见的模型；无标记时回退 `sortOrder` 第一。取值仅
+   * wire agent（'claude-code' | 'codex'）；pi 按 'claude-code' 口径投影。缺省 = 不作为默认。
+   * 故意**不纳入** `modelSignature` 跨供应商一致性校验：同一 id 在不同供应商下可各自表态。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
+  /**
    * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
    * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与
    * `modelSignature` 的同 id 跨供应商一致性校验。
@@ -424,6 +439,28 @@ export interface Provider {
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
    */
   videoDefaults?: { standard: string; draft?: string; best?: string };
+  /**
+   * 该供应商提供的**文本向量(embedding)模型**清单(与 imageModels 同地位:
+   * 不挂 agent,由主机 embedding 通道直调)。消费方为意识 cindy 槽的向量代办
+   * (白名单 + 详情页下拉)。可选,additions-only。
+   *
+   * 与聊天模型清单里被 `classifyModel` 归到 `'embedding'` 的条目**不是同一回事**:
+   * 那些是网关多返回的、不能当 agent 用的条目(设置页折叠在「向量」分组里供
+   * 用户停用);本字段是"哪些型号可以被当作向量能力的后端派单",要显式声明。
+   * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
+   */
+  embeddingModels?: { id: string; name: string; disabled?: boolean }[];
+  /**
+   * 向量能力的默认选型(与 embeddingModels 配套;值必须是 embeddingModels 里的
+   * id;语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
+   *
+   * 注意向量与图像/视频的一处本质差异:**换模型 = 换向量空间**。跟随默认的
+   * 消费方在这里被热更换掉型号后,它此前存下的向量与新向量不可比 —— 所以
+   * 改这个值不像改 imageDefaults 那样无痛,消费方必须自己记住"这批向量是哪个
+   * 模型算的"并在不一致时重嵌(主机侧 chat-history-embedder 就是钉死常量而
+   * 不跟随默认的)。
+   */
+  embeddingDefaults?: { standard: string; draft?: string; best?: string };
 }
 
 /**
@@ -440,6 +477,13 @@ export interface ProviderRuntimeModelConfig {
   defaultEnabled?: boolean;
   /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
   supportsImageInput?: boolean;
+  /** Pi 自定义模型是否支持 reasoning；缺省 / false 均按不支持处理。 */
+  reasoning?: boolean;
+  /**
+   * Pi 自定义模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
+   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
+   */
+  reasoningEfforts?: PiReasoningEffort[];
 }
 
 /**

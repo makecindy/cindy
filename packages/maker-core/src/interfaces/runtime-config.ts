@@ -100,13 +100,22 @@ export interface AgentRuntimeConfig {
   autoCompactThresholdPct?: number;
 
   /**
-   * Host-managed executable directories to prepend to the agent subprocess PATH.
+   * Host-managed executable directories to prepend to agent subprocess PATH.
    *
-   * Used for bundled tools that should win over user/system installations, e.g.
-   * desktop-packaged ripgrep. Agent implementations decide which subprocesses
-   * consume it; paths should already be absolute and host-validated.
+   * Only agents whose executable lookup is safe for PATH-based discovery should consume this.
+   * PI intentionally does not: Windows may resolve an executable from cwd before PATH.
    */
   pathPrepends?: string[];
+
+  /**
+   * Host-validated executable paths that an agent may stage into its private runtime.
+   *
+   * These are explicit paths rather than PATH entries: read-only tools can otherwise
+   * execute a same-named program from an untrusted working directory on Windows.
+   */
+  managedExecutablePaths?: Readonly<{
+    ripgrep?: string;
+  }>;
 
   /**
    * 宿主产品级 system prompt 注入（host 层）。

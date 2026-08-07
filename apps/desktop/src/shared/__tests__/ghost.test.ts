@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+  GHOST_CINDY_EMBED_MAX_TEXTS,
+  GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -10,6 +12,7 @@ import {
   ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
+  ghostPermissionBaselineKey,
   ghostPreviewUrlAllowed,
   parseGhostNodeChildToHostMessage,
   ghostPartition,
@@ -20,6 +23,7 @@ import {
   isOfficialGhostId,
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
+  unreviewedGhostPermissionItems,
   parseGhostPartition,
   resolveGhostManifestLocale,
   validateGhostManifest,
@@ -152,6 +156,14 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), name: 'x'.repeat(65) }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), version: '' }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), version: 'v'.repeat(33) }).ok).toBe(false);
+  });
+
+  it('minCindyVersion 缺省兼容旧插件，声明时只接受 SemVer', () => {
+    expect(validateGhostManifest(goodManifest()).ok).toBe(true);
+    const declared = validateGhostManifest({ ...goodManifest(), minCindyVersion: '1.2.3' });
+    expect(declared.ok && declared.manifest.minCindyVersion).toBe('1.2.3');
+    expect(validateGhostManifest({ ...goodManifest(), minCindyVersion: 'v1.2.3' }).ok).toBe(false);
+    expect(validateGhostManifest({ ...goodManifest(), minCindyVersion: '1.2' }).ok).toBe(false);
   });
 
   it('kind 可省略:缺省归一化为 chip(2026-07-12 晚定案,单形态后纯冗余)', () => {
@@ -709,7 +721,83 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(diff.removed).toHaveLength(0);
   });
 
-  it('agent 详单必须与槽成对，且只接受 background / errand 两项加档', () => {
+  it('agent.schedule 加档:单列一档权限,可与 background / errand 并存(2026-08-04)', () => {
+    const sched = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { schedule: true },
+    });
+    expect(sched.ok).toBe(true);
+    if (!sched.ok) return;
+    expect(sched.manifest.agent).toEqual({ schedule: true });
+    expect(ghostPermissionItems(sched.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'agent:schedule',
+          kind: 'agent',
+          labelKey: 'agentSchedule',
+          detailKey: 'agentScheduleDetail',
+        }),
+      ]),
+    );
+
+    const all = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { background: true, errand: true, schedule: true },
+    });
+    expect(all.ok).toBe(true);
+    if (!all.ok) return;
+    expect(all.manifest.agent).toEqual({ background: true, errand: true, schedule: true });
+
+    // 扩权复核必须看得见它:只加 schedule 的更新,added 恰好是这一项。
+    const userActionOnly = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+    });
+    expect(userActionOnly.ok).toBe(true);
+    if (!userActionOnly.ok) return;
+    const diff = diffGhostPermissionItems(userActionOnly.manifest, sched.manifest);
+    expect(diff.added.map((item) => item.key)).toEqual(['agent:schedule']);
+    expect(diff.removed).toHaveLength(0);
+
+    // schedule: false 且其余非 true = 详单没意义,拒(应省略字段)。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { schedule: false },
+      }).ok,
+    ).toBe(false);
+    // schedule 非布尔 → 拒。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { schedule: 'yes' },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('存量兼容红线:不声明 agent.schedule 的清单,权限项与内容键逐字不变', () => {
+    // 这条钉的是仓规红线(plugin-security-and-authoring.md §5):用户升级客户端后
+    // 什么都不做,已装插件必须照旧可用 —— 不能因为新增了 schedule 加档,就让任何
+    // 老清单多出/少掉一项权限或内容键(那会触发扩权复核、要求用户重新确认)。
+    for (const agentNeeds of [undefined, { background: true }, { errand: true }]) {
+      const result = validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        ...(agentNeeds ? { agent: agentNeeds } : {}),
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const keys = ghostPermissionItems(result.manifest).map((item) => item.key);
+      expect(keys).not.toContain('agent:schedule');
+      expect(ghostContentKeys(result.manifest)).not.toContain('slotSchedule');
+    }
+  });
+
+  it('agent 详单必须与槽成对，且只接受 background / errand / schedule 三项加档', () => {
     expect(
       validateGhostManifest({
         ...goodChipManifest(),
@@ -1011,6 +1099,81 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     ).toBe(false);
   });
 
+  it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const valid = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(valid.ok).toBe(true);
+
+    const missing = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'missing' },
+    });
+    const extraField = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues', label: 'Issues' },
+    });
+    expect(missing.ok).toBe(true);
+    expect(extraField.ok).toBe(true);
+  });
+
+  it('忽略旧 manifest 中无效的同名未知字段', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    for (const legacyValue of [
+      null,
+      true,
+      'legacy',
+      [],
+      {},
+      { label: 'Issues' },
+    ]) {
+      const result = validateGhostManifest({
+        ...base,
+        atResourceProvider: legacyValue,
+      });
+      expect(result.ok, JSON.stringify(legacyValue)).toBe(true);
+    }
+  });
+
+  it('@ 资源入口复用 tool 槽，不新增硬白名单 slot', () => {
+    expect(GHOST_SLOTS).not.toContain('at-resource');
+    expect(validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'tool', 'at-resource'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+      atResourceProvider: { tool: 'search_issues' },
+    }).ok).toBe(false);
+  });
+
+  it('@ 资源入口复用原工具执行权，但作为新增调用入口单独披露', () => {
+    const raw = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const before = validateGhostManifest(raw);
+    const after = validateGhostManifest({
+      ...raw,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(ghostPermissionBaselineKey(after.manifest)).toBe(
+      ghostPermissionBaselineKey(before.manifest),
+    );
+    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
+  });
+
   it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {
     const reservedKeys = ['__proto__', 'constructor', 'prototype'];
     const withoutPanel = (manifest: Record<string, unknown>) => {
@@ -1239,6 +1402,8 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       'image',
       { media: ['upload'] }, // media 类目只有 deposit
       { media: [] },
+      { search: ['deep'] },
+      { search: [] },
     ]) {
       const v = validateGhostManifest(chipWithModel(bad));
       expect(v.ok, JSON.stringify(bad)).toBe(false);
@@ -1287,11 +1452,45 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
     );
   });
 
-  it('text 类目未知动作 / 空数组 → 拒;四类目可同时声明', () => {
+  // 2026-08-04 文本转向量:embed 类目独立落位(同 #784 的落位纪律),权限清单
+  // 单独成行,说明里插值单次条数上限(常量单源,四份 locale 自动跟随)。
+  it('embed 类目落进 cindy.embed,并生成带条数上限的 cindy:embed.text 权限行', () => {
+    const v = validateGhostManifest(chipWithModel({ embed: ['text'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ embed: ['text'] });
+    expect(v.manifest.cindy?.text).toBeUndefined();
+    expect(v.manifest.cindy?.image).toBeUndefined();
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:embed.text',
+          kind: 'cindy',
+          labelKey: 'cindyEmbedText',
+          detailKey: 'cindyEmbedTextDetail',
+          detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) },
+        }),
+      ]),
+    );
+  });
+
+  it('embed 类目未知动作 / 空数组 → 拒', () => {
+    expect(validateGhostManifest(chipWithModel({ embed: ['image'] })).ok).toBe(false);
+    expect(validateGhostManifest(chipWithModel({ embed: ['vector'] })).ok).toBe(false);
+    expect(validateGhostManifest(chipWithModel({ embed: [] })).ok).toBe(false);
+  });
+
+  it('text 类目未知动作 / 空数组 → 拒;五类目可同时声明', () => {
     expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(false);
     expect(validateGhostManifest(chipWithModel({ text: [] })).ok).toBe(false);
     const v = validateGhostManifest(
-      chipWithModel({ image: ['generate'], video: ['edit'], media: ['deposit'], text: ['oneshot'] }),
+      chipWithModel({
+        image: ['generate'],
+        video: ['edit'],
+        media: ['deposit'],
+        text: ['oneshot'],
+        embed: ['text'],
+      }),
     );
     expect(v.ok, JSON.stringify(v)).toBe(true);
     expect(v.ok && v.manifest.cindy).toEqual({
@@ -1299,7 +1498,102 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       video: ['edit'],
       media: ['deposit'],
       text: ['oneshot'],
+      embed: ['text'],
     });
+  });
+
+  it('search 类目落进 cindy.search，并生成独立的 Web Search 权限行', () => {
+    const manifest = chipWithModel({ search: ['web'] });
+    manifest.slots = ['panel', 'cindy', 'tool'];
+    manifest.tools = [{ name: 'research', description: '查询资料' }];
+    const v = validateGhostManifest(manifest);
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ search: ['web'] });
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:search.web',
+          kind: 'cindy',
+          labelKey: 'cindySearchWeb',
+          detailKey: 'cindySearchWebDetail',
+        }),
+      ]),
+    );
+  });
+
+  // 2026-08-05:oneshotModel 快问快答偏好模型(标量意图键,不是类目;
+  // 必须与 text.oneshot 成对;权限行说明换带模型版本,装入即知情)。
+  it('oneshotModel 合法声明:落 cindy.oneshotModel,权限行说明带模型', () => {
+    const v = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:text.oneshot',
+          detailKey: 'cindyTextOneshotModelDetail',
+          detailArgs: { model: 'codex/gpt-5.5' },
+        }),
+      ]),
+    );
+  });
+
+  it('search.web 缺少 tool 槽或工具声明时拒装', () => {
+    const withoutTool = validateGhostManifest(chipWithModel({ search: ['web'] }));
+    expect(withoutTool.ok).toBe(false);
+    expect(!withoutTool.ok && withoutTool.reason).toContain('tool');
+  });
+
+  it('oneshotModel 形态非法 / 无 text.oneshot 本体单挂 → 拒', () => {
+    for (const bad of [
+      { text: ['oneshot'], oneshotModel: '' },
+      { text: ['oneshot'], oneshotModel: '   ' },
+      { text: ['oneshot'], oneshotModel: 42 },
+      { text: ['oneshot'], oneshotModel: 'x'.repeat(129) },
+      { oneshotModel: 'codex/gpt-5.5' },
+      { image: ['generate'], oneshotModel: 'gpt-5.5' },
+    ]) {
+      const v = validateGhostManifest(chipWithModel(bad));
+      expect(v.ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  // 2026-08-05 review:权限指纹必须含 detailKey/detailArgs——同一 key 的固定说明
+  // 随声明变(新增/改/删 oneshotModel),只看 key+detail 会把变化漏判成"权限面
+  // 没变",更新时用户看不到重新确认。
+  it('oneshotModel 新增/变更/移除都算权限面变化(diff/基线/未审三条路径)', () => {
+    const plain = validateGhostManifest(chipWithModel({ text: ['oneshot'] }));
+    const declared = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    const declared2 = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'gpt-5.5' }));
+    if (!plain.ok || !declared.ok || !declared2.ok) throw new Error('fixture 应合法');
+
+    // 新增声明:diff 标 added+removed(key 同、说明变),基线不同,未审列出。
+    const addDiff = diffGhostPermissionItems(plain.manifest, declared.manifest);
+    expect(addDiff.added.map((i) => i.key)).toEqual(['cindy:text.oneshot']);
+    expect(addDiff.removed.map((i) => i.key)).toEqual(['cindy:text.oneshot']);
+    expect(ghostPermissionBaselineKey(plain.manifest)).not.toBe(ghostPermissionBaselineKey(declared.manifest));
+    expect(
+      unreviewedGhostPermissionItems(plain.manifest, plain.manifest, declared.manifest).map((i) => i.key),
+    ).toEqual(['cindy:text.oneshot']);
+
+    // 改模型:同样算变化。
+    expect(diffGhostPermissionItems(declared.manifest, declared2.manifest).added.map((i) => i.key)).toEqual([
+      'cindy:text.oneshot',
+    ]);
+
+    // 移除声明:同样算变化。
+    expect(diffGhostPermissionItems(declared.manifest, plain.manifest).added.map((i) => i.key)).toEqual([
+      'cindy:text.oneshot',
+    ]);
+
+    // 声明原样:三条路径都认为无变化。
+    const same = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    if (!same.ok) throw new Error('fixture 应合法');
+    expect(diffGhostPermissionItems(declared.manifest, same.manifest).added).toEqual([]);
+    expect(ghostPermissionBaselineKey(declared.manifest)).toBe(ghostPermissionBaselineKey(same.manifest));
+    expect(unreviewedGhostPermissionItems(declared.manifest, declared.manifest, same.manifest)).toEqual([]);
   });
 });
 
@@ -2038,6 +2332,118 @@ describe('ghost · network 详单校验', () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('source');
+  });
+
+  it('secrets.source:gh-cli 仅允许官方 GitHub 插件的固定 GitHub API 注入形态', () => {
+    const valid = validateGhostManifest({
+      ...goodManifest(),
+      id: 'cindy-github',
+      slots: ['panel', 'network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub authentication',
+            source: 'gh-cli',
+            url: 'https://github.com/settings/tokens',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.github.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(valid.ok, valid.ok ? '' : valid.reason).toBe(true);
+    if (valid.ok) {
+      const item = ghostPermissionItems(valid.manifest).find(
+        (entry) => entry.key === 'network:secret:github_pat',
+      );
+      expect(item?.labelKey).toBe('networkSecretGhCli');
+      expect(item?.detailKey).toBe('networkSecretGhCliDetail');
+
+      const prior = validateGhostManifest({
+        ...goodManifest(),
+        id: 'cindy-github',
+        slots: ['panel', 'network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.github.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub authentication',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                hosts: ['api.github.com'],
+              },
+            },
+          ],
+        },
+      });
+      expect(prior.ok).toBe(true);
+      if (prior.ok) {
+        expect(diffGhostPermissionItems(prior.manifest, valid.manifest).added).toEqual([]);
+        expect(ghostPermissionBaselineKey(prior.manifest)).toBe(
+          ghostPermissionBaselineKey(valid.manifest),
+        );
+        expect(
+          unreviewedGhostPermissionItems(
+            prior.manifest,
+            prior.manifest,
+            valid.manifest,
+          ),
+        ).toEqual([]);
+      }
+    }
+
+    for (const fixture of [
+      { id: 'github-helper' },
+      { header: 'X-GitHub-Token' },
+      { format: 'token {value}' },
+      { hosts: undefined },
+      { hosts: ['objects.githubusercontent.com'] },
+      {
+        exchange: {
+          url: 'https://api.github.com/token',
+          bodyFormat: '{"token":"{value}"}',
+          tokenPath: 'token',
+        },
+      },
+    ]) {
+      const id = 'id' in fixture ? fixture.id : 'cindy-github';
+      const result = validateGhostManifest({
+        ...goodManifest(),
+        id,
+        slots: ['panel', 'network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.github.com', 'objects.githubusercontent.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub authentication',
+              source: 'gh-cli',
+              inject: {
+                header: 'header' in fixture ? fixture.header : 'Authorization',
+                format: 'format' in fixture ? fixture.format : 'Bearer {value}',
+                ...('hosts' in fixture
+                  ? fixture.hosts === undefined
+                    ? {}
+                    : { hosts: fixture.hosts }
+                  : { hosts: ['api.github.com'] }),
+              },
+              ...('exchange' in fixture ? { exchange: fixture.exchange } : {}),
+            },
+          ],
+        },
+      });
+      expect(result.ok, JSON.stringify(fixture)).toBe(false);
+    }
   });
 
   it('权限清单:login-email 凭证用"将使用登录邮箱"分档文案,key 与 user 凭证同构', () => {

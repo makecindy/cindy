@@ -74,6 +74,20 @@
 ## 4. 网络、凭证与资源交接
 
 - network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**给沙箱。
+- `source: "gh-cli"` 是只为官方 `cindy-github` 保留的宿主凭证来源：Host 优先读取
+  本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT。两种 token
+  均只在 Main 的 networkSlot 内存中注入 `api.github.com` 的
+  `Authorization: Bearer` 请求头，不得进入插件、Renderer、Agent、KV、日志或 Node
+  Worker。设置页只能读取 `hostAvailable` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
+  不允许 `exchange` 或 `setup.requires` 引用，第三方插件不得声明。
+- `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
+  Membership 生效；只有当前组织的 Plugin Market organization 安装记录仍有效、且
+  安装目录 manifest digest 与记录一致时，Host 才会根据当前组织和插件 id 推导 audience。
+  插件和 Node Worker 都不能读取或保存令牌。声明必须固定使用
+  `Authorization: Bearer {value}` 并显式列出非空 `inject.hosts`；其中只允许精确域名，
+  不允许通配。实际目标必须精确命中这份可信 manifest 声明的服务域名才会签发和注入。它没有用户输入、`url`、`exchange` 或
+  `setup.requires` 配置动作。Connection JWT 请求遇到 401 时，仅 GET / HEAD / OPTIONS
+  可自动换令牌重试一次；非幂等请求只作废缓存，不自动重放。
 - 插件 setup 的完成状态只由 Host 读取真实持久化状态后判定。简单的
   `source: "user"` Secret 可由 Host 在聊天 Setup 卡中生成 `inline_form` 并直接写入
   保险库；插件详情页的 `settings.js` 仍可通过 `/oauth`、`/kv`、`/secrets`、

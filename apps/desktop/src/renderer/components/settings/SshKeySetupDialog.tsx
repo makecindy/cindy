@@ -1116,6 +1116,19 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
               </div>
             )}
 
+            {/* Path problem (no_such_file): no platform commands help — the
+                configured key path itself is wrong. Give an explicit fix
+                direction (re-select the key / edit the host's Identity file
+                path) instead of the generic "use a terminal" fallback below. */}
+            {state.reason === 'no_such_file' && (
+              <p
+                className="text-12 leading-relaxed"
+                style={{ color: 'var(--settings-integration-subtitle)' }}
+              >
+                {t('settings.remote.keys.agentTrouble.noSuchFileFix')}
+              </p>
+            )}
+
             {/* Fallback: skip the agent entirely and rely on ~/.ssh/config +
                 IdentityFile. Spelled out so the user knows they're explicitly
                 opting into "no agent, type passphrase per connect" mode. */}

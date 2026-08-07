@@ -62,6 +62,8 @@ export interface RegisterRsbBrowserBridgeOptions {
    * futures this becomes a "all main-window renderers" fan-out.
    */
   getHostWebContents: () => WebContents | null;
+  /** Main-owned popup WebContents do not expose webview.hostWebContents. */
+  getNativePopupOwnerWebContents?: (webContentsId: number) => WebContents | null;
   logger: IpcLogger;
 }
 
@@ -80,7 +82,22 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   }
   registered = true;
 
-  const { registry, getHostWebContents, logger } = opts;
+  const { registry, getHostWebContents, getNativePopupOwnerWebContents, logger } = opts;
+
+  const resolveOwner = (target: WebContents): WebContents | null => {
+    const webviewHost = (
+      target as unknown as {
+        hostWebContents?: WebContents & { isDestroyed?: () => boolean };
+      }
+    ).hostWebContents;
+    if (
+      webviewHost &&
+      (typeof webviewHost.isDestroyed !== 'function' || !webviewHost.isDestroyed())
+    ) {
+      return webviewHost;
+    }
+    return getNativePopupOwnerWebContents?.(target.id) ?? null;
+  };
 
   ipcMain.handle(RSB_BROWSER_BRIDGE_REPORT_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'report payload');
@@ -113,7 +130,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
       );
     }
     // hostWebContents is non-standard but exposed; cast for the typing gap.
-    const host = (target as unknown as { hostWebContents?: WebContents }).hostWebContents;
+    const host = resolveOwner(target);
     if (!host || host.id !== event.sender.id) {
       throwIpcError(
         'INVALID_PARAMS',
@@ -187,7 +204,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     if (!target) {
       throwIpcError('NOT_FOUND', `no live webContents for tab ${tabId}`);
     }
-    const host = (target as unknown as { hostWebContents?: WebContents }).hostWebContents;
+    const host = resolveOwner(target);
     if (!host || host.id !== event.sender.id) {
       throwIpcError('INVALID_PARAMS', `tab ${tabId} is not hosted by the sender`);
     }
@@ -271,7 +288,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     if (!target) {
       throwIpcError('NOT_FOUND', `no live webContents for tab ${tabId}`);
     }
-    const host = (target as unknown as { hostWebContents?: WebContents }).hostWebContents;
+    const host = resolveOwner(target);
     if (!host || host.id !== event.sender.id) {
       throwIpcError('INVALID_PARAMS', `tab ${tabId} is not hosted by the sender`);
     }
@@ -293,9 +310,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   // cpu-alert 无人消费,还会掩盖问题)。
   const sendResourceEvent = (event: RsbBrowserBridgeResourceEvent) => {
     const guest = registry.getWebContentsByTabId(event.tabId);
-    const owner = guest
-      ? (guest as unknown as { hostWebContents?: WebContents }).hostWebContents
-      : null;
+    const owner = guest ? resolveOwner(guest) : null;
     const wc = pickResourceEventTarget(owner);
     if (!wc) return;
     wc.send(RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL, event);
@@ -310,9 +325,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     // 无归属版本 —— 此时该 tab 也不在 listTabs 里,不会被误处置。
     isForeground: (tabId) => {
       const guest = registry.getWebContentsByTabId(tabId);
-      const owner = guest
-        ? (guest as unknown as { hostWebContents?: WebContents }).hostWebContents
-        : null;
+      const owner = guest ? resolveOwner(guest) : null;
       return owner
         ? foregroundTracker.isForegroundFor(tabId, owner.id)
         : foregroundTracker.isForeground(tabId);

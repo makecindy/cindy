@@ -93,3 +93,5 @@
 | `recipe` / `siteguide` | 跑某站现成配方(`recipeId`+`inputs`) / 取某站内置指南(`site`,含入口/关键页/可用配方;非 sitemap.xml) |
 | `screenshot` | 仅在需要视觉确认时用 |
 | `console` / `pdf` / `upload` / `dialog` | 控制台日志 / 导出 PDF / 上传文件 / 处理原生弹窗 |
+
+> **直接调用 `browser` 工具时,`wait` 不是顶层 action**:`action: "wait"` 会报 `INVALID_ARGS`。等待请用 `act` + `request.kind: "wait"`(等 `loadState` / `textGone` / `timeoutMs`)。同理,`evaluate` / `saveResource` 等原子操作也只能作为 `act` 的子操作(`request.kind`),顶层 action 枚举里没有它们。**此限制仅针对直接调用 `browser` 工具的 `action` 参数;配方 `recipeDraft.steps[].action` 里仅 `wait` / `evaluate` 是配方 DSL(由运行器转换为 `act`,不在此限制内),`saveResource` 在配方中同样不可用(`RecipeStepSchema` 不接受它)。**

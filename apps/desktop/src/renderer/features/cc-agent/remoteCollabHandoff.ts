@@ -32,10 +32,35 @@ import {
   refreshRemoteDeviceSessions,
 } from '@/features/device-link/refreshRemoteSessions';
 import { createLogger } from '@/lib/logger';
-import { makerApiForDevice, orcaWorkflowsForDevice } from '@/lib/makerTransport';
+import {
+  agentCapabilitiesForDevice,
+  makerApiForDevice,
+  orcaWorkflowsForDevice,
+} from '@/lib/makerTransport';
 import { extractIpcError } from '@/utils/ipcError';
 
 const log = createLogger('remoteCollabHandoff');
+
+function remoteWorkerPermissionModeUnsupportedError(): Error {
+  return new Error(
+    '[DEVICE_LINK_CHANNEL_NOT_ALLOWED] controlled device does not support Orca Team Worker permission mode',
+  );
+}
+
+async function assertRemoteWorkerPermissionModeSupport(
+  deviceId: string,
+  workerAgent: EnableOrcaOptions['workerAgent'],
+): Promise<void> {
+  const raw = await agentCapabilitiesForDevice(deviceId, workerAgent);
+  if (
+    !raw
+    || typeof raw !== 'object'
+    || Array.isArray(raw)
+    || (raw as Record<string, unknown>).supportsOrcaWorkerPermissionMode !== true
+  ) {
+    throw remoteWorkerPermissionModeUnsupportedError();
+  }
+}
 
 /**
  * 超时后回查被控端权威终态的次数与间隔。
@@ -161,6 +186,9 @@ export interface RemoteCollabEnableParams {
 export async function enableRemoteCollabForSession(
   p: RemoteCollabEnableParams,
 ): Promise<{ focusWorkerSessionId: string }> {
+  // 弹窗展示时的 capability 只是一份快照。真正 mutation 前重新向同一被控端确认，
+  // 防止断线重连后设备降级到旧版本、把显式权限字段静默忽略。
+  await assertRemoteWorkerPermissionModeSupport(p.deviceId, p.options.workerAgent);
   try {
     const result = await makerApiForDevice(p.deviceId).enableOrca(p.leadSessionId, p.options);
     return { focusWorkerSessionId: result.workerSessionId };

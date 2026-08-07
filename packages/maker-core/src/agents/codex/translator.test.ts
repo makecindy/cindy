@@ -1153,7 +1153,7 @@ describe('translateItemNotification collabAgentToolCall', () => {
 });
 
 describe('translateItemNotification subAgentActivity', () => {
-  function activityParams(kind: string, id = 'spawn-1') {
+  function activityParams(kind: string, id = 'spawn-1', model?: string) {
     return {
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -1163,33 +1163,45 @@ describe('translateItemNotification subAgentActivity', () => {
         kind,
         agentThreadId: 'thread-2',
         agentPath: '/root/survey_startup',
+        ...(model ? { model } : {}),
       },
     };
   }
 
-  it('renders a self-closing spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
+  it('renders a running spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     const ctx = makeCtx(rt);
 
-    translateItemNotification('started', activityParams('started'), q, ctx);
+    translateItemNotification('started', activityParams('started', 'spawn-1', 'gpt-5.6-terra'), q, ctx);
 
     const events = await collect(q);
     expect(events.map((event) => event.type)).toEqual([
       'tool_use',
       'tool_result_full',
       'tool_result',
+      'agent_task_update',
     ]);
     expect(events[0].data).toMatchObject({
       toolUseId: 'spawn-1',
       toolName: 'collab:spawn',
-      input: { name: '/root/survey_startup', agentThreadId: 'thread-2' },
+      input: { name: '/root/survey_startup', agentThreadId: 'thread-2', model: 'gpt-5.6-terra' },
     });
     // fullText 是纯数据(agentPath 原文),本地化句子由 renderer 组装,不持久化英文。
     expect(events[1].data).toMatchObject({
       toolUseId: 'spawn-1',
       fullText: '/root/survey_startup',
       isError: false,
+    });
+    // tool_result 就地收口(不留悬空工具调用),卡片状态由 update 主导 → 仍显示运行中,
+    // 后续 tokens / 工具数 / 终态由子线程通知按同一 taskId 增量刷新。
+    expect(events[3].data).toMatchObject({
+      provider: 'codex',
+      taskId: 'spawn-1',
+      parentToolUseId: 'spawn-1',
+      status: 'running',
+      title: '/root/survey_startup',
+      model: 'gpt-5.6-terra',
     });
   });
 

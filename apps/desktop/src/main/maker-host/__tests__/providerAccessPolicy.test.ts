@@ -38,7 +38,9 @@ function catalog(): Catalog {
     { ...model('gpt-image-2'), group: 'image' },
     { ...model('seedance-fast'), group: 'video' },
     { ...model('seedance-pro'), group: 'video' },
+    { ...model('bytedance/seedance-2.5'), group: 'video' },
     { ...model('happyhorse'), group: 'video' },
+    { ...model('voyage/voyage-4'), group: 'embedding' },
   ]);
   xd.imageModels = [
     { id: 'gpt-image-2', name: 'GPT Image 2' },
@@ -48,6 +50,7 @@ function catalog(): Catalog {
   xd.videoModels = [
     { id: 'seedance-fast', name: 'Seedance Fast' },
     { id: 'seedance-pro', name: 'Seedance Pro' },
+    { id: 'bytedance/seedance-2.5', name: 'Seedance 2.5' },
     { id: 'happyhorse', name: 'HappyHorse' },
   ];
   xd.videoDefaults = {
@@ -55,6 +58,11 @@ function catalog(): Catalog {
     draft: 'happyhorse',
     best: 'seedance-pro',
   };
+  xd.embeddingModels = [
+    { id: 'voyage/voyage-4', name: 'Voyage 4' },
+    { id: 'text-embedding-3-small', name: 'OpenAI Embedding 3 Small' },
+  ];
+  xd.embeddingDefaults = { standard: 'voyage/voyage-4', draft: 'text-embedding-3-small' };
   xd.models.codex = undefined;
   return {
     version: 'test',
@@ -101,19 +109,26 @@ describe('provider access policy', () => {
 
       expect(xd?.imageModels).toEqual([]);
       expect(xd?.imageDefaults).toBeUndefined();
+      // 向量与图像同口径:整段清空 —— 该 endpoint 后面全是境外模型,
+      // 留着清单只会让插件拿到"可选但必失败"的型号。
+      expect(xd?.embeddingModels).toEqual([]);
+      expect(xd?.embeddingDefaults).toBeUndefined();
       expect(xd?.videoModels?.map((item) => item.id)).toEqual([
         'seedance-fast',
         'seedance-pro',
+        'bytedance/seedance-2.5',
       ]);
       expect(xd?.videoDefaults).toEqual({
         standard: 'seedance-fast',
         best: 'seedance-pro',
       });
+      // 聊天目录里被归到 embedding 的条目也一并滤掉(设置页的「向量」分组同样清空)。
       expect(xd?.models['claude-code']?.map((item) => item.id)).toEqual([
         'shared-model',
         'xd-only-model',
         'seedance-fast',
         'seedance-pro',
+        'bytedance/seedance-2.5',
       ]);
       expect(xd?.models.codex).toEqual([]);
     },
@@ -154,7 +169,11 @@ describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', ()
     const xd = projected.providers.find((p) => p.id === 'xd');
     expect(xd?.imageModels).toEqual([]);
     expect(xd?.imageDefaults).toBeUndefined();
-    expect(xd?.videoModels?.map((m) => m.id)).toEqual(['seedance-fast', 'seedance-pro']);
+    expect(xd?.videoModels?.map((m) => m.id)).toEqual([
+      'seedance-fast',
+      'seedance-pro',
+      'bytedance/seedance-2.5',
+    ]);
   });
 
   it.each(['cn', 'dev'] as const)(

@@ -34,8 +34,10 @@ export interface DeviceLinkSettings {
   enabled: boolean;
   /** 本机 relay 连接状态。 */
   linkStatus: DeviceLinkLinkStatus;
-  /** 本机 relay 连接问题(鉴权失效/被顶号/超限/版本不符;null = 无异常)。 */
+  /** 本机 relay 连接问题(鉴权失效/被顶号/超限/版本不符/反复掉线;null = 无异常)。 */
   connectionIssue: DeviceLinkConnectionIssuePayload | null;
+  /** 本机另一个 Cindy 实例正持有 device-link 连接,本实例处于待命。 */
+  standby: boolean;
   /** 同账号设备列表(含本机 isSelf);null = 尚未加载。 */
   devices: DeviceLinkDeviceView[] | null;
   /** 当前正在控制本机的控制端。 */
@@ -68,6 +70,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [enabled, setEnabledState] = useState(false);
   const [linkStatus, setLinkStatus] = useState<DeviceLinkLinkStatus>('stopped');
   const [connectionIssue, setConnectionIssue] = useState<DeviceLinkConnectionIssuePayload | null>(null);
+  const [standby, setStandby] = useState(false);
   const [devices, setDevices] = useState<DeviceLinkDeviceView[] | null>(null);
   const [controlledBy, setControlledBy] = useState<ActiveController[]>([]);
   const [revokedControllers, setRevokedControllers] = useState<string[]>([]);
@@ -76,6 +79,8 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
   const disabledControlDeviceIdsRef = useRef<string[]>([]);
+  // getState() 与 ownership push 可能乱序返回;事件版本推进后,旧快照不得覆盖新事实。
+  const ownershipEventVersion = useRef(0);
 
   const applyDisabledControlDeviceIds = useCallback((ids: string[]) => {
     disabledControlDeviceIdsRef.current = ids;
@@ -122,6 +127,11 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         mounted.current = false;
       };
     }
+    const offOwnership = window.electronAPI.deviceLink.onOwnershipChanged((p) => {
+      ownershipEventVersion.current += 1;
+      setStandby(p.standby === true);
+    });
+    const ownershipVersionAtGetState = ownershipEventVersion.current;
     void window.electronAPI.deviceLink
       .getState()
       .then((s) => {
@@ -129,6 +139,9 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         setEnabledState(s.remoteControlEnabled);
         setLinkStatus(s.linkStatus);
         setConnectionIssue(s.connectionIssue ?? null);
+        if (ownershipEventVersion.current === ownershipVersionAtGetState) {
+          setStandby(s.standby === true);
+        }
         setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
@@ -158,6 +171,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       offPresence();
       offStatus();
       offIssue();
+      offOwnership();
       offControlled();
       offControlTarget();
       clearInterval(timer);
@@ -300,6 +314,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     enabled,
     linkStatus,
     connectionIssue,
+    standby,
     devices,
     controlledBy,
     revokedControllers,

@@ -14,8 +14,9 @@
  * - user 源凭证:保险库已保存(等价 /secrets GET 的 saved);
  * - oauth 源凭证:client 可用(自填或内置)且 ≥1 个 connected 账号;
  *   账号存在但全部 expired 时归入 reauth(弹窗文案区分「重新连接」);
- * - login-email 源凭证:恒就绪(登录派生,无配置动作;校验层已禁止
- *   setup 引用,启发式也不将其计入需求);
+ * - login-email / gh-cli / oidc-token 源凭证:Host 派生或优先复用宿主能力,
+ *   没有可靠的同步用户配置判定；校验层禁止 setup 引用，启发式也不把
+ *   它们伪装成待填写 Secret;
  * - 连接:该声明键下至少一条连接;
  * - kv 参数:意识 /kv 文件顶层键非空(undefined / null / 空白字符串算
  *   未配置;false / 0 等有值形态算已配置——存在性检查,不做语义校验)。
@@ -102,7 +103,7 @@ function deriveRequirementGroups(manifest: GhostManifest): GhostSetupRequirement
   }
   const implicit: GhostSetupRequirement[] = [];
   for (const s of manifest.network?.secrets ?? []) {
-    if (s.source === 'login-email') continue; // 登录派生恒就绪,不构成配置需求
+    if (s.source === 'login-email' || s.source === 'gh-cli' || s.source === 'oidc-token') continue;
     implicit.push({ kind: 'secret', key: s.key });
   }
   for (const s of manifest.node?.secretBindings ?? []) {
@@ -115,8 +116,23 @@ function deriveRequirementGroups(manifest: GhostManifest): GhostSetupRequirement
 }
 
 /** 需求条目 → 展示项(label 取声明原文;kind 决定弹窗文案口径)。 */
-function requirementRef(req: GhostSetupRequirement): string {
+export function requirementRef(req: GhostSetupRequirement): string {
   return `${req.kind}:${req.key}`;
+}
+
+/**
+ * oauth_connect 动作 id 的唯一编解码对:actionFor 与 reauthSuggest 生产、
+ * executeGhostSetupAction 反解共用。改动作 id 格式只能改这两个函数,
+ * 任何一侧散落的字面量都会造成"点重连拿 ACTION_STALE"的静默失配。
+ */
+export function oauthConnectActionId(ref: string): string {
+  return `oauth_connect:${ref}`;
+}
+
+export function parseOauthConnectSecretKey(actionId: string): string | null {
+  const prefix = oauthConnectActionId('secret:');
+  const key = actionId.startsWith(prefix) ? actionId.slice(prefix.length) : '';
+  return key.length > 0 ? key : null;
 }
 
 function actionFor(
@@ -134,7 +150,12 @@ function actionFor(
         : kind === 'client_config'
           ? 'open_client_settings'
           : 'open_plugin_settings';
-  return [{ id: `${actionKind}:${ref}`, kind: actionKind }];
+  return [
+    {
+      id: actionKind === 'oauth_connect' ? oauthConnectActionId(ref) : `${actionKind}:${ref}`,
+      kind: actionKind,
+    },
+  ];
 }
 
 function inlineSecretAction(
@@ -227,10 +248,10 @@ function verdictOf(
   }
   if (nodeDecl) return probes.secretSaved(req.key) ? 'satisfied' : 'missing';
   if (!decl) return 'satisfied';
-  if (decl.source === 'login-email') {
+  if (decl.source === 'login-email' || decl.source === 'gh-cli' || decl.source === 'oidc-token') {
     if (strict) {
       throw new GhostSetupAssessmentError(
-        `setup requirement ${requirementRef(req)} cannot use login-email`,
+        `setup requirement ${requirementRef(req)} cannot use a Host-derived secret`,
       );
     }
     return 'satisfied';

@@ -40,6 +40,7 @@ export function AutomationOriginBadge({
   return (
     <button
       type="button"
+      data-split-pane-route-action=""
       title={t('chat.userMessage.automationViewTask')}
       onClick={() => navigate(scheduleFocusPath(automationOrigin.scheduleId))}
       className={cn(

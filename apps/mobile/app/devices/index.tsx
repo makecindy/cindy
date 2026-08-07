@@ -97,6 +97,7 @@ import {
   getCachedHomeListSnapshot,
   scheduleHomeListSnapshotPersist,
 } from '@/session/mobileHomeListCache';
+import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
@@ -195,6 +196,10 @@ export default function HomeScreen() {
   const scheduleIndexDeferRegistryRef = useRef(createScheduleIndexDeferRegistry());
   const scheduleEventVersionsRef = useRef(new Map<string, number>());
   const deviceIdentityCacheRef = useRef(createEmptyDeviceIdentityCache());
+  // A timed-out SecureStore read may still complete. Do not persist an empty/rebuilt
+  // cache until that read settles and its stored identities have been reapplied.
+  const deviceIdentityCachePersistReadyRef = useRef(false);
+  const deviceIdentityCachePersistPendingRef = useRef(false);
   // presence 补丁新鲜度:loadHome 用它判断哪些设备在 REST 快照发起后又收到过 presence-changed,
   // 避免用过期快照把它们改回离线(否则出现「会话都同步出来了、新建对话按钮却灰着」的卡死态)。
   const presenceFreshnessRef = useRef(createPresenceFreshnessTracker());
@@ -267,7 +272,10 @@ export default function HomeScreen() {
   const reconcileDeviceViews = useCallback((nextRawDevices: readonly DeviceView[]) => {
     const result = reconcileDeviceIdentities(nextRawDevices, deviceIdentityCacheRef.current);
     deviceIdentityCacheRef.current = result.cache;
-    if (result.cacheChanged) void saveDeviceIdentityCache(result.cache);
+    if (result.cacheChanged) {
+      if (deviceIdentityCachePersistReadyRef.current) void saveDeviceIdentityCache(result.cache);
+      else deviceIdentityCachePersistPendingRef.current = true;
+    }
     return result;
   }, []);
 
@@ -506,13 +514,24 @@ export default function HomeScreen() {
       return;
     }
     let cancelled = false;
-    void getCachedHomeListSnapshot(homeCacheUserId)
-      .then((snapshot) => {
-        if (cancelled || lastSyncedAtRef.current !== null) return;
-        for (const device of snapshot) {
-          remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
-          updateDeviceConnectionState(device.deviceId, 'syncing');
-        }
+    const read = startBoundedStartupRead(
+      getCachedHomeListSnapshot(homeCacheUserId),
+      [],
+    );
+    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
+      await syncInFlightRef.current;
+      if (cancelled || lastSyncedAtRef.current !== null) return;
+      for (const device of snapshot) {
+        remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
+        updateDeviceConnectionState(device.deviceId, 'syncing');
+      }
+    };
+    void read.initial
+      .then((initial) => {
+        void applySnapshot(initial.value);
+        if (initial.timedOut) void read.completion.then((late) => {
+          if (late.ok) void applySnapshot(late.value);
+        });
       })
       .catch(() => undefined)
       .finally(() => {
@@ -525,18 +544,36 @@ export default function HomeScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadDeviceIdentityCache()
-      .then((cache) => {
+    const read = startBoundedStartupRead(
+      loadDeviceIdentityCache(),
+      createEmptyDeviceIdentityCache(),
+    );
+    void read.initial
+      .then(async (initial) => {
         if (cancelled) return;
-        deviceIdentityCacheRef.current = cache;
-      })
-      .finally(() => {
-        if (!cancelled) setDeviceIdentityCacheReady(true);
+        deviceIdentityCacheRef.current = initial.value;
+        deviceIdentityCachePersistReadyRef.current = !initial.timedOut;
+        setDeviceIdentityCacheReady(true);
+        if (!initial.timedOut) return;
+
+        const late = await read.completion;
+        if (cancelled) return;
+        if (late.ok) {
+          deviceIdentityCacheRef.current = late.value;
+          deviceIdentityCachePersistReadyRef.current = true;
+          const reconciled = reconcileDeviceViews(devicesRef.current);
+          devicesRef.current = reconciled.devices;
+          if (reconciled.viewsChanged) setDevices(reconciled.devices);
+          return;
+        }
+
+        deviceIdentityCachePersistReadyRef.current = true;
+        if (deviceIdentityCachePersistPendingRef.current) void saveDeviceIdentityCache(deviceIdentityCacheRef.current);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reconcileDeviceViews]);
 
   // 冷启动恢复上次的首页视图偏好(设备筛选 + 按项目分组);用户已手动操作过则不覆盖。
   useEffect(() => {
@@ -894,9 +931,9 @@ export default function HomeScreen() {
     setRestoredDeviceName(null);
     void saveHomeViewPreferences({ selectedDevice: null });
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
-  // 连接层失败原因(鉴权失效/被顶号/超限/版本不符)比请求级 error 更根因:非 online 时优先展示。
-  const activeConnectionIssue = status !== 'online' ? connectionIssue : null;
-  const showConnectionRow = !!connectionError || status !== 'online';
+  // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
+  const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
+  const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
   const connectionTone = activeConnectionIssue
     ? 'off'
     : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';

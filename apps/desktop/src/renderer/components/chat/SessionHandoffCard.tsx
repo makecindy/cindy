@@ -1,11 +1,15 @@
 import { ArrowUpRight, CornerDownRight, History } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { shortSessionId } from '@/lib/sessionId';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import {
+  useSessionNavigationIntent,
+  useSessionNavigationMode,
+} from '@/features/cc-agent/embeddedSessionNavigation';
 
 export interface SessionHandoffCardProps {
   sessionId: string;
@@ -30,6 +34,8 @@ export function SessionHandoffCard({
 }: SessionHandoffCardProps) {
   const navigate = useNavigate();
   const navigationMode = useSessionNavigationMode();
+  const reportSessionNavigation = useSessionNavigationIntent();
+  const navigationRequestVersionRef = useRef(0);
   const { t } = useTranslation();
   const displayTitle = title?.trim() || t('ccAgent.handoff.card.unnamedSession');
   // created / resumed 用实心强调样式(新建或被唤醒,值得注意);already-active 用描边弱样式。
@@ -40,6 +46,13 @@ export function SessionHandoffCard({
       : wake === 'resumed'
         ? t('ccAgent.handoff.card.wake.resumed')
         : t('ccAgent.handoff.card.wake.alreadyActive');
+
+  useEffect(
+    () => () => {
+      navigationRequestVersionRef.current += 1;
+    },
+    [sessionId, navigationMode],
+  );
 
   const formatLastActive = (value: string): string => {
     const ms = new Date(value).getTime();
@@ -62,7 +75,10 @@ export function SessionHandoffCard({
   };
 
   const handleClick = () => {
+    const navigationRequestVersion = ++navigationRequestVersionRef.current;
     void resolveSessionRoute(sessionId).then((target) => {
+      if (navigationRequestVersionRef.current !== navigationRequestVersion) return;
+      reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(target) ?? sessionId);
       navigate(target, {
         state: dispatcherSessionId
           ? {
@@ -77,11 +93,12 @@ export function SessionHandoffCard({
     });
   };
 
-  const interactive = navigationMode === 'route-owner';
+  const interactive = navigationMode !== 'sidebar-embedded';
   const Root = interactive ? 'button' : 'div';
 
   return (
     <Root
+      data-split-pane-route-action={interactive ? '' : undefined}
       {...(interactive ? { type: 'button' as const, onClick: handleClick } : {})}
       className={cn(
         'my-2 flex w-full min-w-0 items-center gap-[14px] rounded-[12px]',
@@ -123,7 +140,11 @@ export function SessionHandoffCard({
         <span className="flex min-w-0 items-center gap-[6px]">
           {lastActive ? (
             <>
-              <History size={12} strokeWidth={2} className="shrink-0 text-[var(--settings-section-desc)]" />
+              <History
+                size={12}
+                strokeWidth={2}
+                className="shrink-0 text-[var(--settings-section-desc)]"
+              />
               <span className="truncate text-12 leading-4 text-[var(--settings-section-desc)]">
                 {formatLastActive(lastActive)}
               </span>

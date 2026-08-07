@@ -51,7 +51,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner, BG_TASK_IDLE_FALLBACK_MS } from '../runner';
+import { MakerScheduleRunner } from '../runner';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -62,10 +62,27 @@ type SendImpl = (
 interface FakeSessionHarness {
   session: Session;
   emit(event: AgentEvent): void;
+  emitStatus(status: 'active' | 'aborting' | 'closed' | 'error'): void;
+  setContinuationState(
+    continuationId: number,
+    state: 'awaiting' | 'active' | 'cancelled',
+    emit?: boolean,
+  ): void;
 }
 
 function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
+  const statusListeners: Array<
+    (status: 'active' | 'aborting' | 'closed' | 'error') => void
+  > = [];
+  const continuationListeners: Array<(
+    continuationId: number,
+    state: 'awaiting' | 'active' | 'cancelled',
+  ) => void> = [];
+  const continuationStates = new Map<
+    number,
+    'awaiting' | 'active' | 'cancelled'
+  >();
   const session = {
     id: 'scheduler-session',
     agentKind: 'claude-code',
@@ -76,6 +93,28 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
         listeners.splice(0, listeners.length);
       });
     },
+    beginTurnContinuationWait: (continuationId?: number) =>
+      continuationId === undefined ? null : continuationStates.get(continuationId) ?? null,
+    onTurnContinuationChange(
+      listener: (
+        continuationId: number,
+        state: 'awaiting' | 'active' | 'cancelled',
+      ) => void,
+    ) {
+      continuationListeners.push(listener);
+      return vi.fn(() => {
+        const index = continuationListeners.indexOf(listener);
+        if (index >= 0) continuationListeners.splice(index, 1);
+      });
+    },
+    onStatusChange(
+      listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void,
+    ) {
+      statusListeners.push(listener);
+      return vi.fn(() => {
+        statusListeners.splice(0, statusListeners.length);
+      });
+    },
     abort: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   } as unknown as Session;
@@ -84,6 +123,16 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     session,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
+    },
+    emitStatus(status) {
+      for (const listener of [...statusListeners]) listener(status);
+    },
+    setContinuationState(continuationId, state, emit = false) {
+      continuationStates.set(continuationId, state);
+      if (!emit) return;
+      for (const listener of [...continuationListeners]) {
+        listener(continuationId, state);
+      }
     },
   };
 }
@@ -152,10 +201,15 @@ function textFinal(text: string): AgentEvent {
   return { type: 'text', data: { text, isFinal: true } };
 }
 
-function taskUpdate(taskId: string, status: string): AgentEvent {
+function taskUpdate(
+  taskId: string,
+  status: string,
+  taskType: string = 'local_agent',
+  provider: string = 'claude-code',
+): AgentEvent {
   return {
     type: 'agent_task_update',
-    data: { provider: 'claude-code', taskId, status },
+    data: { provider, taskId, status, taskType },
   };
 }
 
@@ -211,14 +265,16 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
 
     // 主 turn:派出后台 subagent 后以"等待中"文本结束
     h.emit(taskUpdate('bg-task-1', 'running'));
+    h.setContinuationState(1, 'awaiting');
     h.emit(textFinal('waiting for subagents'));
-    h.emit({ type: 'done', data: {} });
+    h.emit({ type: 'done', data: {}, turnContinuationId: 1 });
     await flushMicrotasks();
     expect(resolved).toBe(false);
     expect(notifier.notify).not.toHaveBeenCalled();
 
     // subagent 完成 → SDK 自动续 turn,产出真正的最终 summary
     h.emit(taskUpdate('bg-task-1', 'completed'));
+    h.setContinuationState(1, 'active');
     h.emit(textFinal('final summary'));
     h.emit({ type: 'done', data: {} });
     await firePromise;
@@ -244,56 +300,102 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     expect(notifiedRun(notifier).resultText).toBe('all done');
   });
 
-  it('后台任务事件丢失:静默超时兜底收尾,不永久挂起', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(acceptingSend());
-    const { runner, notifier, logger } = createRunnerHarness(h.session);
+  it('普通后台命令和 Codex 任务卡不具备 continuation 语义,首个 done 立即收尾', async () => {
+    for (const event of [
+      taskUpdate('bash-1', 'running', 'local_bash'),
+      taskUpdate('codex-1', 'running', 'local_agent', 'codex'),
+    ]) {
+      const h = createSessionHarness(acceptingSend());
+      const { runner, notifier } = createRunnerHarness(h.session);
 
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.createMessage).toHaveBeenCalled();
+      const firePromise = runner.fire(baseSchedule(), createFireContext());
+      await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+      h.emit(event);
+      h.emit(textFinal('done without continuation'));
+      h.emit({ type: 'done', data: {} });
+      await firePromise;
 
-    h.emit(taskUpdate('bg-task-1', 'running'));
-    h.emit(textFinal('waiting for subagents'));
-    h.emit({ type: 'done', data: {} });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(notifier.notify).not.toHaveBeenCalled();
-
-    // 任务完成事件永远不来 → 静默满 BG_TASK_IDLE_FALLBACK_MS 后强制收尾
-    await vi.advanceTimersByTimeAsync(BG_TASK_IDLE_FALLBACK_MS);
-    await firePromise;
-
-    const run = notifiedRun(notifier);
-    expect(run.status).toBe('success');
-    expect(run.resultText).toBe('waiting for subagents');
-    expect(logger.warn).toHaveBeenCalled();
+      expect(notifiedRun(notifier).resultText).toBe('done without continuation');
+      vi.clearAllMocks();
+      mocks.createMessage.mockResolvedValue(undefined);
+      mocks.backfillSessionMeta.mockResolvedValue(undefined);
+      mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    }
   });
 
-  it('等待期间有事件流动会刷新兜底计时,不误触发', async () => {
+  it('pending continuation 无论静默多久都不猜完成，只等 provider 状态与下一 done', async () => {
     vi.useFakeTimers();
     const h = createSessionHarness(acceptingSend());
     const { runner, notifier } = createRunnerHarness(h.session);
 
     const firePromise = runner.fire(baseSchedule(), createFireContext());
+    let resolved = false;
+    void firePromise.then(() => {
+      resolved = true;
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.createMessage).toHaveBeenCalled();
 
     h.emit(taskUpdate('bg-task-1', 'running'));
+    h.setContinuationState(2, 'awaiting');
     h.emit(textFinal('waiting for subagents'));
-    h.emit({ type: 'done', data: {} });
+    h.emit({ type: 'done', data: {}, turnContinuationId: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notifier.notify).not.toHaveBeenCalled();
 
-    // 每隔半个兜底窗口来一次 task_progress → 计时被刷新,不应超时收尾
-    for (let i = 0; i < 3; i++) {
-      await vi.advanceTimersByTimeAsync(BG_TASK_IDLE_FALLBACK_MS / 2);
-      h.emit(taskUpdate('bg-task-1', 'running'));
-    }
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(resolved).toBe(false);
     expect(notifier.notify).not.toHaveBeenCalled();
 
     h.emit(taskUpdate('bg-task-1', 'completed'));
+    h.setContinuationState(2, 'active');
     h.emit(textFinal('final summary'));
     h.emit({ type: 'done', data: {} });
     await firePromise;
 
     expect(notifiedRun(notifier).resultText).toBe('final summary');
+  });
+
+  it('continuation task stopped after done 收到 provider cancellation 后立即收口', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session);
+
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+    let resolved = false;
+    void firePromise.then(() => { resolved = true; });
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+
+    h.emit(taskUpdate('bg-task-1', 'running'));
+    h.setContinuationState(3, 'awaiting');
+    h.emit(textFinal('等待后台任务'));
+    h.emit({ type: 'done', data: {}, turnContinuationId: 3 });
+    await flushMicrotasks();
+    expect(resolved).toBe(false);
+
+    h.setContinuationState(3, 'cancelled', true);
+    await firePromise;
+    expect(notifiedRun(notifier).resultText).toBe('等待后台任务');
+  });
+
+  it('host 消费父 done 前 continuation 已 active，仍等待第二个 done', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session);
+
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+    let resolved = false;
+    void firePromise.then(() => { resolved = true; });
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+
+    h.setContinuationState(4, 'active');
+    h.emit(textFinal('父 turn 已结束'));
+    h.emit({ type: 'done', data: {}, turnContinuationId: 4 });
+    await flushMicrotasks();
+    expect(resolved).toBe(false);
+
+    h.emit(textFinal('自动续 turn 的最终结果'));
+    h.emit({ type: 'done', data: {} });
+    await firePromise;
+    expect(notifiedRun(notifier).resultText).toBe('自动续 turn 的最终结果');
   });
 });

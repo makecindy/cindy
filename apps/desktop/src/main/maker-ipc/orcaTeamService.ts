@@ -590,7 +590,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       let result: DispatchWorkerMessageResult;
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
       try {
-        if ((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch) {
+        // Runtime liveness is independent from the persisted worker status. After a restart a
+        // running/error worker can be dormant too, and must rehydrate through the Worker-specific
+        // path so its stored permission mode and Orca vendor options are preserved.
+        if (!wasLiveBeforeDispatch) {
           await deps.resumeWorkerSession(target, link);
         }
         result = await deps.dispatchWorkerMessage({

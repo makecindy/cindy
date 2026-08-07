@@ -112,7 +112,7 @@ interface FolderPickerPopoverProps {
     folderPath: string,
     source: FolderPickerSelectSource,
     option?: FolderPickerOption,
-  ) => void;
+  ) => void | Promise<void>;
   projectOptions?: readonly FolderPickerOption[];
   /**
    * 非空 = 项目区列的是这台对端设备的项目(本机时不传)。只用于空态文案与「浏览文件夹」
@@ -152,13 +152,19 @@ export function FolderPickerPopover({
   const effectiveProjectOptions = projectOptions ?? [];
   const recentFolders = open && !isProjectPicker ? getRecentFolders() : [];
 
-  const handleSelectPath = (
+  const handleSelectPath = async (
     folderPath: string,
     source: FolderPickerSelectSource,
     option?: FolderPickerOption,
-  ) => {
-    onSelect(folderPath, source, option);
+  ): Promise<void> => {
+    try {
+      await onSelect(folderPath, source, option);
+    } finally {
+      // Selection callbacks may persist the directory before handing a pending
+      // send back to the parent. Close only after that hand-off completes so a
+      // controlled popover cannot clear the pending payload first.
     onOpenChange(false);
+    }
   };
 
   const handleRemoveProject = (project: FolderPickerOption) => {
@@ -268,8 +274,7 @@ export function FolderPickerPopover({
     }
     const result = await window.electronAPI.showOpenDirectoryDialog();
     if (!result.canceled && result.path) {
-      onSelect(result.path, 'browse');
-      onOpenChange(false);
+      await handleSelectPath(result.path, 'browse');
     }
     // If canceled, popover stays open per spec
   };

@@ -123,10 +123,8 @@ export interface DiscoveredMarketplace {
   /**
    * 因**读取事实不明**未能判定的条目数(文件锁、权限、网络盘抖动、瞬时 I/O)。
    *
-   * 与 skippedCount 必须分开:>0 表示"这个市场声明了哪些 ghostId"当前给不出完整
-   * 答案。展示可以照旧容错,但**新的所有权提交必须 fail closed**——否则同 ghostId
-   * 的服务端默认安装/手动安装会在它暂时不可读的窗口里抢占先装先得,恢复后该插件
-   * 永久 conflict。与来源级失败(result.ok === false)同一口径,只是粒度到条目。
+   * 与 skippedCount 必须分开:>0 表示部分条目当前读取失败，管理界面应明确提示
+   * 用户刷新或检查来源，但不能因此阻断其它市场的发现和安装。
    */
   unreadableCount: number;
 }
@@ -499,8 +497,7 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
     }
     const resolved = await resolvePluginDir(marketRoot, relPath);
     if (resolved.kind === 'unreadable') {
-      // 事实不明:不能与"内容非法"共用静默跳过分支,否则调用方会把目录当完整,
-      // 允许同 ghostId 的默认安装/手动安装在这个窗口里抢占所有权。
+      // 事实不明不能与“内容非法”共用计数，否则 UI 无法告诉用户这是可重试问题。
       unreadableCount += 1;
       noteSkip(index, relPath, resolved);
       continue;

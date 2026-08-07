@@ -6,7 +6,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
-import { GhostManager } from '../GhostManager';
+import { CINDY_OFFICIAL_GHOST_TRUST, GhostManager } from '../GhostManager';
 
 /** 每个用例独立的临时仓库根 + 源文件目录(规则 23:测试路径一律 os.tmpdir)。 */
 let workDir: string;
@@ -42,6 +42,13 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
     entry: 'main.js',
     slots: ['tool'],
     tools: [{ name: 'do_thing', description: '做点事' }],
+  };
+}
+
+function atResourceManifest(id = 'hello'): Record<string, unknown> {
+  return {
+    ...goodManifest(id),
+    atResourceProvider: { tool: 'do_thing' },
   };
 }
 
@@ -228,6 +235,50 @@ describe('GhostManager · install', () => {
     expect(manager.list().map((c) => c.manifest.id)).toEqual(['hello']);
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(onChanged.mock.calls[0][0].map((c: InstalledGhost) => c.manifest.id)).toEqual(['hello']);
+  });
+
+  it('本地包仅自报 cindy-github 不会获得官方 trust；Host override 才能写官方 receipt', async () => {
+    const local = await makeCindy('github-local.cindy', goodManifest('cindy-github'));
+    const localResult = await manager.install(local);
+    expect(localResult).toMatchObject({ ghost: { trust: { level: 'unverified' } } });
+    await fs.promises.rm(path.join(rootDir, 'cindy-github'), { recursive: true, force: true });
+
+    const officialResult = await manager.install(local, { trustOverride: 'cindy-official' });
+    expect(officialResult).toMatchObject({ ghost: { trust: { level: 'cindy-official' } } });
+    const receipt = JSON.parse(
+      await fs.promises.readFile(path.join(rootDir, 'cindy-github', '.cindy-trust.json'), 'utf8'),
+    ) as { level?: unknown };
+    expect(receipt.level).toBe('cindy-official');
+    expect(receipt).toMatchObject(CINDY_OFFICIAL_GHOST_TRUST);
+    expect(manager.list()[0].trust).toEqual(CINDY_OFFICIAL_GHOST_TRUST);
+  });
+
+  it('残缺的官方 receipt 不会被投影为可用的官方 trust', async () => {
+    const local = await makeCindy('github-incomplete-receipt.cindy', goodManifest('cindy-github'));
+    await manager.install(local, { trustOverride: 'cindy-official' });
+    const metadataPath = path.join(rootDir, 'cindy-github', '.cindy-trust.json');
+    const metadata = JSON.parse(await fs.promises.readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+    delete metadata.publisherName;
+    await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
+
+    expect(manager.list()[0]?.trust).toBeUndefined();
+  });
+
+  it('@ 资源入口必须命中主机安装 receipt，旧安装元数据不会在升级后自动扩权', async () => {
+    const cindy = await makeCindy('at-resource.cindy', atResourceManifest());
+    const installed = await manager.install(cindy);
+
+    const metadataPath = path.join(rootDir, 'hello', '.cindy-trust.json');
+    const metadata = JSON.parse(await fs.promises.readFile(metadataPath, 'utf8')) as Record<string, unknown>;
+
+    delete metadata.approvedAtResourceProvider;
+    await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
+    expect(manager.list()[0].manifest.tools).toEqual([
+      { name: 'do_thing', description: '做点事' },
+    ]);
+
+    metadata.approvedAtResourceProvider = { tool: 'other_tool' };
+    await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
   });
 
   it('initiallyEnabled=false:装入即沉睡(.disabled 与目录同帧就位,首个广播就是沉睡态)', async () => {
@@ -502,6 +553,37 @@ describe('GhostManager · inspect(只验不装)', () => {
     expect((result as { packageSha256: string }).packageSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(fs.existsSync(rootDir)).toBe(false); // 未装入,仓库根都不该出现
     expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('本地化展示清单与包内 canonical 清单分离', async () => {
+    hostLocale = 'zh-CN';
+    const base = {
+      ...goodManifest(),
+      name: 'Base name',
+      locales: {
+        en: 'locales/en.json',
+        'zh-CN': 'locales/zh-CN.json',
+      },
+    };
+    const cindy = await makeCindy('canonical.cindy', base, {
+      'locales/en.json': JSON.stringify({ name: 'English name' }),
+      'locales/zh-CN.json': JSON.stringify({
+        name: '中文名称',
+        tools: { do_thing: { description: '中文工具说明' } },
+      }),
+    });
+
+    const inspected = await manager.inspect(cindy);
+    expect(inspected).toMatchObject({
+      manifest: {
+        name: '中文名称',
+        tools: [{ name: 'do_thing', description: '中文工具说明' }],
+      },
+      canonicalManifest: {
+        name: 'Base name',
+        tools: [{ name: 'do_thing', description: '做点事' }],
+      },
+    });
   });
 
   it('确认后源文件被替换时，整包指纹不一致会拒绝安装', async () => {

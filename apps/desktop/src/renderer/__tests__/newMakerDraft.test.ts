@@ -168,6 +168,7 @@ describe('newMakerDraft store', () => {
           model: 'claude-opus-4-7',
           effort: 'high',
           fast: true,
+          workerPermissionMode: 'bypassPermissions',
           initialTask: '先跑一遍测试',
         },
       },
@@ -186,8 +187,33 @@ describe('newMakerDraft store', () => {
       model: 'claude-opus-4-7',
       effort: 'high',
       fast: true,
+      workerPermissionMode: 'bypassPermissions',
     });
     expect(wc?.initialTask).toBeUndefined();
+  });
+
+  it('另起干净任务时只关闭协同，不覆盖 Worker 创建偏好', async () => {
+    const { getDraft, patchDraft, resetDraftWorkspaceTargets } = await loadModule();
+    patchDraft({
+      collab: {
+        enabled: true,
+        worker: 'codex',
+        workerConfig: {
+          role: 'developer',
+          model: 'gpt-5.5',
+          workerPermissionMode: 'bypassPermissions',
+        },
+      },
+    });
+
+    resetDraftWorkspaceTargets();
+
+    expect(getDraft().collab.enabled).toBe(false);
+    expect(getDraft().collab.workerConfig).toMatchObject({
+      role: 'developer',
+      model: 'gpt-5.5',
+      workerPermissionMode: 'bypassPermissions',
+    });
   });
 
   it('patchDraft: Cindy worktree 路径会折回项目根目录', async () => {
@@ -504,6 +530,20 @@ describe('newMakerDraft store', () => {
       expect(getDraft().worktreeEnabled).toBe(false);
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
     }
+  });
+
+  it('通用草稿 patch 不能改动 worktree 偏好', async () => {
+    vi.resetModules();
+    const { getDraft, patchDraft, setWorktreePreference } = await loadModule();
+
+    patchDraft({ worktreeEnabled: true, worktreePreferenceCustomized: true });
+    expect(getDraft().worktreeEnabled).toBe(false);
+    expect(getDraft().worktreePreferenceCustomized).toBe(false);
+
+    setWorktreePreference(true);
+    patchDraft({ worktreeEnabled: false, worktreePreferenceCustomized: false });
+    expect(getDraft().worktreeEnabled).toBe(true);
+    expect(getDraft().worktreePreferenceCustomized).toBe(true);
   });
 
   it('旧 false 快照不固化默认,旧 true 迁移为显式 override', async () => {

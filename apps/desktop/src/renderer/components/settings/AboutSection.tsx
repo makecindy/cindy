@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, FolderOpen } from 'lucide-react';
+import { ExternalLink, FolderOpen, Loader2, Upload } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -19,6 +19,8 @@ import { Switch } from '@/components/ui/switch';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
+import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
+import { extractIpcError } from '@/utils/ipcError';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { StorageManagementCard } from './StorageManagementCard';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -143,6 +145,10 @@ export function AboutSection() {
         <DebugLogToggleRow />
         <Divider />
         <OpenLogsRow />
+        <Divider />
+        <CrashAutoUploadToggleRow />
+        <Divider />
+        <UploadLogsRow />
         <Divider />
         <LegalLinksRows />
       </div>
@@ -519,6 +525,187 @@ function OpenLogsRow() {
         <FolderOpen size={13} />
         {t('settings.about.openLogsDir')}
       </button>
+    </div>
+  );
+}
+
+/**
+ * 「崩溃时自动上传日志」开关。**默认关闭**。
+ *
+ * 语义是 opt-in:必须已同意《隐私政策》**且**用户显式打开,崩溃现场才会被自动送达。
+ * 关掉开关会立刻清掉已有的待补传标记(main 侧做),不会在下次启动偷偷补传。
+ *
+ * 「恢复默认」删掉这条 override 重新跟随版本默认值;因为默认值就是关闭,用户「打开又关掉」
+ * 会留痕(main 侧 preserveDefaults),这也是合规问询时能自证的依据。
+ */
+function CrashAutoUploadToggleRow() {
+  const { t } = useTranslation();
+  const { state, setCrashAutoUpload, resetCrashAutoUpload } = useLogUploadSettings();
+  const [saving, setSaving] = useState(false);
+
+  const handleToggle = async (next: boolean) => {
+    setSaving(true);
+    try {
+      await setCrashAutoUpload(next);
+      toast.success(
+        next
+          ? t('settings.about.logUpload.crashAutoEnabledToast')
+          : t('settings.about.logUpload.crashAutoDisabledToast'),
+      );
+    } catch {
+      // 不透传 err.message:main 侧的 IPC 错误串是英文技术串,直接 toast 会让非中文用户
+      // 看到不可读的内部信息。
+      toast.error(t('settings.about.logUpload.saveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setSaving(true);
+    try {
+      await resetCrashAutoUpload();
+      toast.success(t('settings.defaults.restored'));
+    } catch {
+      toast.error(t('settings.defaults.restoreFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 未配置上报目标 / 未同意隐私政策时开关不可用 —— 打开它也不会有任何效果,
+  // 让它可拨只会造成「我开了却没传」的误解。
+  const blocked = !state.targetConfigured || !state.privacyConsentAccepted;
+  const disabled = state.loading || saving || blocked;
+
+  return (
+    <div className="flex flex-col gap-1.5 px-[18px] py-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-13 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.logUpload.crashAutoLabel')}
+          </span>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.logUpload.crashAutoDescription')}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <DefaultOverrideControls
+            isCustomized={state.crashAutoUploadCustomized}
+            disabled={state.loading || saving}
+            onReset={handleReset}
+          />
+          <Switch
+            checked={state.crashAutoUploadEnabled}
+            disabled={disabled}
+            onCheckedChange={handleToggle}
+            aria-label={t('settings.about.logUpload.crashAutoLabel')}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 「上传日志」按钮。
+ *
+ * 成功后必须给出上传编号(用户报障时口述给我们),所以 toast 里带编号并把它复制到剪贴板。
+ * 四种失败按 IPC 错误码给可区分的文案:未配置目标 / 未同意隐私政策 / 采到 0 条 / 上传失败。
+ */
+function UploadLogsRow() {
+  const { t } = useTranslation();
+  const { state } = useLogUploadSettings();
+  const [uploading, setUploading] = useState(false);
+
+  const handleUpload = async () => {
+    setUploading(true);
+    try {
+      const result = await window.electronAPI.uploadLogsNow();
+      toast.success(t('settings.about.logUpload.successToast', { code: result.uploadCode }));
+      // 编号是这次上报唯一的可报凭据,顺手放进剪贴板,省得用户从 toast 里抄。
+      try {
+        await navigator.clipboard.writeText(result.uploadCode);
+      } catch {
+        // 剪贴板不可用不影响主流程 —— 编号已经显示在 toast 里了。
+      }
+    } catch (err) {
+      const code = extractIpcError(err)?.code;
+      switch (code) {
+        case 'LOG_UPLOAD_UNAVAILABLE':
+          toast.error(t('settings.about.logUpload.errorUnavailable'));
+          break;
+        case 'PRIVACY_CONSENT_REQUIRED':
+          toast.error(t('settings.about.logUpload.errorConsentRequired'));
+          break;
+        case 'LOG_UPLOAD_EMPTY':
+          toast.error(t('settings.about.logUpload.errorEmpty'));
+          break;
+        case 'LOG_UPLOAD_BUSY':
+          toast.error(t('settings.about.logUpload.errorBusy'));
+          break;
+        default:
+          toast.error(t('settings.about.logUpload.errorFailed'));
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const unavailableReason = !state.targetConfigured
+    ? t('settings.about.logUpload.unavailableNotConfigured')
+    : !state.privacyConsentAccepted
+      ? t('settings.about.logUpload.unavailableNoConsent')
+      : null;
+
+  return (
+    <div className="flex flex-col gap-1.5 px-[18px] py-4">
+      {/* items-start:本行的说明有三段(用途 / 上传内容边界 / 不可用原因),按钮若垂直居中会浮在
+          文字块中间;与标签对齐才和同页其它「标签 + 按钮」行(日志目录 / 服务条款)读起来一致。 */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-13 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.logUpload.uploadLabel')}
+          </span>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.logUpload.uploadDescription')}
+          </p>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.logUpload.scopeDescription')}
+          </p>
+          {unavailableReason !== null && (
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {unavailableReason}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleUpload()}
+          disabled={!state.manualUploadAvailable || uploading || state.loading}
+          className={cn(
+            'flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 -mr-1',
+            'text-12 font-medium text-[var(--settings-section-title)]',
+            'border border-[var(--settings-theme-card-border)]',
+            'transition-colors hover:bg-[var(--settings-theme-card-border)]/40',
+            'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
+          )}
+          title={t('settings.about.logUpload.uploadTooltip')}
+        >
+          {/* 动画必须挂在 HTML 元素上并只用 transform / opacity(工程规范 §7):
+              图标本身是 SVG,所以旋转挂外层 span 而不是 <Loader2 className="animate-spin">。 */}
+          {uploading ? (
+            <span className="inline-flex animate-spin">
+              <Loader2 size={13} />
+            </span>
+          ) : (
+            <Upload size={13} />
+          )}
+          {uploading
+            ? t('settings.about.logUpload.uploading')
+            : t('settings.about.logUpload.uploadButton')}
+        </button>
+      </div>
     </div>
   );
 }

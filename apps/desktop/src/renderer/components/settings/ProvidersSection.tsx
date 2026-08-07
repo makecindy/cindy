@@ -91,14 +91,15 @@ import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers'
 // ---------------------------------------------------------------------------
 
 function providerHasModels(provider: ProviderView): boolean {
-  // 专属媒体清单(imageModels/videoModels)也算「有模型」:XD 动态对话目录不可用时
-  // 内置的图像/视频模型仍可用且可被停用管理,UnifiedModelList 的 buildUnionRows
-  // 会为它们合成能力行 —— 只看 models[agent] 会让整个列表不渲染
-  // (PR #744 review 第十五轮)。
+  // 专属媒体清单(imageModels/videoModels/embeddingModels)也算「有模型」:XD 动态
+  // 对话目录不可用时内置的图像/视频/向量模型仍可用且可被停用管理,
+  // UnifiedModelList 的 buildUnionRows 会为它们合成能力行 —— 只看 models[agent]
+  // 会让整个列表不渲染(PR #744 review 第十五轮;向量补入见 PR #1707 review)。
   return (
     provider.agents.some((a) => (provider.models[a]?.length ?? 0) > 0) ||
     (provider.imageModels?.length ?? 0) > 0 ||
-    (provider.videoModels?.length ?? 0) > 0
+    (provider.videoModels?.length ?? 0) > 0 ||
+    (provider.embeddingModels?.length ?? 0) > 0
   );
 }
 

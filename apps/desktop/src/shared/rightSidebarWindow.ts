@@ -50,6 +50,19 @@ export type RsbWindowCommand =
       focusTaskId?: string | null;
     }
   | {
+      type: 'open-turn-review';
+      sessionId: string;
+      changeSetIds: string[];
+      selectedDiffId?: string | null;
+      selectedPath?: string | null;
+      requestNonce: number;
+      /**
+       * 承载 review tab 的 RSB 桶(缺省 = sessionId 自身)。协同面板里 worker
+       * 流的入口传 lead sessionId:worker 自己的桶在协同视图下不可见。
+       */
+      hostSessionId?: string | null;
+    }
+  | {
       type: 'open-file-browser';
       sessionId: string;
       relPath: string;

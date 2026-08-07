@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
-import { isRemoteSession } from '@/lib/makerTransport';
+import { isRemoteSession, isRemoteSessionSticky } from '@/lib/makerTransport';
 
 export interface RunningBashTask {
   taskId: string;
@@ -66,19 +66,39 @@ export function useBackgroundBashTasks(
 
   // 快照水合:挂载 / 切会话 / 历史重载完成后拉一次存量。maker 未 init 等瞬态失败
   // 保持现状 —— 实时事件流仍会自然补上。
+  // 同一次快照兼做 stale running 对账:候选集必须在**发起请求前**捕获(时序论证
+  // 见 store 的 reconcileStaleRunningTasks),空表 + 非空候选正是「全部已收口」
+  // 的信号,不得 early-return。对账 gating 用**粘滞版**远程判定(与
+  // BackgroundTasksBody、Stop gating 同口径):relay 瞬断窗口 remoteMirror
+  // (非粘滞)会把远程会话误判成本机,本机空快照会把镜像里真实在跑的任务错误
+  // 收口 —— 粘滞判定命中远程时只 seed 不对账。
   useEffect(() => {
     if (!sessionId || remoteMirror) return;
     const api = window.electronAPI?.maker;
     if (!api?.listSessionBackgroundTasks) return;
     let disposed = false;
+    const staleRunningCandidates = isRemoteSessionSticky(sessionId)
+      ? undefined
+      : makerChatStore.captureRunningClaudeTaskIds(sessionId);
     void api
       .listSessionBackgroundTasks(sessionId)
       .then(({ tasks }) => {
-        if (disposed || !Array.isArray(tasks) || tasks.length === 0) return;
-        makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks);
+        if (disposed || !Array.isArray(tasks)) return;
+        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
+        // 本机 main「查无此会话」的空表不可再套用(候选集是按本机误判捕获的,
+        // 套用会误收镜像里真实在跑的任务)。本 hook 不服务远程会话,整体丢弃。
+        if (isRemoteSessionSticky(sessionId)) return;
+        if (tasks.length === 0 && !(staleRunningCandidates && staleRunningCandidates.size > 0)) {
+          return;
+        }
+        makerChatStore.seedBackgroundTaskSnapshots(
+          sessionId,
+          tasks,
+          staleRunningCandidates ? { staleRunningCandidates } : undefined,
+        );
       })
       .catch(() => {
-        // 静默:与 useSessionBackgroundActivity 的快照失败同口径。
+        // 静默:与 useSessionBackgroundActivity 的快照失败同口径(失败不对账)。
       });
     return () => {
       disposed = true;

@@ -57,10 +57,14 @@ const config: Config = {
       fontFamily: {
         mono: ['var(--app-font-code, var(--app-font-code-default))'],
       },
-      // 字号档 = DESIGN.md §3 桌面 UI 字号白名单的镜像(#1505 PR3 收档):
-      // 增删档位必须同步 globals.css 的 --text-N 与 DESIGN.md 白名单,三处一致。
-      // 禁止改回"9–28 每个整数全开"——梯子每一级都是台阶等于没有梯子。
+      // DESIGN.md §3 字号白名单的 Tailwind 镜像。五处必须同步：规范、
+      // 本配置、globals.css 默认值、useFontSettings 运行时注册表、
+      // lib/utils.ts 的 tailwind-merge 字号组。
       fontSize: {
+        xs: ['var(--text-xs)', { lineHeight: 'var(--text-xs-line-height)' }],
+        sm: ['var(--text-sm)', { lineHeight: 'var(--text-sm-line-height)' }],
+        base: ['var(--text-base)', { lineHeight: 'var(--text-base-line-height)' }],
+        lg: ['var(--text-lg)', { lineHeight: 'var(--text-lg-line-height)' }],
         10: 'var(--text-10)',
         11: 'var(--text-11)',
         12: 'var(--text-12)',
@@ -117,8 +121,7 @@ const config: Config = {
       animation: {
         // 功能性 loading spinner 使用 DESIGN.md §14.4 明确登记的语义循环 token；
         // 不复用 Tailwind animate-spin 的硬编码 1s,也不耦合 enter/exit 交互档位。
-        spinner:
-          'spin var(--motion-spinner-cycle, 1000ms) linear infinite',
+        spinner: 'spin var(--motion-spinner-cycle, 1000ms) linear infinite',
         // float-out 需要 forwards:Radix 等 animationend 才卸载,fill 不驻留
         // 会在动画结束到卸载之间闪回原状。
         'float-in':

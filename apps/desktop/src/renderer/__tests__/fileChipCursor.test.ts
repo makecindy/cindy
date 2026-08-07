@@ -33,11 +33,10 @@ const agentActionRow = readFileSync(
 
 describe('File chip cursor — points, not zooms (symptom #2)', () => {
   it('UserMessage file chip uses cursor-pointer (not cursor-zoom-in)', () => {
-    // Hunt for the attachment chip <button> by its stable file-chip key. The
-    // chip carries the user-bg/border tokens. The chip class
-    // list must include `cursor-pointer` and must NOT regress to
-    // `cursor-zoom-in`.
-    const chipBlockStart = userMessage.indexOf('key={`file-${idx}-${f.path}`}');
+    // 附件 chip 的 <button> 现在封装在 UserAttachmentChip 组件里(右键菜单分流
+    // 需要 hook,不能内联在 map 里)。从组件定义处起截到它的 </button>,断言 chip
+    // class 含 `cursor-pointer` 且未回退 `cursor-zoom-in`。
+    const chipBlockStart = userMessage.indexOf('function UserAttachmentChip');
     expect(chipBlockStart).toBeGreaterThan(-1);
     const chipBlockEnd = userMessage.indexOf('</button>', chipBlockStart);
     const chipBlock = userMessage.slice(chipBlockStart, chipBlockEnd);

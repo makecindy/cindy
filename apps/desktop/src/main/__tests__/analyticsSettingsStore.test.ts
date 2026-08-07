@@ -371,3 +371,73 @@ describe('analytics build gate', () => {
     expect(store.isAnalyticsAllowed()).toBe(false);
   });
 });
+
+/**
+ * `classifyAnalyticsContent` 是「盘上记录是否可信」判据里不碰 fs 的纯核心
+ * （2026-08-04 review copilot：`{}` 与非 boolean 已知字段都不该当 valid）。
+ */
+describe('classifyAnalyticsContent', () => {
+  let classify: (c: string | null) => 'none' | 'valid' | 'invalid';
+
+  beforeEach(async () => {
+    classify = (await importStore()).__testing.classifyAnalyticsContent;
+  });
+
+  it('文件不存在 ⇒ none', () => {
+    expect(classify(null)).toBe('none');
+  });
+
+  it('本 writer 会产出的形状 ⇒ valid', () => {
+    expect(classify(JSON.stringify({ privacyConsentAccepted: true, analyticsEnabled: false }))).toBe(
+      'valid',
+    );
+  });
+
+  it('⚠️ 空对象 `{}` ⇒ invalid（writer 清空 override 时删文件，从不落 `{}`）', () => {
+    expect(classify('{}')).toBe('invalid');
+  });
+
+  it('⚠️ 已知字段存在却不是 boolean ⇒ invalid', () => {
+    expect(classify(JSON.stringify({ privacyConsentAccepted: 'yes' }))).toBe('invalid');
+    expect(classify(JSON.stringify({ analyticsEnabled: 1 }))).toBe('invalid');
+    expect(classify(JSON.stringify({ legacyConsentMigrationClosed: null }))).toBe('invalid');
+  });
+
+  it('坏 JSON / 非对象 / 数组 ⇒ invalid', () => {
+    expect(classify('{ not json')).toBe('invalid');
+    expect(classify('"str"')).toBe('invalid');
+    expect(classify('[]')).toBe('invalid');
+    expect(classify('null')).toBe('invalid');
+  });
+
+  it('含未知键但已知字段合法（前向兼容）⇒ valid', () => {
+    expect(classify(JSON.stringify({ privacyConsentAccepted: true, futureKey: 1 }))).toBe('valid');
+    expect(classify(JSON.stringify({ futureKey: 1 }))).toBe('valid');
+  });
+});
+
+/**
+ * 2026-08-04 review P2：首次把盘上记录分类为 invalid 后，用户重新写入（同意 / 改开关）必须
+ * 把缓存探针刷新回可读，否则本会话里日志上报的授权闸一直把同意当「不可读」，手动上报卡在
+ * consent-required、崩溃补传卡到重启。
+ */
+describe('探针在成功写入后刷新（不卡在 invalid）', () => {
+  it('损坏文件 ⇒ 不可读；acceptPrivacyConsent 之后 ⇒ 可读', async () => {
+    fs.writeFileSync(settingsFile(), 'not-json-corrupt{{');
+    const store = await importStore();
+    expect(store.isAnalyticsConsentRecordReadable()).toBe(false);
+
+    store.acceptPrivacyConsent();
+    expect(store.isAnalyticsConsentRecordReadable()).toBe(true);
+    expect(store.readAnalyticsSettings().privacyConsentAccepted).toBe(true);
+  });
+
+  it('空对象 {} ⇒ 不可读；setAnalyticsEnabled 之后 ⇒ 可读', async () => {
+    fs.writeFileSync(settingsFile(), '{}');
+    const store = await importStore();
+    expect(store.isAnalyticsConsentRecordReadable()).toBe(false);
+
+    store.setAnalyticsEnabled(false);
+    expect(store.isAnalyticsConsentRecordReadable()).toBe(true);
+  });
+});

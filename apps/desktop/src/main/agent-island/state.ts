@@ -4,6 +4,7 @@ import {
   type InteractionRequest,
 } from '@cindy/maker-core';
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
@@ -486,6 +487,10 @@ export function applyAgentIslandEvent(
   options: ApplyAgentIslandEventOptions = {},
 ): boolean {
   if (!isIslandRelevantEvent(event)) return false;
+  // A claimed done/status pair only seals one SDK turn. The product turn is
+  // still running, so do not create/update an island entry or trigger any
+  // completion transition here; the unclaimed terminal tail will do that.
+  if (isTurnContinuationBoundaryEvent(event)) return false;
   const assistantText = event.type === 'text' ? assistantTextFromEvent(event) : null;
   if (event.type === 'text' && !assistantText) return false;
 

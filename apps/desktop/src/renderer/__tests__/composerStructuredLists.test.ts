@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor, Node } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
@@ -37,6 +39,8 @@ const TestMentionChip = Node.create({
       titled: { default: false },
       agentText: { default: undefined },
       agentTextTruncated: { default: undefined },
+      sourceLabel: { default: undefined },
+      sourceDescription: { default: undefined },
     };
   },
   renderHTML({ HTMLAttributes }) {
@@ -207,6 +211,29 @@ describe('composer structured list input rules', () => {
     expect(editor.state.doc.firstChild?.childCount).toBe(1);
     expect(editor.state.doc.lastChild?.type.name).toBe('orderedList');
     expect(editor.state.doc.lastChild?.attrs.start).toBe(3);
+  });
+
+  it('reserves the full-width CJK marker separately from the ordinal digits', () => {
+    const editor = makeEditor();
+
+    typeThroughInputRules(editor, '2、');
+
+    const list = editor.view.dom.querySelector('ol');
+    expect(list?.getAttribute('data-marker')).toBe('、');
+    expect(list?.getAttribute('data-marker-digits')).toBe('1');
+
+    const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+    const baseListRule = css.match(
+      /\[data-chat-input-root\]\s+\.ProseMirror\s+:is\(ul,\s*ol\)\s*\{([\s\S]*?)\r?\n\s*\}/,
+    )?.[1];
+    const cjkMarkerRule = css.match(
+      /\[data-chat-input-root\]\s+\.ProseMirror\s+ol\[data-marker='、'\]\s*\{([\s\S]*?)\r?\n\s*\}/,
+    )?.[1];
+    expect(baseListRule).toContain('--composer-list-marker-extra: 0em;');
+    expect(baseListRule).toContain(
+      'var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)',
+    );
+    expect(cjkMarkerRule).toContain('--composer-list-marker-extra: 0.7em;');
   });
 
   it('reserves enough marker width for long ordered-list numbers', () => {
@@ -1703,5 +1730,90 @@ describe('composer structured list serialization', () => {
         display: 'Pasted text (1 line)',
       },
     ]);
+  });
+
+  it('serializes browser-tab and desktop-window chips as structured non-file references', () => {
+    const tabHref = 'cindy://browser-tab/tab-1?url=https%3A%2F%2Fexample.com%2Fdocs';
+    const windowHref = 'cindy://desktop-window/11/22?app=Code.exe';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'mentionChip',
+              attrs: { kind: 'browser-tab', label: 'Docs', path: tabHref },
+            },
+            { type: 'text', text: ' and ' },
+            {
+              type: 'mentionChip',
+              attrs: { kind: 'desktop-window', label: 'Editor', path: windowHref },
+            },
+          ],
+        },
+      ],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    expect(serialized.text).toBe(`[Docs](${tabHref}) and [Editor](${windowHref})`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([
+      {
+        kind: 'browser-tab',
+        start: 0,
+        end: `[Docs](${tabHref})`.length,
+        href: tabHref,
+        tabId: 'tab-1',
+        url: 'https://example.com/docs',
+        title: 'Docs',
+      },
+      {
+        kind: 'desktop-window',
+        start: `[Docs](${tabHref}) and `.length,
+        end: serialized.text.length,
+        href: windowHref,
+        windowId: 22,
+        pid: 11,
+        appName: 'Code.exe',
+        title: 'Editor',
+      },
+    ]);
+  });
+
+  it('serializes Plugin business resources as opaque structured references', () => {
+    const href = 'cindy://plugin-resource/issues/search_issues/ISSUE-1';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'mentionChip',
+          attrs: {
+            kind: 'plugin-resource',
+            label: 'Fix login',
+            path: href,
+            sourceLabel: 'Issue Tracker',
+            sourceDescription: 'Open issue',
+          },
+        }],
+      }],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    expect(serialized.text).toBe(`[Fix login](${href})`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([{
+      kind: 'plugin-resource',
+      start: 0,
+      end: serialized.text.length,
+      href,
+      ghostId: 'issues',
+      tool: 'search_issues',
+      resourceId: 'ISSUE-1',
+      pluginName: 'Issue Tracker',
+      label: 'Fix login',
+      description: 'Open issue',
+    }]);
   });
 });

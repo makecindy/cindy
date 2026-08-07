@@ -47,7 +47,7 @@ function modelLabel(details: TurnUsageDetails, t: TFunction): string | null {
 const LOW_CACHE_MIN_INPUT_TOKENS = 50_000;
 const LOW_CACHE_MAX_HIT_RATE = 0.2;
 
-function suggestion(details: TurnUsageDetails, t: TFunction): string | null {
+export function getTurnUsageSuggestion(details: TurnUsageDetails, t: TFunction): string | null {
   const inputTotal = details.inputTokens + details.cacheReadTokens + details.cacheCreateTokens;
   if (
     inputTotal >= LOW_CACHE_MIN_INPUT_TOKENS &&
@@ -108,7 +108,7 @@ export function buildTurnUsageTooltipLines({
     const model = modelLabel(details, t);
     if (model) lines.push(t('usageDetails.modelLine', { model }));
   }
-  const suggestionText = suggestion(details, t);
+  const suggestionText = getTurnUsageSuggestion(details, t);
   if (suggestionText) {
     lines.push(t('usageDetails.suggestionLine', { suggestion: suggestionText }));
   }

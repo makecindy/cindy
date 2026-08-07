@@ -13,6 +13,16 @@ describe('resolveShellOpenPathTarget', () => {
     expect(resolveShellOpenPathTarget(target)).toBe(target);
   });
 
+  it('normalizes separators to the host form (forward-slash Windows paths)', () => {
+    // 正斜杠 Windows 路径过 shell.openPath 会解析失败,必须折成本机分隔符。
+    // 仅 win32 主机可直接断言反斜杠;POSIX 上 normalize 幂等。
+    if (process.platform === 'win32') {
+      expect(resolveShellOpenPathTarget('C:/Users/a/文档.docx')).toBe('C:\\Users\\a\\文档.docx');
+    } else {
+      expect(resolveShellOpenPathTarget('/tmp/a//b.txt')).toBe('/tmp/a/b.txt');
+    }
+  });
+
   it('resolves a valid cindy-media reference inside the main process', () => {
     const hash = 'a'.repeat(64);
     expect(resolveShellOpenPathTarget(`cindy-media://blobs/${hash}.ogg`)).toBe(

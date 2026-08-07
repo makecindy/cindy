@@ -41,14 +41,12 @@ export interface UpdateAllRow {
   /**
    * 审阅所依据的**已装 manifest 权限指纹**(不是版本号)。
    * `ghosts.update()` 允许同版本整体替换 manifest,所以版本号不是可靠的
-   * 审阅基线——同版本换入不同权限声明时,旧 diff 与它换来的
-   * allowPermissionExpansion 会把未审阅的新权限一并放行。批准前必须拿
-   * 当前已装 manifest 重算指纹比对,不一致即作废重审。
+   * 审阅基线。Renderer 先检查、Main 在安装锁内复核。
    */
   reviewedBaseline?: string;
   /**
-   * 非 server 源在审阅时取得的 manifest:主进程对这类来源强制要求安装时
-   * 传回同一份 reviewed manifest,approve 必须原样带上,否则 INVALID_PARAMS。
+   * 审阅时取得的 manifest:主进程强制要求安装时传回同一份清单，
+   * approve 必须原样带上，否则 INVALID_PARAMS。
    */
   expectedManifest?: GhostManifest;
   /** status 为 failed 时的用户可读错误(已经过 i18n 映射)。 */

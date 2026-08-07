@@ -30,8 +30,17 @@ import {
   query as sdkQuery,
   forkSession as sdkForkSession,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { Query, CanUseTool, McpServerConfig, PermissionUpdate, Settings } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  Query,
+  CanUseTool,
+  HookCallback,
+  McpServerConfig,
+  PermissionUpdate,
+  PreToolUseHookInput,
+  Settings,
+} from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
+import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -85,6 +94,7 @@ import {
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
+import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palette-scanner.js';
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
 import { UsageTracker } from '../shared/usage-tracker.js';
@@ -107,6 +117,7 @@ import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
+  createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -118,6 +129,8 @@ import {
 } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
 import { ensureClaudeTranscriptInWorkingDir } from './transcript-relocation.js';
+import { findClaudeSessionJsonl } from './claude-projects-fs.js';
+import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
@@ -250,34 +263,6 @@ const READ_ONLY_CLAUDE_TOOLS: ReadonlySet<string> = new Set([
 /** canUseTool fail-closed 分支用: 判断工具是否属于已知只读工具(见上方白名单注释)。 */
 function isReadOnlyClaudeTool(toolName: string): boolean {
   return READ_ONLY_CLAUDE_TOOLS.has(toolName);
-}
-
-/**
- * 把 Claude SDK 的 MCP 工具名拆成 host 审批策略要的 { serverName, toolName }。
- *
- * SDK 命名格式为 `mcp__<server>__<tool>`, 但**不能**按 `__` 盲切首段当 server ——
- * server 名自身可以含 `__`(自定义 MCP 的 id 正则是 `/^[a-z0-9_-]+$/`, 下划线合法)。
- * 盲切会让 id 为 `cindy_browser__evil` 的第三方 server 被识别成第一方 `cindy_browser`,
- * 直接继承信任表里的静默放行 —— 这是一条实打实的提权路径。
- *
- * 因此只在**本 session 实际注册过**的 server 名里做前缀匹配, 命中多个时取最长者
- * (`cindy_browser__evil` 胜过 `cindy_browser`), 保证归属唯一。名字对不上任何已注册
- * server 时返回 null, 调用方按"不查策略"处理 —— 走原有权限链, 不放行。
- */
-function resolveMcpToolTarget(
-  toolName: string,
-  registeredServerNames: ReadonlySet<string>,
-): { serverName: string; toolName: string } | null {
-  if (!toolName.startsWith('mcp__')) return null;
-  let best: { serverName: string; toolName: string } | null = null;
-  for (const serverName of registeredServerNames) {
-    const prefix = `mcp__${serverName}__`;
-    if (!toolName.startsWith(prefix) || toolName.length <= prefix.length) continue;
-    if (!best || serverName.length > best.serverName.length) {
-      best = { serverName, toolName: toolName.slice(prefix.length) };
-    }
-  }
-  return best;
 }
 
 /**
@@ -1255,6 +1240,44 @@ export class ClaudeCodeAgent extends BaseAgent {
         .filter(Boolean)
         .join('\n');
     };
+    const turnChangeCaptureHook: HookCallback = async (input) => {
+      const captureCwd = opts.workingDir;
+      const captureSessionId = opts.sessionId;
+      if (!this.deps.turnChangeCapture || !captureCwd || !captureSessionId) {
+        return { continue: true };
+      }
+      if (input.hook_event_name === 'PreToolUse') {
+        const pre = input as PreToolUseHookInput;
+        const toolInput = pre.tool_input as Record<string, unknown> | undefined;
+        const targetPath = ['file_path', 'path', 'notebook_path']
+          .map((key) => toolInput?.[key])
+          .find((value): value is string => typeof value === 'string' && value.length > 0);
+        if (targetPath && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(pre.tool_name)) {
+          await this.deps.turnChangeCapture.beforeKnownFileWrite({
+            sessionId: captureSessionId,
+            provider: 'claude-code',
+            cwd: captureCwd,
+            targetPath,
+            ...(opts.remoteHostId ? { remote: true } : {}),
+          });
+        }
+      } else if (
+        input.hook_event_name === 'PostToolUse'
+        || input.hook_event_name === 'PostToolUseFailure'
+      ) {
+        const toolName = (input as { tool_name?: unknown }).tool_name;
+        if (typeof toolName !== 'string' || (toolName !== 'Bash' && !toolName.startsWith('mcp__'))) {
+          return { continue: true };
+        }
+        this.deps.turnChangeCapture.noteOpaqueWrite({
+          sessionId: captureSessionId,
+          provider: 'claude-code',
+          cwd: captureCwd,
+          ...(opts.remoteHostId ? { remote: true } : {}),
+        });
+      }
+      return { continue: true };
+    };
     const localClaudeHooks = mergeClaudeHookSets(
       buildClaudeLocalToolGuardHooks(
         this.deps.capabilityRouting,
@@ -1268,6 +1291,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
         () => nonHarnessMcpServerNames,
       ),
+      {
+        PreToolUse: [{ hooks: [turnChangeCaptureHook] }],
+        PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
+        PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
+      },
       this.deps.claudeHooks,
     );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -1298,6 +1326,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     // 事件队列预先声明 —— canUseTool 路径要 push interaction_dismissed 事件
     const eventQueue = createAsyncQueue<AgentEvent>();
+    // Cancellation closes a provider continuation with a queued terminal done.
+    // Keep the handle busy until the single Session consumer has processed that
+    // exact event, otherwise a new send can enter ahead of the queued boundary.
+    const continuationTerminalBoundaryEvents = new WeakSet<AgentEvent>();
+    let pendingContinuationTerminalBoundaries = 0;
 
     // ── Pending interaction 跟踪 ───────────────────────────────────────────
     // setPermissionMode 切换 / close session 时, 用此 Map 找到所有挂着的 interaction
@@ -1634,6 +1667,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
           return { behavior: 'allow', updatedInput: input };
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
+          // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,用户有权知道并接管,
+          // 后者按 Auto 本意保持静默(只把 reason 喂给模型)。动作两种都仍然 deny。
+          if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
           return {
             behavior: 'deny',
             message: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
@@ -1754,7 +1790,21 @@ export class ClaudeCodeAgent extends BaseAgent {
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
+    // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
+    // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
+    // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
+    // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+      autoReviewUnavailableNotice.reset();
     };
+    // 「自动审核不可用」的会话级一次性提示(issue #1574)。走既有的非终止 error 事件 +
+    // `[CODE]` 约定,不新增事件类型;逐条提示会把 Auto 退化成比 Ask 更烦的东西,所以去重。
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+      eventQueue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'claude-code',
+      });
+    });
     const reviewAutoAction = (
       action: ReviewableAction,
       workspaceRoots: string[],
@@ -2217,6 +2267,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           remoteHostId: opts.remoteHostId,
           sessionId: opts.sessionId,
         });
+        // 已知覆盖缺口(codex-connector review P1):远端会话的转录在远端 daemon
+        // 磁盘、CLI 流量直连远端 endpoint(remoteEnv.ANTHROPIC_BASE_URL),本地
+        // jsonl 归一化钩子与本地 compat-proxy 响应流改写都拦不到。remote cc 是
+        // MVP(rewind/fork 均 throw,撞车主触发路径在远端不可用),但远端 kimi
+        // 会话一旦撞车(如中断后可见数回落)将无法自愈,持续腐蚀到会话结束。
+        // 修复需扩展 cc-mgr wire protocol + 跨包共享归一化逻辑,列为 follow-up。
+        if (resumeSdkSid) {
+          log.warn(
+            'claude-code: remote cc session not covered by kimi tool-id normalize/rewrite defenses (transcript on remote daemon, CLI bypasses local proxy); a kimi mint collision on this session cannot self-heal',
+            { remoteHostId: opts.remoteHostId, sessionId: opts.sessionId, resumeSdkSid },
+          );
+        }
         // 网关路径(remoteRoute 为 null,即会话有效路由是 XD 网关)才依赖
         // runtimeConfig.remoteEndpoint:host 定义了该字段但值为空 = 网关凭据尚未就绪 /
         // 已失效,env-builder 会回落到本地 endpoint(下面 loopback guard 虽能拦,但错误
@@ -2524,6 +2586,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                 return { kind: 'permission', behavior: 'allow' };
               }
               if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
+                // 与本地分支同口径:审阅器故障要提示一次,模型判定保持静默。
+                if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
                 return {
                   kind: 'permission',
                   behavior: 'deny',
@@ -2650,7 +2714,36 @@ export class ClaudeCodeAgent extends BaseAgent {
               resumeSdkSid,
               workingDir: opts.workingDir,
             });
-          } else if (outcome === 'missing') {
+          }
+          // kimi 系 tool_call id 归一化: moonshot 按可见历史铸造 `${name}_${index}`
+          // id, rewind/中断造成的可见数回落会让新铸 id 与历史撞车, CLI 的
+          // ensureToolResultPairing 随即将重复 id 的 tool exchange 整段丢弃并以
+          // "(no content)" 占位 user 消息 —— 模型看到"自己的工具调用被阻止 +
+          // 用户连发空消息"进入空转(2026-07-31 kimi-k3 实测)。转录就位后、spawn
+          // 前做一次幂等归一化(重复 id 去重 + 数字后缀移出铸造空间), 纯 Anthropic
+          // 会话预扫不命中、零解析开销。详见 jsonl-tool-id-normalize.ts 头注。
+          // 'target-key-inexact' 时 relocation 无法定位 CLI 转码目录, 但全局扫描
+          // 找到的最新副本大概率正是 CLI 要读的转录, 归一化它同样是正收益。
+          if (outcome !== 'missing' && resumeSdkSid) {
+            const transcriptFile = await findClaudeSessionJsonl(
+              resumeSdkSid,
+              opts.workingDir,
+              path.join(claudeConfigDir, 'projects'),
+            );
+            if (transcriptFile) {
+              const normalized = await normalizeClaudeSessionJsonlToolIds(transcriptFile);
+              if (normalized.changed) {
+                log.info('resume transcript tool ids normalized', {
+                  resumeSdkSid,
+                  dedupedBlocks: normalized.dedupedBlockCount,
+                  offsetBlocks: normalized.offsetBlockCount,
+                  duplicateIds: normalized.duplicateIdCount,
+                  backupPath: normalized.backupPath,
+                });
+              }
+            }
+          }
+          if (outcome === 'missing') {
             const cleared = await clearInvalidResumeSession(resumeSdkSid, 'transcript_preflight');
             if (cleared) {
               // 本地 CLI 没有转录就不可能恢复。spawn 前转 fresh，当前用户消息尚未
@@ -2726,6 +2819,21 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
+          ...(this.deps.registerLocalAgentProcess
+            ? {
+                spawnClaudeCodeProcess: (spawnOptions) =>
+                  spawnObservedClaudeProcess({
+                    spawnOptions,
+                    registerProcess: (pid) =>
+                      this.deps.registerLocalAgentProcess?.({
+                        pid,
+                        kind: 'claude',
+                        role: 'task-host',
+                      }),
+                    onStderr: vo.onStderrLine as ((line: string) => void) | undefined,
+                  }),
+              }
+            : {}),
           // 订阅 token 到期续命回调 —— 仅当本次 spawn 实际注入了订阅 OAuth token
           // (oauth-spawn, 见 desktop auth-adapters getAuthEnv)且 host 实现了强刷时接线。
           // cc 侧 turn 中途 401 会发 oauth_token_refresh control 请求, SDK 调本回调向
@@ -2790,6 +2898,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     // closed=true 后 finally 的 eventQueue.end() 收尾 → Session 自动 close → 下次 send
     // 走 IPC lazy create-session 重建 handle。
     function teardownDeadHandle(logLabel: string): void {
+      // Provider death is not a successful user cancellation. Session status
+      // and the queued terminal error/done must decide observer settlement.
+      discardActiveContinuation(logLabel);
       turnInFlight = false;
       // handle 死透 → 后续没有排队 turn 可跑, counter 归零避免残留污染下一 handle 重建
       // (虽然 closed=true + inputQueue.end 已经让新消息进不来, 归零是防御性一致)
@@ -2830,13 +2941,32 @@ export class ClaudeCodeAgent extends BaseAgent {
       bridgeSuppressedDoneData = { ...(data as Record<string, unknown>) };
     }
 
-    function emitTurnBoundary(reason: string, doneData?: Record<string, unknown>): void {
+    function emitTurnBoundary(
+      reason: string,
+      doneData?: Record<string, unknown>,
+      trackContinuationTerminal = false,
+    ): void {
       eventQueue.push({
         type: 'status',
         data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
         source: 'claude-code',
       });
-      eventQueue.push({ type: 'done', data: { ...(doneData ?? {}), reason }, source: 'claude-code' });
+      const doneEvent: AgentEvent = {
+        type: 'done',
+        data: { ...(doneData ?? {}), reason },
+        source: 'claude-code',
+      };
+      if (trackContinuationTerminal) {
+        continuationTerminalBoundaryEvents.add(doneEvent);
+        pendingContinuationTerminalBoundaries += 1;
+      }
+      if (!eventQueue.push(doneEvent) && trackContinuationTerminal) {
+        continuationTerminalBoundaryEvents.delete(doneEvent);
+        pendingContinuationTerminalBoundaries = Math.max(
+          0,
+          pendingContinuationTerminalBoundaries - 1,
+        );
+      }
     }
 
     const canceledBridgeQueries = new WeakSet<Query>();
@@ -2863,8 +2993,178 @@ export class ClaudeCodeAgent extends BaseAgent {
       string,
       { wake: boolean; taskType?: string; toolUseId?: string; title?: string }
     >();
-    function noteBackgroundTaskEvent(e: AgentEvent): void {
-      if (e.type !== 'agent_task_update') return;
+
+    type ContinuationTaskState = 'running' | 'completed' | 'failed' | 'stopped';
+    type ContinuationClaim = {
+      id: number;
+      tasks: Map<string, ContinuationTaskState>;
+      state: 'awaiting' | 'active' | 'cancelled';
+      /** Number of claim-bearing done events not yet processed by Session. */
+      pendingBoundaryEvents: number;
+      /** A later natural/synthetic done has closed the product turn. */
+      settled: boolean;
+    };
+    // Claims are created synchronously when the provider enqueues a `done`.
+    // The id is attached to that exact event, so a fast task_notification or
+    // result-only continuation cannot change what the host later observes.
+    let nextContinuationId = 1;
+    let activeContinuationId: number | null = null;
+    const continuationClaims = new Map<number, ContinuationClaim>();
+    const continuationListeners = new Set<(
+      continuationId: number,
+      state: 'awaiting' | 'active' | 'cancelled',
+    ) => void>();
+    const emitContinuationState = (
+      continuationId: number,
+      state: 'awaiting' | 'active' | 'cancelled',
+    ): void => {
+      for (const listener of [...continuationListeners]) {
+        try {
+          listener(continuationId, state);
+        } catch (e) {
+          log.warn('turn continuation listener threw', { error: String(e) });
+        }
+      }
+    };
+    const activeContinuationClaim = (): ContinuationClaim | null =>
+      activeContinuationId === null
+        ? null
+        : continuationClaims.get(activeContinuationId) ?? null;
+    const releaseSettledContinuationClaim = (claim: ContinuationClaim): void => {
+      if (!claim.settled || claim.pendingBoundaryEvents > 0) return;
+      continuationClaims.delete(claim.id);
+    };
+    const cancelActiveContinuation = (reason: string): ContinuationClaim | null => {
+      const claim = activeContinuationClaim();
+      if (!claim || claim.state !== 'awaiting') return null;
+      claim.state = 'cancelled';
+      claim.settled = true;
+      activeContinuationId = null;
+      log.info('turn continuation cancelled', { reason, continuationId: claim.id });
+      emitContinuationState(claim.id, 'cancelled');
+      releaseSettledContinuationClaim(claim);
+      return claim;
+    };
+    const settleActiveContinuation = (reason: string): void => {
+      const claim = activeContinuationClaim();
+      if (!claim || claim.state !== 'active') return;
+      claim.settled = true;
+      activeContinuationId = null;
+      log.info('turn continuation settled without a follow-up turn', {
+        reason,
+        continuationId: claim.id,
+      });
+      releaseSettledContinuationClaim(claim);
+    };
+    const discardActiveContinuation = (reason: string): void => {
+      if (continuationClaims.size > 0) {
+        log.debug('discarding turn continuation claims', {
+          reason,
+          continuationIds: [...continuationClaims.keys()],
+        });
+      }
+      activeContinuationId = null;
+      for (const claim of continuationClaims.values()) {
+        claim.settled = true;
+        releaseSettledContinuationClaim(claim);
+      }
+    };
+    const consumeTaskNotificationForActiveSegment = (claim: ContinuationClaim): void => {
+      const consumed = [...claim.tasks].find(
+        ([, state]) => state === 'completed' || state === 'failed',
+      );
+      if (consumed) claim.tasks.delete(consumed[0]);
+    };
+    const captureContinuationBoundary = (event: AgentEvent): boolean => {
+      if (event.type !== 'done') return false;
+      const existing = activeContinuationClaim();
+      if (existing?.state === 'awaiting') {
+        // Defensive duplicate done for the same boundary: preserve the same
+        // claim instead of letting the duplicate terminate host observers.
+        event.turnContinuationId = existing.id;
+        existing.pendingBoundaryEvents += 1;
+        return false;
+      }
+      const wasActiveContinuation = existing?.state === 'active';
+      const carriedTasks = existing?.state === 'active'
+        ? new Map(
+            [...existing.tasks].filter(([, state]) => state !== 'stopped'),
+          )
+        : new Map<string, ContinuationTaskState>();
+      if (existing?.state === 'active') {
+        // This is the automatic continuation's own done. It closes the product
+        // turn, so the old claim is no longer needed once its first done has
+        // been observed by the host.
+        existing.settled = true;
+        activeContinuationId = null;
+        releaseSettledContinuationClaim(existing);
+        // The continuation turn may itself launch another wake task. Preserve
+        // the original behavior by scanning the current task table below and
+        // attaching a fresh claim to this done when another automatic turn is
+        // now expected.
+      }
+      const wakeTasks = [...runningBackgroundTasks.entries()].filter(([, info]) => info.wake);
+      for (const [taskId] of wakeTasks) {
+        if (!carriedTasks.has(taskId)) carriedTasks.set(taskId, 'running');
+      }
+      if (carriedTasks.size === 0) return wasActiveContinuation;
+      const claim: ContinuationClaim = {
+        id: nextContinuationId++,
+        state: 'awaiting',
+        tasks: carriedTasks,
+        pendingBoundaryEvents: 1,
+        settled: false,
+      };
+      continuationClaims.set(claim.id, claim);
+      activeContinuationId = claim.id;
+      event.turnContinuationId = claim.id;
+      // 探针:claim 创建是「continuation 悬挂」vs「done 未到达」的关键区分点。
+      // 只记 id / taskId / state 枚举,不记消息文本与 task prompt(脱敏红线)。
+      log.info('turn continuation claim created', {
+        continuationId: claim.id,
+        carriedTasks: [...carriedTasks.entries()].map(([taskId, state]) => ({
+          taskId,
+          state,
+        })),
+        wasActiveContinuation,
+      });
+      return false;
+    };
+    const reconcileActiveContinuation = (): ContinuationClaim | null => {
+      const claim = activeContinuationClaim();
+      if (!claim || claim.state !== 'awaiting') return null;
+      const states = [...claim.tasks.values()];
+      // A completed/failed wake task still has the SDK continuation contract;
+      // only an all-stopped group proves that a second `done` cannot arrive.
+      if (
+        states.length > 0 &&
+        states.every((state) => state === 'stopped')
+      ) {
+        return cancelActiveContinuation('all wake tasks stopped');
+      }
+      return null;
+    };
+    const markWakeTasksStopped = (
+      taskIds: readonly string[],
+      reason: string,
+    ): ContinuationClaim | null => {
+      const claim = activeContinuationClaim();
+      for (const taskId of taskIds) {
+        const info = runningBackgroundTasks.get(taskId);
+        if (!info?.wake) continue;
+        runningBackgroundTasks.delete(taskId);
+        if (claim?.state === 'awaiting' || claim?.state === 'active') {
+          claim.tasks.set(taskId, 'stopped');
+        }
+      }
+      const cancelledClaim = reconcileActiveContinuation();
+      if (taskIds.length > 0) {
+        log.info('marked wake tasks stopped before provider notification', { reason, taskIds });
+      }
+      return cancelledClaim;
+    };
+    function noteBackgroundTaskEvent(e: AgentEvent): ContinuationClaim | null {
+      if (e.type !== 'agent_task_update') return null;
       const data = e.data as
         | {
             taskId?: unknown;
@@ -2876,7 +3176,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         | null
         | undefined;
       const taskId = typeof data?.taskId === 'string' ? data.taskId : undefined;
-      if (!taskId) return;
+      if (!taskId) return null;
       const status = data?.status;
       if (status === 'running') {
         const prev = runningBackgroundTasks.get(taskId);
@@ -2892,10 +3192,70 @@ export class ClaudeCodeAgent extends BaseAgent {
               : prev?.toolUseId,
           title: typeof data?.title === 'string' && data.title ? data.title : prev?.title,
         });
+        const claim = activeContinuationClaim();
+        if ((claim?.state === 'awaiting' || claim?.state === 'active') && wake) {
+          claim.tasks.set(taskId, 'running');
+        }
+        return null;
       } else if (status === 'completed' || status === 'failed' || status === 'stopped') {
+        const prev = runningBackgroundTasks.get(taskId);
         runningBackgroundTasks.delete(taskId);
+        const claim = activeContinuationClaim();
+        if (
+          (claim?.state === 'awaiting' || claim?.state === 'active') &&
+          (prev?.wake || claim.tasks.has(taskId))
+        ) {
+          claim.tasks.set(taskId, status);
+          if (claim.state === 'awaiting') return reconcileActiveContinuation();
+        }
       }
+      return null;
     }
+    const emitCancelledContinuationBoundary = (
+      claim: ContinuationClaim,
+      reason: string,
+    ): void => {
+      log.info('emitting terminal boundary for cancelled turn continuation', {
+        reason,
+        continuationId: claim.id,
+      });
+      emitTurnBoundary('turn_continuation_cancelled', undefined, true);
+    };
+
+    const acknowledgeConsumedEvent = (event: AgentEvent): void => {
+      if (event.turnContinuationId !== undefined) {
+        const claim = continuationClaims.get(event.turnContinuationId);
+        if (claim) {
+          claim.pendingBoundaryEvents = Math.max(0, claim.pendingBoundaryEvents - 1);
+          releaseSettledContinuationClaim(claim);
+        }
+      }
+      if (continuationTerminalBoundaryEvents.delete(event)) {
+        pendingContinuationTerminalBoundaries = Math.max(
+          0,
+          pendingContinuationTerminalBoundaries - 1,
+        );
+      }
+    };
+
+    const consumedEventStream = async function* (): AsyncGenerator<AgentEvent> {
+      try {
+        for await (const event of eventQueue) {
+          try {
+            yield event;
+          } finally {
+            // Code after yield runs when Session asks for the next event, i.e.
+            // after its synchronous fan-out (including Hook/Scheduler queries).
+            acknowledgeConsumedEvent(event);
+          }
+        }
+      } finally {
+        activeContinuationId = null;
+        continuationClaims.clear();
+        continuationListeners.clear();
+        pendingContinuationTerminalBoundaries = 0;
+      }
+    };
     // fire-and-forget 逐个 stopTask:单个失败(任务恰好已自然结束 / 远端 daemon
     // 版本差)只 warn,绝不阻塞随后的 q.interrupt()。SDK 对每个被停任务会回吐
     // status:'stopped' 的 task_notification → 现有事件链把任务出表并让 UI 确定性收口。
@@ -2917,14 +3277,24 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       log.info('stopping running background wake tasks', { reason, wakeIds });
       for (const taskId of wakeIds) {
-        void q.stopTask(taskId).catch((e: unknown) => {
-          // 两类预期失败:任务恰好已自然结束;远端老 daemon 不认识 query/stopTask
-          // (RemoteQuery 恒有本地方法,老 daemon 差异只会在这里以 RPC 错误暴露)。
-          log.warn('stopTask failed (task already finished, or remote daemon predates query/stopTask)', {
-            taskId,
-            error: String(e),
-          });
-        });
+        void q.stopTask(taskId).then(
+          () => {
+            // RPC 成功才有资格把 provider claim 判成 stopped。若 foreground
+            // `done` 已先入队，host 会暂时等在该 claim 上，并在这里收到确定的
+            // cancellation；不能在 RPC 尚可能失败时先猜任务已经停下。
+            const cancelledClaim = markWakeTasksStopped([taskId], reason);
+            if (cancelledClaim) emitCancelledContinuationBoundary(cancelledClaim, reason);
+          },
+          (e: unknown) => {
+            // 两类预期失败:任务恰好已自然结束;远端老 daemon 不认识 query/stopTask
+            // (RemoteQuery 恒有本地方法,老 daemon 差异只会在这里以 RPC 错误暴露)。
+            // 失败时保留任务和 continuation：它仍可能自然完成并自动续 turn。
+            log.warn('stopTask failed (task already finished, or remote daemon predates query/stopTask)', {
+              taskId,
+              error: String(e),
+            });
+          },
+        );
       }
     }
 
@@ -2970,7 +3340,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       deferredResumeFailureEvents = [];
       deferredResumeTurnEnd = false;
       deferResumeFailureBoundary = false;
-      for (const event of events) eventQueue.push(event);
+      for (const event of events) forwardEventSink.push(event);
       if (shouldFinishTurn) completeTranslatedTurnEnd();
     }
     function discardDeferredResumeFailure(): void {
@@ -2982,14 +3352,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       deferredResumeTurnEnd = false;
       deferResumeFailureBoundary = false;
     }
+    let pendingTerminalStatusEvent: AgentEvent | undefined;
     const forwardEventSink: AsyncQueue<AgentEvent> = {
+      // Claude's translator emits `status(isRunning=false)` immediately before
+      // the matching `done`. Hold that status long enough to copy the
+      // provider continuation claim from `done`; otherwise every generic
+      // consumer sees an unclaimed idle event and finalizes the product turn
+      // before the continuation starts.
       push(e: AgentEvent) {
         if (deferResumeFailureBoundary) {
           deferredResumeFailureEvents.push(e);
           return true;
         }
         // 后台任务表旁路观察(O(1) type check,task 事件低频,不碰热路径逻辑)。
-        noteBackgroundTaskEvent(e);
+        const cancelledContinuation = noteBackgroundTaskEvent(e);
         if (queuedBridgeTurns > 0) {
           if (e.type === 'done') {
             rememberBridgeSuppressedDoneData(e.data);
@@ -3019,10 +3395,56 @@ export class ClaudeCodeAgent extends BaseAgent {
             return true;
           }
         }
-        return eventQueue.push(e);
+        if (e.type === 'status') {
+          const data = e.data as { isRunning?: unknown } | null | undefined;
+          if (data?.isRunning === false) {
+            if (pendingTerminalStatusEvent) {
+              eventQueue.push(pendingTerminalStatusEvent);
+            }
+            pendingTerminalStatusEvent = e;
+            return true;
+          }
+        }
+        if (e.type !== 'done' && pendingTerminalStatusEvent) {
+          eventQueue.push(pendingTerminalStatusEvent);
+          pendingTerminalStatusEvent = undefined;
+        }
+        const isContinuationTerminalDone = captureContinuationBoundary(e);
+        if (e.type === 'done' && pendingTerminalStatusEvent) {
+          const statusEvent = pendingTerminalStatusEvent;
+          pendingTerminalStatusEvent = undefined;
+          if (e.turnContinuationId !== undefined) {
+            statusEvent.turnContinuationId = e.turnContinuationId;
+            const claim = continuationClaims.get(e.turnContinuationId);
+            if (claim) claim.pendingBoundaryEvents += 1;
+          }
+          eventQueue.push(statusEvent);
+        }
+        if (isContinuationTerminalDone) {
+          continuationTerminalBoundaryEvents.add(e);
+          pendingContinuationTerminalBoundaries += 1;
+        }
+        const accepted = eventQueue.push(e);
+        // A stopped notification is part of the visible turn history. Preserve
+        // its order, then append a real product-turn boundary so Session can
+        // close the current generation even though the SDK will not emit a
+        // second result for a cancelled wake continuation.
+        if (accepted && cancelledContinuation) {
+          emitCancelledContinuationBoundary(cancelledContinuation, 'task_notification_stopped');
+        }
+        return accepted;
       },
-      end: () => eventQueue.end(),
-      clear: () => eventQueue.clear(),
+      end: () => {
+        if (pendingTerminalStatusEvent) {
+          eventQueue.push(pendingTerminalStatusEvent);
+          pendingTerminalStatusEvent = undefined;
+        }
+        eventQueue.end();
+      },
+      clear: () => {
+        pendingTerminalStatusEvent = undefined;
+        eventQueue.clear();
+      },
       get pending() { return eventQueue.pending; },
       [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
     };
@@ -3067,6 +3489,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // q 换代: 上一代 q 的 pending interrupted result 不可能从新 q drain 出来,
       // 残留的 interruptRequested 会错误抑制新 q 首个真实 is_error 终态 —— 兜底清。
       turnState.interruptRequested = false;
+      discardActiveContinuation('query_replaced');
       // q 换代 = 旧 CLI 子进程已死,其后台任务全部随之终止 —— 清表防 stale 条目
       // 让下次 abort 对不存在的任务空发 stopTask。
       runningBackgroundTasks.clear();
@@ -3110,7 +3533,9 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 停留在 false → isTurnRunning() 误报空闲,session.send 的 SESSION_RUNNING
             // 守卫失守(scheduler 心跳曾借此把 prompt 注入运行中的 turn)、tool-loop
             // guard / upstream-idle watchdog 也整段失效。这里以"turn 内才会出现的
-            // 消息"(assistant / stream_event)为证据补登记,并镜像 send 入口的
+            // 消息"(assistant / stream_event)为证据补登记；若 provider 已给上一
+            // done 锁存 continuation claim，result-only 也能证明自动续 turn 已开始。
+            // 随后镜像 send 入口的
             // per-turn 状态重置(beginNewTurn + toolLoopGuard.resetTurn),否则 guard
             // 会带着上一轮的陈旧计数误判。
             // 排除两种非新 turn 场景:
@@ -3124,8 +3549,21 @@ export class ClaudeCodeAgent extends BaseAgent {
               !turnInFlight &&
               !turnState.interruptRequested &&
               queuedBridgeTurns === 0 &&
-              (rawType === 'assistant' || rawType === 'stream_event')
+              (
+                rawType === 'assistant' ||
+                rawType === 'stream_event' ||
+                (activeContinuationClaim()?.state === 'awaiting' && rawType === 'result')
+              )
             ) {
+              const claim = activeContinuationClaim();
+              if (claim?.state === 'awaiting') {
+                // Each task notification queues one SDK continuation segment.
+                // Consume only the notification that activated this segment;
+                // other terminal tasks must keep the next boundary claimed.
+                consumeTaskNotificationForActiveSegment(claim);
+                claim.state = 'active';
+                emitContinuationState(claim.id, 'active');
+              }
               log.debug('SDK ▶ turn activity without send — marking auto-continued turn in-flight', {
                 rawType,
                 sdkSessionId,
@@ -4149,10 +4587,16 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           // close 本地会连 CLI 子进程一起杀(远端为 daemon 侧 interrupt + 输入流收口,
           // SDK 退出前有极窄残留窗口,由下次 q 换代清表兜底),后台任务随之终止,清表即可。
+          const cancelledContinuation = cancelActiveContinuation('bridge_aborted');
+          if (!cancelledContinuation) settleActiveContinuation('bridge_aborted');
           runningBackgroundTasks.clear();
           turnInFlight = false;
           turnState.interruptRequested = false;
-          emitTurnBoundary('bridge_aborted', takeBridgeSuppressedDoneData());
+          emitTurnBoundary(
+            'bridge_aborted',
+            takeBridgeSuppressedDoneData(),
+            cancelledContinuation !== null,
+          );
           return;
         }
         // 用户主动停止: SDK 被 interrupt 后会 drain 出 error_during_execution 的
@@ -4189,9 +4633,18 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (typeof q.stopTask !== 'function') {
           throw new Error('stopTask is not supported by the current Claude SDK or remote daemon');
         }
-        // 成功后 SDK 会回吐 status:'stopped' 的 task_notification → 现有事件链
-        // 把任务出表并让 UI 收口;这里不主动改表,保持单一事实源。
+        // The foreground `done` may arrive while stopTask is in flight. That is
+        // safe: observers first enter provider continuation wait, then this
+        // successful stop cancels it. Do not mark before the RPC resolves — a
+        // rejected stop must leave the still-running task visible and pending.
         await q.stopTask(taskId);
+        // Some older SDK/daemon pairs acknowledge stopTask without echoing a
+        // task_notification(stopped). The accepted control action is already
+        // authoritative enough to cancel the provider continuation wait.
+        const cancelledClaim = markWakeTasksStopped([taskId], 'user_stop_task');
+        if (cancelledClaim) {
+          emitCancelledContinuationBoundary(cancelledClaim, 'user_stop_task');
+        }
       },
 
       listBackgroundTasks() {
@@ -4206,8 +4659,26 @@ export class ClaudeCodeAgent extends BaseAgent {
         }));
       },
 
+      beginTurnContinuationWait(continuationId?: number) {
+        if (continuationId === undefined) return null;
+        return continuationClaims.get(continuationId)?.state ?? null;
+      },
+
+      onTurnContinuationChange(
+        listener: (
+          continuationId: number,
+          state: 'awaiting' | 'active' | 'cancelled',
+        ) => void,
+      ) {
+        continuationListeners.add(listener);
+        return () => continuationListeners.delete(listener);
+      },
+
       async close() {
         if (closed) return;
+        // Closing/dead sessions settle through Session status (or their queued
+        // terminal event), never through the successful task-stop path.
+        discardActiveContinuation('session_closed');
         closed = true;
         try {
           // 任何挂着的 interaction 强制 deny + emit dismissed, 防止 host 卡住等永远不会来的回应
@@ -4257,7 +4728,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         : {}),
 
       events(): AsyncIterable<AgentEvent> {
-        return eventQueue;
+        return consumedEventStream();
       },
 
       getUsageSnapshot(): UsageSnapshot {
@@ -4398,6 +4869,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
+        // 换模型 / 换路由可能正好修掉了审阅器不可用的原因(目录解析失败、provider 被停用
+        // 等);若换完又不可用,值得再提醒一次。
+        autoReviewUnavailableNotice.reset();
         if (
           !isControlBlocked
           && mutablePermissionMode === 'auto'
@@ -4485,6 +4959,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setPermissionMode(newMode) {
+        // 用户自己动过权限档之后,「自动审核不可用」这条一次性提示重新武装:再回到 Auto
+        // 又不可用时,他有权再看到一次(否则一个会话里只提示一次会显得像偶发)。
+        // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
+        // 会命中先前那条 `unavailable` block —— 审阅器早就恢复了,同一个动作还是被拒
+        // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
+        // 值得再提醒一次。
+        if (newMode !== mutablePermissionMode) {
+          autoReviewDecisionCache.clear();
+          autoReviewUnavailableNotice.reset();
+        }
         // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
         // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。
         if (mutablePlanMode || planTurnActive) {
@@ -4583,7 +5067,15 @@ export class ClaudeCodeAgent extends BaseAgent {
       // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────
 
       isTurnRunning(): boolean {
-        return turnInFlight;
+        // 前台 result/done 到后台 wake 任务自动续 turn 之间，SDK 会短暂把
+        // turnInFlight 清成 false，但从产品/Session 视角 Agent 仍未执行结束。
+        // 把 provider 已锁存的 continuation claim 纳入权威 busy 判据，统一阻止
+        // 新 send、rewind 与 closeIfIdle 插入该窗口。
+        return (
+          turnInFlight ||
+          activeContinuationClaim()?.state === 'awaiting' ||
+          pendingContinuationTerminalBoundaries > 0
+        );
       },
 
       async previewRewindFiles(userUuid: string): Promise<RewindFilesResult> {
