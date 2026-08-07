@@ -352,6 +352,17 @@ function cachedCatalogRows(
   );
 }
 
+/**
+ * 目标 agent 的 Fast 能力门控取值:只认按 (设备, agent) 键控的缓存能力表——
+ * 切/恢复 agent 瞬间闭包里的 capabilities 属于切换前 agent(冷启动时为 null),
+ * 用它门控会把记忆 Fast 恢复给不支持的 agent、或把合法记忆永久清掉(codex
+ * review P1)。未就绪返回 false(保守):恢复点先置 false,由延迟恢复 effect 在
+ * 目标 caps 就绪后补评。
+ */
+function targetAgentHasFast(deviceId: string, agentKind: NewSessionAgentKind): boolean {
+  return getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(deviceId, agentKind))?.hasFastMode === true;
+}
+
 interface WorktreeBranchListSnapshot {
   target: { deviceId: string; workingDir: string };
   branches: string[];
@@ -889,9 +900,11 @@ export default function NewRemoteSessionScreen() {
           providerId: next.providerId,
           // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false;恢复前过与手动选行
           // 同款的 fastEditable 门控(codex review P2:目录/能力变化后不得恢复出
-          // UI 显示关、实际发 true 的矛盾态)。
+          // UI 显示关、实际发 true 的矛盾态)。agent 级门控只认目标 agent 的缓存
+          // 能力表(codex review P1:此刻闭包里的 capabilities 属于切换前 agent 或
+          // 为 null);目标 caps 未就绪 → false,由延迟恢复 effect 就绪后补评。
           fastMode: next.providerId
-            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, capabilities?.hasFastMode === true)
+            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, targetAgentHasFast(selectedDeviceId, next.agentKind))
             ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
             : false,
         };
@@ -1687,6 +1700,35 @@ export default function NewRemoteSessionScreen() {
       unsubscribe();
     };
   }, [selectedDeviceId, draft.agentKind, maker, openLink]);
+
+  // Fast 记忆延迟恢复(codex review P1):切/恢复 agent 的瞬间,目标 agent 的能力表
+  // 尚未到达(或残留着切换前 agent 的),恢复点只能保守置 false;真正的恢复在这里——
+  // 目标 agent 的 capabilities 就绪后,按 (agent, 来源, 模型) 记忆 + 与手动选行同款的
+  // fastEditable 门控重评一次,通过才把 fastMode 打开。手动开关会写 draftMemory:
+  // 用户主动关过 → 记忆为 false → 本 effect 不会重新打开;创建路径拿到的 fastMode
+  // 永远已过目标 agent 门控,不会发出目标不支持的 fastMode:true。
+  useEffect(() => {
+    if (!selectedDeviceId || draft.fastMode || !draft.providerId) return;
+    if (draftMemory.getFast(draft.agentKind, draft.providerId, draft.model) !== true) return;
+    if (!isFastRestorable(
+      draft.agentKind,
+      draft.providerId,
+      draft.model,
+      modelRowsRef.current,
+      targetAgentHasFast(selectedDeviceId, draft.agentKind),
+    )) return;
+    setDraft((current) => (
+      !current.fastMode
+      && current.agentKind === draft.agentKind
+      && current.model === draft.model
+      && current.providerId === draft.providerId
+        ? { ...current, fastMode: true }
+        : current
+    ));
+    // capabilities 是本 effect 的触发信号(任何能力表变化都重评);目标归属由
+    // targetAgentHasFast 的 (设备, agent) 键控缓存校验,不靠 state 身份判断。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capabilities, draft.agentKind, draft.model, draft.providerId, draft.fastMode, selectedDeviceId, draftMemory]);
 
   // 拉被控端 runtime 已注册的 agent 集合(过滤新建 agent 入口)。fail-open:失败/无设备时置 null
   // (不过滤),真正的兜底是被控端 requireAgent。窗口/设备切换重拉,让按需下载补齐的 Pi 及时出现。
@@ -3422,9 +3464,11 @@ export default function NewRemoteSessionScreen() {
           providerId: next.providerId,
           // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false;恢复前过与手动选行
           // 同款的 fastEditable 门控(codex review P2:目录/能力变化后不得恢复出
-          // UI 显示关、实际发 true 的矛盾态)。
+          // UI 显示关、实际发 true 的矛盾态)。agent 级门控只认目标 agent 的缓存
+          // 能力表(codex review P1:此刻闭包里的 capabilities 属于切换前 agent 或
+          // 为 null);目标 caps 未就绪 → false,由延迟恢复 effect 就绪后补评。
           fastMode: next.providerId
-            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, capabilities?.hasFastMode === true)
+            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, targetAgentHasFast(selectedDeviceId, next.agentKind))
             ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
             : false,
         };

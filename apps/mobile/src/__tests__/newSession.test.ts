@@ -1715,3 +1715,29 @@ describe('submit guard catalog wiring (source locks)', () => {
   });
 });
 
+describe('fast memory restore wiring (source locks)', () => {
+  // Fast 记忆恢复的门控接线不变量(codex review P1):
+  //  - 切/恢复 agent 两个恢复点的 agent 级门控必须只认**目标 agent** 的缓存能力表
+  //    (targetAgentHasFast),不得直接用闭包里的 capabilities state(属于切换前 agent
+  //    或冷启动 null);
+  //  - 必须存在延迟恢复 effect:目标 caps 就绪后按 (agent, 来源, 模型) 记忆重评,
+  //    通过才打开 fastMode——「永久清除合法记忆」与「恢复出目标不支持的 fast」
+  //    两个故障形态都靠这对接线闭合。
+  const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+
+  it('both restore sites gate on target-agent cached capabilities, never the closure state', () => {
+    const gated = newSource.match(/isFastRestorable\(next\.agentKind, next\.providerId, next\.model, rowsNow, targetAgentHasFast\(selectedDeviceId, next\.agentKind\)\)/g) ?? [];
+    expect(gated.length).toBe(2);
+    // 恢复点不再直接消费 capabilities state 做门控
+    const stale = newSource.match(/isFastRestorable\(next\.agentKind[^)]*capabilities\?\.hasFastMode/g) ?? [];
+    expect(stale.length).toBe(0);
+  });
+
+  it('defers the remembered-fast restore until target-agent capabilities arrive', () => {
+    expect(newSource).toContain('function targetAgentHasFast(deviceId: string, agentKind: NewSessionAgentKind): boolean');
+    // 延迟恢复 effect:记忆为 true 才评 + 门控用目标 agent 缓存能力表 + 写回前再核一次当前草稿
+    expect(newSource).toContain('draftMemory.getFast(draft.agentKind, draft.providerId, draft.model) !== true');
+    expect(newSource).toContain('targetAgentHasFast(selectedDeviceId, draft.agentKind)');
+    expect(newSource).toContain('current.providerId === draft.providerId');
+  });
+});
