@@ -573,6 +573,8 @@ interface SessionInputState {
   abortReconcileRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryGeneration: number | null;
+  /** SESSION_RUNNING 重试连续命中的次数;超阈值触发 reconcileTurnIdle 校准。 */
+  sessionRunningRetryCount: number;
   /** 当前 retry timer 绑定的队首/compact owner；队首变化时必须替换 timer policy。 */
   sessionRunningRetryOwnerKey: string | null;
   sessionRunningRetryDelayMs: number | null;
@@ -636,6 +638,7 @@ function createInitialInputState(
     abortReconcileRetryTimer: null,
     sessionRunningRetryTimer: null,
     sessionRunningRetryGeneration: null,
+    sessionRunningRetryCount: 0,
     sessionRunningRetryOwnerKey: null,
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
@@ -1310,7 +1313,15 @@ export class AgentInputCoordinator {
       this.cancelPreparedAutoResume(sessionId, state);
     }
     if (isUiContinuationItem(item)) {
-      this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
+      // queue-head recovery 时**跳过** onUiRetry:那条消息在派发前就失败了,
+      // 从未成为一个 turn,与之前失败的 hook turn 无关(与 retryLastError 对
+      // queue-head 刻意不发 onUiRetry 的语义一致,见 performRetryLastError 注释)。
+      // 下方 queue-head 特判分支会清 recovery 重发队首 A,合成 continue 项不入队;
+      // 若在这里发 onUiRetry(无论用哪个 clientId)会让无关的排队桌面消息认领
+      // 并改写旧 hook/channel 的待续跑记账。
+      if (state.recovery?.kind !== 'queue-head') {
+        this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
+      }
     } else if (automaticOrigin && !schedulerOrigin) {
       this.deps.onAutomaticEnqueue?.(sessionId);
     } else if (!automaticOrigin) {
@@ -1340,6 +1351,53 @@ export class AgentInputCoordinator {
     if (!schedulerOrigin) {
       this.abandonActiveTurnRecoveryForUserAction(state);
       this.clearErrorUnlessQueueHeadBlocked(state);
+    }
+    // —— queue-head recovery 解锁(2026-08 事故复盘)——
+    // queue-head recovery 表示队首消息从未跨过 accepted 边界(派发前失败 /
+    // cancelled-before-dispatch)。getDrainableHead 见 recovery 即返回 null,
+    // 队列永久静止,后续所有消息(含用户新输入)全部排队不派发。
+    // 用户显式动作按 2026-07-13 口径表态(与 active-turn 对齐:「新消息 = 不重试旧消息」):
+    //  - 普通新消息(composer 直发,非 scheduler/orca/自愈续跑):放弃从未 accepted
+    //    的队首消息 A(摘除 + 清理回调),让 B 正常派发——无静默重发、无静默丢失;
+    //  - UI 续跑(「继续」按钮,sendUiTrigger):等价 retryLastError——清 recovery
+    //    重发队首 A(原样重发是既有 retryLastError 对 queue-head 的语义),合成
+    //    continue 项不入队,避免 A 与 continue 双发。
+    // 自动来源(scheduler / orca)与 resume(继续队列)维持既有「不清」语义:
+    // 自动化项不代表用户表态,resume 是机械放行,显式点重试/删除仍是唯一出路。
+    if (state.recovery?.kind === 'queue-head' && !automaticOrigin) {
+      const abandonedClientId = state.recovery.clientId;
+      if (isUiContinuationItem(item)) {
+        state.error = null;
+        state.stickyError = null;
+        state.recovery = null;
+        log.info('ui continue resets queue-head recovery; resending failed head', {
+          sessionId,
+          clientId: abandonedClientId,
+        });
+        // 手动「继续」是真人介入,与 retryLastError 同口径刷新 userSendAt(否则
+        // 会话活跃信号 / 列表排序不会反映这次人工动作)。
+        this.touchUserSend(sessionId, opts?.sendAtMs);
+        this.emit(sessionId);
+        this.scheduleDrain(sessionId, 'ui-continue-queue-head-unlock');
+        return this.getProjection(sessionId);
+      }
+      const abandoned = state.pendingQueue.find((q) => q.clientId === abandonedClientId);
+      if (abandoned) {
+        state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== abandonedClientId);
+        this.removePendingCompactWaitClientId(state, abandonedClientId);
+        // 与 remove() 同口径:摘除消息时同步清其 edit lock,否则留下指向不存在
+        // clientId 的孤儿锁,shouldQueueNewTurn 会把后续新输入误导向排队。
+        state.queueEditLocks = state.queueEditLocks.filter((id) => id !== abandonedClientId);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, abandoned);
+        // 脱敏:只记 id/布尔,不记消息文本(白名单方向,见 log-upload-and-redaction)。
+        log.info('explicit user input abandoned queue-head message (never accepted)', {
+          sessionId,
+          clientId: abandonedClientId,
+        });
+      }
+      state.error = null;
+      state.stickyError = null;
+      state.recovery = null;
     }
     // 用户点「继续任务」表达的是恢复刚才中断/失败的 turn，必须先于此前
     // 已排队的新任务执行；普通 composer / Orca / scheduler 输入仍保持 FIFO。
@@ -3502,6 +3560,16 @@ export class AgentInputCoordinator {
     this.scheduleSessionRunningRetry(sessionId, `send:${reason}`);
   }
 
+  /**
+   * SESSION_RUNNING 重试连续命中次数的阈值:超过后调一次 reconcileTurnIdle,
+   * 校准可能因 done 丢失而残留的 busy 边界(turn 实际已结束但事件流没送达,
+   * coordinator 与 live session 状态不一致)。reconcile 以 live Session
+   * isTurnRunning() 为权威——正在跑的 turn 不会被误清。
+   * 阈值是**重试次数**而非时长:普通档 250ms × 20 ≈ 5s,自动续跑 10s 档 × 20
+   * ≈ 200s。设计意图是「短重试窗口快速探测,长档不烧 token 也能兜底」。
+   */
+  private static readonly SESSION_RUNNING_RECONCILE_THRESHOLD = 20;
+
   private prependQueueHeadIfMissing(state: SessionInputState, item: AgentInputQueuedMessage): void {
     if (state.pendingQueue.some((q) => q.clientId === item.clientId)) return;
     state.pendingQueue = [item, ...state.pendingQueue];
@@ -3557,12 +3625,50 @@ export class AgentInputCoordinator {
       latest.sessionRunningRetryOwnerKey = null;
       latest.sessionRunningRetryDelayMs = null;
       latest.sessionRunningRetryToken = null;
-      if (latest.generation !== generation) return;
-      if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
+      // early-return 前必须重置 count:generation 变化(clearSession / stop /
+      // cancelPreSendActiveTurn)或队列已空意味着「当前边界」已结束,残留计数
+      // 会让下一次不相关的 SESSION_RUNNING 边界过早触发 reconcile。
+      if (latest.generation !== generation) {
+        latest.sessionRunningRetryCount = 0;
+        return;
+      }
+      if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) {
+        latest.sessionRunningRetryCount = 0;
+        return;
+      }
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
+        latest.sessionRunningRetryCount += 1;
+        // 兜底:done 丢失时 coordinator 的 busy 边界可能残留(live session 已
+        // idle 但终态事件没送达)。连续被 isTurnRunning 挡住的场景,调一次
+        // reconcile 以 live Session 为权威校准;正在跑的 turn 天然不被误清。
+        if (
+          latest.sessionRunningRetryCount >= AgentInputCoordinator.SESSION_RUNNING_RECONCILE_THRESHOLD
+        ) {
+          latest.sessionRunningRetryCount = 0;
+          // 防御式调用:reconcile 是 best-effort,依赖抛错绝不能中断重试链
+          // (与 abort reconcile 路径同款,见 reconcileTurnIdleAfterAbort)。
+          let reconciledIdle = false;
+          try {
+            reconciledIdle = this.deps.reconcileTurnIdle?.(sessionId) === true;
+          } catch (err) {
+            log.warn('reconcileTurnIdle after session-running retries failed', {
+              sessionId,
+              reason,
+              error: errorMessage(err),
+            });
+          }
+          if (reconciledIdle) {
+            log.warn('session-running retry reconciled stale busy boundary', {
+              sessionId,
+              retries: AgentInputCoordinator.SESSION_RUNNING_RECONCILE_THRESHOLD,
+              reason,
+            });
+          }
+        }
         this.scheduleSessionRunningRetry(sessionId, reason);
         return;
       }
+      latest.sessionRunningRetryCount = 0;
       this.scheduleDrain(sessionId, `session-running-retry:${reason}`);
     }, policy.delayMs);
   }
@@ -3629,6 +3735,7 @@ export class AgentInputCoordinator {
     }
     state.sessionRunningRetryTimer = null;
     state.sessionRunningRetryGeneration = null;
+    state.sessionRunningRetryCount = 0;
     state.sessionRunningRetryOwnerKey = null;
     state.sessionRunningRetryDelayMs = null;
     state.sessionRunningRetryToken = null;

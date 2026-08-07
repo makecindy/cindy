@@ -3118,6 +3118,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       continuationClaims.set(claim.id, claim);
       activeContinuationId = claim.id;
       event.turnContinuationId = claim.id;
+      // 探针:claim 创建是「continuation 悬挂」vs「done 未到达」的关键区分点。
+      // 只记 id / taskId / state 枚举,不记消息文本与 task prompt(脱敏红线)。
+      log.info('turn continuation claim created', {
+        continuationId: claim.id,
+        carriedTasks: [...carriedTasks.entries()].map(([taskId, state]) => ({
+          taskId,
+          state,
+        })),
+        wasActiveContinuation,
+      });
       return false;
     };
     const reconcileActiveContinuation = (): ContinuationClaim | null => {

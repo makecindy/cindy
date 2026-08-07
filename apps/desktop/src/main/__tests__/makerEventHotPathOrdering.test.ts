@@ -390,6 +390,31 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('skips coordinator onSessionClosed inside the rehydrate suppression window (#1930)', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+
+    // rehydrate / 凭证切换 close-rebuild 期间同一逻辑会话进程内重建:必须跳过
+    // coordinator.onSessionClosed,否则 abortInputBoundary 取消驱动本次重建的
+    // input signal → cancelled-before-dispatch(#1930)。去掉守卫即回归事故。
+    expect(closedBlock).toContain(
+      'if (!rehydrateCloseSuppression.isSuppressed(session.id)) {',
+    );
+    expect(closedBlock).toContain(
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
+    );
+    expectOrder(
+      closedBlock,
+      'if (!rehydrateCloseSuppression.isSuppressed(session.id)) {',
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
+    );
+    expectOrder(
+      closedBlock,
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
+      'gitSnapshotCoordinator?.onSessionClosed(session.id);',
+    );
+  });
+
   it('clears Agent Island after mandatory closed-session cleanup', () => {
     const wireSessionSource = extractWireSessionSource();
     const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));

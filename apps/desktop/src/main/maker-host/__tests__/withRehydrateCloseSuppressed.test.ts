@@ -86,6 +86,27 @@ describe('withRehydrateCloseSuppressed', () => {
     expect(sideEffect).toHaveBeenCalledTimes(1);
   });
 
+  it('isSuppressed reflects the suppression window (register closed-cleanup guard contract)', async () => {
+    const suppression = createRehydrateCloseSuppression(makeLog());
+    const sideEffect = vi.fn(async () => undefined);
+
+    // 窗口外:未抑制 → register 的 onSessionClosed 会照常执行。
+    expect(suppression.isSuppressed('session-1')).toBe(false);
+    await suppression.runOnCloseSideEffects('session-1', sideEffect);
+    expect(sideEffect).toHaveBeenCalledTimes(1);
+
+    // 窗口内:抑制 → register 跳过 coordinator.onSessionClosed(#1930 修复点)。
+    await suppression.withSuppressed('session-1', async () => {
+      expect(suppression.isSuppressed('session-1')).toBe(true);
+      await suppression.runOnCloseSideEffects('session-1', sideEffect);
+    });
+
+    // 窗口结束:恢复放行。
+    expect(suppression.isSuppressed('session-1')).toBe(false);
+    await suppression.runOnCloseSideEffects('session-1', sideEffect);
+    expect(sideEffect).toHaveBeenCalledTimes(2);
+  });
+
   it('releases suppression after timeout', async () => {
     vi.useFakeTimers();
     const log = makeLog();
