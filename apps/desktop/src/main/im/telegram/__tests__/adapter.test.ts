@@ -6,7 +6,7 @@ import { buildTelegramAdapter } from '../adapter';
 describe('Telegram group history access scope', () => {
   const adapter = buildTelegramAdapter({} as never, {} as never);
 
-  it('marks group owners as owner scope and guests as lane scope', () => {
+  it('keeps every group turn lane-only — owner-triggered included (injection hardening)', () => {
     const base = {
       contextId: 'bot-1',
       senderId: 'g/-100/77',
@@ -22,13 +22,15 @@ describe('Telegram group history access scope', () => {
       provider: 'telegram-personal:bot-1',
       lane: { provider: 'telegram-personal:bot-1', chatId: '-100', threadId: '77' },
     });
+    // owner 在群里触发也不升权: 群窗口携带成员可控文本, 注入可借 owner 轮次
+    // 跨 lane 检索并回帖泄漏(与 turnPermissionPolicyFor 同一裁决)。
     expect(
       adapter.groupHistoryAccessFor?.({
         ...base,
         speaker: { id: 'owner', name: 'Owner', isOwner: true },
       } as unknown as IMMessageEvent),
     ).toEqual({
-      access: 'owner',
+      access: 'lane',
       provider: 'telegram-personal:bot-1',
       lane: { provider: 'telegram-personal:bot-1', chatId: '-100', threadId: '77' },
     });

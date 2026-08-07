@@ -14,6 +14,17 @@ import { createGroupHistoryMcpServer } from '../groupHistoryMcpServer';
 
 const LANE_A = { provider: 'telegram-personal:bot-a', chatId: '-100', threadId: '' } as const;
 const LANE_B = { provider: 'telegram-personal:bot-a', chatId: '-200', threadId: '7' } as const;
+const OTHER_PERSONAL_LANE = {
+  provider: 'telegram-personal:bot-b',
+  chatId: '-300',
+  threadId: '',
+} as const;
+const OFFICIAL_LANE = { provider: 'telegram:owner-a', chatId: '-400', threadId: '' } as const;
+const UNKNOWN_PROVIDER_LANE = {
+  provider: 'future-provider:bot-c',
+  chatId: '-500',
+  threadId: '',
+} as const;
 
 async function callSearch(
   args: Record<string, unknown>,
@@ -98,6 +109,41 @@ describe('cindy_group_history search permission boundary', () => {
     );
     expect(JSON.stringify(dm.result)).toContain('NO_CURRENT_LANE');
     expect(dm.search).not.toHaveBeenCalled();
+  });
+
+  it('owner may select another personal bot, but cannot cross provider namespaces', async () => {
+    const allowed = await callSearch(
+      { query: '历史', lane: OTHER_PERSONAL_LANE },
+      { access: 'owner', provider: LANE_A.provider, lane: LANE_A },
+    );
+    expect(allowed.search).toHaveBeenCalledWith(
+      expect.objectContaining({ lane: OTHER_PERSONAL_LANE }),
+    );
+
+    for (const deniedLane of [OFFICIAL_LANE, UNKNOWN_PROVIDER_LANE]) {
+      const denied = await callSearch(
+        { query: '历史', lane: deniedLane },
+        { access: 'owner', provider: LANE_A.provider, lane: LANE_A },
+      );
+      expect(JSON.stringify(denied.result)).toContain('PERMISSION_DENIED');
+      expect(denied.search).not.toHaveBeenCalled();
+    }
+  });
+
+  it('guest and official lane scopes cannot be expanded by a requested provider', async () => {
+    const guest = await callSearch(
+      { query: '历史', lane: OTHER_PERSONAL_LANE },
+      { access: 'lane', provider: LANE_A.provider, lane: LANE_A },
+    );
+    expect(JSON.stringify(guest.result)).toContain('PERMISSION_DENIED');
+    expect(guest.search).not.toHaveBeenCalled();
+
+    const official = await callSearch(
+      { query: '历史', lane: LANE_A },
+      { access: 'lane', provider: OFFICIAL_LANE.provider, lane: OFFICIAL_LANE },
+    );
+    expect(JSON.stringify(official.result)).toContain('PERMISSION_DENIED');
+    expect(official.search).not.toHaveBeenCalled();
   });
 
   it('released or stale session-instance scopes fail closed', async () => {
