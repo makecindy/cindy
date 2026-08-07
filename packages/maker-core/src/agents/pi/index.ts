@@ -1438,8 +1438,13 @@ export class PiAgent extends BaseAgent {
     let sdkSessionId = '';
     const refreshRuntimeCapabilities = async (
       stage: 'ready' | 'switch_session' | 'fork',
+      clearCurrent = false,
     ): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
+      // A runtime identity switch invalidates the old catalog immediately.
+      // This runs before the first await, so callers may keep discovery
+      // fire-and-forget without exposing commands from the previous runtime.
+      if (clearCurrent) publishRuntimeCapabilities(undefined);
       const manifest = await capturePiRuntimeCapabilityManifest(
         proc,
         {
@@ -2056,8 +2061,9 @@ export class PiAgent extends BaseAgent {
         queue.push({ type: 'session_id', data: replacement, source: 'pi' });
         // The Pi session has already switched to the replacement file. Do not
         // make rewind wait for optional discovery; the generation fence keeps
-        // this asynchronous refresh from publishing stale data.
-        void refreshRuntimeCapabilities('fork');
+        // this asynchronous refresh from publishing stale data. Clear the old
+        // catalog synchronously so it cannot be observed under the new id.
+        void refreshRuntimeCapabilities('fork', true);
         return { sdkSessionId: replacement };
       },
 

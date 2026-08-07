@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const captured = vi.hoisted(() => ({
   instances: [] as Array<{
     sessionId: string;
+    sdkSessionId: string;
     requests: Array<Record<string, unknown>>;
     closed: boolean;
     onExit?: (info: { code: number | null; signal: string | null }) => void;
@@ -27,6 +28,7 @@ vi.mock('../rpc-client.js', () => ({
     }) {
       this.state = {
         sessionId: opts.env.CINDY_PI_SESSION_ID ?? '',
+        sdkSessionId: `/mock/${opts.env.CINDY_PI_SESSION_ID || 'fork'}.jsonl`,
         requests: [],
         closed: false,
         onExit: opts.onExit,
@@ -37,7 +39,7 @@ vi.mock('../rpc-client.js', () => ({
     async request(command: Record<string, unknown>): Promise<{ type?: string; command?: string; success: boolean; data?: unknown; error?: string }> {
       this.state.requests.push(command);
       if (command.type === 'get_state') {
-        return { success: true, data: { sessionFile: `/mock/${this.state.sessionId || 'fork'}.jsonl`, model: { contextWindow: 200_000 } } };
+        return { success: true, data: { sessionFile: this.state.sdkSessionId, model: { contextWindow: 200_000 } } };
       }
       if (command.type === 'get_commands') {
         if (captured.runtimeFailures.has(this.state.sessionId)) {
@@ -48,6 +50,13 @@ vi.mock('../rpc-client.js', () => ({
         }
         const data = captured.catalogs[this.state.sessionId] ?? { commands: [] };
         return { type: 'response', command: 'get_commands', success: true, data };
+      }
+      if (command.type === 'get_fork_messages') {
+        return { success: true, data: { messages: [{ entryId: 'rewind-entry' }] } };
+      }
+      if (command.type === 'fork') {
+        this.state.sdkSessionId = `/mock/${this.state.sessionId || 'fork'}-rewind.jsonl`;
+        return { success: true, data: {} };
       }
       if (command.type === 'switch_session') return { success: true, data: {} };
       if (command.type === 'clone') return { success: true, data: {} };
@@ -173,6 +182,39 @@ describe('Pi runtime capability lifecycle', () => {
     await agent.listAgentSkills({ workingDir: cwd });
     expect(captured.instances.map((instance) => instance.requests.length)).toEqual(before);
     await Promise.all([first.close(), second.close()]);
+  });
+
+  it('clears the old catalog immediately when rewind changes runtime identity', async () => {
+    captured.catalogs.s1 = catalog('skill:before-rewind');
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+        status: 'loaded',
+        sdkSessionId: '/mock/s1.jsonl',
+        commands: [{ name: 'skill:before-rewind' }],
+      });
+    });
+
+    const changes: unknown[] = [];
+    handle.onRuntimeCapabilitiesChange?.((manifest) => changes.push(manifest));
+    captured.runtimeDeferred = true;
+    captured.catalogs.s1 = catalog('skill:after-rewind');
+
+    const result = await handle.commitRewindFiles?.('', '', { tailTurnsToDrop: 1 });
+    expect(result?.sdkSessionId).toBe('/mock/s1-rewind.jsonl');
+    expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
+    expect(changes).toEqual([undefined]);
+
+    captured.runtimeRelease?.();
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()).toMatchObject({
+        status: 'loaded',
+        sdkSessionId: '/mock/s1-rewind.jsonl',
+        commands: [{ name: 'skill:after-rewind' }],
+      });
+    });
+    expect(captured.instances[0]?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+    await handle.close();
   });
 
   it('refreshes the catalog after switch_session resume and returns a separate fork catalog', async () => {
