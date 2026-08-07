@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { translateChatToResponsesRequest } from '../translate-chat-request.js';
+import { translateResponsesRequest } from '../translate-request.js';
 import type { ChatCompletionsRequest } from '../types.js';
 
 function base(overrides: Partial<ChatCompletionsRequest> = {}): ChatCompletionsRequest {
@@ -135,6 +136,71 @@ describe('translateChatToResponsesRequest', () => {
     }));
     expect(out.max_output_tokens).toBe(200);
     expect(out.reasoning).toEqual({ effort: 'medium' });
+  });
+
+  // Responses API 没有顶层 response_format;照抄 Chat 字段会让透明转发到 Responses 供应商的路由
+  // 以「未知参数」拒掉本来合法的结构化输出请求(#1666 review P1)。
+  it('maps Chat response_format json_object to Responses text.format', () => {
+    const out = translateChatToResponsesRequest(base({
+      response_format: { type: 'json_object' },
+    }));
+    expect(out.text).toEqual({ format: { type: 'json_object' } });
+    expect(out).not.toHaveProperty('response_format');
+  });
+
+  it('flattens Chat json_schema nesting into Responses text.format', () => {
+    const out = translateChatToResponsesRequest(base({
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'answer',
+          description: 'structured answer',
+          schema: { type: 'object', properties: { value: { type: 'string' } } },
+          strict: true,
+        },
+      },
+    }));
+    expect(out.text).toEqual({
+      format: {
+        type: 'json_schema',
+        name: 'answer',
+        description: 'structured answer',
+        schema: { type: 'object', properties: { value: { type: 'string' } } },
+        strict: true,
+      },
+    });
+    expect(out).not.toHaveProperty('response_format');
+  });
+
+  it('passes response_format shapes it does not recognise through to text.format unchanged', () => {
+    const out = translateChatToResponsesRequest(base({
+      response_format: { type: 'text' },
+    }));
+    expect(out.text).toEqual({ format: { type: 'text' } });
+  });
+
+  it('omits text entirely when the Chat request has no response_format', () => {
+    const out = translateChatToResponsesRequest(base());
+    expect(out).not.toHaveProperty('text');
+  });
+
+  // 走 openai-chat 供应商时 body 会再被反向译回 Chat(自环 /responses → createLocalBridgeDecision),
+  // 所以这对映射必须互逆,否则结构化输出会在第二跳丢形状。
+  it('round-trips json_schema back to the original Chat response_format shape', () => {
+    const responseFormat = {
+      type: 'json_schema',
+      json_schema: {
+        name: 'answer',
+        description: 'structured answer',
+        schema: { type: 'object', properties: { value: { type: 'string' } } },
+        strict: true,
+      },
+    };
+    const responses = translateChatToResponsesRequest(base({ response_format: responseFormat }));
+    const chat = translateResponsesRequest(responses, {
+      capabilities: { passthroughFields: ['response_format'] },
+    });
+    expect(chat.response_format).toEqual(responseFormat);
   });
 
   it('treats stream:false as non-streaming and records n>1 downgrade', () => {

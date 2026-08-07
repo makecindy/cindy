@@ -97,6 +97,25 @@ const SAMPLING_PASSTHROUGH_FIELDS = [
 ] as const;
 
 /**
+ * Chat 的 `response_format` → Responses 的 `text.format`。
+ *
+ * Responses API 没有顶层 `response_format`,结构化输出挂在 `text.format` 下,且 `json_schema` 是
+ * **扁平**的(name/description/schema/strict 直接铺在 format 上),不是 Chat 的
+ * `{ json_schema: {...} }` 嵌套。见 OpenAI structured outputs 文档。原样照抄 Chat 字段会让
+ * 透明转发到 Responses 供应商(如 XD 网关)的路由以「未知参数」拒掉本来合法的请求(#1666 review P1)。
+ *
+ * 这与反向的 `chatResponseFormat()`(translate-request.ts)构成一对互逆映射:反向把 format 里除
+ * `type` 以外的字段收进 `json_schema`,这里就把 `json_schema` 的内容摊回顶层。
+ */
+function responsesTextFormat(value: unknown): unknown {
+  if (!isPlainObject(value) || value.type !== 'json_schema' || !isPlainObject(value.json_schema)) {
+    return value;
+  }
+  const { json_schema: jsonSchema, ...rest } = value;
+  return { ...rest, ...jsonSchema, type: 'json_schema' };
+}
+
+/**
  * 把一个标准 Chat Completions 请求译成 Responses 请求。
  *
  * - 前导 system/developer 合并进 `instructions`;之后出现的 system/developer 保留为 message item。
@@ -104,6 +123,7 @@ const SAMPLING_PASSTHROUGH_FIELDS = [
  *   assistant.tool_calls → function_call item;role:tool → function_call_output item。
  * - tools(function)→ Responses function tools;max_tokens/max_completion_tokens → max_output_tokens;
  *   reasoning_effort / reasoning.effort → reasoning.effort;常规采样参数透传。
+ * - response_format → text.format(见 responsesTextFormat)。
  */
 export function translateChatToResponsesRequest(
   input: ChatCompletionsRequest,
@@ -214,7 +234,9 @@ export function translateChatToResponsesRequest(
   for (const field of SAMPLING_PASSTHROUGH_FIELDS) {
     if (record[field] !== undefined) target[field] = record[field];
   }
-  if (input.response_format !== undefined) request.response_format = input.response_format;
+  if (input.response_format !== undefined) {
+    request.text = { format: responsesTextFormat(input.response_format) };
+  }
 
   if (typeof record.n === 'number' && record.n > 1) opts.onDowngrade?.('n>1');
 
