@@ -400,6 +400,11 @@ describe('Discord scheduler manager', () => {
         generation: cleanGeneration,
         state: 'clean',
       },
+      [{
+        identity: '12345678901234567',
+        generation: cleanGeneration,
+        state: 'dirty',
+      }],
     );
     await manager.reconcile();
 

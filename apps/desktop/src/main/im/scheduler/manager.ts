@@ -704,7 +704,8 @@ export class ImSchedulerManager {
     if (runtime) {
       if (runtime.predecessor) this.resolveRuntimeGeneration(runtime.predecessor);
       if (runtime.state === 'clean') {
-        if (!this.runtimeGaps.has(runtime.identity)) {
+        const pending = this.pendingCleanHandoffs.get(runtime.identity);
+        if (!pending || pending.generation !== runtime.generation) {
           this.pendingCleanHandoffs.set(runtime.identity, {
             identity: runtime.identity,
             generation: runtime.generation,

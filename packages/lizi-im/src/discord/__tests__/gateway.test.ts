@@ -16,6 +16,9 @@ const discordMock = vi.hoisted(() => {
     readonly destroy = vi.fn(() => {
       this.destroyed = true;
     });
+    readonly ws = {
+      destroy: vi.fn(async () => undefined),
+    };
 
     destroyed = false;
     ready = false;
@@ -224,6 +227,20 @@ describe('discord gateway pure logic', () => {
     expect(gateway.client).toBe(client);
 
     await gateway.destroy();
+  });
+
+  it('keeps ingress close best-effort when websocket destroy fails', async () => {
+    const { gateway } = createGatewayHarness();
+
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+    client.ws.destroy.mockRejectedValueOnce(new Error('socket already closed'));
+
+    await expect(gateway.closeIngress()).resolves.toBeUndefined();
+    expect(gateway.ingressOpen).toBe(false);
+
+    await gateway.destroy();
+    expect(client.destroy).toHaveBeenCalledOnce();
   });
 
   it('releases the client after a terminal runtime disconnect', async () => {

@@ -156,7 +156,17 @@ class DiscordJsGateway implements DiscordGateway {
     // Client.destroy() also clears the REST token. Handoff must keep accepted
     // turns able to send their final response, so close only the websocket
     // manager here; the owning DiscordIM performs full destroy after draining.
-    await (client.ws as unknown as { destroy(): Promise<void> }).destroy();
+    try {
+      await (client.ws as unknown as { destroy(): Promise<void> }).destroy();
+    } catch (error) {
+      // Closing ingress is best-effort. The ordered handoff must still drain
+      // accepted work and call destroy() even if discord.js rejects ws.close.
+      try {
+        log.warn(`discord gateway ingress close failed: ${errorMessage(error)}`);
+      } catch {
+        // Logging must not turn a cleanup failure back into a rejected handoff.
+      }
+    }
   }
 
   async destroy(): Promise<void> {
