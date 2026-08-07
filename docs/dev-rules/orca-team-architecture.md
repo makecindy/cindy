@@ -123,7 +123,7 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 - MCP `start_team` 可显式指定 `worker_permission_mode`；省略时沿用当前偏好。显式从 `auto` 升级到 `bypassPermissions` 时，Main 必须在写入偏好或创建 Team 前等待宿主持有的用户确认，不能只依赖 MCP 审批、tool 描述或 prompt；取消／超时不得产生副作用。确认通过后才更新 main 镜像，并通知 renderer 回写同一份 localStorage。已由用户保存为 `bypassPermissions` 时，后续沿用不重复确认。
 - `create_worker` / `create_workers` 省略权限参数，统一读取当前偏好；不继承 Lead 的 `sessions.permission_mode`，也不修改已经创建的 Worker。
 - device-link 新控制端只有在被控端 capabilities 明确声明支持 Worker 权限选择时才允许开启协同；已有旧版远程 Team 继续兼容旧创建行为，不宣称或回写该端不支持的偏好。
-`start_team` 的 active 状态真源是 host lifecycle service 查询到的 `orca_teams.status='active'`，不是 MCP context 中可能陈旧的 `vendorOptions.orcaRole='lead'`。工具侧只按 `orcaRole='worker'` 拒绝嵌套；Lead/普通 session 都必须调用 host，由 host 复用当前 active team 或创建新 team。这样旧 team 结束后即使 live context 尚未刷新，再次 `start_team` 也不会误报 already enabled。
+- `start_team` 的 active 状态真源是 host lifecycle service 查询到的 `orca_teams.status='active'`，不是 MCP context 中可能陈旧的 `vendorOptions.orcaRole='lead'`。工具侧只按 `orcaRole='worker'` 拒绝嵌套；Lead/普通 session 都必须调用 host，由 host 复用当前 active team 或创建新 team。这样旧 team 结束后即使 live context 尚未刷新，再次 `start_team` 也不会误报 already enabled。
 
 工具注册是全局可见 + handler 拒绝：
 
