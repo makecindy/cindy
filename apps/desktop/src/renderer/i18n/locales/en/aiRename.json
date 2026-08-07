@@ -1,4 +1,4 @@
 {
-  "noMaterial": "This task has no messages to name yet. Send a message first",
+  "noMaterial": "This session has no messages to name yet. Send a message first.",
   "providerUnsupported": "The current provider doesn't support AI rename. Switch providers and try again"
 }
