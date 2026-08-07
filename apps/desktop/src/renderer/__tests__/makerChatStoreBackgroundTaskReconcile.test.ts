@@ -69,7 +69,12 @@ vi.mock('@/lib/composerDraftStore', () => ({
   }),
 }));
 
-// isRemoteSession 按 id 前缀判定,便于测「远程会话豁免对账」。
+// 远程判定按 id 前缀 + 可动态标记的集合,便于测「远程会话豁免对账」以及
+// 「调度后、触发前才识别为远程」的粘滞复查分支。
+const transportMocks = vi.hoisted(() => ({ dynamicRemoteIds: new Set<string>() }));
+const isMockRemote = (sessionId: string): boolean =>
+  sessionId.startsWith('remote-') || transportMocks.dynamicRemoteIds.has(sessionId);
+
 vi.mock('@/lib/makerTransport', () => ({
   makerApiFor: () => ({
     input: {
@@ -82,8 +87,8 @@ vi.mock('@/lib/makerTransport', () => ({
   listMessagesFor: vi.fn(async () => []),
   aroundMessagesFor: vi.fn(async () => []),
   aroundMessagesByClientIdFor: vi.fn(async () => []),
-  isRemoteSession: (sessionId: string) => sessionId.startsWith('remote-'),
-  isRemoteSessionSticky: (sessionId: string) => sessionId.startsWith('remote-'),
+  isRemoteSession: (sessionId: string) => isMockRemote(sessionId),
+  isRemoteSessionSticky: (sessionId: string) => isMockRemote(sessionId),
 }));
 
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -301,6 +306,7 @@ describe('活动熄灭触发的 stale running 对账', () => {
   afterEach(() => {
     makerChatStore.__teardownGlobalListeners();
     delete (globalThis as { window?: unknown }).window;
+    transportMocks.dynamicRemoteIds.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -339,6 +345,25 @@ describe('活动熄灭触发的 stale running 对账', () => {
       emitActivity({ sessionId: sid, active: false });
       await vi.advanceTimersByTimeAsync(3000);
       await vi.advanceTimersByTimeAsync(0);
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('t1')?.status).toBe('running');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('调度后、触发前才识别为远程(重连窗口误放行)→ 触发沿粘滞复查拦下,不发本机 IPC', async () => {
+    const sid = `late-remote-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_agent' });
+
+      // 调度沿:此刻远程注册表尚未水合,会话被当成本机 → 定时器挂上
+      emitActivity({ sessionId: sid, active: false });
+      // 触发前:注册表水合,会话被识别为远程
+      transportMocks.dynamicRemoteIds.add(sid);
+      await vi.advanceTimersByTimeAsync(3000);
+
+      // 触发沿粘滞复查必须拦下:不发本机 IPC,镜像里的 running 不被空快照错误收口
+      expect(listTasks).not.toHaveBeenCalled();
       expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('t1')?.status).toBe('running');
     } finally {
       makerChatStore.purgeSession(sid);

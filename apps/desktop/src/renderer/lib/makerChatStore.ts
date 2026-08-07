@@ -5691,6 +5691,10 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
     sessionId,
     setTimeout(() => {
       backgroundTaskReconcileTimers.delete(sessionId);
+      // 触发沿复查远程归属(粘滞版):调度沿已筛过,但 3s 窗口内会话可能被识别
+      // 为远程(启动期 registry 迟到水合等)。误放行的代价是拿本机空快照把镜像
+      // 里真实在跑的任务错误收口,必须再拦一次。
+      if (isRemoteSessionSticky(sessionId)) return;
       // 候选集在发起请求前捕获(时序论证见 reconcileStaleRunningTasks);此刻
       // 已无 running 条目则无账可对,不发无谓 IPC。定时器只在 store 对象初始化
       // 之后才可能到点,前向引用 makerChatStore 安全。
@@ -7477,6 +7481,9 @@ function initGlobalListeners(): void {
   // 数据源与 sessionBackgroundActivityStore 同一广播;这里只做调度,拉取与
   // 收口逻辑在 scheduleBackgroundTaskReconcile。仅本机会话:device-link 镜像
   // 会话的快照有降级空表窗口,不可当权威(与远程豁免 running 折算同口径)。
+  // 远程判定用**粘滞版**(与面板水合、Stop gating 同口径):relay 瞬断重连会
+  // 清空注册表,非粘滞判定在该窗口把远程会话误判成本机 → 到点拿本机空快照把
+  // 镜像里真实在跑的任务错误收口;触发沿(timer 到点)还会再复查一次。
   // 可选调用兜底:老 preload 没有该 fanOut 时不得让 initGlobalListeners 整体崩掉。
   bindIpc(
     (cb: (data: unknown) => void) =>
@@ -7488,7 +7495,7 @@ function initGlobalListeners(): void {
         cancelBackgroundTaskReconcile(p.sessionId);
         return;
       }
-      if (isRemoteSession(p.sessionId)) return;
+      if (isRemoteSessionSticky(p.sessionId)) return;
       // 调度前粗筛:没有 running 条目就不必挂定时器;到点后还会再次捕获候选集。
       if (makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0) return;
       scheduleBackgroundTaskReconcile(p.sessionId);
