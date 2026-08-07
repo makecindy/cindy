@@ -243,7 +243,9 @@ export class ImSchedulerManager {
         }
         this.snapshot = event.snapshot;
         this.lastSnapshotObservedAt = event.snapshot.observedAt;
-        this.requiresTaggedSnapshot = false;
+        // Once a lifecycle freshness boundary has been crossed, keep the
+        // tagged-response gate latched for the rest of this manager lifetime.
+        // An older untagged request may still complete after this response.
         this.beginDiscoveryRound({ resetRetryAttempt: !preserveRetryAttempt });
         this.reconcile();
         return;

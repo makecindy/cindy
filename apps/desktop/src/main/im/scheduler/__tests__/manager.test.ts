@@ -240,6 +240,43 @@ describe('dormant scheduler manager', () => {
     expect(manager.getRuntimeGaps().values()).toEqual([]);
   });
 
+  it('keeps rejecting untagged snapshots after a tagged recovery response', () => {
+    const owner = { value: false };
+    const harness = createTransport();
+    harness.transport.isOwner = () => owner.value;
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: (() => {
+        let count = 0;
+        return () => `round-${String(++count).padStart(14, '0')}`;
+      })(),
+    });
+    manager.start();
+    harness.emit({ type: 'snapshot', snapshot: { selfDeviceId: 'z', peers: [], observedAt: 1 } });
+
+    owner.value = true;
+    harness.emit({ type: 'ownership', owner: true });
+    const request = harness.snapshotRequests.at(-1);
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
+      snapshot: {
+        selfDeviceId: 'z',
+        peers: [{ deviceId: 'a', platform: 'win32' }],
+        observedAt: 2,
+      },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 100 },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+  });
+
   it('drops an older snapshot instead of reviving a stale election view', () => {
     const harness = createTransport();
     const manager = new ImSchedulerManager({
