@@ -172,6 +172,25 @@ function requestPathname(url: string): string {
   return (q === -1 ? url : url.slice(0, q)).toLowerCase();
 }
 
+/**
+ * 路径穿越防护(#1666 二轮 P1)。`/v1/messages` 白名单是**前缀**判定(为放行 count_tokens 等
+ * 合法子路径),而 anthropic-compat-proxy 在无 pathOverride 时**原样转发 ctx.url**。若放行
+ * `/v1/messages/../../v1/files` 这类带点段路径,会规范化 dot-segment 的上游 / 中间代理会把它解析
+ * 成 `/v1/files`,借 buildRouteDecision 注入的真实供应商凭证去打该供应商的任意 API。故在过白名单
+ * **之前**先解一层百分号编码(挡 `%2e` 等编码变体),再按段检查:任一段为 `.` / `..` 即视为不支持
+ * 路径拒绝,绝不转发;非法百分号编码本身可疑,一并拒绝。这样即便上游会规范化,Cindy 也从不把带点段
+ * 的路径连同凭证送出去(不依赖上游是否规范化)。
+ */
+function pathnameHasDotSegments(pathname: string): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return true;
+  }
+  return decoded.split('/').some((segment) => segment === '.' || segment === '..');
+}
+
 /** 外部分支的统一 JSON 错误响应(localHandler 完全接管,不转发上游)。 */
 function externalErrorDecision(
   status: number,
@@ -257,6 +276,11 @@ function routeExternalClient(
     return externalErrorDecision(401, 'external_access_disabled', 'Cindy 对外模型代理未开启。');
   }
   const pathname = requestPathname(ctx.url);
+  // 先挡路径穿越:带 `.` / `..` 段的路径(如 /v1/messages/../../v1/files)一律不支持 —— 否则前缀
+  // 白名单会放行它,而原样转发的 ctx.url 会被规范化上游解析成越权路径,借 Cindy 凭证打任意 API。
+  if (pathnameHasDotSegments(pathname)) {
+    return externalErrorDecision(404, 'unsupported_path', '对外 Anthropic 代理不支持该路径。');
+  }
   if (ctx.method.toUpperCase() === 'GET' && /\/v1\/models\/?$/.test(pathname)) {
     return {
       localHandler: async ({ res }) => {

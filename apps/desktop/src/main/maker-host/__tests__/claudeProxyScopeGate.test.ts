@@ -419,4 +419,36 @@ describe('cc routingTransform 外部路径白名单 (P2: 对外只服务 /v1/mes
     const { status } = await drainLocalHandler(decision);
     expect(status).toBe(200);
   });
+
+  // 路径穿越(#1666 二轮 P1):前缀白名单会放行含 /v1/messages/ 的路径,若原样转发,规范化上游会把
+  // dot-segment 解析成越权路径并带上 Cindy 注入的凭证。必须在过闸前按段拒绝 `.` / `..`。
+  it('外部客户端 POST /v1/messages/../../v1/files → 404 unsupported_path(挡路径穿越)', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctx('POST', '/v1/messages/../../v1/files', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
+
+  it('外部客户端 POST /v1/messages/%2e%2e/v1/files(百分号编码 ..)→ 404 unsupported_path', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctx('POST', '/v1/messages/%2e%2e/v1/files', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
+
+  it('外部客户端 GET /v1/models/../messages(向 models 端点做穿越)→ 404 unsupported_path', async () => {
+    const decision = await Promise.resolve(createExternalRoutingTransform()(
+      {},
+      ctx('GET', '/v1/models/../messages', { 'x-api-key': GOOD_TOKEN }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(404);
+    expect(body?.error?.code).toBe('unsupported_path');
+  });
 });
