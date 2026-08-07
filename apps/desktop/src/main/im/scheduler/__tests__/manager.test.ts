@@ -196,7 +196,48 @@ describe('dormant scheduler manager', () => {
     expect(manager.getDecision().reason).toBe('not-owner');
     owner.value = true;
     harness.emit({ type: 'ownership', owner: true });
+    expect(manager.getDecision().reason).toBe('missing-snapshot');
+    const request = harness.snapshotRequests.at(-1);
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request?.accountGeneration,
+      requestId: request?.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
+    });
     expect(manager.getDecision().reason).toBe('elected');
+  });
+
+  it('does not re-adopt a runtime gap from a probe delayed across a binding reset', () => {
+    let localIdentity = identity;
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity: localIdentity }),
+      nonceFactory: () => 'round-000000000000',
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    manager.getRuntimeGaps().adopt({ identity, generation: 'a'.repeat(32), state: 'dirty' });
+
+    localIdentity = nextIdentity;
+    manager.resetBindingDiscovery();
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'probe',
+        sentAt: 2,
+        nonce: 'round-peer-00000',
+        channels: [{ channel: 'discord', identity }],
+        runtimeGaps: [{ identity, generation: 'a'.repeat(32), state: 'dirty' }],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
   });
 
   it('drops an older snapshot instead of reviving a stale election view', () => {
