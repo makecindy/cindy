@@ -31,6 +31,7 @@ import type {
   ListCustomizationsOptions,
   ListCustomizationsResult,
 } from './types/customizations.js';
+import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
@@ -640,6 +641,19 @@ export class Maker {
   /** 拿到一个已激活的 session（不发起恢复） */
   getSession(id: string): Session | undefined {
     return this.activeSessions.get(id);
+  }
+
+  /** Read a live session's per-runtime Pi capability snapshot without creating or resuming it. */
+  getSessionRuntimeCapabilities(id: string): PiRuntimeCapabilityManifest | undefined {
+    return this.activeSessions.get(id)?.getRuntimeCapabilities();
+  }
+
+  /** Subscribe to a live session's per-runtime Pi catalog without sharing state across sessions. */
+  onSessionRuntimeCapabilitiesChange(
+    id: string,
+    listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+  ): () => void {
+    return this.activeSessions.get(id)?.onRuntimeCapabilitiesChange(listener) ?? (() => undefined);
   }
 
   /**

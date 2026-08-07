@@ -80,6 +80,7 @@ import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
+import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
 import {
   createPiTranslateContext,
   translatePiEvent,
@@ -93,6 +94,7 @@ import {
   piContextTokensFromTree,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
+import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
 
 const PI_PROVIDER_ID = 'cindy';
 // 既非 Cindy 网关(cindy/xd)也非订阅直连(openai/anthropic/xai)的 providerId = 显式 BYOM
@@ -424,6 +426,9 @@ export class PiAgent extends BaseAgent {
       // pi 原生 compact RPC:手动压缩(可带聚焦指令,调 LLM 生成摘要)。
       // 斜杠转义后用户无法手输 /compact,此能力是 pi 会话手动压缩的唯一入口。
       manualCompact: { supported: true },
+      // Pi 的 get_commands runtime catalog 通过 per-session handle 查询；
+      // manifest 本身在 ready/fork 后异步采集，暂不可用不代表能力不支持。
+      runtimeCapabilities: { supported: true },
     };
   }
 
@@ -1146,6 +1151,29 @@ export class PiAgent extends BaseAgent {
     // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
     // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
     let proc: PiRpcProcess;
+    let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
+    let runtimeCapabilityGeneration = 0;
+    const runtimeCapabilityListeners = new Set<(
+      manifest: PiRuntimeCapabilityManifest | undefined,
+    ) => void>();
+    const notifyRuntimeCapabilityListener = (
+      listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+      manifest: PiRuntimeCapabilityManifest | undefined,
+    ): void => {
+      try {
+        listener(manifest);
+      } catch (error) {
+        this.deps.logger.warn('pi runtime capability listener failed (non-fatal)', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    const publishRuntimeCapabilities = (manifest: PiRuntimeCapabilityManifest | undefined): void => {
+      runtimeCapabilityManifest = manifest;
+      for (const listener of runtimeCapabilityListeners) {
+        notifyRuntimeCapabilityListener(listener, manifest);
+      }
+    };
     const proxySessionToken = randomBytes(32).toString('base64url');
     let disposeProxySession: (() => void) | undefined;
     // 幂等:onExit(进程异常退出)与 close()(用户结束)可能都调用它;首次注销后置位,
@@ -1281,6 +1309,9 @@ export class PiAgent extends BaseAgent {
         },
         onExit: ({ code, signal }) => {
           clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true });
+          runtimeCapabilityGeneration++;
+          publishRuntimeCapabilities(undefined);
+          runtimeCapabilityListeners.clear();
           if (!closed) {
             // 非用户 close 的进程死亡:terminal error + 收尾,避免 UI 永久 running。
             queue.push({
@@ -1411,6 +1442,22 @@ export class PiAgent extends BaseAgent {
     // 身份注册(否则 ?session= ctx 泄漏)+ 关掉可能已 spawn 的子进程(否则僵尸 pi
     // 仍持有本会话的 MCP 路由),再把原始错误抛给调用方。
     let sdkSessionId = '';
+    const refreshRuntimeCapabilities = async (
+      stage: 'ready' | 'switch_session' | 'fork',
+    ): Promise<void> => {
+      const generation = ++runtimeCapabilityGeneration;
+      const manifest = await capturePiRuntimeCapabilityManifest(
+        proc,
+        {
+          ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+          ...(sdkSessionId ? { sdkSessionId } : {}),
+        },
+        generation,
+        stage,
+      );
+      if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
+    };
+    let runtimeCaptureStage: 'ready' | 'switch_session' = 'ready';
     try {
       // Resume:pi 的会话钥匙是 session JSONL 绝对路径(get_state.sessionFile),
       // 落库 sdk_session_id 存的就是它;切换失败走 invalid-resume CAS 协定。
@@ -1443,6 +1490,8 @@ export class PiAgent extends BaseAgent {
               resumeSessionId: opts.resumeSessionId,
               error: switched.error,
             });
+          } else {
+            runtimeCaptureStage = 'switch_session';
           }
         }
       }
@@ -1477,6 +1526,14 @@ export class PiAgent extends BaseAgent {
       }
       sdkSessionId = stateData.sessionFile || stateData.sessionId || `pi-${Date.now()}`;
       queue.push({ type: 'session_id', data: sdkSessionId, source: 'pi' });
+
+      // get_state is the ready boundary. Capture exactly once after the final
+      // fresh/resumed runtime has been selected; list/customization calls never
+      // trigger this RPC.
+      // Capability discovery is optional and must not delay session creation.
+      // The ready boundary has selected the final Pi session identity; publish
+      // the result later through the per-session query/listener contract.
+      void refreshRuntimeCapabilities(runtimeCaptureStage);
 
       // plan 镜像与 pi 持久态对齐(resume 关键):pi 的 plan-mode 扩展在 session_start 会从
       // session entry 自恢复 planModeEnabled,但不发 notify。若镜像固定为 false 而 pi 实为 true,
@@ -1689,6 +1746,18 @@ export class PiAgent extends BaseAgent {
       get id() { return sdkSessionId; },
       agentKind,
       get model() { return mutableModel; },
+      getRuntimeCapabilities() { return runtimeCapabilityManifest; },
+      onRuntimeCapabilitiesChange(listener) {
+        if (closed) {
+          notifyRuntimeCapabilityListener(listener, undefined);
+          return () => undefined;
+        }
+        runtimeCapabilityListeners.add(listener);
+        // Replay the current snapshot synchronously so late subscribers cannot
+        // miss an async ready/rewind capture that completed before registration.
+        notifyRuntimeCapabilityListener(listener, runtimeCapabilityManifest);
+        return () => runtimeCapabilityListeners.delete(listener);
+      },
 
       // 每轮权限策略(IM 群 / 个人微信等)是 host 侧的 forceConfirmToolCall 回调,必须在
       // 工具执行前的审批边界强制执行。ask/auto 下 cindy-bridge 会把非只读内置工具与桥接
@@ -1780,6 +1849,9 @@ export class PiAgent extends BaseAgent {
 
       async close(): Promise<void> {
         closed = true;
+        runtimeCapabilityGeneration++;
+        publishRuntimeCapabilities(undefined);
+        runtimeCapabilityListeners.clear();
         // 会话结束时挂起的卡已经不可能有人回答:清 policy 并强制 deny,别让等它的调用
         // 悬着(同 CC / Codex)。
         clearActiveTurnPermissionPolicy('session_closed', { dismissPending: true });
@@ -1989,12 +2061,20 @@ export class PiAgent extends BaseAgent {
         }
         const forked = await proc.request({ type: 'fork', entryId });
         if (!forked.success) throw new Error(`pi rewind fork failed: ${forked.error ?? 'unknown'}`);
+        // Pi has switched runtime identity at the successful fork response. Clear
+        // the old catalog before any follow-up get_state can fail or time out.
+        runtimeCapabilityGeneration++;
+        publishRuntimeCapabilities(undefined);
         const state = await proc.request({ type: 'get_state' });
         if (!state.success) throw new Error(`pi rewind get_state failed: ${state.error ?? 'unknown'}`);
         const replacement = (state.data as { sessionFile?: string } | undefined)?.sessionFile;
         if (!replacement) throw new Error('pi rewind replacement session path unavailable');
         sdkSessionId = replacement;
         queue.push({ type: 'session_id', data: replacement, source: 'pi' });
+        // The Pi session has already switched to the replacement file. Do not
+        // make rewind wait for optional discovery; the generation fence keeps
+        // this asynchronous refresh from publishing stale data.
+        void refreshRuntimeCapabilities('fork');
         return { sdkSessionId: replacement };
       },
 
@@ -2254,6 +2334,9 @@ export class PiAgent extends BaseAgent {
         tailTurnsToDrop: tailDrop,
       });
       // uuidMap 空:与 Codex 一致,pi agentMeta 不存 SDK message uuid。
+      // This short-lived control-plane process is closed immediately. The
+      // newly created live session will capture its own authoritative catalog
+      // at ready; do not hold this fork path for an optional 5s RPC timeout.
       return { newSdkSessionId: newPath, uuidMap: new Map() };
     } finally {
       await proc.close();

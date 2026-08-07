@@ -69,6 +69,7 @@ import type {
   ListCustomizationsOptions,
   ListCustomizationsResult,
 } from '../types/customizations.js';
+import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
 import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
@@ -1160,6 +1161,12 @@ export interface AgentSessionHandle {
   readonly id: string;
   readonly agentKind: AgentKind;
   readonly model: string;
+  /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
+  getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
+  onRuntimeCapabilitiesChange?(
+    listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+  ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
   /**
