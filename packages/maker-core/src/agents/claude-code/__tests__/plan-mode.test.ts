@@ -264,6 +264,55 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('keeps remote OAuth Auto when every local MCP is filtered before transport', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const starts: Array<Record<string, unknown>> = [];
+    const fakeQuery = createFakeQuery();
+    const oauthAuth: AuthAdapter = {
+      async getState() {
+        return { authenticated: true, authSource: 'oauth' };
+      },
+      async triggerLogin() {
+        return { authenticated: true };
+      },
+      async logout() {},
+      async getAuthEnv() {
+        return {};
+      },
+    };
+
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth: oauthAuth,
+      mcpProviders: [{
+        name: 'local_sdk_only',
+        toClaudeSdkConfig: () => ({ type: 'sdk', name: 'local_sdk_only', instance: {} }) as never,
+      }],
+      resolveRemoteClaudeRoute: async () => ({
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+      }),
+      remoteCcQueryFactory: async (args) => {
+        starts.push(args.startParams);
+        return fakeQuery as never;
+      },
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-oauth-no-mcp',
+      model: 'claude-opus-4-6',
+      providerId: 'anthropic',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.mcpServers).toBeUndefined();
+    expect(starts[0]?.permissionMode).toBe('auto');
+    await handle.close();
+  });
+
   // 凭证形态回落不变量: 远端 route 为 null(网关路径)时必须按 gateway-key 构建 env,
   // 不能让 getAuthEnv 的本地 fallback(订阅 token)与网关 endpoint 并存 —— 否则订阅
   // token 会被发往网关(泄漏)。resolver 未注入(旧 host)同理。

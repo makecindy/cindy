@@ -1790,11 +1790,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     // leaving permission requests with no Cindy interaction surface. Keep native Auto for
     // MCP-free sessions, but route host-MCP sessions through SDK default so canUseTool owns
     // the decision.
-    const hasHostMcpApprovalSurface = (): boolean => registeredMcpServerNames.size > 0;
+    const hasRegisteredMcpServers = (): boolean => registeredMcpServerNames.size > 0;
     const usesNativeClaudeAutoReview = (): boolean =>
       !nativeAutoReviewUnavailable
       && mutableAutoReviewCredentialMode === 'oauth-bearer'
-      && !hasHostMcpApprovalSurface();
+      && !hasRegisteredMcpServers();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -2346,7 +2346,23 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 在远端不存在); 但 factory 还可能注入 host 侧 http server (协同恢复通道),
         // 所以审批归属快照不在此处定稿, 挪到 factory 调用后按 startParams 重算。
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
-        const remotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
+        const requestedRemotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
+        const remoteHasMcpServers = Object.keys(remoteMcpServers ?? {}).length > 0;
+        // effectiveSdkPermissionMode() is computed from the local registration snapshot,
+        // which still includes in-process SDK MCPs that were just filtered out above.
+        // Restore native OAuth Auto when the remote query has no serializable MCP surface;
+        // the Desktop factory will still downgrade it before opening the query if it later
+        // injects a host HTTP MCP (for example the collaboration bridge).
+        const remotePermissionMode =
+          requestedRemotePermissionMode === 'default'
+          && mutablePermissionMode === 'auto'
+          && !mutablePlanMode
+          && !planTurnActive
+          && !nativeAutoReviewUnavailable
+          && mutableAutoReviewCredentialMode === 'oauth-bearer'
+          && !remoteHasMcpServers
+            ? 'auto'
+            : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = buildClaudeRemoteToolGuards(
           this.deps.capabilityRouting,
