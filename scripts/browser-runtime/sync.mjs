@@ -451,7 +451,7 @@ const LOCAL_PATCHES = {
         '    try {',
     },
     {
-      desc: 'clear stale Service Worker storage for the preview origin BEFORE goto — worker-src blocks NEW registrations, but a persistent profile may hold an old SW (scope / or /preview/ or any other scope covering /preview/<token>/) from an earlier local service on the same 127.0.0.1:<port>, which would intercept the preview load before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27; widened from root-scope unregister to whole-origin SW storage clear, round 27e)',
+      desc: 'clear stale Service Worker storage for the preview origin BEFORE goto and FAIL CLOSED on clear failure — worker-src blocks NEW registrations, but a persistent profile may hold an old SW (scope / or /preview/ or any other scope covering /preview/<token>/) from an earlier local service on the same 127.0.0.1:<port>, which would intercept the preview load before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27; widened to whole-origin SW storage clear, round 27e; fail-closed on clear failure, round 27g)',
       find:
         '  try {\n' +
         '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',
@@ -475,8 +475,13 @@ const LOCAL_PATCHES = {
         '          storageTypes: "service_workers",\n' +
         '        });\n' +
         '        await cdp.detach().catch(() => {});\n' +
-        '      } catch {\n' +
-        '        /* best-effort: a failed clear must not block the navigation */\n' +
+        '      } catch (clearErr) {\n' +
+        '        // Fail-closed: a failed SW clear would let the stale worker\n' +
+        '        // intercept the tokenized request and restore the outbound\n' +
+        '        // channels this cleanup closes — rethrow so the outer\n' +
+        '        // goto-failure path tears down the guard AND the page\n' +
+        '        // (codex-connector P1, round 27g).\n' +
+        '        throw clearErr;\n' +
         '      }\n' +
         '    }\n' +
         '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',

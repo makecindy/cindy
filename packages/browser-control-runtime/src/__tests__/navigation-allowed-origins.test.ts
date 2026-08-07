@@ -91,7 +91,10 @@ describe('exact-origin preview allowlist (navigation level)', () => {
  * short-lived guard (removed right after goto).
  */
 describe('persistent navigation guard (preview origin)', () => {
-  function fakePage(gotoImpl?: () => Promise<unknown>) {
+  function fakePage(
+    gotoImpl?: () => Promise<unknown>,
+    opts?: { cdpSessionThrows?: boolean },
+  ) {
     const unrouteCalls: Array<{ pattern: string; handler: unknown }> = [];
     const routedHandlers: Array<(route: unknown, request: unknown) => Promise<void>> = [];
     const closeCalls: Array<unknown> = [];
@@ -115,17 +118,20 @@ describe('persistent navigation guard (preview origin)', () => {
       },
       addInitScript: async () => {},
       context: () => ({
-        newCDPSession: async () => ({
-          send: async (method: string, params?: unknown) => {
-            cdpSends.push({ method, params });
-            if (method === 'Storage.clearDataForOrigin') {
-              clearedStorageOrigins.push((params as { origin: string }).origin);
-              swUnregisterCalls.push((params as { origin: string }).origin);
-            }
-            return {};
-          },
-          detach: async () => {},
-        }),
+        newCDPSession: async () => {
+          if (opts?.cdpSessionThrows) throw new Error('CDP session failed');
+          return {
+            send: async (method: string, params?: unknown) => {
+              cdpSends.push({ method, params });
+              if (method === 'Storage.clearDataForOrigin') {
+                clearedStorageOrigins.push((params as { origin: string }).origin);
+                swUnregisterCalls.push((params as { origin: string }).origin);
+              }
+              return {};
+            },
+            detach: async () => {},
+          };
+        },
       }),
     };
     return {
@@ -360,5 +366,30 @@ describe('persistent navigation guard (preview origin)', () => {
       ssrfPolicy: POLICY,
     });
     expect(swUnregisterCalls).toHaveLength(0);
+  });
+
+  it('FAILS CLOSED when the preview-origin SW clear fails: no goto, page closed (round 27g)', async () => {
+    // A stale SW that could not be cleared would intercept the tokenized
+    // request and return a document without the preview CSP, restoring the
+    // outbound channels the cleanup closes. A failed clear must REFUSE the
+    // navigation and tear down the guard/page instead of proceeding
+    // (codex-connector P1, round 27g).
+    let gotoCalled = false;
+    const { unrouteCalls, closeCalls, page } = fakePage(async () => {
+      gotoCalled = true;
+      return null;
+    }, { cdpSessionThrows: true });
+    await expect(
+      gotoPageWithNavigationGuard({
+        cdpUrl: 'ws://127.0.0.1:1/devtools/browser/0',
+        page,
+        url: `${PREVIEW_ORIGIN}/preview/<token>/index.html`,
+        timeoutMs: 1000,
+        ssrfPolicy: POLICY,
+      }),
+    ).rejects.toThrow('CDP session failed');
+    expect(gotoCalled).toBe(false); // navigation must NOT proceed
+    expect(unrouteCalls.length).toBeGreaterThan(0); // guard torn down
+    expect(closeCalls).toHaveLength(1); // page closed, no survivor
   });
 });

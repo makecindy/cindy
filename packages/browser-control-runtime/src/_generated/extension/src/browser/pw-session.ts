@@ -1528,8 +1528,13 @@ export async function gotoPageWithNavigationGuard(
           storageTypes: "service_workers",
         });
         await cdp.detach().catch(() => {});
-      } catch {
-        /* best-effort: a failed clear must not block the navigation */
+      } catch (clearErr) {
+        // Fail-closed: a failed SW clear would let the stale worker
+        // intercept the tokenized request and restore the outbound
+        // channels this cleanup closes — rethrow so the outer
+        // goto-failure path tears down the guard AND the page
+        // (codex-connector P1, round 27g).
+        throw clearErr;
       }
     }
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
