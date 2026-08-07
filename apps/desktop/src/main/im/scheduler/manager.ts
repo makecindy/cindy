@@ -174,10 +174,13 @@ export class ImSchedulerManager {
       this.runtimeGaps.clear();
     } else {
       const currentIdentity = this.getLocalChannel()?.identity ?? null;
-      if (this.lastLocalIdentity) this.invalidateRuntimeGapIdentity(this.lastLocalIdentity);
+      if (this.lastLocalIdentity && this.lastLocalIdentity !== currentIdentity) {
+        this.invalidateRuntimeGapIdentity(this.lastLocalIdentity);
+      }
       if (currentIdentity && currentIdentity !== this.lastLocalIdentity) {
         this.clearRuntimeGapIdentity(currentIdentity);
       }
+      if (currentIdentity) this.clearInvalidatedRuntimeGapIdentity(currentIdentity);
       this.lastLocalIdentity = currentIdentity;
     }
     this.beginDiscoveryRound();
@@ -348,6 +351,15 @@ export class ImSchedulerManager {
     const runtime = this.runtimeGaps.get(identity);
     if (runtime) this.rememberInvalidatedRuntimeGap(runtime);
     this.runtimeGaps.clearIdentity(identity);
+  }
+
+  /**
+   * Identity-wide invalidation only applies while an identity is no longer
+   * the current binding. Keep generation tombstones for old gaps, but allow a
+   * newly current identity to publish a fresh legal gap.
+   */
+  private clearInvalidatedRuntimeGapIdentity(identity: string): void {
+    this.invalidatedRuntimeGapIdentities.delete(identity);
   }
 
   private rememberInvalidatedRuntimeGaps(): void {
