@@ -274,14 +274,25 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   const dispatchOrEnqueueOrcaInterAgentMessage = async (
     params: DispatchOrcaInterAgentMessageParams,
   ): Promise<DispatchOrcaInterAgentMessageResult> => {
-    if (!(await deps.isOrcaTeamActive(params.teamId))) {
+    try {
+      if (!(await deps.isOrcaTeamActive(params.teamId))) {
+        return {
+          ok: false,
+          dispatchOutcome: {
+            ...createHostSendFailure(
+              'SEND_FAILED',
+              `ORCA_TEAM_INACTIVE: team ${params.teamId} has already ended`,
+            ),
+            source: params.meta.source,
+            context: params.meta.context,
+          },
+        };
+      }
+    } catch (err) {
       return {
         ok: false,
         dispatchOutcome: {
-          ...createHostSendFailure(
-            'SEND_FAILED',
-            `ORCA_TEAM_INACTIVE: team ${params.teamId} has already ended`,
-          ),
+          ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
           source: params.meta.source,
           context: params.meta.context,
         },
