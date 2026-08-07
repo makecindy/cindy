@@ -926,6 +926,114 @@ describe('message render todo grouping', () => {
         tool('plan2', 'update_plan', { plan: [{ step: 'Ship it', status: 'completed' }] }),
       ]),
     ).not.toHaveProperty('turnFailed');
+
+  /**
+   * 计划归属(ownership)。三个历史病根,都源于"同 source 的上一份计划没勾完
+   * 就无条件当续期":
+   *  1. 跨普通 user turn 串号——用户换了话题,新计划仍复用旧 session/key;
+   *  2. 子代理的计划工具调用与主线程平权,子计划能顶掉主计划;
+   *  3. Codex 不同 turn 的 update_plan 被并成同一 session。
+   */
+  describe('plan ownership boundaries', () => {
+    it('starts a new session when an ordinary user turn intervenes', () => {
+      const staleTodo = tool('todo-old', 'TodoWrite', {
+        todos: [
+          { content: 'Old work', status: 'in_progress' },
+          { content: 'Old follow-up', status: 'pending' },
+        ],
+      });
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-2',
+        content: '换个话题:帮我做另一件事',
+        createdAt: at(5),
+      };
+      const freshTodo = tool('todo-new', 'TodoWrite', {
+        todos: [{ content: 'New work', status: 'in_progress' }, { content: 'New follow-up', status: 'pending' }],
+      });
+
+      const latest = findLatestMessageTodoInsertion([staleTodo, newUserTurn, freshTodo]);
+      // 新 user turn 之后的计划是新 session:key 必须锚在新调用上,不复用旧 key。
+      expect(latest).toMatchObject({
+        key: 'todo-todo-new',
+        todos: [
+          { content: 'New work', status: 'in_progress' },
+          { content: 'New follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('keeps in-turn progress updates merged into one session (no user turn between)', () => {
+      const first = tool('todo-a', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'in_progress' }],
+      });
+      const second = tool('todo-b', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+
+      // 同一 turn 内的进度更新仍是续期:key 锚定首次调用(现状契约,不能破坏)。
+      expect(findLatestMessageTodoInsertion([first, second])).toMatchObject({
+        key: 'todo-todo-a',
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+    });
+
+    it('ignores subagent plan calls for the top-level pinned panel', () => {
+      const mainPlan = tool('plan-main', 'update_plan', {
+        plan: [
+          { step: 'Main step', status: 'in_progress' },
+          { step: 'Main follow-up', status: 'pending' },
+        ],
+      });
+      const subagentTodo: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent internal', status: 'in_progress' },
+            { content: 'Subagent extra', status: 'pending' },
+          ],
+        }),
+        parentToolUseId: 'agent-task-1',
+      };
+
+      // 子代理自己的清单不得顶掉主线程计划。
+      expect(findLatestMessageTodoInsertion([mainPlan, subagentTodo])).toMatchObject({
+        key: 'todo-plan-main',
+        todos: [
+          { content: 'Main step', status: 'in_progress' },
+          { content: 'Main follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('does not merge Codex plans from different turns into one session', () => {
+      const turn1Plan = tool('plan-t1', 'update_plan', {
+        plan: [
+          { step: 'Turn one work', status: 'in_progress' },
+          { step: 'Turn one rest', status: 'pending' },
+        ],
+      }, 'plan:turn-1');
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-3',
+        content: '下一个任务',
+        createdAt: at(6),
+      };
+      const turn2Plan = tool('plan-t2', 'update_plan', {
+        plan: [
+          { step: 'Turn two work', status: 'in_progress' },
+          { step: 'Turn two rest', status: 'pending' },
+        ],
+      }, 'plan:turn-2');
+
+      const latest = findLatestMessageTodoInsertion([turn1Plan, newUserTurn, turn2Plan]);
+      expect(latest).toMatchObject({
+        key: 'todo-plan-t2',
+        todos: [
+          { content: 'Turn two work', status: 'in_progress' },
+          { content: 'Turn two rest', status: 'pending' },
+        ],
+      });
+    });
   });
 
   it('does not infer completion from an ambiguous legacy Codex turn seal', () => {

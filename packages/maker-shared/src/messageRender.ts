@@ -454,14 +454,24 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     firstIndex: number;
     lastIndex: number;
     source: MessageRenderTodoSource;
+    /** 该 session 首条计划调用之前最近一条 user 消息的下标(turn 边界锚点)。 */
+    userBoundaryIndex: number;
   }> = [];
   const lastSessionBySource = new Map<MessageRenderTodoSource, (typeof sessions)[number]>();
   const taskState = new Map<string, MessageRenderTodoItem>();
+  let lastUserIndex = -1;
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
+    if (message.role === 'user') {
+      lastUserIndex = index;
+      continue;
+    }
     const source = agentPlanSource(toolNameOf(message));
     if (!source) continue;
+    // 子代理内部的计划调用不属于顶层面板:它们的 owner 是那个 Agent/Task 工具行,
+    // 混进来会顶掉主线程计划(顶层"最新计划"按位置竞争,历史病 §3.1.5)。
+    if (message.parentToolUseId) continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const previous = lastSessionBySource.get(source);
@@ -476,9 +486,18 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     // 置 false)后不算边界,sealed-then-updated 的复亮行为不变。
     const previousSealed =
       Boolean(previous) && planRowSealOf(messages[previous!.lastIndex]).sealed;
+    // 普通 user turn 也是所有权边界:用户开了新话题,旧的未完成计划不得把新计划
+    // 吞成"续期"(历史病 §3.1.2/3.1.3——串号后新计划复用旧 key、Task 状态跨
+    // turn 拼接)。task source 例外:显式指向已有任务的操作(TaskUpdate/TaskGet
+    // 带已知 id)仍是同一份清单的合法续写。
+    const crossesUserBoundary =
+      Boolean(previous)
+      && lastUserIndex > (previous?.lastIndex ?? -1)
+      && !(source === 'task' && taskToolTargetsExistingTask(message, resultText, taskState));
     const startsNewSession =
       !previous
       || previousSealed
+      || crossesUserBoundary
       || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
     if (source === 'task' && startsNewSession) {
       taskState.clear();
@@ -497,7 +516,13 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       previous.todos = parsed;
       previous.lastIndex = index;
     } else {
-      const session = { todos: parsed, firstIndex: index, lastIndex: index, source };
+      const session = {
+        todos: parsed,
+        firstIndex: index,
+        lastIndex: index,
+        source,
+        userBoundaryIndex: lastUserIndex,
+      };
       sessions.push(session);
       lastSessionBySource.set(source, session);
     }
@@ -548,6 +573,9 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    // 与 findMessageTodoInsertions 同一条边界:子代理内部的计划调用不参与
+    // 顶层"最新计划事件"的判定,否则子调用会让顶层 insertion 判为过期。
+    if (message.parentToolUseId) continue;
     latestPlanIndex = index;
     latestPlanMessage = message;
   }
