@@ -9,10 +9,10 @@ import type {
 } from '../../types/pi-project-trust.js';
 
 const DEFAULT_CAPABILITIES: PiProjectTrustCapabilities = {
-  explicitSkills: true,
+  explicitSkills: false,
   projectedSettings: false,
-  packagesDisabled: true,
-  extensionsDisabled: true,
+  packagesDisabled: false,
+  extensionsDisabled: false,
 };
 
 function normalizePath(value: string, platform: 'posix' | 'win32'): string | null {
@@ -112,10 +112,19 @@ function cloneAllowedSettings(values: unknown): Readonly<PiProjectSettingsValues
     ...(reserveTokens === undefined ? {} : { reserveTokens }),
     ...(keepRecentTokens === undefined ? {} : { keepRecentTokens }),
   };
+  if (Object.keys(clone).length === 0) return null;
   return Object.freeze({ compaction: Object.freeze(clone) });
 }
 
 function snapshotSettingsProjection(projection: PiProjectSettingsProjection): PiProjectSettingsProjection | null {
+  if (
+    typeof projection.sourcePath !== 'string' ||
+    !projection.sourcePath ||
+    projection.sourcePath.includes('\0') ||
+    projection.sourcePath.includes('\uFFFD')
+  ) {
+    return null;
+  }
   const values = cloneAllowedSettings(projection.values);
   if (!values) return null;
   return Object.freeze({
@@ -213,8 +222,8 @@ export function evaluatePiProjectTrust(input: {
   const projectionSnapshot = suppliedProjection ? snapshotSettingsProjection(suppliedProjection) : null;
   const settingsProjection =
     capabilities.projectedSettings &&
-    input.capabilities?.packagesDisabled === true &&
-    input.capabilities?.extensionsDisabled === true &&
+    capabilities.packagesDisabled &&
+    capabilities.extensionsDisabled &&
     projectionSnapshot &&
     discovered.settings.includes(projectionSnapshot.sourcePath) &&
     projectionSnapshot.sourcePath.length > 0

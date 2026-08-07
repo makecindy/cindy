@@ -72,13 +72,13 @@ export interface PiProjectDiscoveredResources {
 
 /** Capabilities proven by the pinned Pi fixture and the PR4 assembler. */
 export interface PiProjectTrustCapabilities {
-  /** PR4 can pass individual skill paths without enabling project trust. */
+  /** PR4 can pass individual skill paths without enabling project trust; omitted/false is fail-closed. */
   explicitSkills: boolean;
-  /** PR4 has a reviewed projection for safe project settings fields. */
+  /** PR4 has a reviewed projection for safe project settings fields; omitted/false is fail-closed. */
   projectedSettings: boolean;
-  /** Hard gate: project package installation is prevented. */
+  /** Explicit hard-gate proof: project package installation is prevented. */
   packagesDisabled: boolean;
-  /** Hard gate: project extensions are not loaded or executed. */
+  /** Explicit hard-gate proof: project extensions are not loaded or executed. */
   extensionsDisabled: boolean;
 }
 

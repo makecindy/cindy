@@ -44,7 +44,12 @@ describe('Pi project trust contract', () => {
   });
 
   it('allows explicit skills only; settings/packages/extensions stay separated', () => {
-    const result = evaluatePiProjectTrust({ identity, approval: approval(), discovered });
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered,
+      capabilities: { explicitSkills: true },
+    });
     expect(result.eligibleSkillPaths).toEqual(discovered.skills);
     expect(result.eligibleSettingsPaths).toEqual([]);
     expect(result.settingsProjection).toBeNull();
@@ -72,7 +77,7 @@ describe('Pi project trust contract', () => {
         extensionsDisabled: undefined,
       },
     });
-    expect(result.eligibleSkillPaths).toEqual(discovered.skills);
+    expect(result.eligibleSkillPaths).toEqual([]);
     expect(result.eligibleSettingsPaths).toEqual([]);
     expect(result.settingsProjection).toBeNull();
     expect(result.launch.allowPackages).toBe(false);
@@ -216,6 +221,16 @@ describe('Pi project trust contract', () => {
       settingsProjection: projection,
     });
     expect(result.resources.settings).toBe('discovered');
+    expect(evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered,
+      capabilities: { explicitSkills: true },
+      settingsProjection: {
+        sourcePath: '/repo/.pi/settings.json',
+        values: { compaction: { reserveTokens: undefined } },
+      },
+    }).resources.settings).toBe('discovered');
     const provenResult = evaluatePiProjectTrust({
       identity,
       approval: approval(),
@@ -259,6 +274,18 @@ describe('Pi project trust contract', () => {
         values: Object.assign(Object.create({ inherited: true }) as Record<string, unknown>, { compaction: true }),
       },
     }).resources.settings).toBe('discovered');
+    for (const sourcePath of ['/repo/.pi/settings\0.json', '/repo/.pi/settings\uFFFD.json', '']) {
+      expect(evaluatePiProjectTrust({
+        identity,
+        approval: approval(),
+        discovered,
+        capabilities: { projectedSettings: true, packagesDisabled: true, extensionsDisabled: true },
+        settingsProjection: {
+          sourcePath,
+          values: { compaction: { reserveTokens: 16_384 } },
+        },
+      }).resources.settings).toBe('discovered');
+    }
     expect(evaluatePiProjectTrust({
       identity,
       approval: approval(),
@@ -390,11 +417,17 @@ describe('Pi project trust contract', () => {
   });
 
   it('does not let concurrent session inputs leak into one another', () => {
-    const first = evaluatePiProjectTrust({ identity, approval: approval({ revision: 'a' }), discovered });
+    const first = evaluatePiProjectTrust({
+      identity,
+      approval: approval({ revision: 'a' }),
+      discovered,
+      capabilities: { explicitSkills: true },
+    });
     const second = evaluatePiProjectTrust({
       identity: { ...identity, canonicalWorkingDir: '/repo/other' },
       approval: approval({ scopeKey: '/repo\0/repo/other', revision: 'b' }),
       discovered: { ...discovered, skills: ['/repo/other/.pi/skills/c'] },
+      capabilities: { explicitSkills: true },
     });
     expect(first.approvalRevision).toBe('a');
     expect(first.eligibleSkillPaths).toEqual(discovered.skills);
