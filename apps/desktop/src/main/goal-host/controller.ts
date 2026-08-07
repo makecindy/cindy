@@ -697,7 +697,13 @@ export class GoalController {
         );
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         if (limited) {
-          // #2105 P0:编辑路径(降上限)触发预算终态。
+          // #2105 P0:编辑路径(降上限)触发预算终态。补 state-transition 供 consumer
+          // 重建状态迁移(reviewer P2:与 shouldLimit/preflight 路径语义对齐)。
+          this.recordRunEvent('state-transition', sessionId, limited, {
+            from: 'active',
+            to: 'budgetLimited',
+            reason: limited.lastReason,
+          });
           this.recordRunEvent('budget-consumed', sessionId, limited, {
             from: 'active',
             to: 'budgetLimited',
@@ -2121,9 +2127,10 @@ export class GoalController {
       return;
     }
     if (this.firing.has(sessionId)) {
-      // 已在派发(并发新恢复已取得所有权):本次 fireTurn 不派发,仅清除自身 boundary 的
-      // 恢复标记(reviewer P1:不得按 sessionId 无条件删除新恢复刚登记的有效标记)。
-      this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
+      // 已在派发(并发旧 fireTurn 持有所有权):本次 fireTurn 不派发——**保留恢复标记**
+      // (reviewer P1:新恢复登记后若在此删除,旧 fireTurn 随后派发只记 turn-dispatched,
+      // 缺配对的 resumed)。恢复意图由旧 fireTurn 收口后的 continuation(同一 boundary)
+      // 派发时消费;串台由 boundary 身份校验防住,无需在此清理。
       return;
     }
     // 首轮 vs 续轮由 state 派生(turnsUsed===0 = 首轮尚未真正跑完),不再由调用方指定。
