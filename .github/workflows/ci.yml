@@ -86,12 +86,17 @@ jobs:
 
       # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
       # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
-      # 会让 apps/desktop 单测在收集阶段全挂——ripgrep 必须单独装回来。
-      # install:ripgrep 不带 --best-effort,不受上面的 skip 环境变量影响。
+      # code-mode 边界测试也会启动随包 Codex——两者都必须单独装回来。
+      # 显式安装命令不带 --best-effort,不受上面的 skip 环境变量影响。
       - name: Install bundled ripgrep
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
+
+      - name: Install bundled Codex
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:codex
 
       - name: Check endpoint literals
         run: pnpm check:endpoints
@@ -196,6 +201,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
+
+      - name: Install bundled Codex
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:codex
 
       - name: Run client and package unit tests
         run: pnpm test:unit
