@@ -592,12 +592,13 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
-  it('recomputes election when an active peer advertises a newly bound channel', () => {
+  it('restarts discovery instead of applying a late peer probe', () => {
     const harness = createTransport();
+    let round = 0;
     const manager = new ImSchedulerManager({
       transport: harness.transport,
       getLocalChannel: () => ({ channel: 'discord', identity }),
-      nonceFactory: () => 'round-000000000000',
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
     });
     manager.start();
     harness.emit({
@@ -629,10 +630,29 @@ describe('dormant scheduler manager', () => {
         channels: [{ channel: 'discord', identity }],
       },
     });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    const refreshedProbe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    expect(refreshedProbe.nonce).not.toBe(probe?.nonce);
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 4,
+        channels: [],
+        inReplyTo: refreshedProbe.nonce,
+      },
+    });
     expect(manager.getDecision()).toEqual({
-      state: 'standby',
+      state: 'active',
       channel: { channel: 'discord', identity },
-      reason: 'peer-won',
+      reason: 'elected',
     });
   });
 
@@ -1093,12 +1113,13 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
-  it('accepts a peer binding probe even when its remote clock moved backwards', () => {
+  it('restarts discovery for a peer binding change despite remote clock rollback', () => {
     const harness = createTransport();
+    let round = 0;
     const manager = new ImSchedulerManager({
       transport: harness.transport,
       getLocalChannel: () => ({ channel: 'discord', identity }),
-      nonceFactory: () => 'round-000000000000',
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
     });
     manager.start();
     harness.emit({
@@ -1130,9 +1151,93 @@ describe('dormant scheduler manager', () => {
         channels: [{ channel: 'discord', identity }],
       },
     });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    const refreshedProbe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 11,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: refreshedProbe.nonce,
+      },
+    });
     expect(manager.getDecision()).toEqual({
       state: 'standby',
       channel: { channel: 'discord', identity },
+      reason: 'peer-won',
+    });
+  });
+
+  it('rejects an older advertisement after a newer binding probe', () => {
+    const harness = createTransport();
+    let round = 0;
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity: nextIdentity }),
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    const probe = harness.pushes.find((push) => push.peerDeviceId === 'a')?.payload as {
+      nonce?: string;
+    };
+    const oldChannel = { channel: 'discord' as const, identity };
+    const newChannel = { channel: 'discord' as const, identity: nextIdentity };
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'probe',
+        sentAt: 3,
+        nonce: 'round-peer-00000',
+        channels: [newChannel],
+      },
+    });
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 4,
+        channels: [oldChannel],
+        inReplyTo: probe?.nonce,
+      },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    const refreshedProbe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    expect(refreshedProbe.nonce).not.toBe(probe?.nonce);
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 5,
+        channels: [newChannel],
+        inReplyTo: refreshedProbe.nonce,
+      },
+    });
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: { channel: 'discord', identity: nextIdentity },
       reason: 'peer-won',
     });
   });

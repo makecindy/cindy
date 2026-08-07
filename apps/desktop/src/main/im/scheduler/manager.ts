@@ -41,6 +41,19 @@ interface PeerAdvertisement {
   frame: SchedulerAdvertisementFrame;
 }
 
+function sameSchedulerChannels(
+  left: readonly SchedulerChannelIdentity[],
+  right: readonly SchedulerChannelIdentity[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (channel, index) =>
+        channel.channel === right[index]?.channel && channel.identity === right[index]?.identity,
+    )
+  );
+}
+
 export interface ImSchedulerManagerOptions {
   transport: SchedulerTransport;
   getLocalChannel: () => SchedulerChannelIdentity | null;
@@ -65,8 +78,13 @@ export class ImSchedulerManager {
   private readonly maxDiscoveryRetries: number;
   private readonly peers = new Map<string, PeerAdvertisement>();
   private readonly confirmedPeers = new Set<string>();
+  private readonly pendingPeerProbeChannels = new Map<
+    string,
+    readonly SchedulerChannelIdentity[]
+  >();
   private readonly runtimeGaps = new RuntimeGapSet();
   private readonly invalidatedRuntimeGaps = new Set<string>();
+  private readonly invalidatedRuntimeGapIdentities = new Set<string>();
   private unsubscribe: (() => void) | null = null;
   private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
   private lastSnapshotObservedAt: number | null = null;
@@ -121,6 +139,8 @@ export class ImSchedulerManager {
     this.unsubscribe = null;
     this.runtimeGaps.clear();
     this.invalidatedRuntimeGaps.clear();
+    this.invalidatedRuntimeGapIdentities.clear();
+    this.pendingPeerProbeChannels.clear();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
     this.resetSnapshotRequestState();
@@ -154,8 +174,9 @@ export class ImSchedulerManager {
       this.runtimeGaps.clear();
     } else {
       const currentIdentity = this.getLocalChannel()?.identity ?? null;
-      for (const identity of [this.lastLocalIdentity, currentIdentity]) {
-        if (identity) this.invalidateRuntimeGapIdentity(identity);
+      if (this.lastLocalIdentity) this.invalidateRuntimeGapIdentity(this.lastLocalIdentity);
+      if (currentIdentity && currentIdentity !== this.lastLocalIdentity) {
+        this.clearRuntimeGapIdentity(currentIdentity);
       }
       this.lastLocalIdentity = currentIdentity;
     }
@@ -289,8 +310,18 @@ export class ImSchedulerManager {
       return;
     }
     if (payload.inReplyTo !== this.discoveryNonce) return;
+    const pendingProbeChannels = this.pendingPeerProbeChannels.get(sourceDeviceId);
+    if (pendingProbeChannels && !sameSchedulerChannels(pendingProbeChannels, payload.channels)) {
+      // A probe and an advertisement can cross in flight. Do not let the
+      // advertisement complete the old round; start a fresh nonce so the
+      // peer must confirm its current binding again.
+      this.beginDiscoveryRound();
+      this.reconcile();
+      return;
+    }
     this.confirmedPeers.add(sourceDeviceId);
     this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
+    this.pendingPeerProbeChannels.delete(sourceDeviceId);
     for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
       if (runtime?.state === 'dirty') this.adoptRuntimeGap(runtime);
     }
@@ -303,18 +334,37 @@ export class ImSchedulerManager {
   }
 
   private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
+    if (this.invalidatedRuntimeGapIdentities.has(runtime.identity)) return;
     if (this.invalidatedRuntimeGaps.has(this.runtimeGapKey(runtime))) return;
     this.runtimeGaps.adopt(runtime);
   }
 
   private invalidateRuntimeGapIdentity(identity: string): void {
+    this.rememberInvalidatedRuntimeGapIdentity(identity);
+    this.clearRuntimeGapIdentity(identity);
+  }
+
+  private clearRuntimeGapIdentity(identity: string): void {
     const runtime = this.runtimeGaps.get(identity);
     if (runtime) this.rememberInvalidatedRuntimeGap(runtime);
     this.runtimeGaps.clearIdentity(identity);
   }
 
   private rememberInvalidatedRuntimeGaps(): void {
-    for (const runtime of this.runtimeGaps.values()) this.rememberInvalidatedRuntimeGap(runtime);
+    for (const runtime of this.runtimeGaps.values()) {
+      this.rememberInvalidatedRuntimeGapIdentity(runtime.identity);
+      this.rememberInvalidatedRuntimeGap(runtime);
+    }
+  }
+
+  private rememberInvalidatedRuntimeGapIdentity(identity: string): void {
+    if (this.invalidatedRuntimeGapIdentities.has(identity)) return;
+    while (this.invalidatedRuntimeGapIdentities.size >= MAX_RUNTIME_GAPS) {
+      const oldest = this.invalidatedRuntimeGapIdentities.values().next().value;
+      if (typeof oldest !== 'string') break;
+      this.invalidatedRuntimeGapIdentities.delete(oldest);
+    }
+    this.invalidatedRuntimeGapIdentities.add(identity);
   }
 
   private rememberInvalidatedRuntimeGap(runtime: SchedulerRuntimeFrame): void {
@@ -336,6 +386,18 @@ export class ImSchedulerManager {
     sourceDeviceId: string,
     payload: Extract<ImSchedulerFrame, { kind: 'probe' }>,
   ): void {
+    // A confirmed advertisement is authoritative for the current discovery
+    // round. A later probe with a different binding is only an invalidation
+    // signal: start a new nonce and wait for a fresh advertisement instead of
+    // using the probe itself as an election view. This also handles a real
+    // binding change without trusting remote wall-clock ordering.
+    if (this.confirmedPeers.has(sourceDeviceId)) {
+      const confirmed = this.peers.get(sourceDeviceId)?.frame.channels ?? [];
+      if (sameSchedulerChannels(confirmed, payload.channels)) return;
+      this.beginDiscoveryRound();
+      return;
+    }
+    this.pendingPeerProbeChannels.set(sourceDeviceId, [...payload.channels]);
     this.peers.set(sourceDeviceId, {
       sentAt: payload.sentAt,
       frame: {
@@ -358,6 +420,7 @@ export class ImSchedulerManager {
     this.discoveryNonce = this.nonceFactory();
     this.peers.clear();
     this.confirmedPeers.clear();
+    this.pendingPeerProbeChannels.clear();
     this.publishProbeToVisiblePeers();
     this.scheduleDiscoveryRetry();
   }
