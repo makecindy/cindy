@@ -299,3 +299,46 @@ test('validateSubmoduleForward does not treat a failed base fetch as forward', (
     fs.rmSync(outer, { recursive: true, force: true });
   }
 });
+
+test('allows the unchanged dangling historical baseline without fetching it', () => {
+  const outer = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'cindy-protocol-unchanged-dangling-'),
+  );
+  const protocol = path.join(outer, 'cindy-protocol');
+  fs.mkdirSync(protocol);
+  try {
+    git(outer, 'init', '-b', 'main');
+    git(outer, 'config', 'user.name', 'Protocol Guard Test');
+    git(outer, 'config', 'user.email', 'protocol-guard@example.invalid');
+    git(protocol, 'init', '-b', 'main');
+    git(
+      protocol,
+      'remote',
+      'add',
+      'origin',
+      '/definitely/missing/protocol.git',
+    );
+    const dangling = '27ef29dcb0df1b0f346c82cb7fbb81e9da536a79';
+    assert.throws(() =>
+      git(protocol, 'cat-file', '-e', `${dangling}^{commit}`),
+    );
+    git(
+      outer,
+      'update-index',
+      '--add',
+      '--cacheinfo',
+      `160000,${dangling},cindy-protocol`,
+    );
+    git(outer, 'commit', '-m', 'dangling baseline');
+
+    assert.deepEqual(validateSubmoduleForward(outer, 'HEAD', 'HEAD'), {
+      baseRef: 'HEAD',
+      headRef: 'HEAD',
+      baseOid: dangling,
+      headOid: dangling,
+      relation: 'unchanged',
+    });
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
+  }
+});

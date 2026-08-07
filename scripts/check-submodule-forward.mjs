@@ -271,9 +271,10 @@ export function validateSubmoduleForward(
   const protocolRepo = path.join(repoRoot, SUBMODULE_PATH);
   const unchangedHistoricalBaseline =
     baseOid === headOid && UNREACHABLE_BASE_COMMITS.has(headOid);
-  if (!unchangedHistoricalBaseline) {
-    validatePublishedProtocolHead(protocolRepo, headOid, options);
+  if (unchangedHistoricalBaseline) {
+    return { baseRef, headRef, baseOid, headOid, relation: 'unchanged' };
   }
+  validatePublishedProtocolHead(protocolRepo, headOid, options);
   ensureCommit(protocolRepo, baseOid, { allowUnreachableBase: true });
   if (!ensureCommit(protocolRepo, headOid)) {
     throw new Error(`无法准备协议 head commit ${headOid}`);
