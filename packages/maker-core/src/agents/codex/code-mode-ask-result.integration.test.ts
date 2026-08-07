@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -21,6 +21,7 @@ const codexBinary = path.join(
   `${process.platform}-${process.arch}`,
   process.platform === 'win32' ? 'codex.exe' : 'codex',
 );
+const codexBoundaryAvailable = process.platform !== 'win32' && existsSync(codexBinary);
 
 const answerPayload = {
   pr_3322_decision: { answers: ['缩回重发'] },
@@ -92,7 +93,10 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
-describe('Codex Ask code-mode return contract', () => {
+// This is a real app-server/functions.exec boundary test. Keep it out of unit lanes
+// that cannot provide a reliable bundled Codex binary (notably Windows); local runs
+// with the binary present still exercise the complete boundary.
+describe.skipIf(!codexBoundaryAvailable)('Codex Ask code-mode return contract', () => {
   const cleanups: Array<() => Promise<void> | void> = [];
 
   afterEach(async () => {
