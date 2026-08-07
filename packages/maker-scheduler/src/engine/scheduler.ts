@@ -362,6 +362,11 @@ export class Scheduler extends EventEmitter {
    * 只存内存：真到了重启，start() 的归一本来就会补上。
    */
   private readonly pendingReplans = new Map<string, StalledClaimPlan>();
+  /**
+   * 严格 cron 解析上线前可能落库的畸形 active 任务。清空 nextFireAt 若遇到存储故障，
+   * 周期 DB 同步仍会读回旧的到期时间；在用户修正表达式前必须持续把它们隔离在内存里。
+   */
+  private readonly invalidScheduleIds = new Set<string>();
 
   constructor(opts: SchedulerOptions) {
     super();
@@ -446,6 +451,7 @@ export class Scheduler extends EventEmitter {
       let next: number | undefined;
       try {
         next = computeNextFireAt(current, now);
+        this.invalidScheduleIds.delete(current.id);
       } catch (err) {
         // 旧版本曾接受 parseInt 可部分解析的畸形 cron（例如 `5abc * * * *`）。
         // 升级后严格解析会拒绝它们，但一条存量坏记录不能让整个 scheduler 启动失败。
@@ -454,6 +460,7 @@ export class Scheduler extends EventEmitter {
           scheduleId: current.id,
           error: String(err),
         });
+        this.invalidScheduleIds.add(current.id);
         try {
           const updated = await this.storage.update(current.id, { nextFireAt: undefined });
           current = updated ?? { ...current, nextFireAt: undefined };
@@ -547,7 +554,14 @@ export class Scheduler extends EventEmitter {
       try {
         const actives = await this.storage.listActive();
         this.activeSchedules.clear();
-        for (const sch of actives) this.activeSchedules.set(sch.id, sch);
+        const activeIds = new Set(actives.map((sch) => sch.id));
+        for (const scheduleId of this.invalidScheduleIds) {
+          if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
+        }
+        for (const sch of actives) {
+          const current = this.keepInvalidScheduleQuarantined(sch, now);
+          this.activeSchedules.set(current.id, current);
+        }
       } catch (err) {
         this.logger?.warn?.('scheduler: active-schedule DB sync failed', err);
       }
@@ -1351,8 +1365,9 @@ export class Scheduler extends EventEmitter {
     const updated = await this.storage.update(id, updates);
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     if (updated.status === 'active') {
-      this.activeSchedules.set(id, updated);
+      this.activeSchedules.set(id, this.keepInvalidScheduleQuarantined(updated, now));
     } else {
+      this.invalidScheduleIds.delete(id);
       this.activeSchedules.delete(id);
     }
     // DEBUG: 帮排查"编辑后 pending fire 没刷新"问题；只在触发字段变更时打。
@@ -1386,6 +1401,7 @@ export class Scheduler extends EventEmitter {
     await this.abortInflightAndWait(id, opts?.exemptRunId);
     const updated = await this.storage.update(id, { status: 'paused', updatedAt: this.clock.now() });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
+    this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
@@ -1412,6 +1428,7 @@ export class Scheduler extends EventEmitter {
       nextFireAt: next,
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
+    this.invalidScheduleIds.delete(id);
     this.activeSchedules.set(id, updated);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
@@ -1419,6 +1436,17 @@ export class Scheduler extends EventEmitter {
 
   async delete(id: string, opts?: { exemptRunId?: string }): Promise<void> {
     return this.serializeScheduleMutation(id, () => this.deleteUnlocked(id, opts));
+  }
+
+  private keepInvalidScheduleQuarantined(schedule: Schedule, now: number): Schedule {
+    if (!this.invalidScheduleIds.has(schedule.id)) return schedule;
+    try {
+      computeNextFireAt(schedule, now);
+      this.invalidScheduleIds.delete(schedule.id);
+      return schedule;
+    } catch {
+      return { ...schedule, nextFireAt: undefined };
+    }
   }
 
   private async deleteUnlocked(id: string, opts?: { exemptRunId?: string }): Promise<void> {
@@ -1435,6 +1463,7 @@ export class Scheduler extends EventEmitter {
     // fireOne 尾部对 schedule 行的重排 update 同样 no-op —— 均无副作用。
     await this.abortInflightAndWait(id, opts?.exemptRunId);
     await this.storage.delete(id);
+    this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
   }

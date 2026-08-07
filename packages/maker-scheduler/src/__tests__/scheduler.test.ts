@@ -702,6 +702,40 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  it('keeps a legacy invalid cron quarantined when clearing its stale fire time fails', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    const staleFireAt = Date.UTC(2020, 0, 1, 0, 0, 0);
+    local.storage.schedules.set('legacy-invalid', {
+      id: 'legacy-invalid',
+      name: 'legacy invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: staleFireAt,
+    });
+    vi.spyOn(local.storage, 'update').mockRejectedValueOnce(new Error('database is locked'));
+
+    await local.scheduler.start();
+    expect((await local.storage.get('legacy-invalid'))?.nextFireAt).toBe(staleFireAt);
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns('legacy-invalid')).toHaveLength(0);
+    await local.scheduler.stop();
+  });
+
   // ── intervalMs（"上次完成 + N" 语义）──
   // 这条线和 cron-槽位 完全分支：fireOne / start / resume / create 都要分别覆盖。
 
