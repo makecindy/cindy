@@ -58,7 +58,6 @@ import { validateTitleOutput } from './title-output-validation.js';
 import {
   requestProviderHttpText,
   requestCustomProviderText,
-  type UtilityFetchImpl,
 } from '../utility-model/oneShotCandidates.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
