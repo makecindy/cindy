@@ -7,7 +7,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
@@ -34,10 +34,6 @@ import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/cla
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
-import {
-  cleanupStagedChatAttachments,
-  extractChatAttachmentPathsFromPersistedContent,
-} from '../../file-browser/remote-file-cache';
 import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
@@ -105,12 +101,23 @@ function ownerStampForBroadcast(
   return getSafeOwnerPushStamp();
 }
 
-const PERSISTED_CHAT_ATTACHMENT_ROWS_SQL = `SELECT m.content
+// DbClient uses better-sqlite3 `.all()`: never return whole message bodies for
+// retention bookkeeping. JSON1 extracts only the distinct paths that startup
+// cleanup needs, while LIKE avoids invoking json_each for unrelated history.
+const PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN = '%chat-attachment-cache%';
+const PERSISTED_CHAT_ATTACHMENT_PATHS_SQL = `SELECT DISTINCT
+         attachment.atom AS filePath
    FROM messages AS m
    JOIN sessions AS s ON s.id = m.session_id
+   JOIN json_tree(
+          CASE WHEN json_valid(m.content) THEN m.content ELSE '{}' END,
+          '$.files'
+        ) AS attachment
   WHERE s.status != 'deleted'
     AND m.rewind_at IS NULL
-    AND m.content LIKE '%chat-attachment-cache%'`;
+    AND m.content LIKE ?
+    AND attachment.key = 'path'
+    AND attachment.type = 'text'`;
 
 export interface EstimatedSessionValueEntry {
   clientId: string;
@@ -139,70 +146,13 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'thinking',
 ] as const);
 
-function uniqueStrings(values: readonly string[]): string[] {
-  return [...new Set(values)];
-}
-
-/** Return staged attachment paths persisted by a session's messages. */
-export async function listSessionPersistedChatAttachmentPaths(
-  sessionId: string,
-): Promise<string[]> {
-  const rows = await getDbClient().drizzle
-    .select({ content: messages.content })
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt)));
-  return uniqueStrings(
-    rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
-  );
-}
-
-/**
- * Return the staged attachment paths that may be removed after deleting one
- * session. Forked sessions copy persisted message content, so a path remains
- * protected while any other non-deleted session still references it.
- */
-export async function listDeletableSessionPersistedChatAttachmentPaths(
-  sessionId: string,
-): Promise<string[]> {
-  const [sessionPaths, retainedPaths] = await Promise.all([
-    listSessionPersistedChatAttachmentPaths(sessionId),
-    listPersistedChatAttachmentPathsForOtherSessions(sessionId),
-  ]);
-  return sessionPaths.filter((filePath) => !retainedPaths.includes(filePath));
-}
-
-/** Return staged attachment paths referenced by other non-deleted sessions. */
-export async function listPersistedChatAttachmentPathsForOtherSessions(
-  sessionId: string,
-): Promise<string[]> {
-  const rows = await getDbClient().drizzle
-    .select({ content: messages.content })
-    .from(messages)
-    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
-    .where(
-      and(
-        ne(messages.sessionId, sessionId),
-        ne(sessions.status, 'deleted'),
-        isNull(messages.rewindAt),
-      ),
-    );
-  return uniqueStrings(
-    rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
-  );
-}
-
 /** Return all staged attachment paths retained by the current owner's message DB. */
 export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
-  const rows = await getDbClient().query<{ content: unknown }>(
-    PERSISTED_CHAT_ATTACHMENT_ROWS_SQL,
+  const rows = await getDbClient().query<{ filePath: unknown }>(
+    PERSISTED_CHAT_ATTACHMENT_PATHS_SQL,
+    [PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN],
   );
-  return uniqueStrings(
-    rows.flatMap((row) =>
-      typeof row.content === 'string'
-        ? extractChatAttachmentPathsFromPersistedContent(row.content)
-        : [],
-    ),
-  );
+  return rows.flatMap((row) => (typeof row.filePath === 'string' ? [row.filePath] : []));
 }
 
 export function registerMessageIpc(): void {
@@ -882,14 +832,6 @@ export async function commitMessageDeletion(
 }> {
   const now = Date.now();
   const db = getDbClient().drizzle;
-  const deletedAttachmentPaths = uniqueStrings(
-    (
-      await db
-        .select({ content: messages.content })
-        .from(messages)
-        .where(and(eq(messages.sessionId, sessionId), inArray(messages.clientId, clientIds)))
-    ).flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
-  );
   const result = await getDbClient().tx('message.delete', {
     sessionId,
     clientIds,
@@ -901,29 +843,6 @@ export async function commitMessageDeletion(
     },
     updatedAt: now,
   });
-
-  if (deletedAttachmentPaths.length > 0) {
-    try {
-      const remainingAttachmentPaths = new Set(
-        await listSessionPersistedChatAttachmentPaths(sessionId),
-      );
-      const retainedByOtherSessions = new Set(
-        await listPersistedChatAttachmentPathsForOtherSessions(sessionId),
-      );
-      await cleanupStagedChatAttachments(
-        deletedAttachmentPaths.filter(
-          (filePath) =>
-            !retainedByOtherSessions.has(filePath) && !remainingAttachmentPaths.has(filePath),
-        ),
-      );
-    } catch (error) {
-      log.warn('message staged attachment cleanup failed', {
-        sessionId,
-        deletedClientIds: clientIds,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
 
   // 当前生产聊天附件主要是 session-attachment 粗粒度引用，不能因删除一轮
   // 误删同 session 其它气泡仍在用的 blob。这里只释放明确以消息 id/clientId
@@ -1076,7 +995,6 @@ export async function rewindPersistedUserMessageAfterClear(
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
 
-  const attachmentPaths = extractChatAttachmentPathsFromPersistedContent(row.content);
   const mediaCleanup = await Promise.allSettled(
     [...new Set([row.id, row.clientId])].map((refId) =>
       removeMediaRefs({ refKind: 'message', refId }),
@@ -1106,28 +1024,6 @@ export async function rewindPersistedUserMessageAfterClear(
       error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
     });
   }
-  if (attachmentPaths.length > 0) {
-    try {
-      const [remaining, retainedByOtherSessions] = await Promise.all([
-        listSessionPersistedChatAttachmentPaths(sessionId),
-        listPersistedChatAttachmentPathsForOtherSessions(sessionId),
-      ]);
-      const remainingSet = new Set(remaining);
-      const retainedSet = new Set(retainedByOtherSessions);
-      await cleanupStagedChatAttachments(
-        attachmentPaths.filter(
-          (filePath) => !remainingSet.has(filePath) && !retainedSet.has(filePath),
-        ),
-      );
-    } catch (error) {
-      log.warn('clear-race staged attachment cleanup failed', {
-        sessionId,
-        clientId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
   broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }

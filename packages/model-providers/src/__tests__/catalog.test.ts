@@ -624,6 +624,57 @@ describe('媒体清单跨供应商契约(2026-07 图像多来源)', () => {
     }
   });
 
+  it('embeddingModels / embeddingDefaults 与 image/video 同一套入口校验', () => {
+    // 不校验的话坏数据能通过 parseCatalog,随后在 deriveCindyMediaConfig 的
+    // for...of 里抛错、被上层降级成空清单 —— 表现是所有插件向量请求变
+    // NO_CANDIDATE,而真正的原因在目录里,排查时毫无线索(PR #1707 review)。
+    const withXd = (mutate: (xd: Record<string, unknown>) => void): Catalog => {
+      const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+      mutate(bad.providers.find((p) => p.id === 'xd')! as unknown as Record<string, unknown>);
+      return bad;
+    };
+
+    // 写成对象而不是数组(远端手写目录最常见的形态错误)。
+    expect(() => parseCatalog(withXd((xd) => { xd.embeddingModels = { a: 1 }; })))
+      .toThrow(/embeddingModels/);
+    // 条目缺 id / name。
+    expect(() => parseCatalog(withXd((xd) => { xd.embeddingModels = [{ name: 'x' }]; })))
+      .toThrow(/embeddingModels/);
+    expect(() => parseCatalog(withXd((xd) => { xd.embeddingModels = [{ id: 'a', name: '' }]; })))
+      .toThrow(/embeddingModels/);
+    // id 重复(first-wins 去重会静默吃掉后一条)。
+    expect(() =>
+      parseCatalog(
+        withXd((xd) => {
+          xd.embeddingModels = [{ id: 'a', name: 'A' }, { id: 'a', name: 'A2' }];
+          xd.embeddingDefaults = { standard: 'a' };
+        }),
+      ),
+    ).toThrow(/duplicate/);
+    // 默认指向清单外型号(型号下架、默认没跟着改)。
+    expect(() =>
+      parseCatalog(
+        withXd((xd) => {
+          xd.embeddingModels = [{ id: 'a', name: 'A' }];
+          xd.embeddingDefaults = { standard: 'not-in-list' };
+        }),
+      ),
+    ).toThrow(/embeddingDefaults/);
+  });
+
+  it('只声明向量清单的供应商可以没有 agents(媒体-only 同理)', () => {
+    const cat = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xd = cat.providers.find((p) => p.id === 'xd')!;
+    xd.agents = [];
+    xd.models = {};
+    xd.routing = {};
+    delete xd.imageModels;
+    delete xd.imageDefaults;
+    delete xd.videoModels;
+    delete xd.videoDefaults;
+    expect(() => parseCatalog(cat)).not.toThrow();
+  });
+
   it('非 xd 内置供应商的媒体模型 id 必须带 "<providerId>/" 前缀(防 first-wins 归属漂移)', () => {
     for (const p of BUNDLED_CATALOG.providers) {
       if (p.id === 'xd') continue;

@@ -88,7 +88,9 @@ export function CindyCapabilityPrefs({
           ? prefs.video
           : capability.startsWith('text.')
             ? prefs.text
-            : prefs.image;
+            : capability.startsWith('embed.')
+              ? prefs.embed
+              : prefs.image;
         // 目录没给这个类目任何模型 = 能力暂不可用:行照旧显示(插件确实申请了
         // 这项能力),但右侧不给下拉,改一句不可点的灰字,不拿旧型号冒充可选。
         const defaultModel = kind.defaultModel;

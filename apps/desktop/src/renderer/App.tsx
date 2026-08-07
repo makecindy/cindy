@@ -26,6 +26,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
+import { PluginMarketPermissionReviewHost } from '@/features/plugin/PluginMarketPermissionReviewHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { installSystemNetworkErrorToastListener } from '@/lib/systemNetworkErrorToast';
 import { installSilentInstallToastListener } from '@/lib/silentInstallToast';
@@ -54,6 +55,11 @@ import {
   setProviderModelFast,
   subscribeProviderModelMemory,
 } from '@/state/providerModelMemory';
+import {
+  readWorkerCreationPrefs,
+  setWorkerPermissionModePreference,
+  subscribeWorkerCreationPrefs,
+} from '@/state/workerCreationPrefs';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { router } from './router';
@@ -147,9 +153,9 @@ export function App() {
         fastMode: draft.fastModeByModel[cc.model] === true,
       });
       // main 缓存两用途:① collab worker spawn 读 model/effort/fastMode;② device-link 远程
-      // 草稿镜像读全量(model/effort/fast/permission/source)。故 lastByVendor 每项带上
-      // permissionMode + providerId(worker spawn 不消费这两项,远程草稿镜像才用)。仅 cc/codex,
-      // 不带 orca。fire-and-forget。
+      // 草稿镜像读全量(model/effort/fast/permission/source)+「是否显式选过模型」。故
+      // lastByVendor 覆盖 cc/codex/pi，并带上 permissionMode + providerId(worker spawn
+      // 不消费这两项,远程草稿镜像才用)。fire-and-forget。
       window.electronAPI.syncNewMakerDraft({
         lastByVendor: {
           cc: {
@@ -164,6 +170,17 @@ export function App() {
             permissionMode: draft.lastByVendor.codex.permissionMode,
             providerId: draft.lastByVendor.codex.providerId ?? null,
           },
+          pi: {
+            model: draft.lastByVendor.pi.model,
+            effort: draft.lastByVendor.pi.effort,
+            permissionMode: draft.lastByVendor.pi.permissionMode,
+            providerId: draft.lastByVendor.pi.providerId ?? null,
+          },
+        },
+        modelChosenByVendor: {
+          cc: draft.modelChosenByVendor.cc === true,
+          codex: draft.modelChosenByVendor.codex === true,
+          pi: draft.modelChosenByVendor.pi === true,
         },
         fastModeByModel: draft.fastModeByModel,
         effortByModel: draft.effortByModel,
@@ -173,6 +190,26 @@ export function App() {
     };
     syncPrefs();
     return subscribeDraft(syncPrefs);
+  }, []);
+
+  // Worker 创建偏好的真源是 renderer localStorage；main 只缓存权限默认值供
+  // Orca UI / agent tool 的创建路径读取。tool 显式改默认时再经 apply push 回写真源。
+  useEffect(() => {
+    const sync = () => {
+      const prefs = readWorkerCreationPrefs();
+      window.electronAPI.syncWorkerCreationPrefs({
+        workerPermissionMode: prefs.workerPermissionMode,
+      });
+    };
+    sync();
+    const unsubscribe = subscribeWorkerCreationPrefs(sync);
+    const offApply = window.electronAPI.onWorkerCreationPrefsApply(({ workerPermissionMode }) => {
+      setWorkerPermissionModePreference(workerPermissionMode);
+    });
+    return () => {
+      unsubscribe();
+      offApply();
+    };
   }, []);
 
   // device-link 被控端单一真相:把 providerModelMemory(草稿模型列表行的真实读源)全量镜像给 main,
@@ -311,6 +348,7 @@ export function App() {
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
+                          <PluginMarketPermissionReviewHost />
                           <OwnerScopedRouter />
                         </EnvCheckGuard>
                       </LoginHandoffHost>

@@ -20,7 +20,8 @@ function git(cwd: string, ...args: string[]): string {
     env: {
       ...process.env,
       GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_GLOBAL: os.devNull,
+      // Git for Windows does not accept Node's extended `\\.\nul` spelling.
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull,
     },
   }).trim();
 }

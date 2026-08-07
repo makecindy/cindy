@@ -30,6 +30,7 @@ import {
 import {
   buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
+  parseModelsSyncPayload,
   withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
 } from './modelsSyncRefresh.js';
@@ -145,10 +146,7 @@ let authGeneration = 0;
 let lastAuthUserId: string | null = null;
 let lastAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 
-function applyGatewayModels(
-  models: ModelAccessGatewayModel[],
-  authenticatedUserId?: string,
-): void {
+function applyGatewayModels(models: ModelAccessGatewayModel[], authenticatedUserId?: string): void {
   // 同一次 /models 响应建立 XD 模型与价格投影。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
   const pricing = replaceGatewayModelPricing(models, authenticatedUserId);
@@ -175,17 +173,20 @@ async function runModelsSync(
   authenticatedUserId: string,
   myAttempt: number,
 ): Promise<void> {
-  let payload: { models: ModelAccessGatewayModel[] };
+  let models: ModelAccessGatewayModel[];
   try {
-    const request = buildModelsSyncRequest(() =>
-      getClientEndpoint('modelAccessApiBaseUrl'),
+    const request = buildModelsSyncRequest(() => getClientEndpoint('modelAccessApiBaseUrl'));
+    const payload = await withModelsSyncOverallDeadline(
+      serverApiFetch<unknown>(request.path, request.options),
     );
-    payload = await withModelsSyncOverallDeadline(
-      serverApiFetch<{ models: ModelAccessGatewayModel[] }>(
-        request.path,
-        request.options,
-      ),
-    );
+    const parsed = parseModelsSyncPayload(payload);
+    if (!parsed.ok) {
+      log.warn('xd gateway models response rejected (keeping last valid list)', {
+        error: parsed.error,
+      });
+      return;
+    }
+    models = parsed.models;
   } catch (err) {
     log.warn('xd gateway models fetch failed (keeping last valid list)', {
       error: err instanceof Error ? err.message : String(err),
@@ -193,8 +194,6 @@ async function runModelsSync(
     return;
   }
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
-  const models = (payload.models ?? [])
-    .filter((m) => typeof m?.id === 'string' && m.id);
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([], authenticatedUserId);

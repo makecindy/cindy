@@ -137,6 +137,32 @@ describe("model registry", () => {
     ).toMatchObject({ inputPerMtok: 3, outputPerMtok: 15 });
   });
 
+  it("resolves DeepSeek BYOK cache-hit pricing for both runtimes", () => {
+    for (const [modelId, expected] of [
+      [
+        "deepseek-v4-pro",
+        { inputPerMtok: 0.435, outputPerMtok: 0.87, cacheReadPerMtok: 0.003625 },
+      ],
+      [
+        "deepseek-v4-flash",
+        { inputPerMtok: 0.14, outputPerMtok: 0.28, cacheReadPerMtok: 0.0028 },
+      ],
+    ] as const) {
+      expect(
+        resolveModelReferencePrice(registry, "deepseek", modelId, {
+          agent: "claude-code",
+          at: "2026-08-05",
+        })?.price,
+      ).toMatchObject(expected);
+      expect(
+        resolveModelReferencePrice(registry, "deepseek", modelId, {
+          agent: "codex",
+          at: "2026-08-05",
+        })?.price,
+      ).toMatchObject(expected);
+    }
+  });
+
   it("normalizes historical Claude aliases before resolving date-effective prices", () => {
     expect(
       resolveModelReferencePrice(registry, "anthropic", "sonnet", {

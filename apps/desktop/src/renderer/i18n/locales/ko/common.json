@@ -712,6 +712,27 @@
       "logsDirLabel": "로그 디렉터리",
       "openLogsDir": "열기",
       "openLogsDirTooltip": "시스템 파일 관리자에서 로그 디렉터리 열기",
+      "logUpload": {
+        "crashAutoLabel": "크래시 시 로그 자동 업로드",
+        "crashAutoDescription": "켜면 Cindy가 크래시할 때 그 전후의 실행 기록을 자동으로 백엔드에 전송하므로 직접 업로드할 필요가 없습니다. 기본값은 꺼짐이며 언제든지 끌 수 있습니다. 끄면 업로드 대기 중인 크래시 기록이 즉시 삭제됩니다.",
+        "crashAutoEnabledToast": "크래시 시 로그 자동 업로드를 켰습니다",
+        "crashAutoDisabledToast": "크래시 시 로그 자동 업로드를 껐습니다",
+        "saveFailed": "로그 업로드 설정을 저장하지 못했습니다",
+        "uploadLabel": "로그 업로드",
+        "uploadButton": "업로드",
+        "uploading": "업로드 중",
+        "uploadTooltip": "최근 실행 기록을 백엔드에 업로드하고 문의 시 사용할 업로드 번호를 받습니다",
+        "uploadDescription": "문제가 생겼을 때 누르면 최근 실행 기록이 백엔드로 전송됩니다. 완료 후 업로드 번호가 표시되므로 문제를 알릴 때 그 번호만 전달하면 됩니다. 파일을 직접 찾을 필요가 없습니다.",
+        "scopeDescription": "업로드하는 항목: Cindy 자체의 실행 기록(시작 및 종료, 크래시, 네트워크, 업데이트, 데이터베이스, 로그인)과 기기 환경 정보(OS 버전, 앱 버전, 기기 식별자), 로그인 후에는 계정 ID도 포함됩니다. 업로드하지 않는 항목: 대화 내용, 파일 내용, 프롬프트, 작업 디렉터리 경로. 자격 증명과 이메일 주소는 업로드 전에 자동으로 제거됩니다.",
+        "successToast": "로그를 업로드했습니다. 업로드 번호 {{code}}(복사됨. 문제를 알릴 때 전달해 주세요)",
+        "errorUnavailable": "이 빌드에는 로그 업로드가 구성되지 않아 현재 사용할 수 없습니다",
+        "errorConsentRequired": "로그를 업로드하려면 먼저 「개인정보 처리방침」에 동의해야 합니다",
+        "errorEmpty": "업로드할 실행 기록이 없습니다",
+        "errorBusy": "이미 업로드가 진행 중입니다. 잠시 기다려 주세요",
+        "errorFailed": "로그 업로드에 실패했습니다. 네트워크를 확인한 후 다시 시도해 주세요",
+        "unavailableNotConfigured": "이 빌드에는 로그 업로드가 구성되지 않았습니다.",
+        "unavailableNoConsent": "먼저 「개인정보 처리방침」에 동의해야 합니다."
+      },
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
@@ -1832,6 +1853,11 @@
         "confirm": "연동 해제",
         "cancel": "취소"
       },
+      "lifecycleAnnouncement": {
+        "label": "온라인/오프라인 알림",
+        "cellLabel": "메시지 알림",
+        "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Discord Bot이 알림 메시지를 보냅니다"
+      },
       "ownerNotice": {
         "linked": "✅ 연동됐어요. 준비되면 바로 말을 걸어 주세요.",
         "disconnected": "🔌 연동을 해제했어요. 필요할 때 다시 연결하면 됩니다.",
@@ -2412,6 +2438,7 @@
         "toggleHint": "이 시스템 전체 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "status": {
           "checking": "ADB 상태 확인 중…",
+          "disabled": "Android 자동화가 꺼져 있습니다. 켜면 ADB와 기기를 감지합니다.",
           "preparing": "ADB 준비 중…",
           "ready": "ADB 준비됨. 사용 가능한 기기: {{count}}. 기본값: {{device}}",
           "adbDetail": "{{version}} 위치: {{path}}",
@@ -3157,6 +3184,8 @@
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
         "installedSection": "설치됨",
+        "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
+        "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
         "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
         "updateAll": "모두 업데이트",
@@ -3196,13 +3225,21 @@
         },
         "install": "설치",
         "details": "상세",
+        "detailsAria": "{{name}} 상세 보기",
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
-        "conflict": "플러그인 ID 충돌",
+        "conflict": "사용할 수 없음",
+        "conflictAria": "{{name}}에 플러그인 ID 충돌이 있습니다",
+        "conflictDescription": "이 플러그인 ID는 이미 사용 중이어서 설치할 수 없습니다.",
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "removalNotice": {
+          "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
+          "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",
+          "multiple_other": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다."
+        },
         "errors": {
           "generic": "플러그인 마켓 작업에 실패했습니다. 다시 시도해 주세요.",
           "invalidRequest": "플러그인 요청이 올바르지 않습니다.",
@@ -3236,6 +3273,9 @@
           "listTitle": "추가된 마켓",
           "pluginCount": "플러그인 {{count}}개",
           "sourceError": "읽기 실패",
+          "empty": "이 마켓에는 플러그인 항목이 없습니다",
+          "skippedEntries": "잘못된 플러그인 항목 {{count}}개를 건너뛰었습니다",
+          "unreadableEntries": "플러그인 항목 {{count}}개를 일시적으로 읽을 수 없습니다. 새로고침하여 다시 시도하세요",
           "localBadge": "로컬",
           "defaultRef": "기본 브랜치",
           "neverSynced": "동기화되지 않음",
@@ -3382,6 +3422,10 @@
         "cindyMediaDepositDetail": "플러그인에 붙여넣거나 끌어다 놓은 소재도 AI가 편집할 수 있게 하는 권한입니다. 저장된 항목은 이 플러그인 이름으로 기록되며 최대 {{quota}}까지 사용하고, 플러그인을 삭제하면 함께 정리됩니다.",
         "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
+        "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
+        "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
+        "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
+        "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 사용량을 소모할 수 있습니다.",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
@@ -3505,7 +3549,8 @@
             "image.edit": "이미지 편집",
             "video.generate": "영상 생성",
             "video.edit": "이미지로 영상",
-            "text.oneshot": "빠른 답변(텍스트)"
+            "text.oneshot": "빠른 답변(텍스트)",
+            "embed.text": "텍스트 벡터 변환"
           },
           "defaultOption": "{{model}} (기본값)",
           "noModels": "사용 가능한 모델 없음"
@@ -3874,6 +3919,8 @@
     "controlledTooltip": "같은 계정으로 로그인한 다른 기기가 이 기기를 원격 제어하고 있습니다. 접근 권한을 철회할 수 있습니다.",
     "revokeAccess": "권한 철회",
     "viewControllers": "보기",
+    "collapseControlledNotice": "원격 제어 알림 접기",
+    "expandControlledNotice": "원격 제어 알림 펼치기: {{label}}",
     "versionMismatch": "상대 기기 버전이 달라 일부 기능이 제한될 수 있습니다"
   },
   "accountDeletion": {
@@ -4176,6 +4223,29 @@
       "latestUserTurnTitle": "최근 사용자 턴 합계"
     }
   },
+  "quotaCard": {
+    "fiveHourLabel": "5시간",
+    "weeklyLabel": "주간",
+    "modelWeeklyLabel": "{{model}} 주간",
+    "windowsRegionLabel": "할당량 구간 목록",
+    "usedPercent": "사용 {{percent}}%",
+    "resetAt": "{{at}} 재설정",
+    "noWindows": "할당량 구간 데이터가 없습니다",
+    "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
+    "limitWarning": "플랜 한도에 근접했습니다",
+    "extraUsageEnabled": "추가 사용량 활성화됨",
+    "costLine": "이번 메시지 비용: {{cost}}",
+    "valueLine": "이번 메시지 토큰 가치: {{cost}}",
+    "noBilledCost": "이번 메시지의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
+    "latestMessageTitle": "최근 메시지 합계",
+    "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
+    "cacheLabel": "캐시",
+    "modelLabel": "모델",
+    "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
+    "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
+  },
   "usageDetails": {
     "costLine": "이번 턴 비용: {{cost}}",
     "valueLine": "이번 턴 토큰 가치: {{cost}}",
@@ -4226,6 +4296,7 @@
     "maximize": "최대화",
     "close": "닫기",
     "menuItems": {
+      "settings": "설정",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"
@@ -4300,6 +4371,7 @@
         "terminal": "터미널",
         "review": "리뷰",
         "backgroundTasks": "백그라운드 작업",
+        "resourceUsage": "리소스 사용량",
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
         "ghostPanel": "플러그인 패널"
@@ -4318,13 +4390,14 @@
       "empty": {
         "eyebrow": "오른쪽 사이드바",
         "title": "패널 시작하기",
-        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일 트리, 리뷰, 내장 브라우저, 터미널을 여기에 여세요.",
+        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 리소스 사용량, 내장 브라우저, 터미널을 여기에 여세요.",
         "openFile": "파일 열기",
         "fileSub": "Files",
         "openReview": "리뷰 열기",
         "reviewSub": "Review",
         "openBackgroundTasks": "백그라운드 작업 열기",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "리소스 사용량 열기",
         "openBrowser": "브라우저 열기",
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
@@ -4399,6 +4472,14 @@
       "spawnFailed": "터미널을 시작할 수 없습니다: {{detail}}"
     },
     "review": {
+      "turn": {
+        "title": "이 메시지의 변경 사항",
+        "currentWorkspace": "현재 작업 공간",
+        "localOnly": "메시지별 정확한 변경 사항은 아직 원격 작업에서 사용할 수 없습니다.",
+        "partialNotice": "이 메시지에는 정확히 추적할 수 없는 명령 또는 도구 쓰기가 포함되어 있습니다. 아래에는 캡처된 일부만 표시되며 완전한 패치가 아닙니다.",
+        "emptyTitle": "기록된 변경 사항 없음",
+        "emptyDesc": "이 메시지에 저장된 패치에는 표시할 수 있는 파일 변경 사항이 없습니다."
+      },
       "fileCount_one": "{{count}}개 파일",
       "fileCount_other": "{{count}}개 파일",
       "emptyTitle": "아직 변경 사항이 없습니다",
@@ -4693,6 +4774,53 @@
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
       "noProgress": "진행 상황 정보가 아직 없습니다"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent 프로세스",
+        "app": "앱 프로세스"
+      },
+      "columns": {
+        "process": "프로세스",
+        "cpu": "CPU",
+        "memory": "메모리",
+        "pid": "PID"
+      },
+      "kinds": {
+        "main": "메인 프로세스",
+        "renderer": "UI 프로세스",
+        "gpu": "GPU 프로세스",
+        "utility": "서비스 프로세스"
+      },
+      "agentRoles": {
+        "codexTask": "Codex 작업",
+        "codexService": "Codex 서비스"
+      },
+      "agentRoleDetails": {
+        "task": "작업 실행",
+        "service": "계정 및 모델"
+      },
+      "services": {
+        "audio": "오디오 서비스",
+        "network": "네트워크 서비스",
+        "storage": "스토리지 서비스",
+        "videoCapture": "비디오 캡처"
+      },
+      "processCount_one": "프로세스 트리: {{count}}개",
+      "processCount_other": "프로세스 트리: {{count}}개",
+      "agentsEmpty": "실행 중인 Agent 프로세스가 없습니다. 작업을 시작하면 여기에 표시됩니다.",
+      "tableLabel": "프로세스별 리소스 사용량",
+      "sortBy": "{{column}} 기준 정렬",
+      "loading": "리소스 사용량을 불러오는 중…",
+      "remoteUnavailableTitle": "원격 세션에서는 사용할 수 없음",
+      "remoteUnavailableDescription": "이 패널은 이 기기의 프로세스만 읽습니다. 이 기기에서 로컬로 실행되는 세션에만 사용할 수 있습니다.",
+      "selectHint": "프로세스 선택",
+      "readOnlyHint": "작업용 Agent 프로세스만 종료할 수 있습니다",
+      "terminate": "프로세스 종료",
+      "terminateConfirmTitle": "{{name}} 프로세스를 종료할까요?",
+      "terminateConfirmDescription": "이 Agent 프로세스를 강제 종료합니다. 이 프로세스를 사용하는 모든 작업이 중단되며, 영향을 받은 작업에서 메시지를 보내면 필요할 때 Agent를 다시 시작할 수 있습니다.",
+      "terminated": "{{name}} 프로세스를 종료했습니다",
+      "terminateFailed": "프로세스를 종료하지 못했습니다. 이미 종료되었을 수 있습니다. 목록은 다음 샘플링 때 자동으로 업데이트됩니다."
     }
   },
   "update": {
@@ -4992,6 +5120,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "이 모델은 설정에서 API key를 구성해야 사용할 수 있습니다",
+      "hidden": "숨김",
       "subscriptionDirectDisabled": {
         "chatgpt": "구독 직결 GPT 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
         "xai": "구독 직결 Grok 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
@@ -5153,9 +5282,7 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치",
-      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작합니다",
-      "exitWorktreeHint": "현재 브랜치를 선택하면 worktree를 해제하고 바로 시작합니다"
+      "sourceTooltip": "worktree 소스 브랜치"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",
@@ -5549,7 +5676,7 @@
       "outputFile": "출력: {{path}}"
     },
     "planPill": {
-      "step": "단계 {{current}} / {{total}}"
+      "step": "{{current}} / {{total}}단계"
     },
     "forkOrigin": {
       "label": "원래 세션에서 생성됨"
@@ -5594,8 +5721,24 @@
       "turnCostEstimated": "이번 턴 토큰 가치(API 단가 환산)",
       "turnCostEstimatedValue": "가치 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "이번 사용자 턴 합계: {{cost}}",
-      "userTurnCostDetailsTitle": "마지막 SDK 세그먼트"
+      "userTurnCostDetailsTitle": "이번 요청 상세"
+    },
+    "shareImage": {
+      "entry": "이미지로 공유",
+      "title": "대화 공유",
+      "subtitle_other": "메시지 {{count}}개 선택",
+      "selectAll": "전체 선택",
+      "clearAll": "선택 해제",
+      "checkboxLabel": "이 메시지 선택",
+      "cancel": "취소",
+      "download": "이미지 저장",
+      "copy": "이미지 복사",
+      "generating": "생성 중…",
+      "copied": "이미지를 복사했습니다",
+      "saved": "이미지를 저장했습니다",
+      "notMounted": "선택한 메시지 중 일부가 표시되지 않았습니다. 위로 스크롤해 표시한 후 다시 시도하세요",
+      "tooLarge": "선택한 내용이 너무 길거나 넓습니다. 선택을 줄인 후 다시 시도하세요",
+      "failed": "이미지를 생성하지 못했습니다. 다시 시도해 주세요"
     },
     "errorBanner": {
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -5984,6 +6127,8 @@
       "duplicateFiles": "동일한 이름의 파일 {{count}}개를 찾았습니다. 절대 경로를 사용해 주세요",
       "copyFile": "복사",
       "copyFilePath": "파일 경로 복사",
+      "openWith": "앱으로 열기",
+      "openWithAppFailed": "선택한 앱으로 열 수 없습니다",
       "revealFile": "파일 위치 열기",
       "openInBrowser": "브라우저에서 열기",
       "fileCopied": "파일이 복사되었습니다",
@@ -6116,6 +6261,37 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
+    },
+    "generatedFiles": {
+      "title": "이 메시지에서 생성된 파일",
+      "showMore": "{{count}}개 더 보기",
+      "showLess": "간략히 보기"
+    },
+    "turnChanges": {
+      "title": "파일 {{count}}개 변경",
+      "partialTitle": "이 메시지의 파일 변경 사항이 완전히 캡처되지 않았습니다",
+      "review": "검토",
+      "undo": "실행 취소",
+      "undoAria": "이 메시지의 변경 사항 실행 취소",
+      "undoPartialAria": "이 메시지에서 정확히 캡처된 변경 사항 실행 취소",
+      "reapply": "다시 적용",
+      "reapplyAria": "이 메시지의 변경 사항 다시 적용",
+      "reapplyPartialAria": "이 메시지에서 정확히 캡처된 변경 사항 다시 적용",
+      "undoSuccess": "이 메시지의 변경 사항을 실행 취소했습니다",
+      "reapplySuccess": "이 메시지의 변경 사항을 다시 적용했습니다",
+      "undoPartialSuccess": "정확히 캡처된 변경 사항을 실행 취소했습니다. 캡처되지 않은 변경 사항은 실행 취소하지 않았습니다",
+      "reapplyPartialSuccess": "정확히 캡처된 변경 사항을 다시 적용했습니다. 캡처되지 않은 변경 사항은 다시 적용하지 않았습니다",
+      "actionRunning": "현재 응답이 끝난 후 작업 공간을 변경하세요",
+      "gitUnavailable": "Git이 감지되지 않았습니다. Git을 설치하고 시스템 PATH에 추가한 뒤 Cindy를 다시 시작하면 실행 취소 및 다시 적용의 전체 기능을 사용할 수 있습니다.",
+      "actionConflict": "작업 공간이 변경되어 이 패치를 안전하게 적용할 수 없습니다. 현재 변경 사항을 먼저 검토하세요",
+      "actionUnavailable": "이 메시지에는 안전하게 실행 취소할 수 없는 파일 변경 사항이 포함되어 있습니다",
+      "actionFailed": "변경 사항을 적용하지 못했습니다. 다시 시도하세요",
+      "partial": "정확히 캡처된 변경 사항만 표시됩니다",
+      "partialReversible": "실행 취소와 다시 적용은 정확히 캡처된 변경 사항만 처리하며 캡처되지 않은 변경 사항은 처리하지 않습니다",
+      "partialActionHint": "정확히 캡처된 파일 변경 사항만 실행 취소하거나 다시 적용합니다",
+      "showMore": "파일 {{count}}개 더 보기",
+      "reviewRemaining": "나머지 파일 {{count}}개를 검토에서 보기",
+      "showLess": "접기"
     },
     "agentActions": {
       "part": {
@@ -6321,6 +6497,7 @@
     "draft": {
       "createSessionFailed": "세션 생성에 실패했습니다. 다시 시도하세요",
       "piRemoteUnsupported": "Pi는 로컬에서만 실행되어 SSH 원격 호스트를 사용할 수 없습니다. 이 호스트를 사용하려면 Claude 또는 Codex로 전환하세요.",
+      "localWorktreeCleanupPending": "이전 로컬 worktree 세션 정리가 아직 완료되지 않았습니다. 정리가 끝난 후 다시 시도하세요.",
       "remoteWorktreeCleanupPending": "이전 원격 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요.",
       "remoteProviderUpdating": "제공자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
@@ -8395,6 +8572,7 @@
       "customRolePredefinedError": "사용자 지정 역할에는 기본 역할 이름을 사용할 수 없습니다",
       "agentLabel": "Agent",
       "modelLabel": "모델",
+      "permissionLabel": "권한 모드",
       "noAvailableModels": "사용 가능한 {{agent}} 모델이 없습니다. 설정에서 제공자 연결과 자격 증명을 확인하세요.",
       "effortLabel": "추론 강도",
       "initialTaskLabel": "초기 작업",
@@ -8439,7 +8617,11 @@
     "empty": "아직 참조 디렉터리가 없습니다",
     "add": "디렉터리 추가…",
     "atLimit": "최대 {{max}}개 도달",
-    "remove": "{{name}} 제거"
+    "remove": "{{name}} 제거",
+    "parentConfirmTitle": "상위 디렉터리를 추가할까요?",
+    "parentConfirmDescription": "선택한 디렉터리는 현재 작업 디렉터리의 상위 또는 조상 디렉터리입니다. Agent가 작업 디렉터리 밖의 내용까지 볼 수 있어 표시 범위가 넓어집니다.\n\n그래도 추가할까요?\n\n{{path}}",
+    "parentConfirmAccept": "그래도 추가",
+    "parentConfirmCancel": "취소"
   },
   "commands": {
     "toast": {
@@ -8610,6 +8792,7 @@
       "passwordPlaceholder": "비밀번호",
       "unlock": "잠금 해제",
       "previewMeta": "{{agent}} · 메시지 {{count}}개 · {{exportedAt}} 내보냄",
+      "previewOrca": "협업 태스크 · Worker {{count}}개 포함",
       "riskWarning": "이 파일은 외부에서 공유된 파일입니다. 출처를 신뢰할 수 있는지 확인하세요. 가져온 기록은 이후 AI의 동작에 영향을 줄 수 있으며, 대화를 이어가면 AI가 로컬 파일을 읽고 쓰거나 명령을 실행할 수 있습니다.",
       "workdirHint": "원래 세션의 작업 디렉터리는 {{originalDir}}입니다. 이 컴퓨터에서 해당하는 디렉터리를 선택하세요.",
       "workdirEmpty": "디렉터리가 선택되지 않았습니다",
@@ -8621,6 +8804,7 @@
       "close": "닫기",
       "openSession": "세션 열기",
       "doneTitle": "가져오기 완료",
+      "doneOrca": "협업 Worker {{count}}개도 함께 가져왔습니다",
       "conflictTitle": "이 세션이 이미 존재합니다",
       "conflictBody": "동일한 식별자의 세션이 이 기기에 이미 존재합니다(이전에 가져왔거나, 원본 세션이 이 기기에 있습니다). 다시 가져오면 기존 세션이 이 공유 파일의 내용으로 덮어쓰기됩니다.",
       "conflictOverwrite": "덮어쓰고 가져오기",

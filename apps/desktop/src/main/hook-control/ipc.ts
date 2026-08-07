@@ -81,11 +81,12 @@ import {
 import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
 import { createHookBindingStore } from './bindings.js';
+import { createHookRequestLedger } from './requestLedger.js';
 import {
   buildGroupContextPrefix,
   listTelegramKnownGroupsForStableBinding,
   mergeTelegramGroupActivationViews,
-  resetGroupContextCursors,
+  resetGroupContextCursorsSafely,
 } from './groupWindow.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
@@ -332,6 +333,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       bindings: createHookBindingStore({
         filePath: ownerScopedUserDataPath('hook-bindings.json'),
+        log,
+      }),
+      terminalLedger: createHookRequestLedger({
+        filePath: ownerScopedUserDataPath('hook-request-ledger.json'),
         log,
       }),
       runner: createMakerHookSessionRunner({ log }),
@@ -1059,9 +1064,9 @@ export async function stopHookControlAccount(): Promise<void> {
 }
 
 /** Stop and discard all state tied to the current data owner; IPC stays registered. */
-export function resetHookControlOwnerBoundary(): void {
+export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
   unregisterSlackToolBridge();
-  resetGroupContextCursors();
+  resetGroupContextCursorsSafely(options);
   resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
   manager = null;
@@ -1076,5 +1081,7 @@ export function disposeHookControl(): void {
   disposeAuthListener?.();
   disposeAuthListener = null;
   observedAuthRealm = null;
-  resetHookControlOwnerBoundary();
+  // App quit is not an account unbind: preserve the durable cursor and only
+  // discard the in-memory cache so the next process resumes incrementally.
+  resetHookControlOwnerBoundary({ clearPersisted: false });
 }

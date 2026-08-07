@@ -216,12 +216,12 @@ function ensurePreviousNoNewline(hunk: Hunk | null): void {
  * Stable per-source file identity. Deliberately content-independent so the
  * renderer's expand state survives refreshes while the agent keeps editing.
  */
-function makeFileId(source: 'staged' | 'unstaged' | 'commit' | 'branch', path: string, idPrefix?: string): string {
+function makeFileId(source: FileDiff['source'], path: string, idPrefix?: string): string {
   return idPrefix ? `${source}:${idPrefix}:${path}` : `${source}:${path}`;
 }
 
 export function parseGitDiff(raw: string, opts: {
-  source: 'staged' | 'unstaged' | 'commit' | 'branch';
+  source: FileDiff['source'];
   idPrefix?: string;
   pathHint?: string | null;
   oldPathHint?: string | null;
@@ -403,7 +403,7 @@ export function parseGitDiff(raw: string, opts: {
 }
 
 export function parseGitDiffs(raw: string, opts: {
-  source: 'staged' | 'unstaged' | 'commit' | 'branch';
+  source: FileDiff['source'];
   idPrefix?: string;
   kind?: FileDiff['kind'];
   size?: number | null;

@@ -150,6 +150,29 @@ describe('AgentTaskCard', () => {
     expect(modelChip(container)).toBeNull();
   });
 
+  it('does not fall back to stale history or spawn input after an explicit model clear', () => {
+    const { container } = render(
+      React.createElement(AgentTaskCard, {
+        toolCall: {
+          clientId: 'c-clear',
+          role: 'tool_use',
+          content: '',
+          toolName: 'collab:spawn',
+          toolUseId: 'toolu_CLEAR',
+          toolInput: { model: 'gpt-5.6-terra' },
+        },
+        update: {
+          provider: 'codex',
+          taskId: 'task-clear',
+          status: 'running',
+          model: null,
+        },
+        subagentModel: 'codex/gpt-5.5',
+      }),
+    );
+    expect(modelChip(container)).toBeNull();
+  });
+
   // bash-task-card + 停止按钮 ---------------------------------------------------
   const stopButton = (container: HTMLElement) =>
     container.querySelector<HTMLButtonElement>('[data-agent-task-stop="true"]');

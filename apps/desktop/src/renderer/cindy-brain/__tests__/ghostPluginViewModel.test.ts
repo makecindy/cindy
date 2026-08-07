@@ -14,6 +14,8 @@ import {
   marketPresentationForInstalledGhost,
   nextOpenPanelIdForOwner,
   sortGhostPluginItemsByRecentUse,
+  installedVisibleCount,
+  sortInstalledForDisplay,
   toGhostPluginDetail,
   toGhostPluginListItem,
   type GhostPluginListItem,
@@ -138,6 +140,72 @@ describe('ghostPluginViewModel', () => {
     expect(
       sortGhostPluginItemsByRecentUse(items, ['third', 'missing', 'first']).map((item) => item.id),
     ).toEqual(['third', 'first', 'second', 'fourth']);
+  });
+
+  describe('sortInstalledForDisplay', () => {
+    const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+
+    it('surfaces unread notifications first, newest badge on top', () => {
+      expect(
+        sortInstalledForDisplay(items, {
+          recentIds: [],
+          unreadAtById: new Map([
+            ['c', 100],
+            ['a', 300],
+          ]),
+        }).map((item) => item.id),
+      ).toEqual(['a', 'c', 'b', 'd']);
+    });
+
+    it('ranks unread above recently-used, then recent, then base order', () => {
+      // b is unread (top); d & a are recently used (d newest); c falls to base tail.
+      expect(
+        sortInstalledForDisplay(items, {
+          recentIds: ['d', 'a'],
+          unreadAtById: new Map([['b', 5]]),
+        }).map((item) => item.id),
+      ).toEqual(['b', 'd', 'a', 'c']);
+    });
+
+    it('keeps base order stable when no signal applies and ignores marketUpdate entirely', () => {
+      // No unread / no recent → untouched. marketUpdate is not an input, so it cannot reorder.
+      expect(
+        sortInstalledForDisplay(items, { recentIds: [], unreadAtById: new Map() }).map(
+          (item) => item.id,
+        ),
+      ).toEqual(['a', 'b', 'c', 'd']);
+    });
+
+    it('breaks unread ties on the same badge time by stable base order', () => {
+      expect(
+        sortInstalledForDisplay(items, {
+          recentIds: [],
+          unreadAtById: new Map([
+            ['d', 7],
+            ['b', 7],
+          ]),
+        }).map((item) => item.id),
+      ).toEqual(['b', 'd', 'a', 'c']);
+    });
+  });
+
+  describe('installedVisibleCount (unread never folded)', () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({ id: `p-${index}` }));
+
+    it('keeps the base cap when unread count is within it', () => {
+      expect(installedVisibleCount(items, new Map([['p-0', 9]]), 8)).toBe(8);
+      expect(installedVisibleCount(items, new Map(), 8)).toBe(8);
+    });
+
+    it('expands the window to cover every unread plugin beyond the cap', () => {
+      const unread = new Map(Array.from({ length: 10 }, (_, i) => [`p-${i}`, i]));
+      // 10 unread > cap 8 → window grows to 10 so no unread plugin is folded.
+      expect(installedVisibleCount(items, unread, 8)).toBe(10);
+    });
+
+    it('ignores unread ids that are not in the installed list', () => {
+      expect(installedVisibleCount(items, new Map([['not-installed', 1]]), 8)).toBe(8);
+    });
   });
 
   it('maps install-record facts onto the list item', () => {

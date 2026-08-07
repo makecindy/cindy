@@ -425,8 +425,12 @@ export function SessionCard({
     </DropdownMenuItem>
   );
 
+  // Orca lead 可导出(整个协同随包);Worker 不进 sidebar,双保险仍排除。
   const canExportShare =
-    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+    !isEmpty &&
+    !session.remoteHostId &&
+    session.orcaRole !== 'worker' &&
+    !session.deviceLinkDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
@@ -764,7 +768,7 @@ export function SessionCard({
         <div className="relative">
           <div
             className={cn(
-              'min-w-0 text-[12.5px] font-bold leading-[1.22] tracking-[-0.005em]',
+              'min-w-0 text-[12.5px] font-semibold leading-[1.22] tracking-[-0.005em]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
               isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
               isEditing && 'invisible',
@@ -795,7 +799,7 @@ export function SessionCard({
                 setIsEditing(false);
               }}
               containerClassName="absolute inset-x-0 top-1/2 -translate-y-1/2"
-              inputClassName="h-6 text-[12.5px] font-bold text-foreground"
+              inputClassName="h-6 text-[12.5px] font-semibold text-foreground"
               activeForeground={isActive}
             />
           )}

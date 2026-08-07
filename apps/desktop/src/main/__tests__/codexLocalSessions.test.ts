@@ -392,6 +392,39 @@ describe('Codex local session import', () => {
     expect(rows).toEqual([{ id: `codex-${threadId}`, title: 'Import Me' }]);
   });
 
+  it('restores a soft-deleted imported Codex session without creating a duplicate', async () => {
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '');
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 2_000, title: 'Restored from Codex' });
+
+    const localId = `codex-${threadId}`;
+    insertImportedCodexSession(currentTestDb(), localId, threadId);
+    currentTestDb().prepare('UPDATE sessions SET status = ? WHERE id = ?').run('deleted', localId);
+
+    const result = await importExternalCodexSessions([threadId]);
+
+    expect(result).toMatchObject({ scanned: 1, inserted: 0, updated: 1 });
+    const sessions = currentTestDb()
+      .prepare(
+        `
+        SELECT id, title, status, sdk_session_id AS sdkSessionId
+        FROM sessions
+        WHERE sdk_session_id = ?
+      `,
+      )
+      .all(threadId);
+    expect(sessions).toEqual([
+      {
+        id: localId,
+        title: 'Restored from Codex',
+        status: 'active',
+        sdkSessionId: threadId,
+      },
+    ]);
+  });
+
   it('normalizes Windows backslash cwd to storage form on import (#537)', async () => {
     const dbPath = createStateDb(externalHome);
     const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);

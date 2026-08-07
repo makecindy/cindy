@@ -197,6 +197,54 @@ describe('classifyMarkdownLinkTarget', () => {
       reason: 'not-a-target',
     });
   });
+
+  // Issue #1811:LLM 按 ChatGPT 沙箱习惯输出 `sandbox:/C:/…` 链接,此前被
+  // unsupported-scheme 判成纯文本,生成的文件在界面上彻底失联。
+  it('strips sandbox: prefixes into local path candidates', () => {
+    expect(classifyMarkdownLinkTarget('sandbox:/C:/Users/u/Desktop/亚马逊多产品 成本统计.xlsx')).toEqual({
+      kind: 'local-candidate',
+      href: 'C:/Users/u/Desktop/亚马逊多产品 成本统计.xlsx',
+      originalHref: 'C:/Users/u/Desktop/亚马逊多产品 成本统计.xlsx',
+      localKind: 'text',
+    });
+    // 斜杠数量不敏感:sandbox:///C:/ 与 sandbox:/C:/ 同义;反斜杠盘符同样认。
+    expect(classifyMarkdownLinkTarget('sandbox:///C:/tmp/a.md')).toMatchObject({
+      kind: 'local-candidate',
+      href: 'C:/tmp/a.md',
+    });
+    expect(classifyMarkdownLinkTarget('sandbox:/C:\\repo\\报告.xlsx')).toMatchObject({
+      kind: 'local-candidate',
+      href: 'C:\\repo\\报告.xlsx',
+    });
+    expect(classifyMarkdownLinkTarget('sandbox:/mnt/data/output.csv')).toMatchObject({
+      kind: 'local-candidate',
+      href: '/mnt/data/output.csv',
+      localKind: 'text',
+    });
+    // 行号后缀照常剥离(与直写路径同链路)。
+    expect(classifyMarkdownLinkTarget('sandbox:/C:/repo/src/App.tsx:42')).toMatchObject({
+      kind: 'local-candidate',
+      href: 'C:/repo/src/App.tsx',
+      line: 42,
+    });
+  });
+
+  it('keeps non-absolute sandbox: forms and other schemes as plain text', () => {
+    // 相对形态没有可靠语义,不剥。
+    expect(classifyMarkdownLinkTarget('sandbox:foo/bar.txt')).toEqual({
+      kind: 'plain-text',
+      href: 'sandbox:foo/bar.txt',
+      reason: 'unsupported-scheme',
+    });
+    // 近似 scheme 不误伤。
+    expect(classifyMarkdownLinkTarget('sandboxy:/C:/tmp/a.md')).toMatchObject({
+      kind: 'plain-text',
+      reason: 'unsupported-scheme',
+    });
+    expect(classifyMarkdownLinkTarget('https://example.com/sandbox:/C:/a.md')).toMatchObject({
+      kind: 'external',
+    });
+  });
 });
 
 describe('classifyInlineCodeTarget', () => {

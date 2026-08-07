@@ -36,20 +36,33 @@ interface HarnessOverrides {
   saveWrite?: FsSlotDeps['writeSaveDeposit'];
   callSessionId?: string | null;
   callGhostId?: string;
+  /** 脚本通道条目的落盘根(schedule.workingDir);undefined = 会话调用不带。 */
+  callScriptWorkdir?: string | null;
+  /** 脚本声明的唯一可写相对路径(out_file);非 null 时只放行该路径。 */
+  callScriptWritePath?: string | null;
+  /** 条目通道;缺省按 callSessionId 推导(null ⇒ script,否则 session)。 */
+  callChannel?: 'session' | 'script';
+  /** 严格在途查询结果:false = 模拟已交卷/已清扫(返回 null)。缺省 true。 */
+  inFlight?: boolean;
 }
 
 function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
   const confirmCalls: string[] = [];
+  const entryFor = (callId: string) =>
+    callId === 'call-1'
+      ? {
+          ghostId: overrides.callGhostId ?? GHOST_ID,
+          sessionId: overrides.callSessionId === undefined ? 'sess-1' : overrides.callSessionId,
+          scriptWorkdir: overrides.callScriptWorkdir ?? null,
+          scriptWritePath: overrides.callScriptWritePath ?? null,
+          channel: overrides.callChannel ?? (overrides.callSessionId === null ? 'script' as const : 'session' as const),
+        }
+      : null;
   const deps: FsSlotDeps = {
     getGhost: (id) => (id === GHOST_ID ? makeGhost(overrides.slots ?? ['fs']) : null),
     dataRootDir: () => dataRoot,
-    callInfo: (callId) =>
-      callId === 'call-1'
-        ? {
-            ghostId: overrides.callGhostId ?? GHOST_ID,
-            sessionId: overrides.callSessionId === undefined ? 'sess-1' : overrides.callSessionId,
-          }
-        : null,
+    callInfo: entryFor,
+    inFlightCallInfo: (callId) => (overrides.inFlight === false ? null : entryFor(callId)),
     getSessionSnapshot: async () => (overrides.session === undefined ? null : overrides.session),
     requestWriteConfirm: async (sessionId) => {
       confirmCalls.push(sessionId);
@@ -349,5 +362,114 @@ describe('GhostFsSlot', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect(fs.existsSync(path.join(outside, 'escape.txt'))).toBe(false);
+  });
+
+  it('workdir(脚本通道):无会话但带 scriptWorkdir 的调用直写落盘、不弹确认卡', async () => {
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      callSessionId: null,
+      callScriptWorkdir: workdir,
+    });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'reports/result.json', content: '{"n":1}', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: true, op: 'write', path: 'reports/result.json' });
+    // 脚本通道无会话可弹确认卡:直写,确认桥零调用。
+    expect(confirmCalls).toHaveLength(0);
+    expect(await fs.promises.readFile(path.join(workdir, 'reports', 'result.json'), 'utf8')).toBe('{"n":1}');
+  });
+
+  it('workdir(脚本通道):无会话且无 scriptWorkdir 仍拒(无上下文不落盘的回归)', async () => {
+    const { slot } = makeHarness(dataRoot, { callSessionId: null });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('未配置有效的工作目录');
+  });
+
+  it('workdir:会话通道的无会话调用(sessionId null)报「无会话上下文」,不冒名脚本通道(review nit)', async () => {
+    // resolveSessionContext 查无时会登记 channel:'session' + sessionId:null——
+    // 照拒,但话术必须保住「无会话上下文」,不能误报「脚本通道」。
+    const { slot } = makeHarness(dataRoot, { callSessionId: null, callChannel: 'session' });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('无会话上下文');
+  });
+
+  it('workdir(脚本通道):已交卷/已清扫的 callId 立即失效(用完即废,review M1)', async () => {
+    // inFlight:false 模拟条目已 settle/回收——即使归属账(宽限窗)里还查得到,
+    // 目录授权也必须在交卷时点失效,不等懒清扫。
+    const { slot } = makeHarness(dataRoot, {
+      callSessionId: null,
+      callScriptWorkdir: workdir,
+      inFlight: false,
+    });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'late/poison.json', content: 'x', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('授权已失效');
+    expect(fs.existsSync(path.join(workdir, 'late', 'poison.json'))).toBe(false);
+  });
+
+  it('workdir(脚本通道):越界路径/不存在的根/非绝对根都拒', async () => {
+    const { slot } = makeHarness(dataRoot, { callSessionId: null, callScriptWorkdir: workdir });
+    // 越界相对路径:全套路径纪律对脚本通道同样生效。
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: '../escape.txt', content: 'x', callId: 'call-1',
+    })).toMatchObject({ ok: false });
+    expect(fs.existsSync(path.join(tmpRoot, 'escape.txt'))).toBe(false);
+    // 根不存在:fail-closed,不为脚本通道自动 mkdir 根目录。
+    const missing = makeHarness(dataRoot, {
+      callSessionId: null,
+      callScriptWorkdir: path.join(tmpRoot, 'no-such-dir'),
+    });
+    const rMissing = await missing.slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(rMissing).toMatchObject({ ok: false });
+    expect((rMissing as { message: string }).message).toContain('脚本工作目录不存在');
+    // 失败必须无副作用:根目录没有被顺手建出来。
+    expect(fs.existsSync(path.join(tmpRoot, 'no-such-dir'))).toBe(false);
+    // 非绝对根:登记侧只应放绝对路径,这里防御性拒。
+    const relative = makeHarness(dataRoot, { callSessionId: null, callScriptWorkdir: 'relative/dir' });
+    expect(await relative.slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    })).toMatchObject({ ok: false });
+  });
+
+  it('workdir(脚本通道):登记后工作目录被删 → realpath fail-closed,不自动重建根目录', async () => {
+    const doomed = path.join(tmpRoot, 'doomed-workdir');
+    await fs.promises.mkdir(doomed, { recursive: true });
+    const { slot } = makeHarness(dataRoot, { callSessionId: null, callScriptWorkdir: doomed });
+    await fs.promises.rm(doomed, { recursive: true, force: true });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('脚本工作目录不存在');
+    expect(fs.existsSync(doomed)).toBe(false);
+  });
+
+  it('workdir(脚本通道):路径白名单——只放行恰好等于 out_file 的写入(review P1 第五轮)', async () => {
+    const { slot } = makeHarness(dataRoot, {
+      callSessionId: null,
+      callScriptWorkdir: workdir,
+      callScriptWritePath: 'reports/result.json',
+    });
+    // 声明路径:放行。
+    const ok = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'reports/result.json', content: '{}', callId: 'call-1',
+    });
+    expect(ok).toMatchObject({ ok: true });
+    // 根内其它路径(合法相对路径但未声明):拒——在途插件写不了 src/ 等无关文件。
+    const denied = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'src/evil.ts', content: 'x', callId: 'call-1',
+    });
+    expect(denied).toMatchObject({ ok: false });
+    expect((denied as { message: string }).message).toContain('仅授权写入');
+    expect(fs.existsSync(path.join(workdir, 'src', 'evil.ts'))).toBe(false);
   });
 });

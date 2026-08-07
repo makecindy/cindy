@@ -34,6 +34,7 @@ import {
   Link2,
   MessageSquarePlus,
   Pencil,
+  Share,
   Split,
   Trash2,
   Undo2,
@@ -51,6 +52,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
+import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
@@ -80,6 +82,8 @@ interface MessageActionBarProps {
   onFork?: () => Promise<void>;
   /** Insert this message's anchored conversation link into the active composer. */
   onAddToChat?: () => void;
+  /** 进入「分享为图片」选择模式并预选本条。放在复制按钮右边(产品指定位置)。 */
+  onShareAsImage?: () => void;
   /** When provided, the More menu exposes single-message deletion. The
    *  parent owns confirmation + persistence; the promise keeps the action
    *  bar disabled until the flow resolves. */
@@ -120,6 +124,7 @@ export function MessageActionBar({
   hovered,
   onFork,
   onAddToChat,
+  onShareAsImage,
   onDelete,
   onEdit,
   onRewind,
@@ -276,6 +281,42 @@ export function MessageActionBar({
     </button>
   );
 
+  // 分享为图片 — 紧贴复制右侧。点击进入选择模式并预选本条,后续勾选与出口都在
+  // 底部操作条上完成(ShareSelectionBar),所以这里是纯 fire-and-forget。
+  const shareBtn = onShareAsImage && (
+    <Tooltip.Root key="share">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onShareAsImage();
+          }}
+          disabled={inFlight}
+          className={cn(
+            'group flex h-[24px] w-[24px] items-center justify-center',
+            'rounded-full border-none bg-transparent outline-none cursor-pointer',
+            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
+          )}
+          aria-label={t('chat.shareImage.entry')}
+        >
+          {/* iOS 同款分享形状(托盘 + 上箭头,对应 SF Symbols 的
+              square.and.arrow.up);lucide 的 Share2 是三点连线的通用款,不用。 */}
+          <Share
+            size={14}
+            strokeWidth={2}
+            className={cn(
+              'text-[var(--cmd-palette-item-meta)]',
+              'group-hover:text-[var(--msg-assistant-text)]',
+              'transition-colors duration-150',
+            )}
+          />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{t('chat.shareImage.entry')}</Tooltip.Content>
+    </Tooltip.Root>
+  );
+
   const forkBtn = onFork && (
     <Tooltip.Root key="fork">
       <Tooltip.Trigger asChild>
@@ -364,17 +405,11 @@ export function MessageActionBar({
   const turnCostTooltipNode =
     displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
       <span className="whitespace-pre-line">
-        {isUserTurnTotal &&
-          `${t('chat.messageActionBar.userTurnCostTotalLine', {
-            cost: formatTurnCostMoney(displayedMoney),
-          })}\n`}
         {buildTurnUsageTooltipLines({
           details: turnUsageDetails,
           t,
-          // Token / model detail is currently scoped to this final SDK segment;
-          // never pair it with the user-turn cumulative total above.
-          money: isUserTurnTotal ? effectiveTurnMoney : displayedMoney,
-          isEstimate: isUserTurnTotal ? turnCostIsEstimate : displayedCostIsEstimate,
+          money: displayedMoney,
+          isEstimate: displayedCostIsEstimate,
           ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
         }).join('\n')}
       </span>
@@ -592,15 +627,17 @@ export function MessageActionBar({
     </DropdownMenu>
   );
 
-  // align='left'  → [copy][fork][more][time][cost]   (assistant)
-  // align='right' → [time][copy][fork][edit][more]   (user)
+  // align='left'  → [copy][share][fork][more][time][cost]   (assistant)
+  // align='right' → [time][copy][share][fork][edit][more]   (user)
   const items =
     align === 'left'
-      ? [copyBtn, forkBtn, moreMenu, timeText, costText || tokensText]
-      : [timeText, copyBtn, forkBtn, editBtn, moreMenu];
+      ? [copyBtn, shareBtn, forkBtn, moreMenu, timeText, costText || tokensText]
+      : [timeText, copyBtn, shareBtn, forkBtn, editBtn, moreMenu];
 
   return (
     <div
+      // 操作栏是纯交互件:分享图片的光栅化会按这个标记整条剔除,不进产物。
+      {...{ [SHARE_EXCLUDE_ATTR]: '' }}
       className={cn(
         'flex items-center gap-0.5',
         align === 'right' ? 'justify-end' : 'justify-start',

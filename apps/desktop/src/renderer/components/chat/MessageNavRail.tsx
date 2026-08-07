@@ -36,7 +36,7 @@ import { useCallback, useEffect, useRef, useState, type WheelEvent as ReactWheel
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { Tip } from '@/components/ui/tooltip';
+import { Tooltip } from '@/components/ui/tooltip';
 
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import {
@@ -382,7 +382,9 @@ export function MessageNavRail({
       // 刻度组在(避开输入 overlay 的)带内垂直居中。
       className={cn(
         'pointer-events-none absolute inset-y-0 left-2 z-30 flex w-6 flex-col items-stretch justify-center',
-        'transition-opacity duration-200 ease-out',
+        // §14.4 禁硬编码 duration / cubic-bezier。不透明度变化属 fast 档
+        // (150ms);原先是 Tailwind 的 duration-200 + ease-out。
+        'transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
         awake ? 'opacity-100' : NAV_RAIL_IDLE_OPACITY_CLASS,
       )}
       style={{ paddingTop: RAIL_TOP_PX, paddingBottom: bottomOffset + RAIL_BOTTOM_EXTRA_PX }}
@@ -390,111 +392,136 @@ export function MessageNavRail({
       // "更早还有 N 条"占位刻度一并覆盖。
       onWheel={handleRailWheel}
     >
-      {plan.hiddenCount > 0 ? (
-        <Tip
-          text={t('chat.messageNavRail.hiddenEarlier', { count: plan.hiddenCount })}
-          side="right"
-          delay={150}
-        >
-          <div
-            className={cn('flex items-center justify-center', tickEvents)}
-            style={{ height: plan.pitchPx }}
-            onMouseEnter={handleTickMouseEnter}
-            onMouseLeave={handleTickMouseLeave}
-          >
-            <span
-              aria-hidden="true"
-              className="text-[9px] leading-none text-[var(--text-tertiary)]"
-            >
-              ⋯
-            </span>
-          </div>
-        </Tip>
-      ) : null}
-      {shown.map((entry, i) => {
-        // 纯附件且无文件名的提问用 i18n 计数文案兜底(模型层不碰 i18n)。
-        const preview =
-          entry.preview ||
-          (entry.attachmentsOnly
-            ? t('chat.messageNavRail.attachmentOnly', { count: entry.attachmentsOnly })
-            : '');
-        const isActive = entry.id === displayActiveId;
-        const fullIdx = plan.startIndex + i;
-        // 该轮次的内容当前正显示在视口里 → 提亮(Codex 同款"屏上内容高亮");
-        // 当前项在提亮之上再加长,两个信号分工:范围 = 在看什么,长刻度 = 读到哪。
-        const inView = rangeStartIdx >= 0 && fullIdx >= rangeStartIdx && fullIdx <= rangeEndIdx;
-        return (
-          <Tip
-            key={entry.id}
-            // 预览卡 = 提问(加粗一行)+ 回答摘要(灰字,至多 3 行)。
-            // 摘要是识别的主载体:大量提问是"继续 / 重来"式短指令,只靠
-            // 提问认不出是哪一轮。回答未产生时只显示提问行。
-            text={
-              preview ? (
-                <span className="flex max-w-[344px] flex-col gap-1">
-                  <span className="truncate text-13 font-medium">{preview}</span>
-                  {entry.answerExcerpt ? (
-                    // 摘要 = 主文字色 × 50% 透明度,不引新 token。数值由多轮
-                    // 实机验收夹逼、最终用户直接指定(2026-07-28)。注意半透明
-                    // 文字经抗锯齿合成会比同亮度实心灰**显得更亮**,别拿色值
-                    // 计算器推这个数,调整必须实机看效果。
-                    <span className="line-clamp-3 whitespace-normal break-normal text-13 leading-relaxed opacity-50">
-                      {entry.answerExcerpt}
-                    </span>
-                  ) : null}
+      {/*
+       * 整条导轨共用一个 Provider。原先每根刻度包一层 <Tip>,而 Tip 内部是
+       * 无条件自带 <TooltipProvider> 的 —— 而 skipDelayDuration 是 **Provider
+       * 级**状态,跨刻度就是跨 Provider,新 Provider 没有"刚刚开过"的记忆,于是
+       * 每根都重新等满 delay。刻度纵距只有 9px,鼠标竖着划过去是连续闪断。
+       * 换成 primitives 挂在一个 Provider 下:首次 hover 等 150ms,之后 700ms 内
+       * 切到相邻刻度立即显示,竖向移动时预览卡只换内容、不中断。
+       * (在 <Tip> 外面套一层 Provider 没用 —— 内层会把外层遮住。)
+       */}
+      <Tooltip.Provider delayDuration={150} skipDelayDuration={700}>
+        {plan.hiddenCount > 0 ? (
+          <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+              <div
+                className={cn('flex items-center justify-center', tickEvents)}
+                style={{ height: plan.pitchPx }}
+                onMouseEnter={handleTickMouseEnter}
+                onMouseLeave={handleTickMouseLeave}
+              >
+                <span
+                  aria-hidden="true"
+                  className="text-[9px] leading-none text-[var(--text-tertiary)]"
+                >
+                  ⋯
                 </span>
-              ) : null
-            }
-            side="right"
-            delay={150}
-            // 面色刻意不用全局 tooltip token(亮暗两模式都是近黑,那是给
-            // "一句话标签"定的惯例):本卡是**内容预览**,语义对应 popover
-            // 内容面 —— 白底深字 / 暗色深面,多行正文可读性优先。旁边的
-            // "更早还有 N 条"是标签,继续用默认 tooltip 面色,两类不混。
-            // 覆盖类刻意与 TooltipContent 的原类同形式(任意值 bg-[...] /
-            // text-[...]),确保 tailwind-merge 归入同一冲突组、后写的必胜,
-            // 不赌歧义值的分组启发式。
-            // 阴影不覆盖:继承 TooltipContent 基座的浮层阴影决策,本卡不引入
-            // 新的深度样式(PR #830 review)。
-            contentClassName={cn(
-              'max-w-[380px] break-normal px-3 py-2',
-              'border-[var(--border-default)] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))]',
-              'dark:border-[var(--border-default)]',
-            )}
-          >
-            <button
-              type="button"
-              aria-label={t('chat.messageNavRail.jumpAria', {
-                index: plan.startIndex + i + 1,
-                preview,
-              })}
-              aria-current={isActive ? 'true' : undefined}
-              onClick={() => handleTickClick(entry.id)}
-              onMouseEnter={handleTickMouseEnter}
-              onMouseLeave={handleTickMouseLeave}
-              // 命中区吃满整格纵距,刻度线本体只有 2px 高。焦点环用全局
-              // --focus-ring token(AgentTaskCard 同款),键盘 Tab 可见
-              // (PR #830 review:纯 outline-none 会让键盘用户丢焦点)。
-              className={cn(
-                'group flex w-full items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                tickEvents,
-              )}
-              style={{ height: plan.pitchPx }}
-            >
-              <span
-                className={cn(
-                  'h-[2px] rounded-full transition-all duration-200 ease-out',
-                  isActive
-                    ? 'w-4 bg-[var(--text-primary)]'
-                    : inView
-                      ? 'w-3 bg-[var(--text-primary)] group-hover:w-3.5'
-                      : 'w-3 bg-[var(--border-default)] group-hover:w-3.5 group-hover:bg-[var(--text-secondary)]',
-                )}
-              />
-            </button>
-          </Tip>
-        );
-      })}
+              </div>
+            </Tooltip.Trigger>
+            {/* 占位刻度是**标签**,继续用默认 tooltip 面色(近黑),与下面的
+                内容预览卡两类不混 —— 面色决策同 #830 原状。 */}
+            <Tooltip.Content side="right">
+              {t('chat.messageNavRail.hiddenEarlier', { count: plan.hiddenCount })}
+            </Tooltip.Content>
+          </Tooltip.Root>
+        ) : null}
+        {shown.map((entry, i) => {
+          // 纯附件且无文件名的提问用 i18n 计数文案兜底(模型层不碰 i18n)。
+          const preview =
+            entry.preview ||
+            (entry.attachmentsOnly
+              ? t('chat.messageNavRail.attachmentOnly', { count: entry.attachmentsOnly })
+              : '');
+          const isActive = entry.id === displayActiveId;
+          const fullIdx = plan.startIndex + i;
+          // 该轮次的内容当前正显示在视口里 → 提亮(Codex 同款"屏上内容高亮");
+          // 当前项在提亮之上再加长,两个信号分工:范围 = 在看什么,长刻度 = 读到哪。
+          const inView = rangeStartIdx >= 0 && fullIdx >= rangeStartIdx && fullIdx <= rangeEndIdx;
+          return (
+            <Tooltip.Root key={entry.id}>
+              <Tooltip.Trigger asChild>
+                <button
+                  type="button"
+                  aria-label={t('chat.messageNavRail.jumpAria', {
+                    index: plan.startIndex + i + 1,
+                    preview,
+                  })}
+                  aria-current={isActive ? 'true' : undefined}
+                  onClick={() => handleTickClick(entry.id)}
+                  onMouseEnter={handleTickMouseEnter}
+                  onMouseLeave={handleTickMouseLeave}
+                  // 命中区吃满整格纵距,刻度线本体只有 2px 高。焦点环用全局
+                  // --focus-ring token(AgentTaskCard 同款),键盘 Tab 可见
+                  // (PR #830 review:纯 outline-none 会让键盘用户丢焦点)。
+                  className={cn(
+                    'group flex w-full items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    tickEvents,
+                  )}
+                  style={{ height: plan.pitchPx }}
+                >
+                  <span
+                    className={cn(
+                      // §14.4 禁硬编码 duration / cubic-bezier:base 档
+                      // (200ms)与原先的 duration-200 同值,曲线取尺寸插值的
+                      // ease-move。过渡属性从 all 收窄到实际会变的两项。
+                      'h-[2px] rounded-full',
+                      'transition-[width,background-color] duration-[var(--motion-base)]',
+                      'ease-[var(--motion-ease-move)]',
+                      isActive
+                        ? 'w-4 bg-[var(--text-primary)]'
+                        : inView
+                          ? 'w-3 bg-[var(--text-primary)] group-hover:w-3.5'
+                          : 'w-3 bg-[var(--border-default)] group-hover:w-3.5 group-hover:bg-[var(--text-secondary)]',
+                    )}
+                  />
+                </button>
+              </Tooltip.Trigger>
+              {/*
+               * 预览卡 = 提问(加粗一行)+ 回答摘要(灰字,至多 3 行)。
+               * 摘要是识别的主载体:大量提问是"继续 / 重来"式短指令,只靠
+               * 提问认不出是哪一轮。回答未产生时只显示提问行。
+               *
+               * 面色刻意不用全局 tooltip token(亮暗两模式都是近黑,那是给
+               * "一句话标签"定的惯例):本卡是**内容预览**,语义对应 popover
+               * 内容面 —— 白底深字 / 暗色深面,多行正文可读性优先。旁边的
+               * "更早还有 N 条"是标签,继续用默认 tooltip 面色,两类不混。
+               * 覆盖类刻意与 TooltipContent 的原类同形式(任意值 bg-[...] /
+               * text-[...]),确保 tailwind-merge 归入同一冲突组、后写的必胜,
+               * 不赌歧义值的分组启发式。
+               * 阴影不覆盖:继承 TooltipContent 基座的浮层阴影决策,本卡不引入
+               * 新的深度样式(PR #830 review)。
+               *
+               * 无预览文本时不渲染 Content —— 与原先 <Tip text={null}> 的
+               * 透明传递等价(空内容不该冒出一个空卡)。
+               */}
+              {preview ? (
+                <Tooltip.Content
+                  side="right"
+                  className={cn(
+                    'max-w-[380px] break-normal px-3 py-2',
+                    'border-[var(--border-default)] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))]',
+                    'dark:border-[var(--border-default)]',
+                  )}
+                >
+                  <span className="flex max-w-[344px] flex-col gap-1">
+                    <span className="truncate text-13 font-medium">{preview}</span>
+                    {entry.answerExcerpt ? (
+                      // 摘要 = 主文字色 × 50% 透明度,不引新 token。数值由多轮
+                      // 实机验收夹逼、最终用户直接指定(2026-07-28)。注意半透明
+                      // 文字经抗锯齿合成会比同亮度实心灰**显得更亮**,别拿色值
+                      // 计算器推这个数,调整必须实机看效果。
+                      <span className="line-clamp-3 whitespace-normal break-normal text-13 leading-relaxed opacity-50">
+                        {entry.answerExcerpt}
+                      </span>
+                    ) : null}
+                  </span>
+                </Tooltip.Content>
+              ) : null}
+            </Tooltip.Root>
+          );
+        })}
+      </Tooltip.Provider>
     </nav>
   );
 }

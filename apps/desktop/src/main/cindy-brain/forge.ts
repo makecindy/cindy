@@ -1074,9 +1074,10 @@ my-ghost/
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3 */ ],
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
-  // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
-  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1)。按需申请,
-  // 每条都会在装入确认框里单独列给用户看。
+  // 类目按需申请:image / video 的动作是 "generate" | "edit";media 只有
+  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1);
+  // text 只有 "oneshot";search 只有 "web"(Cindy 托管公网搜索)。每条都会
+  // 在装入确认框里单独列给用户看。
   "panel": { "title": "面板标题", "html": "panel.html", "position": "left",
              "minWidth": 240, "defaultFraction": 0.24,
              "systemButtons": { "maximize": false } },
@@ -1237,9 +1238,13 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 动作,**没有任何具体模型/供应商信息**(选型权在主机与用户,意识只表达意图)。
 类目与动作:\`image\`(\`generate\`=出图 / \`edit\`=改图)、\`video\`(\`generate\`=
 文生视频 / \`edit\`=图生视频,参考图怎么用由 \`refMode\` 决定:首尾帧 1–2 张,
-或多张参考图,详见 §4 的 cindy-request 视频段)。
+或多张参考图,详见 §4 的 cindy-request 视频段)、\`media\`(\`deposit\`=把手里的
+媒体字节存进媒体库,§4.0.1)、\`text\`(\`oneshot\`=快问快答,§4.0.2)、
+\`embed\`(\`text\`=文本转向量,§4.0.3)、\`search\`(\`web\`=Cindy 托管
+公网搜索,见 §4 的 \`search_web\` 段)。
 详单里没申请的动作,运行时点单直接被拒;声明了 cindy 槽却漏写详单 = 零能力,
-别漏。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
+别漏。\`search.web\` 只能由真实 tool-call 触发,还必须同时声明 \`tool\` 槽和
+至少一个工具。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
 
 **network 详单**(声明了 network 槽时必写,详见 §4.7):
 
@@ -1270,7 +1275,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;意识按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
-      "scopes": ["read.a", "write.b"],              // 可选 ≤48 条:申请的权限范围(确认框逐条展示给用户)
+      "scopes": ["read.a", "write.b"],              // 可选 ≤256 条:申请的权限范围(确认框逐条展示给用户)
       "scopeDelimiter": ",",                        // 可选:authorize URL 的 scope 拼接分隔符;缺省空格(OAuth 标准),Slack 这类逗号分隔的服务商声明 ","(目前只认这一个值)
       "pkce": true,                                 // 可选:PKCE(S256)开关,缺省 true
       "extraAuthorizeParams": { "access_type": "offline", "prompt": "consent" },  // 可选 ≤8 条:服务商特有授权参数(协议保留参数禁写)
@@ -1470,10 +1475,25 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //     聊天卡片时用它按比例精确声明卡高(见 §4.5),别拿去写进交卷文案。
 // 图像可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 后端自定:
 //   { kind: 'gen_image', prompt: '一只猫', aspectRatio: '3:2' }
+
 //   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素
 //   以返回的 width/height 为准。**图像类专用**(gen_image 与 edit_image 都收;
 //   改图不传 = 跟随源图画幅);视频画幅是另一个参数 ratio,值域不同,带错会被拒。
 //   用户没提横竖要求时别自作主张,不传让后端自定。
+//
+// Cindy 托管 Web Search(需声明 cindy.search:["web"]):
+// provider 固定为 cindy,主机固定 Anthropic Messages 搜索模型与上游凭证;
+// 不接受 api_base/header/key/model/tool。
+const search = await cindy.send({
+  type: 'cindy-request',
+  kind: 'search_web',
+  query: 'Cindy 最新版本',
+  limit: 5,                       // 可选,1–10,缺省 5
+  provider: 'cindy',
+  callId: msg.callId,             // 搜索只由 tool-call 触发,必须透传
+  callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
+});
+// search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
 // 改图(需详单含 "edit";源图必须是本意识名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
@@ -1629,6 +1649,114 @@ const r = await cindy.send({
   在 prompt 里自己描述,主机不做逐字段 schema 校验;
 - prompt ≤32768 字符;同步返回,没有异步单;每插件在途上限与媒体代办共用
   (用户可配);装入确认框会单列一行「可向 Cindy 的快速通道提问」。
+
+### 4.0.3 文本转向量:把文字算成向量做语义检索(embed_text)
+
+要做"按意思找"而不是"按关键词找"(在你自己的笔记、素材、条目里做语义搜索,或给
+Agent 做检索增强)时,用这个能力把文字算成向量:
+
+\`\`\`js
+// 需声明:"slots": [..., "cindy"], "cindy": { "embed": ["text"] }
+
+// 1) 入库:把你的内容算成向量,自己存起来
+const requestedDim = undefined; // 传 dimensions 时改成具体数字;不传就是 undefined
+const doc = await cindy.send({
+  type: 'cindy-request',
+  kind: 'embed_text',
+  texts: ['第一段内容…', '第二段内容…'],
+  inputType: 'document',   // 可选:这批是"被检索的内容"
+  ...(requestedDim !== undefined ? { dimensions: requestedDim } : {}),
+  // tier: 'best',         // 可选:档位意图(draft/standard/best)
+  callId: msg.callId,
+});
+// 成功:{ ok:true, embeddings:[[…],[…]], model:'…', dim:1024, modelLabel:'…' }
+// 把 embeddings 连同 model + dim + requestedDim 一起存进你自己的 kv / 文件
+// requestedDim 来自这次请求而不是回执;没传 dimensions 时保持 undefined。
+// dim 只用于兼容性校验(例如比对存量向量长度),不是检索请求的回放依据。
+// (下面检索时要用 storedModel / storedRequestedDim; storedDim 可继续用于校验)
+// 回执里的 model 一定是可以原样回传的那个 id;偶尔还会多一个 upstreamModel
+// (上游带版本号的实际型号),那个只用来看"后端是不是换了实现",别回传。
+
+// 2) 检索:把用户的问题算成向量,和存量向量算余弦相似度,取最近的几条
+const q = await cindy.send({
+  type: 'cindy-request',
+  kind: 'embed_text',
+  texts: [userQuestion],
+  inputType: 'query',      // 可选:这条是"用来检索的提问"
+  model: storedModel,      // 必须与入库时同一型号!
+  // 入库时传过 dimensions 就必须**原样再传一次**:不传等于要该型号的默认维度,
+  // 默认值往往不是你入库时那个,拿到的查询向量和存量长度都不一样,没法比。
+  // 入库时没传过,这里也别传(两边都用默认)。
+  ...(storedRequestedDim !== undefined ? { dimensions: storedRequestedDim } : {}),
+  callId: msg.callId,
+});
+\`\`\`
+
+**长文档要用上下文化**(voyage-context 系列):把一篇文档切好的 chunk 一起递进来,
+同一文档内的 chunk **互为上下文**,每个 chunk 拿到的向量都带着整篇的语境 ——
+比逐块独立嵌明显更准,尤其是"这个"、"该方法"这类指代要靠上文才懂的句子:
+
+\`\`\`js
+// 入库侧:documents 是二维的 —— 每个内层数组 = 一篇文档的 chunk 序列
+const r = await cindy.send({
+  type: 'cindy-request',
+  kind: 'embed_text',
+  model: 'voyage/voyage-context-4',   // 只有 voyage-context 系列支持,别的型号会被明拒
+  documents: [
+    ['第一篇的 chunk1…', '第一篇的 chunk2…', '第一篇的 chunk3…'],
+    ['第二篇的 chunk1…', '第二篇的 chunk2…'],
+  ],
+  inputType: 'document',
+  callId: msg.callId,
+});
+// 成功:{ ok:true, documentEmbeddings:[[v,v,v],[v,v]], model:'…', dim:1024, modelLabel:'…' }
+//   注意字段是 documentEmbeddings(三层:文档 → chunk → 维度),不是 embeddings
+// 检索侧照旧用 texts 传一条问题(查询是单条、无上下文),型号保持一致即可
+\`\`\`
+
+- \`texts\` 与 \`documents\` **二选一**,同时传会被拒(意图不明,主机不猜);
+- 一篇文档必须**整篇一起嵌**,不能拆开分几次调 —— 拆了就没有上下文了,那还不如
+  直接用普通型号;
+- 预算是共用的:两种形态都算 chunk 总数 ≤32、单条 ≤8192 字符、合计 ≤65536 字符。
+  文档多就按文档分批(别把一篇拆开)。
+
+规矩与边界(都会被主机强制):
+
+- **只生成,不存储**。主机把向量原样交给你就结束了 —— 存哪儿、怎么建索引、
+  什么时候重算,全是你自己的事(面板 kv、你自己的文件)。主机自己的向量库不对
+  插件开放;
+- **换模型 = 换向量空间**。不同型号(乃至同型号不同 \`dimensions\`)算出的向量
+  互不可比,混进同一个索引会让相似度失去意义。所以**务必把回执里的 \`model\` 与
+  \`dim\` 跟向量一起存下**,检索前比对;不一致就得把存量重算一遍,而不是接着用。
+  这是它跟出图最不一样的地方:出图换型号无非风格变了,向量换型号会让你的整个
+  索引静默失效;
+- \`model\` 是**可回放**的那个 id(主机白名单里的别名),存下来原样回传即可。回执
+  里若出现 \`upstreamModel\`,那是上游带版本号的实际型号,**只作审计**:同一别名的
+  \`upstreamModel\` 变了 = 后端换了实现,向量空间未必仍可比,建议重算存量;但请求
+  时仍然只传 \`model\`,传 \`upstreamModel\` 会被白名单明拒;
+- **一次 ≤32 条**,单条 ≤8192 字符,单批合计 ≤65536 字符。上限是被"向量要穿过
+  管子回到你手里"的体积钉住的(3072 维一条约 60KB JSON),不是上游 API 的限额。
+  更多请自己分批。超长文本请**按语义自己切块**——指望上游截断的话,你拿到的向量
+  代表的是被截掉后半段的文本,而且不报错;
+- \`inputType\` 是意图声明:\`'document'\` 给入库内容,\`'query'\` 给检索提问。
+  各家模型的实际参数互不兼容,主机负责翻译;有的型号(OpenAI 系)根本没有这个
+  概念,此时主机静默不发 —— 所以别把它当"一定生效"的开关。**要用就两侧一致**:
+  存的时候 \`'document'\`、查的时候 \`'query'\`,或者两边都不传;一边传一边不传
+  不会报错,只是召回悄悄变差;
+- \`dimensions\` 该型号不支持时按 \`errorCode:'INVALID_PARAMS'\` 明拒,不会静默
+  给你另一个长度;
+- \`errorCode:'NO_CANDIDATE'\` = 当前没有可用的向量型号(用户在设置里停用了、
+  该版本/该区域不提供,或主机侧凭证不可用)。**这是正常失败面**,如实提示,别
+  重试轰炸;
+- 失败码是分档的,按它决定下一步,别一律重试:\`'INVALID_PARAMS'\` = 你的请求
+  本身要改(型号不在白名单、维度不支持、texts/documents 同时传、不支持上下文化
+  的型号收到 documents),原样重试永远失败;\`'RATE_LIMITED'\` = 退避后可再来;
+  \`'TIMEOUT'\` = 可再来,但建议同时减小批量;\`'NO_CANDIDATE'\` 见上;
+  \`'INTERNAL'\` = 主机侧故障,重试与否你自己判断;
+- 单次请求有 60 秒时间预算(含主机侧重试),到点即中断并返回 \`'TIMEOUT'\` ——
+  不会让你的 \`await\` 永久悬着;
+- 同步返回,没有异步单;每插件在途上限与媒体代办共用;装入确认框会单列一行
+  「可把文字送去算成向量」并写明单次条数上限。
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
@@ -2251,7 +2379,7 @@ const r = await cindy.fetch({
 
 你从头到尾拿不到绝对路径与文件字节(rel_paths 只是相对路径清单,可用来做
 preset 判定等纯逻辑);伪造/过期/别人的票据统一"票据无效"。单目录 ≤500 个
-文件、单文件 ≤50MB、总量 ≤256MB,超限在过户期就拒。\`dir\` 也接受**单个
+文件、单文件 ≤50MB、总量 ≤500MB,超限在过户期就拒。\`dir\` 也接受**单个
 文件**的绝对路径(传附件等场景):按单文件票据处理,rel_paths 就一条文件名。
 
 **文件下载落盘(as:'file' + save 票据,uploadDir 的镜像)**:要把下载的文件
@@ -2519,7 +2647,11 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
   (主机凭它定位会话,不认自报)。**是否放行跟随该会话的权限模式**——agent
   编辑文件免批的模式直接写;逐条确认的模式会弹确认卡请用户点头(同目录本
   会话批一次);计划/只读模式一律拒。SSH 远程工作区会话不支持(目录在远端
-  机器),会明确报错,请改用 root:'data';
+  机器),会明确报错,请改用 root:'data'。例外:scheduler「仅运行脚本」通道
+  (无会话的定时脚本直调)下发的调用,以该 schedule 配置的工作目录为写入根
+  直接放行——没有会话就没有权限模式可跟随,授权来自 schedule 配置本身;
+  该通道的写入必须在当次 tool-call 处理期间完成,交卷后 callId 立即失效
+  (比会话通道更严:无宽限,先写盘再交卷);
 - \`root:'save'\` **过户目录**:仅 write,凭主 agent 在 ghost_call 顶层传 \`save_dir\`
   过户后注入的 \`args.save_deposit.token\` 写入(与 §4.7 fetch \`as:'file'\` 下载
   落盘同一张票:限时、限次数、限字节、文件名主机消毒、永不覆盖已有文件)。
@@ -2989,7 +3121,7 @@ if (picked.ok) {
 - 同一插件两次请求最小间隔 3 秒、全局同时只有一个选择框(超了回 RATE_LIMITED /
   BUSY);用户取消回 CANCELLED——**尊重取消,不要循环重弹**,那是骚扰;
 - 未声明 node 槽的插件必须 \`deposit: true\`(没有票据你什么都拿不到,请求会被拒);
-  票据收集有上限(500 文件/单文件 50MB/总 256MB),超限会签发失败;
+  票据收集有上限(500 文件/单文件 50MB/总 500MB),超限会签发失败;
 - \`path\` 只发给声明了 node 槽的插件:Node 侧本就有用户级本机权限,给路径不扩权,
   价值是把"用户选了哪个目录"这一事实可信地交过去;
 - 用户每次亲选成功,主机自己也会记一笔「亲选目录台账」(每插件最近 8 条)——

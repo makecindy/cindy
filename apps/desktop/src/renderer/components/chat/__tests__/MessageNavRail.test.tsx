@@ -14,8 +14,21 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+// 预览卡内容不在本文件的覆盖范围(Content 直接丢掉,与原先 Tip stub 只透传
+// children 等价)。Provider 放一个隐藏结构标记,直接断言当前 DOM 中的实例数,
+// 避免 Windows 全量 shard 高负载时 useEffect 挂载计数尚未刷新造成误报。
 vi.mock('@/components/ui/tooltip', () => ({
-  Tip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Tooltip: {
+    Provider: ({ children }: { children: ReactNode }) => (
+      <>
+        <span data-testid="message-nav-tooltip-provider" hidden />
+        {children}
+      </>
+    ),
+    Root: ({ children }: { children: ReactNode }) => <>{children}</>,
+    Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+    Content: () => null,
+  },
 }));
 
 import { MessageNavRail } from '../MessageNavRail';
@@ -103,6 +116,34 @@ describe('MessageNavRail', () => {
     expect(buttons[1].getAttribute('aria-current')).toBe('true');
     expect(buttons[0].getAttribute('aria-current')).toBeNull();
     expect(buttons[2].getAttribute('aria-current')).toBeNull();
+  });
+
+  it('整条导轨只挂一个 TooltipProvider(而不是每根刻度一个)', async () => {
+    // skipDelayDuration 是 Provider 级状态:每根刻度各自一个 Provider 时,
+    // 相邻刻度之间跨 Provider,新 Provider 没有"刚刚开过"的记忆,鼠标竖着
+    // 划过去会看到预览卡反复消失再冒出(刻度纵距只有 9px)。这条守的就是
+    // 「别退回每刻度一个 Provider」——闪断本身依赖 Radix 真实计时,在 jsdom
+    // 里测不稳,所以断言结构不断言时序。
+    const root = buildScrollContainer(1000, [
+      { id: 'u1', top: -400 },
+      { id: 'u2', top: 50 },
+      { id: 'u3', top: 400 },
+      { id: 'u4', top: 600 },
+      { id: 'u5', top: 900 },
+    ]);
+    render(
+      <MessageNavRail
+        entries={ENTRIES}
+        scrollRef={{ current: root }}
+        contentMaxWidth={880}
+        bottomOffset={200}
+        onJump={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByRole('button')).toHaveLength(5);
+    });
+    expect(screen.getAllByTestId('message-nav-tooltip-provider')).toHaveLength(1);
   });
 
   it('点击刻度回调 onJump(clientId),且点击项乐观标记为当前项', async () => {

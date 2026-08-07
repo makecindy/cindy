@@ -21,6 +21,12 @@ describe('pickBranchLabel', () => {
     ).toBe('feat/wt');
   });
 
+  it('remote 来源可信:显示远端分支,即使有 PR 也优先', () => {
+    expect(
+      pickBranchLabel({ localBranch: 'feat/remote', prBranch: 'pr/remote', branchSource: 'remote', hasPrRefs: true }),
+    ).toBe('feat/remote');
+  });
+
   it('workingDir + 无 PR 引用:显示 working_dir 分支(最后兜底)', () => {
     expect(
       pickBranchLabel({ localBranch: 'main', prBranch: null, branchSource: 'workingDir', hasPrRefs: false }),

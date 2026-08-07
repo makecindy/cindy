@@ -404,6 +404,156 @@ describe('AppServerHost descendant thread routing', () => {
     await host.shutdown();
   });
 
+  it('registerDescendantLineage routes child notifications without any thread/started (codex 0.145)', async () => {
+    // 0.145 只对显式 thread/start / fork RPC 发 thread/started;spawn 出的子线程
+    // 只有 item / turn / tokenUsage 通知。血缘必须能由 Cindy 侧(从 spawn item)
+    // 主动登记,否则这些通知全部在 TTL 缓冲里过期,子代理卡永久转圈。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+    });
+
+    // 早到:子线程通知先于 spawn item 被处理,落进 TTL 缓冲。
+    transport.emit({
+      method: 'turn/started',
+      params: { threadId: 'child-thread', turn: { id: 'turn-1' } },
+    });
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+
+    // 缓冲的早到通知按序补投,后续通知实时路由;全程没有任何 thread/started。
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'child-thread', turn: { id: 'turn-1', status: 'completed' } },
+    });
+    expect(descendantNotification).toHaveBeenNthCalledWith(
+      1,
+      'child-thread',
+      'turn/started',
+      { threadId: 'child-thread', turn: { id: 'turn-1' } },
+    );
+    expect(descendantNotification).toHaveBeenNthCalledWith(
+      2,
+      'child-thread',
+      'turn/completed',
+      { threadId: 'child-thread', turn: { id: 'turn-1', status: 'completed' } },
+    );
+
+    // 血缘重复:新版 codex 补发同一条边的 thread/started 不重复建边、不重放缓冲,
+    // 但通知本身仍要转发——它携带的 thread.model 是实际模型的唯一观测入口(codex review)。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' } },
+    });
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(1);
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' },
+    });
+    expect(descendantNotification).toHaveBeenCalledTimes(2);
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('replays a buffered child thread/started before draining ordinary notifications', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    // Root subscription is late. The child metadata and lifecycle arrive first,
+    // then the root spawn item is buffered under the root id.
+    transport.emit({
+      method: 'thread/started',
+      params: {
+        thread: {
+          id: 'child-thread',
+          parentThreadId: 'root-thread',
+          model: 'codex/gpt-5.6-sol',
+        },
+      },
+    });
+    transport.emit({
+      method: 'turn/started',
+      params: { threadId: 'child-thread', turn: { id: 'child-turn' } },
+    });
+    transport.emit({
+      method: 'item/started',
+      params: {
+        threadId: 'root-thread',
+        turnId: 'root-turn',
+        item: { id: 'spawn-1', type: 'subAgentActivity', agentThreadId: 'child-thread' },
+      },
+    });
+
+    const observed: string[] = [];
+    const subscription = host.subscribeThread('root-thread', {
+      itemStarted: () => {
+        observed.push('spawn');
+        host.registerDescendantLineage('child-thread', 'root-thread');
+      },
+      descendantThreadStarted: (params) => {
+        observed.push(`model:${params.thread.model ?? ''}`);
+      },
+      descendantNotification: (_threadId, method) => {
+        observed.push(method);
+      },
+    });
+
+    expect(observed).toEqual([
+      'spawn',
+      'model:codex/gpt-5.6-sol',
+      'turn/started',
+    ]);
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('registerDescendantLineage unlocks a buffered grandchild thread/started chain', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantThreadStarted,
+    });
+
+    // 孙线程的 thread/started(新版 codex 才会发)先到,此时子线程尚无血缘,缓冲。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+
+    // 子线程血缘由 spawn item 路径登记 → 缓冲中的孙线程血缘应被递归重建。
+    host.registerDescendantLineage('child-thread', 'root-thread');
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' },
+    });
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
   it('routes descendant server requests to the root subscription handlers', async () => {
     const transport = new NotificationTransport();
     const host = new AppServerHost({
@@ -603,6 +753,120 @@ describe('AppServerHost descendant thread routing', () => {
     await host.shutdown();
   });
 
+  it('keeps known descendant request dispatch synchronous before a resolved notification', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const order: string[] = [];
+    const subscription = host.subscribeThread('root-thread', {
+      requestUserInput: vi.fn(async () => {
+        order.push('request');
+        return { answers: {} };
+      }),
+      serverRequestResolved: vi.fn(() => {
+        order.push('resolved');
+      }),
+    });
+    transport.emit({
+      id: 'known-request',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'root-thread',
+        turnId: 'root-turn',
+        itemId: 'input',
+        questions: [{ id: 'q1', header: 'Q', question: 'Continue?', options: [] }],
+      },
+    });
+    transport.emit({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'root-thread', requestId: 'known-request' },
+    });
+
+    await vi.waitFor(() => {
+      expect(order).toEqual(['request', 'resolved']);
+    });
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('registers provisional descendant request brokers before replaying resolved notifications', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const order: string[] = [];
+    const subscription = host.subscribeThread('root-thread', {
+      requestUserInput: vi.fn(async (_params, meta) => {
+        order.push(`request:${String(meta.requestId)}`);
+        return { answers: {} };
+      }),
+      dynamicToolCall: vi.fn(async (_params, meta) => {
+        order.push(`request:${String(meta.requestId)}`);
+        return { contentItems: [], success: false };
+      }),
+      descendantNotification: (_threadId, method, params) => {
+        if (method !== 'serverRequest/resolved') return;
+        order.push(`resolved:${String((params as { requestId: string }).requestId)}`);
+      },
+    });
+
+    host.reserveDescendantLineage('child-thread', 'root-thread');
+    transport.emit({
+      id: 'pending-input',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'child-thread',
+        turnId: 'child-turn',
+        itemId: 'input',
+        questions: [{ id: 'q1', header: 'Q', question: 'Continue?', options: [] }],
+      },
+    });
+    transport.emit({
+      id: 'pending-tool',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'child-thread',
+        turnId: 'child-turn',
+        callId: 'tool',
+        namespace: null,
+        tool: 'ask_user',
+        arguments: {},
+      },
+    });
+    transport.emit({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'child-thread', requestId: 'pending-input' },
+    });
+    transport.emit({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'child-thread', requestId: 'pending-tool' },
+    });
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+
+    await vi.waitFor(() => {
+      expect(order).toEqual([
+        'request:pending-input',
+        'request:pending-tool',
+        'resolved:pending-input',
+        'resolved:pending-tool',
+      ]);
+    });
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
   it('declines an MCP elicitation whose lineage stays unknown for the bounded window', async () => {
     const transport = new NotificationTransport();
     const host = new AppServerHost({
@@ -642,6 +906,122 @@ describe('AppServerHost descendant thread routing', () => {
     await subscription.release();
     await host.shutdown();
   });
+
+  it('holds all descendant server requests behind a pending spawn claim until commit', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      notificationBufferTtlMs: 20,
+    });
+    await host.ensureStarted();
+
+    const subscription = host.subscribeThread('root-thread', {
+      commandExecutionApproval: vi.fn(async () => ({ decision: 'accept' as const })),
+      fileChangeApproval: vi.fn(async () => ({ decision: 'accept' as const })),
+      permissionsApproval: vi.fn(async () => ({ permissions: { network: true }, scope: 'turn' as const })),
+      requestUserInput: vi.fn(async () => ({ answers: { q1: { answers: ['ok'] } } })),
+      dynamicToolCall: vi.fn(async () => ({
+        contentItems: [{ type: 'inputText' as const, text: 'ok' }],
+        success: true,
+      })),
+      mcpServerElicitation: vi.fn(async () => ({
+        action: 'accept' as const,
+        content: { value: 'ok' },
+        _meta: null,
+      })),
+    });
+
+    const requests = [
+      { id: 'pending-command', method: 'item/commandExecution/requestApproval', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'command' } },
+      { id: 'pending-file', method: 'item/fileChange/requestApproval', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'file' } },
+      { id: 'pending-permissions', method: 'item/permissions/requestApproval', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'permissions', permissions: { network: true } } },
+      { id: 'pending-input', method: 'item/tool/requestUserInput', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'input', questions: [] } },
+      { id: 'pending-tool', method: 'item/tool/call', params: { threadId: 'child-thread', turnId: 'child-turn', callId: 'tool', namespace: null, tool: 'test', arguments: {} } },
+      { id: 'pending-elicitation', method: 'mcpServer/elicitation/request', params: { threadId: 'child-thread', turnId: 'child-turn', serverName: 'test-mcp', mode: 'form', _meta: null, message: 'Confirm', requestedSchema: {} } },
+    ] as const;
+    const initialLineCount = transport.lines.length;
+    for (const request of requests) transport.emit(request);
+
+    // The parent spawn is known, but not yet accepted by turn reconciliation.
+    host.reserveDescendantLineage('child-thread', 'root-thread');
+    await Promise.resolve();
+    expect(transport.lines).toHaveLength(initialLineCount);
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+    await vi.waitFor(() => {
+      expect(transport.lines).toHaveLength(initialLineCount + requests.length);
+    });
+
+    const responses = transport.lines
+      .slice(initialLineCount)
+      .map((line) => JSON.parse(line) as { id: string; result: unknown });
+    expect(responses.map((response) => response.id)).toEqual(requests.map((request) => request.id));
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('keeps pending child buffers alive until commit and drops them on discard', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      notificationBufferTtlMs: 10,
+    });
+    await host.ensureStarted();
+
+    const descendantThreadStarted = vi.fn();
+    const descendantNotification = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantThreadStarted,
+      descendantNotification,
+    });
+
+    host.reserveDescendantLineage('child-thread', 'root-thread');
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' } },
+    });
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'child-thread', turn: { id: 'child-turn', status: 'completed' } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+    expect(descendantNotification).not.toHaveBeenCalled();
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' },
+    });
+    expect(descendantNotification).toHaveBeenCalledWith(
+      'child-thread',
+      'turn/completed',
+      { threadId: 'child-thread', turn: { id: 'child-turn', status: 'completed' } },
+    );
+
+    host.reserveDescendantLineage('orphan-child', 'root-thread');
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'orphan-child', turn: { id: 'orphan-turn', status: 'completed' } },
+    });
+    host.discardPendingDescendantLineage('orphan-child', 'root-thread');
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'orphan-child', turn: { id: 'late-turn', status: 'completed' } },
+    });
+    expect(descendantNotification).not.toHaveBeenCalledWith(
+      'orphan-child',
+      expect.anything(),
+      expect.anything(),
+    );
+
+    await subscription.release();
+    await host.shutdown();
+  });
 });
 
 describe('AppServerHost descendant notification routing', () => {
@@ -658,11 +1038,13 @@ describe('AppServerHost descendant notification routing', () => {
     const itemStarted = vi.fn();
     const tokenUsageUpdated = vi.fn();
     const turnCompleted = vi.fn();
+    const turnDiffUpdated = vi.fn();
     const subscription = host.subscribeThread('root-thread', {
       descendantNotification,
       itemStarted,
       tokenUsageUpdated,
       turnCompleted,
+      turnDiffUpdated,
     });
 
     transport.emit({
@@ -686,32 +1068,45 @@ describe('AppServerHost descendant notification routing', () => {
       method: 'turn/completed',
       params: { threadId: 'grandchild-thread', turn: { id: 'turn-g1', status: 'completed' } },
     };
+    const childDiff = {
+      method: 'turn/diff/updated',
+      params: { threadId: 'child-thread', turnId: 'turn-c1', diff: 'diff --git a/a b/a' },
+    };
     transport.emit(childItem);
     transport.emit(childUsage);
     transport.emit(grandchildTurn);
+    transport.emit(childDiff);
 
     expect(descendantNotification.mock.calls).toEqual([
       ['child-thread', 'item/started', childItem.params],
       ['child-thread', 'thread/tokenUsage/updated', childUsage.params],
       ['grandchild-thread', 'turn/completed', grandchildTurn.params],
+      ['child-thread', 'turn/diff/updated', childDiff.params],
     ]);
     // 关键隔离:子线程事件绝不能进主线程 handler —— 否则子代理的 exec 会被渲染成
     // 主会话自己的工具调用,并污染主 turn 的 usage 与状态机。
     expect(itemStarted).not.toHaveBeenCalled();
     expect(tokenUsageUpdated).not.toHaveBeenCalled();
     expect(turnCompleted).not.toHaveBeenCalled();
+    expect(turnDiffUpdated).not.toHaveBeenCalled();
 
     // 主线程自己的同名事件照旧走主通道。
     transport.emit({
       method: 'item/started',
       params: { threadId: 'root-thread', turnId: 'turn-r1', item: { id: 'i-2', type: 'commandExecution' } },
     });
+    const rootDiff = {
+      method: 'turn/diff/updated',
+      params: { threadId: 'root-thread', turnId: 'turn-r1', diff: 'diff --git a/b b/b' },
+    };
+    transport.emit(rootDiff);
     expect(itemStarted).toHaveBeenCalledTimes(1);
-    expect(descendantNotification).toHaveBeenCalledTimes(3);
+    expect(turnDiffUpdated).toHaveBeenCalledWith(rootDiff.params);
+    expect(descendantNotification).toHaveBeenCalledTimes(4);
 
     await subscription.release();
     transport.emit(childItem);
-    expect(descendantNotification).toHaveBeenCalledTimes(3);
+    expect(descendantNotification).toHaveBeenCalledTimes(4);
     // thread/started 只走专用的 descendantThreadStarted,不重复出现在本通道。
     expect(descendantNotification.mock.calls.some(([, method]) => method === 'thread/started')).toBe(false);
 

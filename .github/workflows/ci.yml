@@ -63,6 +63,12 @@ jobs:
           git submodule sync -- cindy-protocol
           git submodule update --init --force --recursive -- cindy-protocol
 
+      - name: Reject cindy-protocol rollback or divergence
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          CINDY_PROTOCOL_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-submodule-forward.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:

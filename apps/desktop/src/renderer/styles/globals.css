@@ -25,6 +25,24 @@
        收敛成统一 compact-delta 机制。 */
     --app-code-font-size: 14px;
     --app-ui-font-size: 14px;
+    --text-xs: 12px;
+    --text-sm: 14px;
+    --text-base: 16px;
+    --text-lg: 18px;
+    --text-xl: 20px;
+    --text-2xl: 24px;
+    --text-3xl: 30px;
+    --text-4xl: 36px;
+    --text-5xl: 48px;
+    --text-xs-line-height: 16px;
+    --text-sm-line-height: 20px;
+    --text-base-line-height: 24px;
+    --text-lg-line-height: 28px;
+    --text-xl-line-height: 28px;
+    --text-2xl-line-height: 32px;
+    --text-3xl-line-height: 36px;
+    --text-4xl-line-height: 40px;
+    --text-5xl-line-height: 48px;
     --text-9: 9px;
     --text-10: 10px;
     --text-11: 11px;
@@ -48,16 +66,30 @@
 
     /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
        引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档交互时长 +
-       spinner 语义循环例外 + 3 条曲线,与三档圆角同一哲学。 */
+       spinner 语义循环例外、侧栏标题阅读例外 + 3 条曲线,与三档圆角同一哲学。 */
     --motion-instant: 80ms; /* hover 即时反馈、轻浮层退场 */
     --motion-fast: 150ms; /* 颜色/透明度状态切换、轻浮层入场(§14.4 功能性过渡上限) */
     --motion-base: 200ms; /* 尺寸变化:展开折叠、面板收展 */
     --motion-enter: 250ms; /* 重浮层(弹窗)入场 */
     --motion-exit: 150ms; /* 重浮层(弹窗)退场 */
     --motion-spinner-cycle: 1000ms; /* 功能性 loading spinner 完整一圈(§14.4 窄例外) */
+    --motion-sidebar-title-marquee-per-viewport: 2400ms; /* 溢出标题每个可视宽度的阅读时长(§14.4 窄例外) */
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
+
+    /* Claude 额度条的首帧 alias 与 ColorRegistry 一致：只复用已批准语义槽。 */
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
+  }
+
+  .dark {
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
   }
 
   body {
@@ -145,6 +177,7 @@
       --motion-enter: 0ms;
       --motion-exit: 0ms;
       --motion-spinner-cycle: 0ms;
+      --motion-sidebar-title-marquee-per-viewport: 0ms;
     }
 
     [class*='animate-spinner'] {
@@ -186,6 +219,7 @@
        同一行,出现"一个半角一个全角"。把 CJK 字体提前后,Inter 没覆盖的
        CJK 标点直接落到 PingFang/YaHei,宽度统一。Latin 仍然走 Inter,无副作用。 */
     font-family: var(--app-font-ui, var(--app-font-ui-default));
+    font-size: var(--text-base);
     -webkit-font-smoothing: antialiased;
   }
 
@@ -249,18 +283,18 @@ html:lang(ko) {
    ChatInput 区域(data-chat-input-root)单独还原回默认字号,避免输入框
    字号也跟着缩。 */
 .chat-rail-compact .text-xs {
-  font-size: 11px;
+  font-size: calc(var(--text-xs) - 1px);
 }
 .chat-rail-compact .text-sm {
-  font-size: 13px;
+  font-size: calc(var(--text-sm) - 1px);
   line-height: 1.4;
 }
 .chat-rail-compact .text-base {
-  font-size: 15px;
+  font-size: calc(var(--text-base) - 1px);
   line-height: 1.5;
 }
 .chat-rail-compact .text-lg {
-  font-size: 17px;
+  font-size: calc(var(--text-lg) - 1px);
   line-height: 1.5;
 }
 .chat-rail-compact .text-\[12px\] {
@@ -306,20 +340,20 @@ html:lang(ko) {
 }
 
 .chat-rail-compact [data-chat-input-root] .text-xs {
-  font-size: 0.75rem;
-  line-height: 1rem;
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-sm {
-  font-size: 0.875rem;
-  line-height: 1.25rem;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-base {
-  font-size: 1rem;
-  line-height: 1.5rem;
+  font-size: var(--text-base);
+  line-height: var(--text-base-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-lg {
-  font-size: 1.125rem;
-  line-height: 1.75rem;
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-\[12px\] {
   font-size: 12px;
@@ -364,7 +398,16 @@ html:lang(ko) {
 [data-chat-input-root] .ProseMirror :is(ul, ol) {
   margin: 0;
   --composer-list-padding: 1.5em;
-  padding-inline-start: var(--composer-list-padding, 1.5em);
+  --composer-list-marker-extra: 0em;
+  padding-inline-start: calc(
+    var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)
+  );
+}
+/* The ideographic comma is a full-width glyph, unlike the period / closing
+   parenthesis in the other ordered markers. Keep its extra width separate
+   from the digit budget so multi-digit ordinals still compose correctly. */
+[data-chat-input-root] .ProseMirror ol[data-marker='、'] {
+  --composer-list-marker-extra: 0.7em;
 }
 [data-chat-input-root] .ProseMirror ol[data-marker-digits='2'] {
   --composer-list-padding: 2.2em;
@@ -482,12 +525,8 @@ html:lang(ko) {
 @font-face {
   font-family: 'Cindy CJK Punctuation Local';
   src:
-    local('PingFang SC'),
-    local('Hiragino Sans GB'),
-    local('Microsoft YaHei UI'),
-    local('Microsoft YaHei'),
-    local('Noto Sans CJK SC'),
-    local('Source Han Sans SC');
+    local('PingFang SC'), local('Hiragino Sans GB'), local('Microsoft YaHei UI'),
+    local('Microsoft YaHei'), local('Noto Sans CJK SC'), local('Source Han Sans SC');
   font-style: normal;
   font-weight: 400;
   font-display: swap;
@@ -1066,7 +1105,9 @@ body.resizing-pane [data-ghost-webview] {
    (✓ 复用 Done 语义的唯一批准 overshoot 曲线,同 status-done-pop)。
    motion-reduce 下全部禁用,直接落终态帧。 */
 .summon-seal-arc {
-  transition: stroke-dasharray 600ms var(--motion-ease-out), opacity 600ms var(--motion-ease-out);
+  transition:
+    stroke-dasharray 600ms var(--motion-ease-out),
+    opacity 600ms var(--motion-ease-out);
 }
 @keyframes summon-seal-halo {
   0% {
@@ -1704,7 +1745,7 @@ body.resizing-pane [data-ghost-webview] {
      .doc-search-mark[data-active] → currently focused match (中黄实底 + 1px 琥珀内描边)
    Color spec follows the GitHub Primer attention family. */
 .doc-search-mark {
-  background-color: #fff8c5;       /* Primer attention-muted */
+  background-color: #fff8c5; /* Primer attention-muted */
   color: inherit;
   /* font / line-height 显式继承 —— <mark> 是 phrasing element,Chromium UA
      默认不改字号,但跨主题 / 跨 reset 时把字体属性钉在 inherit 最稳,避免
@@ -1722,7 +1763,7 @@ body.resizing-pane [data-ghost-webview] {
   box-shadow: inset 0 0 0 1px #d4a72c;
 }
 .dark .doc-search-mark {
-  background-color: #362d1b;       /* ≈ #bb8009 @ 15% on dark bg */
+  background-color: #362d1b; /* ≈ #bb8009 @ 15% on dark bg */
 }
 .dark .doc-search-mark[data-active] {
   background-color: #9e6a03;
@@ -1796,6 +1837,67 @@ body.resizing-pane [data-ghost-webview] {
   }
   to {
     transform: translateX(0);
+  }
+}
+
+/* 侧栏超长任务标题：只在实际溢出且 hover 时把完整标题横向带过视口。
+   轨道是 HTML 元素，动效只改 transform/opacity，离开标题区域立即恢复省略号。 */
+@keyframes sidebar-title-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(var(--sidebar-title-marquee-shift));
+  }
+}
+
+.sidebar-title-marquee {
+  position: relative;
+  display: block;
+}
+
+.sidebar-title-marquee__ellipsis {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-title-marquee__track {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: max-content;
+  max-width: none;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(0);
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {
+  opacity: 0;
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+  visibility: visible;
+  opacity: 1;
+  animation: sidebar-title-marquee var(--sidebar-title-marquee-duration) var(--motion-ease-move)
+    forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+    animation: none;
+    visibility: hidden;
+    opacity: 0;
+  }
+
+  .sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {
+    opacity: 1;
   }
 }
 
@@ -1888,23 +1990,49 @@ body.resizing-pane [data-ghost-webview] {
    出现 = 面板收走 → 等 300ms → 圆圈渐显(160ms)→ 幽灵跳进来(240ms,回弹);
    消失 = 幽灵跳走(160ms)→ 圆圈渐隐(120ms 延迟 + 140ms)→ 面板滑入。 */
 @keyframes ghost-bubble-circle-in {
-  from { transform: scale(0.85); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 @keyframes ghost-bubble-circle-out {
-  to { transform: scale(0.9); opacity: 0; }
+  to {
+    transform: scale(0.9);
+    opacity: 0;
+  }
 }
 @keyframes ghost-bubble-ghost-in {
-  0% { transform: translateY(12px) scale(0.4); opacity: 0; }
-  65% { transform: translateY(-4px) scale(1.08); opacity: 1; }
-  100% { transform: none; opacity: 1; }
+  0% {
+    transform: translateY(12px) scale(0.4);
+    opacity: 0;
+  }
+  65% {
+    transform: translateY(-4px) scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
 }
 @keyframes ghost-bubble-ghost-out {
-  to { transform: translateY(-14px) scale(0.4); opacity: 0; }
+  to {
+    transform: translateY(-14px) scale(0.4);
+    opacity: 0;
+  }
 }
 @keyframes ghost-bubble-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
 }
 .ghost-bubble-enter .ghost-bubble-circle {
   animation: ghost-bubble-circle-in 160ms ease-out 300ms backwards;
@@ -1926,11 +2054,23 @@ body.resizing-pane [data-ghost-webview] {
    这是 §7 compositor-only 的窄例外(同登录 handoff 的容器形变口径):
    一次性、有状态含义;内容层定实宽被外壳裁切,webview 不逐帧重排。
    keyframes 缺省端取元素实宽(inline style),不用变量传宽。 */
-@keyframes ghost-panel-expand { from { width: 0; } }
-@keyframes ghost-panel-collapse { to { width: 0; } }
-.ghost-panel-enter { animation: ghost-panel-expand 200ms ease-out; }
+@keyframes ghost-panel-expand {
+  from {
+    width: 0;
+  }
+}
+@keyframes ghost-panel-collapse {
+  to {
+    width: 0;
+  }
+}
+.ghost-panel-enter {
+  animation: ghost-panel-expand 200ms ease-out;
+}
 /* exit 在 enter 之后声明:出现瞬间就点收起时,后者整段覆盖前者。 */
-.ghost-panel-exit { animation: ghost-panel-collapse 180ms ease-in forwards; }
+.ghost-panel-exit {
+  animation: ghost-panel-collapse 180ms ease-in forwards;
+}
 @media (prefers-reduced-motion: reduce) {
   .ghost-bubble-enter .ghost-bubble-circle,
   .ghost-bubble-enter .ghost-bubble-face-jump,
@@ -1938,5 +2078,7 @@ body.resizing-pane [data-ghost-webview] {
   .ghost-bubble-exit .ghost-bubble-face-jump,
   .ghost-panel-enter,
   .ghost-panel-exit,
-  .ghost-bubble:hover .ghost-bubble-face { animation: none; }
+  .ghost-bubble:hover .ghost-bubble-face {
+    animation: none;
+  }
 }

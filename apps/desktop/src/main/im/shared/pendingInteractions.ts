@@ -12,6 +12,12 @@
 
 import type { InteractionDecision } from '@cindy/maker-core';
 
+import {
+  buildAskNoAnswerDecision,
+  buildPermissionDenyDecision,
+  buildPlanDenyDecision,
+} from './interactionCardModel';
+
 interface PendingEntry {
   resolve: (decision: InteractionDecision) => void;
   reject: (err: Error) => void;
@@ -88,20 +94,23 @@ export function resolvePending(
   return { messageId: entry.messageId };
 }
 
-/** Resolve one pending card with the safe decision used when its turn ends. */
+/**
+ * Resolve one pending card with the safe decision used when its turn ends.
+ * 安全默认与 hook 链路同源(interactionCardModel), 只有 reason 文案按渠道给。
+ */
 export function cancelPending(requestId: string, reason: string): boolean {
   const entry = pending.get(requestId);
   if (!entry) return false;
   pending.delete(requestId);
   if (entry.kind === 'ask_user_question') {
-    entry.resolve({ kind: 'ask_user_question', answers: {} });
+    entry.resolve(buildAskNoAnswerDecision());
     return true;
   }
   if (entry.kind === 'plan_review') {
-    entry.resolve({ kind: 'plan_review', behavior: 'deny', reason, dismissed: true });
+    entry.resolve(buildPlanDenyDecision(reason));
     return true;
   }
-  entry.resolve({ kind: 'permission', behavior: 'deny', reason });
+  entry.resolve(buildPermissionDenyDecision(reason));
   return true;
 }
 

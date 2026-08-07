@@ -870,6 +870,56 @@ describe('message render todo grouping', () => {
     expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
   });
 
+  it('does not infer completion from an ambiguous legacy Codex turn seal', () => {
+    const plan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Start dev', status: 'in_progress' },
+        ],
+      }),
+      createdAt: at(1),
+    };
+    const completedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-1',
+      content: 'Dev server is running.',
+      createdAt: at(8),
+      turnCompleted: true,
+    };
+
+    expect(findLatestMessageTodoInsertion([plan, completedBoundary])).toMatchObject({
+      source: 'codex',
+      createdAt: at(1),
+      todos: [
+        { content: 'Inspect', status: 'completed' },
+        { content: 'Start dev', status: 'in_progress' },
+      ],
+    });
+  });
+
+  it('does not infer completion when an ambiguous legacy seal precedes the final plan update', () => {
+    const completedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-1',
+      content: 'The work is complete.',
+      createdAt: at(7),
+      turnCompleted: true,
+    };
+    const plan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Record the final state', status: 'in_progress' }],
+      }),
+      createdAt: at(8),
+    };
+
+    expect(findLatestMessageTodoInsertion([completedBoundary, plan])).toMatchObject({
+      source: 'codex',
+      createdAt: at(8),
+      todos: [{ content: 'Record the final state', status: 'in_progress' }],
+    });
+  });
+
   it('findLatestMessageTodoInsertion treats empty plan updates as clearing the pinned plan', () => {
     const first = tool('todo1', 'TodoWrite', {
       todos: [{ content: 'Read code', status: 'in_progress' }],

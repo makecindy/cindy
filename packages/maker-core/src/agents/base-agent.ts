@@ -213,6 +213,8 @@ export interface PiExtraSpawnConfigContext {
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /** Cindy-side display fallback for Codex subagent cards. */
+  subagentModelFallback?: string;
   /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
   codexBrowserUseAvailable?: boolean;
   /** Exact verified Chrome plugin version provisioned into this app-server. */
@@ -235,6 +237,19 @@ export interface CodexExtraSpawnConfig {
    * (本地压缩)—— 网关 / xAI / 自定义供应商上游不实现远端压缩,错配是硬失败。
    */
   codexRemoteCompactionProviderId?: string;
+}
+
+export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
+
+export interface CodexAppServerProcessRegistration {
+  pid: number;
+  role: CodexAppServerProcessRole;
+}
+
+export interface LocalAgentProcessRegistration {
+  pid: number;
+  kind: 'claude' | 'pi';
+  role: 'task-host' | 'control-plane-service';
 }
 
 export interface CodexLocalCredentialModeSwitchContext {
@@ -282,7 +297,27 @@ export class CodexResumePreparationBlockedError extends Error {
   }
 }
 
+export interface TurnChangeCaptureHooks {
+  /** Capture one known target before the provider is allowed to mutate it. */
+  beforeKnownFileWrite(input: {
+    sessionId: string;
+    provider: 'claude-code' | 'pi';
+    cwd: string;
+    targetPath: string;
+    remote?: boolean;
+  }): Promise<void>;
+  /** Record a tool whose filesystem effects cannot be known before execution. */
+  noteOpaqueWrite(input: {
+    sessionId: string;
+    provider: 'claude-code' | 'pi';
+    cwd: string;
+    remote?: boolean;
+  }): void;
+}
+
 export interface AgentDeps {
+  /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
+  turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;
   runtimeConfig: AgentRuntimeConfig;
   /**
@@ -457,6 +492,22 @@ export interface AgentDeps {
       hostPurpose?: 'control-plane';
     },
   ) => Promise<CodexExtraSpawnConfig>;
+
+  /**
+   * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
+   * 返回 disposer 时会跟随 transport close 调用；远端 SSH transport 不触发。
+   */
+  registerLocalCodexAppServerProcess?: (
+    info: CodexAppServerProcessRegistration,
+  ) => void | (() => void);
+
+  /**
+   * Register a locally spawned Claude/Pi root process with the host. The returned
+   * disposer follows that exact process generation; remote transports never call it.
+   */
+  registerLocalAgentProcess?: (
+    info: LocalAgentProcessRegistration,
+  ) => void | (() => void);
 
   /**
    * Codex 本地 shared app-server 凭证形态要切换前的宿主协调点。

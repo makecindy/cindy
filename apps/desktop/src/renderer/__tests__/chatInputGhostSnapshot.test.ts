@@ -35,7 +35,7 @@ describe('ChatInput Ghost snapshot contract', () => {
       'if (deviceLinkDeviceId) return [];',
     );
     expect(source).toContain(
-      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds]',
+      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, t]',
     );
   });
 });

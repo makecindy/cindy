@@ -348,13 +348,12 @@ describe('startup update relaunch safety', () => {
     });
   });
 
-  it('keeps the patch staged (no relaunch) when auto-update is disabled', async () => {
-    await expect(runStartupUpdate({ enabled: false })).resolves.toMatchObject({ action: 'none' });
-    expect(logInfo).toHaveBeenCalledWith(
-      'startup update relaunch deferred (%s); patch v%s remains ready',
-      'disabled',
-      '0.0.65',
-    );
+  it('auto-applies startup updates even when idle auto-install is disabled', async () => {
+    await expect(runStartupUpdate({ enabled: false })).resolves.toMatchObject({
+      hasUpdate: true,
+      action: 'relaunch',
+      version: '0.0.65',
+    });
   });
 
   it('never runs the startup update flow (nor the native updater) on a dev build', async () => {
@@ -364,7 +363,7 @@ describe('startup update relaunch safety', () => {
     await expect(runStartupUpdate()).resolves.toMatchObject({ hasUpdate: false, action: 'none' });
   });
 
-  it('re-checks the startup policy at the apply boundary, keeping manual apply separate', async () => {
+  it('keeps startup and manual relaunch IPC paths separate', async () => {
     vi.useFakeTimers();
     fetchManifest.mockResolvedValue(updateManifest());
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
@@ -385,25 +384,14 @@ describe('startup update relaunch safety', () => {
 
       await expect(startupHandler?.()).resolves.toMatchObject({ action: 'relaunch' });
 
-      // User flips the auto-update switch off during the renderer's presentation
-      // delay → the apply boundary must still honor it and defer (no relaunch).
+      // Startup/Splash relaunch is independent from the background idle setting.
       readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
-      await expect(autoApplyHandler?.({}, 'dark')).resolves.toEqual({
-        accepted: false,
-        blockReason: 'disabled',
-      });
       expect(service.getUpdateStatus()).toBe('ready');
-      expect(logInfo).toHaveBeenCalledWith(
-        'startup automatic relaunch deferred at apply boundary (%s)',
-        'disabled',
-      );
     } finally {
       service.stopUpdateService();
     }
   });
-});
 
-describe('isUpdateRelaunchImminent', () => {
   /** Boots the startup flow (staging a patch) and hands back the live module. */
   async function bootWithStagedPatch(options: { enabled?: boolean } = {}) {
     vi.useFakeTimers();

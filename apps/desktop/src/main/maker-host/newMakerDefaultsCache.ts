@@ -1,15 +1,21 @@
+import {
+  DEFAULT_ORCA_WORKER_PERMISSION_MODE,
+  resolveOrcaWorkerPermissionMode,
+  type OrcaWorkerPermissionMode,
+} from '../../shared/orca-worker-permission-mode.js';
+
 /**
  * newMakerDefaultsCache —— renderer "New Maker" 面板用户当前选择的 main 端缓存。
  *
- * Source of truth 仍是 renderer 的 newMakerDraft (localStorage); renderer 启动
- * 时全量 push 一次, 此后每次 draft 变化都增量 push, main 端只是一份内存镜像。
+ * Source of truth 仍是 renderer 的 newMakerDraft / workerCreationPrefs (localStorage)；
+ * renderer 启动时全量 push 一次，此后每次偏好变化都增量 push，main 端只保存内存镜像。
  *
  * 用途: collab mode spawn worker 时 (enableOrcaInternal / orca-bridge.create_worker)
  * 不再用 hardcode 默认值,优先读这份缓存 —— worker 实际启动参数 = "用户在 New Maker
  * 面板里该 vendor 当前的选择";旧 renderer 未推 providerId 时,创建服务才回退 Lead 来源。
  *
- * Vendor 名称差异: renderer 用 'cc' / 'codex' / 'orca'; worker spawn 路径用
- * 'claude-code' / 'codex'。getWorkerDefaultsFromNewMaker 内部做映射。
+ * Vendor 名称差异: renderer 用 'cc' / 'codex' / 'pi'; worker spawn 路径用
+ * 'claude-code' / 'codex' / 'pi'。getWorkerDefaultsFromNewMaker 内部做映射。
  */
 type VendorKey = 'cc' | 'codex' | 'pi';
 
@@ -18,7 +24,7 @@ interface VendorPrefsSnapshot {
   effort?: string;
   /**
    * 该 vendor 当前草稿的权限档 / 来源(供应商)。device-link 远程草稿镜像需要完整
-   * 镜像;collab worker 权限固定,但必须携带来源,避免模型与凭证路由脱钩。
+   * 镜像；collab worker 不消费这里的会话权限，但必须携带来源，避免模型与凭证路由脱钩。
    * 老版本 renderer 不推这两项 → undefined,消费方按自己的兜底处理。
    */
   permissionMode?: string;
@@ -27,6 +33,8 @@ interface VendorPrefsSnapshot {
 
 export interface NewMakerDraftSnapshot {
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
+  /** 每个 vendor 是否由用户在 New Maker picker 明确选过模型；旧 renderer 缺省不提供。 */
+  modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
   fastModeByModel: Record<string, boolean>;
   effortByModel: Record<string, string>;
   /**
@@ -38,6 +46,12 @@ export interface NewMakerDraftSnapshot {
 }
 
 let cache: NewMakerDraftSnapshot | null = null;
+
+export interface WorkerCreationPrefsSnapshot {
+  workerPermissionMode: OrcaWorkerPermissionMode;
+}
+
+let workerCreationPrefsCache: WorkerCreationPrefsSnapshot | null = null;
 
 /**
  * providerModelMemory 全量快照镜像(renderer 经 SYNC_PROVIDER_MODEL_MEMORY 推)。
@@ -54,6 +68,18 @@ let providerMemoryCache: ProviderModelMemorySnapshot | null = null;
 /** Renderer push handler 调; 整体替换缓存 (而不是合并), 跟 source of truth 对齐。 */
 export function setNewMakerDraftCache(snapshot: NewMakerDraftSnapshot): void {
   cache = snapshot;
+}
+
+/** Renderer localStorage workerCreationPrefs 的 main 端内存镜像。 */
+export function setWorkerCreationPrefsCache(snapshot: WorkerCreationPrefsSnapshot): void {
+  workerCreationPrefsCache = {
+    workerPermissionMode: resolveOrcaWorkerPermissionMode(snapshot.workerPermissionMode),
+  };
+}
+
+/** 缓存未就绪时使用产品默认 Full access。 */
+export function getWorkerPermissionModeFromCreationPrefs(): OrcaWorkerPermissionMode {
+  return workerCreationPrefsCache?.workerPermissionMode ?? DEFAULT_ORCA_WORKER_PERMISSION_MODE;
 }
 
 /** Renderer push handler 调; 整体替换 providerModelMemory 镜像。 */
@@ -91,7 +117,7 @@ export function getWorkerDefaultsFromNewMaker(
  * device-link 远程草稿镜像用:取某 vendor 在 New Maker 草稿里的**当前完整选择**
  * (model/effort/fast/permission/source)+ **整张 per-model 记忆表**。与
  * getWorkerDefaultsFromNewMaker 的区别:
- *   - 多回 permissionMode + providerId(全量镜像)。
+ *   - 多回 permissionMode + providerId + modelChosenByUser(全量镜像)。
  *   - effort 取「当前激活档」—— 被控端 trigger 显示的就是 lastByVendor.effort,故优先它,
  *     缺省再退 effortByModel(切换记忆);worker 那条因语义不同优先 effortByModel,这里不一样。
  *   - 多回 effortByModel + fastModeByModel(整表):控制端在远程草稿里**切到列表里其它模型**时,
@@ -102,6 +128,8 @@ export function getWorkerDefaultsFromNewMaker(
  */
 export interface RemoteNewMakerDefaults {
   model?: string;
+  /** false = 明确未选过，可应用目录新任务默认；undefined = 旧端未知，保守保留原模型。 */
+  modelChosenByUser?: boolean;
   effort?: string;
   fastMode?: boolean;
   permissionMode?: string;
@@ -128,18 +156,21 @@ export interface RemoteNewMakerDefaults {
 export function getRemoteNewMakerDefaults(
   agentKind: 'claude-code' | 'codex' | 'pi',
 ): RemoteNewMakerDefaults {
+  const vendor: VendorKey =
+    agentKind === 'claude-code' ? 'cc' : agentKind === 'pi' ? 'pi' : 'codex';
   // providerModelMemory(草稿列表行真实读源)与「该 vendor 是否选过模型」无关:即便 cache 未就绪 /
   // 该 vendor 无选中模型(lastByVendor 空),只要被控端有模型级预设就要全量回给控制端,
   // 否则 req1「完整镜像被控端草稿模型列表」在这条边界上回落 capabilities 默认。故在所有早返回里都带上它。
   // worktreeEnabled(vendor 无关根字段)同理:该 vendor 尚无草稿 model 的早返回也必须携带,
   // 否则空草稿的工作端上,手机/控制端永远读不到勾选态。
   const providerModelMemory = providerMemoryCache ?? undefined;
+  const modelChosenByUser = cache?.modelChosenByVendor?.[vendor];
   const base: RemoteNewMakerDefaults = {
     ...(providerModelMemory ? { providerModelMemory } : {}),
     ...(cache ? { worktreeEnabled: cache.worktreeEnabled === true } : {}),
+    ...(typeof modelChosenByUser === 'boolean' ? { modelChosenByUser } : {}),
   };
   if (!cache) return base;
-  const vendor: VendorKey = agentKind === 'claude-code' ? 'cc' : agentKind === 'pi' ? 'pi' : 'codex';
   const prefs = cache.lastByVendor[vendor];
   if (!prefs?.model) return base;
   const model = prefs.model;
@@ -152,5 +183,18 @@ export function getRemoteNewMakerDefaults(
     effortByModel: cache.effortByModel,
     fastModeByModel: cache.fastModeByModel,
     ...base,
+  };
+}
+
+/** device-link push payload：一次广播携带所有可建草稿的 vendor，避免增量 push 丢槽。 */
+export function getRemoteNewMakerDefaultsByVendor(): {
+  claudeCode: RemoteNewMakerDefaults;
+  codex: RemoteNewMakerDefaults;
+  pi: RemoteNewMakerDefaults;
+} {
+  return {
+    claudeCode: getRemoteNewMakerDefaults('claude-code'),
+    codex: getRemoteNewMakerDefaults('codex'),
+    pi: getRemoteNewMakerDefaults('pi'),
   };
 }

@@ -65,9 +65,22 @@ describe('safe attachment routing', () => {
       'utf8',
     );
     expect(source).toMatch(
-      /const downloadOnly = isSafetyDowngradedAttachment\(f\);[\s\S]+if \(downloadOnly\) \{[\s\S]+saveChatAttachmentWithToasts\(sessionFileCtx, f\)[\s\S]+shouldOpenTextLightboxForOrigin/,
+      /const downloadOnly = isSafetyDowngradedAttachment\(file\);[\s\S]+if \(downloadOnly\) \{[\s\S]+saveChatAttachmentWithToasts\(sessionFileCtx, file\)[\s\S]+shouldOpenTextLightboxForOrigin/,
     );
     expect(source).toContain('<Download size={14}');
+  });
+
+  it('gives the downgraded attachment chip a save-as-only context menu', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', 'components', 'chat', 'UserMessage.tsx'),
+      'utf8',
+    );
+    // 右键分流:降级附件只弹「另存为…」单项菜单,普通附件走共享文件 chip 菜单。
+    // 受控 .bin 副本路径不得经复制路径 / 打开所在目录外泄。
+    expect(source).toMatch(
+      /onContextMenu=\{\(e\) => \{[\s\S]+?if \(downloadOnly\) \{[\s\S]+?setSaveMenuPos\(\{ x: e\.clientX, y: e\.clientY \}\);[\s\S]+?ctxMenu\.onContextMenu\(e\);/,
+    );
+    expect(source).toContain("t('chat.media.saveAs')");
   });
 });
 

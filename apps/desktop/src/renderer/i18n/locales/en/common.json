@@ -712,6 +712,27 @@
       "logsDirLabel": "Logs directory",
       "openLogsDir": "Open",
       "openLogsDirTooltip": "Open the logs directory in the system file manager",
+      "logUpload": {
+        "crashAutoLabel": "Upload logs automatically on crash",
+        "crashAutoDescription": "When enabled, Cindy sends the run records from around a crash to our backend automatically, so you don't have to upload them yourself. Off by default and can be turned off at any time; any crash records still queued for upload are cleared immediately when you do.",
+        "crashAutoEnabledToast": "Automatic log upload on crash enabled",
+        "crashAutoDisabledToast": "Automatic log upload on crash disabled",
+        "saveFailed": "Failed to save log upload settings",
+        "uploadLabel": "Upload logs",
+        "uploadButton": "Upload",
+        "uploading": "Uploading",
+        "uploadTooltip": "Upload recent run records to our backend and get an upload code you can quote",
+        "uploadDescription": "Hit this when something goes wrong to send your recent run records to our backend. You'll get an upload code afterwards — just give us that code when reporting the problem, no need to hunt for files.",
+        "scopeDescription": "What is uploaded: Cindy's own run records (startup and exit, crashes, network, updates, database, sign-in) and device environment information (OS version, app version, device identifier), plus your account ID once signed in. What is not uploaded: conversations, file contents, prompts, working directory paths. Credentials and email addresses are stripped automatically before upload.",
+        "successToast": "Logs uploaded. Upload code {{code}} (copied — send it to us when reporting)",
+        "errorUnavailable": "Log upload is not configured in this build and is unavailable for now",
+        "errorConsentRequired": "You need to accept the Privacy Policy before uploading logs",
+        "errorEmpty": "There are no run records to upload",
+        "errorBusy": "An upload is already in progress, please wait",
+        "errorFailed": "Log upload failed. Check your network and try again",
+        "unavailableNotConfigured": "Log upload is not configured in this build.",
+        "unavailableNoConsent": "You need to accept the Privacy Policy first."
+      },
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
@@ -1833,6 +1854,11 @@
         "confirm": "Unbind",
         "cancel": "Cancel"
       },
+      "lifecycleAnnouncement": {
+        "label": "Online/Offline Notifications",
+        "cellLabel": "Message Notifications",
+        "hint": "Have the Discord Bot send a message when this device goes online or offline"
+      },
       "ownerNotice": {
         "linked": "✅ All linked. Just send a message when you're ready.",
         "disconnected": "🔌 Unlinked. Link again whenever you need me.",
@@ -2413,6 +2439,7 @@
         "toggleHint": "This machine-wide toggle only applies to agent sessions started afterward; it does not affect a session that is already running.",
         "status": {
           "checking": "Checking ADB status…",
+          "disabled": "Android automation is off. Turn it on to detect ADB and devices.",
           "preparing": "Preparing ADB…",
           "ready": "ADB ready. Ready devices: {{count}}. Default: {{device}}",
           "adbDetail": "{{version}} at {{path}}",
@@ -3158,6 +3185,8 @@
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "installedSection": "Installed",
+        "installedExpand": "Show all {{count}} installed plugins",
+        "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
@@ -3197,13 +3226,21 @@
         },
         "install": "Install",
         "details": "Details",
+        "detailsAria": "View details for {{name}}",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
-        "conflict": "Plugin ID conflict",
+        "conflict": "Unavailable",
+        "conflictAria": "{{name}} has a plugin ID conflict",
+        "conflictDescription": "This plugin ID is already in use, so this plugin can't be installed.",
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "removalNotice": {
+          "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
+          "multiple_one": "The organization removed {{count}} plugin. Its local copy and data on this device have been cleaned up.",
+          "multiple_other": "The organization removed {{count}} plugins. Their local copies and data on this device have been cleaned up."
+        },
         "errors": {
           "generic": "The plugin market operation failed. Please try again.",
           "invalidRequest": "The plugin request is invalid.",
@@ -3237,6 +3274,9 @@
           "listTitle": "Added Marketplaces",
           "pluginCount": "{{count}} plugins",
           "sourceError": "Unavailable",
+          "empty": "No plugin entries in this marketplace",
+          "skippedEntries": "Skipped {{count}} invalid plugin entries",
+          "unreadableEntries": "{{count}} plugin entries are temporarily unreadable; refresh to retry",
           "localBadge": "Local",
           "defaultRef": "Default branch",
           "neverSynced": "Never synced",
@@ -3383,6 +3423,10 @@
         "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
         "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
+        "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
+        "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
+        "cindySearchWeb": "Can search the public web with Cindy AI",
+        "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -3506,7 +3550,8 @@
             "image.edit": "Image editing",
             "video.generate": "Video generation",
             "video.edit": "Image-to-video",
-            "text.oneshot": "Quick answer (text)"
+            "text.oneshot": "Quick answer (text)",
+            "embed.text": "Text to vector"
           },
           "defaultOption": "{{model}} (default)",
           "noModels": "No models available"
@@ -3876,6 +3921,8 @@
     "controlledTooltip": "Another device signed in to the same account is remotely controlling this machine. You can revoke its access.",
     "revokeAccess": "Revoke",
     "viewControllers": "View",
+    "collapseControlledNotice": "Collapse remote control notice",
+    "expandControlledNotice": "Expand remote control notice: {{label}}",
     "versionMismatch": "Version mismatch with the other device; some features may be limited"
   },
   "accountDeletion": {
@@ -4178,6 +4225,29 @@
       "latestUserTurnTitle": "Latest user-turn total"
     }
   },
+  "quotaCard": {
+    "fiveHourLabel": "5 hours",
+    "weeklyLabel": "Weekly",
+    "modelWeeklyLabel": "{{model}} weekly",
+    "windowsRegionLabel": "Quota Windows",
+    "usedPercent": "Used {{percent}}%",
+    "resetAt": "Resets {{at}}",
+    "noWindows": "No quota window data available",
+    "limitRejected": "Plan limit reached; requests may be rejected",
+    "limitWarning": "Approaching plan limit",
+    "extraUsageEnabled": "Extra usage enabled",
+    "costLine": "Cost this message: {{cost}}",
+    "valueLine": "Token value this message: {{cost}}",
+    "noBilledCost": "Cost unavailable for this message; showing usage only",
+    "latestMessageTitle": "Latest message total",
+    "turnCostUnavailable": "Cost unavailable for this message",
+    "tokenLabel": "Tokens",
+    "tokenBreakdown": "(input {{input}} · output {{output}})",
+    "cacheLabel": "Cache",
+    "modelLabel": "Model",
+    "staleData": "Data updated {{minutes}} minutes ago",
+    "waiting": "Claude subscription usage will update after the next request completes."
+  },
   "usageDetails": {
     "costLine": "Cost this turn: {{cost}}",
     "valueLine": "Token value this turn: {{cost}}",
@@ -4228,6 +4298,7 @@
     "maximize": "Maximize",
     "close": "Close",
     "menuItems": {
+      "settings": "Settings",
       "help": "Help",
       "issues": "Issues",
       "checkForUpdates": "Check for Updates"
@@ -4302,6 +4373,7 @@
         "terminal": "Terminal",
         "review": "Review",
         "backgroundTasks": "Background tasks",
+        "resourceUsage": "Resource Usage",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel"
@@ -4320,13 +4392,14 @@
       "empty": {
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
-        "desc": "Open a file tree, review, built-in browser, or terminal here to work alongside the chat on the left.",
+        "desc": "Open files, review, resource usage, a built-in browser, or a terminal here to work alongside the chat on the left.",
         "openFile": "Open files",
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
         "openBackgroundTasks": "Open background tasks",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "Open Resource Usage",
         "openBrowser": "Open browser",
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
@@ -4401,6 +4474,14 @@
       "spawnFailed": "Failed to start terminal: {{detail}}"
     },
     "review": {
+      "turn": {
+        "title": "Changes from this message",
+        "currentWorkspace": "Current workspace",
+        "localOnly": "Exact message changes are not available for remote sessions yet.",
+        "partialNotice": "This message includes command or tool writes that could not be tracked exactly. Only the captured subset is shown; it is not a complete patch.",
+        "emptyTitle": "No recorded changes",
+        "emptyDesc": "The recorded patch for this message has no displayable file changes."
+      },
       "fileCount_one": "{{count}} file",
       "fileCount_other": "{{count}} files",
       "emptyTitle": "No changes yet",
@@ -4695,6 +4776,53 @@
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
       "noProgress": "No progress details yet"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent Processes",
+        "app": "App Processes"
+      },
+      "columns": {
+        "process": "Process",
+        "cpu": "CPU",
+        "memory": "Memory",
+        "pid": "PID"
+      },
+      "kinds": {
+        "main": "Main process",
+        "renderer": "UI process",
+        "gpu": "GPU process",
+        "utility": "Service process"
+      },
+      "agentRoles": {
+        "codexTask": "Codex Task",
+        "codexService": "Codex Service"
+      },
+      "agentRoleDetails": {
+        "task": "Task runtime",
+        "service": "Accounts and models"
+      },
+      "services": {
+        "audio": "Audio Service",
+        "network": "Network Service",
+        "storage": "Storage Service",
+        "videoCapture": "Video Capture"
+      },
+      "processCount_one": "Process tree: {{count}} process",
+      "processCount_other": "Process tree: {{count}} processes",
+      "agentsEmpty": "No agent processes are running. Start a task and its usage will show up here.",
+      "tableLabel": "Resource Usage by Process",
+      "sortBy": "Sort by {{column}}",
+      "loading": "Reading resource usage…",
+      "remoteUnavailableTitle": "Unavailable for remote sessions",
+      "remoteUnavailableDescription": "This panel only reads processes on this device. It is available only for local sessions running on this device.",
+      "selectHint": "Select a process",
+      "readOnlyHint": "Only Agent processes used for tasks can be stopped",
+      "terminate": "Stop Process",
+      "terminateConfirmTitle": "Stop {{name}} process?",
+      "terminateConfirmDescription": "This force-stops the Agent process. Every task using this process will be interrupted; send another message in an affected task to start an Agent again.",
+      "terminated": "Stopped the {{name}} process",
+      "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample."
     }
   },
   "update": {
@@ -4994,6 +5122,7 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "hidden": "Hidden",
       "subscriptionDirectDisabled": {
         "chatgpt": "Subscription-direct GPT models are not supported in SSH remote sessions yet",
         "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",
@@ -5155,9 +5284,7 @@
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
-      "sourceTooltip": "Worktree source branch",
-      "worktreeHint": "Picking another branch starts this chat in an isolated worktree",
-      "exitWorktreeHint": "Picking the current branch leaves worktree and starts directly on it"
+      "sourceTooltip": "Worktree source branch"
     },
     "folderPicker": {
       "selectFolder": "Select folder",
@@ -5551,7 +5678,7 @@
       "outputFile": "Output: {{path}}"
     },
     "planPill": {
-      "step": "Step {{current}} / {{total}}"
+      "step": "Step {{current}} of {{total}}"
     },
     "forkOrigin": {
       "label": "Created from another session"
@@ -5596,8 +5723,25 @@
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "User-turn total: {{cost}}",
-      "userTurnCostDetailsTitle": "Final SDK segment"
+      "userTurnCostDetailsTitle": "Request details"
+    },
+    "shareImage": {
+      "entry": "Share as Image",
+      "title": "Share Conversation",
+      "subtitle_one": "{{count}} message selected",
+      "subtitle_other": "{{count}} messages selected",
+      "selectAll": "Select All",
+      "clearAll": "Deselect All",
+      "checkboxLabel": "Select this message",
+      "cancel": "Cancel",
+      "download": "Save Image",
+      "copy": "Copy Image",
+      "generating": "Generating…",
+      "copied": "Image copied",
+      "saved": "Image saved",
+      "notMounted": "Some selected messages are not currently visible. Scroll back to show them, then try again",
+      "tooLarge": "The selection is too long or wide. Select less content and try again",
+      "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
       "retryTitle": "Resend the last message",
@@ -5986,6 +6130,8 @@
       "duplicateFiles": "Found {{count}} files with the same name, please use an absolute path",
       "copyFile": "Copy",
       "copyFilePath": "Copy file path",
+      "openWith": "Open with",
+      "openWithAppFailed": "Couldn't open with the selected app",
       "revealFile": "Reveal in folder",
       "openInBrowser": "Open in browser",
       "fileCopied": "File copied",
@@ -6118,6 +6264,37 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
+    },
+    "generatedFiles": {
+      "title": "Files created this message",
+      "showMore": "Show {{count}} more",
+      "showLess": "Show less"
+    },
+    "turnChanges": {
+      "title": "Changed {{count}} files",
+      "partialTitle": "File changes were not fully captured",
+      "review": "Review",
+      "undo": "Undo",
+      "undoAria": "Undo changes from this message",
+      "undoPartialAria": "Undo exactly captured changes from this message",
+      "reapply": "Reapply",
+      "reapplyAria": "Reapply changes from this message",
+      "reapplyPartialAria": "Reapply exactly captured changes from this message",
+      "undoSuccess": "Changes from this message were undone",
+      "reapplySuccess": "Changes from this message were reapplied",
+      "undoPartialSuccess": "Exactly captured changes were undone; uncaptured changes were not undone",
+      "reapplyPartialSuccess": "Exactly captured changes were reapplied; uncaptured changes were not reapplied",
+      "actionRunning": "Wait for the current response to finish before changing the workspace",
+      "gitUnavailable": "Git was not detected. Install Git, make sure it is on the system PATH, and restart Cindy to use the full Undo and Reapply functionality.",
+      "actionConflict": "The workspace has changed, so this patch cannot be applied safely. Review the current changes first",
+      "actionUnavailable": "This message includes file changes that cannot be safely undone",
+      "actionFailed": "The changes could not be applied. Try again",
+      "partial": "Only the changes captured exactly are shown",
+      "partialReversible": "Only exactly captured changes can be undone or reapplied; uncaptured changes are not handled",
+      "partialActionHint": "Only undo or reapply exactly captured file changes",
+      "showMore": "Show {{count}} more files",
+      "reviewRemaining": "Review {{count}} more files",
+      "showLess": "Show less"
     },
     "agentActions": {
       "part": {
@@ -6332,6 +6509,7 @@
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
       "piRemoteUnsupported": "Pi runs locally only and can't use SSH remote hosts. Switch to Claude or Codex to use this host.",
+      "localWorktreeCleanupPending": "The previous local worktree session is still awaiting cleanup. Try again after cleanup finishes.",
       "remoteWorktreeCleanupPending": "The previous remote worktree is still awaiting cleanup. Reconnect the device and try again.",
       "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
@@ -8407,6 +8585,7 @@
       "customRolePredefinedError": "Custom role cannot use a predefined role name",
       "agentLabel": "Agent",
       "modelLabel": "Model",
+      "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
       "effortLabel": "Effort",
       "initialTaskLabel": "Initial Task",
@@ -8452,7 +8631,11 @@
     "empty": "No reference directories yet",
     "add": "Add directory…",
     "atLimit": "Limit reached ({{max}})",
-    "remove": "Remove {{name}}"
+    "remove": "Remove {{name}}",
+    "parentConfirmTitle": "Add a parent directory?",
+    "parentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. This expands the Agent's visible scope beyond the working directory.\n\nAdd it anyway?\n\n{{path}}",
+    "parentConfirmAccept": "Add anyway",
+    "parentConfirmCancel": "Cancel"
   },
   "commands": {
     "toast": {
@@ -8623,6 +8806,7 @@
       "passwordPlaceholder": "Password",
       "unlock": "Unlock",
       "previewMeta": "{{agent}} · {{count}} messages · exported {{exportedAt}}",
+      "previewOrca": "Collaboration task · includes {{count}} Workers",
       "riskWarning": "This file was shared from outside — make sure you trust its source. The imported history may influence the AI's future behavior, and if you continue the chat, the AI can still read and write local files and run commands.",
       "workdirHint": "The original working directory was {{originalDir}}. Choose the matching directory on this machine.",
       "workdirEmpty": "No directory selected",
@@ -8634,6 +8818,7 @@
       "close": "Close",
       "openSession": "Open session",
       "doneTitle": "Import complete",
+      "doneOrca": "Also imported {{count}} collaboration Workers",
       "conflictTitle": "This session already exists",
       "conflictBody": "A session with the same identifier already exists on this device (it was imported before, or it originated here). Importing again will overwrite the existing session with the contents of this share file.",
       "conflictOverwrite": "Overwrite & import",

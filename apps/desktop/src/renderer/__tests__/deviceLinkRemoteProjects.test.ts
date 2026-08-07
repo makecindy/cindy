@@ -2,12 +2,69 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createReconcileBackoff,
+  nextSessionListTokenRetryDelay,
   resolveIneligibleRemoteProjectAction,
   startRemoteSessionsReconciler,
+  startSessionListTokenRefresh,
 } from '@/features/device-link/useDeviceLinkRemoteProjects';
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('session-list owner token retry backoff', () => {
+  it('从 2s 指数退避到 30s 后仍持续恢复,cleanup 停旧循环,新账号从 2s 重启', async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn(async () => undefined);
+    const stop = startSessionListTokenRefresh(refresh, () => false);
+    await vi.advanceTimersByTimeAsync(0); // 首次立即补读
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    // 实际循环的间隔序列:2s → 4s → 8s → 16s → 30s → 30s,封顶后不停止。
+    for (const [index, delay] of [2_000, 4_000, 8_000, 16_000, 30_000, 30_000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(refresh).toHaveBeenCalledTimes(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refresh).toHaveBeenCalledTimes(index + 2);
+    }
+
+    stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(7); // 旧账号 timer 已取消
+
+    // effect 在新账号边界重建启动器:立即补读一次,首次重试重新回到 2s(不是继承 30s)。
+    const stopNextOwner = startSessionListTokenRefresh(refresh, () => false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(8);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(refresh).toHaveBeenCalledTimes(8);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refresh).toHaveBeenCalledTimes(9);
+    stopNextOwner();
+  });
+
+  it('readiness 就位后不再排后续补读', async () => {
+    vi.useFakeTimers();
+    let ready = false;
+    const refresh = vi.fn(async () => {
+      ready = true;
+    });
+    const stop = startSessionListTokenRefresh(refresh, () => ready);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('纯延迟函数保持 2s 到 30s 封顶', () => {
+    const delays: number[] = [];
+    let previous = 0;
+    for (let i = 0; i < 7; i += 1) {
+      previous = nextSessionListTokenRetryDelay(previous);
+      delays.push(previous);
+    }
+    expect(delays).toEqual([2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+  });
 });
 
 describe('startRemoteSessionsReconciler', () => {

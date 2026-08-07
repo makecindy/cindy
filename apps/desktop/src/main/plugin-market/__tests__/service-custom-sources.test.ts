@@ -65,9 +65,8 @@ vi.mock('../download.js', () => ({
   downloadVerifiedPlugin: vi.fn(async () => undefined),
 }));
 
-import type { VisiblePluginSummary } from '@cindy/plugin-protocol';
+import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-protocol';
 
-import type { MarketSourceConfig } from '../../../shared/pluginMarket';
 import { customMarketPluginId, customMarketReleaseId, marketSourceKey } from '../../../shared/pluginMarket';
 import { PluginMarketLedger, ghostManifestDigest } from '../ledger';
 import { PluginMarketService } from '../service';
@@ -100,7 +99,7 @@ function ghostManifest(id: string, version = '1.0.0') {
     version,
     kind: 'chip' as const,
     entry: 'main.js',
-    slots: ['notify'],
+    slots: ['notify' as const],
   };
 }
 
@@ -123,18 +122,6 @@ function serverSummary(overrides: Partial<VisiblePluginSummary> = {}): VisiblePl
       icon: null,
     },
     ...overrides,
-  };
-}
-
-/** 服务端详情夹具：summary + 该 release 的完整 manifest。 */
-function serverDetail() {
-  const summary = serverSummary();
-  return {
-    ...summary,
-    currentRelease: {
-      ...summary.currentRelease,
-      manifest: ghostManifest(summary.ghostId),
-    },
   };
 }
 
@@ -180,8 +167,18 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
     });
   }
   const api = {
-    listAll: vi.fn(async () => items),
-    detail: vi.fn(),
+    listAll: vi.fn(async () => ({ plugins: items, removals: [] })),
+    detail: vi.fn(async (pluginId: string) => {
+      const item = items.find((candidate) => candidate.id === pluginId);
+      if (!item) throw new Error('not found');
+      return {
+        ...item,
+        currentRelease: {
+          ...item.currentRelease,
+          manifest: ghostManifest(item.ghostId, item.currentRelease.version),
+        },
+      } satisfies VisiblePluginDetail;
+    }),
     download: vi.fn(),
   };
   return {
@@ -278,7 +275,7 @@ describe('PluginMarketService 自定义市场聚合', () => {
     });
   });
 
-  it('marks cross-source ghostId duplicates as conflict on both sides', async () => {
+  it('keeps uninstalled cross-source ghostId duplicates available', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
@@ -286,10 +283,10 @@ describe('PluginMarketService 自定义市场聚合', () => {
 
     const snapshot = await h.service.snapshot();
     expect(snapshot.items.find((item) => item.sourceType === 'server')?.installState).toBe(
-      'conflict',
+      'not-installed',
     );
     expect(snapshot.items.find((item) => item.sourceType === 'local-market')?.installState).toBe(
-      'conflict',
+      'not-installed',
     );
   });
 
@@ -352,7 +349,7 @@ describe('PluginMarketService 自定义市场 snapshot 账户作用域', () => {
     // 而不是把 user-1 的自定义插件聚合进 user-2 的快照。
     h.api.listAll.mockImplementation(async () => {
       runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
-      return [];
+      return { plugins: [], removals: [] };
     });
     await expect(h.service.snapshot()).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
@@ -384,7 +381,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const h = harness([], [{ name: 'team-lib', dir }]);
 
     const detail = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
-    expect(detail.manifest.id).toBe('alpha');
+    expect(detail.manifest?.id).toBe('alpha');
     expect(detail.sourceType).toBe('local-market');
     await expect(h.service.detail(customMarketPluginId('team-lib', 'missing'))).rejects.toMatchObject({
       code: 'NOT_FOUND',
@@ -475,7 +472,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // 不得把 user-1 审阅的插件装进 user-2 的运行时。
     h.api.listAll.mockImplementation(async () => {
       runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
-      return [];
+      return { plugins: [], removals: [] };
     });
     // 打包前的 discover/校验按 user-1 完成;在 install 入口后切换会话。
     const installPromise = h.service.install(customMarketPluginId('team-lib', 'alpha'), {
@@ -609,7 +606,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
-  it('rejects install when another custom source declares the same ghostId', async () => {
+  it('lets the user choose between uninstalled custom sources with the same ghostId', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
@@ -619,10 +616,19 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       { name: 'rival-lib', dir: rival },
     ]);
 
-    // 两个来源声明同一 ghostId、本地尚无安装:列表把双方都标成 conflict 并禁用,
-    // 安装入口必须用同一口径重算并拒绝,不能因为"本地还没装"就放行。
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('alpha'),
+      dir: '/ghosts/alpha',
+      enabled: true,
+    });
+
+    // 市场目录只负责发现。没有真实安装时，两个条目都可选；用户选择哪个来源，
+    // 安装完成后才由运行时插件和账本建立所有权。
     const snapshot = await h.service.snapshot();
-    expect(snapshot.items.map((item) => item.installState)).toEqual(['conflict', 'conflict']);
+    expect(snapshot.items.map((item) => item.installState)).toEqual([
+      'not-installed',
+      'not-installed',
+    ]);
 
     const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
     await expect(
@@ -630,15 +636,20 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
         expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
         expectedManifest: reviewed.manifest,
       }),
-    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
-    expect(runtime.install).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ ghost: { manifest: { id: 'alpha' } } });
+    expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects install when the server catalog declares the same ghostId', async () => {
+  it('lets a selected custom source install when the server catalog declares the same ghostId', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
     const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('server-plugin'),
+      dir: '/ghosts/server-plugin',
+      enabled: true,
+    });
 
     const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'server-plugin'));
     await expect(
@@ -646,66 +657,78 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
         expectedReleaseId: customMarketReleaseId('team-lib', 'server-plugin', '1.0.0'),
         expectedManifest: reviewed.manifest,
       }),
-    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
-    expect(runtime.install).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
+    expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects installing a server plugin that a custom source also declares', async () => {
+  it('lets a selected server plugin install when a custom source declares the same ghostId', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
     const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
     const item = serverSummary();
-    h.api.detail.mockResolvedValue(serverDetail());
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 42,
+    });
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('server-plugin'),
+      dir: '/ghosts/server-plugin',
+      enabled: true,
+    });
 
-    // 列表把两边都标成 conflict 并禁用;服务端安装入口只查服务端目录内部重名,
-    // 必须用同一口径重算,否则普通 UI 流程或直接 IPC 都能装进来并抢占 ghostId。
     const snapshot = await h.service.snapshot();
     expect(
       snapshot.items.find((entry) => entry.sourceType === 'server')?.installState,
-    ).toBe('conflict');
+    ).toBe('not-installed');
 
     await expect(
-      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
-    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
-    expect(h.api.download).not.toHaveBeenCalled();
+      h.service.install(item.id, {
+        expectedReleaseId: item.currentRelease.id,
+        expectedManifest: ghostManifest(item.ghostId, item.currentRelease.version),
+      }),
+    ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
+    expect(h.api.download).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the conflict state on the server detail view', async () => {
+  it('keeps an uninstalled duplicate available on the server detail view', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
     const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
-    h.api.detail.mockResolvedValue(serverDetail());
 
-    // 详情传空重复集合会把 conflict 项恢复成可安装,给出绕过冲突闸的入口。
     const detail = await h.service.detail(serverSummary().id);
-    expect(detail.installState).toBe('conflict');
+    expect(detail.installState).toBe('not-installed');
   });
 
-  it('skips defaultInstall when a custom source declares the same ghostId', async () => {
+  it('does not let an uninstalled custom catalog entry block an official default install', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
     const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
-    h.api.detail.mockResolvedValue(serverDetail());
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 42,
+    });
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('server-plugin'),
+      dir: '/ghosts/server-plugin',
+      enabled: true,
+    });
 
-    // 默认安装会真的下载并启用插件。若只按服务端目录判重,与自定义来源同 ghostId
-    // 的默认项会被静默抢占所有权,而列表随后又把它标成 conflict —— 既定事实已经
-    // 发生。冲突集合必须先于默认安装算出来。
-    const snapshot = await h.service.snapshot();
-    expect(h.api.download).not.toHaveBeenCalled();
-    expect(runtime.install).not.toHaveBeenCalled();
-    expect(
-      snapshot.items.find((entry) => entry.sourceType === 'server')?.installState,
-    ).toBe('conflict');
+    await h.service.snapshot();
+    expect(h.api.download).toHaveBeenCalledTimes(1);
+    expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
-  it('rechecks cross-source ownership right before committing the install', async () => {
+  it('does not rescan unrelated catalogs while committing a selected install', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
-    const rivalDir = writeLocalMarket(root, 'rival-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
     const h = harness([], [{ name: 'team-lib', dir }]);
     runtime.install.mockResolvedValue({
       manifest: ghostManifest('alpha'),
@@ -715,25 +738,13 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const pluginId = customMarketPluginId('team-lib', 'alpha');
     const reviewed = await h.service.detail(pluginId);
 
-    // 竞争来源必须在**入口检查之后**才出现,否则被入口那次判定拦住,根本触不到
-    // 提交点复核。打包是异步的、可以持续很久,期间另一窗口经独立的 market-sources
-    // 互斥键添加了声明同一 ghostId 的来源 —— 用"第一次读取来源表之后才加进去"
-    // 精确模拟这个时序。
-    const rival: MarketSourceConfig = {
-      name: 'rival-lib',
-      addedAt: '2026-08-01T00:00:00.000Z',
-      lastSyncedAt: '2026-08-01T00:00:00.000Z',
-      lastRevision: null,
-      source: { type: 'local', path: rivalDir },
-    };
     const realList = MarketSourceStore.prototype.list;
     let reads = 0;
     const listSpy = vi
       .spyOn(MarketSourceStore.prototype, 'list')
       .mockImplementation(function (this: MarketSourceStore) {
-        const configs = realList.call(this);
         reads += 1;
-        return reads <= 1 ? configs : [...configs, rival];
+        return realList.call(this);
       });
 
     try {
@@ -742,10 +753,9 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
           expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
           expectedManifest: reviewed.manifest,
         }),
-      ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
-      // 关键:不能只是报错,而是必须在**改动 Ghost 运行时之前**就拒绝。
-      expect(runtime.install).not.toHaveBeenCalled();
-      expect(reads).toBeGreaterThan(1);
+      ).resolves.toMatchObject({ ghost: { manifest: { id: 'alpha' } } });
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+      expect(reads).toBe(0);
     } finally {
       listSpy.mockRestore();
     }
@@ -761,8 +771,8 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const reviewed = await h.service.detail(pluginId);
 
     // 落位期间(installOrUpdateMarketGhostPackage 还在 await 包检查)另一窗口尝试
-    // 添加声明同一 ghostId 的来源。提交段持有来源锁,这次 addSource 必须排在落位
-    // 之后 —— 否则复核结论在真正落位前就过期了。
+    // 变更来源配置。自定义安装提交段持有来源锁，这次 addSource 必须排在落位后，
+    // 保证所选来源从提交前复核到落位完成之间保持稳定。
     const order: string[] = [];
     let markInstallEntered!: () => void;
     const installEntered = new Promise<void>((resolve) => {
@@ -964,22 +974,31 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     }
   });
 
-  it('skips default installs while any custom source is unreadable', async () => {
+  it('keeps official default installs available while a custom source is unreadable', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'other-plugin' }]);
     const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
-    h.api.detail.mockResolvedValue(serverDetail());
-    // 来源暂时不可读:合并冲突集合缺了它声明的 ghostId,此刻自动安装会在它恢复
-    // 前抢占所有权——目录不完整时必须整体跳过默认安装。
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 42,
+    });
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('server-plugin'),
+      dir: '/ghosts/server-plugin',
+      enabled: true,
+    });
+    // 来源暂时不可读只影响该来源，未安装的目录条目不能阻塞官方默认安装。
     fs.rmSync(dir, { recursive: true, force: true });
 
     await h.service.snapshot();
-    expect(h.api.download).not.toHaveBeenCalled();
-    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.api.download).toHaveBeenCalled();
+    expect(runtime.install).toHaveBeenCalled();
   });
 
-  it('skips default installs while a single plugin entry is temporarily unreadable', async () => {
+  it('keeps official default installs available while one custom entry is unreadable', async () => {
     // 粒度到条目:来源本身可读、清单也在,只是**某个插件的 ghost.json** 因文件锁/
     // 权限/网络盘抖动暂时读不到。此前这类失败与"内容非法"共用静默跳过分支,目录
     // 仍被判 complete,同 ghostId 的默认安装会在这个窗口里抢占所有权,恢复后该
@@ -992,7 +1011,17 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       { rel: 'plugins/srv', id: 'unrelated-plugin' },
     ]);
     const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
-    h.api.detail.mockResolvedValue(serverDetail());
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 42,
+    });
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('server-plugin'),
+      dir: '/ghosts/server-plugin',
+      enabled: true,
+    });
     // EACCES 是可重试类错误(事实不明);注意不能用 ENOENT —— 那是"清单指向不存在
     // 的目录"这种永久错误,按内容非法跳过才对(否则这类市场永久阻塞默认安装)。
     // 路径必须按 realpath 拼:发现层用的是 realpath(macOS 上 /var → /private/var),
@@ -1009,8 +1038,8 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     }) as typeof fs.promises.open);
     try {
       await h.service.snapshot();
-      expect(h.api.download).not.toHaveBeenCalled();
-      expect(runtime.install).not.toHaveBeenCalled();
+      expect(h.api.download).toHaveBeenCalled();
+      expect(runtime.install).toHaveBeenCalled();
     } finally {
       spy.mockRestore();
     }
@@ -1025,26 +1054,75 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/gone', id: 'stale-entry' }]);
     fs.rmSync(path.join(dir, 'plugins', 'gone'), { recursive: true, force: true });
     const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
-    h.api.detail.mockResolvedValue(serverDetail());
 
     await h.service.snapshot();
     // 与"不可读"组对称的信号:目录判为完整 → 默认安装照常进入下载阶段。
     expect(h.api.download).toHaveBeenCalled();
   });
 
-  it('fails closed on manual installs while any custom source is unreadable', async () => {
+  it('keeps manual official installs available while a custom source is unreadable', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'other-plugin' }]);
     const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
-    h.api.detail.mockResolvedValue(serverDetail());
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 42,
+    });
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('server-plugin'),
+      dir: '/ghosts/server-plugin',
+      enabled: true,
+    });
     fs.rmSync(dir, { recursive: true, force: true });
 
     const item = serverSummary();
     await expect(
-      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
-    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      h.service.install(item.id, {
+        expectedReleaseId: item.currentRelease.id,
+        expectedManifest: ghostManifest(item.ghostId, item.currentRelease.version),
+      }),
+    ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
+    expect(h.api.download).toHaveBeenCalled();
+  });
+
+  it('does not let official market take over an installed custom plugin when its source is unreadable', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/x', id: 'server-plugin' },
+    ]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    runtime.ghosts = [
+      { manifest: ghostManifest('server-plugin'), dir: '/ghosts/server-plugin', enabled: true },
+    ];
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'server-plugin'),
+      ghostId: 'server-plugin',
+      releaseId: customMarketReleaseId('team-lib', 'server-plugin', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-08-06T00:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('server-plugin')),
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const item = serverSummary();
+    await expect(
+      h.service.install(item.id, {
+        expectedReleaseId: item.currentRelease.id,
+        expectedManifest: ghostManifest(item.ghostId, item.currentRelease.version),
+      }),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 
   it('adopts a matching install after a lost ledger write instead of dead-ending in conflict', async () => {

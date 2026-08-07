@@ -11,6 +11,7 @@ const DEFAULT_API_BASE = 'http://localhost:3333';
 const DEFAULT_DEVICE_ID = 'mobile-e2e-host';
 const DEFAULT_DEVICE_NAME = 'XDMaker Mock Mac';
 const DEFAULT_SESSION_ID = 'mock-session-1';
+const MOCK_WORKTREE_BRANCHES = ['main', 'feature/mobile-worktree', 'release/mobile'];
 
 // 日志脱敏:session id 可能来自 env / 真实本地 db,只打印首尾预览,不落明文
 // (CodeQL js/clear-text-logging)。
@@ -40,6 +41,7 @@ const startedAt = new Date();
 const state = realDbPath
   ? createRealDbState({ dbPath: realDbPath, sessionId, deviceId, deviceName, startedAt, limit: realDbLimit })
   : createMockState({ deviceId, sessionId, deviceName, scenario, startedAt });
+const mockWorktree = createMockWorktreeState(state);
 const controllerTopics = new Map();
 const revokedControllers = new Set();
 const visualTransitionKeys = new Set();
@@ -299,6 +301,14 @@ async function handleInvoke(controllerId, channel, args) {
       return agentCapabilities(String(args[0] ?? 'claude-code'));
     case 'maker:provider:list':
       return mockProviders();
+    case 'maker:get-new-maker-defaults':
+      return { worktreeEnabled: mockWorktree.enabled };
+    case 'maker:apply-new-maker-worktree-pref':
+      return applyMockWorktreePreference(args[0]);
+    case 'maker:get-new-maker-worktree-branch-pref':
+      return getMockWorktreeBranchPreference(args[0]);
+    case 'maker:apply-new-maker-worktree-branch-pref':
+      return applyMockWorktreeBranchPreference(args[0]);
     case 'maker:switch-session-agent':
       return registerAgentSwitchIntent(
         String(args[0] ?? sessionId),
@@ -341,6 +351,16 @@ async function handleInvoke(controllerId, channel, args) {
       return statPath(args[0]?.path);
     case 'fs:mkdir-p':
       return { resolvedPath: String(args[0]?.path ?? '/tmp') };
+    case 'worktree:detect-cwd':
+      return detectMockWorktreeCwd(args[0]);
+    case 'worktree:list-branches':
+      return listMockWorktreeBranches(args[0]);
+    case 'worktree:suggest-name':
+      return suggestMockWorktreeName(args[0]);
+    case 'worktree:create':
+      return createMockWorktree(args[0]);
+    case 'worktree:discard-precreated':
+      return discardMockPrecreatedWorktree(args[0]);
     case 'text-file:read-preview':
       return readTextFilePreview(args[0]?.filePath);
     case 'maker:schedule:list':
@@ -1254,6 +1274,227 @@ function listMessages(id, opts = {}) {
   return filtered.slice(-limit);
 }
 
+/**
+ * Native E2E does not create real git directories, but the worktree fixture mirrors the
+ * Desktop IPC response shapes and ownership transition closely enough to exercise the
+ * mobile two-step flow: pre-create a worktree, then claim it with maker:create-session.
+ */
+function createMockWorktreeState(mockState) {
+  const baseRepos = new Set(
+    mockState.sessions
+      .filter((session) => session.workspaceKind !== 'dialogue')
+      .map((session) => typeof session.workingDir === 'string' ? session.workingDir.trim() : '')
+      .filter((workingDir) => path.isAbsolute(workingDir)),
+  );
+  if (baseRepos.size === 0) baseRepos.add('/tmp/xdt-maker-mobile-e2e');
+  return {
+    baseRepos,
+    branches: [...MOCK_WORKTREE_BRANCHES],
+    currentBranch: MOCK_WORKTREE_BRANCHES[0],
+    enabled: false,
+    nameSequence: 0,
+    branchPreferenceRevision: new Map(),
+    branchPreferences: new Map(),
+    bySessionId: new Map(),
+  };
+}
+
+function mockIpcError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function requireMockObject(value, description) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw mockIpcError('INVALID_PARAMS', `${description} required`);
+  }
+  return value;
+}
+
+function requireMockString(value, field) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw mockIpcError('INVALID_PARAMS', `${field} required`);
+  }
+  return value.trim();
+}
+
+function applyMockWorktreePreference(raw) {
+  const pref = requireMockObject(raw, 'worktree preference');
+  if (typeof pref.worktreeEnabled !== 'boolean') {
+    throw mockIpcError('INVALID_PARAMS', 'worktreeEnabled must be boolean');
+  }
+  mockWorktree.enabled = pref.worktreeEnabled;
+  return undefined;
+}
+
+function getMockWorktreeBranchPreference(raw) {
+  const input = requireMockObject(raw, 'worktree branch preference request');
+  const baseRepo = requireMockString(input.baseRepo, 'baseRepo');
+  return mockWorktree.branchPreferences.get(path.normalize(baseRepo)) ?? null;
+}
+
+function applyMockWorktreeBranchPreference(raw) {
+  const input = requireMockObject(raw, 'worktree branch preference request');
+  const baseRepo = path.normalize(requireMockString(input.baseRepo, 'baseRepo'));
+  const sourceBranch = requireMockString(input.sourceBranch, 'sourceBranch');
+  if (!mockWorktree.baseRepos.has(baseRepo)) {
+    throw mockIpcError('NOT_GIT_REPO', 'baseRepo is not a known mock git repository');
+  }
+  if (sourceBranch !== 'HEAD' && !mockWorktree.branches.includes(sourceBranch)) {
+    throw mockIpcError('INVALID_PARAMS', 'sourceBranch is not a known mock branch');
+  }
+  const revision = (mockWorktree.branchPreferenceRevision.get(baseRepo) ?? 0) + 1;
+  const snapshot = { baseRepo, sourceBranch, revision };
+  mockWorktree.branchPreferenceRevision.set(baseRepo, revision);
+  mockWorktree.branchPreferences.set(baseRepo, snapshot);
+  broadcast('maker:new-maker-worktree-branch:changed', snapshot);
+  return snapshot;
+}
+
+function managedWorktreeRepoRoot(cwd) {
+  const normalized = path.normalize(cwd);
+  const marker = `${path.sep}.cindy-worktrees${path.sep}`;
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex > 0) {
+    const inferredBaseRepo = normalized.slice(0, markerIndex);
+    if (mockWorktree.baseRepos.has(inferredBaseRepo)) return inferredBaseRepo;
+  }
+  const candidates = [...mockWorktree.baseRepos]
+    .filter((repo) => normalized === repo || normalized.startsWith(`${repo}${path.sep}`))
+    .sort((a, b) => b.length - a.length);
+  return candidates[0] ?? null;
+}
+
+function detectMockWorktreeCwd(raw) {
+  const input = requireMockObject(raw, 'worktree detect request');
+  const cwd = requireMockString(input.cwd, 'cwd');
+  if (!path.isAbsolute(cwd)) {
+    return {
+      isGitRepo: false,
+      isInsideWorktree: false,
+      gitInstalled: true,
+      supportsRecoveryKeyDiscard: true,
+    };
+  }
+  const repoRoot = managedWorktreeRepoRoot(cwd);
+  if (!repoRoot) {
+    return {
+      isGitRepo: false,
+      isInsideWorktree: false,
+      gitInstalled: true,
+      supportsRecoveryKeyDiscard: true,
+    };
+  }
+  return {
+    isGitRepo: true,
+    isInsideWorktree: path.normalize(cwd).includes(`${path.sep}.cindy-worktrees${path.sep}`),
+    gitInstalled: true,
+    currentBranch: mockWorktree.currentBranch,
+    repoRoot,
+    supportsRecoveryKeyDiscard: true,
+  };
+}
+
+function listMockWorktreeBranches(raw) {
+  const input = requireMockObject(raw, 'worktree branch request');
+  const baseRepo = requireMockString(input.baseRepo, 'baseRepo');
+  if (!path.isAbsolute(baseRepo)) {
+    throw mockIpcError('INVALID_PARAMS', 'baseRepo must be absolute');
+  }
+  if (!mockWorktree.baseRepos.has(path.normalize(baseRepo))) {
+    throw mockIpcError('NOT_GIT_REPO', 'baseRepo is not a known mock git repository');
+  }
+  return {
+    branches: [...mockWorktree.branches],
+    current: mockWorktree.currentBranch,
+  };
+}
+
+function suggestMockWorktreeName(raw) {
+  const input = requireMockObject(raw, 'worktree name request');
+  requireMockString(input.baseRepo, 'baseRepo');
+  mockWorktree.nameSequence += 1;
+  return { name: `mobile-e2e-${mockWorktree.nameSequence}` };
+}
+
+function createMockWorktree(raw) {
+  const input = requireMockObject(raw, 'worktree create request');
+  const sessionId = requireMockString(input.sessionId, 'sessionId');
+  const baseRepo = requireMockString(input.baseRepo, 'baseRepo');
+  const name = requireMockString(input.name, 'name');
+  const sourceBranch = requireMockString(input.sourceBranch, 'sourceBranch');
+  const recoveryKey = input.recoveryKey === undefined
+    ? undefined
+    : requireMockString(input.recoveryKey, 'recoveryKey');
+
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/.test(name) || name.includes('--')) {
+    return {
+      ok: false,
+      error: {
+        kind: 'unknown',
+        message: 'worktree 名称非法',
+        hint: '名称只能包含小写字母、数字和单个连字符，且不超过 20 个字符',
+      },
+    };
+  }
+  if (sourceBranch !== 'HEAD' && !mockWorktree.branches.includes(sourceBranch)) {
+    return {
+      ok: false,
+      error: {
+        kind: 'unknown',
+        message: `源分支 "${sourceBranch}" 不存在`,
+        hint: '请刷新分支列表或选择其他源分支',
+      },
+    };
+  }
+
+  const normalizedBaseRepo = path.normalize(baseRepo);
+  const meta = {
+    sessionId,
+    name,
+    path: path.join(normalizedBaseRepo, '.cindy-worktrees', name),
+    baseRepo: normalizedBaseRepo,
+    branch: `xdt/${name}`,
+    sourceBranch,
+    createdAt: new Date().toISOString(),
+    ...(recoveryKey ? { recoveryKey } : {}),
+  };
+  mockWorktree.baseRepos.add(normalizedBaseRepo);
+  mockWorktree.bySessionId.set(sessionId, { meta, claimed: false });
+  return { ok: true, meta };
+}
+
+function discardMockPrecreatedWorktree(raw) {
+  const input = requireMockObject(raw, 'discard pre-created worktree request');
+  const sessionId = requireMockString(input.sessionId, 'sessionId');
+  const hasPath = input.path !== undefined;
+  const hasRecoveryKey = input.recoveryKey !== undefined;
+  if (hasPath === hasRecoveryKey) {
+    throw mockIpcError(
+      'INVALID_PARAMS',
+      'discard pre-created worktree requires exactly one recovery locator',
+    );
+  }
+
+  const record = mockWorktree.bySessionId.get(sessionId);
+  if (!record) return { discarded: true };
+  if (record.claimed) {
+    throw mockIpcError('PRECONDITION_FAILED', '会话已认领该 worktree，拒绝补偿回收');
+  }
+  if (hasPath && requireMockString(input.path, 'path') !== record.meta.path) {
+    throw mockIpcError('PERMISSION_DENIED', '预创建 worktree 路径与登记记录不匹配');
+  }
+  if (
+    hasRecoveryKey
+    && requireMockString(input.recoveryKey, 'recoveryKey') !== record.meta.recoveryKey
+  ) {
+    throw mockIpcError('PERMISSION_DENIED', '预创建 worktree 恢复关联键与登记记录不匹配');
+  }
+  mockWorktree.bySessionId.delete(sessionId);
+  return { discarded: true, branchDeleted: true };
+}
+
 async function enqueueMessage(controllerId, id, queued) {
   applyPendingAgentSwitchIntent(id);
   const text = typeof queued?.text === 'string' ? queued.text : 'mobile message';
@@ -1275,11 +1516,17 @@ function createSession(opts = {}) {
   // 对 provided id 幂等),缺省才由 mock 生成——新建会话乐观管线依赖这一契约。
   const id = typeof opts?.id === 'string' && opts.id ? opts.id : `mock-created-${Date.now()}`;
   const workingDir = typeof opts?.workingDir === 'string' ? opts.workingDir : '/tmp/xdt-maker-mobile-e2e';
+  const precreatedWorktree = mockWorktree.bySessionId.get(id);
+  const claimedWorktree = precreatedWorktree?.meta.path === workingDir
+    ? precreatedWorktree
+    : null;
+  if (claimedWorktree) claimedWorktree.claimed = true;
   const session = {
     ...state.sessions[0],
     id,
     title: 'Mobile Created Mock Session',
     workingDir,
+    worktreePath: claimedWorktree?.meta.path ?? null,
     workspaceKind: opts?.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     model: typeof opts?.model === 'string' ? opts.model : state.sessions[0].model,
     effort: typeof opts?.effort === 'string' ? opts.effort : state.sessions[0].effort,
