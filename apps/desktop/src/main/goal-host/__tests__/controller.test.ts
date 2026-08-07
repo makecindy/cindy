@@ -3473,4 +3473,20 @@ describe('GoalController', () => {
     expect(events.some((e) => e.type === 'state-transition')).toBe(false);
   });
 
+  it('does not leak a stale resume intent into a new goal on the same session', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    // 恢复预算已耗尽的 goal:登记 resumed 意图 → fireTurn preflight 拦截(无派发)。
+    await local.storage.upsert(seededGoal({ status: 'paused', turnsUsed: 5, maxTurns: 5, objective: 'old goal' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'budgetLimited' });
+    expect(events.some((e) => e.type === 'resumed')).toBe(false);
+    // 同 sessionId 新目标:首轮派发不得消费上一个 Goal 的旧恢复标记。
+    await local.controller.setGoal({ sessionId: 's1', objective: 'new goal' });
+    await tick();
+    expect(events.filter((e) => e.type === 'resumed')).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'turn-dispatched').length).toBeGreaterThanOrEqual(1);
+  });
+
 });

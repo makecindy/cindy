@@ -2066,9 +2066,15 @@ export class GoalController {
       }
       this.stopSession(sessionId);
       if (limited) this.emit(limited);
+      // 派发被放弃:清除恢复标记,防止串入同 sessionId 的下一个 Goal(reviewer P1/P2)。
+      this.pendingResumeEvents.delete(sessionId);
       return;
     }
-    if (this.firing.has(sessionId)) return;
+    if (this.firing.has(sessionId)) {
+      // 已在派发:本次 fireTurn 不派发,放弃恢复标记(新目标不应消费旧恢复意图)。
+      this.pendingResumeEvents.delete(sessionId);
+      return;
+    }
     // 首轮 vs 续轮由 state 派生(turnsUsed===0 = 首轮尚未真正跑完),不再由调用方指定。
     // 关键:首轮被 busy 跳过 / 被暂停后再发时,只要首轮还没跑过就仍按 first 发,否则首轮
     // 特有的"质量自检 + AskUserQuestion"约定(buildFirstTurnDirective)会丢,目标直接进
@@ -2230,6 +2236,9 @@ export class GoalController {
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
       }
+      // 清除残留恢复标记(reviewer P1/P2):正常派发时已在 onDispatching 消费删除,
+      // 此处幂等兜底 send 失败/拒绝/未派发路径,防止旧标记串入同 sessionId 新目标。
+      this.pendingResumeEvents.delete(sessionId);
     }
   }
 }
