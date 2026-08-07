@@ -60,6 +60,8 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     jobConfig: undefined,
     source: 'user',
     projectConfigId: undefined,
+    originKind: undefined,
+    originId: undefined,
     kind: 'cron',
     cronExpr: '0 9 * * 1-5',
     timezone: 'Asia/Shanghai',
@@ -130,6 +132,8 @@ const SCHEDULER_DDL = [
       script_config TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
+      origin_kind TEXT,
+      origin_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
       kind TEXT NOT NULL DEFAULT 'cron',
       cron_expr TEXT NOT NULL,
@@ -223,6 +227,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       nextFireAt: 1_700_000_120_000,
       // providerId 钉到非原生来源,断言往返保真(insert → get 都带回 'anthropic')。
       providerId: 'anthropic',
+      originKind: 'codex-automation',
+      originId: 'storage-smoke',
     });
     const run: ScheduleRun = {
       id: 'run-storage',

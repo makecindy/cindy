@@ -6,6 +6,7 @@ import {
   createCodexAutomationMigrationService,
   findDuplicateSchedule,
   type CodexAutomationMigrationConverter,
+  type CodexAutomationMigrationScheduler,
 } from '../codex-automation-migration.js';
 
 function detail(id: string, overrides: Partial<CodexAutomationDetail> = {}): CodexAutomationDetail {
@@ -300,6 +301,40 @@ describe('CodexAutomationMigrationService', () => {
       scheduleId: 'schedule-1',
     });
     expect(second.skipped).toEqual([]);
+    expect(await scheduler.list()).toEqual([
+      expect.objectContaining({ id: 'schedule-1', status: 'paused', manual: false }),
+    ]);
+  });
+
+  it('recovers a persisted staging schedule after the scheduler service is recreated', async () => {
+    const item = detail('paused', { status: 'PAUSED' });
+    const { service, scheduler, reader } = setup([item]);
+    scheduler.update.mockRejectedValueOnce(new Error('restore manual failed'));
+    scheduler.delete.mockRejectedValueOnce(new Error('delete failed'));
+
+    await service.import(['paused']);
+    const [leftover] = await scheduler.list();
+    expect(leftover).toMatchObject({
+      originKind: 'codex-automation',
+      originId: 'paused',
+    });
+
+    const freshScheduler: CodexAutomationMigrationScheduler = {
+      list: scheduler.list,
+      create: scheduler.create,
+      update: scheduler.update,
+      pause: scheduler.pause,
+      delete: scheduler.delete,
+    };
+    const freshService = createCodexAutomationMigrationService({
+      reader,
+      scheduler: freshScheduler,
+    });
+
+    const result = await freshService.import(['paused']);
+
+    expect(scheduler.create).toHaveBeenCalledTimes(1);
+    expect(result.created[0]).toMatchObject({ sourceId: 'paused', scheduleId: 'schedule-1' });
     expect(await scheduler.list()).toEqual([
       expect.objectContaining({ id: 'schedule-1', status: 'paused', manual: false }),
     ]);

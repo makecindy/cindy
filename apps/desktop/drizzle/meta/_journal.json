@@ -624,6 +624,13 @@
       "when": 1786092084443,
       "tag": "0088_thankful_captain_midlands",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "6",
+      "when": 1786100536404,
+      "tag": "0089_goofy_blob",
+      "breakpoints": true
     }
   ]
 }

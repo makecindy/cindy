@@ -696,6 +696,8 @@ export const schedules = sqliteTable(
     scriptConfig: text('script_config'),
     source: text('source').default('user'),
     projectConfigId: text('project_config_id'),
+    originKind: text('origin_kind', { enum: ['codex-automation'] }),
+    originId: text('origin_id'),
     /**
      * 是否允许用“任务名 + workspace + 工作目录”认领没有 schedule_runs 的旧会话。
      *
