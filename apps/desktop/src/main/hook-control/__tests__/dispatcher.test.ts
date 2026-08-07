@@ -1749,8 +1749,7 @@ describe('dispatcher 核心语义', () => {
       runner: fr.runner,
       buildContextPrefix: async () => ({
         prefix: '<group_chat_context>背景</group_chat_context>',
-        commit: async (guard) => {
-          expect(await guard?.()).toBe(true);
+        commit: async () => {
           // commit 已完成；让账号边界微任务先于 dispatcher 的 await continuation
           // 失效，钉住“返回后、ACK 前”的窄竞态。
           queueMicrotask(() => {
@@ -1776,6 +1775,134 @@ describe('dispatcher 核心语义', () => {
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(c.ofType('task.ack')).toHaveLength(0);
     expect(fr.calls).toHaveLength(0);
+  });
+
+  it('直达受理的游标补偿失败时保留 admission，恢复后才结束账号边界', async () => {
+    vi.useFakeTimers();
+    try {
+      let beginDeactivation: () => Promise<void> = async () => undefined;
+      let deactivation: Promise<void> | null = null;
+      let rollbackAttempts = 0;
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const rollback = vi.fn(async () => {
+        rollbackAttempts += 1;
+        if (rollbackAttempts === 1) throw new Error('sqlite busy');
+      });
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({
+        runner: fr.runner,
+        log,
+        buildContextPrefix: async () => ({
+          prefix: '<group_chat_context>背景</group_chat_context>',
+          commit: async () => {
+            queueMicrotask(() => {
+              deactivation = beginDeactivation();
+            });
+            return { rollback };
+          },
+        }),
+      });
+      beginDeactivation = () => d.deactivateAccount();
+      const c = collector();
+
+      d.handleDispatch(
+        'conn-1',
+        dispatch({ requestId: 'accepted-recovery', externalKey: 'telegram:group:bot:-900:9:g0' }),
+        c.send,
+      );
+      for (let i = 0; i < 30 && rollbackAttempts === 0; i += 1) await Promise.resolve();
+      expect(deactivation).not.toBeNull();
+      expect(rollback).toHaveBeenCalledTimes(1);
+
+      let deactivated = false;
+      void deactivation!.then(() => {
+        deactivated = true;
+      });
+      await tick();
+      expect(deactivated).toBe(false);
+      expect(c.ofType('task.ack')).toHaveLength(0);
+      expect(fr.calls).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await deactivation!;
+      expect(rollback).toHaveBeenCalledTimes(2);
+      expect(deactivated).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining('group context cursor rollback retained for retry'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('排队任务的游标补偿失败时保留 execution，恢复前不丢任务引用', async () => {
+    vi.useFakeTimers();
+    try {
+      let beginDeactivation: () => Promise<void> = async () => undefined;
+      let deactivation: Promise<void> | null = null;
+      let rollbackAttempts = 0;
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const rollback = vi.fn(async () => {
+        rollbackAttempts += 1;
+        if (rollbackAttempts === 1) throw new Error('sqlite busy');
+      });
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({
+        runner: fr.runner,
+        log,
+        buildContextPrefix: async (payload) => ({
+          prefix: '<group_chat_context>背景</group_chat_context>',
+          commit:
+            payload.requestId === 'queued-recovery'
+              ? async () => {
+                  queueMicrotask(() => {
+                    deactivation = beginDeactivation();
+                  });
+                  return { rollback };
+                }
+              : () => undefined,
+        }),
+      });
+      beginDeactivation = () => d.deactivateAccount();
+      const c = collector();
+      const externalKey = 'telegram:group:bot:-900:9:g0';
+
+      d.handleDispatch('conn-1', dispatch({ requestId: 'running', externalKey }), c.send);
+      await tick();
+      d.handleDispatch('conn-1', dispatch({ requestId: 'queued-recovery', externalKey }), c.send);
+      await tick();
+      expect(c.last('task.ack')?.payload).toMatchObject({
+        requestId: 'queued-recovery',
+        result: 'queued',
+      });
+
+      fr.finish({ finalText: 'running done' });
+      for (let i = 0; i < 30 && rollbackAttempts === 0; i += 1) await Promise.resolve();
+      expect(deactivation).not.toBeNull();
+      expect(rollback).toHaveBeenCalledTimes(1);
+      expect(fr.calls).toHaveLength(1);
+
+      let deactivated = false;
+      void deactivation!.then(() => {
+        deactivated = true;
+      });
+      await tick();
+      expect(deactivated).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await deactivation!;
+      expect(rollback).toHaveBeenCalledTimes(2);
+      expect(deactivated).toBe(true);
+      expect(fr.calls).toHaveLength(1);
+      expect(c.ofType('turn.end').some((m) => m.payload.requestId === 'queued-recovery')).toBe(
+        false,
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining('group context cursor rollback retained for retry'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('runner 失败 -> turn.end status=error 且 errorMessage 非空', async () => {

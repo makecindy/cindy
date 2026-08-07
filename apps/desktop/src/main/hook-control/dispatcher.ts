@@ -383,6 +383,9 @@ const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 const REOPEN_TTL_MS = 24 * 60 * 60_000;
 /** 续跑记账条数上限(FIFO 淘汰最老), 同 ackHistory 语义: 防长驻进程无界增长。 */
 const MAX_PENDING_REOPENS = 200;
+/** 游标补偿已在共享核心内有界重试；dispatcher 继续保留任务并退避恢复。 */
+const CURSOR_ROLLBACK_RECOVERY_BASE_DELAY_MS = 25;
+const CURSOR_ROLLBACK_RECOVERY_MAX_DELAY_MS = 1_000;
 
 /**
  * 原对话不再落在工作目录映射内时(被移到映射外的项目, 或映射本身被改/删),
@@ -498,12 +501,10 @@ export function buildHookSessionTitle(
   return `[${contextTag}${displayProvider}${dmTag}] ${snippet}`;
 }
 
+type ContextCursorReceipt = { rollback(): void | Promise<void> };
 type ContextCursorCommit = (
   guard?: () => boolean | Promise<boolean>,
-) =>
-  | void
-  | { rollback(): void | Promise<void> }
-  | Promise<void | { rollback(): void | Promise<void> }>;
+) => void | ContextCursorReceipt | Promise<void | ContextCursorReceipt>;
 
 /** 待执行任务(定位已完成, 排队即执行参数就绪)。 */
 interface PendingTask {
@@ -1499,14 +1500,56 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   }
 
   /**
+   * 账号代次失效后，任务必须留在当前 admission/execution Promise 中，直到
+   * durable cursor 确认恢复。共享核心单次 rollback 已做有界重试；这里再以
+   * 退避循环承接持续 SQLite 故障，使 deactivateAccount() 继续等待该任务，
+   * 不会在补偿失败时清掉引用并让未执行消息永久越过游标。
+   */
+  async function recoverTaskContextCursor(
+    receipt: ContextCursorReceipt | void,
+    task: { requestId: string; run: { sessionId: string } },
+    phase: 'accepted' | 'queued',
+  ): Promise<void> {
+    if (!receipt) return;
+    let failures = 0;
+    for (;;) {
+      try {
+        await receipt.rollback();
+        if (failures > 0) {
+          log.info(
+            `group context cursor rollback recovered: phase=${phase} requestId=${task.requestId} attempts=${failures + 1}`,
+          );
+        }
+        return;
+      } catch (error) {
+        failures += 1;
+        const retryDelayMs = Math.min(
+          CURSOR_ROLLBACK_RECOVERY_BASE_DELAY_MS * 2 ** Math.min(failures - 1, 6),
+          CURSOR_ROLLBACK_RECOVERY_MAX_DELAY_MS,
+        );
+        log.warn(
+          `group context cursor rollback retained for retry: phase=${phase} requestId=${task.requestId} retryInMs=${retryDelayMs} error=${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
+  }
+
+  /**
    * 排队任务只有在真正开始执行时才推进群上下文游标。账号代次若在提交
-   * await 期间失效，补偿本次提交并静默丢弃这条尚未开始的任务。
+   * await 期间失效，保留任务直到补偿成功，再按账号边界丢弃尚未开始的任务。
    */
   async function commitTaskContextCursor(task: PendingTask): Promise<boolean> {
     if (!task.commitContextCursor) return true;
-    let receipt: { rollback(): void | Promise<void> } | void;
+    if (!isCurrentGeneration(task.accountGeneration)) return false;
+    let receipt: ContextCursorReceipt | void;
     try {
-      receipt = await task.commitContextCursor(() => isCurrentGeneration(task.accountGeneration));
+      // dispatcher owns the post-write generation check so a successful write
+      // always returns its receipt to the recovery loop instead of losing it in
+      // the shared core's optional guard compensation path.
+      receipt = await task.commitContextCursor();
     } catch (error) {
       // The production group-window commit keeps persistence failures non-fatal;
       // retain the same queue liveness for injected/legacy callbacks.
@@ -1515,18 +1558,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return true;
+      return isCurrentGeneration(task.accountGeneration);
     }
     if (isCurrentGeneration(task.accountGeneration)) return true;
-    try {
-      await receipt?.rollback();
-    } catch (error) {
-      log.warn(
-        `queued group context cursor rollback failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    await recoverTaskContextCursor(receipt, task, 'queued');
     return false;
   }
 
@@ -2084,13 +2119,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             return;
           }
 
-          // Preserve the direct accepted path's pre-ACK guard: a generation
+          // Preserve the direct accepted path's pre-ACK generation fence: a
           // boundary racing the durable write must roll back and emit no ACK.
-          const cursorCommit = await commitContextCursor?.(() =>
-            isCurrentGeneration(admittedGeneration),
-          );
+          // Do not pass the optional shared-core guard here: dispatcher must
+          // retain the returned receipt so a failed compensation can keep this
+          // admission alive and retry instead of losing the unaccepted task.
+          const cursorCommit = await commitContextCursor?.();
           if (!isCurrentGeneration(admittedGeneration)) {
-            await cursorCommit?.rollback();
+            await recoverTaskContextCursor(cursorCommit, taskBase, 'accepted');
             return;
           }
 
