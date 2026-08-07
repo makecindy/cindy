@@ -43,9 +43,14 @@ let _controller: GoalController | null = null;
  */
 const goalRunRecorder = createRunEventRecorder();
 
-/** 读最近 Goal run 观测事件(审计 / 排障用;未启动 controller 时为空)。 */
+/** 读最近 Goal run 观测事件(审计 / 排障用;controller 重置后为空)。 */
 export function getGoalRunEvents(): readonly GoalRunEvent[] {
   return goalRunRecorder.snapshot();
+}
+
+/** 显式清空观测环(切账号 / 登出等 reset 场景,防止旧账号事件泄漏给新查看方)。 */
+export function clearGoalRunEvents(): void {
+  goalRunRecorder.clear();
 }
 
 export function startGoalController(deps: StartGoalControllerDeps): GoalController {
@@ -160,4 +165,7 @@ export function getGoalController(): GoalController | null {
 export function resetGoalController(): void {
   if (_controller) _controller.dispose();
   _controller = null;
+  // 清空观测环(reviewer P1):recorder 是模块级单例,不清空会让旧账号的
+  // sessionId/reason 泄漏给重置后的新查看方,造成排障误判与隐私暴露。
+  goalRunRecorder.clear();
 }
