@@ -431,7 +431,7 @@ export class ImSchedulerManager {
       return;
     }
     if (!channel) {
-      if (this.snapshot) this.scheduleDiscoveryRetry();
+      if (this.snapshot || this.transport.requestSnapshot) this.scheduleDiscoveryRetry();
       else this.cancelDiscoveryRetry();
       this.publishDecision({ state: 'standby', channel: null, reason: 'missing-binding' });
       return;
