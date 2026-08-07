@@ -6,6 +6,8 @@ import {
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
+  mobileMarkdownImageAltChipText,
+  MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH,
   mobileMarkdownInlineImageSize,
   parseMobileMarkdown,
   parseMobileMarkdownInlines,
@@ -1417,33 +1419,30 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     expect(chunkText.join('')).toBe(text);
   });
 
-  it('splits oversized non-direct image alt text by rendered inline text length', () => {
-    const blocks = parseMobileMarkdown(`![${'a'.repeat(21)}](docs/local-image.png)`);
-    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+  it('keeps oversized non-direct image alt text in one image inline while bounding rendered chip text', () => {
+    const alt = 'a'.repeat(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH + 21);
+    const blocks = parseMobileMarkdown(`![${alt}](docs/local-image.png)`);
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 1800 });
     const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
     const imageInlines = chunks.flatMap((block) => block.inlines.filter((inline) => inline.type === 'image'));
 
-    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
-    expect(imageInlines.map((inline) => inline.alt)).toEqual([
-      'a'.repeat(8),
-      'a'.repeat(8),
-      'a'.repeat(5),
-    ]);
-    expect(imageInlines.every((inline) => inline.url === 'docs/local-image.png')).toBe(true);
-    expect(chunks.map((block) => block.textRunContinuation === true)).toEqual([false, true, true]);
+    expect(groups.map((group) => group.type)).toEqual(['text_run']);
+    expect(imageInlines).toHaveLength(1);
+    expect(imageInlines[0]).toMatchObject({ alt, url: 'docs/local-image.png' });
+    expect(mobileMarkdownImageAltChipText(imageInlines[0].alt)).toHaveLength(
+      MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH,
+    );
+    expect(mobileMarkdownImageAltChipText(imageInlines[0].alt).endsWith('…')).toBe(true);
   });
 
-  it('does not split surrogate pairs in oversized image alt text', () => {
-    const alt = `${'a'.repeat(7)}😀b`;
-    const blocks = parseMobileMarkdown(`![${alt}](docs/local-image.png)`);
-    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
-    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
-    const imageAltChunks = chunks.flatMap((block) => (
-      block.inlines.filter((inline) => inline.type === 'image').map((inline) => inline.alt)
-    ));
+  it('does not split surrogate pairs when truncating oversized image alt chip text', () => {
+    const alt = `${'a'.repeat(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH - 1)}😀b`;
+    const chipText = mobileMarkdownImageAltChipText(alt);
 
-    expect(imageAltChunks).toEqual(['a'.repeat(7), '😀b']);
-    expect(imageAltChunks.join('')).toBe(alt);
+    expect(chipText).toHaveLength(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH);
+    expect(chipText).toBe(`${'a'.repeat(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH - 1)}…`);
+    expect(chipText).not.toContain('\uD83D');
+    expect(chipText).not.toContain('\uDE00');
   });
 
   it('counts rendered list marker spaces when splitting long list items', () => {

@@ -61,6 +61,7 @@ describe('mobile message text selection', () => {
     expect(markdownBodySource).toContain('isTextRunContinuationGroup(group)');
     expect(markdownBodySource).toContain('height: layout.markdownBodyGap');
     expect(markdownBodySource).not.toContain('{ gap: layout.markdownBodyGap }');
+    expect(source).toContain('mobileMarkdownImageAltChipText(inline.alt)');
     expect(markdownBodySource).toContain('selectable={inlinesSelectable(cell)}');
     expect(markdownBodySource).toContain('selectable={selectable === true}');
 

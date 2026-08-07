@@ -154,6 +154,7 @@ import {
 import {
   groupMobileMarkdownSelectableBlocks,
   isMobileMarkdownImageDirectUrl,
+  mobileMarkdownImageAltChipText,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
   mobileMarkdownInlineImageSize,
@@ -4015,6 +4016,9 @@ function renderInline(
       // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
       // 点开后由 ImageLightbox 经 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
+        const imageChipText = inline.alt
+          ? mobileMarkdownImageAltChipText(inline.alt)
+          : i18n.t('message.renderer.imageFallbackTitle');
         return (
           <SpanText
             key={spanKey(`image:${index}:${inline.url}`)}
@@ -4022,7 +4026,7 @@ function renderInline(
             style={clickableInlineStyle(styles, openImageChip, ctx.baseStyle)}
             testID="message.markdownInlineImageChip"
           >
-            {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
+            {imageChipText}
           </SpanText>
         );
       }

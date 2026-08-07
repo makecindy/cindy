@@ -430,6 +430,7 @@ export interface MobileMarkdownTextRunGroupingOptions {
 }
 
 const MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH = 2;
+export const MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH = 256;
 
 export function groupMobileMarkdownSelectableBlocks(
   blocks: readonly MobileMarkdownBlock[],
@@ -510,9 +511,15 @@ function mobileMarkdownTextRunBlockLength(block: MobileMarkdownTextRunBlock): nu
 
 function mobileMarkdownInlineTextLength(inline: MobileMarkdownInline): number {
   if (inline.type === 'image') {
-    return inline.alt.length;
+    return mobileMarkdownImageAltChipText(inline.alt).length;
   }
   return inline.text.length;
+}
+
+export function mobileMarkdownImageAltChipText(alt: string): string {
+  if (alt.length <= MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH) return alt;
+  const end = safeUtf16SliceEnd(alt, 0, MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH - 1);
+  return `${alt.slice(0, end)}…`;
 }
 
 function splitOversizedTextRunBlock(
@@ -564,7 +571,13 @@ function splitOversizedTextRunBlock(
 
   for (const inline of block.inlines) {
     if (inline.type === 'image') {
-      appendInlineTextChunks(inline.alt, (alt) => ({ ...inline, alt }));
+      const inlineLength = mobileMarkdownInlineTextLength(inline);
+      if (current.length > 0 && currentTextLength + inlineLength > currentLimit()) {
+        flushCurrent();
+      }
+      current.push(inline);
+      currentTextLength += inlineLength;
+      if (currentTextLength >= currentLimit()) flushCurrent();
       continue;
     }
 
