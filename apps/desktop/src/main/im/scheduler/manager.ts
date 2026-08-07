@@ -186,7 +186,13 @@ export class ImSchedulerManager {
         return;
       case 'ownership':
         if (event.owner) {
+          // Ownership may have been absent long enough for the Device Link
+          // membership view to change. Never elect from a snapshot collected
+          // before that gap; require a tagged refresh for the current request
+          // generation before discovery can complete again.
+          this.invalidateAuthoritativeSnapshot();
           this.beginDiscoveryRound();
+          this.requestSnapshot(false);
         } else {
           this.cancelDiscoveryRetry();
         }
@@ -301,9 +307,10 @@ export class ImSchedulerManager {
         ...(payload.runtimeGaps ? { runtimeGaps: payload.runtimeGaps } : {}),
       },
     });
-    for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
-      if (runtime?.state === 'dirty') this.runtimeGaps.adopt(runtime);
-    }
+    // A probe can be delayed across a binding reset and carries no response
+    // tag for the receiver's current discovery round. Its channel view is
+    // useful for election convergence, but runtime gaps are only authoritative
+    // when returned in an advertisement replying to our current nonce.
   }
 
   private beginDiscoveryRound(options: { resetRetryAttempt?: boolean } = {}): void {
@@ -412,6 +419,16 @@ export class ImSchedulerManager {
     this.snapshotRequestId = null;
     this.awaitingSnapshot = false;
     this.snapshotRefreshPending = false;
+  }
+
+  private invalidateAuthoritativeSnapshot(): void {
+    this.cancelDiscoveryRetry();
+    this.snapshot = null;
+    this.lastSnapshotObservedAt = null;
+    this.resetSnapshotRequestState();
+    this.requiresTaggedSnapshot = true;
+    this.peers.clear();
+    this.confirmedPeers.clear();
   }
 
   private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {
