@@ -356,7 +356,11 @@ async function tryCustomProviderTitle(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
   const onExternalAbort = () => controller.abort();
-  args.signal?.addEventListener('abort', onExternalAbort);
+  if (args.signal?.aborted) {
+    controller.abort();
+  } else {
+    args.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
   try {
     const cred = readCustomProviderCredential(provider, args.agentKind, routing);
     if (!cred.ok) {
@@ -527,7 +531,11 @@ export async function generateTitleViaProviderResult(
   const timeout = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
   // 外部 signal(发送被取消)联动到本次请求。
   const onExternalAbort = () => controller.abort();
-  args.signal?.addEventListener('abort', onExternalAbort);
+  if (args.signal?.aborted) {
+    controller.abort();
+  } else {
+    args.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   // 派发紧前重查(PR #744 review 第二十一轮):OAuth 刷新等凭证获取是可能数秒的
   // await,期间该 (来源, 标题模型) 可能被用户停用或被热刷新标成 retired —— 凭证

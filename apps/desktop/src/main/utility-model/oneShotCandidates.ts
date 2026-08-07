@@ -962,7 +962,13 @@ export async function requestProviderHttpText(input: {
   const timeoutMs = input.timeoutMs ?? 90_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const onExternalAbort = () => controller.abort();
-  input.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  if (input.signal?.aborted) {
+    // 外部信号在调用前已中止：abort 事件早已触发，再挂监听不会生效；立即中止内部
+    // controller，避免请求仍发出、只能等内部 timeout 才结束。
+    controller.abort();
+  } else {
+    input.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
   try {
     const supportsRequestedReasoning = Boolean(
       input.wire !== 'anthropic-messages'
@@ -1172,10 +1178,16 @@ export async function requestCustomProviderText(input: {
   if (input.agentKind === 'claude-code') {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
   }
+  // buildUserProvider 会省略与 agent 默认一致的 wireProtocol（Pi 默认 openai-chat，
+  // 见 packages/model-providers/src/user-provider.ts 的 defaultWireProtocol）；
+  // undefined 时按 agent 默认补全，避免 Pi 的 BYOM 本地端点（Ollama/vLLM 的
+  // /v1/chat/completions）被误当成 Responses 打到 /responses。
+  const effectiveWireProtocol =
+    input.wireProtocol ?? (input.agentKind === 'pi' ? 'openai-chat' : 'openai-responses');
   const wire: ProviderWire =
     input.agentKind === 'claude-code'
       ? 'anthropic-messages'
-      : input.wireProtocol === 'openai-chat'
+      : effectiveWireProtocol === 'openai-chat'
         ? 'chat-completions'
         : 'responses';
   return requestProviderHttpText({

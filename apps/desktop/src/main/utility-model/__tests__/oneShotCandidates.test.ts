@@ -80,7 +80,12 @@ import { readModelDisableOverrides } from '../../maker-host/model-disable-store.
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
-import { getUtilityTextCandidates, requestUtilityText } from '../oneShotCandidates.js';
+import {
+  getUtilityTextCandidates,
+  requestCustomProviderText,
+  requestProviderHttpText,
+  requestUtilityText,
+} from '../oneShotCandidates.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const readKey = vi.mocked(readClaudeApiKey);
@@ -1549,4 +1554,73 @@ describe('utility one-shot candidates', () => {
       expect(body).not.toHaveProperty('reasoning');
     },
   );
+});
+
+describe('requestProviderHttpText / requestCustomProviderText 边界（review 反馈）', () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('外部 signal 在调用前已中止 → 立即失败,不发请求（fetch 不被调用）', async () => {
+    // 预中止检查会让内部 controller 先于 fetch 进入 aborted 态,outboundUndiciFetch
+    // 在 resolveOutboundDispatcher 处直接抛 AbortError——真正的 undici fetch 不应被触碰。
+    await expect(
+      requestProviderHttpText({
+        wire: 'chat-completions',
+        endpoint: 'https://custom.example/v1/chat/completions',
+        model: 'm',
+        prompt: 'x',
+        signal: AbortSignal.abort(),
+      }),
+    ).rejects.toMatchObject({ failure: { reason: 'timeout' } });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('Pi 自定义供应商省略 wireProtocol（默认 openai-chat）→ 打到 /chat/completions', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'pi title' } }] }),
+    } as never);
+    const text = await requestCustomProviderText({
+      agentKind: 'pi',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      credential: '',
+      authStrategy: 'none',
+      model: 'qwen3',
+      prompt: '起个标题',
+      maxTokens: 32,
+    });
+    expect(text).toBe('pi title');
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:11434/v1/chat/completions', expect.anything());
+    const init = fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string>; body: string };
+    expect(init.headers?.['Authorization']).toBeUndefined();
+    expect(JSON.parse(init.body)).toMatchObject({
+      model: 'qwen3',
+      max_tokens: 32,
+      messages: [{ role: 'user', content: '起个标题' }],
+    });
+  });
+
+  it('codex 省略 wireProtocol 仍按默认 Responses（/responses），行为不变', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => [
+        'data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":"codex title"}]}]}}',
+        'data: [DONE]',
+        '',
+      ].join('\n'),
+    } as never);
+    const text = await requestCustomProviderText({
+      agentKind: 'codex',
+      baseUrl: 'https://custom.example/v1',
+      credential: 'k',
+      authStrategy: 'api-key-header',
+      model: 'm',
+      prompt: 'x',
+    });
+    expect(text).toBe('codex title');
+    expect(fetchMock).toHaveBeenCalledWith('https://custom.example/v1/responses', expect.anything());
+  });
 });

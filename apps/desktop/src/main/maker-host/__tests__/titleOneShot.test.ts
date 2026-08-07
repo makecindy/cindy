@@ -12,7 +12,7 @@
  * 无 electron 的 vitest 里加载;真正的凭证 / fetch / 会话 provider 全部经 deps 注入,不碰真实实现。
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetAppCapabilities, mockReadModelDisableOverrides } = vi.hoisted(() => ({
   mockGetAppCapabilities: vi.fn(() => ({ canUseCindyGateway: true })),
@@ -56,7 +56,7 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 // 自定义供应商凭证读取:tryCustomProviderTitle 走数据驱动路由时用。默认返回 null
 // (无凭证 → failed),单测按需 mockReturnValueOnce 给 key。
 const { mockReadCustomProviderKey } = vi.hoisted(() => ({
-  mockReadCustomProviderKey: vi.fn(() => null),
+  mockReadCustomProviderKey: vi.fn(() => null as string | null),
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: mockReadCustomProviderKey,
@@ -379,6 +379,32 @@ describe('generateTitleViaProviderResult — 手动重命名失败语义', () =>
     expect(result).toEqual({ status: 'failed' });
   });
 
+  it('外部 signal 在调用前已中止 → 立即失败,请求收到已中止信号(不发真实请求)', async () => {
+    await withDeepSeekCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+      const fetchImpl = vi.fn(async (_url: unknown, init: unknown) => {
+        const signal = (init as { signal?: AbortSignal })?.signal;
+        if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ content: [{ type: 'text', text: '不应出现' }] }),
+          body: { cancel: async () => undefined },
+        };
+      }) as unknown as NonNullable<TitleOneShotDeps['fetchImpl']>;
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 's-aborted', agentKind: 'claude-code', prompt: 'x', signal: AbortSignal.abort() },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect((vi.mocked(fetchImpl).mock.calls[0]?.[1] as { signal?: AbortSignal })?.signal?.aborted).toBe(true);
+    });
+  });
 });
 
 // ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────
