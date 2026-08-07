@@ -214,10 +214,19 @@ describe('resolveSubmitGuardCatalog —— 提交终检目录取信(代际安全
     expect(res).toMatchObject({ rows: rowsOf('cached'), catalogKnown: true });
   });
 
-  it('从未驱逐(gen=0)+ 无缓存 → 不 fetch,catalogKnown=false(冷启动信任,不加延迟)', async () => {
+  it('冷启动(gen=0)+ 无缓存 → join 首轮拉取(不重复发请求),成功按新目录校验(Codex P2)', async () => {
     const fetchSpy = vi.fn(baseArgs.fetch);
     const res = await resolveSubmitGuardCatalog({ ...baseArgs, gen: () => 0, fetch: fetchSpy });
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ rows: rowsOf('fetched'), catalogKnown: true });
+  });
+
+  it('冷启动(gen=0)+ 首轮拉取失败 → 未知 → 信任(fail-open 语义保持)', async () => {
+    const res = await resolveSubmitGuardCatalog({
+      ...baseArgs,
+      gen: () => 0,
+      fetch: () => Promise.reject(new Error('first load down')),
+    });
     expect(res).toMatchObject({ rows: [], catalogKnown: false });
   });
 

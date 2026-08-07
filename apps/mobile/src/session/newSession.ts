@@ -418,7 +418,20 @@ export async function resolveSubmitGuardCatalog(args: {
     const genAt = gen();
     const hit = cached();
     if (hit) return { rows: buildRows(hit), catalogKnown: true, genAt };
-    if (genAt === 0) return { rows: [], catalogKnown: false, genAt };
+    if (genAt === 0) {
+      // 冷启动:首轮拉取可能在途——join 它(缓存层 inflight 去重,不重复发请求),
+      // 成功按新目录校验,避免带着已失效的最近会话绑定提交(Codex review P2:
+      // 目录就绪后的终检 effect 来不及纠正提交);首轮拉取失败 → 未知 → 信任
+      // (原 fail-open 语义)。
+      try {
+        const fresh = await fetch();
+        if (gen() !== genAt) continue; // 拉取期间换代 → join 新代
+        return { rows: buildRows(fresh), catalogKnown: true, genAt };
+      } catch {
+        if (gen() !== genAt) continue;
+        return { rows: [], catalogKnown: false, genAt };
+      }
+    }
     try {
       const fresh = await fetch();
       // await 期间换代 → 旧 promise 返回值已过期(缓存层只拒绝回写、仍 resolve),
