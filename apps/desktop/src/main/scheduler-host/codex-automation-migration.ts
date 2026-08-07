@@ -357,6 +357,48 @@ export function createCodexAutomationMigrationService(
               name: importedSchedule.name,
             });
           } catch (error) {
+            if (!createdSchedule && isUniqueOriginConflict(error)) {
+              const concurrentSchedule = (await deps.scheduler.list()).find(
+                (schedule) =>
+                  schedule.originKind === CODEX_AUTOMATION_ORIGIN_KIND &&
+                  schedule.originId === detail.id,
+              );
+              if (concurrentSchedule) {
+                knownSchedules.push(concurrentSchedule);
+                if (converted.status === 'paused' && concurrentSchedule.manual) {
+                  try {
+                    let recoveredSchedule = concurrentSchedule;
+                    if (recoveredSchedule.status === 'active') {
+                      recoveredSchedule = await deps.scheduler.pause(recoveredSchedule.id);
+                    }
+                    if (recoveredSchedule.manual !== desiredManual) {
+                      recoveredSchedule = await deps.scheduler.update(recoveredSchedule.id, {
+                        manual: desiredManual,
+                      });
+                    }
+                    created.push({
+                      sourceId,
+                      scheduleId: recoveredSchedule.id,
+                      name: recoveredSchedule.name,
+                    });
+                  } catch (recoveryError) {
+                    failed.push({
+                      sourceId,
+                      name: detail.name,
+                      error: `${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}; schedule ${concurrentSchedule.id} remains manual and will not auto-run`,
+                    });
+                  }
+                } else {
+                  skipped.push({
+                    sourceId,
+                    name: detail.name,
+                    scheduleId: concurrentSchedule.id,
+                    reason: 'Codex automation already imported concurrently',
+                  });
+                }
+                continue;
+              }
+            }
             let errorMessage = error instanceof Error ? error.message : String(error);
             if (createdSchedule) {
               try {
@@ -379,6 +421,10 @@ export function createCodexAutomationMigrationService(
       });
     },
   };
+}
+
+function isUniqueOriginConflict(error: unknown): boolean {
+  return error instanceof Error && /unique constraint failed.*origin/i.test(error.message);
 }
 
 /** Kept as a type-only assertion for consumers that already hold a Scheduler. */

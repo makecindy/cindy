@@ -801,6 +801,7 @@ export const schedules = sqliteTable(
   (t) => ({
     idxActiveNext: index('idx_schedules_active_next').on(t.status, t.nextFireAt),
     idxTargetSession: index('idx_schedules_target_session').on(t.targetSessionId),
+    uniqOrigin: uniqueIndex('uniq_schedules_origin').on(t.originKind, t.originId),
   }),
 );
 

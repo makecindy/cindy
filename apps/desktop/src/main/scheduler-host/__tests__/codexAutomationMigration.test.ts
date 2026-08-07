@@ -340,6 +340,31 @@ describe('CodexAutomationMigrationService', () => {
     ]);
   });
 
+  it('recovers the schedule won by another process after an origin uniqueness conflict', async () => {
+    const item = detail('one');
+    const { service, scheduler } = setup([item]);
+    const concurrent = {
+      id: 'schedule-other-process',
+      ...inputFor(item),
+      originKind: 'codex-automation' as const,
+      originId: 'one',
+      status: 'active' as const,
+    } as Schedule;
+    scheduler.create.mockRejectedValueOnce(
+      new Error('UNIQUE constraint failed: schedules.origin_kind, schedules.origin_id'),
+    );
+    scheduler.list.mockResolvedValueOnce([]).mockResolvedValueOnce([concurrent]);
+
+    const result = await service.import(['one']);
+
+    expect(result.failed).toEqual([]);
+    expect(result.skipped[0]).toMatchObject({
+      sourceId: 'one',
+      scheduleId: 'schedule-other-process',
+    });
+    expect(scheduler.create).toHaveBeenCalledTimes(1);
+  });
+
   it('restores the intended automatic cadence only after a paused task is safely paused', async () => {
     const item = detail('paused', { status: 'PAUSED' });
     const { service, scheduler } = setup([item]);

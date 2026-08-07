@@ -169,6 +169,7 @@ const SCHEDULER_DDL = [
   `,
   'CREATE INDEX idx_schedules_active_next ON schedules(status, next_fire_at)',
   'CREATE INDEX idx_schedules_target_session ON schedules(target_session_id)',
+  'CREATE UNIQUE INDEX uniq_schedules_origin ON schedules(origin_kind, origin_id)',
   `
     CREATE TABLE schedule_runs (
       id TEXT PRIMARY KEY,
@@ -321,6 +322,35 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           costAttribution: 'exact',
         }),
       ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('enforces unique origin identity at the SQLite boundary', async () => {
+    const harness = createStorageHarness();
+    const first = baseSchedule({
+      id: 'sch-origin-first',
+      originKind: 'codex-automation',
+      originId: 'codex-1',
+    });
+    const duplicate = baseSchedule({
+      id: 'sch-origin-duplicate',
+      originKind: 'codex-automation',
+      originId: 'codex-1',
+    });
+
+    try {
+      await harness.storage.insert(first);
+      await expect(harness.storage.insert(duplicate)).rejects.toThrow(
+        /UNIQUE constraint failed.*origin/i,
+      );
+      await expect(harness.storage.get(first.id)).resolves.toMatchObject({
+        id: first.id,
+        originKind: 'codex-automation',
+        originId: 'codex-1',
+      });
+      await expect(harness.storage.get(duplicate.id)).resolves.toBeNull();
     } finally {
       harness.close();
     }
