@@ -1785,8 +1785,16 @@ export class ClaudeCodeAgent extends BaseAgent {
     let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    // Claude's native OAuth Auto classifier bypasses canUseTool entirely. Once a host MCP
+    // is registered, that would also bypass Cindy's trusted-server and prompt policies,
+    // leaving permission requests with no Cindy interaction surface. Keep native Auto for
+    // MCP-free sessions, but route host-MCP sessions through SDK default so canUseTool owns
+    // the decision.
+    const hasHostMcpApprovalSurface = (): boolean => registeredMcpServerNames.size > 0;
     const usesNativeClaudeAutoReview = (): boolean =>
-      !nativeAutoReviewUnavailable && mutableAutoReviewCredentialMode === 'oauth-bearer';
+      !nativeAutoReviewUnavailable
+      && mutableAutoReviewCredentialMode === 'oauth-bearer'
+      && !hasHostMcpApprovalSurface();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();

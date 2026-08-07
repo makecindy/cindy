@@ -1,6 +1,6 @@
 /**
- * Auto-review 接线集成测试:官方 Claude OAuth 保留原生 Auto classifier；第三方路由
- * 映射到 SDK default，让 canUseTool 走 Cindy 当前模型轻量 fallback。
+ * Auto-review 接线集成测试:官方 Claude OAuth 在没有 host MCP 时保留原生 Auto classifier；
+ * 一旦有 host MCP 或使用第三方路由,映射到 SDK default，让 canUseTool 走 Cindy 当前模型轻量 fallback。
  *
  * 覆盖(靶心是接线,而非策略本身 —— 策略逐规则由 auto-review-policy.test.ts 覆盖):
  *   - auto + 安全内置(只读 / 区内写 / 只读 shell)→ 静默 allow,不惊动 resolver
@@ -16,7 +16,12 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
+import type {
+  AgentDeps,
+  AgentSessionHandle,
+  McpToolApprovalContext,
+  McpToolApprovalPolicy,
+} from '../../base-agent.js';
 import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
@@ -45,6 +50,8 @@ function noopLogger(): Logger {
 function createDeps(options: {
   authSource?: 'oauth' | 'api-key';
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
+  mcpProviderNames?: readonly string[];
+  getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
 } = {}): AgentDeps {
   const auth: AuthAdapter = {
     async getState() { return { authenticated: true, authSource: options.authSource }; },
@@ -57,8 +64,12 @@ function createDeps(options: {
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: noopLogger(),
-    mcpProviders: [],
+    mcpProviders: (options.mcpProviderNames ?? []).map((name) => ({
+      name,
+      toClaudeSdkConfig: () => ({ type: 'stdio', command: 'true' }),
+    })),
     reviewAutoPermissionAction: options.reviewAutoPermissionAction,
+    getMcpToolApprovalPolicy: options.getMcpToolApprovalPolicy,
   };
 }
 
@@ -97,6 +108,8 @@ async function startSession(
     reviewer?: AgentDeps['reviewAutoPermissionAction'];
     attachResolver?: boolean;
     model?: string;
+    mcpProviderNames?: readonly string[];
+    mcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -112,6 +125,8 @@ async function startSession(
   const agent = new ClaudeCodeAgent(createDeps({
     authSource: options.authSource,
     reviewAutoPermissionAction,
+    mcpProviderNames: options.mcpProviderNames,
+    getMcpToolApprovalPolicy: options.mcpToolApprovalPolicy,
   }));
   const handle = await agent.startSession({
     sessionId: 'session-auto-review',
@@ -172,13 +187,32 @@ afterEach(async () => {
 });
 
 describe('Auto-review wiring: native first, Cindy fallback', () => {
-  it('keeps SDK auto for official Claude OAuth', async () => {
+  it('keeps SDK auto for official Claude OAuth without host MCPs', async () => {
     const { handle, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
       providerId: 'anthropic',
       authSource: 'oauth',
     });
     expect(queryPermissionMode).toBe('auto');
     expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('uses SDK default for official Claude OAuth when a host MCP is registered', async () => {
+    const { handle, canUseTool, queryPermissionMode, seen } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      mcpProviderNames: ['cindy_orca'],
+      mcpToolApprovalPolicy: () => 'auto-approve',
+    });
+    expect(queryPermissionMode).toBe('default');
+
+    const result = await canUseTool(
+      'mcp__cindy_orca__create_workers',
+      { workers: [] },
+      { toolUseID: 'oauth-orca-mcp' },
+    );
+    expect(result.behavior).toBe('allow');
+    expect(seen).toHaveLength(0);
     await handle.close();
   });
 
