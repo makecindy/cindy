@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { selectIngressDevice } from '../state';
+import { compareSchedulerStrings, selectIngressDevice } from '../state';
 
 describe('Discord scheduler election state', () => {
+  it('orders scheduler values without consulting the process locale', () => {
+    expect(compareSchedulerStrings('Z', 'a')).toBe(-1);
+    expect(compareSchedulerStrings('a', 'Z')).toBe(1);
+    expect(compareSchedulerStrings('same', 'same')).toBe(0);
+  });
+
   it('selects the same deterministic Desktop regardless of input order', () => {
     const devices = [
       {

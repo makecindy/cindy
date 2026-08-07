@@ -18,6 +18,12 @@ export interface SchedulerDevice {
 
 const DESKTOP_PLATFORMS = new Set<SchedulerPlatform>(['darwin', 'linux', 'win32']);
 
+/** Locale-independent ordering for values that participate in election state. */
+export function compareSchedulerStrings(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 export function isDesktopSchedulerPlatform(
   platform: string | null | undefined,
 ): platform is SchedulerPlatform {
@@ -44,6 +50,6 @@ export function selectIngressDevice(
           ),
       )
       .map((device) => device.deviceId)
-      .sort((left, right) => left.localeCompare(right))[0] ?? null
+      .sort(compareSchedulerStrings)[0] ?? null
   );
 }
