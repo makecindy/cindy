@@ -577,9 +577,21 @@ export function isProtectedSystemPath(target: string): boolean {
  */
 function stripDataLiterals(command: string): string {
   const QUOTED = String.raw`(?:"[^"]*"|'[^']*')`;
-  /** 抹成占位符,但**凭证路径原样留下** —— 值可能是路径,抹了红线就失去证据。 */
-  const maskUnlessCredential = (prefix: string, literal: string): string =>
-    (isSensitiveCredentialPath(literal) ? `${prefix}${literal}` : `${prefix}DATA`);
+  /**
+   * 抹成占位符,但两种情况原样留下:
+   *  - **凭证路径**:值可能是一个路径,抹了红线就失去证据(护栏一);
+   *  - **含命令替换的双引号值**:双引号里的 `$(…)` / 反引号 / `<(…)` **会执行**,不是纯数据。
+   *    `git commit -m "$(cat ~/.aws/credentials)"` 把凭证明文写进 commit,抹掉整个值会让
+   *    替换体里的凭证路径消失(替换体的递归检查只查执行类红线,不查凭证路径)—— review P1。
+   *    单引号里的 `$(…)` 不执行,但这里不区分引号种类:多留几个字面量进扫描面是 fail-closed
+   *    方向,代价只是极少数误报。
+   */
+  const EXECUTABLE_INSIDE_QUOTES = /\$\(|`|<\(/;
+  const maskUnlessCredential = (prefix: string, literal: string): string => (
+    isSensitiveCredentialPath(literal) || EXECUTABLE_INSIDE_QUOTES.test(literal)
+      ? `${prefix}${literal}`
+      : `${prefix}DATA`
+  );
   return command
     // 1) NAME='…' / NAME="…" —— 赋值的右值是数据(除非它是凭证路径)。
     .replace(
@@ -1289,13 +1301,14 @@ function isPipeExecutor(bin: string): boolean {
 function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   const bin = executableName(tokens[0] ?? '');
   if (!isPipeExecutor(bin)) return false;
-  // 裸 `-` 操作数是各解释器「从 stdin 读程序」的通用写法(`powershell -Command -`、
-  // `python3 -`、`sh -`):放在最前,不受下面任何「程序是字面量」判据影响。
-  if (tokens.slice(1).some((t) => t === '-')) return true;
   // stdin → 参数(不是程序);真正要跑的命令交下方 xargsCommandTokens 递归审查。两个例外:
   //  - `xargs sh -c`:stdin 直接变成 shell 的命令串 = 任意命令执行;
   //  - 裸 `parallel`(无命令操作数):GNU parallel 把 stdin 的每一行**当命令执行**
   //    (裸 `xargs` 不同,它缺省是 echo,无副作用)。
+  //
+  // 注意顺序:这一分支与下面的 awk 必须排在裸 `-` 判据**之前** —— 对这三个 bin,`-` 是
+  // 「stdin 作为**数据**输入」的占位符,不是「stdin 作为程序」(review 指出:
+  // `… | awk -f script.awk -` 会被误升成确定性红线)。
   if (bin === 'xargs' || bin === 'parallel') {
     if (tokens.slice(1).some((t) => SHELL_EXECUTORS.has(executableName(t)))) return true;
     return bin === 'parallel' && positionalOperands(tokens.slice(1)).length === 0;
@@ -1306,6 +1319,9 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   if (/^(?:(?:g|m|n|go)?awk)\d*(?:\.\d+)*$/.test(bin)) {
     return tokens.slice(1).some((t) => /\bsystem\s*\(|\bENVIRON\b|\|\s*["']|["']\s*\|/.test(t));
   }
+  // 裸 `-` 操作数是各解释器「从 stdin 读**程序**」的通用写法(`powershell -Command -`、
+  // `python3 -`、`sh -`)。放在 awk/xargs/parallel 之后:对它们 `-` 是数据占位符。
+  if (tokens.slice(1).some((t) => t === '-')) return true;
   // 字面量程序(shell -c / 解释器 -e/-c/--eval):静态可见,且各自另有递归审查。
   // 例外:载荷正好是 `-`(如 `powershell -Command -`、`python -c -`)是**从 stdin 读程序**
   // 的标准写法,不是字面量代码 —— 放行它等于把 `下载 | 解释器` 整条漏掉。
@@ -2189,9 +2205,17 @@ function isSafeReadonlyGh(tokens: string[]): boolean {
   if (!command || command.startsWith('-') || !sub || sub.startsWith('-')) return false;
   const safeSubs = SAFE_GH_READONLY_SUBCOMMANDS.get(command.toLowerCase());
   if (!safeSubs || !safeSubs.has(sub.toLowerCase())) return false;
-  // --web/-w 把结果转到浏览器打开;-w 可能与其它短选项簇写(如 -wL),按包含判定 fail-closed。
-  if (tokens.slice(3).some((t) => t === '--web' || /^-[a-zA-Z]*w/.test(t))) return false;
-  return true;
+  return tokens.slice(3).every((t) => {
+    // --web 把结果转到浏览器打开,行为出静态审查面。
+    if (t === '--web') return false;
+    // `gh auth status --show-token` 会把**可复用的 GitHub 令牌**打进工具输出、进而进模型
+    // 上下文 —— 这是凭证读取,必须逐次确认,不能因为 `auth status` 在只读表里就放行
+    // (review P1)。同族的 `--jq`/`--template` 不涉及,单独点名这两个。
+    if (t === '--show-token') return false;
+    // 短选项可簇写(`-wt`、`-tw`),按**包含**判定 fail-closed:`w` = --web,`t` = --show-token。
+    if (/^-[a-zA-Z]*[wt]/.test(t)) return false;
+    return true;
+  });
 }
 
 /**
@@ -2591,7 +2615,7 @@ function classifyShellSegment(
   // `/dev/nullx` 等相近路径不匹配(`(?![\w/])`),仍按普通文件写升级。
   const redirectScan = segment
     .replace(/'[^']*'|"[^"]*"/g, '')
-    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty)(?![\w/])/gi, '');
+    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)(?![\w/])/gi, '');
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
   if (OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
@@ -2655,9 +2679,12 @@ export function commandExecutableNames(command: string): string[] {
   if (typeof command !== 'string' || command.trim().length === 0) return [];
   const names = new Set<string>();
   for (const { text } of splitExecutableSegments(command)) {
+    // unwrapWrappers 已经剥掉 `env` / 环境变量赋值前缀等包装,`NODE_OPTIONS=… pnpm test`
+    // 到这里 tokens[0] 就是 `pnpm`(有用例钉住)。这里只需兜住取不到 bin 的段。
     const tokens = unwrapWrappers(tokenize(text));
     const bin = executableName(tokens[0] ?? '');
-    // 环境变量赋值前缀(`NODE_OPTIONS=… pnpm …`)不是可执行文件,跳过它继续找真正的 bin。
+    // 仍取不到可执行文件名的段(空段、纯赋值段如 `FOO=1`)不贡献名字。**不是**跳过整条命令:
+    // 其余段照常收集,所以 `FOO=1 rm -rf x && ls` 得到 {rm, ls},破坏性 bin 不会隐身。
     if (!bin || /^[A-Za-z_]\w*=/.test(bin)) continue;
     names.add(bin);
   }

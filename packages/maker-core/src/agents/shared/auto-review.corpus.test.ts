@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { classifyShellCommand } from './auto-review.js';
+import { classifyShellCommand, commandExecutableNames } from './auto-review.js';
 
 const roots = ['/repo', '/extra'];
 const opts = { cwd: '/repo', platform: 'darwin' as const };
@@ -153,6 +153,58 @@ describe('凭证路径不因数据位剥离而失去证据(review P1)', () => {
     )).toBe('auto-approve');
     // 但它要读的**文件操作数**从不参与剥离 —— 凭证路径仍然可见。
     expect(classifyShellCommand('grep -E "foo|bar" ~/.ssh/id_rsa', roots, opts)).toBe('prompt-each-time');
+  });
+});
+
+/**
+ * 第一轮 review 的其余修复(全部由 bot 定位、逐条实测确认成立)。
+ */
+describe('review 第一轮 — 其余修复', () => {
+  it('[P1] gh auth status --show-token 不放行(会把可复用令牌打进模型上下文)', () => {
+    for (const c of [
+      'gh auth status --show-token',
+      'gh auth status -t',
+      'gh auth status -wt',
+      'gh pr view 1 --show-token',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).not.toBe('auto-approve');
+    }
+    // 不带该 flag 的照常放行,不因这道护栏反向误报。
+    expect(classifyShellCommand('gh auth status', roots, opts)).toBe('auto-approve');
+  });
+
+  it('[P1] 含命令替换的引号值不当纯数据剥离(双引号里的 $() 会执行)', () => {
+    for (const c of [
+      'git commit -m "$(cat ~/.aws/credentials)"',
+      'git commit -m "`cat ~/.ssh/id_rsa`"',
+      'BODY="$(cat ~/.ssh/id_rsa)" && echo ok',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('awk / xargs / parallel 的 `-` 是数据占位符,不是"从 stdin 读程序"', () => {
+    // 判定顺序:这三个 bin 的分支必须排在裸 `-` 判据之前。
+    expect(classifyShellCommand("cat d.txt | awk -f script.awk -", roots, opts)).not.toBe('prompt-each-time');
+    expect(classifyShellCommand("cat d.txt | awk '{print $1}' -", roots, opts)).not.toBe('prompt-each-time');
+    // 但真正「stdin 就是程序」的形态一条都不能松。
+    expect(classifyShellCommand('cat x | python3 -', roots, opts)).toBe('prompt-each-time');
+    expect(classifyShellCommand("cat d.txt | awk '{system($0)}'", roots, opts)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat x | xargs sh -c', roots, opts)).toBe('prompt-each-time');
+  });
+
+  it('重定向到 /dev/fd/<n> 与其它安全伪设备同口径,不当文件写', () => {
+    expect(classifyShellCommand('ls -la 2>/dev/fd/1', roots, opts)).toBe('auto-approve');
+    expect(classifyShellCommand('git status 2>/dev/fd/2', roots, opts)).toBe('auto-approve');
+    // 相近但非伪设备的目标仍升级。
+    expect(classifyShellCommand('ls > /dev/fd/x', roots, opts)).not.toBe('auto-approve');
+  });
+
+  it('commandExecutableNames:环境变量前缀不吞掉真正的 bin,其它段照常收集', () => {
+    expect(commandExecutableNames('NODE_OPTIONS=--max-old-space-size=8192 pnpm test')).toEqual(['pnpm']);
+    // 破坏性 bin 不因前面有赋值段而隐身。
+    expect(commandExecutableNames('FOO=1 rm -rf build && ls').sort()).toEqual(['ls', 'rm']);
+    expect(commandExecutableNames('cd /repo && pnpm test').sort()).toEqual(['cd', 'pnpm']);
   });
 });
 
