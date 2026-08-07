@@ -32,6 +32,18 @@ const approval = (overrides: Partial<Extract<PiProjectApprovalSnapshot, { status
   ...overrides,
 });
 
+const provenSettingsCapabilities = {
+  projectedSettings: true,
+  packagesDisabled: true,
+  extensionsDisabled: true,
+} as const;
+
+function expectSettingsDiscovered(result: ReturnType<typeof evaluatePiProjectTrust>): void {
+  expect(result.resources.settings).toBe('discovered');
+  expect(result.settingsProjection).toBeNull();
+  expect(result.eligibleSettingsPaths).toEqual([]);
+}
+
 describe('Pi project trust contract', () => {
   it('uses canonical repo root + workingDir and isolates sibling workingDirs', () => {
     expect(piProjectKey(identity)).toBe('/repo\0/repo/packages/app');
@@ -207,12 +219,13 @@ describe('Pi project trust contract', () => {
     }).status).toBe('unapproved');
   });
 
-  it('only exposes non-empty reviewed settings projections', () => {
-    const projection: PiProjectSettingsProjection = {
-      sourcePath: '/repo/.pi/settings.json',
-      values: { compaction: { reserveTokens: 16_384, keepRecentTokens: 8_192 } },
-      revision: 'settings-rev-1',
-    };
+  const projection: PiProjectSettingsProjection = {
+    sourcePath: '/repo/.pi/settings.json',
+    values: { compaction: { reserveTokens: 16_384, keepRecentTokens: 8_192 } },
+    revision: 'settings-rev-1',
+  };
+
+  it('keeps settings discovered until every hard gate is explicitly proven', () => {
     const result = evaluatePiProjectTrust({
       identity,
       approval: approval(),
@@ -220,92 +233,78 @@ describe('Pi project trust contract', () => {
       capabilities: { projectedSettings: true },
       settingsProjection: projection,
     });
-    expect(result.resources.settings).toBe('discovered');
-    expect(evaluatePiProjectTrust({
+    expectSettingsDiscovered(result);
+  });
+
+  it('exposes a non-empty reviewed settings projection after every hard gate is proven', () => {
+    const result = evaluatePiProjectTrust({
       identity,
       approval: approval(),
       discovered,
-      capabilities: { explicitSkills: true },
-      settingsProjection: {
-        sourcePath: '/repo/.pi/settings.json',
-        values: { compaction: { reserveTokens: undefined } },
-      },
-    }).resources.settings).toBe('discovered');
-    const provenResult = evaluatePiProjectTrust({
-      identity,
-      approval: approval(),
-      discovered,
-      capabilities: { projectedSettings: true, packagesDisabled: true, extensionsDisabled: true },
+      capabilities: provenSettingsCapabilities,
       settingsProjection: projection,
     });
-    expect(provenResult.resources.settings).toBe('eligible');
-    expect(provenResult.settingsProjection).toEqual(projection);
-    expect(provenResult.eligibleSettingsPaths).toEqual([projection.sourcePath]);
-    expect(evaluatePiProjectTrust({
+    expect(result.resources.settings).toBe('eligible');
+    expect(result.settingsProjection).toEqual(projection);
+    expect(result.eligibleSettingsPaths).toEqual([projection.sourcePath]);
+  });
+
+  it.each([
+    ['undefined-only values', { compaction: { reserveTokens: undefined } }],
+    ['empty values', {}],
+    ['packages key', { packages: [] }],
+    ['extensions key', { extensions: [] }],
+    ['defaultProjectTrust key', { defaultProjectTrust: 'always' }],
+    [
+      'non-plain values',
+      Object.assign(
+        Object.create({ inherited: true }) as Record<string, unknown>,
+        { compaction: { reserveTokens: 16_384 } },
+      ),
+    ],
+    ['null values', null],
+    ['negative threshold', { compaction: { reserveTokens: -1 } }],
+  ])('rejects %s after settings hard gates are proven', (_label, values) => {
+    const result = evaluatePiProjectTrust({
       identity,
       approval: approval(),
       discovered,
-      capabilities: { projectedSettings: true },
-      settingsProjection: { sourcePath: '/repo/.pi/settings.json', values: {} },
-    }).resources.settings).toBe('discovered');
-    expect(evaluatePiProjectTrust({
+      capabilities: provenSettingsCapabilities,
+      settingsProjection: {
+        sourcePath: '/repo/.pi/settings.json',
+        values: values as PiProjectSettingsProjection['values'],
+      },
+    });
+    expectSettingsDiscovered(result);
+  });
+
+  it('rejects a reviewed projection whose source was not discovered', () => {
+    const result = evaluatePiProjectTrust({
       identity,
       approval: approval(),
       discovered,
-      capabilities: { projectedSettings: true },
+      capabilities: provenSettingsCapabilities,
       settingsProjection: { sourcePath: '/repo/.pi/other-settings.json', values: { compaction: { reserveTokens: 16_384 } } },
-    }).resources.settings).toBe('discovered');
-    for (const forbiddenKey of ['packages', 'extensions', 'defaultProjectTrust']) {
-      expect(evaluatePiProjectTrust({
-        identity,
-        approval: approval(),
-        discovered,
-        capabilities: { projectedSettings: true },
-        settingsProjection: { sourcePath: '/repo/.pi/settings.json', values: { [forbiddenKey]: [] } },
-      }).resources.settings).toBe('discovered');
-    }
-    expect(evaluatePiProjectTrust({
+    });
+    expectSettingsDiscovered(result);
+  });
+
+  it.each([
+    ['NUL', '/repo/.pi/settings\0.json'],
+    ['replacement character', '/repo/.pi/settings\uFFFD.json'],
+    ['empty path', ''],
+  ])('rejects a discovered settings source containing %s', (_label, sourcePath) => {
+    const result = evaluatePiProjectTrust({
       identity,
       approval: approval(),
-      discovered,
-      capabilities: { projectedSettings: true },
+      discovered: { ...discovered, settings: [sourcePath] },
+      capabilities: provenSettingsCapabilities,
       settingsProjection: {
-        sourcePath: '/repo/.pi/settings.json',
-        values: Object.assign(Object.create({ inherited: true }) as Record<string, unknown>, { compaction: true }),
+        sourcePath,
+        values: { compaction: { reserveTokens: 16_384 } },
       },
-    }).resources.settings).toBe('discovered');
-    for (const sourcePath of ['/repo/.pi/settings\0.json', '/repo/.pi/settings\uFFFD.json', '']) {
-      expect(evaluatePiProjectTrust({
-        identity,
-        approval: approval(),
-        discovered,
-        capabilities: { projectedSettings: true, packagesDisabled: true, extensionsDisabled: true },
-        settingsProjection: {
-          sourcePath,
-          values: { compaction: { reserveTokens: 16_384 } },
-        },
-      }).resources.settings).toBe('discovered');
-    }
-    expect(evaluatePiProjectTrust({
-      identity,
-      approval: approval(),
-      discovered,
-      capabilities: { projectedSettings: true },
-      settingsProjection: {
-        sourcePath: '/repo/.pi/settings.json',
-        values: null as unknown as Readonly<Record<string, unknown>>,
-      },
-    }).resources.settings).toBe('discovered');
-    expect(evaluatePiProjectTrust({
-      identity,
-      approval: approval(),
-      discovered,
-      capabilities: { projectedSettings: true, packagesDisabled: true, extensionsDisabled: true },
-      settingsProjection: {
-        sourcePath: '/repo/.pi/settings.json',
-        values: { compaction: { reserveTokens: -1 } },
-      },
-    }).resources.settings).toBe('discovered');
+    });
+    expectSettingsDiscovered(result);
   });
 
   it('returns a detached frozen settings snapshot', () => {
