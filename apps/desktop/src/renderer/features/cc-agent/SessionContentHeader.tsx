@@ -152,8 +152,12 @@ export function SessionContentHeader({
   // 「移动到项目」/「导出会话…」可见性与 SessionItem 同条件。
   const canMoveToProject =
     !isEmpty && !session.remoteHostId && !session.deviceLinkDeviceId && !isArchived;
+  // Orca lead 可导出(整个协同随包);Worker 会话流不走此 header 菜单,双保险仍排除。
   const canExportShare =
-    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+    !isEmpty &&
+    !session.remoteHostId &&
+    session.orcaRole !== 'worker' &&
+    !session.deviceLinkDeviceId;
   // 导出 HTML:pi 原生 export_html。仅当前打开的本地 pi 会话(需 live 进程应答 RPC),
   // 排除空会话 / 远程 / device-link / archived(archived 无 live 进程)。
   const canExportHtml =

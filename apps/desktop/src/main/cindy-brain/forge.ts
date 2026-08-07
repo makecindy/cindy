@@ -1064,6 +1064,7 @@ my-ghost/
     "ko": "locales/ko.json"
   },
   "version": "1.0.0",
+  "minCindyVersion": "1.2.3", // 可选:安装所需最低 Cindy 正式版本(SemVer)。不写=兼容所有版本;只在确实使用了新版宿主能力时声明
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:意识只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(确认框会如实标注"常驻运行",绝大多数意识不需要,仅订阅型/需秒响应的场景用)
   "slots": ["tool", "cindy", "panel"],   // 能力白名单,没声明的槽运行时不存在
@@ -1074,9 +1075,10 @@ my-ghost/
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3 */ ],
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
-  // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
-  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1)。按需申请,
-  // 每条都会在装入确认框里单独列给用户看。
+  // 类目按需申请:image / video 的动作是 "generate" | "edit";media 只有
+  // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1);
+  // text 只有 "oneshot";search 只有 "web"(Cindy 托管公网搜索)。每条都会
+  // 在装入确认框里单独列给用户看。
   "panel": { "title": "面板标题", "html": "panel.html", "position": "left",
              "minWidth": 240, "defaultFraction": 0.24,
              "systemButtons": { "maximize": false } },
@@ -1094,6 +1096,9 @@ my-ghost/
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 \`\`\`
+
+不要为“当前开发环境版本”机械填写 \`minCindyVersion\`。旧插件和不依赖新版宿主能力的
+插件应省略它；只有确认更早版本无法解析或安装时，才填写能工作的最早正式版本。
 
 ### 2.1 本地化资源(locales)
 
@@ -1239,9 +1244,11 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 文生视频 / \`edit\`=图生视频,参考图怎么用由 \`refMode\` 决定:首尾帧 1–2 张,
 或多张参考图,详见 §4 的 cindy-request 视频段)、\`media\`(\`deposit\`=把手里的
 媒体字节存进媒体库,§4.0.1)、\`text\`(\`oneshot\`=快问快答,§4.0.2)、
-\`embed\`(\`text\`=文本转向量,§4.0.3)。
+\`embed\`(\`text\`=文本转向量,§4.0.3)、\`search\`(\`web\`=Cindy 托管
+公网搜索,见 §4 的 \`search_web\` 段)。
 详单里没申请的动作,运行时点单直接被拒;声明了 cindy 槽却漏写详单 = 零能力,
-别漏。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
+别漏。\`search.web\` 只能由真实 tool-call 触发,还必须同时声明 \`tool\` 槽和
+至少一个工具。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
 
 **network 详单**(声明了 network 槽时必写,详见 §4.7):
 
@@ -1471,10 +1478,25 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //     聊天卡片时用它按比例精确声明卡高(见 §4.5),别拿去写进交卷文案。
 // 图像可选画幅 aspectRatio:'1:1' 方图 / '3:2' 横图 / '2:3' 竖图,不传 = 后端自定:
 //   { kind: 'gen_image', prompt: '一只猫', aspectRatio: '3:2' }
+
 //   比例是意图声明(同 tier 哲学),主机翻译成该模型支持的具体尺寸,真实像素
 //   以返回的 width/height 为准。**图像类专用**(gen_image 与 edit_image 都收;
 //   改图不传 = 跟随源图画幅);视频画幅是另一个参数 ratio,值域不同,带错会被拒。
 //   用户没提横竖要求时别自作主张,不传让后端自定。
+//
+// Cindy 托管 Web Search(需声明 cindy.search:["web"]):
+// provider 固定为 cindy,主机固定 Anthropic Messages 搜索模型与上游凭证;
+// 不接受 api_base/header/key/model/tool。
+const search = await cindy.send({
+  type: 'cindy-request',
+  kind: 'search_web',
+  query: 'Cindy 最新版本',
+  limit: 5,                       // 可选,1–10,缺省 5
+  provider: 'cindy',
+  callId: msg.callId,             // 搜索只由 tool-call 触发,必须透传
+  callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
+});
+// search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
 // 改图(需详单含 "edit";源图必须是本意识名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
@@ -1605,12 +1627,14 @@ await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash })
 
 \`\`\`js
 // 需声明:"slots": [..., "cindy"], "cindy": { "text": ["oneshot"] }
+// 可选偏好:"cindy": { "text": ["oneshot"], "oneshotModel": "codex/gpt-5.5" }
 const r = await cindy.send({
   type: 'cindy-request',
   kind: 'oneshot_text',
   prompt: '把下面的反馈按情绪分成 正面/负面/中性,只回类别词:\\n' + feedback,
   // expectJson: true,     // 可选:要求只输出 JSON,主机校验可解析
-  // maxTokens: 256,       // 可选:回答预算(1–4096,缺省 1024)
+  // maxTokens: 256,       // 可选:插件自限输出(正整数)。快问快答不设输出上限——
+                          // 与宿主会话一致,按所选供应商/模型的自然输出,60s 超时兜底
   callId: msg.callId,      // tool-call 触发时务必带上(归因)
 });
 // 成功:{ ok:true, text:'…', model:'…' }(model = 实际应答的通道/型号,仅诊断)
@@ -1622,7 +1646,13 @@ const r = await cindy.send({
 - 它走主机的**轻量任务模型链**(用户在设置里配置的快速通道,与会话自动起
   标题同一条),不拉起 Agent、没有工具、碰不到用户文件、不进任何会话——
   要"干活"(读文件、查资料、多步操作)请用派活(§4.11.1);
-- 选型不在你手里,也没有 tier/model 参数:链由用户配置,主机逐候选兜底;
+- 选型仍不在你手里(没有 tier/model 参数),但有两级偏好:**用户可在插件
+  详情页把这项能力钉到他供应商列表里的任意文本模型**(钉死,失败不回落);
+  你也可以在身份卡 \`cindy\` 里声明 \`"oneshotModel": "<目录模型 id>"\` 表达
+  偏好——主机目录解析得到(且用户没停用)就用它,解析不到按未声明处理。
+  优先级:用户钉档 > 你的声明 > 系统默认链。声明只表达意图,别拿它当可用性
+  保证;**更老的宿主会整份拒装含此字段的身份卡**(cindy 详单未知类目硬拒),
+  声明前确认目标用户群的主机版本;
 - \`errorCode:'NO_CANDIDATE'\` = 用户当前没有可用的快速通道(未配置或凭证
   不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸;
 - \`expectJson: true\` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回

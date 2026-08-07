@@ -81,6 +81,38 @@ async function mountAndKick() {
 
 const flush = () => act(async () => {});
 
+describe('EnvCheckContext dev 短路径的 ripgrep fail-fast (#1956)', () => {
+  // vitest 下 import.meta.env.DEV === true,mount 的 auto-check 走 dev 短路径,
+  // 只消费 envCheckCalls[0]。
+  it('dev:ripgrep failed 进 failed 态,不被 dev 的无条件放行吞掉', async () => {
+    const view = renderHook(() => useEnvCheck(), { wrapper });
+    await waitFor(() => expect(envCheckCalls.length).toBe(1));
+
+    await act(async () => {
+      envCheckCalls[0].resolve({
+        allPassed: false,
+        ripgrep: { status: 'failed', error: 'Bundled ripgrep not found' },
+      });
+    });
+
+    await waitFor(() => expect(view.result.current.status).toBe('failed'));
+  });
+
+  it('dev:claude/codex 缺失维持既有放行(只有 ripgrep 失败才拦)', async () => {
+    const view = renderHook(() => useEnvCheck(), { wrapper });
+    await waitFor(() => expect(envCheckCalls.length).toBe(1));
+
+    await act(async () => {
+      envCheckCalls[0].resolve({
+        allPassed: false,
+        claudeCode: { status: 'failed', error: 'no claude binary' },
+      });
+    });
+
+    await waitFor(() => expect(view.result.current.status).toBe('passed'));
+  });
+});
+
 describe('EnvCheckContext 启动下载进度时序', () => {
   it('热更先下(常态):Phase 2 在途期间热更进度直接驱动 splash,二进制接管时归零', async () => {
     const { result } = await mountAndKick();

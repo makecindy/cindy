@@ -38,7 +38,7 @@ Orca 是 Cindy Desktop 内的多 agent 协同能力：一个 **Lead session** �
 
 - 多 worker：同一个 active team 下可创建多个 worker，支持 role、label、focused worker 切换、soft/hard limit 与归档。
 - Split view：Lead 与 focused Worker 共用 `OrcaSplitView` pane 外壳，宽屏为左右 split，doc rail 为 Lead/Worker toggle。见 `apps/desktop/src/renderer/features/cc-agent/OrcaSplitView.tsx` 的 `OrcaSplitView`、`OrcaPaneShell`。
-- Claude Code 与 Codex 的普通 Lead 无论是项目还是对话都可开启协同；SSH 远端会话两端均可作 Lead（远端 agent 经 SSH remote-forward 直连本机 HTTP MCP bridge，`cindy_orca` 在两端都可用：codex 走 daemon config 注入，cc 走 per-query http 注入）；device-link 被控端的项目与对话同样可作 Lead（Lead / Worker / team 的真身都在被控端，控制端只是镜像）。renderer 的入口判定收敛在 `apps/desktop/src/renderer/features/cc-agent/collabEntryPolicy.ts` 的 `resolveCollabEntryPolicy`，新建草稿（`NewMakerDraftRoute`）与会话视图（`CCAgentSessionView` 的 `allowCollabToggle`）共用同一份：普通 Lead 都显示入口，只排除不能嵌套协同的 Orca Worker 子会话。项目按项目级策略查询；Main 的 `resolveLocalCollabPolicyWorkingDir` 同时服务入口状态查询与最终授权，只有 workspace kind 为 dialogue 且 Main 确认目录位于 app 托管 dialogue root 时才只查用户级/全局级策略（即使 cwd 内出现 `.cindy/plugins.json`），显式绑定真实目录的对话仍按该目录的项目级策略查询，不能靠自报 `workspaceKind` 绕过项目禁用。
+- 本地 Claude Code、Codex 与 Pi 的普通 Lead 无论是项目还是对话都可开启协同，本地 Worker 也支持这三类 agent；Pi 当前仅支持本地 Lead / Worker，不支持 SSH 远程协同。SSH 远端会话的 Claude Code 与 Codex 两端均可作 Lead（远端 agent 经 SSH remote-forward 直连本机 HTTP MCP bridge，`cindy_orca` 在两端都可用：codex 走 daemon config 注入，cc 走 per-query http 注入）；device-link 被控端的项目与对话同样可作 Lead（Lead / Worker / team 的真身都在被控端，控制端只是镜像）。renderer 的入口判定收敛在 `apps/desktop/src/renderer/features/cc-agent/collabEntryPolicy.ts` 的 `resolveCollabEntryPolicy`，新建草稿（`NewMakerDraftRoute`）与会话视图（`CCAgentSessionView` 的 `allowCollabToggle`）共用同一份：普通 Lead 都显示入口，只排除不能嵌套协同的 Orca Worker 子会话。项目按项目级策略查询；Main 的 `resolveLocalCollabPolicyWorkingDir` 同时服务入口状态查询与最终授权，只有 workspace kind 为 dialogue 且 Main 确认目录位于 app 托管 dialogue root 时才只查用户级/全局级策略（即使 cwd 内出现 `.cindy/plugins.json`），显式绑定真实目录的对话仍按该目录的项目级策略查询，不能靠自报 `workspaceKind` 绕过项目禁用。
 - Codex Lead 使用全局注册的 `cindy_orca`，调用时通过 context 恢复身份并在 handler 内拒绝越权。远端 Codex 同样走 `params._meta.threadId` 路由——remote thread 与本地 thread 一样注册进 `CodexMcpThreadContextStore`（`packages/maker-core/src/agents/codex/index.ts` 的 `registerCodexMcpContext` 不再跳过 remoteHostId）。远端 cc 没有 threadId，身份走持久 bearer token + URL `?session=<id>` 路由（`codexHttpBridge.registerSessionCtx`），审批归属快照在 `remoteCcQueryFactory` 注入后按 `startParams.mcpServers` 最终清单定稿。
 - SSH 远端 Codex 的 MCP 桥接：本机 `codexHttpBridge` 在原有 per-run 主 token 之外接受一个 persistent bearer token（safeStorage）；`remote-ssh/codex-remote-mcp.ts` 在 session start/resume 前置完成 per-host 固定端口 remote-forward（`RemoteHost.openRemoteForward`，重连自动 rebind）、远端 `$CODEX_HOME/config.toml` 的 `mcp_servers` 管理段漂移检测（行级 marker + 剥离用户同名 table）与 daemon 幂等 bootstrap（token 只经 stdin 的 KEY=value 块注入，不进 argv）；config 漂移需要重启 daemon 时若同 host 有 live turn 则本次降级（留待下次 ensure）。worker 创建经 `OrcaLeadSessionSnapshot.remoteHostId` 继承在同一台远端主机 spawn，创建前走 `ensureRemoteReadyForSessionStart`（SSH 重连 / agent 安装 / MCP 注入）；lazy resume 与 Orca worker 唤醒路径同样先 ensure 再 bootstrap。
 - PR #107 提供 side_chat 的底层 fork 数据动作：user/assistant 消息都能 fork，assistant 按 turn 粒度复制，Claude 用 uuid 锚点，Codex 用 ThreadFork + ThreadRollback。当前作为普通 session 跳转；未来要登记为 side activity 并挂入统一 pane。
@@ -51,7 +51,7 @@ Orca 是 Cindy Desktop 内的多 agent 协同能力：一个 **Lead session** �
 - workflow_run / CC Workflow 编排还未纳入当前实现。
 - side_chat 尚未登记为 side activity 对象，也未挂进 pane；PR #107 只是 fork 数据动作。
 - device-link 协同的 Lead / Worker / team 全部在被控端进程内编排，控制端只按 session 来源经隧道路由（`makerTransport` 的 `makerApiFor` / `orcaWorkflowsFor` / `subscribeOrcaWorkerChanged`，channel 见 `packages/device-link/src/allowlist.ts` 的 Orca 段）。collab 开关同样查被控端（`maker:plugins:get-state` 经 `pluginEnableStateFor`）：项目读取被控端项目级策略，对话读取被控端用户级/全局级策略。控制端本机状态不能代表被控端真相。老被控端没有该 channel 时回 `CHANNEL_NOT_ALLOWED`，控制端 fail-closed 置灰入口并提示设备版本过旧，而不是放行到 `enableOrca` 才撞错。
-- SSH 远端协同支持 codex 与 claude-code 两类 lead + 远端 worker（继承 remoteHostId）。cc 远端经 `cc-remote-mcp.ts` 把 `cindy_orca` / `orca_worker_bridge` 以 http 形态追加进 `startParams.mcpServers`（persistent token + `?session=` 路由，白名单仅此两个 server）。远端 worker 手动 `send_to_lead` 依赖 daemon 侧 `orca_worker_bridge` 经同一 bridge 可达；auto-bridge 回报不依赖 worker 侧 MCP，天然可用。共享 userData 多实例连同一远端 host 时，只有先建立 SSH 转发的实例能持有该 host 的 MCP bridge 端口，其余实例按“远端无 MCP”降级（与历史行为一致）。远端会话的项目级 collab 开关不查本机 fs；`assertCollabProjectEnabled` 对 remote 只查用户级/全局级开关，远端项目级配置机制是 follow-up。
+- SSH 远端协同仅支持 codex 与 claude-code 两类 lead + 远端 worker（继承 remoteHostId），不支持 Pi Lead 或 Pi Worker。cc 远端经 `cc-remote-mcp.ts` 把 `cindy_orca` / `orca_worker_bridge` 以 http 形态追加进 `startParams.mcpServers`（persistent token + `?session=` 路由，白名单仅此两个 server）。远端 worker 手动 `send_to_lead` 依赖 daemon 侧 `orca_worker_bridge` 经同一 bridge 可达；auto-bridge 回报不依赖 worker 侧 MCP，天然可用。共享 userData 多实例连同一远端 host 时，只有先建立 SSH 转发的实例能持有该 host 的 MCP bridge 端口，其余实例按“远端无 MCP”降级（与历史行为一致）。远端会话的项目级 collab 开关不查本机 fs；`assertCollabProjectEnabled` 对 remote 只查用户级/全局级开关，远端项目级配置机制是 follow-up。
 
 ### 核心概念与数据模型
 
@@ -80,8 +80,8 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 | 服务 | 文件 | 责任 |
 |---|---|---|
-| `OrcaLifecycleService` | `apps/desktop/src/main/maker-ipc/orcaLifecycleService.ts` | `start_team`、开启协同 `enableTeam`、创建 team、设置 Lead `orcaRole`、首个 worker 创建补偿 |
-| `OrcaWorkerCreationService` | `apps/desktop/src/main/maker-ipc/orcaWorkerCreationService.ts` | 既有 team 下创建 worker，统一 role/label/model/effort/fast 校验与默认值；新 Worker 的 `permissionMode` 固定为 `auto`，不继承 Lead 当前模式；创建 worker session 并写 `orca_workers` |
+| `OrcaLifecycleService` | `apps/desktop/src/main/maker-ipc/orcaLifecycleService.ts` | `start_team`、开启协同 `enableTeam`、创建 team、读取或更新 Worker 创建权限偏好、设置 Lead `orcaRole`、首个 worker 创建补偿 |
+| `OrcaWorkerCreationService` | `apps/desktop/src/main/maker-ipc/orcaWorkerCreationService.ts` | 既有 team 下创建 worker，统一 role/label/model/effort/fast 校验与默认值；新 Worker 使用 `workerCreationPrefs` 的权限偏好，不继承 Lead 当前模式；创建 worker session 并写 `orca_workers` |
 | `OrcaTeamService` | `apps/desktop/src/main/maker-ipc/orcaTeamService.ts` | 给既有 worker 派活、resume、idle、archive、terminal turn 处理与 auto-bridge |
 | `OrcaInterAgentDispatcher` | `apps/desktop/src/main/maker-ipc/orcaInterAgentDispatcher.ts` | Lead/Worker 之间的消息直发或排队、accepted callback、rollback/settle 语义 |
 
@@ -116,6 +116,14 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 `cindy_orca` 直接注册到顶层，而不是藏在 `list_tools/call_tool` 后面；模型在“开协同 / 派 worker”时需要稳定发现 `start_team/create_worker`。实现见 `packages/lizi-mcps/src/orca/server.ts` 的 `createOrcaMcpServer`、`DirectToolSink`、`OrcaMcpDeps`。
 
+Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast 的“下次创建默认值”同类，不是 Lead 权限的继承项，也不是 Team 数据库字段：
+
+- 真源是 renderer `workerCreationPrefs` localStorage；main 只保存内存镜像，应用启动和偏好变化时由 renderer 同步。
+- 没有保存过权限偏好时，产品默认是 `bypassPermissions`（Full access）；这只是可选择的初始值，不是固定模式。UI 每次创建 Worker 都可改选 `auto` 或 `bypassPermissions`，提交后成为下一次默认值；已经保存过的选择继续优先，不随产品默认值变化而改写。
+- MCP `start_team` 可显式指定 `worker_permission_mode`；省略时沿用当前偏好。显式从 `auto` 升级到 `bypassPermissions` 时，Main 必须在写入偏好或创建 Team 前等待宿主持有的用户确认，不能只依赖 MCP 审批、tool 描述或 prompt；取消／超时不得产生副作用。确认通过后才更新 main 镜像，并通知 renderer 回写同一份 localStorage。已由用户保存为 `bypassPermissions` 时，后续沿用不重复确认。
+- `create_worker` / `create_workers` 省略权限参数，统一读取当前偏好；不继承 Lead 的 `sessions.permission_mode`，也不修改已经创建的 Worker。
+- device-link 新控制端只有在被控端 capabilities 明确声明支持 Worker 权限选择时才允许开启协同；已有旧版远程 Team 继续兼容旧创建行为，不宣称或回写该端不支持的偏好。
+
 工具注册是全局可见 + handler 拒绝：
 
 - 工具可见性不是权限边界：`providers.ts` 的 `cindy_orca` provider 没有 per-role `isEnabled` gate，普通 session / worker / lead 的差异必须由 handler 和 host service 拒绝。
@@ -128,12 +136,13 @@ Codex app-server 是单例进程，多 thread 共用同一批 MCP server。Codex
 
 关键约束：`mcp-session-id` 只标识 MCP transport，不证明 maker session 归属，因此**不作为路由依据**。Codex HTTP bridge 在已初始化的 MCP POST message 里读取 `params._meta.threadId`，用它查 maker-core 注册的 Codex thread context；缺失、未知、batch 内不一致或不完整时，bridge 宁可不给 context（让工具调用安全降级为 NO_SESSION_CONTEXT），也不猜一个错误 context 造成跨会话串线。实现见 `apps/desktop/src/main/mcp-integrations/codexHttpBridge.ts` 的 MCP bridge request handling，以及 `apps/desktop/src/main/mcp-integrations/codexMcpThreadContextStore.ts` 的 `registerThreadContext`、`unregisterThreadContext`、`getContextForThreadId`。
 
-Codex prompt / developerInstructions 有双通道：
+Codex `developerInstructions` 有两条投递通道。最终选择取决于本 thread 的 Responses 传输形态以及 proxy registry 是否可用，不能只按凭据类型，也不能只看请求是否进入 loopback proxy。凭据类型会参与 provider 选择，但不是 instructions 通道的最终判据；在 proxy 就绪的本地 `oauth-bearer` host 中，`cindy_gateway` 与 `cindy_openai` 的 `base_url` 都指向同一个 proxy：
 
-- API key 模式：走 local proxy registry，把拼好的 instructions 按 thread 注册，再由 proxy 注入顶层 instructions。实现见 `packages/maker-core/src/agents/codex/index.ts` 的 `registerCodexDeveloperInstructions`、`apps/desktop/src/main/maker-host/index.ts` 的 Codex agent deps、`apps/desktop/src/main/maker-host/codex-proxy-host.ts` 的 `registerComposed`。
-- OAuth / 非 proxy 模式：直接把 developerInstructions 放进 `thread/start`；resume 时按会话的产品 prompt 状态决定是否补发。实现见 `packages/maker-core/src/agents/codex/index.ts` 的 `ThreadStart/ThreadResume` 参数组装。
+- `cindy_gateway`：`supports_websockets=false`，使用可解析请求正文的 HTTP Responses。proxy 就绪时，API key／gateway、`codex/` 前缀、第三方 provider，以及其它依赖正文路由或兼容改写的请求都使用这个 provider；proxy registry 通道可用时，maker-core 把启动时拼好的 instructions 按 thread 注册，再由 proxy 注入顶层 `instructions`。通道不可用时，只有满足下述 `gateway-key` 直连降级条件的会话改走原生通道。实现见 `apps/desktop/src/main/maker-host/codex-gateway-config.ts` 的 provider 装配、`packages/maker-core/src/agents/codex/index.ts` 的 `registerCodexDeveloperInstructions`，以及 `apps/desktop/src/main/maker-host/codex-proxy-host.ts` 的 `registerComposed`。
+- `cindy_openai`：只在 `oauth-bearer` host 中定义，并由官方订阅 thread 显式选择；`supports_websockets=true`，Codex 默认使用 Responses WebSocket。loopback proxy 在这条通道上只做 socket 隧道，看不到也不能改写请求正文，因此 instructions 由 `thread/start`／`thread/resume` 的原生 `developerInstructions` 承载。即使 proxy 用 426 让该 session 降级到 HTTP，也继续以原生通道为唯一投递来源，不能临时切成 registry 注入。
+- proxy 不可用时不能假装 registry 仍有效：当前仅 `gateway-key` host 允许退化为直连 gateway，maker-core 会改走原生 `developerInstructions`；OAuth 与第三方凭证注入依赖 proxy，启动失败时 fail closed。
 
-因此 Codex Lead 不依赖 proxy 才能注入提示词；proxy 只是 API key 模式下更稳定的投递通道。
+任何依赖宿主追加 instructions 的能力都必须复用 `isCodexProxyChannelReady`／`useProxyChannel` 的完整判定（host proxy active、thread 非 WebSocket、registry 注册 hook 可用），为每个 thread 选择且只选择一个投递来源；禁止按 API key／OAuth 另做一套推导，也禁止为了兜底同时走两条通道。未来若要在会话运行中刷新任意上下文，设计必须分别说明 HTTP registry 与 app-server 原生通道的更新入口，以及 start／resume／compact 后如何保持一致；原生通道没有运行期更新能力时，不得宣称 WebSocket thread 支持逐请求刷新。
 
 #### ADR：Codex per-role 工具隔离不走 proxy 改写 tools
 
@@ -253,6 +262,7 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 当前文档要求保留以下回归方向：
 
 - Service 边界：`orcaLifecycleService`、`orcaWorkerCreationService`、`orcaTeamService` 的单测覆盖 start/enable/create/dispatch/idle/archive/auto-bridge 关键路径。
+- Worker 创建权限偏好：覆盖无保存偏好时默认 `bypassPermissions`、已保存的 `auto` / `bypassPermissions` 继续优先、MCP 显式 `auto → bypassPermissions` 必须先经用户确认且取消／超时零副作用、复用 Team 时省略不重置／显式才更新、首个与后续 Worker 都读取共享创建偏好、已有 Worker 权限不反写、renderer localStorage 启动同步与 tool 写回，以及旧 device-link 被控端被阻止开启协同并提示升级。
 - MCP 工具：`cindy_orca` 16 工具（13 team + 3 只读诊断）的 role gate、ctx 缺失、worker/main 误调用、soft/hard limit、duplicate label、budget model API mode gate；`create_workers` 另覆盖默认 hard limit、配置 hard=3、部分成功、连续失败与 hard-limit 后不再调用 host；诊断工具的纯只读语义（无 active team 时返回空 workspace、不建 team）；排队消息控制 3 工具的归属校验（跨 lead 拒绝）、非 lead 条目拒绝（`NOT_LEAD_MESSAGE`）、steering 拒绝（`MESSAGE_CONSUMING`）、撤回结清 accepted 暂存。
 - Codex MCP context：`CodexMcpThreadContextStore` 覆盖按 threadId 查 context、unknown / missing threadId fail-closed、unregister 后清理、`vendorOptions` 引用保持；`codexHttpBridge` 覆盖从 JSON-RPC `params._meta.threadId` 注入真实 session context。
 - Host 归属校验：`send_to_worker`、`idle_worker`、`archive_worker` 经共享 `resolveWorkerRef`（同时接受 worker_id / session_id 两种 id）必须以 caller 自身 Lead 身份校验，拒绝跨 workflow worker id 与 ctx 缺失；即使模型传错 id 或换用另一种 id，也不能越权操作。

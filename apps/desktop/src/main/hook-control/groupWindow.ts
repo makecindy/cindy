@@ -25,6 +25,7 @@ import {
   assembleGroupWindowContext,
   createFenceNeutralizer,
   recordGroupWindowEntry,
+  resetGroupWindowCursors,
   type GroupContextAssembly,
 } from '../im/shared/groupWindowCore.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -124,8 +125,8 @@ export async function sweepGroupWindowExpired(): Promise<void> {
 }
 
 /**
- * 每 lane 的增量游标(上次拼装到的窗口行 id)。内存态: 重启后首次派发会
- * 重新包含整个窗口(一次性冗余, 可接受), 之后恢复增量语义。
+ * 每 lane 的增量游标(上次拼装到的窗口行 id)。内存态只作热缓存, 持久事实在
+ * hook_group_context_cursors; 重启后首次派发从本地 DB 恢复增量语义。
  */
 const contextCursors = new Map<string, number>();
 
@@ -141,7 +142,7 @@ const NO_CONTEXT: GroupContextAssembly = { prefix: '', commit: () => undefined }
 
 /**
  * 为一次 hook 派发组装本地群上下文前缀。非群 lane / 窗口为空返回空装配。
- * 只读窗口; 游标推进延迟到 commit(由 dispatcher 在任务受理后调用)。
+ * 只读窗口; 游标推进延迟到 commit(由 dispatcher 在 provider 实际受理后调用)。
  */
 export async function buildGroupContextPrefix(
   payload: TaskDispatchPayload,
@@ -172,9 +173,25 @@ export async function buildGroupContextPrefix(
   });
 }
 
-/** 测试与登出清理: 重置内存游标(窗口行随 DB 生命周期)。 */
-export function resetGroupContextCursors(): void {
-  contextCursors.clear();
+/** 测试与登出清理: 只清理官方群 provider 的内存态与持久游标。 */
+export function resetGroupContextCursors(options?: {
+  clearPersisted?: boolean;
+}): Promise<void> {
+  return resetGroupWindowCursors({
+    cursors: contextCursors,
+    providerPrefixes: ['telegram:'],
+    providerNames: ['telegram'],
+    ...(options?.clearPersisted === false ? { clearPersisted: false } : {}),
+  });
+}
+
+/** 同步生命周期入口使用的安全收口: 异步清理失败只记日志, 不产生 unhandled rejection。 */
+export function resetGroupContextCursorsSafely(options?: {
+  clearPersisted?: boolean;
+}): void {
+  void resetGroupContextCursors(options).catch((error: unknown) => {
+    log.warn(`group context cursor reset failed: ${String(error)}`);
+  });
 }
 
 /** 设置卡数据源：官方群窗口里出现过的群，按最近活跃排序。 */

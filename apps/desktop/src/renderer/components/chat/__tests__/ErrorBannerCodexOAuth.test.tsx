@@ -810,7 +810,11 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.continueAfterReset' }));
+    const continueButton = screen.getByRole('button', {
+      name: 'chat.errorBanner.continueAfterReset',
+    });
+    expect(continueButton.getAttribute('data-split-pane-route-action')).toBe('');
+    fireEvent.click(continueButton);
     expect(onContinueAfterUsageReset).toHaveBeenCalledOnce();
 
     rerender(

@@ -64,7 +64,7 @@ describe('ChatInput session switch focus contract', () => {
 
   it('enables storageKey refocus for routed session and new-draft views', () => {
     expect(sessionViewSource).toContain(
-      'const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;',
+      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
     expect(newMakerDraftRouteSource).toContain('focusOnStorageKeyChange');
@@ -98,7 +98,12 @@ describe('ChatInput session switch focus contract', () => {
     expect(pluginPageSource.match(/focusAtEnd: true/g)).toHaveLength(1);
     expect(
       chatInputSource.match(/placeGhostAtComposerStart\(editor, ghost, installedGhosts\)/g),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(
+      chatInputSource.match(
+        /placeGhostAtComposerStart\(editor, ghost, installedGhostsRef\.current\)/g,
+      ),
+    ).toHaveLength(1);
     expect(chatInputSource).toContain('pendingGhostId: undefined');
     expect(chatInputSource).toContain('focusComposerEndNextFrame(editor);');
   });

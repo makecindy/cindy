@@ -1520,3 +1520,20 @@ export const hookGroupMessages = sqliteTable(
     byWindow: index('hook_group_messages_window_idx').on(t.provider, t.chatId, t.threadId, t.id),
   }),
 );
+
+/**
+ * 群消息窗口的已提交游标。游标与消息池同属本地 DB，但按 provider 命名空间
+ * 隔离，登出/换绑时只清理对应 bot 的行。
+ */
+export const hookGroupContextCursors = sqliteTable(
+  'hook_group_context_cursors',
+  {
+    provider: text('provider').notNull(),
+    cursorKey: text('cursor_key').notNull(),
+    cursorId: integer('cursor_id').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.provider, t.cursorKey] }),
+  }),
+);

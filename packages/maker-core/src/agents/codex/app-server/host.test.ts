@@ -1038,11 +1038,13 @@ describe('AppServerHost descendant notification routing', () => {
     const itemStarted = vi.fn();
     const tokenUsageUpdated = vi.fn();
     const turnCompleted = vi.fn();
+    const turnDiffUpdated = vi.fn();
     const subscription = host.subscribeThread('root-thread', {
       descendantNotification,
       itemStarted,
       tokenUsageUpdated,
       turnCompleted,
+      turnDiffUpdated,
     });
 
     transport.emit({
@@ -1066,32 +1068,45 @@ describe('AppServerHost descendant notification routing', () => {
       method: 'turn/completed',
       params: { threadId: 'grandchild-thread', turn: { id: 'turn-g1', status: 'completed' } },
     };
+    const childDiff = {
+      method: 'turn/diff/updated',
+      params: { threadId: 'child-thread', turnId: 'turn-c1', diff: 'diff --git a/a b/a' },
+    };
     transport.emit(childItem);
     transport.emit(childUsage);
     transport.emit(grandchildTurn);
+    transport.emit(childDiff);
 
     expect(descendantNotification.mock.calls).toEqual([
       ['child-thread', 'item/started', childItem.params],
       ['child-thread', 'thread/tokenUsage/updated', childUsage.params],
       ['grandchild-thread', 'turn/completed', grandchildTurn.params],
+      ['child-thread', 'turn/diff/updated', childDiff.params],
     ]);
     // 关键隔离:子线程事件绝不能进主线程 handler —— 否则子代理的 exec 会被渲染成
     // 主会话自己的工具调用,并污染主 turn 的 usage 与状态机。
     expect(itemStarted).not.toHaveBeenCalled();
     expect(tokenUsageUpdated).not.toHaveBeenCalled();
     expect(turnCompleted).not.toHaveBeenCalled();
+    expect(turnDiffUpdated).not.toHaveBeenCalled();
 
     // 主线程自己的同名事件照旧走主通道。
     transport.emit({
       method: 'item/started',
       params: { threadId: 'root-thread', turnId: 'turn-r1', item: { id: 'i-2', type: 'commandExecution' } },
     });
+    const rootDiff = {
+      method: 'turn/diff/updated',
+      params: { threadId: 'root-thread', turnId: 'turn-r1', diff: 'diff --git a/b b/b' },
+    };
+    transport.emit(rootDiff);
     expect(itemStarted).toHaveBeenCalledTimes(1);
-    expect(descendantNotification).toHaveBeenCalledTimes(3);
+    expect(turnDiffUpdated).toHaveBeenCalledWith(rootDiff.params);
+    expect(descendantNotification).toHaveBeenCalledTimes(4);
 
     await subscription.release();
     transport.emit(childItem);
-    expect(descendantNotification).toHaveBeenCalledTimes(3);
+    expect(descendantNotification).toHaveBeenCalledTimes(4);
     // thread/started 只走专用的 descendantThreadStarted,不重复出现在本通道。
     expect(descendantNotification.mock.calls.some(([, method]) => method === 'thread/started')).toBe(false);
 

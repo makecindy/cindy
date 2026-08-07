@@ -28,6 +28,8 @@ function fakeGhost(
       media?: string[];
       text?: string[];
       embed?: string[];
+      search?: string[];
+      oneshotModel?: string;
     } | null;
   } = {},
 ): InstalledGhost {
@@ -74,6 +76,9 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   depositMedia: ReturnType<typeof vi.fn>;
   depositUsageBytes: ReturnType<typeof vi.fn>;
   releaseDeposit: ReturnType<typeof vi.fn>;
+  searchWeb: ReturnType<typeof vi.fn>;
+  claimPipeCall: ReturnType<typeof vi.fn>;
+  settlePipeCallClaim: ReturnType<typeof vi.fn>;
 } {
   const generateImage = vi.fn(async () => ({
     buffer: new Uint8Array([1, 2, 3]),
@@ -143,6 +148,19 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   );
   const depositUsageBytes = vi.fn(async () => 0);
   const releaseDeposit = vi.fn(async () => true);
+  const searchWeb = vi.fn(async () => ({
+    ok: true as const,
+    results: [
+      {
+        title: 'Cindy',
+        url: 'https://example.test/cindy',
+        snippet: 'Search result',
+      },
+    ],
+    requestId: 'search-call-1',
+  }));
+  const claimPipeCall = vi.fn(() => true);
+  const settlePipeCallClaim = vi.fn(() => true);
   const slot = new GhostCindySlot({
     getGhost: () => fakeGhost(),
     getOwnerScopeKey: () => 'cloud:test-owner:1',
@@ -162,6 +180,9 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     depositMedia,
     depositUsageBytes,
     releaseDeposit,
+    searchWeb,
+    claimPipeCall,
+    settlePipeCallClaim,
     ...overrides,
   } as CindySlotDeps);
   return {
@@ -180,6 +201,9 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     depositMedia,
     depositUsageBytes,
     releaseDeposit,
+    searchWeb,
+    claimPipeCall,
+    settlePipeCallClaim,
   };
 }
 
@@ -285,6 +309,194 @@ describe('载荷校验', () => {
     expect(videoBad).toMatchObject({ ok: false });
     expect((videoBad as { message: string }).message).toContain('ratio');
     expect(generateVideo).not.toHaveBeenCalled();
+  });
+});
+
+describe('Cindy Web Search', () => {
+  const SEARCH_REQ = {
+    type: 'cindy-request',
+    kind: 'search_web',
+    query: '  Cindy Web Search  ',
+    provider: 'cindy',
+    callId: 'call-search-1',
+    callerTool: 'research',
+  };
+
+  const searchGhost = () => fakeGhost({ model: { search: ['web'] } });
+
+  it('按能力声明放行，trim query、补默认结果数并保持逻辑 Provider 为 cindy', async () => {
+    const searchWeb = vi.fn(async () => ({
+      ok: true as const,
+      results: [
+        {
+          title: 'Result',
+          url: 'https://example.test/result',
+          snippet: 'Summary',
+        },
+      ],
+      requestId: 'litellm-call-1',
+    }));
+    const { slot, claimPipeCall, settlePipeCallClaim } = makeSlot({
+      getGhost: searchGhost,
+      searchWeb,
+    });
+
+    const result = await slot.handleModelRequest('art', SEARCH_REQ);
+
+    expect(searchWeb).toHaveBeenCalledWith({ query: 'Cindy Web Search', limit: 5 });
+    expect(claimPipeCall).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    );
+    expect(settlePipeCallClaim).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      false,
+    );
+    expect(result).toEqual({
+      ok: true,
+      provider: 'cindy',
+      results: [
+        {
+          title: 'Result',
+          url: 'https://example.test/result',
+          snippet: 'Summary',
+        },
+      ],
+    });
+  });
+
+  it('权限不足返回 PERMISSION_DENIED；非法参数返回 INVALID_PARAMS，且不出网', async () => {
+    const searchWeb = vi.fn();
+    for (const getGhost of [
+      () => fakeGhost({ enabled: false, model: { search: ['web'] } }),
+      () => fakeGhost({ slots: ['tool'], model: { search: ['web'] } }),
+      () => fakeGhost(),
+    ]) {
+      const denied = makeSlot({ getGhost, searchWeb });
+      expect(await denied.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+      });
+    }
+
+    const unbound = makeSlot({
+      getGhost: searchGhost,
+      searchWeb,
+      claimPipeCall: vi.fn(() => false),
+    });
+    expect(await unbound.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+    });
+
+    const { slot } = makeSlot({ getGhost: searchGhost, searchWeb });
+    for (const request of [
+      { ...SEARCH_REQ, provider: 'tavily' },
+      { ...SEARCH_REQ, query: '   ' },
+      { ...SEARCH_REQ, query: 'x'.repeat(2001) },
+      { ...SEARCH_REQ, limit: 0 },
+      { ...SEARCH_REQ, limit: 1.5 },
+      { ...SEARCH_REQ, limit: 11 },
+      { ...SEARCH_REQ, callId: '' },
+      { ...SEARCH_REQ, callerTool: '' },
+    ]) {
+      expect(await slot.handleModelRequest('art', request)).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_PARAMS',
+      });
+    }
+    expect(searchWeb).not.toHaveBeenCalled();
+  });
+
+  it('能力未接线、并发受限和账号切换等前置失败不消费 binding', async () => {
+    const notConfigured = makeSlot({
+      getGhost: searchGhost,
+      searchWeb: undefined,
+    });
+    expect(await notConfigured.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'NOT_CONFIGURED',
+    });
+    expect(notConfigured.claimPipeCall).not.toHaveBeenCalled();
+    expect(notConfigured.settlePipeCallClaim).not.toHaveBeenCalled();
+
+    const rateLimited = makeSlot({
+      getGhost: searchGhost,
+      getInflightLimit: () => 0,
+    });
+    expect(await rateLimited.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'RATE_LIMITED',
+    });
+    expect(rateLimited.claimPipeCall).not.toHaveBeenCalled();
+    expect(rateLimited.settlePipeCallClaim).not.toHaveBeenCalled();
+
+    const switching = makeSlot({
+      getGhost: searchGhost,
+      isOwnerBoundaryPending: () => true,
+    });
+    expect(await switching.slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+    });
+    expect(switching.claimPipeCall).not.toHaveBeenCalled();
+    expect(switching.settlePipeCallClaim).not.toHaveBeenCalled();
+  });
+
+  it('仅明确未出网的失败允许重试；已出网错误保留错误码并消费 binding', async () => {
+    const notStartedSearch = vi.fn(async () => ({
+      ok: false as const,
+      errorCode: 'NOT_CONFIGURED' as const,
+      message: '搜索尚未配置',
+      requestStarted: false,
+    }));
+    const notStarted = makeSlot({ getGhost: searchGhost, searchWeb: notStartedSearch });
+    expect(await notStarted.slot.handleModelRequest('art', SEARCH_REQ)).toEqual({
+      ok: false,
+      errorCode: 'NOT_CONFIGURED',
+      message: '搜索尚未配置',
+    });
+    expect(notStarted.settlePipeCallClaim).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      true,
+    );
+
+    const searchWeb = vi.fn(async () => ({
+      ok: false as const,
+      errorCode: 'QUOTA_EXHAUSTED' as const,
+      message: 'Cindy AI 搜索额度不足',
+      requestStarted: true,
+      status: 402,
+      requestId: 'litellm-call-2',
+    }));
+    const quota = makeSlot({ getGhost: searchGhost, searchWeb });
+    expect(await quota.slot.handleModelRequest('art', SEARCH_REQ)).toEqual({
+      ok: false,
+      errorCode: 'QUOTA_EXHAUSTED',
+      message: 'Cindy AI 搜索额度不足',
+    });
+
+    expect(quota.claimPipeCall).toHaveBeenCalledTimes(1);
+    expect(quota.settlePipeCallClaim).toHaveBeenCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      false,
+    );
+    expect(searchWeb).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1512,8 +1724,15 @@ describe('快问快答(oneshot_text)', () => {
     expect(
       await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 0 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    // 宿主不设输出上限:任意正整数 maxTokens 合法(仅基本校验,挡负数/小数)。
     expect(
-      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 99999 }),
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 81920 }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 999999 }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: -1 }),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     expect(
       await slot.handleModelRequest('art', { ...ONESHOT, expectJson: 'yes' }),
@@ -1531,16 +1750,97 @@ describe('快问快答(oneshot_text)', () => {
     });
   });
 
-  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens=1024', async () => {
+  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens 不设输出上限', async () => {
     const oneshotText = vi.fn(async () => ({ ok: true as const, text: '答案', model: 'chain/mini' }));
     const { slot } = withText({ oneshotText });
     const r = await slot.handleModelRequest('art', ONESHOT);
     expect(r).toMatchObject({ ok: true, text: '答案', model: 'chain/mini' });
     expect(oneshotText).toHaveBeenCalledWith({
       prompt: '总结一下',
-      maxTokens: 1024,
+      maxTokens: undefined,
       timeoutMs: 60_000,
     });
+  });
+
+  // 2026-08-05:选型优先级 = 用户钉档 > 身份卡声明(oneshotModel)> 系统默认链。
+  it('选型优先级:用户钉档 > 身份卡声明 > 系统默认链', async () => {
+    const oneshotText = vi.fn(async (_params: { route?: unknown }) => ({ ok: true as const, text: 'ok' }));
+    const declared = { model: { text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' } };
+    const resolveOneshotModel = vi.fn(() => ({ providerId: 'xd', agentKind: 'codex' as const, model: 'codex/gpt-5.5' }));
+
+    // ① 用户钉了轻量档位键:原样下传,声明不生效(resolve 不调用)。
+    const pinned = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => 'litellm-kimi-k2.6',
+      resolveOneshotModel,
+      oneshotText,
+    });
+    await pinned.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({ route: { kind: 'utility-profile', profileId: 'litellm-kimi-k2.6' } }),
+    );
+    expect(resolveOneshotModel).not.toHaveBeenCalled();
+
+    // ② 用户钉了目录钉(cat: 编码):解码成 供应商×agent×模型。
+    const catalogPinned = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => 'cat:openai:codex:gpt-5.5',
+      oneshotText,
+    });
+    await catalogPinned.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        route: { kind: 'catalog', providerId: 'openai', agentKind: 'codex', model: 'gpt-5.5' },
+      }),
+    );
+
+    // ③ 无钉档 + 声明可解析:走声明路由。
+    const declaredOnly = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => null,
+      resolveOneshotModel,
+      oneshotText,
+    });
+    await declaredOnly.slot.handleModelRequest('art', ONESHOT);
+    expect(resolveOneshotModel).toHaveBeenCalledWith('codex/gpt-5.5');
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        route: { kind: 'catalog', providerId: 'xd', agentKind: 'codex', model: 'codex/gpt-5.5' },
+      }),
+    );
+
+    // ④ 无钉档 + 声明解析不到(目录没有/已停用):按未声明,跟随默认链。
+    const unresolved = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => null,
+      resolveOneshotModel: () => null,
+      oneshotText,
+    });
+    await unresolved.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
+
+    // ⑤ 无钉档无声明:route 缺省,跟随默认链。
+    const plain = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      getOverride: () => null,
+      oneshotText,
+    });
+    await plain.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
+  });
+
+  // 2026-08-06 终审:带 cat: 前缀但解码失败的钉档值必须 fail-closed——目录钉的
+  // 语义是「钉死不回落」,静默落到系统默认链会悄悄烧错链路的钱。
+  it('畸形目录钉(cat: 前缀但解码失败)→ NO_CANDIDATE,不回落默认链、不下链', async () => {
+    const oneshotText = vi.fn(async () => ({ ok: true as const, text: 'ok' }));
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      getOverride: () => 'cat:broken',
+      oneshotText,
+    });
+    const r = await slot.handleModelRequest('art', ONESHOT);
+    expect(r).toMatchObject({ ok: false, errorCode: 'NO_CANDIDATE' });
+    expect(oneshotText).not.toHaveBeenCalled();
   });
 
   it('链路失败三档映射:no_candidate → NO_CANDIDATE,timeout → TIMEOUT,failed → INTERNAL', async () => {

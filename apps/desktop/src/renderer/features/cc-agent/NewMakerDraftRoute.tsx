@@ -113,7 +113,6 @@ import {
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
 import { showWorktreeError } from '@/lib/worktreeToast';
-import type { CreateWorktreeResp } from '@/lib/worktree.types';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared } from '@/lib/sessionsBus';
@@ -166,11 +165,17 @@ import {
   forgetPendingRemotePrecreatedWorktree,
   isRemotePrecreatedWorktreeCleanupPendingError,
   isRemotePrecreatedWorktreeOwnerChangedError,
+  parseRemoteWorktreeCreateResult,
   registerPendingRemotePrecreatedWorktree,
   recoverPendingRemotePrecreatedWorktrees,
   RemotePrecreatedWorktreeCleanupPendingError,
   RemotePrecreatedWorktreeOwnerChangedError,
+  type RemoteWorktreeCreateRequest,
 } from './remotePrecreatedWorktree';
+import {
+  isLocalGoalWorktreeCleanupPendingError,
+  prepareLocalGoalWorktree,
+} from './localGoalWorktree';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -218,6 +223,7 @@ import {
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
+  shouldReseedDeviceLinkDraftDefaults,
   type DeviceLinkDraftSelection,
   type RemoteDraftDefaults,
 } from './deviceLinkDraftDefaults';
@@ -233,6 +239,53 @@ import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-work
 
 const log = createLogger('NewMakerDraftRoute');
 const IS_MAC_PLATFORM = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
+
+interface DraftWorktreeBranchTarget {
+  /** null = 当前电脑；string = device-link 被控工作端。 */
+  deviceId: string | null;
+  baseRepo: string | null;
+}
+
+interface DraftWorktreeBranchSync {
+  deviceId: string | null;
+  baseRepo: string;
+  /** 工作端为该 canonical repo 维护的单调递增 revision；-1 表示 GET 未命中/不可用。 */
+  revision: number;
+  /** GET 未命中时是旧端兼容降级；loading 只存在于一次读取事务期间。 */
+  status: 'ready' | 'unsupported' | 'loading';
+  /** Present for an accepted host snapshot; used to fence render-commit races. */
+  sourceBranch?: string;
+}
+
+function sameDraftWorktreeBranchTarget(
+  left: DraftWorktreeBranchTarget,
+  right: DraftWorktreeBranchTarget,
+): boolean {
+  return left.deviceId === right.deviceId && left.baseRepo === right.baseRepo;
+}
+
+function parseDraftWorktreeBranchSnapshot(
+  value: unknown,
+): NewMakerWorktreeBranchPreferenceSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<NewMakerWorktreeBranchPreferenceSnapshot>;
+  if (
+    typeof candidate.baseRepo !== 'string'
+    || candidate.baseRepo.length === 0
+    || typeof candidate.sourceBranch !== 'string'
+    || candidate.sourceBranch.length === 0
+    || typeof candidate.revision !== 'number'
+    || !Number.isSafeInteger(candidate.revision)
+    || candidate.revision < 0
+  ) return null;
+  return candidate as NewMakerWorktreeBranchPreferenceSnapshot;
+}
+
+function isWorktreeBranchPreferenceChannelUnsupported(error: unknown): boolean {
+  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  return error instanceof Error
+    && /\[(?:DEVICE_LINK_)?CHANNEL_NOT_ALLOWED\]/.test(error.message);
+}
 // F-COLLAB (2026-05): 老的 vendor='orca' 入口已退役,OrcaHeaderStrip 组件随之
 // 删除(它是给 isOrca 分支的 ChatInput.topSlot 用的)。Lead/Worker 协作组合现在
 // 由 ChatInput「+」菜单里的协同模式项控制,Lead 是当前 vendor 本身,
@@ -340,6 +393,7 @@ function draftEnableOrcaOptions(
       role: cfg.role,
       label: createWorkerLabel(cfg.role, []),
       delegateTask: cfg.initialTask || undefined,
+      workerPermissionMode: cfg.workerPermissionMode,
     };
   }
   // 草稿里持久化的来源在发送时按 live 目录重新收窄(已连接 + 提供该模型 + 未被可见性
@@ -375,6 +429,7 @@ function draftEnableOrcaOptions(
     fast: cfg.fast,
     providerId,
     delegateTask: cfg.initialTask || undefined,
+    workerPermissionMode: cfg.workerPermissionMode,
   };
 }
 
@@ -611,6 +666,54 @@ export function NewMakerDraftRoute() {
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(
     null,
   );
+  // repo-scoped 分支偏好以工作端 main 为权威。target ref 在换设备 / repo 的同步动作里先行
+  // 改写，挡住 React commit 前一瞬间到达的旧 GET / APPLY / push；seq 另挡异步 GET 晚到。
+  const wtBranchTargetRef = useRef<DraftWorktreeBranchTarget>({
+    deviceId: null,
+    baseRepo: null,
+  });
+  const wtBranchReadSeqRef = useRef(0);
+  const wtBranchSyncRef = useRef<DraftWorktreeBranchSync | null>(null);
+  const [wtBranchSync, setWtBranchSync] = useState<DraftWorktreeBranchSync | null>(null);
+  // Host-first preference writes are transactions, not fire-and-forget UI
+  // updates.  A send/goal started while one is in flight must not consume the
+  // previous branch/checkbox value.  The sequence + serial promise chain also
+  // makes the last branch click win when two IPC calls resolve out of order.
+  const wtBranchWriteSeqRef = useRef(0);
+  const wtBranchWriteChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const wtBranchPreferenceSavingRef = useRef(false);
+  const [wtBranchPreferenceSaving, setWtBranchPreferenceSaving] = useState(false);
+  const wtBranchCommittedValueRef = useRef<string | null>(null);
+  // Unlike React state, this ref only advances from a layout effect, so it
+  // represents a value that has reached wtRef in a committed render. A newer
+  // host push may render before the matching APPLY settles; the write fence can
+  // then be released immediately instead of waiting for a render that will not
+  // happen again.
+  const wtBranchRenderedValueRef = useRef(wtSourceBranch);
+  const armWtBranchCommittedValue = useCallback((sourceBranch: string) => {
+    wtBranchCommittedValueRef.current = sourceBranch;
+    if (wtBranchRenderedValueRef.current !== sourceBranch) return;
+    wtBranchCommittedValueRef.current = null;
+    wtBranchPreferenceSavingRef.current = false;
+    setWtBranchPreferenceSaving(false);
+  }, []);
+  const wtBranchPreferenceErrorRef = useRef(false);
+  const [wtBranchPreferenceError, setWtBranchPreferenceError] = useState(false);
+  const wtPreferenceWriteSeqRef = useRef(0);
+  const wtPreferenceWriteChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const wtPreferenceSavingRef = useRef(false);
+  const [wtPreferenceSaving, setWtPreferenceSaving] = useState(false);
+  const wtPreferenceCommittedValueRef = useRef<boolean | null>(null);
+  // A timed-out/disconnected APPLY can no longer be called "saving", but its
+  // authority is still unknown. Keep create fail-closed while leaving the
+  // checkbox itself enabled so the user can explicitly retry either value.
+  const wtPreferenceAuthorityUnknownRef = useRef(false);
+  const wtPreferenceTransactionRef = useRef<{
+    seq: number;
+    deviceId: string;
+    enabled: boolean;
+    status: 'writing' | 'reconciling-success' | 'reconciling-unknown' | 'committed';
+  } | null>(null);
   // F-COLLAB: 协同模式状态(enabled + worker 类型)直接读自 draft store,
   // 和 workingDir 走同一份 localStorage,重启 / 切走再回都能恢复。
   // 协同与项目/对话形态正交:两种草稿都向 ChatInput 提供入口;项目读项目级策略,
@@ -691,6 +794,87 @@ export function NewMakerDraftRoute() {
    * 有没有项目只决定 workspaceKind 是 'project' 还是 'dialogue'。
    */
   const isDeviceLinkDraft = effectiveDeviceLinkDeviceId != null;
+  const wtBranchTarget: DraftWorktreeBranchTarget = {
+    deviceId: effectiveDeviceLinkDeviceId ?? null,
+    baseRepo: wtBaseRepo,
+  };
+  wtBranchTargetRef.current = wtBranchTarget;
+  const wtBranchPreferenceReady = wtBaseRepo != null
+    && wtBranchSync?.deviceId === wtBranchTarget.deviceId
+    && wtBranchSync.baseRepo === wtBaseRepo
+    && wtBranchSync.status !== 'loading'
+    && !wtBranchPreferenceError;
+  const wtBranchPreferenceLoading = wtBaseRepo != null
+    && !wtBranchPreferenceError
+    && (
+      wtBranchSync == null
+      || (wtBranchSync.deviceId === wtBranchTarget.deviceId
+        && wtBranchSync.baseRepo === wtBaseRepo
+        && wtBranchSync.status === 'loading')
+    );
+  const wtBranchPreferenceLoadingRef = useRef(false);
+  wtBranchPreferenceLoadingRef.current = wtBranchPreferenceLoading;
+
+  /**
+   * 权威 snapshot 的统一落点。GET、APPLY response、本地 push、远端 push 全走这一道：
+   * 设备/repo 必须仍是当前 target；同 target 只接受不小于已接收 host revision 的值。
+   * APPLY response 与它的 push echo revision 相等是合法的幂等重复。
+   */
+  const acceptWtBranchSnapshot = useCallback((
+    requestTarget: DraftWorktreeBranchTarget,
+    rawSnapshot: unknown,
+  ): boolean => {
+    const snapshot = parseDraftWorktreeBranchSnapshot(rawSnapshot);
+    if (!snapshot || !requestTarget.baseRepo) return false;
+    const currentTarget = wtBranchTargetRef.current;
+    if (!sameDraftWorktreeBranchTarget(requestTarget, currentTarget)) return false;
+    if (snapshot.baseRepo !== currentTarget.baseRepo) return false;
+
+    const previous = wtBranchSyncRef.current;
+    if (
+      previous
+      && previous.deviceId === currentTarget.deviceId
+      && previous.baseRepo === snapshot.baseRepo
+      && snapshot.revision < previous.revision
+    ) return false;
+
+    const next: DraftWorktreeBranchSync = {
+      deviceId: currentTarget.deviceId,
+      baseRepo: snapshot.baseRepo,
+      revision: snapshot.revision,
+      status: 'ready',
+      sourceBranch: snapshot.sourceBranch,
+    };
+    wtBranchSyncRef.current = next;
+    setWtBranchSync(next);
+    wtBranchPreferenceErrorRef.current = false;
+    setWtBranchPreferenceError(false);
+    setWtSourceBranch(snapshot.sourceBranch);
+    return true;
+  }, []);
+
+  /** GET 返回 null / 明确的旧工作端不支持 channel 时才允许兼容降级。 */
+  const markWtBranchTargetReady = useCallback((target: DraftWorktreeBranchTarget) => {
+    if (!target.baseRepo) return;
+    if (!sameDraftWorktreeBranchTarget(target, wtBranchTargetRef.current)) return;
+    const previous = wtBranchSyncRef.current;
+    if (
+      previous
+      && previous.deviceId === target.deviceId
+      && previous.baseRepo === target.baseRepo
+      && previous.status !== 'loading'
+    ) return;
+    const next: DraftWorktreeBranchSync = {
+      deviceId: target.deviceId,
+      baseRepo: target.baseRepo,
+      revision: -1,
+      status: 'unsupported',
+    };
+    wtBranchSyncRef.current = next;
+    setWtBranchSync(next);
+    wtBranchPreferenceErrorRef.current = false;
+    setWtBranchPreferenceError(false);
+  }, []);
   /**
    * 远程草稿的附件闸门:**先选设备、之后再拖进来的**路径型附件同样进不了对端(Codex review P1)。
    *
@@ -1005,6 +1189,7 @@ export function NewMakerDraftRoute() {
       agent: capabilityAgentKind,
       model: chatPrefs.model,
       chosenByUser: draftModelChosenByUser,
+      preferredProviderId: chatPrefs.providerId,
       providersLoading: localProvidersLoading,
     });
   }, [
@@ -1012,6 +1197,7 @@ export function NewMakerDraftRoute() {
     autoCalibrationProviders,
     capabilityAgentKind,
     chatPrefs.model,
+    chatPrefs.providerId,
     draftModelChosenByUser,
     localProvidersLoading,
   ]);
@@ -1107,6 +1293,9 @@ export function NewMakerDraftRoute() {
   const [remoteDraftRetryEpoch, setRemoteDraftRetryEpoch] = useState(0);
   const [dlSel, setDlSel] = useState<DeviceLinkDraftSelection | null>(null);
   const dlSeedKeyRef = useRef<string | null>(null);
+  const dlSeedCapabilitiesRef = useRef<AgentCapabilities | null>(null);
+  /** 控制端是否编辑过当前设备 / Agent 的远程运行配置；能力刷新不得覆盖这类显式意图。 */
+  const dlRuntimeTouchedRef = useRef(false);
   const skipDefaultsRefetchRef = useRef(false);
   const remoteDraftIdentityRef = useRef<string | null>(null);
   const remoteDraftRevisionRef = useRef(0);
@@ -1167,18 +1356,57 @@ export function NewMakerDraftRoute() {
     remoteDraftRetryEpoch,
   ]);
 
-  // seed dlSel:等被控端 capabilities + 草稿值都就绪后种一次;按 (deviceId, vendor) 记 seedKey,
-  // 同一设备 / vendor 内不重种(用户编辑只改 dlSel、不动 seedKey,故不被覆盖),切设备 / vendor 才重种。
+  // seed dlSel:等被控端 capabilities + 草稿值都就绪后播种。切设备 / vendor 必须重种；同一目标
+  // 在被控端明确未选过模型且控制端未编辑时，允许 capabilities 刷新重新校准区域默认。
   useEffect(() => {
     if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) {
       dlSeedKeyRef.current = null;
+      dlSeedCapabilitiesRef.current = null;
+      dlRuntimeTouchedRef.current = false;
       setDlSel(null);
       return;
     }
-    if (!capabilities || remoteDraftState.status !== 'ready') return;
+    // provider revision 驱逐时 hook 会保留旧快照但标 loading；必须等新代际 ready，不能用 stale
+    // capabilities 把 inline handoff 或用户当前选择校准回旧目录。
+    if (!capabilities || capabilitiesLoading || remoteDraftState.status !== 'ready') return;
     const key = `${effectiveDeviceLinkDeviceId}:${capabilityAgentKind}`;
-    if (dlSeedKeyRef.current === key) return;
+    const newTarget = dlSeedKeyRef.current !== key;
+    const capabilitiesChanged = dlSeedCapabilitiesRef.current !== capabilities;
+    if (
+      !shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: dlSeedKeyRef.current,
+        nextSeedKey: key,
+        capabilitiesChanged,
+        controllerTouched: dlRuntimeTouchedRef.current,
+        remoteModelChosenByUser: remoteDraftState.value?.modelChosenByUser,
+      })
+    ) {
+      if (capabilitiesChanged) {
+        dlSeedCapabilitiesRef.current = capabilities;
+        // 显式意图只禁止“换成区域默认”，不能把已从新能力清单消失的 model / effort /
+        // permission 留在草稿里。用当前控制端选择合成 active draft，只做合法性夹紧。
+        setDlSel((current) =>
+          current
+            ? resolveDeviceLinkDraftDefaults(
+                capabilities,
+                {
+                  model: current.model,
+                  modelChosenByUser: true,
+                  effort: current.effort,
+                  fastMode: current.fastMode,
+                  permissionMode: current.permissionMode,
+                  providerId: current.providerId,
+                },
+                current.model,
+              )
+            : current,
+        );
+      }
+      return;
+    }
     dlSeedKeyRef.current = key;
+    dlSeedCapabilitiesRef.current = capabilities;
+    if (newTarget) dlRuntimeTouchedRef.current = false;
     setDlSel(
       resolveDeviceLinkDraftDefaults(
         capabilities,
@@ -1192,6 +1420,7 @@ export function NewMakerDraftRoute() {
     effectiveDeviceLinkDeviceId,
     capabilityAgentKind,
     capabilities,
+    capabilitiesLoading,
     remoteDraftState,
   ]);
 
@@ -1260,17 +1489,208 @@ export function NewMakerDraftRoute() {
   }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId, capabilityAgentKind, capabilities]);
 
   // ── worktree 勾选 = 工作端记忆的镜像(2026-07-29 用户裁决:状态只属于用户) ────
-  // 本地草稿读本地 draft.worktreeEnabled;device-link 远程草稿读被控端镜像
-  // (remoteDraftState.value.worktreeEnabled,vendor 无关根字段,拉取完成前保持关,
-  // 不闪开)。checkbox **原样直出**记忆——不做 baseRepo/资格点亮门槛、没有任何
-  // 自动开关;环境合格性只影响 checkbox 禁用态与发送时是否真的走 worktree
-  // (handleSend 按「勾选 && baseRepo 就绪」静默降级,绝不报错拦截、绝不改记忆)。
-  const worktreePref = isDeviceLinkDraft
-    ? remoteDraftState.value?.worktreeEnabled === true
-    : draft.worktreeEnabled;
+  // 本地草稿读本地 draft.worktreeEnabled;device-link 远程草稿只接受被控端明确返回的
+  // boolean(remoteDraftState.value.worktreeEnabled,vendor 无关根字段)。同一设备重连时
+  // 缺字段 / 拉取失败保留最后镜像;切到新设备时先回到默认未勾选。checkbox **原样直出**
+  // 记忆——不做 baseRepo/资格点亮门槛、没有任何自动开关。环境合格性只影响
+  // checkbox 禁用态；用户已勾选且当前项目尚不能创建 worktree 时，handleSend
+  // 必须保留草稿并提示，不能静默创建普通 session，也不能改写用户记忆。
   useEffect(() => {
-    setWtEnabled(worktreePref);
-  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId, worktreePref]);
+    if (!isDeviceLinkDraft) {
+      setWtEnabled(draft.worktreeEnabled);
+      return;
+    }
+    if (remoteDraftState.status !== 'ready') return;
+    const remotePreference = remoteDraftState.value?.worktreeEnabled;
+    if (typeof remotePreference === 'boolean') setWtEnabled(remotePreference);
+  }, [isDeviceLinkDraft, draft.worktreeEnabled, remoteDraftState]);
+  // 放在同步 effect 后面:切设备的首帧 remoteDraftState 可能仍属于上一台设备，
+  // 先处理旧快照再重置，保证它不能把新设备的默认 false 覆盖回去。
+  useEffect(() => {
+    if (isDeviceLinkDraft) setWtEnabled(false);
+  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId]);
+
+  // A device-link checkbox write remains a create gate until the controlled
+  // endpoint's defaults mirror confirms the requested boolean. A mismatching
+  // post-write snapshot does not make the old value safe: mark authority
+  // unknown, keep Send/Goal fail-closed, but re-enable the checkbox for retry.
+  useEffect(() => {
+    const transaction = wtPreferenceTransactionRef.current;
+    if (
+      !transaction
+      || !isDeviceLinkDraft
+      || transaction.deviceId !== effectiveDeviceLinkDeviceId
+      || remoteDraftState.status !== 'ready'
+    ) return;
+    const authoritative = remoteDraftState.value?.worktreeEnabled;
+    if (typeof authoritative !== 'boolean') return;
+    if (authoritative === transaction.enabled) {
+      transaction.status = 'committed';
+      wtPreferenceAuthorityUnknownRef.current = false;
+      wtPreferenceCommittedValueRef.current = authoritative;
+      setWtEnabled(authoritative);
+      return;
+    }
+    if (transaction.status === 'writing') return;
+    wtPreferenceAuthorityUnknownRef.current = true;
+    wtPreferenceSavingRef.current = false;
+    setWtPreferenceSaving(false);
+  }, [
+    isDeviceLinkDraft,
+    effectiveDeviceLinkDeviceId,
+    remoteDraftState,
+  ]);
+
+  // Do not release the synchronous create fence until React has committed the
+  // authoritative checkbox value into wtRef. This closes the APPLY-resolved →
+  // next-render gap for both local and device-link writes.
+  useLayoutEffect(() => {
+    const committed = wtPreferenceCommittedValueRef.current;
+    if (committed === null || wtEnabled !== committed) return;
+    wtPreferenceCommittedValueRef.current = null;
+    wtPreferenceTransactionRef.current = null;
+    wtPreferenceSavingRef.current = false;
+    setWtPreferenceSaving(false);
+  }, [wtEnabled]);
+
+  // ── worktree 源分支 = 工作端 repo-scoped 偏好镜像 ─────────────────────
+  // detect-cwd 给出 canonical baseRepo 后再读；本地走 preload，device-link 草稿走
+  // 被控端同名 invoke。seq + target ref 保证切设备/项目后的旧回包不能复活旧分支。
+  // 连接代次变化后先清掉读取 fence 再发 GET。新版 host 会持久化 revision，旧版
+  // host 可能从 1 重来；控制端都不能只相信上一条连接留下的 snapshot。
+  useLayoutEffect(() => {
+    wtBranchReadSeqRef.current += 1;
+    wtBranchSyncRef.current = null;
+    setWtBranchSync(null);
+    wtBranchPreferenceErrorRef.current = false;
+    setWtBranchPreferenceError(false);
+    setWtSourceBranch('');
+  }, [effectiveDeviceLinkDeviceId, remoteDraftRefreshEpoch]);
+
+  // 换设备才作废旧设备的 host write。仅同设备重连时不能提前解除 saving：
+  // 旧 promise 仍可能在新链路落地，Send/Goal 必须一直等到它 settle。
+  useLayoutEffect(() => {
+    wtBranchWriteSeqRef.current += 1;
+    wtBranchCommittedValueRef.current = null;
+    wtBranchPreferenceSavingRef.current = false;
+    setWtBranchPreferenceSaving(false);
+    wtPreferenceWriteSeqRef.current += 1;
+    wtPreferenceTransactionRef.current = null;
+    wtPreferenceCommittedValueRef.current = null;
+    wtPreferenceAuthorityUnknownRef.current = false;
+    wtPreferenceSavingRef.current = false;
+    setWtPreferenceSaving(false);
+  }, [effectiveDeviceLinkDeviceId]);
+
+  useEffect(() => {
+    if (!wtBaseRepo) return;
+    const target: DraftWorktreeBranchTarget = {
+      deviceId: effectiveDeviceLinkDeviceId ?? null,
+      baseRepo: wtBaseRepo,
+    };
+    const seq = ++wtBranchReadSeqRef.current;
+    let cancelled = false;
+    const loadingSnapshot: DraftWorktreeBranchSync = {
+      deviceId: target.deviceId,
+      baseRepo: wtBaseRepo,
+      revision: -1,
+      status: 'loading',
+    };
+    wtBranchSyncRef.current = loadingSnapshot;
+    setWtBranchSync(loadingSnapshot);
+    wtBranchPreferenceErrorRef.current = false;
+    setWtBranchPreferenceError(false);
+    const read = target.deviceId
+      ? window.electronAPI.deviceLink.invoke(
+          target.deviceId,
+          'maker:get-new-maker-worktree-branch-pref',
+          [{ baseRepo: wtBaseRepo }],
+        )
+      : window.electronAPI.getNewMakerWorktreeBranchPreference(wtBaseRepo);
+    void read
+      .then((snapshot) => {
+        if (cancelled || seq !== wtBranchReadSeqRef.current) return;
+        if (snapshot === null) {
+          markWtBranchTargetReady(target);
+          return;
+        }
+        if (acceptWtBranchSnapshot(target, snapshot)) return;
+        // A push can land after GET starts and carry a newer host revision.
+        // If so, a stale/malformed late GET has no authority to erase that
+        // already-accepted snapshot or turn the target back into an error.
+        const current = wtBranchSyncRef.current;
+        if (
+          current?.status === 'ready'
+          && current.deviceId === target.deviceId
+          && current.baseRepo === target.baseRepo
+        ) return;
+        // A non-null response that cannot be parsed/accepted is not the same
+        // as "no saved preference". Treat malformed, wrong-repo or stale
+        // snapshots as an unavailable authority and keep Worktree ON closed.
+        wtBranchSyncRef.current = null;
+        setWtBranchSync(null);
+        wtBranchPreferenceErrorRef.current = true;
+        setWtBranchPreferenceError(true);
+      })
+      .catch((error) => {
+        if (cancelled || seq !== wtBranchReadSeqRef.current) return;
+        const current = wtBranchSyncRef.current;
+        if (
+          current?.status === 'ready'
+          && current.deviceId === target.deviceId
+          && current.baseRepo === target.baseRepo
+        ) return;
+        // 只有被控端明确声明 channel 不存在时才走旧端兼容；超时、断链、
+        // malformed response 等其它错误都保持未就绪，Worktree ON 创建必须阻塞。
+        // 这条边界不能用「catch 全部都 ready」表达，否则一次瞬时断链就会
+        // 静默拿当前 checkout 分支创建到错误的 worktree。
+        if (isWorktreeBranchPreferenceChannelUnsupported(error)) {
+          markWtBranchTargetReady(target);
+          return;
+        }
+        wtBranchSyncRef.current = null;
+        setWtBranchSync(null);
+        wtBranchPreferenceErrorRef.current = true;
+        setWtBranchPreferenceError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    wtBaseRepo,
+    effectiveDeviceLinkDeviceId,
+    remoteDraftRefreshEpoch,
+    acceptWtBranchSnapshot,
+    markWtBranchTargetReady,
+  ]);
+
+  // 当前电脑其它窗口 / mobile 控制端改分支后，本地 main 广播权威 snapshot。
+  useEffect(() => window.electronAPI.onNewMakerWorktreeBranchChanged((snapshot) => {
+    const target = wtBranchTargetRef.current;
+    if (target.deviceId !== null || !target.baseRepo) return;
+    acceptWtBranchSnapshot(target, snapshot);
+  }), [acceptWtBranchSnapshot]);
+
+  // device-link 草稿只接收当前目标设备转发的同名广播；payload 内 baseRepo + host
+  // revision 仍交统一接受器校验，不能只凭 channel 就覆盖当前 UI。
+  useEffect(() => window.electronAPI.deviceLink.onRemotePush((push) => {
+    const target = wtBranchTargetRef.current;
+    if (!target.deviceId || !target.baseRepo) return;
+    if (push.deviceId !== target.deviceId) return;
+    if (push.channel !== 'maker:new-maker-worktree-branch:changed') return;
+    acceptWtBranchSnapshot(target, push.payload);
+  }), [acceptWtBranchSnapshot]);
+
+  // Keep the branch transaction fence until the accepted host source has
+  // actually reached wtRef through a committed render.
+  useLayoutEffect(() => {
+    wtBranchRenderedValueRef.current = wtSourceBranch;
+    const committed = wtBranchCommittedValueRef.current;
+    if (committed === null || wtSourceBranch !== committed) return;
+    wtBranchCommittedValueRef.current = null;
+    wtBranchPreferenceSavingRef.current = false;
+    setWtBranchPreferenceSaving(false);
+  }, [wtSourceBranch]);
 
   // modelMemoryOverride:非选中行读镜像、改动经隧道写穿被控端(active=false)。providerId 由
   // ModelSelector 按行传入(每行各自的供应商)。写失败(旧版被控端 / 离线)静默吞 —— 乐观本地镜像
@@ -1534,6 +1954,7 @@ export function NewMakerDraftRoute() {
       if (req.remoteSnapshot) {
         const { capabilities: freshCaps, defaults: freshDefaults } = req.remoteSnapshot;
         dlSeedKeyRef.current = req.deviceId ? `${req.deviceId}:${capabilityAgentKind}` : null;
+        dlSeedCapabilitiesRef.current = freshCaps;
         if (deviceChanged) {
           setDlSel(
             resolveDeviceLinkDraftDefaults(
@@ -1543,6 +1964,7 @@ export function NewMakerDraftRoute() {
               capabilityAgentKind,
             ),
           );
+          dlRuntimeTouchedRef.current = false;
           // deviceId 变化会让 defaults effect 重跑;我们已经 inline 拉过了,跳过那一次避免覆盖。
           skipDefaultsRefetchRef.current = true;
         } else {
@@ -1577,6 +1999,8 @@ export function NewMakerDraftRoute() {
       } else if (deviceChanged) {
         setDlSel(null);
         dlSeedKeyRef.current = null;
+        dlSeedCapabilitiesRef.current = null;
+        dlRuntimeTouchedRef.current = false;
         setRemoteDraftState({ status: 'loading', value: null });
       }
 
@@ -1586,9 +2010,25 @@ export function NewMakerDraftRoute() {
       if (deviceChanged || workingDirChanged) {
         // worktreeEnabled is the user's working-device preference, not repo metadata.
         // Keep it across target changes; only invalidate the probed repository/branch.
+        wtBranchReadSeqRef.current += 1;
+        wtBranchWriteSeqRef.current += 1;
+        wtBranchPreferenceSavingRef.current = false;
+        setWtBranchPreferenceSaving(false);
+        wtBranchTargetRef.current = { deviceId: req.deviceId, baseRepo: null };
+        wtBranchSyncRef.current = null;
+        setWtBranchSync(null);
+        wtBranchPreferenceErrorRef.current = false;
+        setWtBranchPreferenceError(false);
         setWtBaseRepo(null);
         setWtSourceBranch('');
         setWtSupportsRecoveryKeyDiscard(null);
+      }
+      if (deviceChanged) {
+        // A checkbox write belongs to the previous work device. Invalidate its
+        // renderer completion before the next device's mirror is seeded.
+        wtPreferenceWriteSeqRef.current += 1;
+        wtPreferenceSavingRef.current = false;
+        setWtPreferenceSaving(false);
       }
 
       patchDraft({
@@ -1885,6 +2325,7 @@ export function NewMakerDraftRoute() {
   const handleModelDidChange = useCallback(
     (newModelId: string) => {
       if (isDeviceLinkDraft) {
+        dlRuntimeTouchedRef.current = true;
         // 远程草稿:只改 dlSel,绝不写本地 newMakerDraft。capabilities 未就绪时退化为仅换 model。
         if (!capabilities) {
           setDlSel((prev) => (prev ? { ...prev, model: newModelId } : prev));
@@ -1915,6 +2356,7 @@ export function NewMakerDraftRoute() {
   const handleFastModeChange = useCallback(
     (enabled: boolean) => {
       if (isDeviceLinkDraft) {
+        dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, fastMode: enabled } : prev));
         pushActiveDraftPref({ fast: enabled }); // 选中模型 fast 写穿被控端
         return;
@@ -1945,6 +2387,7 @@ export function NewMakerDraftRoute() {
   const handleEffortDidChange = useCallback(
     (newEffort: Effort) => {
       if (isDeviceLinkDraft) {
+        dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, effort: newEffort } : prev));
         pushActiveDraftPref({ effort: newEffort }); // 选中模型 effort 写穿被控端
         return;
@@ -1966,6 +2409,7 @@ export function NewMakerDraftRoute() {
   const handlePermissionModeDidChange = useCallback(
     (newMode: PermissionMode) => {
       if (isDeviceLinkDraft) {
+        dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, permissionMode: newMode } : prev));
         return;
       }
@@ -1988,6 +2432,7 @@ export function NewMakerDraftRoute() {
   const handleProviderDidChange = useCallback(
     (newProviderId: string | null) => {
       if (isDeviceLinkDraft) {
+        dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, providerId: newProviderId } : prev));
         return;
       }
@@ -2118,34 +2563,222 @@ export function NewMakerDraftRoute() {
     [handleWorkingDirChange],
   );
 
-  // 用户点击 checkbox 切换 worktree:写穿「工作端勾选记忆」——本地草稿写本地
-  // newMakerDraft 根字段;device-link 远程草稿写到被控端(状态归工作端所有,
-  // 控制端只是远程操作器,与手机端同语义)。分支选择不会隐式改动这个状态。
-  const handleWtEnabledChange = useCallback(
-    (enabled: boolean) => {
-      setWtEnabled(enabled);
-      if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
-        remoteDraftRevisionRef.current += 1;
-        window.electronAPI.deviceLink
-          .invoke(effectiveDeviceLinkDeviceId, 'maker:apply-new-maker-worktree-pref', [
-            { worktreeEnabled: enabled },
-          ])
-          .catch(() => {
-            // 旧版被控端无此 channel(CHANNEL_NOT_ALLOWED)/ 隧道瞬断 → 勾选仅本次草稿
-            // 生效,不打断用户;被控端后续 push 回流可能把 UI 收敛回旧值,属可接受降级。
-          });
-        return;
-      }
-      setWorktreePreference(enabled);
-    },
-    [isDeviceLinkDraft, effectiveDeviceLinkDeviceId],
-  );
+  // 用户点击 checkbox 是唯一改动路径。本地草稿直接写工作端偏好;
+  // device-link 草稿先把操作交给被控端,只有被控端接受后才更新控制端
+  // 显示镜像。分支、项目和资格变化都不能调用此回调。
+  const handleWtEnabledChange = useCallback((enabled: boolean) => {
+    if (sendInFlightRef.current) return;
+    const writeSeq = ++wtPreferenceWriteSeqRef.current;
+    wtPreferenceAuthorityUnknownRef.current = false;
+    wtPreferenceCommittedValueRef.current = null;
+    wtPreferenceSavingRef.current = true;
+    setWtPreferenceSaving(true);
+    if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
+      remoteDraftRevisionRef.current += 1;
+      wtPreferenceTransactionRef.current = {
+        seq: writeSeq,
+        deviceId: effectiveDeviceLinkDeviceId,
+        enabled,
+        status: 'writing',
+      };
+      // Serialize host writes so A → B clicks cannot arrive at the host in the
+      // opposite order. The sequence fence then ignores an old completion that
+      // races a newer remote push.
+      const invoke = () => window.electronAPI.deviceLink.invoke(
+        effectiveDeviceLinkDeviceId,
+        'maker:apply-new-maker-worktree-pref',
+        [{ worktreeEnabled: enabled }],
+      );
+      const write = wtPreferenceWriteChainRef.current
+        .catch(() => undefined)
+        .then(invoke);
+      wtPreferenceWriteChainRef.current = write.catch(() => undefined);
+      void write
+        .then(() => {
+          const transaction = wtPreferenceTransactionRef.current;
+          if (
+            wtPreferenceWriteSeqRef.current !== writeSeq
+            || transaction?.seq !== writeSeq
+          ) return;
+          // Main accepted the invoke, but the controlled renderer persists the
+          // preference after receiving a broadcast. Invalidate overlapping
+          // defaults GETs and keep the bidirectional create gate until a push
+          // or a fresh GET observes the requested boolean.
+          transaction.status = 'reconciling-success';
+          remoteDraftRevisionRef.current += 1;
+          setRemoteDraftState((previous) => ({
+            status: 'loading',
+            value: previous.value,
+          }));
+          setRemoteDraftRetryEpoch((value) => value + 1);
+        })
+        .catch((error) => {
+          const transaction = wtPreferenceTransactionRef.current;
+          if (
+            wtPreferenceWriteSeqRef.current !== writeSeq
+            || transaction?.seq !== writeSeq
+          ) return;
+          if (isWorktreeBranchPreferenceChannelUnsupported(error)) {
+            // Old endpoints cannot persist this preference. Preserve the old
+            // value for ON, but still provide an explicit OFF escape from a
+            // remembered ON mirror (same compatibility boundary as mobile).
+            if (!enabled) {
+              transaction.status = 'committed';
+              wtPreferenceCommittedValueRef.current = false;
+              setWtEnabled(false);
+            } else {
+              wtPreferenceTransactionRef.current = null;
+              wtPreferenceSavingRef.current = false;
+              setWtPreferenceSaving(false);
+            }
+            return;
+          }
+          // Timeout/disconnect may have committed remotely. Re-read host
+          // authority after the invoke settles; until then both ON→OFF and
+          // OFF→ON remain blocked from Send/Goal.
+          transaction.status = 'reconciling-unknown';
+          wtPreferenceAuthorityUnknownRef.current = true;
+          wtPreferenceSavingRef.current = false;
+          setWtPreferenceSaving(false);
+          remoteDraftRevisionRef.current += 1;
+          setRemoteDraftState((previous) => ({
+            status: 'loading',
+            value: previous.value,
+          }));
+          setRemoteDraftRetryEpoch((value) => value + 1);
+        });
+      return;
+    }
+    wtPreferenceCommittedValueRef.current = enabled;
+    setWtEnabled(enabled);
+    setWorktreePreference(enabled);
+  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId]);
   const handleWtSourceBranchChange = useCallback((sourceBranch: string) => {
-    setWtSourceBranch(sourceBranch);
-  }, []);
+    if (sendInFlightRef.current) return;
+    const normalized = sourceBranch.trim();
+    const target = wtBranchTargetRef.current;
+    // GET 尚未完成时分支区会被禁用，但 React 提交 disabled 前的同一 tick 仍可能送达旧事件；
+    // 同步忽略，避免它抢在权威 repo 偏好返回前覆盖已保存的选择。
+    if (!normalized || !target.baseRepo || wtBranchPreferenceLoadingRef.current) {
+      return;
+    }
+    wtBranchCommittedValueRef.current = null;
+    const branchSyncAtStart = wtBranchSyncRef.current;
+    const revisionAtStart = branchSyncAtStart
+      && branchSyncAtStart.deviceId === target.deviceId
+      && branchSyncAtStart.baseRepo === target.baseRepo
+      ? branchSyncAtStart.revision
+      : -1;
+
+    const writeSeq = ++wtBranchWriteSeqRef.current;
+    wtBranchPreferenceSavingRef.current = true;
+    setWtBranchPreferenceSaving(true);
+    wtBranchPreferenceErrorRef.current = false;
+    setWtBranchPreferenceError(false);
+
+    const invoke = () => target.deviceId
+      ? window.electronAPI.deviceLink.invoke(
+        target.deviceId,
+        'maker:apply-new-maker-worktree-branch-pref',
+        [{ baseRepo: target.baseRepo, sourceBranch: normalized }],
+      )
+      : window.electronAPI.applyNewMakerWorktreeBranchPreference(
+        target.baseRepo!,
+        normalized,
+      );
+    const apply = wtBranchWriteChainRef.current
+      .catch(() => undefined)
+      .then(invoke);
+    wtBranchWriteChainRef.current = apply.catch(() => undefined);
+    void apply
+      .then((snapshot) => {
+        if (writeSeq !== wtBranchWriteSeqRef.current) return;
+        const parsedSnapshot = parseDraftWorktreeBranchSnapshot(snapshot);
+        const accepted = acceptWtBranchSnapshot(target, snapshot);
+        if (
+          accepted
+          && parsedSnapshot!.sourceBranch === normalized
+          && parsedSnapshot!.revision > revisionAtStart
+        ) {
+          armWtBranchCommittedValue(normalized);
+          return;
+        }
+        const current = wtBranchSyncRef.current;
+        if (
+          current?.status === 'ready'
+          && current.deviceId === target.deviceId
+          && current.baseRepo === target.baseRepo
+          && current.revision > revisionAtStart
+          && current.sourceBranch === normalized
+        ) {
+          armWtBranchCommittedValue(normalized);
+          return;
+        }
+        // A newer snapshot for another branch is still useful as the next
+        // retry's revision floor, but it cannot confirm this write. Keep the
+        // requested value visible and Worktree ON fail-closed until the user
+        // explicitly retries and host authority observes this exact branch.
+        setWtSourceBranch(normalized);
+        wtBranchPreferenceErrorRef.current = true;
+        setWtBranchPreferenceError(true);
+      })
+      .catch((error) => {
+        if (writeSeq !== wtBranchWriteSeqRef.current) return;
+        const current = wtBranchSyncRef.current;
+        if (
+          current?.status === 'ready'
+          && current.deviceId === target.deviceId
+          && current.baseRepo === target.baseRepo
+          && current.revision > revisionAtStart
+          && current.sourceBranch === normalized
+        ) {
+          armWtBranchCommittedValue(normalized);
+          return;
+        }
+        // 只有结构化 CHANNEL_NOT_ALLOWED 才允许旧端兼容：本次选择留在
+        // 当前草稿内存中，不冒充 host 已持久化。其它错误保持 fail-closed,
+        // Worktree ON 的 Send/Goal 会继续阻塞并允许用户重试。
+        if (isWorktreeBranchPreferenceChannelUnsupported(error)) {
+          if (sameDraftWorktreeBranchTarget(target, wtBranchTargetRef.current)) {
+            setWtSourceBranch(normalized);
+            markWtBranchTargetReady(target);
+            armWtBranchCommittedValue(normalized);
+          }
+          return;
+        }
+        setWtSourceBranch(normalized);
+        wtBranchPreferenceErrorRef.current = true;
+        setWtBranchPreferenceError(true);
+      })
+      .finally(() => {
+        if (writeSeq !== wtBranchWriteSeqRef.current) return;
+        if (wtBranchCommittedValueRef.current !== null) return;
+        wtBranchPreferenceSavingRef.current = false;
+        setWtBranchPreferenceSaving(false);
+      });
+  }, [acceptWtBranchSnapshot, armWtBranchCommittedValue, markWtBranchTargetReady]);
   const handleWtBaseRepoChange = useCallback((baseRepo: string | null) => {
+    const nextTarget: DraftWorktreeBranchTarget = {
+      deviceId: effectiveDeviceLinkDeviceId ?? null,
+      baseRepo,
+    };
+    if (
+      wtBaseRepo === baseRepo
+      && sameDraftWorktreeBranchTarget(nextTarget, wtBranchTargetRef.current)
+    ) return;
+    wtBranchReadSeqRef.current += 1;
+    wtBranchWriteSeqRef.current += 1;
+    wtBranchCommittedValueRef.current = null;
+    wtBranchPreferenceSavingRef.current = false;
+    setWtBranchPreferenceSaving(false);
+    wtBranchTargetRef.current = nextTarget;
+    wtBranchSyncRef.current = null;
+    setWtBranchSync(null);
+    wtBranchPreferenceErrorRef.current = false;
+    setWtBranchPreferenceError(false);
+    setWtSourceBranch('');
     setWtBaseRepo(baseRepo);
-  }, []);
+  }, [effectiveDeviceLinkDeviceId, wtBaseRepo]);
   const handleWtRecoveryKeyDiscardSupportChange = useCallback((supported: boolean | null) => {
     setWtSupportsRecoveryKeyDiscard(supported);
   }, []);
@@ -2170,6 +2803,9 @@ export function NewMakerDraftRoute() {
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
+    branchPreferenceReady: wtBranchPreferenceReady,
+    branchPreferenceSaving: wtBranchPreferenceSaving,
+    preferenceSaving: wtPreferenceSaving,
   });
   wtRef.current = {
     enabled: wtEnabled,
@@ -2177,6 +2813,9 @@ export function NewMakerDraftRoute() {
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
+    branchPreferenceReady: wtBranchPreferenceReady,
+    branchPreferenceSaving: wtBranchPreferenceSaving,
+    preferenceSaving: wtPreferenceSaving,
   };
 
   // ─── Send 拦截:vendorAuthGate → createSession → send / background worktree ──
@@ -2289,6 +2928,32 @@ export function NewMakerDraftRoute() {
       // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
       // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
       const selectedWorktree = { ...wtRef.current };
+      // worktree 是用户对本次 project session 的明确选择。探测、分支偏好或远端
+      // recovery 能力尚未就绪时保留输入并提示；绝不能把勾选静默降级成普通 session。
+      // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
+      // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 则只在
+      // Worktree ON 时阻塞；OFF 仍可直接创建普通 session，保持两条轴独立。
+      if (
+        wtPreferenceSavingRef.current
+        || wtPreferenceAuthorityUnknownRef.current
+        || (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current)
+      ) {
+        toast.warning(t('ccAgent.draft.deviceStillLoading'));
+        return false;
+      }
+      if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {
+        if (!selectedWorktree.baseRepo) {
+          toast.error(t('ccAgent.draft.worktreeMissingRepo'));
+          return false;
+        }
+        if (
+          !selectedWorktree.branchPreferenceReady
+          || (isDeviceLinkDraft && selectedWorktree.supportsRecoveryKeyDiscard !== true)
+        ) {
+          toast.error(t('ccAgent.draft.deviceStillLoading'));
+          return false;
+        }
+      }
       const dataOwnerAtSend = getDataOwnerGeneration();
       const isCurrentDataOwner = () =>
         dataOwnerAtSend.dataOwnerId === dataOwnerId &&
@@ -2348,8 +3013,8 @@ export function NewMakerDraftRoute() {
                 }
               | undefined;
             // 生效条件 = 勾选 && baseRepo 已就绪 && 被控端明确支持 recoveryKey discard。
-            // 旧 Desktop 可能接受未知 recoveryKey 却不持久化，不能把它当成支持端发起
-            // 预创建；能力不合格 / 探测未回时静默按普通方式启动，不报错不改勾选记忆。
+            // 上面的发送门已阻止不完整状态；这里仍保留完整条件作副作用前的防御。
+            // 旧 Desktop 可能接受未知 recoveryKey 却不持久化，不能把它当成支持端发起预创建。
             if (
               effectiveWorkingDir &&
               wt.enabled &&
@@ -2390,6 +3055,7 @@ export function NewMakerDraftRoute() {
                 dataOwnerId: ownerAtSend,
                 recoveryKey,
                 createdAt,
+                phase: 'reserved' as const,
               };
               // 远端副作用之前先持久化 recoveryKey reservation。首次写盘失败时
               // 绝不调用 worktree:create；内存镜像不能冒充跨进程恢复保证。
@@ -2409,15 +3075,17 @@ export function NewMakerDraftRoute() {
               }
               setWtCreating(true);
               try {
-                const resp = (await invokeRemote('worktree:create', [
-                  {
-                    sessionId: presetSessionId,
-                    baseRepo,
-                    name,
-                    sourceBranch: wt.sourceBranch.trim() || 'HEAD',
-                    recoveryKey,
-                  },
-                ])) as CreateWorktreeResp | null;
+                const createRequest: RemoteWorktreeCreateRequest = {
+                  sessionId: presetSessionId,
+                  baseRepo,
+                  name,
+                  sourceBranch: wt.sourceBranch.trim() || 'HEAD',
+                  recoveryKey,
+                };
+                const resp = parseRemoteWorktreeCreateResult(
+                  await invokeRemote('worktree:create', [createRequest]),
+                  createRequest,
+                );
                 if (!resp) {
                   throw new RemotePrecreatedWorktreeCleanupPendingError();
                 }
@@ -2447,6 +3115,7 @@ export function NewMakerDraftRoute() {
                   {
                     ...reservation,
                     path: resp.meta.path,
+                    phase: 'precreated',
                   },
                   isCurrentDataOwner,
                 );
@@ -2615,8 +3284,8 @@ export function NewMakerDraftRoute() {
           const sessionId = makeDraftSessionId();
           const workingDir = selectedWorkingDir;
           const wt = selectedWorktree;
-          // 生效条件 = 勾选 && baseRepo 已就绪;不合格时静默普通启动(同 device-link 分支,
-          // 见 2026-07-29 状态不变量:勾选记忆永不因环境被改动或报错拦截)。
+          // 生效条件 = 勾选 && baseRepo 已就绪。上面的发送门已阻止不完整状态；
+          // 这里保留完整条件作创建副作用前的防御，且始终不改写勾选记忆。
           if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo) {
             const baseRepo = wt.baseRepo;
 
@@ -3031,6 +3700,36 @@ export function NewMakerDraftRoute() {
       }
       markSendInFlight(true);
       try {
+        const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
+        const selectedWorktree = { ...wtRef.current };
+        // Keep Goal on the exact same worktree contract as Send.  In
+        // particular, an in-flight checkbox write blocks both directions,
+        // while an in-flight branch write only blocks a Worktree-enabled
+        // project.  OFF remains an ordinary base-repo create even if the
+        // independent branch preference transaction is still settling.
+        if (
+          wtPreferenceSavingRef.current
+          || wtPreferenceAuthorityUnknownRef.current
+          || (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current)
+        ) {
+          throw new Error(t('ccAgent.draft.deviceStillLoading'));
+        }
+        if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {
+          if (!selectedWorktree.baseRepo) {
+            throw new Error(t('ccAgent.draft.worktreeMissingRepo'));
+          }
+          if (
+            !selectedWorktree.branchPreferenceReady
+            || wtBranchPreferenceErrorRef.current
+            || (isDeviceLinkDraft && selectedWorktree.supportsRecoveryKeyDiscard !== true)
+          ) {
+            throw new Error(t('ccAgent.draft.deviceStillLoading'));
+          }
+        }
+        const dataOwnerAtGoal = getDataOwnerGeneration();
+        const isCurrentDataOwner = () =>
+          dataOwnerAtGoal.dataOwnerId === dataOwnerId
+          && isDataOwnerGenerationCurrent(dataOwnerAtGoal);
         let policyEnabled = collabPolicy.enabled;
         if (effectiveCollab.enabled && collabPolicyEligible) {
           if (collabPolicy.loading) {
@@ -3085,11 +3784,106 @@ export function NewMakerDraftRoute() {
           }
           const deviceId = effectiveDeviceLinkDeviceId;
           const deviceName = effectiveDeviceLinkDeviceName ?? deviceId;
+          const ownerAtGoal = dataOwnerAtGoal.dataOwnerId;
+          const invokeRemote = async (channel: string, args: unknown[]) => {
+            if (!isCurrentDataOwner()) {
+              throw new RemotePrecreatedWorktreeOwnerChangedError();
+            }
+            const result = await window.electronAPI.deviceLink.invoke(deviceId, channel, args);
+            if (!isCurrentDataOwner()) {
+              throw new RemotePrecreatedWorktreeOwnerChangedError();
+            }
+            return result;
+          };
+          let remoteWorkingDir = selectedWorkingDir;
+          let presetSessionId: string | undefined;
+          let precreatedWorktree:
+            | { path: string; recoveryKey: string; createdAt: number }
+            | undefined;
+          if (
+            selectedWorkingDir
+            && selectedWorktree.enabled
+            && selectedWorktree.baseRepo
+            && selectedWorktree.supportsRecoveryKeyDiscard === true
+          ) {
+            if (!ownerAtGoal) {
+              throw new RemotePrecreatedWorktreeCleanupPendingError();
+            }
+            const recovery = await recoverPendingRemotePrecreatedWorktrees({
+              deviceId,
+              dataOwnerId: ownerAtGoal,
+              invoke: invokeRemote,
+              isCurrent: isCurrentDataOwner,
+            });
+            if (!recovery.storageReadable || recovery.retained > 0) {
+              throw new RemotePrecreatedWorktreeCleanupPendingError();
+            }
+            let name = selectedWorktree.name.trim();
+            if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
+            presetSessionId = makeDraftSessionId();
+            const recoveryKey = makeDraftSessionId();
+            const createdAt = Date.now();
+            const reservation = {
+              deviceId,
+              sessionId: presetSessionId,
+              dataOwnerId: ownerAtGoal,
+              recoveryKey,
+              createdAt,
+              phase: 'reserved' as const,
+            };
+            const reservationRecorded = await registerPendingRemotePrecreatedWorktree(
+              reservation,
+              isCurrentDataOwner,
+            );
+            if (!reservationRecorded) {
+              await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
+              throw new RemotePrecreatedWorktreeCleanupPendingError();
+            }
+            setWtCreating(true);
+            try {
+              let resp: ReturnType<typeof parseRemoteWorktreeCreateResult>;
+              try {
+                const createRequest: RemoteWorktreeCreateRequest = {
+                  sessionId: presetSessionId,
+                  baseRepo: selectedWorktree.baseRepo,
+                  name,
+                  sourceBranch: selectedWorktree.sourceBranch.trim() || 'HEAD',
+                  recoveryKey,
+                };
+                resp = parseRemoteWorktreeCreateResult(
+                  await invokeRemote('worktree:create', [createRequest]),
+                  createRequest,
+                );
+              } catch (error) {
+                if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
+                if (isRemotePrecreatedWorktreeCleanupPendingError(error)) throw error;
+                // No response means the host may already have created it.
+                // Retain the reservation and force reconciliation before retry.
+                throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: error });
+              }
+              if (!resp) {
+                throw new RemotePrecreatedWorktreeCleanupPendingError();
+              }
+              if (!resp.ok) {
+                await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
+                throw new Error(resp.error.message ?? resp.error.kind);
+              }
+              remoteWorkingDir = resp.meta.path;
+              precreatedWorktree = { path: resp.meta.path, recoveryKey, createdAt };
+              await registerPendingRemotePrecreatedWorktree(
+                { ...reservation, path: resp.meta.path, phase: 'precreated' },
+                isCurrentDataOwner,
+              );
+            } finally {
+              setWtCreating(false);
+            }
+          }
           // 与 handleSend 同口径先存一份 args:临时行要按实际提交的值组装(见 commitRemoteSessionHandoff)。
           const createArgs = resolveDeviceLinkSubmission({
             agentKind: persistedAgentKind,
             // 无项目 → 不传,由 workingDir 派生 workspaceKind:'dialogue'。
-            workingDir: effectiveWorkingDir ?? undefined,
+            id: presetSessionId,
+            workingDir: remoteWorkingDir,
             extraDirs: effectiveExtraDirs,
             // 候选值 = 组件级派生值(弹窗独立于 ChatInput,拿不到它的回传)。与发送路径过同一道
             // 校准 —— 这两条路径曾各自推导,于是「只在新建目标上复现」的缺陷出过三次。
@@ -3103,15 +3897,31 @@ export function NewMakerDraftRoute() {
             deviceProviders,
             capabilityAgentKind,
           });
-          const createResult = await window.electronAPI.deviceLink
-            .invoke(deviceId, 'maker:create-session', [createArgs])
+          let created: { sessionId?: string; workDir?: string } | null = null;
+          const remoteSessionId = await (presetSessionId && precreatedWorktree
+            ? createRemoteSessionWithPrecreatedWorktree({
+                deviceId,
+                sessionId: presetSessionId,
+                path: precreatedWorktree.path,
+                recoveryKey: precreatedWorktree.recoveryKey,
+                ...(ownerAtGoal ? { dataOwnerId: ownerAtGoal } : {}),
+                createdAt: precreatedWorktree.createdAt,
+                createArgs,
+                invoke: invokeRemote,
+                isCurrent: isCurrentDataOwner,
+              })
+            : invokeRemote('maker:create-session', [createArgs]).then((result) => {
+                created = result as { sessionId?: string; workDir?: string } | null;
+                return created?.sessionId;
+              }))
             .catch((err) => {
               const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
               if (remoteWorkdirMessage) throw new Error(remoteWorkdirMessage);
               throw err;
             });
-          const created = createResult as { sessionId?: string; workDir?: string } | null;
-          const remoteSessionId = created?.sessionId;
+          if (presetSessionId && precreatedWorktree) {
+            created = { sessionId: remoteSessionId, workDir: remoteWorkingDir };
+          }
           if (!remoteSessionId) {
             throw new Error(t('ccAgent.draft.createSessionFailed'));
           }
@@ -3235,22 +4045,70 @@ export function NewMakerDraftRoute() {
           navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
           return;
         }
-        const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
+        const useLocalGoalWorktree = Boolean(
+          selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled,
+        );
+        const goalSessionId = makeDraftSessionId();
+        let goalWorkingDir = selectedWorkingDir;
+        let goalWorktreeName = '';
+        let goalWorktreeBranchName = '';
+        if (useLocalGoalWorktree) {
+          const baseRepo = selectedWorktree.baseRepo!;
+          goalWorktreeName = selectedWorktree.name.trim();
+          if (!goalWorktreeName) {
+            const suggestResp = await window.electronAPI.worktreeSuggestName({ baseRepo });
+            goalWorktreeName = (suggestResp.name ?? '').trim();
+          }
+          if (!goalWorktreeName) goalWorktreeName = `auto-${Date.now().toString(36).slice(-6)}`;
+          goalWorktreeBranchName = getBranchName(goalWorktreeName);
+          // The local API needs a session id, so this is a compensated saga:
+          // create an empty base-repo session, then create the worktree and move
+          // workingDir. Any setup failure soft-deletes that empty session before
+          // retry; Goal never starts against the base repository.
+          goalWorkingDir = baseRepo;
+          setWtCreating(true);
+        }
         const newSession = await createSession({
-          id: makeDraftSessionId(),
+          id: goalSessionId,
           agentKind: persistedAgentKind,
           model: draftInitialModel,
           effort: draftInitialEffort,
           permissionMode: chatInitialPermissionMode,
           fastMode: effectiveFastMode,
-          workingDir: selectedWorkingDir,
-          workspaceKind: selectedWorkingDir ? 'project' : 'dialogue',
-          remoteHostId: selectedWorkingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
+          workingDir: goalWorkingDir,
+          workspaceKind: goalWorkingDir ? 'project' : 'dialogue',
+          remoteHostId: goalWorkingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
           extraDirs: effectiveExtraDirs,
           providerId: chatInitialProviderId ?? null,
         });
         if (!newSession) {
           throw new Error(t('ccAgent.draft.createSessionFailed'));
+        }
+        if (useLocalGoalWorktree) {
+          const baseRepo = selectedWorktree.baseRepo!;
+          await prepareLocalGoalWorktree({
+            sessionId: newSession.id,
+            baseRepo,
+            name: goalWorktreeName,
+            initialBranchName: goalWorktreeBranchName,
+            sourceBranch: selectedWorktree.sourceBranch.trim() || 'HEAD',
+            createWorktree: (request) => window.electronAPI.worktreeCreate(request),
+            updateWorkingDir: (managedDir) => (
+              sessionService.update(newSession.id, { workingDir: managedDir }).then(() => undefined)
+            ),
+            patchWorkingDir: (managedDir) => {
+              sessionsStore.patchLocal(newSession.id, { workingDir: managedDir });
+            },
+            rollbackSession: () => (
+              sessionService.setStatus(newSession.id, 'deleted').then(() => undefined)
+            ),
+            patchDeleted: () => {
+              sessionsStore.patchLocal(newSession.id, { status: 'deleted' });
+            },
+            setProgress: (progress) => worktreeCreationStore.set(newSession.id, progress),
+            clearProgress: () => worktreeCreationStore.clear(newSession.id),
+          });
+          await refreshWorktrees();
         }
         // 目标文案是纯文本(goal 对话框没有附件 / mention 入口),直接即时预览 ——
         // 与下面 autoNameSession(objective) 最终写入的占位是同一个串。
@@ -3301,13 +4159,30 @@ export function NewMakerDraftRoute() {
           replace: true,
           state: orcaWorkersRevealState ? { orcaWorkersReveal: orcaWorkersRevealState } : undefined,
         });
+      } catch (error) {
+        if (isLocalGoalWorktreeCleanupPendingError(error)) {
+          log.error('[draft goal] incomplete local worktree session cleanup failed', {
+            setupError: error.setupError,
+            cleanupError: error.cleanupError,
+          });
+          throw new Error(t('ccAgent.draft.localWorktreeCleanupPending'));
+        }
+        if (isRemotePrecreatedWorktreeCleanupPendingError(error)) {
+          throw new Error(t('ccAgent.draft.remoteWorktreeCleanupPending'));
+        }
+        if (isRemotePrecreatedWorktreeOwnerChangedError(error)) {
+          throw new Error(t('ccAgent.draft.createSessionFailed'));
+        }
+        throw error;
       } finally {
+        setWtCreating(false);
         markSendInFlight(false);
       }
     },
     [
       markSendInFlight,
       isDeviceLinkDraft,
+      isRemoteProjectDraft,
       remoteModelListStatus,
       remoteDraftState.status,
       deviceProviders,
@@ -3317,6 +4192,7 @@ export function NewMakerDraftRoute() {
       effectiveDeviceLinkDeviceId,
       effectiveDeviceLinkDeviceName,
       effectiveWorkingDir,
+      dataOwnerId,
       createSession,
       persistedAgentKind,
       draftInitialModel,
@@ -3337,6 +4213,7 @@ export function NewMakerDraftRoute() {
       localProviders,
       localProvidersLoading,
       patchCollab,
+      refreshWorktrees,
       navigate,
       t,
     ],
@@ -3581,7 +4458,9 @@ export function NewMakerDraftRoute() {
                   worktreeDisabled={isRemoteProjectDraft}
                   deviceLinkDeviceId={effectiveDeviceLinkDeviceId ?? null}
                   deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}
-                  disabled={wtCreating}
+                  disabled={wtCreating || sendInFlight}
+                  branchDisabled={wtBranchPreferenceLoading || wtBranchPreferenceSaving}
+                  checkboxDisabled={wtPreferenceSaving}
                 />
               </div>
               <ThemeBrandLockup
@@ -3863,12 +4742,14 @@ export function NewMakerDraftRoute() {
                 fast: form.fast,
                 providerId: form.providerId,
                 initialTask: form.initialTask || undefined,
+                workerPermissionMode: form.workerPermissionMode,
               },
             });
             setCreateWorkerOpen(false);
           }}
           title={t('orca.createWorker.enableCollabTitle')}
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
+          requireWorkerPermissionModeSupport
           deviceId={effectiveDeviceLinkDeviceId ?? undefined}
           // SSH 远程草稿(draft.remoteHostId):worker 在远端 spawn,模型清单按 SSH
           // 口径过滤,与本路由 ChatInput 候选及 main 侧 remote-worker guard 同口径。

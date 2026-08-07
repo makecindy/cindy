@@ -12,8 +12,8 @@
 import type { IMCardActionEvent, InteractiveCardSpec } from '../types.js';
 import type { TgCallbackQuery } from './api.js';
 import { decodeCallbackData, encodeCallbackData, encodeMessageId, encodeLaneUserId } from './codec.js';
+import { TELEGRAM_CARD_LAYOUT } from './cardLayout.js';
 import { capRenderedText } from './htmlCap.js';
-import { INTERACTION_CARD_MODEL } from './interactionCardModel.js';
 import { markdownToTelegramHtml } from './markdown.js';
 
 export interface TelegramInlineKeyboardButton {
@@ -27,7 +27,7 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
 } {
   const title = spec.title ? `<b>${escapeTitle(spec.title)}</b>\n\n` : '';
   const { html: body } = markdownToTelegramHtml(spec.body);
-  const html = capRenderedText(`${title}${body}`, INTERACTION_CARD_MODEL.cardTextMax);
+  const html = capRenderedText(`${title}${body}`, TELEGRAM_CARD_LAYOUT.cardTextMax);
 
   if (spec.buttons.length === 0) return { html, replyMarkup: undefined };
 
@@ -35,10 +35,10 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
   let pendingPair: TelegramInlineKeyboardButton | null = null;
   for (const button of spec.buttons) {
     const rendered: TelegramInlineKeyboardButton = {
-      text: button.label.slice(0, INTERACTION_CARD_MODEL.buttonLabelMax),
+      text: button.label.slice(0, TELEGRAM_CARD_LAYOUT.buttonLabelMax),
       callback_data: encodeCallbackData(button.id, button.payload ?? {}),
     };
-    if (button.label.length <= INTERACTION_CARD_MODEL.pairLabelMax) {
+    if (button.label.length <= TELEGRAM_CARD_LAYOUT.pairLabelMax) {
       if (pendingPair) {
         rows.push([pendingPair, rendered]);
         pendingPair = null;

@@ -7,7 +7,21 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type Ref,
 } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  autoUpdate,
+  flip,
+  limitShift,
+  offset,
+  shift,
+  size,
+  useFloating,
+} from '@floating-ui/react-dom';
+import { DismissableLayer } from '@radix-ui/react-dismissable-layer';
+import { useFocusGuards } from '@radix-ui/react-focus-guards';
+import { FocusScope } from '@radix-ui/react-focus-scope';
 import {
   Check,
   ChevronDown,
@@ -25,6 +39,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { MorphPopover } from '@/components/ui/morph-popover';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
@@ -139,6 +154,8 @@ const PROVIDER_TITLE_KEY: Record<string, string> = {
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
+const MODEL_OPTIONS_COLLISION_PADDING = 8;
+const MODEL_OPTIONS_COLLISION_BOUNDARY: Element[] = [];
 const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
 // 一级菜单只保留单行模型信息与必要标签：20px 内容 + 16px 纵向 padding。
 const MODEL_LIST_ROW_HEIGHT_PX = 36;
@@ -150,6 +167,124 @@ export function modelListMaxHeightForRows(maxVisibleRows?: number): number | und
   return Math.min(
     MODEL_LIST_DEFAULT_MAX_HEIGHT_PX,
     rows * MODEL_LIST_ROW_HEIGHT_PX + Math.max(0, rows - 1) * MODEL_LIST_ROW_GAP_PX,
+  );
+}
+
+interface ModelOptionsFloatingPanelProps {
+  anchor: HTMLElement;
+  panelRef: Ref<HTMLDivElement>;
+  className?: string;
+  onCancelClose: () => void;
+  onScheduleClose: () => void;
+  onDismiss: () => void;
+  children: ReactNode;
+}
+
+/**
+ * 新建任务页的模型次级面板仍复刻 Radix 的 left/center 几何与 viewport 碰撞规则，
+ * 但定位层改用真实 left/top。Electron 的 app-region 只按布局矩形命中；若沿用
+ * Popper 的 translate 定位，视觉面板与 no-drag 矩形会错位，覆盖标题栏的区域就会吞 pointer。
+ */
+function ModelOptionsFloatingPanel({
+  anchor,
+  panelRef,
+  className,
+  onCancelClose,
+  onScheduleClose,
+  onDismiss,
+  children,
+}: ModelOptionsFloatingPanelProps) {
+  useFocusGuards();
+  const { refs, floatingStyles, isPositioned, placement } = useFloating<HTMLElement>({
+    strategy: 'fixed',
+    placement: 'left',
+    transform: false,
+    open: true,
+    elements: { reference: anchor },
+    whileElementsMounted: (reference, floating, update) =>
+      autoUpdate(reference, floating, update, { animationFrame: false }),
+    middleware: [
+      offset({ mainAxis: MODEL_OPTIONS_SIDE_OFFSET, alignmentAxis: 0 }),
+      shift({
+        mainAxis: true,
+        crossAxis: false,
+        limiter: limitShift(),
+        padding: MODEL_OPTIONS_COLLISION_PADDING,
+        boundary: MODEL_OPTIONS_COLLISION_BOUNDARY,
+        altBoundary: false,
+      }),
+      flip({
+        padding: MODEL_OPTIONS_COLLISION_PADDING,
+        boundary: MODEL_OPTIONS_COLLISION_BOUNDARY,
+        altBoundary: false,
+      }),
+      size({
+        padding: MODEL_OPTIONS_COLLISION_PADDING,
+        boundary: MODEL_OPTIONS_COLLISION_BOUNDARY,
+        altBoundary: false,
+        apply: ({ elements, availableHeight }) => {
+          elements.floating.style.setProperty(
+            '--radix-popover-content-available-height',
+            `${availableHeight}px`,
+          );
+        },
+      }),
+    ],
+  });
+
+  const placedSide = placement.startsWith('left') ? 'left' : 'right';
+
+  return createPortal(
+    <div
+      ref={refs.setFloating}
+      data-radix-popper-content-wrapper=""
+      className="z-50 w-[248px]"
+      style={{
+        ...floatingStyles,
+        visibility: isPositioned ? undefined : 'hidden',
+        pointerEvents: isPositioned ? undefined : 'none',
+        ...WINDOW_NO_DRAG_STYLE,
+      }}
+    >
+      <FocusScope
+        asChild
+        loop
+        trapped={false}
+        onMountAutoFocus={(event) => event.preventDefault()}
+        onUnmountAutoFocus={(event) => event.preventDefault()}
+      >
+        <DismissableLayer
+          asChild
+          disableOutsidePointerEvents={false}
+          deferPointerDownOutside
+          onDismiss={onDismiss}
+        >
+          <div
+            ref={panelRef}
+            role="dialog"
+            data-state="open"
+            data-side={placedSide}
+            data-testid="model-options-floating-panel"
+            onPointerEnter={onCancelClose}
+            onPointerLeave={onScheduleClose}
+            onFocusCapture={onCancelClose}
+            onBlurCapture={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              onScheduleClose();
+            }}
+            className={cn(
+              'w-full overflow-hidden rounded-[12px] p-2 shadow-[var(--shadow-menu)] outline-none duration-100',
+              'animate-float-in border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+              className,
+            )}
+            style={{ transformOrigin: placedSide === 'left' ? 'right center' : 'left center' }}
+          >
+            {children}
+          </div>
+        </DismissableLayer>
+      </FocusScope>
+    </div>,
+    document.body,
   );
 }
 
@@ -570,6 +705,8 @@ interface ModelSelectorContentProps {
   selectedRowClickOpensConfiguration?: boolean;
   /** Morph 原位展开时，要求真实 pointer move 后才展示行级配置，避免静止光标误触。 */
   pointerRevealRequiresIntent?: boolean;
+  /** 次级面板用真实 left/top 定位，保持原位置并让 Electron no-drag 几何与视觉一致。 */
+  optionsPanelUsesLayoutPositioning?: boolean;
   /**
    * field 形态:面板宽度绑定 trigger(DESIGN.md §4「Panel width must bind to the
    * trigger width」),主菜单列由固定 320 改为撑满外层 PopoverContent。
@@ -689,6 +826,7 @@ function ModelSelectorContentView({
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
   pointerRevealRequiresIntent = false,
+  optionsPanelUsesLayoutPositioning = false,
   fluidWidth = false,
   agentSwitch,
   discoveringModels = false,
@@ -804,6 +942,7 @@ function ModelSelectorContentView({
   const [editing, setEditing] = useState<{ providerId: string | null; modelId: string } | null>(
     null,
   );
+  const [optionsAnchor, setOptionsAnchor] = useState<HTMLElement | null>(null);
   // 非选中模型的 effort/fast 改动写进全局预设,不反映在 live props —— 用 tick 触发重渲染读新值。
   const [editTick, setEditTick] = useState(0);
   const bump = () => setEditTick((n) => n + 1);
@@ -820,6 +959,11 @@ function ModelSelectorContentView({
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不应收起行配置浮层。
   const suppressScrollDismissRef = useRef(false);
   const closeOptionsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const closeOptionsPanel = useCallback(() => {
+    setEditing(null);
+    setOptionsAnchor(null);
+  }, []);
 
   // ── pointer-reveal 武装门 ──
   // 面板(MorphPopover)在光标正下方原位展开:行滑到**静止**光标底下会触发
@@ -857,7 +1001,7 @@ function ModelSelectorContentView({
     // 80ms 足够接住浮层,又不会产生「鼠标走了选项还赖着」的视觉残留。
     closeOptionsTimerRef.current = setTimeout(() => {
       closeOptionsTimerRef.current = null;
-      setEditing(null);
+      closeOptionsPanel();
     }, 80);
   };
 
@@ -870,11 +1014,11 @@ function ModelSelectorContentView({
     const onAnyScroll = (event: Event) => {
       if (configPanelRef.current?.contains(event.target as Node)) return;
       cancelOptionsClose();
-      setEditing(null);
+      closeOptionsPanel();
     };
     document.addEventListener('scroll', onAnyScroll, true);
     return () => document.removeEventListener('scroll', onAnyScroll, true);
-  }, [editing]);
+  }, [closeOptionsPanel, editing]);
 
   useEffect(
     () => () => {
@@ -889,8 +1033,8 @@ function ModelSelectorContentView({
       clearTimeout(closeOptionsTimerRef.current);
       closeOptionsTimerRef.current = null;
     }
-    setEditing(null);
-  }, [interactionDisabled]);
+    closeOptionsPanel();
+  }, [closeOptionsPanel, interactionDisabled]);
 
   // 模型清单来源:本机会话从 live providers 派生(builtin + 自定义合集);device-link 远程会话
   // 必须列**被控端**模型(cc/codex.capabilities.availableModels,deviceId 作用域),不读控制端本地
@@ -1322,6 +1466,11 @@ function ModelSelectorContentView({
     effortOverride?: Effort,
   ) => {
     if (interactionDisabled) return;
+    const dismissAfterSelection = () => {
+      if (!dismiss) return;
+      closeOptionsPanel();
+      onDismiss?.();
+    };
     // 浏览目标引擎态:选中模型 = 确认切换引擎(两步式的第二步),走切换事务。
     // providerId 一起带上:切换后 sessions.provider_id 直接落用户选的来源,
     // trigger 来源 icon / 路由立即正确(null = flat 退化行,交给默认路由)。
@@ -1331,7 +1480,7 @@ function ModelSelectorContentView({
         id,
         providerId,
       );
-      if (dismiss) onDismiss?.();
+      dismissAfterSelection();
       return;
     }
     const selectedModel = sections
@@ -1350,23 +1499,15 @@ function ModelSelectorContentView({
         !!selectedModel &&
         (selectedModel.efforts.length > 0 || fastEditable(providerId, selectedModel));
       const opensConfiguration =
-        selectedRowClickOpensConfiguration &&
-        configurationEnabled &&
-        selectedModelHasConfiguration;
+        selectedRowClickOpensConfiguration && configurationEnabled && selectedModelHasConfiguration;
       // A selected row can be the effective fallback for a stale explicit
       // provider.  Repair that route before opening its configuration, but do
       // not persist the row's derived/default effort just by opening the card.
       if (reselectEmitsChange) {
         if (sections && providerId) {
-          const needsProviderRepair =
-            !!currentProviderId &&
-            currentProviderId !== providerId;
+          const needsProviderRepair = !!currentProviderId && currentProviderId !== providerId;
           if (!opensConfiguration || needsProviderRepair) {
-            onProviderChange?.(
-              providerId,
-              id,
-              opensConfiguration ? undefined : reconciledEffort,
-            );
+            onProviderChange?.(providerId, id, opensConfiguration ? undefined : reconciledEffort);
           }
         } else if (!opensConfiguration) {
           onModelChange(id);
@@ -1380,7 +1521,7 @@ function ModelSelectorContentView({
       // reselectEmitsChange:调用方的「当前值」可能是**解析出来的继承值**而非已持久化的
       // 显式值(IM 工作目录偏好),这时点当前行的语义是「把继承值钉成显式值」,必须照常回调,
       // 否则用户点了没反应、之后上游默认一变这条偏好就被静默改掉。
-      if (dismiss) onDismiss?.();
+      dismissAfterSelection();
       return;
     }
     if (sections && providerId) {
@@ -1389,7 +1530,7 @@ function ModelSelectorContentView({
     } else {
       onModelChange(id);
     }
-    if (dismiss) onDismiss?.();
+    dismissAfterSelection();
   };
   // ── hover / focus 浮层目标 ───────────────────────────────────────────────
   const editingModel: RowModel | null = useMemo(() => {
@@ -1400,6 +1541,18 @@ function ModelSelectorContentView({
     }
     return flatModels?.find((m) => m.id === editing.modelId) ?? null;
   }, [editing, sections, flatModels]);
+
+  // 搜索过滤会卸载当前模型行。create-agent 的自定位浮层不能继续保留 detached DOM
+  // 作为锚点；否则清空搜索后 configPanel 恢复时会先在旧锚点上重挂载。
+  useEffect(() => {
+    if (!optionsPanelUsesLayoutPositioning || !editing) return;
+    if (!editingModel || (optionsAnchor !== null && !optionsAnchor.isConnected)) {
+      closeOptionsPanel();
+    }
+  }, [closeOptionsPanel, editing, editingModel, optionsAnchor, optionsPanelUsesLayoutPositioning]);
+
+  // effect 会清理失效状态；渲染门再保证清理提交前也绝不把 detached 锚点交给 Floating UI。
+  const connectedOptionsAnchor = optionsAnchor?.isConnected ? optionsAnchor : null;
 
   // 浏览目标引擎态恒非 active(与 isSelectedRow 同口径):目标列表里可能出现与当前
   // 会话同 id 同来源的行(网关同一模型双引擎都供),悬浮面板里的改动绝不能写进
@@ -1511,7 +1664,6 @@ function ModelSelectorContentView({
   // 这样浮层会像 Hermes 的 Radix submenu 一样贴着当前行移动,切行不触发主菜单重排。
   const configPanel = editingModel ? (
     <div
-      ref={configPanelRef}
       role="group"
       aria-label={`${editingModel.displayName} ${t('newChat.modelSelector.options')}`}
       className="flex flex-col gap-0.5"
@@ -1723,9 +1875,18 @@ function ModelSelectorContentView({
     const hasOptions = !disabled;
     const isEditingThis =
       !!editing && editing.modelId === model.id && editing.providerId === providerId;
-    const revealOptions = () => {
+    const revealOptions = (anchor: HTMLDivElement) => {
       cancelOptionsClose();
-      setEditing(hasOptions ? { providerId, modelId: model.id } : null);
+      if (!hasOptions) {
+        closeOptionsPanel();
+        return;
+      }
+      setOptionsAnchor((current) => (current === anchor ? current : anchor));
+      setEditing((current) =>
+        current?.providerId === providerId && current.modelId === model.id
+          ? current
+          : { providerId, modelId: model.id },
+      );
     };
     // pointerenter 触发的 reveal 必须等光标真实移动过才武装:面板(MorphPopover)在
     // 光标正下方原位展开时,行会滑到**静止**光标底下触发 pointerenter,行配置浮层
@@ -1741,15 +1902,14 @@ function ModelSelectorContentView({
         event.nativeEvent.isTrusted
       )
         return;
-      if (!isEditingThis) revealOptions();
-      else cancelOptionsClose();
+      revealOptions(event.currentTarget);
     };
     return (
       <Popover
         key={`${providerId ?? ''}::${model.id}`}
         open={isEditingThis}
         onOpenChange={(open) => {
-          if (!open && isEditingThis) setEditing(null);
+          if (!open && isEditingThis) closeOptionsPanel();
         }}
       >
         <PopoverAnchor asChild>
@@ -1764,7 +1924,7 @@ function ModelSelectorContentView({
             onPointerEnter={revealOptionsByPointer}
             onPointerMove={revealOptionsByPointer}
             onPointerLeave={scheduleOptionsClose}
-            onFocus={revealOptions}
+            onFocus={(event) => revealOptions(event.currentTarget)}
             onBlur={(event) => {
               if (configPanelRef.current?.contains(event.relatedTarget as Node | null)) return;
               scheduleOptionsClose();
@@ -1777,7 +1937,7 @@ function ModelSelectorContentView({
               if (ev.target !== ev.currentTarget || disabled) return;
               if (ev.key === 'ArrowLeft' && hasOptions) {
                 ev.preventDefault();
-                revealOptions();
+                revealOptions(ev.currentTarget);
                 requestAnimationFrame(() => {
                   configPanelRef.current
                     ?.querySelector<HTMLElement>('button:not(:disabled)')
@@ -1859,12 +2019,13 @@ function ModelSelectorContentView({
             )}
           </div>
         </PopoverAnchor>
-        {isEditingThis && configPanel && (
+        {!optionsPanelUsesLayoutPositioning && isEditingThis && configPanel && (
           <PopoverContent
+            ref={configPanelRef}
             side="left"
             align="center"
             sideOffset={MODEL_OPTIONS_SIDE_OFFSET}
-            collisionPadding={8}
+            collisionPadding={MODEL_OPTIONS_COLLISION_PADDING}
             onOpenAutoFocus={(event) => event.preventDefault()}
             onCloseAutoFocus={(event) => event.preventDefault()}
             onPointerEnter={cancelOptionsClose}
@@ -2054,7 +2215,7 @@ function ModelSelectorContentView({
             return;
           }
           // 滚动不派发 pointerleave,行级配置浮层会跟着滚出视口的锚点行跑到菜单外 → 一滚动就收起。
-          if (editing) setEditing(null);
+          if (editing) closeOptionsPanel();
         }}
       >
         {!hasAnyModel ? (
@@ -2129,6 +2290,19 @@ function ModelSelectorContentView({
             </span>
           </button>
         </>
+      )}
+
+      {optionsPanelUsesLayoutPositioning && connectedOptionsAnchor && configPanel && (
+        <ModelOptionsFloatingPanel
+          anchor={connectedOptionsAnchor}
+          panelRef={configPanelRef}
+          className={overlayContentClassName}
+          onCancelClose={cancelOptionsClose}
+          onScheduleClose={scheduleOptionsClose}
+          onDismiss={closeOptionsPanel}
+        >
+          {configPanel}
+        </ModelOptionsFloatingPanel>
       )}
     </div>
   );
@@ -2750,6 +2924,7 @@ export function ModelSelector({
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}
+      optionsPanelUsesLayoutPositioning={isCreateAgentVariant}
       fluidWidth={isFieldTrigger}
       agentSwitch={contentAgentSwitch}
       discoveringModels={showDiscoveryPending && discovery.pending}

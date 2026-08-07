@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { BrowserWebviewPool } from '@/components/layout/BrowserWebviewPool';
 import { ChromeActions } from '@/components/layout/ChromeActions';
+import { shouldReserveLeftChromeActions } from '@/components/layout/chromeActionsLayout';
 import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
 import { rightSidebarOwnsRailChromeActions as resolveRightSidebarRailChromeActionsOwner } from '@/components/layout/railChromeActions';
 import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
@@ -11,6 +12,10 @@ import { RightSidebar, type RightSidebarHandle } from '@/components/layout/Right
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { Sidebar } from '@/components/sidebar/Sidebar';
+import {
+  getSplitSessionIds,
+  useSplitGroup,
+} from '@/features/cc-agent/splitGroupStore';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
@@ -209,6 +214,7 @@ function SidebarPinSpacer({ width }: { width: number }) {
 }
 
 export function MainLayout() {
+  const splitGroup = useSplitGroup();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
   const [shareImportRequest, setShareImportRequest] = useState<{
     id: number;
@@ -422,14 +428,25 @@ export function MainLayout() {
     }
   }, [sidebarPeek.peekState, isRailMode, handleRailModeChange]);
 
+  const routeSessionId = resolveAgentIslandVisibleSessionIdFromPath(location.pathname);
+  const splitVisibleSessionIds = useMemo(
+    () => {
+      const splitSessionIds = getSplitSessionIds(splitGroup.root);
+      return routeSessionId && splitSessionIds.length >= 2
+        ? [...new Set([routeSessionId, ...splitSessionIds])]
+        : [];
+    },
+    [routeSessionId, splitGroup.root],
+  );
+
   const syncAgentIslandVisibleSession = useCallback(() => {
     if (!isAgentIslandSupported()) return;
     if (!document.hasFocus()) return;
     if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;
     void window.electronAPI.agentIsland?.setVisibleSession?.(
-      resolveAgentIslandVisibleSessionIdFromPath(location.pathname),
+      splitVisibleSessionIds.length >= 2 ? splitVisibleSessionIds : routeSessionId,
     );
-  }, [location.pathname]);
+  }, [location.pathname, routeSessionId, splitVisibleSessionIds]);
 
   useEffect(() => {
     syncAgentIslandVisibleSession();
@@ -1328,7 +1345,11 @@ export function MainLayout() {
                   onCloseSidebar={isMac ? undefined : handleToggleRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
-                  reserveLeftChromeActions={isRightSidebarMaximized && isSidebarCollapsed}
+                  reserveLeftChromeActions={shouldReserveLeftChromeActions({
+                    isSidebarCollapsed,
+                    rightSidebarSide,
+                    isRightSidebarMaximized,
+                  })}
                   railChromeActionsHitHole={rightSidebarOwnsRailChromeActions}
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}

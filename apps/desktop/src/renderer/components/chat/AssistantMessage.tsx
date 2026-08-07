@@ -56,9 +56,13 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { MessageActionBar } from './MessageActionBar';
+import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import {
+  isInteractiveSessionNavigationMode,
+  useSessionNavigationMode,
+} from '@/features/cc-agent/embeddedSessionNavigation';
 
 /**
  * Streaming 渲染策略开关 (代码级 / 编译期):
@@ -253,7 +257,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   });
   const navigationMode = useSessionNavigationMode();
   const canFork =
-    navigationMode === 'route-owner' &&
+    isInteractiveSessionNavigationMode(navigationMode) &&
     Boolean(currentSessionId && messageClientId) &&
     forkSupported;
   // 远程会话的消息深链把归属设备冻进 `?device=`(粘滞解析,relay 重连窗口不丢),
@@ -263,6 +267,14 @@ export const AssistantMessage = memo(function AssistantMessage({
         deviceId: getStickySessionDeviceId(currentSessionId),
       })
     : undefined;
+  // 分享为图片:进入选择模式并预选本条(入口那条天然该已勾选,省一次点击)。
+  const handleShareAsImage = useMemo(
+    () =>
+      currentSessionId && messageClientId
+        ? () => shareSelectionStore.enter(currentSessionId, messageClientId)
+        : undefined,
+    [currentSessionId, messageClientId],
+  );
   const handleAddToChat = useCallback(() => {
     if (!currentSessionId || !messageDeepLink) return;
     insertSessionLinkIntoComposer({
@@ -372,6 +384,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           hovered={hovered}
           onFork={canFork ? handleFork : undefined}
           onAddToChat={messageDeepLink ? handleAddToChat : undefined}
+          onShareAsImage={handleShareAsImage}
           onDelete={currentSessionId && messageClientId ? handleDelete : undefined}
           turnMoney={turnMoney}
           turnCostUsd={turnCostUsd}

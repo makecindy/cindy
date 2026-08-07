@@ -3424,6 +3424,9 @@
         "cindyTextOneshotDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。",
         "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
         "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
+        "cindySearchWeb": "Cindy AI で公開ウェブを検索できます",
+        "cindySearchWebDetail": "検索では公開ウェブにアクセスし、Cindy AI の利用枠を消費する場合があります。",
+        "cindyTextOneshotModelDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。プラグインが希望モデルを宣言しています: {{model}}(現在のカタログで利用可能な場合に有効。ピン留めが優先されます)。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
@@ -3480,6 +3483,7 @@
         "codeDetailWithNode": "パネル UI は独立したサンドボックスで実行されます。ローカル処理は上記で宣言された Node ランタイムが提供します。",
         "added": "追加",
         "removed": "削除",
+        "updated": "更新",
         "unchanged": "他 {{count}} 件の権限は変更なし",
         "noChange": "権限に変更はありません。",
         "pick": "フォルダの選択をあなたに依頼できます",
@@ -3549,6 +3553,9 @@
             "embed.text": "テキストのベクトル化"
           },
           "defaultOption": "{{model}}(既定)",
+          "defaultOptionDeclared": "{{model}}(プラグイン宣言)",
+          "searchPlaceholder": "モデルやプロバイダを検索",
+          "budgetBadge": "割引",
           "noModels": "利用可能なモデルなし"
         },
         "errandPrefs": {
@@ -4367,6 +4374,7 @@
         "terminal": "ターミナル",
         "review": "レビュー",
         "backgroundTasks": "バックグラウンドタスク",
+        "resourceUsage": "リソース使用量",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
         "ghostPanel": "プラグインパネル"
@@ -4385,13 +4393,14 @@
       "empty": {
         "eyebrow": "右サイドバー",
         "title": "パネルを開く",
-        "desc": "ファイルツリー、レビュー、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
+        "desc": "ファイル、レビュー、リソース使用量、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
         "openFile": "ファイルを開く",
         "fileSub": "Files",
         "openReview": "レビューを開く",
         "reviewSub": "Review",
         "openBackgroundTasks": "バックグラウンドタスクを開く",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "リソース使用量を開く",
         "openBrowser": "ブラウザを開く",
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
@@ -4466,6 +4475,14 @@
       "spawnFailed": "ターミナルを起動できません: {{detail}}"
     },
     "review": {
+      "turn": {
+        "title": "このメッセージの変更",
+        "currentWorkspace": "現在のワークスペース",
+        "localOnly": "メッセージ単位の正確な変更は、リモートタスクではまだ利用できません。",
+        "partialNotice": "このメッセージには正確に追跡できないコマンドまたはツールの書き込みが含まれます。以下は取得できた一部のみで、完全なパッチではありません。",
+        "emptyTitle": "記録された変更はありません",
+        "emptyDesc": "このメッセージで保存されたパッチに表示可能なファイル変更はありません。"
+      },
       "fileCount_one": "{{count}} ファイル",
       "fileCount_other": "{{count}} ファイル",
       "emptyTitle": "変更はまだありません",
@@ -4760,6 +4777,53 @@
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
       "noProgress": "進行状況の詳細はまだありません"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent プロセス",
+        "app": "アプリプロセス"
+      },
+      "columns": {
+        "process": "プロセス",
+        "cpu": "CPU",
+        "memory": "メモリ",
+        "pid": "PID"
+      },
+      "kinds": {
+        "main": "メインプロセス",
+        "renderer": "UI プロセス",
+        "gpu": "GPU プロセス",
+        "utility": "サービスプロセス"
+      },
+      "agentRoles": {
+        "codexTask": "Codex タスク",
+        "codexService": "Codex サービス"
+      },
+      "agentRoleDetails": {
+        "task": "タスク実行",
+        "service": "アカウントとモデル"
+      },
+      "services": {
+        "audio": "オーディオサービス",
+        "network": "ネットワークサービス",
+        "storage": "ストレージサービス",
+        "videoCapture": "ビデオキャプチャ"
+      },
+      "processCount_one": "プロセスツリー：{{count}} 個",
+      "processCount_other": "プロセスツリー：{{count}} 個",
+      "agentsEmpty": "実行中の Agent プロセスはありません。タスクを開始するとここに表示されます",
+      "tableLabel": "プロセス別のリソース使用量",
+      "sortBy": "{{column}}で並べ替え",
+      "loading": "リソース使用量を読み込んでいます…",
+      "remoteUnavailableTitle": "リモートセッションでは利用できません",
+      "remoteUnavailableDescription": "このパネルはこのデバイス上のプロセスだけを読み取ります。このデバイスでローカルに実行されるセッションでのみ利用できます。",
+      "selectHint": "プロセスを選択",
+      "readOnlyHint": "終了できるのはタスク用の Agent プロセスだけです",
+      "terminate": "プロセスを終了",
+      "terminateConfirmTitle": "{{name}} プロセスを終了しますか？",
+      "terminateConfirmDescription": "この Agent プロセスを強制終了します。このプロセスを使用しているすべてのタスクが中断されます。影響を受けたタスクでメッセージを送信すると、必要に応じて Agent を再起動できます。",
+      "terminated": "{{name}} プロセスを終了しました",
+      "terminateFailed": "プロセスを終了できませんでした。すでに終了している可能性があります。リストは次回のサンプリングで自動的に更新されます"
     }
   },
   "update": {
@@ -5662,6 +5726,23 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "リクエストの明細"
     },
+    "shareImage": {
+      "entry": "画像として共有",
+      "title": "会話を共有",
+      "subtitle_other": "{{count}} 件のメッセージを選択中",
+      "selectAll": "すべて選択",
+      "clearAll": "選択を解除",
+      "checkboxLabel": "このメッセージを選択",
+      "cancel": "キャンセル",
+      "download": "画像を保存",
+      "copy": "画像をコピー",
+      "generating": "生成中…",
+      "copied": "画像をコピーしました",
+      "saved": "画像を保存しました",
+      "notMounted": "選択したメッセージの一部が表示されていません。上へスクロールして表示してから再試行してください",
+      "tooLarge": "選択内容が長すぎるか幅が広すぎます。選択を減らして再試行してください",
+      "failed": "画像を生成できませんでした。もう一度お試しください"
+    },
     "errorBanner": {
       "retryTitle": "最後のメッセージを再送信",
       "cancelTitle": "エラーを閉じる",
@@ -6185,8 +6266,34 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
     },
     "generatedFiles": {
-      "title": "このターンで生成されたファイル",
-      "showMore": "さらに {{count}} 件を表示",
+      "title": "このメッセージで作成されたファイル",
+      "showMore": "さらに {{count}} 件表示",
+      "showLess": "折りたたむ"
+    },
+    "turnChanges": {
+      "title": "{{count}} ファイルを変更",
+      "partialTitle": "このメッセージのファイル変更を完全には取得できませんでした",
+      "review": "レビュー",
+      "undo": "元に戻す",
+      "undoAria": "このメッセージの変更を元に戻す",
+      "undoPartialAria": "このメッセージで正確に取得された変更を元に戻す",
+      "reapply": "再適用",
+      "reapplyAria": "このメッセージの変更を再適用する",
+      "reapplyPartialAria": "このメッセージで正確に取得された変更を再適用する",
+      "undoSuccess": "このメッセージの変更を元に戻しました",
+      "reapplySuccess": "このメッセージの変更を再適用しました",
+      "undoPartialSuccess": "正確に取得された変更を元に戻しました。取得されていない変更は元に戻していません",
+      "reapplyPartialSuccess": "正確に取得された変更を再適用しました。取得されていない変更は再適用していません",
+      "actionRunning": "現在の応答が完了してからワークスペースを変更してください",
+      "gitUnavailable": "Git が検出されませんでした。Git をインストールしてシステムの PATH に追加し、Cindy を再起動すると、元に戻す・再適用の全機能を利用できます。",
+      "actionConflict": "ワークスペースが変更されたため、このパッチを安全に適用できません。現在の変更を先にレビューしてください",
+      "actionUnavailable": "このメッセージには安全に元に戻せないファイル変更が含まれています",
+      "actionFailed": "変更を適用できませんでした。もう一度お試しください",
+      "partial": "正確に取得できた変更のみ表示しています",
+      "partialReversible": "元に戻す操作と再適用の対象は正確に取得された変更のみです。取得されていない変更は処理されません",
+      "partialActionHint": "正確に取得されたファイル変更のみを元に戻すか再適用します",
+      "showMore": "さらに {{count}} ファイルを表示",
+      "reviewRemaining": "残り {{count}} ファイルをレビューで表示",
       "showLess": "折りたたむ"
     },
     "agentActions": {
@@ -6393,6 +6500,7 @@
     "draft": {
       "createSessionFailed": "セッションの作成に失敗しました。再試行してください",
       "piRemoteUnsupported": "Pi はローカルでのみ動作し、SSH リモートホストは利用できません。このホストを使うには Claude または Codex に切り替えてください。",
+      "localWorktreeCleanupPending": "前回のローカル worktree セッションのクリーンアップが完了していません。完了後に再試行してください。",
       "remoteWorktreeCleanupPending": "前回のリモート worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。",
       "remoteProviderUpdating": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
       "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
@@ -8500,6 +8608,25 @@
       "closeAria": "閉じる"
     }
   },
+  "splitGroup": {
+    "closeAria": "「{{title}}」のペインを閉じる",
+    "closeAll": "分割を閉じる",
+    "toggleDirection": "上下 / 左右の分割を切り替え",
+    "dropHint": "ここにセッションをドロップして開く",
+    "loadingTask": "セッションを読み込み中…",
+    "resizeAria": "セッションペインのサイズを変更",
+    "openInSplit": "分割で開く",
+    "openSide": {
+      "left": "セッションを左側で開く",
+      "right": "セッションを右側で開く",
+      "top": "セッションを上側で開く",
+      "bottom": "セッションを下側で開く"
+    },
+    "alreadyOpen": "このセッションはすでに分割内で開いています。別のセッションを選択してください。",
+    "limitReached": "1 つの分割で開けるセッションは最大 {{count}} 件です。ペインを 1 つ閉じてから、もう一度お試しください。",
+    "addUnavailable": "このセッションは現在の分割で開けません。メイン領域でセッションを開いてから、もう一度お試しください。",
+    "workerUnavailable": "Worker は個別のペインで開けません。所属する Lead セッションを開いてください。"
+  },
   "extraDirs": {
     "menuAria": "操作メニュー",
     "tooltipEmpty": "その他の操作",
@@ -8512,7 +8639,11 @@
     "empty": "参照ディレクトリはまだありません",
     "add": "ディレクトリを追加…",
     "atLimit": "上限 {{max}} 件に達しました",
-    "remove": "{{name}} を削除"
+    "remove": "{{name}} を削除",
+    "parentConfirmTitle": "親ディレクトリを追加しますか？",
+    "parentConfirmDescription": "選択したディレクトリは、現在の作業ディレクトリの親または祖先です。Agent が作業ディレクトリ外の内容も参照できるようになり、表示範囲が広がります。\n\nそれでも追加しますか？\n\n{{path}}",
+    "parentConfirmAccept": "追加する",
+    "parentConfirmCancel": "キャンセル"
   },
   "commands": {
     "toast": {
@@ -8683,6 +8814,7 @@
       "passwordPlaceholder": "パスワード",
       "unlock": "ロック解除",
       "previewMeta": "{{agent}} · {{count}} 件のメッセージ · {{exportedAt}} にエクスポート",
+      "previewOrca": "協同タスク · Worker {{count}} 件を含む",
       "riskWarning": "このファイルは外部から共有されたものです。提供元が信頼できることを確認してください。インポートした履歴は AI のその後の動作に影響する可能性があり、会話を続けると AI はローカルファイルの読み書きやコマンドの実行を行うことができます。",
       "workdirHint": "元のセッションの作業ディレクトリは {{originalDir}} です。このマシン上の対応するディレクトリを選択してください。",
       "workdirEmpty": "ディレクトリが未選択です",
@@ -8694,6 +8826,7 @@
       "close": "閉じる",
       "openSession": "セッションを開く",
       "doneTitle": "インポート完了",
+      "doneOrca": "協同 Worker {{count}} 件も併せてインポートしました",
       "conflictTitle": "このセッションは既に存在します",
       "conflictBody": "同じ識別子を持つセッションがこの端末に既に存在します（以前にインポート済み、または元のセッションがこの端末にあります）。再インポートすると、既存のセッションはこの共有ファイルの内容で上書きされます。",
       "conflictOverwrite": "上書きしてインポート",

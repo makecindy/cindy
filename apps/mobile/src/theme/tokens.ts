@@ -700,7 +700,8 @@ export const loginSizes = {
 /**
  * Motion token(全局动效档位,ms)——与桌面端 DESIGN.md §14.4 的 --motion-* 同名
  * 同值,双端同构。新增动效一律引用这些档位,不要在组件里硬编码时长。
- * spinnerCycle 是功能性 loading spinner 的语义循环例外,不是第六档交互时长。
+ * spinnerCycle 与 sidebarTitleMarqueePerViewport 是 §14.4 登记的语义例外,
+ * 不是额外交互时长档位。
  */
 export const motionDuration = {
   /** hover / 即时反馈、轻浮层退场 */
@@ -715,6 +716,8 @@ export const motionDuration = {
   exit: 150,
   /** 功能性 loading spinner 完整一圈(§14.4 窄例外) */
   spinnerCycle: 1000,
+  /** Desktop 侧栏溢出标题每个可视宽度的阅读时长(双端 token 同构,移动端不消费) */
+  sidebarTitleMarqueePerViewport: 2400,
 } as const;
 
 /**

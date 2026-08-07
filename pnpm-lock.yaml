@@ -97,6 +97,9 @@ importers:
       '@cindy/mcps':
         specifier: workspace:*
         version: link:../../packages/lizi-mcps
+      '@cindy/model-access-protocol':
+        specifier: workspace:*
+        version: link:../../cindy-protocol/packages/model-access-protocol
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
@@ -184,6 +187,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.41.1
         version: 6.43.6
+      '@floating-ui/react-dom':
+        specifier: ^2.1.9
+        version: 2.1.9(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@fontsource-variable/inter':
         specifier: ^5.2.8
         version: 5.2.8
@@ -211,9 +217,18 @@ importers:
       '@radix-ui/react-dialog':
         specifier: ^1.1.15
         version: 1.1.19(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@radix-ui/react-dismissable-layer':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@radix-ui/react-dropdown-menu':
         specifier: ^2.1.16
         version: 2.1.20(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@radix-ui/react-focus-guards':
+        specifier: ^1.1.4
+        version: 1.1.4(@types/react@19.2.17)(react@19.2.3)
+      '@radix-ui/react-focus-scope':
+        specifier: ^1.1.12
+        version: 1.1.12(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@radix-ui/react-popover':
         specifier: ^1.1.15
         version: 1.1.19(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -1082,6 +1097,9 @@ importers:
       '@cindy/maker-shared':
         specifier: workspace:*
         version: link:../maker-shared
+      diff:
+        specifier: ^8.0.4
+        version: 8.0.4
       better-sqlite3:
         specifier: '*'
         version: 12.11.1

@@ -1634,6 +1634,14 @@ export interface ImportSharedCodexThreadResult {
    */
   stateWritten: boolean;
   /**
+   * 复用既有 thread 时，本次刷新前的可变字段快照。后续 Maker DB 事务失败时
+   * 必须恢复，不能让失败的覆盖导入把旧任务的 cwd / rollout_path 改到新目录。
+   */
+  previousState: {
+    dbPath: string;
+    values: Record<string, SqlScalar>;
+  } | null;
+  /**
    * 调用结束后该 thread 的 state 行是否在 desktop state DB 里(本次写入或原本
    * 就在都算)。false = B 机无 state DB 或写入失败,调用方据此降档提示——
    * 不能用 stateWritten 判断:复用场景 stateWritten=false 但 state 完好。
@@ -1684,6 +1692,7 @@ export async function importSharedCodexThread(
   }
 
   let stateWritten = false;
+  let previousState: ImportSharedCodexThreadResult['previousState'] = null;
   const dbPath = findLatestStateDb(home);
   if (dbPath && params.stateRows.threads.length > 0) {
     // thread 行已存在(典型是删除 Maker 会话后重导同一分享包——软删不清 state)时
@@ -1691,8 +1700,8 @@ export async function importSharedCodexThread(
     // thread_spawn_edges 无唯一约束,重复 INSERT 会翻倍;stateWritten 保持 false,
     // 让回滚不去误删既有行。但既有 threads 行的可变字段(cwd / rollout_path)必须
     // 刷新为本次导入值——codex resume 从 state DB 读这两列,不刷新会让重导会话
-    // 跑回旧目录 / 指向失效 rollout(review bot P2)。该 UPDATE 不登记回滚:把
-    // 指向收敛到盘上真实存在的文件是单调修正,导入失败后残留新值无害。
+    // 跑回旧目录 / 指向失效 rollout(review bot P2)。UPDATE 前保留原值，若后续
+    // Maker DB 事务失败则由 removeSharedCodexThread 恢复，避免失败导入污染旧任务。
     const preExisting = readRawThreadRow(dbPath, params.threadId) !== null;
     let db: Database.Database | null = null;
     try {
@@ -1713,6 +1722,21 @@ export async function importSharedCodexThread(
             args.rollout_path = rolloutPath;
           }
           if (sets.length > 0) {
+            const previousRow = targetDb
+              .prepare(
+                `SELECT ${sets.map((set) => quoteIdent(set.slice(0, set.indexOf(' =')))).join(', ')} FROM threads WHERE id = @id`,
+              )
+              .get({ id: params.threadId }) as SqlRow | undefined;
+            if (previousRow) {
+              previousState = {
+                dbPath,
+                values: Object.fromEntries(
+                  Object.entries(previousRow).filter(
+                    (entry): entry is [string, SqlScalar] => entry[1] !== undefined,
+                  ),
+                ),
+              };
+            }
             targetDb.prepare(`UPDATE threads SET ${sets.join(', ')} WHERE id = @id`).run(args);
           }
         }
@@ -1758,16 +1782,38 @@ export async function importSharedCodexThread(
   } as CodexThreadSummary);
 
   const statePresent = dbPath ? readRawThreadRow(dbPath, params.threadId) !== null : false;
-  return { rolloutPath, rolloutWritten, stateWritten, statePresent };
+  return { rolloutPath, rolloutWritten, stateWritten, previousState, statePresent };
 }
 
-/** 会话分享导入失败的回滚:删本次**真实写入**的 rollout 与 state 三表行(best-effort);复用的既有文件/行不动。 */
+/** 会话分享导入失败的回滚:删本次真实写入的 rollout/state 行，或恢复复用 thread 的可变字段。 */
 export async function removeSharedCodexThread(
   threadId: string,
   written: ImportSharedCodexThreadResult,
 ): Promise<void> {
   if (written.rolloutPath && written.rolloutWritten) {
     await fsp.rm(written.rolloutPath, { force: true }).catch(() => undefined);
+  }
+  if (written.previousState) {
+    let db: Database.Database | null = null;
+    try {
+      db = createBetterSqliteDatabase(written.previousState.dbPath);
+      db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+      const entries = Object.entries(written.previousState.values);
+      if (entries.length > 0 && tableExists(db, 'threads')) {
+        const sets = entries.map(([column]) => `${quoteIdent(column)} = @${column}`);
+        db.prepare(`UPDATE threads SET ${sets.join(', ')} WHERE id = @id`).run({
+          id: threadId,
+          ...written.previousState.values,
+        });
+      }
+    } catch (err) {
+      log.warn('restore shared codex thread state failed', {
+        threadId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      closeDbQuietly(db);
+    }
   }
   if (!written.stateWritten) return;
   const dbPath = findLatestStateDb(getDesktopCodexHome());

@@ -43,6 +43,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 
 const PERMISSION_TITLE = 'cindy:permission';
+const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
@@ -633,6 +634,23 @@ export default async function cindyBridge(pi: any) {
 
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
+    if (FILE_WRITE_BUILTINS.has(event.toolName)) {
+      try {
+        // Internal synchronization point: the host snapshots only the target file for
+        // known-path writes. The result is deliberately ignored; capture must never turn
+        // an observability failure into a tool-execution failure.
+        await ctx.ui.confirm(
+          TURN_CHANGE_CAPTURE_TITLE,
+          JSON.stringify({
+            toolName: event.toolName,
+            toolUseId: event.toolCallId,
+            input: event.input ?? {},
+          }),
+        );
+      } catch {
+        // Best-effort capture; the permission boundary below remains authoritative.
+      }
+    }
     const permission = currentPermissionState();
     // Extra Dirs 的结构化写工具永远禁止，即使 Full access 也不能把“只读引用”静默
     // 升级成写目录。bash 仍由 Cindy 审批/模型指令约束（Pi 暂无 OS sandbox API）。
@@ -673,6 +691,22 @@ export default async function cindyBridge(pi: any) {
     }
     if (!approved) {
       return { block: true, reason: 'User denied this tool call via Cindy.' };
+    }
+  });
+
+  pi.on('tool_result', async (event: any, ctx: any) => {
+    if (event.toolName !== 'bash' && !String(event.toolName ?? '').startsWith('mcp__')) return;
+    try {
+      await ctx.ui.confirm(
+        TURN_CHANGE_CAPTURE_TITLE,
+        JSON.stringify({
+          toolName: event.toolName,
+          toolUseId: event.toolCallId,
+          input: event.input ?? {},
+        }),
+      );
+    } catch {
+      // Best-effort capture; tool results must never fail because observability did.
     }
   });
 

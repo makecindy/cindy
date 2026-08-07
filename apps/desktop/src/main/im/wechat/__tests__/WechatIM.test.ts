@@ -75,6 +75,26 @@ describe('WechatIM host boundary', () => {
     ).toBe(true);
   });
 
+  it('排队等待 provider 受理时按 task session 回退微信 peer', () => {
+    const activeTasks = new Map<
+      string,
+      { routeSessionId?: string; task: { sessionId: string } }
+    >([
+      ['peer-queued', { task: { sessionId: 'wechat-task-session' } }],
+      ['peer-other', { task: { sessionId: 'other-session' } }],
+    ]);
+
+    expect(__testing.activePeerIdForSession(activeTasks, 'wechat-task-session')).toBe(
+      'peer-queued',
+    );
+
+    activeTasks.get('peer-queued')!.routeSessionId = 'accepted-route-session';
+    expect(__testing.activePeerIdForSession(activeTasks, 'wechat-task-session')).toBeNull();
+    expect(__testing.activePeerIdForSession(activeTasks, 'accepted-route-session')).toBe(
+      'peer-queued',
+    );
+  });
+
   it('keeps staged files only for accepted poll tasks', () => {
     const accepted = __testing.acceptedPollTaskIds({
       committed: true,
@@ -153,6 +173,35 @@ describe('WechatIM host boundary', () => {
     expect(question).toEqual({
       kind: 'ask_user_question',
       answers: { 选择环境: '生产' },
+    });
+  });
+
+  it('cancels only the matching one-shot interaction when its central route closes', async () => {
+    const im = new WechatIM(deps());
+    vi.spyOn(im, 'sendText').mockResolvedValue({ messageId: 'interaction-prompt' });
+    const request = {
+      kind: 'permission' as const,
+      requestId: 'request-current',
+      toolName: 'bash',
+      input: { command: 'pnpm test' },
+    };
+    const pending = im.handleTextInteraction('peer-1', request, { timeoutMs: 60_000 });
+    await Promise.resolve();
+
+    expect(im.cancelTextInteraction('peer-1', 'request-stale', {
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'stale_route',
+    })).toBe(false);
+    expect(im.cancelTextInteraction('peer-1', 'request-current', {
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'interaction_route_released',
+    })).toBe(true);
+    await expect(pending).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'interaction_route_released',
     });
   });
 
