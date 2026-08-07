@@ -476,10 +476,18 @@ describe('dormant scheduler manager', () => {
     harness.emit({
       type: 'snapshot',
       accountGeneration: request.accountGeneration,
-      requestId: request.requestId,
+      requestId: 'nonce-old-response',
       snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
     });
     expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request.accountGeneration,
+      requestId: request.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 2 },
+    });
+    expect(manager.getDecision().state).toBe('active');
     manager.stop();
   });
 
