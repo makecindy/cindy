@@ -122,6 +122,40 @@ describe('collectGeneratedFiles', () => {
     expect(files[0].source).toBe('tool');
   });
 
+  it('collapses doubled backslashes so escaped wrapper commands do not duplicate chips', () => {
+    // 实测场景(pr-watch session):powershell 包一层 node -e,落库命令文本里的
+    // 路径带转义残留(`C:\\Users\\...`);同轮另一条命令用正斜杠形态。fs 层它们
+    // 是同一文件(Windows 归并重复分隔符),不折叠会出两个同名 chip。
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Bash', {
+          command: "powershell -Command '$p = 'C:\\\\Users\\\\U\\\\pr-watch\\\\registry.json'; Get-Content $p'",
+        }),
+        toolUse('Bash', {
+          command: "node -e \"const p='C:/Users/U/pr-watch/registry.json'; console.log(p);\"",
+        }),
+      ],
+      'C:\\Users\\U\\pr-watch',
+    );
+    const registry = files.filter((f) => f.name === 'registry.json');
+    expect(registry).toHaveLength(1);
+    // 画布路径本身也折叠成单反斜杠本机形态,不带转义残留。
+    expect(registry[0].path).toBe('C:\\Users\\U\\pr-watch\\registry.json');
+  });
+
+  it('keeps the UNC leading double backslash while collapsing inner separator runs', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Bash', { command: "copy out '\\\\server\\share\\\\dir\\report.csv'" }),
+        toolUse('Bash', { command: "open '\\\\server\\share\\dir\\report.csv'" }),
+      ],
+      'C:\\work',
+    );
+    const reports = files.filter((f) => f.name === 'report.csv');
+    expect(reports).toHaveLength(1);
+    expect(reports[0].path.startsWith('\\\\server\\')).toBe(true);
+  });
+
   it('excludes command mentions of files edited by file tools this turn', () => {
     // 编码会话形态:Edit 改了源码文件,随后命令引用它(跑测试)。它是编辑不是
     // 新建,不能因 mtime 落在本轮窗口就被当成产物。
