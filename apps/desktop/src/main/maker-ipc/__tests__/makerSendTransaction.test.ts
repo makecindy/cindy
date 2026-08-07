@@ -1311,6 +1311,51 @@ describe('session-agent-switch handoff injection', () => {
     expect(consumePendingHandoff).not.toHaveBeenCalled();
   });
 
+  it('计划对账段命中时前置进 wire payload,落库内容保持用户原文', async () => {
+    const { deps, session } = createDeps({
+      peekPlanReconcileNote: vi.fn(async () => 'RECONCILE-NOTE'),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
+      persistUserMessage: { clientId: 'client-1', content: '新消息' },
+    });
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: 'RECONCILE-NOTE\n\n新消息' },
+      expect.anything(),
+    );
+    const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1];
+    expect(persisted?.content).toBe('新消息');
+  });
+
+  it('计划对账在交接段外层(对账在前、交接在后)', async () => {
+    const { deps, session } = createDeps({
+      peekPendingHandoff: vi.fn(async () => 'HANDOFF-TEXT'),
+      consumePendingHandoff: vi.fn(),
+      peekPlanReconcileNote: vi.fn(async () => 'RECONCILE-NOTE'),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {});
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: 'RECONCILE-NOTE\n\nHANDOFF-TEXT\n\n新消息' },
+      expect.anything(),
+    );
+  });
+
+  it('对账读取抛错时静默跳过,不挡发送', async () => {
+    const { deps, session } = createDeps({
+      peekPlanReconcileNote: vi.fn(async () => {
+        throw new Error('db unavailable');
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {});
+    expect(session.send).toHaveBeenCalledWith({ type: 'user', content: '新消息' }, expect.anything());
+  });
+
   it('lazy-create 前调用 reconcileCreateOptsWithDb 以 DB 行校正 createOpts', async () => {
     const reconcile = vi.fn(async (_sessionId: string, co: MakerSessionCreateOpts) => {
       co.agentKind = 'codex';

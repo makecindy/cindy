@@ -17,6 +17,12 @@ export interface MessageRenderSourceMessageLike {
   toolInput?: unknown;
   /** SDK tool-use id — used to link a Task/collab tool-call to its live `agent_task_update`. */
   toolUseId?: string | null;
+  /**
+   * Owning Agent/Task tool-use id when this message was produced inside a
+   * subagent. Plan scanning treats it as an ownership boundary: subagent plan
+   * calls never compete for the top-level pinned panel.
+   */
+  parentToolUseId?: string | null;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
   /**

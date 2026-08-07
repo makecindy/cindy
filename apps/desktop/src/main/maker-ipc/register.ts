@@ -577,6 +577,7 @@ import {
 } from './agentHandoff.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
+import { buildPlanReconcileNote, summarizeOpenPlan } from './planReconcile.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -8963,6 +8964,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
+    // 计划对账:未收口的旧计划让 agent 在下一轮顺手交代。读近段历史现算,
+    // 无 pending 状态(清单被更新/清掉后下一轮自然不再注入)。
+    peekPlanReconcileNote: async (sessionId) => {
+      const rows = await listMessagesForAgentHandoff(sessionId, 400);
+      const summary = summarizeOpenPlan(rows);
+      return summary ? buildPlanReconcileNote(summary) : null;
+    },
     // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。

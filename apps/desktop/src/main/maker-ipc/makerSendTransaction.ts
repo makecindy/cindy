@@ -216,6 +216,13 @@ export interface MakerSendTransactionDeps {
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   /**
+   * 计划对账:会话里若有未收口的旧计划(未盖终态章且有未完成步骤),返回一段
+   * "顺手收拾"指示文本,与交接同通道前置进 wire payload(不进落库显示)。每次
+   * 发送现算,无 pending 状态、无 consume——旧清单被 agent 更新/清掉后,下一轮
+   * 自然算不出注入。undefined = 不启用(测试最小 harness)。
+   */
+  peekPlanReconcileNote?(sessionId: string): Promise<string | null>;
+  /**
    * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
    * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
@@ -728,6 +735,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
+      // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
+      // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
+      // 失败静默跳过:对账是锦上添花,不能挡发送。
+      const planReconcileNote =
+        (await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null;
+      const withPlanReconcile = planReconcileNote
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcileNote)
+        : withHandoff;
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
       // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
@@ -740,8 +755,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? buildMobileClientPromptNote()
           : null;
       const outgoing = mobileClientNote
-        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
-        : withHandoff;
+        ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)
+        : withPlanReconcile;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);

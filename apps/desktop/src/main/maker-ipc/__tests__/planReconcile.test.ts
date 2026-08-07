@@ -1,0 +1,136 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  buildPlanReconcileNote,
+  summarizeOpenPlan,
+  type PlanReconcileCandidateRow,
+} from '../planReconcile';
+
+let seq = 0;
+function row(
+  role: string,
+  content: unknown,
+  clientId = `row-${(seq += 1)}`,
+): PlanReconcileCandidateRow {
+  return { clientId, role, content, createdAt: 1_700_000_000_000 + seq * 1000 };
+}
+
+function planRow(
+  plan: Array<{ step: string; status: string }>,
+  extra: Record<string, unknown> = {},
+  toolUseId = `plan:turn-${(seq += 1)}`,
+): PlanReconcileCandidateRow {
+  return row('tool_use', {
+    toolUseId,
+    toolName: 'update_plan',
+    input: { plan },
+    ...extra,
+  });
+}
+
+describe('summarizeOpenPlan', () => {
+  it('returns open steps for an unsealed plan left behind', () => {
+    const summary = summarizeOpenPlan([
+      row('user', { text: '做点什么' }),
+      planRow([
+        { step: 'Done work', status: 'completed' },
+        { step: 'Open work', status: 'in_progress' },
+        { step: 'Future work', status: 'pending' },
+      ]),
+    ]);
+
+    expect(summary).toEqual({
+      openSteps: ['Open work', 'Future work'],
+      totalSteps: 3,
+    });
+  });
+
+  it('returns null when there is no plan at all', () => {
+    expect(summarizeOpenPlan([row('user', { text: 'hi' })])).toBeNull();
+  });
+
+  it('returns null when the plan is fully completed', () => {
+    expect(
+      summarizeOpenPlan([
+        planRow([
+          { step: 'A', status: 'completed' },
+          { step: 'B', status: 'completed' },
+        ]),
+      ]),
+    ).toBeNull();
+  });
+
+  it('returns null when the plan was sealed by a successful turn', () => {
+    // 成功收尾盖了章的清单不对账:它的生命周期已经结束,哪怕留有未勾步骤
+    // 也是"如实记录",下一轮不需要 agent 交代。
+    expect(
+      summarizeOpenPlan([
+        planRow(
+          [
+            { step: 'Done', status: 'completed' },
+            { step: 'Left open', status: 'in_progress' },
+          ],
+          { terminalPlanSnapshot: true },
+        ),
+      ]),
+    ).toBeNull();
+  });
+
+  it('ignores subagent plans (ownership boundary)', () => {
+    expect(
+      summarizeOpenPlan([
+        row('tool_use', {
+          toolUseId: 'todo-sub',
+          toolName: 'TodoWrite',
+          parentToolUseId: 'agent-task-1',
+          input: { todos: [{ content: 'Subagent internal', status: 'in_progress' }] },
+        }),
+      ]),
+    ).toBeNull();
+  });
+
+  it('reconciles only the latest plan session after a user turn boundary', () => {
+    const summary = summarizeOpenPlan([
+      planRow([{ step: 'Old abandoned', status: 'in_progress' }]),
+      row('user', { text: '换个话题' }),
+      planRow([
+        { step: 'Current work', status: 'in_progress' },
+        { step: 'Current next', status: 'pending' },
+      ]),
+    ]);
+
+    // 只对账当前(最新 session)的清单,不把上一轮被 supersede 的旧步骤翻出来。
+    expect(summary?.openSteps).toEqual(['Current work', 'Current next']);
+  });
+});
+
+describe('buildPlanReconcileNote', () => {
+  it('lists open steps and grants all three outcomes including deletion', () => {
+    const note = buildPlanReconcileNote({
+      openSteps: ['Fix parser', 'Run tests'],
+      totalSteps: 4,
+    });
+
+    expect(note).toContain('- Fix parser');
+    expect(note).toContain('- Run tests');
+    // 三个出口都要在场:继续更新 / 修订 / 清掉。删除授权是关键——不给的话
+    // 模型会把不相干的旧清单硬拖进新话题。
+    expect(note).toContain('更新计划状态');
+    expect(note).toContain('修订条目');
+    expect(note).toContain('清掉');
+    // 顺手性质,不许抢占用户问题。
+    expect(note).toContain('不要让它先于用户的问题');
+    expect(note).toContain('以下是用户的新消息');
+  });
+
+  it('caps the listed steps and notes the remainder', () => {
+    const note = buildPlanReconcileNote({
+      openSteps: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'],
+      totalSteps: 8,
+    });
+
+    expect(note).toContain('- f');
+    expect(note).not.toContain('- g');
+    expect(note).toContain('另有 2 项未列出');
+  });
+});

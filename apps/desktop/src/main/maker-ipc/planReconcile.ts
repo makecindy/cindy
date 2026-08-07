@@ -1,0 +1,101 @@
+/**
+ * 计划对账注入(plan reconcile)。
+ *
+ * 用户抱怨的另一半:泡泡退场(终态章)解决了"看得见的残留",但那份没做完的
+ * 清单本身还躺在会话里——下一轮 agent 被叫醒时没人要求它交代旧清单的下落,
+ * 清单内容就烂在那里(Codex 的 update_plan 是纯自述,引擎层没有回收机制)。
+ *
+ * 机制:每轮用户消息发送时(makerSendTransaction 的 wire 注入点,与
+ * agentHandoff / mobileClientNote 同一条搭车通道),若会话里最新的顶层计划
+ * 仍有未完成步骤,就在用户消息前注入一段"顺手收拾"指示:接着干就更新进度,
+ * 方向变了就改条目,不相干了就清掉。
+ *
+ * 三条纪律:
+ *  - 只搭车,不烧独立轮次——"没在干了"的那一刻没人可问,叫醒它就又在干了,
+ *    所以对账只能发生在"本来就要叫醒它"的时机(用户的设计决策);
+ *  - 措辞是顺手性质,不是任务——否则用户问"X 是什么",agent 先一本正经整理
+ *    清单,答案排到后面;
+ *  - 归属判定复用 maker-shared 的所有权边界(跨轮不串号、子代理不算数),
+ *    这也是先修归属再开对账的原因:对着一份不存在或别人的清单唠叨,污染的
+ *    是用户下一轮的真正问题。
+ */
+
+import {
+  findLatestMessageTodoInsertion,
+  type MessageRenderSourceMessageLike,
+} from '@cindy/maker-shared/message-render';
+
+export interface PlanReconcileCandidateRow {
+  clientId: string;
+  role: string;
+  content: unknown;
+  createdAt: number;
+}
+
+/** 从 DB 行还原 maker-shared 扫描所需的最小形状(与 renderer 的 hydrate 同口径)。 */
+function toRenderSourceMessage(row: PlanReconcileCandidateRow): MessageRenderSourceMessageLike {
+  const content =
+    row.content && typeof row.content === 'object' && !Array.isArray(row.content)
+      ? (row.content as Record<string, unknown>)
+      : null;
+  const toolName = typeof content?.toolName === 'string' ? content.toolName : undefined;
+  const toolInput = content?.input;
+  const toolUseId = typeof content?.toolUseId === 'string' ? content.toolUseId : undefined;
+  const parentToolUseId =
+    typeof content?.parentToolUseId === 'string' ? content.parentToolUseId : undefined;
+  return {
+    clientId: row.clientId,
+    role: row.role,
+    content: row.content,
+    createdAt: new Date(row.createdAt).toISOString(),
+    ...(toolName ? { toolName } : {}),
+    ...(toolInput !== undefined ? { toolInput } : {}),
+    ...(toolUseId ? { toolUseId } : {}),
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+    ...(content?.terminalPlanSnapshot === true ? { terminalPlanSnapshot: true } : {}),
+  };
+}
+
+export interface OpenPlanSummary {
+  /** 未完成步骤(pending / in_progress)的内容,注入文本引用它。 */
+  openSteps: string[];
+  totalSteps: number;
+}
+
+/**
+ * 找出会话里仍未收口的顶层计划。
+ *
+ * 返回 null 的情况就是不注入的情况:没有计划、计划全部完成、计划已被终态章
+ * 收口(成功收尾的清单不需要对账——它的生命周期已经结束,下一轮是新的开始)。
+ * 未盖章 + 有未完成步骤 = 中断/失败/被打断后遗留的清单,才值得让 agent 交代。
+ */
+export function summarizeOpenPlan(
+  rows: readonly PlanReconcileCandidateRow[],
+): OpenPlanSummary | null {
+  const insertion = findLatestMessageTodoInsertion(rows.map(toRenderSourceMessage));
+  if (!insertion) return null;
+  if (insertion.sealed === true) return null;
+  const openSteps = insertion.todos
+    .filter((todo) => todo.status !== 'completed')
+    .map((todo) => todo.content);
+  if (openSteps.length === 0) return null;
+  return { openSteps, totalSteps: insertion.todos.length };
+}
+
+/**
+ * 对账指示文本。三个出口穷尽所有情况(继续 / 修订 / 清掉),且明确授权删除——
+ * 不授权的话模型倾向于"计划不能丢",会把不相干的旧清单硬拖进新话题。
+ * 结尾用与 agentHandoff 同款的"以下是用户的新消息"边界,让正文归位。
+ */
+export function buildPlanReconcileNote(summary: OpenPlanSummary): string {
+  const steps = summary.openSteps.slice(0, 6).map((step) => `- ${step}`).join('\n');
+  const more =
+    summary.openSteps.length > 6 ? `\n(另有 ${summary.openSteps.length - 6} 项未列出)` : '';
+  return [
+    '[计划对账]上一轮留有未完成的计划步骤:',
+    `${steps}${more}`,
+    '处理用户消息时顺手收拾这份计划,不要让它先于用户的问题:若继续这些工作,',
+    '推进时更新计划状态;若方向已变,修订条目;若已与当前任务无关,用空计划清掉它。',
+    '== 对账说明结束,以下是用户的新消息 ==',
+  ].join('\n');
+}
