@@ -33,9 +33,12 @@ import { describe, expect, it } from 'vitest';
  *     `*` 起头行仅在**非选择器形态**时按 jsdoc 跳过(`* {` / `*{` 照常受检)。
  *  6. 同一行 / 同一文件多个违规逐个计数(occurrence 级)—— 在已豁免文件里
  *     追加新违规同样会红。
- *  7. 五处镜像检查:DESIGN.md 白名单 ↔ tailwind.config.ts fontSize ↔
- *     globals.css 默认值 ↔ useFontSettings.ts 运行时注册表 ↔
- *     lib/utils.ts tailwind-merge 字号组;各处档位、映射值与去重列表必须一致。
+ *  7. numeric 白名单的四个权威来源互验:DESIGN.md ↔ tailwind.config.ts
+ *     fontSize ↔ globals.css 默认值 ↔ useFontSettings.ts 运行时注册表;
+ *     lib/utils.ts 的 tailwind-merge 字号组是一个消费端一致性守卫。
+ *     配置中仍保留 xl..5xl 语义映射(源码零使用),不可简单删除:它们挂在
+ *     theme.extend 下,删除会静默回退到不跟随用户缩放的 Tailwind 默认值;
+ *     守卫在源码侧拒绝 xl..9xl,配置清理留待后续改成显式 numeric 档位。
  *
  * ## 豁免(精确绑定:文件 + 规则 + 理由 + 具体合法命中及期望次数)
  *  每条豁免按具体 match 签名计数;新增 font-black 或 800 即使总数不变也红。
@@ -74,6 +77,17 @@ const DESIGN_MD = join(ROOT, '..', '..', 'docs', 'design-rules', 'DESIGN.md');
 /** DESIGN.md §3 桌面 UI 字号白名单(镜像检查会与文档、config、CSS 变量互验)。 */
 const SIZE_WHITELIST = [10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28] as const;
 const SIZE_SET = new Set<number>(SIZE_WHITELIST);
+const SEMANTIC_TOKEN_VALUES = {
+  xs: 12,
+  sm: 14,
+  base: 16,
+  lg: 18,
+  xl: 20,
+  '2xl': 24,
+  '3xl': 30,
+  '4xl': 36,
+  '5xl': 48,
+} as const;
 /** 字重:UI chrome 工作集(700 只许经豁免,见 DESIGN.md §3 字重阶梯)。 */
 const WEIGHT_SET = new Set([400, 500, 600]);
 
@@ -99,30 +113,130 @@ interface Exemption {
 const EXEMPTIONS: Exemption[] = [
   // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五处形态
   // (238 直接字面量、290 filled/error 三元、300/310 focus/blur style 赋值、748 内联 style)。
-  { file: 'src/renderer/components/login/LoginControls.tsx', rule: 'tw-weight', reason: '登录品牌画布 Bold(§16)', signatures: [{ match: 'font-bold', expected: 7 }] },
-  { file: 'src/renderer/components/login/LoginControls.tsx', rule: 'inline-weight', reason: '登录品牌画布 Bold(§16,含 filled/focus 态三元与 style 赋值)', signatures: [{ match: 'fontWeight …700', expected: 5 }] },
-  { file: 'src/renderer/components/auth/LegacyMigrationDialog.tsx', rule: 'inline-weight', reason: '登录品牌画布家族(680→490 缩放),字重按 #1505 拍板豁免', signatures: [{ match: 'fontWeight …700', expected: 2 }] },
-  { file: 'src/renderer/components/markdown/codemirrorGithubTheme.ts', rule: 'inline-weight', reason: 'markdown 内容域:编辑器 strong 语法节点(§3 豁免表「markdown 内容」行)', signatures: [{ match: 'fontWeight …bold', expected: 1 }] },
-  { file: 'src/main/oauthResultPage.ts', rule: 'string-weight', reason: '登录品牌画布家族(自包含品牌页生成器,§3 豁免表)', signatures: [{ match: 'font-weight:700', expected: 2 }] },
-  { file: 'src/renderer/styles/globals.css', rule: 'css-weight', reason: 'hljs 语法高亮主题移植(§3 豁免表,保真优先)', signatures: [{ match: 'font-weight: bold', expected: 4 }] },
+  {
+    file: 'src/renderer/components/login/LoginControls.tsx',
+    rule: 'tw-weight',
+    reason: '登录品牌画布 Bold(§16)',
+    signatures: [{ match: 'font-bold', expected: 7 }],
+  },
+  {
+    file: 'src/renderer/components/login/LoginControls.tsx',
+    rule: 'inline-weight',
+    reason: '登录品牌画布 Bold(§16,含 filled/focus 态三元与 style 赋值)',
+    signatures: [{ match: 'fontWeight …700', expected: 5 }],
+  },
+  {
+    file: 'src/renderer/components/auth/LegacyMigrationDialog.tsx',
+    rule: 'inline-weight',
+    reason: '登录品牌画布家族(680→490 缩放),字重按 #1505 拍板豁免',
+    signatures: [{ match: 'fontWeight …700', expected: 2 }],
+  },
+  {
+    file: 'src/renderer/components/markdown/codemirrorGithubTheme.ts',
+    rule: 'inline-weight',
+    reason: 'markdown 内容域:编辑器 strong 语法节点(§3 豁免表「markdown 内容」行)',
+    signatures: [{ match: 'fontWeight …bold', expected: 1 }],
+  },
+  {
+    file: 'src/main/oauthResultPage.ts',
+    rule: 'string-weight',
+    reason: '登录品牌画布家族(自包含品牌页生成器,§3 豁免表)',
+    signatures: [{ match: 'font-weight:700', expected: 2 }],
+  },
+  {
+    file: 'src/renderer/styles/globals.css',
+    rule: 'css-weight',
+    reason: 'hljs 语法高亮主题移植(§3 豁免表,保真优先)',
+    signatures: [{ match: 'font-weight: bold', expected: 4 }],
+  },
   // 紧凑代码字号是 DESIGN.md §3 已登记的机制本体;只允许这些现有文件/具体类。
-  { file: 'src/renderer/components/chat/AgentActionRow.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
-  { file: 'src/renderer/components/chat/DiffView.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
-  { file: 'src/renderer/components/chat/GhostSummonCard.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
-  { file: 'src/renderer/components/chat/MarkdownDiffBlock.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
-  { file: 'src/renderer/components/chat/MarkdownMermaidBlock.tsx', rule: 'arb-size', reason: '代码字号变量', signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }] },
-  { file: 'src/renderer/components/chat/MarkdownRenderer.tsx', rule: 'arb-size', reason: '代码字号变量', signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }] },
-  { file: 'src/renderer/components/chat/SystemCard.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [
-    { match: 'text-[length:calc(var(--app-code-font-size)_-_1.5px)]', expected: 1 },
-    { match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 },
-  ] },
-  { file: 'src/renderer/components/chat/ToolCallCard.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 }] },
-  { file: 'src/renderer/components/chat/ToolPayloadLightbox.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 3 }] },
-  { file: 'src/renderer/components/chat/UserMessage.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_2px)]', expected: 1 }] },
-  { file: 'src/renderer/components/markdown/MermaidSourceEditor.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
-  { file: 'src/renderer/components/new-chat/PermissionPrompt.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }] },
-  { file: 'src/renderer/features/skillhub/PublishDialog.tsx', rule: 'arb-size', reason: '紧凑代码字号派生值', signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_3px)]', expected: 1 }] },
-  { file: 'src/renderer/features/skillhub/SkillhubDetailView.tsx', rule: 'arb-size', reason: '代码字号变量', signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 1 }] },
+  {
+    file: 'src/renderer/components/chat/AgentActionRow.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/components/chat/DiffView.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/components/chat/GhostSummonCard.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/components/chat/MarkdownDiffBlock.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/components/chat/MarkdownMermaidBlock.tsx',
+    rule: 'arb-size',
+    reason: '代码字号变量',
+    signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }],
+  },
+  {
+    file: 'src/renderer/components/chat/MarkdownRenderer.tsx',
+    rule: 'arb-size',
+    reason: '代码字号变量',
+    signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }],
+  },
+  {
+    file: 'src/renderer/components/chat/SystemCard.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [
+      { match: 'text-[length:calc(var(--app-code-font-size)_-_1.5px)]', expected: 1 },
+      { match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 },
+    ],
+  },
+  {
+    file: 'src/renderer/components/chat/ToolCallCard.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 }],
+  },
+  {
+    file: 'src/renderer/components/chat/ToolPayloadLightbox.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 3 }],
+  },
+  {
+    file: 'src/renderer/components/chat/UserMessage.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_2px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/components/markdown/MermaidSourceEditor.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/components/new-chat/PermissionPrompt.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/features/skillhub/PublishDialog.tsx',
+    rule: 'arb-size',
+    reason: '紧凑代码字号派生值',
+    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_3px)]', expected: 1 }],
+  },
+  {
+    file: 'src/renderer/features/skillhub/SkillhubDetailView.tsx',
+    rule: 'arb-size',
+    reason: '代码字号变量',
+    signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 1 }],
+  },
 ];
 
 // ── 预处理 ──────────────────────────────────────────────────────────
@@ -267,7 +381,10 @@ export function findInlineSizeViolations(text: string): Hit[] {
 export function findStringWeightViolations(text: string): Hit[] {
   const hits: Hit[] = [];
   for (const m of text.matchAll(/font-weight\s*:\s*([^;}\n]+)/gi)) {
-    const value = m[1].replace(/\s*!important\s*$/i, '').trim().toLowerCase();
+    const value = m[1]
+      .replace(/\s*!important\s*$/i, '')
+      .trim()
+      .toLowerCase();
     if (!value) continue;
     if (/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value)) {
       if (WEIGHT_SET.has(Number(value))) continue;
@@ -302,17 +419,31 @@ export function findFontShorthands(text: string): Hit[] {
   for (const c of candidates) {
     const value = c.match.replace(/\s+/g, ' ').trim();
     if (!value || value === 'inherit' || /&&|\|\|/.test(value)) continue;
-    const unitForm = /(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax)\b/i.test(value);
-    const systemKeyword = /^(?:caption|icon|menu|message-box|small-caption|status-bar)\b/i.test(value);
+    const unitForm =
+      /(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax)\b/i.test(value);
+    const systemKeyword = /^(?:caption|icon|menu|message-box|small-caption|status-bar)\b/i.test(
+      value,
+    );
     const sizeKeywordShorthand =
-      /^(?:xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)\b\s+\S/i.test(value);
+      /^(?:xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)\b\s+\S/i.test(
+        value,
+      );
     // numeric weight 起头按完整数值文法判(两位/四位/小数/带符号同样是
     // shorthand 形态,50 / 1000 / 700.5 / +700 不得绕过——gate-audit 五轮)。
     const styleKeywordShorthand =
-      /^(?:normal|italic|oblique|bold|bolder|lighter|small-caps|(?:ultra-|extra-|semi-)?(?:condensed|expanded)|[+-]?(?:\d+(?:\.\d+)?|\.\d+))\s+\S/i.test(value);
+      /^(?:normal|italic|oblique|bold|bolder|lighter|small-caps|(?:ultra-|extra-|semi-)?(?:condensed|expanded)|[+-]?(?:\d+(?:\.\d+)?|\.\d+))\s+\S/i.test(
+        value,
+      );
     const varForm = /^var\(/i.test(value);
     const globalKeyword = /^(?:initial|unset|revert(?:-layer)?)\b/i.test(value);
-    if (unitForm || systemKeyword || sizeKeywordShorthand || styleKeywordShorthand || varForm || globalKeyword) {
+    if (
+      unitForm ||
+      systemKeyword ||
+      sizeKeywordShorthand ||
+      styleKeywordShorthand ||
+      varForm ||
+      globalKeyword
+    ) {
       hits.push({ match: `font: ${value}`.slice(0, 60), index: c.index });
     }
   }
@@ -357,7 +488,8 @@ function lineOf(text: string, index: number): number {
 function scan(): Violation[] {
   const violations: Violation[] = [];
   const push = (file: string, text: string, rule: string, hits: Hit[]) => {
-    for (const h of hits) violations.push({ file, line: lineOf(text, h.index), rule, match: h.match });
+    for (const h of hits)
+      violations.push({ file, line: lineOf(text, h.index), rule, match: h.match });
   };
 
   for (const rel of collectFiles(/\.(ts|tsx)$/)) {
@@ -428,7 +560,9 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
         if (hits !== signature.expected) {
           exemptionDrift.push(
             `${e.file} [${e.rule}] ${signature.match} 登记 ${signature.expected} 次,实测 ${hits} 次 —— ` +
-              (hits > signature.expected ? '有人蹭豁免,新增处必须自证或归梯' : '豁免已过期,请同步删登记'),
+              (hits > signature.expected
+                ? '有人蹭豁免,新增处必须自证或归梯'
+                : '豁免已过期,请同步删登记'),
           );
         }
       }
@@ -438,18 +572,29 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     expect(exemptionDrift).toEqual([]);
   });
 
-  it('mirrors the size ladder across all five implementation sources and DESIGN.md', () => {
+  it('mirrors numeric size ladder across four authorities plus one consumer', () => {
     const expected = [...SIZE_WHITELIST].sort((a, b) => a - b);
     const expectedSemantic = { xs: 12, sm: 14, base: 16, lg: 18 };
 
     const config = readFileSync(join(ROOT, 'tailwind.config.ts'), 'utf8');
-    const fontSizeBlock = /fontSize:\s*\{([\s\S]*?)^\s*\},\s*borderRadius:/m.exec(config)?.[1] ?? '';
+    const fontSizeBlock =
+      /fontSize:\s*\{([\s\S]*?)^\s*\},\s*borderRadius:/m.exec(config)?.[1] ?? '';
     const configNumeric = parseNumericConfigMappings(config);
     expect(configNumeric).toEqual(expected.map((n) => [n, n]));
     const configSemantic = Object.fromEntries(
-      [...fontSizeBlock.matchAll(/^\s*(xs|sm|base|lg):\s*\[['"]var\(--text-\1\)['"]/gm)].map((m) => [m[1], expectedSemantic[m[1] as keyof typeof expectedSemantic]]),
+      [...fontSizeBlock.matchAll(/^\s*(xs|sm|base|lg):\s*\[['"]var\(--text-\1\)['"]/gm)].map(
+        (m) => [m[1], expectedSemantic[m[1] as keyof typeof expectedSemantic]],
+      ),
     );
     expect(configSemantic).toEqual(expectedSemantic);
+    const preservedConfigSemantic = Object.fromEntries(
+      [
+        ...fontSizeBlock.matchAll(
+          /^\s*['"]?(xl|2xl|3xl|4xl|5xl)['"]?:\s*\[['"]var\(--text-\1\)['"]/gm,
+        ),
+      ].map((m) => [m[1], SEMANTIC_TOKEN_VALUES[m[1] as keyof typeof SEMANTIC_TOKEN_VALUES]]),
+    );
+    expect(preservedConfigSemantic).toEqual({ xl: 20, '2xl': 24, '3xl': 30, '4xl': 36, '5xl': 48 });
 
     const css = readFileSync(join(ROOT, 'src/renderer/styles/globals.css'), 'utf8');
     const cssNumeric = parseNumericCssMappings(css);
@@ -458,21 +603,50 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       [...css.matchAll(/--text-(xs|sm|base|lg):\s*(\d+)px;/g)].map((m) => [m[1], Number(m[2])]),
     );
     expect(cssSemantic).toEqual(expectedSemantic);
+    const preservedCssSemantic = Object.fromEntries(
+      [...css.matchAll(/--text-(xl|2xl|3xl|4xl|5xl):\s*(\d+)px;/g)].map((m) => [
+        m[1],
+        Number(m[2]),
+      ]),
+    );
+    expect(preservedCssSemantic).toEqual({ xl: 20, '2xl': 24, '3xl': 30, '4xl': 36, '5xl': 48 });
 
     const hook = readFileSync(join(ROOT, 'src/renderer/hooks/useFontSettings.ts'), 'utf8');
     const runtimeBlock = /UI_TEXT_TOKEN_SIZES\s*=\s*\[([^\]]+)\]/s.exec(hook)?.[1] ?? '';
-    const runtimeNumeric = [...runtimeBlock.matchAll(/\b\d+\b/g)].map((m) => Number(m[0])).sort((a, b) => a - b);
+    const runtimeNumeric = [...runtimeBlock.matchAll(/\b\d+\b/g)]
+      .map((m) => Number(m[0]))
+      .sort((a, b) => a - b);
     expect(runtimeNumeric).toEqual(expected);
-    expect(hook).toMatch(/for \(const tokenSize of UI_TEXT_TOKEN_SIZES\)[\s\S]*?set\(`--text-\$\{tokenSize\}`, `\$\{Math\.round\(tokenSize \* scale\)\}px`\)/);
+    expect(hook).toMatch(
+      /for \(const tokenSize of UI_TEXT_TOKEN_SIZES\)[\s\S]*?set\(`--text-\$\{tokenSize\}`, `\$\{Math\.round\(tokenSize \* scale\)\}px`\)/,
+    );
     const semanticBlock = /SCALED_TAILWIND_TOKENS\s*=\s*\{([^}]+)\}/s.exec(hook)?.[1] ?? '';
     const runtimeSemantic = Object.fromEntries(
-      [...semanticBlock.matchAll(/^\s*(xs|sm|base|lg):\s*(\d+),/gm)].map((m) => [m[1], Number(m[2])]),
+      [...semanticBlock.matchAll(/^\s*(xs|sm|base|lg):\s*(\d+),/gm)].map((m) => [
+        m[1],
+        Number(m[2]),
+      ]),
     );
     expect(runtimeSemantic).toEqual(expectedSemantic);
+    const preservedRuntimeSemantic = Object.fromEntries(
+      [...semanticBlock.matchAll(/^\s*['"]?(xl|2xl|3xl|4xl|5xl)['"]?:\s*(\d+),/gm)].map((m) => [
+        m[1],
+        Number(m[2]),
+      ]),
+    );
+    expect(preservedRuntimeSemantic).toEqual({
+      xl: 20,
+      '2xl': 24,
+      '3xl': 30,
+      '4xl': 36,
+      '5xl': 48,
+    });
 
     const mergeUtils = readFileSync(join(ROOT, 'src/renderer/lib/utils.ts'), 'utf8');
     const mergeBlock = /font-size'[\s\S]*?text:\s*\[([^\]]+)\]/.exec(mergeUtils)?.[1] ?? '';
-    const mergeNumeric = [...mergeBlock.matchAll(/['"](\d+)['"]/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
+    const mergeNumeric = [...mergeBlock.matchAll(/['"](\d+)['"]/g)]
+      .map((m) => Number(m[1]))
+      .sort((a, b) => a - b);
     expect(mergeNumeric).toEqual(expected);
 
     // DESIGN.md §3「桌面 UI 字号白名单」小节的两个 {…} 集合。
@@ -480,7 +654,12 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     const section = design.split('### 桌面 UI 字号白名单')[1]?.split('###')[0] ?? '';
     const sets = [...section.matchAll(/\{([\d\s,、]+)\}/g)];
     const docTiers = sets
-      .flatMap((m) => m[1].split(/[,、\s]+/).filter(Boolean).map(Number))
+      .flatMap((m) =>
+        m[1]
+          .split(/[,、\s]+/)
+          .filter(Boolean)
+          .map(Number),
+      )
       .sort((a, b) => a - b);
     expect(docTiers).toEqual(expected);
   });
@@ -490,7 +669,9 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     const matches = (hits: Hit[]) => hits.map((h) => h.match);
 
     it('flags red samples', () => {
-      expect(matches(findTwWeightViolations('className="text-12 font-bold"'))).toEqual(['font-bold']);
+      expect(matches(findTwWeightViolations('className="text-12 font-bold"'))).toEqual([
+        'font-bold',
+      ]);
       expect(matches(findTwWeightViolations('font-[550]'))).toEqual(['font-[550]']);
       // 同行双违规逐个计数(评审轮:第一个命中不再吞掉第二个)
       expect(findTwWeightViolations('cn("font-bold font-black")')).toHaveLength(2);
@@ -507,7 +688,9 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findArbitrarySizes('text-[12PX]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[17pt]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[length:.75rem]')).toHaveLength(1);
-      expect(matches(findOffLadderTokenSizes('className="text-17 font-medium"'))).toEqual(['text-17']);
+      expect(matches(findOffLadderTokenSizes('className="text-17 font-medium"'))).toEqual([
+        'text-17',
+      ]);
       expect(matches(findOffLadderTokenSizes('text-xl text-2xl text-3xl text-9xl'))).toEqual([
         'text-xl',
         'text-2xl',
@@ -527,7 +710,9 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findInlineWeightViolations("el.style.fontWeight = '700';")).toHaveLength(1);
       expect(findInlineWeightViolations('<Text fontWeight="800">')).toHaveLength(1);
       // 跨行声明(红队三轮 P1:值换行不再漏报)
-      expect(findInlineWeightViolations('const s = {\n  fontWeight:\n    800,\n};')).toHaveLength(1);
+      expect(findInlineWeightViolations('const s = {\n  fontWeight:\n    800,\n};')).toHaveLength(
+        1,
+      );
       expect(findInlineSizeViolations('const s = {\n  fontSize:\n    17,\n};')).toHaveLength(1);
       expect(findStringWeightViolations('.x {\n  font-weight:\n    900;\n}')).toHaveLength(1);
       expect(findFontShorthands('font:\n  normal 700 12px/22px sans-serif;')).toHaveLength(1);
@@ -539,13 +724,23 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findInlineSizeViolations("fontSize: '17ch',")).toHaveLength(1);
       expect(findInlineSizeViolations("fontSize: '17PX',")).toHaveLength(1);
       expect(findInlineSizeViolations("fontSize: '13pt',")).toHaveLength(1);
-      expect(matches(findStringWeightViolations('font-weight:700;color:red'))).toEqual(['font-weight:700']);
+      expect(matches(findStringWeightViolations('font-weight:700;color:red'))).toEqual([
+        'font-weight:700',
+      ]);
       expect(findStringWeightViolations('h1{font-weight:700} h2{font-weight:900}')).toHaveLength(2);
       expect(findStringWeightViolations('font-weight: bold;')).toHaveLength(1);
       // CSS 通配选择器不是注释(css 路径经 stripCssComments,ts 路径经 prepareTsContent)
-      expect(findStringWeightViolations(stripCssComments('* { font-weight: 900; }'))).toHaveLength(1);
-      expect(findStringWeightViolations(prepareTsContent('const css = `\n* { font-weight: 900; }\n`;'))).toHaveLength(1);
-      expect(findStringWeightViolations(prepareTsContent('const css = `\n*{box-sizing:border-box}\n.a{font-weight:900}\n`;'))).toHaveLength(1);
+      expect(findStringWeightViolations(stripCssComments('* { font-weight: 900; }'))).toHaveLength(
+        1,
+      );
+      expect(
+        findStringWeightViolations(prepareTsContent('const css = `\n* { font-weight: 900; }\n`;')),
+      ).toHaveLength(1);
+      expect(
+        findStringWeightViolations(
+          prepareTsContent('const css = `\n*{box-sizing:border-box}\n.a{font-weight:900}\n`;'),
+        ),
+      ).toHaveLength(1);
       // shorthand 合法变体全覆盖(三轮:size 关键字 / system 关键字 / var / global)
       expect(findFontShorthands('font: 600 12px/22px sans-serif;')).toHaveLength(1);
       expect(findFontShorthands('font: normal 700 12px/22px sans-serif;')).toHaveLength(1);
@@ -578,8 +773,12 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findInlineWeightViolations("fontWeight: 'Bolder' }")).toHaveLength(1);
       // 括号包裹与混合三元:直接字面量臂不因片段含括号而整段漏判(gate-audit 五轮)
       expect(findInlineWeightViolations('fontWeight: (700),')).toHaveLength(1);
-      expect(findInlineWeightViolations('fontWeight: active ? 700 : toWeight(500),')).toHaveLength(1);
-      expect(findInlineWeightViolations('fontWeight: active ? toWeight(500) : 800,')).toHaveLength(1);
+      expect(findInlineWeightViolations('fontWeight: active ? 700 : toWeight(500),')).toHaveLength(
+        1,
+      );
+      expect(findInlineWeightViolations('fontWeight: active ? toWeight(500) : 800,')).toHaveLength(
+        1,
+      );
       // shorthand numeric weight 完整文法:两位/四位/小数/带符号不得绕过
       expect(findFontShorthands('font: 50 medium serif;')).toHaveLength(1);
       expect(findFontShorthands('font: 1000 medium serif;')).toHaveLength(1);
@@ -599,10 +798,14 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     });
 
     it('passes green samples', () => {
-      expect(findTwWeightViolations('className="font-medium font-semibold font-normal"')).toEqual([]);
+      expect(findTwWeightViolations('className="font-medium font-semibold font-normal"')).toEqual(
+        [],
+      );
       expect(findArbitrarySizes('text-[var(--md-h1-fg)]')).toEqual([]);
       expect(findArbitrarySizes('text-[var(--app-code-font-size)]')).toEqual([]);
-      expect(findOffLadderTokenSizes('className="text-xs text-sm text-base text-lg text-12 text-28"')).toEqual([]);
+      expect(
+        findOffLadderTokenSizes('className="text-xs text-sm text-base text-lg text-12 text-28"'),
+      ).toEqual([]);
       expect(findInlineWeightViolations('fontWeight: 500,')).toEqual([]);
       expect(findInlineWeightViolations('fontWeight: active ? 600 : 500,')).toEqual([]);
       // 片段截断:同对象里的后续属性数字不误报为字重
@@ -615,10 +818,14 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findInlineSizeViolations('fontSize: size * 0.86,')).toEqual([]);
       // SVG/JSX 多行属性:相邻属性的数值不串进本属性片段
       expect(
-        findInlineSizeViolations('<text\n  fontSize="10"\n  fontWeight="500"\n  letterSpacing="0.3"\n/>'),
+        findInlineSizeViolations(
+          '<text\n  fontSize="10"\n  fontWeight="500"\n  letterSpacing="0.3"\n/>',
+        ),
       ).toEqual([]);
       expect(
-        findInlineWeightViolations('<text\n  fontSize="10"\n  fontWeight="500"\n  letterSpacing="0.3"\n/>'),
+        findInlineWeightViolations(
+          '<text\n  fontSize="10"\n  fontWeight="500"\n  letterSpacing="0.3"\n/>',
+        ),
       ).toEqual([]);
       expect(findStringWeightViolations('font-weight: 600;')).toEqual([]);
       // normal(=400)/inherit 落梯放行;动态值与 initial/unset/revert 为登记盲区
@@ -645,7 +852,9 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findInlineWeightViolations('fontWeight: 5e2,')).toEqual([]);
       expect(findInlineWeightViolations('fontWeight: 6_50,')).toEqual([]);
       // 尾注释剥离:注释里的数字不进入 fontSize 片段
-      expect(findInlineSizeViolations(prepareTsContent('fontSize: 13, // 对齐 xterm 2024 默认'))).toEqual([]);
+      expect(
+        findInlineSizeViolations(prepareTsContent('fontSize: 13, // 对齐 xterm 2024 默认')),
+      ).toEqual([]);
       expect(prepareTsLine('  // font-weight: 700 in prose')).toBeNull();
       expect(prepareTsLine(' * jsdoc 续行 font-weight: 700 也是注释')).toBeNull();
       // CSS 块注释剥离保行号:注释内的违规不报、注释外的照报且行号正确

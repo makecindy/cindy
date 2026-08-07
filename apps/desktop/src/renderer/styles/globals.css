@@ -29,10 +29,20 @@
     --text-sm: 14px;
     --text-base: 16px;
     --text-lg: 18px;
+    --text-xl: 20px;
+    --text-2xl: 24px;
+    --text-3xl: 30px;
+    --text-4xl: 36px;
+    --text-5xl: 48px;
     --text-xs-line-height: 16px;
     --text-sm-line-height: 20px;
     --text-base-line-height: 24px;
     --text-lg-line-height: 28px;
+    --text-xl-line-height: 28px;
+    --text-2xl-line-height: 32px;
+    --text-3xl-line-height: 36px;
+    --text-4xl-line-height: 40px;
+    --text-5xl-line-height: 48px;
     /* DESIGN.md §3 的 numeric 字号白名单默认值。运行时会由
        useFontSettings 按用户 UI 缩放覆写；档位须与 tailwind.config.ts、
        UI_TEXT_TOKEN_SIZES、tailwind-merge 字号组保持五处一致。 */

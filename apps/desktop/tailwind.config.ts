@@ -57,14 +57,19 @@ const config: Config = {
       fontFamily: {
         mono: ['var(--app-font-code, var(--app-font-code-default))'],
       },
-      // DESIGN.md §3 字号白名单的 Tailwind 镜像。五处必须同步：规范、
-      // 本配置、globals.css 默认值、useFontSettings 运行时注册表、
-      // lib/utils.ts 的 tailwind-merge 字号组。
+      // DESIGN.md §3 numeric 字号白名单的 Tailwind 来源。四个权威来源
+      // （规范、本配置、globals.css 默认值、useFontSettings 运行时注册表）
+      // 由守卫互验；lib/utils.ts 是消费端去重列表，需同步 numeric 档位。
       fontSize: {
         xs: ['var(--text-xs)', { lineHeight: 'var(--text-xs-line-height)' }],
         sm: ['var(--text-sm)', { lineHeight: 'var(--text-sm-line-height)' }],
         base: ['var(--text-base)', { lineHeight: 'var(--text-base-line-height)' }],
         lg: ['var(--text-lg)', { lineHeight: 'var(--text-lg-line-height)' }],
+        xl: ['var(--text-xl)', { lineHeight: 'var(--text-xl-line-height)' }],
+        '2xl': ['var(--text-2xl)', { lineHeight: 'var(--text-2xl-line-height)' }],
+        '3xl': ['var(--text-3xl)', { lineHeight: 'var(--text-3xl-line-height)' }],
+        '4xl': ['var(--text-4xl)', { lineHeight: 'var(--text-4xl-line-height)' }],
+        '5xl': ['var(--text-5xl)', { lineHeight: 'var(--text-5xl-line-height)' }],
         10: 'var(--text-10)',
         11: 'var(--text-11)',
         12: 'var(--text-12)',

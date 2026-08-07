@@ -144,7 +144,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 - **UI 段:{10, 11, 12, 13, 14, 15, 16}px;标题 / 内容段:{18, 20, 24, 28}px。** 下限 10px —— 9px 及以下禁止(再小就不是文字是纹理)。
 - **写法**:一律用 `tailwind.config.ts` 的 `text-<n>` token 类(映射 `--text-<n>` 变量;doc 紧凑模式与后续字号缩放能力都挂在这层变量上,任意值类会静默漏掉这些机制)。语义类 `text-xs / text-sm / text-base / text-lg` 为收编存量(等值 12 / 14 / 16 / 18)。**禁止新增任意值 `text-[Npx]`(含一切小数)与白名单外档位**;需要新档先改本表与下列四个实现镜像,再进组件。
-- 本白名单与以下四个实现来源已完成五处镜像,改档必须同步更新并由守卫互验(issue #1505 / PR #1553):`tailwind.config.ts` 的 fontSize(类名可用性)、`globals.css` 的 `--text-<n>` 静态默认值、`useFontSettings.ts` 的 `UI_TEXT_TOKEN_SIZES`(运行时缩放生效值)、`lib/utils.ts` 的 tailwind-merge font-size 组(类名去重正确性)。
+- numeric 白名单与以下四个权威来源已完成同步,改档必须同步更新并由守卫互验(issue #1505 / PR #1553):`tailwind.config.ts` 的 numeric fontSize(类名可用性)、`globals.css` 的 numeric `--text-<n>` 静态默认值、`useFontSettings.ts` 的 `UI_TEXT_TOKEN_SIZES`(运行时缩放生效值)。`lib/utils.ts` 的 tailwind-merge font-size 组是消费端去重列表,需同步 numeric 档位。配置中保留 `xl..5xl` 语义映射与运行时缩放表;源码守卫拒绝使用这些白名单外语义类,不可简单删除配置——它们位于 `theme.extend`,删除会静默回退到不跟随用户字号缩放的 Tailwind 默认值。
 - 品牌画布域(登录 / Splash 家族等设计 px 坐标系表面)不映射本白名单:字面量只允许进画布常量文件(`loginDesignTokens.ts` 的地位,对齐手机端 `loginSkinLayout.ts`)**或下表登记的自包含品牌页生成器**(`oauthResultPage.ts` 整页由 main 侧生成,其内嵌 raw CSS 即该页的常量载体),组件消费端照常受守卫扫描。
 
 ### 排版豁免登记表(2026-08,issue #1505)

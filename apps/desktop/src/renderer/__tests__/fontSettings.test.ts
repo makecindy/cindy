@@ -22,8 +22,12 @@ const SCALED_TAILWIND_TOKENS = {
   sm: 14,
   base: 16,
   lg: 18,
+  xl: 20,
+  '2xl': 24,
+  '3xl': 30,
+  '4xl': 36,
+  '5xl': 48,
 } as const;
-const REMOVED_TAILWIND_TOKENS = ['xl', '2xl', '3xl', '4xl', '5xl'] as const;
 
 function resetRootStyles() {
   const targets = [document.documentElement, document.body];
@@ -35,7 +39,7 @@ function resetRootStyles() {
     for (const tokenSize of [...UI_TEXT_TOKEN_SIZES, ...REMOVED_UI_TEXT_TOKEN_SIZES]) {
       target.style.removeProperty(`--text-${tokenSize}`);
     }
-    for (const token of [...Object.keys(SCALED_TAILWIND_TOKENS), ...REMOVED_TAILWIND_TOKENS]) {
+    for (const token of Object.keys(SCALED_TAILWIND_TOKENS)) {
       target.style.removeProperty(`--text-${token}`);
       target.style.removeProperty(`--text-${token}-line-height`);
     }
@@ -125,10 +129,6 @@ describe('font settings', () => {
     for (const [token, base] of Object.entries(SCALED_TAILWIND_TOKENS)) {
       expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe(`${base}px`);
     }
-    for (const token of REMOVED_TAILWIND_TOKENS) {
-      expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe('');
-      expect(rootStyle.getPropertyValue(`--text-${token}-line-height`)).toBe('');
-    }
     expect(rootStyle.getPropertyValue('--text-sm-line-height')).toBe('20px');
     expect(document.body.style.getPropertyValue('--text-sm-line-height')).toBe('20px');
   });
@@ -157,9 +157,6 @@ describe('font settings', () => {
       expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe(
         `${Math.round((base * 18) / DEFAULT_UI_FONT_SIZE)}px`,
       );
-    }
-    for (const token of REMOVED_TAILWIND_TOKENS) {
-      expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe('');
     }
     expect(rootStyle.getPropertyValue('--text-sm-line-height')).toBe('26px');
     expect(document.body.style.getPropertyValue('--text-sm-line-height')).toBe('26px');
