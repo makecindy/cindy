@@ -141,12 +141,21 @@ export async function fetchDeviceProvidersFresh(
       return payload;
     })
     .catch((e) => {
-      // fresh 失败且曾作废普通在途 → 恢复普通拉取(codex review P2):被作废的
-      // 普通请求已因代际失效不回写,hook 会停在 ready=false 不再自动重拉(设备/
-      // maker 未变化不触发 effect)——重新走 cache-first 拉取:有缓存立即恢复
-      // 已知状态,无缓存重新访问工作站。fire-and-forget,不阻塞调用方的 reject。
+      // fresh 失败且曾作废普通在途 → 恢复目录(codex review P2):被作废的普通
+      // 请求已因代际失效不回写,hook 会停在 ready=false 不再自动重拉(设备/maker
+      // 未变化不触发 effect)。恢复两条路径:
+      // - 缓存命中:主动重发快照恢复 hook 的 readyFor/readyGen——fetchDeviceProviders
+      //   缓存命中直接返回不触发 payload 订阅回调,fresh 推进的代际已使 ready
+      //   失效,不重发则目录一直未知(codex review P2);
+      // - 无缓存:真正重新访问工作站。
+      // fire-and-forget,不阻塞调用方的 reject。
       if (invalidatedOrdinary) {
-        void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined);
+        const cached = cache.get(deviceId);
+        if (cached) {
+          notifyDeviceProviders(deviceId, cached);
+        } else {
+          void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined);
+        }
       }
       throw e;
     });

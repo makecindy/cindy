@@ -4,9 +4,14 @@
  * 丢弃不复活、reject 不缓存下次重试 —— 对齐桌面 deviceProvidersCache.test。
  * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。fetcher 注入,无需 stub 全局。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
+
+const readTextLf = (path: string, encoding: BufferEncoding): string =>
+  readFileSync(path, encoding).toString().replace(/\r\n/g, '\n');
 
 beforeEach(() => {
   vi.resetModules();
@@ -315,5 +320,18 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     off2();
     mod.evictDeviceProviders('dev-1');
     expect(dev1).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('fetchDeviceProvidersFresh 恢复分支 (source locks)', () => {
+  it('fresh 失败恢复时缓存命中 → 主动重发快照(codex P2:缓存命中分支必须发布,否则 hook ready 一直未知)', () => {
+    // 行为时序「缓存有值 + 普通在途」在轮次 37 修复后互斥不可黑盒构造,用 source-lock
+    // 守住恢复分支的两条路径(cache-first 命中 → notify 重发;miss → 重新拉取)。
+    const source = readTextLf(
+      resolve(process.cwd(), 'src/device-link/deviceProvidersCache.ts'),
+      'utf8',
+    );
+    expect(source).toContain('notifyDeviceProviders(deviceId, cached)');
+    expect(source).toContain('void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined)');
   });
 });
