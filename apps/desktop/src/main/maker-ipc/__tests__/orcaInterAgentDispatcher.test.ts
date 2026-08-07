@@ -70,6 +70,7 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     withSessionLock: vi.fn(async (_sessionId, task) => task()),
     isSessionSendFenced: vi.fn(() => false),
     buildCreateOptsForQueuedSession: vi.fn(async () => createOpts),
+    prepareQueuedMessageQueue: vi.fn(async () => undefined),
     enqueueQueuedMessage: vi.fn((_sessionId, item) => {
       queuedItems.push(item);
     }),
@@ -281,6 +282,93 @@ describe('Orca lead/worker dispatcher', () => {
     await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', firstQueuedItem(h.queuedItems));
 
     expect(accepted).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not enqueue or retain an accepted callback when shutdown fences during queue preparation', async () => {
+    let fenced = false;
+    let finishPreparing!: () => void;
+    const preparationGate = new Promise<void>((resolve) => {
+      finishPreparing = resolve;
+    });
+    let preparationStarted!: () => void;
+    const didStartPreparing = new Promise<void>((resolve) => {
+      preparationStarted = resolve;
+    });
+    const accepted = vi.fn();
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+      isSessionSendFenced: vi.fn(() => fenced),
+      prepareQueuedMessageQueue: vi.fn(async () => {
+        preparationStarted();
+        await preparationGate;
+      }),
+    });
+
+    const dispatch = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Do not queue after shutdown',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'queued-fence-race-test' },
+      onAccepted: accepted,
+    });
+    await didStartPreparing;
+    fenced = true;
+    finishPreparing();
+
+    await expect(dispatch).resolves.toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SESSION_NOT_FOUND',
+      },
+    });
+    expect(h.queuedItems).toHaveLength(0);
+    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+    expect(
+      h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback(
+        'target-session',
+        { clientId: 'client-1' } as AgentInputQueuedMessage,
+      ),
+    ).toBeUndefined();
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it('discards the queued accepted callback when synchronous enqueue fails', async () => {
+    const accepted = vi.fn();
+    const rollback = vi.fn();
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+      enqueueQueuedMessage: vi.fn(() => {
+        throw new Error('queue unavailable');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Queue failure',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'queued-enqueue-failure-test' },
+      onAccepted: accepted,
+      onAcceptedRollback: rollback,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SEND_FAILED',
+      },
+    });
+    expect(
+      h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback(
+        'target-session',
+        { clientId: 'client-1' } as AgentInputQueuedMessage,
+      ),
+    ).toBeUndefined();
+    expect(accepted).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
   });
 
   it('discards queued accepted callbacks without rollback when the queued item never ran', async () => {

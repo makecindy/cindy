@@ -6044,48 +6044,58 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     teamId: string;
     leadSessionId: string;
     sessionId: string;
-  }): Promise<boolean> {
-    const live = maker.getSession(target.sessionId);
-    if (live) return false;
+  }): Promise<'resumed' | 'unchanged' | 'fenced'> {
+    return withSendToSessionLock(target.sessionId, async () => {
+      if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return 'fenced';
 
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, target.sessionId))
-      .limit(1);
-    if (!row) return false;
+      // Re-read liveness only after winning the route lock. Concurrent dormant
+      // sends must not bootstrap the same Worker twice.
+      const live = maker.getSession(target.sessionId);
+      if (live) return 'unchanged';
 
-    const workerVendorOptions = {
-      orcaRole: 'worker' as const,
-      orcaWorkflowId: target.teamId,
-      orcaLeadSessionId: target.leadSessionId,
-      orcaWorkerId: target.id,
-      orcaWorkerSessionId: target.sessionId,
-    };
-    const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
-    const opts = buildCreateOptsWithStderr({
-      id: row.id,
-      agentKind: dbToMakerAgentKind(row.agentKind),
-      workingDir: row.workingDir ?? '',
-      model: row.model,
-      effort: row.effort as CreateOpts['effort'],
-      fastMode: !!row.fastMode,
-      permissionMode: permissionModeOrAsk(row.permissionMode),
-      title: row.title,
-      resumeSessionId: row.sdkSessionId ?? undefined,
-      orcaRole: row.orcaRole as 'worker' | null,
-      vendorOptions: workerVendorOptions,
-      // 远端 worker 唤醒必须带上 remoteHostId 并走 ensure (SSH 重连 / agent
-      // 安装 / codex daemon MCP 注入), 否则会以远端 workingDir 在本机 spawn,
-      // 且远端 daemon 的协同 MCP 通道不就绪。
-      remoteHostId: row.remoteHostId ?? undefined,
-      ...(extraDirs.length > 0 ? { extraDirs } : {}),
+      const db = getDbClient().drizzle;
+      const [row] = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, target.sessionId))
+        .limit(1);
+      if (!row) return 'unchanged';
+
+      const workerVendorOptions = {
+        orcaRole: 'worker' as const,
+        orcaWorkflowId: target.teamId,
+        orcaLeadSessionId: target.leadSessionId,
+        orcaWorkerId: target.id,
+        orcaWorkerSessionId: target.sessionId,
+      };
+      const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
+      const opts = buildCreateOptsWithStderr({
+        id: row.id,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir ?? '',
+        model: row.model,
+        effort: row.effort as CreateOpts['effort'],
+        fastMode: !!row.fastMode,
+        permissionMode: permissionModeOrAsk(row.permissionMode),
+        title: row.title,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        orcaRole: row.orcaRole as 'worker' | null,
+        vendorOptions: workerVendorOptions,
+        // 远端 worker 唤醒必须带上 remoteHostId 并走 ensure (SSH 重连 / agent
+        // 安装 / codex daemon MCP 注入), 否则会以远端 workingDir 在本机 spawn,
+        // 且远端 daemon 的协同 MCP 通道不就绪。
+        remoteHostId: row.remoteHostId ?? undefined,
+        ...(extraDirs.length > 0 ? { extraDirs } : {}),
+      });
+      await ensureRemoteReadyForSessionStart({ createOpts: opts });
+      // end_team installs its fence before waiting for this route lock. It can
+      // therefore start during the remote await above; never bootstrap after
+      // that point even though shutdown is still waiting for the lock.
+      if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return 'fenced';
+      const { session: resumedSession } = await bootstrapSession(opts);
+      await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
+      return 'resumed';
     });
-    await ensureRemoteReadyForSessionStart({ createOpts: opts });
-    const { session: resumedSession } = await bootstrapSession(opts);
-    await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
-    return true;
   }
 
   // sessionId → remoteHostId 的进程内缓存 reader(lazy resume 路径每次 send 都
@@ -7815,14 +7825,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withSessionLock: withSendToSessionLock,
     isSessionSendFenced: isOrcaWorkerSessionDisableFenced,
     buildCreateOptsForQueuedSession,
-    enqueueQueuedMessage: (sessionId, item) => {
+    prepareQueuedMessageQueue: async (sessionId) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
       // 队列处于 paused 态不会被新消息的 getDrainableHead 立刻 drain。
-      void (async () => {
-        await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-        inputCoordinator.enqueue(sessionId, item);
-      })();
+      await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
     },
+    enqueueQueuedMessage: (sessionId, item) => inputCoordinator.enqueue(sessionId, item),
     sendToSessionInternal,
     createDbMessage,
     beginDirectTurnChangeSet: async (sessionId, clientId) => {
@@ -8103,8 +8111,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // to 'running' — that only happens when actual work is dispatched via sendToWorker.
     if (target.status === 'idle') {
       try {
-        const didResume = await resumeOrcaWorkerSessionIfMissing(target);
-        if (didResume) {
+        const resumeResult = await resumeOrcaWorkerSessionIfMissing(target);
+        if (resumeResult === 'resumed') {
           log.info('switchFocus: resumed idle worker (session only, no status change)', {
             workerId: target.id,
             sessionId: target.sessionId,
@@ -8157,7 +8165,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listWorkersByLead,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     resumeWorkerSession: async (target) => {
-      await resumeOrcaWorkerSessionIfMissing(target);
+      const result = await resumeOrcaWorkerSessionIfMissing(target);
+      return result === 'fenced' ? 'fenced' : 'ready';
     },
     updateWorkerStatus,
     markWorkerIdle: async (workerId) => {

@@ -628,13 +628,32 @@ describe('sendToSession ordering', () => {
     );
 
     expect(resumeBranch).toContain('const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);');
+    expect(resumeBranch).toContain('return withSendToSessionLock(target.sessionId, async () => {');
+    expect(countOccurrences(
+      resumeBranch,
+      'isOrcaWorkerSessionDisableFenced(target.sessionId)',
+    )).toBe(2);
     expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
     expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
     expectOrder(resumeBranch, 'const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);', 'const opts = buildCreateOptsWithStderr({');
     expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
+    const afterRemoteEnsure = resumeBranch.slice(
+      resumeBranch.indexOf('await ensureRemoteReadyForSessionStart({ createOpts: opts });'),
+    );
+    expectOrder(
+      afterRemoteEnsure,
+      'await ensureRemoteReadyForSessionStart({ createOpts: opts });',
+      'if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return \'fenced\';',
+    );
+    expectOrder(
+      afterRemoteEnsure,
+      'if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return \'fenced\';',
+      'await bootstrapSession(opts);',
+    );
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
-    expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain('const result = await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain("return result === 'fenced' ? 'fenced' : 'ready';");
+    expect(switchFocusIpcBlock).toContain('const resumeResult = await resumeOrcaWorkerSessionIfMissing(target);');
     expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
   });
 
@@ -811,6 +830,29 @@ describe('sendToSession ordering', () => {
     expectOrder(jumpBranch, 'const run = waitPrev.then(async () => {', fenceCheck);
     expectOrder(jumpBranch, fenceCheck, 'maker.getSessionMeta(targetSessionId)');
     expectOrder(jumpBranch, fenceCheck, 'await bootstrapSession(createOpts);');
+  });
+
+  it('finishes async queue preparation before the final fence check and synchronous enqueue', () => {
+    const dispatchBlock = extractDispatchOrEnqueueOrcaInterAgentMessageSource();
+    const queuedBlock = extractBetween(
+      dispatchBlock,
+      'const enqueueQueuedMessage = async',
+      '\n\n    if (deps.isSessionSendFenced(params.targetSessionId)) {',
+    );
+    const adapterBlock = extractBetween(
+      source,
+      'prepareQueuedMessageQueue: async (sessionId) => {',
+      '    sendToSessionInternal,',
+    );
+
+    expectOrder(queuedBlock, 'await deps.prepareQueuedMessageQueue', 'deps.isSessionSendFenced');
+    expectOrder(queuedBlock, 'deps.isSessionSendFenced', 'registerQueuedOrcaInterAgentAcceptedCallback');
+    expectOrder(queuedBlock, 'registerQueuedOrcaInterAgentAcceptedCallback', 'deps.enqueueQueuedMessage');
+    expect(adapterBlock).toContain('await inputCoordinator.ensureQueueRestored(sessionId)');
+    expect(adapterBlock).toContain(
+      'enqueueQueuedMessage: (sessionId, item) => inputCoordinator.enqueue(sessionId, item)',
+    );
+    expect(adapterBlock).not.toContain('void (async () => {');
   });
 
   it('keeps worker idle/archive adapters passing the caller lead session id', () => {

@@ -140,6 +140,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     meta: TSessionMeta,
   ) => Promise<AgentInputCreateOpts>;
+  prepareQueuedMessageQueue: (sessionId: string) => Promise<void>;
   enqueueQueuedMessage: (sessionId: string, item: AgentInputQueuedMessage) => void;
   sendToSessionInternal: (
     params: OrcaInterAgentSendToSessionInternalParams,
@@ -307,20 +308,48 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         return params.senderLabel;
       }
     };
+    const fencedFailure = (): Promise<DispatchOrcaInterAgentMessageResult> => failureResult({
+      ...createHostSendFailure(
+        'SESSION_NOT_FOUND',
+        `Session ${params.targetSessionId} is unavailable because its Orca team is ending or has ended`,
+      ),
+      source: params.meta.source,
+      context: params.meta.context,
+    });
     const enqueueQueuedMessage = async (logEvent: string): Promise<DispatchOrcaInterAgentMessageResult> => {
       const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
+      const senderLabel = await resolveSenderLabel();
       const queued = buildQueuedOrcaInterAgentMessage({
         clientId,
         agentMessageText,
         persistedContent,
         rawContent: params.rawContent,
-        senderLabel: await resolveSenderLabel(),
+        senderLabel,
         createOpts,
       });
+      await deps.prepareQueuedMessageQueue(params.targetSessionId);
+      // No await is allowed between this final fence check and the synchronous
+      // callback registration + enqueue. Otherwise end_team can archive the
+      // Worker while this queued task is still being prepared.
+      if (deps.isSessionSendFenced(params.targetSessionId)) {
+        return fencedFailure();
+      }
       if (params.onAccepted) {
         registerQueuedOrcaInterAgentAcceptedCallback(clientId, params.onAccepted, params.onAcceptedRollback);
       }
-      deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      try {
+        deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      } catch (error) {
+        discardQueuedOrcaInterAgentAcceptedCallback(clientId);
+        return failureResult({
+          ...createHostSendFailure(
+            'SEND_FAILED',
+            error instanceof Error ? error.message : String(error),
+          ),
+          source: params.meta.source,
+          context: params.meta.context,
+        });
+      }
       log.info(logEvent, {
         targetSessionId: params.targetSessionId,
         clientId,
@@ -337,14 +366,6 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       };
     };
 
-    const fencedFailure = (): Promise<DispatchOrcaInterAgentMessageResult> => failureResult({
-      ...createHostSendFailure(
-        'SESSION_NOT_FOUND',
-        `Session ${params.targetSessionId} is unavailable because its Orca team is ending or has ended`,
-      ),
-      source: params.meta.source,
-      context: params.meta.context,
-    });
     if (deps.isSessionSendFenced(params.targetSessionId)) {
       return fencedFailure();
     }
