@@ -81,6 +81,32 @@ describe('createCodexAutomationReader', () => {
     expect(items[0].diagnostics.join(' ')).toContain('id');
   });
 
+  it('uses the directory name as the stable id when TOML declares a different id', async () => {
+    const root = await makeRoot();
+    await writeAutomation(
+      root,
+      'stable-directory',
+      [
+        'version = 1',
+        'id = "declared-id"',
+        'name = "Mismatched id"',
+        'prompt = "read only"',
+        'status = "ACTIVE"',
+        'rrule = "FREQ=DAILY;BYHOUR=9;BYMINUTE=0"',
+      ].join('\n'),
+    );
+
+    const reader = createCodexAutomationReader({ rootDir: root });
+    const [listed] = await reader.list();
+
+    expect(listed.id).toBe('stable-directory');
+    expect(listed.diagnostics).toContain('id does not match its automation directory');
+    await expect(reader.get(listed.id)).resolves.toMatchObject({
+      id: 'stable-directory',
+      name: 'Mismatched id',
+    });
+  });
+
   it('diagnoses unsupported interval rules without rewriting them', async () => {
     const root = await makeRoot();
     await writeAutomation(

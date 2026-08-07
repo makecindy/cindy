@@ -151,9 +151,11 @@ function parseAutomation(
   }
 
   const rawId = raw.id;
-  const id = typeof rawId === 'string' ? rawId : idFromDirectory;
+  const id = idFromDirectory;
   if (typeof rawId !== 'string') diagnostics.push('id must be a string');
-  if (id !== idFromDirectory) diagnostics.push('id does not match its automation directory');
+  if (typeof rawId === 'string' && rawId !== idFromDirectory) {
+    diagnostics.push('id does not match its automation directory');
+  }
 
   const version = raw.version;
   if (version !== undefined && (typeof version !== 'number' || !Number.isInteger(version))) {
