@@ -576,9 +576,8 @@ async function requestBuiltinProviderText(
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
   }
 
-  // 目录钉可能指向 maxOutput 低于缺省 81920 的模型(如 claude-opus-4-5 的
-  // 64000):请求的 maxTokens 钳到该模型目录声明的输出上限,避免被 provider 拒绝。
-  // Codex 2026-08-06。
+  // 插件显式传了 maxTokens 时,钳到该模型目录声明的输出上限(maxOutput),
+  // 避免发送超过模型能力的值被 provider 拒绝。缺省(未传)不钳,走模型自然输出。
   const catalogModel = findProviderModel(input.provider, input.agentKind, input.model);
   if (input.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
     input = { ...input, maxTokens: Math.min(input.maxTokens, catalogModel.maxOutput) };
@@ -627,7 +626,9 @@ async function requestBuiltinProviderText(
         },
         model: toSdkModelString(input.model, findProviderModel(input.provider, input.agentKind, input.model)?.contextWindow),
         prompt: text,
-        maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
+        // Anthropic API 协议必填 max_tokens:缺省时以模型目录声明的 maxOutput
+        // (模型自身输出能力)兜底,没有目录条目才回退 81920——宿主不设政策上限。
+        maxTokens: requestOpts?.maxTokens ?? input.maxTokens ?? catalogModel?.maxOutput ?? 81_920,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
@@ -973,8 +974,9 @@ async function requestProviderHttpText(input: {
       : input.wire === 'anthropic-messages'
         ? {
           model: input.model,
-          // Anthropic API 协议必填 max_tokens;缺省与快问快答默认输出上限同量级
-          // (81920,思考链+正文够用,与其它 wire 的缺省一致)。
+          // Anthropic API 协议必填 max_tokens。缺省由调用方以模型目录声明的
+          // maxOutput 兜底(模型自身输出能力);81920 只是模型不在目录时的最后
+          // 回退,不是宿主承诺的输出上限。
           max_tokens: input.maxTokens ?? 81_920,
           messages: [{ role: 'user', content: input.prompt }],
         }

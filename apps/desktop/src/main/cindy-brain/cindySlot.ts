@@ -57,7 +57,6 @@ import {
   GHOST_CINDY_SEARCH_MAX_RESULTS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
-  GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS,
   GHOST_ONESHOT_TEXT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_TIMEOUT_MS,
@@ -1529,11 +1528,10 @@ export class GhostCindySlot {
       }
       const outcome = await oneshot({
         prompt,
-        // 插件没传 maxTokens 时给一个**够大**的默认输出上限:太小会被思考链
-        // 烧光(empty_response/BAD_MODEL_OUTPUT,320/1024/1600 都被证伪过),
-        // 完全不设又失去单次成本边界(Greptile 2026-08-06 P1)。8192 对
-        // 思考链+正文绰绰有余,单次问答成本也封顶;插件仍可显式传更小值。
-        maxTokens: (p.maxTokens as number | undefined) ?? GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
+        // 缺省不设输出上限:各供应商/模型按自然输出,60s 超时是实际边界;
+        // 插件可显式传 maxTokens 自限(1–81920)。(2026-08-07:曾给缺省加
+        // 81920,但 Codex / OpenAI 路径无法落实该参数,撤回为无上限设计。)
+        maxTokens: p.maxTokens as number | undefined,
         timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
         route,
       });

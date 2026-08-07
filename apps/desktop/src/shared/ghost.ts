@@ -5495,18 +5495,15 @@ export const GHOST_CINDY_DEPOSIT_REFILL_MS = 1000;
 /**
  * ── oneshot_text 政策参数(2026-07-31 开闸)────────────────────────────
  * 快问快答走轻量任务模型链,秒级到几十秒,只有同步形态(没有 submit 档:
- * 一单等不起的文本问答本身就是用错了通道)。上限对齐 agent-request 的
- * 消息量级;插件可显式传 maxTokens 自我约束(≤ 校验上限)。缺省给一个
- * **够大**的输出上限:太小会被思考模型的思考链烧光(empty_response /
- * BAD_MODEL_OUTPUT,320/1024/1600 都被证伪过),完全不设又失去单次成本
- * 边界;81920 对思考链+正文绰绰有余,单次问答成本也封顶。
+ * 一单等不起的文本问答本身就是用错了通道)。prompt 上限对齐 agent-request
+ * 的消息量级;输出**不设宿主级上限**——缺省按各供应商/模型的自然输出,
+ * 单次等待上限(60s 超时)是实际边界,插件可显式传 maxTokens 自我约束。
+ * (2026-08-07:撤回曾加上的缺省 81920——它在不支持该参数的路径
+ * (Codex / OpenAI)落实不了,反而被当作未兑现的成本承诺;设计改为无上限。)
  */
 export const GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS = 32_768;
-/** 插件显式传 maxTokens 的合法上限。与缺省值同量级(81920):若显式上限远小于
- *  缺省值,插件省略参数反而拿到更大预算,形成绕过路径(Greptile 2026-08-06)。 */
+/** 插件显式传 maxTokens 自限时的合法上限。 */
 export const GHOST_ONESHOT_TEXT_MAX_TOKENS = 81_920;
-/** 插件省略 maxTokens 时的缺省输出上限(够思考链+正文,又封顶单次成本)。 */
-export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 81_920;
 /** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */
 export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
 

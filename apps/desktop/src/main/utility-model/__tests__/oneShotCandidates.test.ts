@@ -1000,6 +1000,68 @@ describe('utility one-shot candidates', () => {
     expect(body.max_tokens).toBe(64_000);
   });
 
+  it('缺省不传 maxTokens 时,Anthropic wire 用模型目录 maxOutput 兜底(协议必填,非宿主上限)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {
+          'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          'claude-code': [{ id: 'claude-opus-4-5', name: 'Opus', contextWindow: 200_000, maxOutput: 64_000 }],
+        },
+      }],
+    } as never);
+    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'script' }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      providerId: 'anthropic',
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-5',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'anthropic' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.max_tokens).toBe(64_000);
+  });
+
+  it('缺省不传 maxTokens 时,xd wire 不发送输出上限(模型自然输出)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'api-key' },
+        routing: { codex: { upstream: 'https://xd.example/v1', authStrategy: 'api-key-header' } },
+        models: { codex: [{ id: 'claude-sonnet-4-6', name: 'Sonnet', contextWindow: 100_000, maxOutput: 64_000 }] },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'ok' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
   it('routes a descriptor-backed no-auth builtin through the generic utility transport', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
