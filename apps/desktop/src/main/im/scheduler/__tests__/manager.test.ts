@@ -419,6 +419,104 @@ describe('dormant scheduler manager', () => {
     expect(manager.getRuntimeGaps().values()).toEqual([]);
   });
 
+  it('allows a same-identity token refresh to adopt a new runtime gap', () => {
+    let round = 0;
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    manager.resetBindingDiscovery();
+    const probe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    const refreshedGap = { identity, generation: 'b'.repeat(32), state: 'dirty' as const };
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 2,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [refreshedGap],
+      },
+    });
+
+    expect(manager.getRuntimeGaps().values()).toEqual([refreshedGap]);
+    manager.stop();
+  });
+
+  it('allows a same-identity rebind while retaining old generation tombstones', () => {
+    let localIdentity: string | null = identity;
+    let round = 0;
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () =>
+        localIdentity ? { channel: 'discord', identity: localIdentity } : null,
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    const oldGap = { identity, generation: 'a'.repeat(32), state: 'dirty' as const };
+    manager.getRuntimeGaps().adopt(oldGap);
+
+    localIdentity = null;
+    manager.resetBindingDiscovery();
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+
+    localIdentity = identity;
+    manager.resetBindingDiscovery();
+    const probe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    const refreshedGap = { identity, generation: 'b'.repeat(32), state: 'dirty' as const };
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 2,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [oldGap],
+      },
+    });
+
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 3,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [refreshedGap],
+      },
+    });
+
+    expect(manager.getRuntimeGaps().values()).toEqual([refreshedGap]);
+    manager.stop();
+  });
+
   it('keeps rejecting untagged snapshots after a tagged recovery response', () => {
     const owner = { value: false };
     const harness = createTransport();
