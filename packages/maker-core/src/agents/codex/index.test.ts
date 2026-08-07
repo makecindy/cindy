@@ -17,7 +17,7 @@ import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
 
-const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
+const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoisted(() => {
   type LineHandler = (line: string) => void;
   type StderrHandler = (line: string) => void;
   type CloseHandler = (info: { reason: string }) => void;
@@ -232,11 +232,16 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
   }
 
   const createdTransports: MockCodexTransport[] = [];
-  return { MockCodexTransport, createdTransports };
+  const createdStdioOptions: Array<{
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }> = [];
+  return { MockCodexTransport, createdTransports, createdStdioOptions };
 });
 
 vi.mock('./app-server/stdioTransport.js', () => ({
-  createStdioTransport: () => {
+  createStdioTransport: (opts: { onProcessSpawned?: (pid: number) => void | (() => void) }) => {
+    createdStdioOptions.push(opts);
+    opts.onProcessSpawned?.(7_000 + createdStdioOptions.length);
     const transport = new MockCodexTransport();
     createdTransports.push(transport);
     return transport;
@@ -245,6 +250,7 @@ vi.mock('./app-server/stdioTransport.js', () => ({
 
 beforeEach(() => {
   createdTransports.length = 0;
+  createdStdioOptions.length = 0;
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
@@ -2763,10 +2769,12 @@ describe('CodexAgent.refreshLocalModels', () => {
       extraEnv: {},
       codexProxyActive: ctx.credentialMode === 'provider-oauth',
     }));
+    const registerLocalCodexAppServerProcess = vi.fn();
     const agent = new CodexAgent(createDeps({}, {
       onCodexLocalModelsListed,
       prepareCodexLocalCredentialModeSwitch,
       prepareCodexExtraSpawnConfig,
+      registerLocalCodexAppServerProcess,
     }));
     const xaiHandle = await agent.startSession({
       sessionId: 'session-provider-oauth-before-openai-refresh',
@@ -2780,6 +2788,10 @@ describe('CodexAgent.refreshLocalModels', () => {
     ).resolves.toBe(true);
 
     expect(createdTransports).toHaveLength(2);
+    expect(registerLocalCodexAppServerProcess.mock.calls).toEqual([
+      [{ pid: 7_001, role: 'task-host' }],
+      [{ pid: 7_002, role: 'control-plane-service' }],
+    ]);
     expect(createdTransports[0].closed).toBe(false);
     expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
     expect(createdTransports[0].lines.some((line) => (
@@ -4219,7 +4231,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports[0].closed).toBe(true);
   });
 
-  it('runs utility calls on the shared local host instead of spawning another local host', async () => {
+  it('keeps utility calls on the task host and account RPCs on an isolated control-plane host', async () => {
     const agent = new CodexAgent(createDeps());
 
     const handle = await agent.startSession({
@@ -4235,10 +4247,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       rateLimitsByLimitId: null,
       rateLimitResetCredits: { availableCount: 2, credits: null },
     };
-    createdTransports[0].setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
-    createdTransports[0].setMockResponse(Method.AccountRateLimitResetCreditConsume, {
-      result: { outcome: 'reset' },
-    });
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
+      transport.setMockResponse(Method.AccountRateLimitResetCreditConsume, {
+        result: { outcome: 'reset' },
+      });
+    };
 
     await agent.setMemory(true);
     const pushCountAfterSet = createdTransports[0].lines
@@ -4259,12 +4273,13 @@ describe('CodexAgent MCP thread context hooks', () => {
       creditId: 'credit-earliest',
     })).resolves.toEqual({ outcome: 'reset' });
 
-    expect(createdTransports).toHaveLength(1);
+    expect(createdTransports).toHaveLength(2);
     expect(createdTransports[0].lines.some((line) => line.includes('skills/list'))).toBe(true);
     expect(createdTransports[0].lines.some((line) => line.includes('config/read'))).toBe(true);
     expect(createdTransports[0].lines.some((line) => line.includes('memory/reset'))).toBe(true);
-    expect(createdTransports[0].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(true);
-    expect(createdTransports[0].lines.some((line) => (
+    expect(createdTransports[0].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(false);
+    expect(createdTransports[1].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(true);
+    expect(createdTransports[1].lines.some((line) => (
       line.includes('account/rateLimitResetCredit/consume')
       && line.includes('018f4ec7-c6d8-7f10-8d43-9f8791d33000')
       && line.includes('credit-earliest')
@@ -4349,7 +4364,15 @@ describe('CodexAgent MCP thread context hooks', () => {
         result: { outcome: 'reset' },
       });
     };
-    const agent = new CodexAgent(createDeps());
+    const registerLocalCodexAppServerProcess = vi.fn();
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
+      extraArgs: [],
+      extraEnv: {},
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      registerLocalCodexAppServerProcess,
+      prepareCodexExtraSpawnConfig,
+    }));
 
     await expect(agent.readAccountRateLimits()).resolves.toEqual(rateLimits);
     await expect(agent.consumeAccountRateLimitResetCredit({
@@ -4357,12 +4380,32 @@ describe('CodexAgent MCP thread context hooks', () => {
     })).resolves.toEqual({ outcome: 'reset' });
 
     expect(createdTransports).toHaveLength(1);
+    expect(registerLocalCodexAppServerProcess).toHaveBeenCalledWith({
+      pid: 7_001,
+      role: 'control-plane-service',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      hostPurpose: 'control-plane',
+    });
+    expect(Array.from(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+    )).toEqual(['local-control:oauth-bearer']);
     expect(createdTransports[0].lines[0]).toContain('initialize');
     expect(createdTransports[0].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(true);
     await agent.dispose();
   });
 
-  it('refuses account reset RPCs on a differently-authenticated active host', async () => {
+  it('keeps a differently-authenticated task host alive while account RPCs use control-plane', async () => {
+    const rateLimits = {
+      rateLimits: { planType: 'plus', primary: { usedPercent: 42, windowMinutes: 300 } },
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 1, credits: null },
+    };
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
+    };
     const agent = new CodexAgent(createDeps());
     const handle = await agent.startSession({
       sessionId: 'session-gateway-host',
@@ -4371,9 +4414,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
 
-    await expect(agent.readAccountRateLimits()).rejects.toThrow(/active Codex session/i);
-    expect(createdTransports).toHaveLength(1);
+    await expect(agent.readAccountRateLimits()).resolves.toEqual(rateLimits);
+    expect(createdTransports).toHaveLength(2);
     expect(createdTransports[0].closed).toBe(false);
+    expect(createdTransports[1].lines.some((line) => (
+      line.includes('account/rateLimits/read')
+    ))).toBe(true);
 
     await handle.close();
     await agent.dispose();

@@ -4374,6 +4374,7 @@
         "terminal": "Terminal",
         "review": "Review",
         "backgroundTasks": "Background tasks",
+        "resourceUsage": "Resource Usage",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel"
@@ -4392,13 +4393,14 @@
       "empty": {
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
-        "desc": "Open a file tree, review, built-in browser, or terminal here to work alongside the chat on the left.",
+        "desc": "Open files, review, resource usage, a built-in browser, or a terminal here to work alongside the chat on the left.",
         "openFile": "Open files",
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
         "openBackgroundTasks": "Open background tasks",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "Open Resource Usage",
         "openBrowser": "Open browser",
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
@@ -4775,6 +4777,53 @@
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
       "noProgress": "No progress details yet"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent Processes",
+        "app": "App Processes"
+      },
+      "columns": {
+        "process": "Process",
+        "cpu": "CPU",
+        "memory": "Memory",
+        "pid": "PID"
+      },
+      "kinds": {
+        "main": "Main process",
+        "renderer": "UI process",
+        "gpu": "GPU process",
+        "utility": "Service process"
+      },
+      "agentRoles": {
+        "codexTask": "Codex Task",
+        "codexService": "Codex Service"
+      },
+      "agentRoleDetails": {
+        "task": "Task runtime",
+        "service": "Accounts and models"
+      },
+      "services": {
+        "audio": "Audio Service",
+        "network": "Network Service",
+        "storage": "Storage Service",
+        "videoCapture": "Video Capture"
+      },
+      "processCount_one": "Process tree: {{count}} process",
+      "processCount_other": "Process tree: {{count}} processes",
+      "agentsEmpty": "No agent processes are running. Start a task and its usage will show up here.",
+      "tableLabel": "Resource Usage by Process",
+      "sortBy": "Sort by {{column}}",
+      "loading": "Reading resource usage…",
+      "remoteUnavailableTitle": "Unavailable for remote sessions",
+      "remoteUnavailableDescription": "This panel only reads processes on this device. It is available only for local sessions running on this device.",
+      "selectHint": "Select a process",
+      "readOnlyHint": "Only Agent processes used for tasks can be stopped",
+      "terminate": "Stop Process",
+      "terminateConfirmTitle": "Stop {{name}} process?",
+      "terminateConfirmDescription": "This force-stops the Agent process. Every task using this process will be interrupted; send another message in an affected task to start an Agent again.",
+      "terminated": "Stopped the {{name}} process",
+      "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample."
     }
   },
   "update": {
@@ -5676,6 +5725,24 @@
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details"
+    },
+    "shareImage": {
+      "entry": "Share as Image",
+      "title": "Share Conversation",
+      "subtitle_one": "{{count}} message selected",
+      "subtitle_other": "{{count}} messages selected",
+      "selectAll": "Select All",
+      "clearAll": "Deselect All",
+      "checkboxLabel": "Select this message",
+      "cancel": "Cancel",
+      "download": "Save Image",
+      "copy": "Copy Image",
+      "generating": "Generating…",
+      "copied": "Image copied",
+      "saved": "Image saved",
+      "notMounted": "Some selected messages are not currently visible. Scroll back to show them, then try again",
+      "tooLarge": "The selection is too long or wide. Select less content and try again",
+      "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
       "retryTitle": "Resend the last message",
@@ -8565,7 +8632,11 @@
     "empty": "No reference directories yet",
     "add": "Add directory…",
     "atLimit": "Limit reached ({{max}})",
-    "remove": "Remove {{name}}"
+    "remove": "Remove {{name}}",
+    "parentConfirmTitle": "Add a parent directory?",
+    "parentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. This expands the Agent's visible scope beyond the working directory.\n\nAdd it anyway?\n\n{{path}}",
+    "parentConfirmAccept": "Add anyway",
+    "parentConfirmCancel": "Cancel"
   },
   "commands": {
     "toast": {
@@ -8736,6 +8807,7 @@
       "passwordPlaceholder": "Password",
       "unlock": "Unlock",
       "previewMeta": "{{agent}} · {{count}} messages · exported {{exportedAt}}",
+      "previewOrca": "Collaboration task · includes {{count}} Workers",
       "riskWarning": "This file was shared from outside — make sure you trust its source. The imported history may influence the AI's future behavior, and if you continue the chat, the AI can still read and write local files and run commands.",
       "workdirHint": "The original working directory was {{originalDir}}. Choose the matching directory on this machine.",
       "workdirEmpty": "No directory selected",
@@ -8747,6 +8819,7 @@
       "close": "Close",
       "openSession": "Open session",
       "doneTitle": "Import complete",
+      "doneOrca": "Also imported {{count}} collaboration Workers",
       "conflictTitle": "This session already exists",
       "conflictBody": "A session with the same identifier already exists on this device (it was imported before, or it originated here). Importing again will overwrite the existing session with the contents of this share file.",
       "conflictOverwrite": "Overwrite & import",

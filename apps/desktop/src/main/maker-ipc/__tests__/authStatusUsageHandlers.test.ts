@@ -70,7 +70,9 @@ describe('maker auth IPC handlers', () => {
       identity: { email: 'dev@example.test' },
     });
     expect(onCodexAuthChange).toHaveBeenCalledOnce();
-    expect(refreshAgentLocalModels).toHaveBeenCalledWith('codex');
+    expect(refreshAgentLocalModels).toHaveBeenCalledWith('codex', {
+      credentialMode: 'oauth-bearer',
+    });
     expect(onCodexAuthChange).toHaveBeenCalledWith(true, true, expect.any(Function));
     expect(broadcast).toHaveBeenNthCalledWith(1, MAKER_PUSH.AUTH_LOGIN_PROGRESS, {
       agentKind: 'codex',

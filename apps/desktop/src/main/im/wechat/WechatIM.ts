@@ -96,6 +96,16 @@ interface ActiveTask {
   terminalCommitted: boolean;
 }
 
+function activePeerIdForSession<
+  T extends { routeSessionId?: string; task: { sessionId: string } },
+>(activeTasks: ReadonlyMap<string, T>, sessionId: string | undefined): string | null {
+  if (!sessionId) return null;
+  const peers = [...activeTasks.entries()]
+    .filter(([, active]) => (active.routeSessionId ?? active.task.sessionId) === sessionId)
+    .map(([peerId]) => peerId);
+  return peers.length === 1 ? peers[0]! : null;
+}
+
 interface PendingWechatInteraction {
   request: InteractionRequest;
   resolve: (decision: InteractionDecision) => void;
@@ -466,13 +476,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   }
 
   getActivePeerIdForSession(sessionId: string | undefined): string | null {
-    if (!sessionId) return null;
-    const peers = [...this.#activeTasks.entries()]
-      .filter(
-        ([, active]) => (active.routeSessionId ?? active.task.sessionId) === sessionId,
-      )
-      .map(([peerId]) => peerId);
-    return peers.length === 1 ? peers[0]! : null;
+    return activePeerIdForSession(this.#activeTasks, sessionId);
   }
 
   async handleTextInteraction(
@@ -1973,6 +1977,7 @@ function machineErrorCode(error: unknown): string {
 }
 
 export const __testing = {
+  activePeerIdForSession,
   acceptedPollTaskIds,
   authorizationCancelPhase,
   classifyOutboxSendError,

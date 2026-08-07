@@ -278,7 +278,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(chatInputSource).not.toContain("isCreateAgentVariant ? 'flex-wrap gap-2' : 'min-w-0 gap-1'");
     expect(chatInputSource).not.toContain("'flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2'");
     expect(source).toContain('className="shrink-0"');
-    expect(extraDirsButtonSource).toContain("'flex shrink-0 items-center rounded-full transition-colors'");
+    expect(extraDirsButtonSource).toContain(
+      "'flex h-[30px] shrink-0 items-center rounded-full border border-transparent'",
+    );
     expect(permissionSelectorSource).toContain("'h-[30px] min-w-[72px] max-w-full shrink px-2.5'");
     expect(permissionSelectorSource).not.toContain("'h-[30px] min-w-[90px] max-w-none shrink-0");
     expect(permissionSelectorSource).not.toContain("'h-[30px] min-w-[72px] max-w-full shrink border border-[var(--create-agent-control-border)]");
@@ -300,16 +302,14 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     );
     // 本机会话可选附件,但远程或身份尚未回流的已建会话不能摄入控制端绝对路径。
     expect(chatInputSource).toContain('const localAttachmentPickerEnabled =');
-    expect(chatInputSource).toContain(
-      'localAttachmentPickerEnabled && !composerMutationLocked ? addFiles : undefined',
-    );
+    expect(chatInputSource).toContain('{localAttachmentPickerEnabled && (');
+    expect(chatInputSource).toContain('if (files.length > 0) void addFiles(files);');
+    expect(chatInputSource).toContain("id: 'attach-files'");
     expect(chatInputSource).not.toContain('(extraDirs !== undefined && onExtraDirsChange)');
     expect(chatInputSource).not.toContain(
       "vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange",
     );
-    expect(extraDirsButtonSource).toContain(
-      'const hasReferenceDirs = onChange !== undefined',
-    );
+    expect(chatInputSource).toContain('hasReferenceDirs={onExtraDirsChange !== undefined}');
     expect(extraDirsButtonSource).not.toContain("const isCc = agentKind === 'cc'");
     // ×N 角标在 create-agent(新建草稿)也要外显(2026-07-25 用户定稿):引用目录
     // 扩大 agent 可见范围,收起态不允许静默。不得回退到 icon-only 紧凑态。

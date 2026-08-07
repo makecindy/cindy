@@ -40,6 +40,7 @@ import type {
   Settings,
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
+import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -2818,6 +2819,21 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
+          ...(this.deps.registerLocalAgentProcess
+            ? {
+                spawnClaudeCodeProcess: (spawnOptions) =>
+                  spawnObservedClaudeProcess({
+                    spawnOptions,
+                    registerProcess: (pid) =>
+                      this.deps.registerLocalAgentProcess?.({
+                        pid,
+                        kind: 'claude',
+                        role: 'task-host',
+                      }),
+                    onStderr: vo.onStderrLine as ((line: string) => void) | undefined,
+                  }),
+              }
+            : {}),
           // 订阅 token 到期续命回调 —— 仅当本次 spawn 实际注入了订阅 OAuth token
           // (oauth-spawn, 见 desktop auth-adapters getAuthEnv)且 host 实现了强刷时接线。
           // cc 侧 turn 中途 401 会发 oauth_token_refresh control 请求, SDK 调本回调向

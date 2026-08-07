@@ -4372,6 +4372,7 @@
         "terminal": "终端",
         "review": "审查",
         "backgroundTasks": "后台任务",
+        "resourceUsage": "资源用量",
         "collaboration": "协同",
         "unknown": "未知标签页",
         "ghostPanel": "插件面板"
@@ -4390,13 +4391,14 @@
       "empty": {
         "eyebrow": "右侧栏",
         "title": "开始一个面板",
-        "desc": "在右侧打开文件树、审查、内置浏览器或终端，与左侧对话并行工作。",
+        "desc": "在右侧打开文件、审查、资源用量、内置浏览器或终端，与左侧对话并行工作。",
         "openFile": "打开文件",
         "fileSub": "Files",
         "openReview": "打开审查",
         "reviewSub": "Review",
         "openBackgroundTasks": "打开后台任务",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "打开资源用量",
         "openBrowser": "打开浏览器",
         "browserSub": "Browser",
         "openTerminal": "打开终端",
@@ -4773,6 +4775,53 @@
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
       "noProgress": "暂无进度详情"
+    },
+    "resourceUsage": {
+      "sections": {
+        "agents": "Agent 进程",
+        "app": "应用进程"
+      },
+      "columns": {
+        "process": "进程",
+        "cpu": "CPU",
+        "memory": "内存",
+        "pid": "PID"
+      },
+      "kinds": {
+        "main": "主进程",
+        "renderer": "界面进程",
+        "gpu": "GPU 进程",
+        "utility": "服务进程"
+      },
+      "agentRoles": {
+        "codexTask": "Codex 任务",
+        "codexService": "Codex 服务"
+      },
+      "agentRoleDetails": {
+        "task": "任务运行",
+        "service": "账户与模型"
+      },
+      "services": {
+        "audio": "音频服务",
+        "network": "网络服务",
+        "storage": "存储服务",
+        "videoCapture": "视频采集"
+      },
+      "processCount_one": "进程树：{{count}} 个进程",
+      "processCount_other": "进程树：{{count}} 个进程",
+      "agentsEmpty": "当前没有运行中的 Agent 进程，启动任务后会在这里展示占用",
+      "tableLabel": "按进程展示的资源用量",
+      "sortBy": "按{{column}}排序",
+      "loading": "正在读取资源用量…",
+      "remoteUnavailableTitle": "远程任务暂不可用",
+      "remoteUnavailableDescription": "此面板仅读取本机进程，仅适用于在此设备上运行的本机任务。",
+      "selectHint": "选择一个进程",
+      "readOnlyHint": "只有用于任务的 Agent 进程可以终止",
+      "terminate": "终止进程",
+      "terminateConfirmTitle": "终止 {{name}} 进程？",
+      "terminateConfirmDescription": "将强制终止该 Agent 进程，使用该进程的所有任务都会中断；之后在任一受影响任务里继续发消息，即可按需重新启动 Agent。",
+      "terminated": "已终止 {{name}} 进程",
+      "terminateFailed": "无法终止该进程，它可能已自行退出；列表会随下一次采样自动更新"
     }
   },
   "update": {
@@ -5674,6 +5723,23 @@
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本轮明细"
+    },
+    "shareImage": {
+      "entry": "分享为图片",
+      "title": "分享对话",
+      "subtitle_other": "已选 {{count}} 条消息",
+      "selectAll": "全选",
+      "clearAll": "取消全选",
+      "checkboxLabel": "选择这条消息",
+      "cancel": "取消",
+      "download": "下载到本地",
+      "copy": "复制为图片",
+      "generating": "正在生成…",
+      "copied": "图片已复制",
+      "saved": "图片已保存",
+      "notMounted": "有些已选消息暂未显示，请滚动回去让它们显示后重试",
+      "tooLarge": "所选内容过长或过宽，请减少选择后重试",
+      "failed": "图片生成失败，请重试"
     },
     "errorBanner": {
       "retryTitle": "重新发送最后一条消息",
@@ -8552,7 +8618,11 @@
     "empty": "还没有引用目录",
     "add": "添加目录…",
     "atLimit": "已达上限 {{max}} 个",
-    "remove": "移除 {{name}}"
+    "remove": "移除 {{name}}",
+    "parentConfirmTitle": "添加父目录？",
+    "parentConfirmDescription": "选中的目录是当前工作目录的父级或祖先。这会扩大 Agent 的可见范围，使其能看到工作目录之外的内容。\n\n仍要添加吗？\n\n{{path}}",
+    "parentConfirmAccept": "仍然添加",
+    "parentConfirmCancel": "取消"
   },
   "commands": {
     "toast": {
@@ -8723,6 +8793,7 @@
       "passwordPlaceholder": "密码",
       "unlock": "解锁",
       "previewMeta": "{{agent}} · {{count}} 条消息 · 导出于 {{exportedAt}}",
+      "previewOrca": "协同任务 · 含 {{count}} 个 Worker",
       "riskWarning": "该文件来自外部分享，请确认来源可信。导入的历史内容可能影响 AI 的后续行为；继续对话时，AI 仍可读写本机文件、执行命令。",
       "workdirHint": "原任务的工作目录是 {{originalDir}}，请选择你机器上对应的目录。",
       "workdirEmpty": "尚未选择目录",
@@ -8734,6 +8805,7 @@
       "close": "关闭",
       "openSession": "打开任务",
       "doneTitle": "导入完成",
+      "doneOrca": "已一并导入 {{count}} 个协同 Worker",
       "conflictTitle": "该任务已存在",
       "conflictBody": "本机已存在相同标识的任务（此前导入过，或原任务就在本机）。重新导入将覆盖已有任务，替换为此分享包中的内容。",
       "conflictOverwrite": "覆盖导入",

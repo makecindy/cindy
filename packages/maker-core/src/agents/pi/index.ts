@@ -1214,6 +1214,12 @@ export class PiAgent extends BaseAgent {
         cwd: opts.workingDir,
         env: spawnEnv,
         logger: this.deps.logger,
+        onProcessSpawned: (pid) =>
+          this.deps.registerLocalAgentProcess?.({
+            pid,
+            kind: 'pi',
+            role: 'task-host',
+          }),
         onEvent: (event: PiRpcEvent) => {
           if (event.type === 'extension_ui_request') {
             this.handleExtensionUiRequest(event, proc, () => ({
@@ -2119,6 +2125,12 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: forkHome,
       },
       logger: log,
+      onProcessSpawned: (pid) =>
+        this.deps.registerLocalAgentProcess?.({
+          pid,
+          kind: 'pi',
+          role: 'control-plane-service',
+        }),
       onEvent: () => {},
       onExit: () => {},
     });

@@ -684,10 +684,14 @@ export const SessionItem = memo(function SessionItem({
     !session.deviceLinkDeviceId &&
     session.status !== 'archived';
 
-  // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、orca 协同关系
-  // 不可移植、device-link 数据在被控端 —— 全部隐藏入口。
+  // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、device-link 数据在
+  // 被控端 —— 隐藏入口。Orca lead 可导出(整个协同随包);Worker 不进 sidebar,
+  // 无需在此排除。
   const canExportShare =
-    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+    !isEmpty &&
+    !session.remoteHostId &&
+    session.orcaRole !== 'worker' &&
+    !session.deviceLinkDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>

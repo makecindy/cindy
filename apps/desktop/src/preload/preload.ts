@@ -37,6 +37,15 @@ import {
   type LogUploadSettingsPayload,
 } from '../shared/logUpload';
 import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
+import {
+  PROCESS_MONITOR_SAMPLE_CHANNEL,
+  PROCESS_MONITOR_SUBSCRIBE_CHANNEL,
+  PROCESS_MONITOR_TERMINATE_CHANNEL,
+  PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL,
+  type ProcessMonitorSample,
+  type TerminateAgentProcessRequest,
+  type TerminateAgentProcessResult,
+} from '../shared/processMonitor';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
@@ -55,6 +64,7 @@ import type {
 } from '../shared/local-themes';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
+import type { RawReleaseNotes } from '../shared/releaseNotesContent';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
   type ModelAccessStatus as ModelAccessStatusPayload,
@@ -420,6 +430,8 @@ const fanOutRsbBrowserCommand = createIpcFanOut('rsb:browser-command');
 const fanOutRsbBrowserBridgePin = createIpcFanOut('rsb-browser-bridge:pin');
 const fanOutRsbBrowserBridgeUnpin = createIpcFanOut('rsb-browser-bridge:unpin');
 const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:resource-event');
+// 资源用量面板:main 订阅驱动采样推送(面板打开才有流量)。
+const fanOutProcessMonitorSample = createIpcFanOut(PROCESS_MONITOR_SAMPLE_CHANNEL);
 // Phase 3: RsbWebviewBackend (open/focus/close) push 给 renderer 让它代调 store。
 const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:tab-op-request');
 // session-git-pr-context: HEAD 分支变化 / session PR 引用变化推送
@@ -3632,7 +3644,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform is resolved in main via getPlatformKey() to keep the CDN path
   // axis identical to the hot-update manifest.
   // Returns null on 404 / network / parse error — caller decides UX.
-  fetchReleaseNotes: (version: string): Promise<RawReleaseNotesPayload | null> =>
+  fetchReleaseNotes: (version: string): Promise<RawReleaseNotes | null> =>
     ipcRenderer.invoke('release-notes:fetch', version),
 
   // Sorted ascending list of every version with a notice on the CDN. Renderer
@@ -4649,6 +4661,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** main → renderer 资源看门狗事件(evict-request / kill-notice / cpu-alert)。 */
     onResourceEvent: (cb: (event: unknown) => void) =>
       fanOutRsbBrowserBridgeResourceEvent(cb as IpcCallback),
+  },
+
+  // ── 资源用量面板(process-monitor)────────────────────────────────────────
+  /**
+   * 订阅期间 main 才采样(面板关闭零开销);onSample 回调只收业务 payload。
+   * terminate 只对本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
+   */
+  processMonitor: {
+    subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),
+    unsubscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL),
+    terminate: (request: TerminateAgentProcessRequest): Promise<TerminateAgentProcessResult> =>
+      ipcRenderer.invoke(PROCESS_MONITOR_TERMINATE_CHANNEL, request),
+    onSample: (cb: (sample: ProcessMonitorSample) => void) =>
+      fanOutProcessMonitorSample(cb as IpcCallback),
   },
 
   rsbNativePopup: {

@@ -31,10 +31,7 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import {
-  isAgentPlanToolName,
-  isDeliveryProseText,
-} from '@cindy/maker-shared/message-render';
+import { isAgentPlanToolName, isDeliveryProseText } from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -53,13 +50,18 @@ import {
   isRemoteSessionSticky,
   subscribeTurnChangeSetUpdated,
 } from '@/lib/makerTransport';
+import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
+import { cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
+import { SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
+import { ShareMessageCheckbox } from './ShareMessageCheckbox';
+import { isShareableMessage, useShareSelectionActive } from './shareSelectionStore';
 
 // perf-baseline: 大 session 切换 first-paint 性能基线,保留用于回归监测。
 // 历史:commit ffff3603 (render-window 首引入) 因 687 条 session first-paint
@@ -111,17 +113,6 @@ export const RENDER_WINDOW_INITIAL_ITEMS = 80;
 export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 30;
 const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
-
-function isEditableKeyboardTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tagName = target.tagName;
-  return (
-    tagName === 'INPUT' ||
-    tagName === 'TEXTAREA' ||
-    tagName === 'SELECT' ||
-    target.isContentEditable
-  );
-}
 
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
@@ -2328,6 +2319,9 @@ export function MessageStream({
   // (见 sessionImageSrcs 处注释)。
   const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId);
 
+  /** 分享选择模式:只驱动整列缩进(低频)。逐条的选中态由每个复选框自己订阅。 */
+  const shareSelectionActive = useShareSelectionActive(sessionId);
+
   // 滚动容器:原生 div + overflow-y-auto,样式由全局 .is-scrolling 体系接管
   // (lib/scrollbarAutoHide.ts 自动加/撤 .is-scrolling 类,globals.css 控制
   // thumb 显隐)。data-scroll-container 给 ImageLightbox 等四个 lightbox
@@ -3624,7 +3618,14 @@ export function MessageStream({
     }
     const id = window.setTimeout(run, 300);
     return () => window.clearTimeout(id);
-  }, [sessionId, navRailEnabled, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
+  }, [
+    sessionId,
+    navRailEnabled,
+    navRailEntries.length,
+    hasMoreMessages,
+    isLoadingMore,
+    onLoadMore,
+  ]);
 
   const railJumpSeqRef = useRef(0);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
@@ -3783,7 +3784,17 @@ export function MessageStream({
               React `key` 一律取 item.key — stable across builds(派生约定见
               RenderItem 类型注释 / buildRenderItems),复用 DOM 节点避免折叠
               态丢失 / 滚动锚点漂走。 */}
-                <div ref={itemsRef} className="flex flex-col gap-3.5">
+                <div
+                  ref={itemsRef}
+                  className={cn(
+                    'flex flex-col gap-3.5',
+                    // 分享选择模式:整列内容右移,左侧让出复选框那一列。缩进加在
+                    // 容器上(不是逐条消息),工具卡等不可选的 item 也跟着移,
+                    // 左边缘保持对齐。
+                    shareSelectionActive && 'pl-10',
+                    'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
+                  )}
+                >
                   {visibleRenderItems.map((item) => {
                     if (item.type === 'fork_origin') {
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
@@ -3976,16 +3987,32 @@ export function MessageStream({
                       );
                     }
 
+                    // 分享选择:复选框与光栅化定位属性都挂在这个**既有** wrapper 上,
+                    // 不新增 DOM 层级 —— 多包一层会让 AssistantMessage 子树在进出
+                    // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
+                    const shareable =
+                      Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
+
                     return (
                       <div
                         key={item.key}
                         data-message-client-id={msg.clientId}
-                        className={
-                          highlightMessageClientId === msg.clientId
-                            ? 'scroll-mt-20 rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)] transition-colors'
-                            : 'scroll-mt-20 transition-colors'
-                        }
+                        {...(shareable
+                          ? {
+                              [SHARE_SESSION_ATTR]: sessionId,
+                              [SHARE_MESSAGE_ATTR]: msg.clientId,
+                            }
+                          : {})}
+                        className={cn(
+                          'scroll-mt-20 transition-colors',
+                          shareable && 'relative',
+                          highlightMessageClientId === msg.clientId &&
+                            'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
+                        )}
                       >
+                        {shareable && shareSelectionActive ? (
+                          <ShareMessageCheckbox clientId={msg.clientId} />
+                        ) : null}
                         <MessageItem
                           message={msg}
                           toolResult={singleResultMap.get(msg.clientId)}

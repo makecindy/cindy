@@ -504,6 +504,23 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(h.touchUserSendInDb).toHaveBeenCalledWith('sess-old');
   });
 
+  it('provider 接受后才执行回调，回调失败不反转已受理 turn', async () => {
+    const onProviderAccepted = vi.fn(async () => {
+      h.calls.push('providerAccepted');
+      throw new Error('cursor db unavailable');
+    });
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ onProviderAccepted }));
+
+    expect(outcome.status).toBe('ok');
+    expect(onProviderAccepted).toHaveBeenCalledTimes(1);
+    expect(h.calls.indexOf('createMessage')).toBeLessThan(h.calls.indexOf('providerAccepted'));
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('provider-accepted callback failed for session=sess-new'),
+    );
+  });
+
   it('入站图片附件:ingest 进媒体总仓挂 session-attachment 引用,喂 agent 用 blob 绝对路径,落库用 cindy-media url', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(

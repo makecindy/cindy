@@ -325,13 +325,46 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
-      sendToSession: async ({ targetSessionId, message, dispatcherSessionId, title, useWorktree, workingDir }) => {
+      sendToSession: async ({
+        targetSessionId,
+        message,
+        dispatcherSessionId,
+        title,
+        useWorktree,
+        workingDir,
+        agentKind,
+        model,
+        effort,
+        fast,
+      }) => {
         const svc = tryGetOrcaCollabService();
         if (!svc) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'orca collab service not initialized' };
         }
         try {
-          return await svc.sendToSession({ targetSessionId, message, dispatcherSessionId, title, useWorktree, workingDir });
+          const hasExecutionOverrides =
+            agentKind !== undefined
+            || model !== undefined
+            || effort !== undefined
+            || fast !== undefined;
+          return await svc.sendToSession({
+            targetSessionId,
+            message,
+            dispatcherSessionId,
+            title,
+            useWorktree,
+            workingDir,
+            ...(hasExecutionOverrides
+              ? {
+                  execution: {
+                    agentKind,
+                    model,
+                    effort,
+                    fastMode: fast,
+                  },
+                }
+              : {}),
+          });
         } catch (err) {
           return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
         }

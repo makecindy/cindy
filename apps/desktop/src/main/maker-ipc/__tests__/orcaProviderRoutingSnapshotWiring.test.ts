@@ -10,8 +10,10 @@ const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'ut
 
 describe('Orca provider routing snapshot wiring', () => {
   it('derives provider views and registry identities from one selectable catalog snapshot', () => {
-    const start = registerSource.indexOf('getProviderRoutingContext: async () => {');
-    const end = registerSource.indexOf('readClaudeApiKey,', start);
+    const start = registerSource.indexOf(
+      'async function getProviderRoutingContext(): Promise<OrcaWorkerProviderRoutingContext> {',
+    );
+    const end = registerSource.indexOf('const orcaWorkerCreationService', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const wiring = registerSource.slice(start, end);
@@ -20,5 +22,22 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(wiring).toContain('catalog,');
     expect(wiring).toContain('const modelRegistry = catalog.modelRegistry;');
     expect(wiring).not.toContain('getActiveCatalog().modelRegistry');
+    expect(registerSource).toContain('getProviderRoutingContext,');
+  });
+
+  it('validates explicit execution config before allocating a handoff worktree', () => {
+    const start = registerSource.indexOf('async function sendToSessionInternal(params: {');
+    const end = registerSource.indexOf('const newTitle =', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const createSetup = registerSource.slice(start, end);
+    const validation = createSetup.indexOf(
+      'const resolvedExecution = resolveSendToSessionExecutionConfig({',
+    );
+    const worktreeAllocation = createSetup.indexOf(
+      'const prep = await prepareHandoffWorktree(',
+    );
+    expect(validation).toBeGreaterThanOrEqual(0);
+    expect(worktreeAllocation).toBeGreaterThan(validation);
   });
 });

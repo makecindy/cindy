@@ -239,6 +239,19 @@ export interface CodexExtraSpawnConfig {
   codexRemoteCompactionProviderId?: string;
 }
 
+export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
+
+export interface CodexAppServerProcessRegistration {
+  pid: number;
+  role: CodexAppServerProcessRole;
+}
+
+export interface LocalAgentProcessRegistration {
+  pid: number;
+  kind: 'claude' | 'pi';
+  role: 'task-host' | 'control-plane-service';
+}
+
 export interface CodexLocalCredentialModeSwitchContext {
   fromMode?: AgentCredentialMode;
   /**
@@ -479,6 +492,22 @@ export interface AgentDeps {
       hostPurpose?: 'control-plane';
     },
   ) => Promise<CodexExtraSpawnConfig>;
+
+  /**
+   * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
+   * 返回 disposer 时会跟随 transport close 调用；远端 SSH transport 不触发。
+   */
+  registerLocalCodexAppServerProcess?: (
+    info: CodexAppServerProcessRegistration,
+  ) => void | (() => void);
+
+  /**
+   * Register a locally spawned Claude/Pi root process with the host. The returned
+   * disposer follows that exact process generation; remote transports never call it.
+   */
+  registerLocalAgentProcess?: (
+    info: LocalAgentProcessRegistration,
+  ) => void | (() => void);
 
   /**
    * Codex 本地 shared app-server 凭证形态要切换前的宿主协调点。

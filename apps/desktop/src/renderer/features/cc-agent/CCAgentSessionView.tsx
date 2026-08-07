@@ -71,6 +71,11 @@ import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
 import { MessageStream } from '@/components/chat/MessageStream';
+import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
+import {
+  shareSelectionStore,
+  useShareSelectionActive,
+} from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
   ErrorTailErrorBanner,
@@ -3144,6 +3149,33 @@ export function CCAgentSessionView({
     </>
   );
 
+  // ── 分享为图片:选择模式 ──
+  // 底部操作条与 ChatInput 互斥(挑消息时不该还能发消息),所以状态在这里读一次,
+  // 供下方输入区的 ternary 链分流。
+  const shareSelectionActive = useShareSelectionActive(sessionId);
+  // 输入区被更高优先级的态占走(远程接管 / 会话准备中 / 任何 pending 交互)时,
+  // 底部操作条会随之卸载 —— 那样用户就失去了退出选择模式的入口(Esc 监听在条上)。
+  // 所以这些态一出现就主动退出:分享是轻量的一次性动作,重新点一次即可。
+  const shareSelectionBlocked =
+    Boolean(sessionBinding.attached) ||
+    worktreePreparing ||
+    Boolean(
+      pendingPlanReview ||
+        pendingPermission ||
+        pendingAskUser ||
+        pendingPluginSetup ||
+        pendingIssueConfirm ||
+        pendingRenameSessionsConfirm ||
+        pendingGhostGrantConfirm,
+    );
+  useEffect(() => {
+    if (shareSelectionActive && shareSelectionBlocked) shareSelectionStore.exit();
+  }, [shareSelectionActive, shareSelectionBlocked]);
+  // 切会话不保留选择态(分享没有跨会话恢复语义)。
+  useEffect(() => {
+    shareSelectionStore.exitIfNotSession(sessionId);
+  }, [sessionId]);
+
   // MessageStream 提成变量:perf/session-switch 的 <Profiler> 是纯诊断,只在 DEV
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
   const messageStreamEl = (
@@ -3730,6 +3762,12 @@ export function CCAgentSessionView({
                 />
               ) : worktreePreparing && smoothedBranchName ? (
                 <WorktreeCreatingOverlay branchName={smoothedBranchName} />
+              ) : shareSelectionActive && sessionId ? (
+                <ShareSelectionBar
+                  sessionId={sessionId}
+                  contentWidth={messageWidth}
+                  barWidth={inputWidth}
+                />
               ) : (
                 <ChatInput
                   onSend={handleSend}

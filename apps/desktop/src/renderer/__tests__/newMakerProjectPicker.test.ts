@@ -67,7 +67,7 @@ const scheduleChipsSource = readSource('features', 'scheduler', 'components', 'S
 
 const newGoalDialogSource = readSource('components', 'new-chat', 'NewGoalDialog.tsx');
 
-const extraDirsButtonSource = readSource('components', 'new-chat', 'ExtraDirsButton.tsx');
+const chatInputSource = readSource('components', 'new-chat', 'ChatInput.tsx');
 
 const sidebarUpperSource = readSource('features', 'cc-agent', 'CCAgentSidebarUpper.tsx');
 
@@ -1396,10 +1396,9 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
     );
-    // ExtraDirsButton 的契约:没有 onChange 就不渲染引用目录段(其余菜单项不受影响)。
-    expect(extraDirsButtonSource).toContain(
-      '未提供时只显示目标、计划模式或 Plugin 入口，不显示引用目录段',
-    );
+    // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
+    expect(chatInputSource).toContain('if (onExtraDirsChange) {');
+    expect(chatInputSource).toContain('hasReferenceDirs={onExtraDirsChange !== undefined}');
   });
 
   // #807 review 第二十四轮:`useAttachments.addFiles` 对未知扩展名要先 await peekFileHeader,附件是
