@@ -4683,17 +4683,21 @@ export function registerGhostIpc(): void {
   // 未知 id 静默跳过(不报错——列表渲染时的竞态窗口里可能已卸载)。
   ipcMain.handle('ghosts:setup-profiles', (event, ids: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (!Array.isArray(ids) || !ids.every((id): id is string => typeof id === 'string')) {
+    if (!Array.isArray(ids)) {
       throwIpcError('INVALID_PARAMS', 'ids must be a string array');
     }
-      // 防御性上限：可信 renderer 里若出现 XSS/被导航后的脚本调用该 bridge，
-      // 传入超大数组会让后续逐项探针在 main 进程无界运行并卡住所有窗口。
-      // 已装插件数量作为硬上限，拒绝异常大请求。
-      const installedCount = getGhostManager().list().length;
-      const maxIds = Math.max(installedCount, 200);
-      if (ids.length > maxIds) {
-        throwIpcError("INVALID_PARAMS", `ids exceeds maximum of ${maxIds}`);
-      }
+    // 防御性上限：可信 renderer 里若出现 XSS/被导航后的脚本调用该 bridge，
+    // 传入超大数组会让后续逐项探针在 main 进程无界运行并卡住所有窗口。
+    // 已装插件数量作为硬上限，拒绝异常大请求。
+    // 先做长度上限检查，再遍历元素，避免超大数组的 .every 在 main 进程无界运行。
+    const installedCount = getGhostManager().list().length;
+    const maxIds = Math.max(installedCount, 200);
+    if (ids.length > maxIds) {
+      throwIpcError("INVALID_PARAMS", `ids exceeds maximum of ${maxIds}`);
+    }
+    if (!ids.every((id): id is string => typeof id === 'string')) {
+      throwIpcError('INVALID_PARAMS', 'ids must be a string array');
+    }
     const oauthManager = getGhostOauthAccountManager();
     const result: Record<string, GhostSetupProfile> = {};
     // 一次性快照:availableGhosts() 内部调 GhostManager.list() 会触发全盘扫描;
@@ -4743,7 +4747,22 @@ export function registerGhostIpc(): void {
             expired: accounts.filter((a) => a.status === 'expired').length,
           };
         },
-        connectionCount: (key) => getGhostConnectionManager().list(ghostId, key).length,
+        connectionCount: (key) => {
+          try {
+            return getGhostConnectionManager().list(ghostId, key).length;
+          } catch (err) {
+            // 单个插件连接凭据检查异常不中止整批查询：文件损坏/解密失败/权限错误时
+            // 退化为 0（视为无连接），不让一个插件的连接探针故障拖垮整批 IPC。
+            if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+              log.warn('[ghosts:setup-profiles] connection check failed', {
+                ghostId,
+                key,
+                err,
+              });
+            }
+            return 0;
+          }
+        },
         kvValue: (key) => {
           if (kvSnapshot === null) {
             try {
