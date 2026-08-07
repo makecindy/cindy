@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { InstalledGhost } from '../../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../../shared/pluginMarket';
+import { marketPresentationForInstalledGhost } from '../ghostPluginViewModel';
 import {
   orderPluginCatalogItems,
   pluginPresentationOrigin,
@@ -30,6 +32,70 @@ function marketItem(
     sourceMarketName: null,
   };
 }
+
+function installedGhost(): Pick<InstalledGhost, 'manifest' | 'iconDataUrl'> {
+  return {
+    manifest: {
+      schemaVersion: 2,
+      id: 'example',
+      name: 'Example',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: [],
+    },
+    iconDataUrl: 'data:image/png;base64,LOCAL',
+  };
+}
+
+describe('marketPresentationForInstalledGhost', () => {
+  it('uses the server market icon URL for an exact installed version', () => {
+    const item = marketItem('plugin-server-icon', 'example', 'installed');
+    item.icon = {
+      mimeType: 'image/png',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 128,
+      url: 'https://plugin.example.invalid/example.png?signature=new',
+      expiresAt: '2026-07-27T01:00:00.000Z',
+    };
+
+    expect(marketPresentationForInstalledGhost(installedGhost(), item)?.iconDataUrl).toBe(
+      item.icon.url,
+    );
+  });
+
+  it('keeps a null server icon authoritative over the local package icon', () => {
+    const presentation = marketPresentationForInstalledGhost(
+      installedGhost(),
+      marketItem('plugin-server-no-icon', 'example', 'installed'),
+    );
+
+    expect(presentation).not.toBeNull();
+    expect(presentation?.iconDataUrl).toBeUndefined();
+  });
+
+  it.each(['git-market', 'local-market'] as const)(
+    'uses the installed package icon for an exact %s item',
+    (sourceType) => {
+      const ghost = installedGhost();
+      const item = marketItem(`plugin-${sourceType}`, 'example', 'installed');
+      item.sourceType = sourceType;
+      item.sourceMarketName = 'Custom Market';
+
+      expect(marketPresentationForInstalledGhost(ghost, item)?.iconDataUrl).toBe(ghost.iconDataUrl);
+    },
+  );
+
+  it('returns null when the market item does not exactly own the installed version', () => {
+    const versionMismatch = marketItem('plugin-version-mismatch', 'example', 'installed');
+    versionMismatch.version = '2.0.0';
+    const conflict = marketItem('plugin-conflict', 'example', 'conflict');
+
+    expect(marketPresentationForInstalledGhost(installedGhost(), versionMismatch)).toBeNull();
+    expect(marketPresentationForInstalledGhost(installedGhost(), conflict)).toBeNull();
+    expect(marketPresentationForInstalledGhost(installedGhost(), null)).toBeNull();
+  });
+});
 
 describe('pluginPresentationOrigin', () => {
   it('maps public plugins independently of their default-install policy', () => {

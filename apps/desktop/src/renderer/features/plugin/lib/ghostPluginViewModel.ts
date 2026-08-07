@@ -73,8 +73,10 @@ export interface GhostPluginDetail extends GhostPluginListItem {
 /**
  * 展示投影只覆盖用户能看到的四个字段；运行时仍完全来自本地安装包。
  *
- * `iconDataUrl` 是有意要求存在的字段：市场项的 `icon: null` 也必须覆盖本地
- * 包图标，而不是因为缺少 URL 又显示旧图标。
+ * `iconDataUrl` 是有意要求存在的字段：服务端市场项的 `icon: null` 必须覆盖
+ * 本地包图标，而不是因为缺少 URL 又显示旧图标。自定义市场没有服务端图标
+ * 管道，回退本地包图标；其 `installed` 归属要求安装清单摘要与市场目录一致，
+ * 版本一致时本地图标即对应市场包，不存在旧图标问题。
  */
 export interface GhostPluginMarketPresentation {
   name: string;
@@ -89,11 +91,18 @@ export interface GhostPluginMarketPresentation {
  * market item, or a pending version update must keep using its local manifest.
  */
 export function marketPresentationForInstalledGhost(
-  ghost: Pick<InstalledGhost, 'manifest'>,
+  ghost: Pick<InstalledGhost, 'manifest' | 'iconDataUrl'>,
   marketItem:
     | Pick<
         PluginMarketItem,
-        'ghostId' | 'installState' | 'version' | 'name' | 'description' | 'author' | 'icon'
+        | 'ghostId'
+        | 'installState'
+        | 'version'
+        | 'name'
+        | 'description'
+        | 'author'
+        | 'icon'
+        | 'sourceType'
       >
     | null
     | undefined,
@@ -110,7 +119,7 @@ export function marketPresentationForInstalledGhost(
     name: marketItem.name,
     description: marketItem.description ?? '',
     author: marketItem.author,
-    iconDataUrl: marketItem.icon?.url,
+    iconDataUrl: marketItem.sourceType === 'server' ? marketItem.icon?.url : ghost.iconDataUrl,
   };
 }
 
