@@ -146,6 +146,18 @@ describe('convertCodexAutomation', () => {
     expect(result.diagnostics.join(' ')).toContain('absolute');
   });
 
+  it('explains that only the first cwd is imported when multiple are present', () => {
+    const result = convertCodexAutomation(
+      detail({ cwds: ['C:\\newlife', 'D:\\other-project'] }),
+      { timezone: 'UTC' },
+    );
+
+    expect(result.canImport).toBe(false);
+    expect(result.diagnostics).toContain(
+      'automation has multiple cwds; only the first cwd will be imported',
+    );
+  });
+
   it('carries reader diagnostics and rejects an empty prompt', () => {
     const result = convertCodexAutomation(detail({ prompt: '', diagnostics: ['malformed field'] }));
 
