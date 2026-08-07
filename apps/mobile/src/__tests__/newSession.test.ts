@@ -329,7 +329,7 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: null });
   });
 
-  it('keeps the recent effort when the recent model is not in modelRows (no SectionModel to reconcile)', () => {
+  it('omits the effort when the catalog is ready but the model has no row (delisted → omit, codex P2)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
       sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-legacy', effort: 'high', userSendAt: '2026-01-01T00:00:00.000Z' })],
@@ -337,6 +337,19 @@ describe('pickAgentDefaultRuntime', () => {
       currentEffort: 'medium',
       catalogReady: true,
     });
+    // 目录就绪且无匹配行 → 省略 effort(旧自定义档位对内置默认无效,由被控端取默认)
+    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-legacy', effort: '', providerId: null });
+  });
+
+  it('keeps the recent effort while the catalog is not ready (no authoritative section model yet)', () => {
+    const runtime = pickAgentDefaultRuntime({
+      agentKind: 'codex',
+      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-legacy', effort: 'high', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [],
+      currentEffort: 'medium',
+      catalogReady: false,
+    });
+    // 目录未就绪 → 保留最近任务 effort(未知不得省略,信任既有绑定)
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-legacy', effort: 'high', providerId: null });
   });
 
@@ -382,7 +395,8 @@ describe('pickAgentDefaultRuntime', () => {
       currentEffort: 'medium',
       catalogReady: true,
     });
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
+    // 回退内置默认且目录为空 → 省略 effort(codex P2:旧自定义档位对内置模型无效)
+    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
   });
 
   it('trusts the recent providerId while modelRows are still loading (empty)', () => {
@@ -405,7 +419,8 @@ describe('pickAgentDefaultRuntime', () => {
       catalogReady: true,
     });
     // 目录就绪但为空:来源失效且无人能提供该模型 → model 一并回退内置默认(不留裸模型)
-    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'medium', providerId: null });
+    // + 省略 effort(codex P2:旧自定义档位对内置模型无效)
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
   });
 
   it('reconciles effort with the exact (providerId, modelId) row when multiple providers offer the same model (Copilot)', () => {
@@ -509,21 +524,21 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'high', providerId: 'provB' });
   });
 
-  it('falls back to DEFAULT_MODELS and keeps current effort when providers are not loaded yet', () => {
+  it('falls back to DEFAULT_MODELS and omits effort when the catalog is ready but empty (codex P2)', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
       sessions: [],
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: true,
-    })).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
+    })).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
       sessions: [],
       modelRows: [],
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'high', providerId: null });
+    })).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
   });
 
   it('skips the top-row branch while the catalog is not ready (stale rows from the previous device, codex P1)', () => {
@@ -1975,12 +1990,13 @@ describe('submit guard catalog wiring (source locks)', () => {
 
   it('every catalog rebuild in the guards passes the keepSelected exemption pair', () => {
     // 两处守卫内的 buildRows(2 处)带 effectiveDraft 豁免对 + 渲染期(1 处)带 draft
-    // + 轮次 35 新增:create 管线 revalidate(1 处)与 Goal 路径 fresh 校验(1 处)
-    // 均带 effectiveDraft 豁免对 = 5 处。
+    // + 轮次 35 create 管线 revalidate(1 处)带 effectiveDraft 豁免对 = 4 处
+    // (轮次 36 删除了 Goal 路径的旧 authResult fresh 校验——时间序错误,guard
+    // 已用 fetchDeviceProvidersFresh 强制刷新,不再二次校验)。
     const selectedModel = newSource.match(/selectedModelId: (effectiveDraft|draft|selected)\.model,/g) ?? [];
     const selectedProvider = newSource.match(/selectedProviderId: (effectiveDraft|draft|selected)\.providerId,/g) ?? [];
-    expect(selectedModel.length).toBe(5);
-    expect(selectedProvider.length).toBe(5);
+    expect(selectedModel.length).toBe(4);
+    expect(selectedProvider.length).toBe(4);
   });
 
   it('both guards are device-guarded through to the handoff, with ACK-gated ledger compensation after precreate', () => {

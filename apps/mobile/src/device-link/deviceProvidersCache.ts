@@ -106,6 +106,14 @@ export async function fetchDeviceProvidersFresh(
   const fp = freshInflight.get(deviceId);
   if (fp) return fp;
 
+  // fresh 语义 = 强制访问工作站拿当前真相:作废更早在途的普通请求(greptile/
+  // copilot/codex review P1/P2)——旧普通请求若在 fresh 之后返回,仍会通过
+  // isCurrent() 回写旧目录覆盖 fresh 结果;代际 +1 使所有更早请求失效,并清掉
+  // 普通 inflight 槽(不再被跟踪)。fresh 自身捕获新代际,回写不受影响。
+  inflight.delete(deviceId);
+  deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
+  notifyDeviceProvidersGen(deviceId);
+
   const startGen = deviceGen.get(deviceId) ?? 0;
   const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
 
@@ -119,13 +127,13 @@ export async function fetchDeviceProvidersFresh(
       };
       if (isCurrent()) {
         cache.set(deviceId, payload);
-        inflight.delete(deviceId);
         notifyDeviceProviders(deviceId, payload);
       }
       return payload;
     })
     .catch((e) => {
-      if (isCurrent()) inflight.delete(deviceId);
+      // 失败分支不动普通 inflight:那是 cache-first 槽,fresh 不写它也不该清它
+      // (copilot review P1)。freshInflight 由下方 finally 清理。
       throw e;
     });
   freshInflight.set(deviceId, p);
@@ -183,7 +191,15 @@ function notifyDeviceProvidersGen(deviceId: string): void {
  * clear 之后又把旧数据写回。
  */
 export function clearAllDeviceProviders(): void {
-  const ids = new Set<string>([...cache.keys(), ...inflight.keys(), ...deviceGen.keys()]);
+  // fresh-only 在途设备也要纳入代际作废(greptile/copilot/codex review P1/P2):
+  // 只有 freshInflight 在途时(如提交终检触发的 fresh 拉取),登出后旧响应仍会
+  // 通过 isCurrent() 回写并广播,造成跨账号残留。
+  const ids = new Set<string>([
+    ...cache.keys(),
+    ...inflight.keys(),
+    ...freshInflight.keys(),
+    ...deviceGen.keys(),
+  ]);
   for (const id of ids) {
     deviceGen.set(id, (deviceGen.get(id) ?? 0) + 1);
     notifyDeviceProvidersGen(id);

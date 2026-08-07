@@ -243,9 +243,9 @@ function attachFirstMessageSessionReferences(
     : queued;
 }
 
-function synthesizeSession(params: NewSessionCreationParams): RemoteSession {
+function synthesizeSession(params: NewSessionCreationParams, draftOverride?: NewSessionDraft): RemoteSession {
   return {
-    ...sessionFromCreateResult({ sessionId: params.sessionId }, params.draft),
+    ...sessionFromCreateResult({ sessionId: params.sessionId }, draftOverride ?? params.draft),
     pendingLocalCreation: true,
   };
 }
@@ -613,14 +613,14 @@ async function persistPrecreatedSessionCreateStarted(task: InternalTask): Promis
 /** 返回被控端分配的 workDir(dialogue 会话此刻才有;probe 收敛路径取权威行的值)。 */
 async function createSessionIdempotent(
   task: InternalTask,
-  draftPatch?: Partial<NewSessionDraft>,
+  effectiveDraft: NewSessionDraft,
 ): Promise<{ workDir: string | null }> {
   const { maker } = task.params.transport;
   const sleep = task.params.sleep ?? realSleep;
-  // 鉴权后联合校验的 patch 覆盖 task.draft(codex review P2):只影响本次创建,
-  // 不改 task.draft 状态(UI 快照保持提交时语义)。
+  // 鉴权后联合校验的最终草稿(codex review P2):只影响本次创建,不改 task.draft
+  // 状态(UI 快照保持提交时语义)。
   const createOpts = {
-    ...buildRemoteCreateSessionOptions(draftPatch ? { ...task.draft, ...draftPatch } : task.draft),
+    ...buildRemoteCreateSessionOptions(effectiveDraft),
     id: task.sessionId,
   };
 
@@ -825,13 +825,16 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 鉴权 fresh revalidate 之后、createSession 之前,用工作站当前目录联合校验
     // (model, providerId)(codex review P2):终检在 handoff 前完成,建链/鉴权期间
     // 工作站可能已替换 provider——patch 覆盖 task.draft,避免向已删除来源发创建。
+    // finalDraft 贯穿本管线余下阶段(createSession + 排队消息合成),不再有旧草稿
+    // 携带失效来源的路径(codex review P2)。
     let draftPatch: Partial<NewSessionDraft> | null = null;
     if (auth?.fresh && params.revalidateDraftAfterAuth) {
       draftPatch = await params.revalidateDraftAfterAuth(auth.fresh);
       assertTaskOwnerCurrent(task);
     }
+    const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
 
-    const createOutcome = await createSessionIdempotent(task, draftPatch ?? undefined);
+    const createOutcome = await createSessionIdempotent(task, finalDraft);
     assertTaskOwnerCurrent(task);
     if (!tasks.has(sessionId)) return; // 已被用户 dismiss
     // 从这一刻起 worktree 已被会话认领；即使首条消息 enqueue 后续失败，
@@ -879,12 +882,12 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 会让「桌面重启后、首 turn 前」的 lazy-create 无法回到已分配的对话工作区
     // (codex review P2);project 会话两者一致,补齐是 no-op。
     const sessionForQueue = freshSession ?? {
-      ...synthesizeSession(params),
+      ...synthesizeSession(params, finalDraft),
       ...(createOutcome.workDir ? { workingDir: createOutcome.workDir } : {}),
     };
     const queuedDraft = attachFirstMessageSessionReferences(buildQueuedTextMessage(
       sessionForQueue,
-      params.draft.firstMessage,
+      finalDraft.firstMessage,
       new Date(),
       task.firstMessageClientId,
       { attachments: [...params.attachments] },

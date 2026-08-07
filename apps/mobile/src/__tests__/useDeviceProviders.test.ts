@@ -64,6 +64,39 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-old-xd' }] });
   });
 
+  it('fetchDeviceProvidersFresh 发起时作废普通在途:旧普通请求后返回不回写覆盖 fresh(greptile P1)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    // 普通请求挂起(发起时目录为 A)
+    const ordinaryResolvers: Array<(v: Providers) => void> = [];
+    const ordinary = vi.fn(() => new Promise<Providers>((r) => ordinaryResolvers.push(r)));
+    const ordinaryP = mod.fetchDeviceProviders('dev-1', ordinary);
+    // fresh 在普通请求在途时发起(强制访问工作站,拿到 B)
+    const freshResolvers: Array<(v: Providers) => void> = [];
+    const freshFetcher = vi.fn(() => new Promise<Providers>((r) => freshResolvers.push(r)));
+    const freshP = mod.fetchDeviceProvidersFresh('dev-1', freshFetcher);
+    expect(freshFetcher).toHaveBeenCalledTimes(1);
+    freshResolvers.forEach((r) => r(result('dev-1-fresh')));
+    await freshP;
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-fresh-xd' }] });
+    // 旧普通请求随后返回 A → 代际已变,不得回写覆盖 fresh
+    ordinaryResolvers.forEach((r) => r(result('dev-1-stale')));
+    await ordinaryP;
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-fresh-xd' }] });
+  });
+
+  it('clearAll 纳入 fresh-only 在途设备:登出后 fresh 响应不回写跨账号残留(greptile/copilot P1)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    const freshResolvers: Array<(v: Providers) => void> = [];
+    const freshFetcher = vi.fn(() => new Promise<Providers>((r) => freshResolvers.push(r)));
+    // 无普通缓存/在途,只有 fresh 在途(提交终检触发)
+    const freshP = mod.fetchDeviceProvidersFresh('dev-1', freshFetcher);
+    mod.clearAllDeviceProviders(); // 登出 → fresh-only 设备也要代际作废
+    freshResolvers.forEach((r) => r(result('dev-1-old-account')));
+    await freshP;
+    // 旧账号 fresh 响应不得回写缓存(代际已变)
+    expect(mod.getCachedDeviceProviders('dev-1')).toBeUndefined();
+  });
+
   it('clearAll:向已挂载 payload 订阅者推送空 payload,清掉登出残留(copilot P2)', async () => {
     const mod = await import('@/device-link/deviceProvidersCache');
     const f1 = vi.fn(async () => result('dev-1'));

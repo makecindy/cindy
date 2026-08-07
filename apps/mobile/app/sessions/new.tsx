@@ -4198,10 +4198,11 @@ export default function NewRemoteSessionScreen() {
         precreatedWorktree,
         precreatedWorktreeAccountId: worktreeAccountId,
         // stale-ready 防护(review P1):缓存判 ready/unknown 也可能已过期。管线内
-        // 与建链并行 revalidate;verdict 已是 unauthenticated 时上面刚现拉确认过,跳过。
-        confirmUnauthenticated: agentAuthVerdict === 'unauthenticated'
-          ? () => Promise.resolve({ unauthenticated: false, fresh: null })
-          : () => confirmAgentUnauthenticated(agentKindSnapshot),
+        // 与建链并行 revalidate。无条件让管线自做 fresh 检查(codex review P2):
+        // 表单内预检放行(新来源已连接/空响应/瞬断)后还要经历 worktree、目录
+        // guard、建链、订阅多个 await,期间来源可能再变——verdict 分支若把管线
+        // fresh 替换成 null 会绕过最后的联合终检。
+        confirmUnauthenticated: () => confirmAgentUnauthenticated(agentKindSnapshot),
         // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):建链/鉴权
         // 期间工作站可能已替换 provider——patch 覆盖本次创建,不再向已删除来源发。
         revalidateDraftAfterAuth: async (fresh) => {
@@ -4759,35 +4760,11 @@ export default function NewRemoteSessionScreen() {
         }
       }
       // 同一 turn:同步应用 + createSession,零 await 间隔(独立 review round-21 Spec P1)。
+      // 注意:不用 authResult.fresh 再校验一次(codex review P2)——authResult 在
+      // worktree 创建/建链/guard 之前取得,比守卫目录旧;guard 已用
+      // fetchDeviceProvidersFresh 强制刷新(离创建最近的目录快照),旧快照只会把
+      // guard 的新结果回退成旧来源。
       applyGuard(guardResult);
-      // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):鉴权现拉
-      // 是离 createSession 最近的工作站目录快照——守卫目录可能仍停在替换前的
-      // 来源 A,此处用 fresh 再核一次,失效即回退(纯同步,不破坏零 await 间隔)。
-      if (authResult.fresh) {
-        const freshRows = flattenProviderSections(buildMobileModelSections({
-          providers: authResult.fresh.providers,
-          agentKind: effectiveDraft.agentKind,
-          visibilityOverrides: authResult.fresh.modelVisibilityOverrides,
-          selectedModelId: effectiveDraft.model,
-          selectedProviderId: effectiveDraft.providerId,
-        }).sections);
-        const resolved = resolveRecentModelAndProvider(
-          freshRows,
-          { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
-          effectiveDraft.agentKind,
-          true,
-        );
-        const pairChanged = resolved.model !== effectiveDraft.model
-          || resolved.providerId !== effectiveDraft.providerId;
-        if (pairChanged) {
-          effectiveDraft = {
-            ...effectiveDraft,
-            ...resolved,
-            effort: reconcileEffortAfterFallback(freshRows, resolved, effectiveDraft.effort),
-            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
-          };
-        }
-      }
       const finalDraft = {
         ...effectiveDraft,
       };

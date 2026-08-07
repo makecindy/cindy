@@ -653,8 +653,13 @@ export function pickAgentDefaultRuntime(args: {
   // 的残留行,findSectionModelRow 的 modelId 回退会按错误来源校准 effort;新目录
   // 确认原 (provider, model) 有效后组合未变化又不再重校准,用户可能在能力表到达前
   // 提交该来源不支持的档位(codex review P2)。未就绪时保留最近任务的 effort。
+  // catalogReady 且无匹配行 = 回退到内置默认(目录为空/模型下架):旧自定义模型的
+  // 档位对新内置模型无效——省略 effort,由被控端取默认(codex review P2:模型无行
+  // 回退时不得沿用旧档位;与 reconcileEffortAfterFallback 的 no-row 口径一致)。
   const sectionModel = catalogReady ? findSectionModelRow(modelRows, model, providerId)?.model : undefined;
-  const effort = sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : baseEffort;
+  const effort = sectionModel
+    ? reconcileEffortForModel(sectionModel, baseEffort)
+    : catalogReady ? '' : baseEffort;
   return { agentKind, model, effort, providerId };
 }
 
