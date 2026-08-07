@@ -31,6 +31,11 @@ describe('parseCron', () => {
     expect(p.dayOfWeek).toEqual([0]);
   });
 
+  it('expands dayOfWeek steps through the Sunday alias 7', () => {
+    expect(parseCron('0 0 * * 7/2').dayOfWeek).toEqual([0]);
+    expect(parseCron('0 0 * * 5/2').dayOfWeek).toEqual([0, 5]);
+  });
+
   it('rejects out-of-range minute', () => {
     expect(() => parseCron('60 * * * *')).toThrow();
   });

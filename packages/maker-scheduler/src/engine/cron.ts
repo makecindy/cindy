@@ -93,7 +93,7 @@ function parseField(token: string, range: FieldRange, allowDowSeven = false): nu
       }
       lo = v;
       // "N/S" expands as "N,N+S,N+2S,...,max"
-      hi = stepPart !== undefined ? range.max : v;
+      hi = stepPart !== undefined ? effectiveMax : v;
     }
     if (lo < range.min || hi > effectiveMax) {
       throw new Error(`Field "${part}" out of range [${range.min}, ${effectiveMax}]`);
