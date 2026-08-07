@@ -12130,6 +12130,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
     expect(startParams.dynamicTools?.[0]?.description).toContain('provide a generic list');
     expect(startParams.dynamicTools?.[0]?.description).toContain('Ask 1 to 3 short questions in a single call');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('returns the awaited result as a JSON string');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('JSON.parse(raw)');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Do not read .content or .structuredContent');
     expect(startParams.dynamicTools?.[0]?.inputSchema?.properties?.questions?.description).toContain('Bundle independent choices');
 
     const openAiAgent = new CodexAgent(createDeps());
@@ -12474,6 +12477,12 @@ describe('CodexAgent MCP thread context hooks', () => {
         text: JSON.stringify({ 'question-1': { answers: ['Keep going'] } }),
       },
     ]);
+    const resultText = result.contentItems
+      .map((item) => item.type === 'inputText' ? item.text : '')
+      .join('');
+    expect(JSON.parse(resultText)).toEqual({
+      'question-1': { answers: ['Keep going'] },
+    });
     expect(nativeDuplicateResult).toEqual({
       answers: { 'native-q1': { answers: ['Keep going'] } },
     });
