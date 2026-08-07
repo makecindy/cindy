@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { isImSchedulerFrame } from "../discordSchedulerProtocol.js";
 
@@ -61,5 +61,22 @@ describe("Discord scheduler protocol", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("prevalidates untrusted fields before calculating payload size", () => {
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(
+        isImSchedulerFrame({
+          kind: "advertisement",
+          sentAt: 1,
+          channels: [],
+          unexpected: "x".repeat(100_000),
+        }),
+      ).toBe(false);
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
   });
 });

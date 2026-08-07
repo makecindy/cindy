@@ -49,6 +49,16 @@ const DISCORD_ID_PATTERN = /^[1-9][0-9]{16,19}$/;
 const RUNTIME_GENERATION_PATTERN = /^[a-f0-9]{32}$/;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 
+function isWithinSchedulerFrameSize(value: unknown): boolean {
+  let size = 0;
+  try {
+    size = JSON.stringify(value).length;
+  } catch {
+    return false;
+  }
+  return size <= 8_192;
+}
+
 export function isSchedulerChannelIdentity(
   value: unknown,
 ): value is SchedulerChannelIdentity {
@@ -121,17 +131,7 @@ function isRuntimeGapList(
 export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
   if (!value || typeof value !== "object") return false;
   const frame = value as Record<string, unknown>;
-  let size = 0;
-  try {
-    size = JSON.stringify(value).length;
-  } catch {
-    return false;
-  }
-  if (
-    size > 8_192 ||
-    typeof frame.sentAt !== "number" ||
-    !Number.isFinite(frame.sentAt)
-  )
+  if (typeof frame.sentAt !== "number" || !Number.isFinite(frame.sentAt))
     return false;
 
   if (frame.kind === "probe") {
@@ -150,15 +150,15 @@ export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
     ) {
       return false;
     }
-    return (
+    const valid =
       typeof frame.nonce === "string" &&
       NONCE_PATTERN.test(frame.nonce) &&
       Array.isArray(frame.channels) &&
       frame.channels.length <= 1 &&
       frame.channels.every(isSchedulerChannelIdentity) &&
       (frame.runtime === undefined || isSchedulerRuntimeFrame(frame.runtime)) &&
-      isRuntimeGapList(frame.runtimeGaps)
-    );
+      isRuntimeGapList(frame.runtimeGaps);
+    return valid && isWithinSchedulerFrameSize(value);
   }
 
   if (frame.kind !== "advertisement") return false;
@@ -177,7 +177,7 @@ export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
   ) {
     return false;
   }
-  return (
+  const valid =
     Array.isArray(frame.channels) &&
     frame.channels.length <= 1 &&
     frame.channels.every(isSchedulerChannelIdentity) &&
@@ -185,6 +185,6 @@ export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
     isRuntimeGapList(frame.runtimeGaps) &&
     (frame.inReplyTo === undefined ||
       (typeof frame.inReplyTo === "string" &&
-        NONCE_PATTERN.test(frame.inReplyTo)))
-  );
+        NONCE_PATTERN.test(frame.inReplyTo)));
+  return valid && isWithinSchedulerFrameSize(value);
 }
