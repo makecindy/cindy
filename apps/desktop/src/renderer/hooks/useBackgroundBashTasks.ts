@@ -66,19 +66,24 @@ export function useBackgroundBashTasks(
 
   // 快照水合:挂载 / 切会话 / 历史重载完成后拉一次存量。maker 未 init 等瞬态失败
   // 保持现状 —— 实时事件流仍会自然补上。
+  // 同一次快照兼做 stale running 对账:候选集必须在**发起请求前**捕获(时序论证
+  // 见 store 的 reconcileStaleRunningTasks);本 hook 只跑本机会话,快照可当权威,
+  // 空表 + 非空候选正是「全部已收口」的信号,不得 early-return。
   useEffect(() => {
     if (!sessionId || remoteMirror) return;
     const api = window.electronAPI?.maker;
     if (!api?.listSessionBackgroundTasks) return;
     let disposed = false;
+    const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
     void api
       .listSessionBackgroundTasks(sessionId)
       .then(({ tasks }) => {
-        if (disposed || !Array.isArray(tasks) || tasks.length === 0) return;
-        makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks);
+        if (disposed || !Array.isArray(tasks)) return;
+        if (tasks.length === 0 && staleRunningCandidates.size === 0) return;
+        makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, { staleRunningCandidates });
       })
       .catch(() => {
-        // 静默:与 useSessionBackgroundActivity 的快照失败同口径。
+        // 静默:与 useSessionBackgroundActivity 的快照失败同口径(失败不对账)。
       });
     return () => {
       disposed = true;
