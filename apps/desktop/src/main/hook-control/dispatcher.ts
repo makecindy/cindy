@@ -59,6 +59,8 @@ import {
 } from '@cindy/slack-hook-protocol';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
+import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
+import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
@@ -176,6 +178,8 @@ export interface HookRunRequest {
   origin: { connectionId: string; connectionName: string; externalKey: string };
   /** IM 来源元数据(平台 + thread 上下文); 省略 = 旧 server 不发。 */
   source?: TaskSource;
+  /** 官方 Telegram 群轮次的 lane-only 群历史检索作用域。 */
+  groupHistoryAccess?: GroupHistoryAccessScope;
   /**
    * provider 已实际接受本次发送后的副作用。runner 只在 send outcome
    * 确认为 dispatched 后 await；失败必须由调用方自行降级，不能反转已受理 turn。
@@ -2062,6 +2066,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           );
           return;
         }
+        const groupHistoryAccess = groupHistoryAccessForExternalKey(payload.externalKey);
         const taskBase: Omit<PendingTask, 'ack'> = {
           connectionId,
           requestId: payload.requestId,
@@ -2070,6 +2075,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             ...resolved.run,
             ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
             ...(source ? { source } : {}),
+            ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
           },
           accountGeneration: admittedGeneration,
           reopenCapable: supportsReopen(connectionId),

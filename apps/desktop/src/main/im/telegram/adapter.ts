@@ -16,10 +16,7 @@
 
 import fs from 'node:fs';
 import type { TelegramIM } from '@cindy/im';
-import {
-  decodeTelegramLaneUserId,
-  decodeTelegramMessageId,
-} from '@cindy/im';
+import { decodeTelegramLaneUserId, decodeTelegramMessageId } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
@@ -28,6 +25,7 @@ import { readTelegramPersona } from './behaviorStore';
 import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
 import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
+import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
 
 function ensureWorkingDir(botId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', `telegram-${botId}`);
@@ -56,7 +54,10 @@ function personaBlock(): string {
 /** 发言人显示名/用户名消毒: 平台可改字段是不可信输入, 去控制字符与换行防注入。 */
 function sanitizeSpeakerText(value: string): string {
   // eslint-disable-next-line no-control-regex
-  return value.replace(/[\u0000-\u001f\u007f\u200b]/g, ' ').trim().slice(0, 64);
+  return value
+    .replace(/[\u0000-\u001f\u007f\u200b]/g, ' ')
+    .trim()
+    .slice(0, 64);
 }
 
 export function buildTelegramAdapter(
@@ -99,6 +100,15 @@ export function buildTelegramAdapter(
     // DM(无 speaker)不挂, owner 私聊保持全速。
     turnPermissionPolicyFor: (event) =>
       event.speaker ? createTelegramGuestTurnPermissionPolicy(event.messageId) : undefined,
+    groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
+      const lane = decodeTelegramLaneUserId(event.senderId);
+      const provider = `telegram-personal:${event.contextId}`;
+      return {
+        access: !lane || event.speaker?.isOwner === true ? 'owner' : 'lane',
+        provider,
+        lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
+      };
+    },
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
