@@ -257,6 +257,16 @@ describe('ghostPluginViewModel', () => {
     expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
   });
 
+  it('uses the installed package icon for an exact custom-market install', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const presentation = marketPresentationForInstalledGhost(
+      ghost,
+      marketItem({ sourceType: 'local-market', sourceMarketName: 'team-lib', icon: null }),
+    );
+
+    expect(presentation?.iconDataUrl).toBe('data:image/png;base64,LOCAL');
+  });
+
   it.each([
     ['local market miss', null],
     ['not installed', marketItem({ installState: 'not-installed' })],

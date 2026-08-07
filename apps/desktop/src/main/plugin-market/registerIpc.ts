@@ -111,6 +111,22 @@ export function registerPluginMarketIpc(): void {
       service().detail(requireString(pluginId, 'pluginId')),
     );
   });
+  ipcMain.handle('plugin-market:local-icons', (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(raw) || raw.length > 8) {
+      throwIpcError('INVALID_PARAMS', 'local icon requests must contain at most 8 entries');
+    }
+    const requests = raw.map((entry) => {
+      const payload = requireObject(entry);
+      const pluginId = requireString(payload.pluginId, 'pluginId');
+      const expectedIconKey = requireString(payload.expectedIconKey, 'expectedIconKey');
+      if (pluginId.length > 1024 || !/^[a-f0-9]{64}$/.test(expectedIconKey)) {
+        throwIpcError('INVALID_PARAMS', 'Invalid local Plugin icon request');
+      }
+      return { pluginId, expectedIconKey };
+    });
+    return invokePluginMarket(() => service().localIcons(requests));
+  });
   ipcMain.handle(
     'plugin-market:install',
     (event, pluginId: unknown, options: unknown) => {

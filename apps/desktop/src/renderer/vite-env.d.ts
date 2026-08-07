@@ -1500,6 +1500,9 @@ interface ElectronAPI {
   pluginMarket: {
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    localIcons: (
+      requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
+    ) => Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]>;
     install: (
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
