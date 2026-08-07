@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   captureRunningClaudeTaskIds: vi.fn((): ReadonlySet<string> => new Set<string>()),
   seedBackgroundTaskSnapshots: vi.fn(),
+  // 粘滞判定可独立标记:覆盖「非粘滞误判本机、粘滞仍认远程」的重连窗口分支。
+  stickyRemoteIds: new Set<string>(),
 }));
 
 vi.mock('@/lib/makerChatStore', () => ({
@@ -23,6 +25,8 @@ vi.mock('@/lib/makerChatStore', () => ({
 
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSession: (sessionId: string) => sessionId.startsWith('remote-'),
+  isRemoteSessionSticky: (sessionId: string) =>
+    sessionId.startsWith('remote-') || mocks.stickyRemoteIds.has(sessionId),
 }));
 
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
@@ -41,6 +45,7 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
 
   afterEach(() => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    mocks.stickyRemoteIds.clear();
     vi.clearAllMocks();
   });
 
@@ -72,5 +77,29 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     await Promise.resolve();
     expect(listTasks).not.toHaveBeenCalled();
     expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
+  });
+
+  it('重连窗口(非粘滞误判本机、粘滞仍认远程):只 seed 不对账,空快照不收口', async () => {
+    const sid = 's4-blip';
+    mocks.stickyRemoteIds.add(sid);
+    mocks.captureRunningClaudeTaskIds.mockReturnValue(new Set(['t-mirror-running']));
+
+    renderHook(() => useBackgroundBashTasks(sid, new Map(), true));
+    await waitFor(() => expect(listTasks).toHaveBeenCalledWith(sid));
+
+    // 粘滞命中远程:候选集不捕获;本机空快照下 seed 不被调用(不得收口镜像任务)
+    expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
+    expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
+
+    // 快照非空(理论分支)时也只 seed、不带候选集
+    listTasks.mockResolvedValueOnce({ tasks: [{ taskId: 't-new' }] });
+    renderHook(() => useBackgroundBashTasks(sid, new Map(), false));
+    await waitFor(() => {
+      expect(mocks.seedBackgroundTaskSnapshots).toHaveBeenCalledWith(
+        sid,
+        [{ taskId: 't-new' }],
+        undefined,
+      );
+    });
   });
 });
