@@ -5,14 +5,36 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 
-import { classifyProtocolRelation } from '../check-submodule-forward.mjs';
+import {
+  classifyProtocolRelation,
+  validateSubmoduleForward,
+} from '../check-submodule-forward.mjs';
 
 function git(repo, ...args) {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf-8' }).trim();
 }
 
+function commitTree(repo, tree, parent, message) {
+  const args = ['commit-tree', tree];
+  if (parent) args.push('-p', parent);
+  return execFileSync('git', args, {
+    cwd: repo,
+    encoding: 'utf-8',
+    input: `${message}\n`,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Protocol Guard Test',
+      GIT_AUTHOR_EMAIL: 'protocol-guard@example.invalid',
+      GIT_COMMITTER_NAME: 'Protocol Guard Test',
+      GIT_COMMITTER_EMAIL: 'protocol-guard@example.invalid',
+    },
+  }).trim();
+}
+
 function fixture() {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-protocol-forward-'));
+  const repo = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'cindy-protocol-forward-'),
+  );
   git(repo, 'init', '-b', 'main');
   git(repo, 'config', 'user.name', 'Protocol Guard Test');
   git(repo, 'config', 'user.email', 'protocol-guard@example.invalid');
@@ -40,5 +62,116 @@ test('classifies unchanged, forward, rollback and diverged protocol gitlinks', (
     assert.equal(classifyProtocolRelation(f.repo, f.two, f.fork), 'diverged');
   } finally {
     fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('accepts an unreachable base only for a strict equivalent ancestor', () => {
+  const f = fixture();
+  try {
+    const tree = git(f.repo, 'rev-parse', `${f.one}^{tree}`);
+    const duplicate = commitTree(f.repo, tree, f.one, 'duplicate');
+    const head = commitTree(f.repo, tree, duplicate, 'head');
+    const baseOid = 'a'.repeat(40);
+    const metadata = new Map([[baseOid, { parents: [f.one], tree }]]);
+    assert.equal(
+      classifyProtocolRelation(f.repo, baseOid, head, {
+        unreachableBaseMetadata: metadata,
+      }),
+      'forward',
+    );
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('accepts an available base with an equivalent head ancestor', () => {
+  const f = fixture();
+  try {
+    const tree = git(f.repo, 'rev-parse', `${f.one}^{tree}`);
+    const duplicate = commitTree(f.repo, tree, null, 'duplicate');
+    const head = commitTree(f.repo, tree, duplicate, 'head');
+    assert.equal(classifyProtocolRelation(f.repo, f.one, head), 'forward');
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('rejects matching tree when the parent list differs', () => {
+  const f = fixture();
+  try {
+    const tree = git(f.repo, 'rev-parse', `${f.one}^{tree}`);
+    const candidate = commitTree(
+      f.repo,
+      tree,
+      f.one,
+      'same tree, different parent',
+    );
+    const baseOid = 'b'.repeat(40);
+    const metadata = new Map([[baseOid, { parents: [f.two], tree }]]);
+    assert.throws(
+      () =>
+        classifyProtocolRelation(f.repo, baseOid, candidate, {
+          unreachableBaseMetadata: metadata,
+        }),
+      /无法读取协议 base commit/,
+    );
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when an unavailable base cannot be fetched', () => {
+  const f = fixture();
+  try {
+    const baseOid = 'c'.repeat(40);
+    assert.throws(
+      () => classifyProtocolRelation(f.repo, baseOid, f.two),
+      /无法读取协议 base commit/,
+    );
+  } finally {
+    fs.rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test('validateSubmoduleForward does not treat a failed base fetch as forward', () => {
+  const outer = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'cindy-protocol-forward-parent-'),
+  );
+  const protocol = path.join(outer, 'cindy-protocol');
+  fs.mkdirSync(protocol);
+  try {
+    git(outer, 'init', '-b', 'main');
+    git(outer, 'config', 'user.name', 'Protocol Guard Test');
+    git(outer, 'config', 'user.email', 'protocol-guard@example.invalid');
+    git(protocol, 'init', '-b', 'main');
+    git(protocol, 'config', 'user.name', 'Protocol Guard Test');
+    git(protocol, 'config', 'user.email', 'protocol-guard@example.invalid');
+    fs.writeFileSync(path.join(protocol, 'protocol.txt'), 'head\n');
+    git(protocol, 'add', '.');
+    git(protocol, 'commit', '-m', 'head');
+    const head = git(protocol, 'rev-parse', 'HEAD');
+    const base = 'd'.repeat(40);
+    git(
+      outer,
+      'update-index',
+      '--add',
+      '--cacheinfo',
+      `160000,${base},cindy-protocol`,
+    );
+    git(outer, 'commit', '-m', 'base');
+    git(
+      outer,
+      'update-index',
+      '--add',
+      '--cacheinfo',
+      `160000,${head},cindy-protocol`,
+    );
+    git(outer, 'commit', '-m', 'head');
+    assert.throws(
+      () => validateSubmoduleForward(outer, 'HEAD~1', 'HEAD'),
+      /无法读取协议 base commit/,
+    );
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
   }
 });
