@@ -4,7 +4,11 @@ import path from 'node:path';
 import { Maker, type CreateSessionOptions } from './maker.js';
 import { Session } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
-import type { AgentSessionHandle, BaseAgent } from './agents/base-agent.js';
+import {
+  TurnPermissionPolicyUnsupportedError,
+  type AgentSessionHandle,
+  type BaseAgent,
+} from './agents/base-agent.js';
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
 import type { AgentKind, PermissionMode } from './types/common.js';
 import type { AgentEvent } from './types/events.js';
@@ -1118,13 +1122,15 @@ describe('Session turn send guard', () => {
     await expect(session.send('second')).resolves.toEqual({ accepted: true });
   });
 
-  it('runs provider option preflight before durable or accepted side effects', async () => {
-    const preflightError = new Error('unsupported policy/mode combination');
+  it('keeps the session reusable when provider option preflight rejects before dispatch', async () => {
+    vi.useFakeTimers();
+    const preflightError = new TurnPermissionPolicyUnsupportedError('pi', 'ask');
     const handle = createHandle({ id: 'thread-send-preflight' });
     handle.validateSendOptions = vi.fn(() => {
       throw preflightError;
     });
     handle.send = vi.fn(async () => undefined);
+    handle.close = vi.fn(async () => undefined);
     const session = new Session({
       id: 'send-preflight',
       agentKind: 'codex',
@@ -1135,18 +1141,28 @@ describe('Session turn send guard', () => {
     });
     const beforeProviderStart = vi.fn();
     const onAccepted = vi.fn();
+    const send = () => session.send('message', { beforeProviderStart, onAccepted });
 
-    await expect(
-      session.send('first', {
-        beforeProviderStart,
-        onAccepted,
-      }),
-    ).rejects.toBe(preflightError);
+    try {
+      await expect(send()).rejects.toBe(preflightError);
+      await expect(send()).rejects.toBe(preflightError);
+      expect(session.isTurnRunning()).toBe(false);
+      expect(session.getStatus()).toBe('active');
 
-    expect(handle.validateSendOptions).toHaveBeenCalledOnce();
-    expect(beforeProviderStart).not.toHaveBeenCalled();
-    expect(onAccepted).not.toHaveBeenCalled();
-    expect(handle.send).not.toHaveBeenCalled();
+      // A pure validateSendOptions failure happens before origin installation,
+      // so it must not arm the 250 ms terminal-drain fence or close the Session.
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(send()).rejects.toBe(preflightError);
+
+      expect(handle.validateSendOptions).toHaveBeenCalledTimes(3);
+      expect(beforeProviderStart).not.toHaveBeenCalled();
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(handle.send).not.toHaveBeenCalled();
+      expect(handle.close).not.toHaveBeenCalled();
+      expect(session.getStatus()).toBe('active');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('runs reservation state preparation before provider option preflight', async () => {

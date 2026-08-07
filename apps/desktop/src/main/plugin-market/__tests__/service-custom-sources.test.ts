@@ -450,6 +450,32 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     });
   });
 
+  it('custom market 即使自报 cindy-github 也不会获得 server-market 官方标记', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-github-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/github', id: 'cindy-github' },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('cindy-github'),
+      dir: '/ghosts/cindy-github',
+      enabled: true,
+    });
+    const pluginId = customMarketPluginId('team-lib', 'cindy-github');
+    const reviewed = await h.service.detail(pluginId);
+
+    await h.service.install(pluginId, {
+      expectedReleaseId: customMarketReleaseId('team-lib', 'cindy-github', '1.0.0'),
+      expectedManifest: reviewed.manifest,
+    });
+
+    expect(runtime.install.mock.calls[0]?.[1]).toEqual({
+      ghostId: 'cindy-github',
+      version: '1.0.0',
+    });
+  });
+
   it('rejects install when the reviewed release no longer matches', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

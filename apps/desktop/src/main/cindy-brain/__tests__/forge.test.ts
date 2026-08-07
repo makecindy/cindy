@@ -813,6 +813,9 @@ describe('FORGE_GUIDE', () => {
       'exchange',
       'tokenPath',
       'login-email',
+      'gh-cli',
+      'gh auth token',
+      'hostAvailable',
       // 多连接(connections,2026-07-14):声明形态 / 设置页协议 / 主机受信确认。
       'connections',
       '/connections',

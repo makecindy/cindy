@@ -88,6 +88,31 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
     });
   });
 
+  it('gh-cli 优先凭证不因备用 PAT 未保存而阻塞插件调用', () => {
+    const m = manifest({
+      id: 'cindy-github',
+      slots: ['tool', 'network'],
+      tools: [{ name: 'github', description: 'GitHub' }],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub authentication',
+            source: 'gh-cli',
+            inject: { ...INJECT, hosts: ['api.github.com'] },
+          },
+        ],
+      },
+    });
+    expect(evaluateGhostSetup(m, probes())).toEqual({
+      ready: true,
+      missingGroups: [],
+      reauth: [],
+    });
+  });
+
   it('双 key 任一已保存即就绪(Web Search 形态)', () => {
     const m = manifest({
       slots: ['tool', 'network'],
@@ -500,7 +525,7 @@ describe('evaluateGhostSetupAssessment · Setup Runtime 完整判定', () => {
     expect(evaluateGhostSetup(drifted, probes()).ready).toBe(true);
   });
 
-  it('严格模式统一拒绝悬空 connection、缺 settingsHtml 的 kv 与 login-email requirement', () => {
+  it('严格模式统一拒绝悬空 connection、缺 settingsHtml 的 kv 与 Host 派生 requirement', () => {
     const connectionDrift = manifest({
       slots: ['tool', 'network'],
       tools: [{ name: 'work', description: '干活' }],
@@ -553,6 +578,30 @@ describe('evaluateGhostSetupAssessment · Setup Runtime 完整判定', () => {
       requires: [{ anyOf: [{ kind: 'secret', key: 'identity' }] }],
     };
     expect(() => evaluateGhostSetupAssessment(loginEmailDrift, probes(), { revision: 1 })).toThrow(
+      GhostSetupAssessmentError,
+    );
+
+    const ghCliDrift = manifest({
+      id: 'cindy-github',
+      slots: ['tool', 'network'],
+      tools: [{ name: 'work', description: '干活' }],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub authentication',
+            source: 'gh-cli',
+            inject: { ...INJECT, hosts: ['api.github.com'] },
+          },
+        ],
+      },
+    });
+    ghCliDrift.setup = {
+      requires: [{ anyOf: [{ kind: 'secret', key: 'github_pat' }] }],
+    };
+    expect(() => evaluateGhostSetupAssessment(ghCliDrift, probes(), { revision: 1 })).toThrow(
       GhostSetupAssessmentError,
     );
   });

@@ -115,6 +115,16 @@ export interface AgentCapabilities {
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
    */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /**
+   * 每轮 host 权限策略能力门:未声明或 supported.supported !== true 的 Agent 无法
+   * 用于「无条件挂逐条权限确认」的渠道(如个人微信)。与 maker-core 的
+   * Capabilities.turnPermissionPolicy 同构;device-link 老被控端无此字段 →
+   * undefined = 不支持。
+   */
+  turnPermissionPolicy?: {
+    supported: CapabilityStatus;
+    unsupportedPermissionModes: string[];
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

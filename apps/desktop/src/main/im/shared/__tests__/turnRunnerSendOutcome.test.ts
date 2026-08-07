@@ -5,13 +5,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TurnPermissionPolicyUnsupportedError } from '@cindy/maker-core';
 import type {
   AgentEvent,
+  Capabilities,
   InteractionDecision,
   InteractionRequest,
   MakerEvent,
   Session,
   SessionSendResult,
+  TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
 
@@ -194,6 +197,9 @@ function createSessionHarness(
     message: Parameters<Session['send']>[0],
   ) => Promise<SessionSendResult>,
   sessionId = 'feishu-session',
+  options: {
+    capabilities?: Capabilities;
+  } = {},
 ): SessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
   // onAccepted 仅在消息真被接受时触发 — 对齐 maker-core Session.send 语义;
@@ -214,6 +220,7 @@ function createSessionHarness(
   const session = {
     id: sessionId,
     agentKind: 'claude-code',
+    capabilities: options.capabilities ?? ({} as Capabilities),
     send,
     isTurnRunning,
     abort,
@@ -925,6 +932,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('applies a deferred switch and sends the first queued IM message through the refreshed session', async () => {
     const order: string[] = [];
+    const turnPermissionPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
     const oldSession = createSessionHarness(async () => ({
       accepted: false,
       reason: 'cancelled-before-dispatch',
@@ -980,17 +992,74 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         userMessageId: 'msg-agent-switch',
         text: 'send after switch',
         attachments: [],
+        turnPermissionPolicy,
       });
 
       expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('feishu-session');
       expect(oldSession.send).not.toHaveBeenCalled();
-      expect(switchedSession.send).toHaveBeenCalledTimes(1);
+      expect(switchedSession.send).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ turnPermissionPolicy }),
+      );
       expect(mocks.wireSessionToIpcExternal).toHaveBeenLastCalledWith(switchedSession.session);
       expect(order).toEqual(['apply', 'send', 'release']);
       expect(localRunner.getMakerSessionById('feishu-session')).toBeNull();
     } finally {
       localRunner.disposeAllSessions();
     }
+  });
+
+  it.each([
+    {
+      label: 'Agent capability is unavailable',
+      capabilities: {} as Capabilities,
+      mode: 'ask' as const,
+      failureKind: 'agent',
+    },
+    {
+      label: 'only the final permission mode is unsupported',
+      capabilities: {
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      } as unknown as Capabilities,
+      mode: 'bypassPermissions' as const,
+      failureKind: 'mode',
+    },
+  ])('classifies final turn-policy rejection when $label', async ({
+    capabilities,
+    mode,
+    failureKind,
+  }) => {
+    const h = createSessionHarness(
+      async () => {
+        throw new TurnPermissionPolicyUnsupportedError('claude-code', mode);
+      },
+      'feishu-session',
+      { capabilities },
+    );
+    mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: `msg-policy-${failureKind}`,
+      text: 'policy failure',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart: vi.fn(async () => undefined),
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'wechat' },
+        confirmationSurface: 'channel',
+        forceConfirmToolCall: () => false,
+      },
+    });
+
+    expect(dispatch).toEqual({
+      kind: 'rejected',
+      reason: `TURN_PERMISSION_POLICY_UNSUPPORTED:${failureKind}:${mode}`,
+    });
   });
 
   it('does not suppress a requested close during no-op switch acquisition', async () => {

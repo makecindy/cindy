@@ -69,6 +69,24 @@ export const ui = {
       `ℹ️ 以下内容我消化不了，先丢一边了：\n${entries.map((entry) => `• ${entry.label}`).join('\n')}\n\n` +
       '其它部分收到啦，正在处理~',
   },
+  error: {
+    // turnPermissionPolicy 分类:agent(如 Pi)未声明该 capability,任何权限模式
+    // 都无法提供微信所需的逐条确认 → 换 Agent;已声明的 agent 仅个别模式不可用
+    // (如 bypassPermissions / acceptEdits) → 换权限模式。
+    // 注意:微信渠道的 Agent 配置只在 /new 时应用到现有会话(设置仅影响新对话),
+    // 所以「换 Agent」指引必须带 /new,否则用户改完设置重发仍路由到旧 Agent。
+    agentUnsupported:
+      '⚠️ 当前 Agent 不支持个人微信的逐条权限确认，消息无法启动。\n' +
+      '请在 desktop 设置里把微信渠道的 Agent 换成 Claude Code 或 Codex，再在微信发送 /new，然后重试。',
+    // 换 Agent 后仍可能不兼容的权限模式(Claude Code / Codex 的
+    // unsupportedPermissionModes 并集:bypassPermissions / acceptEdits):
+    // 仅换 Agent 会在新 Agent 上再次命中权限模式错误,补一条 /permission 提示。
+    agentSwitchAlsoCheckPermissionMode:
+      '若新的 Agent 仍提示权限模式问题，请在微信发送 /permission 调整权限模式后重试。',
+    permissionModeUnsupported:
+      '⚠️ 当前 Agent 无法在个人微信中安全使用此权限模式。\n' +
+      '请在微信发送 /permission 切换权限模式后重试。',
+  },
   cards: {
     permission: {
       title: (toolName: string) => `🔧 工具调用：${toolName}`,

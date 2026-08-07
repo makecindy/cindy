@@ -44,6 +44,7 @@ import {
   isBuiltinGhostRemovedByUser,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
+import { hasCindyOfficialTrustMetadata } from '../cindy-brain/GhostManager.js';
 import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
@@ -306,6 +307,32 @@ function serverMarketOwnsInstalledGhost(
   );
 }
 
+function canBackfillOfficialCindyGithubTrust(
+  record: PluginMarketInstallationRecord,
+  installed: InstalledGhost,
+): boolean {
+  return (
+    record.installed &&
+    record.source === 'market' &&
+    record.manifestDigest !== undefined &&
+    !hasCindyOfficialTrustMetadata(installed.dir) &&
+    serverMarketOwnsInstalledGhost(record.pluginId, installed, record)
+  );
+}
+
+function sameMarketInstallation(
+  current: PluginMarketInstallationRecord,
+  expected: PluginMarketInstallationRecord,
+): boolean {
+  return (
+    current.pluginId === expected.pluginId &&
+    current.releaseId === expected.releaseId &&
+    current.version === expected.version &&
+    current.sha256 === expected.sha256 &&
+    current.manifestDigest === expected.manifestDigest
+  );
+}
+
 /** Stable local facts reused while projecting one market catalog response. */
 interface LocalInstallSnapshot {
   /** Installed Ghost runtime facts indexed once for one market operation. */
@@ -400,6 +427,7 @@ export class PluginMarketService {
     requireSameMarketOwner(owner);
     const ledger = this.ledgerForOwner(owner);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
+    await this.backfillOfficialCindyGithubTrust(ledger, owner);
     await this.reconcileRemovedInstallations(ledger, owner);
     await this.applyServerRemovals(removals, owner, ledger);
     // 自定义来源只影响自己的目录发现；暂时不可读的来源不能阻塞官方默认安装。
@@ -1202,6 +1230,7 @@ export class PluginMarketService {
       const installed = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
+        ...(plugin.ghostId === 'cindy-github' ? { officialCindyGithub: true } : {}),
         ...(options.reviewedManifest
           ? {
               reviewedManifest: options.reviewedManifest,
@@ -1316,6 +1345,70 @@ export class PluginMarketService {
         pluginId: matches[0].id,
         exactCurrentRelease: record.releaseId === matches[0].currentRelease.id,
       });
+    }
+  }
+
+  /**
+   * 旧版 server-market 安装已经有 Host ledger + manifestDigest，但尚未写
+   * cindy-official receipt。不能只按 manifestDigest 抬权：攻击者可保留清单、
+   * 只替换 main.js。这里按 ledger 的 releaseId + sha256 重新下载原官方包，
+   * 校验后原位恢复官方字节并由市场安装路径写 receipt。
+   * legacy-adopted 只是“按 id 收养”的历史记录，绝不进入本路径。
+   */
+  private async backfillOfficialCindyGithubTrust(
+    ledger: PluginMarketLedger,
+    owner: ActiveAppSession,
+  ): Promise<void> {
+    const record = ledger.installationForGhost('cindy-github');
+    requireSameMarketOwner(owner);
+    const installed = getGhostManager().list().find((ghost) => ghost.manifest.id === 'cindy-github');
+    if (!record || !installed || !canBackfillOfficialCindyGithubTrust(record, installed)) return;
+    const tempPath = path.join(
+      app.getPath('temp'),
+      `cindy-plugin-trust-backfill-${crypto.randomUUID()}.cindy`,
+    );
+    try {
+      const download = await this.api.download(record.pluginId, record.releaseId);
+      requireSameMarketOwner(owner);
+      if (download.sha256 !== record.sha256) {
+        log.warn('cindy-github trust backfill release hash changed');
+        return;
+      }
+      const expiresAt = Date.parse(download.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        log.warn('cindy-github trust backfill authorization expired');
+        return;
+      }
+      await downloadVerifiedPlugin(download.url, download, tempPath);
+      requireSameMarketOwner(owner);
+      await withGhostInstallLock('cindy-github', async () => {
+        requireSameMarketOwner(owner);
+        const currentRecord = ledger.installationForGhost('cindy-github');
+        const currentInstalled = getGhostManager()
+          .list()
+          .find((ghost) => ghost.manifest.id === 'cindy-github');
+        if (
+          !currentRecord?.installed ||
+          currentRecord.source !== 'market' ||
+          !currentInstalled ||
+          !sameMarketInstallation(currentRecord, record) ||
+          !canBackfillOfficialCindyGithubTrust(currentRecord, currentInstalled)
+        ) {
+          return;
+        }
+        await installOrUpdateMarketGhostPackage(tempPath, {
+          ghostId: 'cindy-github',
+          version: currentRecord.version,
+          officialCindyGithub: true,
+        });
+      });
+      requireSameMarketOwner(owner);
+    } catch (error) {
+      log.warn('cindy-github trust backfill deferred', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
     }
   }
 
