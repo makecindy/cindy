@@ -176,7 +176,7 @@ import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
-import { GhostScheduleSlot, isConfirmDialogHostWindowUrl, isMainShellWindowUrl } from './scheduleSlot.js';
+import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
@@ -2149,22 +2149,14 @@ function ensureGhostConfirmDialogBridge(): ReturnType<typeof initGhostConfirmDia
     getGhostConfirmDialogBridge() ??
     initGhostConfirmDialogBridge({
       sendToWindow: (payload) => {
-        // 只投**挂了确认框宿主**的窗口:GhostConfirmDialogHost 挂在 App.tsx 的
-        // ConfirmDialogProvider 里,所有 MainLayout 窗口都挂(含「在新窗口打开」
-        // 的会话副窗 secondaryWindow=1——用户正看着副窗时,确认框就该弹在那)。
-        // 只排除轻壳窗:utility 工具窗(view)/插件面板独立窗/右侧栏独立窗没挂
-        // host,投过去用户看不到、请求白等 90 秒超时按拒绝(Greptile + Codex
-        // 2026-08-07 P1)。判据 isConfirmDialogHostWindowUrl 专为确认框写,
-        // 不误伤 secondaryWindow。
-        const candidates = BrowserWindow.getAllWindows().filter(
-          (window) => !window.isDestroyed() && isConfirmDialogHostWindowUrl(window.webContents.getURL()),
-        );
-        const focused = BrowserWindow.getFocusedWindow();
-        const win =
-          focused && !focused.isDestroyed() && candidates.includes(focused)
-            ? focused
-            : candidates[0];
-        if (!win) return false;
+        // GhostConfirmDialogHost 挂在 App.tsx 的 ConfirmDialogProvider 里(路由前),
+        // 所有渲染主 App 的窗口都挂 host——主窗、「在新窗口打开」的会话副窗
+        // (secondaryWindow=1)、插件面板独立窗(ghostPanelWindow)都会弹,谁收
+        // 到谁弹。所以直接投 focused 窗口(用户正看着的那个),不按 URL 排除;
+        // utility 工具窗(词典/权限引导等)是独立 BrowserWindow 不渲染 App.tsx,
+        // 弹不到,回落第一个窗口。没有可投窗口时返回 false → 桥按拒绝处理。
+        const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) return false;
         sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
         return true;
       },
