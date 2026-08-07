@@ -35,16 +35,23 @@ export interface SplitDragSourceContext {
   orcaRole?: string | null;
   /** 行是否被 SortableJS 容器（置顶/项目手动排序）包裹。 */
   inSortableContainer: boolean;
+  /** SortableJS 是否已被祖先的 data-no-drag 边界拦截。 */
+  sortableDragBlocked?: boolean;
 }
 
 /**
  * 一行任务是否充当分屏拖拽源。SortableJS（forceFallback 指针手势）与原生 HTML5
  * 拖拽会争抢同一次手势：行带 `draggable` 时浏览器可能启动原生拖拽并中断 fallback
- * 排序，因此 Sortable 容器内的行保持原有手动排序，不再叠加分屏拖拽。Orca worker
- * 不进侧栏列表，防御性排除，避免把 worker id 写进分屏树后与 Lead 路由错位。
+ * 排序，因此未被 `data-no-drag` 边界隔离的 Sortable 行保持原有手动排序，不叠加分屏
+ * 拖拽。Orca worker 不进侧栏列表，防御性排除，避免把 worker id 写进分屏树后与 Lead
+ * 路由错位。
  */
 export function isSplitGroupDragSource(context: SplitDragSourceContext): boolean {
-  return !context.editing && context.orcaRole !== 'worker' && !context.inSortableContainer;
+  return (
+    !context.editing &&
+    context.orcaRole !== 'worker' &&
+    (!context.inSortableContainer || context.sortableDragBlocked === true)
+  );
 }
 
 /** 按指针距四条边的最近距离决定左 / 右 / 上 / 下落点。 */

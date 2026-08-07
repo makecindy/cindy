@@ -261,7 +261,10 @@ describe('SessionCard review regressions', () => {
       "splitDragEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'",
     );
     expect(sessionItemSource).toContain('draggable={splitDragEnabled}');
-    expect(sessionItemSource).toContain('useState(true)');
+    expect(sessionItemSource).toContain('inSortableContainer: true');
+    expect(sessionItemSource).toContain(
+      "sortableDragBlocked: Boolean(row?.closest('[data-no-drag]'))",
+    );
   });
 
   it('wires split creation into both sidebar rendering modes', () => {
