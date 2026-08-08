@@ -90,12 +90,30 @@ const enqueue = vi.fn(
   }),
 );
 
+const retryLastError = vi.fn(async (sessionId: string): Promise<AgentInputProjection> => ({
+  sessionId,
+  pendingQueue: [],
+  steeringQueueClientIds: [],
+  queuePaused: false,
+  queueExpanded: false,
+  queueInteractionLocks: [],
+  queueEditLocks: [],
+  queueAbortPending: false,
+  error: null,
+  recovery: null,
+  errorRetryText: null,
+  credentialSwitchWait: null,
+}));
+
+let messageCreatedHandler: ((payload: unknown) => void) | null = null;
+
 function installElectronBridge(): void {
+  messageCreatedHandler = null;
   const w = globalThis as unknown as { window?: Record<string, unknown> };
   if (!w.window) w.window = {};
   w.window.electronAPI = {
     maker: {
-      input: { enqueue },
+      input: { enqueue, retryLastError },
       onInputProjection: vi.fn(() => vi.fn()),
       onEvent: vi.fn(() => vi.fn()),
       onStatusChanged: vi.fn(() => vi.fn()),
@@ -110,7 +128,10 @@ function installElectronBridge(): void {
     },
     localDb: {
       messages: {
-        onCreated: vi.fn(() => vi.fn()),
+        onCreated: vi.fn((cb: (payload: unknown) => void) => {
+          messageCreatedHandler = cb;
+          return vi.fn();
+        }),
       },
     },
     deviceLink: { invoke: vi.fn().mockResolvedValue(undefined) },
@@ -167,5 +188,36 @@ describe('isLocalSentUserMessage (#2194)', () => {
     makerChatStore.purgeSession(sid);
 
     expect(makerChatStore.isLocalSentUserMessage(sid, item.clientId)).toBe(false);
+  });
+
+  // review P1: 人工 Retry 的克隆重发行由 main 以新 clientId 落库，发送侧登记不到；
+  // renderer 在点击时记基线，此后第一条新 user 消息按本端发送认领（一次性）。
+  it('人工 Retry 后的克隆 user 行按本端发送认领，且只认领一次', async () => {
+    const sid = `retry-${Math.random().toString(36).slice(2, 8)}`;
+
+    makerChatStore.initGlobalListeners();
+    messageCreatedHandler?.({
+      sessionId: sid,
+      message: {
+        id: 'm-1',
+        clientId: 'orig-user',
+        sessionId: sid,
+        role: 'user',
+        content: 'failed text',
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: '2026-06-07T00:00:00.000Z',
+      },
+    });
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+    expect(retryLastError).toHaveBeenCalledTimes(1);
+
+    // 基线消息本身不被误领（渲染期对既有末尾消息的查询不消费标记）。
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'orig-user')).toBe(false);
+    // main 以新 clientId 落库的克隆行 → 认领为本端意图，消费后失效。
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone')).toBe(true);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'later-im-message')).toBe(false);
   });
 });
