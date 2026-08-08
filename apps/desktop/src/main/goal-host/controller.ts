@@ -326,6 +326,9 @@ interface TurnAccumulator {
    * storage await 期间提前置位但事件未写(clear/pause/替换),accepted 补发
    * turn-dispatched 需以此为准,避免孤儿派发(Greptile P1)。 */
   auditFinalized?: boolean;
+  /** 生命周期唯一 id(freshTurn 生成,跨换代不变;generation 重置为 0 时仍可
+   * 区分生命周期——事件排序/配对以此为准)。 */
+  lifecycleId: string;
   /** 正常 turn 换代只递增 generation，不替换整个 Goal 生命周期 owner。 */
   generation: number;
   /** 显式 Stop 正在把 paused 落盘；迟到事件与自动恢复都必须停在这条边界外。 */
@@ -336,17 +339,22 @@ interface TurnAccumulator {
   pendingCompletion: Promise<void> | null;
 }
 
+/** 生命周期序号(模块级单调递增,freshTurn 生成唯一 id)。 */
+let lifecycleSeq = 0;
+
 function freshTurn(
   cancelled = false,
   pendingPersistence: Promise<void> | null = null,
   pendingCompletion: Promise<void> | null = null,
 ): TurnAccumulator {
+  lifecycleSeq += 1;
   return {
     text: '',
     sawToolUse: false,
     tokensThisTurn: 0,
     continuationTokens: 0,
     finalized: false,
+    lifecycleId: `g${lifecycleSeq}`,
     generation: 0,
     cancelled,
     pendingPersistence,
@@ -478,6 +486,7 @@ export class GoalController {
     const evt: GoalRunEvent = {
       type,
       goalSessionId,
+      lifecycleId: boundary?.lifecycleId,
       turnIndex: (state?.turnsUsed ?? 0) + (type === 'turn-dispatched' ? 1 : 0),
       ...(state
         ? {
@@ -500,7 +509,14 @@ export class GoalController {
       at: extra?.at ?? this.now(),
     };
     try {
-      this.deps.recordRunEvent(evt);
+      // 同步 throw 与异步 reject 都兜底(best-effort:观测不得影响状态机执行)。
+      Promise.resolve(this.deps.recordRunEvent(evt)).catch((error) => {
+        this.deps.logger.warn('[goal] recordRunEvent failed (best-effort)', {
+          type,
+          goalSessionId,
+          error: String(error),
+        });
+      });
     } catch (error) {
       // 观测是 best-effort：回调/sink 抛错不得改变状态机执行(派发/持久化/通知)。
       this.deps.logger.warn('[goal] recordRunEvent failed (best-effort)', {

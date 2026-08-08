@@ -23,6 +23,9 @@ export type GoalRunEventType =
 export interface GoalRunEvent {
   type: GoalRunEventType;
   goalSessionId: string;
+  /** 生命周期唯一 id(freshTurn 每次换代生成):generation 会被 freshTurn 重置为 0,
+   * 同 generation 不证明同生命周期——排序/配对以 lifecycleId 为准。 */
+  lifecycleId?: string;
   /** 生命周期 generation —— 防 Stop/Resume 换代后旧事件串台(与 controller 同语义)。 */
   generation: number;
   /**
@@ -50,7 +53,7 @@ export interface GoalRunEvent {
   at: number;
 }
 
-export type RunEventSink = (evt: GoalRunEvent) => void;
+export type RunEventSink = (evt: GoalRunEvent) => void | Promise<void>;
 
 /**
  * 内存环记录器:保留最近 N 条,可注入外部 sink(持久化 / push 到 renderer)。
@@ -76,11 +79,13 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         budget: evt.budget ? { ...evt.budget } : undefined,
       });
       if (ring.length > capacity) ring.shift();
-      // best-effort:外部 sink 抛错不得冒泡影响业务流程。
+      // best-effort:外部 sink 抛错/异步 reject 不得冒泡影响业务流程。
       try {
-        sink?.(evt);
+        Promise.resolve(sink?.(evt)).catch(() => {
+          // 观测链路失败静默;环内数据不受影响。
+        });
       } catch {
-        // 观测链路失败静默;环内数据不受影响。
+        // 同步 throw 同样静默。
       }
     },
     snapshot() {
@@ -88,9 +93,10 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       // 不会污染环内数据。
       // 排序不变量(可验证,与评审过程无关):
       //  1. 按 at 升序(快终态时 dispatch 的 at 早于收口,即使落环晚);
-      //  2. 同 at 且同 generation(同生命周期)按 turnIndex 升序;
-      //     跨 generation 换代时不用全局 turnIndex(新 run 的 turnIndex 小于旧
-      //     terminal,不得把"新 run 开始"排到"旧 run 结束"之前);
+      //  2. 同 at 且同 lifecycleId(同生命周期)按 turnIndex 升序;
+      //     跨生命周期换代时不用全局 turnIndex(freshTurn 重置 generation=0,
+      //     同代不证明同生命周期;新 run 的 turnIndex 小于旧 run 的 terminal,
+      //     不得把"新 run 开始"排到"旧 run 结束"之前);
       //  3. 同 at 且仍相等时,派发类(resumed/turn-dispatched)在收口类之前;
       //  4. 其余按显式插入序号(不依赖引擎 sort 稳定性,插入序 = 落环序)。
       const dispatchGroup = new Set(['resumed', 'turn-dispatched']);
@@ -112,11 +118,10 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         .sort((a, b) => {
           const byAt = (a.at ?? 0) - (b.at ?? 0);
           if (byAt !== 0) return byAt;
-          // 同 at:仅同 generation(同生命周期)用 turnIndex 与派发/收口类型次序——
-          // 跨 generation 换代时新 run 的 turnIndex 小于旧 run 的 terminal,
-          // 且新 run 的 turn-dispatched 不得排到旧 run 的 terminal 之前,
-          // 直接回退到插入序 _seq。
-          if ((a.generation ?? 0) === (b.generation ?? 0)) {
+          // 同 at:仅同 lifecycleId(同生命周期)用 turnIndex 与派发/收口类型次序——
+          // 跨生命周期换代时新 run 的 turn-dispatched 不得排到旧 run 的 terminal
+          // 之前,直接回退到插入序 _seq。
+          if (a.lifecycleId && a.lifecycleId === b.lifecycleId) {
             const byTurn = a.turnIndex - b.turnIndex;
             if (byTurn !== 0) return byTurn;
             // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序。
