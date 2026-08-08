@@ -178,8 +178,17 @@ describe('Dialogue sidebar section', () => {
     expect(dialogueSectionSource).toContain('className={HEADER_ACTIONS_CLASS}');
   });
 
-  it('creates a standalone dialogue without inheriting a project draft directory', () => {
+  it('creates a standalone dialogue and inherits an explicitly selected remote machine', () => {
     expect(sidebarSource).toContain('resetDraftWorkspaceTargets();');
+    expect(sidebarSource).toContain(
+      'resolveDialogueDeviceTarget(selectedMachineId, switcherDevices)',
+    );
+    expect(sidebarSource).toContain(
+      'deviceLinkDeviceId: selectedDialogueDeviceTarget.deviceId',
+    );
+    expect(sidebarSource).toContain(
+      'deviceLinkDeviceName: selectedDialogueDeviceTarget.deviceName',
+    );
     expect(sidebarSource).toMatch(
       /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/,
     );
