@@ -5,7 +5,7 @@
  * 读写、GC、游标与统计均不得跨命名空间。
  */
 
-import { and, desc, eq, gt, like, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, like, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../../localDb/client/current';
 import { hookGroupContextCursors, hookGroupMessages } from '../../localDb/schema';
@@ -135,6 +135,11 @@ export async function recordGroupWindowEntry(
 ): Promise<boolean> {
   const db = getDbClient().drizzle;
   const storedText = prepareGroupWindowText(entry.provider, entry.text);
+  // 用 `.run()` 的 changes 判重, **不能用 `.returning()`**: main 侧的 drizzle 是
+  // createDrizzleProxy 的代理, 它对没有 select fields 的 builder 一律走 'run' op 并
+  // 返回空数组(proxy 里写明「RETURNING 当前未使用」)。于是 `.returning()` 在生产上
+  // 恒得空数组 —— 每条入库都被判成重复, 直接 return false, 回收与容量观测一次都
+  // 不会跑。onConflictDoNothing 下 changes===0 正是「这条已存在」, 语义等价。
   const inserted = await db
     .insert(hookGroupMessages)
     .values({
@@ -151,8 +156,8 @@ export async function recordGroupWindowEntry(
       createdAt: Date.now(),
     })
     .onConflictDoNothing()
-    .returning({ id: hookGroupMessages.id });
-  if (inserted.length === 0) return false;
+    .run();
+  if (inserted.changes === 0) return false;
   if (retention === undefined) {
     await maybeLogGroupWindowNamespaceStats(entry.provider);
     return true;
@@ -238,20 +243,32 @@ async function dropOldestUntilLowWater(
   const rowsToDrop = Math.max(0, stats.rows - targetRows);
 
   // 最旧的 maxDrop 行里, 第一个同时满足「累计字节够」与「行数够」的位置就是边界。
-  const boundary = await db.all<{ id: number }>(sql`
-    select id from (
-      select id,
-        sum(length(cast(text as blob))) over (order by id) as cum_bytes,
-        row_number() over (order by id) as rn
-      from ${hookGroupMessages}
-      where provider = ${provider}
-      order by id
-      limit ${maxDrop}
-    )
-    where cum_bytes >= ${bytesToFree} and rn >= ${rowsToDrop}
-    order by id
-    limit 1
-  `);
+  //
+  // 必须整条走 **query builder**: main 侧拿到的 drizzle 是 createDrizzleProxy 的
+  // 代理, 只把 builder 的终结方法转发给 worker RPC。直接 `db.all(sql\`...\`)` 不经过
+  // builder, 会落进代理内部只会抛错的 fakeSqliteClient.prepare() —— 回收在生产上
+  // 100% 失败, 而单测若用真实 drizzle 建 harness 就会假绿(与 recentWorkdirs 的
+  // LRU 驱逐同一类踩坑, 见 localDb/ipc/__tests__/recentWorkdirsLru.test.ts)。
+  const oldest = db
+    .select({
+      id: hookGroupMessages.id,
+      cumBytes:
+        sql<number>`sum(length(cast(${hookGroupMessages.text} as blob))) over (order by ${hookGroupMessages.id})`.as(
+          'cum_bytes',
+        ),
+      rn: sql<number>`row_number() over (order by ${hookGroupMessages.id})`.as('rn'),
+    })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, provider))
+    .orderBy(hookGroupMessages.id)
+    .limit(maxDrop)
+    .as('oldest');
+  const boundary = await db
+    .select({ id: oldest.id })
+    .from(oldest)
+    .where(and(gte(oldest.cumBytes, bytesToFree), gte(oldest.rn, rowsToDrop)))
+    .orderBy(oldest.id)
+    .limit(1);
   let threshold = boundary[0]?.id;
   if (threshold === undefined) {
     // 把能删的都删了也到不了低水位: 删到只剩最新一行为止, 而不是整轮 no-op ——
