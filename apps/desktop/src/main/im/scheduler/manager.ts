@@ -83,6 +83,7 @@ export class ImSchedulerManager {
   private readonly peers = new Map<string, PeerAdvertisement>();
   private readonly confirmedPeers = new Set<string>();
   private readonly pendingPeerProbeChannels = new Map<string, readonly SchedulerChannelBinding[]>();
+  private readonly ignoredPeerProbeNonces = new Map<string, Set<string>>();
   private readonly runtimeGaps = new RuntimeGapSet();
   private unsubscribe: (() => void) | null = null;
   private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
@@ -142,6 +143,7 @@ export class ImSchedulerManager {
     this.unsubscribe = null;
     this.runtimeGaps.clear();
     this.pendingPeerProbeChannels.clear();
+    this.ignoredPeerProbeNonces.clear();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
     this.resetSnapshotRequestState();
@@ -355,6 +357,8 @@ export class ImSchedulerManager {
     sourceDeviceId: string,
     payload: Extract<ImSchedulerFrame, { kind: 'probe' }>,
   ): void {
+    if (this.isIgnoredPeerProbeNonce(sourceDeviceId, payload.nonce)) return;
+
     // A confirmed advertisement is authoritative for the current discovery
     // round. A later probe with a different binding is only an invalidation
     // signal: start a new nonce and wait for a fresh advertisement instead of
@@ -363,6 +367,17 @@ export class ImSchedulerManager {
     if (this.confirmedPeers.has(sourceDeviceId)) {
       const confirmed = this.peers.get(sourceDeviceId)?.frame.channels ?? [];
       if (sameSchedulerChannels(confirmed, payload.channels)) return;
+      this.ignorePeerProbeNonce(sourceDeviceId, payload.nonce);
+      this.beginDiscoveryRound();
+      return;
+    }
+    const pending = this.pendingPeerProbeChannels.get(sourceDeviceId);
+    if (pending && !sameSchedulerChannels(pending, payload.channels)) {
+      // Probes from the same peer can cross in flight. Treat a contradictory
+      // probe as stale/ambiguous, rotate our nonce, and let the next round's
+      // advertisement establish the peer view. Do not overwrite the pending
+      // binding with whichever probe happened to arrive last.
+      this.ignorePeerProbeNonce(sourceDeviceId, payload.nonce);
       this.beginDiscoveryRound();
       return;
     }
@@ -381,6 +396,20 @@ export class ImSchedulerManager {
     // tag for the receiver's current discovery round. Its channel view is
     // useful for election convergence, but runtime gaps are only authoritative
     // when returned in an advertisement replying to our current nonce.
+  }
+
+  private ignorePeerProbeNonce(sourceDeviceId: string, nonce: string): void {
+    const nonces = this.ignoredPeerProbeNonces.get(sourceDeviceId) ?? new Set<string>();
+    nonces.add(nonce);
+    // Keep this defensive cache bounded per visible peer. It only suppresses
+    // duplicate stale probes; the next local discovery round still performs
+    // a fresh authoritative advertisement exchange.
+    while (nonces.size > 8) nonces.delete(nonces.values().next().value!);
+    this.ignoredPeerProbeNonces.set(sourceDeviceId, nonces);
+  }
+
+  private isIgnoredPeerProbeNonce(sourceDeviceId: string, nonce: string): boolean {
+    return this.ignoredPeerProbeNonces.get(sourceDeviceId)?.has(nonce) === true;
   }
 
   private beginDiscoveryRound(options: { resetRetryAttempt?: boolean } = {}): void {
