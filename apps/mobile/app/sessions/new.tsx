@@ -4679,6 +4679,11 @@ export default function NewRemoteSessionScreen() {
           rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
         };
       }
+      // 终检刷新(await 网络往返)期间设备可能已切换:进入 commit 段前复核
+      // (greptile P1:终检后遗漏设备复核)——precreatedWorktree 存在时补偿 ledger
+      // 后中止;不存在(无 worktree 的 Goal 路径)时直接中止。避免闭包绑定的旧设备
+      // 在界面已切换后仍创建当前界面未接管的会话。
+      if (await abortIfDeviceSwitched()) return;
       // ── commit 段:started 写盘(await)后同步核对 genAt;此后无裸 return ──
       if (precreatedWorktree) {
         const startedRecorded = await registerPendingPrecreatedWorktree(
@@ -4834,7 +4839,14 @@ export default function NewRemoteSessionScreen() {
           sessionId: result.sessionId,
           deviceId: selectedDeviceId,
           deviceName: selectedDeviceName,
-          ...(goalSetError ? { goalError: goalSetError } : {}),
+          // goal.set 失败接回(codex review P2:保留失败 Goal 的表单内容):草稿已
+          // 清空、目标页表单只从空 composer 初始化——把原输入经路由参数带到目标页,
+          // 用户无需重填;limits 序列化为 JSON(目标页解析带防护,坏数据忽略)。
+          ...(goalSetError ? {
+            goalError: goalSetError,
+            goalObjective: input.objective,
+            ...(input.limits ? { goalLimits: JSON.stringify(input.limits) } : {}),
+          } : {}),
         },
       });
     } catch (err) {

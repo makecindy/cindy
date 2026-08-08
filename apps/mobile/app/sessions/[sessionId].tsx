@@ -740,6 +740,8 @@ export default function SessionScreen() {
     deviceName?: string;
     draft?: string;
     goalError?: string;
+    goalObjective?: string;
+    goalLimits?: string;
     focusClientId?: string;
     focusComposerRequestKey?: string;
     focusRequestKey?: string;
@@ -841,6 +843,28 @@ export default function SessionScreen() {
   // 新建页 goal.set 失败接回时经路由参数带入(见 new.tsx 创建流程);
   // 平时无参 → null,与旧行为一致。
   const [goalError, setGoalError] = useState<string | null>(() => readRouteParam(params.goalError));
+  // 新建页 goal.set 失败接回时经路由参数带入的完整 Goal 输入(codex review P2):
+  // objective 原样、limits JSON 序列化(解析失败/缺省 → undefined,坏参数不炸);
+  // 平时无参 → null,与旧行为一致(表单仍从 composer 文字初始化)。
+  const [goalRestore, setGoalRestore] = useState<{ objective: string; limits?: MobileGoalLimitsInput } | null>(() => {
+    const objective = readRouteParam(params.goalObjective);
+    if (!objective) return null;
+    let limits: MobileGoalLimitsInput | undefined;
+    const limitsRaw = readRouteParam(params.goalLimits);
+    if (limitsRaw) {
+      try {
+        const parsed = JSON.parse(limitsRaw) as Partial<MobileGoalLimitsInput>;
+        limits = {
+          maxTurns: typeof parsed.maxTurns === 'number' ? parsed.maxTurns : null,
+          budgetTokens: typeof parsed.budgetTokens === 'number' ? parsed.budgetTokens : null,
+          noProgressLimit: typeof parsed.noProgressLimit === 'number' ? parsed.noProgressLimit : null,
+        };
+      } catch {
+        limits = undefined;
+      }
+    }
+    return { objective, ...(limits ? { limits } : {}) };
+  });
   // goal.set 失败接回(codex review P2):仅初始化 error 不打开面板,用户跳转后
   // 看不到目标设置失败——带入错误时自动打开 Goal 视图,让失败提示可见。
   useEffect(() => {
@@ -7976,7 +8000,8 @@ export default function SessionScreen() {
               busy={goalBusy}
               error={goalError}
               goal={goalStatus}
-              initialObjective={draft.trim() || undefined}
+              initial={goalRestore ?? undefined}
+              initialObjective={goalRestore ? undefined : (draft.trim() || undefined)}
               onClearGoal={handleClearGoal}
               onPauseGoal={handlePauseGoal}
               onResumeGoal={handleResumeGoal}
