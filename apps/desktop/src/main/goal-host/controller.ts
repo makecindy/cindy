@@ -2334,16 +2334,16 @@ export class GoalController {
         this.goalTurnsInFlight.delete(sessionId);
         this.deps.logger.warn('[goal] send not accepted', { sessionId, kind, reason: result.reason });
       } else {
-        if (!isCurrentDispatch()) {
-          baselineStarted = false;
-          return;
-        }
         // onDispatching 是归属登记的唯一边界。不能在 await send 后再次 add：极快的
         // turn 可能已经发出终态并同步释放归属，重新登记会把后续用户 turn 误认成 Goal。
         baselineStarted = false;
         // #2105 P0:send 确认 accepted 后才补发派发事件(reviewer P2:onDispatching 在
         // handle.send 前触发,cancelled-before-dispatch 时 send 返回 accepted:false,
         // 事件必须等 accepted 确认才记录,避免"已派发无收口"幽灵事件)。
+        // 不依赖 isCurrentDispatch()(reviewer P1:快终态时 provider 在 send resolve 前
+        // 报终态,finalizeTurn 已换代/停 session,isCurrentDispatch 为 false 会跳过事件,
+        // 但 onDispatching 已标记 goal-owned 且 finalizer 已记 turn-finalized/terminal
+        // —— 用捕获的 dispatchBoundary/generation 发,保证 finalize 有配对 dispatch)。
         const pendingResume = this.pendingResumeEvents.get(sessionId);
         if (pendingResume && pendingResume.boundary === dispatchBoundary) {
           this.pendingResumeEvents.delete(sessionId);
@@ -2353,6 +2353,10 @@ export class GoalController {
           });
         }
         this.recordRunEvent('turn-dispatched', sessionId, state);
+        if (!isCurrentDispatch()) {
+          // 快终态/换代:终态已由 finalizeTurn 处理,这里只抑制 stale 副作用。
+          return;
+        }
       }
     } catch (e) {
       if (baselineStarted) {

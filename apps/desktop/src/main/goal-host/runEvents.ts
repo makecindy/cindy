@@ -79,7 +79,12 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       sink?.(evt);
     },
     snapshot() {
-      return ring.slice();
+      // 与 record 同样浅拷贝(含 budget):slice 只复制数组,消费者修改返回的事件
+      // 对象仍会污染环(Copilot suppressed 03:50)。
+      return ring.map((evt) => ({
+        ...evt,
+        budget: evt.budget ? { ...evt.budget } : undefined,
+      }));
     },
     clear() {
       ring.length = 0;
