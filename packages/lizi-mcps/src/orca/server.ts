@@ -91,13 +91,14 @@ export interface OrcaMcpDeps {
     role: string;
     agent: ControlWorkerAgent;
     model?: string;
+    providerId?: string | null;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     fast?: boolean;
     label: string;
     initialTask?: string;
   }) => Promise<
     ControlResult<
-      { workerId: string; workerSessionId: string; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
+      { workerId: string; workerSessionId: string; resolvedModel?: string; providerId?: string | null; routeProviderId?: string | null; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
       'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE'
     >
   >;
@@ -176,6 +177,11 @@ export interface OrcaMcpDeps {
       codex?: Array<{ id: string; label: string }>;
       claude_code?: Array<{ id: string; label: string }>;
       pi?: Array<{ id: string; label: string }>;
+      routes?: {
+        codex?: Array<{ modelId: string; label: string; providerId: string; providerName: string; isDefault: boolean }>;
+        claude_code?: Array<{ modelId: string; label: string; providerId: string; providerName: string; isDefault: boolean }>;
+        pi?: Array<{ modelId: string; label: string; providerId: string; providerName: string; isDefault: boolean }>;
+      };
     }>
   >;
   /** 只读诊断：列出当前 Orca workflow 与 worker sessions。 */

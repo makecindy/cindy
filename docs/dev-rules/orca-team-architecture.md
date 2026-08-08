@@ -116,6 +116,11 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 `cindy_orca` 直接注册到顶层，而不是藏在 `list_tools/call_tool` 后面；模型在“开协同 / 派 worker”时需要稳定发现 `start_team/create_worker`。实现见 `packages/lizi-mcps/src/orca/server.ts` 的 `createOrcaMcpServer`、`DirectToolSink`、`OrcaMcpDeps`。
 
+模型选择在工具层使用稳定的二元组 `(provider_id, model_id)`。`list_available_models`
+保留按 agent 聚合的兼容清单，并通过 `routes` 返回每个已连接来源及当前默认来源；
+`create_worker` / `create_workers` 可选传入 `provider_id` 做精确路由。创建回执同时返回
+持久化的 `provider_id` 与实际解析后的 `route_provider_id`，两者不能混为一谈。
+
 Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast 的“下次创建默认值”同类，不是 Lead 权限的继承项，也不是 Team 数据库字段：
 
 - 真源是 renderer `workerCreationPrefs` localStorage；main 只保存内存镜像，应用启动和偏好变化时由 renderer 同步。

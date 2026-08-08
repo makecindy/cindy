@@ -178,6 +178,28 @@ describe('create_workers tool', () => {
     ]);
   });
 
+  it('passes and reports provider routes for each worker', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => ({
+      ...created(1, 8),
+      resolvedModel: 'gpt-5.5',
+      providerId: 'openai',
+      routeProviderId: 'openai',
+    }));
+    const registry = setup(createWorker);
+
+    const first = { ...worker(1), model: 'gpt-5.5', provider_id: 'openai' };
+    const second = { ...worker(2), model: 'gpt-5.5', provider_id: 'xd' };
+    const result = parse(await registry.call('create_workers', { workers: [first, second] }));
+
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({ providerId: 'openai' }));
+    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({ providerId: 'xd' }));
+    expect(result.results[0]).toMatchObject({
+      resolved_model: 'gpt-5.5',
+      provider_id: 'openai',
+      route_provider_id: 'openai',
+    });
+  });
+
   it('reports consecutive non-limit failures without inventing created workers', async () => {
     const outcomes = [
       { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: 'bad model' },
