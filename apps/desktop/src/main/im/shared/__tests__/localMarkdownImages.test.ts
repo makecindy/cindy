@@ -147,6 +147,9 @@ describe('materializeLocalMarkdownImages', () => {
       '```md',
       `![fenced](${sourcePath})`,
       '```',
+      '> ~~~md',
+      `> ![quoted](${sourcePath})`,
+      '> ~~~',
       '',
       `    ![indented](${sourcePath})`,
     ].join('\n');

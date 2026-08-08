@@ -194,6 +194,22 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
   });
 
+  it('parses a plain destination with an optional Markdown title', () => {
+    const quoted = '[报告](xdt-file:///tmp/report.pdf "下载")';
+    const parenthesized = '[报告](xdt-file:///tmp/report.pdf (下载))';
+
+    for (const text of [quoted, parenthesized]) {
+      expect(collectXdtFileRefs(text)).toEqual([
+        {
+          alt: '报告',
+          url: 'xdt-file:///tmp/report.pdf',
+          start: 0,
+          end: text.length,
+        },
+      ]);
+    }
+  });
+
   it('ignores file references inside inline code and fenced code blocks', () => {
     const inline = '`[报告](xdt-file:///tmp/inline.pdf)`';
     const fenced = '```md\n[报告](xdt-file:///tmp/fenced.pdf)\n```';
@@ -201,6 +217,13 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
 
     expect(collectXdtFileRefs(text)).toEqual([]);
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('ignores file references inside blockquote and list-container fences', () => {
+    const quoted = '> ~~~md\n> [报告](xdt-file:///tmp/quoted.pdf)\n> ~~~';
+    const listed = '- ```md\n  [报告](xdt-file:///tmp/listed.pdf)\n  ```';
+
+    expect(collectXdtFileRefs(`${quoted}\n${listed}`)).toEqual([]);
   });
 
   it('ignores file references inside four-space indented code blocks', () => {

@@ -99,19 +99,58 @@ function isIndentedCodeContinuation(text: string, start: number, end: number): b
   return lineIndentColumns(text, start, end) >= 4 || isBlankLine(text, start, end);
 }
 
+function fenceMarkerAtLine(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+): { start: number; marker: '`' | '~'; run: number } | null {
+  let cursor = lineStart;
+  let spaces = 0;
+  while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
+    cursor += 1;
+    spaces += 1;
+  }
+  while (cursor < lineEnd) {
+    if (text[cursor] === '>') {
+      cursor += 1;
+      if (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+    } else {
+      let markerEnd = cursor;
+      if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
+        markerEnd += 1;
+      } else {
+        let digits = 0;
+        while (markerEnd < lineEnd && digits < 9 && /[0-9]/.test(text[markerEnd])) {
+          markerEnd += 1;
+          digits += 1;
+        }
+        if (digits === 0 || (text[markerEnd] !== '.' && text[markerEnd] !== ')')) break;
+        markerEnd += 1;
+      }
+      if (text[markerEnd] !== ' ' && text[markerEnd] !== '\t') break;
+      cursor = markerEnd + 1;
+      while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+    }
+    spaces = 0;
+    while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
+      cursor += 1;
+      spaces += 1;
+    }
+  }
+  const marker = text[cursor];
+  if (marker !== '`' && marker !== '~') return null;
+  const run = runLength(text, cursor, marker);
+  return run >= 3 ? { start: cursor, marker, run } : null;
+}
+
 /** Locate fenced, indented, and inline Markdown code without copying large model output. */
 export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
   const fences: MarkdownCodeRange[] = [];
   let lineStart = 0;
   while (lineStart < text.length) {
     const openingLineEnd = lineEndAfterNewline(text, lineStart);
-    let markerStart = lineStart;
-    while (markerStart < openingLineEnd && markerStart - lineStart < 3 && text[markerStart] === ' ') {
-      markerStart += 1;
-    }
-    const marker = text[markerStart];
-    const openingRun = marker === '`' || marker === '~' ? runLength(text, markerStart, marker) : 0;
-    if (openingRun < 3) {
+    const opening = fenceMarkerAtLine(text, lineStart, openingLineEnd);
+    if (!opening) {
       lineStart = openingLineEnd;
       continue;
     }
@@ -120,13 +159,9 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
     let fenceEnd = text.length;
     while (searchLine < text.length) {
       const candidateLineEnd = lineEndAfterNewline(text, searchLine);
-      let candidate = searchLine;
-      while (candidate < candidateLineEnd && candidate - searchLine < 3 && text[candidate] === ' ') {
-        candidate += 1;
-      }
-      const closingRun = runLength(text, candidate, marker);
-      if (closingRun >= openingRun) {
-        const rest = text.slice(candidate + closingRun, candidateLineEnd).trim();
+      const closing = fenceMarkerAtLine(text, searchLine, candidateLineEnd);
+      if (closing?.marker === opening.marker && closing.run >= opening.run) {
+        const rest = text.slice(closing.start + closing.run, candidateLineEnd).trim();
         if (rest === '') {
           fenceEnd = candidateLineEnd;
           break;
@@ -253,6 +288,51 @@ function angleReferenceEnd(text: string, closingAngle: number): number {
   return text[cursor] === ')' ? cursor : -1;
 }
 
+function plainReferenceBounds(
+  text: string,
+  schemeStart: number,
+  initialEndParen: number,
+): { endParen: number; urlEnd: number } {
+  let titleEnd = initialEndParen - 1;
+  while (text[titleEnd] === ' ' || text[titleEnd] === '\t') titleEnd -= 1;
+
+  const closingTitle = text[titleEnd];
+  let endParen = initialEndParen;
+  let openingTitle: '"' | "'" | '(';
+  if (closingTitle === '"' || closingTitle === "'") {
+    openingTitle = closingTitle;
+  } else {
+    let outerParen = initialEndParen + 1;
+    while (text[outerParen] === ' ' || text[outerParen] === '\t') outerParen += 1;
+    if (text[outerParen] !== ')') return { endParen: initialEndParen, urlEnd: initialEndParen };
+    openingTitle = '(';
+    titleEnd = initialEndParen;
+    endParen = outerParen;
+  }
+
+  let titleStart = titleEnd - 1;
+  while (titleStart > schemeStart) {
+    if (text[titleStart] === openingTitle) {
+      let slashes = 0;
+      for (let i = titleStart - 1; i >= schemeStart && text[i] === '\\'; i -= 1) slashes += 1;
+      if (slashes % 2 === 0) break;
+    }
+    if (text[titleStart] === '\n' || text[titleStart] === '\r') {
+      return { endParen: initialEndParen, urlEnd: initialEndParen };
+    }
+    titleStart -= 1;
+  }
+  if (text[titleStart] !== openingTitle) {
+    return { endParen: initialEndParen, urlEnd: initialEndParen };
+  }
+  let urlEnd = titleStart;
+  while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
+  if (urlEnd === titleStart || urlEnd <= schemeStart) {
+    return { endParen: initialEndParen, urlEnd: initialEndParen };
+  }
+  return { endParen, urlEnd };
+}
+
 /**
  * 判定 text[openBracket] 处是否**直接**开始一个 managed-media 引用。判据与
  * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 扫描遇 '[' 即
@@ -355,13 +435,16 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     }
 
     const closingAngle = angleWrapped ? text.indexOf('>', schemeStart + scheme.length) : -1;
-    const endParen = angleWrapped
+    const initialEndParen = angleWrapped
       ? closingAngle === -1
         ? -1
         : angleReferenceEnd(text, closingAngle)
       : nextParen(schemeStart + scheme.length);
-    if (endParen === -1) break;
-    const urlEnd = angleWrapped ? closingAngle : endParen;
+    if (initialEndParen === -1) break;
+    const bounds = angleWrapped
+      ? { endParen: initialEndParen, urlEnd: closingAngle }
+      : plainReferenceBounds(text, schemeStart, initialEndParen);
+    const { endParen, urlEnd } = bounds;
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
     // 把整段错误改写。判据是 URL 段里出现**构成引用起点**的 '['(#1856 review
