@@ -69,10 +69,14 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
   const [readyGen, setReadyGen] = useState<number>(() =>
     deviceId ? getDeviceProvidersGen(deviceId) : 0,
   );
-  // 上一次 effect 运行时的连接代际:重连(epoch 变化)后缓存命中分支必须强制刷新
-  // (codex review P1)——relay 断线期间被控端可能已改供应商且无 provider push,
-  // 缓存命中短路会让模型选择器无限期展示旧来源。null = 首次挂载(正常缓存命中)。
-  const prevEpochRef = useRef<number | null>(null);
+  // 各设备上一次 effect 运行时的连接代际,按 deviceId 记录(codex review P2):
+  // 重连(epoch 变化)后缓存命中分支必须强制刷新(codex review P1)——relay 断线
+  // 期间被控端可能已改供应商且无 provider push,缓存命中短路会让模型选择器无限期
+  // 展示旧来源。单值 ref 记录不了「重连时 hook 未挂载 / 正查看其它设备」的旧设备:
+  // 再打开该设备时 prevEpoch 会被判成「未重连」而直接把旧缓存标就绪;Map 按
+  // deviceId 存上次代际,读到该设备旧代际 → reconnected → 强制 fresh。无记录
+  // = 该设备首次挂载(正常缓存命中快路径,与原 null 语义一致)。
+  const prevEpochsRef = useRef(new Map<string, number>());
 
   useEffect(() => {
     if (!deviceId) {
@@ -119,9 +123,10 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     const cached = getCachedDeviceProviders(deviceId);
     // 重连(connectionEpoch 变化)后缓存命中也要强制刷新(codex review P1):
     // relay 断线期间被控端可能已改供应商且无 provider push,直接短路会无限期
-    // 展示旧来源。首次挂载(prevEpochRef null)走正常缓存命中快路径。
-    const reconnected = prevEpochRef.current !== null && prevEpochRef.current !== connectionEpoch;
-    prevEpochRef.current = connectionEpoch;
+    // 展示旧来源。该设备无代际记录(首次挂载)走正常缓存命中快路径。
+    const prevEpoch = prevEpochsRef.current.get(deviceId);
+    const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;
+    prevEpochsRef.current.set(deviceId, connectionEpoch);
     if (cached && !reconnected) {
       setPayload(cached);
       setError(null);

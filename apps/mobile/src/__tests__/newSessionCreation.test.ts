@@ -159,6 +159,7 @@ describe('newSessionCreation pipeline', () => {
       's19',
       's20',
       's21',
+      's22',
     ]) dismissNewSessionCreation(id);
   });
 
@@ -322,6 +323,57 @@ describe('newSessionCreation pipeline', () => {
       }),
       expect.anything(),
     );
+  });
+
+  it('started 写盘后二次鉴权中止:账本降回 precreated,任务可返回编辑(codex P2)', async () => {
+    // 首次鉴权通过、precreated 账本写成 session-create-started 后,二次鉴权发现
+    // 来源全断开——createSession 尚未调用,必须先把账本降回 precreated 再失败:
+    // 否则 precreatedWorktreeSessionCreateStarted=true 会让 retry 拒绝重试、
+    // prepareForEdit 拒绝返回编辑、recovery 不回收未认领的 started 记录,
+    // 用户被困失败页且 worktree 无法自动回收(codex review P2 补强)。
+    const precreated = {
+      sessionId: 's22',
+      deviceId: 'dev-1',
+      path: '/repo/.cindy-worktrees/auto-two',
+      recoveryKey: 'recovery-key-2222222222',
+      originalWorkingDir: '/repo',
+    };
+    let authCalls = 0;
+    const maker = makeMaker();
+    startNewSessionCreation(makeParams('s22', maker, {
+      draft: { ...DRAFT, workingDir: precreated.path },
+      precreatedWorktree: precreated,
+      precreatedWorktreeAccountId: 'owner-a',
+      // 第 1 次 = 管线内鉴权(persist 之前):通过,fresh fail-open;
+      // 第 2 次 = started 写盘后二次鉴权(persist 之后):来源全断开 → 中止,
+      // 但 createSession 尚未调用,必须先降级账本。
+      confirmUnauthenticated: async () => {
+        authCalls += 1;
+        return authCalls === 1
+          ? { unauthenticated: false, fresh: null }
+          : { unauthenticated: true, fresh: null };
+      },
+      // 二次鉴权分支的开关:revalidateDraftAfterAuth 非空才执行 started 写盘后重验
+      revalidateDraftAfterAuth: async () => null,
+    }));
+    await flushPipeline();
+    expect(getNewSessionCreationTask('s22')?.status).toBe('create-failed');
+    expect(maker.createSession).not.toHaveBeenCalled();
+    // 账本降回 precreated(recovery 可回收未认领 worktree)
+    const pending = await listPendingPrecreatedWorktrees('owner-a');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      sessionId: 's22',
+      deviceId: 'dev-1',
+      path: precreated.path,
+      recoveryKey: 'recovery-key-2222222222',
+      phase: 'precreated',
+    });
+    // 任务可返回编辑(不再 retain-only 拒绝)——prepare 会 discard + forget
+    const prepared = await prepareNewSessionCreationForEdit('s22');
+    expect(prepared).not.toBeNull();
+    expect(maker.worktree.discardPrecreated).toHaveBeenCalled();
+    await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([]);
   });
 
   it('createSession 返回的 id 与预生成 id 不一致 → 确定性 create-failed,不把首条消息发进错误会话', async () => {

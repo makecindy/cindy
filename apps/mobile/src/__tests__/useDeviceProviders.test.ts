@@ -165,6 +165,19 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(f2).toHaveBeenCalledTimes(1);
   });
 
+  it('按设备记录缓存所属连接代际:单值 ref 改为 deviceId Map(codex P2)', async () => {
+    // hook 的 reconnected 判定必须按 deviceId 记录上次 effect 代际——relay 重连
+    // 时 hook 未挂载或正查看其它设备,单值 ref 会把旧设备缓存误判为「未重连」而
+    // 直接标记就绪,断线期间改过的供应商永远不被刷新(codex review P2)。
+    const src = readTextLf(resolve(process.cwd(), 'src/device-link/useDeviceProviders.ts'), 'utf8');
+    expect(src).toContain('const prevEpochsRef = useRef(new Map<string, number>());');
+    expect(src).toContain('const prevEpoch = prevEpochsRef.current.get(deviceId);');
+    expect(src).toContain('const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;');
+    expect(src).toContain('prevEpochsRef.current.set(deviceId, connectionEpoch);');
+    // 该设备无记录(首次挂载)→ prevEpoch undefined → reconnected=false(原 null 语义)
+    expect(src).not.toMatch(/prevEpochRef\.current !== null/);
+  });
+
   it('多 peer 故障隔离:dev-1 fresh 拉取失败,dev-2 缓存零感知(fault-radius 三问)', async () => {
     // 故障半径三问的多 peer 用例:恢复路径改动必须带「≥2 控制端共享同一被控端,
     // 一个 peer 静默/失败,其它 peer 零感知」——dev-1 fresh 失败只作用于 dev-1

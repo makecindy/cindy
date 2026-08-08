@@ -40,6 +40,7 @@ import {
 import {
   buildRemoteCreateSessionOptions,
   normalizeCreateSessionResult,
+  resolveStartedDowngradeOrCommit,
   sessionFromCreateResult,
   type NewSessionDraft,
 } from '@/session/newSession';
@@ -644,7 +645,31 @@ async function createSessionIdempotent(
       // 当前 Agent 的来源可能全部断开——此时应中止创建并显示鉴权提示,而不是
       // 继续 createSession 变成创建失败(管线最初的鉴权检查在该写盘 await 之前,
       // 无法覆盖此窗口,retain-only 阶段的任务也无法正常重试)。
+      // 中止前先把账本降回 precreated(codex review P2 补强):createSession 尚未
+      // 调用、worktree 未被会话认领——不降级直接抛错会让 failTask 保留
+      // precreatedWorktreeSessionCreateStarted=true,retry 拒绝重试、
+      // prepareNewSessionCreationForEdit 拒绝返回编辑、冷启动 recovery 也不
+      // discard 未认领的 started 记录,用户被困失败页且 worktree 无法自动回收。
+      // 降级成功 → 复位 sessionCreateStarted(task 可重试/可编辑/recovery 可回收);
+      // 降级失败(写盘罕见失败)→ 保持 started 现状,由外层兜底。
       if (auth?.unauthenticated) {
+        const pwt = task.precreatedWorktree;
+        const ledger = (phase: 'precreated' | 'session-create-started') =>
+          task.params.precreatedWorktreeAccountId && pwt
+            ? registerPendingPrecreatedWorktree(task.params.precreatedWorktreeAccountId, {
+                sessionId: task.sessionId,
+                deviceId: task.deviceId,
+                path: pwt.path,
+                recoveryKey: pwt.recoveryKey,
+                createdAt: pwt.createdAt ?? Date.now(),
+                phase,
+              })
+            : Promise.resolve(false);
+        const decision = await resolveStartedDowngradeOrCommit({
+          downgrade: () => ledger('precreated'),
+          restoreStarted: () => ledger('session-create-started'),
+        });
+        if (decision === 'downgraded') task.precreatedWorktreeSessionCreateStarted = false;
         task.params.onUnauthenticated();
         throw new Error(task.params.authGateHint);
       }
