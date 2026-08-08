@@ -2171,13 +2171,15 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(goalSetSuccess).toBeGreaterThan(-1);
     expect(restoreClear).toBeGreaterThan(goalSetSuccess);
     // initial 优先级:恢复载荷优先于 composer 文字带入;无载荷时 initialObjective
-    // 仍从 composer 带入(旧行为)
+    // 仍从 composer 带入(旧行为)。渲染前按 sessionId 过滤(codex review P1):
+    // 恢复值带 sessionId 归属,非当前任务立即失效,新表单不用旧目标初始化。
+    expect(sessionSource).toContain('goalRestore && goalRestore.sessionId === sessionId ? goalRestore : undefined');
     const viewCall = sessionSource.slice(
-      sessionSource.indexOf('initial={goalRestore ?? undefined}') - 200,
-      sessionSource.indexOf('initial={goalRestore ?? undefined}') + 300,
+      sessionSource.indexOf('initial={goalRestoreForSession}') - 200,
+      sessionSource.indexOf('initial={goalRestoreForSession}') + 300,
     );
-    expect(viewCall).toContain('initial={goalRestore ?? undefined}');
-    expect(viewCall).toContain('initialObjective={goalRestore ? undefined : (draft.trim() || undefined)}');
+    expect(viewCall).toContain('initial={goalRestoreForSession}');
+    expect(viewCall).toContain('initialObjective={goalRestoreForSession ? undefined : (draft.trim() || undefined)}');
   });
 
   it('goal 接回载荷按 sessionId 换代清理:切任务不残留旧 objective/limits(codex P2)', () => {

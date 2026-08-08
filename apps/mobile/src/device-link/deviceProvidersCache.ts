@@ -24,6 +24,20 @@ const cache = new Map<string, DeviceProvidersPayload>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
 const listeners = new Map<string, Set<(payload: DeviceProvidersPayload) => void>>();
+// 各设备缓存写入时的连接代际(模块级,组件卸载不丢):hook 用它对「重连时未挂载 /
+// 正看其它设备」的旧缓存做重连判定(codex review P1)——组件本地 ref 会随卸载
+// 丢失,旧设备再打开会被当首次挂载、采信断线前缓存。
+const deviceFetchEpoch = new Map<string, number>();
+
+/** hook 在缓存命中 / 拉取完成后标记该设备缓存所属的连接代际。 */
+export function markDeviceFetchEpoch(deviceId: string, epoch: number): void {
+  deviceFetchEpoch.set(deviceId, epoch);
+}
+
+/** 读该设备缓存写入时的连接代际;无记录 = 该设备从未标记(首次挂载语义)。 */
+export function getDeviceFetchEpoch(deviceId: string): number | undefined {
+  return deviceFetchEpoch.get(deviceId);
+}
 
 function notifyDeviceProviders(deviceId: string, payload: DeviceProvidersPayload): void {
   for (const listener of listeners.get(deviceId) ?? []) listener(payload);

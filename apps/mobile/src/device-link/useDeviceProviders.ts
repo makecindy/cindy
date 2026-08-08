@@ -8,7 +8,7 @@
  * React 接线。优雅回退:被控端为旧版(allowlist 无 `maker:provider:list`)→ listProviders
  * reject → 暴露 error,调用方回退到基于 capabilities 的扁平模型列表。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
 
@@ -17,7 +17,9 @@ import {
   fetchDeviceProviders,
   fetchDeviceProvidersFresh,
   getCachedDeviceProviders,
+  getDeviceFetchEpoch,
   getDeviceProvidersGen,
+  markDeviceFetchEpoch,
   subscribeDeviceProviders,
   subscribeDeviceProvidersGen,
   type DeviceProvidersPayload,
@@ -69,14 +71,13 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
   const [readyGen, setReadyGen] = useState<number>(() =>
     deviceId ? getDeviceProvidersGen(deviceId) : 0,
   );
-  // 各设备上一次 effect 运行时的连接代际,按 deviceId 记录(codex review P2):
-  // 重连(epoch 变化)后缓存命中分支必须强制刷新(codex review P1)——relay 断线
-  // 期间被控端可能已改供应商且无 provider push,缓存命中短路会让模型选择器无限期
-  // 展示旧来源。单值 ref 记录不了「重连时 hook 未挂载 / 正查看其它设备」的旧设备:
-  // 再打开该设备时 prevEpoch 会被判成「未重连」而直接把旧缓存标就绪;Map 按
-  // deviceId 存上次代际,读到该设备旧代际 → reconnected → 强制 fresh。无记录
-  // = 该设备首次挂载(正常缓存命中快路径,与原 null 语义一致)。
-  const prevEpochsRef = useRef(new Map<string, number>());
+  // 各设备缓存写入时的连接代际存在模块级(deviceProvidersCache):重连(epoch
+  // 变化)后缓存命中分支必须强制刷新(codex review P1)——relay 断线期间被控端
+  // 可能已改供应商且无 provider push,缓存命中短路会让模型选择器无限期展示旧
+  // 来源。模块级 Map 跨组件卸载存活:重连时 hook 未挂载 / 正查看其它设备,旧设备
+  // 再打开仍能读到断线前代际 → reconnected → 强制 fresh(组件本地 ref 会随卸载
+  // 丢失,把旧设备误判为首次挂载、采信断线前缓存,codex review P1)。无记录 =
+  // 该设备首次标记(正常缓存命中快路径,与原 null 语义一致)。
 
   useEffect(() => {
     if (!deviceId) {
@@ -123,10 +124,10 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     const cached = getCachedDeviceProviders(deviceId);
     // 重连(connectionEpoch 变化)后缓存命中也要强制刷新(codex review P1):
     // relay 断线期间被控端可能已改供应商且无 provider push,直接短路会无限期
-    // 展示旧来源。该设备无代际记录(首次挂载)走正常缓存命中快路径。
-    const prevEpoch = prevEpochsRef.current.get(deviceId);
+    // 展示旧来源。该设备无代际记录(首次标记)走正常缓存命中快路径。
+    const prevEpoch = getDeviceFetchEpoch(deviceId);
     const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;
-    prevEpochsRef.current.set(deviceId, connectionEpoch);
+    markDeviceFetchEpoch(deviceId, connectionEpoch);
     if (cached && !reconnected) {
       setPayload(cached);
       setError(null);

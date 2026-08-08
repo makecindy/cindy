@@ -849,12 +849,16 @@ export default function SessionScreen() {
   // limits,不改写为 null——改写会让 limitsTouched=true 显式提交「全部无限」覆盖
   // 被控端默认;独立审核者 P2)。平时无参 → null,与旧行为一致(表单仍从 composer
   // 文字初始化)。
-  const [goalRestore, setGoalRestore] = useState<{ objective: string; limits?: MobileGoalLimitsInput } | null>(() => {
+  const [goalRestore, setGoalRestore] = useState<{ sessionId: string; objective: string; limits?: MobileGoalLimitsInput } | null>(() => {
     const objective = readRouteParam(params.goalObjective);
     if (!objective) return null;
     const limits = parseGoalLimitsRouteParam(readRouteParam(params.goalLimits));
-    return { objective, ...(limits ? { limits } : {}) };
+    return { sessionId: readRouteParam(params.sessionId) ?? '', objective, ...(limits ? { limits } : {}) };
   });
+  // 渲染期按当前 sessionId 过滤恢复值:非当前任务的接回值立即失效(不依赖换代
+  // effect 的 commit 后清理时序),新任务表单不会用旧 objective/limits 初始化。
+  const goalRestoreForSession =
+    goalRestore && goalRestore.sessionId === sessionId ? goalRestore : undefined;
   // goal.set 失败接回(codex review P2):仅初始化 error 不打开面板,用户跳转后
   // 看不到目标设置失败——带入错误时自动打开 Goal 视图,让失败提示可见。
   useEffect(() => {
@@ -8009,13 +8013,18 @@ export default function SessionScreen() {
               testID="session.contextSheetScreenshotsGrid"
             />
           ) : (
+            // goal 接回载荷按 sessionId 归属、渲染时同步过滤(codex review P1):
+            // key={sessionId} 重挂载发生在渲染新 sessionId 的瞬间,此时 goalRestore
+            // 仍是旧任务的残留值——新表单会先用旧 objective/limits 初始化,换代
+            // effect 在 commit 后才清空、晚于那次挂载。渲染时按 sessionId 过滤:
+            // 旧任务的值立即失效(不依赖 effect 时序),新表单从 composer 初始化。
             <ContextSheetGoalView
               key={sessionId}
               busy={goalBusy}
               error={goalError}
               goal={goalStatus}
-              initial={goalRestore ?? undefined}
-              initialObjective={goalRestore ? undefined : (draft.trim() || undefined)}
+              initial={goalRestoreForSession}
+              initialObjective={goalRestoreForSession ? undefined : (draft.trim() || undefined)}
               onClearGoal={handleClearGoal}
               onPauseGoal={handlePauseGoal}
               onResumeGoal={handleResumeGoal}

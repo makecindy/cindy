@@ -165,17 +165,22 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(f2).toHaveBeenCalledTimes(1);
   });
 
-  it('按设备记录缓存所属连接代际:单值 ref 改为 deviceId Map(codex P2)', async () => {
-    // hook 的 reconnected 判定必须按 deviceId 记录上次 effect 代际——relay 重连
-    // 时 hook 未挂载或正查看其它设备,单值 ref 会把旧设备缓存误判为「未重连」而
-    // 直接标记就绪,断线期间改过的供应商永远不被刷新(codex review P2)。
+  it('缓存所属连接代际持久化到模块级:组件卸载不丢,旧设备仍判重连(codex P1)', async () => {
+    // reconnected 判定必须按 deviceId 记录「缓存写入时的连接代际」,且存模块级
+    // (组件本地 ref 会随卸载丢失)——重连时 hook 未挂载,旧设备再打开若被当首次
+    // 挂载会采信断线前缓存,断线期间改过的供应商永远不被刷新(codex review P1)。
     const src = readTextLf(resolve(process.cwd(), 'src/device-link/useDeviceProviders.ts'), 'utf8');
-    expect(src).toContain('const prevEpochsRef = useRef(new Map<string, number>());');
-    expect(src).toContain('const prevEpoch = prevEpochsRef.current.get(deviceId);');
+    const cacheSrc = readTextLf(resolve(process.cwd(), 'src/device-link/deviceProvidersCache.ts'), 'utf8');
+    // hook 从模块级缓存读取/标记代际(不持有组件本地 ref)
+    expect(src).toContain('const prevEpoch = getDeviceFetchEpoch(deviceId);');
     expect(src).toContain('const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;');
-    expect(src).toContain('prevEpochsRef.current.set(deviceId, connectionEpoch);');
-    // 该设备无记录(首次挂载)→ prevEpoch undefined → reconnected=false(原 null 语义)
-    expect(src).not.toMatch(/prevEpochRef\.current !== null/);
+    expect(src).toContain('markDeviceFetchEpoch(deviceId, connectionEpoch);');
+    // 模块级 Map + 导出存取(跨组件卸载存活)
+    expect(cacheSrc).toContain('const deviceFetchEpoch = new Map<string, number>();');
+    expect(cacheSrc).toContain('export function markDeviceFetchEpoch(deviceId: string, epoch: number): void');
+    expect(cacheSrc).toContain('export function getDeviceFetchEpoch(deviceId: string): number | undefined');
+    // 不再有组件本地单值/Map ref 判定
+    expect(src).not.toMatch(/prevEpochRef|prevEpochsRef/);
   });
 
   it('多 peer 故障隔离:dev-1 fresh 拉取失败,dev-2 缓存零感知(fault-radius 三问)', async () => {

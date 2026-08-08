@@ -160,6 +160,7 @@ describe('newSessionCreation pipeline', () => {
       's20',
       's21',
       's22',
+      's23',
     ]) dismissNewSessionCreation(id);
   });
 
@@ -374,6 +375,55 @@ describe('newSessionCreation pipeline', () => {
     expect(prepared).not.toBeNull();
     expect(maker.worktree.discardPrecreated).toHaveBeenCalled();
     await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([]);
+  });
+
+  it('started 二次鉴权中止 + 账本降级写盘失败:任务不锁死,可返回编辑(codex P1)', async () => {
+    // 降级(写回 precreated)罕见失败时,resolveStartedDowngradeOrCommit 走 commit
+    // 分支(restoreStarted 把账本写回 started)——第 60 轮无条件抛错会保留
+    // sessionCreateStarted=true → retry 拒绝/prepareForEdit 报 cleanup pending/
+    // recovery 不回收 = 永久锁死(codex review P1)。修复后两种结果都复位任务。
+    const rec = await import('@/session/precreatedWorktreeRecovery');
+    const original = rec.registerPendingPrecreatedWorktree;
+    const spy = vi.spyOn(rec, 'registerPendingPrecreatedWorktree')
+      .mockImplementation(async (accountId, record) => {
+        if (record.phase === 'precreated') return false; // 降级写盘失败
+        return original(accountId, record);
+      });
+    try {
+      const precreated = {
+        sessionId: 's23',
+        deviceId: 'dev-1',
+        path: '/repo/.cindy-worktrees/auto-three',
+        recoveryKey: 'recovery-key-3333333333',
+        originalWorkingDir: '/repo',
+      };
+      let authCalls = 0;
+      const maker = makeMaker();
+      startNewSessionCreation(makeParams('s23', maker, {
+        draft: { ...DRAFT, workingDir: precreated.path },
+        precreatedWorktree: precreated,
+        precreatedWorktreeAccountId: 'owner-a',
+        confirmUnauthenticated: async () => {
+          authCalls += 1;
+          return authCalls === 1
+            ? { unauthenticated: false, fresh: null }
+            : { unauthenticated: true, fresh: null };
+        },
+        revalidateDraftAfterAuth: async () => null,
+      }));
+      await flushPipeline();
+      expect(getNewSessionCreationTask('s23')?.status).toBe('create-failed');
+      expect(maker.createSession).not.toHaveBeenCalled();
+      // 降级失败 → restoreStarted 把账本写回 started(recovery 保守不回收,
+      // 但任务可返回编辑,不再报 cleanup pending 锁死)
+      const pending = await listPendingPrecreatedWorktrees('owner-a');
+      expect(pending[0]?.phase).toBe('session-create-started');
+      const prepared = await prepareNewSessionCreationForEdit('s23');
+      expect(prepared).not.toBeNull();
+      expect(maker.worktree.discardPrecreated).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('createSession 返回的 id 与预生成 id 不一致 → 确定性 create-failed,不把首条消息发进错误会话', async () => {
