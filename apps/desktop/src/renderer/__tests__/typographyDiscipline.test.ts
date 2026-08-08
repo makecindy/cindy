@@ -304,7 +304,7 @@ export function findTwWeightViolations(text: string): Hit[] {
 export function findArbitrarySizes(text: string): Hit[] {
   return [
     ...text.matchAll(
-      /\btext-\[(?:(?:length:)?(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax|%)|(?:length:)?(?:calc|clamp|min|max)\([^\]\n]+\)|length:var\([^\]\n]+\)|(?:length:)?(?:xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger))\]/gi,
+      /\btext-\[(?:(?:length:)?(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax|%)|length:[^\]\n]+|(?:calc|clamp|min|max)\([^\]\n]+\)|(?:length:)?(?:xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger))\]/gi,
     ),
     ...text.matchAll(/\[(?:font-size):[^\]\n]+\]/gi),
   ].map((m) => ({ match: m[0], index: m.index ?? 0 }));
@@ -745,6 +745,8 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findArbitrarySizes('text-[.75rem]')).toHaveLength(1);
       // 函数形式不能因 `[` 后不是数字而绕过守卫(P1)
       expect(findArbitrarySizes('text-[length:calc(9px+1vw)]')).toHaveLength(1);
+      // `length:` 默认拒绝开放的 CSS 函数集合,不能退化为已知函数枚举。
+      expect(findArbitrarySizes('text-[length:env(safe-area-inset-top,_9px)]')).toHaveLength(1);
       // Tailwind 可推断为 length 的函数无需显式 `length:` 也必须拦截。
       expect(findArbitrarySizes('text-[calc(9px+1vw)] text-[clamp(9px,1vw,12px)]')).toHaveLength(2);
       expect(findArbitrarySizes('text-[length:var(--app-code-font-size)]')).toHaveLength(1);
