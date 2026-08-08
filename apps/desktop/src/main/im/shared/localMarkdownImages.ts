@@ -30,8 +30,11 @@ const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 interface LocalMarkdownImageDeps {
   realpath(value: string): Promise<string>;
-  stat(value: string): Promise<{ isFile(): boolean; size: number }>;
-  readFile(value: string): Promise<Uint8Array>;
+  readBoundedFile(
+    value: string,
+    maxBytes: number,
+    containWithin?: string,
+  ): Promise<Uint8Array | null>;
   ingest(params: {
     buffer: Uint8Array;
     mimeType: string;
@@ -42,8 +45,12 @@ interface LocalMarkdownImageDeps {
 
 const defaultDeps: LocalMarkdownImageDeps = {
   realpath: (value) => fs.realpath(value),
-  stat: (value) => fs.stat(value),
-  readFile: (value) => fs.readFile(value),
+  readBoundedFile: (value, maxBytes, containWithin) =>
+    readBoundedFileFollowLinks(
+      value,
+      maxBytes,
+      containWithin === undefined ? undefined : { containWithin },
+    ),
   ingest: async ({ buffer, mimeType, sessionId }) =>
     ingestMedia({
       buffer,
@@ -76,6 +83,14 @@ function markdownImageDestination(raw: string): string {
     // `![alt](</private/file.png> "title")`. Extract only the destination.
     // A malformed missing `>` remains fail-closed for local-path detection.
     target = target.slice(1, closingBracket >= 0 ? closingBracket : target.length).trim();
+  } else {
+    // A plain destination may be followed by a quoted/parenthesized title:
+    // `![alt](/work/out.png "preview")`. Unescaped whitespace is not part of
+    // a plain Markdown destination, so only strip a syntactically complete title.
+    const titled = target.match(
+      /^(\S+)[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/,
+    );
+    if (titled) target = titled[1];
   }
   return target;
 }
@@ -246,6 +261,8 @@ export async function materializeLocalMarkdownImages(
     maxImageBytes?: number;
     /** 已由 tool_result side-channel 收集的图片；参与总数限制与去重。 */
     existingAbsPaths?: string[];
+    /** SSH host when local-looking paths belong to a remote desktop session. */
+    remoteHostId?: string | null;
   },
   deps: LocalMarkdownImageDeps = defaultDeps,
 ): Promise<MaterializedLocalMarkdownImages> {
@@ -279,16 +296,31 @@ export async function materializeLocalMarkdownImages(
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index];
     const rawTarget = match[2].trim();
-    const managed = isManagedImageTarget(rawTarget);
+    const destination = markdownImageDestination(rawTarget);
+    const managed = isManagedImageTarget(destination);
     const localTarget = managed ? null : markdownLocalTarget(rawTarget);
     if (!managed && !localTarget) continue;
 
     try {
-      const resolvedSource = managed
-        ? deps.resolveMediaUrl(rawTarget).absPath
-        : (localTarget as string);
-      const sourceReal = await deps.realpath(resolvedSource);
-      if (!managed) {
+      let sourceReal: string;
+      let dedupeKey: string;
+      let containWithin: string | undefined;
+      let expectedSize: number | undefined;
+      if (managed) {
+        sourceReal = await deps.realpath(deps.resolveMediaUrl(destination).absPath);
+        dedupeKey = pathKey(sourceReal);
+      } else if (params.remoteHostId) {
+        const remote = await materializeSshRemoteFile(
+          { remoteHostId: params.remoteHostId, workdir: params.workingDir },
+          localTarget as string,
+          maxImageBytes,
+        );
+        if (!remote.ok) continue;
+        sourceReal = remote.cachePath;
+        dedupeKey = `ssh:${params.remoteHostId}:${remote.relPath}`;
+        expectedSize = remote.size;
+      } else {
+        sourceReal = await deps.realpath(localTarget as string);
         if (workingDirReal === undefined) {
           try {
             workingDirReal = await deps.realpath(params.workingDir);
@@ -297,19 +329,20 @@ export async function materializeLocalMarkdownImages(
           }
         }
         if (!workingDirReal || !isPathInside(workingDirReal, sourceReal)) continue;
+        dedupeKey = pathKey(sourceReal);
+        containWithin = workingDirReal;
       }
-      const dedupeKey = pathKey(sourceReal);
       const existing = materializedByRealPath.get(dedupeKey);
       if (existing) {
         acceptedMatchIndexes.add(index);
         continue;
       }
       if (materializedByRealPath.size >= maxImages) continue;
-
-      const stat = await deps.stat(sourceReal);
-      if (!stat.isFile() || stat.size <= 0 || stat.size > maxImageBytes) continue;
-      const buffer = await deps.readFile(sourceReal);
-      if (buffer.byteLength !== stat.size || buffer.byteLength > maxImageBytes) continue;
+      // This helper verifies the opened descriptor still resolves inside the
+      // trusted root before reading, closing both final- and parent-symlink races.
+      const buffer = await deps.readBoundedFile(sourceReal, maxImageBytes, containWithin);
+      if (expectedSize !== undefined && buffer?.byteLength !== expectedSize) continue;
+      if (!buffer || buffer.byteLength === 0 || buffer.byteLength > maxImageBytes) continue;
       const mimeType = sniffMediaMime(buffer);
       if (!mimeType?.startsWith('image/')) continue;
 

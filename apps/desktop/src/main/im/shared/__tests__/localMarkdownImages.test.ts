@@ -30,6 +30,14 @@ function makeDeps(mediaAbsPath: string) {
     realpath: (value: string) => fs.realpath(value),
     stat: (value: string) => fs.stat(value),
     readFile: (value: string) => fs.readFile(value),
+    readBoundedFile: (value: string, maxBytes: number, containWithin?: string) =>
+      import('../../../utils/readBoundedFile').then(({ readBoundedFileFollowLinks }) =>
+        readBoundedFileFollowLinks(
+          value,
+          maxBytes,
+          containWithin === undefined ? undefined : { containWithin },
+        ),
+      ),
     ingest: vi.fn(async () => ({ url: 'cindy-media://blobs/test.png' })),
     resolveMediaUrl: vi.fn(() => ({ absPath: mediaAbsPath })),
   };
@@ -72,6 +80,97 @@ describe('materializeLocalMarkdownImages', () => {
       mimeType: 'image/png',
       sessionId: 'session-1',
     });
+  });
+
+  it('parses an optional Markdown title after a plain local destination', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `![preview](${sourcePath} "caption")`,
+          workingDir,
+          sessionId: 'session-title',
+        },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
+  });
+
+  it('materializes SSH Markdown images through the remote file service', async () => {
+    const cacheRoot = await makeTempRoot();
+    const cachePath = path.join(cacheRoot, 'remote-image.png');
+    const mediaAbsPath = path.join(cacheRoot, 'media-store.png');
+    await fs.writeFile(cachePath, PNG_BYTES);
+    remoteFileMocks.materializeSshRemoteFile.mockResolvedValue({
+      ok: true,
+      cachePath,
+      size: PNG_BYTES.length,
+      relPath: 'out.png',
+    });
+    const deps = makeDeps(mediaAbsPath);
+
+    const result = await materializeLocalMarkdownImages(
+      {
+        text: '![remote](/srv/project/out.png)',
+        workingDir: '/srv/project',
+        remoteHostId: 'ssh-host-1',
+        sessionId: 'session-ssh-image',
+      },
+      deps,
+    );
+
+    expect(remoteFileMocks.materializeSshRemoteFile).toHaveBeenCalledWith(
+      { remoteHostId: 'ssh-host-1', workdir: '/srv/project' },
+      '/srv/project/out.png',
+      20 * 1024 * 1024,
+    );
+    expect(result).toEqual({ absPaths: [mediaAbsPath], text: 'remote' });
+    expect(deps.ingest).toHaveBeenCalledWith({
+      buffer: PNG_BYTES,
+      mimeType: 'image/png',
+      sessionId: 'session-ssh-image',
+    });
+  });
+
+  it('does not reopen a validated local image path for reading', async () => {
+    const parent = await makeTempRoot();
+    const workingDir = path.join(parent, 'work');
+    const sourceDir = path.join(workingDir, 'slot');
+    const outsideDir = path.join(parent, 'outside');
+    const sourcePath = path.join(sourceDir, 'generated.png');
+    const outsidePath = path.join(outsideDir, 'generated.png');
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.mkdir(outsideDir);
+    const sourceBytes = Buffer.concat([PNG_BYTES, Buffer.from([0x01])]);
+    await fs.writeFile(sourcePath, sourceBytes);
+    const outsideBytes = Buffer.from(sourceBytes);
+    outsideBytes[outsideBytes.length - 1] ^= 0xff;
+    await fs.writeFile(outsidePath, outsideBytes);
+    const deps = makeDeps(path.join(parent, 'media-store.png'));
+    deps.stat = async (value: string) => {
+      const stat = await fs.stat(value);
+      await fs.rename(sourceDir, `${sourceDir}-original`);
+      await fs.symlink(outsideDir, sourceDir);
+      return stat;
+    };
+    deps.readBoundedFile = vi.fn(async () => null);
+
+    const result = await materializeLocalMarkdownImages(
+      {
+        text: `![preview](${sourcePath})`,
+        workingDir,
+        sessionId: 'session-race',
+      },
+      deps,
+    );
+
+    expect(result).toEqual({ absPaths: [], text: `![preview](${sourcePath})` });
+    expect(deps.ingest).not.toHaveBeenCalled();
   });
 
   it('拒绝 workingDir 外路径和伪装成图片的非图片字节', async () => {

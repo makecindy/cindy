@@ -645,6 +645,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('materializes inline managed images before rich-card plain-text fallback', async () => {
     const managedUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    mocks.findActiveSession.mockResolvedValueOnce({
+      id: 'feishu-session',
+      agentKind: 'claude-code',
+      workingDir: '/srv/project',
+      model: 'claude-opus-4-7',
+      effort: 'xhigh',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+      sdkSessionId: null,
+      providerId: null,
+      remoteHostId: 'ssh-host-1',
+    });
     mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
     mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({
       absPaths: ['/tmp/inline.png'],
@@ -670,10 +682,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
     expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith({
       text: `image ready\n![inline image](${managedUrl})`,
-      workingDir: 'F:\\XDMaker',
+      workingDir: '/srv/project',
       sessionId: 'feishu-session',
       maxImages: 4,
       existingAbsPaths: [],
+      remoteHostId: 'ssh-host-1',
     });
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'image ready\ninline image', {
       threadTs: undefined,
@@ -2267,6 +2280,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         sessionId: 'feishu-session',
         maxImages: 4,
         existingAbsPaths: [],
+        remoteHostId: null,
       });
       expect(commitFinal).toHaveBeenCalledWith({
         userId: 'ou_user',
