@@ -457,7 +457,7 @@ describe('will- 拦截', () => {
     expect(await p).toEqual({ action: 'allow' });
   });
 
-  it('成功投递后重新获得完整的裁决窗口', async () => {
+  it('入口钩子的唤醒与裁决共享同一个整体超时', async () => {
     let finishWake!: () => void;
     const wake = vi.fn(() => new Promise<void>((resolve) => {
       finishWake = resolve;
@@ -472,20 +472,16 @@ describe('will- 拦截', () => {
     finishWake();
     await vi.waitFor(() => expect(sent).toHaveLength(1));
 
-    let settled = false;
-    void p.then(() => (settled = true));
     await vi.advanceTimersByTimeAsync(200);
-    expect(settled).toBe(false);
-
+    expect(await p).toEqual({ action: 'allow' });
     gw.handleVerdict('h1', {
       type: 'event-verdict',
       hookId: (sent[0].payload as { hookId: string }).hookId,
-      action: 'allow',
+      action: 'block',
     });
-    expect(await p).toEqual({ action: 'allow' });
   });
 
-  it('上下文读取挂死:无上下文投递后仍获得完整裁决窗口', async () => {
+  it('上下文读取挂死:无上下文投递后仍受整体超时约束', async () => {
     const { gw, sent, running } = makeGateway({
       listGhosts: () => [HOOK_GHOSTS[0]],
       resolveMessageHookContext: () => new Promise<never>(() => {}),
@@ -495,7 +491,7 @@ describe('will- 拦截', () => {
     await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2);
     expect((sent[0].payload as { data: unknown }).data).toEqual({ sessionId: 's1', text: 'hi' });
     const hookId = (sent[0].payload as { hookId: string }).hookId;
-    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS + 1);
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2 + 1);
     expect(await p).toEqual({ action: 'allow' });
     gw.handleVerdict('h1', {
       type: 'event-verdict',

@@ -452,9 +452,9 @@ export class GhostSubscriptionGateway {
         ts: this.deps.now(),
         data,
       });
-      // Wake/context resolution must remain bounded, but a successful delivery
-      // starts a fresh decision window so setup latency cannot consume it.
-      if (this.pendingHooks.has(hookId)) armTimeout();
+      // Assistant hooks run after the turn and may grant a fresh decision
+      // window. User hooks stay inside the original end-to-end send deadline.
+      if (hookName === 'will-assistant-message' && this.pendingHooks.has(hookId)) armTimeout();
     })().catch((err) => {
       if (this.pendingHooks.delete(hookId)) {
         deliverFailure = `deliver: ${err instanceof Error ? err.message : String(err)}`;
