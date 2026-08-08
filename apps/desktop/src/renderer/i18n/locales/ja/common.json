@@ -4261,6 +4261,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
     "cacheLabel": "キャッシュ",
+    "timeLabel": "時間",
+    "timeAndRateValue": "{{duration}} 速度:{{rate}} トークン/秒",
     "modelLabel": "モデル",
     "staleData": "データは {{minutes}} 分前に更新されました",
     "paceTrendFast": "現在の平均使用ペースは速めです（おおよその傾向）",
@@ -4269,6 +4271,11 @@
     "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "performanceLine": "速度 {{rate}} トークン/秒 · 時間 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} トークン/秒",
+    "timeLine": "時間 {{duration}}",
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
     "tokenLine": "Token: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",

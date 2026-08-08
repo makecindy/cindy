@@ -53,6 +53,7 @@ import type { LiziMcpSessionContext, SchedulerMcpDeps } from './types.js';
 export interface SchedulerMcpSessionCtx {
   agentKind: 'claude-code' | 'codex' | 'pi';
   workingDir: string;
+  getSessionContext?: () => LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
 }

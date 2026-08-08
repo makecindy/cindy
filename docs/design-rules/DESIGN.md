@@ -146,7 +146,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 - **UI 段:{10, 11, 12, 13, 14, 15, 16}px;标题 / 内容段:{18, 20, 24, 28}px。** 下限 10px —— 9px 及以下禁止(再小就不是文字是纹理)。
 - **下限约束的是「开发者写死的档位」,不约束运行期缩放结果。** 用户可把 UI 字号设到 `appearanceSettings.uiSize` 允许的最小值 12（默认 14）,`useFontSettings` 按 `uiSize / 14` 缩放并 `Math.round`,此时 `--text-10` 与 `--text-11` 都会算成 9px（两档在该设置下失去区分）。这是用户主动选择的整体缩小,不是违反下限;守卫也只检查源码里写的档位,不检查运行期计算值。**若要保住 10px 视觉下限,应在字号设置侧（提高 `uiSize` 下限或改缩放曲线）解决,而不是往白名单里加更小的档位。**
 - **写法**:一律用 `tailwind.config.ts` 的 `text-<n>` token 类(映射 `--text-<n>` 变量;doc 紧凑模式与后续字号缩放能力都挂在这层变量上,任意值类会静默漏掉这些机制)。语义类 `text-xs / text-sm / text-base / text-lg` 只收编存量(等值 12 / 14 / 16 / 18)；源码侧禁止使用 `text-xl` 及以上语义档位（由守卫拦截），配置侧 `theme.extend.fontSize` 的 `xl..5xl` 遗留项不在本轮删除范围，避免删除后静默回退到 Tailwind 内置固定值、失去用户字号缩放；其清理另行处理。**禁止新增任意值 `text-[Npx]`(含一切小数)与白名单外档位**;需要新档先改本表与权威来源，再进组件。
-- **镜像约定（目标态；施工由 #1553 承接）**：当前 main 尚未建立白名单与字号实现的镜像关系。四个权威来源必须同步：本表（规范正本）与以下三处代码——`apps/desktop/tailwind.config.ts` 的 `fontSize`（类名可用性与变量映射；漏掉则 `text-<n>` 类根本不存在）、`apps/desktop/src/renderer/styles/globals.css` 的静态 `--text-<n>` 默认值（漏掉则变量未定义并回退到继承值）、`apps/desktop/src/renderer/hooks/useFontSettings.ts` 的 `UI_TEXT_TOKEN_SIZES` 运行时生效值（含用户字号缩放；漏掉则该档位不随用户设置缩放，反向漏则会写出已删档位的陈旧变量）。另有一个消费端需保持一致：`apps/desktop/src/renderer/lib/utils.ts` 的 tailwind-merge `classGroups['font-size']` 负责类名去重，不产生字号值；漏登记会让 `cn()` 合并两个字号类失效，两个类会同时留在 DOM 上。该消费端单独做一致性校验，不计入四个权威来源镜像。同一 hook 的 `SCALED_TAILWIND_TOKENS` 负责语义类运行时缩放，需与 Tailwind 语义类映射保持同步，但不改变本白名单的具体档位。PR4 的守卫按四个权威来源做镜像断言，并单独校验消费端一致性。
+- **镜像约定（已成立，由 #1553 完成）**：四个权威来源必须同步：本表（规范正本）与以下三处代码——`apps/desktop/tailwind.config.ts` 的 `fontSize`（类名可用性与变量映射；漏掉则 `text-<n>` 类根本不存在）、`apps/desktop/src/renderer/styles/globals.css` 的静态 `--text-<n>` 默认值（漏掉则变量未定义并回退到继承值）、`apps/desktop/src/renderer/hooks/useFontSettings.ts` 的 `UI_TEXT_TOKEN_SIZES` 运行时生效值（含用户字号缩放；漏掉则该档位不随用户设置缩放，反向漏则会写出已删档位的陈旧变量）。另有一个消费端需保持一致：`apps/desktop/src/renderer/lib/utils.ts` 的 tailwind-merge `classGroups['font-size']` 负责类名去重，不产生字号值；漏登记会让 `cn()` 合并两个字号类失效，两个类会同时留在 DOM 上。该消费端单独做一致性校验，不计入四个权威来源镜像。同一 hook 的 `SCALED_TAILWIND_TOKENS` 负责语义类运行时缩放，需与 Tailwind 语义类映射保持同步，但不改变本白名单的具体档位。PR4 的守卫按四个权威来源做镜像断言，并单独校验消费端一致性。
 - 品牌画布域(登录 / Splash 家族等设计 px 坐标系表面)不映射本白名单:字面量只允许进画布常量文件(`loginDesignTokens.ts` 的地位,对齐手机端 `loginSkinLayout.ts`)**或下表登记的自包含品牌页生成器**(`oauthResultPage.ts` 整页由 main 侧生成,其内嵌 raw CSS 即该页的常量载体),组件消费端照常受守卫扫描。
 
 ### 排版豁免登记表(2026-08,issue #1505)
@@ -170,7 +170,8 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 以下漂移**已知且本轮明确不治理**,后人见到不要当「漏网」顺手修,治理需另立 issue:
 
-- line-height:桌面存在 `leading-[1.45]` / `leading-[1.55]` 等微调档与无单位 / px 混轨。
+- line-height **档位统一**:桌面存在 `leading-[1.45]` / `leading-[1.55]` 等微调档与无单位 / px 混轨,本轮不收敛成统一阶梯。
+  - **但有一条例外,已在 #1553 治理完毕**:`text-<n>` 与**固定 px 行高**(`leading-[Mpx]`)并存属于**功能缺陷**,不是风格漂移 —— `text-<n>` 经 `--text-<n>` 响应「外观 → UI 字号」设置,固定 px 行框不跟随,用户放大字号时文字会裁切/重叠。原设计未考虑用户可自行调整字号,故留下这个洞。**该组合一律改为无单位比例**(比例 = 原 px ÷ 字号),渲染在默认字号下不变而放大时正确。#1553 已把当时全部 38 处清零(其中 14 处为字号归一新引入、24 处先于其存在);后续新增 `text-<n>` 时**不得再配固定 px 行高**,该约束由 `typographyDiscipline.test.ts` 的 `fixed-leading` 规则做机器门禁,**按 `className` / `cn(...)` 整块区域跨行判定**(只比对同一行会漏掉 `cn()` 分行写法,#1553 实际漏过一处)。行高被 JS 布局计算写死引用时(如按行高算 auto-grow 上限),须同时改成读计算值,否则上限不跟随缩放。
 - 语义类 `text-xs/sm/base/lg` → `text-<n>` 的机械统一:等值改写零收益,收编即可。
 - letter-spacing 与 font-family 治理。
 - 原生层排版:macOS agent-island helper 等 Swift / 原生 UI 的字号字重不在本白名单域(Web 白名单与守卫均不覆盖,治理需另立 issue)。

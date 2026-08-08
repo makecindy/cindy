@@ -434,7 +434,7 @@ function ForkOriginMarker({ onClick }: { onClick?: () => void }) {
         type="button"
         onClick={onClick}
         disabled={!onClick}
-        className="group inline-flex shrink-0 items-center gap-2 bg-transparent p-0 text-[13px] font-medium leading-5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default disabled:text-[var(--text-tertiary)] disabled:hover:no-underline"
+        className="group inline-flex shrink-0 items-center gap-2 bg-transparent p-0 text-13 font-medium leading-5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default disabled:text-[var(--text-tertiary)] disabled:hover:no-underline"
       >
         <GitFork size={15} strokeWidth={2} className="shrink-0" aria-hidden="true" />
         <span>{t('chat.forkOrigin.label')}</span>

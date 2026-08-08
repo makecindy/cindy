@@ -23,6 +23,7 @@ const knobs = vi.hoisted(() => ({
   getStateRejects: false,
   closeCount: 0,
   onExit: null as null | ((info: { code: number | null; signal: string | null }) => void),
+  onEvent: null as null | ((event: unknown) => void),
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
 }));
@@ -33,9 +34,15 @@ vi.mock('../rpc-client.js', () => ({
     constructor(opts: unknown) {
       // 捕获 onExit 以便单测模拟进程异常退出(crash);捕获 env 以断言每会话隔离 configHome。
       const o = opts as
-        | { onExit?: typeof knobs.onExit; env?: Record<string, string | undefined>; args?: string[] }
+        | {
+            onExit?: typeof knobs.onExit;
+            onEvent?: typeof knobs.onEvent;
+            env?: Record<string, string | undefined>;
+            args?: string[];
+          }
         | undefined;
       knobs.onExit = o?.onExit ?? null;
+      knobs.onEvent = o?.onEvent ?? null;
       knobs.spawnedEnvs.push({ ...(o?.env ?? {}) });
       knobs.spawnedArgs.push([...(o?.args ?? [])]);
       if (knobs.ctorThrows) throw new Error('spawn failed (mock)');
@@ -78,6 +85,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.getStateRejects = false;
     knobs.closeCount = 0;
     knobs.onExit = null;
+    knobs.onEvent = null;
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
     disposed = 0;
@@ -88,6 +96,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -163,6 +172,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   it('does not dispose ctx on the success path (dispose is deferred to close())', async () => {
     const agent = new PiAgent(buildDeps());
     const handle = await agent.startSession(opts());
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    knobs.onEvent?.({ type: 'message_start' });
     expect(preparedMcpContext).toMatchObject({
       sessionId: 's1',
       sessionInstanceId: 'pi-instance-1',
@@ -171,6 +182,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(disposed).toBe(0);
     expect(proxyDisposed).toBe(0);
     await handle.close();
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(disposed).toBe(1); // close() 才注销
     expect(proxyDisposed).toBe(1);
   });
@@ -206,8 +218,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(disposed).toBe(0);
     expect(proxyDisposed).toBe(0);
     expect(knobs.onExit).toBeTypeOf('function');
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    knobs.onEvent?.({ type: 'message_start' });
 
     knobs.onExit!({ code: 1, signal: null }); // 模拟进程异常退出
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(1);
 

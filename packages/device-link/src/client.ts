@@ -41,6 +41,8 @@ import {
   byteLength,
 } from './transport.js';
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
+/** RFC 6455 1013 Try Again Later:relay 因拥塞主动断连(如 inbound backpressure)。 */
+const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
 /**
  * latest-wins 腾位适用的**可驱逐通道白名单**(review 三轮收敛:contacts-sync
  * 黑名单 → 白名单 → 收缩到单通道)。push 单 FIFO 上混着三类语义,只有第一类
@@ -211,6 +213,18 @@ export interface DeviceLinkTiming {
    * 由重连 resync 补偿,invoke-result 的原请求方早已超时,整队放弃无损。
    */
   stalledLinkPendingMaxAgeMs: number;
+  /**
+   * relay 主动拥塞断连(close 1013 Try Again Later,如 inbound backpressure)
+   * 后的重连冷却下限:连续第 N 次拥塞断连后,下一次重连至少等
+   * min(congestionBackoffBaseMs × 2^(N-1), congestionBackoffMaxMs),与普通
+   * 退避取 max。普通退避在稳定在线(reconnectStableResetMs)后归零,而拥塞
+   * 断连恰恰常发生在「在线很久 → 出站洪峰 → 被踢」之后——若冷却随稳定期
+   * 归零,客户端会以 1s 级节奏反复「重连 → 全量重放洪峰 → 再被踢」
+   * (2026-08-08 线上:两次 1013 间隔仅 15s,第二条连接只活了 7s)。
+   * 连续拥塞计数同样只在稳定在线一个 reconnectStableResetMs 后清零。
+   */
+  congestionBackoffBaseMs: number;
+  congestionBackoffMaxMs: number;
 }
 
 const DEFAULT_TIMING: DeviceLinkTiming = {
@@ -226,7 +240,43 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   transportMaxRetryAttempts: TRANSPORT_MAX_RETRY_ATTEMPTS,
   presenceRetryIntervalMs: 500,
   stalledLinkPendingMaxAgeMs: 60_000,
+  congestionBackoffBaseMs: 5_000,
+  congestionBackoffMaxMs: 30_000,
 };
+
+/**
+ * 重连延迟计算(包内部工具,为确定性单测保持具名导出;**不属于稳定公共
+ * API 面**,外部不应依赖):普通指数退避与拥塞冷却下限取 max,再做向下抖动
+ * (0.7x–1.0x,与 scheduleReconnect 既有抖动语义一致)。
+ * 入参钳制(review P2,防误用产生 NaN/负延迟):attempt / congestionCloseStreak
+ * 取整并夹到 ≥0(非有限值按 0),random 夹到 [0,1];streak=0 表示无拥塞信号。
+ */
+export function computeReconnectDelayMs(input: {
+  attempt: number;
+  congestionCloseStreak: number;
+  reconnectBaseMs: number;
+  reconnectMaxMs: number;
+  congestionBackoffBaseMs: number;
+  congestionBackoffMaxMs: number;
+  random: number;
+}): number {
+  const attempt = Number.isFinite(input.attempt) ? Math.max(0, Math.floor(input.attempt)) : 0;
+  const streak = Number.isFinite(input.congestionCloseStreak)
+    ? Math.max(0, Math.floor(input.congestionCloseStreak))
+    : 0;
+  const random = Number.isFinite(input.random) ? Math.min(Math.max(input.random, 0), 1) : 0;
+  const base = Math.min(
+    input.reconnectBaseMs * 2 ** attempt,
+    input.reconnectMaxMs,
+  );
+  const congestionFloor = streak > 0
+    ? Math.min(
+      input.congestionBackoffBaseMs * 2 ** (streak - 1),
+      input.congestionBackoffMaxMs,
+    )
+    : 0;
+  return Math.round(Math.max(base, congestionFloor) * (0.7 + random * 0.3));
+}
 
 export type DeviceLinkStatus = 'stopped' | 'connecting' | 'online';
 
@@ -398,6 +448,15 @@ export class DeviceLinkClient {
   private status: DeviceLinkStatus = 'stopped';
   private stopped = true;
   private reconnectAttempt = 0;
+  /**
+   * 连续 relay 拥塞断连(1013)计数,驱动重连冷却下限(computeReconnectDelayMs)。
+   * 与 reconnectAttempt 生命周期刻意不同:attempt 在稳定在线后归零以恢复快速
+   * 重连,本计数只在稳定在线满 reconnectStableResetMs 后清零——拥塞信号不因
+   * 「重连握手成功」而失效,否则回到「重连 → 重放洪峰 → 再被踢」的紧循环。
+   * connectNow / restartConnection(用户显式等待的前台恢复/唤醒)清 attempt
+   * 但不清本计数:立即重连可以,但若再被踢,冷却按更深一档生效。
+   */
+  private congestionCloseStreak = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStableTimer: ReturnType<typeof setTimeout> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -467,6 +526,8 @@ export class DeviceLinkClient {
     if (!this.stopped) return;
     this.stopped = false;
     this.reconnectAttempt = 0;
+    // 全新生命周期(登录/切号后 start):不背上一世代的拥塞冷却。
+    this.congestionCloseStreak = 0;
     void this.connect('start');
   }
 
@@ -476,12 +537,32 @@ export class DeviceLinkClient {
    * 供"用户正在等"的场景(如移动端回到前台)opt-in,绕开指数退避——
    * 不改默认退避曲线(桌面端断线重连仍走 scheduleReconnect 的 1s→30s)。
    * 已 online 时为空操作,不打断健康连接;stopped 时等价于 start()。
+   *
+   * 拥塞冷却例外(review P1):relay 刚以 1013 拥塞断连、冷却计时器在跑时,
+   * 默认**不** un-park——事故形态下恰是在途请求经 waitUntilOnline → connectNow
+   * 把每次 1013 后的冷却清掉,「重连 → 重放洪峰 → 再被踢」的循环因此掐不断。
+   * 只有显式用户意图(移动端回前台)传 overrideCongestionCooldown 保留立即重连;
+   * 被 park 的调用方等冷却计时器到点自然重连(封顶 congestionBackoffMaxMs)。
    */
-  connectNow(reason = 'connect-now'): void {
+  connectNow(reason = 'connect-now', opts?: { overrideCongestionCooldown?: boolean }): void {
     // online 时强制重建请用 restartConnection —— 它才是「半开假活」场景的入口,
     // 且已包含 resetLinkStateForReconnect(此处曾有一个等价的 { force } 分支,
     // 生产代码从未使用,只有测试在调,故收敛为单一入口)。
     if (this.status === 'online') return;
+    if (this.stopped) {
+      // stopped → 等价 start():全新生命周期不背上一世代的拥塞冷却(review P1,
+      // 与 start() 的清零语义对齐)。
+      this.congestionCloseStreak = 0;
+    } else if (
+      this.congestionCloseStreak > 0
+      && this.reconnectTimer
+      && !opts?.overrideCongestionCooldown
+    ) {
+      this.log.debug(
+        `connectNow(${reason}) parked: congestion cool-down active (streak=${this.congestionCloseStreak})`,
+      );
+      return;
+    }
     this.stopped = false;
     this.reconnectAttempt = 0;
     if (this.reconnectTimer) {
@@ -1234,6 +1315,12 @@ export class DeviceLinkClient {
         `relay replaced this device connection; keeping reconnect backoff warm${reason ? ` (${reason})` : ''}`,
       );
     }
+    if (code === RELAY_TRY_AGAIN_LATER_CLOSE_CODE) {
+      this.congestionCloseStreak++;
+      this.log.warn(
+        `relay signalled congestion (close=1013${reason ? `, ${reason}` : ''}); reconnect cool-down engaged (streak=${this.congestionCloseStreak})`,
+      );
+    }
     // 可分类的失败(鉴权/顶号/超限/版本)记为 issue 供 UI 展示原因;普通断线
     // 不产生也不清除 issue —— 401 重连风暴里穿插的网络失败不该把原因洗掉。
     const kind = classifyConnectionIssue(code, reason, this.lastSocketErrorMessage);
@@ -1284,16 +1371,23 @@ export class DeviceLinkClient {
 
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
-    const base = Math.min(
-      this.timing.reconnectBaseMs * 2 ** this.reconnectAttempt,
-      this.timing.reconnectMaxMs,
-    );
-    // 向下抖动(0.7x–1.0x):打散同 deviceId 双连风暴 / 服务重启后的全端齐步重连,
-    // 上界不变,文档承诺的最大退避(reconnectMaxMs)仍然成立。
-    const delay = Math.round(base * (0.7 + Math.random() * 0.3));
+    // 普通指数退避与拥塞冷却下限取 max;向下抖动(0.7x–1.0x)打散同 deviceId
+    // 双连风暴 / 服务重启后的全端齐步重连,上界不变,文档承诺的最大退避
+    // (reconnectMaxMs / congestionBackoffMaxMs)仍然成立。
+    const delay = computeReconnectDelayMs({
+      attempt: this.reconnectAttempt,
+      congestionCloseStreak: this.congestionCloseStreak,
+      reconnectBaseMs: this.timing.reconnectBaseMs,
+      reconnectMaxMs: this.timing.reconnectMaxMs,
+      congestionBackoffBaseMs: this.timing.congestionBackoffBaseMs,
+      congestionBackoffMaxMs: this.timing.congestionBackoffMaxMs,
+      random: Math.random(),
+    });
     this.reconnectAttempt++;
     this.setStatus('connecting');
-    this.log.debug(`scheduling device-link reconnect in ${delay}ms (attempt=${this.reconnectAttempt})`);
+    this.log.debug(
+      `scheduling device-link reconnect in ${delay}ms (attempt=${this.reconnectAttempt}, congestionStreak=${this.congestionCloseStreak})`,
+    );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.connect('backoff-reconnect');
@@ -2909,6 +3003,9 @@ export class DeviceLinkClient {
       if (this.stopped || this.status !== 'online') return;
       this.reconnectAttempt = 0;
       this.shortLivedStreak = 0;
+      // 拥塞冷却与普通退避在同一稳定判据下清零:稳定在线一个窗口说明出站
+      // 速率已被 relay 接受,下一次普通断线不再背负拥塞冷却。
+      this.congestionCloseStreak = 0;
       if (this.connectionIssue?.kind === 'unstable') this.setConnectionIssue(null);
     }, this.timing.reconnectStableResetMs);
   }

@@ -30,6 +30,46 @@ function formatTokens(value: number): string {
   return formatCompactTokens(Math.max(0, Math.floor(value)));
 }
 
+export function formatOutputTokenRate(details: TurnUsageDetails): string | null {
+  const durationMs = details.durationMs;
+  if (
+    details.outputTokens <= 0 ||
+    typeof durationMs !== 'number' ||
+    !Number.isFinite(durationMs) ||
+    durationMs <= 0
+  ) {
+    return null;
+  }
+  const rate = (details.outputTokens * 1000) / durationMs;
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  if (rate < 0.1) return '<0.1';
+  return rate >= 100 ? rate.toFixed(0) : rate.toFixed(1).replace(/\.0$/, '');
+}
+
+export function formatTurnDuration(durationMs: number, t?: TFunction): string | null {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+  const seconds = durationMs / 1000;
+  if (seconds < 60) {
+    const precision = seconds >= 10 ? 1 : 2;
+    const rounded = Number(seconds.toFixed(precision));
+    if (rounded < 60) {
+      return t
+        ? t('usageDetails.durationSeconds', { value: String(rounded) })
+        : `${rounded}s`;
+    }
+  }
+  const roundedSeconds = Math.round(seconds);
+  const minutes = Math.floor(roundedSeconds / 60);
+  const remainder = roundedSeconds % 60;
+  const paddedSeconds = String(remainder).padStart(2, '0');
+  return t
+    ? t('usageDetails.durationMinutesSeconds', {
+        minutes: String(minutes),
+        seconds: paddedSeconds,
+      })
+    : `${minutes}m ${paddedSeconds}s`;
+}
+
 function modelLabel(details: TurnUsageDetails, t: TFunction): string | null {
   if (details.model) return details.model;
   if (details.models && details.models.length === 1) return details.models[0];
@@ -103,6 +143,20 @@ export function buildTurnUsageTooltipLines({
     create: formatTokens(details.cacheCreateTokens),
     rate: hitRate ?? '',
   }));
+  const outputRate = formatOutputTokenRate(details);
+  const turnDuration = typeof details.turnDurationMs === 'number'
+    ? formatTurnDuration(details.turnDurationMs, t)
+    : null;
+  if (outputRate && turnDuration) {
+    lines.push(t('usageDetails.performanceLine', {
+      rate: outputRate,
+      duration: turnDuration,
+    }));
+  } else if (outputRate) {
+    lines.push(t('usageDetails.performanceRateLine', { rate: outputRate }));
+  } else if (turnDuration) {
+    lines.push(t('usageDetails.timeLine', { duration: turnDuration }));
+  }
   // 已展开按模型明细时不再重复笼统的「N 个模型」行。
   if (!showBreakdown) {
     const model = modelLabel(details, t);

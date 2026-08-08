@@ -66,10 +66,10 @@ function TurnChangeFileRow({
         className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
       >
         <FileText size={15} className="shrink-0 text-[var(--text-secondary)]" />
-        <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--text-primary)]">
+        <span className="min-w-0 flex-1 truncate text-13 text-[var(--text-primary)]">
           {file.path}
         </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-[12px] tabular-nums">
+        <span className="shrink-0 whitespace-nowrap font-mono text-12 tabular-nums">
           {file.additions > 0 && (
             <span className="text-[var(--diff-add-fg)]">+{file.additions}</span>
           )}{' '}
@@ -182,7 +182,7 @@ export function TurnChangesCard({
           <FileDiff size={18} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] font-medium text-[var(--text-primary)]">
+          <div className="truncate text-14 font-medium text-[var(--text-primary)]">
             {files.length > 0
               ? t('chat.turnChanges.title', { count: changeSet.fileCount })
               : t('chat.turnChanges.partialTitle')}
@@ -190,13 +190,13 @@ export function TurnChangesCard({
           {files.length > 0 && (
             // 零文件卡的语义是「发生了变更但没录下内容」,+0 −0 会被误读成
             // 「没有变化」,所以增删统计只在录到文件时显示。
-            <div className="mt-0.5 font-mono text-[12px] tabular-nums">
+            <div className="mt-0.5 font-mono text-12 tabular-nums">
               <span className="text-[var(--diff-add-fg)]">+{changeSet.additions}</span>{' '}
               <span className="text-[var(--diff-del-fg)]">-{changeSet.deletions}</span>
             </div>
           )}
           {changeSet.state === 'partial' && (
-            <div className="mt-1 flex items-center gap-1 text-[11px] text-[var(--warning-fg)]">
+            <div className="mt-1 flex items-center gap-1 text-11 text-[var(--warning-fg)]">
               <AlertTriangle size={12} />
               <span>{t(
                 files.length === 0
@@ -227,7 +227,7 @@ export function TurnChangesCard({
               )}
               onClick={() => void applyTurnChange()}
               className={cn(
-                'flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium',
+                'flex h-8 items-center gap-1.5 rounded-lg px-2 text-13 font-medium',
                 'text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]',
                 'disabled:cursor-not-allowed disabled:opacity-50',
               )}
@@ -250,7 +250,7 @@ export function TurnChangesCard({
             <button
               type="button"
               onClick={() => openReview()}
-              className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-[13px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+              className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
             >
               {t('chat.turnChanges.review')}
             </button>
@@ -274,7 +274,7 @@ export function TurnChangesCard({
               type="button"
               onClick={() => setExpanded(true)}
               className={cn(
-                'flex h-8 items-center gap-1 rounded-lg px-2 text-[13px] text-[var(--text-secondary)]',
+                'flex h-8 items-center gap-1 rounded-lg px-2 text-13 text-[var(--text-secondary)]',
                 'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
               )}
             >
@@ -287,7 +287,7 @@ export function TurnChangesCard({
               type="button"
               onClick={() => openReview()}
               className={cn(
-                'flex h-8 items-center gap-1 rounded-lg px-2 text-[13px] text-[var(--text-secondary)]',
+                'flex h-8 items-center gap-1 rounded-lg px-2 text-13 text-[var(--text-secondary)]',
                 'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
               )}
             >
@@ -299,7 +299,7 @@ export function TurnChangesCard({
               type="button"
               onClick={() => setExpanded(false)}
               className={cn(
-                'flex h-8 items-center gap-1 rounded-lg px-2 text-[13px] text-[var(--text-secondary)]',
+                'flex h-8 items-center gap-1 rounded-lg px-2 text-13 text-[var(--text-secondary)]',
                 'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
               )}
             >

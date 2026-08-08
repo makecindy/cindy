@@ -134,7 +134,7 @@ function MentionChipNodeView({ node, selected }: NodeViewProps) {
 const FALLBACK_CHIP_CLASS =
   'inline-flex min-w-0 max-w-[min(240px,55vw)] select-none items-center align-middle ' +
   'gap-1.5 rounded-full border border-[var(--border-default)] px-2 py-0.5 ' +
-  'bg-[var(--surface-chip)] text-[var(--text-primary)] text-[12px] font-normal leading-5';
+  'bg-[var(--surface-chip)] text-[var(--text-primary)] text-12 font-normal leading-5';
 
 export const MentionChipNode = Node.create<Record<string, never>, Record<string, never>>({
   name: 'mentionChip',

@@ -395,8 +395,8 @@ import {
   setModelPriceOverride,
 } from '../usage/modelPriceOverrideStore.js';
 import {
+  ClaudeOutputLagTimingGuard,
   computeModelUsageDeltas,
-  detectOutputLag,
   type ModelUsageCumulative,
   type ModelUsageDeltaEntry,
 } from '../usage/modelUsageDelta.js';
@@ -693,6 +693,10 @@ import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
 } from './sessionTurnActivityTracker.js';
+import {
+  ProductTurnUsageTargetTracker,
+  ProductTurnWallClockTracker,
+} from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
@@ -2380,6 +2384,9 @@ let pendingAgentSwitchApplyHolder:
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
+const productTurnWallClockTracker = new ProductTurnWallClockTracker();
+const productTurnUsageTargetTracker = new ProductTurnUsageTargetTracker();
+const claudeOutputLagTimingGuard = new ClaudeOutputLagTimingGuard();
 
 /**
  * Own the session input boundary while rewind stops an active turn and changes
@@ -3161,6 +3168,8 @@ function settleSilentStopDone(
   reason: 'exhausted' | 'skip' | 'send-failed',
 ): void {
   void finalizeTurnChangeSet(sessionId, null, 'complete');
+  productTurnWallClockTracker.clear(sessionId);
+  productTurnUsageTargetTracker.clear(sessionId);
   sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
   noteClaudeSessionTurnState(sessionId, false);
   agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
@@ -3220,6 +3229,9 @@ async function handleSilentStopTurnEnd(
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
   if (decision.action === 'resume') {
     try {
+      // The next Claude running boundary belongs to the same user-visible turn.
+      // Mark it before send(), which may synchronously emit status events.
+      productTurnWallClockTracker.preserveForContinuation(session.id);
       const clientId = randomUUID();
       const sendResult = await session.send(
         { type: 'user', content: SILENT_STOP_RESUME_PROMPT },
@@ -3418,6 +3430,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let pendingCodexAccountUsageSnapshot: unknown | null = null;
       let shouldMarkTurnStatusIdleAfterBroadcast = false;
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
+      let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
       // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
       // 若 claim 悬挂会导致 UI 永久「正在生成」。区分「claim 悬挂」与「done 未到达」。
@@ -3454,6 +3467,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             clearPending: typeof event.turnAttemptToken === 'number',
           });
           const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
+          if (!wasInTurn && event.source === 'claude-code') {
+            const startedProductTurn = productTurnWallClockTracker.start(session.id);
+            if (startedProductTurn) productTurnUsageTargetTracker.clear(session.id);
+          }
           sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
           if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);
           // 后台活动检测:turn 开始 → 该会话的 API 流量回归主线,后台横幅熄灭。
@@ -3500,6 +3517,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const rawTurn = (event.data as { raw?: { id?: unknown; status?: unknown } } | null)?.raw;
         const isSilentStopDone =
           (event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true;
+        if (
+          event.source === 'claude-code' &&
+          !isContinuationBoundary &&
+          !isSilentStopDone
+        ) {
+          completedTurnWallClockMs = productTurnWallClockTracker.finish(session.id);
+        }
         if (!isContinuationBoundary && !isSilentStopDone) {
           shouldMarkTurnTerminalIdleAfterBroadcast = true;
         }
@@ -3758,6 +3782,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           }
           pendingFailedTurnAssistantPersistId.delete(session.id);
         }
+        if (event.type === 'done' && event.source === 'claude-code') {
+          if (isContinuationBoundary) {
+            productTurnUsageTargetTracker.remember(session.id, turnAssistantPersistId);
+          } else {
+            turnAssistantPersistId = productTurnUsageTargetTracker.finish(
+              session.id,
+              turnAssistantPersistId,
+            );
+          }
+        }
         flushOrphanToolResults(session.id, eventAgentMeta);
         if (turnBoundaryAssistantPersistId) {
           // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
@@ -3928,6 +3962,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const doneData = event.data as
           | {
               total_cost_usd?: unknown;
+              duration_ms?: unknown;
+              duration_api_ms?: unknown;
               usage?: {
                 input_tokens?: number;
                 output_tokens?: number;
@@ -3935,10 +3971,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 cache_creation_input_tokens?: number;
               };
               modelUsage?: Record<string, unknown>;
+              assistant_message_id?: unknown;
+              is_error?: unknown;
             }
           | undefined;
         const cumulative = doneData?.total_cost_usd;
         const modelUsage = doneData?.modelUsage;
+        const claudeTurnDurationMs =
+          completedTurnWallClockMs ??
+          (typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined);
         let modelUsageDeltas: ModelUsageDeltaEntry[] | undefined;
         if (modelUsage && typeof modelUsage === 'object') {
           const { next, deltas } = computeModelUsageDeltas(
@@ -3948,6 +3989,20 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedModelUsageBySession.set(session.id, next);
           modelUsageDeltas = deltas;
         }
+        const outputLagTiming = claudeOutputLagTimingGuard.evaluate(
+          session.id,
+          modelUsageDeltas ?? [],
+          !isContinuationBoundary,
+          typeof doneData?.assistant_message_id === 'string'
+            ? doneData.assistant_message_id
+            : undefined,
+          doneData?.is_error !== true,
+        );
+        const claudeGenerationDurationMs = outputLagTiming.suppressTiming
+          ? undefined
+          : typeof doneData?.duration_api_ms === 'number'
+            ? doneData.duration_api_ms
+            : undefined;
         // total_cost_usd 累计基线: 主路径不靠它算钱, 但仍跟住, 以便万一某轮缺 modelUsage
         // 走兜底时累计差才准。先取"更新前"基线给兜底用, 再写入本轮累计。
         const prevReportedCost = lastReportedCostUsdBySession.get(session.id) ?? 0;
@@ -3958,7 +4013,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 判定主线被上游静默替换(如 fable-5 高负载被路由到 opus-4-8),把标记挂到本轮
         // 收尾 assistant 的 agent_meta 上(AssistantMessage 渲染降级提示行)。
         // fire-and-forget,与记账 sink 互不阻塞;判定纯函数见 shared/modelMismatch.ts。
-        if (modelUsageDeltas && detectOutputLag(modelUsageDeltas)) {
+        if (modelUsageDeltas && outputLagTiming.detected) {
           // 上游在 done 时点还没结算本轮输出(实测 Vertex),这一轮的费用会偏低、下一轮偏高。
           // 总量不丢,只是归属错位;不做纠正的理由见 usage/modelUsageDelta 文件头。
           log.warn(
@@ -4079,6 +4134,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 deltas,
                 'unknown',
                 perModel,
+                claudeGenerationDurationMs,
+                claudeTurnDurationMs,
               );
               recordTurnSpend(turnMoney);
               recordSessionTurnSpend(session.id, turnMoney);
@@ -4130,6 +4187,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 deltas,
                 'unknown',
                 perModel,
+                claudeGenerationDurationMs,
+                claudeTurnDurationMs,
               );
               if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
                 const changedScheduleId = await recordSchedulerTurnCost({
@@ -4167,6 +4226,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               doneData?.usage,
               undefined,
               resolvedModel,
+              undefined,
+              claudeGenerationDurationMs,
+              claudeTurnDurationMs,
             );
             // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
             // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
@@ -4269,6 +4331,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             completionTokens?: number;
             reasoningTokens?: number;
             cachedTokens?: number;
+            durationMs?: number;
+            turnDurationMs?: number;
           };
           const promptTokens = Number(u.promptTokens) || 0;
           const completionTokens = Number(u.completionTokens) || 0;
@@ -4355,6 +4419,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               cacheReadTokens: cachedTokens,
               cacheCreateTokens: 0,
               model: turnModel,
+              durationMs: u.durationMs,
+              turnDurationMs: u.turnDurationMs,
             });
             const recordCodexUsageOnly = async () => {
               if (!turnAssistantPersistId) return;
@@ -4507,6 +4573,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             const turnUsageDetails = buildTurnUsageDetails({
               ...tokens,
               model: turnModel,
+              durationMs:
+                typeof (rawUsage as { durationMs?: unknown }).durationMs === 'number'
+                  ? (rawUsage as { durationMs: number }).durationMs
+                  : undefined,
+              turnDurationMs:
+                typeof (rawUsage as { turnDurationMs?: unknown }).turnDurationMs === 'number'
+                  ? (rawUsage as { turnDurationMs: number }).turnDurationMs
+                  : undefined,
             });
 
             // Pi 也必须进 daily_model_usage，否则首页仪表盘会把 Pi 的
@@ -4653,6 +4727,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedCostUsdBySession.delete(session.id);
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
+          productTurnWallClockTracker.clear(session.id);
+          productTurnUsageTargetTracker.clear(session.id);
+          claudeOutputLagTimingGuard.clear(session.id);
           // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
           clearClaudeSessionBackgroundActivity(session.id);
           clearSessionPersistState(session.id);

@@ -4261,6 +4261,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
     "cacheLabel": "캐시",
+    "timeLabel": "시간",
+    "timeAndRateValue": "{{duration}} 속도:{{rate}} 토큰/초",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
     "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
@@ -4269,6 +4271,11 @@
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}초",
+    "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "performanceLine": "속도 {{rate}} 토큰/초 · 시간 {{duration}}",
+    "performanceRateLine": "속도 {{rate}} 토큰/초",
+    "timeLine": "시간 {{duration}}",
     "costLine": "이번 턴 비용: {{cost}}",
     "valueLine": "이번 턴 토큰 가치: {{cost}}",
     "tokenLine": "Token: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",

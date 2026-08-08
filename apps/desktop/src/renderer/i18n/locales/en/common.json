@@ -4263,6 +4263,8 @@
     "tokenLabel": "Tokens",
     "tokenBreakdown": "(input {{input}} · output {{output}})",
     "cacheLabel": "Cache",
+    "timeLabel": "Time",
+    "timeAndRateValue": "{{duration}} TPS:{{rate}}",
     "modelLabel": "Model",
     "staleData": "Data updated {{minutes}} minutes ago",
     "paceTrendFast": "Trending fast at the current average pace (rough estimate)",
@@ -4271,6 +4273,11 @@
     "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}s",
+    "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
+    "performanceLine": "TPS {{rate}} · Time {{duration}}",
+    "performanceRateLine": "TPS {{rate}}",
+    "timeLine": "Time {{duration}}",
     "costLine": "Cost this turn: {{cost}}",
     "valueLine": "Token value this turn: {{cost}}",
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",

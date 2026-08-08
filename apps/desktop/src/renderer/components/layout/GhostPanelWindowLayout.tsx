@@ -77,7 +77,7 @@ export function GhostPanelWindowLayout() {
         <div className={isMac ? 'w-20 shrink-0' : 'w-3 shrink-0'} />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Puzzle size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-          <span className="truncate text-[13px] text-[var(--text-secondary)]">{title}</span>
+          <span className="truncate text-13 text-[var(--text-secondary)]">{title}</span>
         </div>
         <div
           className="flex shrink-0 items-center gap-1 pr-2"
@@ -89,7 +89,7 @@ export function GhostPanelWindowLayout() {
             onClick={mergeBack}
             title={t('ghostPanelWindow.mergeBack')}
             aria-label={t('ghostPanelWindow.mergeBack')}
-            className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+            className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-12 text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           >
             <PictureInPicture2 size={14} />
             <span>{t('ghostPanelWindow.mergeBack')}</span>
@@ -111,7 +111,7 @@ export function GhostPanelWindowLayout() {
           <PanelBody manifest={manifest} />
         ) : (
           <div className="flex flex-1 items-center justify-center">
-            <span className="text-[13px] text-[var(--text-tertiary)]">
+            <span className="text-13 text-[var(--text-tertiary)]">
               {t('ghostPanelWindow.unavailable')}
             </span>
           </div>
