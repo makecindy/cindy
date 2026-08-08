@@ -78,9 +78,11 @@ export function decodeCatalogPin(
  * requestUtilityText 显式路径的静态闸:内置供应商只收执行侧硬编码认的
  * 四家(见 ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS);自定义供应商要求 routing
  * 未禁用 + 鉴权策略受支持 + 有上游地址 + 声明的 wire 与执行侧该 agent 的
- * 实际出线一致(claude-code 恒发 anthropic-messages;codex 发不出
- * anthropic-messages,会被静默当 responses——配置错线的组合钉上恒失败,
- * 不进清单)。
+ * 实际出线一致(claude-code 恒发 anthropic-messages,声明别的 wire 是错线;
+ * codex/pi 缺省按 agent 默认出线,显式声明 anthropic-messages 现在也走
+ * Anthropic wire——与 requestCustomProviderText 的 effectiveWireProtocol
+ * 判定一致,review P2:否则 pin-option 侧会把执行侧能跑的 route 判成不可
+ * 路由,钉档清单/插件声明偏好静默回落到别的 route)。
  */
 function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean {
   if (!provider.agents.includes(agentKind)) return false;
@@ -89,7 +91,7 @@ function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean
   if (provider.source === 'builtin') return ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS.has(provider.id);
   if (agentKind === 'claude-code') {
     if (routing.wireProtocol !== undefined && routing.wireProtocol !== 'anthropic-messages') return false;
-  } else if (routing.wireProtocol === 'anthropic-messages') return false;
+  }
   return (
     (routing.authStrategy === 'api-key-header'
       || routing.authStrategy === 'oauth-token'
