@@ -12,25 +12,36 @@ const devices: SwitcherDevice[] = [
 
 describe('resolveDialogueDeviceTarget', () => {
   it('inherits the only selected remote machine', () => {
-    expect(resolveDialogueDeviceTarget(['remote-a'], devices)).toEqual({
-      deviceId: 'remote-a',
-      deviceName: 'Remote A',
+    expect(resolveDialogueDeviceTarget(['remote-a'], devices, true)).toEqual({
+      status: 'ready',
+      target: { deviceId: 'remote-a', deviceName: 'Remote A' },
     });
-    expect(resolveDialogueDeviceTarget(['remote-b'], devices)).toEqual({
-      deviceId: 'remote-b',
-      deviceName: 'Remote B',
+    expect(resolveDialogueDeviceTarget(['remote-b'], devices, true)).toEqual({
+      status: 'ready',
+      target: { deviceId: 'remote-b', deviceName: 'Remote B' },
     });
   });
 
   it('keeps the local default when the machine scope is not a unique remote target', () => {
-    expect(resolveDialogueDeviceTarget(MACHINE_ALL, devices)).toBeNull();
-    expect(resolveDialogueDeviceTarget([MACHINE_LOCAL], devices)).toBeNull();
-    expect(resolveDialogueDeviceTarget([MACHINE_LOCAL, 'remote-a'], devices)).toBeNull();
-    expect(resolveDialogueDeviceTarget(['remote-a', 'remote-b'], devices)).toBeNull();
+    const local = { status: 'ready', target: null };
+    expect(resolveDialogueDeviceTarget(MACHINE_ALL, devices, false)).toEqual(local);
+    expect(resolveDialogueDeviceTarget([MACHINE_LOCAL], devices, false)).toEqual(local);
+    expect(resolveDialogueDeviceTarget([MACHINE_LOCAL, 'remote-a'], devices, false)).toEqual(local);
+    expect(resolveDialogueDeviceTarget(['remote-a', 'remote-b'], devices, false)).toEqual(local);
   });
 
-  it('does not inherit an unavailable or rejected device', () => {
-    expect(resolveDialogueDeviceTarget(['missing'], devices)).toBeNull();
-    expect(resolveDialogueDeviceTarget(['remote-rejected'], devices)).toBeNull();
+  it('waits for an unresolved unique remote until the directory settles', () => {
+    expect(resolveDialogueDeviceTarget(['remote-a'], [], false)).toEqual({ status: 'pending' });
+    expect(resolveDialogueDeviceTarget(['remote-a'], [], true)).toEqual({
+      status: 'ready',
+      target: null,
+    });
+  });
+
+  it('does not inherit a rejected device', () => {
+    expect(resolveDialogueDeviceTarget(['remote-rejected'], devices, true)).toEqual({
+      status: 'ready',
+      target: null,
+    });
   });
 });

@@ -10,6 +10,10 @@ export interface DialogueDeviceTarget {
   deviceName: string;
 }
 
+export type DialogueDeviceTargetResolution =
+  | { status: 'pending' }
+  | { status: 'ready'; target: DialogueDeviceTarget | null };
+
 /**
  * “对话”分组的新建入口只在作用域明确指向一台远程机器时继承设备。
  * “所有”、本机、混合或多台远程机器都没有唯一目标，继续使用既有本机默认。
@@ -17,11 +21,17 @@ export interface DialogueDeviceTarget {
 export function resolveDialogueDeviceTarget(
   selectedMachineId: MachineSelection,
   devices: readonly SwitcherDevice[],
-): DialogueDeviceTarget | null {
-  if (selectedMachineId === MACHINE_ALL || selectedMachineId.length !== 1) return null;
+  deviceListSettled: boolean,
+): DialogueDeviceTargetResolution {
+  if (selectedMachineId === MACHINE_ALL || selectedMachineId.length !== 1) {
+    return { status: 'ready', target: null };
+  }
   const deviceId = selectedMachineId[0];
-  if (deviceId === MACHINE_LOCAL) return null;
+  if (deviceId === MACHINE_LOCAL) return { status: 'ready', target: null };
   const device = devices.find((candidate) => candidate.deviceId === deviceId);
-  if (!device || device.status === 'rejected') return null;
-  return { deviceId, deviceName: device.name };
+  if (!device) {
+    return deviceListSettled ? { status: 'ready', target: null } : { status: 'pending' };
+  }
+  if (device.status === 'rejected') return { status: 'ready', target: null };
+  return { status: 'ready', target: { deviceId, deviceName: device.name } };
 }

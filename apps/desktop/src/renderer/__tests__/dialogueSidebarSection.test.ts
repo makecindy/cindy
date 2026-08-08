@@ -187,10 +187,11 @@ describe('Dialogue sidebar section', () => {
   it('routes standalone dialogue targets through the mounted draft page transition', () => {
     const handler = extractHandlerBlock(sidebarSource, 'handleCreateDialogue');
     expect(sidebarSource).toContain(
-      'resolveDialogueDeviceTarget(selectedMachineId, switcherDevices)',
+      'resolveDialogueDeviceTarget(selectedMachineId, switcherDevices, deviceListSettled)',
     );
+    expect(handler).toContain("selectedDialogueDeviceResolution.status === 'pending'");
     expect(handler).toContain(
-      'state: makeDialogueNewMakerRouteState(selectedDialogueDeviceTarget)',
+      'state: makeDialogueNewMakerRouteState(selectedDialogueDeviceResolution.target)',
     );
     expect(handler).not.toContain('resetDraftWorkspaceTargets');
     expect(handler).not.toContain('patchNewMakerDraft');
@@ -207,7 +208,10 @@ describe('Dialogue sidebar section', () => {
       /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
     );
     expect(handler).toContain("navigate('/cc-agent/new'");
-    expect(sidebarSource).toContain('onCreateDialogue={handleCreateDialogue}');
+    expect((sidebarSource.match(/onCreateDialogue={handleCreateDialogue}/g) ?? []).length).toBe(2);
+    expect(sidebarSource).toContain('createDisabled={dialogueCreatePending}');
+    expect(sidebarSource).toContain('isCreateDialogueDisabled={dialogueCreatePending}');
+    expect(dialogueSectionSource).toContain('disabled={createDisabled}');
   });
 
   it('allows the shared create route to send a standalone dialogue without picking a project', () => {
