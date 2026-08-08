@@ -36,8 +36,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
-| 节流间隔与长度上限的**取值** | `PresenterPolicy` | 只有**取值**同源。个人侧仅复用 1.5s 这个常量，自己维护 `ACTIVITY_TICK_MS` 与卡片 patch 定时器；官方侧走 `createProgressEmitter`。**两套发射逻辑各自维护**，改一边必须核对另一边 |
-| 命令面登记 | `im/shared/botCommands.ts` | 一张表覆盖两侧；`surfaces` 标注谁有谁没有，单侧独有必须写 `parityNote`，缺了 CI 红 |
+| 进度节流**间隔** | `PresenterPolicy.intermediateThrottleMs` | 只有这一个值两侧都读。**长度上限不算**——见下表 |
 | 群历史检索核心 | `im/shared/groupHistoryAccess.ts` | 官方侧由 `hook-control/groupHistoryScope.ts` 把官方 externalKey 解析成同一套 access scope，两侧检索走同一实现 |
 
 ### 放在共享目录、但**只有一侧消费**的
@@ -46,6 +45,8 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 |---|---|
 | `im/shared/channelToolPolicy.ts` 的 `channelForceConfirmToolCall` | 只被个人 Telegram / 微信 / 钉钉的权限策略引用。**官方 bot 不挂**——见第三节的裁决。放在 `shared/` 下是因为个人侧三个渠道共用，不代表两个 bot 共用 |
 | `packages/lizi-im/src/telegram/presentationCapabilities.ts` | 只导出并由**个人 driver** 消费 `TELEGRAM_PERSONAL_CAPABILITIES`，没有官方 bot 共用的契约数据。它的作用是把车道差异写在一处，不是让两侧取同一份值 |
+| `PresenterPolicy.intermediateMaxRenderedChars`（长度上限） | **只有官方那条路消费**（`createProgressEmitter`）。个人侧用自己的私有常量 `INTERMEDIATE_EDIT_LIMIT = 3800`（`streamingText.ts`）判断何时停止编辑。**改共享的长度策略只会改到官方 bot**——两处独立维护，改一处必须核对另一处 |
+| `im/shared/botCommands.ts` 的**官方那一半** | 官方 bot 的命令**仍由服务端 `TELEGRAM_COMMANDS` 下发**，本表对官方侧是「声明性镜像、不接线」。测试只用内联清单核对镜像，**服务端改了命令这边完全可能不同步**。个人侧那一半是真的单一真相源（菜单与分发直接读它）；官方那一半是跨仓镜像，**改命令要两个仓一起核对** |
 
 进度帧去重的三槽基线（`shouldEmitProgressFrame` / `createProgressEmitter`）同理：只在注入
 `onProgress` 时启用，也就是**只有官方那条路在用**，个人侧不消费。
@@ -90,6 +91,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | # | 缺口 | 现状 | 归属 |
 |---|---|---|---|
 | 1 | **个人 bot 缺 3 条命令** | `/unbind`（清当前 chat 的项目映射）、`/effort`（思考强度）、`/agent`（切 Agent）官方有、个人无，目前只能在桌面端改。注册表已显式登记并由 CI 拦住 | 每条各自独立 PR |
+| 1b | **官方命令镜像没有跨仓校验** | 注册表里官方那一半是手抄的声明性镜像，服务端单方面加减命令这边不会红 | 待判：把 `TELEGRAM_COMMANDS` 放进 `cindy-protocol` 两侧生成，或在服务端加反向校验。要跨仓改动与一次协议版本推进 |
 | 2 | **msg.op 动词只接了一个** | 服务端全套动词在 `xindong/cindy-server#349`（未合）；桌面侧目前只消费 `react`（ack 表情，见 `hook-control/ackReactions.ts` 的 `HOOK_FEATURE_MESSAGE_OPS` 判据）。`send` / `edit` / `delete` / `typing` / `media` 未接线 | #1855 第三刀。**这是把官方 bot 的出站改由桌面驱动的关键一步**——接完之后两侧的发射与收口才可能走同一份代码，而不是各写一套 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
@@ -106,8 +108,9 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 3. 第四节里标「待核」的行，核完就把结论写回来，不要让它一直挂着。
 4. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
    成功与失败要分开看——本表初版曾把只对成功收口成立的不变量泛化到失败路径。
-5. 命令的分类以 `botCommands.ts` 的 `parityNote` 为准——那里是唯一真相源，本表只是
-   把它的结论摊开讲。两边对不上时，改本表，不是改注册表。
+5. 命令的**分类**以 `botCommands.ts` 的 `parityNote` 为准——本表只是把它的结论摊开讲，
+   两边对不上时改本表、不改注册表。但注意注册表里**官方那一半是跨仓镜像**：改命令时
+   服务端的 `TELEGRAM_COMMANDS` 也要一起核对，CI 拦不住它漂移。
 
 ## 相关
 
