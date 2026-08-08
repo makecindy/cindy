@@ -149,13 +149,33 @@ export function createAckReactions(deps: {
   }
 
   /**
-   * 断线时没发出去的终态表情。key 用 opId —— 同一个动作重发拿同一个幂等键,
+   * **还没拿到成功回执**的终态表情。key 用 opId —— 同一个动作重发拿同一个幂等键,
    * 服务端据此去重, 补发不会打出第二个表情。
+   *
+   * 注意这里的判据不是「送出去了没有」: `send()` 返回 true 只代表帧进了本地
+   * ws 缓冲, 不代表服务端收到、更不代表它执行了。socket 在 flush 之前断开时那一
+   * 帧就没了, 而消息上还挂着 👀 —— 只有匹配的 `msg.op.result` 成功回执才算收口。
+   * 所以发出去的也照样先记进来, 等回执来了再删。
    */
   const pendingFinals = new Map<
     string,
     { task: AckReactionTask; emoji: string; failed: boolean }
   >();
+  /**
+   * 待收口表的上限。正常情况下每条都会被回执清掉; 设上限只为兜住「服务端从此
+   * 不回回执」这种异常, 不让它无界增长。超了从最旧的开始丢。
+   */
+  const PENDING_FINALS_MAX = 500;
+
+  function rememberPendingFinal(
+    opId: string,
+    entry: { task: AckReactionTask; emoji: string; failed: boolean },
+  ): void {
+    pendingFinals.set(opId, entry);
+    if (pendingFinals.size <= PENDING_FINALS_MAX) return;
+    const oldest = pendingFinals.keys().next().value;
+    if (oldest !== undefined) pendingFinals.delete(oldest);
+  }
   /**
    * 可回落的终态表情: opId → 该轮的任务与成败。
    *
@@ -194,11 +214,10 @@ export function createAckReactions(deps: {
           if (definitelyIncapable) pendingFinals.delete(opId);
           continue;
         }
-        pendingFinals.delete(opId);
+        // 重发即可, **不出表** —— 出表要等成功回执。补发本身同样可能在 flush
+        // 之前断掉, 提前删掉就再也补不上了。opId 不变, 服务端按它去重。
         const outcome = react(entry.task, 'final', entry.emoji, send);
-        // 补发时 socket 又断了 —— 放回去等下一次重连, 否则那条消息永远挂着 👀。
-        if (outcome === 'failed') pendingFinals.set(opId, entry);
-        else if (outcome === 'sent' && modeOf() === 'expressive') {
+        if (outcome === 'sent' && modeOf() === 'expressive') {
           retryables.set(opId, { task: entry.task, failed: entry.failed });
         }
       }
@@ -225,17 +244,19 @@ export function createAckReactions(deps: {
             : failed
               ? FAIL_EMOJI
               : OK_EMOJI;
+      const opId = `${task.requestId}:final`;
       const outcome = react(task, 'final', emoji, send);
-      if (outcome === 'sent') {
-        if (mode === 'expressive') retryables.set(`${task.requestId}:final`, { task, failed });
-      } else if (outcome === 'failed') {
-        // 送不出去(断线)就记下来, 重连时补 —— 否则那条消息永远挂着 👀。
-        pendingFinals.set(`${task.requestId}:final`, { task, emoji, failed });
+      // sent 与 failed 都要记: 前者只是进了本地 ws 缓冲, 服务端到底收没收到、
+      // 执行没执行, 要等 msg.op.result。skipped 才是真的不需要收口。
+      if (outcome !== 'skipped') rememberPendingFinal(opId, { task, emoji, failed });
+      if (outcome === 'sent' && mode === 'expressive') {
+        retryables.set(opId, { task, failed });
       }
     },
     onResult(payload, sendFor) {
-      // 成功即出表 —— 否则每个跑完的任务都会在回落表里留一条, 只涨不落。
+      // **回执才是收口**: 到这一步才能确定服务端真的执行了, 两张表一起出。
       if (payload.ok) {
+        pendingFinals.delete(payload.opId);
         retryables.delete(payload.opId);
         return;
       }
@@ -247,11 +268,22 @@ export function createAckReactions(deps: {
         // 里。回落基础款并换一个幂等键(服务端按 opId 去重, 沿用旧键会被当成重复
         // 直接返回上一次的失败)。只回落一次, 基础款再被拒就认了。
         retryables.delete(payload.opId);
+        pendingFinals.delete(payload.opId);
         const fallback = retry.failed ? FAIL_EMOJI : OK_EMOJI;
+        const fallbackOpId = `${retry.task.requestId}:final-fallback`;
         log.info(`msg.op ${payload.opId} reaction rejected; retrying with the base emoji`);
-        react(retry.task, 'final-fallback', fallback, send);
+        // 回落这一发同样要等它自己的回执, 所以接着进待收口表。
+        if (react(retry.task, 'final-fallback', fallback, send) !== 'skipped') {
+          rememberPendingFinal(fallbackOpId, {
+            task: retry.task,
+            emoji: fallback,
+            failed: retry.failed,
+          });
+        }
         return;
       }
+      // 服务端明确拒绝且没有可回落的了: 再补也是同样的答复, 出表免得反复重发。
+      pendingFinals.delete(payload.opId);
       log.warn(`msg.op ${payload.opId} failed: ${payload.error ?? 'unknown'}`);
     },
   };

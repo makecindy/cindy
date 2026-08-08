@@ -179,15 +179,44 @@ describe('官方 bot ack 表情', () => {
       expect(opOf(h.sent[1]).opId).toBe('req-1:final');
     });
 
-    it('补发只补自己那条连接的, 且只补一次', () => {
+    it('补发只补自己那条连接的; 拿到成功回执前一直补, 拿到就停', () => {
+      // send() 返回 true 只代表帧进了本地 ws 缓冲 —— socket 在 flush 前断开那一帧
+      // 就没了, 而消息上还挂着 👀。所以收口的判据是**回执**, 不是「发出去了」。
+      // opId 不变, 服务端按它去重, 重复补发不会打出第二个表情。
       const h = harness();
       h.reactions.onFinished(TASK, 'ok', vi.fn(() => false));
       h.reactions.onReconnected('another-conn', h.send);
       expect(h.send).not.toHaveBeenCalled();
+
       h.reactions.onReconnected(CONN, h.send);
       expect(h.sent).toHaveLength(1);
+      // 还没有回执 —— 再次重连仍然补, 用的是同一个幂等键。
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.sent).toHaveLength(2);
+      expect(opOf(h.sent[1]).opId).toBe('req-1:final');
+
+      h.reactions.onResult({ opId: 'req-1:final', ok: true, messageId: '55' });
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.sent).toHaveLength(2); // 收口了, 不再补
+    });
+
+    it('发出去但没等到回执 → 重连照样补(本地入队不算送达)', () => {
+      const h = harness();
+      h.reactions.onAccepted(TASK, h.send);
+      h.reactions.onFinished(TASK, 'ok', h.send); // send 成功, 但没有回执
+      expect(h.sent).toHaveLength(2);
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.sent).toHaveLength(3);
+      expect(opOf(h.sent[2]).opId).toBe('req-1:final');
+    });
+
+    it('服务端明确拒绝且无可回落 → 出表, 不反复重发', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal');
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      h.reactions.onResult({ opId: 'req-1:final', ok: false, error: 'message not in lane' });
       h.reactions.onReconnected(CONN, h.send);
       expect(h.sent).toHaveLength(1);
+      expect(h.warn).toHaveBeenCalled();
     });
 
     it('expressive 的表情被群拒绝 → 换新幂等键回落基础款', () => {

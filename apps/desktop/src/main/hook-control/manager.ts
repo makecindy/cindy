@@ -1105,12 +1105,24 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
    * 的全局开关, 而 Telegram lane 与 binding 一一对应。
    */
   let telegramEmojiReactions: TelegramEmojiReactions | null = null;
+  /**
+   * 缓存里那个档位是**谁的**。
+   *
+   * 档位是 per-binding 的用户设置。换绑(A → B)时如果只是重新拉一次而不先作废
+   * 旧值, B 的设置到达之前的每一次派发都会按 A 的选择发表情 —— 上一位主人关了
+   * 表情、新主人开着(或反过来)都会串号。
+   */
+  let telegramEmojiReactionsBindingId: string | null = null;
 
   /**
    * 把最新档位落进缓存并转告 dispatcher(ack 表情按它决定发什么、发不发)。
    */
-  function adoptTelegramEmojiReactions(next: TelegramEmojiReactions | null): void {
+  function adoptTelegramEmojiReactions(
+    next: TelegramEmojiReactions | null,
+    bindingId: string | null = null,
+  ): void {
     telegramEmojiReactions = next;
+    telegramEmojiReactionsBindingId = next === null ? null : bindingId;
     dispatcher?.setEmojiReactionsMode(next);
   }
 
@@ -1142,7 +1154,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // 服务端根本不宣告 provider.behavior: 不存在服务端侧的覆盖值, 协议基线**就是**
     // 确定的有效值, 直接落定。不落定的话档位永远停在「未知」, ack 表情一次都不发。
     if (!telegramLane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_BEHAVIOR)) {
-      adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions);
+      adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions, bindingId);
       return;
     }
     void sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
@@ -1372,6 +1384,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // 换绑则回到基线, 不把上一位主人的选择留给下一个。
     if (lane.config.provider === 'telegram') {
       if (view.state === 'confirmed') {
+        // 换绑: 先把旧主人的档位作废再拉新的。不作废的话, B 的设置到达之前
+        // 每一次派发都按 A 的选择发表情 —— 配置串号。同一个 binding 的重复
+        // confirmed 不清, 免得把已经就绪的档位打回未知、白白漏发一批。
+        if ((view.bindingId ?? null) !== telegramEmojiReactionsBindingId) {
+          adoptTelegramEmojiReactions(null);
+        }
         // 这一刻 lane.binding 可能还是旧值, 用刚确认的 bindingId。
         primeTelegramEmojiReactions(view.bindingId ?? null);
       } else if (
@@ -2259,7 +2277,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           return;
         }
         const view = telegramBehaviorView(msg.payload);
-        adoptTelegramEmojiReactions(view.emojiReactions);
+        adoptTelegramEmojiReactions(view.emojiReactions, view.bindingId);
         pending.resolve(view);
         notifyTelegramBehavior?.(view);
         return;
@@ -2269,7 +2287,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return;
       }
       const pushedView = telegramBehaviorView(msg.payload);
-      adoptTelegramEmojiReactions(pushedView.emojiReactions);
+      adoptTelegramEmojiReactions(pushedView.emojiReactions, pushedView.bindingId);
       notifyTelegramBehavior?.(pushedView);
       return;
     }
