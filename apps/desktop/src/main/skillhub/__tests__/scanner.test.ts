@@ -15,6 +15,7 @@ import {
   readSkillContent,
   readSkillRawFile,
   readSkillSiblingFile,
+  renameLocalSkill,
   scanAllSkills,
   writeSkillFile,
 } from '../scanner';
@@ -393,6 +394,27 @@ describe('scanAllSkills', () => {
 });
 
 describe('skill file access', () => {
+  it('rejects renaming a skill directory symlink without mutating its target', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-rename-link-'));
+    tempRoots.push(root);
+    const skillRoot = path.join(root, 'project', '.pi', 'skills');
+    const targetSkill = path.join(skillRoot, 'target');
+    const aliasSkill = path.join(skillRoot, 'alias');
+    fs.mkdirSync(targetSkill, { recursive: true });
+    fs.writeFileSync(path.join(targetSkill, 'SKILL.md'), '---\nname: target\n---\n# Target\n', 'utf-8');
+    fs.symlinkSync(targetSkill, aliasSkill, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await expect(renameLocalSkill({
+      absolutePath: aliasSkill,
+      newName: 'renamed-alias',
+    })).resolves.toMatchObject({ success: false });
+    expect(fs.existsSync(aliasSkill)).toBe(true);
+    expect(fs.existsSync(path.join(skillRoot, 'renamed-alias'))).toBe(false);
+    expect(fs.readFileSync(path.join(targetSkill, 'SKILL.md'), 'utf-8')).toBe(
+      '---\nname: target\n---\n# Target\n',
+    );
+  });
+
   it('rejects project .pi skill symlinks that escape the physical skill root', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-escape-'));
     tempRoots.push(root);

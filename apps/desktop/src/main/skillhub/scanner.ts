@@ -740,9 +740,12 @@ export async function renameLocalSkill(params: {
   // 必须是已有的 skill folder
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(absolutePath);
+    stat = fs.lstatSync(absolutePath);
   } catch {
     return { success: false, error: '目录不存在' };
+  }
+  if (stat.isSymbolicLink()) {
+    return { success: false, error: '符号链接 skill 不支持重命名' };
   }
   if (!stat.isDirectory()) {
     return { success: false, error: 'absolutePath 不是目录' };
