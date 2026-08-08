@@ -14,9 +14,9 @@
  *   - true  : 新消息会被 enqueue 到 embedding_jobs, Worker 异步嵌入到 chat_messages_vec_v1
  *   - false : createMessage hook 在 enabled 守卫处直接 return, 零成本
  *
- * **默认 true** —— 与 main DEFAULTS 对齐 (聊天语义搜索默认全员开启)。本镜像只用于
- * 设置 UI 即时态; 真正的 enqueue 守卫在 main (chat-history-embedder)。bootstrap 会在
- * React 挂载前从 main 拉真值覆盖这里, 显式关过的用户会被同步成 false。
+ * **偏好默认 true** —— 与 main DEFAULTS 对齐。本镜像只用于设置 UI 即时态; 真正的
+ * enqueue 守卫在 main (chat-history-embedder)。bootstrap 会在 React 挂载前从 main
+ * 拉取经过账号与模型目录可用性检查的有效值，不可用或显式关过都会同步成 false。
  */
 
 const STORAGE_KEY = 'chatEmbedding.enabled';
