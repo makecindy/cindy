@@ -136,8 +136,9 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // Keep the desired tab zoom attached to each webview generation and native
   // popup surface. The hook reapplies it after navigation and guest attach.
   useEffect(() => {
+    if (!tabVisible) return;
     browser.setZoomFactor(zoomFactor);
-  }, [browser.setZoomFactor, browser.webview, nativePopupSurfaceId, zoomFactor]);
+  }, [browser.setZoomFactor, browser.webview, nativePopupSurfaceId, tabVisible, zoomFactor]);
 
   // 当前会话一轮结束后，如果该轮产物修改了正在预览的本地 HTML，则刷新一次。
   // 不监听磁盘；非激活 tab 与 SSH 远程会话不参与。

@@ -91,6 +91,7 @@ function publishState(record: SurfaceRecord): void {
 }
 
 function applyZoomFactor(record: SurfaceRecord): void {
+  if (!record.requestedVisible) return;
   try {
     record.webContents.setZoomFactor(record.zoomFactor);
   } catch (err) {
@@ -423,6 +424,7 @@ export function registerRsbNativePopupSurfaceIpc(tabRegistry: TabRegistry): void
     record.requestedBounds = bounds;
     record.requestedVisible = raw.visible;
     applyVisibility(record);
+    if (raw.visible) applyZoomFactor(record);
     return { ok: true };
   });
 
