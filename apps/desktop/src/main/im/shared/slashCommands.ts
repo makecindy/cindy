@@ -426,22 +426,39 @@ export function createSlashHandlers(
           await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
           return true;
         }
+        // /ctr 接管期间, 下一条消息跑在**被接管的 desktop 会话**里 —— /model、
+        // /permission 改的也是那一行。总览无条件读 Telegram 自己的确定性会话行
+        // 就会报接管前的项目/模型/权限, 与同一屏里的其它命令自相矛盾。
+        //
+        // binding 指向的行已失效时回落到渠道自身的会话 —— 与 turnRunner 命中
+        // 无效 binding 时的落点一致(它还会顺手 detach, 只读路径不写)。
+        const attachedSessionId = bindingStore.get({
+          channel,
+          botContextId: ctx.botContextId,
+          userId: ctx.userId,
+        });
         // 只读查询必须走只读路径: resolveRouteTarget 没有现成会话时会**建**一条,
         // 而它内部的 findActiveSession 还会把软删行翻回 active 并广播 —— 问一句
         // 「我现在什么配置」不该凭空造出任务, 更不该把用户已删的会话拉回列表。
-        const row = await repo.peekSession(ctx.botContextId, ctx.userId);
+        const row =
+          (attachedSessionId ? await repo.peekSessionById(attachedSessionId) : null) ??
+          (await repo.peekSession(ctx.botContextId, ctx.userId));
+        // 还没有会话行时报的必须是**下一条消息真正会用的**那份配置。静态
+        // adapter.config 不认用户在设置页改过的新会话默认值, 也不认已下架的模型,
+        // 会报出一个用户根本得不到的配置。prepareNewSession 走的正是建会话那条
+        // 默认值解析(readImDefaultSettings + 供应商目录 reconcile), 且只算不写。
+        const effective = row ?? (await repo.prepareNewSession(ctx.botContextId, ctx.userId));
         // 项目显示成目录名而不是绝对路径: 官方 bot 那边显示的是工作区别名(短名),
         // 两边给出的粒度得一样, 否则同一个项目在两个 bot 里看着像两个东西。
-        const workspace = workspaceDisplayName(row?.workingDir, ctx.botContextId);
-        // 还没有会话行时报渠道默认值 —— 那正是下一条消息会用的配置。
+        const workspace = workspaceDisplayName(effective.workingDir, ctx.botContextId);
         await safeSendText(
           ctx.userId,
           render({
             workspace,
-            agent: row?.agentKind ?? adapter.config.agentKind,
-            model: row?.model ?? adapter.config.defaultModel,
-            effort: row?.effort ?? repo.getDefaultEffortFor(adapter.config.defaultModel),
-            permission: row?.permissionMode ?? adapter.config.defaultPermissionMode,
+            agent: effective.agentKind,
+            model: effective.model,
+            effort: effective.effort,
+            permission: effective.permissionMode,
           }),
         );
         return true;

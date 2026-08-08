@@ -174,6 +174,7 @@ const sessionIdFor = (bot: string, user: string, scope?: string): string =>
 const fakeRepo: ImSessionRepo = {
   sessionIdFor,
   peekSession: async () => null,
+  peekSessionById: async () => null,
   findActiveSession: vi.fn(async (bot: string, user: string, scope?: string) => {
     return rows.get(sessionIdFor(bot, user, scope)) ?? null;
   }),

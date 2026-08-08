@@ -83,6 +83,14 @@ export interface ImSessionRepo {
    * 设置, 报默认值反而误导。
    */
   peekSession(botContextId: string, userId: string, scopeKey?: string): Promise<ImSessionRow | null>;
+  /**
+   * 按 session id 只读一行 —— `/ctr` 接管期间要读的是**被接管的 desktop 会话**,
+   * 它的 id 不由 `sessionIdFor` 推得出来。同样不创建、不复活、不广播。
+   *
+   * `workingDir` 为空视为无效(binding 指向的行已被删/数据异常), 返回 null 让
+   * 调用方回落到渠道自身的会话 —— 与 turnRunner 命中无效 binding 时的落点一致。
+   */
+  peekSessionById(sessionId: string): Promise<ImSessionRow | null>;
   prepareNewSession(
     botContextId: string,
     userId: string,
@@ -175,6 +183,24 @@ export function createImSessionRepo(
         id: row.id,
         agentKind: toCoreAgentKind(row.agentKind),
         workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        model: row.model,
+        effort: row.effort,
+        permissionMode: row.permissionMode,
+        fastMode: row.fastMode,
+        sdkSessionId: row.sdkSessionId,
+        providerId: row.providerId ?? null,
+      };
+    },
+
+    async peekSessionById(sessionId) {
+      const db = getDbClient().drizzle;
+      const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+      const row = rows[0];
+      if (!row?.workingDir) return null;
+      return {
+        id: row.id,
+        agentKind: toCoreAgentKind(row.agentKind),
+        workingDir: row.workingDir,
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,

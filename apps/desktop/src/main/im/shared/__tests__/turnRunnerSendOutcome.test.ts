@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   bindingGet: vi.fn(),
   bindingDetach: vi.fn(),
   peekSession: async () => null,
+  peekSessionById: async () => null,
   findActiveSession: vi.fn(),
   createSession: vi.fn(),
   touchUserSent: vi.fn(),
@@ -261,6 +262,7 @@ function createSessionHarness(
 const fakeRepo: ImSessionRepo = {
   sessionIdFor: (bot, user) => `feishu_${bot}_${user}`,
   peekSession: async () => null,
+  peekSessionById: async () => null,
   findActiveSession: (...args: [string, string]) => mocks.findActiveSession(...args),
   prepareNewSession: vi.fn(async (bot: string, user: string): Promise<ImSessionRow> => ({
     id: `feishu_${bot}_${user}`,

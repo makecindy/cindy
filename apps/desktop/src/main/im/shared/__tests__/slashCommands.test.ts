@@ -29,6 +29,7 @@ vi.mock('../sessionRepo', async (importOriginal) => ({
 vi.mock('../../binding', () => ({
   bindingStore: {
     get: vi.fn(),
+    detach: vi.fn(),
     listByIdentity: vi.fn(() => []),
   },
   executeDetach: vi.fn(),
@@ -71,6 +72,7 @@ function makeRepo(overrides: Partial<ImSessionRepo> = {}): ImSessionRepo {
     sessionIdFor: vi.fn(() => 'feishu-session'),
     findActiveSession: vi.fn(async () => defaultRow),
     peekSession: vi.fn(async () => defaultRow),
+    peekSessionById: vi.fn(async () => null),
     prepareNewSession: vi.fn(async () => defaultRow),
     createSession: vi.fn(async () => defaultRow),
     getDefaultEffortFor: vi.fn(() => 'high' as const),
@@ -467,6 +469,71 @@ describe('IM slash commands', () => {
       expect(text).toContain('项目：对话（托管目录）');
       expect(text).toContain('Agent：claude-code');
       expect(text).not.toContain('项目：\n');
+    });
+
+    it('无会话时的默认值走建会话那条解析, 不读静态 adapter.config', async () => {
+      // 用户在设置页把新会话默认值改成别的 agent/模型后, adapter.config 还是
+      // 出厂那份 —— 照它报就等于告诉用户一个他下一条消息根本得不到的配置, 甚至
+      // 可能是已下架的模型。prepareNewSession 走的正是建会话那条默认值解析
+      // (readImDefaultSettings + 供应商目录 reconcile), 且只算不写库。
+      const prepared: ImSessionRow = {
+        ...defaultRow,
+        agentKind: 'codex',
+        model: 'gpt-5.6-sol',
+        effort: 'medium',
+        permissionMode: 'plan',
+      };
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => null),
+        prepareNewSession: vi.fn(async () => prepared),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.prepareNewSession).toHaveBeenCalledOnce();
+      expect(repo.createSession).not.toHaveBeenCalled();
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('Agent：codex');
+      expect(text).toContain('模型：gpt-5.6-sol');
+      expect(text).toContain('强度：medium');
+      expect(text).toContain('权限：plan');
+    });
+
+    it('/ctr 接管中: 报的是被接管那条会话, 不是接管前的配置', async () => {
+      // 接管期间下一条消息、/model、/permission 走的都是 binding 命中的 desktop
+      // 会话。总览无条件读 Telegram 自己那行, 就会和同一屏里的其它命令打架。
+      const { bindingStore } = await import('../../binding');
+      (bindingStore.get as ReturnType<typeof vi.fn>).mockReturnValueOnce('attached-session');
+      const attached: ImSessionRow = {
+        ...defaultRow,
+        id: 'attached-session',
+        workingDir: 'D:\\work\\Attached',
+        model: 'claude-sonnet-5',
+        permissionMode: 'plan',
+      };
+      const repo = makeRepo({ peekSessionById: vi.fn(async () => attached) });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.peekSessionById).toHaveBeenCalledWith('attached-session');
+      expect(repo.peekSession).not.toHaveBeenCalled();
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：Attached');
+      expect(text).toContain('模型：claude-sonnet-5');
+      expect(text).toContain('权限：plan');
+    });
+
+    it('binding 指向的会话已失效 → 回落到渠道自己那行, 只读不 detach', async () => {
+      const { bindingStore } = await import('../../binding');
+      (bindingStore.get as ReturnType<typeof vi.fn>).mockReturnValueOnce('gone-session');
+      const repo = makeRepo({
+        peekSessionById: vi.fn(async () => null),
+        peekSession: vi.fn(async () => ({ ...defaultRow, workingDir: 'D:\\work\\XDMaker' })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.peekSession).toHaveBeenCalledOnce();
+      expect(bindingStore.detach).not.toHaveBeenCalled();
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：XDMaker');
     });
 
     it('目录是渠道托管目录时显示「对话」, 不露内部路径名', async () => {
