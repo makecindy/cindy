@@ -66,10 +66,11 @@ describe('/plan composer command', () => {
   });
 
   it('recognizes only an available standalone plan command on send', () => {
-    expect(isPlanModeComposerCommandText('/plan', true)).toBe(true);
-    expect(isPlanModeComposerCommandText('  /PLAN  ', true)).toBe(true);
-    expect(isPlanModeComposerCommandText('/plan explain this', true)).toBe(false);
-    expect(isPlanModeComposerCommandText('/plan', false)).toBe(false);
+    expect(isPlanModeComposerCommandText('/plan', true, [])).toBe(true);
+    expect(isPlanModeComposerCommandText('  /PLAN  ', true, [])).toBe(true);
+    expect(isPlanModeComposerCommandText('/plan explain this', true, [])).toBe(false);
+    expect(isPlanModeComposerCommandText('/plan', false, [])).toBe(false);
+    expect(isPlanModeComposerCommandText('/plan', true, null)).toBe(false);
     expect(
       isPlanModeComposerCommandText('/plan', true, [
         { kind: 'agent-skill', name: 'PLAN', source: 'skill' },

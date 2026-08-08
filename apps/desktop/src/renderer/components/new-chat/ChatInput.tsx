@@ -3401,20 +3401,37 @@ export function ChatInput({
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
-  const [mergedCommands, setMergedCommands] = useState<UnifiedCommand[]>([]);
+  const paletteAgentKind = agentKind ?? 'claude-code';
+  // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
+  // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
+  const isRemoteSession = !!remoteHostId;
+  const slashCommandContextKey = JSON.stringify([
+    workingDir ?? null,
+    paletteAgentKind,
+    isRemoteSession,
+    deviceLinkDeviceId ?? null,
+  ]);
+  const [slashCommandLoadState, setSlashCommandLoadState] = useState<{
+    contextKey: string;
+    status: 'loading' | 'ready' | 'error';
+    commands: UnifiedCommand[];
+  }>({ contextKey: '', status: 'loading', commands: [] });
+  const slashCommandsReady =
+    slashCommandLoadState.contextKey === slashCommandContextKey &&
+    slashCommandLoadState.status === 'ready';
+  const mergedCommands =
+    slashCommandLoadState.contextKey === slashCommandContextKey
+      ? slashCommandLoadState.commands
+      : [];
   const planModeCommandAvailable = planModeEntry !== undefined;
   const composerSlashCommands = useMemo(
     () =>
       addPlanModeComposerCommand(
         mergedCommands,
-        planModeCommandAvailable ? t('planMode.menuItem') : null,
+        planModeCommandAvailable && slashCommandsReady ? t('planMode.menuItem') : null,
       ),
-    [mergedCommands, planModeCommandAvailable, t],
+    [mergedCommands, planModeCommandAvailable, slashCommandsReady, t],
   );
-  const paletteAgentKind = agentKind ?? 'claude-code';
-  // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
-  // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
-  const isRemoteSession = !!remoteHostId;
   const slashCommandLoadSeqRef = useRef(0);
   useEffect(
     () => () => {
@@ -3425,6 +3442,11 @@ export function ChatInput({
   const reloadSlashCommands = useCallback(
     (opts?: { forceReload?: boolean }) => {
       const seq = ++slashCommandLoadSeqRef.current;
+      setSlashCommandLoadState({
+        contextKey: slashCommandContextKey,
+        status: 'loading',
+        commands: [],
+      });
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
@@ -3434,21 +3456,32 @@ export function ChatInput({
         deviceLinkDeviceId,
       )
         .then((cmds) => {
-          if (slashCommandLoadSeqRef.current === seq) setMergedCommands(cmds);
+          if (slashCommandLoadSeqRef.current === seq) {
+            setSlashCommandLoadState({
+              contextKey: slashCommandContextKey,
+              status: 'ready',
+              commands: cmds,
+            });
+          }
         })
         .catch(() => {
-          if (slashCommandLoadSeqRef.current === seq) setMergedCommands([]);
+          if (slashCommandLoadSeqRef.current === seq) {
+            setSlashCommandLoadState({
+              contextKey: slashCommandContextKey,
+              status: 'error',
+              commands: [],
+            });
+          }
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId],
+    [
+      workingDir,
+      paletteAgentKind,
+      isRemoteSession,
+      deviceLinkDeviceId,
+      slashCommandContextKey,
+    ],
   );
-  // context(workingDir / agentKind / remote)变化时先同步清空命令缓存:切换会话(尤其
-  // local→remote)那一瞬,reloadSlashCommands 是异步的,清空可避免 palette 在刷新完成前
-  // 残留上一个项目的本地 skills。下面的 reload effect 紧接着用新 context 重填。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 这里用依赖数组表达上下文切换触发清空，effect 内不直接读取这些值。
-  useEffect(() => {
-    setMergedCommands([]);
-  }, [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId]);
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
@@ -4233,7 +4266,7 @@ export function ChatInput({
           isPlanModeComposerCommandText(
             editorText,
             planModeEntry !== undefined,
-            mergedCommands,
+            slashCommandsReady ? mergedCommands : null,
           )
         ) {
           planModeEntry?.onToggle(!planModeEntry.enabled);
