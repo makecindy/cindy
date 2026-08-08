@@ -1320,7 +1320,11 @@ export class GoalController {
    * "active 却永远不动"的 dormant 死状态。
    */
   async resumeActiveGoals(): Promise<void> {
+    // dispose 后丢弃(reviewer P1:登出/切账号时 in-flight 扫描不得重建 turns /
+    // attach 旧 listener / emit 旧账号状态 / fireTurn)。await 前后各查一次。
+    if (this.disposed) return;
     const active = await this.deps.storage.listActive();
+    if (this.disposed) return;
     let resumed = 0;
     for (const snapshot of active) {
       // listActive 是启动扫描快照；并发 Stop 可能已经立 cancelled boundary 或写成 paused。
@@ -2094,6 +2098,9 @@ export class GoalController {
   }
 
   private async fireTurn(sessionId: string): Promise<void> {
+    // dispose 后丢弃(reviewer P1:登出/切账号后旧 controller 的续跑/扫描不得继续
+    // 实际操作——重建 turns、attach listener、emit 旧账号状态)。
+    if (this.disposed) return;
     const lifecycleBoundary = this.turns.get(sessionId);
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) {
       // 生命周期已接管(cancelled / 无 owner):仅清除属于本次 boundary 的恢复标记
@@ -2160,8 +2167,10 @@ export class GoalController {
     if (this.firing.has(sessionId)) {
       // 已在派发(并发旧 fireTurn 持有所有权):本次 fireTurn 不派发——**保留恢复标记**
       // (reviewer P1:新恢复登记后若在此删除,旧 fireTurn 随后派发只记 turn-dispatched,
-      // 缺配对的 resumed)。恢复意图由旧 fireTurn 收口后的 continuation(同一 boundary)
-      // 派发时消费;串台由 boundary 身份校验防住,无需在此清理。
+      // 缺配对的 resumed)。**并安排防抖重试**(reviewer P1:直接 return 会让恢复后的
+      // active 目标僵死——旧 fireTurn 因 lifecycle 被替换在派发前退出且不调度;重试
+      // 走同 boundary,onDispatching 消费标记)。串台由 boundary 身份校验防住。
+      this.scheduleContinuation(sessionId);
       return;
     }
     // 首轮 vs 续轮由 state 派生(turnsUsed===0 = 首轮尚未真正跑完),不再由调用方指定。
