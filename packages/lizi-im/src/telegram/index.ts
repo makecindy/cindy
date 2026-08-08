@@ -876,7 +876,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           // 每次之间都有 await —— 所以核验要下沉到每次调用前, 只在批次开头查一次
           // 挡不住"第一组传完才换主人"这个窗口。
           this.assertRoundStillLive(round);
-          await this.uploadImages(messageId, imageUrls, () =>
+          return this.uploadImages(messageId, imageUrls, () =>
             this.assertRoundStillLive(round),
           );
         },
@@ -1934,9 +1934,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     messageId: string,
     imageRefs: string[],
     assertLive?: () => void,
-  ): Promise<void> {
+  ): Promise<readonly string[]> {
     const api = this.api;
-    if (!api || imageRefs.length === 0) return;
+    if (!api || imageRefs.length === 0) return [];
     // 图片以 reply 挂回答案锚点消息: 论坛 topic 内自动跟随该 topic(裸发会
     // 落进 General), 视觉上也和答案连成一体; 锚点被删则降级普通发送。
     const { chatId, messageId: anchorNativeId } = decodeMessageId(messageId);
@@ -1948,6 +1948,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     };
     const seen = new Set<string>();
     const absPaths: string[] = [];
+    const refsByAbsPath = new Map<string, string[]>();
     for (const ref of imageRefs) {
       let absPath: string | null = null;
       if (ref.startsWith('abs:')) {
@@ -1959,14 +1960,27 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           absPath = null;
         }
       }
-      if (!absPath || seen.has(absPath)) continue;
-      seen.add(absPath);
-      absPaths.push(absPath);
+      if (!absPath) continue;
+      const refs = refsByAbsPath.get(absPath) ?? [];
+      if (!refs.includes(ref)) refs.push(ref);
+      refsByAbsPath.set(absPath, refs);
+      if (!seen.has(absPath)) {
+        seen.add(absPath);
+        absPaths.push(absPath);
+      }
     }
+    const deliveredRefs = new Set<string>();
+    const markDelivered = (paths: string[]): void => {
+      for (const absPath of paths) {
+        for (const ref of refsByAbsPath.get(absPath) ?? []) deliveredRefs.add(ref);
+      }
+    };
     if (absPaths.length === 1) {
       assertLive?.();
-      await this.sendSinglePhoto(chatId, absPaths[0], anchorReply);
-      return;
+      if (await this.sendSinglePhoto(chatId, absPaths[0], anchorReply)) {
+        markDelivered(absPaths);
+      }
+      return [...deliveredRefs];
     }
     for (let i = 0; i < absPaths.length; i += 10) {
       const group = absPaths.slice(i, i + 10);
@@ -1974,14 +1988,21 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // 单张不成相册, 直接走单发 —— 这条是正常路径, 不是相册失败。
       const outcome =
         group.length > 1 ? await this.sendPhotoAlbum(chatId, group, anchorReply) : 'rejected';
+      if (outcome === 'sent') {
+        markDelivered(group);
+        continue;
+      }
       if (outcome === 'uncertain') continue; // 可能已经发出去了, 不补发
       if (outcome === 'rejected') {
         for (const absPath of group) {
           assertLive?.();
-          await this.sendSinglePhoto(chatId, absPath, anchorReply);
+          if (await this.sendSinglePhoto(chatId, absPath, anchorReply)) {
+            markDelivered([absPath]);
+          }
         }
       }
     }
+    return [...deliveredRefs];
   }
 
   private behaviorOf(): TelegramBehaviorConfig {
@@ -2053,18 +2074,20 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     chatId: string,
     absPath: string,
     anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const api = this.api;
-    if (!api) return;
+    if (!api) return false;
     try {
       const form = new FormData();
       form.set('chat_id', chatId);
       if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set('photo', new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
       await api.callForm('sendPhoto', form);
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`telegram image upload failed: ${msg}`);
+      return false;
     }
   }
 

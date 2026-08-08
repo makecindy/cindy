@@ -1462,6 +1462,23 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(1);
   });
 
+  it('单图发送失败时不把该图片确认为已交付', async () => {
+    await connect();
+    const absPath = path.join(tmpDir, 'failed-single.png');
+    fs.writeFileSync(absPath, 'fake-png');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendPhoto') throw new TypeError('fetch failed');
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+    const handle = await im.startStreamingText(OWNER_ID);
+    handle.addExtraImageAbsPath?.(absPath);
+
+    await handle.finalize('一张发送失败的图');
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
+  });
+
   describe('相册发送失败的回落判据', () => {
     // Telegram 没有发送端幂等键: 一次 sendMediaGroup 只要被接受, 图片就已经在
     // 聊天里了 —— 哪怕响应在网络上丢了。逐张补发会让用户看到两套同样的图, 且

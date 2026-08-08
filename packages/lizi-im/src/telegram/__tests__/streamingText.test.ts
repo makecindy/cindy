@@ -26,6 +26,7 @@ function makeHarness(
     deleteImpl?: (messageId: string) => Promise<void>;
     chunk?: (text: string) => string[];
     extractImageUrls?: (markdown: string) => string[];
+    uploadImagesImpl?: (messageId: string, imageUrls: string[]) => Promise<readonly string[]>;
     /** 不提供 repost 时用于验证回落 send 的行为。 */
     withoutRepost?: boolean;
   } = {},
@@ -52,6 +53,7 @@ function makeHarness(
         calls.push(`upload:${messageId}`);
         uploadAnchors.push(messageId);
       }
+      return overrides.uploadImagesImpl?.(messageId, imageUrls) ?? imageUrls;
     },
     chunk: overrides.chunk ?? ((text) => [text]),
     extractImageUrls: overrides.extractImageUrls ?? (() => []),
@@ -169,6 +171,21 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
 
     // 锚点是补送出来的那条(msg-2), 不是被删掉的 msg-1。
     expect(h.uploadAnchors).toEqual(['msg-2']);
+  });
+
+  it('only acknowledges extra images that the upload layer confirms', async () => {
+    const first = '/tmp/first.png';
+    const second = '/tmp/second.png';
+    const h = makeHarness({
+      uploadImagesImpl: async (_messageId, imageUrls) => [imageUrls[0]],
+    });
+    const handle = await startTelegramStreaming(h.deps, 'working');
+    handle.addExtraImageAbsPath?.(first);
+    handle.addExtraImageAbsPath?.(second);
+
+    await handle.finalize('answer');
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
   });
 
   it('补送后剩余分段照常发出', async () => {
