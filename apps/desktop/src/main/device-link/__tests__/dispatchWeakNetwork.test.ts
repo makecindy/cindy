@@ -33,7 +33,11 @@ vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, flushRemoteInvokeResultOutboxOnReconnect } from '../dispatch';
+import {
+  __testing,
+  flushRemoteInvokeResultOutboxOnReconnect,
+  setDispatchPresenceOfflineCheck,
+} from '../dispatch';
 
 function mkClient(
   over: Partial<{
@@ -233,6 +237,70 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
     status = 'online';
     flushRemoteInvokeResultOutboxOnReconnect();
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+});
+
+describe('[5] outbox flush 的 presence 显式离线门禁', () => {
+  it('presence 明确离线的控制端本轮跳过(条目保留),在线控制端照常投递;设备回归后可投', () => {
+    // 2026-08-08 线上:ws-online 全量 flush 对已离线目标逐帧弹 DEVICE_OFFLINE,
+    // 叠进 relay 聚合背压。门禁按 src 隔离——一个离线控制端不影响其它控制端。
+    const offline = new Set(['ctrl-offline']);
+    setDispatchPresenceOfflineCheck((id) => offline.has(id));
+    const sendInvokeResult = vi.fn().mockImplementation(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+
+    // 两个控制端各一条 outbox 积压(首发失败入队)
+    for (const src of ['ctrl-offline', 'ctrl-online']) {
+      __testing.sendInvokeResultSafe(
+        client as never,
+        src,
+        `req-${src}`,
+        { ok: true, result: 1 },
+        'local-db:sessions:list',
+      );
+    }
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(2);
+
+    // ws-online 全量 flush:离线者被门禁跳过(不 trySend),在线者投递成功
+    sendInvokeResult.mockImplementation(() => {});
+    const callsBefore = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    const flushed = sendInvokeResult.mock.calls.slice(callsBefore);
+    expect(flushed.map((c) => c[0])).toEqual(['ctrl-online']);
+    // 离线者的条目保留(TTL 照常),没有被丢弃
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 设备回归(presence 翻转):下一次 flush 正常投递
+    offline.clear();
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult).toHaveBeenLastCalledWith(
+      'ctrl-offline',
+      'req-ctrl-offline',
+      expect.anything(),
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('presence 判据未接线(null)时 fail-open:行为与门禁不存在时一致', () => {
+    // __testing.reset() 已把判据清空;不接线直接 flush,验证默认路径不受影响
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+    flushRemoteInvokeResultOutboxOnReconnect();
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
   });
 });

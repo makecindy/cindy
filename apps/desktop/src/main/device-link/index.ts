@@ -67,6 +67,7 @@ import {
   forgetControllerInvokeState,
   handleControllerOffline,
   purgeRevokedController,
+  setDispatchPresenceOfflineCheck,
 } from './dispatch';
 import {
   clearControllerPlatforms,
@@ -244,6 +245,17 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
  */
 const presenceOnlineByDevice = new Map<string, boolean>();
+
+/**
+ * presence「显式离线」判据(接线给 dispatch 的 outbox flush,与本文件订阅重放
+ * fan-out 共用):只有权威 presence 明确说过 offline 才为 true;视图里没有该
+ * 设备(teardown 清空 / relay 重连后尚未收到首帧 presence)一律 fail-open——
+ * 恢复窗口的首发允许盲发,由既有终止/恢复事件收敛(重试前置门 + presence
+ * 翻转重放 + link-open 定向 flush)。
+ */
+function isPresenceExplicitlyOffline(deviceId: string): boolean {
+  return presenceOnlineByDevice.get(deviceId) === false;
+}
 
 const presenceNameByDevice = new Map<string, string>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
@@ -563,6 +575,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
   wireInboundDispatch(client);
+  // outbox flush 的 presence 显式离线门禁(运行期接线,模块顶层会撞 import 环 TDZ)
+  setDispatchPresenceOfflineCheck(isPresenceExplicitlyOffline);
 
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)
   startBusyReporting();
@@ -904,6 +918,16 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
     `device-link replay subscriptions (${reason}): devices=${refs.length} topics=${topicCount}`,
   );
   for (const { deviceId, topics } of refs) {
+    // 首发与重试同门禁(重试前置门见 replayDeviceSubscription 的 timer 回调):
+    // presence 已明确宣告离线的目标跳过盲发——subscribe 必弹 DEVICE_OFFLINE,
+    // 只喂 relay 聚合背压;presence 未知(重连后视图刚清空)不拦,恢复窗口的
+    // 首发照旧。设备回归由 presence-online 翻转重放接棒(onPresenceChanged)。
+    if (isPresenceExplicitlyOffline(deviceId)) {
+      log.debug(
+        `device-link replay subscriptions (${reason}): skip ${deviceId.slice(0, 8)} (presence offline)`,
+      );
+      continue;
+    }
     replayDeviceSubscription(deviceId, topics, reason, 0);
   }
 }

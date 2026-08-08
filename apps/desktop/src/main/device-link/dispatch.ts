@@ -391,6 +391,22 @@ function projectInvokeResultForTunnel(
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
 let activeClient: DeviceLinkClient | null = null;
 
+/**
+ * presence「显式离线」判据(index.ts 接线,那里持有权威 presence 视图):
+ * 返回 true 仅当 presence 明确宣告该设备离线;presence 未知(如 relay 重连后
+ * 视图刚清空)必须返回 false——fail-open,否则会把重连后的恢复窗口一并拦死。
+ * outbox 全量 flush 据此跳过注定 DEVICE_OFFLINE 的盲发(2026-08-08 线上:
+ * ws-online 全量 flush 对离线目标逐帧弹回,叠进当晚的 relay 聚合背压);
+ * 条目保留不丢,恢复由该控制端回归后的 link-open / subscribe 定向 flush 接棒。
+ */
+let presenceOfflineCheck: ((deviceId: string) => boolean) | null = null;
+
+export function setDispatchPresenceOfflineCheck(
+  check: ((deviceId: string) => boolean) | null,
+): void {
+  presenceOfflineCheck = check;
+}
+
 /** 订阅集合变化时一次性通知 host UI 控制态与更新重启安全态。 */
 type ControllersChangedListener = (
   controllers: ActiveController[],
@@ -1681,6 +1697,13 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     // 离线轮只做上面的 TTL 出清:trySend 必然 NOT_CONNECTED,不空转、不刷日志。
     if (!relayOnline) continue;
     if (blockedPeers.has(queued.src)) continue;
+    // presence 已明确宣告该控制端离线:本轮跳过盲发(逐帧必弹 DEVICE_OFFLINE,
+    // 只喂 relay 聚合背压),条目保留、TTL 照常;presence 未知不拦(fail-open)。
+    // 恢复:控制端回归必先 link-open / subscribe,两者都有定向 flush。
+    if (presenceOfflineCheck?.(queued.src)) {
+      blockedPeers.add(queued.src);
+      continue;
+    }
     const attempt = trySendInvokeResult(
       client,
       queued.src,
@@ -2274,6 +2297,7 @@ export const __testing = {
     clearAllSessionActivityStages();
     cancelAllLinkAcceptRetries();
     setBroadcastTapListener(null);
+    presenceOfflineCheck = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,
