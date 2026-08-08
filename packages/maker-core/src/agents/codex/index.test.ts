@@ -13523,7 +13523,25 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(forkParams?.excludeTurns).toBeUndefined();
   });
 
-  it('forks from a temporary rollout copy without unsafe payload lines', async () => {
+  it('preserves source provider credentials on an isolated fork host', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      model: 'gpt-5.4',
+      providerId: 'custom-provider',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    // The isolated host is created through the same provider-oauth credential
+    // path as the source session; this prevents custom-provider forks from
+    // falling back to unrelated local credentials.
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+      threadId: 'source-thread-id',
+    }));
+  });  it('forks from a temporary rollout copy without unsafe payload lines', async () => {
     const agent = new CodexAgent(createDeps());
     let copied = '';
     const host = installFakeHost(agent, async (method, params) => {
