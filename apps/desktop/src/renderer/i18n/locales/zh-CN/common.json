@@ -6529,7 +6529,8 @@
       "outputFile": "输出：{{path}}"
     },
     "planPill": {
-      "step": "第 {{current}} / {{total}} 步"
+      "step": "第 {{current}} / {{total}} 步",
+      "dismiss": "关闭计划"
     },
     "forkOrigin": {
       "label": "基于原任务创建"

@@ -6529,7 +6529,8 @@
       "outputFile": "出力: {{path}}"
     },
     "planPill": {
-      "step": "ステップ {{current}} / {{total}}"
+      "step": "ステップ {{current}} / {{total}}",
+      "dismiss": "計画を閉じる"
     },
     "forkOrigin": {
       "label": "元のセッションから作成"

@@ -6529,7 +6529,8 @@
       "outputFile": "출력: {{path}}"
     },
     "planPill": {
-      "step": "{{current}} / {{total}}단계"
+      "step": "{{current}} / {{total}}단계",
+      "dismiss": "계획 닫기"
     },
     "forkOrigin": {
       "label": "원래 세션에서 생성됨"
