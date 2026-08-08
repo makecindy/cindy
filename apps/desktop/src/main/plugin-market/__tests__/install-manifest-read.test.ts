@@ -95,6 +95,35 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
     expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
   });
 
+  it('保留前缀闸在打包前生效:闸抛错 → 安装拒绝,不进入打包', async () => {
+    // TOCTOU 纵深防线:发现层已按保留前缀过滤(discover.ts 的 reserved-ghost-id),
+    // 但发现之后目录可被改写、pluginId 可被伪造直调 install——安装管道必须自己再
+    // 过一遍 rejectReservedGhostIdForCustomMarket。此用例钉住"管道调了闸、且闸的
+    // 拒绝生效",防止未来有人以"发现层已过滤"为由删掉这次调用。
+    const reserved = { ...GOOD_MANIFEST, id: 'cindy-fake' };
+    const pluginDir = path.join(workDir, 'plugin-reserved');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify(reserved),
+    );
+    brain.rejectReservedGhostIdForCustomMarket.mockImplementation((id: string) => {
+      if (id.startsWith('cindy-')) throw Object.assign(new Error('[GHOST_ID_RESERVED] reserved'), { code: 'GHOST_ID_RESERVED' });
+    });
+    try {
+      await expect(
+        installCustomMarketPlugin({
+          pluginDir: await fs.promises.realpath(pluginDir),
+          expected: reserved as unknown as GhostManifest,
+        }),
+      ).rejects.toMatchObject({ code: 'GHOST_ID_RESERVED' });
+      expect(brain.rejectReservedGhostIdForCustomMarket).toHaveBeenCalledWith('cindy-fake');
+      expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
+    } finally {
+      brain.rejectReservedGhostIdForCustomMarket.mockReset();
+    }
+  });
+
   it('把已校验的规范根同时作为打包输入与打包器锚点传下去', async () => {
     // 契约用例:锚点必须是**本层校验过的那个规范根**,不能是任何别的字符串
     // (第三个参数是必填的,TS 只能保证"传了",保证不了"传对";传成 tempPath
