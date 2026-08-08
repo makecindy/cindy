@@ -639,6 +639,29 @@ function resolveAllowedExistingSkillPath(absolutePath: string): string | null {
   return realTarget;
 }
 
+/**
+ * Canonicalize a path previously surfaced by SkillHub discovery for an IPC
+ * grant. This deliberately reuses the same lexical whitelist and physical
+ * symlink boundary as the eventual read/write operation.
+ */
+export function resolveExistingSkillPathForGrant(absolutePath: string): string | null {
+  if (!absolutePath || !path.isAbsolute(absolutePath)) return null;
+  return resolveAllowedExistingSkillPath(absolutePath);
+}
+
+/** Return whether an existing target belongs to one of the sender's scanned roots. */
+export function isExistingSkillPathGranted(
+  absolutePath: string,
+  grantedRoots: ReadonlySet<string>,
+): boolean {
+  const realTarget = resolveExistingSkillPathForGrant(absolutePath);
+  if (!realTarget) return false;
+  for (const root of grantedRoots) {
+    if (isPathWithin(root, realTarget)) return true;
+  }
+  return false;
+}
+
 function findSkillRootForPath(absolutePath: string): string | null {
   const norm = path.resolve(absolutePath).replace(/\\/g, '/');
   const markerMatch = /\/(?:\.claude\/(?:skills|commands|agents)|\.agents\/skills|\.codex\/skills|\.pi\/skills|codex-home\/skills)\//.exec(norm);

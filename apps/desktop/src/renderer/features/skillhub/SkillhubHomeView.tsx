@@ -32,7 +32,7 @@ import {
   PluginManagementPage,
 } from '@/features/plugin/PluginManagementLayout';
 import { canAccessSkillhubMarket } from './lib/marketAccess';
-import { buildLocalSkillRoute } from './lib/localRoutes';
+import { buildLocalSkillRoute, findLocalSkillByPath } from './lib/localRoutes';
 import { refresh as refreshSkillhub, useSkillhub } from './hooks/useSkillhub';
 import { useMarketList, type MarketSkill } from './hooks/useMarketList';
 import { basename, deriveProjectWorkingDir } from './lib/pathDerivations';
@@ -432,7 +432,7 @@ export function SkillhubHomeView() {
             if (!result?.name) return;
             void refreshSkillhub().then((scannedSkills) => {
               const imported = result.absolutePath
-                ? scannedSkills.find((skill) => skill.absolutePath === result.absolutePath)
+                ? findLocalSkillByPath(scannedSkills, result.absolutePath)
                 : undefined;
               if (imported) {
                 navigate(buildLocalSkillRoute(imported), {

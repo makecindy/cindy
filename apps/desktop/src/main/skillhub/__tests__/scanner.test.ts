@@ -11,11 +11,13 @@ vi.mock('../registry', () => ({
 }));
 
 import {
+  isExistingSkillPathGranted,
   listSkillFolderChildren,
   readSkillContent,
   readSkillRawFile,
   readSkillSiblingFile,
   renameLocalSkill,
+  resolveExistingSkillPathForGrant,
   scanAllSkills,
   writeSkillFile,
 } from '../scanner';
@@ -572,6 +574,11 @@ describe('skill file access', () => {
 
   it('follows a supported skill path symlink across detail, files panel, and editor access', async () => {
     const { actualSkillMd, exposedDir, exposedPricingJson, exposedSkillMd } = createSymlinkedSkill();
+
+    const grantedRoot = resolveExistingSkillPathForGrant(exposedDir);
+    expect(grantedRoot).toBe(fs.realpathSync(exposedDir));
+    expect(isExistingSkillPathGranted(exposedSkillMd, new Set([grantedRoot!]))).toBe(true);
+    expect(isExistingSkillPathGranted(actualSkillMd, new Set([grantedRoot!]))).toBe(false);
 
     await expect(readSkillContent({ mdPath: exposedSkillMd })).resolves.toMatchObject({
       success: true,

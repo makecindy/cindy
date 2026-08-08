@@ -187,6 +187,16 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(workingDirHandler).toContain('slashDispatch.message,');
   });
 
+  it('uses bounded Pi runtime reconciliation for ordinary sends and steering', () => {
+    const slashDispatchBranch = sessionViewSource.slice(
+      sessionViewSource.indexOf('const originalMessage = message;'),
+      sessionViewSource.indexOf('if (slashDispatch.handled) return;'),
+    ).replace(/\r\n/g, '\n');
+
+    expect(slashDispatchBranch.match(/piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS/g))
+      .toHaveLength(2);
+  });
+
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
     // 控制端的 invoke 超时**不会取消**被控端正在跑的 enableOrca,所以「控制端报失败、
     // 对端稍后仍建成 team」是真实终态(codex review P1)。回流放在 finally 里,让

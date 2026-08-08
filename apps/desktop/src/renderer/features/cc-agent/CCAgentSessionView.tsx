@@ -2675,8 +2675,13 @@ export function CCAgentSessionView({
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
       const originalMessage = message;
       const slashDispatch = deliveryMode === 'steer'
-        ? await maybeDispatchDesktopSlashCommand(message, files, { allowDesktopDispatch: false })
-        : await maybeDispatchDesktopSlashCommand(message, files);
+        ? await maybeDispatchDesktopSlashCommand(message, files, {
+            allowDesktopDispatch: false,
+            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+          })
+        : await maybeDispatchDesktopSlashCommand(message, files, {
+            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+          });
       if (slashDispatch.handled) return;
       message = slashDispatch.message;
       if (message !== originalMessage && opts) {
