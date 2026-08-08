@@ -89,6 +89,27 @@ describe('summarizeOpenPlan', () => {
     ).toBeNull();
   });
 
+  it('still reconciles a top-level plan whose agent_meta carries a legacy transcript parent', () => {
+    // legacy Claude 导入把 transcript 链边(非 RFC 串)存进 agent_meta.parentUuid。
+    // 把裸字段一律提升成显式 parentToolUseId 会让它被判成子代理、顶层计划从对账里
+    // 消失,还与保留裸字段的 mobile 分叉(review P2)。
+    const legacyPlan: PlanReconcileCandidateRow = {
+      ...planRow([{ step: 'Open work', status: 'in_progress' }]),
+      agentMeta: { parentUuid: 'preceding-user-uuid' },
+    };
+    expect(summarizeOpenPlan([legacyPlan])).toEqual({
+      openSteps: ['Open work'],
+      totalSteps: 1,
+    });
+
+    // 真正的 SDK 子代理归属(toolu_ / call_ 形态)照旧过滤。
+    const subagentPlan: PlanReconcileCandidateRow = {
+      ...planRow([{ step: 'Subagent work', status: 'in_progress' }]),
+      agentMeta: { parentUuid: 'toolu_01AbCdEf' },
+    };
+    expect(summarizeOpenPlan([subagentPlan])).toBeNull();
+  });
+
   it('reconciles only the latest plan session after a user turn boundary', () => {
     const summary = summarizeOpenPlan([
       planRow([{ step: 'Old abandoned', status: 'in_progress' }]),

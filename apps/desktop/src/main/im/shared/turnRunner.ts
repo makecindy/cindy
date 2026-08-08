@@ -105,6 +105,7 @@ import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleto
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
+import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
 import {
   cancelPending,
   registerPending,
@@ -867,7 +868,11 @@ export function createTurnRunner(
       // 读库失败静默跳过,不挡发送。
       const planReconcileNote = await (async () => {
         try {
-          const rows = await listMessagesForAgentHandoff(rowId, 1000);
+          // 与 register.ts 同口径:读排在持久化 FIFO 之后,不然会读到终态章/失败
+          // 印记尚未落库的旧快照(review P2)。
+          const rows = await enqueueDurableWrite(`plan-reconcile-read:${rowId}`, () =>
+            listMessagesForAgentHandoff(rowId, 1000),
+          );
           const summary = summarizeOpenPlan(rows);
           return summary ? buildPlanReconcileNote(summary) : null;
         } catch {

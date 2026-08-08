@@ -8970,7 +8970,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // null → 本轮不注入——降级方向是"少提醒",不会误提醒,可接受;不做全量
     // 分页回溯,避免每次发送为一个提示扫全历史。
     peekPlanReconcileNote: async (sessionId) => {
-      const rows = await listMessagesForAgentHandoff(sessionId, 1000);
+      // 读排在同一条持久化 FIFO 之后:终态章(persistCodexPlanOnDone)与失败印记
+      // 只是 enqueueWrite 入队,不等它们落库就查,会读到未盖章的旧快照 → 给已经
+      // 收口的计划多注入一次对账;反过来,全勾完但失败的计划可能因 turnCompleted:false
+      // 还没写进去而漏掉唯一的收口通道(review P2)。调用方对失败已经 catch 成 null,
+      // 队列被 app-session 边界打断时最多这一轮不注入。
+      const rows = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
+        listMessagesForAgentHandoff(sessionId, 1000),
+      );
       const summary = summarizeOpenPlan(rows);
       return summary ? buildPlanReconcileNote(summary) : null;
     },

@@ -42,15 +42,14 @@ function toRenderSourceMessage(row: PlanReconcileCandidateRow): MessageRenderSou
   const toolName = typeof content?.toolName === 'string' ? content.toolName : undefined;
   const toolInput = content?.input;
   const toolUseId = typeof content?.toolUseId === 'string' ? content.toolUseId : undefined;
-  // 子代理归属:Claude 子代理的 TodoWrite 行把父 id 持久化在 agent_meta.parentUuid
-  // (messagePersistBroadcaster 写入),content 里没有;两处都认。
+  // 子代理归属:显式 parentToolUseId 才提升为 parentToolUseId 字段。裸
+  // agent_meta.parentUuid 原样带过去,由 maker-shared 的 hasSubagentParent 按
+  // SDK tool-parent 形态(toolu_ / call_)判定——legacy Claude 导入把 transcript
+  // 链边(preceding-user-uuid 这类非 RFC 串)也存在这个键上,一律提升会把顶层
+  // 计划误判成子代理并从对账里过滤掉,还与保留裸字段的 mobile 分叉(review P2)。
   const meta = row.agentMeta ?? null;
   const parentToolUseId =
-    typeof content?.parentToolUseId === 'string'
-      ? content.parentToolUseId
-      : typeof meta?.parentUuid === 'string' && meta.parentUuid
-        ? meta.parentUuid
-        : undefined;
+    typeof content?.parentToolUseId === 'string' ? content.parentToolUseId : undefined;
   return {
     clientId: row.clientId,
     role: row.role,
