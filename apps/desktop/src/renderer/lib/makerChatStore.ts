@@ -10759,7 +10759,7 @@ function extractSessionRefs(
   return reconcileSessionRefsForText(text, previous, getStickySessionDeviceId);
 }
 
-function buildCreateOptsForCurrentSession(
+export function buildCreateOptsForCurrentSession(
   sessionId: string,
   model: string,
   effort: string,

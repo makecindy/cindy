@@ -38,6 +38,10 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(keydownBlock).toContain('event.stopPropagation();');
     expect(keydownBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
     expect(keydownBlock).not.toContain('composerCanSubmitRef.current');
+    const paletteGuard = keydownBlock.indexOf('panelBridgeRef.current?.captureKey(event)');
+    const voiceSend = keydownBlock.indexOf('void voiceInputStopAndSendRef.current(enterIntent);');
+    expect(paletteGuard).toBeGreaterThan(-1);
+    expect(paletteGuard).toBeLessThan(voiceSend);
   });
 
   it('allows voice Enter-to-send only when the event target itself falls back to the document body', () => {

@@ -7887,6 +7887,9 @@
       "deny": "거부"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "이 프로젝트를 신뢰하면 사용할 수 있습니다"
+  },
   "skillhub": {
     "home": {
       "title": "스킬",
@@ -7914,7 +7917,12 @@
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",
-      "close": "닫기"
+      "close": "닫기",
+      "statusDiscovered": "발견됨",
+      "statusApproved": "승인됨",
+      "statusLoaded": "로드됨",
+      "statusFailed": "로드 실패",
+      "statusUnknown": "알 수 없음"
     },
     "welcome": {
       "scanning": "로컬 skill 스캔 중…",

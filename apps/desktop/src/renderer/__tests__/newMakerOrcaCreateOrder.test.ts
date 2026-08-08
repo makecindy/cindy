@@ -140,6 +140,63 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(sessionViewSource).toContain('disabled={remoteHandoffPreparing}');
   });
 
+  it('rebases delayed-create inline metadata after rewriting a Pi skill alias', () => {
+    const pendingBranch = sessionViewSource.slice(
+      sessionViewSource.indexOf('const pending = consumePending(sessionId);'),
+      sessionViewSource.indexOf('const pendingGoalConsumedRef'),
+    ).replace(/\r\n/g, '\n');
+
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.agentReferences,',
+    );
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.pastedTextRanges,',
+    );
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.slashCommandRanges,',
+    );
+    expect(pendingBranch).toContain('agentReferences: pendingAgentReferences');
+    expect(pendingBranch).toContain('pastedTextRanges: pendingPastedTextRanges');
+    expect(pendingBranch).toContain('slashCommandRanges: pendingSlashCommandRanges');
+    expect(pendingBranch).toContain('PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
+  });
+
+  it('reconciles Pi skill aliases after the user selects a working directory', () => {
+    const workingDirHandler = sessionViewSource.slice(
+      sessionViewSource.indexOf('const handleWorkingDirChange = useCallback('),
+      sessionViewSource.indexOf('const maybeShowContextUsage'),
+    ).replace(/\r\n/g, '\n');
+
+    expect(sessionViewSource).toContain('const commands = options?.workingDirOverride');
+    expect(workingDirHandler).toContain('workingDirOverride: newDir');
+    expect(workingDirHandler).toContain(
+      'piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS',
+    );
+    expect(workingDirHandler).toContain('preparePiRuntime: async () =>');
+    expect(workingDirHandler).toContain("'maker:create-session'");
+    expect(workingDirHandler).toContain('window.electronAPI.maker.createSession(createOpts)');
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.agentReferences,',
+    );
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.pastedTextRanges,',
+    );
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.slashCommandRanges,',
+    );
+    expect(workingDirHandler).toContain('slashDispatch.message,');
+  });
+
+  it('uses bounded Pi runtime reconciliation for ordinary sends and steering', () => {
+    const slashDispatchBranch = sessionViewSource.slice(
+      sessionViewSource.indexOf('const originalMessage = message;'),
+      sessionViewSource.indexOf('if (slashDispatch.handled) return;'),
+    ).replace(/\r\n/g, '\n');
+
+    expect(slashDispatchBranch.match(/piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS/g))
+      .toHaveLength(2);
+  });
+
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
     // 控制端的 invoke 超时**不会取消**被控端正在跑的 enableOrca,所以「控制端报失败、
     // 对端稍后仍建成 team」是真实终态(codex review P1)。回流放在 finally 里,让
