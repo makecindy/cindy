@@ -197,7 +197,13 @@ export function createAckReactions(deps: {
     pendingFinals.set(opId, entry);
     if (pendingFinals.size <= PENDING_FINALS_MAX) return;
     const oldest = pendingFinals.keys().next().value;
-    if (oldest !== undefined) pendingFinals.delete(oldest);
+    if (oldest !== undefined) {
+      pendingFinals.delete(oldest);
+      // 回落记录与待收口项同键同生命周期: 服务端从此不回回执时, 只淘汰
+      // pendingFinals 会让 expressive 的每个终态永久留在 retryables 里,
+      // 换一张表继续无界增长。
+      retryables.delete(oldest);
+    }
   }
   /**
    * 可回落的终态表情: opId → 该轮的任务与成败。

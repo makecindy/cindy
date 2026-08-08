@@ -358,6 +358,15 @@ export interface HookDispatcher {
    */
   setEmojiReactionsMode(mode: TelegramEmojiReactions | null): void;
   /**
+   * 在 manager 关 transport / 重置档位**之前**结清 👀 欠账。
+   *
+   * deactivateAccount 里那次 onAccountTeardown 是兜底 —— 走到那里时 manager
+   * 已经 reset 了档位(null → 一帧不发)、stopAll 也删光了发送函数, 什么都发
+   * 不出去。真正有效的结账必须在两者之前, 由 manager 显式触发。幂等: opId
+   * 不变, 服务端去重, 兜底那次重复发也只是同一答复。
+   */
+  settleAckReactions(): void;
+  /**
    * task.cancel: 中断指定 requestId 的任务。排队中的直接摘除并回
    * turn.end(cancelled); 执行中的标记取消并 abort 对应 session, 收口时以
    * cancelled 回推; 未知 / 已收口的静默忽略(server 侧幂等消化竞态)。
@@ -2517,6 +2526,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     },
     setEmojiReactionsMode(mode: TelegramEmojiReactions | null) {
       emojiReactionsMode = mode;
+    },
+    settleAckReactions() {
+      ackReactions.onAccountTeardown((cid) => sendFns.get(cid));
     },
     onConnected(connectionId, send, features) {
       if (!accountActive) return;

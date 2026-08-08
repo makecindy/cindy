@@ -3187,6 +3187,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // when another caller is already waiting on the same physical drain.
       accountActive = false;
       accountGeneration += 1;
+      // 👀 欠账要趁档位与连接都还活着结清 —— reset 之后档位是 null(一帧不发),
+      // stopAll 之后发送函数也没了, dispatcher 兜底那次 teardown 结不了账。
+      dispatcher?.settleAckReactions();
       resetTelegramEmojiReactions();
       for (const lane of lanes) {
         lane.openRequestId = null;

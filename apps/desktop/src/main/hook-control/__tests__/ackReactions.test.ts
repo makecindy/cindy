@@ -383,6 +383,25 @@ describe('官方 bot ack 表情', () => {
     h.reactions.reset();
   });
 
+  it('待收口表淘汰最旧项时, 同键的回落记录一起清', () => {
+    // 服务端从此不回回执时, 只淘汰 pendingFinals 会让 expressive 的每个终态
+    // 永久留在 retryables 里 —— 换一张表继续无界增长。
+    const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0);
+    for (let i = 0; i < 501; i += 1) {
+      const task = { ...TASK, requestId: `bulk-${i}` };
+      h.reactions.onAccepted(task, h.send);
+      h.reactions.onFinished(task, 'ok', h.send);
+    }
+    // 第 0 条被淘汰出待收口表后, 它的回落记录也不能再触发回落发。
+    const before = h.sent.length;
+    h.reactions.onResult(
+      { opId: 'bulk-0:final', ok: false, messageId: null, error: 'REACTION_INVALID' },
+      () => h.send,
+    );
+    expect(h.sent.length).toBe(before); // 没有回落发 = retryables 里已经没有它
+    h.reactions.reset();
+  });
+
   it('能力快照还没到时不丢待补发 —— 只有明确降级才作废', () => {
     // 「这一刻还不知道」与「服务端说了不支持」不能混同: 前者一次时序抖动就把
     // 待补发全丢了, 那条消息永远挂着 👀。
