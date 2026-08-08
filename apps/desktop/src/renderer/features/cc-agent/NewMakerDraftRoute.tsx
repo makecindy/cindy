@@ -2856,8 +2856,9 @@ export function NewMakerDraftRoute() {
         // skill 误判成 desktop 命令(Codex P2:远程草稿提前 return 会吞掉同名 skill)。
         // 这是 handleSend 里**第一个 await**,必须先上在途锁(Copilot):拉取 IPC 期间
         // 用户可能切换设备/工作区/agent,闭包会持有旧上下文做判断与 toggle,串台误判。
-        // 上锁让 pill 立即拒绝,拉完立即释放 —— 因为 /plan 命中会 return,后续主流程
-        // 还有自己的 markSendInFlight(true),不能「用完即释放」。
+        // 上锁让 pill 立即拒绝;拉取完成后在此释放(命中 /plan 的分支 —— 远程 toast /
+        // 本地 toggle —— 都在 finally 前 return,不存在重复解锁);若命中同名 skill 放行,
+        // 后续主流程会重新 markSendInFlight(true) 上锁。
         markSendInFlight(true);
         try {
           const cmds = await loadAllCommands(
@@ -2870,8 +2871,9 @@ export function NewMakerDraftRoute() {
             effectiveDeviceLinkDeviceId,
           );
           const hit = cmds.find((c) => c.name.toLowerCase() === 'plan');
-          // 命中 agent skill(agent-builtin/agent-skill 优先于 desktop) → 放行,
-          // 让 /plan 作为首条消息发给 agent(本地或被控端的同名 skill 都算)。
+          // 命中 agent skill(mergeCommands 优先级 agent-skill > desktop > agent-builtin,
+          // 同名时 agent-skill 覆盖 desktop) → 放行,让 /plan 作为首条消息发给 agent
+          // (本地或被控端的同名 skill 都算)。
           if (!hit || hit.kind === 'desktop') {
             if (isDeviceLinkDraft) {
               // 无同名命令或 /plan 归属 desktop,但草稿是 device-link 远程:计划模式
