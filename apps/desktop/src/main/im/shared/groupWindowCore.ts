@@ -40,6 +40,12 @@ const CURSOR_ROLLBACK_RETRY_DELAY_MS = 25;
  *
  * `maxRowsPerNamespace` 只是防止极端行数膨胀的安全阀(海量空消息把行开销撑爆),
  * 设得足够高, 正常使用永远碰不到 —— 它不是日常清理手段。
+ *
+ * **字节口径只统计 `text`**, 不含 `file_names` / `chat_name` / `author` / 各类 id
+ * 与索引。这不是遗漏: `text_bytes` 由 migration 0088 的触发器维护, 改口径要动
+ * schema。纯附件消息的 `text` 正是空串, 这类命名空间的增长由**行数阀**兜 ——
+ * 每行的非正文开销约 200~250 字节(含索引), 500 万行即约 1.2 GiB, 与正文额度
+ * 同一量级, 上限可估。要精确按整行受控字节计费得改触发器, 另立议题。
  */
 export type GroupWindowRetentionPolicy = {
   /** 该 provider 命名空间保留的正文字节上限。 */
