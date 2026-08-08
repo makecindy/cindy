@@ -1728,6 +1728,12 @@
         "cellLabel": "메시지 알림",
         "hint": "연결/해제 시 Bot에 알림 메시지를 전송합니다"
       },
+      "sessionNotification": {
+        "label": "세션 완료 알림",
+        "cellLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
+        "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
+        "disabledHint": "먼저 Bot을 설정하고 바인딩을 완료하려면 DM을 보내주세요."
+      },
       "bind": "연동"
     },
     "wechatBot": {

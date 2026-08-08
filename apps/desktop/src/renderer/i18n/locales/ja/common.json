@@ -1728,6 +1728,12 @@
         "cellLabel": "メッセージ通知",
         "hint": "接続・切断時に Bot へ通知メッセージを送信"
       },
+      "sessionNotification": {
+        "label": "セッション完了通知",
+        "cellLabel": "セッション完了または応答が必要なときに Feishu / Lark メッセージを送信",
+        "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
+        "disabledHint": "先に Bot を設定し、バインドを完了するために DM を送信してください。"
+      },
       "bind": "連携"
     },
     "wechatBot": {
