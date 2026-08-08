@@ -140,6 +140,26 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(sessionViewSource).toContain('disabled={remoteHandoffPreparing}');
   });
 
+  it('rebases delayed-create inline metadata after rewriting a Pi skill alias', () => {
+    const pendingBranch = sessionViewSource.slice(
+      sessionViewSource.indexOf('const pending = consumePending(sessionId);'),
+      sessionViewSource.indexOf('const pendingGoalConsumedRef'),
+    );
+
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.agentReferences,',
+    );
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.pastedTextRanges,',
+    );
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.slashCommandRanges,',
+    );
+    expect(pendingBranch).toContain('agentReferences: pendingAgentReferences');
+    expect(pendingBranch).toContain('pastedTextRanges: pendingPastedTextRanges');
+    expect(pendingBranch).toContain('slashCommandRanges: pendingSlashCommandRanges');
+  });
+
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
     // 控制端的 invoke 超时**不会取消**被控端正在跑的 enableOrca,所以「控制端报失败、
     // 对端稍后仍建成 team」是真实终态(codex review P1)。回流放在 finally 里,让

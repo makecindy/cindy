@@ -3089,6 +3089,27 @@ export function CCAgentSessionView({
           return slashDispatch.handled;
         });
         if (dispatched) return;
+        const pendingAgentReferences = pending.agentReferences
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.agentReferences,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
+        const pendingPastedTextRanges = pending.pastedTextRanges
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.pastedTextRanges,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
+        const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.slashCommandRanges,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
         await deliverRecoverableHandoff(sessionId, () =>
@@ -3102,20 +3123,20 @@ export function CCAgentSessionView({
             pending.mentions,
             pending.vendorOptions ||
               pending.quotesEncoded ||
-              pending.agentReferences?.length ||
-              pending.pastedTextRanges?.length ||
-              pending.slashCommandRanges !== undefined
+              pendingAgentReferences?.length ||
+              pendingPastedTextRanges?.length ||
+              pendingSlashCommandRanges !== undefined
               ? {
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
-                  ...(pending.agentReferences?.length
-                    ? { agentReferences: pending.agentReferences }
+                  ...(pendingAgentReferences?.length
+                    ? { agentReferences: pendingAgentReferences }
                     : {}),
-                  ...(pending.pastedTextRanges?.length
-                    ? { pastedTextRanges: pending.pastedTextRanges }
+                  ...(pendingPastedTextRanges?.length
+                    ? { pastedTextRanges: pendingPastedTextRanges }
                     : {}),
-                  ...(pending.slashCommandRanges !== undefined
-                    ? { slashCommandRanges: pending.slashCommandRanges }
+                  ...(pendingSlashCommandRanges !== undefined
+                    ? { slashCommandRanges: pendingSlashCommandRanges }
                     : {}),
                 }
               : undefined,

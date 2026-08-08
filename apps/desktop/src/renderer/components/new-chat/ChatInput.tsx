@@ -3858,15 +3858,20 @@ export function ChatInput({
             return false;
           case 'Enter':
           case 'Tab':
-            if (slashOpen && filteredCommands[slashFocus]) {
-              if (isSlashCommandUnavailable(filteredCommands[slashFocus])) {
+            if (slashOpen) {
+              const focusedCommand = filteredCommands[slashFocus];
+              if (!focusedCommand) {
+                if (trigger.kind === 'slash') setSuppressedSlashAt(trigger.from);
+                return true;
+              }
+              if (isSlashCommandUnavailable(focusedCommand)) {
                 setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
                 if (!hasAvailableSlashCommand(filteredCommands) && trigger.kind === 'slash') {
                   setSuppressedSlashAt(trigger.from);
                 }
                 return true;
               }
-              insertSlashCommand(filteredCommands[slashFocus]);
+              insertSlashCommand(focusedCommand);
               return true;
             }
             if (
