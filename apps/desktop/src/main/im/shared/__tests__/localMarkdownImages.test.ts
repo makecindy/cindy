@@ -45,7 +45,7 @@ describe('materializeLocalMarkdownImages', () => {
 
     const result = await materializeLocalMarkdownImages(
       {
-        text: `完成\n![测试图片](${sourcePath})\n![重复](${sourcePath})`,
+        text: `完成\n![测试图片](${sourcePath})\n![重复](<${sourcePath}> "caption")`,
         workingDir,
         sessionId: 'session-1',
       },
@@ -253,5 +253,15 @@ describe('sanitizeLocalMarkdownImageRefs', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe(
       ['unix', 'windows', 'file url', '![remote](https://example.com/public.png)'].join('\n'),
     );
+  });
+
+  it('removes angle-bracket local targets with optional Markdown titles', () => {
+    const text = [
+      '![unix](</Users/private/a.png> "caption")',
+      '![windows](<C:\\Users\\private\\b.png> "caption")',
+      '![file url](<file:///Users/private/c.png> "caption")',
+    ].join('\n');
+
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('unix\nwindows\nfile url');
   });
 });

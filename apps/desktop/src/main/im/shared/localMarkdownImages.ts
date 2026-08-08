@@ -67,11 +67,20 @@ function isPathInside(parentAbs: string, childAbs: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function markdownLocalTarget(raw: string): string | null {
+function markdownImageDestination(raw: string): string {
   let target = raw.trim();
-  if (target.startsWith('<') && target.endsWith('>')) {
-    target = target.slice(1, -1).trim();
+  if (target.startsWith('<')) {
+    const closingBracket = target.indexOf('>');
+    // Markdown permits an optional title after an angle-bracket destination:
+    // `![alt](</private/file.png> "title")`. Extract only the destination.
+    // A malformed missing `>` remains fail-closed for local-path detection.
+    target = target.slice(1, closingBracket >= 0 ? closingBracket : target.length).trim();
   }
+  return target;
+}
+
+function markdownLocalTarget(raw: string): string | null {
+  const target = markdownImageDestination(raw);
   if (!target || target.includes('\0') || !path.isAbsolute(target)) return null;
   return target;
 }
@@ -207,10 +216,7 @@ export async function materializeLocalMarkdownFiles(
 }
 
 function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
-  let target = rawTarget.trim();
-  if (target.startsWith('<') && target.endsWith('>')) {
-    target = target.slice(1, -1).trim();
-  }
+  const target = markdownImageDestination(rawTarget);
   return (
     target.startsWith('file://') ||
     target.startsWith('/') ||
