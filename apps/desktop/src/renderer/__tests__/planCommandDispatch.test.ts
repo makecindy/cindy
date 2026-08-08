@@ -13,7 +13,8 @@
  *   2) CCAgentSessionView:plan 分支要求 sessionId,并保留 effect 顶部对
  *      payload.sessionId !== sessionId 的早退(避免其它窗口的会话命令误切当前会话);
  *   3) CCAgentSessionView:capabilities 未加载(sessionCaps == null)时不吞命令;
- *      已加载但 planMode 缺失/不支持时忽略;
+ *      已加载但 planMode 缺失/不支持时不执行 toggle 且 toast 提示(Codex),并兜底
+ *      关闭冷启动期间遗留的开启状态(Greptile P1);
  *   4) CCAgentSessionView:支持时按当前状态 toggle(setPlanMode(nextEnabled),
  *      nextEnabled 由 getSnapshot 取「当下」planModeEnabled 计算,监听器不依赖闭包旧值;
  *      且失败 rejection 被显式吞掉(不升级为未捕获的 Promise rejection);
@@ -51,10 +52,11 @@ function planBranchSource(): string {
   const idx = sessionViewSource.indexOf("payload.command === 'plan'");
   if (idx < 0) throw new Error('plan branch missing');
   // 动态定位到分支收尾,不依赖固定长度 slice(注释加长会推远断言,Codex P1 / Copilot):
-  // 取 .catch( /「不支持 toast」/「遗留状态自愈 setPlanMode(false)」中最靠后的位置 + 余量。
-  const catchIdx = sessionViewSource.indexOf('.catch(', idx);
+  // 用分支内具体调用链锚定(而非宽泛的 .catch( —— 分支外残留 .catch( 会造成假阳性,
+  // Copilot):setPlanMode(nextEnabled).catch / 不支持 toast / 自愈 setPlanMode(false).catch。
+  const catchIdx = sessionViewSource.indexOf('setPlanMode(nextEnabled).catch', idx);
   const toastIdx = sessionViewSource.indexOf('planModeUnsupportedRemote', idx);
-  const healIdx = sessionViewSource.indexOf('setPlanMode(false)', idx);
+  const healIdx = sessionViewSource.indexOf('setPlanMode(false).catch', idx);
   const markers = [catchIdx, toastIdx, healIdx].filter((v) => v >= 0);
   if (markers.length === 0) throw new Error('no branch end marker after plan branch');
   return sessionViewSource.slice(idx, Math.max(...markers) + 200);
@@ -101,7 +103,9 @@ describe('/plan slash command contract', () => {
     expect(branch).toContain('(sessionCaps == null || sessionCaps.planMode?.supported === true)');
     expect(branch).toContain('planModeUnsupportedRemote');
     expect(branch).toContain('toast.warning(');
-    expect(branch).toContain('setPlanMode(false)');
+    // 断言具体调用链而非裸 setPlanMode(false)(Copilot):避免被分支外其它位置的
+    // setPlanMode(false) 命中假阳性,且保证 rejection 被显式 .catch 吞掉。
+    expect(branch).toContain('setPlanMode(false).catch');
   });
 
   it('re-verifies command ownership with forceReload before dispatching a desktop command', () => {
@@ -123,7 +127,8 @@ describe('/plan slash command contract', () => {
     expect(branch).toContain('setPlanMode(nextEnabled)');
     expect(branch).toContain('getSnapshot(payload.sessionId).planModeEnabled');
     // setPlanMode 持久化失败会 reject —— 必须显式 .catch 吞掉,避免未捕获 rejection
-    expect(branch).toContain('.catch(');
+    // (断言具体调用链而非宽泛的 .catch(,防分支外残留命中,Copilot)。
+    expect(branch).toContain('setPlanMode(nextEnabled).catch');
   });
 
   it('intercepts a bare /plan in the draft send path before creating a session', () => {

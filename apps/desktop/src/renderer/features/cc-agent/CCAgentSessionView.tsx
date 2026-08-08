@@ -1849,9 +1849,9 @@ export function CCAgentSessionView({
         // payload.sessionId 必等于当前会话。
         // 能力门控:整个 capabilities 未加载(sessionCaps == null,冷启动/远程拉取较慢)
         // 时不吞命令,直接 setPlanMode(对支持 planMode 的 agent 本就生效);
-        // capabilities 已加载但 planMode 缺失/不支持时忽略 —— device-link 老被控端
-        // 序列化无 planMode 字段,useAgentCapabilities 文档明确 undefined = 不支持。
-        // 但对「已加载且明确不支持」不能静默吞掉(Codex):/plan 已出现在 palette 且
+        // capabilities 已加载但 planMode 缺失/不支持时 —— device-link 老被控端
+        // 序列化无 planMode 字段,useAgentCapabilities 文档明确 undefined = 不支持 ——
+        // 不执行 toggle 且 toast 提示,不能静默吞掉(Codex):/plan 已出现在 palette 且
         // 发送路径已消费,若毫无反馈用户会以为命令没生效 —— 提示而非静默。
         if (payload.sessionId) {
           if (sessionCaps == null || sessionCaps.planMode?.supported === true) {
@@ -1886,6 +1886,23 @@ export function CCAgentSessionView({
     // planModeEnabled 不再进 deps:plan 分支改用 getSnapshot 取当下值,监听器保持稳定,
     // 切换计划模式不会 teardown+re-subscribe(避免漏掉空窗期推送的命令回流,Copilot)。
   }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t, setPlanMode, sessionCaps]);
+
+  // 能力解析兜底自愈(Greptile P1 第二轮):命令事件路径的自愈只在「用户再次输入 /plan」
+  // 时触发,而「能力从 null/未知解析为明确不支持」这个时刻不会经过命令监听器(它只是
+  // re-subscribe)。若冷启动(null)期间乐观 toggle 遗留了开启状态,能力落地后必须在此
+  // 自动关闭 —— 否则菜单/状态指示器被能力门控隐藏后,planModeEnabled 仍持久化为 true
+  // 且重启恢复。sessionCaps == null(能力未决)时不动,避免与正常加载流程竞争。
+  useEffect(() => {
+    if (!sessionId) return;
+    if (sessionCaps != null && sessionCaps.planMode?.supported !== true) {
+      const snap = makerChatStore.getSnapshot(sessionId);
+      if (snap.planModeEnabled) {
+        void setPlanMode(false).catch((err: unknown) => {
+          log.warn('plan command: reset plan mode after capabilities resolved unsupported', err);
+        });
+      }
+    }
+  }, [sessionId, sessionCaps, setPlanMode]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
