@@ -1391,6 +1391,16 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     const promptIter = rebuildArgs.prompt[Symbol.asyncIterator]();
     expect((await promptIter.next()).value?.message?.content).toBe('/compact');
 
+    // /compact may finish while the real user message is still converting.
+    // Its terminal payload must survive the accept-phase Stop boundary.
+    secondQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0.0035,
+      usage: { input_tokens: 220_000, output_tokens: 25 },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
     controller.abort();
     await handle.abort();
     resolveResize(path.join(os.tmpdir(), 'slow-stop.png'));
@@ -1399,6 +1409,14 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(secondQuery.close).toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'bridge_aborted')).toBe(true);
+    });
+    const abortedDone = events.find(
+      (e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'bridge_aborted',
+    );
+    expect(abortedDone?.data).toMatchObject({
+      total_cost_usd: 0.0035,
+      usage: { input_tokens: 220_000, output_tokens: 25 },
+      reason: 'bridge_aborted',
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(

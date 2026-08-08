@@ -4726,7 +4726,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         let acceptRetryResumeAt: string | undefined;
         let acceptAttempt: SendAcceptAttempt | null = null;
         let acceptAbortSignalListener: (() => void) | undefined;
-        const finishSendBeforeUserInput = (reason: string, error?: unknown): void => {
+        const finishSendBeforeUserInput = (
+          reason: string,
+          error?: unknown,
+          doneData?: Record<string, unknown>,
+        ): void => {
           const attempt = acceptAttempt;
           if (!attempt || attempt.settled) return;
           attempt.settled = true;
@@ -4785,7 +4789,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           pendingToolIds.clear();
           acceptingRebuiltSend = false;
           clearUpstreamResponseIdle();
-          emitTurnBoundary(reason);
+          emitTurnBoundary(reason, doneData);
         };
         const createSendAcceptAttempt = (): SendAcceptAttempt => {
           let rejectAcceptCancellation!: (error: Error) => void;
@@ -4814,6 +4818,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (this.settled || this.cancelled) return;
               this.cancelled = true;
               const cancellationReason = bridgeStateActive() ? 'bridge_aborted' : reason;
+              let suppressedDoneData: Record<string, unknown> | undefined;
               canceledBridgeQueries.add(this.query);
               this.input.clear();
               try {
@@ -4826,6 +4831,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (bridgeStateActive()) {
                 restoreBridgeAutoCompactSnapshot(cancellationReason);
                 autoCompactController?.onCompactCanceled(cancellationReason);
+                suppressedDoneData = takeBridgeSuppressedDoneData();
                 clearBridgeState();
               }
               if (this.retryResumeAt) {
@@ -4840,7 +4846,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               terminalBackgroundTaskIds.clear();
               replayableUserInput = null;
               acceptingRebuiltSend = false;
-              finishSendBeforeUserInput(cancellationReason, error);
+              finishSendBeforeUserInput(cancellationReason, error, suppressedDoneData);
               rejectAcceptCancellation(new Error('Claude send cancelled before acceptance'));
             },
           };
