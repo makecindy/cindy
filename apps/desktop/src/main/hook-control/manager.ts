@@ -1139,6 +1139,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       bindingIdOverride ??
       (telegramLane.binding?.state === 'confirmed' ? telegramLane.binding.bindingId : null);
     if (bindingId === null) return; // 还没确认绑定 —— 等 confirmed 回调再来
+    // 服务端根本不宣告 provider.behavior: 不存在服务端侧的覆盖值, 协议基线**就是**
+    // 确定的有效值, 直接落定。不落定的话档位永远停在「未知」, ack 表情一次都不发。
+    if (!telegramLane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_BEHAVIOR)) {
+      adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions);
+      return;
+    }
     void sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
       makeProviderBehaviorGet({
         requestId,
@@ -1148,12 +1154,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     )
       .then((view) => adoptTelegramEmojiReactions(view.emojiReactions))
       .catch(() => {
-        // 服务端不宣告 provider.behavior、或请求超时 —— 那就不存在服务端侧的
-        // 覆盖值, 协议基线**就是**确定的有效值。必须在这里落定, 否则档位永远
-        // 停在「未知」, ack 表情一次都不会发。
-        if (telegramEmojiReactions === null) {
-          adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions);
-        }
+        // 超时 / 断线是**暂时**失败: 服务端明明有这套设置, 只是这一次没问到。
+        // 拿基线顶上就等于替用户做了选择(他可能正是把表情关掉的那个), 所以
+        // 档位留在「未知」—— 下一次连接或绑定确认会再 hydrate 一遍。
       });
   }
 

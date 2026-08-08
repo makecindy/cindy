@@ -290,6 +290,22 @@ describe('官方 bot ack 表情', () => {
     expect(h.reactions.supports(CONN)).toBe(false);
   });
 
+  it('能力快照还没到时不丢待补发 —— 只有明确降级才作废', () => {
+    // 「这一刻还不知道」与「服务端说了不支持」不能混同: 前者一次时序抖动就把
+    // 待补发全丢了, 那条消息永远挂着 👀。
+    const h = harness();
+    h.reactions.onAccepted(TASK, h.send);
+    h.reactions.onFinished(TASK, 'ok', vi.fn(() => false)); // 断线, 进待补发
+    h.serverFeatures.delete(CONN); // 快照还没到
+    h.reactions.onReconnected(CONN, h.send);
+    expect(h.sent).toHaveLength(1); // 没发, 但也没丢
+
+    h.serverFeatures.set(CONN, [HOOK_FEATURE_MESSAGE_OPS]); // 快照到了
+    h.reactions.onReconnected(CONN, h.send);
+    expect(h.sent).toHaveLength(2);
+    expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+  });
+
   it('补发时又断了 → 留着下次重连再补, 不丢', () => {
     // 先删后发、失败却不放回的话, 后续再重连便无内容可补, 消息永远挂着 👀。
     const h = harness();

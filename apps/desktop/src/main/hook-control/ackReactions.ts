@@ -180,13 +180,21 @@ export function createAckReactions(deps: {
       acked.clear();
     },
     onReconnected(connectionId, send) {
-      // 新 welcome 明确没有 msg-op-v1(滚动发布落到旧节点): 这条连接的待补发
-      // 全部作废, 不往旧节点发它没协商过的帧。
-      const usable = supports(connectionId) || everSupported.has(connectionId);
+      const features = serverFeatures.get(connectionId);
+      const capable = features?.includes(HOOK_FEATURE_MESSAGE_OPS) === true;
+      if (capable) everSupported.add(connectionId);
+      // 「新 welcome 里明确没有这条能力」是**确定性**降级(滚动发布落到旧节点):
+      // 待补发留着也永远发不出去, 作废。而能力快照还没到只是「这一刻还不知道」
+      // —— 那时必须留着, 否则一次时序抖动就把待补发全丢了。
+      const definitelyIncapable = features !== undefined && !capable;
+      if (definitelyIncapable) everSupported.delete(connectionId);
       for (const [opId, entry] of [...pendingFinals]) {
         if (entry.task.connectionId !== connectionId) continue;
+        if (!capable) {
+          if (definitelyIncapable) pendingFinals.delete(opId);
+          continue;
+        }
         pendingFinals.delete(opId);
-        if (!usable) continue;
         const outcome = react(entry.task, 'final', entry.emoji, send);
         // 补发时 socket 又断了 —— 放回去等下一次重连, 否则那条消息永远挂着 👀。
         if (outcome === 'failed') pendingFinals.set(opId, entry);
