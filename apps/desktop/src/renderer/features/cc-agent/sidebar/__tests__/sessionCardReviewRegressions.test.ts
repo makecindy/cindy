@@ -258,7 +258,7 @@ describe('SessionCard review regressions', () => {
 
   it('aligns the session row cursor with the actual split drag source state', () => {
     expect(sessionItemSource).toContain(
-      "splitDragEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'",
+      "!isEditing && 'cursor-pointer'",
     );
     expect(sessionItemSource).toContain('draggable={splitDragEnabled}');
     expect(sessionItemSource).toContain('inSortableContainer: true');
