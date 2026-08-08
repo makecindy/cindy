@@ -613,6 +613,7 @@
       "options": {
         "system": "跟随系统",
         "zh-CN": "简体中文",
+        "zh-TW": "繁体中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -924,6 +925,7 @@
         "optionDescriptions": {
           "auto": "由识别服务自动判断",
           "zh-CN": "简体中文（中国大陆）",
+          "zh-TW": "繁体中文（台湾）",
           "en": "English",
           "ja": "日本語",
           "ko": "한국어"

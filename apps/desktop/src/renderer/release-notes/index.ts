@@ -96,8 +96,8 @@ export function selectLocalizedContent(
   locale: NoticeLocale,
 ): RawLocalizedContent | null {
   const localized = raw.contentByLocale;
-  if (locale === 'zh-CN') {
-    const zh = localized?.['zh-CN'];
+  if (locale === 'zh-CN' || locale === 'zh-TW') {
+    const zh = localized?.[locale] ?? localized?.['zh-CN'];
     if (hasUsableContent(zh)) return zh;
     const legacy = legacyContentFromRoot(raw);
     return hasUsableContent(legacy) ? legacy : null;

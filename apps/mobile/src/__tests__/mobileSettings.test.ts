@@ -15,6 +15,15 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile settings overview', () => {
+  it('renders language as one expandable picker instead of a fixed option list', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+
+    expect(source).toContain('testID="settings.language.picker"');
+    expect(source).toContain('<SheetModal');
+    expect(source).toContain('<MobileChoicePickerList');
+    expect(source).not.toContain('LanguageOptionRow');
+  });
+
   it('keeps the device-link hello name and settings device name on one source', () => {
     expect(buildMobileDeviceName({ constantsDeviceName: ' Carol iPhone ', platform: 'ios' })).toBe('Carol iPhone');
     expect(buildMobileDeviceName({ constantsDeviceName: '   ', platform: 'android' })).toBe('Cindy android');

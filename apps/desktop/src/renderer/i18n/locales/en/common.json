@@ -613,6 +613,7 @@
       "options": {
         "system": "Auto (follow system)",
         "zh-CN": "简体中文",
+        "zh-TW": "Traditional Chinese",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -924,6 +925,7 @@
         "optionDescriptions": {
           "auto": "Let the recognition service detect it",
           "zh-CN": "Simplified Chinese (Mainland China)",
+          "zh-TW": "Traditional Chinese (Taiwan)",
           "en": "English",
           "ja": "Japanese",
           "ko": "Korean"

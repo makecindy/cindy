@@ -11,7 +11,15 @@
 import { parseModelRegistry } from '@cindy/model-access-protocol';
 
 import { PI_REASONING_EFFORTS } from './types.js';
-import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
+import type {
+  Catalog,
+  Provider,
+  CatalogModel,
+  AgentKind,
+  Effort,
+  ProviderPreset,
+  PresetSortRegion,
+} from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
 import { isProviderRequestPath } from './provider-url.js';
@@ -513,12 +521,15 @@ function presetVendorKey(p: ProviderPreset): string {
 /**
  * 预设列表排序（稳定，纯呈现层）：
  *   - 按**厂商分组**（id 去区域后缀），厂商间按分组键首字母升序；
- *   - 同一厂商的国内/国际条目**相邻**，组内按用户语言排先后（zh → cn 在前，其它 → global 在前）；
+ *   - 同一厂商的国内/国际条目**相邻**，组内按客户端构建区域排先后（cn/dev → cn 在前，global → global 在前）；
  *   - 组内无 regionHint 的条目居中，保持目录原始顺序。
  * 只排序不过滤 —— 所有预设对所有用户可见可选，可达性由「测试连接」实测裁决。
  */
-export function sortPresetsForLocale(presets: ProviderPreset[], locale: string): ProviderPreset[] {
-  const cnFirst = locale.toLowerCase().startsWith('zh');
+export function sortPresetsForRegion(
+  presets: ProviderPreset[],
+  region: PresetSortRegion,
+): ProviderPreset[] {
+  const cnFirst = region !== 'global';
   const regionRank = (p: ProviderPreset): number => {
     if (p.regionHint === undefined) return 1;
     if (p.regionHint === 'cn') return cnFirst ? 0 : 2;
