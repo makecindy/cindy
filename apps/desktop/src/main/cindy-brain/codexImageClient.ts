@@ -14,7 +14,12 @@ import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { createLogger } from '../logger.js';
 
 const CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
-const HOST_MODEL = 'gpt-5.5';
+/**
+ * 静态兜底 host 模型:Codex Responses 需要一个 host 模型来编排 hosted image_generation
+ * tool。账号订阅计划不含该模型时上游会直接拒绝请求,因此 generate() 优先采用
+ * getHostModel 按账号模型清单解析出的模型;解析失败才退回这里。
+ */
+const DEFAULT_HOST_MODEL = 'gpt-5.5';
 const IMAGE_MODEL = 'gpt-image-2';
 const USER_AGENT = `codex_cli_rs/cindy (${process.platform}; ${process.arch})`;
 const SSE_EVENT_BOUNDARY = /(?:\r\n|\r|\n){2}/;
@@ -37,6 +42,11 @@ export interface CreateCodexImageChannelOptions {
   }): void | Promise<void>;
   fetchImplementation?: typeof fetch;
   beforeDispatch?(model: string): void;
+  /**
+   * Best-effort 解析当前账号实际可用的 host 模型(订阅计划不含静态兜底模型时,
+   * 硬编码会被上游拒绝)。返回 null / 抛错都安全——通道侧退回静态兜底模型。
+   */
+  getHostModel?(): Promise<string | null>;
 }
 
 function extractImageB64(value: unknown): string | null {
@@ -138,6 +148,22 @@ async function httpError(
 export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): ImageChannel {
   const doFetch = opts.fetchImplementation ?? fetch;
 
+  /**
+   * 本次请求的 host 模型:优先账号模型清单解析结果;解析抛错 / 返回空值退回静态
+   * 兜底——清单缺失不能挡住出图。
+   */
+  async function resolveHostModel(): Promise<string> {
+    try {
+      const candidate = await opts.getHostModel?.();
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    } catch (err) {
+      log.warn('Codex image host model resolution failed, falling back to default', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return DEFAULT_HOST_MODEL;
+  }
+
   async function generate(params: {
     model: string;
     prompt: string;
@@ -150,9 +176,10 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     // 先在 token 刷新 / 本地参考图读取之前拦停，后面的二次检查继续覆盖
     // 准备请求期间发生的模型停用。
     opts.beforeDispatch?.(params.model);
-    const [auth, images] = await Promise.all([
+    const [auth, images, hostModel] = await Promise.all([
       opts.getAuth(),
       Promise.all((params.imagePaths ?? []).map(inputImage)),
+      resolveHostModel(),
     ]);
     opts.beforeDispatch?.(params.model);
     const content: Array<Record<string, unknown>> = [
@@ -171,7 +198,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
         ...(auth.accountId ? { 'ChatGPT-Account-Id': auth.accountId } : {}),
       },
       body: JSON.stringify({
-        model: HOST_MODEL,
+        model: hostModel,
         store: false,
         stream: true,
         instructions: 'Use the image_generation tool to fulfill this image request.',

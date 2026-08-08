@@ -14,6 +14,11 @@ export interface CodexImageAuthBinding {
     body: string;
     failedAccessToken: string;
   }): unknown | Promise<unknown>;
+  /**
+   * Best-effort 解析当前账号可用的 Codex Responses host 模型(按账号模型清单派生)。
+   * 返回 null 或抛错都让通道侧退回静态兜底模型——解析失败绝不能挡住出图。
+   */
+  getHostModel?(): Promise<string | null>;
 }
 
 let binding: CodexImageAuthBinding | null = null;

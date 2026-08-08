@@ -503,6 +503,7 @@ import {
   getChatgptBridgeAuth,
   invalidateChatgptBridgeAuth,
 } from './maker-host/anthropic-responses-bridge-host.js';
+import { resolveCodexImageHostModel } from './maker-host/codex-model-discovery.js';
 import {
   readSilentEncryptedRetrySettingsState,
   resetSilentEncryptedRetrySettings,
@@ -1392,6 +1393,7 @@ registerLayoutIpc();
 setCodexImageAuthBinding({
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
+  getHostModel: resolveCodexImageHostModel,
 });
 registerGhostIpc();
 registerPluginMarketIpc();

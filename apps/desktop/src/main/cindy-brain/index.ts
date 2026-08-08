@@ -2650,6 +2650,7 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     const codexImagesClient = createCodexImageChannel({
       hasOAuthLogin: hasCodexOAuthLoginReadOnly,
       getAuth: () => getCodexImageAuthBinding().getAuth(),
+      getHostModel: () => getCodexImageAuthBinding().getHostModel?.() ?? Promise.resolve(null),
       onAuthFailure: async (failure) => {
         await getCodexImageAuthBinding().onAuthFailure(failure);
       },

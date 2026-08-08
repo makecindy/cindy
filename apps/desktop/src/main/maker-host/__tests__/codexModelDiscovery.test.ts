@@ -16,8 +16,10 @@ vi.mock('node:fs/promises', () => ({ default: { readFile: vi.fn() } }));
 import {
   mapCodexModelsToCatalog,
   mapCodexAppServerModelsToCatalog,
+  pickCodexImageHostModel,
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
+  resolveCodexImageHostModel,
 } from '../codex-model-discovery.js';
 
 // 取自本机 ~/.codex/models_cache.json 的真实结构(裁剪到关键字段)。
@@ -276,5 +278,38 @@ describe('readCodexDiscoveredModelsForAuthRefresh', () => {
     await expect(
       readCodexDiscoveredModelsForAuthRefresh(vi.fn().mockResolvedValue(discovered)),
     ).resolves.toBe(discovered);
+  });
+});
+
+describe('pickCodexImageHostModel', () => {
+  it('账号清单含首选模型时原样保留(存量账号零行为变化)', () => {
+    expect(pickCodexImageHostModel(mapCodexModelsToCatalog(SAMPLE))).toBe('gpt-5.5');
+  });
+
+  it('账号无首选模型时取上游 priority 最小的旗舰(计划内没有 gpt-5.5 也能出图)', () => {
+    const without55 = { models: SAMPLE.models.filter((m) => m.slug !== 'gpt-5.5') };
+    expect(pickCodexImageHostModel(mapCodexModelsToCatalog(without55))).toBe('gpt-5.6');
+  });
+
+  it('空清单返回 null,让通道侧保留静态兜底', () => {
+    expect(pickCodexImageHostModel([])).toBeNull();
+  });
+});
+
+describe('resolveCodexImageHostModel', () => {
+  beforeEach(() => {
+    vi.mocked(fsp.readFile).mockReset();
+  });
+
+  it('从账号 cache 派生 host 模型;cache 不可读时返回 null 交通道兜底', async () => {
+    vi.mocked(fsp.readFile)
+      .mockResolvedValueOnce(OAUTH_AUTH)
+      .mockResolvedValueOnce(JSON.stringify(SAMPLE));
+    await expect(resolveCodexImageHostModel()).resolves.toBe('gpt-5.5');
+
+    vi.mocked(fsp.readFile)
+      .mockResolvedValueOnce(OAUTH_AUTH)
+      .mockRejectedValueOnce(new Error('missing'));
+    await expect(resolveCodexImageHostModel()).resolves.toBeNull();
   });
 });
