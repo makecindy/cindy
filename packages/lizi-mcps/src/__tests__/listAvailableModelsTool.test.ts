@@ -11,6 +11,17 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('list_available_models tool', () => {
+  it('documents route metadata as optional for older hosts', () => {
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, {
+      listAvailableModels: async () => ({ ok: true }),
+    });
+
+    expect(registry.get('list_available_models')?.description).toContain(
+      '旧 host 可能不返回此字段',
+    );
+  });
+
   it('preserves the aggregate list and exposes distinct provider routes', async () => {
     const listAvailableModels = vi.fn(async () => ({
       ok: true as const,

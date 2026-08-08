@@ -60,6 +60,12 @@ describe('create_worker tool', () => {
     expect(registry.get('create_worker')?.description).toContain(
       '用户一次要求创建 2 个及以上 Worker 时必须改用 create_workers；不要并行或连续多次调用 create_worker。',
     );
+    expect(registry.get('create_worker')?.description).toContain(
+      'provider_id: 可选, 显式模型供应商 id; 可单独传入或与 model 一起传入',
+    );
+    expect(registry.get('create_worker')?.description).toContain(
+      'route_provider_id 是 host 最终解析的供应商路由',
+    );
   });
 
   it('surfaces structured hard-limit details to the lead', async () => {
