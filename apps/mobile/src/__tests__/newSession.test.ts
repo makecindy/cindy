@@ -379,6 +379,46 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'deepseek-v4-flash', effort: 'medium', providerId: 'prov-deepseek-v4-flash' });
   });
 
+  it('reroutes by agent default rule when the recent provider is gone and multiple sources offer the model (codex P2)', () => {
+    // 显式来源失效 + 同名模型多来源:不得取目录首行(custom 排前面)——按 agent
+    // 默认规则解析(effectiveSourceIdForModel,codex 优先 openai 其次 xd),与
+    // null 分支/模型面板高亮同口径,避免悄然改用另一套凭证/计费/Fast 语义。
+    const fullRow = (providerId: string, connected = true): ProviderModelRow => ({
+      provider: {
+        id: providerId,
+        name: providerId,
+        agents: ['codex'],
+        routing: { codex: {} },
+        connected,
+        models: { codex: [{ id: 'gpt-5.4', name: 'gpt-5.4' }] },
+      } as unknown as ProviderModelRow['provider'],
+      model: {
+        id: 'gpt-5.4',
+        displayName: 'gpt-5.4',
+        efforts: ['low', 'medium'],
+        defaultEffort: 'medium',
+        contextWindow: 0,
+      },
+    });
+    expect(
+      resolveRecentModelAndProvider(
+        [fullRow('custom'), fullRow('xd')],
+        { model: 'gpt-5.4', providerId: 'prov-deleted' },
+        'codex',
+        true,
+      ),
+    ).toEqual({ model: 'gpt-5.4', providerId: 'xd' });
+    // 全部来源不可路由(未连接)→ 解析不到 → 落目录首项(整体回退)
+    expect(
+      resolveRecentModelAndProvider(
+        [fullRow('custom', false), fullRow('xd', false)],
+        { model: 'gpt-5.4', providerId: 'prov-deleted' },
+        'codex',
+        true,
+      ),
+    ).toEqual({ model: 'gpt-5.4', providerId: 'custom' });
+  });
+
   it('falls back to the catalog top row (with its provider) when no provider offers the recent model', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',

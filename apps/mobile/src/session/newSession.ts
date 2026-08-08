@@ -408,8 +408,23 @@ export function resolveRecentModelAndProvider(
   }
   const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
   if (valid) return { model: recent.model, providerId: valid };
-  const alt = modelRows.find((row) => row.model.id === recent.model);
-  if (alt) return { model: recent.model, providerId: alt.provider.id };
+  // 显式来源失效的替代选择:与 null 分支同口径(codex review P2:按 Agent 默认
+  // 规则选择失效来源的替代项)——同名模型多来源时**不得取目录首行**(目录顺序
+  // ≠ Agent 原生默认顺序,如 Codex 候选 [custom, xd] 会被首行绑定到 custom,
+  // 而 effectiveSourceIdForModel 与模型面板高亮都选 xd,会悄然改用另一套凭证/
+  // 计费/Fast 语义)。单来源 → 无歧义顶替;多来源 → 按 agent 默认解析,解析不到
+  // → 落目录首项(整体回退)。
+  const offerings = modelRows.filter((row) => row.model.id === recent.model);
+  if (offerings.length === 1) return { model: recent.model, providerId: offerings[0].provider.id };
+  if (offerings.length > 1) {
+    const defaultSourceId = effectiveSourceIdForModel(
+      offerings.map((row) => row.provider),
+      null,
+      recent.model,
+      agentKind,
+    );
+    if (defaultSourceId) return { model: recent.model, providerId: defaultSourceId };
+  }
   const top = modelRows[0];
   if (top) return { model: top.model.id, providerId: top.provider.id };
   return { model: DEFAULT_MODELS[agentKind], providerId: null };
