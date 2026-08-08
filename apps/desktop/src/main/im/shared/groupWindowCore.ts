@@ -5,7 +5,7 @@
  * 读写、GC、游标与统计均不得跨命名空间。
  */
 
-import { and, desc, eq, gt, like, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, like, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../../localDb/client/current';
 import { hookGroupContextCursors, hookGroupMessages } from '../../localDb/schema';
@@ -50,6 +50,13 @@ export type GroupWindowRetentionPolicy = {
 
 /** 触发回收后收敛到上限的这个比例, 避免超限后每插一条都删一条。 */
 const RETENTION_LOW_WATER_RATIO = 0.9;
+/**
+ * 一次入库最多收敛几轮。
+ *
+ * 边界按实际累计字节取, 正常一轮就到位; 多留几轮是兜住并发写入在两次统计之间
+ * 又插了一批的情况, 同时保证不会无限循环。
+ */
+const RETENTION_MAX_PASSES = 4;
 
 /**
  * 保留上限的**默认数值** —— 官方与个人 bot 共用同一组数字, 但各自持有一份。
@@ -151,6 +158,15 @@ export async function recordGroupWindowEntry(
 }
 
 /**
+ * 同一命名空间的回收串行化。
+ *
+ * 并发入库时两次回收会各读一次统计、各算一次边界, 算出的删除范围互相重叠 ——
+ * 后跑的那次从**已经回收过**的剩余记录再往后移边界, 把低水位以内的历史也一起
+ * 删了。串起来跑就只有第一次真正动手, 后面那次重读统计发现已在水位内直接退出。
+ */
+const retentionRuns = new Map<string, Promise<void>>();
+
+/**
  * 按存储大小回收一个 provider 命名空间的群历史。
  *
  * 删的是**最旧的行**(按自增 id), 跨群一视同仁 —— 与「保留最近这段时间」的直觉
@@ -160,41 +176,95 @@ export async function recordGroupWindowEntry(
  * 触发即回收到**低水位**(上限的 90%)而不是刚好压线, 否则超限后每插一条都要删一条,
  * 每次入库都带一次删除。
  */
-async function enforceNamespaceRetention(
+function enforceNamespaceRetention(
   provider: string,
   retention: GroupWindowRetentionPolicy,
 ): Promise<void> {
-  const db = getDbClient().drizzle;
-  const stats = await getGroupWindowNamespaceStats(provider);
-  const overBytes = stats.textBytes > retention.maxTextBytesPerNamespace;
-  const overRows = stats.rows > retention.maxRowsPerNamespace;
-  if (!overBytes && !overRows) return;
+  const run = (retentionRuns.get(provider) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(() => runNamespaceRetention(provider, retention));
+  retentionRuns.set(provider, run);
+  return run.finally(() => {
+    if (retentionRuns.get(provider) === run) retentionRuns.delete(provider);
+  });
+}
 
-  // 行数安全阀按行数直接切; 字节按平均行大小估算要删多少行, 再由低水位收敛 ——
-  // 单行大小差异很大(一条纯表情 vs 一条长文), 估算不准也没关系: 下一次入库会
-  // 继续收, 而低水位保证不会每条都触发。
+async function runNamespaceRetention(
+  provider: string,
+  retention: GroupWindowRetentionPolicy,
+): Promise<void> {
   const targetBytes = Math.floor(retention.maxTextBytesPerNamespace * RETENTION_LOW_WATER_RATIO);
   const targetRows = Math.floor(retention.maxRowsPerNamespace * RETENTION_LOW_WATER_RATIO);
-  const avgRowBytes = stats.rows > 0 ? Math.max(1, stats.textBytes / stats.rows) : 1;
-  const rowsToDropForBytes = overBytes
-    ? Math.ceil((stats.textBytes - targetBytes) / avgRowBytes)
-    : 0;
-  const rowsToDropForRows = overRows ? stats.rows - targetRows : 0;
-  const dropCount = Math.max(rowsToDropForBytes, rowsToDropForRows);
-  if (dropCount <= 0) return;
+  let stats = await getGroupWindowNamespaceStats(provider);
+  // 只有真的越过上限才动手; 一旦动手就收到低水位, 而不是刚好压线。
+  if (
+    stats.textBytes <= retention.maxTextBytesPerNamespace &&
+    stats.rows <= retention.maxRowsPerNamespace
+  )
+    return;
 
-  const boundary = await db
-    .select({ id: hookGroupMessages.id })
-    .from(hookGroupMessages)
-    .where(eq(hookGroupMessages.provider, provider))
-    .orderBy(hookGroupMessages.id)
-    .limit(1)
-    .offset(dropCount);
-  const threshold = boundary[0]?.id;
-  if (threshold === undefined) return; // 命名空间里的行还不够删, 留着
-  await db
+  for (let pass = 0; pass < RETENTION_MAX_PASSES; pass += 1) {
+    if (stats.textBytes <= targetBytes && stats.rows <= targetRows) return;
+    // 删不动了(只剩最新一行还超限, 比如单条超大消息配极小阈值): 留着, 不清空。
+    if (!(await dropOldestUntilLowWater(provider, stats, targetBytes, targetRows))) return;
+    stats = await getGroupWindowNamespaceStats(provider);
+  }
+}
+
+/**
+ * 删掉最旧的行直到落进低水位; 返回是否真的删掉了行。
+ *
+ * 边界按**待删行实际累计的正文字节**取, 不按平均行大小估算 —— 一批空正文的附件
+ * 消息后面跟着长文时, 平均值会让回收删掉一堆零字节的旧行却几乎不掉 `text_bytes`,
+ * 于是此后每插一条都要再回收一次, 低水位形同虚设。
+ */
+async function dropOldestUntilLowWater(
+  provider: string,
+  stats: { rows: number; textBytes: number },
+  targetBytes: number,
+  targetRows: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  // 至少留最新一行 —— 阈值被配得极小时不能把整个命名空间清空。
+  const maxDrop = Math.max(0, stats.rows - 1);
+  if (maxDrop === 0) return false;
+  const bytesToFree = Math.max(0, stats.textBytes - targetBytes);
+  const rowsToDrop = Math.max(0, stats.rows - targetRows);
+
+  // 最旧的 maxDrop 行里, 第一个同时满足「累计字节够」与「行数够」的位置就是边界。
+  const boundary = await db.all<{ id: number }>(sql`
+    select id from (
+      select id,
+        sum(length(cast(text as blob))) over (order by id) as cum_bytes,
+        row_number() over (order by id) as rn
+      from ${hookGroupMessages}
+      where provider = ${provider}
+      order by id
+      limit ${maxDrop}
+    )
+    where cum_bytes >= ${bytesToFree} and rn >= ${rowsToDrop}
+    order by id
+    limit 1
+  `);
+  let threshold = boundary[0]?.id;
+  if (threshold === undefined) {
+    // 把能删的都删了也到不了低水位: 删到只剩最新一行为止, 而不是整轮 no-op ——
+    // 否则命名空间会长期挂在超限状态, 每次入库都白跑一遍回收。
+    const [last] = await db
+      .select({ id: hookGroupMessages.id })
+      .from(hookGroupMessages)
+      .where(eq(hookGroupMessages.provider, provider))
+      .orderBy(hookGroupMessages.id)
+      .limit(1)
+      .offset(maxDrop - 1);
+    threshold = last?.id;
+  }
+  if (threshold === undefined) return false;
+  const deleted = await db
     .delete(hookGroupMessages)
-    .where(and(eq(hookGroupMessages.provider, provider), lt(hookGroupMessages.id, threshold)));
+    .where(and(eq(hookGroupMessages.provider, provider), lte(hookGroupMessages.id, threshold)))
+    .run();
+  return deleted.changes > 0;
 }
 
 async function readPersistedCursor(provider: string, cursorKey: string): Promise<number> {

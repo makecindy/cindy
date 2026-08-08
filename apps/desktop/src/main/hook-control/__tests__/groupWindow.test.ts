@@ -129,6 +129,37 @@ describe('groupLaneOf', () => {
   });
 });
 
+/** 2000 字节上限对应的低水位(上限的 90%)。 */
+const LOW_WATER_OF_2000 = 1_800;
+
+/** 用一个很小的字节上限跑回收, 结束后还原 —— 真实默认值(1 GiB)逼不出回收。 */
+async function withByteLimit(limit: number, body: () => Promise<void>): Promise<void> {
+  const previous = GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace;
+  GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = limit;
+  try {
+    await body();
+  } finally {
+    GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = previous;
+  }
+}
+
+function namespaceStats(provider = `telegram:${PRINCIPAL_ID}`): { b: number; n: number } {
+  const row = sqlite
+    .prepare(
+      'SELECT text_bytes AS b, row_count AS n FROM hook_group_message_stats WHERE provider = ?',
+    )
+    .get(provider) as { b: number; n: number } | undefined;
+  return row ?? { b: 0, n: 0 };
+}
+
+function hasMessage(messageId: string, provider = `telegram:${PRINCIPAL_ID}`): boolean {
+  return (
+    sqlite
+      .prepare('SELECT 1 FROM hook_group_messages WHERE provider = ? AND message_id = ?')
+      .get(provider, messageId) !== undefined
+  );
+}
+
 describe('recordGroupMessage', () => {
   it('同一条消息重放只落一行(幂等)', async () => {
     const payload = frame({ messageId: '4213' });
@@ -365,9 +396,7 @@ describe('recordGroupMessage', () => {
   it('额度按命名空间各算各的 —— 一个账号写爆不影响另一个', async () => {
     // 两个账号同时在用时消息绝不能串, 额度也不能共用: 统计表以 provider 为主键,
     // 回收也按 provider 过滤。个人 bot 的 telegram-personal:<botId> 同理另算。
-    const previousBytes = GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace;
-    GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = 2_000;
-    try {
+    await withByteLimit(2_000, async () => {
       // 另一个账号先放一条, 之后不再碰它。
       sqlite
         .prepare(
@@ -391,40 +420,79 @@ describe('recordGroupMessage', () => {
         .get() as { n: number };
       expect(mine.n).toBeLessThan(60);
       expect(other.n).toBe(1);
-    } finally {
-      GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = previousBytes;
-    }
+    });
   });
 
   it('超过字节上限时删最旧的, 并收敛到低水位', async () => {
     // 用一个很小的上限把回收逼出来 —— 真实默认值(1 GiB)正常使用碰不到。
-    const previousBytes = GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace;
-    GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = 2_000; // 约 20 条 100 字节的消息
-    try {
+    await withByteLimit(2_000, async () => {
       const body = 'x'.repeat(100);
-      for (let i = 0; i < 60; i += 1) {
+      // 第 21 条把总量顶到 2100 > 2000, 正好落在回收触发点上。
+      for (let i = 0; i < 21; i += 1) {
         await recordGroupMessage(frame({ messageId: `b${i}`, text: body }));
       }
-      const stats = sqlite
-        .prepare("SELECT text_bytes AS b, row_count AS n FROM hook_group_message_stats WHERE provider = 'telegram:9'")
-        .get() as { b: number; n: number };
-      // 收敛到低水位(上限的 90%)以内, 而不是刚好压线。
-      expect(stats.b).toBeLessThanOrEqual(2_000);
-      expect(stats.n).toBeGreaterThan(0);
+      const stats = namespaceStats();
+      // 收敛到低水位(上限的 90% = 1800)以内, 而不是刚好压到 2000 —— 否则超限后
+      // 每插一条都要删一条。
+      expect(stats.b).toBeLessThanOrEqual(LOW_WATER_OF_2000);
+      // 也不能删过头: 到了低水位就停, 不该继续往下清。
+      expect(stats.b).toBeGreaterThan(LOW_WATER_OF_2000 - 100);
       // 删的是最旧的: 最早那几条不在了, 最新那条还在。
-      expect(
-        sqlite
-          .prepare("SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'b0'")
-          .get(),
-      ).toBeUndefined();
-      expect(
-        sqlite
-          .prepare("SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'b59'")
-          .get(),
-      ).toBeDefined();
-    } finally {
-      GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = previousBytes;
-    }
+      expect(hasMessage('b0')).toBe(false);
+      expect(hasMessage('b20')).toBe(true);
+    });
+  });
+
+  it('旧行短新行长时也真的降到低水位 —— 边界按实际字节取, 不按平均行大小估', async () => {
+    // 平均行大小在这种分布下会严重低估: 一批 1 字节的附件消息 + 几条长文, 按均值
+    // 算出来的行数只会删掉那些零头旧行, text_bytes 几乎不降, 于是此后每插一条都
+    // 要再回收一次, 低水位形同虚设。
+    await withByteLimit(2_000, async () => {
+      for (let i = 0; i < 100; i += 1) {
+        await recordGroupMessage(frame({ messageId: `tiny${i}`, text: 'x' }));
+      }
+      const long = 'y'.repeat(500);
+      for (let i = 0; i < 4; i += 1) {
+        await recordGroupMessage(frame({ messageId: `long${i}`, text: long }));
+      }
+      // 一轮就到位: 边界越过全部 1 字节旧行, 吃进第一条长文。
+      expect(namespaceStats().b).toBeLessThanOrEqual(LOW_WATER_OF_2000);
+      expect(hasMessage('tiny0')).toBe(false);
+      expect(hasMessage('long3')).toBe(true);
+    });
+  });
+
+  it('阈值小到一条消息都放不下时保留最新一行, 不清空命名空间', async () => {
+    // 极端配置(或单条超大消息)下, 回收要么删到只剩最新一行为止, 要么整轮 no-op
+    // 让命名空间长期挂在超限状态 —— 两个都不能变成「删光」。
+    await withByteLimit(10, async () => {
+      for (let i = 0; i < 3; i += 1) {
+        await recordGroupMessage(frame({ messageId: `huge${i}`, text: 'z'.repeat(100) }));
+      }
+      expect(namespaceStats().n).toBe(1);
+      expect(hasMessage('huge2')).toBe(true);
+    });
+  });
+
+  it('并发入库不会把历史删过低水位 —— 同一命名空间的回收串行执行', async () => {
+    // 每次回收各读一次统计再各算边界, 不串行的话后跑的那次会从已回收过的剩余
+    // 记录再往后移边界, 把低水位以内的历史一起删掉。
+    // 注: better-sqlite3 是同步驱动, 这里复现不出真正的交错 —— 本例钉的是「并发
+    // 入库后仍停在低水位」这条不变量, 换成异步驱动或加了批量删除也不许破。
+    await withByteLimit(2_000, async () => {
+      const body = 'x'.repeat(100);
+      for (let i = 0; i < 20; i += 1) {
+        await recordGroupMessage(frame({ messageId: `p${i}`, text: body }));
+      }
+      await Promise.all(
+        [0, 1, 2, 3].map((i) => recordGroupMessage(frame({ messageId: `c${i}`, text: body }))),
+      );
+      const stats = namespaceStats();
+      expect(stats.b).toBeLessThanOrEqual(2_000);
+      // 只该收敛一次到低水位, 而不是被并发的几次回收接力删穿。
+      expect(stats.b).toBeGreaterThanOrEqual(LOW_WATER_OF_2000 - 100);
+      for (const id of ['c0', 'c1', 'c2', 'c3']) expect(hasMessage(id)).toBe(true);
+    });
   });
 });
 
