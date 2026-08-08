@@ -20,6 +20,7 @@ import {
   pickMostRecentSessionRuntime,
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
+  resolveRecentModelAndProvider,
   resolveSubmitGuardCatalog,
   resolveStartedDowngradeOrCommit,
   sessionFromCreateResult,
@@ -585,6 +586,46 @@ describe('pickAgentDefaultRuntime', () => {
     });
     // devB 的会话被设备过滤排除 → 落到列表首项分支,来源取该行的 provider,不串 devB 的 prov-b
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: 'prov-gpt-5.4' });
+  });
+
+  it('resolves the default source by agent rule for a null providerId offered by multiple sources (codex review P2)', () => {
+    // 同名模型由多个来源提供时,不得取目录首行(anthropic 在前)——被控端默认路由
+    // 按 agent 解析(effectiveSourceIdForModel,codex 优先 openai 其次 xd),UI 高亮与
+    // 创建路由必须一致;解析不到时保留 null 默认路由。
+    const fullRow = (providerId: string, connected = true): ProviderModelRow => ({
+      provider: {
+        id: providerId,
+        name: providerId,
+        agents: ['codex'],
+        routing: { codex: {} },
+        connected,
+        models: { codex: [{ id: 'gpt-5.4', name: 'gpt-5.4' }] },
+      } as unknown as ProviderModelRow['provider'],
+      model: {
+        id: 'gpt-5.4',
+        displayName: 'gpt-5.4',
+        efforts: ['low', 'medium'],
+        defaultEffort: 'medium',
+        contextWindow: 0,
+      },
+    });
+    expect(
+      resolveRecentModelAndProvider(
+        [fullRow('anthropic'), fullRow('xd')],
+        { model: 'gpt-5.4', providerId: null },
+        'codex',
+        true,
+      ),
+    ).toEqual({ model: 'gpt-5.4', providerId: 'xd' });
+    // 全部来源不可路由(未连接)→ 解析不到 → 保留 null 默认路由,不固化任何来源
+    expect(
+      resolveRecentModelAndProvider(
+        [fullRow('anthropic', false), fullRow('xd', false)],
+        { model: 'gpt-5.4', providerId: null },
+        'codex',
+        true,
+      ),
+    ).toEqual({ model: 'gpt-5.4', providerId: null });
   });
 });
 

@@ -4,6 +4,7 @@ import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import type { MobileModelOption } from './agentCapabilities';
+import { effectiveSourceIdForModel } from '@cindy/model-providers/registry';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
@@ -386,8 +387,23 @@ export function resolveRecentModelAndProvider(
   // 默认自愈旧数据,不再产出「裸 model + 默认网关」的必 400 组合(copilot P2);
   // 无同名行(真内置默认模型)保持 null。
   if (!recent.providerId) {
-    const alt = modelRows.find((row) => row.model.id === recent.model);
-    if (alt) return { model: recent.model, providerId: alt.provider.id };
+    // 同名模型行的提供者集合:空 → 无该模型行(真内置默认)保持 null;
+    // 唯一提供者 → 无歧义自愈(#1898 坏数据现场);多提供者 → 不能取目录首行——
+    // 实际默认来源由被控端按 agent 解析(effectiveSourceIdForModel,Claude Code
+    // 优先 XD,即使 Anthropic 排在目录前面),取首行会把默认路由固化成别的供应商,
+    // 改变凭证/计费/Fast 语义(codex review P2:保留 null 草稿的默认来源语义)。
+    // 多来源时按同一默认来源解析函数选来源,解析不到 → 保留 null 默认路由。
+    const offerings = modelRows.filter((row) => row.model.id === recent.model);
+    if (offerings.length === 1) return { model: recent.model, providerId: offerings[0].provider.id };
+    if (offerings.length > 1) {
+      const defaultSourceId = effectiveSourceIdForModel(
+        offerings.map((row) => row.provider),
+        null,
+        recent.model,
+        agentKind,
+      );
+      if (defaultSourceId) return { model: recent.model, providerId: defaultSourceId };
+    }
     return { model: recent.model, providerId: null };
   }
   const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
