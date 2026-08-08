@@ -18,6 +18,7 @@ import {
   isGhostEligibleSessionRow,
   normalizeTurnUsage,
   readStatusIsRunning,
+  resolveGhostUserHookModel,
   withGhostAssistantHookModel,
   withGhostUserHookModel,
   type GhostSubscriptionGatewayDeps,
@@ -432,6 +433,11 @@ describe('will- 拦截', () => {
       action: 'allow',
     });
     expect(await p).toEqual({ action: 'allow' });
+  });
+
+  it('排队轮次使用入队时捕获的模型', () => {
+    expect(resolveGhostUserHookModel(false, 'new-selection', 'queued-model')).toBe('queued-model');
+    expect(resolveGhostUserHookModel(true, 'live-model', 'queued-model')).toBe('live-model');
   });
 
   it('verdict 归属校验:冒名/未知 hookId 静默丢;迟到 verdict 无副作用', async () => {

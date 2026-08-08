@@ -83,7 +83,15 @@ export function withGhostAssistantHookModel<T>(model: Promise<string>, task: () 
   return assistantHookContext.run(context, task);
 }
 
-/** Carry the live session model through the user-hook screening continuation. */
+export function resolveGhostUserHookModel(
+  turnRunning: boolean,
+  liveModel: string | undefined,
+  queuedModel: string | undefined,
+): string | undefined {
+  return turnRunning ? liveModel : queuedModel;
+}
+
+/** Carry the dispatch model through the user-hook screening continuation. */
 export function withGhostUserHookModel<T>(model: string | undefined, task: () => T): T {
   return model && model !== 'unknown' ? userHookContext.run({ model }, task) : task();
 }

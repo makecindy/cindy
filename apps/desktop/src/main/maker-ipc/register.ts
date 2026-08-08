@@ -772,6 +772,7 @@ import {
 } from '../cindy-brain/errandPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
 import {
+  resolveGhostUserHookModel,
   withGhostAssistantHookModel,
   withGhostUserHookModel,
 } from '../cindy-brain/subscriptionGateway.js';
@@ -9925,9 +9926,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 意识拦截钩(订阅槽①):派发/落库前问已装钩子意识;fail-open 由
     // screenGhostUserMessage 内部收敛,快路径(无钩子意识)零开销。
-    screenUserMessage: (sessionId, agentFacingText) => {
+    screenUserMessage: (sessionId, agentFacingText, item) => {
       const session = getStableSessionForTurnBoundary(sessionId);
-      return withGhostUserHookModel(session?.isTurnRunning() ? session.model : undefined, () =>
+      const model = resolveGhostUserHookModel(
+        session?.isTurnRunning() === true,
+        session?.model,
+        item.createOpts.model,
+      );
+      return withGhostUserHookModel(model, () =>
         screenGhostUserMessage(sessionId, agentFacingText),
       );
     },
