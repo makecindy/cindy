@@ -124,9 +124,14 @@ test("client CI builds model-access protocol before consumer checks", () => {
 	).replace(/\r\n/g, "\n");
 	const jobs = [
 		{
-			name: "verify",
-			body: workflow.match(/\n  verify:\n([\s\S]*?)\n  windows-unit-shards:/)?.[1],
+			name: "verify-checks",
+			body: workflow.match(/\n  verify-checks:\n([\s\S]*?)\n  linux-unit-shards:/)?.[1],
 			consumerCommand: "run: pnpm --filter desktop typecheck",
+		},
+		{
+			name: "linux-unit-shards",
+			body: workflow.match(/\n  linux-unit-shards:\n([\s\S]*?)\n  verify:/)?.[1],
+			consumerCommand: "run: pnpm exec node scripts/test-workspaces.mjs --tier unit",
 		},
 		{
 			name: "windows-unit-shards",
