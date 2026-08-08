@@ -155,6 +155,7 @@ import {
 } from '@/session/ContextSheet';
 import { RecentPhotosStrip, ScreenshotsGrid } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalView, goalStatusLabel } from '@/session/ContextSheetGoalView';
+import { parseGoalLimitsRouteParam } from '@/session/goalLimitsRouteParam';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/session/ComposerAttachmentTray';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import { ImageLightbox } from '@/session/ImageLightbox';
@@ -741,6 +742,9 @@ export default function SessionScreen() {
     deviceId?: string;
     deviceName?: string;
     draft?: string;
+    goalError?: string;
+    goalObjective?: string;
+    goalLimits?: string;
     focusClientId?: string;
     focusComposerRequestKey?: string;
     focusRequestKey?: string;
@@ -839,7 +843,46 @@ export default function SessionScreen() {
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
   const [composerPreviewAttachmentId, setComposerPreviewAttachmentId] = useState<string | null>(null);
   const [goalBusy, setGoalBusy] = useState(false);
-  const [goalError, setGoalError] = useState<string | null>(null);
+  // 新建页 goal.set 失败接回时经路由参数带入(见 new.tsx 创建流程);
+  // 平时无参 → null,与旧行为一致。
+  const [goalError, setGoalError] = useState<string | null>(() => readRouteParam(params.goalError));
+  // 新建页 goal.set 失败接回时经路由参数带入的完整 Goal 输入(codex review P2):
+  // objective 原样、limits 经 parseGoalLimitsRouteParam 严格解析(坏参数忽略整个
+  // limits,不改写为 null——改写会让 limitsTouched=true 显式提交「全部无限」覆盖
+  // 被控端默认;独立审核者 P2)。平时无参 → null,与旧行为一致(表单仍从 composer
+  // 文字初始化)。
+  const [goalRestore, setGoalRestore] = useState<{ sessionId: string; objective: string; limits?: MobileGoalLimitsInput } | null>(() => {
+    const objective = readRouteParam(params.goalObjective);
+    if (!objective) return null;
+    const limits = parseGoalLimitsRouteParam(readRouteParam(params.goalLimits));
+    return { sessionId: readRouteParam(params.sessionId) ?? '', objective, ...(limits ? { limits } : {}) };
+  });
+  // 渲染期按当前 sessionId 过滤恢复值:非当前任务的接回值立即失效(不依赖换代
+  // effect 的 commit 后清理时序),新任务表单不会用旧 objective/limits 初始化。
+  const goalRestoreForSession =
+    goalRestore && goalRestore.sessionId === sessionId ? goalRestore : undefined;
+  // goal.set 失败接回(codex review P2):仅初始化 error 不打开面板,用户跳转后
+  // 看不到目标设置失败——带入错误时自动打开 Goal 视图,让失败提示可见。
+  useEffect(() => {
+    if (goalError) {
+      setContextSheetView('goal');
+      setContextSheetOpen(true);
+    }
+  }, [goalError]);
+  // goal 接回载荷按任务换代清理(codex review P2):任务抽屉 router.replace 原地
+  // 更新同一 SessionScreen 实例,goalRestore/goalError 只在首次挂载初始化——切
+  // 任务后残留会让新任务的 Goal 表单预填旧任务的 objective/limits,甚至把旧目标
+  // 提交到新任务。prevSessionIdRef 与当前 sessionId 同步初始化:首次挂载
+  // (prev===cur)不触发清理,保留路由带入的接回值;同一任务内 router.setParams
+  // 清参由 handleSetGoal 成功路径处理,不依赖本 effect。
+  const prevSessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      setGoalRestore(null);
+      setGoalError(null);
+    }
+  }, [sessionId]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   // 圈点标注接线 api 的 ref 中转:hook 实例声明在 removeRemoteFileAttachment 之后
   // (依赖它做再编辑替换),而 onUploaded 闭包在此之前就要引用 decorate——回调
@@ -6831,13 +6874,22 @@ export default function SessionScreen() {
         setContextSheetOpen(false);
         setContextSheetView('main');
         requestMessageListFollowLatest();
+        // 失败接回的恢复载荷一次性消费(独立审核者 P2):成功后清除 state 与路由
+        // 参数——否则以后清掉该 Goal 重新挂载表单,仍会用第一次失败时的旧
+        // objective/limits;路由参数未消费也会在页面重挂载时再次恢复旧值。
+        setGoalRestore(null);
+        router.setParams({
+          goalObjective: undefined,
+          goalLimits: undefined,
+          goalError: undefined,
+        });
       } catch (err) {
         setGoalError(formatRemoteError(err));
       } finally {
         setGoalBusy(false);
       }
     })();
-  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, sessionId, setComposerDraft, t]);
+  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, router, sessionId, setComposerDraft, t]);
   const handlePauseGoal = useCallback(() => {
     void runGoalAction(
       () => maker.goal.pause(sessionId),
@@ -7963,11 +8015,18 @@ export default function SessionScreen() {
               testID="session.contextSheetScreenshotsGrid"
             />
           ) : (
+            // goal 接回载荷按 sessionId 归属、渲染时同步过滤(codex review P1):
+            // key={sessionId} 重挂载发生在渲染新 sessionId 的瞬间,此时 goalRestore
+            // 仍是旧任务的残留值——新表单会先用旧 objective/limits 初始化,换代
+            // effect 在 commit 后才清空、晚于那次挂载。渲染时按 sessionId 过滤:
+            // 旧任务的值立即失效(不依赖 effect 时序),新表单从 composer 初始化。
             <ContextSheetGoalView
+              key={sessionId}
               busy={goalBusy}
               error={goalError}
               goal={goalStatus}
-              initialObjective={draft.trim() || undefined}
+              initial={goalRestoreForSession}
+              initialObjective={goalRestoreForSession ? undefined : (draft.trim() || undefined)}
               onClearGoal={handleClearGoal}
               onPauseGoal={handlePauseGoal}
               onResumeGoal={handleResumeGoal}
