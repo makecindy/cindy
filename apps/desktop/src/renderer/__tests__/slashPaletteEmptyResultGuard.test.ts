@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 describe('slash palette empty-result keyboard guard', () => {
   it('captures Enter and Tab while the slash palette is open with no focused result', () => {

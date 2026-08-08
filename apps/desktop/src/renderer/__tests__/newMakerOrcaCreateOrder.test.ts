@@ -144,7 +144,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     const pendingBranch = sessionViewSource.slice(
       sessionViewSource.indexOf('const pending = consumePending(sessionId);'),
       sessionViewSource.indexOf('const pendingGoalConsumedRef'),
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(pendingBranch).toContain(
       'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.agentReferences,',
