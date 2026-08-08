@@ -457,12 +457,14 @@ export class GoalController {
     type: GoalRunEventType,
     goalSessionId: string,
     state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
-    // 只允许补充/覆盖 helper 未计算/归一化的字段(from/to/generation/reason);
-    // type/goalSessionId/turnIndex/at/budget 由 helper 负责,调用方不可意外覆盖。
+    // 只允许补充/覆盖 helper 未计算/归一化的字段(from/to/generation/reason/at);
+    // type/goalSessionId/turnIndex/budget 由 helper 负责,调用方不可意外覆盖。
+    // at 允许传入(reviewer P1:快终态重放顺序需要派发时刻锚点,如 dispatchAt),
+    // helper 内 extra.at ?? now 优先。
     // reason 单独定义(不放进 Pick):交叉类型对同名属性取交集,会把 reason 收窄成
     // string,无法接受 GoalState.lastReason 的 string | null;单独给 nullable 类型后
     // helper 内归一化为 undefined,strict 下安全。
-    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation'> & { reason?: string | null },
+    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation' | 'at'> & { reason?: string | null },
   ): void {
     // dispose 后丢弃观测(登出/切账号 reset 后,in-flight 的旧 controller
     // 扫描/收口不得把旧账号事件写回已清空的环)。
@@ -488,7 +490,8 @@ export class GoalController {
         : {}),
       ...extra,
       reason: extra?.reason ?? undefined,
-      at: this.now(),
+      // extra.at 优先(reviewer P1:dispatchAt 锚定重放顺序,不得被 now 覆盖)。
+      at: extra?.at ?? this.now(),
     };
     try {
       this.deps.recordRunEvent(evt);
