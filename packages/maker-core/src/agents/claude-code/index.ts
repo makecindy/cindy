@@ -5111,7 +5111,11 @@ export class ClaudeCodeAgent extends BaseAgent {
               // foreground turn has not already produced a terminal, replace
               // it with one synthetic boundary; a raced natural result leaves
               // foregroundWasInFlight=false and therefore does not get a duplicate.
-              if (foregroundWasInFlight) emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              // accept 阶段的并发 send 例外:boundary 由它的 finishSendBeforeUserInput
+              // 发,这里再发会双 boundary(review 3541310178)。
+              if (foregroundWasInFlight && !sendInAcceptPhase) {
+                emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              }
             }
             inputQueue.clear();
             try {
@@ -5122,13 +5126,18 @@ export class ClaudeCodeAgent extends BaseAgent {
             recordCanceledQueryClose(cancelledQuery, 'user_stop cancellation');
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
-            turnInFlight = false;
+            // sendInAcceptPhase 时留给 finishSendBeforeUserInput 清 + 发 boundary
+            // (inputQueue 已 end,并发 send 的 push 必失败进 catch)。
+            if (!sendInAcceptPhase) turnInFlight = false;
           } else {
             // interrupt 成功且无后台任务需要清：被中断的 turn 会收到
             // error_during_execution result → translator 在 onTurnEnd 清
             // turnInFlight。这里显式补清以防 SDK 未 drain result 的极端
             // 情况(确保不会 SESSION_RUNNING 永拒)。
-            turnInFlight = false;
+            // sendInAcceptPhase 例外:并发 send 仍在 accept 窗口,抢清会让它的
+            // finishSendBeforeUserInput 在 `if (!turnInFlight) return` 提前返回,
+            // send_cancelled_before_acceptance boundary 丢失(review 3541310178)。
+            if (!sendInAcceptPhase) turnInFlight = false;
           }
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);
@@ -5155,11 +5164,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             recordCanceledQueryClose(q, 'user_stop interrupt timeout');
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
-            turnInFlight = false;
+            // 同上:accept 阶段并发 send 的收口权归 finishSendBeforeUserInput。
+            if (!sendInAcceptPhase) turnInFlight = false;
           } else {
             // interrupt 真正抛错(非超时)，回收标记防误抑制(同 watchdog)。
             turnState.interruptRequested = false;
-            turnInFlight = false;
+            if (!sendInAcceptPhase) turnInFlight = false;
             log.warn('abort threw', { error: String(e) });
           }
         }
