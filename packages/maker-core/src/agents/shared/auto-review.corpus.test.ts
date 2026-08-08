@@ -166,10 +166,12 @@ describe('review 第一轮 — 其余修复', () => {
     for (const c of [
       'gh auth status --show-token',
       'gh auth status --show-token=true',
-      'gh pr view 1 --show-token',
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
     }
+    // `--show-token` 只存在于 `gh auth`,别的子命令带上它不会打印令牌 —— 不升红线,
+    // 但仍挡在只读白名单外(未知 flag 一律不放行)。
+    expect(classifyShellCommand('gh pr view 1 --show-token', roots, opts)).not.toBe('auto-approve');
     // 短选项簇写至少不进只读白名单。
     for (const c of ['gh auth status -t', 'gh auth status -wt']) {
       expect(classifyShellCommand(c, roots, opts), c).not.toBe('auto-approve');
@@ -710,6 +712,22 @@ describe('语料回归 — 伪设备静音重定向仍照常放行(反向边界)
       'echo x > /dev/fd/2',
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
+    }
+  });
+});
+
+describe('语料回归 — 凭证 flag 只在命令位才算(反向边界)', () => {
+  it('--show-token 只在 gh auth 命令位才算令牌读取', () => {
+    // 这几条是普通文本/参数,原本直接放行;不限定命令位就会被打成硬弹窗。
+    for (const c of [
+      'echo --show-token',
+      'echo "用法: --show-token"',
+      'grep -rn -- --show-token src',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
+    }
+    for (const c of ['gh auth status --show-token', 'gh auth status --show-token=true']) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
     }
   });
 });

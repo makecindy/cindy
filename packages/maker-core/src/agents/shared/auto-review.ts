@@ -660,7 +660,10 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // 读凭证文件,按凭证同级作**确定性必问** —— 只把它挡在 gh 只读白名单外还不够:落灰区
   // 意味着可能被轻量审阅器静默放行(`gh auth status` 看起来就是一条状态查询)。
   // 覆盖 `--show-token` / `--show-token=true` 两种形态(review 二轮 P1)。
-  /(?:^|[\s|&;(])--show-token(?:$|[\s=])/,
+  // **必须限定在 `gh auth` 命令位**:这个字符串出现在别处只是普通文本或参数,
+  // `echo --show-token`、`grep -rn -- --show-token src` 原本是直接放行的,不限定就被打成
+  // 硬弹窗 —— 正是本 PR 要消灭的那类误报(review 报)。命令位写法与下面的短选项一致。
+  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s--show-token(?:$|[\s=])/,
   // 短选项形态:`gh auth status -t` 与含 `t` 的簇写(`-wt`/`-tw`)是同一个 flag,只把它挡在
   // gh 只读白名单外不够 —— 落灰区就可能被轻量审阅器静默放行(review 三轮 P1)。`-t` 本身
   // 在别的命令里含义完全不同(`docker -t`、`tar -t`),所以**限定在 `gh auth` 命令位**上匹配。
