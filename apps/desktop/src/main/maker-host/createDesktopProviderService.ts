@@ -684,7 +684,9 @@ export async function refreshCustomProvidersIntoCatalog(
       log.info('discarded stale custom provider catalog refresh');
       return;
     }
-    setCustomProviders(configs.map((c) => buildUserProvider(c)));
+    setCustomProviders(
+      configs.map((c) => buildUserProvider(c, { modelRegistry: getActiveCatalog().modelRegistry })),
+    );
     log.info('custom providers merged into active catalog', { count: configs.length });
   } catch (err) {
     if (!shouldApply()) {
