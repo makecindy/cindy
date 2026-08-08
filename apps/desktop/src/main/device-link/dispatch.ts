@@ -799,8 +799,8 @@ function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage):
  * 一次 flush 的丢弃账本(聚合日志用)。
  *
  * 这里原本还有一条「批帧被拒 → 就地降级为逐帧 best-effort」的路径。它引出了 review
- * 里最长的一族反馈,四轮都在同一段十几行代码上打转,而且两位 reviewer 的要求互相
- * 抵触——记下来,免得有人再把它加回来:
+ * 里最长的一族反馈,**五轮**都在同一段十几行代码上打转,而且 reviewer 的要求互相
+ * 抵触(同一位在第 1/4 轮与第 5 轮各站一边)——记下来,免得有人再把它加回来:
  *
  *  1. 无条件逐帧重放整个切片 → 队头不可驱逐时 ≤64 次失败、≤64 条 WARN,正是本 PR
  *     要消灭的逐事件 admission 与告警洪峰(greptile P1)。
@@ -812,8 +812,20 @@ function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage):
  *     ≤64 次 admission + 驱逐判定 + throw/catch 依旧在洪峰时放大主进程压力,只是
  *     WARN 被静默了(greptile P1 第三轮)。
  *
- * 第 1 与第 4 是同一条要求,第 2 与第 3 是它的反向要求 —— 这段代码不存在同时满足两侧
- * 的取值。**所以把它整个删掉**:批帧发不出去就丢掉这一片,记一条聚合日志。
+ *  5. 于是整片丢弃 → 又被要求恢复逐帧:小帧仍可进入剩余容量,最多 64 条流式增量
+ *     消失(greptile P1 第四轮,与它自己的第 1、4 轮相反)。
+ *
+ * 1/4 与 2/3/5 是同一命题的两个反向,这段代码只有「逐帧试」与「整片丢」两种可能行为,
+ * 每一轮都在要求上一轮的反面。**所以按数据定,一次定完 —— 结论是整片丢弃**,并把这
+ * 一族在本 PR 内关闭(再出现同族反馈请对照这里,不要再实现一遍)。
+ *
+ * 定这一侧的依据是 8/8 线上那次拥塞**是 count-bound 而不是 size-bound**:三个上限里
+ * pending 条数 64 是**尺寸无关**的,而 64 条 maker:event 撑不到 pending 的 16MB 字节上限
+ * (每条几 KB,满窗约 1–2MB),日志里的 `reliable transport buffer is full` 正来自条数这
+ * 一侧。条数满且队头不可驱逐时小帧与大帧一样进不去,逐帧就是 64 次零交付的纯浪费。
+ * 反向的 size-bound 窗口真实但很窄:要求 pending 条数有余量、同时 ws bufferedAmount 落在
+ * 距 8MB 上限不足 256KB 的那条带子里(≤3%)。而批本身还让 count-bound 更难触发——填满
+ * 64 槽从前需要 64 条事件,现在需要最多 4096 条。
  *
  * 为什么可以直接丢:`maker:event` 与批 channel 都在 #2167 的 COALESCIBLE_PUSH_CHANNELS
  * 白名单里 —— 拥塞时丢弃最旧的镜像帧、由控制端 resync 补偿,这正是那个 PR 定下的取舍,
