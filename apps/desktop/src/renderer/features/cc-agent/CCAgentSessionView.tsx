@@ -137,6 +137,7 @@ import {
   loadAllCommands,
   dispatchCommand,
   reconcilePiRuntimeCommandForDispatch,
+  rewriteAgentSkillInvocationForDispatch,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 import * as sessionService from '@/lib/sessionService';
@@ -2408,9 +2409,13 @@ export function CCAgentSessionView({
   const pendingIssueFilesRef = useRef<AttachedFile[] | undefined>(undefined);
 
   const maybeDispatchDesktopSlashCommand = useCallback(
-    async (message: string, files?: AttachedFile[]): Promise<boolean> => {
+    async (
+      message: string,
+      files?: AttachedFile[],
+      allowDesktopDispatch = true,
+    ): Promise<{ handled: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
-      if (!slashMatch) return false;
+      if (!slashMatch) return { handled: false, message };
       const cmdName = slashMatch[1].toLowerCase();
       const args = slashMatch[2] ?? '';
       const cached = allCommandsRef.current;
@@ -2437,7 +2442,15 @@ export function CCAgentSessionView({
         setAllCommands(reconciled.commands);
       }
       const hit = reconciled.command;
-      if (hit?.kind !== 'desktop') return false;
+      if (hit?.kind !== 'desktop') {
+        return {
+          handled: false,
+          message: agentKind === 'pi'
+            ? rewriteAgentSkillInvocationForDispatch(message, hit)
+            : message,
+        };
+      }
+      if (!allowDesktopDispatch) return { handled: false, message };
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。
       if (hit.name === 'issue') {
@@ -2453,7 +2466,7 @@ export function CCAgentSessionView({
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
       });
-      return true;
+      return { handled: true, message };
     },
     [
       getHelpCommandsSnapshot,
@@ -2570,9 +2583,11 @@ export function CCAgentSessionView({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      if (deliveryMode !== 'steer' && (await maybeDispatchDesktopSlashCommand(message, files))) {
-        return;
-      }
+      const slashDispatch = deliveryMode === 'steer'
+        ? await maybeDispatchDesktopSlashCommand(message, files, false)
+        : await maybeDispatchDesktopSlashCommand(message, files);
+      if (slashDispatch.handled) return;
+      message = slashDispatch.message;
 
       // ① 本机会话维持既有 readiness gate。device-link 已建任务不把视图生命周期内
       // 的认证弹窗/导航闭包塞进 outbox：弱网时先建立稳定 clientId 的本地乐观消息，
@@ -3033,15 +3048,18 @@ export function CCAgentSessionView({
         }
         // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
         // resolve false / 抛错都保留(见该函数注释)。
-        const dispatched = await deliverRecoverableHandoff(sessionId, () =>
-          maybeDispatchDesktopSlashCommand(pending.text, pending.files),
-        );
+        let pendingText = pending.text;
+        const dispatched = await deliverRecoverableHandoff(sessionId, async () => {
+          const slashDispatch = await maybeDispatchDesktopSlashCommand(pending.text, pending.files);
+          pendingText = slashDispatch.message;
+          return slashDispatch.handled;
+        });
         if (dispatched) return;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
         await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
-            pending.text,
+            pendingText,
             session.model,
             session.effort as Effort,
             session.permissionMode as PermissionMode,

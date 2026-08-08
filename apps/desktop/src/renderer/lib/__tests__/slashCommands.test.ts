@@ -8,9 +8,49 @@ import {
   mergeCommands,
   nextAvailableSlashCommandIndex,
   reconcilePiRuntimeCommandForDispatch,
+  rewriteAgentSkillInvocationForDispatch,
   slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
+
+const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' }>> = {}) => ({
+  kind: 'agent-skill' as const,
+  name: 'demo',
+  source: 'skill' as const,
+  ...overrides,
+});
+
+describe('rewriteAgentSkillInvocationForDispatch', () => {
+  it('rewrites a directly typed loaded Pi skill alias and preserves its arguments', () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+
+    expect(rewriteAgentSkillInvocationForDispatch('/demo   keep spacing', loaded)).toBe(
+      '/skill:demo   keep spacing',
+    );
+  });
+
+  it('does not rewrite unavailable, mismatched, or non-skill commands', () => {
+    const discovered = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+      runtimeCommandName: 'skill:demo',
+    });
+    const desktop: UnifiedCommand = { kind: 'desktop', name: 'demo', description: 'Demo' };
+
+    expect(rewriteAgentSkillInvocationForDispatch('/demo', discovered)).toBe('/demo');
+    expect(rewriteAgentSkillInvocationForDispatch('/other', {
+      ...discovered,
+      runtimeStatus: 'loaded',
+    })).toBe('/other');
+    expect(rewriteAgentSkillInvocationForDispatch('/demo', desktop)).toBe('/demo');
+  });
+});
 
 describe('filterSlashCommands', () => {
   it('matches command names by case-insensitive containment', () => {
@@ -59,13 +99,6 @@ describe('filterSlashCommands', () => {
 });
 
 describe('Pi project skill availability', () => {
-  const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' }>> = {}) => ({
-    kind: 'agent-skill' as const,
-    name: 'demo',
-    source: 'skill' as const,
-    ...overrides,
-  });
-
   it('disables only discovered project skills', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);

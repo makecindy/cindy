@@ -40,6 +40,27 @@ export function slashCommandInvocationName(command: UnifiedCommand): string {
     : command.name;
 }
 
+/**
+ * Palette selection already inserts runtimeCommandName. Apply the same mapping
+ * to a matching command that the user typed or pasted directly before send.
+ */
+export function rewriteAgentSkillInvocationForDispatch(
+  message: string,
+  command: UnifiedCommand | undefined,
+): string {
+  if (
+    !command ||
+    command.kind !== 'agent-skill' ||
+    !command.runtimeCommandName ||
+    isSlashCommandUnavailable(command)
+  ) {
+    return message;
+  }
+  const match = message.match(/^\/(\S+)([\s\S]*)$/);
+  if (!match || match[1].toLowerCase() !== command.name.toLowerCase()) return message;
+  return `/${command.runtimeCommandName}${match[2]}`;
+}
+
 /** First available command index, or 0 when nothing is available/present. */
 export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
   const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
