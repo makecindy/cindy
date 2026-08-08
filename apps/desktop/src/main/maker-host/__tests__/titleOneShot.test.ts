@@ -14,9 +14,10 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockGetAppCapabilities, mockReadModelDisableOverrides } = vi.hoisted(() => ({
+const { mockGetAppCapabilities, mockReadModelDisableOverrides, mockProviderRouteMutationInProgress } = vi.hoisted(() => ({
   mockGetAppCapabilities: vi.fn(() => ({ canUseCindyGateway: true })),
   mockReadModelDisableOverrides: vi.fn(() => ({})),
+  mockProviderRouteMutationInProgress: vi.fn(() => false),
 }));
 
 vi.mock('../../appCapabilities.js', () => ({
@@ -26,6 +27,11 @@ vi.mock('../../appCapabilities.js', () => ({
 // 用户停用覆盖(disable override store)在测试里可控;默认空 = 无停用。
 vi.mock('../model-disable-store.js', () => ({
   readModelDisableOverrides: mockReadModelDisableOverrides,
+}));
+
+// 路由变更窗口 gate(tryCustomProviderTitle 派发前查);默认无变更。
+vi.mock('../provider-route.js', () => ({
+  isProviderRouteMutationInProgress: mockProviderRouteMutationInProgress,
 }));
 
 // xd 网关上游运行期来自 model-access server 下发(effectiveXdGatewayBaseUrl),
@@ -870,6 +876,26 @@ describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱
       const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '不应出现' }] } }));
       const result = await generateTitleViaProviderResult(
         { sessionId: 'ds2', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
+  it('路由变更窗口中 → failed(fail-closed),不读凭证不发请求', async () => {
+    await withDeepSeekCatalog(async () => {
+      // 有 key 也会被 gate 拦住:mutation in progress 时 catalog route 与 safeStorage
+      // 更新不是原子的,继续派发可能把旧 endpoint 配新 key 发到错误 upstream。
+      mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+      mockProviderRouteMutationInProgress.mockReturnValueOnce(true);
+      const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '不应出现' }] } }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds-mut', agentKind: 'claude-code', prompt: 'x' },
         {
           fetchImpl,
           readSessionProviderId: async () => 'deepseek',

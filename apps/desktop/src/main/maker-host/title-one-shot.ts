@@ -47,6 +47,7 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from './model-disable-store.js';
+import { isProviderRouteMutationInProgress } from './provider-route.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import { outboundUndiciFetch } from './outbound-fetch.js';
@@ -344,6 +345,14 @@ async function tryCustomProviderTitle(
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   // 未在目录,或内置供应商(内置无目标由 buildTitleTarget 的 null 兜底)→ 不适用本分支。
   if (!provider || provider.source === 'builtin') return null;
+
+  // 路由变更窗口(用户编辑/删除该自定义供应商)期间 config 与 safeStorage 更新不是原子的,
+  // 继续读 catalog route + 凭证可能把旧 endpoint 配新 key(或反过来)发到错误 upstream。
+  // 与通用层 requestExplicitProviderText / provider-route.ts 同口径 fail-closed(review P1)。
+  if (isProviderRouteMutationInProgress(providerId)) {
+    log.debug('title oneShot skipped: provider route mutation in progress', { providerId, agentKind: args.agentKind });
+    return { status: 'failed' };
+  }
 
   const routing = provider.routing[args.agentKind];
   if (!routing || routing.disabled || !routing.upstream) {
