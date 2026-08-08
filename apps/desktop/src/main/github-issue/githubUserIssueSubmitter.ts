@@ -6,7 +6,7 @@
  */
 
 import type { GithubIssuePostBody, GithubIssuePostResponse } from './githubIssueSubmitService';
-import type { IssueSubmissionIdentity } from './issueConfirmBridge';
+import type { IssueSubmissionChoices, IssueSubmissionIdentity } from './issueConfirmBridge';
 
 export const CINDY_GITHUB_GHOST_ID = 'cindy-github';
 export const CINDY_GITHUB_SECRET_KEY = 'github_pat';
@@ -30,6 +30,7 @@ export interface GithubUserIssueSubmitterDeps {
     args: Record<string, unknown>;
   }) => Promise<GhostToolCallResult>;
   identityProbeTimeoutMs?: number;
+  logger?: { warn: (message: string, meta?: Record<string, unknown>) => void };
 }
 
 interface IssueSubmissionError extends Error {
@@ -83,35 +84,55 @@ export function callCindyGithubOperation(
   return callGithubOperation(deps, name, args, options);
 }
 
-/** 已装、启用且保存了凭证时验证 token；其余场景明确选择平台代提交。 */
-export async function resolveGithubIssueSubmissionIdentity(
+/**
+ * 平台 Bot 始终作为默认身份返回。GitHub 插件只负责提供一个可选增强：当前配置
+ * 完整且身份验证成功时追加本人账号；任何插件、凭证、网络或响应异常都只隐藏
+ * 这个可选项，绝不能阻断官方反馈入口。
+ */
+export async function resolveGithubIssueSubmissionChoices(
   deps: GithubUserIssueSubmitterDeps,
   workdir?: string | null,
-): Promise<IssueSubmissionIdentity> {
-  if (!isCindyGithubGhostUsable(deps, workdir)) {
-    return PLATFORM_ISSUE_SUBMISSION_IDENTITY;
+): Promise<IssueSubmissionChoices> {
+  const platformOnly: IssueSubmissionChoices = {
+    platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+  };
+  try {
+    if (!isCindyGithubGhostUsable(deps, workdir)) {
+      return platformOnly;
+    }
+  } catch (err) {
+    logOptionalIdentityUnavailable(deps, 'readiness check failed', err);
+    return platformOnly;
   }
 
   let operation: { ok: true; data: unknown } | GithubOperationFailure;
   try {
-    operation = await callGithubOperation(deps, 'get_current_user', {}, {
-      timeoutMs: deps.identityProbeTimeoutMs ?? 5000,
-    });
+    operation = await callGithubOperation(
+      deps,
+      'get_current_user',
+      {},
+      {
+        timeoutMs: deps.identityProbeTimeoutMs ?? 5000,
+      },
+    );
   } catch (err) {
-    throw malformedResponseError('读取 GitHub 用户身份失败', err);
+    logOptionalIdentityUnavailable(deps, 'identity probe failed', err);
+    return platformOnly;
   }
   if (!operation.ok) {
-    if (isGithubAuthFailure(operation.message)) {
-      throw submissionError(
-        'AUTH_NOT_READY',
-        `已绑定的 GitHub 身份不可用，issue 未提交。请到「插件」→「Cindy GitHub」重新配置并测试连接：${operation.message}`,
-      );
-    }
-    // 身份尚未选定，插件运行时不可用时可继续走既有平台路径；确认卡会如实展示。
-    return PLATFORM_ISSUE_SUBMISSION_IDENTITY;
+    logOptionalIdentityUnavailable(deps, 'identity probe unavailable', operation);
+    return platformOnly;
   }
 
-  return { kind: 'github-user', login: parseGithubLogin(operation.data) };
+  try {
+    return {
+      ...platformOnly,
+      githubUser: { kind: 'github-user', login: parseGithubLogin(operation.data) },
+    };
+  } catch (err) {
+    logOptionalIdentityUnavailable(deps, 'identity response invalid', err);
+    return platformOnly;
+  }
 }
 
 /** 按确认过的用户身份创建 issue；任何失败都原样报错，绝不降级到平台身份。 */
@@ -222,7 +243,9 @@ function buildDirectIssueBody(body: GithubIssuePostBody): string {
 }
 
 function isGithubAuthFailure(message: string): boolean {
-  return /token 未配置|token.*失效|凭证.*尚未配置|HTTP 401|HTTP 403|没有权限.*token scope|token scope 不够/i.test(message);
+  return /token 未配置|token.*失效|凭证.*尚未配置|HTTP 401|HTTP 403|没有权限.*token scope|token scope 不够/i.test(
+    message,
+  );
 }
 
 function isNetworkFailure(message: string): boolean {
@@ -234,6 +257,28 @@ function malformedResponseError(context: string, err: unknown): IssueSubmissionE
     'SERVER_ERROR',
     `${context}，issue 未提交：${err instanceof Error ? err.message : String(err)}`,
   );
+}
+
+function logOptionalIdentityUnavailable(
+  deps: GithubUserIssueSubmitterDeps,
+  reason: string,
+  detail: unknown,
+): void {
+  if (!deps.logger) return;
+  const meta: Record<string, unknown> = { reason };
+  if (detail instanceof Error) {
+    meta.errorName = detail.name;
+  } else if (isRecord(detail) && typeof detail.errorCode === 'string') {
+    meta.errorCode = detail.errorCode;
+  }
+  try {
+    deps.logger.warn(
+      'GitHub user identity unavailable; platform issue submission remains available',
+      meta,
+    );
+  } catch {
+    // 可选身份的诊断日志也不能反过来阻断平台 Bot 提交。
+  }
 }
 
 function submissionError(

@@ -73,7 +73,7 @@ const D_LIST_TOOLS =
   '(list_workdirs / list_sessions / get_chat_history 按元数据捞, search_chat_history 按内容语义找),' +
   '用于让用户基于自己的对话历史组织 memory / 知识库;' +
   `传 category=feedback → 用户要给 ${BRAND_NAME} 官方提 bug / 反馈 / 功能建议时用` +
-  '(submit_github_issue,先与用户对话澄清细节,提交前会弹系统确认卡片);' +
+  '(submit_github_issue,先与用户对话澄清缺失细节;Bug 可在用户同意后附脱敏诊断摘要;提交前会弹系统确认卡片,创建后可继续协助源码修复);' +
   '传 category=handoff → 把消息投递到一个【已知 session】, 或为外部业务对象(issue / jira / pr)新建专属 session' +
   '(send_to_session, 供 skill 绑定业务对象路由用)。' +
   '⚠️ 开协同 / 多 agent / 派 worker 干活 / 拉 agent review, 请用 cindy_orca 的 start_team / create_worker, 不要用 handoff(它不组队、不进协同分组)。' +
