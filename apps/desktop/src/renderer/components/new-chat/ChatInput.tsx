@@ -205,7 +205,16 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
-import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
+import {
+  beginSlashCommandRosterLoad,
+  EMPTY_SLASH_COMMANDS,
+  failSlashCommandRosterLoad,
+  filterSlashCommands,
+  isSlashCommandRosterReady,
+  loadAllCommands,
+  type SlashCommandRosterState,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 import {
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   getAtDirectoryCompletionQuery,
@@ -3411,18 +3420,19 @@ export function ChatInput({
     isRemoteSession,
     deviceLinkDeviceId ?? null,
   ]);
-  const [slashCommandLoadState, setSlashCommandLoadState] = useState<{
-    contextKey: string;
-    status: 'loading' | 'ready' | 'error';
-    commands: UnifiedCommand[];
-  }>({ contextKey: '', status: 'loading', commands: [] });
-  const slashCommandsReady =
-    slashCommandLoadState.contextKey === slashCommandContextKey &&
-    slashCommandLoadState.status === 'ready';
+  const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
+    contextKey: '',
+    status: 'loading',
+    commands: EMPTY_SLASH_COMMANDS,
+  });
+  const slashCommandsReady = isSlashCommandRosterReady(
+    slashCommandLoadState,
+    slashCommandContextKey,
+  );
   const mergedCommands =
     slashCommandLoadState.contextKey === slashCommandContextKey
       ? slashCommandLoadState.commands
-      : [];
+      : EMPTY_SLASH_COMMANDS;
   const planModeCommandAvailable = planModeEntry !== undefined;
   const composerSlashCommands = useMemo(
     () =>
@@ -3442,11 +3452,9 @@ export function ChatInput({
   const reloadSlashCommands = useCallback(
     (opts?: { forceReload?: boolean }) => {
       const seq = ++slashCommandLoadSeqRef.current;
-      setSlashCommandLoadState({
-        contextKey: slashCommandContextKey,
-        status: 'loading',
-        commands: [],
-      });
+      setSlashCommandLoadState((current) =>
+        beginSlashCommandRosterLoad(current, slashCommandContextKey),
+      );
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
@@ -3466,11 +3474,9 @@ export function ChatInput({
         })
         .catch(() => {
           if (slashCommandLoadSeqRef.current === seq) {
-            setSlashCommandLoadState({
-              contextKey: slashCommandContextKey,
-              status: 'error',
-              commands: [],
-            });
+            setSlashCommandLoadState((current) =>
+              failSlashCommandRosterLoad(current, slashCommandContextKey),
+            );
           }
         });
     },
