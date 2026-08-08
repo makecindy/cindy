@@ -5274,6 +5274,7 @@
     },
     "worktree": {
       "detecting": "检测环境中…",
+      "detectFailed": "环境检测失败，worktree 暂不可用",
       "gitMissing": "未检测到 git，请先安装",
       "notGitRepo": "当前目录不是 git 仓库",
       "alreadyInWorktree": "已在 worktree 中，禁止嵌套",

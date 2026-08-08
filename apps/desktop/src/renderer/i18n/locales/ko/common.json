@@ -5274,6 +5274,7 @@
     },
     "worktree": {
       "detecting": "환경 감지 중…",
+      "detectFailed": "환경 감지에 실패하여 worktree를 당분간 사용할 수 없습니다",
       "gitMissing": "git이 감지되지 않습니다. 먼저 설치하세요",
       "notGitRepo": "현재 디렉터리는 git 리포지토리가 아닙니다",
       "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다",

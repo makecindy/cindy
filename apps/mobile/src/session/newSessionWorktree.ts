@@ -323,6 +323,11 @@ export function isWorktreeChannelNotAllowedError(error: unknown): boolean {
 /**
  * 开关行是否显示:正常情况下是 project + workingDir + 通道可用；若老端不支持但
  * 镜像仍为 ON，保留已勾选的关闭入口，不能把用户锁在 fail-closed 状态。
+ *
+ * 2026-08-07 用户裁决(对齐桌面 WorktreeChipsRow):勾选记忆只对具备资格的目录
+ * 生效——探测**成功**且确认不合格(ineligible:非 git / 无 git / 已在 worktree 内)
+ * 时开关行隐藏、创建按普通会话放行,记忆保留;probing / detect-failed 不算确认,
+ * 维持显示 + fail closed,一次断连不能把用户要求的隔离静默降级。
  */
 export function shouldShowWorktreeToggle(input: {
   workspaceKind: 'project' | 'dialogue';
@@ -332,13 +337,19 @@ export function shouldShowWorktreeToggle(input: {
 }): boolean {
   return input.workspaceKind === 'project'
     && input.workingDir.trim().length > 0
+    && input.eligibility.status !== 'ineligible'
     && (input.eligibility.status !== 'unsupported' || input.enabled);
 }
 
 /**
- * checkbox 正在写工作端时不能按旧镜像创建；已勾选且当前目标尚未确认 eligible 时，
+ * checkbox 正在写工作端时不能按旧镜像创建；已勾选且当前目标**探测未定**时,
  * 也不能静默退化为普通目录会话。unsupported + ON 仍 fail closed，但保留显式关闭
  * 入口，不能绕过 worktree:create 落到 base repo，也不能把用户永久锁住。
+ *
+ * ineligible(探测成功、确认不合格)放行(2026-08-07 裁决):勾选记忆只对合格
+ * 目录生效,确认非 git 等三种资格缺失时按普通会话创建,开关行同步隐藏
+ * (shouldShowWorktreeToggle)。probing / recovering / detect-failed 仍拦截——
+ * 「确认不是 git」和「探测不出来」不是一回事。
  */
 export function shouldBlockNewSessionCreateForWorktree(input: {
   /** 当前草稿是否真的会使用 worktree：仅 project + 已选目录。 */
@@ -352,7 +363,8 @@ export function shouldBlockNewSessionCreateForWorktree(input: {
   if (!input.applicable) return false;
   if (input.preferenceSaving) return true;
   return input.enabled
-    && input.eligibility.status !== 'eligible';
+    && input.eligibility.status !== 'eligible'
+    && input.eligibility.status !== 'ineligible';
 }
 
 /** 资格未通过时的 caption 文案 key(session.json);eligible 无 caption。 */

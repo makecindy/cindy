@@ -196,9 +196,10 @@ describe('Shared create project picker', () => {
     expect(worktreeChipsSource).toContain(
       'const switchDisabled = disabled || checkboxDisabled || (environmentDisabled && !enabled)',
     );
-    expect(worktreeChipsSource).toContain(
-      'const showBranchChip = !advancedHidden && (enabled || !!detect.data?.isGitRepo)',
-    );
+    // 2026-08-07 裁决:确认不合格(confirmedIneligible === true)时整条控件隐藏、
+    // 发送侧放行普通会话;探测中/失败(null)时已 ON 仍显示并 fail closed。
+    expect(worktreeChipsSource).toContain('confirmedIneligible !== true');
+    expect(worktreeChipsSource).toContain('&& (enabled || !!detect.data?.isGitRepo)');
     const toggleHandler = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleWtEnabledChange = useCallback('),
       newMakerDraftRouteSource.indexOf('const handleWtSourceBranchChange = useCallback('),
@@ -213,8 +214,12 @@ describe('Shared create project picker', () => {
       'if (isDeviceLinkDraft) setWtEnabled(false);',
     );
     expect(newMakerDraftRouteSource).toContain('wt.enabled && wt.baseRepo');
+    const sendGuardStart = newMakerDraftRouteSource.indexOf(
+      '&& selectedWorktree.confirmedIneligible !== true',
+    );
+    expect(sendGuardStart).toBeGreaterThan(-1);
     const sendGuard = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {'),
+      sendGuardStart,
       newMakerDraftRouteSource.indexOf('const dataOwnerAtSend = getDataOwnerGeneration();'),
     );
     expect(sendGuard).toContain('worktreeMissingRepo');
