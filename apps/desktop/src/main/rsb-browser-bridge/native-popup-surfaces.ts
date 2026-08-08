@@ -367,6 +367,77 @@ export function transferRsbNativePopupSurface(
   return 'transferred';
 }
 
+/**
+ * Prepare every still-queued native popup for one host transition before the
+ * caller commits its window state. Any claimed surface, or any unclaimed
+ * surface whose one-shot payload has already left the main-process queue,
+ * blocks the transition. Earlier moves are rolled back when a later native
+ * view cannot be attached, so a retryable transfer never leaves a half-written
+ * detached preference behind.
+ */
+export function prepareQueuedRsbNativePopupSurfaceTransfer(
+  surfaceIds: readonly string[],
+  nextOwnerWebContents: WebContents,
+): { ready: boolean; droppedSurfaceIds: string[] } {
+  const blocked = { ready: false, droppedSurfaceIds: [] };
+  if (nextOwnerWebContents.isDestroyed()) return blocked;
+  let nextOwnerWindow: BrowserWindow | null = null;
+  try {
+    nextOwnerWindow = BrowserWindow.fromWebContents(nextOwnerWebContents);
+  } catch {
+    return blocked;
+  }
+  if (!nextOwnerWindow || nextOwnerWindow.isDestroyed()) return blocked;
+
+  const queuedIds = new Set(surfaceIds);
+  const previousOwners = new Map<string, WebContents>();
+  for (const record of surfaces.values()) {
+    const owner = record.ownerWebContents;
+    if (
+      record.tabId !== null ||
+      record.sessionId !== null ||
+      !queuedIds.has(record.surfaceId) ||
+      !owner ||
+      owner.isDestroyed()
+    ) {
+      return blocked;
+    }
+    previousOwners.set(record.surfaceId, owner);
+  }
+
+  const moved: string[] = [];
+  for (const surfaceId of queuedIds) {
+    const previousOwner = previousOwners.get(surfaceId);
+    const result = transferRsbNativePopupSurface(surfaceId, nextOwnerWebContents);
+    if (result === 'retryable') {
+      const droppedSurfaceIds: string[] = [];
+      for (const movedId of moved.reverse()) {
+        const owner = previousOwners.get(movedId);
+        const rollback =
+          owner && !owner.isDestroyed()
+            ? transferRsbNativePopupSurface(movedId, owner)
+            : 'retryable';
+        if (rollback !== 'transferred') {
+          // A queued payload must never remain paired with a surface owned by
+          // the not-yet-active target. Dispose it explicitly; the queue layer
+          // removes the matching one-shot payload from the result below.
+          disposeUnclaimedRsbNativePopupSurface(movedId);
+          droppedSurfaceIds.push(movedId);
+          log.warn('dropped native popup after prepared owner rollback failed', {
+            surfaceId: movedId,
+            rollback,
+          });
+        }
+      }
+      return { ready: false, droppedSurfaceIds };
+    }
+    if (result === 'transferred' && previousOwner && previousOwner.id !== nextOwnerWebContents.id) {
+      moved.push(surfaceId);
+    }
+  }
+  return { ready: true, droppedSurfaceIds: [] };
+}
+
 /** Release a queued surface that was never exposed to or claimed by a renderer. */
 export function disposeUnclaimedRsbNativePopupSurface(surfaceId: string): boolean {
   const record = surfaces.get(surfaceId);

@@ -191,6 +191,7 @@ import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
   flushRsbBrowserPopupQueue,
   installWebviewHardener,
+  prepareRsbBrowserPopupQueueForHost,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   setRsbPopupOpenerResolver,
@@ -1271,6 +1272,7 @@ const rsbWindowController = new RsbWindowController({
 registerRsbWindowIpc({
   controller: rsbWindowController,
   getMainWindow: () => mainWindowRef,
+  preparePopupHostTransition: prepareRsbBrowserPopupQueueForHost,
 });
 
 // ── 插件停靠面板独立窗口(ghost panel window)────────────────────────────

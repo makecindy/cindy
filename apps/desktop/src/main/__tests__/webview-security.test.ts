@@ -28,6 +28,12 @@ const nativeSurfaceMocks = vi.hoisted(() => ({
   transfer: vi.fn<(surfaceId: string, target: WebContents) => 'transferred' | 'retryable' | 'gone'>(
     () => 'transferred',
   ),
+  prepare: vi.fn<
+    (
+      surfaceIds: readonly string[],
+      target: WebContents,
+    ) => { ready: boolean; droppedSurfaceIds: string[] }
+  >(() => ({ ready: true, droppedSurfaceIds: [] })),
   dispose: vi.fn(),
   getOwner: vi.fn<(id: number) => WebContents | null>(() => null),
 }));
@@ -35,6 +41,7 @@ const nativeSurfaceMocks = vi.hoisted(() => ({
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   createRsbNativePopupSurface: nativeSurfaceMocks.create,
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
+  prepareQueuedRsbNativePopupSurfaceTransfer: nativeSurfaceMocks.prepare,
   transferRsbNativePopupSurface: nativeSurfaceMocks.transfer,
   disposeUnclaimedRsbNativePopupSurface: nativeSurfaceMocks.dispose,
   getRsbNativePopupOwnerWebContents: nativeSurfaceMocks.getOwner,
@@ -50,6 +57,7 @@ import {
   RSB_BROWSER_POPUP_BUFFER_LIMIT,
   RSB_BROWSER_POPUP_BUFFER_TTL_MS,
   flushRsbBrowserPopupQueue,
+  prepareRsbBrowserPopupQueueForHost,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   RSB_BROWSER_POPUP_CHANNEL,
@@ -217,6 +225,8 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
     nativeSurfaceMocks.attribute.mockClear();
     nativeSurfaceMocks.transfer.mockReset();
     nativeSurfaceMocks.transfer.mockReturnValue('transferred');
+    nativeSurfaceMocks.prepare.mockReset();
+    nativeSurfaceMocks.prepare.mockReturnValue({ ready: true, droppedSurfaceIds: [] });
     nativeSurfaceMocks.dispose.mockClear();
     nativeSurfaceMocks.getOwner.mockReset();
     nativeSurfaceMocks.getOwner.mockReturnValue(null);
@@ -314,6 +324,62 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
     expect(nativeSurfaceMocks.transfer.mock.invocationCallOrder[0]).toBeLessThan(
       detachedHost.send.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('reattach preflight only prepares native surfaces whose payload is still queued', () => {
+    const oldHost = makeContents(1);
+    const mainHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+
+    expect(prepareRsbBrowserPopupQueueForHost(mainHost as never)).toBe(true);
+    expect(nativeSurfaceMocks.prepare).toHaveBeenCalledWith(['surface-oauth'], mainHost);
+    currentHost = mainHost as never;
+    flushRsbBrowserPopupQueue();
+    expect(nativeSurfaceMocks.prepare.mock.invocationCallOrder[0]).toBeLessThan(
+      nativeSurfaceMocks.transfer.mock.invocationCallOrder[0]!,
+    );
+    expect(nativeSurfaceMocks.transfer.mock.invocationCallOrder[0]).toBeLessThan(
+      mainHost.send.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('reattach preflight preserves detached state when queued surface transfer is unsafe', () => {
+    const oldHost = makeContents(1);
+    const mainHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+    nativeSurfaceMocks.prepare.mockReturnValue({
+      ready: false,
+      droppedSurfaceIds: ['surface-oauth'],
+    });
+
+    expect(prepareRsbBrowserPopupQueueForHost(mainHost as never)).toBe(false);
+    currentHost = mainHost as never;
+    flushRsbBrowserPopupQueue();
+    expect(nativeSurfaceMocks.transfer).not.toHaveBeenCalled();
+    expect(mainHost.send).not.toHaveBeenCalled();
   });
 
   it('native surface 迁移失败时保留队首且绝不向新 host 泄露 surface id', () => {

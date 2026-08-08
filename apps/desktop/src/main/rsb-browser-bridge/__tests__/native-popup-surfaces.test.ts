@@ -60,6 +60,7 @@ import {
   hasActiveRsbNativePopupSurfaces,
   hasActiveRsbNativePopupSurfacesForOwner,
   isRsbNativePopupWebContentsId,
+  prepareQueuedRsbNativePopupSurfaceTransfer,
   registerRsbNativePopupSurfaceIpc,
   transferRsbNativePopupSurface,
 } from '../native-popup-surfaces';
@@ -234,6 +235,123 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(popup.close).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledWith('tab-popup', 42);
     expect(hasActiveRsbNativePopupSurfaces()).toBe(false);
+  });
+
+  it('prepares every queued unclaimed surface before a host transition', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const firstPopup = makeContents(42);
+    const secondPopup = makeContents(43);
+    electronMocks.windows.set(oldHost, makeWindow());
+    electronMocks.windows.set(nextHost, makeWindow());
+    const firstId = createRsbNativePopupSurface(oldHost as never, firstPopup as never)!;
+    const secondId = createRsbNativePopupSurface(oldHost as never, secondPopup as never)!;
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer([firstId, secondId], nextHost as never),
+    ).toEqual({ ready: true, droppedSurfaceIds: [] });
+    expect(getRsbNativePopupOwnerWebContents(firstPopup.id)).toBe(nextHost);
+    expect(getRsbNativePopupOwnerWebContents(secondPopup.id)).toBe(nextHost);
+  });
+
+  it('blocks a host transition for unclaimed surfaces whose payload already left the queue', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    electronMocks.windows.set(oldHost, makeWindow());
+    electronMocks.windows.set(nextHost, makeWindow());
+    createRsbNativePopupSurface(oldHost as never, popup as never);
+
+    expect(prepareQueuedRsbNativePopupSurfaceTransfer([], nextHost as never)).toEqual({
+      ready: false,
+      droppedSurfaceIds: [],
+    });
+    expect(getRsbNativePopupOwnerWebContents(popup.id)).toBe(oldHost);
+  });
+
+  it('blocks a host transition once a queued surface has been claimed', async () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    electronMocks.windows.set(oldHost, makeWindow());
+    electronMocks.windows.set(nextHost, makeWindow());
+    const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    await claim({ sender: oldHost }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
+
+    expect(prepareQueuedRsbNativePopupSurfaceTransfer([surfaceId], nextHost as never)).toEqual({
+      ready: false,
+      droppedSurfaceIds: [],
+    });
+    expect(getRsbNativePopupOwnerWebContents(popup.id)).toBe(oldHost);
+  });
+
+  it('rolls back earlier queued transfers when a later native view is retryable', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const firstPopup = makeContents(42);
+    const secondPopup = makeContents(43);
+    const oldWindow = makeWindow();
+    const nextWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, nextWindow);
+    const firstId = createRsbNativePopupSurface(oldHost as never, firstPopup as never)!;
+    const secondId = createRsbNativePopupSurface(oldHost as never, secondPopup as never)!;
+    let attachCount = 0;
+    nextWindow.contentView.addChildView.mockImplementation((view: object) => {
+      attachCount += 1;
+      if (attachCount === 2) throw new Error('second native view rejected');
+      return nextWindow.children.add(view);
+    });
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer([firstId, secondId], nextHost as never),
+    ).toEqual({ ready: false, droppedSurfaceIds: [] });
+    expect(getRsbNativePopupOwnerWebContents(firstPopup.id)).toBe(oldHost);
+    expect(getRsbNativePopupOwnerWebContents(secondPopup.id)).toBe(oldHost);
+    expect(nextWindow.children.size).toBe(0);
+  });
+
+  it('disposes a prepared surface when its rollback is also retryable', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const firstPopup = makeContents(42);
+    const secondPopup = makeContents(43);
+    const oldWindow = makeWindow();
+    const nextWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, nextWindow);
+    const firstId = createRsbNativePopupSurface(oldHost as never, firstPopup as never)!;
+    const secondId = createRsbNativePopupSurface(oldHost as never, secondPopup as never)!;
+    let targetAttachCount = 0;
+    nextWindow.contentView.addChildView.mockImplementation((view: object) => {
+      targetAttachCount += 1;
+      if (targetAttachCount === 2) throw new Error('second native view rejected');
+      return nextWindow.children.add(view);
+    });
+    let oldAttachCount = 0;
+    oldWindow.contentView.addChildView.mockImplementation((view: object) => {
+      oldAttachCount += 1;
+      if (oldAttachCount === 2) throw new Error('first native view rollback rejected');
+      return oldWindow.children.add(view);
+    });
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer([firstId, secondId], nextHost as never),
+    ).toEqual({ ready: false, droppedSurfaceIds: [firstId] });
+    expect(firstPopup.close).toHaveBeenCalledOnce();
+    expect(getRsbNativePopupOwnerWebContents(firstPopup.id)).toBeNull();
+    expect(getRsbNativePopupOwnerWebContents(secondPopup.id)).toBe(oldHost);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(false);
+  });
+
+  it('allows stale queued ids when no native surface remains', () => {
+    const nextHost = makeContents(2);
+    electronMocks.windows.set(nextHost, makeWindow());
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer(['surface-already-gone'], nextHost as never),
+    ).toEqual({ ready: true, droppedSurfaceIds: [] });
   });
 
   it('rolls an unclaimed surface back when the new window rejects its view', async () => {

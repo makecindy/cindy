@@ -46,6 +46,7 @@ import {
   createRsbNativePopupSurface,
   disposeUnclaimedRsbNativePopupSurface,
   getRsbNativePopupOwnerWebContents,
+  prepareQueuedRsbNativePopupSurfaceTransfer,
   transferRsbNativePopupSurface,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 
@@ -529,6 +530,26 @@ function resolveCurrentPopupHost(): WebContents | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Pre-transfer only the native popup surfaces whose one-shot payloads are
+ * still owned by this main-process queue. The IPC transition calls this before
+ * writing `detached:false`; claimed or already-delivered surfaces fail closed.
+ */
+export function prepareRsbBrowserPopupQueueForHost(target: WebContents): boolean {
+  pruneQueuedBrowserPopups();
+  const queuedSurfaceIds = queuedBrowserPopups.flatMap(({ payload }) =>
+    payload.nativePopupSurfaceId ? [payload.nativePopupSurfaceId] : [],
+  );
+  const prepared = prepareQueuedRsbNativePopupSurfaceTransfer(queuedSurfaceIds, target);
+  if (prepared.droppedSurfaceIds.length > 0) {
+    const dropped = new Set(prepared.droppedSurfaceIds);
+    queuedBrowserPopups = queuedBrowserPopups.filter(
+      ({ payload }) => !payload.nativePopupSurfaceId || !dropped.has(payload.nativePopupSurfaceId),
+    );
+  }
+  return prepared.ready;
 }
 
 /**

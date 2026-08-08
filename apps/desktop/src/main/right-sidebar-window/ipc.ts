@@ -7,7 +7,7 @@
  */
 
 import { ipcMain } from 'electron';
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, WebContents } from 'electron';
 
 import { MAKER_INVOKE, MAKER_SEND } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
@@ -204,8 +204,15 @@ function parseOpenUserInitiated(raw: unknown): boolean {
 export function registerRsbWindowIpc(opts: {
   controller: RsbWindowController;
   getMainWindow: () => BrowserWindow | null;
+  preparePopupHostTransition: (target: WebContents) => boolean;
+  hasActivePopupSurfaces?: () => boolean;
 }): void {
-  const { controller, getMainWindow } = opts;
+  const {
+    controller,
+    getMainWindow,
+    preparePopupHostTransition,
+    hasActivePopupSurfaces = hasActiveRsbNativePopupSurfaces,
+  } = opts;
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 
@@ -214,8 +221,11 @@ export function registerRsbWindowIpc(opts: {
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_CLOSE, () => {
-    if (hasActiveRsbNativePopupSurfaces()) {
-      throwIpcError('PRECONDITION_FAILED', 'active browser popup must be completed or closed first');
+    if (hasActivePopupSurfaces()) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'active browser popup must be completed or closed first',
+      );
     }
     controller.close();
   });
@@ -224,8 +234,31 @@ export function registerRsbWindowIpc(opts: {
     if (typeof detached !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'detached required (boolean)');
     }
-    if (detached !== controller.getState().detached && hasActiveRsbNativePopupSurfaces()) {
-      throwIpcError('PRECONDITION_FAILED', 'active browser popup must be completed or closed first');
+    const currentDetached = controller.getState().detached;
+    if (detached !== currentDetached) {
+      if (detached) {
+        if (hasActivePopupSurfaces()) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'active browser popup must be completed or closed first',
+          );
+        }
+      } else {
+        const mainWindow = getMainWindow();
+        const target = mainWindow?.webContents ?? null;
+        if (
+          !mainWindow ||
+          mainWindow.isDestroyed() ||
+          !target ||
+          target.isDestroyed() ||
+          !preparePopupHostTransition(target)
+        ) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'active browser popup cannot be transferred to the main window',
+          );
+        }
+      }
     }
     return controller.setDetached(detached);
   });

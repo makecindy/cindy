@@ -413,6 +413,9 @@ describe('getHostWebContents', () => {
 
     expect(h.controller.getPopupHostWebContents()).toBe(h.mainWin.webContents);
     expect(h.onPopupHostAvailable).toHaveBeenCalledTimes(1);
+    expect(h.onPopupHostAvailable.mock.invocationCallOrder[0]).toBeLessThan(
+      h.windows[0].close.mock.invocationCallOrder[0]!,
+    );
   });
 });
 
