@@ -413,6 +413,8 @@ export class GoalController {
   private readonly consecutiveOverloadTurns = new Map<string, number>();
   private readonly now: () => number;
   private readonly debounceMs: number;
+  /** dispose 后为 true:in-flight 异步(如启动 resumeActiveGoals 扫描)不再产出观测事件。 */
+  private disposed = false;
   /**
    * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
    * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
@@ -451,6 +453,9 @@ export class GoalController {
     state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
     extra?: Partial<GoalRunEvent>,
   ): void {
+    // dispose 后丢弃观测(reviewer P1:登出/切账号 reset 后,in-flight 的旧 controller
+    // 扫描/收口不得把旧账号事件写回已清空的环)。
+    if (this.disposed) return;
     if (!this.deps.recordRunEvent) return;
     const boundary = this.turns.get(goalSessionId);
     const evt: GoalRunEvent = {
@@ -1368,6 +1373,7 @@ export class GoalController {
 
   /** 关停所有监听 + 计时器(测试 / 进程退出)。 */
   dispose(): void {
+    this.disposed = true;
     for (const sessionId of [...this.unsubscribers.keys()]) {
       this.stopSession(sessionId);
     }
