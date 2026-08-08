@@ -30,8 +30,9 @@ function hasGitMarker(dir: string): boolean {
   try {
     const marker = fs.statSync(path.join(dir, '.git'));
     return marker.isDirectory() || marker.isFile();
-  } catch {
-    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
   }
 }
 

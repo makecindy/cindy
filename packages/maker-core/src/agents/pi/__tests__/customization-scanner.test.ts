@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildPiSources, scanPiCustomizations } from '../customization-scanner.js';
+
+const { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } = fs;
 
 const roots: string[] = [];
 
@@ -107,6 +109,33 @@ describe('scanPiCustomizations', () => {
 
     expect(names).toContain('worktree-skill');
     expect(names).not.toContain('above-worktree');
+  });
+
+  it('treats an unreadable .git marker as a repository boundary', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    const cwd = path.join(repo, 'src');
+    mkdirSync(cwd, { recursive: true });
+    const canonicalRepo = canonical(repo);
+    const canonicalCwd = canonical(cwd);
+    const originalStatSync = fs.statSync;
+    const statSyncSpy = vi.spyOn(fs, 'statSync').mockImplementation((candidate, options) => {
+      if (String(candidate) === path.join(canonicalRepo, '.git')) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return originalStatSync(candidate, options as never);
+    });
+
+    const projectDirs = buildPiSources([cwd])
+      .filter((source) => source.scope === 'repo')
+      .map((source) => source.dir);
+
+    expect(projectDirs).toEqual([
+      path.join(canonicalCwd, '.pi', 'skills'),
+      path.join(canonicalCwd, '.agents', 'skills'),
+      path.join(canonicalRepo, '.agents', 'skills'),
+    ]);
+    statSyncSpy.mockRestore();
   });
 
   it('scans only the working directory .agents path outside Git repositories', async () => {
