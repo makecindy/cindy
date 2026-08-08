@@ -21,14 +21,16 @@ interface FakeWindow {
   isDestroyed: () => boolean;
   destroyed: boolean;
   webContents: { id: number };
+  /** 测试用:触发 close guard,但不自动触发 closed。 */
+  emitClose: () => { preventDefault: ReturnType<typeof vi.fn> };
   /** 测试用:触发已注册的 closed listener(模拟用户关窗 / win.close() 完成)。 */
   emitClosed: () => void;
 }
 
 function fakeWindow(id = 1, asyncClose = false): FakeWindow {
-  const listeners = new Map<string, () => void>();
+  const listeners = new Map<string, (event?: { preventDefault: () => void }) => void>();
   const win: FakeWindow = {
-    on: vi.fn((event: string, cb: () => void) => {
+    on: vi.fn((event: string, cb: (event?: { preventDefault: () => void }) => void) => {
       listeners.set(event, cb);
     }),
     // 真实 BrowserWindow.close() 异步走到 'closed';fake 里同步触发,足够覆盖状态机
@@ -44,6 +46,11 @@ function fakeWindow(id = 1, asyncClose = false): FakeWindow {
     isDestroyed: () => win.destroyed,
     destroyed: false,
     webContents: { id },
+    emitClose: () => {
+      const event = { preventDefault: vi.fn() };
+      listeners.get('close')?.(event);
+      return event;
+    },
     emitClosed: () => {
       win.destroyed = true;
       listeners.get('closed')?.();
@@ -54,7 +61,10 @@ function fakeWindow(id = 1, asyncClose = false): FakeWindow {
 
 function makeHarness(
   initial: Partial<RsbWindowSettings> = {},
-  opts: { asyncClose?: boolean } = {},
+  opts: {
+    asyncClose?: boolean;
+    canCloseWindow?: (win: BrowserWindow) => boolean;
+  } = {},
 ) {
   let settings: RsbWindowSettings = { detached: false, lastOpen: false, ...initial };
   let quitting = false;
@@ -90,6 +100,7 @@ function makeHarness(
     contextChannel: 'ctx-channel',
     commandChannel: 'cmd-channel',
     isQuitting: () => quitting,
+    canCloseWindow: opts.canCloseWindow,
     onPopupHostAvailable,
     log: { info: vi.fn(), warn: vi.fn() },
   };
@@ -143,6 +154,51 @@ describe('open / close', () => {
   it('窗口不存在时 close 也落 lastOpen=false 并广播', () => {
     const h = makeHarness({ lastOpen: true });
     h.controller.close();
+    expect(h.getSettings().lastOpen).toBe(false);
+    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
+  });
+
+  it('close guard receives the exact sidebar window instead of global popup state', () => {
+    const canCloseWindow = vi.fn((win: BrowserWindow) => win.webContents.id === 200);
+    const h = makeHarness({}, { canCloseWindow });
+    h.controller.open();
+
+    const event = h.windows[0].emitClose();
+
+    expect(canCloseWindow).toHaveBeenCalledWith(h.windows[0]);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('still blocks close while that sidebar window owns an active popup', () => {
+    const h = makeHarness({}, { canCloseWindow: () => false });
+    h.controller.open();
+
+    const event = h.windows[0].emitClose();
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it('restores persisted open state when a programmatic close is blocked', () => {
+    let allowClose = false;
+    const h = makeHarness(
+      {},
+      { asyncClose: true, canCloseWindow: () => allowClose },
+    );
+    h.controller.open();
+
+    h.controller.close();
+    const blocked = h.windows[0].emitClose();
+
+    expect(blocked.preventDefault).toHaveBeenCalledOnce();
+    expect(h.windows[0].isDestroyed()).toBe(false);
+    expect(h.getSettings().lastOpen).toBe(true);
+    expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: true });
+
+    allowClose = true;
+    h.controller.close();
+    const allowed = h.windows[0].emitClose();
+    expect(allowed.preventDefault).not.toHaveBeenCalled();
+    h.windows[0].emitClosed();
     expect(h.getSettings().lastOpen).toBe(false);
     expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
   });

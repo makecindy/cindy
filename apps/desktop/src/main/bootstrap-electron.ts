@@ -208,7 +208,7 @@ import {
 } from './rsb-browser-bridge';
 import {
   getRsbNativePopupOwnerWebContents,
-  hasActiveRsbNativePopupSurfaces,
+  hasActiveRsbNativePopupSurfacesForOwner,
   registerRsbNativePopupSurfaceIpc,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
@@ -1262,7 +1262,9 @@ const rsbWindowController = new RsbWindowController({
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
   isQuitting: () => isQuitting,
-  canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
+  // A surface already transferred to the attached main window must not keep
+  // the now-empty detached window alive during reattach.
+  canCloseWindow: (win) => !hasActiveRsbNativePopupSurfacesForOwner(win.webContents.id),
   onPopupHostAvailable: flushRsbBrowserPopupQueue,
   log: createLogger('right-sidebar-window-controller'),
 });

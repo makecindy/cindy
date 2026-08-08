@@ -58,6 +58,7 @@ import {
   disposeUnclaimedRsbNativePopupSurface,
   getRsbNativePopupOwnerWebContents,
   hasActiveRsbNativePopupSurfaces,
+  hasActiveRsbNativePopupSurfacesForOwner,
   isRsbNativePopupWebContentsId,
   registerRsbNativePopupSurfaceIpc,
   transferRsbNativePopupSurface,
@@ -193,6 +194,16 @@ describe('main-owned RSB native popup surfaces', () => {
     electronMocks.windows.set(nextHost, nextWindow);
     const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
     const view = electronMocks.views[0]!;
+    const staleDestroyed = oldHost.listeners('destroyed')[0] as () => void;
+    const staleNavigation = oldHost.listeners('did-start-navigation')[0] as (
+      event: unknown,
+      url: string,
+      isSameDocument: boolean,
+      isMainFrame: boolean,
+    ) => void;
+
+    expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(true);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(false);
 
     expect(transferRsbNativePopupSurface(surfaceId, nextHost as never)).toBe('transferred');
     expect(oldWindow.contentView.removeChildView).toHaveBeenCalledWith(view);
@@ -200,6 +211,15 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(oldWindow.children.has(view)).toBe(false);
     expect(nextWindow.children.has(view)).toBe(true);
     expect(getRsbNativePopupOwnerWebContents(42)).toBe(nextHost);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(false);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(true);
+
+    // removeListener cannot revoke a callback Electron already queued. Both
+    // stale lifecycle callbacks must observe that oldHost is no longer owner.
+    staleDestroyed();
+    staleNavigation({}, 'https://stale-owner.test/', false, true);
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(hasActiveRsbNativePopupSurfaces()).toBe(true);
 
     oldHost.close();
     expect(popup.close).not.toHaveBeenCalled();
@@ -225,6 +245,13 @@ describe('main-owned RSB native popup surfaces', () => {
     electronMocks.windows.set(oldHost, oldWindow);
     electronMocks.windows.set(nextHost, nextWindow);
     const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
+    const staleDestroyed = oldHost.listeners('destroyed')[0] as () => void;
+    const staleNavigation = oldHost.listeners('did-start-navigation')[0] as (
+      event: unknown,
+      url: string,
+      isSameDocument: boolean,
+      isMainFrame: boolean,
+    ) => void;
     nextWindow.contentView.addChildView.mockImplementationOnce(() => {
       throw new Error('native view rejected');
     });
@@ -233,6 +260,13 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(getRsbNativePopupOwnerWebContents(42)).toBe(oldHost);
     expect(oldWindow.children.has(electronMocks.views[0]!)).toBe(true);
     expect(popup.close).not.toHaveBeenCalled();
+
+    // Rollback installs a new ownership generation. Callbacks captured before
+    // the attempted transfer must not tear down the restored surface.
+    staleDestroyed();
+    staleNavigation({}, 'https://stale-owner.test/', false, true);
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(true);
 
     const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
     expect(

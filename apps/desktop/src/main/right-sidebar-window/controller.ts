@@ -53,7 +53,7 @@ export interface RsbWindowControllerDeps {
   commandChannel: string;
   isQuitting: () => boolean;
   /** Popup WindowProxy depends on the ordinary webview opener staying alive. */
-  canCloseWindow?: () => boolean;
+  canCloseWindow?: (win: BrowserWindow) => boolean;
   /** attached main 或 detached ready host 可投递时,通知 main 刷新一次性 popup 队列。 */
   onPopupHostAvailable?: () => void;
   log: ControllerLogger;
@@ -121,9 +121,14 @@ export class RsbWindowController {
     this.closing = false;
     this.ready = false;
     win.on('close', (event) => {
-      if (this.deps.isQuitting() || this.deps.canCloseWindow?.() !== false) return;
+      if (this.deps.isQuitting() || this.deps.canCloseWindow?.(win) !== false) return;
       event.preventDefault();
       this.closing = false;
+      // close() optimistically persists lastOpen=false before Electron emits
+      // this cancellable event. Restore the real open state when the popup
+      // guard keeps the window alive.
+      this.deps.settings.writePatch({ lastOpen: true });
+      this.broadcast();
       this.deps.log.warn('right-sidebar window close blocked by active browser popup');
     });
     win.on('closed', () => this.onClosed());

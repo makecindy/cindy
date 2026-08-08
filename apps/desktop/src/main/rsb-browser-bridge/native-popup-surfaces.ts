@@ -43,6 +43,8 @@ interface SurfaceRecord {
   popupPinRelease: (() => void) | null;
   claimTimer: ReturnType<typeof setTimeout> | null;
   detachOwnerObservers: (() => void) | null;
+  /** Invalidates callbacks captured by a previous owner during transfer/rollback. */
+  ownerGeneration: number;
 }
 
 export const RSB_NATIVE_POPUP_CLAIM_TIMEOUT_MS = 30_000;
@@ -191,8 +193,13 @@ function installSurfaceObservers(record: SurfaceRecord): void {
 
 function installOwnerObservers(record: SurfaceRecord, hostContents: WebContents): () => void {
   const popupContents = record.webContents;
+  const generation = record.ownerGeneration;
+  const isCurrentOwner = () =>
+    surfaces.get(record.surfaceId) === record &&
+    record.ownerGeneration === generation &&
+    record.ownerWebContents === hostContents;
   const handleOwnerDestroyed = () => {
-    if (surfaces.get(record.surfaceId) !== record) return;
+    if (!isCurrentOwner()) return;
     cleanupSurface(record, false);
     if (!popupContents.isDestroyed()) popupContents.close();
   };
@@ -202,7 +209,7 @@ function installOwnerObservers(record: SurfaceRecord, hostContents: WebContents)
     isSameDocument: boolean,
     isMainFrame: boolean,
   ) => {
-    if (!isMainFrame || isSameDocument || surfaces.get(record.surfaceId) !== record) return;
+    if (!isMainFrame || isSameDocument || !isCurrentOwner()) return;
     // A full renderer reload keeps the same host WebContents, but loses the
     // runtime tab↔surface map. Close before the old renderer disappears so a
     // stale view cannot cover the new page or block sidebar reparent forever.
@@ -247,6 +254,7 @@ export function createRsbNativePopupSurface(
     popupPinRelease: null,
     claimTimer: null,
     detachOwnerObservers: null,
+    ownerGeneration: 0,
   };
   surfaces.set(surfaceId, record);
   managedWebContentsIds.add(popupContents.id);
@@ -302,6 +310,10 @@ export function transferRsbNativePopupSurface(
 
   const previousOwnerWindow = record.ownerWindow;
   const previousOwnerWebContents = record.ownerWebContents;
+  // Invalidate old-owner callbacks before touching native views. Electron may
+  // already have queued one while removeListener is running; that stale
+  // callback must not tear down a surface that is being transferred.
+  record.ownerGeneration += 1;
   record.detachOwnerObservers?.();
   record.detachOwnerObservers = null;
 
@@ -554,6 +566,14 @@ export function isRsbNativePopupWebContentsId(webContentsId: number): boolean {
 
 export function hasActiveRsbNativePopupSurfaces(): boolean {
   return surfaces.size > 0;
+}
+
+/** Whether a specific renderer still owns an active native popup surface. */
+export function hasActiveRsbNativePopupSurfacesForOwner(webContentsId: number): boolean {
+  for (const record of surfaces.values()) {
+    if (record.ownerWebContents?.id === webContentsId) return true;
+  }
+  return false;
 }
 
 /** Test-only reset. */
