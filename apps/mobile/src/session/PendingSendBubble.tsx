@@ -5,10 +5,10 @@
  * 「这就是你的消息,只是还没生效」;落定时提高不透明度,回流后同一个列表位置换成正式
  * 消息,原地变实。徽标语义:
  *  - 转圈 = 还没有「已被收下」这个事实(enqueue 在途 / 已出队待回流 / 附件上传中);
- *  - 「排入队尾 list-end」= 已确认入队,顺序由排列先后表达,不标数字;
+ *  - 「时钟 + 已排队」= 已确认入队,顺序由排列先后表达,不标数字;
  *  - ✎ = 正在底部 composer 编辑这一条;
  *  - ⚠ = 失败,可重试 / 删除。
- * 「排入队尾」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
+ * 「已排队」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,7 +19,7 @@ import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   AlertCircle,
   ArrowUp,
-  ListEnd,
+  Clock3,
   Paperclip,
   Pencil,
   RotateCcw,
@@ -199,79 +199,95 @@ export function PendingSendBubble({
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
       <View style={styles.bubbleRow}>
-        <View style={styles.badge} testID={`pendingSend.badge.${item.phase}`}>
-          {failed ? (
-            <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : spinning ? (
-            <ActivityIndicator color={colors.textTertiary} size="small" />
-          ) : editing ? (
-            <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : (
-            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
-            <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          )}
-        </View>
-        <Pressable
-          accessibilityHint={item.hint ?? undefined}
-          accessibilityLabel={failed
-            ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
-            : spinning
-              ? t('message.queue.sendingMessage', { text: bubbleLabel })
-              : item.queueIndex !== null
-                ? t('message.queue.queuedMessageLabel', { index: item.queueIndex, text: bubbleLabel })
-                : t('message.queue.sendingMessage', { text: bubbleLabel })}
-          accessibilityRole="button"
-          accessibilityState={{ expanded: selected, disabled: !interactive }}
-          disabled={!interactive}
-          onPress={() => actions.onSelect(selected ? null : item.clientId)}
-          style={({ pressed }) => [
-            styles.bubble,
-            item.phase === 'settling' && styles.bubbleSettling,
-            selected && styles.bubbleSelected,
-            editing && styles.bubbleEditing,
-            pressed && styles.pressed,
-          ]}
-          testID={`pendingSend.bubble.${item.clientId}`}
-        >
-          {rendersSentInlineBody ? (
-            <SentInlineAtomBody
-              interactiveAtoms={false}
-              maxVisibleLines={selected ? undefined : 6}
-              numberOfLines={selected ? undefined : 6}
-              testID="pendingSend.sentInlineAtoms"
-              textStyle={styles.bubbleText}
-              tokens={item.sentInlineTokens}
-            />
-          ) : item.text ? (
-            <Text numberOfLines={selected ? undefined : 6} style={styles.bubbleText}>
-              {item.text}
-            </Text>
-          ) : null}
-          <AttachmentThumbStrip resolveRemoteMedia={resolveRemoteMedia} thumbs={item.thumbs} />
-          {item.fileCount > 0 || uploadsPending ? (
-            <View style={styles.attachmentLine}>
-              <Paperclip color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-              <Text style={styles.attachmentLineText}>
-                {uploadsPending
-                  ? t('message.queue.uploadingAttachments', {
-                      uploaded: item.uploadedCount,
-                      total: item.attachmentCount,
-                    })
-                  : t('message.queue.attachmentCount', { n: item.fileCount })}
+        <View style={styles.bubbleShell}>
+          <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={styles.badge}
+            testID={`pendingSend.badge.${item.phase}`}
+          >
+            {failed ? (
+              <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            ) : spinning ? (
+              <ActivityIndicator color={colors.textTertiary} size="small" />
+            ) : editing ? (
+              <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            ) : (
+              // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用明确的排队标记。
+              <>
+                <Clock3 color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                <Text
+                  numberOfLines={1}
+                  style={styles.queuedStatusText}
+                  testID={`pendingSend.queuedStatus.${item.clientId}`}
+                >
+                  {t('message.queue.queuedStatus')}
+                </Text>
+              </>
+            )}
+          </View>
+          <Pressable
+            accessibilityHint={item.hint ?? undefined}
+            accessibilityLabel={failed
+              ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
+              : spinning
+                ? t('message.queue.sendingMessage', { text: bubbleLabel })
+                : item.queueIndex !== null
+                  ? t('message.queue.queuedMessageLabel', { index: item.queueIndex, text: bubbleLabel })
+                  : t('message.queue.sendingMessage', { text: bubbleLabel })}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: selected, disabled: !interactive }}
+            disabled={!interactive}
+            onPress={() => actions.onSelect(selected ? null : item.clientId)}
+            style={({ pressed }) => [
+              styles.bubble,
+              item.phase === 'settling' && styles.bubbleSettling,
+              selected && styles.bubbleSelected,
+              editing && styles.bubbleEditing,
+              pressed && styles.pressed,
+            ]}
+            testID={`pendingSend.bubble.${item.clientId}`}
+          >
+            {rendersSentInlineBody ? (
+              <SentInlineAtomBody
+                interactiveAtoms={false}
+                maxVisibleLines={selected ? undefined : 6}
+                numberOfLines={selected ? undefined : 6}
+                testID="pendingSend.sentInlineAtoms"
+                textStyle={styles.bubbleText}
+                tokens={item.sentInlineTokens}
+              />
+            ) : item.text ? (
+              <Text numberOfLines={selected ? undefined : 6} style={styles.bubbleText}>
+                {item.text}
               </Text>
-            </View>
-          ) : null}
-          {editing ? (
-            <Text style={styles.editingHint} testID={`pendingSend.editingHint.${item.clientId}`}>
-              {t('message.queue.editingInComposer')}
-            </Text>
-          ) : null}
-          {item.errorText ? (
-            <Text style={styles.errorText} testID={`pendingSend.error.${item.clientId}`}>
-              {item.errorText}
-            </Text>
-          ) : null}
-        </Pressable>
+            ) : null}
+            <AttachmentThumbStrip resolveRemoteMedia={resolveRemoteMedia} thumbs={item.thumbs} />
+            {item.fileCount > 0 || uploadsPending ? (
+              <View style={styles.attachmentLine}>
+                <Paperclip color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                <Text style={styles.attachmentLineText}>
+                  {uploadsPending
+                    ? t('message.queue.uploadingAttachments', {
+                        uploaded: item.uploadedCount,
+                        total: item.attachmentCount,
+                      })
+                    : t('message.queue.attachmentCount', { n: item.fileCount })}
+                </Text>
+              </View>
+            ) : null}
+            {editing ? (
+              <Text style={styles.editingHint} testID={`pendingSend.editingHint.${item.clientId}`}>
+                {t('message.queue.editingInComposer')}
+              </Text>
+            ) : null}
+            {item.errorText ? (
+              <Text style={styles.errorText} testID={`pendingSend.error.${item.clientId}`}>
+                {item.errorText}
+              </Text>
+            ) : null}
+          </Pressable>
+        </View>
       </View>
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
@@ -380,11 +396,29 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   bubbleRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: spacing.sm,
     justifyContent: 'flex-end',
     width: '100%',
   },
-  badge: { alignItems: 'center', flexDirection: 'row' },
+  // 徽标绝对定位在气泡外,不参与横向排版:长待发消息与落定后的 86% 正式气泡保持同宽,
+  // 文本不会因「已排队」标签出现/消失而重新换行。
+  bubbleShell: { alignItems: 'flex-end', flexShrink: 1, maxWidth: '86%', position: 'relative' },
+  badge: {
+    alignItems: 'center',
+    bottom: 0,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+    position: 'absolute',
+    right: '100%',
+    top: 0,
+  },
+  queuedStatusText: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+  },
   // 与已发送用户气泡同款,但整体半透明:「这就是你的消息,只是还没生效」。
   bubble: {
     backgroundColor: colors.surfaceElevated,
@@ -392,7 +426,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.xs,
-    maxWidth: '86%',
+    maxWidth: '100%',
     opacity: 0.62,
     padding: spacing.md,
   },
