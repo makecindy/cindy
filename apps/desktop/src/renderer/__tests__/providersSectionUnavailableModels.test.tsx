@@ -217,6 +217,10 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(
       (await screen.findAllByText('settings.providers.xd.title')).length,
     ).toBeGreaterThanOrEqual(2);
+    // 详情标题的模型数/订阅标签必须在可用宽度内折行，不能溢出覆盖右侧连接操作。
+    const metadata = screen.getByTestId('provider-detail-metadata');
+    expect(metadata.classList.contains('flex-wrap')).toBe(true);
+    expect(metadata.parentElement?.classList.contains('flex-auto')).toBe(true);
     // 未连接的 Anthropic 不出现在左栏(无检测建议时整页不出现)。
     expect(screen.queryByText('Anthropic')).toBeNull();
     // xd 实时模型为空 → 详情仍渲染模型工具行与刷新入口，避免用户无从恢复。
