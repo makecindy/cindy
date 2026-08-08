@@ -14,8 +14,12 @@ export function LayoutResetControl() {
     if (resetting) return;
     setResetting(true);
     try {
-      await window.electronAPI.layout.reset();
-      toast.success(t('settings.appearance.layout.resetSuccess'));
+      const result = await window.electronAPI.layout.reset();
+      if (result.persisted) {
+        toast.success(t('settings.appearance.layout.resetSuccess'));
+      } else {
+        toast.error(t('settings.appearance.layout.resetFailed'));
+      }
     } catch {
       toast.error(t('settings.appearance.layout.resetFailed'));
     } finally {

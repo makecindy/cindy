@@ -257,7 +257,11 @@ export function PanelDragController({
             if (op.applied) {
               void window.electronAPI.layout
                 .set(op.layout)
-                .then(() => toast.success(t('settings.appearance.layout.saved')))
+                .then((result) =>
+                  result.persisted
+                    ? toast.success(t('settings.appearance.layout.saved'))
+                    : toast.error(t('settings.appearance.layout.saveFailed')),
+                )
                 .catch(() => toast.error(t('settings.appearance.layout.saveFailed')));
             }
           } catch {

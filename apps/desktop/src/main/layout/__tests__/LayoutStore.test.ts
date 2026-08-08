@@ -82,6 +82,7 @@ describe('LayoutStore · 写路径(严格)', () => {
 
     const result = store.setLayout(next);
     expect('layout' in result && result.layout).toEqual(next);
+    expect('persisted' in result && result.persisted).toBe(true);
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(readFileJson()).toEqual(next);
     // 新实例读回同一棵树(round-trip)。
@@ -109,6 +110,26 @@ describe('LayoutStore · 写路径(严格)', () => {
     expect('rejection' in store.setLayout(null)).toBe(true);
     expect('rejection' in store.setLayout('garbage')).toBe(true);
   });
+
+  it('setLayout 写盘失败时保留内存布局并返回 persisted=false', () => {
+    const onChanged = vi.fn();
+    const store = makeStore(onChanged);
+    const before = createDefaultLayout();
+    expect(store.setLayout(before)).toMatchObject({ persisted: true });
+
+    const next = structuredClone(before);
+    (next.content as { children: { fraction: number }[] }).children[0].fraction = 0.55;
+    (next.content as { children: { fraction: number }[] }).children[1].fraction = 0.45;
+    vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    expect(store.setLayout(next)).toEqual({ layout: next, persisted: false });
+    expect(store.getLayout()).toEqual(next);
+    expect(readFileJson()).toEqual(before);
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(fs.existsSync(`${filePath}.tmp`)).toBe(false);
+  });
 });
 
 describe('LayoutStore · reset 与 ensurePersisted', () => {
@@ -120,8 +141,8 @@ describe('LayoutStore · reset 与 ensurePersisted', () => {
     (custom.content as { children: { fraction: number }[] }).children[1].fraction = 0.2;
     store.setLayout(custom);
 
-    const layout = store.reset();
-    expect(layout).toEqual(createDefaultLayout());
+    const result = store.reset();
+    expect(result).toEqual({ layout: createDefaultLayout(), persisted: true });
     expect(readFileJson()).toEqual(createDefaultLayout());
     expect(onChanged).toHaveBeenCalledTimes(2);
   });
