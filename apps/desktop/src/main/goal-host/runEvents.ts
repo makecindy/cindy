@@ -2,7 +2,7 @@
  * Goal run 结构化观测事件 (#2105, roadmap #2104 P0)
  * ---------------------------------------------------------------------------
  * 让一次 goal 运行可审计:第几个 turn、状态如何迁移、实际派发了什么、最终状态
- * 怎么收口、预算消耗、停滞/重试/恢复。统一 schema + generation 防旧事件串台。
+ * 怎么收口、预算消耗、停滞/恢复。统一 schema + generation 防旧事件串台。
  *
  * 设计约束(维护者 #2104):
  *  - 只加观测、不改状态机语义;不引入宽泛自动恢复(#2091 边界)。
@@ -79,8 +79,8 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       sink?.(evt);
     },
     snapshot() {
-      // 与 record 同样浅拷贝(含 budget):slice 只复制数组,消费者修改返回的事件
-      // 对象仍会污染环(reviewer)。
+      // 与 record 同样浅拷贝(含 budget):返回新对象,消费者修改返回值
+      // 不会污染环内数据。
       return ring.map((evt) => ({
         ...evt,
         budget: evt.budget ? { ...evt.budget } : undefined,

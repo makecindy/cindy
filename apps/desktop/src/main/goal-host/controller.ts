@@ -1064,7 +1064,7 @@ export class GoalController {
    * /已 active 不处理。
    */
   async resumeGoal(sessionId: string, opts?: { auto?: boolean }): Promise<void> {
-    // dispose 后丢弃(reviewer P1:GOAL_RESUME 捕获的旧实例在登出/切账号后不得恢复
+    // dispose 后丢弃(GOAL_RESUME 捕获的旧实例在登出/切账号后不得恢复
     // 旧账号 goal、重建 turns / attach listener / emit 旧状态)。
     if (this.disposed) return;
     let existingBoundary = this.turns.get(sessionId);
@@ -1292,7 +1292,7 @@ export class GoalController {
    * 这样重开会话能让 active 目标自己跑下去,而不是卡死等用户重发 /goal。
    */
   async resumeOnOpen(sessionId: string): Promise<void> {
-    // dispose 后丢弃(reviewer P1:GOAL_GET_STATUS 捕获实例 await 期间登出,不得重建
+    // dispose 后丢弃(GOAL_GET_STATUS 捕获实例 await 期间登出,不得重建
     // turns / attach 旧 listener / emit 旧账号状态)。每个 await 后重查。
     if (this.disposed) return;
     if (this.unsubscribers.has(sessionId) || this.turns.has(sessionId)) return; // 已在管或正在 Stop
@@ -2236,6 +2236,13 @@ export class GoalController {
     });
     let dispatchBoundary: TurnAccumulator | undefined;
     let dispatchGeneration: number | undefined;
+    /** onDispatching 时刻(重放顺序锚点):快终态时 finalize 事件可能先落环,
+     * 用派发时刻的 at 保证 dispatch 排在 finalize 前(Codex P1)。 */
+    let dispatchAt: number | undefined;
+    /** onDispatching 固化的恢复原因:快终态时 pendingResume 可能先被
+     * stopSession/clearPendingResumeForBoundary 清掉,固化值保证 accepted 分支
+     * 仍能补发同代 resumed(Greptile P1)。 */
+    let dispatchResumeReason: string | undefined;
     const isCurrentDispatch = (): boolean =>
       dispatchBoundary != null &&
       dispatchGeneration != null &&
@@ -2320,6 +2327,13 @@ export class GoalController {
             // 窗口内回调已执行但 send 返回 accepted:false,会产生"已派发无收口"的
             // 幽灵事件)。归属登记(goalTurnsInFlight)必须同步,事件等 send 返回
             // accepted 后在 accepted 分支补发。
+            // 此处固化恢复原因与派发时刻:快终态时 pendingResume 可能先被清理,
+            // accepted 分支需用固化值补发同代 resumed;at 用派发时刻保证重放顺序。
+            const pendingResume = this.pendingResumeEvents.get(sessionId);
+            if (pendingResume && pendingResume.boundary === dispatchBoundary) {
+              dispatchResumeReason = pendingResume.reason;
+            }
+            dispatchAt = this.now();
           },
           signal: dispatchAbortController.signal,
         },
@@ -2339,27 +2353,28 @@ export class GoalController {
         // onDispatching 是归属登记的唯一边界。不能在 await send 后再次 add：极快的
         // turn 可能已经发出终态并同步释放归属，重新登记会把后续用户 turn 误认成 Goal。
         baselineStarted = false;
-        // #2105 P0:send 确认 accepted 后才补发派发事件(reviewer P2:onDispatching 在
+        // #2105 P0:send 确认 accepted 后才补发派发事件(onDispatching 在
         // handle.send 前触发,cancelled-before-dispatch 时 send 返回 accepted:false,
         // 事件必须等 accepted 确认才记录,避免"已派发无收口"幽灵事件)。
-        // 不依赖 isCurrentDispatch()(reviewer P1:快终态时 provider 在 send resolve 前
+        // 不依赖 isCurrentDispatch()(快终态时 provider 在 send resolve 前
         // 报终态,finalizeTurn 已换代/停 session,isCurrentDispatch 为 false 会跳过事件,
         // 但 onDispatching 已标记 goal-owned 且 finalizer 已记 turn-finalized/terminal
         // —— 用捕获的 dispatchBoundary/generation 发,保证 finalize 有配对 dispatch)。
-        // generation 显式传捕获值(reviewer P1/P2:recordRunEvent 内部从 this.turns
+        // generation 显式传捕获值(recordRunEvent 内部从 this.turns
         // 读 generation,快终态时 boundary 已被 stopSession 清掉会写成 0,与
-        // finalize/terminal 脱节)。
-        const pendingResume = this.pendingResumeEvents.get(sessionId);
-        if (pendingResume && pendingResume.boundary === dispatchBoundary) {
-          this.pendingResumeEvents.delete(sessionId);
+        // finalize/terminal 脱节)。resumed 用 onDispatching 固化的恢复原因
+        // (pendingResume 可能已被清理);at 用派发时刻保证重放顺序在 finalize 前。
+        if (dispatchResumeReason !== undefined) {
           this.recordRunEvent('resumed', sessionId, state, {
             to: 'active',
-            reason: pendingResume.reason,
+            reason: dispatchResumeReason,
             generation: dispatchGeneration,
+            at: dispatchAt ?? this.now(),
           });
         }
         this.recordRunEvent('turn-dispatched', sessionId, state, {
           generation: dispatchGeneration,
+          at: dispatchAt ?? this.now(),
         });
         if (!isCurrentDispatch()) {
           // 快终态/换代:终态已由 finalizeTurn 处理,这里只抑制 stale 副作用。
