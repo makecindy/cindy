@@ -144,6 +144,69 @@ describe('native provider connection claim on read', () => {
     expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1);
   });
 
+  it('首次认领要等缓存与 HTTP 清单完成后再返回本次 provider 快照', async () => {
+    let releaseCache!: () => void;
+    let releaseRefresh!: () => void;
+    h.loadAnthropicDiskCache.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseCache = resolve; }),
+    );
+    h.refreshAnthropicModels.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { releaseRefresh = () => resolve(true); }),
+    );
+
+    let settled = false;
+    const providersPromise = listProviders().then((providers) => {
+      settled = true;
+      return providers;
+    });
+
+    await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
+    const settledBeforeCache = settled;
+    releaseCache();
+    await vi.waitFor(() => expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1));
+    const settledBeforeRefresh = settled;
+    releaseRefresh();
+
+    const providers = await providersPromise;
+    expect(settledBeforeCache).toBe(false);
+    expect(settledBeforeRefresh).toBe(false);
+    expect(providers.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
+  });
+
+  it('并发读取要共等首次认领的同一趟清单刷新', async () => {
+    let releaseCache!: () => void;
+    let releaseRefresh!: () => void;
+    h.loadAnthropicDiskCache.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseCache = resolve; }),
+    );
+    h.refreshAnthropicModels.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { releaseRefresh = () => resolve(true); }),
+    );
+
+    const first = listProviders();
+    await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
+    expect(isNativeProviderAuthBound('anthropic')).toBe(true);
+
+    let secondSettled = false;
+    const second = listProviders().then((providers) => {
+      secondSettled = true;
+      return providers;
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    releaseCache();
+    await vi.waitFor(() => expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1));
+    expect(secondSettled).toBe(false);
+
+    releaseRefresh();
+    const [firstProviders, secondProviders] = await Promise.all([first, second]);
+    expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1);
+    expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1);
+    expect(firstProviders.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
+    expect(secondProviders.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
+  });
+
   it('认领本机 xai 凭证(清单不走动态发现,不触发拉取)', async () => {
     expect((await connectedMap()).xai).toBe(true);
     expect(isNativeProviderAuthBound('xai')).toBe(true);

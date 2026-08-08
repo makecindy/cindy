@@ -708,15 +708,15 @@ export async function refreshCustomProvidersIntoCatalog(
  * reconcile 收口(见 auth-adapters.claimDetectedCodexOAuthBinding),因为它的凭证是
  * 惰性物化的;这两家的凭证同步可读,在读连接态时就地认领即可。
  */
-function claimNativeProviderAuthOnRead(
+async function claimNativeProviderAuthOnRead(
   provider: 'anthropic' | 'xai',
   hasCredential: () => boolean,
-  onClaimed?: () => void,
-): void {
+  onClaimed?: () => void | Promise<void>,
+): Promise<void> {
   try {
     if (!claimDetectedNativeProviderAuth(provider, hasCredential)) return;
     log.info('native provider credential auto-bound to current owner', { provider });
-    onClaimed?.();
+    await onClaimed?.();
     // 认领成功 = 这家供应商刚从「未连接」翻成「已连接」,但只有触发这次读取的那个调用方
     // 拿到了新快照。其它窗口会一直留着 connected:false;配对的手机 / 控制端更是只认
     // maker:provider:changed 这一条推送来失效缓存,不广播就永远停在旧快照
@@ -725,6 +725,32 @@ function claimNativeProviderAuthOnRead(
   } catch (err) {
     log.warn('native provider auth binding claim failed', { provider, error: String(err) });
   }
+}
+
+/**
+ * 首个 Anthropic 绑定认领后的目录补拉要让并发的 provider 读取共等同一趟。
+ * 绑定文件在补拉开始前就已落盘；若只让赢得认领的调用等待，紧随其后的读取会看到
+ * 「已绑定」便直接返回旧目录，再次制造首次 scheduler fire 的零来源快照。
+ */
+let anthropicClaimDiscoveryInflight: Promise<void> | null = null;
+
+function refreshAnthropicCatalogAfterClaim(): Promise<void> {
+  if (anthropicClaimDiscoveryInflight) return anthropicClaimDiscoveryInflight;
+
+  const flight = (async () => {
+    // 启动期两条加载都可能因尚未绑定而早退。先恢复最后一次成功的磁盘清单，再刷新
+    // HTTP；任一失败都保留已有目录，不把连接态读取整条打穿。
+    await loadAnthropicModelsFromDiskCache().catch(() => undefined);
+    await refreshAnthropicModelsFromHttp().catch(() => false);
+  })();
+  anthropicClaimDiscoveryInflight = flight;
+  const clear = () => {
+    if (anthropicClaimDiscoveryInflight === flight) {
+      anthropicClaimDiscoveryInflight = null;
+    }
+  };
+  void flight.then(clear, clear);
+  return flight;
 }
 
 let nativeProviderClaimListener: (() => void) | null = null;
@@ -787,12 +813,12 @@ export function getDesktopProviderService(): ProviderService {
       // hasClaudeAiOAuth / hasCodexOAuthLogin / hasGrokOAuthLogin 内部都已校验绑定,
       // 所以这里不再前置 isNativeProviderAuthBound —— 前置短路是纯冗余,而且会把
       // listProviders 挡在自愈之前,正是「设置页已连接 / 聊天无来源」假报的成因(#294)。
-      anthropic: ({ allowSideEffects }) => {
+      anthropic: async ({ allowSideEffects }) => {
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
         // 才放行,其余降级为纯读(PR #548 review)。
         if (!allowSideEffects) return hasClaudeAiOAuth();
-        claimNativeProviderAuthOnRead('anthropic', hasClaudeAiOAuthUnbound, () => {
+        await claimNativeProviderAuthOnRead('anthropic', hasClaudeAiOAuthUnbound, () => {
           // anthropic 的 live entitlement 证据只来自动态发现，而发现只在启动期与
           // 显式 OAuth 登录成功时触发。绑定是在这两个时机之后才建立的，启动期那次
           // 早被登录态 gate 掉——不在认领成功时补拉，目录虽可能有 Registry presence，
@@ -801,12 +827,11 @@ export function getDesktopProviderService(): ProviderService {
           // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
           // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
           // 失败,明明有可用的缓存清单,用户还是一个模型都选不了(PR #548 review)。
-          void loadAnthropicModelsFromDiskCache()
-            .catch(() => undefined)
-            .finally(() => {
-              void refreshAnthropicModelsFromHttp();
-            });
+          return refreshAnthropicCatalogAfterClaim();
         });
+        // 认领者写完绑定后、目录补拉完成前，并发读取会走「已经绑定」分支。它们也必须
+        // 等同一趟补拉，才能让随后求值的 lazy catalog 与连接态属于同一个新快照。
+        if (anthropicClaimDiscoveryInflight) await anthropicClaimDiscoveryInflight;
         return hasClaudeAiOAuth();
       },
       // openai 的自愈挂在 adapter 的 reconcile 收口里(#294 既有形态),这里同样要受开关约束:
@@ -817,8 +842,8 @@ export function getDesktopProviderService(): ProviderService {
         allowSideEffects
           ? desktopCodexAuthAdapter.hasCodexOAuthLogin()
           : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
-      xai: ({ allowSideEffects }) => {
-        if (allowSideEffects) claimNativeProviderAuthOnRead('xai', hasGrokOAuthLoginUnbound);
+      xai: async ({ allowSideEffects }) => {
+        if (allowSideEffects) await claimNativeProviderAuthOnRead('xai', hasGrokOAuthLoginUnbound);
         return hasGrokOAuthLogin();
       },
     },

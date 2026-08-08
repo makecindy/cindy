@@ -50,9 +50,11 @@ describe('resolveDefaultScheduleRoute', () => {
     ).resolves.toEqual({ model: 'claude-sonnet-4-6', providerId: 'anthropic' });
 
     expect(h.listProviders).toHaveBeenCalledWith({
-      catalog: h.catalog,
       allowSideEffects: true,
+      getCatalog: expect.any(Function),
     });
+    const { getCatalog } = h.listProviders.mock.calls[0]![0];
+    expect(getCatalog()).toBe(h.catalog);
     expect(h.effectiveSourceIdForModel).toHaveBeenCalledWith(
       [],
       null,

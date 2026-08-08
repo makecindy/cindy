@@ -78,10 +78,9 @@ export async function resolveDefaultScheduleRoute(
   // Scheduler fire is a trusted main-process operation, not an untrusted status projection.
   // Allow the provider service to claim an existing native subscription before materializing
   // the route; otherwise legacy/local owners can look disconnected until another UI read heals it.
-  const catalog = getActiveCatalog();
   const views = await getDesktopProviderService().listProviders({
-    catalog,
     allowSideEffects: true,
+    getCatalog: getActiveCatalog,
   });
   const preferredModelId = modelId?.trim();
   if (preferredModelId) {

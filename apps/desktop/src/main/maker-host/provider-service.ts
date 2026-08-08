@@ -39,6 +39,12 @@ export interface ProviderListOptions extends ConnectionReadOptions {
    * rather than the user-selectable projection. Never sourced from IPC input.
    */
   catalog?: Catalog;
+  /**
+   * Internal lazy full-catalog override. Policy callers use this when an allowed connection read
+   * may claim credentials and refresh dynamic models before the provider view is materialized.
+   * Evaluated after every async connection reader settles; never sourced from IPC input.
+   */
+  getCatalog?: () => Catalog;
 }
 
 /** 内置三家供应商「是否已连接」的判定器（由 host 注入，读各自凭证存储）。 */
@@ -118,7 +124,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       Promise.resolve(deps.connection.openai(readOpts)),
       Promise.resolve(deps.connection.xai(readOpts)),
     ]);
-    const catalog = opts?.catalog ?? deps.getCatalog();
+    const catalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     // 自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」替代「连接 / 断开」，
     // 没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
