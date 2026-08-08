@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { createAppshotsBridge } from './appshotsBridge.js';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import {
@@ -812,6 +813,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   appDisplayVersion: appDisplayVersionInfo.display,
   appDisplayVersionDetail: appDisplayVersionInfo.detail,
   getDeviceId: (): Promise<string> => ipcRenderer.invoke('get-device-id'),
+  appshots: createAppshotsBridge({
+    invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+    on: (channel, listener) => ipcRenderer.on(channel, listener),
+    removeListener: (channel, listener) => ipcRenderer.removeListener(channel, listener),
+  }),
   windowMinimize: () => ipcRenderer.send('window-minimize'),
   windowMaximize: () => ipcRenderer.send('window-maximize'),
   windowClose: () => ipcRenderer.send('window-close'),

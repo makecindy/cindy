@@ -54,6 +54,14 @@ const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
 
 const modifierShortcutRecordingWebContentsIds = new Set<number>();
+type MacModifierSnapshotSubscriber = (keys: readonly string[]) => void;
+const macModifierSnapshotSubscribers = new Map<string, MacModifierSnapshotSubscriber>();
+
+function stopKeyCaptureWhenUnused(): void {
+  if (modifierShortcutRecordingWebContentsIds.size === 0 && macModifierSnapshotSubscribers.size === 0) {
+    macModifierShortcutListener.stopKeyCapture();
+  }
+}
 /**
  * 正在录制快捷键的 renderer —— 与上面那个「keys 转发名单」是两件事。
  *
@@ -132,8 +140,50 @@ const macModifierShortcutListener = new MacModifierShortcutListener({
       }
       window.webContents.send('voice-input:modifier-shortcut-keys', { keys });
     }
+    for (const subscriber of Array.from(macModifierSnapshotSubscribers.values())) {
+      try {
+        subscriber([...keys]);
+      } catch (error) {
+        log.warn('mac modifier key snapshot subscriber threw', { error: stringifyError(error) });
+      }
+    }
   },
 });
+
+/**
+ * Retains the shared native modifier listener for a non-voice consumer.
+ *
+ * The listener also powers voice-input recording, so consumers must release their own reference
+ * rather than stopping it directly. This keeps the single native event tap authoritative.
+ */
+export async function retainMacModifierKeySnapshots(
+  owner: string,
+  subscriber: MacModifierSnapshotSubscriber,
+): Promise<() => void> {
+  if (!owner || typeof owner !== 'string') throw new Error('Could not start the macOS modifier key listener.');
+  const previous = macModifierSnapshotSubscribers.get(owner);
+  macModifierSnapshotSubscribers.set(owner, subscriber);
+  const started = await startMacNativeListener(() => macModifierShortcutListener.startKeyCapture());
+  if (!started.ok) {
+    // A later retain for the same owner may have replaced this subscriber while the
+    // shared native listener was starting. Only roll back our own registration; an
+    // older failed start must never remove the newer live subscriber.
+    if (macModifierSnapshotSubscribers.get(owner) === subscriber) {
+      if (previous) macModifierSnapshotSubscribers.set(owner, previous);
+      else macModifierSnapshotSubscribers.delete(owner);
+    }
+    throw new Error('Could not start the macOS modifier key listener.');
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (macModifierSnapshotSubscribers.get(owner) === subscriber) {
+      macModifierSnapshotSubscribers.delete(owner);
+    }
+    stopKeyCaptureWhenUnused();
+  };
+}
 
 type VoiceInputGlobalResult =
   | { ok: true }
@@ -1107,9 +1157,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
       markModifierShortcutRecordingSession(event.sender);
       event.sender.once('destroyed', () => {
         modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
-        if (modifierShortcutRecordingWebContentsIds.size === 0) {
-          macModifierShortcutListener.stopKeyCapture();
-        }
+        stopKeyCaptureWhenUnused();
       });
       // 走 startMacNativeListener：startKeyCapture 也会抛（helper 源码缺失 / swiftc
       // 失败）。不接住的话下面的清理与 errorCode 分类都跑不到，本 renderer 会留在
@@ -1147,9 +1195,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     (event): VoiceInputGlobalResult => {
       modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
       modifierShortcutRecordingSessionIds.delete(event.sender.id);
-      if (modifierShortcutRecordingWebContentsIds.size === 0) {
-        macModifierShortcutListener.stopKeyCapture();
-      }
+      stopKeyCaptureWhenUnused();
       return { ok: true };
     },
   );
@@ -1509,7 +1555,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
  * 「capture 真的起来了」的那些窗口。
  */
 function stopNativeShortcutListenerPreservingCapture(): void {
-  if (modifierShortcutRecordingWebContentsIds.size > 0) {
+  if (modifierShortcutRecordingWebContentsIds.size > 0 || macModifierSnapshotSubscribers.size > 0) {
     macModifierShortcutListener.releaseShortcutKeepingCapture();
     return;
   }
