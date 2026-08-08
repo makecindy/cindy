@@ -3711,13 +3711,13 @@ export function ChatInput({
 
   // Keep keyboard focus on an executable row when filtering or runtime status changes.
   useEffect(() => {
-    if (
-      slashFocus >= filteredCommands.length
-      || (filteredCommands[slashFocus] && isSlashCommandUnavailable(filteredCommands[slashFocus]))
-    ) {
-      setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
-    }
-  }, [filteredCommands, slashFocus]);
+    setSlashFocus((current) => (
+      current >= filteredCommands.length
+      || (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
+        ? firstAvailableSlashCommandIndex(filteredCommands)
+        : current
+    ));
+  }, [filteredCommands]);
   useEffect(() => {
     if (
       atFocus >= filteredAt.length ||
@@ -3829,11 +3829,11 @@ export function ChatInput({
             return false;
           case 'Enter':
           case 'Tab':
-            if (
-              slashOpen
-              && filteredCommands[slashFocus]
-              && !isSlashCommandUnavailable(filteredCommands[slashFocus])
-            ) {
+            if (slashOpen && filteredCommands[slashFocus]) {
+              if (isSlashCommandUnavailable(filteredCommands[slashFocus])) {
+                setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
+                return true;
+              }
               insertSlashCommand(filteredCommands[slashFocus]);
               return true;
             }
