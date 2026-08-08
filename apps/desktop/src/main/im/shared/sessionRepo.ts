@@ -11,7 +11,7 @@
  * 只附加 SDK handle。
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
@@ -129,6 +129,27 @@ export function createImSessionRepo(
     return getImDefaultEffortFor(agentKind, modelId, config.effortOverrides);
   }
 
+  /**
+   * 复活 / upsert 冲突分支里给 `workspaceKind` 用的 SET 片段。
+   *
+   * 渠道声明的归属分组只能校正**还留在渠道托管目录里**的行 —— 那种行的
+   * 'project' 是老版本留下的默认值, 刷成渠道真实归属是对的。但 `/project`
+   * 已经把行切到项目目录时, 'project' 是用户的显式选择: 归档后被新消息复活
+   * 就一并刷回 'dialogue' 的话, 会话会跳出 sidebar 的项目分组, 而 workingDir
+   * 仍指着那个项目 —— 两个 bot 的 `/project`、`/settings` 从此把真项目报成
+   * 「对话」, sidebar 的归组也跟着说谎。
+   *
+   * 判据写进同一条 UPDATE 的 CASE 里, 不做「先读再改写」: 并发下读到的旧值
+   * 会盖掉另一路刚写的新值。
+   */
+  function correctedWorkspaceKind(botContextId: string): Record<string, unknown> {
+    if (!ns.workspaceKind) return {};
+    const managedDir = ns.ensureWorkingDir(botContextId);
+    return {
+      workspaceKind: sql`case when ${sessions.workingDir} is null or ${sessions.workingDir} = ${managedDir} then ${ns.workspaceKind} else ${sessions.workspaceKind} end`,
+    };
+  }
+
   return {
     sessionIdFor: (botContextId, userId, scopeKey) =>
       ns.sessionIdFor(botContextId, userId, scopeKey),
@@ -169,6 +190,10 @@ export function createImSessionRepo(
       const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
       const row = rows[0];
       if (!row) return null;
+      // 复活会按 correctedWorkspaceKind 的判据刷这一列, 返回值得跟着走 ——
+      // 直接回 `row.workspaceKind`(update 之前读到的旧值)会让 caller 与库里
+      // 不一致一整轮。
+      let workspaceKind = row.workspaceKind ?? null;
       if (row.status !== 'active') {
         // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
         // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
@@ -180,10 +205,16 @@ export function createImSessionRepo(
             status: 'active',
             userSendAt: now,
             updatedAt: now,
-            // 渠道声明了归属分组时顺手校正(老行可能还是默认 'project')
-            ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
+            // 渠道声明了归属分组时顺手校正老行, 但不碰用户 `/project` 切出去的行
+            ...correctedWorkspaceKind(botContextId),
           })
           .where(eq(sessions.id, id));
+        if (
+          ns.workspaceKind &&
+          (!row.workingDir || row.workingDir === ns.ensureWorkingDir(botContextId))
+        ) {
+          workspaceKind = ns.workspaceKind;
+        }
         log.info(`revived soft-deleted ${ns.source} session id=${row.id} (was ${row.status})`);
         // 软删行已从 sidebar 消失,patched 增量对不存在的行无效;
         // created 触发 renderer 重拉列表,让会话重新出现。
@@ -199,7 +230,7 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
-        workspaceKind: row.workspaceKind ?? null,
+        workspaceKind,
       };
     },
 
@@ -276,7 +307,9 @@ export function createImSessionRepo(
           set: {
             status: 'active',
             source: ns.source,
-            ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
+            // 冲突分支撞的是残留行 —— 同 findActiveSession, 用户 `/project`
+            // 切出去的归属不能被渠道默认值刷掉。
+            ...correctedWorkspaceKind(botContextId),
             ...ns.extraInsertColumns(botContextId, userId),
             updatedAt: now,
             userSendAt: now,
