@@ -276,6 +276,14 @@ const MUST_NOT_AUTO_APPROVE: Record<string, string[]> = {
     'GIT_SSH_COMMAND="ssh -i /tmp/k" git fetch',
     'GIT_EXTERNAL_DIFF=/tmp/x git diff',
     'PATH=/tmp:$PATH git status',
+    // 命令位边界要认 shell 分隔符:分隔符后不带空格同样是命令位
+    `true;GH_PAGER='touch /tmp/pwn' gh pr view 1`,
+    `true&&GH_PAGER='touch /tmp/pwn' gh pr view 1`,
+    `true|GH_PAGER='touch /tmp/pwn' gh pr view 1`,
+    `(GH_PAGER='touch /tmp/pwn' gh pr view 1)`,
+    'true;LD_PRELOAD=/tmp/x.so gh pr view 1',
+    'true;PATH=/tmp:$PATH git status',
+    `true&&NODE_OPTIONS="--require /tmp/x" gh pr view 1`,
   ],
 
   '标准流别名 / 任意 fd 不是可证明安全的写目标': [

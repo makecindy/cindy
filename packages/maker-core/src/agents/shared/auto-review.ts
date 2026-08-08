@@ -745,7 +745,10 @@ const ENV_VARS_EXECUTING_THEIR_VALUE = 'LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD
   // 只列 `GIT_` 前缀等于给一个换前缀就绕过的口子(review 报,与 PAGER 那次同一个错误)。
   + '|(?:[A-Z][A-Z0-9_]*)?EDITOR|VISUAL'
   + '|RUBYOPT|PATH';
-const ENV_EXECUTION_ASSIGNMENT = new RegExp(`(?:^|\\s)(?:${ENV_VARS_EXECUTING_THEIR_VALUE})=`);
+// 命令位边界必须认 shell 分隔符,不能只认空白:`true;GH_PAGER='…' gh pr view 1` 里
+// 分号后不带空格,原 `(?:^|\s)` 匹配不到,整条直接放行(review 报)。与本文件 `su` /
+// `gh auth` 两处命令位判据同一写法 —— 那两处早就是 `[\s|&;(]`,这里当初漏了对齐。
+const ENV_EXECUTION_ASSIGNMENT = new RegExp(`(?:^|[\\s|&;(])(?:${ENV_VARS_EXECUTING_THEIR_VALUE})=`);
 const ENV_EXECUTION_NAME = new RegExp(`^(?:${ENV_VARS_EXECUTING_THEIR_VALUE})$`);
 
 const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
