@@ -16,8 +16,18 @@ export interface SchedulerChannelIdentity {
   identity: string;
 }
 
+export interface SchedulerChannelBinding extends SchedulerChannelIdentity {
+  /** Opaque lifecycle fence rotated whenever this Desktop's binding changes. */
+  bindingGeneration: string;
+}
+
 export interface SchedulerRuntimeFrame {
   identity: string;
+  /**
+   * Recipient binding lifecycle for which this runtime state is valid. A peer
+   * must not relabel an older gap when the recipient advertises a new binding.
+   */
+  bindingGeneration: string;
   generation: string;
   state: "active" | "dirty" | "clean";
   predecessor?: string;
@@ -26,7 +36,7 @@ export interface SchedulerRuntimeFrame {
 export interface SchedulerAdvertisementFrame {
   kind: "advertisement";
   sentAt: number;
-  channels: readonly SchedulerChannelIdentity[];
+  channels: readonly SchedulerChannelBinding[];
   runtime?: SchedulerRuntimeFrame;
   runtimeGaps?: readonly SchedulerRuntimeFrame[];
   /** Matches the discovery probe that caused this advertisement. */
@@ -37,7 +47,7 @@ export interface SchedulerProbeFrame {
   kind: "probe";
   sentAt: number;
   nonce: string;
-  channels: readonly SchedulerChannelIdentity[];
+  channels: readonly SchedulerChannelBinding[];
   runtime?: SchedulerRuntimeFrame;
   runtimeGaps?: readonly SchedulerRuntimeFrame[];
 }
@@ -72,6 +82,21 @@ export function isSchedulerChannelIdentity(
   );
 }
 
+export function isSchedulerChannelBinding(
+  value: unknown,
+): value is SchedulerChannelBinding {
+  if (!value || typeof value !== "object") return false;
+  const binding = value as Record<string, unknown>;
+  return (
+    Object.keys(binding).length === 3 &&
+    binding.channel === "discord" &&
+    typeof binding.identity === "string" &&
+    DISCORD_ID_PATTERN.test(binding.identity) &&
+    typeof binding.bindingGeneration === "string" &&
+    NONCE_PATTERN.test(binding.bindingGeneration)
+  );
+}
+
 export function isSchedulerRuntimeFrame(
   value: unknown,
 ): value is SchedulerRuntimeFrame {
@@ -80,7 +105,13 @@ export function isSchedulerRuntimeFrame(
   if (
     Object.keys(runtime).some(
       (key) =>
-        !["identity", "generation", "state", "predecessor"].includes(key),
+        ![
+          "identity",
+          "bindingGeneration",
+          "generation",
+          "state",
+          "predecessor",
+        ].includes(key),
     )
   ) {
     return false;
@@ -90,6 +121,12 @@ export function isSchedulerRuntimeFrame(
     !DISCORD_ID_PATTERN.test(runtime.identity)
   )
     return false;
+  if (
+    typeof runtime.bindingGeneration !== "string" ||
+    !NONCE_PATTERN.test(runtime.bindingGeneration)
+  ) {
+    return false;
+  }
   if (
     typeof runtime.generation !== "string" ||
     !RUNTIME_GENERATION_PATTERN.test(runtime.generation)
@@ -155,7 +192,7 @@ export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
       NONCE_PATTERN.test(frame.nonce) &&
       Array.isArray(frame.channels) &&
       frame.channels.length <= 1 &&
-      frame.channels.every(isSchedulerChannelIdentity) &&
+      frame.channels.every(isSchedulerChannelBinding) &&
       (frame.runtime === undefined || isSchedulerRuntimeFrame(frame.runtime)) &&
       isRuntimeGapList(frame.runtimeGaps);
     return valid && isWithinSchedulerFrameSize(value);
@@ -180,7 +217,7 @@ export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
   const valid =
     Array.isArray(frame.channels) &&
     frame.channels.length <= 1 &&
-    frame.channels.every(isSchedulerChannelIdentity) &&
+    frame.channels.every(isSchedulerChannelBinding) &&
     (frame.runtime === undefined || isSchedulerRuntimeFrame(frame.runtime)) &&
     isRuntimeGapList(frame.runtimeGaps) &&
     (frame.inReplyTo === undefined ||

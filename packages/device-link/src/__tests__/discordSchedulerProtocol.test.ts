@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { isImSchedulerFrame } from "../discordSchedulerProtocol.js";
 
 const identity = "12345678901234567";
+const bindingGeneration = "binding-123456789";
 
 describe("Discord scheduler protocol", () => {
   it("accepts non-secret advertisements, probes, and bounded dirty gaps", () => {
@@ -10,7 +11,7 @@ describe("Discord scheduler protocol", () => {
       isImSchedulerFrame({
         kind: "advertisement",
         sentAt: 1,
-        channels: [{ channel: "discord", identity }],
+        channels: [{ channel: "discord", identity, bindingGeneration }],
         inReplyTo: "1234567890abcdef",
       }),
     ).toBe(true);
@@ -20,7 +21,14 @@ describe("Discord scheduler protocol", () => {
         sentAt: 1,
         nonce: "1234567890abcdef",
         channels: [],
-        runtimeGaps: [{ identity, generation: "a".repeat(32), state: "dirty" }],
+        runtimeGaps: [
+          {
+            identity,
+            bindingGeneration,
+            generation: "a".repeat(32),
+            state: "dirty",
+          },
+        ],
       }),
     ).toBe(true);
   });
@@ -38,14 +46,20 @@ describe("Discord scheduler protocol", () => {
       isImSchedulerFrame({
         kind: "advertisement",
         sentAt: 1,
-        channels: [{ channel: "telegram", identity }],
+        channels: [{ channel: "telegram", identity, bindingGeneration }],
       }),
     ).toBe(false);
     expect(
       isImSchedulerFrame({
         kind: "advertisement",
         sentAt: 1,
-        channels: [{ channel: "discord", identity: `${identity}.secret` }],
+        channels: [
+          {
+            channel: "discord",
+            identity: `${identity}.secret`,
+            bindingGeneration,
+          },
+        ],
       }),
     ).toBe(false);
     expect(
@@ -55,10 +69,26 @@ describe("Discord scheduler protocol", () => {
         channels: [],
         runtime: {
           identity,
+          bindingGeneration,
           generation: "a".repeat(32),
           state: "clean",
           predecessor: "b".repeat(32),
         },
+      }),
+    ).toBe(false);
+    expect(
+      isImSchedulerFrame({
+        kind: "advertisement",
+        sentAt: 1,
+        channels: [{ channel: "discord", identity }],
+      }),
+    ).toBe(false);
+    expect(
+      isImSchedulerFrame({
+        kind: "advertisement",
+        sentAt: 1,
+        channels: [],
+        runtimeGaps: [{ identity, generation: "a".repeat(32), state: "dirty" }],
       }),
     ).toBe(false);
   });

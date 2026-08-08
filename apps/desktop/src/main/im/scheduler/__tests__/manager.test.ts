@@ -5,6 +5,65 @@ import type { SchedulerTransport, SchedulerTransportEvent } from '../transport';
 
 const identity = '12345678901234567';
 const nextIdentity = '12345678901234568';
+const peerBindingGeneration = 'peer-binding-0001';
+const oldLocalBindingGeneration = 'local-binding-old1';
+const nextLocalBindingGeneration = 'local-binding-next';
+const currentLocalBindingGeneration = 'local-binding-current';
+
+function sequenceFactory(...values: string[]): () => string {
+  let index = 0;
+  return () => values[Math.min(index++, values.length - 1)]!;
+}
+
+function dirtyGap(runtimeIdentity: string, generation: string, bindingGeneration: string) {
+  return {
+    identity: runtimeIdentity,
+    bindingGeneration,
+    generation,
+    state: 'dirty' as const,
+  };
+}
+
+function normalizeSchedulerPush(
+  event: SchedulerTransportEvent,
+  pushes: Array<{ peerDeviceId: string; payload: unknown }>,
+): SchedulerTransportEvent {
+  if (event.type !== 'push' || !event.payload || typeof event.payload !== 'object') return event;
+  const payload = event.payload as Record<string, unknown>;
+  const latestLocalBindingGeneration = [...pushes]
+    .reverse()
+    .map((push) => push.payload)
+    .find(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === 'object' &&
+        (candidate as { kind?: unknown }).kind === 'probe',
+    ) as { channels?: Array<{ bindingGeneration?: string }> } | undefined;
+  const recipientBindingGeneration =
+    latestLocalBindingGeneration?.channels?.[0]?.bindingGeneration ?? 'local-binding-0001';
+  const bindRuntime = (runtime: unknown): unknown =>
+    runtime && typeof runtime === 'object'
+      ? { bindingGeneration: recipientBindingGeneration, ...runtime }
+      : runtime;
+  const channels = Array.isArray(payload.channels)
+    ? payload.channels.map((channel) =>
+        channel && typeof channel === 'object'
+          ? { bindingGeneration: peerBindingGeneration, ...channel }
+          : channel,
+      )
+    : payload.channels;
+  return {
+    ...event,
+    payload: {
+      ...payload,
+      channels,
+      ...(payload.runtime === undefined ? {} : { runtime: bindRuntime(payload.runtime) }),
+      ...(Array.isArray(payload.runtimeGaps)
+        ? { runtimeGaps: payload.runtimeGaps.map(bindRuntime) }
+        : {}),
+    },
+  };
+}
 
 function createTransport(
   overrides: Partial<{
@@ -39,7 +98,7 @@ function createTransport(
     pushes,
     snapshotRequests,
     emit(event: SchedulerTransportEvent) {
-      listener?.(event);
+      listener?.(normalizeSchedulerPush(event, pushes));
     },
   };
 }
@@ -399,7 +458,7 @@ describe('dormant scheduler manager', () => {
       type: 'snapshot',
       snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
     });
-    manager.getRuntimeGaps().adopt({ identity, generation: 'a'.repeat(32), state: 'dirty' });
+    manager.getRuntimeGaps().adopt(dirtyGap(identity, 'a'.repeat(32), oldLocalBindingGeneration));
 
     localIdentity = nextIdentity;
     manager.resetBindingDiscovery();
@@ -426,13 +485,17 @@ describe('dormant scheduler manager', () => {
       transport: harness.transport,
       getLocalChannel: () => ({ channel: 'discord', identity }),
       nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+      bindingGenerationFactory: sequenceFactory(
+        oldLocalBindingGeneration,
+        currentLocalBindingGeneration,
+      ),
     });
     manager.start();
     harness.emit({
       type: 'snapshot',
       snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
     });
-    const oldGap = { identity, generation: 'a'.repeat(32), state: 'dirty' as const };
+    const oldGap = dirtyGap(identity, 'a'.repeat(32), oldLocalBindingGeneration);
     manager.getRuntimeGaps().adopt(oldGap);
 
     manager.resetBindingDiscovery();
@@ -443,7 +506,7 @@ describe('dormant scheduler manager', () => {
         (push) =>
           push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
       )?.payload as { nonce?: string };
-    const refreshedGap = { identity, generation: 'b'.repeat(32), state: 'dirty' as const };
+    const refreshedGap = dirtyGap(identity, 'b'.repeat(32), currentLocalBindingGeneration);
     harness.emit({
       type: 'push',
       sourceDeviceId: 'a',
@@ -481,6 +544,63 @@ describe('dormant scheduler manager', () => {
       },
     });
     expect(manager.getRuntimeGaps().values()).toEqual([refreshedGap]);
+    manager.stop();
+  });
+
+  it('keeps the binding barrier after more stale gaps than the wire limit', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      bindingGenerationFactory: sequenceFactory(
+        oldLocalBindingGeneration,
+        currentLocalBindingGeneration,
+      ),
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    manager.resetBindingDiscovery();
+    const probe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+
+    for (let index = 0; index < 9; index += 1) {
+      harness.emit({
+        type: 'push',
+        sourceDeviceId: 'a',
+        payload: {
+          kind: 'advertisement',
+          sentAt: index + 2,
+          channels: [{ channel: 'discord', identity }],
+          inReplyTo: probe?.nonce,
+          runtimeGaps: [
+            dirtyGap(identity, index.toString(16).repeat(32), oldLocalBindingGeneration),
+          ],
+        },
+      });
+    }
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+
+    const currentGap = dirtyGap(identity, 'f'.repeat(32), currentLocalBindingGeneration);
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 20,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [currentGap],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([currentGap]);
     manager.stop();
   });
 
@@ -534,6 +654,11 @@ describe('dormant scheduler manager', () => {
       transport: harness.transport,
       getLocalChannel: () => ({ channel: 'discord', identity: localIdentity }),
       nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+      bindingGenerationFactory: sequenceFactory(
+        oldLocalBindingGeneration,
+        nextLocalBindingGeneration,
+        currentLocalBindingGeneration,
+      ),
     });
     manager.start();
     harness.emit({
@@ -541,7 +666,7 @@ describe('dormant scheduler manager', () => {
       snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
     });
 
-    const oldGap = { identity, generation: 'a'.repeat(32), state: 'dirty' as const };
+    const oldGap = dirtyGap(identity, 'a'.repeat(32), oldLocalBindingGeneration);
     localIdentity = nextIdentity;
     manager.resetBindingDiscovery();
     let probe = [...harness.pushes]
@@ -571,7 +696,7 @@ describe('dormant scheduler manager', () => {
         (push) =>
           push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
       )?.payload as { nonce?: string };
-    const refreshedGap = { identity, generation: 'b'.repeat(32), state: 'dirty' as const };
+    const refreshedGap = dirtyGap(identity, 'b'.repeat(32), currentLocalBindingGeneration);
     harness.emit({
       type: 'push',
       sourceDeviceId: 'a',
@@ -599,7 +724,7 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
-  it('allows a same-identity rebind while retaining old generation tombstones', () => {
+  it('allows a same-identity rebind while rejecting the previous binding generation', () => {
     let localIdentity: string | null = identity;
     let round = 0;
     const harness = createTransport();
@@ -608,13 +733,18 @@ describe('dormant scheduler manager', () => {
       getLocalChannel: () =>
         localIdentity ? { channel: 'discord', identity: localIdentity } : null,
       nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+      bindingGenerationFactory: sequenceFactory(
+        oldLocalBindingGeneration,
+        nextLocalBindingGeneration,
+        currentLocalBindingGeneration,
+      ),
     });
     manager.start();
     harness.emit({
       type: 'snapshot',
       snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
     });
-    const oldGap = { identity, generation: 'a'.repeat(32), state: 'dirty' as const };
+    const oldGap = dirtyGap(identity, 'a'.repeat(32), oldLocalBindingGeneration);
     manager.getRuntimeGaps().adopt(oldGap);
 
     localIdentity = null;
@@ -629,7 +759,7 @@ describe('dormant scheduler manager', () => {
         (push) =>
           push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
       )?.payload as { nonce?: string };
-    const refreshedGap = { identity, generation: 'b'.repeat(32), state: 'dirty' as const };
+    const refreshedGap = dirtyGap(identity, 'b'.repeat(32), currentLocalBindingGeneration);
     harness.emit({
       type: 'push',
       sourceDeviceId: 'a',
@@ -666,6 +796,10 @@ describe('dormant scheduler manager', () => {
       transport: harness.transport,
       getLocalChannel: () => ({ channel: 'discord', identity }),
       nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+      bindingGenerationFactory: sequenceFactory(
+        oldLocalBindingGeneration,
+        currentLocalBindingGeneration,
+      ),
     });
     manager.start();
     harness.emit({
@@ -674,6 +808,7 @@ describe('dormant scheduler manager', () => {
     });
     manager.getRuntimeGaps().adopt({
       identity,
+      bindingGeneration: oldLocalBindingGeneration,
       generation: 'a'.repeat(32),
       state: 'dirty',
     });
@@ -696,7 +831,7 @@ describe('dormant scheduler manager', () => {
         (push) =>
           push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
       )?.payload as { nonce?: string };
-    const refreshedGap = { identity, generation: 'b'.repeat(32), state: 'dirty' as const };
+    const refreshedGap = dirtyGap(identity, 'b'.repeat(32), currentLocalBindingGeneration);
     harness.emit({
       type: 'push',
       sourceDeviceId: 'a',
@@ -960,13 +1095,17 @@ describe('dormant scheduler manager', () => {
         let round = 0;
         return () => `round-${String(++round).padStart(14, '0')}`;
       })(),
+      bindingGenerationFactory: sequenceFactory(
+        oldLocalBindingGeneration,
+        currentLocalBindingGeneration,
+      ),
     });
     manager.start();
     harness.emit({
       type: 'snapshot',
       snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
     });
-    manager.getRuntimeGaps().adopt({ identity, generation: 'a'.repeat(32), state: 'dirty' });
+    manager.getRuntimeGaps().adopt(dirtyGap(identity, 'a'.repeat(32), oldLocalBindingGeneration));
 
     localIdentity = nextIdentity;
     manager.resetBindingDiscovery();
@@ -976,7 +1115,13 @@ describe('dormant scheduler manager', () => {
         (push) =>
           push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
       )?.payload as { channels?: Array<{ identity: string }>; nonce?: string } | undefined;
-    expect(latestProbe?.channels).toEqual([{ channel: 'discord', identity: nextIdentity }]);
+    expect(latestProbe?.channels).toEqual([
+      {
+        channel: 'discord',
+        identity: nextIdentity,
+        bindingGeneration: currentLocalBindingGeneration,
+      },
+    ]);
     expect(manager.getRuntimeGaps().values()).toEqual([]);
 
     harness.emit({
@@ -988,18 +1133,18 @@ describe('dormant scheduler manager', () => {
         channels: [{ channel: 'discord', identity: nextIdentity }],
         inReplyTo: latestProbe?.nonce,
         runtimeGaps: [
-          { identity, generation: 'a'.repeat(32), state: 'dirty' },
-          { identity: nextIdentity, generation: 'b'.repeat(32), state: 'dirty' },
+          dirtyGap(identity, 'a'.repeat(32), oldLocalBindingGeneration),
+          dirtyGap(nextIdentity, 'b'.repeat(32), currentLocalBindingGeneration),
         ],
       },
     });
     expect(manager.getRuntimeGaps().values()).toEqual([
-      { identity: nextIdentity, generation: 'b'.repeat(32), state: 'dirty' },
+      dirtyGap(nextIdentity, 'b'.repeat(32), currentLocalBindingGeneration),
     ]);
 
     manager
       .getRuntimeGaps()
-      .adopt({ identity: nextIdentity, generation: 'b'.repeat(32), state: 'dirty' });
+      .adopt(dirtyGap(nextIdentity, 'b'.repeat(32), currentLocalBindingGeneration));
     manager.resetAccountDiscovery();
     expect(manager.getRuntimeGaps().values()).toEqual([]);
   });
@@ -1013,7 +1158,7 @@ describe('dormant scheduler manager', () => {
       nonceFactory: () => 'round-000000000000',
     });
     manager.start();
-    manager.getRuntimeGaps().adopt({ identity, generation: 'a'.repeat(32), state: 'dirty' });
+    manager.getRuntimeGaps().adopt(dirtyGap(identity, 'a'.repeat(32), oldLocalBindingGeneration));
 
     localIdentity = nextIdentity;
     harness.emit({ type: 'ownership', owner: true });
@@ -1470,7 +1615,7 @@ describe('dormant scheduler manager', () => {
     });
   });
 
-  it('rejects an older advertisement after a newer binding probe', () => {
+  it('rejects an older binding advertisement after a newer binding probe', () => {
     const harness = createTransport();
     let round = 0;
     const manager = new ImSchedulerManager({
@@ -1486,8 +1631,16 @@ describe('dormant scheduler manager', () => {
     const probe = harness.pushes.find((push) => push.peerDeviceId === 'a')?.payload as {
       nonce?: string;
     };
-    const oldChannel = { channel: 'discord' as const, identity };
-    const newChannel = { channel: 'discord' as const, identity: nextIdentity };
+    const oldChannel = {
+      channel: 'discord' as const,
+      identity: nextIdentity,
+      bindingGeneration: peerBindingGeneration,
+    };
+    const newChannel = {
+      channel: 'discord' as const,
+      identity: nextIdentity,
+      bindingGeneration: nextLocalBindingGeneration,
+    };
 
     harness.emit({
       type: 'push',
