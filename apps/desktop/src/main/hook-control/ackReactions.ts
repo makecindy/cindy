@@ -136,6 +136,20 @@ export function createAckReactions(deps: {
     emoji: string,
     send: (m: HookMessage) => boolean,
   ): ReactOutcome {
+    return reactWithOpId(task, `${task.requestId}:${suffix}`, emoji, send);
+  }
+
+  /**
+   * 补发入口: 待收口表的 key 就是当初的 opId(可能是 `:final` 也可能是
+   * `:final-fallback`), 重发必须**原样**用它 —— 换个后缀等于换幂等键, 服务端
+   * 当成新操作再执行一遍, 回执的 opId 也对不上本地表, 那一项永远收不了口。
+   */
+  function reactWithOpId(
+    task: AckReactionTask,
+    opId: string,
+    emoji: string,
+    send: (m: HookMessage) => boolean,
+  ): ReactOutcome {
     if (task.triggerMessageId === null) return 'skipped';
     // 断线时能力快照已被清 —— 那条连接曾经支持过就照常尝试, 让失败落进待补发。
     if (!supports(task.connectionId) && !everSupported.has(task.connectionId)) return 'skipped';
@@ -147,7 +161,7 @@ export function createAckReactions(deps: {
     if (mode === 'off' && emoji !== '') return 'skipped';
     return send(
       makeMessageOp({
-        opId: `${task.requestId}:${suffix}`,
+        opId,
         requestId: task.requestId,
         scope: { externalKey: task.externalKey },
         action: { kind: 'react', targetMessageId: task.triggerMessageId, emoji },
@@ -204,11 +218,11 @@ export function createAckReactions(deps: {
   return {
     supports,
     onAccountTeardown(sendFor) {
-      // 终态在途(打出去了但回执没到): 尽力再发一次, opId 不变、服务端幂等。
+      // 终态在途(打出去了但回执没到): 尽力再发一次, opId 原样、服务端幂等。
       // 这一发之后就交给命运 —— 账号都没了, 没有下一次重连可等。
-      for (const entry of pendingFinals.values()) {
+      for (const [opId, entry] of pendingFinals) {
         const send = sendFor(entry.task.connectionId);
-        if (send !== undefined) react(entry.task, 'final', entry.emoji, send);
+        if (send !== undefined) reactWithOpId(entry.task, opId, entry.emoji, send);
       }
       // 只打过 👀、终态永远不会来的(运行中被代次作废 / 排队被直接清): 撤销
       // 那个 👀。装一个 👍 是撒谎 —— 任务没跑完; 什么都不留才是真实状态。
@@ -247,8 +261,9 @@ export function createAckReactions(deps: {
           pendingFinals.set(opId, entry);
         }
         // 重发即可, **不出表** —— 出表要等成功回执。补发本身同样可能在 flush
-        // 之前断掉, 提前删掉就再也补不上了。opId 不变, 服务端按它去重。
-        const outcome = react(entry.task, 'final', entry.emoji, send);
+        // 之前断掉, 提前删掉就再也补不上了。opId 原样(可能是 :final-fallback),
+        // 服务端按它去重。
+        const outcome = reactWithOpId(entry.task, opId, entry.emoji, send);
         if (outcome === 'sent' && modeOf() === 'expressive') {
           retryables.set(opId, { task: entry.task, failed: entry.failed });
         }

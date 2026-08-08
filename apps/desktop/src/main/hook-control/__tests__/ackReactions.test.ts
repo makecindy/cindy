@@ -360,6 +360,29 @@ describe('官方 bot ack 表情', () => {
     h.reactions.reset();
   });
 
+  it('回落发(:final-fallback)进了待补发后, 重发保持原 opId', () => {
+    // 换个后缀等于换幂等键: 服务端当成新操作再执行一遍, 回执的 opId 也对不上
+    // 本地表, 那一项永远收不了口。
+    const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0);
+    h.reactions.onAccepted(TASK, h.send);
+    h.reactions.onFinished(TASK, 'ok', h.send);
+    // expressive 被群限制拒掉 → 回落基础款(此时回落发在待补发表里, 键是 :final-fallback)
+    h.reactions.onResult(
+      { opId: 'req-1:final', ok: false, messageId: null, error: 'REACTION_INVALID' },
+      () => h.send,
+    );
+    const fallbackIdx = h.sent.length - 1;
+    expect(opOf(h.sent[fallbackIdx]).opId).toBe('req-1:final-fallback');
+    // 回落发没等到回执就断线重连 → 补发用的必须还是 :final-fallback
+    h.reactions.onReconnected(CONN, h.send);
+    expect(opOf(h.sent[h.sent.length - 1]).opId).toBe('req-1:final-fallback');
+    // 账号 teardown 的最后一发同样保持原 opId
+    h.reactions.onAccountTeardown(() => h.send);
+    const teardownOps = h.sent.slice(fallbackIdx + 1).map((m) => opOf(m).opId);
+    expect(teardownOps).not.toContain('req-1:final');
+    h.reactions.reset();
+  });
+
   it('能力快照还没到时不丢待补发 —— 只有明确降级才作废', () => {
     // 「这一刻还不知道」与「服务端说了不支持」不能混同: 前者一次时序抖动就把
     // 待补发全丢了, 那条消息永远挂着 👀。
