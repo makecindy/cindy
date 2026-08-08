@@ -678,6 +678,22 @@ function stageMakerEventPush(
   payload: unknown,
   ownerStamp?: PushOwnerStamp,
 ): void {
+  const payloadBytes = estimateMakerEventBytes(payload);
+  // 越过字节阈值的事件**不挤进本批**:挤进去只会被 takeMakerEventBatchSlice 再切出来,
+  // 每次越界白送一个 1 条事件的小尾批(30KB 级事件流下 100 条会变成 ~23 帧而不是
+  // ~13 帧,直接削掉大半减帧收益,review P2)。改成先把已攒的这一批收口发出,新事件
+  // 成为下一批的开头 —— 强不变量不受影响:flush 仍然一次清空,新事件是 flush **之后**
+  // 才入缓冲的。单条即超阈值的事件在入批前就被 forwardPush 拦到逐帧路径,所以收口后
+  // 它一定装得进空批。
+  const stagedTail = makerEventBatchStages.get(dst)?.batches.get(sessionId)?.at(-1);
+  if (
+    stagedTail
+    && stagedTail.events.length > 0
+    && makerEventBatchOwnerStampEquals(stagedTail.ownerStamp, ownerStamp)
+    && stagedTail.bytes + payloadBytes > MAKER_EVENT_BATCH_MAX_BYTES
+  ) {
+    flushMakerEventBatchesForSession(dst, sessionId);
+  }
   let stage = makerEventBatchStages.get(dst);
   if (!stage) {
     stage = { batches: new Map(), timer: null };
@@ -694,17 +710,24 @@ function stageMakerEventPush(
     segments.push(tail);
   }
   tail.events.push(payload);
-  tail.bytes += estimateMakerEventBytes(payload);
+  tail.bytes += payloadBytes;
   if (
     tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
     || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES
   ) {
-    const outcome = createMakerEventBatchFlushOutcome();
-    flushMakerEventBatchSession(dst, stage, sessionId, outcome);
-    reportMakerEventBatchFlushOutcome(dst, outcome);
+    flushMakerEventBatchesForSession(dst, sessionId);
     return;
   }
   scheduleMakerEventBatchFlush(dst, stage);
+}
+
+/** 收口单个会话的待发批(到量 / 越界 / 跨 channel 收口共用),含聚合日志。 */
+function flushMakerEventBatchesForSession(dst: string, sessionId: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage) return;
+  const outcome = createMakerEventBatchFlushOutcome();
+  flushMakerEventBatchSession(dst, stage, sessionId, outcome);
+  reportMakerEventBatchFlushOutcome(dst, outcome);
 }
 
 /** 读 push payload 顶层 sessionId(与 topicForPush 的 session-scoped 判据同一字段)。 */
@@ -846,8 +869,16 @@ function flushMakerEventBatchSession(
         // 降级为逐帧:sendPushBestEffort 吞掉每条的失败并保留超大帧裁剪,顺序仍是
         // 原顺序。批不因失败滞留 —— 那正是顺序问题的唯一来源。
         for (let i = 0; i < slice.length; i += 1) {
-          if (sendPushBestEffort(dst, MAKER_PUSH.EVENT, slice[i], segment.ownerStamp)) continue;
-          // 逐帧也进不去:同步循环内窗口不会被 ACK 腾空,后续帧必然同样失败。停在
+          const frameOutcome = sendPushBestEffort(
+            dst,
+            MAKER_PUSH.EVENT,
+            slice[i],
+            segment.ownerStamp,
+          );
+          // 这一帧自身被拒(超限且 compact 也没救回等):与链路无关,继续发后面的,
+          // 否则本可送达的文本 / 状态增量会被连坐丢掉(review P1)。它自己已记过日志。
+          if (frameOutcome !== 'peer-blocked') continue;
+          // 管子堵了或断了:同步循环内窗口不会被 ACK 腾空,后续帧必然同样失败。停在
           // 这里,把没尝试过的计入丢弃 —— 失败的那一帧自己已经记过一条日志。
           outcome.sendingBlocked = true;
           outcome.blockedReason = 'send-failed';
@@ -905,9 +936,7 @@ function flushMakerEventBatchesForSessionPush(
   if (!stage || stage.batches.size === 0) return;
   const sessionId = readPushSessionId(payload);
   if (!sessionId || !stage.batches.has(sessionId)) return;
-  const outcome = createMakerEventBatchFlushOutcome();
-  flushMakerEventBatchSession(dst, stage, sessionId, outcome);
-  reportMakerEventBatchFlushOutcome(dst, outcome);
+  flushMakerEventBatchesForSession(dst, sessionId);
 }
 
 /** 丢弃单个会话的待发批(退订该会话流时调用);stage 空则一并回收定时器。 */
@@ -1153,43 +1182,64 @@ export function pushToTopicSubscribers(
 }
 
 /**
+ * 一帧 push 的发送结果。`peer-blocked` 与 `frame-rejected` 必须分开,否则批降级会把
+ * 「这一条帧自己不合格」误判成「整条链路堵了」而丢掉本可送达的批尾(review P1):
+ *  - `peer-blocked`:BACKPRESSURE / NOT_CONNECTED / 无 client —— 管子本身满了或断了,
+ *    同一同步循环内后续帧必然同样失败(窗口不会被 ACK 腾空),应当停手;
+ *  - `frame-rejected`:这一帧自身的问题(超限且 compact 兜底也没救回、payload 不可
+ *    序列化等)—— 与链路状态无关,后续帧照发。
+ */
+type PushSendOutcome = 'sent' | 'frame-rejected' | 'peer-blocked';
+
+function classifyPushSendFailure(err: unknown): PushSendOutcome {
+  if (
+    err instanceof DeviceLinkError
+    && (err.code === 'BACKPRESSURE' || err.code === 'NOT_CONNECTED')
+  ) {
+    return 'peer-blocked';
+  }
+  return 'frame-rejected';
+}
+
+/**
  * best-effort 转发一帧 push:失败只记日志、不抛。
- * @returns 帧是否已交给可靠传输(含 compact 兜底后成功)。绝大多数调用方忽略返回值;
- *   批降级路径靠它在第一次失败处停下来,不把一次失败重放成 ≤64 条 WARN。
+ * @returns 见 PushSendOutcome。绝大多数调用方忽略返回值;批降级路径靠它区分「停手」
+ *   与「跳过这一条继续」,既不把一次链路失败重放成 ≤64 条 WARN,也不误丢批尾。
  */
 function sendPushBestEffort(
   dst: string,
   channel: string,
   payload: unknown,
   ownerStamp?: PushOwnerStamp,
-): boolean {
-  if (!activeClient) return false;
+): PushSendOutcome {
+  if (!activeClient) return 'peer-blocked';
   try {
     if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
     else activeClient.sendPush(dst, channel, payload, ownerStamp);
-    return true;
+    return 'sent';
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      return false;
+      return classifyPushSendFailure(err);
     }
 
     const compactPayload = compactOversizedPushPayload(channel, payload);
     if (!compactPayload) {
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      return false;
+      // 超限且没有 compact 兜底:是这一帧自己的问题,不是管子的问题。
+      return 'frame-rejected';
     }
 
     try {
       if (ownerStamp === undefined) activeClient.sendPush(dst, channel, compactPayload);
       else activeClient.sendPush(dst, channel, compactPayload, ownerStamp);
       log.warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
-      return true;
+      return 'sent';
     } catch (retryErr) {
       log.warn(
         `forwardPush to ${shortId(dst)} failed after compact retry (${channel}): ${String(retryErr)}`,
       );
-      return false;
+      return classifyPushSendFailure(retryErr);
     }
   }
 }

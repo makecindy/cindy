@@ -300,6 +300,40 @@ describe('[4] 生命周期与背压', () => {
     expect(sendPush.mock.calls.length).toBe(before);
   });
 
+  it('逐帧降级中某一条自身被拒:只跳过它,批尾照发(不连坐)', () => {
+    // review P1:「这一帧自己不合格」与「整条链路堵了」必须分开——前者连坐会把本可
+    // 送达的文本 / 状态增量一起丢掉。这里第 2 条超限且 compact 兜底也救不回。
+    const sendPush = vi.fn((
+      _dst: string,
+      channel: string,
+      payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+      }
+      if ((payload as { event?: { i?: number } }).event?.i === 1) {
+        throw new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame exceeds max size');
+      }
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    for (let i = 0; i < 4; i += 1) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    // 批被背压拒 → 逐帧降级;第 2 条(i=1)被拒,其余三条照样发出
+    const delivered = sendPush.mock.calls
+      .filter((c) => c[1] === 'maker:event')
+      .map((c) => (c[2] as { event: { i: number } }).event.i);
+    expect(delivered).toContain(0);
+    expect(delivered).toContain(2);
+    expect(delivered).toContain(3);
+  });
+
   it('relay 离线:不做逐帧尝试(逐帧同样发不出去),直接丢弃且不滞留', () => {
     // NOT_CONNECTED 下逐帧只是把同一次失败重放 ≤64 次 —— 纯日志洪峰、零收益。
     // 与 BACKPRESSURE 的区别:后者「大批被拒 ≠ 小帧被拒」(#2167 可驱逐档),值得试。
@@ -474,6 +508,34 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
       'maker:event',
     ]);
     expect((h.sent[0]!.payload as MakerEventBatchPayload).events).toHaveLength(1);
+  });
+
+  it('越过字节阈值的事件留作下一批的开头,不再每次越界白送一个 1 条的小尾批', () => {
+    // review P2:挤进本批再被 takeMakerEventBatchSlice 切出来,等于每 8 条多一帧
+    // (30KB 级事件流 100 条 → ~23 帧而不是 ~13 帧),直接削掉大半减帧收益。
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 每条 ~30KB:8 条 240KB < 256KB 上限,第 9 条会越界
+    const chunk = 'x'.repeat(30_000);
+    for (let i = 0; i < 9; i += 1) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i, chunk } });
+    }
+
+    // 第 9 条触发收口:发出的**只有一帧**,装着前 8 条(而不是 8 条 + 1 条两帧)
+    let frames = batchesIn(h.sent);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.events).toHaveLength(8);
+
+    // 第 9 条成为下一批的开头,等窗口到点才发
+    vi.advanceTimersByTime(WINDOW_MS);
+    frames = batchesIn(h.sent);
+    expect(frames).toHaveLength(2);
+    expect(frames[1]!.events).toHaveLength(1);
+    // 无损:9 条事件按序全部送达
+    expect(frames.flatMap((f) => f.events.map((e) => (e as { event: { i: number } }).event.i)))
+      .toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
   });
 });
 
