@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import matter from 'gray-matter';
-import type { AgentCustomization, Maker } from '@cindy/maker-core';
+import type { AgentCustomization, Maker, PiRuntimeCapabilityStatus } from '@cindy/maker-core';
 import { registryService, type StoredInstall } from './registry';
 import { isIgnoredSkillPackagePath } from './packageIgnore';
 
@@ -50,9 +50,13 @@ export interface Skill {
    */
   urlKey: string;
   /** 来自哪个 agent 引擎。 */
-  engine: 'claude-code' | 'codex';
+  engine: 'claude-code' | 'codex' | 'pi';
   /** 发现该 skill 的所有引擎专属路径（去重后）。~/.agents/ 通用路径不算引擎。 */
-  linkedEngines: Array<{ engine: 'claude-code' | 'codex'; label: string }>;
+  linkedEngines: Array<{
+    engine: 'claude-code' | 'codex' | 'pi';
+    label: string;
+    runtimeStatus?: PiRuntimeCapabilityStatus;
+  }>;
   kind: SkillKind;
   scope: SkillScope;
   /** Folder name for kind=skill; basename without `.md` for kind=command/agent. */
@@ -131,12 +135,12 @@ export interface ProjectInput {
  * 状态; ok 状态简化为按 (kind/scope) 聚合 count。失败不抛, 单个 errors 收进 sources。
  */
 /**
- * Codex scope → SkillScope 映射。
- * Codex: 'user'|'system'|'admin' → 'global', 'repo' → 'project'。
+ * Codex/Pi scope → SkillScope 映射。
+ * Codex/Pi: 'user'|'system'|'admin' → 'global', 'repo' → 'project'。
  * Claude: 已经是 'global'|'project'，直通。
  */
 function normalizeScope(engine: string, rawScope: string): SkillScope {
-  if (engine === 'codex') {
+  if (engine === 'codex' || engine === 'pi') {
     return rawScope === 'repo' ? 'project' : 'global';
   }
   return rawScope as SkillScope;
@@ -234,17 +238,18 @@ export async function scanAllSkills(
       : `${c.kind}:project:${projectHash}:${canonicalName}`;
     const id = `${engine}:${urlKey}`;
 
-    const engineSet = new Map<string, string>();
+    const engineSet = new Map<Skill['engine'], Skill['linkedEngines'][number]>();
     for (const item of all) {
-      const eng = item.engine as Skill['engine'];
+      const eng = item.engine;
       if (!engineSet.has(eng)) {
-        engineSet.set(eng, eng === 'claude-code' ? 'Claude' : eng === 'codex' ? 'Codex' : eng);
+        engineSet.set(eng, {
+          engine: eng,
+          label: eng === 'claude-code' ? 'Claude' : eng === 'codex' ? 'Codex' : 'Pi',
+          ...(item.runtimeStatus ? { runtimeStatus: item.runtimeStatus } : {}),
+        });
       }
     }
-    const linkedEngines: Skill['linkedEngines'] = Array.from(engineSet, ([e, label]) => ({
-      engine: e as Skill['engine'],
-      label,
-    }));
+    const linkedEngines = Array.from(engineSet.values());
 
     const skill: Skill = {
       id,
@@ -522,7 +527,7 @@ const EDIT_SIZE_CAP_WRITE = 1024 * 1024; // 1 MB write cap (defensive against pa
 
 // 统一白名单：所有引擎的 skill/command/agent 目录共用。
 // 新增引擎时只需在此 regex 加一个分支。
-const SKILL_PATH_WHITELIST = /\/(\.(claude\/(skills|commands|agents)|agents\/skills|codex\/skills)|codex-home\/skills)\//;
+const SKILL_PATH_WHITELIST = /\/(\.(claude\/(skills|commands|agents)|agents\/skills|codex\/skills|pi\/skills)|codex-home\/skills)\//;
 
 function isAllowedSkillPath(absolutePath: string): boolean {
   // path.resolve 解析 .. 和 . 段，防止遍历绕过白名单
@@ -532,7 +537,7 @@ function isAllowedSkillPath(absolutePath: string): boolean {
 
 function findSkillRootForPath(absolutePath: string): string | null {
   const norm = path.resolve(absolutePath).replace(/\\/g, '/');
-  const markerMatch = /\/(?:\.claude\/(?:skills|commands|agents)|\.agents\/skills|\.codex\/skills|codex-home\/skills)\//.exec(norm);
+  const markerMatch = /\/(?:\.claude\/(?:skills|commands|agents)|\.agents\/skills|\.codex\/skills|\.pi\/skills|codex-home\/skills)\//.exec(norm);
   if (!markerMatch) return null;
 
   const afterMarker = norm.slice((markerMatch.index ?? 0) + markerMatch[0].length);

@@ -1870,19 +1870,32 @@ export function SkillhubDetailView() {
             </h2>
             <KindChip kind={entry.kind} />
             <ScopeChip scope={entry.scope} />
-            {entry.linkedEngines.map(le => (
-              <span
-                key={le.engine}
-                className={cn(
-                  'inline-flex h-5 shrink-0 items-center rounded-full px-2 whitespace-nowrap',
-                  'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
-                )}
-              >
-                <span className="relative top-[0.5px] text-[11px] font-medium leading-none">
-                  {le.label}
+            {entry.linkedEngines.map(le => {
+              const statusKey = le.runtimeStatus === 'discovered'
+                ? 'skillhub.common.statusDiscovered'
+                : le.runtimeStatus === 'approved'
+                  ? 'skillhub.common.statusApproved'
+                  : le.runtimeStatus === 'loaded'
+                    ? 'skillhub.common.statusLoaded'
+                    : le.runtimeStatus === 'failed'
+                      ? 'skillhub.common.statusFailed'
+                      : le.runtimeStatus === 'unknown'
+                        ? 'skillhub.common.statusUnknown'
+                        : null;
+              return (
+                <span
+                  key={le.engine}
+                  className={cn(
+                    'inline-flex h-5 shrink-0 items-center rounded-full px-2 whitespace-nowrap',
+                    'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
+                  )}
+                >
+                  <span className="relative top-[0.5px] text-[11px] font-medium leading-none">
+                    {statusKey ? `${le.label} · ${t(statusKey)}` : le.label}
+                  </span>
                 </span>
-              </span>
-            ))}
+              );
+            })}
             {detailState?.isMine && publishedStatus === 'rejected' && (
               <Tip text={t('skillhub.detail.rejectedTooltip')}>
                 <button

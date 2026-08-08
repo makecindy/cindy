@@ -178,6 +178,56 @@ describe('scanAllSkills', () => {
     realpathSyncSpy.mockRestore();
   });
 
+  it('preserves Pi discovery status on per-engine badges', async () => {
+    const projectRoot = path.resolve('/repo');
+    const skillDir = path.join(projectRoot, '.pi', 'skills', 'pi-demo');
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'pi',
+          kind: 'skill',
+          scope: 'repo',
+          name: 'pi-demo',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          workingDir: projectRoot,
+          runtimeStatus: 'discovered',
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({
+      projects: [{ projectRoot, hash: 'pi123456' }],
+    }, maker);
+
+    expect(result.skills[0]).toMatchObject({
+      engine: 'pi',
+      scope: 'project',
+      projectRoot,
+      linkedEngines: [{ engine: 'pi', label: 'Pi', runtimeStatus: 'discovered' }],
+    });
+  });
+
+  it('allows SkillHub detail reads from project .pi/skills', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-skill-'));
+    tempRoots.push(root);
+    const skillDir = path.join(root, '.pi', 'skills', 'pi-demo');
+    const skillMd = path.join(skillDir, 'SKILL.md');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(skillMd, '---\nname: pi-demo\n---\n\n# Pi Demo\n', 'utf-8');
+
+    await expect(readSkillContent({ mdPath: skillMd })).resolves.toMatchObject({
+      success: true,
+      content: '\n# Pi Demo\n',
+    });
+    await expect(listSkillFolderChildren({ dirPath: skillDir })).resolves.toMatchObject({
+      success: true,
+      entries: [{ name: 'SKILL.md', kind: 'file' }],
+    });
+  });
+
   it('filters sensitive entries from the initial skill files snapshot', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-scan-files-'));
     tempRoots.push(root);

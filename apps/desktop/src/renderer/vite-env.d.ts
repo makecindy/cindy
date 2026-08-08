@@ -4683,6 +4683,7 @@ interface ElectronAPI {
         path?: string;
         scope?: string;
         enabled?: boolean;
+        runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
       }>;
     }>;
 
@@ -5837,7 +5838,11 @@ interface SkillhubSkill {
   /** 来自哪个 agent 引擎。 */
   engine: 'claude-code' | 'codex' | 'pi';
   /** 发现该 skill 的所有引擎专属路径（去重后）。 */
-  linkedEngines: Array<{ engine: 'claude-code' | 'codex' | 'pi'; label: string }>;
+  linkedEngines: Array<{
+    engine: 'claude-code' | 'codex' | 'pi';
+    label: string;
+    runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+  }>;
   kind: SkillhubKind;
   scope: SkillhubScope;
   name: string;

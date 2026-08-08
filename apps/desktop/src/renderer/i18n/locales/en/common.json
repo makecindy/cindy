@@ -7899,6 +7899,9 @@
       "deny": "Deny"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "Available after you trust this project"
+  },
   "skillhub": {
     "home": {
       "title": "Skills",
@@ -7926,7 +7929,12 @@
     },
     "common": {
       "openFolderFailed": "Failed to open folder",
-      "close": "Close"
+      "close": "Close",
+      "statusDiscovered": "Discovered",
+      "statusApproved": "Approved",
+      "statusLoaded": "Loaded",
+      "statusFailed": "Load failed",
+      "statusUnknown": "Unknown"
     },
     "welcome": {
       "scanning": "Scanning local skills…",

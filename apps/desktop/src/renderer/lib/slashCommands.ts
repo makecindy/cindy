@@ -24,6 +24,12 @@ const log = createLogger('SlashCommands');
 
 export type { UnifiedCommand } from '@cindy/maker-core';
 
+export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
+  return command.kind === 'agent-skill'
+    && command.scope === 'repo'
+    && command.runtimeStatus === 'discovered';
+}
+
 // device-link 远程会话下 desktop 命令**全量可用**:业务语义在「会话归属设备」的命令
 // (/goal /learn /cmd)由控制端 main(commands/builtins.ts)按 ctx.deviceId 经隧道路由
 // 到被控端对应 channel(maker:goal:* / learn:* / desktop-cmd:run,均在 REMOTE_INVOKE_ALLOWLIST);
@@ -49,7 +55,10 @@ export function mergeCommands(
   const seen = new Set<string>();
   const result: UnifiedCommand[] = [];
   const tiers: UnifiedCommand[][] = [
-    [...agentSkill].sort((a, b) => a.name.localeCompare(b.name)),
+    [...agentSkill].sort((a, b) => (
+      a.name.localeCompare(b.name)
+      || Number(isSlashCommandUnavailable(a)) - Number(isSlashCommandUnavailable(b))
+    )),
     [...desktop].sort((a, b) => a.name.localeCompare(b.name)),
     [...agentBuiltin].sort((a, b) => a.name.localeCompare(b.name)),
   ];

@@ -7886,6 +7886,9 @@
       "deny": "拒否"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "このプロジェクトを信頼すると使用できます"
+  },
   "skillhub": {
     "home": {
       "title": "スキル",
@@ -7913,7 +7916,12 @@
     },
     "common": {
       "openFolderFailed": "フォルダを開けませんでした",
-      "close": "閉じる"
+      "close": "閉じる",
+      "statusDiscovered": "検出済み",
+      "statusApproved": "承認済み",
+      "statusLoaded": "読み込み済み",
+      "statusFailed": "読み込み失敗",
+      "statusUnknown": "不明"
     },
     "welcome": {
       "scanning": "ローカルの skill をスキャン中…",

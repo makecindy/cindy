@@ -1,3 +1,5 @@
+import type { PiRuntimeCapabilityStatus } from './pi-runtime-capabilities.js';
+
 export type SlashCommandSource = 'user' | 'skill';
 
 /**
@@ -14,6 +16,8 @@ export interface AgentSlashCommand {
   path?: string;
   scope?: 'global' | 'project' | 'user' | 'repo' | 'system' | 'admin';
   enabled?: boolean;
+  /** Pi discovery/runtime state; omitted for engines without a runtime truth layer. */
+  runtimeStatus?: PiRuntimeCapabilityStatus;
 }
 
 // ── New unified command model (palette refactor) ──────────────────────────
@@ -59,6 +63,8 @@ export interface AgentSkillCommand {
   path?: string;
   scope?: 'global' | 'project' | 'user' | 'repo' | 'system' | 'admin';
   enabled?: boolean;
+  /** Pi discovery/runtime state; omitted for engines without a runtime truth layer. */
+  runtimeStatus?: PiRuntimeCapabilityStatus;
 }
 
 export type UnifiedCommand = DesktopCommandMeta | AgentBuiltinCommand | AgentSkillCommand;

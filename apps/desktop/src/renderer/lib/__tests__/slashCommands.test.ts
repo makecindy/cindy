@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { filterSlashCommands } from '@/lib/slashCommands';
+import {
+  filterSlashCommands,
+  isSlashCommandUnavailable,
+  mergeCommands,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 
 describe('filterSlashCommands', () => {
   it('matches command names by case-insensitive containment', () => {
@@ -45,5 +50,28 @@ describe('filterSlashCommands', () => {
         { kind: 'desktop' as const, name: 'drive', description: '' },
       ], 'drive', 25).map((command) => command.name),
     ).toContain('drive');
+  });
+});
+
+describe('Pi project skill availability', () => {
+  const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' }>> = {}) => ({
+    kind: 'agent-skill' as const,
+    name: 'demo',
+    source: 'skill' as const,
+    ...overrides,
+  });
+
+  it('disables only discovered project skills', () => {
+    expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
+    expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'discovered' }))).toBe(false);
+    expect(isSlashCommandUnavailable(skill({ scope: 'repo' }))).toBe(false);
+  });
+
+  it('keeps an available same-name skill ahead of a discovered project preview', () => {
+    const discovered = skill({ scope: 'repo', runtimeStatus: 'discovered', path: '/repo/.pi/skills/demo' });
+    const available = skill({ scope: 'user', path: '/home/user/.agents/skills/demo' });
+
+    expect(mergeCommands([], [], [discovered, available])).toEqual([available]);
   });
 });

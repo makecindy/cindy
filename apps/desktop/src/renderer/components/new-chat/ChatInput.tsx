@@ -200,7 +200,12 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
-import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
+import {
+  filterSlashCommands,
+  isSlashCommandUnavailable,
+  loadAllCommands,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 import {
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   getAtDirectoryCompletionQuery,
@@ -3858,6 +3863,7 @@ export function ChatInput({
   // ── Palette insertions ─────────────────────────────────────────────
   const insertSlashCommand = useCallback(
     (cmd: UnifiedCommand) => {
+      if (isSlashCommandUnavailable(cmd)) return;
       if (!editor || trigger.kind !== 'slash') return;
       const { from } = trigger;
       // Replace the WHOLE slash-run, not just up-to-caret: the user may

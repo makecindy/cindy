@@ -21,6 +21,7 @@ export interface SourceDef {
   scope: string;
   dir: string;
   workingDir?: string;
+  runtimeStatus?: AgentCustomization['runtimeStatus'];
 }
 
 export function parseFrontmatter(raw: string): {
@@ -100,6 +101,7 @@ function readFolderSkill(source: SourceDef, folder: string, mdPath: string): Age
     frontmatter,
     parseError,
     ...(source.workingDir ? { workingDir: source.workingDir } : {}),
+    ...(source.runtimeStatus ? { runtimeStatus: source.runtimeStatus } : {}),
   };
 }
 
@@ -128,6 +130,7 @@ function readFileCustomization(source: SourceDef, mdPath: string): AgentCustomiz
     frontmatter,
     parseError,
     ...(source.workingDir ? { workingDir: source.workingDir } : {}),
+    ...(source.runtimeStatus ? { runtimeStatus: source.runtimeStatus } : {}),
   };
 }
 
