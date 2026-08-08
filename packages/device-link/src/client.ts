@@ -2078,9 +2078,17 @@ export class DeviceLinkClient {
         // 帧饿死：丢弃整个队头可丢弃前缀（fresh push 一并放弃——单 FIFO 无法同时
         // 做到 push 无损与 result 抢占），让 result 成为最早可交付的 live seq。
         this.dropDiscardablePendingPrefix(env.dst, peer, false, 'to make room for invoke-result');
+      } else if (env.kind === 'push') {
+        // push 是尽力而为的状态镜像（控制端重连/回前台会整体 resync + 重新订阅）。
+        // 拥塞即对端未在 ACK：2026-08-07 线上该形态一小时内 5168 次连续
+        // BACKPRESSURE（maker:event），镜像状态一条都没交付，只放大重试风暴。
+        // latest-wins：只从队头驱逐最旧的可丢弃帧直到放得下（剩余镜像历史保留，
+        // 对端恢复后仍可交付最新状态）；队头是 live 帧时无位可让，维持原
+        // BACKPRESSURE 语义。只删队头 → baseSeq 单调前移，无 seq 空洞。
+        this.dropOldestDiscardableForPushAdmission(env.dst, peer, reservedBytes);
       } else {
-        // 其它帧的入队压力只做 TTL 兜底清扫：过期 push 已无实时价值，先出队腾位；
-        // 新鲜 push 之间维持原有 BACKPRESSURE 语义，不互相驱逐。
+        // live invoke 的入队压力只做 TTL 兜底清扫：过期 push 已无实时价值，先出队
+        // 腾位；新鲜 push 不互相驱逐（invoke 不能以丢镜像为代价抢占）。
         this.dropDiscardablePendingPrefix(env.dst, peer, true, 'after pending push TTL expiry');
       }
     }
@@ -2424,7 +2432,8 @@ export class DeviceLinkClient {
   }
 
   /**
-   * 可丢弃帧判据（重连重放与 invoke-result 腾位两条路径共用的不变量）：
+   * 可丢弃帧判据（重连重放、invoke-result 腾位、push latest-wins 腾位三条
+   * 路径共用的不变量）：
    * best-effort push，以及 timeout / relay-error 后被 dropReliablePendingForRequest
    * 换成 transport-skip 占位 payload 的帧——其外层 kind 仍是原 invoke /
    * invoke-result，但已无任何业务副作用。两者都可以通过推进 baseSeq 让接收端
@@ -2502,6 +2511,43 @@ export class DeviceLinkClient {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
     }
+  }
+
+  /**
+   * push 入队的拥塞腾位（latest-wins）：只从队头连续移除最旧的可丢弃帧，直到
+   * 放得下新帧或队头变成 live 帧。与 dropDiscardablePendingPrefix 的区别是「按需
+   * 腾位」而非「整段前缀丢弃」：对端只是暂时未 ACK 时，队列里较新的镜像历史保留
+   * 下来，恢复后仍能交付；被驱逐的最旧镜像由控制端 resync 补偿，不是静默丢数据。
+   * 队头是 live invoke/invoke-result 时无位可让（保留会制造 seq 空洞的帧），调用方
+   * 按容量复检结果维持原 BACKPRESSURE 语义。只删队头 → baseSeq 单调前移，接收端
+   * 按新基线整体跳过被驱逐 seq，无空洞、不挂累计 ACK。
+   *
+   * 生产反例（2026-08-07，P0 度量实锤）：对端停 ACK 时新鲜 push 之间互相背压，
+   * 每条新 push 都抛 BACKPRESSURE，一小时 5168 次（maker:event），镜像零交付。
+   */
+  private dropOldestDiscardableForPushAdmission(
+    dst: string,
+    peer: PeerTransportState,
+    reservedBytes: number,
+  ): number {
+    let dropped = 0;
+    while (
+      peer.pending.size >= MAX_TRANSPORT_PENDING_MESSAGES
+      || peer.pendingBytes + reservedBytes > MAX_TRANSPORT_PENDING_BYTES
+    ) {
+      const head = peer.pending.entries().next();
+      if (head.done) break;
+      const [seq, pending] = head.value;
+      if (!this.isDiscardablePending(pending)) break;
+      this.removePendingEntry(peer, seq, pending);
+      dropped += 1;
+    }
+    if (dropped > 0) {
+      this.log.warn(
+        `dropped ${dropped} oldest discardable pending frame(s) for peer ${dst.slice(0, 8)} latest-wins push admission`,
+      );
+    }
+    return dropped;
   }
 
   private ensureRetryTimer(dst: string): void {
