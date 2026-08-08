@@ -112,6 +112,12 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     `printf 'touch /outside/pwn' | xargs nice`,
     `printf 'touch /outside/pwn' | xargs env FOO=1`,
     `printf 'touch /outside/pwn' | parallel env`,
+    // parallel 的选项挡不住真正的 COMMAND(--pipe 模式把输入送进 job 的 stdin)
+    `printf 'open("/tmp/pwn","w")' | parallel --pipe python3`,
+    `printf 'x' | parallel --pipe -j2 node`,
+    `printf 'x' | parallel --pipe --block 1M ruby`,
+    `printf 'x' | parallel -j 2 python3`,
+    `printf 'x' | parallel --pipe env`,
   ],
 
   '交互模式:stdin 进 REPL 逐行执行': [
@@ -350,6 +356,7 @@ describe('对抗语料 — 反向边界:读输入 ≠ 执行输入', () => {
       `printf 'x' | xargs python3 run.py`,
       `printf 'x' | parallel echo {}`,
       `printf 'x' | parallel wc -l {}`,
+      `printf 'x' | parallel --pipe python3 run.py`,
       'cat list.txt | xargs -I{} node run.js {}',
       // 包装器**带**了 COMMAND —— 命令位没空着,stdin 只是它的参数
       `printf 'x' | xargs env python3 run.py`,

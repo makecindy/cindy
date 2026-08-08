@@ -1749,14 +1749,29 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
     // (review 报)。问的是同一个问题「程序位是不是空的」,所以直接对嵌套命令递归。
     // 反面同样重要:`printf 'x' | xargs python3 run.py` 里 stdin 只是 run.py 的 argv,
     // 程序位已被静态脚本占住 —— 递归自然返回 false,不回退成本 PR 已消除的那条误报。
-    const nested = bin === 'xargs' ? xargsCommandTokens(tokens) : tokens.slice(1);
-    if (nested !== null && nested.length > 0) {
+    // parallel 的选项集合没有建模(`--pipe`、`-j 2`、`--colsep …`),直接拿 `tokens.slice(1)`
+    // 会让首个选项挡住真正的 COMMAND —— `parallel --pipe python3` 把输入送进每个 job 的
+    // stdin,那就是 python 的源码,却因为递归只看到 `--pipe` 而落灰区(review 报)。
+    // 与其逐个登记选项(登记必漏,这一轮已经证明过),不如**从每个非选项 token 起扫后缀**:
+    // 真正的 COMMAND 一定是其中之一,任意前缀是什么选项都不影响判定。
+    const candidates: string[][] = [];
+    if (bin === 'xargs') {
+      const parsed = xargsCommandTokens(tokens);
+      if (parsed !== null && parsed.length > 0) candidates.push(parsed);
+    } else {
+      const rest = tokens.slice(1);
+      rest.forEach((t, i) => { if (!t.startsWith('-')) candidates.push(rest.slice(i)); });
+    }
+    for (const nested of candidates) {
       const inner = unwrapWrappers(nested);
       // **包装器自己就缺 COMMAND**(`xargs env`、`xargs nohup`、`xargs timeout 5`、
       // `xargs env FOO=1`):剥完壳什么都不剩 = 命令位空着,由 stdin 的第一个输入项填上,
       // 那一项就是真正被执行的程序(review 报)。这一族按「剥壳后还剩不剩命令」统一判,
       // 不逐个登记包装器名 —— 包装器集合已经在 `COMMAND_WRAPPERS` 里维护了一份。
-      if (inner.length === 0) return true;
+      // 前提必须是**真的以包装器开头**:后缀扫描会产生 `{}` 这种候选,它剥完同样是空,
+      // 但那是占位符不是包装器 —— 少了这道前提会把 `parallel echo {}` 误升成红线(自查)。
+      if (inner.length === 0
+        && COMMAND_WRAPPERS.has(executableName(nested[0] ?? ''))) return true;
       if (interpreterReadsProgramFromStdin(inner)) return true;
     }
     // 注:parallel 的 `{}` 占位符判定同样**不在这里** —— 与 xargs 一样,本分支拿到的
