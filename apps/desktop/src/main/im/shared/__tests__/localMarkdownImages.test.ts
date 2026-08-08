@@ -101,6 +101,22 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
   });
 
+  it('parses an escaped closing bracket in a local image label', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const text = `![a\\]b](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-escaped-alt' },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'a]b' });
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('a]b');
+  });
+
   it('captures a balanced parenthesized Markdown title without leaving a trailing bracket', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'generated.png');

@@ -32,7 +32,7 @@ import { readBoundedFileFollowLinks } from '../../utils/readBoundedFile';
 // Destination scanning permits escaped characters and one balanced parenthesis
 // level, so a parenthesized Markdown title is captured before the outer `)`.
 const LOCAL_MARKDOWN_IMAGE_RE =
-  /!\[([^\]\r\n]{0,512})\]\(((?:\\[^\r\n]|[^()\r\n]|\((?:\\[^\r\n]|[^()\r\n])*\)){1,4096})\)/g;
+  /!\[((?:\\[^\r\n]|[^\\\]\r\n]){0,512})\]\(((?:\\[^\r\n]|[^()\r\n]|\((?:\\[^\r\n]|[^()\r\n])*\)){1,4096})\)/g;
 const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -42,6 +42,10 @@ function localMarkdownImageMatches(text: string): RegExpMatchArray[] {
   return Array.from(text.matchAll(LOCAL_MARKDOWN_IMAGE_RE)).filter(
     (match) => match.index !== undefined && !isMarkdownCodePosition(codeRanges, match.index),
   );
+}
+
+function markdownImageLabel(raw: string): string {
+  return raw.replace(/\\([\\[\]])/g, '$1').trim() || '图片';
 }
 
 interface LocalMarkdownImageDeps {
@@ -262,7 +266,7 @@ export function sanitizeLocalMarkdownImageRefs(text: string): string {
     if (!isSensitiveLocalMarkdownImageTarget(match[2])) continue;
     const start = match.index;
     if (start === undefined) continue;
-    const replacement = match[1].trim() || '图片';
+    const replacement = markdownImageLabel(match[1]);
     sanitized = `${sanitized.slice(0, start)}${replacement}${sanitized.slice(start + match[0].length)}`;
   }
   return sanitized;
@@ -387,7 +391,7 @@ export async function materializeLocalMarkdownImages(
     const match = matches[index];
     const start = match.index;
     if (start === undefined) continue;
-    const replacement = match[1].trim() || '图片';
+    const replacement = markdownImageLabel(match[1]);
     text = `${text.slice(0, start)}${replacement}${text.slice(start + match[0].length)}`;
   }
 
