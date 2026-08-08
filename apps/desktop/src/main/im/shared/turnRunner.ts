@@ -82,6 +82,7 @@ import type {
   TurnPermissionPolicy,
   UserMessage,
 } from '@cindy/maker-core';
+import { transformXdtRefs } from '@cindy/im';
 import type { IMAttachment, InteractiveCardSpec, StreamingTextHandle } from '@cindy/im';
 
 import { persistUserMessage } from '../messagePersistence';
@@ -2501,6 +2502,9 @@ export function createTurnRunner(
       // The output surface may fail before the first card exists. The Agent
       // reply is already durable at this point, so use the independent plain
       // text API instead of silently dropping a non-empty final response.
+      if (output.kind === 'rich-card') {
+        await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+      }
       const fallbackText = composeStreamingView(turn) || '✅ (本轮无文本输出)';
       try {
         if (output.kind === 'chunked-text') {
@@ -2643,8 +2647,18 @@ export function createTurnRunner(
     maybeDispatchNextQueued(state, userId);
   }
 
-  async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (output.kind !== 'chunked-text' || !turn.presenter.wholeText().includes('![')) return;
+  async function materializeTurnLocalImages(
+    state: SessionState,
+    turn: TurnState,
+    options: { richCardFallback?: boolean } = {},
+  ): Promise<void> {
+    const richCardFallback = options.richCardFallback === true;
+    if (
+      (!richCardFallback && output.kind !== 'chunked-text') ||
+      !turn.presenter.wholeText().includes('![')
+    ) {
+      return;
+    }
     try {
       const materialized = await materializeLocalMarkdownImages({
         text: turn.presenter.wholeText(),
@@ -2658,9 +2672,20 @@ export function createTurnRunner(
         if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
       }
     } catch (err) {
-      log.warn(
-        `local markdown image materialization failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const error = sanitizeSendOutcomeError(err);
+      log.warn('local markdown image materialization failed (non-fatal)', {
+        kind: 'terminal-media-materialization',
+        source: 'materializeLocalMarkdownImages',
+        error,
+      });
+    } finally {
+      if (richCardFallback) {
+        turn.presenter.replaceBody(
+          transformXdtRefs(turn.presenter.wholeText(), {
+            image: ({ alt }) => alt.trim() || '图片',
+          }),
+        );
+      }
     }
   }
 

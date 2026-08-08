@@ -633,6 +633,100 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
   });
 
+  it('materializes inline managed images before rich-card plain-text fallback', async () => {
+    const managedUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({
+      absPaths: ['/tmp/inline.png'],
+      text: 'image ready\ninline image',
+    });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'text',
+      data: { text: `image ready\n![inline image](${managedUrl})`, isFinal: true },
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/inline.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
+    expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith({
+      text: `image ready\n![inline image](${managedUrl})`,
+      workingDir: 'F:\\XDMaker',
+      sessionId: 'feishu-session',
+      maxImages: 4,
+      existingAbsPaths: [],
+    });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'image ready\ninline image', {
+      threadTs: undefined,
+    });
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not expose inline managed image URLs when fallback materialization fails', async () => {
+    const managedUrl = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockRejectedValueOnce(
+      new Error(`resolve failed for ${managedUrl}`),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'text',
+      data: { text: `image failed\n![private image](${managedUrl})`, isFinal: true },
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        'image failed\nprivate image',
+        { threadTs: undefined },
+      );
+    });
+    const loggedPayload = JSON.stringify([
+      ...mocks.logger.warn.mock.calls,
+      ...mocks.logger.error.mock.calls,
+    ]);
+    expect(loggedPayload).not.toContain(managedUrl);
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves inline managed images to a healthy rich-card handle', async () => {
+    const managedUrl = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const handle = {
+      messageId: 'stream-inline',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValueOnce(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    const finalText = `image ready\n![inline image](${managedUrl})`;
+    h.emit({ type: 'text', data: { text: finalText, isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(handle.finalize).toHaveBeenCalledWith(finalText);
+    });
+    expect(mocks.materializeLocalMarkdownImages).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+  });
+
   it('continues media fallback and settles safely when one generated image send fails', async () => {
     mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
     mocks.resolveXdtImageUrl.mockImplementation((url: string) => ({
