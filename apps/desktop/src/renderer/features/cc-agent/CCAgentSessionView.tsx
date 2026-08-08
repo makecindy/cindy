@@ -1851,17 +1851,23 @@ export function CCAgentSessionView({
         // 时不吞命令,直接 setPlanMode(对支持 planMode 的 agent 本就生效);
         // capabilities 已加载但 planMode 缺失/不支持时忽略 —— device-link 老被控端
         // 序列化无 planMode 字段,useAgentCapabilities 文档明确 undefined = 不支持。
-        if (payload.sessionId && (sessionCaps == null || sessionCaps.planMode?.supported === true)) {
-          // 用 getSnapshot 取「当下」的 planModeEnabled 计算 next(而非闭包里的旧值):
-          // 监听器不依赖 planModeEnabled,切换计划模式不会 teardown+re-subscribe,
-          // 避免 main 恰好在空窗期推送其它 desktop 命令回流(如 /cmd result)被漏掉
-          // (Copilot)。
-          const nextEnabled = !makerChatStore.getSnapshot(payload.sessionId).planModeEnabled;
-          // setPlanMode 持久化 / remote invoke 失败会 reject(store 内 throw),显式吞掉
-          // 并记日志,避免把可恢复的失败升级成未捕获的 Promise rejection。
-          void setPlanMode(nextEnabled).catch((err: unknown) => {
-            log.warn('plan command: failed to toggle plan mode', err);
-          });
+        // 但对「已加载且明确不支持」不能静默吞掉(Codex):/plan 已出现在 palette 且
+        // 发送路径已消费,若毫无反馈用户会以为命令没生效 —— 提示而非静默。
+        if (payload.sessionId) {
+          if (sessionCaps == null || sessionCaps.planMode?.supported === true) {
+            // 用 getSnapshot 取「当下」的 planModeEnabled 计算 next(而非闭包里的旧值):
+            // 监听器不依赖 planModeEnabled,切换计划模式不会 teardown+re-subscribe,
+            // 避免 main 恰好在空窗期推送其它 desktop 命令回流(如 /cmd result)被漏掉
+            // (Copilot)。
+            const nextEnabled = !makerChatStore.getSnapshot(payload.sessionId).planModeEnabled;
+            // setPlanMode 持久化 / remote invoke 失败会 reject(store 内 throw),显式吞掉
+            // 并记日志,避免把可恢复的失败升级成未捕获的 Promise rejection。
+            void setPlanMode(nextEnabled).catch((err: unknown) => {
+              log.warn('plan command: failed to toggle plan mode', err);
+            });
+          } else {
+            toast.warning(t('newChat.collaboration.planModeUnsupportedRemote'));
+          }
         }
         return;
       }

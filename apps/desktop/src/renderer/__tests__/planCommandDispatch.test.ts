@@ -50,10 +50,13 @@ const sessionViewSource = readFileSync(
 function planBranchSource(): string {
   const idx = sessionViewSource.indexOf("payload.command === 'plan'");
   if (idx < 0) throw new Error('plan branch missing');
-  // 动态定位到 .catch( 收尾,不依赖固定长度 slice(注释加长会推远断言,Codex P1 / Copilot)
+  // 动态定位到分支收尾,不依赖固定长度 slice(注释加长会推远断言,Codex P1 / Copilot):
+  // 取 .catch( 与「不支持 toast」两者中更靠后的位置 + 余量(Codex:老被控端不支持时 toast)。
   const catchIdx = sessionViewSource.indexOf('.catch(', idx);
-  if (catchIdx < 0) throw new Error('.catch( missing after plan branch');
-  return sessionViewSource.slice(idx, catchIdx + 120);
+  const toastIdx = sessionViewSource.indexOf('planModeUnsupportedRemote', idx);
+  const markers = [catchIdx, toastIdx].filter((v) => v >= 0);
+  if (markers.length === 0) throw new Error('no branch end marker after plan branch');
+  return sessionViewSource.slice(idx, Math.max(...markers) + 160);
 }
 
 describe('/plan slash command contract', () => {
@@ -75,7 +78,7 @@ describe('/plan slash command contract', () => {
   it('does not toggle plan mode when the payload carries no sessionId', () => {
     const branch = planBranchSource();
     // guard 基于 payload.sessionId:无 sessionId 的命令(draft 分支/回退广播)不切当前会话
-    expect(branch).toMatch(/if \(payload\.sessionId && /);
+    expect(branch).toMatch(/if \(payload\.sessionId\)/);
   });
 
   it('keeps the cross-window guard: session commands are dropped when sessionId mismatches', () => {
@@ -88,12 +91,14 @@ describe('/plan slash command contract', () => {
     expect(guardIdx).toBeLessThan(planIdx);
   });
 
-  it('runs /plan when capabilities are still loading (sessionCaps == null); ignores when loaded but planMode missing/unsupported', () => {
+  it('runs /plan when capabilities are still loading (sessionCaps == null); toasts when loaded but planMode unsupported', () => {
     const branch = planBranchSource();
     // 整个 capabilities 未加载(null,冷启动/远程拉取慢) → 不吞命令;
     // capabilities 已加载但 planMode 缺失(device-link 老被控端,undefined = 不支持)
-    // 或 supported === false → 忽略。
+    // 或 supported === false → toast 提示而非静默吞掉(Codex)。
     expect(branch).toContain('(sessionCaps == null || sessionCaps.planMode?.supported === true)');
+    expect(branch).toContain('planModeUnsupportedRemote');
+    expect(branch).toContain('toast.warning(');
   });
 
   it('toggles plan mode based on the current state when supported', () => {
