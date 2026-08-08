@@ -64,13 +64,17 @@ import { describe, expect, it } from 'vitest';
  *    (`size * 0.86`、`17 / 1`,片段含 * 或 / 即跳过)—— 非静态可判;
  *  - 内联字号盲区: `style={{ fontSize: <number | 'Npx'> }}` 形式的白名单档位
  *    当前允许通过,但 `applyFontSettings` 只改写 `--text-*` 变量,这些字面量不会
- *    响应设置页的 UI 字号缩放。已知约 39 处真实 UI 命中,集中在
- *    `features/skillhub/`(约 27 处),另有 `MakerExperimentalView`、
- *    `LegacyMigrationDialog`、两个 Lightbox 等; `codemirrorGithubTheme.ts`
- *    与 `loginDesignTokens.ts` 属既有豁免域,`xtermPool.ts` 因 xterm API 需数字
- *    入参属合法调用。收紧方向是静态内联字号默认判红,仅为 SVG/画布/第三方 API
- *    登记精确豁免;本 PR 不处理,后续独立施工需改约 39 处 UI 调用点并完成设计核对
- *    与 Light/Dark 双模式验收;
+ *    响应设置页的 UI 字号缩放。实测共有 48 处未登记命中,其中约 39 处是真实 UI:
+ *    `features/skillhub/` 共 27 处(`InstallTargetPicker` 10 / `MarketCard` 8 /
+ *    `SkillhubMarketListView` 6 / `SkillhubMarketPreviewPanel` 3),另有
+ *    `MakerExperimentalView` 4、`LegacyMigrationDialog` 3、`ModelLightbox` 1、
+ *    `ImageLightbox` 1、`LoginControls` 2、`AttachmentTypeThumb` 1;其余命中包括
+ *    `codemirrorGithubTheme.ts`、`shareConversationImage.ts` 与 `xtermPool.ts`。
+ *    `codemirrorGithubTheme.ts` / `loginDesignTokens.ts` 各 13 处属既有豁免域;
+ *    SVG `fontSize="N"` 属性与 `xtermPool.ts` 的数字入参属于无法用 token 类表达的
+ *    结构性合法用法。收紧方向是静态内联字号默认判红,仅为 SVG/画布/第三方 API
+ *    登记精确豁免;本 PR 不处理,后续独立施工需改约 48 处调用点并先界定豁免边界,
+ *    再完成设计核对与 Light/Dark 双模式验收;
  *  - CSS font-weight 的动态值(var(...)、模板插值、calc())与
  *    initial/unset/revert 全局关键字(计算结果不引入梯外静态值)不判红;
  *  - .css 与字符串内嵌 CSS 的直接 font-size 声明值域(紧凑模式 -1px 派生、
