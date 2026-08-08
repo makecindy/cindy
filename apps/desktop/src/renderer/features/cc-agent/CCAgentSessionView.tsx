@@ -1373,6 +1373,12 @@ export function CCAgentSessionView({
   );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps, loading: capabilitiesLoading } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
+  // 镜像最新值供订阅 handler 读取,避免把易变值放进订阅 effect 的 deps 导致频繁
+  // re-subscribe、退订空窗漏事件(如 /cmd 结果回流,Copilot)。
+  const sessionCapsRef = useRef(sessionCaps);
+  sessionCapsRef.current = sessionCaps;
+  const capabilitiesLoadingRef = useRef(capabilitiesLoading);
+  capabilitiesLoadingRef.current = capabilitiesLoading;
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
   // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
   // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
@@ -1859,10 +1865,13 @@ export function CCAgentSessionView({
         //    toggle**,仅 toast 提示稍后重试:此时 toggle 无法验证归属,开启后能力解析
         //    为不支持会遗留「菜单隐藏但状态开启、重启恢复」的状态(Greptile P1),且远程
         //    老被控端的 setPlanMode RPC 会 reject 回滚,自愈不可靠(Codex)。
+        // 能力快照从 ref 读「当下」值(会话期间能力刷新不重建监听器,Copilot):
         if (payload.sessionId) {
-          if (sessionCaps == null || capabilitiesLoading) {
+          const caps = sessionCapsRef.current;
+          const capsLoading = capabilitiesLoadingRef.current;
+          if (caps == null || capsLoading) {
             toast.info(t('newChat.collaboration.planModeCapabilitiesLoading'));
-          } else if (sessionCaps.planMode?.supported === true) {
+          } else if (caps.planMode?.supported === true) {
             // 用 getSnapshot 取「当下」的 planModeEnabled 计算 next(而非闭包里的旧值):
             // 监听器不依赖 planModeEnabled,切换计划模式不会 teardown+re-subscribe,
             // 避免 main 恰好在空窗期推送其它 desktop 命令回流(如 /cmd result)被漏掉
@@ -1884,7 +1893,8 @@ export function CCAgentSessionView({
     return unsub;
     // planModeEnabled 不再进 deps:plan 分支改用 getSnapshot 取当下值,监听器保持稳定,
     // 切换计划模式不会 teardown+re-subscribe(避免漏掉空窗期推送的命令回流,Copilot)。
-  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t, setPlanMode, sessionCaps, capabilitiesLoading]);
+    // capabilities/loading 同理走 ref 镜像(见上方 sessionCapsRef 定义),不进 deps。
+  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t, setPlanMode]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
@@ -2458,6 +2468,14 @@ export function CCAgentSessionView({
       // 会 forceReload 显示新 skill,但发送路径仍按旧归属把 /plan 当 desktop 执行。
       // 复核为 agent-skill 则放行给 agent(与 mergeCommands 优先级 agent-skill > desktop 一致)。
       if (cmdName === 'plan') {
+        // /plan 只对**裸命令**做 desktop toggle(Codex P2):`/plan 分析一下` 这类带参数
+        // 的命令不属于 toggle 语义,放行给 agent 处理(不消费、不 toggle)。
+        if (args) return false;
+        // 归属复核:loadAllCommands 内部对三路 IPC 各自 catch 降级空列表、通常不抛错 ——
+        // 三路全失败/返回空列表时 freshHit 为 undefined,此时不能据 cached 旧归属继续
+        // 消费(会误吞同名 agent-skill,Copilot)。只有复核**明确命中 desktop** 才消费,
+        // 空列表/失败/skill 一律放行(与 mergeCommands 优先级 agent-skill > desktop 一致)。
+        let freshHit: UnifiedCommand | undefined;
         try {
           const agentKind = dbToMakerAgentKind(session?.agentKind);
           const fresh = await loadAllCommands(
@@ -2466,15 +2484,15 @@ export function CCAgentSessionView({
             { skipAgentSkills: isRemoteSession, forceReload: true },
             remoteDeviceId,
           );
-          const freshHit = fresh.find((c) => c.name.toLowerCase() === cmdName);
-          if (freshHit && freshHit.kind !== 'desktop') return false;
+          freshHit = fresh.find((c) => c.name.toLowerCase() === cmdName);
         } catch {
-          // 复核失败沿用旧判断,不阻断发送。
+          // 复核抛错(同步异常等)同样视为「无法确认归属」→ 放行,不误吞。
+          freshHit = undefined;
         }
-        // 归属确认后才应用附件保护(Codex P2):装了名为 plan 的 agent skill 且带附件时,
-        // palette 会解析为 skill —— 上面已放行(freshHit 非 desktop),skill + 附件正常
-        // 发送给 agent;只有**明确命中 desktop** /plan 且 composer 已带附件时才不消费:
-        // 接受命令会走 ChatInput accepted 清理清掉附件,而「+」菜单 toggle 不动草稿。
+        if (!freshHit || freshHit.kind !== 'desktop') return false;
+        // 归属确认后才应用附件保护(Codex P2):只有**明确命中 desktop** /plan 且 composer
+        // 已带附件时才不消费:接受命令会走 ChatInput accepted 清理清掉附件,而「+」菜单
+        // toggle 不动草稿。
         if (files?.length) {
           toast.info(t('newChat.collaboration.planModeToggleWithAttachments'));
           return 'preserve';

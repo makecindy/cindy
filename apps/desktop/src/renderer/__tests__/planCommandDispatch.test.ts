@@ -95,17 +95,30 @@ describe('/plan slash command contract', () => {
 
   it('gates /plan on capabilities: no optimistic toggle while loading; toast when loaded but unsupported', () => {
     const branch = planBranchSource();
-    // capabilities 未加载(sessionCaps == null,冷启动/远程拉取慢)→ **不乐观 toggle**,
-    // 仅 toast 提示稍后重试(Greptile P1:乐观开启 + 能力解析为不支持会遗留状态且远程
-    // setPlanMode RPC reject 回滚,自愈不可靠 —— Codex);
+    // capabilities 未加载/正在刷新(caps == null || capsLoading,冷启动/远程拉取慢)→
+    // **不乐观 toggle**,仅 toast 提示稍后重试(Greptile P1:乐观开启 + 能力解析为不支持
+    // 会遗留状态且远程 setPlanMode RPC reject 回滚,自愈不可靠 —— Codex);
     // capabilities 已加载且 planMode.supported === true → toggle;
     // 已加载但缺失/不支持(device-link 老被控端,undefined = 不支持)→ toast 提示而非
     // 静默吞掉(Codex)。
-    expect(branch).toContain('sessionCaps == null');
+    // 能力值经 ref 镜像读「当下」(sessionCapsRef),避免进订阅 effect deps 频繁重订阅(Copilot)。
+    expect(branch).toContain('sessionCapsRef.current');
+    expect(branch).toContain('caps == null || capsLoading');
     expect(branch).toContain('planModeCapabilitiesLoading');
-    expect(branch).toContain('sessionCaps.planMode?.supported === true');
+    expect(branch).toContain('caps.planMode?.supported === true');
     expect(branch).toContain('planModeUnsupportedSession');
     expect(branch).toContain('toast.warning(');
+  });
+
+  it('restricts the /plan desktop toggle to bare commands and re-verifies ownership strictly', () => {
+    // Codex P2:`/plan 分析一下` 这类带参数命令不属于 toggle 语义 → 放行给 agent;
+    // Copilot:复核三路全失败/空列表时 freshHit undefined → 放行,不据旧归属误吞 skill。
+    const idx = sessionViewSource.indexOf('const maybeDispatchDesktopSlashCommand');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const region = sessionViewSource.slice(idx, idx + 2400);
+    expect(region).toContain("if (args) return false");
+    expect(region).toContain('!freshHit || freshHit.kind !== \'desktop\'');
+    expect(region).toContain('return false');
   });
 
   it('re-verifies /plan command ownership with forceReload before dispatching; other desktop commands skip it', () => {
@@ -115,11 +128,13 @@ describe('/plan slash command contract', () => {
     // Copilot:复核收窄到 cmdName === 'plan',避免 /help /clear 每次执行都强制刷新+扫描。
     const idx = sessionViewSource.indexOf('const maybeDispatchDesktopSlashCommand');
     expect(idx).toBeGreaterThanOrEqual(0);
-    const region = sessionViewSource.slice(idx, idx + 1700);
+    const region = sessionViewSource.slice(idx, idx + 2400);
     expect(region).toContain('cmdName === \'plan\'');
     expect(region).toContain('forceReload: true');
     expect(region).toContain('skipAgentSkills: isRemoteSession');
-    expect(region).toContain('freshHit && freshHit.kind !== \'desktop\'');
+    // 复核严格化(Copilot):三路拉取失败/空列表时 freshHit 为 undefined → 一律放行,
+    // 只有明确命中 desktop 才消费。
+    expect(region).toContain('!freshHit || freshHit.kind !== \'desktop\'');
     expect(region).toContain('return false');
   });
 
