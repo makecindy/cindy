@@ -29,6 +29,15 @@ export const RSB_BROWSER_WEBAUTHN_LABELS: Record<
     unknownRelyingParty: '此网站',
     touchIdPromptReason: '在 $1 验证你的身份',
   },
+  'zh-TW': {
+    title: '選擇通行密鑰',
+    message: '選擇用於 {{relyingPartyId}} 的通行密鑰',
+    detail: 'Cindy 只會將你的選擇交給驗證器；通行密鑰的私密資訊始終留在驗證器中。',
+    cancel: '取消通行密鑰登入',
+    unknownAccount: '通行密鑰 {{index}}',
+    unknownRelyingParty: '此網站',
+    touchIdPromptReason: '在 $1 驗證你的身分',
+  },
   en: {
     title: 'Choose a Passkey',
     message: 'Choose a passkey for {{relyingPartyId}}',

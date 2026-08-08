@@ -536,8 +536,8 @@ export interface ProviderPreset {
   /**
    * 区域提示（可选）：'cn' = 中国大陆端点，'global' = 国际端点。
    *
-   * **只影响呈现排序，不是过滤开关**：UI 按应用语言智能排序（zh-CN 用户 cn 靠前，
-   * 其它语言 global 靠前，见 `sortPresetsForLocale`），两边始终都可见可选——用户永远
+   * **只影响呈现排序，不是过滤开关**：UI 按客户端构建区域智能排序（cn/dev 版本 cn 靠前，
+   * global 版本 global 靠前，见 `sortPresetsForRegion`），两边始终都可见可选——用户永远
    * 不需要回答「你在哪个地区」，可达性由「测试连接」实测裁决。缺省 = 区域中立
    * （单端点全球服务的厂商，如 OpenRouter / DeepSeek），排序时居中。
    */
@@ -550,6 +550,9 @@ export interface ProviderPreset {
   /** per-runtime 预填数据（至少一个）。 */
   runtimes: Partial<Record<AgentKind, ProviderPresetRuntime>>;
 }
+
+/** 客户端实际构建区域；模型预设排序只看该版本身份，不看 UI 语言。 */
+export type PresetSortRegion = 'cn' | 'global' | 'dev';
 
 /** 完整目录（OSS / 本地 / 内置 三处都是这个形状）。 */
 export interface Catalog {

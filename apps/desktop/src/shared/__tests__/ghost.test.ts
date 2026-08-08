@@ -268,12 +268,13 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), author: 42 }).ok).toBe(false);
   });
 
-  it('locales 只接受宿主四种语言、安全 JSON 路径且必须提供英文', () => {
+  it('locales 只接受宿主五种语言、安全 JSON 路径且必须提供英文', () => {
     const valid = validateGhostManifest({
       ...goodManifest(),
       locales: {
         en: 'locales/en.json',
         'zh-CN': 'locales/zh-CN.json',
+        'zh-TW': 'locales/zh-TW.json',
         ja: 'locales/ja.json',
         ko: 'locales/ko.json',
       },
@@ -333,8 +334,10 @@ describe('ghost · 清单校验', () => {
     if (!parsed.ok) return;
     expect(ghostLocalePathFor(parsed.manifest, 'ja')).toBe('locales/ja.json');
     expect(ghostLocalePathFor(parsed.manifest, 'zh-CN')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-TW')).toBe('locales/en.json');
     expect(ghostLocalePathFor(parsed.manifest, 'fr-FR')).toBe('locales/en.json');
     expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
+    expect(withGhostResolvedLocale(parsed.manifest, 'zh-TW').resolvedLocale).toBe('zh-TW');
     expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
   });
 

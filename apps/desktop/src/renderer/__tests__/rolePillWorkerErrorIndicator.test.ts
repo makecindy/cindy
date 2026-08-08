@@ -17,7 +17,11 @@ const source = readFileSync(
  */
 describe('RolePillDropdown worker error indicator', () => {
   it('WorkerErrorBadge 是带 ERR 文案的实心药丸(i18n + error token), 不是红点', () => {
-    const badgeBlock = extractBetween(source, 'function WorkerErrorBadge({', 'const WORKER_LIST_LAYOUT_KEY');
+    const badgeBlock = extractBetween(
+      source,
+      'function WorkerErrorBadge({',
+      'const WORKER_LIST_LAYOUT_KEY',
+    );
     expect(badgeBlock).toContain("t('orca.rolePill.errorBadge')");
     expect(badgeBlock).toContain("t('orca.rolePill.errorBadgeAria')");
     // 实心饱和红底 + 浅色字(比软红底更醒目, 仍全走 error token)。
@@ -26,7 +30,11 @@ describe('RolePillDropdown worker error indicator', () => {
   });
 
   it('WorkerAvatar 只保留绿色完成未读点, error 不再叠红点', () => {
-    const avatarBlock = extractBetween(source, 'function WorkerAvatar({', 'function WorkerErrorBadge({');
+    const avatarBlock = extractBetween(
+      source,
+      'function WorkerAvatar({',
+      'function WorkerErrorBadge({',
+    );
     // 绿点保留(done 未读)。
     expect(avatarBlock).toContain('var(--card-status-done)');
     // error 不再用状态点表达(不出现红色状态点 token / showErrorDot 逻辑)。
@@ -70,20 +78,19 @@ describe('RolePillDropdown worker error indicator', () => {
 });
 
 describe('orca.rolePill error badge i18n', () => {
-  const LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
-  it('errorBadge / errorBadgeAria 四语言齐全且非空', () => {
+  const LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
+  it('errorBadge / errorBadgeAria 全部语言齐全且非空', () => {
     for (const locale of LOCALES) {
       const common = JSON.parse(
-        readFileSync(
-          resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
-          'utf8',
-        ),
+        readFileSync(resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'), 'utf8'),
       );
       const rolePill = common?.orca?.rolePill ?? {};
       expect(typeof rolePill.errorBadge, `${locale} errorBadge`).toBe('string');
       expect(rolePill.errorBadge.length, `${locale} errorBadge non-empty`).toBeGreaterThan(0);
       expect(typeof rolePill.errorBadgeAria, `${locale} errorBadgeAria`).toBe('string');
-      expect(rolePill.errorBadgeAria.length, `${locale} errorBadgeAria non-empty`).toBeGreaterThan(0);
+      expect(rolePill.errorBadgeAria.length, `${locale} errorBadgeAria non-empty`).toBeGreaterThan(
+        0,
+      );
     }
   });
 });

@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from '../catalog.js';
+import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
 import { mergeWithBundled } from '../source.js';
 import type { Catalog } from '../types.js';
 
@@ -301,6 +301,7 @@ describe('presetDisplayName', () => {
   it('中文 locale 用 name;其它 locale 优先 nameEn,缺省回落 name', () => {
     const p = { name: '智谱 GLM(中国大陆)', nameEn: 'Zhipu GLM (China)' };
     expect(presetDisplayName(p, 'zh-CN')).toBe('智谱 GLM(中国大陆)');
+    expect(presetDisplayName(p, 'zh-TW')).toBe('智谱 GLM(中国大陆)');
     expect(presetDisplayName(p, 'zh')).toBe('智谱 GLM(中国大陆)');
     expect(presetDisplayName(p, 'en')).toBe('Zhipu GLM (China)');
     expect(presetDisplayName(p, 'ja')).toBe('Zhipu GLM (China)');
@@ -342,31 +343,31 @@ describe('regionHint 归一化与 locale 排序', () => {
       mk('minimax-cn', 'cn'),
       mk('minimax-global', 'global'),
     ]);
-    // zh：厂商序 deepseek < minimax < openrouter < zhipu-glm；组内 cn 在前。
-    expect(sortPresetsForLocale(presets, 'zh-CN').map((p) => p.id)).toEqual([
+    // cn 版本：厂商序 deepseek < minimax < openrouter < zhipu-glm；组内 cn 在前。
+    expect(sortPresetsForRegion(presets, 'cn').map((p) => p.id)).toEqual([
       'deepseek', 'minimax-cn', 'minimax-global', 'openrouter', 'zhipu-glm-cn', 'zhipu-glm-global',
     ]);
-    // en/ja：厂商序不变，组内 global 在前。
-    expect(sortPresetsForLocale(presets, 'en').map((p) => p.id)).toEqual([
+    // global 版本：厂商序不变，组内 global 在前。
+    expect(sortPresetsForRegion(presets, 'global').map((p) => p.id)).toEqual([
       'deepseek', 'minimax-global', 'minimax-cn', 'openrouter', 'zhipu-glm-global', 'zhipu-glm-cn',
     ]);
-    expect(sortPresetsForLocale(presets, 'ja').map((p) => p.id)).toEqual(
-      sortPresetsForLocale(presets, 'en').map((p) => p.id),
+    expect(sortPresetsForRegion(presets, 'dev').map((p) => p.id)).toEqual(
+      sortPresetsForRegion(presets, 'cn').map((p) => p.id),
     );
   });
 
-  it('智谱与 Z.AI Coding Plan 使用同一厂商分组并按 locale 排区域顺序', () => {
+  it('智谱与 Z.AI Coding Plan 使用同一厂商分组并按构建区域排顺序', () => {
     const presets = sanitizePresets([
       mk('zai-coding-plan-global', 'global'),
       mk('zhipu-coding-plan-cn', 'cn'),
       mk('volcengine-coding-plan'),
     ]);
-    expect(sortPresetsForLocale(presets, 'zh-CN').map((p) => p.id)).toEqual([
+    expect(sortPresetsForRegion(presets, 'cn').map((p) => p.id)).toEqual([
       'volcengine-coding-plan',
       'zhipu-coding-plan-cn',
       'zai-coding-plan-global',
     ]);
-    expect(sortPresetsForLocale(presets, 'en').map((p) => p.id)).toEqual([
+    expect(sortPresetsForRegion(presets, 'global').map((p) => p.id)).toEqual([
       'volcengine-coding-plan',
       'zai-coding-plan-global',
       'zhipu-coding-plan-cn',

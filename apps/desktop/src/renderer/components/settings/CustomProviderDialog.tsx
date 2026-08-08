@@ -55,7 +55,7 @@ import {
 import {
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
-  sortPresetsForLocale,
+  sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
   AgentKind,
@@ -65,6 +65,7 @@ import type {
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { SettingsTextInput } from './SettingsTextInput';
+import { CURRENT_CINDY_REGION } from '@/../shared/brandRegion';
 
 /**
  * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
@@ -294,7 +295,7 @@ export function CustomProviderDialog({
   onSaved,
   onClose,
 }: CustomProviderDialogProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const editing = !!initial;
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
 
@@ -419,15 +420,14 @@ export function CustomProviderDialog({
   );
 
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
-  // 区域感知排序：zh-CN 用户国内端点预设靠前、其它语言国际端点靠前（只排序不过滤，
-  // 用户不需要理解「地区」概念，可达性由测试连接实测裁决）。
+  // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
     if (editing) return;
     let cancelled = false;
     void window.electronAPI.maker
       .listProviderPresets()
       .then((r) => {
-        if (!cancelled) setPresets(sortPresetsForLocale(r.presets, i18n.language));
+        if (!cancelled) setPresets(sortPresetsForRegion(r.presets, CURRENT_CINDY_REGION));
       })
       .catch(() => {
         /* 预设缺失不影响手填 */
@@ -435,7 +435,7 @@ export function CustomProviderDialog({
     return () => {
       cancelled = true;
     };
-  }, [editing, i18n.language]);
+  }, [editing]);
 
   /** 应用预设：预填显示名 + 各 runtime 的 baseUrl / 模型 / headers（创建时快照，之后与预设脱钩）。 */
   const applyPreset = useCallback(
@@ -1062,7 +1062,7 @@ export function CustomProviderDialog({
           </p>
 
           {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
-              用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，见 sortPresetsForLocale）。 */}
+              用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
           {!editing && presets.length > 0 && (
             <div className="flex flex-col gap-2">
               <FieldLabel>{t('settings.providers.custom.presets.label')}</FieldLabel>
