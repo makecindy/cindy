@@ -62,6 +62,9 @@ describe('create_workers tool', () => {
     expect(registry.get('create_workers')?.description).toContain(
       '用户一次要求创建多个 Worker 时必须使用本工具，不要并行或连续多次调用 create_worker。',
     );
+    expect(registry.get('create_workers')?.description).toContain(
+      'route_provider_id 是 host 最终解析的供应商路由',
+    );
   });
 
   it('rejects duplicate labels before creating any worker', async () => {
