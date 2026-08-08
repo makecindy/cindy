@@ -18,7 +18,7 @@
  */
 
 import { createElement, Fragment } from 'react';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -29,6 +29,7 @@ import {
   clearSessionAttention,
 } from '@/lib/sessionAttentionStore';
 import { SessionAttentionUrgencyProvider } from '../../contexts/SessionAttentionUrgencyContext';
+import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
 
 // ── mocks:剥离与"渲染隔离"无关的重依赖,只留计数探针 ──────────────────────────
 
@@ -189,6 +190,50 @@ describe('SessionItem — 归档视觉', () => {
     expect(archivedIconBranch).toContain('text-[var(--sidebar-item-active-foreground)]');
     expect(archivedIconBranch).toContain('strokeWidth={1.75}');
     expect(archivedIconBranch).toContain('text-[var(--cmd-palette-item-meta)]');
+  });
+});
+
+describe('SessionItem — 置顶分屏拖拽', () => {
+  it('标题起手区写入分屏 MIME，同时把其余行区域留给 Sortable 排序', () => {
+    const pinnedSession = {
+      ...makeSession('pinned-session'),
+      pinnedAt: '2026-08-08T00:00:00.000Z',
+    };
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: 'none',
+      setData: (format: string, data: string) => values.set(format, data),
+    };
+    const { container } = render(
+      createElement(SessionAttentionUrgencyProvider, {
+        urgentSessionIds: new Set<string>(),
+        children: createElement(
+          'div',
+          { 'data-sortable-id': pinnedSession.id },
+          createElement(SessionItem, {
+            session: pinnedSession,
+            isActive: false,
+            isRunning: false,
+            hasAttentionNotification: false,
+            onClick: noop,
+            onAction: noop,
+            onRename: noop,
+            onTogglePin: noop,
+          }),
+        ),
+      }),
+    );
+
+    const row = container.querySelector<HTMLElement>('[data-session-id="pinned-session"]');
+    const handle = row?.querySelector<HTMLElement>('[data-split-group-drag-handle="true"]');
+    expect(row?.draggable).toBe(false);
+    expect(handle?.draggable).toBe(true);
+    expect(handle?.getAttribute('data-no-drag')).toBe('true');
+
+    fireEvent.dragStart(handle!, { dataTransfer });
+
+    expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(pinnedSession.id);
+    expect(dataTransfer.effectAllowed).toBe('copyMove');
   });
 });
 

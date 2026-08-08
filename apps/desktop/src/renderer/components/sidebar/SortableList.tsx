@@ -84,6 +84,9 @@ export interface SortableListProps<T> {
    *  默认 `'button, input, textarea, select, a, [data-no-drag]'`，覆盖
    *  绝大多数会"误把可交互元素当成拖动起点"的场景。 */
   filter?: string;
+  /** 是否强制使用 SortableJS 的 pointer fallback。关闭后使用原生 DnD，
+   *  允许同一个会话行把拖拽交给右侧分屏 drop target。 */
+  forceFallback?: boolean;
   /** 容器额外 class（如 flex-col / gap 等布局）。 */
   className?: string;
   /** 每个 Sortable wrapper 的额外 class，用于非侧栏场景覆盖 drag/ghost 视觉。 */
@@ -111,6 +114,7 @@ export function SortableList<T>({
   handle,
   onDragActiveChange,
   filter,
+  forceFallback = true,
   className,
   rowClassName,
   role,
@@ -155,9 +159,18 @@ export function SortableList<T>({
       dragClass: 'xdt-sortable-drag',
       // 见文件顶部"设计要点 5"：强制 JS fallback，绕开 HTML5 DnD 在 React 19 +
       // 嵌套 click/contextmenu 环境下的不稳定行为。
-      forceFallback: true,
+      forceFallback,
       fallbackOnBody: true,
       fallbackTolerance: 4,
+      setData: (dataTransfer, dragEl) => {
+        dataTransfer.setData('Text', dragEl.textContent ?? '');
+        const rect = dragEl.getBoundingClientRect();
+        dataTransfer.setDragImage(
+          dragEl,
+          Math.min(24, Math.max(0, rect.width / 2)),
+          Math.min(24, Math.max(0, rect.height / 2)),
+        );
+      },
       // 真正开拖（移动超过 fallbackTolerance）才触发,不是 pointerdown 即触发——
       // 所以"按下未拖"和"普通 hover"都不会上 grabbing 光标,只有真正拖动中才会。
       onStart: () => {
@@ -269,7 +282,13 @@ export function SortableList<T>({
   );
 
   return (
-    <div ref={containerRef} role={role} aria-label={ariaLabel} className={className}>
+    <div
+      ref={containerRef}
+      data-sortable-native-dnd={forceFallback ? undefined : 'true'}
+      role={role}
+      aria-label={ariaLabel}
+      className={className}
+    >
       {children}
     </div>
   );

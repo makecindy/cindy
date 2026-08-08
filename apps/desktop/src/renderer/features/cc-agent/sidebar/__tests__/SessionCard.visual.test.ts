@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionCard } from '../SessionCard';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
+import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -225,6 +226,51 @@ describe('SessionCard visual cases', () => {
     expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1);
     expect(mocks.ensureInitialMessages).toHaveBeenCalledWith('short-idle-cc');
   });
+
+  it.each(['card', 'list'] as const)(
+    'uses the %s title as a split-drag handle while keeping the pinned wrapper sortable',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+      if (!visualCase) throw new Error('Missing idle visual case');
+      const values = new Map<string, string>();
+      const dataTransfer = {
+        effectAllowed: 'none',
+        setData: (format: string, data: string) => values.set(format, data),
+      };
+
+      const { container } = render(
+        createElement(
+          'div',
+          { 'data-sortable-id': visualCase.session.id },
+          createElement(SessionCard, {
+            session: visualCase.session,
+            variant,
+            isActive: false,
+            isRunning: false,
+            isAttached: false,
+            hasAttentionNotification: false,
+            isSelected: false,
+            onClick: vi.fn(),
+            onAction: vi.fn(),
+            onRename: vi.fn(),
+            onTogglePin: vi.fn(),
+            projectOptions: [],
+          }),
+        ),
+      );
+
+      const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
+      const handle = card?.querySelector<HTMLElement>('[data-split-group-drag-handle="true"]');
+      expect(card?.draggable).toBe(false);
+      expect(handle?.draggable).toBe(true);
+      expect(handle?.getAttribute('data-no-drag')).toBe('true');
+
+      fireEvent.dragStart(handle!, { dataTransfer });
+
+      expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(visualCase.session.id);
+      expect(dataTransfer.effectAllowed).toBe('copyMove');
+    },
+  );
 
   it.each(sessionCardVisualCases.map((item) => [item.label, item.id] as const))(
     'renders visual case: %s',

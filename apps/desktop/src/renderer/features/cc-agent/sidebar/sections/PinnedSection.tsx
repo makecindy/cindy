@@ -356,6 +356,7 @@ export function PinnedSection({
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
+              forceFallback={false}
               renderItem={renderCard}
             />
           ) : mode === 'list' ? (
@@ -368,6 +369,7 @@ export function PinnedSection({
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
+              forceFallback={false}
               className="flex flex-col gap-0.5"
               renderItem={renderCard}
             />
@@ -377,6 +379,7 @@ export function PinnedSection({
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
+              forceFallback={false}
               className="flex flex-col gap-0.5"
               renderItem={(entry) =>
                 entry.kind === 'project' ? (

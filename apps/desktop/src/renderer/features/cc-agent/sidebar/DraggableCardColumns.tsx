@@ -24,6 +24,8 @@ export interface DraggableCardColumnsProps<T> {
   onReorder: (newOrderIds: string[]) => void;
   reducedMotion: boolean;
   groupId?: string;
+  /** 与 SortableList 同口径；置顶卡片用原生 DnD 兼容分屏 drop。 */
+  forceFallback?: boolean;
 }
 
 const CARD_DRAG_FILTER = 'button, input, textarea, select, a, [data-no-drag]';
@@ -122,6 +124,7 @@ export function DraggableCardColumns<T>({
   onReorder,
   reducedMotion,
   groupId,
+  forceFallback = true,
 }: DraggableCardColumnsProps<T>) {
   const columnRefs = useRef<(HTMLDivElement | null)[]>([]);
   const itemsRef = useRef(items);
@@ -188,9 +191,18 @@ export function DraggableCardColumns<T>({
         ghostClass: 'xdt-sortable-ghost',
         chosenClass: '',
         dragClass: 'xdt-sortable-drag',
-        forceFallback: true,
         fallbackOnBody: true,
         fallbackTolerance: 4,
+        forceFallback,
+        setData: (dataTransfer, dragEl) => {
+          dataTransfer.setData('Text', dragEl.textContent ?? '');
+          const rect = dragEl.getBoundingClientRect();
+          dataTransfer.setDragImage(
+            dragEl,
+            Math.min(24, Math.max(0, rect.width / 2)),
+            Math.min(24, Math.max(0, rect.height / 2)),
+          );
+        },
         onStart,
         onEnd,
       }),
@@ -219,7 +231,7 @@ export function DraggableCardColumns<T>({
       originalBucketsRef.current = null;
       instances.forEach((inst) => inst.destroy());
     };
-  }, [columns, reducedMotion, groupId]);
+  }, [columns, forceFallback, reducedMotion, groupId]);
 
   return (
     <div className="flex w-full items-stretch gap-[7px]">
@@ -227,6 +239,7 @@ export function DraggableCardColumns<T>({
         <div
           key={c}
           data-col={c}
+          data-sortable-native-dnd={forceFallback ? undefined : 'true'}
           ref={(el) => {
             columnRefs.current[c] = el;
           }}
