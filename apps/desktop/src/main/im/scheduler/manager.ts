@@ -247,6 +247,9 @@ export class ImSchedulerManager {
         if (this.awaitingSnapshot && event.requestId === undefined) return;
         const isCurrentRequest =
           event.requestId !== undefined && event.requestId === pendingRequestId;
+        if (isCurrentRequest && event.accountGeneration === this.snapshotAccountGeneration) {
+          this.requiresTaggedSnapshot = true;
+        }
         const preserveRetryAttempt = this.snapshotRefreshPending;
         this.resetSnapshotRequestState();
         if (event.snapshot === null) {
