@@ -4,6 +4,7 @@ import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   GHOST_CINDY_EMBED_MAX_TEXTS,
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
@@ -304,6 +305,23 @@ describe('ghost · 清单校验', () => {
       ...goodManifest(),
       locales: { en: 'GHOST.JSON' },
     }).ok).toBe(false);
+  });
+
+  it('locale description / whenToUse 共用协议仓字符上限', () => {
+    const manifest = validateGhostManifest({
+      ...goodManifest(),
+      description: 'Base description',
+      whenToUse: 'Base recall',
+    });
+    expect(manifest.ok).toBe(true);
+    if (!manifest.ok) return;
+    expect(validateGhostManifestLocaleResource({
+      description: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS),
+      whenToUse: 'y'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS),
+    }, manifest.manifest).ok).toBe(true);
+    expect(validateGhostManifestLocaleResource({
+      description: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1),
+    }, manifest.manifest).ok).toBe(false);
   });
 
   it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
@@ -1773,7 +1791,7 @@ describe('ghost · description(自我介绍)', () => {
     const chip = validateGhostManifest({ ...goodChipManifest(), description: '画图小助手' });
     expect(chip.ok && chip.manifest.description).toBe('画图小助手');
 
-    for (const bad of ['', '  ', 'x'.repeat(301), 42]) {
+    for (const bad of ['', '  ', 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1), 42]) {
       expect(validateGhostManifest({ ...goodManifest(), description: bad }).ok, JSON.stringify(bad)).toBe(false);
     }
   });
@@ -1823,7 +1841,10 @@ describe('ghost · whenToUse(语义召回线索)', () => {
     const chip = validateGhostManifest({ ...goodChipManifest(), whenToUse: '需要出图时找我' });
     expect(chip.ok && chip.manifest.whenToUse).toBe('需要出图时找我');
     expect(validateGhostManifest({ ...goodChipManifest(), whenToUse: '' }).ok).toBe(false);
-    expect(validateGhostManifest({ ...goodChipManifest(), whenToUse: 'x'.repeat(301) }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodChipManifest(),
+      whenToUse: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1),
+    }).ok).toBe(false);
   });
 });
 

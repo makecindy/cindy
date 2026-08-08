@@ -138,11 +138,13 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 | 700 | Bold | **仅限下方豁免登记表中的域**,禁止出现在普通 UI chrome |
 
 - 与手机端 `apps/mobile/src/theme/tokens.ts` 的 `fontWeight` token(regular / medium / semibold / bold)一一对应 —— 两端一张梯子。
+- **两端 700 口径**:手机端 UI chrome 的上限仍是 600（正本为 `apps/mobile/docs/mobile-design-guide.md`,该文已同步登记本例外）。`bold` / 700 在手机端**只允许**出现在下表登记的域——原生 Markdown strong 与登录品牌画布。也就是说「四档梯子」是两端共用的**档位定义**,不等于两端 chrome 都可用 700。
 - **CJK 注记**:桌面未设 `font-synthesis: none`,中文回退字体(PingFang)公开档位到 600 —— UI 里用 700 会在中文上触发伪粗体(算法加粗、边缘发糊),且 600 与 700 在 CJK 上的渲染差异不可靠。**中文层级不得依赖 600 vs 700 区分**,强调靠字号或颜色。
 
 ### 桌面 UI 字号白名单(2026-08,issue #1505)
 
 - **UI 段:{10, 11, 12, 13, 14, 15, 16}px;标题 / 内容段:{18, 20, 24, 28}px。** 下限 10px —— 9px 及以下禁止(再小就不是文字是纹理)。
+- **下限约束的是「开发者写死的档位」,不约束运行期缩放结果。** 用户可把 UI 字号设到 `appearanceSettings.uiSize` 允许的最小值 12（默认 14）,`useFontSettings` 按 `uiSize / 14` 缩放并 `Math.round`,此时 `--text-10` 与 `--text-11` 都会算成 9px（两档在该设置下失去区分）。这是用户主动选择的整体缩小,不是违反下限;守卫也只检查源码里写的档位,不检查运行期计算值。**若要保住 10px 视觉下限,应在字号设置侧（提高 `uiSize` 下限或改缩放曲线）解决,而不是往白名单里加更小的档位。**
 - **写法**:一律用 `tailwind.config.ts` 的 `text-<n>` token 类(映射 `--text-<n>` 变量;doc 紧凑模式与后续字号缩放能力都挂在这层变量上,任意值类会静默漏掉这些机制)。语义类 `text-xs / text-sm / text-base / text-lg` 只收编存量(等值 12 / 14 / 16 / 18)；源码侧禁止使用 `text-xl` 及以上语义档位（由守卫拦截），配置侧 `theme.extend.fontSize` 的 `xl..5xl` 遗留项不在本轮删除范围，避免删除后静默回退到 Tailwind 内置固定值、失去用户字号缩放；其清理另行处理。**禁止新增任意值 `text-[Npx]`(含一切小数)与白名单外档位**;需要新档先改本表与权威来源，再进组件。
 - **镜像约定（已成立，由 #1553 完成）**：四个权威来源必须同步：本表（规范正本）与以下三处代码——`apps/desktop/tailwind.config.ts` 的 `fontSize`（类名可用性与变量映射；漏掉则 `text-<n>` 类根本不存在）、`apps/desktop/src/renderer/styles/globals.css` 的静态 `--text-<n>` 默认值（漏掉则变量未定义并回退到继承值）、`apps/desktop/src/renderer/hooks/useFontSettings.ts` 的 `UI_TEXT_TOKEN_SIZES` 运行时生效值（含用户字号缩放；漏掉则该档位不随用户设置缩放，反向漏则会写出已删档位的陈旧变量）。另有一个消费端需保持一致：`apps/desktop/src/renderer/lib/utils.ts` 的 tailwind-merge `classGroups['font-size']` 负责类名去重，不产生字号值；漏登记会让 `cn()` 合并两个字号类失效，两个类会同时留在 DOM 上。该消费端单独做一致性校验，不计入四个权威来源镜像。同一 hook 的 `SCALED_TAILWIND_TOKENS` 负责语义类运行时缩放，需与 Tailwind 语义类映射保持同步，但不改变本白名单的具体档位。PR4 的守卫按四个权威来源做镜像断言，并单独校验消费端一致性。
 - 品牌画布域(登录 / Splash 家族等设计 px 坐标系表面)不映射本白名单:字面量只允许进画布常量文件(`loginDesignTokens.ts` 的地位,对齐手机端 `loginSkinLayout.ts`)**或下表登记的自包含品牌页生成器**(`oauthResultPage.ts` 整页由 main 侧生成,其内嵌 raw CSS 即该页的常量载体),组件消费端照常受守卫扫描。
@@ -153,9 +155,13 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 | 域 | 范围 | 允许 | 理由 |
 | --- | --- | --- | --- |
-| 登录 / Splash 品牌画布 | `LoginControls.tsx`、`loginDesignTokens.ts`(Splash 借用同族面板)、`LegacyMigrationDialog.tsx`(仅字重)、`oauthResultPage.ts`(自包含品牌页生成器,raw CSS 为其常量载体) | 700 + 设计 px 字号 | §16 已登记 Bold,figma 画布坐标系 |
-| markdown 内容 | 桌面 DOM `<strong>`（必须解析为绝对 700；嵌套 strong 仍封顶 700）、CodeMirror strong 语法节点（`codemirrorGithubTheme.ts` 的 `t.strong` → `fontWeight: 'bold'`）、移动端原生 Markdown strong（`apps/mobile/src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`） | 700 / `bold` | 用户内容语义,非 UI chrome;编辑器内 strong 与两端渲染后的 strong 同权。当前桌面 Tailwind preflight 的相对 `bolder` 会使嵌套 strong 计算到更高档位，是已知实现缺口；规则不把该结果视为合规，待独立施工。 |
+| 登录 / Splash 品牌画布 | 桌面 `LoginControls.tsx`、`loginDesignTokens.ts`(Splash 借用同族面板)、`LegacyMigrationDialog.tsx`(仅字重)、`oauthResultPage.ts`(自包含品牌页生成器,raw CSS 为其常量载体)；手机 `apps/mobile/app/(auth)/login.tsx`(登录页本体)、`apps/mobile/src/components/LoginSkinControls.tsx` 与 `apps/mobile/src/auth/loginSkinLayout.ts` | 700 + 设计 px 字号 | §16 已登记 Bold,两端共用同源登录画布与 figma 坐标系；桌面守卫只扫描 `apps/desktop/src/renderer`，手机端由自身守卫体系负责，本登记不扩展 PR #1553 的扫描范围 |
+| markdown 内容 | **仅 Markdown 渲染路径**：桌面 Markdown 渲染器输出的 DOM `<strong>`（`MarkdownRenderer` 及其消费方；必须解析为绝对 700；嵌套 strong 仍封顶 700）、CodeMirror strong 语法节点（`codemirrorGithubTheme.ts` 的 `t.strong` → `fontWeight: 'bold'`）、移动端原生 Markdown strong（`apps/mobile/src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`） | 700 / `bold` | 用户内容语义,非 UI chrome;编辑器内 strong 与两端渲染后的 strong 同权。当前桌面 Tailwind preflight 的相对 `bolder` 会使嵌套 strong 计算到更高档位，是已知实现缺口；规则不把该结果视为合规，待独立施工。**本行不覆盖普通 UI chrome 里直接写的 `<strong>`**（如 `MakerExperimentalView.tsx` 会话状态与事件列表）——它们同样被 preflight 的相对 `bolder` 渲染成 700,但不属豁免域,是已登记缺口,待归一为 `font-medium` / `font-semibold`。 |
 | hljs 主题移植 | `globals.css` 内 hljs 规则 | `bold` | 第三方主题移植,保真优先 |
+| 第三方查看器（用户内容） | `apps/desktop/src/renderer/vendor/drawio/viewer-static.min.js`（由 `DrawioPreview.tsx` 加载）及 `vendor/` 下其他上游产物 | 上游自带字重与字号 | 上游压缩产物,渲染的是用户绘图内容而非本产品 chrome;不改上游、不逐行归一。**守卫边界**:整个 `vendor/` 目录不纳入扫描（PR #1553 已在守卫盲区中显式登记该排除,不是未登记的漏扫）。 |
+| CodeMirror / Markdown 内容字号 | `codemirrorGithubTheme.ts` 的标题等内容层级（`2.15em` / `1.62em` 等相对值,CSS-in-JS 路径） | 相对字号（`em` 派生） | 内容标题层级必须随编辑器基础字号等比缩放,固定 token 会打断这个比例关系;相对值本身不脱离缩放链,故不要求落在 numeric 白名单。**守卫边界**:`em` / `rem` / `%` 相对值不参与 numeric 白名单判定。 |
+| 命令式第三方 API（非 DOM class 路径） | xterm 的 `ITerminalOptions.fontSize`（`features/right-sidebar/plugins/terminal/lib/xtermPool.ts`）等只接受**数值字段**、无法挂 class 的第三方配置入口；SVG 的 `fontSize="N"` 属性同理 | 数值字面量 | 这类 API 不消费 DOM class,Tailwind token 类挂不上去,只能传数字。**取值规则**:数值必须取自本白名单档位,或取自用户代码字号设置（`--app-code-font-size` / `appearanceSettings.codeSize`）解析出的运行期值 —— 不允许凭手感另取一个数。**守卫边界**:按精确签名放行（文件 + 字段 + 期望次数）,不做整文件豁免,新增此类入口须先改本表。 |
+| 用户可配置代码字号（变量路径） | `--app-code-font-size` 及其派生写法（`text-[length:var(--app-code-font-size)]`、`text-[length:calc(var(--app-code-font-size)_-_1px)]` 等,消费方含 Markdown / DiffView / ToolCallCard 等约 19 个文件） | 变量与其 `calc` 派生 | 该字号是**用户设置项**,`appearanceSettings.ts` 的 `codeSize` 允许 10–24 逐整数取值,因此运行期可落在 17 / 19 / 21 / 22 / 23 等 numeric 白名单外的值;这是刻意的可配置能力,不是漏归一。本白名单约束的是**开发者写死的档位**,不约束用户设置的运行期取值。**守卫边界**:`--app-code-font-size` 的变量与 `calc` 派生写法按精确签名登记豁免（见 PR #1553 守卫的豁免表）,不按 numeric 白名单判定。 |
 | 外部页注入 | `browserCommentPreload.ts` | 系统字体族 | 注入他人网页,不强加 Inter |
 | 手机 WebView HTML 生成器 | `selectableMarkdownHtml.ts` 等 | CSS 语法字面量 | 手机守卫已自登记盲区,值仍须守本阶梯 |
 | 紧凑模式派生值 | `globals.css` `.chat-rail-compact` 段 | calc / -1px 派生 | 机制本体 |
@@ -321,7 +327,7 @@ Three tiers — **these three only**:
 - Don't introduce any chromatic color outside the sanctioned semantic set in §2 — no brand blue, no accent green, no warm tones beyond the registered exceptions
 - Don't invent arbitrary radii — only three values exist: 8px (inner controls), 12px (containers), 9999px (pill). Nothing in between, nothing else.
 - Don't add shadows to any element — the flat aesthetic is intentional
-- Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in §3 (markdown `<strong>`, hljs theme ports, login brand canvas); no 800+, no in-between values, anywhere
+- Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in the §3 registry (that table is the single source of truth; it currently covers markdown content, hljs theme ports, login / Splash brand canvas, third-party viewers under `vendor/`, and imperative third-party APIs). Don't re-enumerate the domains here — read §3. No 800+, no in-between values, anywhere
 - Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on the explicitly enumerated sanctioned brand surfaces in §15.7 / §16
 - Don't use gradients anywhere — flat blocks and borders only
 - Don't overcomplicate the layout — stick to the region structure in §5; no complex nested grids

@@ -390,6 +390,10 @@ function peekAutoBridgeState(workerId: string): AutoBridgeState | null {
 }
 
 function setAutoBridgePending(workerId: string, pending: boolean): void {
+  if (!pending) {
+    workerAutoBridgePending.delete(workerId);
+    return;
+  }
   let state = peekAutoBridgeState(workerId);
   if (!state) {
     state = { pending: false, ready: false, inFlight: false, version: 0 };

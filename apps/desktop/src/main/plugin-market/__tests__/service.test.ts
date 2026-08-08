@@ -19,6 +19,9 @@ const runtime = vi.hoisted(() => ({
   uninstall: vi.fn(),
   builtinRemoved: new Set<string>(),
   accountGhostAvailable: true,
+  pendingCalls: false,
+  runningErrand: false,
+  cindyWork: false,
   boundaryPending: false,
   pluginApiBaseUrl: 'https://plugin.test.invalid' as string | null,
   session: {
@@ -56,6 +59,9 @@ vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: () => runtime.ghosts }),
   isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: runtime.install,
+  hasPendingGhostCalls: vi.fn(() => runtime.pendingCalls),
+  hasRunningGhostErrand: vi.fn(() => runtime.runningErrand),
+  hasRunningGhostCindyWork: vi.fn(() => runtime.cindyWork),
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
   uninstallGhostAndCleanup: runtime.uninstall,
 }));
@@ -97,6 +103,9 @@ afterEach(() => {
   runtime.uninstall.mockReset();
   runtime.builtinRemoved.clear();
   runtime.accountGhostAvailable = true;
+  runtime.pendingCalls = false;
+  runtime.runningErrand = false;
+  runtime.cindyWork = false;
   runtime.boundaryPending = false;
   runtime.pluginApiBaseUrl = 'https://plugin.test.invalid';
   runtime.session = {
@@ -1035,6 +1044,494 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(snapshot.items[0]).toMatchObject({
       installState: 'installed',
       enabled: true,
+    });
+  });
+
+  it('silently updates an organization defaultInstall package and preserves disabled state', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: {
+        ...summary().currentRelease,
+        id: 'release-2',
+        version: '2.0.0',
+      },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: false }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    const upgraded = manifest(item.ghostId, '2.0.0');
+    runtime.install.mockImplementation(async () => {
+      runtime.ghosts = [{ manifest: upgraded, dir: installDir, enabled: false }];
+      return runtime.ghosts[0];
+    });
+
+    const snapshot = await h.service.snapshot();
+
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({
+        ghostId: item.ghostId,
+        version: '2.0.0',
+        reviewedManifest: upgraded,
+      }),
+    );
+    expect(snapshot.items[0]).toMatchObject({ installState: 'installed', enabled: false });
+    expect(h.service.consumeUpgradeNotice()).toEqual({ count: 1, name: 'Test Plugin', permissions: null, hasPermissionExpansion: false });
+  });
+
+  it('integration: snapshot upgrades an organization defaultInstall release and consumes its notice', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: {
+        ...summary().currentRelease,
+        id: 'release-2',
+        version: '2.0.0',
+      },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-integration-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    const upgraded = manifest(item.ghostId, '2.0.0');
+    runtime.install.mockImplementationOnce(async () => {
+      const ghost = { manifest: upgraded, dir: installDir, enabled: true };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'installed', version: '2.0.0' }],
+      unavailableReason: null,
+    });
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+    expect(h.api.detail).toHaveBeenCalledWith(item.id);
+    expect(h.api.download).toHaveBeenCalledWith(item.id, 'release-2');
+    expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(h.service.consumeUpgradeNotice()).toEqual({ count: 1, name: 'Test Plugin', permissions: null, hasPermissionExpansion: false });
+    expect(h.service.consumeUpgradeNotice()).toBeNull();
+  });
+
+  it('skips a queued duplicate snapshot after the first upgrade reconciles the release', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-concurrent-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    const upgraded = manifest(item.ghostId, '2.0.0');
+    runtime.install.mockImplementationOnce(async () => {
+      const ghost = { manifest: upgraded, dir: installDir, enabled: true };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    const first = h.service.snapshot();
+    const second = h.service.snapshot();
+    await Promise.all([first, second]);
+
+    expect(h.api.download).toHaveBeenCalledTimes(1);
+    expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(h.service.consumeUpgradeNotice()).toEqual({ count: 1, name: 'Test Plugin', permissions: null, hasPermissionExpansion: false });
+    expect(h.service.consumeUpgradeNotice()).toBeNull();
+  });
+
+  it('silently upgrades organization plugins that expand catalog permissions and reports the new permissions', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    const expanded = manifest(item.ghostId, '2.0.0', ['notify', 'fs']);
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: expanded },
+    } as never);
+
+    const upgraded = manifest(item.ghostId, '2.0.0', ['notify', 'fs']);
+    runtime.install.mockImplementationOnce(async () => {
+      runtime.ghosts = [{ manifest: upgraded, dir: installDir, enabled: true }];
+      return runtime.ghosts[0];
+    });
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'installed', version: '2.0.0' }],
+    });
+    expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(h.service.consumeUpgradeNotice()).toEqual({
+      count: 1,
+      name: 'Test Plugin',
+      permissions: [{ key: 'fs', labelKey: 'fsWrite' }],
+      hasPermissionExpansion: true,
+    });
+  });
+
+  it('skips organization upgrades when the downloaded package drifts to extra permissions', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    runtime.install.mockRejectedValueOnce(
+      new GhostPackagePermissionReviewRequiredError({
+        manifest: manifest(item.ghostId, '2.0.0', ['notify', 'fs']),
+        permissionDiff: diffGhostPermissionItems(oldManifest, manifest(item.ghostId, '2.0.0', ['notify', 'fs'])),
+        packageSha256: item.currentRelease.sha256,
+        installedBaseline: ghostPermissionBaselineKey(oldManifest),
+      }),
+    );
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'update-available' }],
+    });
+    expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(h.service.consumeUpgradeNotice()).toBeNull();
+  });
+
+  it('abandons a silent upgrade before download when the installed permission baseline changes', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-stale-baseline-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    const expanded = manifest(item.ghostId, '2.0.0', ['notify', 'fs']);
+    h.api.detail.mockImplementationOnce(async () => {
+      const changed = manifest(item.ghostId, '1.0.0', ['notify', 'workspace'] as never);
+      runtime.ghosts = [{ manifest: changed, dir: installDir, enabled: true }];
+      return {
+        ...item,
+        currentRelease: { ...item.currentRelease, manifest: expanded },
+      } as never;
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'update-available' }],
+    });
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.service.consumeUpgradeNotice()).toBeNull();
+  });
+
+  it('abandons a silent upgrade when the installed permission baseline changes during download', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-stale-baseline-lock-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    const expanded = manifest(item.ghostId, '2.0.0', ['notify', 'fs']);
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: expanded },
+    } as never);
+    const downloadMock = vi.mocked(
+      (await import('../download.js')).downloadVerifiedPlugin,
+    );
+    const downloadStarted = deferred();
+    const downloadGate = deferred();
+    downloadMock.mockImplementationOnce(async () => {
+      downloadStarted.resolve();
+      await downloadGate.promise;
+    });
+
+    const snapshotPromise = h.service.snapshot();
+    await downloadStarted.promise;
+    const changed = manifest(item.ghostId, '1.0.0', ['notify', 'workspace'] as never);
+    runtime.ghosts = [{ manifest: changed, dir: installDir, enabled: true }];
+    downloadGate.resolve();
+
+    await expect(snapshotPromise).resolves.toMatchObject({
+      items: [{ installState: 'update-available' }],
+    });
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.service.consumeUpgradeNotice()).toBeNull();
+  });
+
+  it.each(['pendingCalls', 'runningErrand', 'cindyWork'] as const)(
+    'skips a busy organization upgrade and retries on the next snapshot (%s)',
+    async (signal) => {
+      const item = summary({
+        scope: 'organization',
+        organizationId: 'org-1',
+        defaultInstall: true,
+        currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+      });
+      const oldManifest = manifest(item.ghostId, '1.0.0');
+      const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+      roots.push(installDir);
+      fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+      runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+      const h = harness([item]);
+      h.ledger.upsertInstallation({
+        ...recordForTest(item),
+        releaseId: 'release-1',
+        version: '1.0.0',
+        manifestDigest: ghostManifestDigest(oldManifest),
+      });
+      runtime[signal] = true;
+      const upgraded = manifest(item.ghostId, '2.0.0');
+      runtime.install.mockImplementation(async () => {
+        runtime.ghosts = [{ manifest: upgraded, dir: installDir, enabled: true }];
+        return runtime.ghosts[0];
+      });
+
+      await h.service.snapshot();
+      expect(runtime.install).not.toHaveBeenCalled();
+      runtime[signal] = false;
+      await h.service.snapshot();
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+      expect(h.service.consumeUpgradeNotice()).toEqual({ count: 1, name: 'Test Plugin', permissions: null, hasPermissionExpansion: false });
+    },
+  );
+
+  it('skips organization upgrades that require a newer Cindy version', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    const incompatible = { ...manifest(item.ghostId, '2.0.0'), minCindyVersion: '99.0.0' };
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: incompatible },
+    } as never);
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'update-available' }],
+    });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('continues upgrading other organization plugins when one upgrade fails', async () => {
+    const first = summary({
+      scope: 'organization', organizationId: 'org-1', defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const second = summary({
+      id: `c${'b'.repeat(24)}`, ghostId: 'cindy-second', name: 'Second Plugin',
+      scope: 'organization', organizationId: 'org-1', defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2b', version: '2.0.0' },
+    });
+    const firstDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    const secondDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(firstDir, secondDir);
+    const firstManifest = manifest(first.ghostId, '1.0.0');
+    const secondManifest = manifest(second.ghostId, '1.0.0');
+    fs.writeFileSync(path.join(firstDir, 'ghost.json'), JSON.stringify(firstManifest));
+    fs.writeFileSync(path.join(secondDir, 'ghost.json'), JSON.stringify(secondManifest));
+    runtime.ghosts = [
+      { manifest: firstManifest, dir: firstDir, enabled: true },
+      { manifest: secondManifest, dir: secondDir, enabled: true },
+    ];
+    const h = harness([first, second]);
+    h.ledger.upsertInstallation({ ...recordForTest(first), releaseId: 'release-1', version: '1.0.0', manifestDigest: ghostManifestDigest(firstManifest) });
+    h.ledger.upsertInstallation({ ...recordForTest(second), releaseId: 'release-1b', version: '1.0.0', manifestDigest: ghostManifestDigest(secondManifest) });
+    runtime.install
+      .mockRejectedValueOnce(new Error('first failed'))
+      .mockImplementationOnce(async (_file, expected) => {
+        const upgraded = {
+          ...manifest(expected.ghostId, '2.0.0'),
+          ...(expected.ghostId === second.ghostId ? { name: 'Second Plugin' } : {}),
+        };
+        const dir = expected.ghostId === first.ghostId ? firstDir : secondDir;
+        const ghost = { manifest: upgraded, dir, enabled: true };
+        runtime.ghosts = runtime.ghosts.map((candidate) => candidate.manifest.id === expected.ghostId ? ghost : candidate);
+        return ghost;
+      });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({ unavailableReason: null });
+    expect(runtime.install).toHaveBeenCalledTimes(2);
+    expect(h.service.consumeUpgradeNotice()).toEqual({ count: 1, name: 'Second Plugin', permissions: null, hasPermissionExpansion: false });
+  });
+
+  it('does not silently update public or non-defaultInstall plugins', async () => {
+    const publicItem = summary({ defaultInstall: true, currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' } });
+    const nonDefault = summary({
+      id: `c${'b'.repeat(24)}`, ghostId: 'cindy-second', scope: 'organization', organizationId: 'org-1', defaultInstall: false,
+      currentRelease: { ...summary().currentRelease, id: 'release-2b', version: '2.0.0' },
+    });
+    const firstDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    const secondDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(firstDir, secondDir);
+    const firstManifest = manifest(publicItem.ghostId, '1.0.0');
+    const secondManifest = manifest(nonDefault.ghostId, '1.0.0');
+    fs.writeFileSync(path.join(firstDir, 'ghost.json'), JSON.stringify(firstManifest));
+    fs.writeFileSync(path.join(secondDir, 'ghost.json'), JSON.stringify(secondManifest));
+    runtime.ghosts = [
+      { manifest: firstManifest, dir: firstDir, enabled: true },
+      { manifest: secondManifest, dir: secondDir, enabled: true },
+    ];
+    const h = harness([publicItem, nonDefault]);
+    h.ledger.upsertInstallation({ ...recordForTest(publicItem), releaseId: 'release-1', version: '1.0.0', manifestDigest: ghostManifestDigest(firstManifest) });
+    h.ledger.upsertInstallation({ ...recordForTest(nonDefault), releaseId: 'release-1b', version: '1.0.0', manifestDigest: ghostManifestDigest(secondManifest) });
+
+    const snapshot = await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(snapshot.items.map((entry) => entry.installState)).toEqual(['update-available', 'update-available']);
+  });
+
+  it('aggregates upgrade notices and filters directional controls from a single name', async () => {
+    const item = summary({
+      scope: 'organization', organizationId: 'org-1', defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({ ...recordForTest(item), releaseId: 'release-1', version: '1.0.0', manifestDigest: ghostManifestDigest(oldManifest) });
+    const upgraded = { ...manifest(item.ghostId, '2.0.0'), name: '\u202eSecret Plugin' };
+    h.api.detail.mockResolvedValueOnce({ ...item, currentRelease: { ...item.currentRelease, manifest: upgraded } } as never);
+    runtime.install.mockResolvedValueOnce({ manifest: upgraded, dir: installDir, enabled: true });
+
+    await h.service.snapshot();
+    expect(h.service.consumeUpgradeNotice()).toEqual({ count: 1, name: 'Secret Plugin', permissions: null, hasPermissionExpansion: false });
+    expect(h.service.consumeUpgradeNotice()).toBeNull();
+  });
+
+  it('aggregates multiple upgrades and flags permission expansion without listing names', async () => {
+    const first = summary({
+      scope: 'organization', organizationId: 'org-1', defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const second = summary({
+      id: `c${'b'.repeat(24)}`, ghostId: 'cindy-second', name: 'Second Plugin',
+      scope: 'organization', organizationId: 'org-1', defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2b', version: '2.0.0' },
+    });
+    const firstDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    const secondDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-upgrade-'));
+    roots.push(firstDir, secondDir);
+    const firstManifest = manifest(first.ghostId, '1.0.0');
+    const secondManifest = manifest(second.ghostId, '1.0.0');
+    fs.writeFileSync(path.join(firstDir, 'ghost.json'), JSON.stringify(firstManifest));
+    fs.writeFileSync(path.join(secondDir, 'ghost.json'), JSON.stringify(secondManifest));
+    runtime.ghosts = [
+      { manifest: firstManifest, dir: firstDir, enabled: true },
+      { manifest: secondManifest, dir: secondDir, enabled: true },
+    ];
+    const h = harness([first, second]);
+    h.ledger.upsertInstallation({ ...recordForTest(first), releaseId: 'release-1', version: '1.0.0', manifestDigest: ghostManifestDigest(firstManifest) });
+    h.ledger.upsertInstallation({ ...recordForTest(second), releaseId: 'release-1b', version: '1.0.0', manifestDigest: ghostManifestDigest(secondManifest) });
+    h.api.detail.mockImplementation(async (id) => {
+      const plugin = id === first.id ? first : second;
+      const nextManifest = id === first.id
+        ? manifest(plugin.ghostId, '2.0.0', ['notify', 'fs'])
+        : manifest(plugin.ghostId, '2.0.0');
+      return { ...plugin, currentRelease: { ...plugin.currentRelease, manifest: nextManifest } } as never;
+    });
+    runtime.install.mockImplementation(async (_file, expected) => {
+      const dir = expected.ghostId === first.ghostId ? firstDir : secondDir;
+      const upgraded = { ...manifest(expected.ghostId, '2.0.0', expected.ghostId === first.ghostId ? ['notify', 'fs'] : ['notify']), name: expected.ghostId === second.ghostId ? 'Second Plugin' : 'Test Plugin' };
+      const ghost = { manifest: upgraded, dir, enabled: true };
+      runtime.ghosts = runtime.ghosts.map((candidate) => candidate.manifest.id === expected.ghostId ? ghost : candidate);
+      return ghost;
+    });
+
+    await h.service.snapshot();
+    expect(h.service.consumeUpgradeNotice()).toEqual({
+      count: 2,
+      name: null,
+      permissions: null,
+      hasPermissionExpansion: true,
     });
   });
 
