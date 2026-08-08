@@ -45,7 +45,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 东西 | 实际情况 |
 |---|---|
 | `im/shared/channelToolPolicy.ts` 的 `channelForceConfirmToolCall` | 只被个人 Telegram / 微信 / 钉钉的权限策略引用。**官方 bot 不挂**——见第三节的裁决。放在 `shared/` 下是因为个人侧三个渠道共用，不代表两个 bot 共用 |
-| `packages/lizi-im/src/telegram/presentationCapabilities.ts` | 只导出并由**个人 driver** 消费 `TELEGRAM_PERSONAL_CAPABILITIES`，没有官方 bot 共用的契约数据。它的作用是把车道差异写在一处，不是让两侧取同一份值 |
+| `packages/lizi-im/src/telegram/presentationCapabilities.ts` | 只导出并由**个人 driver** 消费 `TELEGRAM_PERSONAL_CAPABILITIES`，没有官方 bot 共用的契约数据。它的作用是把车道差异写在一处，不是让两侧取同一份值。官方侧同名策略在另一个仓各写一套——具体到链接预览见第四节 2c |
 | `PresenterPolicy.intermediateMaxRenderedChars`（长度上限） | **只有官方那条路消费**（`createProgressEmitter`）。个人侧用自己的私有常量 `INTERMEDIATE_EDIT_LIMIT = 3800`（`streamingText.ts`）判断何时停止编辑。**改共享的长度策略只会改到官方 bot**——两处独立维护，改一处必须核对另一处 |
 | `PresenterPolicy.intermediateThrottleMs`（节流间隔） | 个人路径是**双层节流**：`turnRunner` 的 `CARD_PATCH_THROTTLE_MS` 确实读共享值，但真正出站的 `streamingText.ts` 还有一份写死的 `TELEGRAM_UPDATE_THROTTLE_MS = 1500`（注释称「双层节流冗余但无害」）。**改共享值只改得动 runner 那层，driver 那层不跟**——所以这个值也不是同源，改它要连 driver 的常量一起核对 |
 | `im/shared/botCommands.ts` 的**官方那一半** | 官方 bot 的命令**仍由服务端 `TELEGRAM_COMMANDS` 下发**，本表对官方侧是「声明性镜像、不接线」。测试只用内联清单核对镜像，**服务端改了命令这边完全可能不同步**。个人侧那一半是真的单一真相源（菜单与分发直接读它）；官方那一半是跨仓镜像，**改命令要两个仓一起核对** |
@@ -97,7 +97,8 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 1 | **个人 bot 缺 3 条命令** | `/unbind`（清当前 chat 的项目映射）、`/effort`（思考强度）、`/agent`（切 Agent）官方有、个人无，目前只能在桌面端改。注册表已显式登记并由 CI 拦住 | 每条各自独立 PR |
 | 1b | **官方命令镜像没有跨仓校验** | 注册表里官方那一半是手抄的声明性镜像，服务端单方面加减命令这边不会红 | 待判：把 `TELEGRAM_COMMANDS` 放进 `cindy-protocol` 两侧生成，或在服务端加反向校验。要跨仓改动与一次协议版本推进 |
 | 2 | **msg.op 动词只接了一个** | 服务端全套动词在 `xindong/cindy-server#349`（未合）；桌面侧目前只消费 `react`（ack 表情，见 `hook-control/ackReactions.ts` 的 `HOOK_FEATURE_MESSAGE_OPS` 判据）。`send` / `edit` / `delete` / `typing` / `media` 未接线 | #1855 第三刀。**这是把官方 bot 的出站改由桌面驱动的关键一步**——接完之后两侧的发射与收口才可能走同一份代码，而不是各写一套 |
-| 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧**全轮次**生效（`noReplyScope: 'all-turns'`）：`streamingText.finalize` 的哨兵判定不带 ambient 门控，任何轮次命中整条 NO_REPLY 都撤占位、零出站。官方只在 ambient 轮次生效——`presentationCapabilities.ts` 把它明写为**跨服务端 TODO**，即「想统一但要动服务端」，**不是**已裁决的产品差异，所以只登记在这里、不进第三节 | 待判：要统一得改服务端的哨兵判定 |
+| 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧**全轮次**生效（`noReplyScope: 'all-turns'`）：`streamingText.finalize` 的哨兵判定不带 ambient 门控。但**「零出站」只在惰性占位还没建过消息时成立**——哨兵前已经有正文流出的轮次消息已经发出去了，finalize 走的是**尽力撤回**：`deleteMessage` 失败被 `catch` 吞掉，那条停在过程态的消息就留在聊天里。官方只在 ambient 轮次生效，且删不掉时**不吞**——`discardProgressMessage` 返回 false，标 `retainAmbientCleanup` 并留给下一拍重试。`presentationCapabilities.ts` 把范围差异明写为**跨服务端 TODO**，即「想统一但要动服务端」，**不是**已裁决的产品差异，所以只登记在这里、不进第三节 | 待判：要统一得改服务端的哨兵判定。失败出口的差异（吞 vs 重试）一并判 |
+| 2c | **链接预览关闭两边各写一套，覆盖面还不一样** | 个人侧读契约 `linkPreviewDisabled: true`，driver 在**答案这条路**上全部消费——正文/过程消息的发送、分段发送、编辑，以及 HTML 解析失败后的纯文本回落；**卡片消息、陌生人提示、主人通知不带**。官方侧**不读这个契约**（在服务端仓 `telegram/client.ts` 里写死 `{ is_disabled: true }`），且只写在两处：`sendAdaptiveMessage` / `editAdaptiveMessage` 的 **HTML 回落**分支；纯文本的 `sendMessage` / `editMessageText`（权限卡、通知、附件转发、续跑提示，以及 adaptive 最后一层纯文本回落）都不带，链接预览按 Telegram 默认开着。两侧的 rich 主路径（`rich_message` payload）都不带这个参数，其预览行为**未核**——非公开 API | 待判：要么把参数补进官方的纯文本出站，要么把这条策略升进 `cindy-protocol` 两侧共用。跨仓 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
@@ -116,7 +117,11 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 4. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
    成功与失败要分开看——本表初版曾把只对成功收口成立的不变量泛化到失败路径。
    同理，**别把"通常这样"写成无条件**：长终稿会分段新发、原位编辑失败会 repost、
-   第一帧建消息会推送，这些边界都被本表的早期版本漏掉过。
+   第一帧建消息会推送、NO_REPLY 在已经建过消息时只是尽力撤回（删不掉就留着），
+   这些边界都被本表的早期版本漏掉过。
+   还有一条同族的：**布尔契约字段的名字说的是策略，不是覆盖面**。`linkPreviewDisabled`
+   / `progressSilent` 这种字段要数它实际挂在哪几个调用点上——个人侧的链接预览只关在
+   答案那条路上，卡片与提示类消息并不带（见第四节 2c），字段名读起来却像"全关"。
 5. 命令的**分类**以 `botCommands.ts` 的 `parityNote` 为准——本表只是把它的结论摊开讲，
    两边对不上时改本表、不改注册表。但注意注册表里**官方那一半是跨仓镜像**：改命令时
    服务端的 `TELEGRAM_COMMANDS` 也要一起核对，CI 拦不住它漂移。
