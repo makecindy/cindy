@@ -1177,7 +1177,11 @@ export async function requestCustomProviderText(input: {
   }
   if (input.credential) {
     headers.Authorization = `Bearer ${input.credential}`;
-    if (input.agentKind === 'claude-code' && input.authStrategy === 'api-key-header') {
+    // Anthropic wire + api-key-header 时补 x-api-key(与 agentKind 无关,review 反馈)
+    if (
+      input.authStrategy === 'api-key-header'
+      && (input.agentKind === 'claude-code' || effectiveWireProtocol === 'anthropic-messages')
+    ) {
       headers['x-api-key'] = input.credential;
     }
   }

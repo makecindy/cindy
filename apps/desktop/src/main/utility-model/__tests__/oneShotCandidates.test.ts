@@ -1645,10 +1645,35 @@ describe('requestProviderHttpText / requestCustomProviderText 边界（review �
     const init = fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string>; body: string };
     expect(init.headers?.['anthropic-version']).toBe('2023-06-01');
     expect(init.headers?.['Authorization']).toBe('Bearer k');
+    expect(init.headers?.['x-api-key']).toBe('k');
     expect(JSON.parse(init.body)).toMatchObject({
       model: 'm',
       max_tokens: 32,
       messages: [{ role: 'user', content: 'x' }],
     });
+  });
+
+  it('pi 自定义供应商 anthropic-messages wire + api-key-header → 同样补 x-api-key', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'pi anthropic title' }] }),
+    } as never);
+    const text = await requestCustomProviderText({
+      agentKind: 'pi',
+      baseUrl: 'https://custom.example/v1',
+      wireProtocol: 'anthropic-messages',
+      credential: 'k',
+      authStrategy: 'api-key-header',
+      model: 'm',
+      prompt: 'x',
+      maxTokens: 32,
+    });
+    expect(text).toBe('pi anthropic title');
+    expect(fetchMock).toHaveBeenCalledWith('https://custom.example/v1/messages', expect.anything());
+    const init = fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string>; body: string };
+    expect(init.headers?.['anthropic-version']).toBe('2023-06-01');
+    expect(init.headers?.['Authorization']).toBe('Bearer k');
+    expect(init.headers?.['x-api-key']).toBe('k');
   });
 });
