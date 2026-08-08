@@ -181,6 +181,35 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(model).toMatchObject({ efforts: ['high', 'ultra'], defaultEffort: 'ultra' });
   });
 
+  it('requires a target-agent route before inheriting a canonical registry entry', () => {
+    const provider = buildUserProvider(
+      {
+        id: 'relay',
+        name: 'Relay',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' }],
+          },
+          'claude-code': {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+
+    expect(provider.models.codex?.[0]).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+    expect(provider.models['claude-code']?.[0]).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+  });
+
   it('respects an explicit hidden default for discovered models', () => {
     const p = buildUserProvider({
       ...codexOnly,

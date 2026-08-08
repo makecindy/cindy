@@ -63,10 +63,11 @@ function registryEffortMetadata(
   const candidates = new Set([modelId]);
   if (modelId.startsWith('chatgpt/')) candidates.add(modelId.slice('chatgpt/'.length));
   const matches = registry.models.filter((entry) =>
-    candidates.has(entry.id)
-      || entry.routes.some(
-        (route) => route.agents.includes(agent) && candidates.has(route.modelId),
-      ),
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (candidates.has(entry.id) || candidates.has(route.modelId)),
+    ),
   );
   const entries = [...new Map(matches.map((entry) => [entry.id, entry])).values()];
   if (entries.length !== 1) return undefined;
