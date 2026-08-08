@@ -58,7 +58,6 @@ import {
 } from './settings-store';
 import { keepAwakeController } from './power-blocker';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
-import { createPresenceOfflineGate } from './presenceOfflineGate';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
@@ -248,17 +247,19 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
 const presenceOnlineByDevice = new Map<string, boolean>();
 
 /**
- * 发送门禁用的「presence 显式离线」判据(订阅重放 fan-out 与 dispatch 的 outbox
- * 全量 flush 共用)。当代视图是单一真相,gate 只叠加「跨重连保留上一代离线事实」
- * 那一层——重连的 ws-online 全量重放跑在本代首帧 presence 之前,只查当代视图会
- * 让门禁在主路径上失效(不变量与理由见 presenceOfflineGate.ts)。
+ * 发送门禁判据:**当代 presence 已明确宣告**该设备离线(供 dispatch 的
+ * invoke-result outbox 全量轮跳过盲发,见 setDispatchPresenceOfflineCheck)。
+ *
+ * 刻意只读当代视图、不做任何跨连接代的记忆:
+ * - presence-changed 是**只发给当时在线设备的增量广播,新连接没有全量重放**
+ *   (mobile 侧同一结论已固化在 presenceRecovery.resetPresenceAvailabilityForConnection
+ *   的注释里)。断线期间恢复上线的设备,重连后不会有任何 presence 帧来纠正一条
+ *   转存下来的 offline 结论——跨代保留会把它永久挡在门外,拿不到订阅与在途回包。
+ * - 因此门禁的作用域被限定为「同一连接代内、presence 已明说离线」这一段:视图为空
+ *   (刚重连、尚无首帧 presence)一律 fail-open。它是减量优化,不是安全边界。
  */
-const presenceOfflineGate = createPresenceOfflineGate(
-  (deviceId) => presenceOnlineByDevice.get(deviceId),
-);
-
 function isPresenceExplicitlyOffline(deviceId: string): boolean {
-  return presenceOfflineGate.isExplicitlyOffline(deviceId);
+  return presenceOnlineByDevice.get(deviceId) === false;
 }
 
 const presenceNameByDevice = new Map<string, string>();
@@ -481,9 +482,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 上线时 wasAvailable 仍是 true,「不可用→可用」翻转永远不发生,推送流一直
     // 缺到下次无关恢复事件(review P1)。
     if (status !== 'online') {
-      // 清空前转存本代已知的 offline 事实:重连后的 ws-online 全量重放跑在本代
-      // 首帧 presence 之前,发送门禁需要它才不至于对已知离线目标整批盲发。
-      presenceOfflineGate.carryOverGenerationEnd(presenceOnlineByDevice);
       presenceOnlineByDevice.clear();
       presenceAvailableByDevice.clear();
     }
@@ -526,9 +524,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
-    // 权威 presence 帧已到:早于本帧的可达证据与跨代结论一并让位,判据交回刚写入
-    // 的当代值(无论本帧 online / offline)。
-    presenceOfflineGate.observePresenceFrame(snap.deviceId);
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
     // `!== false` 与重放侧的 `!== true` 对称:视图清空后重连的首帧不可用 presence
@@ -595,9 +590,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 带上来源 deviceId(src),renderer 据此把事件路由到对应远程设备的 store
   client.onFrame((env: Envelope) => {
     if (!env.src) return;
-    // 收到来自该设备的帧 = 本代最新的可达证据(帧发出时对端活着、relay 路由通),
-    // 门禁内优先于当代 presence(优先级链与三轮 review 推导见 presenceOfflineGate.ts)。
-    presenceOfflineGate.observeReachable(env.src);
     // 控制端:被控端撤销访问权限会发 link-close('revoked')。据此移除该被控端的项目/对话 +
     // 标记「已撤销」(presence 不变 —— 被控端仍在线且全局允许被控,故必须靠这条信号)。
     if (env.kind === 'link-close') {
@@ -916,8 +908,6 @@ function teardownActiveLink(): void {
   // 同步在降级过一次之后永久失效。清空 presence 就够了 —— 没有对端就不会发送,
   // client 为 null 时 sendPush 也是 no-op。
   presenceOnlineByDevice.clear();
-  // 离线事实是链路 / 账号作用域的:登出或失去持有权后翻篇,不串到下一段链路。
-  presenceOfflineGate.reset();
   clearControllerPlatforms();
   presenceNameByDevice.clear();
   resetSubscriptionRefs();
@@ -933,16 +923,15 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
     `device-link replay subscriptions (${reason}): devices=${refs.length} topics=${topicCount}`,
   );
   for (const { deviceId, topics } of refs) {
-    // 首发与重试同门禁(重试前置门见 replayDeviceSubscription 的 timer 回调):
-    // presence 已明确宣告离线的目标跳过盲发——subscribe 必弹 DEVICE_OFFLINE,
-    // 只喂 relay 聚合背压;presence 未知(重连后视图刚清空)不拦,恢复窗口的
-    // 首发照旧。设备回归由 presence-online 翻转重放接棒(onPresenceChanged)。
-    if (isPresenceExplicitlyOffline(deviceId)) {
-      log.debug(
-        `device-link replay subscriptions (${reason}): skip ${deviceId.slice(0, 8)} (presence offline)`,
-      );
-      continue;
-    }
+    // 这里**不套** presence 离线门禁(2026-08-08 review 的收敛结论,别再加回来):
+    //  - 唯一的广播型调用者是 ws-online,而它跑在「非 online 时清空视图」之后、
+    //    本代首帧 presence 之前,当代 presence 必然为空 → 门禁在此恒不成立,是死码;
+    //  - 其余三个调用者都是定向的(link-reopen / responsiveness-recovered /
+    //    presence-online),各自的触发证据(收到 link-accept、探测 invoke 刚成功、
+    //    presence 刚翻成 online)都比 presence 视图更新更强,拿更旧的 presence 去
+    //    拦它们只会把恢复事件拦死——与 dispatch 侧「定向 flush 不受门禁约束」同构。
+    // 已知离线目标的无效 subscribe 由 replayDeviceSubscription 的重试前置门
+    // (presenceAvailableByDevice !== true)在当代内收敛,首发放行一帧即可。
     replayDeviceSubscription(deviceId, topics, reason, 0);
   }
 }

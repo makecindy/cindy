@@ -243,8 +243,10 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
 
 describe('[5] outbox flush 的 presence 显式离线门禁', () => {
   it('presence 明确离线的控制端本轮跳过(条目保留),在线控制端照常投递;设备回归后可投', () => {
-    // 2026-08-08 线上:ws-online 全量 flush 对已离线目标逐帧弹 DEVICE_OFFLINE,
-    // 叠进 relay 聚合背压。门禁按 src 隔离——一个离线控制端不影响其它控制端。
+    // 门禁要掐掉的是**同一连接代内**的稳态盲发:relay 在线时全量轮每 500ms 跑一次
+    // (REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS),对 presence 已明说离线的控制端就是
+    // 2 帧/秒的 DEVICE_OFFLINE 稳定输出,直到 TTL 出清——纯粹喂 relay 聚合背压。
+    // 门禁按 src 隔离:一个离线控制端不影响其它控制端本轮的投递。
     const offline = new Set(['ctrl-offline']);
     setDispatchPresenceOfflineCheck((id) => offline.has(id));
     const sendInvokeResult = vi.fn().mockImplementation(() => {
