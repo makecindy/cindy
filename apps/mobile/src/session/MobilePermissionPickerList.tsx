@@ -11,6 +11,7 @@ import { Text } from '@/components/AppText';
 import { Check } from 'lucide-react-native';
 
 import type { MobileChoiceOption } from '@/session/agentCapabilities';
+import { permissionOptionsForDisplay } from '@/session/mobilePermissionPickerOptions';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import { fontWeight, iconSize, iconStroke, lineHeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
@@ -60,7 +61,7 @@ export function MobilePermissionPickerList({
   const { t } = useTranslation();
   // 计划模式已迁移到 + 号 Context 面板的专属入口(点击即进入),权限下拉不再展示 plan;
   // 当前模式为 plan 时列表无高亮行,从这里选任意模式即退出计划模式。
-  const visibleOptions = options.filter((option) => option.id !== 'plan');
+  const visibleOptions = permissionOptionsForDisplay(options, activeMode);
   return (
     <>
       {visibleOptions.map((option) => {
