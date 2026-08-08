@@ -20,6 +20,7 @@ import {
 
 export type ComposerSuggestionActionId =
   | 'attach-files'
+  | 'capture-appshot'
   | 'new-goal'
   | 'plan-mode'
   | 'collaboration'

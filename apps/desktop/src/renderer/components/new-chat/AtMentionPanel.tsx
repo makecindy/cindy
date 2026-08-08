@@ -33,6 +33,7 @@ import {
   Monitor,
   Paperclip,
   Plug,
+  Scan,
   Sparkles,
   Target,
   UsersRound,
@@ -102,6 +103,7 @@ interface AtMentionPanelProps {
 
 const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
   'attach-files': Paperclip,
+  'capture-appshot': Scan,
   'new-goal': Target,
   'plan-mode': ClipboardList,
   collaboration: UsersRound,

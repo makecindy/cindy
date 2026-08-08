@@ -80,6 +80,9 @@ import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast
 import { usePluginUpgradeNoticeToast } from '@/hooks/usePluginUpgradeNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
+import { getDraft as getComposerDraft, saveDraft as saveComposerDraft } from '@/lib/composerDraftStore';
+import { installAppshotInbox, routeAppshotCapture } from '@/features/appshots/appshotInbox';
+import { sessionsStore } from '@/lib/sessionsStore';
 import { cn } from '@/lib/utils';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
@@ -371,6 +374,36 @@ export function MainLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation();
+
+  const appshotRouteContextRef = useRef({ location, navigate });
+  appshotRouteContextRef.current = { location, navigate };
+
+  useEffect(() => {
+    const inbox = installAppshotInbox({
+      route: async (result) => {
+        const { location: currentLocation, navigate: currentNavigate } = appshotRouteContextRef.current;
+        const match = currentLocation.pathname.match(/^\/cc-agent\/([^/]+)$/);
+        const sessionId = match?.[1];
+        const staticSegment = sessionId && CC_AGENT_STATIC_SEGMENTS.includes(sessionId);
+        const session = sessionId && !staticSegment ? sessionsStore.findById(sessionId) : null;
+        return routeAppshotCapture(result, {
+          route: {
+            writable: session?.status === 'active',
+            local: !session?.remoteHostId && !session?.deviceLinkDeviceId,
+            agentKind: session?.agentKind ?? null,
+            sessionId: session?.id ?? null,
+            remoteHostId: session?.remoteHostId ?? null,
+            deviceLinkDeviceId: session?.deviceLinkDeviceId ?? null,
+          },
+          getDraft: getComposerDraft,
+          saveDraft: saveComposerDraft,
+          patchDraft,
+          navigate: currentNavigate,
+        });
+      },
+    });
+    return () => inbox.dispose();
+  }, []);
 
   useEffect(() => {
     syncNotificationsEnabledToMain();

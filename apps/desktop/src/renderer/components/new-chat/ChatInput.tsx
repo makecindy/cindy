@@ -66,7 +66,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
 import type { AttachedFile, MentionedResource, ImageAnnotationStroke } from '@/lib/fileTypes';
 import {
@@ -137,6 +137,8 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
+import { appshotThumbnailLabel } from '@/features/appshots/appshotInbox';
+import { canCaptureAppshotFromComposer } from '@/features/appshots/appshotInbox';
 import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
@@ -542,6 +544,7 @@ interface ChatInputProps {
     hasAttachments: boolean;
     addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
     addClipboardImage: (blob: Blob) => Promise<void>;
+    addAppshot: (result: import('../../../shared/appshots').AppshotCaptureResult) => void;
     rejections: { id: string; message: string }[];
     dismissRejection: (id: string) => void;
     clearRejections: () => void;
@@ -2562,6 +2565,41 @@ export function ChatInput({
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
   const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;
   composerMutationLockedRef.current = composerMutationLocked;
+  const appshotCaptureEnabled = canCaptureAppshotFromComposer({
+    platform: window.electronAPI?.platform,
+    sessionId,
+    runtimeAgentKind,
+    vendorKey,
+    remoteHostId,
+    deviceLinkDeviceId,
+    composerMutationLocked,
+  });
+  const captureAppshot = useCallback(async () => {
+    if (!appshotCaptureEnabled) return;
+    try {
+      await window.electronAPI.appshots.capture();
+    } catch (error) {
+      if (extractIpcError(error)?.code === 'PERMISSION_DENIED') {
+        const openSettings = await confirmDialog({
+          title: t('newChat.chatInput.appshots.permissionTitle'),
+          description: t('newChat.chatInput.appshots.permissionDescription'),
+          confirmText: t('newChat.chatInput.appshots.openSettings'),
+          cancelText: t('newChat.chatInput.appshots.cancel'),
+          autoFocusConfirm: true,
+        });
+        if (openSettings) {
+          const result = await window.electronAPI.openExternal(
+            'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+          );
+          if (!result.success) {
+            toast.error(t('newChat.chatInput.appshots.openSettingsFailed'));
+          }
+        }
+        return;
+      }
+      toast.error(t('newChat.chatInput.appshots.captureFailed'));
+    }
+  }, [appshotCaptureEnabled, confirmDialog, t]);
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
   }, [composerMutationLocked, editor]);
@@ -3611,6 +3649,14 @@ export function ChatInput({
         run: () => suggestionFileInputRef.current?.click(),
       });
     }
+    if (appshotCaptureEnabled) {
+      actions.push({
+        id: 'capture-appshot',
+        label: t('newChat.chatInput.appshots.menuItem'),
+        disabled: composerMutationLocked,
+        run: () => void captureAppshot(),
+      });
+    }
     if (inSessionGoalEnabled || onNewGoal) {
       actions.push({
         id: 'new-goal',
@@ -3681,6 +3727,8 @@ export function ChatInput({
     }
     return actions;
   }, [
+    appshotCaptureEnabled,
+    captureAppshot,
     collaboration,
     composerMutationLocked,
     confirmDialog,
@@ -7376,6 +7424,9 @@ function ThumbnailItem({
   // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
   // base64 的图片同样落到文件卡分支。
   const isImageThumb = file.category === 'image' && Boolean(file.url || file.base64);
+  const thumbnailLabel = file.appshot
+    ? appshotThumbnailLabel(file.appshot, file.name)
+    : file.name;
   // 副行是「类型 · 大小」;无扩展名(Makefile 之类)或 size 缺失时按存在的部分给。
   // file.size 是拖入那一刻的快照:文件在托盘期间被改写后,发出去的是新内容,卡片
   // 却还报旧字节数。缩略图复核时 main 会把当前 stat 大小一并带回,这里优先用它。
@@ -7410,15 +7461,16 @@ function ThumbnailItem({
         disabled={isDownloadOnly}
         aria-label={
           isDownloadOnly
-            ? t('chat.userMessage.attachmentAttachedAria', { name: file.name })
-            : `Preview ${file.name}`
+            ? t('chat.userMessage.attachmentAttachedAria', { name: thumbnailLabel })
+            : `Preview ${thumbnailLabel}`
         }
+        title={file.appshot ? thumbnailLabel : undefined}
       >
         {file.category === 'image' && (file.url || file.base64) ? (
           <span className="relative block h-full w-full">
             <img
               src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
-              alt={file.name}
+              alt={thumbnailLabel}
               className="h-full w-full rounded-lg object-cover"
               draggable={false}
             />
@@ -7451,7 +7503,9 @@ function ThumbnailItem({
             </span>
             <span className="flex min-w-0 flex-col gap-0.5">
               <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
-                {file.name}
+                {file.appshot
+                  ? thumbnailLabel
+                  : file.name /* ordinary attachment: {file.name} */}
               </span>
               {metaLine ? (
                 <span className="truncate text-11" style={{ color: 'var(--text-secondary)' }}>
@@ -7486,7 +7540,7 @@ function ThumbnailItem({
           open={isHovered}
           anchorRef={thumbRef}
           src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
-          alt={file.name}
+          alt={thumbnailLabel}
         />
       ) : null}
       {isHovered &&

@@ -46,6 +46,8 @@ import {
   isDataOwnerGenerationCurrent,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import type { AppshotCaptureResult } from '../../shared/appshots';
+import { toAppshotAttachment } from '@/features/appshots/appshotInbox';
 
 /**
  * A single "this file did not get attached" rejection, surfaced inline in the
@@ -62,6 +64,8 @@ export interface UseAttachmentsReturn {
   hasAttachments: boolean;
   addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
   addClipboardImage: (blob: Blob) => Promise<void>;
+  /** Add a native Appshot whose URL is already managed by cindy-media. */
+  addAppshot: (result: AppshotCaptureResult) => void;
   /**
    * Files rejected on the most recent add attempt (oversize / empty / blocked
    * type / max-files / read failure). Rendered inline near the composer; stays
@@ -790,6 +794,19 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     [isAttachmentOperationScopeCurrent, pushScopedRejections, settleAttachmentsForScope, t],
   );
 
+  const addAppshot = useCallback((result: AppshotCaptureResult) => {
+    const attachment = toAppshotAttachment(result);
+    setAttachments((prev) =>
+      prev.some(
+        (file) =>
+          file.id === attachment.id ||
+          file.appshot?.captureId === attachment.appshot?.captureId,
+      )
+        ? prev
+        : [...prev, attachment],
+    );
+  }, []);
+
   const removeFile = useCallback((id: string) => {
     const removed = attachmentsRef.current.find((f) => f.id === id);
     // 共享引用(如"标注历史图"直接引用消息里的原图)不归附件所有,删除附件
@@ -853,6 +870,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     hasAttachments: attachments.length > 0,
     addFiles,
     addClipboardImage,
+    addAppshot,
     rejections,
     dismissRejection,
     clearRejections,
