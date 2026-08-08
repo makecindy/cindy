@@ -269,22 +269,58 @@ describe('[4] 生命周期与背压', () => {
     expect(sendPush.mock.calls.length).toBe(before);
   });
 
-  it('relay 离线:同样就地降级(逐帧 best-effort 自行吞掉失败),不滞留', () => {
+  it('逐帧降级在第一次失败处停下:一次背压不再重放成 N 条失败与 N 条日志', () => {
+    // review P1:降级本身不得复刻本 PR 要消掉的洪峰。批被拒后逐帧若第一帧也进不去,
+    // 同步循环内可靠窗口不会被 ACK 腾空,后续帧必然同样失败 —— 停在第一次失败处,
+    // 交付集合完全不变,省掉的只是注定失败的尝试与逐条 WARN。
+    const sendPush = vi.fn((
+      _dst: string,
+      _channel: string,
+      _payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    for (let i = 0; i < 5; i += 1) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    // 一次批帧尝试 + 一次逐帧尝试(而不是 1 + 5)
+    expect(sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL)).toHaveLength(1);
+    expect(sendPush.mock.calls.filter((c) => c[1] === 'maker:event')).toHaveLength(1);
+
+    // 缓冲仍然为空:强不变量不因提前停止而破
+    const before = sendPush.mock.calls.length;
+    vi.advanceTimersByTime(10_000);
+    expect(sendPush.mock.calls.length).toBe(before);
+  });
+
+  it('relay 离线:不做逐帧尝试(逐帧同样发不出去),直接丢弃且不滞留', () => {
+    // NOT_CONNECTED 下逐帧只是把同一次失败重放 ≤64 次 —— 纯日志洪峰、零收益。
+    // 与 BACKPRESSURE 的区别:后者「大批被拒 ≠ 小帧被拒」(#2167 可驱逐档),值得试。
     let status = 'online';
-    const h = mkClient();
+    const sendPush = vi.fn();
+    const h = mkClient({ sendPush });
     h.client.getStatus = vi.fn(() => status) as never;
     __testing.setActiveClient(h.client as never);
     subscribeBatchController('ctrl-1', ['session:s1']);
 
     __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
     status = 'connecting';
     vi.advanceTimersByTime(WINDOW_MS);
 
-    // 未以批帧发出;缓冲已空,不会在恢复后突然补投陈旧事件
-    expect(batchesIn(h.sent)).toHaveLength(0);
+    // 一帧都没发:批帧因离线未尝试,逐帧降级也被判据挡掉
+    expect(sendPush).not.toHaveBeenCalled();
+    // 缓冲已空,不会在恢复后突然补投陈旧事件
     status = 'online';
     vi.advanceTimersByTime(10_000);
-    expect(batchesIn(h.sent)).toHaveLength(0);
+    expect(sendPush).not.toHaveBeenCalled();
   });
 });
 

@@ -598,13 +598,16 @@ const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
  *
  * 所以这里**去掉了退避重试**,换成一条强不变量:
  *
- *   **缓冲的生命周期不跨越任何一次发送失败。** flush 要么整批发出,要么就地
- *   降级为逐帧 best-effort 发送(与本 PR 之前的旧语义完全一致),两种情况都让
- *   缓冲立刻清空。
+ *   **缓冲的生命周期不跨越任何一次发送失败。** flush 返回时缓冲一定为空——整批
+ *   发出、逐帧降级发出、或(逐帧也注定失败时)直接丢弃,三条出路都不保留状态。
  *
  * 于是「同会话有待发批」这个状态只存在于「窗口内、且尚未尝试发送」的区间,
  * 收口点(flushMakerEventBatchesForSessionPush)一次调用即可保证清空,顺序问题
  * 整族消失,而不是每轮补一个新场景。
+ *
+ * 降级本身也要收敛,否则它就是本 PR 要消掉的那个洪峰的复刻(review P1):逐帧
+ * 只在**可能成功**时才做(判据见 shouldDegradeBatchToPerFrame),且在第一次失败处
+ * 停下、剩余事件计入一条聚合日志(账本见 MakerEventBatchFlushOutcome)。
  *
  * 代价与为什么可接受:拥塞时不再保留事件等窗口恢复。但那本来不是本 PR 的目标
  * (常态减帧才是),而拥塞时的取舍是 #2167 的职责——降级后的逐帧发送正好落回
@@ -680,7 +683,9 @@ function stageMakerEventPush(
     tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
     || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES
   ) {
-    flushMakerEventBatchSession(dst, stage, sessionId);
+    const outcome = createMakerEventBatchFlushOutcome();
+    flushMakerEventBatchSession(dst, stage, sessionId, outcome);
+    reportMakerEventBatchFlushOutcome(dst, outcome);
     return;
   }
   scheduleMakerEventBatchFlush(dst, stage);
@@ -716,23 +721,68 @@ function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage):
   (stage.timer as unknown as { unref?: () => void }).unref?.();
 }
 
+/**
+ * 一次 flush 内的降级账本。存在的理由是**降级不能自己变成新的洪峰**(review P1):
+ * 批帧被拒后逐帧重放最多 64 次,每次一条 WARN,正好把本 PR 要消掉的逐事件
+ * admission 与告警洪峰原样重建。两条收敛:
+ *  - 一旦确认「这个 peer 现在发不出去」,本轮后续切片与会话只清空、不再尝试发送
+ *    (本轮是同步的,可靠传输窗口不会在循环中间被 ACK 腾空,后续尝试必然同样失败);
+ *  - 被跳过的事件数聚合成**一条**日志,而不是每帧一条。
+ */
+interface MakerEventBatchFlushOutcome {
+  /** 本轮已确认发不出去:只清空缓冲,不再尝试发送。 */
+  sendingBlocked: boolean;
+  /** 本轮未尝试发送而直接丢弃的事件数(用于聚合日志)。 */
+  droppedEvents: number;
+}
+
+function createMakerEventBatchFlushOutcome(): MakerEventBatchFlushOutcome {
+  return { sendingBlocked: false, droppedEvents: 0 };
+}
+
+function reportMakerEventBatchFlushOutcome(
+  dst: string,
+  outcome: MakerEventBatchFlushOutcome,
+): void {
+  if (outcome.droppedEvents === 0) return;
+  log.warn(
+    `maker:event batch flush to ${shortId(dst)}: peer send unavailable, `
+    + `dropped ${outcome.droppedEvents} event(s) without retry`,
+  );
+}
+
+/**
+ * 批帧发送失败后,逐帧重放**有没有可能成功**。
+ *  - `NOT_CONNECTED`(含本模块在 relay 离线时自造的那条):整条链路发不出去,逐帧
+ *    只是把同一次失败重放 ≤64 次 —— 纯日志洪峰、零收益,直接丢。
+ *  - `BACKPRESSURE`:大批被拒 ≠ 小帧被拒(#2167 的可驱逐档:一帧小 maker:event 能靠
+ *    驱逐队头腾出槽位,256KB 的批不行),逐帧确实有机会,值得降级。
+ *  - `PAYLOAD_TOO_LARGE` / 其它:逐帧是唯一出路(且逐帧还带 compact 兜底),降级。
+ */
+function shouldDegradeBatchToPerFrame(err: unknown): boolean {
+  return !(err instanceof DeviceLinkError && err.code === 'NOT_CONNECTED');
+}
+
 /** flush 该控制端的全部会话批(窗口到点 / 显式收口)。 */
 function flushMakerEventBatchStage(dst: string, stage: MakerEventBatchStage): void {
+  const outcome = createMakerEventBatchFlushOutcome();
   for (const sessionId of [...stage.batches.keys()]) {
-    flushMakerEventBatchSession(dst, stage, sessionId);
+    flushMakerEventBatchSession(dst, stage, sessionId, outcome);
   }
+  reportMakerEventBatchFlushOutcome(dst, outcome);
 }
 
 /**
  * 发送某会话的待发批,**返回时缓冲一定为空**(强不变量,见本段顶部注释):
- * 按段 FIFO、段内按上限切片;任一切片发送失败即就地降级为逐帧 best-effort
- * 发送该切片的事件(与本 PR 之前的旧语义一致,含 compactOversizedPushPayload
- * 兜底),不保留、不重试。
+ * 按段 FIFO、段内按上限切片;切片发送失败时,若逐帧还有机会就就地降级为逐帧
+ * best-effort 发送(与本 PR 之前的旧语义一致,含 compactOversizedPushPayload
+ * 兜底),不保留、不重试。降级本身的洪峰由 outcome 账本收敛(见其定义)。
  */
 function flushMakerEventBatchSession(
   dst: string,
   stage: MakerEventBatchStage,
   sessionId: string,
+  outcome: MakerEventBatchFlushOutcome,
 ): void {
   const segments = stage.batches.get(sessionId);
   stage.batches.delete(sessionId);
@@ -745,6 +795,11 @@ function flushMakerEventBatchSession(
     while (segment.events.length > 0) {
       const slice = takeMakerEventBatchSlice(segment);
       if (slice.length === 0) break;
+      // 本轮已确认发不出去:只把缓冲取空(维持强不变量),不再制造注定失败的帧。
+      if (outcome.sendingBlocked) {
+        outcome.droppedEvents += slice.length;
+        continue;
+      }
       const payload: MakerEventBatchPayload = { sessionId, events: slice };
       try {
         if (!activeClient || activeClient.getStatus() !== 'online') {
@@ -755,11 +810,21 @@ function flushMakerEventBatchSession(
         } else {
           activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
         }
-      } catch {
-        // 降级为逐帧:sendPushBestEffort 吞掉每条的失败并保留超大帧裁剪,
-        // 顺序仍是原顺序。批不因失败滞留 —— 那正是顺序问题的唯一来源。
-        for (const event of slice) {
-          sendPushBestEffort(dst, MAKER_PUSH.EVENT, event, segment.ownerStamp);
+      } catch (err) {
+        if (!shouldDegradeBatchToPerFrame(err)) {
+          outcome.sendingBlocked = true;
+          outcome.droppedEvents += slice.length;
+          continue;
+        }
+        // 降级为逐帧:sendPushBestEffort 吞掉每条的失败并保留超大帧裁剪,顺序仍是
+        // 原顺序。批不因失败滞留 —— 那正是顺序问题的唯一来源。
+        for (let i = 0; i < slice.length; i += 1) {
+          if (sendPushBestEffort(dst, MAKER_PUSH.EVENT, slice[i], segment.ownerStamp)) continue;
+          // 逐帧也进不去:同步循环内窗口不会被 ACK 腾空,后续帧必然同样失败。停在
+          // 这里,把没尝试过的计入丢弃 —— 失败的那一帧自己已经记过一条日志。
+          outcome.sendingBlocked = true;
+          outcome.droppedEvents += slice.length - i - 1;
+          break;
         }
       }
     }
@@ -812,7 +877,9 @@ function flushMakerEventBatchesForSessionPush(
   if (!stage || stage.batches.size === 0) return;
   const sessionId = readPushSessionId(payload);
   if (!sessionId || !stage.batches.has(sessionId)) return;
-  flushMakerEventBatchSession(dst, stage, sessionId);
+  const outcome = createMakerEventBatchFlushOutcome();
+  flushMakerEventBatchSession(dst, stage, sessionId, outcome);
+  reportMakerEventBatchFlushOutcome(dst, outcome);
 }
 
 /** 丢弃单个会话的待发批(退订该会话流时调用);stage 空则一并回收定时器。 */
@@ -1057,37 +1124,44 @@ export function pushToTopicSubscribers(
   forwardPush(channel, payload, ownerStamp);
 }
 
+/**
+ * best-effort 转发一帧 push:失败只记日志、不抛。
+ * @returns 帧是否已交给可靠传输(含 compact 兜底后成功)。绝大多数调用方忽略返回值;
+ *   批降级路径靠它在第一次失败处停下来,不把一次失败重放成 ≤64 条 WARN。
+ */
 function sendPushBestEffort(
   dst: string,
   channel: string,
   payload: unknown,
   ownerStamp?: PushOwnerStamp,
-): void {
-  if (!activeClient) return;
+): boolean {
+  if (!activeClient) return false;
   try {
     if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
     else activeClient.sendPush(dst, channel, payload, ownerStamp);
-    return;
+    return true;
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      return;
+      return false;
     }
 
     const compactPayload = compactOversizedPushPayload(channel, payload);
     if (!compactPayload) {
       log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      return;
+      return false;
     }
 
     try {
       if (ownerStamp === undefined) activeClient.sendPush(dst, channel, compactPayload);
       else activeClient.sendPush(dst, channel, compactPayload, ownerStamp);
       log.warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
+      return true;
     } catch (retryErr) {
       log.warn(
         `forwardPush to ${shortId(dst)} failed after compact retry (${channel}): ${String(retryErr)}`,
       );
+      return false;
     }
   }
 }
