@@ -575,8 +575,16 @@ export function isProtectedSystemPath(target: string): boolean {
  * `highImpactExecutionNeedsConsent` 判定(它按引号外的真实执行结构分析,不读本函数
  * 的产物)。这里剥掉的只是纯字符串实参。
  */
-/** rg 家族里「值是要启动的外部程序」的选项(`--pre COMMAND`、`--hostname-bin PROG`)。 */
-const RG_EXECUTABLE_OPTIONS = /(?:^|\s)--(?:pre|hostname-bin)$/;
+/**
+ * grep 家族里「值是**要启动的外部程序**」的选项:rg 的 `--pre COMMAND` /
+ * `--hostname-bin PROG`、ag 的 `--pager COMMAND`。这些位置的值不是搜索模式,抹成 DATA
+ * 就把执行证据抹没了 —— 而这几个工具又都在只读白名单里,结果是**直接放行**(review 报:
+ * `ag --pager "sudo cat /etc/shadow" foo .` 实测由确定性必问降成了 auto-approve)。
+ *
+ * 尾部那条 `[\w-]*-(?:bin|cmd|command|prog|program)` 覆盖同族的命名惯例,不必等每个新
+ * 选项各报一次。
+ */
+const RG_EXECUTABLE_OPTIONS = /(?:^|\s)--(?:pre|pager|hostname-bin|[\w-]*-(?:bin|cmd|command|prog|program))$/;
 
 function stripDataLiterals(command: string): string {
   const QUOTED = String.raw`(?:"[^"]*"|'[^']*')`;
@@ -663,7 +671,9 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // **必须限定在 `gh auth` 命令位**:这个字符串出现在别处只是普通文本或参数,
   // `echo --show-token`、`grep -rn -- --show-token src` 原本是直接放行的,不限定就被打成
   // 硬弹窗 —— 正是本 PR 要消灭的那类误报(review 报)。命令位写法与下面的短选项一致。
-  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s--show-token(?:$|[\s=])/,
+  // 首尾边界要**对称**:命令位允许分隔符开头(`ls;gh auth …`),flag 后面同样可以紧跟
+  // `;` `|` `&` `)` 而不带空格 —— 只补开头是把同一条边界修了一半(review 报)。
+  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s--show-token(?:$|[\s=|&;)])/,
   // 短选项形态:`gh auth status -t` 与含 `t` 的簇写(`-wt`/`-tw`)是同一个 flag,只把它挡在
   // gh 只读白名单外不够 —— 落灰区就可能被轻量审阅器静默放行(review 三轮 P1)。`-t` 本身
   // 在别的命令里含义完全不同(`docker -t`、`tar -t`),所以**限定在 `gh auth` 命令位**上匹配。

@@ -146,6 +146,11 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     'gh auth status -t=true',
     'gh auth status --show-token',
     'gh auth status --show-token=true',
+    // flag 后紧跟分隔符同样是合法写法,首尾边界必须对称
+    'gh auth status --show-token;',
+    'gh auth status --show-token|cat',
+    'gh auth status --show-token&&ls',
+    '(gh auth status --show-token)',
     'gh auth status --hostname github.com -t',
     'gh auth status --hostname github.com -t=true',
     '/usr/bin/gh auth status -t',
@@ -233,6 +238,7 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     // rg 的外部程序选项:值是要启动的程序,不是搜索模式
     'rg --pre "sudo cat /etc/shadow" foo .',
     'rg --hostname-bin "sudo id" foo .',
+    'ag --pager "sudo cat /etc/shadow" foo .',
     // 输出进程替换在双引号内同样会执行
     'git commit -m "x >(sudo tee /etc/x) y"',
   ],
@@ -373,6 +379,8 @@ describe('对抗语料 — 反向边界:读输入 ≠ 执行输入', () => {
       'GH_EDITOR=vim gh issue create',
       'MANPAGER=cat man ls',
     ];
+    // 执行型选项的值是普通程序名时,只读查询仍照常直接放行。
+    expect(classifyShellCommand('ag --pager less foo .', roots, opts)).toBe('auto-approve');
     const wrong = commands.filter((c) => classifyShellCommand(c, roots, opts) !== 'prompt');
     expect(wrong, `以下日常写法被误升成红线或误放行:\n${wrong.join('\n')}`).toEqual([]);
   });
