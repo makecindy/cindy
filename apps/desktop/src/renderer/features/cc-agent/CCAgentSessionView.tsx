@@ -4372,8 +4372,8 @@ function RunningStatusBar({
   // 每次真实动静(状态文案变化 / token 计数推进)时通过 key 重挂载触发一次呼吸。
   // 播放期间到达的动静只置 pending,onAnimationEnd 再连播一次 —— 产出密集时是
   // 连续呼吸(节奏 = 动画时长),静默期(长 thinking / 等待工具)常亮不动。
-  // 视觉语义从「固定心跳 = 在运行」变为「呼吸 = 正在产出」,与 Codex 的
-  // cadenced 扫光同构;也让运行指示不再依赖 infinite 循环。
+  // 视觉语义从「固定心跳 = 在运行」变为「呼吸 = 正在产出」;也让运行指示
+  // 不再依赖 infinite 循环。
   const [shimmerCycle, setShimmerCycle] = useState(0);
   const shimmerPlayingRef = useRef(false);
   const shimmerPendingRef = useRef(false);

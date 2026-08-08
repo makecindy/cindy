@@ -6,7 +6,7 @@
  * 这**不是**被红线禁止的逐字打字机 —— 词整体已渲染就位,只有透明度渐变;
  * 设计裁决(2026-08-07)按「浮现 ≠ 打字」放行。
  *
- * 架构:CSS 管形态、JS 只管时序(对齐 Codex Desktop 的工程结论):
+ * 架构:CSS 管形态、JS 只管时序:
  *   - 本插件仅在 isStreaming 且非 reduced-motion 时挂进 rehype 链尾,把文本节点
  *     切词并包 `<span class="stream-word" style="--wf-delay:Nms">`;动画本体是
  *     globals.css 的 stream-word-in(--motion-fast 淡入,`both` 填充,delay 前隐藏)。
@@ -14,7 +14,7 @@
  *     delay。流式节流(100ms)每次 re-parse 重建整棵 hast 树,已见过的词拿回
  *     同一份 className/style → React 原位更新 span,不 remount → 动画不重播。
  *     (pending 行 markdown 结构闭合时的局部 remount 会让那几个词快速重淡一次,
- *     150ms 幅度在打字节奏下属于自然观感,与 Codex 行为一致。)
+ *     150ms 幅度在实际流式节奏下属于自然观感。)
  *   - **背压**:每个 parse tick 内新词按 16ms/词 递进 stagger;当 tick 内积压
  *     排程超过 96ms(≈6 词)时压缩到 4ms/词,长段落一次性到达时不会排出
  *     秒级的"字幕机"队列。
