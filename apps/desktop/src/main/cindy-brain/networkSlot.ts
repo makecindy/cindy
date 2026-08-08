@@ -1242,6 +1242,24 @@ export class GhostNetworkSlot {
           });
           break;
         }
+        // 401 且 method 已降级(如 POST 经 3xx 变 GET)时,重放分支被
+        // responseMethod === originalRequestMethod 拦截;但被拒令牌的本地缓存
+        // 仍必须失效,否则后续相同调用会一直复用被拒令牌、永远 401 且无法
+        // 通过重试刷新(与上方 Connection 分支同一语义)。
+        if (
+          response.status === 401
+          && responseMethod !== originalRequestMethod
+          && (responseUsedExchange || responseOauthInjected.size > 0)
+        ) {
+          if (responseUsedExchange) this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
+          for (const [secretKey, accountId] of responseOauthInjected) {
+            this.deps.oauthTokens?.invalidateAccessToken(ghostId, secretKey, accountId);
+          }
+          this.deps.log?.info('ghost fetch-request 401 exchange/oauth cache invalidated without replay', {
+            ghostId, callId, method: responseMethod, originalMethod: originalRequestMethod, host: url.hostname,
+          });
+          break;
+        }
         retryUsedExchange = responseUsedExchange;
         retryOauthInjected = responseOauthInjected;
         retryConnectionInjected = responseConnectionInjected;

@@ -1295,7 +1295,6 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "paths": ["/v1/convert"],                     // 可选:精确 URL.pathname 白名单,1–16 条(大小写/尾斜杠敏感,不含 query);缺省=全部路径
       "methods": ["POST"]                           // 可选:GET/POST/PUT/PATCH/DELETE 白名单;缺省=全部支持的方法
     },                                              // 声明了 paths 或 methods 时,顶层 schemaVersion 必须写 3(旧客户端不认识这两个字段,会整包拒装而非静默放开)
-    },
     "exchange": {                                   // 可选:key 换令牌二段式(服务要求先拿 key 换临时令牌时声明,主机照单代办,见 §4.7;与 oauth 互斥)
       "url": "https://api.example.com/token",       // 交换端点(https;域名必须命中 hosts 白名单)
       "bodyFormat": "{\\"sub\\":\\"{value}\\"}",        // POST 请求体模板,恰含一个 {value}(原始 key 落点,主机按 contentType 转义)

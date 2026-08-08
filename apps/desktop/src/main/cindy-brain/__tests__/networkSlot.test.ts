@@ -1803,6 +1803,40 @@ describe('networkSlot · 凭证交换(key 换令牌二段式)', () => {
     expect(exchangeCalls(fetchImpl)).toHaveLength(1);
   });
 
+  it('POST 经 302 降级为 GET 后 401:被拒令牌的缓存仍失效(下次调用重换而非复用)', async () => {
+    // 修复回归:method 降级抑制重放的同时,被拒令牌的本地缓存必须失效;
+    // 否则后续相同调用会一直复用被拒令牌、永远 401 且无法刷新。
+    const { slot, fetchImpl } = makeExchangeSlot({
+      tokenResponses: [
+        () => fakeResponse({ body: '{"session":"tok-1"}' }),
+        () => fakeResponse({ body: '{"session":"tok-2"}' }),
+      ],
+      apiResponses: [
+        () => fakeResponse({ status: 302, headers: { location: 'https://aigc.example.com/result' } }),
+        () => fakeResponse({ status: 401, body: '{"error":"expired"}' }),
+        () => fakeResponse({ status: 302, headers: { location: 'https://aigc.example.com/result' } }),
+        () => fakeResponse({ status: 401, body: '{"error":"expired"}' }),
+      ],
+    });
+    for (let i = 0; i < 2; i++) {
+      const r = await slot.handleFetchRequest('web-search', {
+        url: 'https://aigc.example.com/submit',
+        method: 'POST',
+        body: 'payload=1',
+      });
+      expect(r.ok).toBe(true);
+      if (r.ok && 'body' in r) expect(r.status).toBe(401);
+    }
+    const api = apiCalls(fetchImpl);
+    // 两次调用各只走一跳(原始 POST → 降级后的 GET /result 401),均未重放。
+    expect(api).toHaveLength(4);
+    expect(api[1][1].method).toBe('GET');
+    expect(api[3][1].method).toBe('GET');
+    // 第二次调用重新走交换端点(缓存已被失效),取到的是新令牌。
+    const ex = exchangeCalls(fetchImpl);
+    expect(ex).toHaveLength(2);
+  });
+
   it('交换端点非 2xx:整单结构化失败,错误带状态码与摘录、不发业务请求、不泄 key', async () => {
     const { slot, fetchImpl } = makeExchangeSlot({
       tokenResponses: [() => fakeResponse({ status: 403, body: 'invalid subscriber' })],
