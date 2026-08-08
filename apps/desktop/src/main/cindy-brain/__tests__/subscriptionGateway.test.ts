@@ -19,6 +19,7 @@ import {
   normalizeTurnUsage,
   readStatusIsRunning,
   withGhostAssistantHookModel,
+  withGhostUserHookModel,
   type GhostSubscriptionGatewayDeps,
 } from '../subscriptionGateway';
 import {
@@ -411,6 +412,26 @@ describe('will- 拦截', () => {
     const { gw } = makeGateway({ listGhosts: () => [], resolveMessageHookContext });
     expect(await gw.screenUserMessage({ sessionId: 's1', text: 'hi' })).toEqual({ action: 'allow' });
     expect(resolveMessageHookContext).not.toHaveBeenCalled();
+  });
+
+  it('同轮插话使用运行中会话的模型快照', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'next-model' }));
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      resolveMessageHookContext,
+    });
+    running.add('h1');
+    const p = withGhostUserHookModel('live-model', () =>
+      gw.screenUserMessage({ sessionId: 's1', text: 'steer' }),
+    );
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'live-model' } });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'allow',
+    });
+    expect(await p).toEqual({ action: 'allow' });
   });
 
   it('verdict 归属校验:冒名/未知 hookId 静默丢;迟到 verdict 无副作用', async () => {

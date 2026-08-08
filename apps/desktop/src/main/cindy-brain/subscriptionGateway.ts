@@ -59,6 +59,7 @@ type HookVerdict = {
 };
 
 type MessageHookContext = Pick<GhostMessageHookData, 'model'>;
+const userHookContext = new AsyncLocalStorage<MessageHookContext>();
 const assistantHookContext = new AsyncLocalStorage<Promise<MessageHookContext>>();
 
 function boundMessageHookContext(context: Promise<MessageHookContext>): Promise<MessageHookContext> {
@@ -76,6 +77,11 @@ export function withGhostAssistantHookModel<T>(model: Promise<string>, task: () 
     model.then((value) => (value && value !== 'unknown' ? { model: value } : {})),
   );
   return assistantHookContext.run(context, task);
+}
+
+/** Carry the live session model through the user-hook screening continuation. */
+export function withGhostUserHookModel<T>(model: string | undefined, task: () => T): T {
+  return model && model !== 'unknown' ? userHookContext.run({ model }, task) : task();
 }
 
 /**
@@ -273,7 +279,8 @@ export class GhostSubscriptionGateway {
     input: { sessionId: string; text: string },
     ownerStamp?: unknown,
   ): Promise<GhostScreenResult> {
-    let context: MessageHookContext | Promise<MessageHookContext> | undefined;
+    let context: MessageHookContext | Promise<MessageHookContext> | undefined =
+      userHookContext.getStore();
     let currentText = input.text;
     let rewritten = false;
     let lastRewriteGhost: InstalledGhost | null = null;
