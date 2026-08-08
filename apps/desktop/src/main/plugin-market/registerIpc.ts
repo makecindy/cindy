@@ -4,6 +4,7 @@ import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { GhostManifest } from '../../shared/ghost.js';
+import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';
 import {
   sendToTrustedAppWindows,
   setGhostUninstallLedgerPreparer,
@@ -121,6 +122,22 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() =>
       service().detail(requireString(pluginId, 'pluginId')),
     );
+  });
+  ipcMain.handle('plugin-market:local-icons', (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(raw) || raw.length > 8) {
+      throwIpcError('INVALID_PARAMS', 'local icon requests must contain at most 8 entries');
+    }
+    const requests = raw.map((entry) => {
+      const payload = requireObject(entry);
+      const pluginId = requireString(payload.pluginId, 'pluginId');
+      const expectedIconKey = requireString(payload.expectedIconKey, 'expectedIconKey');
+      if (pluginId.length > 1024 || !isPluginMarketCustomIconKey(expectedIconKey)) {
+        throwIpcError('INVALID_PARAMS', 'Invalid local Plugin icon request');
+      }
+      return { pluginId, expectedIconKey };
+    });
+    return invokePluginMarket(() => service().localIcons(requests));
   });
   ipcMain.handle(
     'plugin-market:install',

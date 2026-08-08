@@ -89,11 +89,18 @@ export interface GhostPluginMarketPresentation {
  * market item, or a pending version update must keep using its local manifest.
  */
 export function marketPresentationForInstalledGhost(
-  ghost: Pick<InstalledGhost, 'manifest'>,
+  ghost: Pick<InstalledGhost, 'manifest' | 'iconDataUrl'>,
   marketItem:
     | Pick<
         PluginMarketItem,
-        'ghostId' | 'installState' | 'version' | 'name' | 'description' | 'author' | 'icon'
+        | 'ghostId'
+        | 'installState'
+        | 'version'
+        | 'name'
+        | 'description'
+        | 'author'
+        | 'icon'
+        | 'sourceType'
       >
     | null
     | undefined,
@@ -110,7 +117,10 @@ export function marketPresentationForInstalledGhost(
     name: marketItem.name,
     description: marketItem.description ?? '',
     author: marketItem.author,
-    iconDataUrl: marketItem.icon?.url,
+    // Custom market has no signed server URL. Once the exact version is installed,
+    // the package's already verified icon is the source of truth. A server `icon:null`
+    // remains an explicit hide and must not reveal the package asset.
+    iconDataUrl: marketItem.sourceType === 'server' ? marketItem.icon?.url : ghost.iconDataUrl,
   };
 }
 
