@@ -4801,10 +4801,17 @@ export class CodexAgent extends BaseAgent {
     }
 
     async function withCodexGenerationPaused<T>(
+      requestThreadId: string | null | undefined,
       turnId: string | null | undefined,
       pauseId: string,
       run: () => Promise<T>,
     ): Promise<T> {
+      if (requestThreadId && requestThreadId !== threadId) {
+        // Descendant requests are routed through the root session UI, but their
+        // waits belong to the child turn. The root collab item already owns the
+        // generation pause, so child ids must never reset the shared root timer.
+        return run();
+      }
       if (!turnId) {
         // Without a turn id the wait cannot be paired with a reliable resume
         // boundary. Keep the interaction usable, but fail closed for TPS.
@@ -4953,6 +4960,7 @@ export class CodexAgent extends BaseAgent {
      * 就走用户决策; settled=true 说明 dismissAllPending 已经替它做了决定, 用户后续点了也吞掉。
      */
     async function awaitApprovalDecision(
+      requestThreadId: string | null | undefined,
       turnId: string | null,
       requestId: string,
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation',
@@ -4960,7 +4968,7 @@ export class CodexAgent extends BaseAgent {
       opts?: { forcePrompt?: boolean; autoReviewAction?: ReviewableAction },
     ): Promise<ApprovalDecision> {
       const timingPauseId = `approval:${kind}:${requestId}`;
-      return withCodexGenerationPaused(turnId, timingPauseId, async () => {
+      return withCodexGenerationPaused(requestThreadId, turnId, timingPauseId, async () => {
         let forcePrompt =
           opts?.forcePrompt === true ||
           (req.kind === 'permission' &&
@@ -5731,7 +5739,7 @@ export class CodexAgent extends BaseAgent {
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
       const requestId = params.approvalId ?? params.itemId;
-      const decision = await awaitApprovalDecision(params.turnId, requestId, 'commandExecution', {
+      const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolName: 'exec',
@@ -5764,7 +5772,7 @@ export class CodexAgent extends BaseAgent {
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       const requestId = params.itemId;
-      const decision = await awaitApprovalDecision(params.turnId, requestId, 'fileChange', {
+      const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'fileChange', {
         kind: 'permission',
         requestId,
         toolName: 'file_change',
@@ -5988,6 +5996,7 @@ export class CodexAgent extends BaseAgent {
       const innerToolName = mcpInnerToolName(params);
       const requestId = `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
       const decision = await awaitApprovalDecision(
+        params.threadId,
         params.turnId,
         requestId,
         'mcpServerElicitation',
@@ -6036,7 +6045,7 @@ export class CodexAgent extends BaseAgent {
       const requestId = params.itemId ?? params.turnId;
       // kind 借用 'commandExecution' 仅为复用其 fail-closed 语义(见 awaitApprovalDecision:无 action /
       // 无人值守时 decline)——权限升级请求本就该 fail-closed。此处不是命令执行,只是共用同一条兜底路径。
-      const decision = await awaitApprovalDecision(params.turnId, requestId, 'commandExecution', {
+      const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolName: 'permissions',
@@ -6383,6 +6392,7 @@ export class CodexAgent extends BaseAgent {
       // lifecycle. Only the native fallback needs its own human-wait boundary.
       return kind === 'ask_user_question' && !hasToolGenerationBoundary
         ? withCodexGenerationPaused(
+            params.threadId,
             params.turnId,
             `user-input:${requestId}`,
             waitForUserInput,
