@@ -427,6 +427,38 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
+    it('Pi 空模型的动态来源只用于创建，不固化成 Claude 式 session 来源', async () => {
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'byom/llama-4',
+        providerId: 'local-byom',
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'pi', model: undefined, providerId: undefined }),
+      );
+
+      expect(resolveDefaultModelRoute).toHaveBeenCalledWith('pi', null);
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentKind: 'pi',
+          model: 'byom/llama-4',
+          providerId: 'local-byom',
+        }),
+      );
+      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+      expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
+        expect.anything(),
+        'scheduler-session',
+        expect.objectContaining({ providerId: undefined }),
+        expect.anything(),
+      );
+    });
+
     it('Pi 空模型且没有已连接来源时在创建会话前明确失败', async () => {
       const h = createSessionHarness();
       const resolveDefaultModelRoute = vi.fn(async () => null);

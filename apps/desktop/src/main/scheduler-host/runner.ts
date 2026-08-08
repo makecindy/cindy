@@ -740,8 +740,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         `schedule route unavailable: Claude Code has no connected source for model "${model}"`,
       );
     }
-    const materializedDefaultProviderId =
-      !isHeartbeat && !explicitProviderId ? (dynamicDefaultRoute?.providerId ?? null) : null;
+    const materializedDefaultProviderId = shouldMaterializeFreshClaudeProvider
+      ? (dynamicDefaultRoute?.providerId ?? null)
+      : null;
     const permissionMode = defaultPermissionModeForSchedule();
     // fastMode 对 Codex / Pi 生效（claude-code agent 忽略此字段）；Claude 恒不传，
     // 确保「不影响 Claude」。heartbeat 沿用 session meta 里的 fast 态，非 heartbeat 取 schedule。

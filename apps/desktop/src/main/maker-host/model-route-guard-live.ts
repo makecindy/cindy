@@ -6,8 +6,9 @@
  *   - scheduler runner 经 deps 注入(测试最小 harness 不接线 = 不裁决);
  *   - help / sessionTaskSummary 的 agent one-shot 兜底用 isAgentOneShotRouteDisabled。
  * 目录读取失败降级为 override-only 保守裁决(见 overrideOnlyVerdict)——不把目录
- * 故障升级成全体用户的功能不可用,也不给配置过停用的用户开绕过口。纯读
- * (allowSideEffects 缺省 false),自愈另有主进程业务入口负责。
+ * 故障升级成全体用户的功能不可用,也不给配置过停用的用户开绕过口。普通裁决纯读
+ * (allowSideEffects 缺省 false)；scheduler 默认来源解析是可信主进程业务入口，
+ * 会显式允许认领已有原生订阅凭证。
  */
 
 import {
@@ -74,7 +75,14 @@ export async function resolveDefaultScheduleRoute(
   preferredProviderId?: string | null,
   modelId?: string,
 ): Promise<{ model: string; providerId: string } | null> {
-  const views = await listRouteGuardProviders();
+  // Scheduler fire is a trusted main-process operation, not an untrusted status projection.
+  // Allow the provider service to claim an existing native subscription before materializing
+  // the route; otherwise legacy/local owners can look disconnected until another UI read heals it.
+  const catalog = getActiveCatalog();
+  const views = await getDesktopProviderService().listProviders({
+    catalog,
+    allowSideEffects: true,
+  });
   const preferredModelId = modelId?.trim();
   if (preferredModelId) {
     const providerId = effectiveSourceIdForModel(
