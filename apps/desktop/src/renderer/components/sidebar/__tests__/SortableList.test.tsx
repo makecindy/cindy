@@ -90,6 +90,38 @@ describe('SortableList native drop disposition', () => {
     external.remove();
   });
 
+  it('restores an upward transient move when the final drop is external', () => {
+    const onReorder = vi.fn();
+    const { container } = render(
+      <SortableList
+        items={['a', 'b', 'c']}
+        getId={(id) => id}
+        onReorder={onReorder}
+        renderItem={(id) => <span>{id}</span>}
+        forceFallback={false}
+      />,
+    );
+    const list = container.firstElementChild as HTMLElement;
+    const instance = sortableMock.MockSortable.instances[0];
+    const onStart = callback<() => void>(instance.options, 'onStart');
+    const onEnd = callback<(event: SortableEvent) => void>(instance.options, 'onEnd');
+    const moved = list.children[2] as HTMLElement;
+
+    sortableMock.MockSortable.active = instance;
+    onStart();
+    list.insertBefore(moved, list.children[0] ?? null);
+
+    const external = document.createElement('div');
+    document.body.append(external);
+    external.dispatchEvent(new Event('drop', { bubbles: true }));
+
+    onEnd({ item: moved, from: list, oldIndex: 2, newIndex: 0 });
+
+    expect(rowIds(list)).toEqual(['a', 'b', 'c']);
+    expect(onReorder).not.toHaveBeenCalled();
+    external.remove();
+  });
+
   it('persists reorder when the final drop is inside the sortable container', () => {
     const onReorder = vi.fn();
     const { container } = render(

@@ -205,10 +205,9 @@ export function SortableList<T>({
         // 让位时的位置上。
         const parent = evt.from;
         if (parent && evt.item && oldIndex != null) {
+          evt.item.parentNode?.removeChild(evt.item);
           const refNode = parent.children[oldIndex] ?? null;
-          if (evt.item !== refNode) {
-            parent.insertBefore(evt.item, refNode);
-          }
+          parent.insertBefore(evt.item, refNode);
         }
 
         if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
