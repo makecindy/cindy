@@ -4368,6 +4368,40 @@ function RunningStatusBar({
   const seconds = elapsed % 60;
   const elapsedText = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 
+  // Cadenced shimmer(DESIGN.md §14.4):status-shimmer 已是一次性动画,这里在
+  // 每次真实动静(状态文案变化 / token 计数推进)时通过 key 重挂载触发一次呼吸。
+  // 播放期间到达的动静只置 pending,onAnimationEnd 再连播一次 —— 产出密集时是
+  // 连续呼吸(节奏 = 动画时长),静默期(长 thinking / 等待工具)常亮不动。
+  // 视觉语义从「固定心跳 = 在运行」变为「呼吸 = 正在产出」,与 Codex 的
+  // cadenced 扫光同构;也让运行指示不再依赖 infinite 循环。
+  const [shimmerCycle, setShimmerCycle] = useState(0);
+  const shimmerPlayingRef = useRef(false);
+  const shimmerPendingRef = useRef(false);
+  const handleShimmerEnd = useCallback(() => {
+    shimmerPlayingRef.current = false;
+    if (shimmerPendingRef.current) {
+      shimmerPendingRef.current = false;
+      shimmerPlayingRef.current = true;
+      setShimmerCycle((n) => n + 1);
+    }
+  }, []);
+  useEffect(() => {
+    // suppressContent 期间 shimmer 类被摘、动画不会启动,onAnimationEnd 不来 ——
+    // 一并清零,避免播放标记卡死后整轮 turn 不再呼吸。
+    if (!visible || suppressContent) {
+      // 运行结束把播放态清零,下一轮 turn 的首次动静立即触发而不是误判在播。
+      shimmerPlayingRef.current = false;
+      shimmerPendingRef.current = false;
+      return;
+    }
+    if (shimmerPlayingRef.current) {
+      shimmerPendingRef.current = true;
+      return;
+    }
+    shimmerPlayingRef.current = true;
+    setShimmerCycle((n) => n + 1);
+  }, [visible, suppressContent, status, tokenUsage]);
+
   // Animate the token counter so live mid-turn updates (from message_delta in
   // agentManager) feel like a smoothly-incrementing number, the same way claude
   // code's CLI status line ticks. The hook re-anchors from the displayed value
@@ -4404,16 +4438,19 @@ function RunningStatusBar({
       style={{ width: inputWidth }}
     >
       <div
+        // cadenced shimmer:key 重挂载 = 重播一次呼吸(见上方 shimmerCycle 说明)。
+        // 左段只有 icon + 一行文字,1.5s 一次的重挂载成本可忽略。
+        key={shimmerCycle}
+        onAnimationEnd={handleShimmerEnd}
         className={cn(
           // min-w-0(非 shrink-0):让内部 status span 的 truncate 真正生效 —— status 可变长
           // (turn-start 带用户名 / tool 进度长串),窄宽时左段截断而非把右段顶出界。
           'flex min-w-0 items-center gap-[6px]',
-          // 隐藏时一律摘所有动画类:infinite 动画即便 visibility:hidden 不画也照算
-          // 样式/合成层，长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
+          // 隐藏时一律摘所有动画类:动画即便 visibility:hidden 不画也照算样式/合成层，
+          // 长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
           // 非隐藏时 done 与 shimmer 区别对待:
-          // - shimmer 是 infinite opacity 呼吸，其 opacity 关键帧会盖过 fadeStyle 的
-          //   inline opacity，使 visible 转 false 后不淡出、一直呼吸到突然消失，故仅
-          //   在真正 visible(运行中)时挂，linger / fade 阶段摘掉让其正常淡出。
+          // - shimmer 现在是 cadenced 一次性呼吸(1 → 0.45 → 1),终态回满不会盖住
+          //   fadeStyle 的 inline opacity;linger / fade 阶段照旧摘掉,保证淡出干净。
           // - done 是 0.4s 一次性 pop(keyframe 已去掉 opacity、只动 transform)，turn
           //   结束那一刻(isDone 必伴随 !visible)要弹一下，故保持 !isHidden gate;
           //   不动 opacity 所以不会盖 fade。
