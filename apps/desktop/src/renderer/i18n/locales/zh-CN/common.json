@@ -3061,6 +3061,33 @@
     },
     "shortcuts": {
       "title": "键盘快捷键",
+      "appshots": {
+        "title": "Appshots 截图",
+        "description": "捕获当前应用窗口，并附加到当前本地 Codex 输入框。",
+        "codexOnly": "Appshots 只在本地 Codex 会话中可用，不会自动发送。",
+        "preferred": "首选快捷键",
+        "fallback": "备用快捷键",
+        "active": "当前生效",
+        "unavailable": "不可用",
+        "customize": "自定义",
+        "reset": "恢复 Appshots 快捷键",
+        "loadFailed": "无法读取 Appshots 快捷键设置",
+        "saveFailed": "无法保存 Appshots 快捷键设置",
+        "permissionsTitle": "macOS 权限",
+        "permissions": "屏幕录制用于捕获窗口图像；辅助功能用于读取窗口标题和 UI 树；输入监控用于双修饰键快捷键。Cindy 启动时不会主动请求这些权限；启用功能后，请在“系统设置 > 隐私与安全性”中授权。",
+        "openPermissionSettingsFailed": "无法打开 macOS 权限设置",
+        "permissionsActions": {
+          "screen-recording": "屏幕录制",
+          "accessibility": "辅助功能",
+          "input-monitoring": "输入监控"
+        },
+        "modifiers": { "command": "双 Command", "option": "双 Option", "shift": "双 Shift" },
+        "reasons": {
+          "codex-running": "Codex 正在运行，因此当前使用备用快捷键。",
+          "registration-conflict": "首选快捷键不可用，因此当前使用备用快捷键。",
+          "input-monitoring": "输入监控权限不可用，因此当前使用备用快捷键。"
+        }
+      },
       "resetAll": "恢复全部默认",
       "reset": "恢复默认",
       "recording": "按下新快捷键…",
@@ -5423,6 +5450,14 @@
     },
     "chatInput": {
       "defaultPlaceholder": "今天我们做点什么呢~",
+      "appshots": {
+        "permissionTitle": "需要屏幕录制权限",
+        "permissionDescription": "Appshots 需要 macOS 屏幕录制权限才能捕获当前应用窗口。Cindy 只会打开对应的系统设置页面；在你重新尝试前，不会捕获或发送任何内容。",
+        "openSettings": "打开系统设置",
+        "cancel": "取消",
+        "openSettingsFailed": "无法打开屏幕录制设置",
+        "captureFailed": "无法捕获当前应用窗口"
+      },
       "voiceInput": {
         "start": "开始语音输入",
         "stop": "停止语音输入",
