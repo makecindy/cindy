@@ -8010,6 +8010,7 @@ export default function SessionScreen() {
             />
           ) : (
             <ContextSheetGoalView
+              key={sessionId}
               busy={goalBusy}
               error={goalError}
               goal={goalStatus}

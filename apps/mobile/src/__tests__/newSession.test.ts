@@ -2206,6 +2206,22 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(sessionSource).toContain('setGoalRestore(null);');
   });
 
+  it('goal 表单按 sessionId 重挂载:子表单内部 state 随任务换代重置(codex P2)', () => {
+    // 第 58 轮只清理父层 goalRestore;ContextSheetGoalCreateForm 的
+    // objective/limits/limitsTouched 只在挂载时 useState(initial) 初始化一次,
+    // 同实例下不随 initial 清空——旧目标仍显示并可提交到新任务。key={sessionId}
+    // 强制表单组件在任务换代时重挂载,内部字段从新 initial 重新初始化。
+    const sessionSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const viewCall = sessionSource.indexOf('<ContextSheetGoalView');
+    expect(viewCall).toBeGreaterThan(-1);
+    const callBlock = sessionSource.slice(viewCall, viewCall + 120);
+    expect(callBlock).toContain('key={sessionId}');
+    // 表单内部确实只在挂载时读 initial(useState 初始化)——重挂载是唯一同步手段
+    const viewSource = readTextLf(resolve(process.cwd(), 'src/session/ContextSheetGoalView.tsx'), 'utf8');
+    expect(viewSource).toContain('useState(initial?.objective ?? \'\')');
+    expect(viewSource).toContain('useState(initial?.limits != null)');
+  });
+
   it('goal commit segment: started 后无裸 return,goal.set 先于本地同步(round-22 Spec P1-2/P1-3)', () => {
     const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
     const iStarted = goalSlice.indexOf('sessionCreateStarted = true;');
