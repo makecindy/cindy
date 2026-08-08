@@ -49,7 +49,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("function TranslucentBackdrop()");
     expect(source).toContain("<TranslucentBackdrop />");
     expect(source).toContain('return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;');
-    expect(source).toContain('<View onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
+    expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>');
     expect(source).toContain("sessionChrome: {\n    left: 0,\n    overflow: 'hidden',\n    position: 'absolute',");
     expect(source).toContain('sessionChromeContent: {');

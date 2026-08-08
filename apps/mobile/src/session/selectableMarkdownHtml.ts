@@ -90,6 +90,15 @@ export function buildSelectableMarkdownHtml(
   ].join('');
 }
 
+export function buildSelectableMarkdownFragmentHtml(
+  markdown: string,
+  options: SelectableMarkdownHtmlOptions = {},
+): string {
+  return renderBlocks(parseMobileMarkdown(markdown), {
+    sessionLinkTitles: options.sessionLinkTitles,
+  });
+}
+
 /** 文档内是否存在 math 块或 inline math(决定要不要注入 KaTeX runtime)。 */
 function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
   const inlinesHaveMath = (inlines: readonly MobileMarkdownInline[]) =>
@@ -150,7 +159,7 @@ best.addEventListener('animationend',function(){best.classList.remove('xdt-line-
 })();</script>`;
 }
 
-function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
+export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
   // 缺省走 light hex(调用方一般从 useTheme().colors 显式注入,见 MarkdownFileReader)。
   const textColor = cssValue(options.textColor ?? lightColors.textPrimary);
   const mutedColor = cssValue(options.mutedColor ?? lightColors.textSecondary);

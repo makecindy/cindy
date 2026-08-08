@@ -44,6 +44,7 @@
     "locateMessageNotFound": "未找到要定位的消息。",
     "shareNoLocalImage": "无法获取本地图片文件",
     "shareFailedTitle": "分享失败",
+    "shareImageFailed": "无法生成或打开分享图片，请重试。",
     "shareUnsupported": "当前客户端暂不支持分享，更新到最新版本后重试。",
     "downloadFailed": "下载失败",
     "voiceNoRemoteDevice": "缺少远程设备，不能开始语音输入。",
@@ -105,6 +106,17 @@
     "forkConfirmDescription": "系统会根据这里的对话上下文创建一个独立的新任务。原任务不会改变，之后两边的消息互不影响。",
     "forkConfirm": "开启新任务",
     "forkCancel": "取消"
+  },
+  "shareImage": {
+    "title": "分享对话",
+    "selectedCount": "已选择 {{count}} 条消息",
+    "selectAll": "全选",
+    "clearAll": "取消全选",
+    "cancel": "取消分享",
+    "share": "分享图片",
+    "generating": "正在准备…",
+    "checkboxLabel": "选择要分享的消息",
+    "shareMessage": "分享这条消息"
   },
   "new": {
     "selectDevice": "选择设备",
