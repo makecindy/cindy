@@ -700,6 +700,20 @@ describe('review 第十一轮 — 交互模式 / parallel 缺省占位符', () =
   });
 });
 
+describe('语料回归 — 伪设备静音重定向仍照常放行(反向边界)', () => {
+  it('/dev/null 静音重定向仍照常放行', () => {
+    for (const c of [
+      'ls -la 2>/dev/null',
+      'git log --all --oneline 2>/dev/null | head',
+      'echo x > /dev/null',
+      'echo x > /dev/stdout',
+      'echo x > /dev/fd/2',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
+    }
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [

@@ -853,12 +853,14 @@ function splitTopLevelSegments(command: string): string[] {
  * 判定前先去掉引号内容(引号内的 `>` 是数据,如 `git log --format='%h>%s'`),再抹掉指向
  * 安全伪设备的重定向(`2>/dev/null`、`&>/dev/fd/1`):写伪设备等同丢弃、无落盘副作用,
  * 与 `SAFE_DEVICE_PATH` / `isProtectedSystemPath` 的白名单同口径。`/dev/null/x`、
- * `/dev/nullx` 等相近路径不匹配(`(?![\w/])`),仍按普通文件写升级。
+ * `/dev/nullx`、`/dev/null.tmp`、`/dev/null-foo` 等相近路径不匹配(`(?![\w/.-])`),
+ * 仍按普通文件写升级 —— 边界要把 `.` 和 `-` 一并挡住,否则这条正则会比它自称对齐的
+ * `SAFE_DEVICE_PATH`(精确匹配设备名)更宽(review 报)。
  */
 function segmentHasSideEffectRedirectOrSubstitution(segment: string): boolean {
   const redirectScan = segment
     .replace(/'[^']*'|"[^"]*"/g, '')
-    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)(?![\w/])/gi, '');
+    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)(?![\w/.-])/gi, '');
   return OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment);
 }
 
@@ -3157,7 +3159,7 @@ function classifyShellSegment(
   // 再抹掉指向安全伪设备的重定向(`2>/dev/null`、`>/dev/null`、`&>/dev/null`):写 /dev/null
   // 等同丢弃、无落盘副作用,是实机语料里最高频的静音写法,不该把整段只读命令拖进灰区
   // (与 SAFE_DEVICE_PATH / isProtectedSystemPath 的伪设备白名单同口径)。`/dev/null/x`、
-  // `/dev/nullx` 等相近路径不匹配(`(?![\w/])`),仍按普通文件写升级。
+  // `/dev/nullx` / `/dev/null.tmp` / `/dev/null-foo` 等相近路径不匹配,仍按普通文件写升级。
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
   if (segmentHasSideEffectRedirectOrSubstitution(segment)) return 'prompt';

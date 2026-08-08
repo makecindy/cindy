@@ -172,6 +172,16 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     'env sudo ls',
   ],
 
+  '伪设备白名单的边界:相近路径是真实文件写': [
+    // 剥离「安全静音重定向」的正则必须与 SAFE_DEVICE_PATH 同口径(精确匹配设备名),
+    // 否则 `.tmp` / `-foo` 这类后缀会跟着被当成安全目标剥掉。
+    'echo hi > /dev/null.tmp',
+    'echo hi > /dev/null-foo',
+    'echo hi 2> /dev/null.bak',
+    'echo hi > /dev/nullx',
+    'echo hi > /dev/null/x',
+  ],
+
   '工作区外的破坏性操作': [
     'rm -rf /outside/dir',
     'rm -rf ~/Documents',
