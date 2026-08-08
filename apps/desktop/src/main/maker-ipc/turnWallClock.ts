@@ -28,3 +28,26 @@ export class ProductTurnWallClockTracker {
     this.startedAtBySession.delete(sessionId);
   }
 }
+
+/**
+ * Keeps the latest assistant message target across Claude continuation SDK
+ * segments. A tokenless final segment can then attach the complete product-turn
+ * duration to the last message that actually carried output.
+ */
+export class ProductTurnUsageTargetTracker {
+  private readonly clientIdBySession = new Map<string, string>();
+
+  remember(sessionId: string, clientId: string | null | undefined): void {
+    if (clientId) this.clientIdBySession.set(sessionId, clientId);
+  }
+
+  finish(sessionId: string, currentClientId: string | null | undefined): string | undefined {
+    const rememberedClientId = this.clientIdBySession.get(sessionId);
+    this.clientIdBySession.delete(sessionId);
+    return currentClientId || rememberedClientId;
+  }
+
+  clear(sessionId: string): void {
+    this.clientIdBySession.delete(sessionId);
+  }
+}

@@ -209,6 +209,26 @@ describe('recordTurnCostOnMessage', () => {
     });
   });
 
+  it('较晚到达的 token 明细保留同消息先落下的完整整轮耗时', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: terminal },
+    );
+
+    await recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[1]?.patch).toEqual({
+      turnUsageDetails: { ...DETAILS, turnDurationMs: 6_500 },
+    });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual({
+      ...DETAILS,
+      turnDurationMs: 6_500,
+    });
+  });
+
   it('价格未知时仍可单独持久化并广播 token/cache 明细', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await expect(recordTurnUsageOnMessage({
@@ -410,6 +430,32 @@ describe('recordTurnUsageOnMessage', () => {
     ).resolves.toBe(false);
     expect(patchCalls).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
+  });
+
+  it('0 token 终段把完整耗时合并到同消息已有 token 明细', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: DETAILS },
+    );
+
+    await expect(
+      recordTurnUsageOnMessage(
+        { sessionId: 's1', clientId: 'm1', turnUsageDetails: terminal },
+        deps,
+      ),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[0]?.patch).toEqual({ turnUsageDetails: terminal });
+    expect(patchCalls[1]?.patch).toEqual({
+      turnUsageDetails: { ...DETAILS, turnDurationMs: 6_500 },
+    });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual({
+      ...DETAILS,
+      turnDurationMs: 6_500,
+    });
   });
 
   it('sessionId / clientId 缺失 → 直接跳过', async () => {

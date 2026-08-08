@@ -693,7 +693,10 @@ import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
 } from './sessionTurnActivityTracker.js';
-import { ProductTurnWallClockTracker } from './turnWallClock.js';
+import {
+  ProductTurnUsageTargetTracker,
+  ProductTurnWallClockTracker,
+} from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
@@ -2382,6 +2385,7 @@ let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
 const productTurnWallClockTracker = new ProductTurnWallClockTracker();
+const productTurnUsageTargetTracker = new ProductTurnUsageTargetTracker();
 
 /**
  * Own the session input boundary while rewind stops an active turn and changes
@@ -3459,6 +3463,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
           if (!wasInTurn && event.source === 'claude-code') {
             productTurnWallClockTracker.start(session.id);
+            productTurnUsageTargetTracker.clear(session.id);
           }
           sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
           if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);
@@ -3770,6 +3775,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             isPairedFailedTurnDone = true;
           }
           pendingFailedTurnAssistantPersistId.delete(session.id);
+        }
+        if (event.type === 'done' && event.source === 'claude-code') {
+          if (isContinuationBoundary) {
+            productTurnUsageTargetTracker.remember(session.id, turnAssistantPersistId);
+          } else {
+            turnAssistantPersistId = productTurnUsageTargetTracker.finish(
+              session.id,
+              turnAssistantPersistId,
+            );
+          }
         }
         flushOrphanToolResults(session.id, eventAgentMeta);
         if (turnBoundaryAssistantPersistId) {
@@ -4691,6 +4706,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
           productTurnWallClockTracker.clear(session.id);
+          productTurnUsageTargetTracker.clear(session.id);
           // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
           clearClaudeSessionBackgroundActivity(session.id);
           clearSessionPersistState(session.id);

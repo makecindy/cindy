@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ProductTurnWallClockTracker } from '../turnWallClock';
+import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from '../turnWallClock';
 
 describe('ProductTurnWallClockTracker', () => {
   it('keeps continuation gaps inside the final product-turn duration', () => {
@@ -31,5 +31,26 @@ describe('ProductTurnWallClockTracker', () => {
 
     tracker.start('session-1', 6_000);
     expect(tracker.finish('session-1', 8_000)).toBe(2_000);
+  });
+});
+
+describe('ProductTurnUsageTargetTracker', () => {
+  it('reuses the latest continuation assistant for a tokenless final segment', () => {
+    const tracker = new ProductTurnUsageTargetTracker();
+    tracker.remember('session-1', 'assistant-1');
+    tracker.remember('session-1', 'assistant-2');
+
+    expect(tracker.finish('session-1', undefined)).toBe('assistant-2');
+    expect(tracker.finish('session-1', undefined)).toBeUndefined();
+  });
+
+  it('prefers a final segment assistant and clears abandoned targets', () => {
+    const tracker = new ProductTurnUsageTargetTracker();
+    tracker.remember('session-1', 'assistant-1');
+    expect(tracker.finish('session-1', 'assistant-final')).toBe('assistant-final');
+
+    tracker.remember('session-1', 'stale-assistant');
+    tracker.clear('session-1');
+    expect(tracker.finish('session-1', undefined)).toBeUndefined();
   });
 });

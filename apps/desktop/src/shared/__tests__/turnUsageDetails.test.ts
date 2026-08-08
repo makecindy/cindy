@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { aggregateTurnUsageDetails, buildTurnUsageDetails } from '../turnUsageDetails';
+import {
+  aggregateTurnUsageDetails,
+  buildTurnUsageDetails,
+  mergeTurnUsageDetailsForMessage,
+} from '../turnUsageDetails';
 import { DEFAULT_USAGE_CURRENCY, gatewayMoney, usdMoney } from '../regionalMoney';
 
 describe('aggregateTurnUsageDetails', () => {
@@ -61,6 +65,22 @@ describe('aggregateTurnUsageDetails', () => {
     expect(aggregateTurnUsageDetails([timed, inputOnly])).toMatchObject({ durationMs: 1_000 });
   });
 
+  it('keeps a complete wall clock from a tokenless terminal segment', () => {
+    const generated = buildTurnUsageDetails({
+      outputTokens: 20,
+      durationMs: 1_000,
+      turnDurationMs: 2_000,
+    });
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+
+    expect(terminal).toMatchObject({ totalTokens: 0, turnDurationMs: 6_500 });
+    expect(aggregateTurnUsageDetails([generated, terminal])).toMatchObject({
+      outputTokens: 20,
+      durationMs: 1_000,
+      turnDurationMs: 6_500,
+    });
+  });
+
   it('uses the default usage currency when the same model has mixed segment currencies', () => {
     const staleCurrency = DEFAULT_USAGE_CURRENCY === 'USD' ? 'CNY' : 'USD';
     const first = buildTurnUsageDetails({
@@ -111,5 +131,36 @@ describe('aggregateTurnUsageDetails', () => {
     expect(
       buildTurnUsageDetails({ outputTokens: 20, durationMs: Number.NaN }),
     ).not.toHaveProperty('durationMs');
+  });
+});
+
+describe('mergeTurnUsageDetailsForMessage', () => {
+  it('preserves token facts when a tokenless terminal snapshot supplies the final wall clock', () => {
+    const generated = buildTurnUsageDetails({
+      inputTokens: 10,
+      outputTokens: 20,
+      durationMs: 1_000,
+      turnDurationMs: 2_000,
+    });
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+
+    expect(mergeTurnUsageDetailsForMessage(generated, terminal!)).toEqual({
+      ...generated,
+      turnDurationMs: 6_500,
+    });
+  });
+
+  it('preserves an earlier final wall clock when the token snapshot arrives later', () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const generated = buildTurnUsageDetails({
+      outputTokens: 20,
+      durationMs: 1_000,
+      turnDurationMs: 2_000,
+    });
+
+    expect(mergeTurnUsageDetailsForMessage(terminal, generated!)).toEqual({
+      ...generated,
+      turnDurationMs: 6_500,
+    });
   });
 });

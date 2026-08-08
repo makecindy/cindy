@@ -128,7 +128,8 @@ export function aggregateTurnUsageDetails(
   detailsList: readonly (TurnUsageDetails | null | undefined)[],
 ): TurnUsageDetails | null {
   const details = detailsList.filter(
-    (item): item is TurnUsageDetails => Boolean(item && item.totalTokens > 0),
+    (item): item is TurnUsageDetails =>
+      Boolean(item && (item.totalTokens > 0 || item.turnDurationMs !== undefined)),
   );
   if (details.length === 0) return null;
 
@@ -179,22 +180,43 @@ export function aggregateTurnUsageDetails(
   });
 }
 
-/** Build a normalized usage detail object. Returns null when all token counts are 0. */
+/**
+ * Preserve a later complete product-turn wall clock without replacing the
+ * token facts already attached to the same assistant message. Full usage
+ * snapshots remain replacement/idempotent rather than being summed twice.
+ */
+export function mergeTurnUsageDetailsForMessage(
+  existing: TurnUsageDetails | null | undefined,
+  incoming: TurnUsageDetails,
+): TurnUsageDetails {
+  if (!existing) return incoming;
+  const turnDurationMs = Math.max(existing.turnDurationMs ?? 0, incoming.turnDurationMs ?? 0);
+  const base = incoming.totalTokens > 0 ? incoming : existing.totalTokens > 0 ? existing : incoming;
+  return {
+    ...base,
+    ...(turnDurationMs > 0 ? { turnDurationMs } : {}),
+  };
+}
+
+/**
+ * Build a normalized usage detail object. A positive product-turn duration is
+ * retained even when the terminal SDK segment contributes no tokens.
+ */
 export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUsageDetails | null {
   const inputTokens = sanitizeToken(input.inputTokens);
   const outputTokens = sanitizeToken(input.outputTokens);
   const cacheReadTokens = sanitizeToken(input.cacheReadTokens);
   const cacheCreateTokens = sanitizeToken(input.cacheCreateTokens);
   const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens;
-  if (totalTokens <= 0) return null;
+  const durationMs = sanitizeDuration(input.durationMs);
+  const turnDurationMs = sanitizeDuration(input.turnDurationMs);
+  if (totalTokens <= 0 && turnDurationMs === undefined) return null;
 
   const cacheDenominator = inputTokens + cacheReadTokens + cacheCreateTokens;
   const cacheHitRate = cacheDenominator > 0 ? cacheReadTokens / cacheDenominator : null;
   const model = sanitizeModel(input.model);
   const models = uniqueModels(input.models);
   const perModelCost = sanitizePerModelCost(input.perModelCost);
-  const durationMs = sanitizeDuration(input.durationMs);
-  const turnDurationMs = sanitizeDuration(input.turnDurationMs);
 
   return {
     inputTokens,
