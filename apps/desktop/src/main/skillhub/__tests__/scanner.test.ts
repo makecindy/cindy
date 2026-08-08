@@ -439,6 +439,27 @@ describe('scanAllSkills', () => {
 });
 
 describe('skill file access', () => {
+  it.skipIf(process.platform === 'win32')('rejects writing through a final file symlink', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-write-file-link-'));
+    tempRoots.push(root);
+    const skillDir = path.join(root, '.agents', 'skills', 'linked-file');
+    const outsideMd = path.join(root, 'outside.md');
+    const exposedMd = path.join(skillDir, 'SKILL.md');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(outsideMd, '# Outside\n', 'utf-8');
+    fs.symlinkSync(outsideMd, exposedMd, 'file');
+
+    await expect(writeSkillFile({
+      filePath: exposedMd,
+      content: '# Changed\n',
+    })).resolves.toEqual({
+      success: false,
+      error: 'refusing to write through a symbolic link',
+    });
+    expect(fs.readFileSync(outsideMd, 'utf-8')).toBe('# Outside\n');
+    expect(fs.lstatSync(exposedMd).isSymbolicLink()).toBe(true);
+  });
+
   it('rejects renaming a skill directory symlink without mutating its target', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-rename-link-'));
     tempRoots.push(root);

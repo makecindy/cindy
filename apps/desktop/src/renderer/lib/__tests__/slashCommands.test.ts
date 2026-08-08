@@ -7,6 +7,7 @@ import {
   isSlashCommandUnavailable,
   mergeCommands,
   nextAvailableSlashCommandIndex,
+  rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
   rewriteAgentSkillInvocationForDispatch,
   slashCommandInvocationName,
@@ -32,6 +33,25 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
     expect(rewriteAgentSkillInvocationForDispatch('/demo   keep spacing', loaded)).toBe(
       '/skill:demo   keep spacing',
     );
+  });
+
+  it('rebases command and later inline metadata when the runtime alias grows', () => {
+    const original = '/demo @task pasted';
+    const rewritten = '/skill:demo @task pasted';
+
+    expect(rebaseInlineRangesAfterSlashCommandRewrite(
+      [
+        { start: 0, end: 5, kind: 'slash' },
+        { start: 6, end: 11, kind: 'reference' },
+        { start: 12, end: 18, kind: 'paste' },
+      ],
+      original,
+      rewritten,
+    )).toEqual([
+      { start: 0, end: 11, kind: 'slash' },
+      { start: 12, end: 17, kind: 'reference' },
+      { start: 18, end: 24, kind: 'paste' },
+    ]);
   });
 
   it('does not rewrite unavailable, mismatched, or non-skill commands', () => {
@@ -234,6 +254,18 @@ describe('Pi project skill availability', () => {
       },
     })).resolves.toEqual({ command: loaded, commands: [loaded] });
     expect(reloaded).toBe(false);
+  });
+
+  it('keeps the cached command when a best-effort refresh has no matching result', async () => {
+    const desktop: UnifiedCommand = { kind: 'desktop', name: 'help', description: 'Help' };
+
+    await expect(reconcilePiRuntimeCommandForDispatch({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'help',
+      commands: [desktop],
+      reload: async () => [],
+    })).resolves.toEqual({ command: desktop, commands: [desktop] });
   });
 
   it('does not refresh a non-Pi desktop hit', async () => {

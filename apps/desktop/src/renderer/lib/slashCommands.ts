@@ -61,6 +61,30 @@ export function rewriteAgentSkillInvocationForDispatch(
   return `/${command.runtimeCommandName}${match[2]}`;
 }
 
+/**
+ * Rebase persisted/render-only inline ranges after the leading slash-command
+ * token grows or shrinks during runtime alias rewriting.
+ */
+export function rebaseInlineRangesAfterSlashCommandRewrite<T extends { start: number; end: number }>(
+  ranges: readonly T[],
+  originalMessage: string,
+  rewrittenMessage: string,
+): T[] {
+  if (originalMessage === rewrittenMessage) return [...ranges];
+  const originalCommand = originalMessage.match(/^\/\S+/)?.[0];
+  const rewrittenCommand = rewrittenMessage.match(/^\/\S+/)?.[0];
+  if (!originalCommand || !rewrittenCommand) return [...ranges];
+
+  const boundary = originalCommand.length;
+  const delta = rewrittenCommand.length - boundary;
+  if (delta === 0) return [...ranges];
+  return ranges.map((range) => ({
+    ...range,
+    start: range.start >= boundary ? range.start + delta : range.start,
+    end: range.end >= boundary ? range.end + delta : range.end,
+  }));
+}
+
 /** First available command index, or 0 when nothing is available/present. */
 export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
   const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
@@ -232,7 +256,10 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   }
   try {
     const refreshed = await params.reload();
-    return { command: findCommand(refreshed), commands: refreshed };
+    const refreshedCommand = findCommand(refreshed);
+    return refreshedCommand || !current
+      ? { command: refreshedCommand, commands: refreshed }
+      : { command: current, commands: params.commands };
   } catch {
     return { command: current, commands: params.commands };
   }

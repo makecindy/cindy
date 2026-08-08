@@ -703,6 +703,19 @@ export async function writeSkillFile(params: { filePath: string; content: string
   if (path.normalize(filePath).split(path.sep).includes('..')) {
     return { success: false, error: 'filePath contains traversal segments' };
   }
+  if (!isLexicallyAllowedSkillPath(filePath)) {
+    return { success: false, error: 'path is not under a recognized skills directory' };
+  }
+  try {
+    // Parent-directory compatibility symlinks remain supported, but the final
+    // editable file must be a regular lexical entry. Otherwise resolving it
+    // first would let an atomic rename overwrite the symlink's external target.
+    if (fs.lstatSync(filePath).isSymbolicLink()) {
+      return { success: false, error: 'refusing to write through a symbolic link' };
+    }
+  } catch {
+    return { success: false, error: '文件不存在,本期不允许创建新文件' };
+  }
   const resolvedFilePath = resolveAllowedExistingSkillPath(filePath);
   if (!resolvedFilePath) {
     return { success: false, error: 'path is not under a recognized skills directory' };

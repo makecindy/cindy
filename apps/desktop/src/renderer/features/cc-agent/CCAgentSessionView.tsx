@@ -136,6 +136,7 @@ import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import {
   loadAllCommands,
   dispatchCommand,
+  rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
   rewriteAgentSkillInvocationForDispatch,
   type UnifiedCommand,
@@ -2583,11 +2584,44 @@ export function CCAgentSessionView({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
+      const originalMessage = message;
       const slashDispatch = deliveryMode === 'steer'
         ? await maybeDispatchDesktopSlashCommand(message, files, false)
         : await maybeDispatchDesktopSlashCommand(message, files);
       if (slashDispatch.handled) return;
       message = slashDispatch.message;
+      if (message !== originalMessage && opts) {
+        opts = {
+          ...opts,
+          ...(opts.agentReferences
+            ? {
+                agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.agentReferences,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+          ...(opts.pastedTextRanges
+            ? {
+                pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.pastedTextRanges,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+          ...(opts.slashCommandRanges !== undefined
+            ? {
+                slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.slashCommandRanges,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+        };
+      }
 
       // ① 本机会话维持既有 readiness gate。device-link 已建任务不把视图生命周期内
       // 的认证弹窗/导航闭包塞进 outbox：弱网时先建立稳定 clientId 的本地乐观消息，
