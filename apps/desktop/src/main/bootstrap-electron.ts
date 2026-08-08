@@ -727,7 +727,7 @@ import {
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
 import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
-import { startGoalController, getGoalController } from './goal-host/index.js';
+import { startGoalController, getGoalController, resetGoalController } from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
@@ -1104,6 +1104,14 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     await resetScheduler();
   } catch (err) {
     authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
+  }
+  // goal-host 的观测 recorder 是模块级单例(reviewer P1):切账号/登出必须连同
+  // controller 一起重置,否则用户 A 的 sessionId/reason 会留在环里泄漏给用户 B。
+  // resetGoalController 同步 dispose + clear 观测环,与 scheduler reset 同属账号边界。
+  try {
+    resetGoalController();
+  } catch (err) {
+    authBoundaryLog.error(`resetGoalController on ${reason} failed (non-fatal):`, err);
   }
   // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
   // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
