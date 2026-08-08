@@ -15,7 +15,6 @@
  * 改写,不碰 DOM 结构。
  */
 
-import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { diffChars } from 'diff';
 
@@ -30,17 +29,6 @@ export const SHARE_SESSION_ATTR = 'data-share-session-id';
 export const SHARE_MESSAGE_ATTR = 'data-share-message-id';
 /** 打了这个标记的元素是纯交互件(操作栏、复选框、hover 工具栏),不进图。 */
 export const SHARE_EXCLUDE_ATTR = 'data-share-exclude';
-
-/** 分享图片页脚使用的品牌域名。dev 的行为语义归 cn 系。 */
-export const SHARE_SITE_HOST_BY_REGION: Readonly<Record<CindyRegion, string>> = Object.freeze({
-  cn: 'cindy.cn',
-  dev: 'cindy.cn',
-  global: 'cindy.app',
-});
-
-export function shareSiteHostForRegion(region: CindyRegion): string {
-  return SHARE_SITE_HOST_BY_REGION[region];
-}
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
@@ -68,8 +56,6 @@ export interface BuildShareImageOptions {
   logoSrc: string;
   /** 页脚 Cindy 角色主视觉的 URL(打包资源,同源)。 */
   characterSrc?: string;
-  /** 页脚网址文字(host,如 cindy.app)。 */
-  siteHost: string;
 }
 
 /** 找不到任何选中消息的 DOM 时抛这个 —— 调用方据此 toast。 */
@@ -392,23 +378,19 @@ export interface ShareImageFooterAssets {
   logoSrc: string;
   /** Cindy 角色主视觉;缺省时页脚只有 logo。 */
   characterSrc?: string;
-  /** 网址文字(host,如 cindy.app)。 */
-  siteHost: string;
 }
 
 /**
- * 品牌页脚:角色图标与 logo 横向锁定,网址在下一行,整体居中。
- * 角色图标仅承担品牌识别,通过小尺寸和轻度降饱和避免抢正文。
+ * 品牌页脚:角色图标与 logo 横向锁定、整体居中。
+ * 角色图标直接保留源素材颜色,不额外调色。
  */
 export function buildShareImageFooter({
   logoSrc,
   characterSrc,
-  siteHost,
 }: ShareImageFooterAssets): HTMLElement {
   const footer = document.createElement('div');
   footer.className = 'flex flex-col items-center';
   footer.style.paddingTop = '48px';
-  footer.style.gap = '6px';
 
   const lockup = document.createElement('div');
   lockup.className = 'flex items-center justify-center';
@@ -422,8 +404,6 @@ export function buildShareImageFooter({
     character.style.width = `${FOOTER_CHARACTER_PX}px`;
     character.style.borderRadius = '8px';
     character.style.objectFit = 'cover';
-    character.style.filter = 'saturate(0.72) contrast(0.94)';
-    character.style.opacity = '0.9';
     character.style.flexShrink = '0';
     character.setAttribute('loading', 'eager');
     lockup.appendChild(character);
@@ -437,25 +417,7 @@ export function buildShareImageFooter({
   logo.setAttribute('loading', 'eager');
   lockup.appendChild(logo);
   footer.appendChild(lockup);
-
-  if (siteHost) {
-    const site = document.createElement('span');
-    site.textContent = siteHost;
-    site.style.fontSize = '11px';
-    site.style.color = 'var(--text-tertiary)';
-    footer.appendChild(site);
-  }
   return footer;
-}
-
-/** `https://cindy.app/` → `cindy.app`;解析失败回落原串。 */
-export function websiteHost(websiteUrl: string | undefined): string {
-  if (!websiteUrl) return '';
-  try {
-    return new URL(websiteUrl).host;
-  } catch {
-    return websiteUrl;
-  }
 }
 
 /**
@@ -467,7 +429,6 @@ export async function buildShareImageBlob({
   contentWidth,
   logoSrc,
   characterSrc,
-  siteHost,
 }: BuildShareImageOptions): Promise<Blob> {
   const sourceNodes: HTMLElement[] = [];
   for (const clientId of orderedSelectedIds) {
@@ -561,7 +522,6 @@ export async function buildShareImageBlob({
       buildShareImageFooter({
         logoSrc: footerLogo,
         ...(footerCharacter ? { characterSrc: footerCharacter } : {}),
-        siteHost,
       }),
     );
 

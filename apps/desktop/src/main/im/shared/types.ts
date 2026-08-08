@@ -207,6 +207,20 @@ export interface ImUiTextPack {
      * cards. Missing copy falls back to unknownCommand.
      */
     interactiveCommandUnsupported?: (cmd: string) => string;
+    /**
+     * `/settings` 的只读总览。
+     *
+     * 官方 bot 的同名命令由服务端渲染成固定五行(项目 / Agent / 模型 / 强度 /
+     * 权限); 个人侧照同一结构给, 两个 bot 的用户看到的是同一份东西。缺省渠道
+     * 回 unknownCommand —— 没有会话配置概念的渠道不该硬造一个。
+     */
+    settings?: (info: {
+      workspace: string;
+      agent: string;
+      model: string;
+      effort: string;
+      permission: string;
+    }) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;

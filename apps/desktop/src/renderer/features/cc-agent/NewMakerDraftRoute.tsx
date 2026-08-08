@@ -36,7 +36,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { NEW_MAKER_DRAFT_KEY } from './newMakerDraftKeys';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
-import { useNavigate, useOutletContext } from 'react-router-dom';
+import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
@@ -123,6 +123,10 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
+import {
+  consumeNewMakerDialogueTargetRequest,
+  readNewMakerDialogueTargetRequest,
+} from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
@@ -565,7 +569,13 @@ export function NewMakerDraftRoute() {
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const draft = useNewMakerDraft();
+  const location = useLocation();
   const navigate = useNavigate();
+  const dialogueTargetRequest = useMemo(
+    () => readNewMakerDialogueTargetRequest(location.state),
+    [location.state],
+  );
+  const handledDialogueTargetRequestRef = useRef<string | null>(null);
   // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
   // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
   // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
@@ -2052,6 +2062,30 @@ export function NewMakerDraftRoute() {
       dropPathBackedAttachments,
     ],
   );
+
+  // “对话”分组可能在 /cc-agent/new 已经打开时再次导航到同一路由，组件不会 remount。
+  // 目标因此随 location.state 交给本页消费，而不是让侧栏直接 patch device 字段；无论首次进入
+  // 还是重复导航，local ↔ remote / remote A ↔ B / 项目 → 对话都统一经过 applyDraftTarget，
+  // mention、路径型附件、远程运行配置和 worktree 三态才不会绕过集中迁移。
+  useLayoutEffect(() => {
+    if (
+      !dialogueTargetRequest ||
+      handledDialogueTargetRequestRef.current === dialogueTargetRequest.requestId
+    ) {
+      return;
+    }
+    handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;
+    patchCollab({ enabled: false });
+    applyDraftTarget({
+      deviceId: dialogueTargetRequest.deviceId,
+      deviceName: dialogueTargetRequest.deviceName,
+      workingDir: null,
+    });
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: consumeNewMakerDialogueTargetRequest(location.state),
+    });
+  }, [applyDraftTarget, dialogueTargetRequest, location, navigate]);
 
   // 弹窗确认添加后的落点:SSH 立即建会话 + navigate;device-link 把当前草稿指向被控端项目,
   // 首条消息发出时走既有 create-on-send 链路(见下方 isDeviceLinkDraft 分支)。

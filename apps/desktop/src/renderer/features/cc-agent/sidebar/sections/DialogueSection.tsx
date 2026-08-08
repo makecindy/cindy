@@ -83,6 +83,7 @@ export interface DialogueSectionProps {
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   onCreateDialogue: () => void;
+  createDisabled?: boolean;
   /** 排序受控化:状态提升到 ExpandedView,折叠 rail 的对话面板与本段共用同一
    *  排序(否则折叠后面板前 N 条与展开态刚排好的顺序不一致,codex review)。 */
   sortBy: DialogueSortBy;
@@ -130,6 +131,7 @@ export function DialogueSection({
   projectOptions,
   onScheduleAction,
   onCreateDialogue,
+  createDisabled = false,
   sortBy,
   onSortByChange,
 }: DialogueSectionProps) {
@@ -244,6 +246,7 @@ export function DialogueSection({
             <button
               type="button"
               onClick={onCreateDialogue}
+              disabled={createDisabled}
               aria-label={t('ccAgent.sidebar.newDialogue')}
               className={cn(
                 'flex h-7 w-7 items-center justify-center rounded-md',

@@ -103,7 +103,6 @@ import {
 } from '@/lib/sessionAttentionStore';
 import {
   patchDraft as patchNewMakerDraft,
-  resetDraftWorkspaceTargets,
 } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
 import { requestConversationSearch } from '@/state/conversationSearchRequest';
@@ -234,15 +233,19 @@ import {
   useRemoteSessionBootstrapLoading,
   useRemoteSessionBootstrapLoadingDevices,
   useSelectedMachineConnecting,
+  useSwitcherDevices,
 } from '@/features/device-link/useMachineSwitcher';
 import {
   retryDeviceLinkDeviceList,
+  useDeviceLinkDeviceListSettled,
   useDeviceLinkDeviceListRequestState,
 } from '@/features/device-link/useDeviceLinkDeviceList';
 import {
   useDeleteScheduleWithSessions,
   type DeletedScheduleGeneratedSessionResult,
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
+import { resolveDialogueDeviceTarget } from './lib/dialogueCreateTarget';
+import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
 
 const log = createLogger('CCAgentSidebarUpper');
 // perf-baseline(与 MessageStream 的 perf/session-switch 探针同通道):
@@ -1104,6 +1107,13 @@ function ExpandedView({
   // 机器切换栏选中机器后整体过滤:本机 → 只本地会话;远程 → 只该机器会话。
   // 过滤在源头做,下游 grouping / pinned / projects / dialogues / date-grouped / search 自动继承。
   const selectedMachineId = useEffectiveSelectedMachineId();
+  const switcherDevices = useSwitcherDevices();
+  const deviceListSettled = useDeviceLinkDeviceListSettled();
+  const selectedDialogueDeviceResolution = useMemo(
+    () => resolveDialogueDeviceTarget(selectedMachineId, switcherDevices, deviceListSettled),
+    [selectedMachineId, switcherDevices, deviceListSettled],
+  );
+  const dialogueCreatePending = selectedDialogueDeviceResolution.status === 'pending';
   // 「所有」或含远程设备的作用域还要等 device-link 首次 sessions snapshot；
   // 否则本地 sessions 先完成时会把尚未知的远程空数组误报成真实空态。
   const remoteSessionBootstrapLoading = useRemoteSessionBootstrapLoading(selectedMachineId);
@@ -1956,10 +1966,15 @@ function ExpandedView({
   ]);
 
   const handleCreateDialogue = useCallback(() => {
+    // 冷启动时 effective selection 会刻意保留持久化的唯一远端选择，但设备目录可能尚未
+    // settle、switcherDevices 仍为空。此时不能把“尚未解析”当成“确认缺失”并回落本机；
+    // 展开态段头与折叠 rail 面板共用这个 handler，因此在目标可判定前统一不创建。
+    if (selectedDialogueDeviceResolution.status === 'pending') return;
     handleClearSelection();
-    resetDraftWorkspaceTargets();
-    navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
-  }, [handleClearSelection, navigate]);
+    navigate('/cc-agent/new', {
+      state: makeDialogueNewMakerRouteState(selectedDialogueDeviceResolution.target),
+    });
+  }, [handleClearSelection, navigate, selectedDialogueDeviceResolution]);
 
   const handleLinkCodexProject = useCallback(
     async (project: ProjectNode) => {
@@ -3081,6 +3096,7 @@ function ExpandedView({
                     projectOptions={projectPickerOptions}
                     onScheduleAction={handleScheduleAction}
                     onCreateDialogue={handleCreateDialogue}
+                    createDisabled={dialogueCreatePending}
                     sortBy={dialogueSortBy}
                     onSortByChange={setDialogueSortBy}
                   />
@@ -3166,6 +3182,7 @@ function ExpandedView({
         projectOptions={projectPickerOptions}
         onScheduleAction={handleScheduleAction}
         onCreateDialogue={handleCreateDialogue}
+        isCreateDialogueDisabled={dialogueCreatePending}
         onCreateInProject={handleCreateInProject}
         onToggleProjectPin={handleToggleProjectPin}
         onRemoveProjectFromSidebar={handleRemoveProjectFromSidebar}
@@ -3435,6 +3452,7 @@ interface RailPanelsProps {
   onScheduleAction: Parameters<typeof SessionEntryList>[0]['onScheduleAction'];
   /** 新建对话(对话面板头部 SquarePen)——展开态 DialogueSection 段头同源 handler。 */
   onCreateDialogue: () => void;
+  isCreateDialogueDisabled: boolean;
   /** 在此项目内新建(项目行右键菜单 + 三级面板头部)——展开态 ProjectNode
    *  的 newInDirectory 主操作同源 handler(内置远程写保护)。 */
   onCreateInProject: (project: ProjectNode) => void;
@@ -3473,6 +3491,7 @@ function RailPanels({
   projectOptions,
   onScheduleAction,
   onCreateDialogue,
+  isCreateDialogueDisabled,
   onCreateInProject,
   onToggleProjectPin,
   onRemoveProjectFromSidebar,
@@ -3821,7 +3840,11 @@ function RailPanels({
             {panelHead(
               t('ccAgent.sidebar.railNav.dialogues'),
               dialogues.length,
-              panelHeadCreateButton(t('ccAgent.sidebar.newDialogue'), onCreateDialogue),
+              panelHeadCreateButton(
+                t('ccAgent.sidebar.newDialogue'),
+                onCreateDialogue,
+                isCreateDialogueDisabled,
+              ),
             )}
             <div className="max-h-[420px] overflow-y-auto [scrollbar-width:thin]">
               <SessionEntryList
