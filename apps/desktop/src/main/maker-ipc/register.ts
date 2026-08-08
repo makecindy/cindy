@@ -8966,8 +8966,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
     // 计划对账:未收口的旧计划让 agent 在下一轮顺手交代。读近段历史现算,
     // 无 pending 状态(清单被更新/清掉后下一轮自然不再注入)。
+    // 窗口 1000 行(交接用 400):计划行被长工具流挤出窗口时 summarize 返回
+    // null → 本轮不注入——降级方向是"少提醒",不会误提醒,可接受;不做全量
+    // 分页回溯,避免每次发送为一个提示扫全历史。
     peekPlanReconcileNote: async (sessionId) => {
-      const rows = await listMessagesForAgentHandoff(sessionId, 400);
+      const rows = await listMessagesForAgentHandoff(sessionId, 1000);
       const summary = summarizeOpenPlan(rows);
       return summary ? buildPlanReconcileNote(summary) : null;
     },

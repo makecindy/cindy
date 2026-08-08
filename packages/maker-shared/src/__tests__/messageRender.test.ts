@@ -963,6 +963,47 @@ describe('message render todo grouping', () => {
       });
     });
 
+    it('does not cut a session at synthetic user rows (auto-resume / scheduler)', () => {
+      const staleTodo = tool('todo-live', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'in_progress' },
+          { content: 'Long follow-up', status: 'pending' },
+        ],
+      });
+      const autoResumeRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'auto-resume-1',
+        content: '继续',
+        createdAt: at(5),
+        agentMeta: { autoResume: true },
+      };
+      const schedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sched-1',
+        content: '定时任务触发',
+        createdAt: at(6),
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' } },
+      };
+      const progress = tool('todo-live-2', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+
+      // 自动续跑/scheduler 落的 user 行不是"用户开新话题":同计划的后续更新
+      // 仍并入原 session,key 不变,不产生重复计划卡。
+      expect(
+        findLatestMessageTodoInsertion([staleTodo, autoResumeRow, schedulerRow, progress]),
+      ).toMatchObject({
+        key: 'todo-todo-live',
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+    });
+
     it('keeps in-turn progress updates merged into one session (no user turn between)', () => {
       const first = tool('todo-a', 'TodoWrite', {
         todos: [{ content: 'Step', status: 'in_progress' }],

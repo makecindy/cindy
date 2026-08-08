@@ -1344,6 +1344,33 @@ describe('session-agent-switch handoff injection', () => {
     );
   });
 
+  it('内部派发(scheduler / 自动续跑)不注入对账', async () => {
+    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const { deps, session } = createDeps({ peekPlanReconcileNote });
+    const transaction = createMakerSendTransaction(deps);
+
+    // scheduler 定时消息(顶层 origin)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '定时活' }, undefined, {
+      origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '定时活' },
+      expect.anything(),
+    );
+
+    // 自动续跑(persistUserMessage.autoResume)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, undefined, {
+      persistUserMessage: { clientId: 'c2', content: '继续', autoResume: true },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '继续' },
+      expect.anything(),
+    );
+
+    // 内部派发路径不应触发对账查询
+    expect(peekPlanReconcileNote).not.toHaveBeenCalled();
+  });
+
   it('对账读取抛错时静默跳过,不挡发送', async () => {
     const { deps, session } = createDeps({
       peekPlanReconcileNote: vi.fn(async () => {

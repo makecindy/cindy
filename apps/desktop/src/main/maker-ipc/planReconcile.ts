@@ -30,6 +30,7 @@ export interface PlanReconcileCandidateRow {
   role: string;
   content: unknown;
   createdAt: number;
+  agentMeta?: Record<string, unknown> | null;
 }
 
 /** 从 DB 行还原 maker-shared 扫描所需的最小形状(与 renderer 的 hydrate 同口径)。 */
@@ -41,13 +42,21 @@ function toRenderSourceMessage(row: PlanReconcileCandidateRow): MessageRenderSou
   const toolName = typeof content?.toolName === 'string' ? content.toolName : undefined;
   const toolInput = content?.input;
   const toolUseId = typeof content?.toolUseId === 'string' ? content.toolUseId : undefined;
+  // 子代理归属:Claude 子代理的 TodoWrite 行把父 id 持久化在 agent_meta.parentUuid
+  // (messagePersistBroadcaster 写入),content 里没有;两处都认。
+  const meta = row.agentMeta ?? null;
   const parentToolUseId =
-    typeof content?.parentToolUseId === 'string' ? content.parentToolUseId : undefined;
+    typeof content?.parentToolUseId === 'string'
+      ? content.parentToolUseId
+      : typeof meta?.parentUuid === 'string' && meta.parentUuid
+        ? meta.parentUuid
+        : undefined;
   return {
     clientId: row.clientId,
     role: row.role,
     content: row.content,
     createdAt: new Date(row.createdAt).toISOString(),
+    ...(meta ? { agentMeta: meta } : {}),
     ...(toolName ? { toolName } : {}),
     ...(toolInput !== undefined ? { toolInput } : {}),
     ...(toolUseId ? { toolUseId } : {}),

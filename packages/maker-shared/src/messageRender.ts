@@ -23,6 +23,13 @@ export interface MessageRenderSourceMessageLike {
    * calls never compete for the top-level pinned panel.
    */
   parentToolUseId?: string | null;
+  /**
+   * Host-persisted message metadata. Plan ownership only reads two keys:
+   * `autoResume` / `origin` — user rows carrying either are internal dispatches
+   * (auto-resume continuation, scheduler runs), not the user opening a new
+   * topic, so they must not cut a plan session boundary.
+   */
+  agentMeta?: Record<string, unknown> | null;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
   /**
@@ -470,7 +477,13 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (message.role === 'user') {
-      lastUserIndex = index;
+      // 只有"用户真的开口"才是所有权边界。自动续跑(agentMeta.autoResume)与
+      // scheduler 定时消息(agentMeta.origin)落的也是 user 行,但那是同一件事
+      // 的延续,不能把进行中的计划切成新 session(否则历史里出现重复计划卡)。
+      const meta = message.agentMeta;
+      const syntheticUserRow =
+        meta?.autoResume === true || (meta?.origin !== undefined && meta?.origin !== null);
+      if (!syntheticUserRow) lastUserIndex = index;
       continue;
     }
     const source = agentPlanSource(toolNameOf(message));

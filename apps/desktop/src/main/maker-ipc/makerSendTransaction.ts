@@ -737,9 +737,18 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : normalized;
       // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
       // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
+      // 只对普通用户开启的新轮次注入:scheduler 定时消息(origin)、自动续跑
+      // (persistUserMessage.autoResume)都是内部派发,它们的"用户消息"不代表用户
+      // 换了话题,注入会让自动轮次去动一份用户没打算收的计划。
       // 失败静默跳过:对账是锦上添花,不能挡发送。
-      const planReconcileNote =
-        (await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null;
+      const soForReconcile = (outgoingSendOpts ?? {}) as MakerSendOptions;
+      const isInternalDispatch =
+        soForReconcile.origin !== undefined ||
+        soForReconcile.persistUserMessage?.autoResume === true ||
+        soForReconcile.persistUserMessage?.origin !== undefined;
+      const planReconcileNote = isInternalDispatch
+        ? null
+        : ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null);
       const withPlanReconcile = planReconcileNote
         ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcileNote)
         : withHandoff;
