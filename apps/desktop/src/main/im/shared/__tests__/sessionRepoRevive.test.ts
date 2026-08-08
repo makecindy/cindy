@@ -279,7 +279,9 @@ describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
     expect(setSql).toContain('sessions.working_dir');
     expect(setSql).toContain('/tmp/im-working-dir/bot');
     expect(setSql).toContain('dialogue');
-    expect(setSql).toContain('sessions.workspace_kind');
+    // else 分支写死 'project': 老版本刷坏的存量行(dialogue + 项目目录)靠"保留现值"
+    // 永远修不好。语义与判据见 sessionRepoWorkspaceKind.test.ts。
+    expect(setSql).toContain("else 'project'");
   });
 
   it('软删行复活时按同一判据校正 workspaceKind', async () => {

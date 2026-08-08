@@ -131,6 +131,35 @@ describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
     expect(revived?.workspaceKind).toBe('dialogue');
   });
 
+  it('老版本刷坏的存量行(dialogue + 项目目录)读出来就是项目, 不用等归档', async () => {
+    // 这批行是老版本的复活/upsert 无条件写 'dialogue' 留下的: workingDir 还在项目
+    // 里, 归属却成了「对话」。只保护未来的复活救不了它们 —— 只要用户不再归档一次
+    // 就永远显示成「对话」。只读路径按目录现算, 立刻自愈。
+    const r = repo();
+    const created = await r.createSession('bot1', 'u1');
+    await db
+      .update(sessions)
+      .set({ workingDir: PROJECT_DIR, workspaceKind: 'dialogue' });
+
+    expect((await r.peekSession('bot1', 'u1'))?.workspaceKind).toBe('project');
+    expect((await r.findActiveSession('bot1', 'u1'))?.workspaceKind).toBe('project');
+    // 这一行还是 active, 没走复活, 库里那一列仍是脏的 —— 下一次复活才落定。
+    expect(await kindOf(created.id)).toBe('dialogue');
+  });
+
+  it('存量脏行下一次复活时把库里那一列也修好', async () => {
+    const r = repo();
+    const created = await r.createSession('bot1', 'u1');
+    await db
+      .update(sessions)
+      .set({ workingDir: PROJECT_DIR, workspaceKind: 'dialogue', status: 'archived' });
+
+    await r.findActiveSession('bot1', 'u1');
+
+    // sidebar 的归组读的是这一列, 不修它会话就一直待在「对话」分组。
+    expect(await kindOf(created.id)).toBe('project');
+  });
+
   it('createSession 撞上残留行时同样不动用户选的项目归属', async () => {
     const r = repo();
     const created = await r.createSession('bot1', 'u1');

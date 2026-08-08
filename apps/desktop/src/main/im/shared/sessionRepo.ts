@@ -145,9 +145,37 @@ export function createImSessionRepo(
   function correctedWorkspaceKind(botContextId: string): Record<string, unknown> {
     if (!ns.workspaceKind) return {};
     const managedDir = ns.ensureWorkingDir(botContextId);
+    // else 分支写死 'project' 而不是"保留现值": 库里躺着一批老版本刷坏的行
+    // (dialogue + 项目目录), 保留现值救不了它们, 那些会话会永远留在错的分组里。
+    // 目录不等于托管目录 ⟺ 它是项目 —— 见 readWorkspaceKind 的说明。
     return {
-      workspaceKind: sql`case when ${sessions.workingDir} is null or ${sessions.workingDir} = ${managedDir} then ${ns.workspaceKind} else ${sessions.workspaceKind} end`,
+      workspaceKind: sql`case when ${sessions.workingDir} is null or ${sessions.workingDir} = ${managedDir} then ${ns.workspaceKind} else 'project' end`,
     };
+  }
+
+  /**
+   * 只读路径上的归属判据 —— 不看列里存着什么, 按目录现算。
+   *
+   * 存量脏行的自愈: 老版本的复活 / upsert 会把 `/project` 选中的 'project' 无条件
+   * 刷回渠道默认的 'dialogue', 而 workingDir 还留在项目里。库里因此躺着一批
+   * 「dialogue + 项目目录」的行 —— 只保护未来的复活救不了它们, 用户看到的仍是
+   * 「对话」, 而且只要不再归档一次就永远不自愈。
+   *
+   * 这条通道的行只有两种去处: 渠道托管目录, 或用户经 `/project` 选中的项目目录
+   * (cardActionHandler 的非 project 分支写的正是 ensureWorkingDir)。所以「目录不等于
+   * 托管目录」⟺「它是项目」。
+   *
+   * 只能用在 peekSession / findActiveSession —— 它们查的是本渠道按 sessionIdFor 推出
+   * 的自有行。peekSessionById 不行: `/ctr` 接管的是一条 desktop 会话, 它的目录既不是
+   * 项目、也不是本渠道的托管目录(末段常是内部 UUID), 按这条判会把 UUID 当项目名。
+   */
+  function readWorkspaceKind(
+    workingDir: string | null,
+    storedKind: 'project' | 'dialogue' | null,
+    botContextId: string,
+  ): 'project' | 'dialogue' | null {
+    if (ns.workspaceKind !== 'dialogue' || !workingDir) return storedKind;
+    return workingDir === ns.ensureWorkingDir(botContextId) ? 'dialogue' : 'project';
   }
 
   return {
@@ -180,7 +208,7 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
-        workspaceKind: row.workspaceKind ?? null,
+        workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
       };
     },
 
@@ -190,10 +218,6 @@ export function createImSessionRepo(
       const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
       const row = rows[0];
       if (!row) return null;
-      // 复活会按 correctedWorkspaceKind 的判据刷这一列, 返回值得跟着走 ——
-      // 直接回 `row.workspaceKind`(update 之前读到的旧值)会让 caller 与库里
-      // 不一致一整轮。
-      let workspaceKind = row.workspaceKind ?? null;
       if (row.status !== 'active') {
         // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
         // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
@@ -209,12 +233,6 @@ export function createImSessionRepo(
             ...correctedWorkspaceKind(botContextId),
           })
           .where(eq(sessions.id, id));
-        if (
-          ns.workspaceKind &&
-          (!row.workingDir || row.workingDir === ns.ensureWorkingDir(botContextId))
-        ) {
-          workspaceKind = ns.workspaceKind;
-        }
         log.info(`revived soft-deleted ${ns.source} session id=${row.id} (was ${row.status})`);
         // 软删行已从 sidebar 消失,patched 增量对不存在的行无效;
         // created 触发 renderer 重拉列表,让会话重新出现。
@@ -230,7 +248,9 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
-        workspaceKind,
+        // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
+        // caller 拿到的和库里落定的才是同一个答案。
+        workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
       };
     },
 
