@@ -3,7 +3,7 @@
  * 握手 / 请求配对 / 超时 / relay-error / 重连退避 / 心跳僵死 / token 缺失。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { DeviceLinkClient, type WsLike } from '../client.js';
+import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
 import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js';
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
@@ -4199,5 +4199,77 @@ describe('DeviceLinkClient', () => {
         clock.mockRestore();
       }
     });
+  });
+});
+
+describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
+  const timing = {
+    reconnectBaseMs: 1_000,
+    reconnectMaxMs: 30_000,
+    congestionBackoffBaseMs: 5_000,
+    congestionBackoffMaxMs: 30_000,
+  };
+
+  it('无拥塞信号:维持原指数退避曲线与 0.7x–1.0x 向下抖动', () => {
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 0, random: 0 }))
+      .toBe(700);
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 0, random: 0.9999 }))
+      .toBe(1000);
+    // 指数封顶 reconnectMaxMs
+    expect(computeReconnectDelayMs({ ...timing, attempt: 10, congestionCloseStreak: 0, random: 0 }))
+      .toBe(21_000);
+  });
+
+  it('拥塞冷却:与普通退避取 max,按连击加深,封顶 congestionBackoffMaxMs', () => {
+    // 稳定在线后 attempt 归零,但拥塞连击在:冷却下限接管(5s × 0.7 = 3.5s)
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 1, random: 0 }))
+      .toBe(3_500);
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 2, random: 0 }))
+      .toBe(7_000);
+    // 连击封顶:5s × 2^3 = 40s > 30s 上限
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 4, random: 0 }))
+      .toBe(21_000);
+    // 普通退避已深于冷却下限时,取普通退避(max 语义,不是叠加)
+    expect(computeReconnectDelayMs({ ...timing, attempt: 6, congestionCloseStreak: 1, random: 0 }))
+      .toBe(21_000);
+  });
+});
+
+describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  it('1013 计入拥塞连击,握手成功不清零,稳定在线满窗口才清零;普通断线不计入', async () => {
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1,
+        reconnectMaxMs: 5,
+        reconnectStableResetMs: 20,
+        congestionBackoffBaseMs: 2,
+        congestionBackoffMaxMs: 8,
+        pingIntervalMs: 60_000,
+      },
+    });
+    const internals = h.client as unknown as { congestionCloseStreak: number };
+    h.client.start();
+    await tick();
+    h.current().ack();
+    expect(internals.congestionCloseStreak).toBe(0);
+
+    // relay 拥塞踢连接:计入连击
+    h.current().emit('close', 1013, 'inbound backpressure');
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    // 退避后重连成功:握手成功**不**清拥塞连击(与 reconnectAttempt 生命周期不同)
+    await tick(40);
+    h.current().ack();
+    expect(h.client.getStatus()).toBe('online');
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    // 稳定在线满 reconnectStableResetMs 后清零
+    await tick(100);
+    expect(internals.congestionCloseStreak).toBe(0);
+
+    // 普通断线(1006)不计入拥塞连击
+    h.current().emit('close', 1006, 'heartbeat lost');
+    expect(internals.congestionCloseStreak).toBe(0);
+    h.client.stop();
   });
 });
