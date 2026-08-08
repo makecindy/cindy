@@ -179,6 +179,33 @@ describe('Claude credential shared write lock', () => {
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
+  it.each(['linux', 'darwin'] as const)(
+    'treats a missing config directory as absent without creating it on %s',
+    async (platform) => {
+      const root = makeRoot();
+      const missing = path.join(root, 'missing-claude-dir');
+      const execFileSync = vi.fn(() => JSON.stringify({ claudeAiOauth: oauth }));
+      const lockSync = vi.fn(() => vi.fn());
+      const {
+        readClaudeAiOAuth,
+        hasClaudeAiOAuth,
+        getClaudeAiOAuthCredentialMatchState,
+      } = await importStore({
+        platform,
+        configDir: missing,
+        execFileSync,
+        lockSync,
+      });
+
+      expect(readClaudeAiOAuth()).toBeNull();
+      expect(hasClaudeAiOAuth()).toBe(false);
+      expect(getClaudeAiOAuthCredentialMatchState(oauth)).toBe('absent');
+      expect(fs.existsSync(missing)).toBe(false);
+      expect(lockSync).not.toHaveBeenCalled();
+      expect(execFileSync).not.toHaveBeenCalled();
+    },
+  );
+
   it('holds storage before both binding checks and the token read', async () => {
     let held = false;
     let bindingChecks = 0;
@@ -617,10 +644,13 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     expect(fs.readdirSync(root)).toEqual([]);
   });
 
-  it('keeps a complete final credential and warns when temp cleanup is blocked', async () => {
+  it('keeps snapshot reads side-effect-free and reaps stale managed temps on mutation', async () => {
     const root = makeRoot();
     const file = path.join(root, '.credentials.json');
-    const { writeClaudeAiOAuth } = await importStore({ platform: 'linux', configDir: root });
+    const { readClaudeAiOAuth, hasClaudeAiOAuth, writeClaudeAiOAuth } = await importStore({
+      platform: 'linux',
+      configDir: root,
+    });
     const realUnlink = fs.unlinkSync;
     const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(((target) => {
       if (String(target).endsWith('.tmp')) {
@@ -650,8 +680,12 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     fs.utimesSync(stagedPath, old, old);
     fs.utimesSync(unrelatedPath, old, old);
 
-    const { readClaudeAiOAuth } = await import('../claude-credentials-store.js');
+    expect(hasClaudeAiOAuth()).toBe(true);
     expect(readClaudeAiOAuth()?.accessToken).toBe(oauth.accessToken);
+    expect(fs.existsSync(stagedPath)).toBe(true);
+    expect(fs.readFileSync(unrelatedPath, 'utf8')).toBe('do-not-delete');
+
+    writeClaudeAiOAuth({ ...oauth, accessToken: 'replacement-access-token' });
     expect(fs.existsSync(stagedPath)).toBe(false);
     expect(fs.readFileSync(unrelatedPath, 'utf8')).toBe('do-not-delete');
   });

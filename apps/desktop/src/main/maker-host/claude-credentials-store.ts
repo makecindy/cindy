@@ -254,13 +254,18 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
 /**
  * Read-only counterpart to the mutation lock. Contention and lock/read errors
  * are a normal fail-closed `null` for status/spawn callers, never a UI or agent
- * startup exception. The lock target/order still matches writers exactly.
+ * startup exception. A missing config directory is a confirmed absence supplied
+ * by the caller; the lock target/order still matches writers exactly.
  */
-function withCredentialSnapshotLock<T>(snapshot: () => T): T | null {
+function withCredentialSnapshotLock<T>(snapshot: () => T, directoryAbsent: T): T | null {
   const dir = claudeConfigDir();
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    // Provider/status snapshots must not create the user's Claude directory.
+    // A missing directory is a confirmed absence until a writer creates it;
+    // every other stat failure remains fail-closed.
+    if (!fs.statSync(dir).isDirectory()) return null;
   } catch (error) {
+    if (isErrno(error, 'ENOENT')) return directoryAbsent;
     log.warn('claude credential snapshot directory unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -285,7 +290,6 @@ function withCredentialSnapshotLock<T>(snapshot: () => T): T | null {
     }
     return null;
   }
-  cleanupStaleCredentialTempFiles();
 
   let value: T | null = null;
   try {
@@ -523,7 +527,7 @@ function writeBlob(blob: Record<string, unknown>, mode: BlobWriteMode): void {
  * getState 自动兼容本地登录 + 登录后状态判定都用它。
  */
 export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
-  return withCredentialSnapshotLock(() => {
+  return withCredentialSnapshotLock<ClaudeAiOAuth | null>(() => {
     // Writers finalize in storage→binding order. Holding the storage lock while
     // checking binding prevents owner A from passing a stale binding check and
     // then reading token B after another process completes login.
@@ -541,7 +545,7 @@ export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
       return null;
     }
     return oauth;
-  });
+  }, null);
 }
 
 /** 是否存在可用的 Claude.ai OAuth 登录(有 accessToken)。 */
@@ -567,7 +571,7 @@ export function getClaudeAiOAuthCredentialMatchState(
       return 'absent';
     }
     return matchesClaudeAiOAuthIdentity(current, expected) ? 'same' : 'changed';
-  });
+  }, 'absent');
   return state ?? 'unreadable';
 }
 
