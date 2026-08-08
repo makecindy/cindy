@@ -32,6 +32,8 @@ import remarkPreserveRawLocalDestinations, {
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
+import { createWordFadeState, rehypeStreamWordFade } from './rehypeStreamWordFade';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
@@ -1621,6 +1623,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
+  // 流式逐词淡入(rehypeStreamWordFade,§14.4 第五个 sanctioned motion class):
+  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。state 按渲染器
+  // 实例持有(useMemo 键 isStreaming):流式期间跨 parse tick 记住每个词的 delay
+  // 保证不重播;isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS ——
+  // 终版渲染无任何 span 包装,插件与 state 一起被回收,静态路径零开销。
+  const reducedMotion = useReducedMotion();
+  const streamFade = isStreaming && !reducedMotion;
+  const rehypePlugins = useMemo<PluggableList>(() => {
+    if (!streamFade) return REHYPE_PLUGINS;
+    return [...REHYPE_PLUGINS, [rehypeStreamWordFade, createWordFadeState()]];
+  }, [streamFade]);
   // LaTeX 定界符归一化(`\(...\)` / `\[...\]` → `$...$` / `$$...$$`)。
   // emitSourceLines(TextLightbox 行锚点 doc 模式,依赖 data-source-line 与
   // 源文件行号一致)时走保行数模式:单行 inline 照常转换(同行替换不改行
@@ -1825,7 +1838,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     <div className="msg-markdown select-text">
       <ReactMarkdown
         remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={components}
         urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
         skipHtml
