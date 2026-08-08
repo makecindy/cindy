@@ -24,6 +24,8 @@ const log = createLogger('SlashCommands');
 
 export type { UnifiedCommand } from '@cindy/maker-core';
 
+export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000] as const;
+
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
     && command.scope === 'repo'
@@ -263,6 +265,31 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   } catch {
     return { command: current, commands: params.commands };
   }
+}
+
+export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
+  agentKind: AgentKind;
+  sessionId?: string;
+  commandName: string;
+  commands: UnifiedCommand[];
+  reload: () => Promise<UnifiedCommand[]>;
+  retryDelaysMs?: readonly number[];
+  sleep?: (delayMs: number) => Promise<void>;
+}): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
+  const retryDelaysMs = params.retryDelaysMs ?? PI_RUNTIME_SKILL_RETRY_DELAYS_MS;
+  const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>(
+    (resolve) => window.setTimeout(resolve, delayMs),
+  ));
+  let result = await reconcilePiRuntimeCommandForDispatch(params);
+  for (const delayMs of retryDelaysMs) {
+    if (!result.command || !isSlashCommandUnavailable(result.command)) return result;
+    await sleep(delayMs);
+    result = await reconcilePiRuntimeCommandForDispatch({
+      ...params,
+      commands: result.commands,
+    });
+  }
+  return result;
 }
 
 /**

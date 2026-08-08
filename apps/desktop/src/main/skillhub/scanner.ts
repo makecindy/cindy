@@ -618,7 +618,7 @@ function resolveAllowedExistingSkillPath(absolutePath: string): string | null {
 
   const normalized = lexicalPath.replace(/\\/g, '/');
   const marker = '/.pi/skills/';
-  const markerIndex = normalized.lastIndexOf(marker);
+  const markerIndex = normalized.indexOf(marker);
   if (markerIndex < 0) return realTarget;
 
   const lexicalSkillRoot = path.normalize(normalized.slice(0, markerIndex + marker.length - 1));

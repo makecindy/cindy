@@ -136,8 +136,10 @@ import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import {
   loadAllCommands,
   dispatchCommand,
+  PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
+  reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -2215,72 +2217,6 @@ export function CCAgentSessionView({
     }
   }, [sessionId]);
 
-  const handleWorkingDirChange = useCallback(
-    (newDir: string | null) => {
-      // ChatInput already persists workingDir to server; we just refresh our local copy.
-      refreshServerSession();
-
-      // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③
-      if (newDir && pendingSendRef.current) {
-        const {
-          deliveryMode,
-          message,
-          model,
-          effort,
-          permissionMode,
-          files,
-          mentions,
-          vendorOptions,
-          quotesEncoded,
-          agentReferences,
-          pastedTextRanges,
-          slashCommandRanges,
-          onRemoteOptimisticFailure,
-          onDeferredAccepted,
-        } = pendingSendRef.current;
-        pendingSendRef.current = null;
-        const dispatch = deliveryMode === 'steer' ? steerMessage : sendMessage;
-        void dispatch(
-          message,
-          model,
-          effort,
-          permissionMode,
-          newDir,
-          files,
-          mentions,
-          quotesEncoded ||
-            vendorOptions !== undefined ||
-            agentReferences?.length ||
-            pastedTextRanges?.length ||
-            slashCommandRanges !== undefined ||
-            onRemoteOptimisticFailure !== undefined ||
-            onDeferredAccepted !== undefined
-            ? {
-                ...(vendorOptions ? { vendorOptions } : {}),
-                ...(quotesEncoded ? { quotesEncoded: true } : {}),
-                ...(agentReferences?.length ? { agentReferences } : {}),
-                ...(pastedTextRanges?.length ? { pastedTextRanges } : {}),
-                ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
-                ...(onRemoteOptimisticFailure ? { onRemoteOptimisticFailure } : {}),
-                ...(onDeferredAccepted ? { onDeferredAccepted } : {}),
-              }
-            : undefined,
-        ).then(
-          (accepted) => {
-            if (accepted) onDeferredAccepted?.();
-          },
-          (error) => {
-            log.warn(
-              'pending send after working directory selection failed:',
-              error instanceof Error ? error.message : String(error),
-            );
-          },
-        );
-      }
-    },
-    [refreshServerSession, sendMessage, steerMessage],
-  );
-
   const handleFolderPickerOpenChange = useCallback((open: boolean) => {
     setFolderPickerOpen(open);
     // If user closed the popover without selecting, clear pending send
@@ -2413,23 +2349,35 @@ export function CCAgentSessionView({
     async (
       message: string,
       files?: AttachedFile[],
-      allowDesktopDispatch = true,
+      options?: {
+        allowDesktopDispatch?: boolean;
+        piRuntimeRetryDelaysMs?: readonly number[];
+        workingDirOverride?: string;
+      },
     ): Promise<{ handled: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
       if (!slashMatch) return { handled: false, message };
       const cmdName = slashMatch[1].toLowerCase();
       const args = slashMatch[2] ?? '';
+      const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
+      const workingDir = options?.workingDirOverride ?? session?.workingDir;
       const cached = allCommandsRef.current;
-      const commands = cached.length > 0 ? cached : await getHelpCommandsSnapshot();
+      // A newly selected project changes command ownership, so do not let a
+      // pre-selection global hit suppress the forced project catalog refresh.
+      const commands = options?.workingDirOverride
+        ? []
+        : cached.length > 0
+          ? cached
+          : await getHelpCommandsSnapshot();
       const agentKind = dbToMakerAgentKind(session?.agentKind);
-      const reconciled = await reconcilePiRuntimeCommandForDispatch({
+      const reconcileParams = {
         agentKind,
         sessionId: session?.id,
         commandName: cmdName,
         commands,
         reload: () => loadAllCommands(
           agentKind,
-          session?.workingDir,
+          workingDir,
           {
             skipAgentSkills: isRemoteSession,
             sessionId: session?.id,
@@ -2437,7 +2385,13 @@ export function CCAgentSessionView({
           },
           remoteDeviceId,
         ),
-      });
+      };
+      const reconciled = options?.piRuntimeRetryDelaysMs
+        ? await reconcilePiRuntimeCommandForDispatchWithRetry({
+            ...reconcileParams,
+            retryDelaysMs: options.piRuntimeRetryDelaysMs,
+          })
+        : await reconcilePiRuntimeCommandForDispatch(reconcileParams);
       if (reconciled.commands !== commands) {
         allCommandsRef.current = reconciled.commands;
         setAllCommands(reconciled.commands);
@@ -2463,7 +2417,7 @@ export function CCAgentSessionView({
       // (/cmd 拿被控端路径本机 spawn、/goal /learn 在本机产生副作用;Codex review #548)。
       void dispatchCommand(hit, {
         ...(sessionId ? { sessionId } : {}),
-        ...(session?.workingDir ? { workingDir: session.workingDir } : {}),
+        ...(workingDir ? { workingDir } : {}),
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
       });
@@ -2477,6 +2431,108 @@ export function CCAgentSessionView({
       session?.workingDir,
       sessionId,
       remoteDeviceId,
+    ],
+  );
+
+  const handleWorkingDirChange = useCallback(
+    (newDir: string | null) => {
+      // ChatInput already persists workingDir to server; we just refresh our local copy.
+      refreshServerSession();
+
+      // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③.
+      // The first slash reconciliation ran before this directory existed, so refresh again with
+      // the selected project before dispatching and keep inline metadata aligned with any alias rewrite.
+      const pending = pendingSendRef.current;
+      if (!newDir || !pending) return;
+      pendingSendRef.current = null;
+      void (async () => {
+        try {
+          const slashDispatch = await maybeDispatchDesktopSlashCommand(
+            pending.message,
+            pending.files,
+            {
+              allowDesktopDispatch: pending.deliveryMode !== 'steer',
+              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              workingDirOverride: newDir,
+            },
+          );
+          if (slashDispatch.handled) {
+            pending.onDeferredAccepted?.();
+            return;
+          }
+
+          const pendingAgentReferences = pending.agentReferences
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.agentReferences,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const pendingPastedTextRanges = pending.pastedTextRanges
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.pastedTextRanges,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.slashCommandRanges,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
+          const accepted = await dispatch(
+            slashDispatch.message,
+            pending.model,
+            pending.effort,
+            pending.permissionMode,
+            newDir,
+            pending.files,
+            pending.mentions,
+            pending.quotesEncoded ||
+              pending.vendorOptions !== undefined ||
+              pendingAgentReferences?.length ||
+              pendingPastedTextRanges?.length ||
+              pendingSlashCommandRanges !== undefined ||
+              pending.onRemoteOptimisticFailure !== undefined ||
+              pending.onDeferredAccepted !== undefined
+              ? {
+                  ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
+                  ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
+                  ...(pendingAgentReferences?.length
+                    ? { agentReferences: pendingAgentReferences }
+                    : {}),
+                  ...(pendingPastedTextRanges?.length
+                    ? { pastedTextRanges: pendingPastedTextRanges }
+                    : {}),
+                  ...(pendingSlashCommandRanges !== undefined
+                    ? { slashCommandRanges: pendingSlashCommandRanges }
+                    : {}),
+                  ...(pending.onRemoteOptimisticFailure
+                    ? { onRemoteOptimisticFailure: pending.onRemoteOptimisticFailure }
+                    : {}),
+                  ...(pending.onDeferredAccepted
+                    ? { onDeferredAccepted: pending.onDeferredAccepted }
+                    : {}),
+                }
+              : undefined,
+          );
+          if (accepted) pending.onDeferredAccepted?.();
+        } catch (error) {
+          log.warn(
+            'pending send after working directory selection failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      })();
+    },
+    [
+      maybeDispatchDesktopSlashCommand,
+      refreshServerSession,
+      sendMessage,
+      steerMessage,
     ],
   );
 
@@ -2586,7 +2642,7 @@ export function CCAgentSessionView({
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
       const originalMessage = message;
       const slashDispatch = deliveryMode === 'steer'
-        ? await maybeDispatchDesktopSlashCommand(message, files, false)
+        ? await maybeDispatchDesktopSlashCommand(message, files, { allowDesktopDispatch: false })
         : await maybeDispatchDesktopSlashCommand(message, files);
       if (slashDispatch.handled) return;
       message = slashDispatch.message;
@@ -3084,7 +3140,11 @@ export function CCAgentSessionView({
         // resolve false / 抛错都保留(见该函数注释)。
         let pendingText = pending.text;
         const dispatched = await deliverRecoverableHandoff(sessionId, async () => {
-          const slashDispatch = await maybeDispatchDesktopSlashCommand(pending.text, pending.files);
+          const slashDispatch = await maybeDispatchDesktopSlashCommand(
+            pending.text,
+            pending.files,
+            { piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS },
+          );
           pendingText = slashDispatch.message;
           return slashDispatch.handled;
         });

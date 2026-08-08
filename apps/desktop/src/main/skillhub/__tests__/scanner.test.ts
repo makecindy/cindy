@@ -522,6 +522,29 @@ describe('skill file access', () => {
     expect(fs.readFileSync(path.join(outsideSkill, 'SKILL.md'), 'utf-8')).toBe('# Outside\n');
   });
 
+  it('anchors project .pi skill boundaries before nested marker segments', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-nested-marker-'));
+    tempRoots.push(root);
+    const projectRoot = path.join(root, 'project');
+    const outsideRoot = path.join(root, 'outside');
+    const nestedSkill = path.join(outsideRoot, '.pi', 'skills', 'escape');
+    const exposedRoot = path.join(projectRoot, '.pi', 'skills', 'alias');
+    fs.mkdirSync(nestedSkill, { recursive: true });
+    fs.mkdirSync(path.dirname(exposedRoot), { recursive: true });
+    fs.writeFileSync(path.join(nestedSkill, 'SKILL.md'), '# Outside\n', 'utf-8');
+    fs.symlinkSync(outsideRoot, exposedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const exposedSkill = path.join(exposedRoot, '.pi', 'skills', 'escape');
+    const exposedSkillMd = path.join(exposedSkill, 'SKILL.md');
+    await expect(readSkillContent({ mdPath: exposedSkillMd })).resolves.toMatchObject({ success: false });
+    await expect(listSkillFolderChildren({ dirPath: exposedSkill })).resolves.toMatchObject({ success: false });
+    await expect(writeSkillFile({
+      filePath: exposedSkillMd,
+      content: '# Changed\n',
+    })).resolves.toMatchObject({ success: false });
+    expect(fs.readFileSync(path.join(nestedSkill, 'SKILL.md'), 'utf-8')).toBe('# Outside\n');
+  });
+
   it('follows a supported skill path symlink across detail, files panel, and editor access', async () => {
     const { actualSkillMd, exposedDir, exposedPricingJson, exposedSkillMd } = createSymlinkedSkill();
 

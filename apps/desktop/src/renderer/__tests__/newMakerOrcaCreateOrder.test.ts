@@ -158,6 +158,30 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(pendingBranch).toContain('agentReferences: pendingAgentReferences');
     expect(pendingBranch).toContain('pastedTextRanges: pendingPastedTextRanges');
     expect(pendingBranch).toContain('slashCommandRanges: pendingSlashCommandRanges');
+    expect(pendingBranch).toContain('PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
+  });
+
+  it('reconciles Pi skill aliases after the user selects a working directory', () => {
+    const workingDirHandler = sessionViewSource.slice(
+      sessionViewSource.indexOf('const handleWorkingDirChange = useCallback('),
+      sessionViewSource.indexOf('const maybeShowContextUsage'),
+    ).replace(/\r\n/g, '\n');
+
+    expect(sessionViewSource).toContain('const commands = options?.workingDirOverride');
+    expect(workingDirHandler).toContain('workingDirOverride: newDir');
+    expect(workingDirHandler).toContain(
+      'piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS',
+    );
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.agentReferences,',
+    );
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.pastedTextRanges,',
+    );
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.slashCommandRanges,',
+    );
+    expect(workingDirHandler).toContain('slashDispatch.message,');
   });
 
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {

@@ -9,6 +9,7 @@ import {
   nextAvailableSlashCommandIndex,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
+  reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
   slashCommandInvocationName,
   type UnifiedCommand,
@@ -215,6 +216,34 @@ describe('Pi project skill availability', () => {
       commands: [discovered],
       reload: async () => [loaded],
     })).resolves.toEqual({ command: loaded, commands: [loaded] });
+  });
+
+  it('waits for a transient discovered Pi skill to enter the runtime catalog', async () => {
+    const discovered = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+    const sleeps: number[] = [];
+    let reloads = 0;
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [discovered],
+      retryDelaysMs: [10, 20, 30],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload: async () => (++reloads < 3 ? [discovered] : [loaded]),
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(sleeps).toEqual([10, 20]);
+    expect(reloads).toBe(3);
   });
 
   it('refreshes an unknown Pi alias in case the runtime catalog arrived late', async () => {
