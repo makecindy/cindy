@@ -4,7 +4,10 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { materializeLocalMarkdownImages } from '../localMarkdownImages';
+import {
+  materializeLocalMarkdownFiles,
+  materializeLocalMarkdownImages,
+} from '../localMarkdownImages';
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const tempRoots: string[] = [];
@@ -177,5 +180,52 @@ describe('materializeLocalMarkdownImages', () => {
     expect(realpath).toHaveBeenCalledWith(alias);
     expect(result).toEqual({ absPaths: [], text: '图片' });
     expect(deps.ingest).not.toHaveBeenCalled();
+  });
+});
+
+describe('materializeLocalMarkdownFiles', () => {
+  it('accepts real files inside workingDir, dedupes them, and removes internal URLs', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+    const url = `xdt-file://${reportPath}`;
+    const deps = {
+      realpath: vi.fn((value: string) => fs.realpath(value)),
+      stat: vi.fn((value: string) => fs.stat(value)),
+    };
+
+    const result = await materializeLocalMarkdownFiles(
+      {
+        text: `ready\n[report](${url})\n[duplicate](${url})`,
+        workingDir,
+      },
+      deps,
+    );
+
+    expect(deps.realpath).toHaveBeenCalledWith(reportPath);
+    expect(deps.stat).toHaveBeenCalledWith(await fs.realpath(reportPath));
+    expect(result).toEqual({
+      absPaths: [await fs.realpath(reportPath)],
+      text: 'ready\nreport\nduplicate',
+    });
+  });
+
+  it('rejects files outside workingDir and symlink escapes without exposing their paths', async () => {
+    const parent = await makeTempRoot();
+    const workingDir = path.join(parent, 'work');
+    const outsidePath = path.join(parent, 'secret.txt');
+    const symlinkPath = path.join(workingDir, 'linked.txt');
+    await fs.mkdir(workingDir);
+    await fs.writeFile(outsidePath, 'secret');
+    await fs.symlink(outsidePath, symlinkPath);
+
+    const result = await materializeLocalMarkdownFiles({
+      text: `[outside](xdt-file://${outsidePath})\n[linked](xdt-file://${symlinkPath})`,
+      workingDir,
+    });
+
+    expect(result).toEqual({ absPaths: [], text: 'outside\nlinked' });
+    expect(result.text).not.toContain('xdt-file://');
+    expect(result.text).not.toContain(outsidePath);
   });
 });

@@ -120,7 +120,10 @@ import {
   type ImAuthCheckDeps,
 } from './authCheck';
 import { FBOT_DRAFT_TITLE, generateAndPersistFbotTitle } from './fbotTitle';
-import { materializeLocalMarkdownImages } from './localMarkdownImages';
+import {
+  materializeLocalMarkdownFiles,
+  materializeLocalMarkdownImages,
+} from './localMarkdownImages';
 import {
   createTurnActivity,
   markActivityWriting,
@@ -2525,6 +2528,7 @@ export function createTurnRunner(
       // text API instead of silently dropping a non-empty final response.
       if (output.kind === 'rich-card') {
         await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        await materializeTurnLocalFiles(state, turn);
       }
       const fallbackText = composeStreamingView(turn) || '✅ (本轮无文本输出)';
       try {
@@ -2707,6 +2711,35 @@ export function createTurnRunner(
           }),
         );
       }
+    }
+  }
+
+  async function materializeTurnLocalFiles(state: SessionState, turn: TurnState): Promise<void> {
+    if (!turn.presenter.wholeText().includes('xdt-file://')) return;
+    try {
+      const materialized = await materializeLocalMarkdownFiles({
+        text: turn.presenter.wholeText(),
+        workingDir: state.workingDir,
+        maxFiles: 8,
+        existingAbsPaths: [...turn.mediaAbsPaths],
+      });
+      turn.presenter.replaceBody(materialized.text);
+      for (const absPath of materialized.absPaths) {
+        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+      }
+    } catch (err) {
+      const error = sanitizeSendOutcomeError(err);
+      log.warn('local markdown file materialization failed (non-fatal)', {
+        kind: 'terminal-file-materialization',
+        source: 'materializeLocalMarkdownFiles',
+        error,
+      });
+    } finally {
+      turn.presenter.replaceBody(
+        transformXdtRefs(turn.presenter.wholeText(), {
+          file: ({ alt }) => alt.trim() || '附件',
+        }),
+      );
     }
   }
 
@@ -2897,9 +2930,11 @@ export function createTurnRunner(
     const turn = state?.queue[0];
     if (!turn?.streamingHandle) return;
     const view = composeStreamingView(turn);
+    let finalizedWithContent = false;
     if (view.length > 0) {
       try {
         await turn.streamingHandle.finalize(view);
+        finalizedWithContent = true;
       } catch (err) {
         log.warn(
           `finalizeActiveStream: finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -2912,6 +2947,7 @@ export function createTurnRunner(
     }
     turn.streamingHandle = null;
     turn.streamingHandlePromise = null;
+    if (finalizedWithContent) turn.mediaAbsPaths = [];
     turn.presenter.replaceBody('');
   }
 

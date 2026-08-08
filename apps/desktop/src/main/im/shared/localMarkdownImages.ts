@@ -12,6 +12,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { collectXdtFileRefs, normalizeXdtAbsPath, transformXdtRefs } from '@cindy/im';
+
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
 import { ingestMedia } from '../../cindy-media/ingest';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
@@ -84,6 +86,81 @@ export interface MaterializedLocalMarkdownImages {
   absPaths: string[];
   /** 成功物化的图片语法替换为 alt，避免把本机路径发到聊天。 */
   text: string;
+}
+
+export interface MaterializedLocalMarkdownFiles {
+  /** 已通过工作目录边界校验的真实文件路径，供 IM 渠道上传。 */
+  absPaths: string[];
+  /** 所有内部文件引用均替换为可读标签，避免本机路径泄漏。 */
+  text: string;
+}
+
+/**
+ * 将最终 Markdown 的 xdt-file 引用收敛为可上传路径。
+ *
+ * 文件来源是模型输出，必须同时通过绝对路径、realpath 与 workingDir 包含校验；
+ * 未通过的引用不会发送，但仍会从正文中移除内部 URL，只留下可读标签。
+ */
+export async function materializeLocalMarkdownFiles(
+  params: {
+    text: string;
+    workingDir: string;
+    maxFiles?: number;
+    existingAbsPaths?: string[];
+  },
+  deps: Pick<LocalMarkdownImageDeps, 'realpath' | 'stat'> = defaultDeps,
+): Promise<MaterializedLocalMarkdownFiles> {
+  const refs = collectXdtFileRefs(params.text);
+  if (refs.length === 0) return { absPaths: [], text: params.text };
+
+  const maxFiles = Math.max(0, params.maxFiles ?? 8);
+  const existing = new Set<string>();
+  for (const absPath of params.existingAbsPaths ?? []) {
+    try {
+      existing.add(pathKey(await deps.realpath(absPath)));
+    } catch {
+      existing.add(pathKey(absPath));
+    }
+  }
+
+  let workingDirReal: string | null = null;
+  try {
+    workingDirReal = await deps.realpath(params.workingDir);
+  } catch {
+    // Fail closed: without a canonical root, no model-authored file may be sent.
+  }
+
+  const accepted = new Set<string>();
+  const absPaths: string[] = [];
+  if (workingDirReal) {
+    for (const ref of refs) {
+      if (absPaths.length >= maxFiles) break;
+      try {
+        const candidate = normalizeXdtAbsPath(
+          decodeURIComponent(ref.url.slice('xdt-file://'.length)),
+        );
+        const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(candidate) || /^\\\\[^\\]/.test(candidate);
+        if (candidate.includes('\u0000') || (!path.isAbsolute(candidate) && !isWindowsAbsolute)) continue;
+        const targetReal = await deps.realpath(candidate);
+        if (!isPathInside(workingDirReal, targetReal)) continue;
+        const stat = await deps.stat(targetReal);
+        if (!stat.isFile()) continue;
+        const key = pathKey(targetReal);
+        if (accepted.has(key) || existing.has(key)) continue;
+        accepted.add(key);
+        absPaths.push(targetReal);
+      } catch {
+        // A bad or missing file is omitted; the readable label remains below.
+      }
+    }
+  }
+
+  return {
+    absPaths,
+    text: transformXdtRefs(params.text, {
+      file: ({ alt }) => alt.trim() || '附件',
+    }),
+  };
 }
 
 export async function materializeLocalMarkdownImages(
