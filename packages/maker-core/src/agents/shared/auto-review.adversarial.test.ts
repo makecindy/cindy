@@ -145,6 +145,14 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     '/usr/bin/gh auth status -t',
     'gh auth status -wt',
     'gh auth status -tw',
+    // 分隔符后不带空格同样是命令位 —— 删个空格就绕过的口子不能留
+    'ls;gh auth token',
+    'ls&&gh auth token',
+    'ls||gh auth token',
+    'ls|gh auth token',
+    '(gh auth token)',
+    'ls;gh auth status -t',
+    'ls&&gh auth status --show-token',
     // 凭证路径藏在「消息正文」类选项里时不得被数据位剥离遮蔽
     'git commit -F "/home/user/.ssh/id_rsa"',
     'git notes add -F ~/.aws/credentials',
