@@ -59,6 +59,17 @@ describe('mobile simulator Metro takeover', () => {
     ])).toBe(false);
   });
 
+  it('requires every process group member to stay in the Metro worktree', () => {
+    expect(isDedicatedMetroProcessGroup([
+      { command: 'pnpm mobile:sim:start', cwd: '/repo' },
+      { command: 'node expo start --dev-client --port 8081', cwd: '/repo/apps/mobile' },
+    ], '/repo')).toBe(true);
+    expect(isDedicatedMetroProcessGroup([
+      { command: 'pnpm mobile:sim:start', cwd: '/repo' },
+      { command: 'node expo start --dev-client --port 8081', cwd: '/other/apps/mobile' },
+    ], '/repo')).toBe(false);
+  });
+
   it('signals the Metro process group and waits for the listener to exit', async () => {
     const run = vi.fn();
     let alive = true;
@@ -113,7 +124,7 @@ describe('mobile simulator Metro takeover', () => {
       execFile: run,
       groupId: '456',
       currentGroupId: '789',
-      groupCommands: ['pnpm mobile:sim:start', 'Cindy.app/Contents/MacOS/Cindy Helper'],
+      groupEntries: ['pnpm mobile:sim:start', 'Cindy.app/Contents/MacOS/Cindy Helper'],
       isAlive: () => false,
     });
 

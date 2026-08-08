@@ -121,7 +121,7 @@ if (portArgs.port === DEFAULT_PORT) {
         console.error(`✗ ${DEFAULT_PORT} 上是本 worktree 的 Metro,但无法确认它对应当前源码。`);
         process.exit(1);
       }
-    } else if (!takeover || !listener.confirmed) {
+    } else if (!takeover || !listenerConfirmed) {
       console.error(`✗ 端口 ${DEFAULT_PORT} 被其他进程占用:${cwd || '(未知进程)'}`);
       console.error(`  本 app 无 expo-dev-client、只会连默认 ${DEFAULT_PORT};默认不会自动接管。`);
       console.error('  只有确认它是本 Cindy worktree 的 Metro 后，传 `--takeover` 才能安全切换。');
@@ -132,7 +132,7 @@ if (portArgs.port === DEFAULT_PORT) {
       console.error(`✗ ${DEFAULT_PORT} 上的进程不是可确认的 Metro,拒绝接管。`);
       process.exit(1);
     }
-    const stopped = await terminateMetro(pid, { worktreeRoot });
+    const stopped = await terminateMetro(pid, { worktreeRoot: listener.worktree });
     if (!stopped) {
       console.error(`✗ 无法在限定时间内停止旧 Metro(pid=${pid}),拒绝继续。`);
       process.exit(1);
