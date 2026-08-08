@@ -2,7 +2,7 @@ import fs from 'node:fs';
 
 import {
   coerceLayout,
-  createDefaultLayout,
+  createDefaultLayoutPreservingGhostPanels,
   validateLayout,
   type Layout,
 } from '../../shared/layoutTree.js';
@@ -101,7 +101,7 @@ export class LayoutStore {
 
   /** 重置为默认布局(等价 WoW /resetui):写盘 + 广播。 */
   reset(): LayoutMutationResult {
-    const layout = createDefaultLayout();
+    const layout = createDefaultLayoutPreservingGhostPanels(this.getLayout());
     this.cached = layout;
     const persisted = this.persist(layout);
     this.options.onChanged?.(layout);

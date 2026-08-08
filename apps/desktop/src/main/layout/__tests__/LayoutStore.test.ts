@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDefaultLayout, validateLayout, type Layout } from '../../../shared/layoutTree';
+import {
+  createDefaultLayout,
+  insertRootSplitPane,
+  validateLayout,
+  type Layout,
+  type SplitNode,
+} from '../../../shared/layoutTree';
 import { LAYOUT_FILE_NAME, LayoutStore } from '../LayoutStore';
 
 /** 每个用例独立临时目录(规则 23:测试路径一律 os.tmpdir,收尾清理)。 */
@@ -145,6 +151,32 @@ describe('LayoutStore · reset 与 ensurePersisted', () => {
     expect(result).toEqual({ layout: createDefaultLayout(), persisted: true });
     expect(readFileJson()).toEqual(createDefaultLayout());
     expect(onChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('reset 恢复内置默认排列但保留已停靠的意识面板', () => {
+    const store = makeStore();
+    const withGhost = insertRootSplitPane(
+      createDefaultLayout(),
+      { id: 'custom-ghost', panelKind: 'ghost:calendar', minWidth: 260 },
+      { index: 2, fraction: 0.3 },
+    );
+    expect(withGhost.applied).toBe(true);
+    store.setLayout(withGhost.layout);
+
+    const result = store.reset();
+    expect(result.persisted).toBe(true);
+    const children = (result.layout.content as SplitNode).children;
+    expect(children.map((child) => child.node.type === 'pane' && child.node.panelKind)).toEqual([
+      'ghost:calendar',
+      'chat-main',
+      'right-tabs',
+    ]);
+    expect(children[0].node).toMatchObject({
+      id: 'ghost-calendar',
+      panelKind: 'ghost:calendar',
+      minWidth: 260,
+    });
+    expect(readFileJson()).toEqual(result.layout);
   });
 
   it('ensurePersisted:缺失时落默认存档;已有合法存档不覆盖', () => {
