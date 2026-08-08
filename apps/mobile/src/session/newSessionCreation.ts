@@ -618,8 +618,9 @@ async function createSessionIdempotent(
   const { maker } = task.params.transport;
   const sleep = task.params.sleep ?? realSleep;
   // 鉴权后联合校验的最终草稿(codex review P2):只影响本次创建,不改 task.draft
-  // 状态(UI 快照保持提交时语义)。
-  const createOpts = {
+  // 状态(UI 快照保持提交时语义)。precreated 分支在 persist started 后重验并
+  // 重建(见下),其余路径直接使用本初值。
+  let createOpts = {
     ...buildRemoteCreateSessionOptions(effectiveDraft),
     id: task.sessionId,
   };
@@ -630,6 +631,25 @@ async function createSessionIdempotent(
     // malformed replies, wrong ids, and transport errors must never authorize
     // retrying or discarding the managed directory.
     await persistPrecreatedSessionCreateStarted(task);
+    assertTaskOwnerCurrent(task);
+    // started 写盘后重验普通创建目录(codex review P2:在 started 写盘后重验普通
+    // 创建目录)——persist 账本的 await 期间供应商可能由 A 替换为 B,前面算出的
+    // finalDraft 已过期;重拉 fresh 再联合校验,重建 createOpts(仍只影响本次
+    // 创建,不改 task.draft 状态)。
+    if (task.params.revalidateDraftAfterAuth) {
+      const auth = await task.params.confirmUnauthenticated();
+      assertTaskOwnerCurrent(task);
+      if (auth?.fresh) {
+        const patch = await task.params.revalidateDraftAfterAuth(auth.fresh);
+        assertTaskOwnerCurrent(task);
+        if (patch) {
+          createOpts = {
+            ...buildRemoteCreateSessionOptions({ ...effectiveDraft, ...patch }),
+            id: task.sessionId,
+          };
+        }
+      }
+    }
     try {
       assertTaskOwnerCurrent(task);
       const created = await maker.createSession(createOpts);
