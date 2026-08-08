@@ -6,10 +6,10 @@
     "options": {
       "system": "跟隨系統",
       "zh-CN": "簡體中文",
+      "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
-    "ko": "한국어",
-    "zh-TW": "繁體中文"
+      "ko": "한국어"
     }
   },
   "version": {

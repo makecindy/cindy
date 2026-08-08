@@ -102,11 +102,11 @@ type SelfDeviceNameQueuedWrite =
   | { kind: 'rename'; name: string; options: SelfDeviceNameSaveOptions }
   | { kind: 'reset' };
 const SETTINGS_DEVICE_TIMEOUT_MS = 12_000;
-// 显示语言选项:英语优先,「跟随系统」作为非语言选项放在最后。
+// 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列。
 const LANGUAGE_OPTIONS: readonly LocalePreference[] = [
+  'system',
   'en',
   ...SUPPORTED_LOCALES.filter((locale) => locale !== 'en'),
-  'system',
 ];
 
 export default function SettingsScreen() {

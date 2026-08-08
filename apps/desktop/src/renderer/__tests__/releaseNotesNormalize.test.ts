@@ -172,6 +172,22 @@ describe('release-notes normalization', () => {
     expect(fetchReleaseNotes).toHaveBeenCalledTimes(1);
   });
 
+  it('zh-TW localized block 畸形时继续回退到有效 zh-CN 内容', async () => {
+    stubFetch({
+      version: '0.1.30',
+      date: '2026-08-06',
+      contentByLocale: {
+        'zh-TW': { topics: [] },
+        'zh-CN': { topics: [{ title: '简体说明', text: '有效的简体内容。' }] },
+      },
+    });
+    const mod = await import('@/release-notes');
+
+    await expect(mod.fetchReleaseNotes('0.1.30', 'zh-TW')).resolves.toMatchObject({
+      topics: [{ title: '简体说明', text: '有效的简体内容。' }],
+    });
+  });
+
   it('英文缺失时回退中文,中文 localized 缺失时直接回退顶层中文', async () => {
     stubFetch({
       version: '0.1.25',
