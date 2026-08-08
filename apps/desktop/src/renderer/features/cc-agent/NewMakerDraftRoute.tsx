@@ -2862,15 +2862,24 @@ export function NewMakerDraftRoute() {
         // 后续主流程会重新 markSendInFlight(true) 上锁。
         markSendInFlight(true);
         try {
-          const cmds = await loadAllCommands(
-            capabilityAgentKind,
-            draft.workingDir,
-            {
-              forceReload: true,
-              skipAgentSkills: effectiveRemoteHostId != null,
-            },
-            effectiveDeviceLinkDeviceId,
-          );
+          let cmds: Awaited<ReturnType<typeof loadAllCommands>> = [];
+          try {
+            cmds = await loadAllCommands(
+              capabilityAgentKind,
+              draft.workingDir,
+              {
+                forceReload: true,
+                skipAgentSkills: effectiveRemoteHostId != null,
+              },
+              effectiveDeviceLinkDeviceId,
+            );
+          } catch (err) {
+            // IPC/bridge 临时不可用:loadAllCommands 内部对三源各自 catch 降级空列表,
+            // 但同步异常/未预期 rejection 仍可能抛到这里 —— 降级空列表放行,别让 /plan
+            // 发送被异常中断(Copilot)。空列表 → hit 未命中 → 走默认发送路径。
+            log.warn('plan command: failed to load command roster; falling back to passthrough', err);
+            cmds = [];
+          }
           const hit = cmds.find((c) => c.name.toLowerCase() === 'plan');
           // 仅当 merged 列表**明确命中 desktop** /plan 时才拦截(Copilot):loadAllCommands
           // 在 IPC 失败时降级返回空列表,`!hit` 无法证明命令归属 —— 若把「未命中」也当

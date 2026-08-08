@@ -5375,7 +5375,7 @@
       "loadingHint": "正在确认协同设置，请稍后重试",
       "planModeUnavailableRemoteDraft": "远程草稿不支持计划模式。",
       "planModeUnsupportedRemote": "此远程设备不支持计划模式。",
-      "planModeCapabilitiesLoading": "正在确认此会话是否支持计划模式...",
+      "planModeCapabilitiesLoading": "正在确认此任务是否支持计划模式…",
       "stopHint": "停止协同",
       "stopAria": "停止协同",
       "toggleOnAria": "协同模式已开启，点击停止",
