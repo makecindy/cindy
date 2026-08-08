@@ -418,7 +418,7 @@ export class GoalController {
   /**
    * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
    * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
-   * turn-dispatched 同代成对。以 **boundary 身份**绑定生命周期(* generation 不足以区分"busy 重试同代派发"与"同 sessionId 新目标首轮",二者都是
+   * turn-dispatched 同代成对。以 **boundary 身份**绑定生命周期(generation 不足以区分"busy 重试同代派发"与"同 sessionId 新目标首轮",二者都是
    * gen 1;boundary 引用不变 = 同一次恢复的重试可消费,换代 = 新生命周期自动失效)。
    * busy / 预算预检拦截 / send 拒绝等未派发路径不产生孤儿恢复事件;stopSession
    * (生命周期接管)清空作废的恢复意图。
