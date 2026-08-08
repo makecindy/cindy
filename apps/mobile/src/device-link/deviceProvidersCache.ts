@@ -166,6 +166,11 @@ export async function fetchDeviceProvidersFresh(
           // 仅 fresh 所属代际仍有效时才补拉(codex review P2):fresh 请求期间设备
           // 可能已被驱逐/登出/切号(代际已变),此时补拉成功会重新写入已驱逐设备
           // 或上一账号的目录——清理完成后不得复活旧目录。
+          // 先清 fresh 槽(codex review P2:在清除 fresh 槽后再启动恢复拉取)——本
+          // promise 仍占着 freshInflight(直到下方 p.finally 才删除),fetchDeviceProviders
+          // 的 fresh 优先分支会 join 同一个正在 reject 的 promise,fetcher 不会再次
+          // 执行,已挂载 hook 停在 ready=false。清槽后恢复调用走正常普通拉取。
+          freshInflight.delete(deviceId);
           void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined);
         }
       }

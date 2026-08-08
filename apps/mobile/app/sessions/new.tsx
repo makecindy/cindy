@@ -4748,11 +4748,14 @@ export default function NewRemoteSessionScreen() {
       // 中止(与 create() 的鉴权门禁同口径)。fail-open(catalogKnown=false)时
       // rows 不可信,保持信任语义不拦截。
       if (guardResult.catalogKnown) {
-        const connectedCount = connectedProvidersForAgent(
-          [...new Map(guardResult.rows.map((row) => [row.provider.id, row.provider])).values()],
-          draft.agentKind,
-        ).length;
-        if (guardResult.rows.length > 0 && connectedCount === 0) {
+        // 用**未过滤**的原始目录计算连接数(codex review P2:用未过滤的目录执行
+        // Goal 最终鉴权)——guardResult.rows 经 buildMobileModelSections 只保留
+        // connectedProvidersForAgent 的供应商,来源全部断开时 rows 恰好为空,
+        // 「rows.length > 0」条件会让零已连接来源场景漏过门禁。fetchDeviceProvidersFresh
+        // 成功已按代际写回缓存,缓存即未过滤的原始 providers。
+        const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
+        if (rawProviders.length > 0
+          && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           setGoalError(agentAuthGateHint(draft.agentKind));
