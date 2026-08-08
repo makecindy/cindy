@@ -55,13 +55,6 @@ function isBlankLine(text: string, start: number, end: number): boolean {
   return text.slice(start, end).trim() === '';
 }
 
-function previousLine(text: string, lineStart: number): { start: number; end: number } | null {
-  if (lineStart === 0) return null;
-  const end = text[lineStart - 1] === '\n' ? lineStart - 1 : lineStart;
-  const start = text.lastIndexOf('\n', Math.max(0, end - 1)) + 1;
-  return { start, end };
-}
-
 function listItemContentIndent(text: string, start: number, end: number): number | null {
   const line = text.slice(start, end);
   const match = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/);
@@ -73,74 +66,119 @@ function listItemContentIndent(text: string, start: number, end: number): number
   return columns;
 }
 
-function hasContainingListItem(text: string, lineStart: number, indent: number): boolean {
-  let cursor = lineStart;
-  while (true) {
-    const previous = previousLine(text, cursor);
-    if (!previous) return false;
-    cursor = previous.start;
-    if (isBlankLine(text, previous.start, previous.end)) continue;
-    const contentIndent = listItemContentIndent(text, previous.start, previous.end);
-    if (contentIndent !== null) {
-      return indent >= contentIndent && indent < contentIndent + 4;
-    }
-    if (lineIndentColumns(text, previous.start, previous.end) === 0) return false;
-  }
-}
+function indentedCodeStartLines(text: string): Set<number> {
+  const starts = new Set<number>();
+  let lineStart = 0;
+  let previousBlank = true;
+  let activeListIndent: number | null = null;
+  while (lineStart < text.length) {
+    const lineEnd = lineEndAfterNewline(text, lineStart);
+    const blank = isBlankLine(text, lineStart, lineEnd);
+    const indent = lineIndentColumns(text, lineStart, lineEnd);
+    const containedByList =
+      activeListIndent !== null && indent >= activeListIndent && indent < activeListIndent + 4;
+    if (indent >= 4 && previousBlank && !containedByList) starts.add(lineStart);
 
-function isIndentedCodeStart(text: string, start: number, end: number): boolean {
-  const indent = lineIndentColumns(text, start, end);
-  if (indent < 4 || hasContainingListItem(text, start, indent)) return false;
-  const previous = previousLine(text, start);
-  return previous === null || isBlankLine(text, previous.start, previous.end);
+    if (!blank) {
+      const listIndent = listItemContentIndent(text, lineStart, lineEnd);
+      if (listIndent !== null) activeListIndent = listIndent;
+      else if (indent === 0) activeListIndent = null;
+    }
+    previousBlank = blank;
+    lineStart = lineEnd;
+  }
+  return starts;
 }
 
 function isIndentedCodeContinuation(text: string, start: number, end: number): boolean {
   return lineIndentColumns(text, start, end) >= 4 || isBlankLine(text, start, end);
 }
 
-function fenceMarkerAtLine(
-  text: string,
-  lineStart: number,
-  lineEnd: number,
-): { start: number; marker: '`' | '~'; run: number } | null {
+interface LineContainerPrefix {
+  cursor: number;
+  quoteDepth: number;
+  indent: number;
+}
+
+function lineContainerPrefix(text: string, lineStart: number, lineEnd: number): LineContainerPrefix {
   let cursor = lineStart;
-  let spaces = 0;
-  while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
-    cursor += 1;
-    spaces += 1;
-  }
+  let quoteDepth = 0;
+  let indent = 0;
   while (cursor < lineEnd) {
-    if (text[cursor] === '>') {
-      cursor += 1;
-      if (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
-    } else {
-      let markerEnd = cursor;
-      if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
-        markerEnd += 1;
-      } else {
-        let digits = 0;
-        while (markerEnd < lineEnd && digits < 9 && /[0-9]/.test(text[markerEnd])) {
-          markerEnd += 1;
-          digits += 1;
-        }
-        if (digits === 0 || (text[markerEnd] !== '.' && text[markerEnd] !== ')')) break;
-        markerEnd += 1;
-      }
-      if (text[markerEnd] !== ' ' && text[markerEnd] !== '\t') break;
-      cursor = markerEnd + 1;
-      while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
-    }
-    spaces = 0;
+    let spaces = 0;
     while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
       cursor += 1;
       spaces += 1;
     }
+    indent += spaces;
+    if (text[cursor] !== '>') break;
+    quoteDepth += 1;
+    cursor += 1;
+    if (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+    indent = 0;
+  }
+  return { cursor, quoteDepth, indent };
+}
+
+interface FenceMarker {
+  start: number;
+  marker: '`' | '~';
+  run: number;
+  quoteDepth: number;
+  listContentIndent: number | null;
+}
+
+function fenceMarkerAtLine(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+): FenceMarker | null {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  let cursor = prefix.cursor;
+  let contentIndent = prefix.indent;
+  let listContentIndent: number | null = null;
+  while (cursor < lineEnd) {
+    let markerEnd = cursor;
+    if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
+      markerEnd += 1;
+    } else {
+      let digits = 0;
+      while (markerEnd < lineEnd && digits < 9) {
+        const code = text.charCodeAt(markerEnd);
+        if (code < 48 || code > 57) break;
+        markerEnd += 1;
+        digits += 1;
+      }
+      if (digits === 0 || (text[markerEnd] !== '.' && text[markerEnd] !== ')')) break;
+      markerEnd += 1;
+    }
+    if (text[markerEnd] !== ' ' && text[markerEnd] !== '\t') break;
+    contentIndent += markerEnd - cursor;
+    cursor = markerEnd;
+    while (text[cursor] === ' ' || text[cursor] === '\t') {
+      contentIndent += text[cursor] === '\t' ? 4 - (contentIndent % 4) : 1;
+      cursor += 1;
+    }
+    listContentIndent = contentIndent;
   }
   const marker = text[cursor];
   if (marker !== '`' && marker !== '~') return null;
   const run = runLength(text, cursor, marker);
-  return run >= 3 ? { start: cursor, marker, run } : null;
+  return run >= 3
+    ? { start: cursor, marker, run, quoteDepth: prefix.quoteDepth, listContentIndent }
+    : null;
+}
+
+function lineStaysInFenceContainer(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  opening: FenceMarker,
+): boolean {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (opening.quoteDepth > 0 && prefix.quoteDepth < opening.quoteDepth) return false;
+  if (opening.listContentIndent === null || isBlankLine(text, lineStart, lineEnd)) return true;
+  return prefix.indent >= opening.listContentIndent;
 }
 
 /** Locate fenced, indented, and inline Markdown code without copying large model output. */
@@ -159,8 +197,17 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
     let fenceEnd = text.length;
     while (searchLine < text.length) {
       const candidateLineEnd = lineEndAfterNewline(text, searchLine);
+      if (!lineStaysInFenceContainer(text, searchLine, candidateLineEnd, opening)) {
+        fenceEnd = searchLine;
+        break;
+      }
       const closing = fenceMarkerAtLine(text, searchLine, candidateLineEnd);
-      if (closing?.marker === opening.marker && closing.run >= opening.run) {
+      if (
+        closing?.marker === opening.marker &&
+        closing.run >= opening.run &&
+        closing.quoteDepth === opening.quoteDepth &&
+        (opening.listContentIndent !== null || closing.listContentIndent === null)
+      ) {
         const rest = text.slice(closing.start + closing.run, candidateLineEnd).trim();
         if (rest === '') {
           fenceEnd = candidateLineEnd;
@@ -174,6 +221,7 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
   }
 
   const blocks = [...fences];
+  const indentedStarts = indentedCodeStartLines(text);
   lineStart = 0;
   while (lineStart < text.length) {
     const fence = codeRangeAt(fences, lineStart);
@@ -182,7 +230,7 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
       continue;
     }
     const lineEnd = lineEndAfterNewline(text, lineStart);
-    if (!isIndentedCodeStart(text, lineStart, lineEnd)) {
+    if (!indentedStarts.has(lineStart)) {
       lineStart = lineEnd;
       continue;
     }
@@ -263,6 +311,22 @@ export function isMarkdownCodePosition(
   position: number,
 ): boolean {
   return codeRangeAt(ranges, position) !== null;
+}
+
+function markdownLabelEnd(text: string, start: number): { end: number; nested: boolean } {
+  let cursor = start;
+  while (cursor < text.length) {
+    if (text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === '[') return { end: cursor, nested: true };
+    if (text[cursor] === ']' && text[cursor + 1] === '(') {
+      return { end: cursor, nested: false };
+    }
+    cursor += 1;
+  }
+  return { end: text.length, nested: false };
 }
 
 function angleReferenceEnd(text: string, closingAngle: number): number {
@@ -348,17 +412,10 @@ function refStartsAt(
 ): boolean {
   if (codeRangeAt(codeRanges, openBracket)) return false;
   const image = openBracket > 0 && text[openBracket - 1] === '!';
-  let altEnd = openBracket + 1;
-  while (
-    altEnd < text.length &&
-    text[altEnd] !== '[' &&
-    !(text[altEnd] === ']' && text[altEnd + 1] === '(')
-  ) {
-    altEnd += 1;
-  }
-  if (altEnd >= text.length || text[altEnd] === '[') return false;
+  const label = markdownLabelEnd(text, openBracket + 1);
+  if (label.end >= text.length || label.nested) return false;
 
-  const urlStart = altEnd + 2;
+  const urlStart = label.end + 2;
   const schemeStart = text[urlStart] === '<' ? urlStart + 1 : urlStart;
   return image
     ? text.startsWith('xdt-image://', schemeStart) || text.startsWith('cindy-media://', schemeStart)
@@ -400,18 +457,12 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     const image = openBracket > 0 && text[openBracket - 1] === '!';
     const start = image ? openBracket - 1 : openBracket;
     const altStart = openBracket + 1;
-    let altEnd = altStart;
-    while (
-      altEnd < text.length &&
-      text[altEnd] !== '[' &&
-      !(text[altEnd] === ']' && text[altEnd + 1] === '(')
-    ) {
-      altEnd += 1;
-    }
+    const label = markdownLabelEnd(text, altStart);
+    const altEnd = label.end;
 
     // A nested opening bracket supersedes the malformed outer candidate. This
     // both preserves later valid refs and keeps the scan strictly forward.
-    if (text[altEnd] === '[') {
+    if (label.nested) {
       cursor = altEnd;
       continue;
     }

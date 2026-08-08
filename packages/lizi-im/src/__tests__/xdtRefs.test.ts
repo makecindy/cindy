@@ -12,6 +12,7 @@ import {
   collectXdtFileRefs,
   collectXdtImageRefs,
   collectXdtImageUrls,
+  markdownCodeRanges,
   normalizeXdtAbsPath,
   stripXdtFileLinks,
   stripXdtForStreaming,
@@ -222,8 +223,18 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
   it('ignores file references inside blockquote and list-container fences', () => {
     const quoted = '> ~~~md\n> [报告](xdt-file:///tmp/quoted.pdf)\n> ~~~';
     const listed = '- ```md\n  [报告](xdt-file:///tmp/listed.pdf)\n  ```';
+    const nestedQuote = '> ```md\n> > [报告](xdt-file:///tmp/nested.pdf)\n> ```';
+    const listShapedLiteral = '```md\n- ```\n[报告](xdt-file:///tmp/literal.pdf)\n```';
 
-    expect(collectXdtFileRefs(`${quoted}\n${listed}`)).toEqual([]);
+    expect(collectXdtFileRefs(`${quoted}\n${listed}\n${nestedQuote}\n${listShapedLiteral}`)).toEqual([]);
+  });
+
+  it('ends an unclosed container fence when the container ends', () => {
+    const text = '> ```md\n> example\n\n[报告](xdt-file:///tmp/outside.pdf)';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/outside.pdf' },
+    ]);
   });
 
   it('ignores file references inside four-space indented code blocks', () => {
@@ -242,6 +253,20 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     ]);
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('- 输出：\n    报告');
     expect(collectXdtFileRefs(afterBlank)).toHaveLength(1);
+  });
+
+  it('classifies long list continuations in linear time', () => {
+    const text = `- output\n${'    continuation\n'.repeat(20_000)}`;
+
+    expect(markdownCodeRanges(text)).toEqual([]);
+  }, 2_000);
+
+  it('parses attachment labels with escaped closing brackets', () => {
+    const text = String.raw`[a\](b](xdt-file:///tmp/report.pdf)`;
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: String.raw`a\](b`, url: 'xdt-file:///tmp/report.pdf' },
+    ]);
   });
 });
 
