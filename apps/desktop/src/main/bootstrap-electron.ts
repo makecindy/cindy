@@ -6849,6 +6849,12 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
     }
     patch.codexSubagentsEnabled = input.codexSubagentsEnabled;
   }
+  if ('codexUseCindySubagentPolicy' in input) {
+    if (typeof input.codexUseCindySubagentPolicy !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexUseCindySubagentPolicy must be boolean');
+    }
+    patch.codexUseCindySubagentPolicy = input.codexUseCindySubagentPolicy;
+  }
   if ('codexMaxConcurrentSubagents' in input) {
     if (!isValidCodexSubagentConcurrencyInput(input.codexMaxConcurrentSubagents)) {
       throwIpcError(
