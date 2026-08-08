@@ -8,10 +8,12 @@
  *   - 鼠标悬停时临时展开,移开即收起;点击/Enter 后固定展开,再次触发立即收起。
  *     浮层绝对定位(bottom-full),不改变 composer overlay 的实测高度,
  *     消息流不会因 hover 抖动。
- *   - 浮层行:completed 灰(check 圆圈),in_progress 高亮(静态虚线圆圈),
+ *   - 浮层行:completed 灰(check 圆圈),in_progress 高亮(实心圆点呼吸,
+ *     复用侧栏运行态同款 session-status-breathing;按 DESIGN.md §SVG 常驻
+ *     动画红线,呼吸挂 HTML wrapper,SVG 本体静态;reduced-motion 静止),
  *     pending 正常前景色(空心圆圈)。
- *   - 胶囊图标使用静态灰度进度圆环表达当前步骤位置,不使用持续旋转或 pulse;
- *     进度变化只通过圆环长度的短过渡反馈。
+ *   - 胶囊图标使用静态灰度进度圆环表达当前步骤位置(它表达"第几步",不是
+ *     loading 语义,不旋转);进度变化只通过圆环长度的短过渡反馈。
  *
  * 颜色沿用 ToolCallCard 同套 token(设计系统零阴影,浮层用 1px 边框):
  *   --msg-tool-card-text:    primary(icon、in_progress/pending 文本)
@@ -19,7 +21,7 @@
  */
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { CircleCheck, CircleDashed, Circle } from 'lucide-react';
+import { CircleCheck, CircleDot, Circle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 
@@ -260,11 +262,18 @@ export function TodoListCard({
                         />
                       )}
                       {todo.status === 'in_progress' && (
-                        <CircleDashed
-                          size={18}
-                          strokeWidth={1.5}
-                          className="shrink-0 text-[var(--msg-tool-card-text)]"
-                        />
+                        // 呼吸表达"正在干活":挂侧栏运行态同款动画。按 SVG 常驻
+                        // 动画红线,动画在 span wrapper 上,SVG 本体保持静态。
+                        <span
+                          data-plan-step-active="true"
+                          className="session-status-breathing inline-flex shrink-0"
+                        >
+                          <CircleDot
+                            size={18}
+                            strokeWidth={1.5}
+                            className="shrink-0 text-[var(--msg-tool-card-text)]"
+                          />
+                        </span>
                       )}
                       {todo.status === 'pending' && (
                         <Circle
