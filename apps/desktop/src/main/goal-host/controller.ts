@@ -1728,25 +1728,34 @@ export class GoalController {
       );
       // 观测:completion 提交(达成记录 + clear + null emit)成功后才宣告终态
       // (reviewer P1:提交卡住或 clear 拒绝时,不得产生假 terminal complete)。
-      this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
-        from: state.status,
-        to: 'complete',
-        reason: decision.lastReason,
-        generation: completedGeneration,
-      });
-      if (decision.status !== state.status) {
-        this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+      // 再次校验生命周期(reviewer P1:await trackCompletion 期间登出/切账号会
+      // resetGoalController → dispose 清 turns + 环,本完成轮不得把旧账号事件重新
+      // 写入已清空的环;trackCompletion 本身已提交,达成记录/clear 不受影响)。
+      if (isCurrentTurn()) {
+        this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
           from: state.status,
           to: 'complete',
           reason: decision.lastReason,
           generation: completedGeneration,
         });
+        if (decision.status !== state.status) {
+          this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+            from: state.status,
+            to: 'complete',
+            reason: decision.lastReason,
+            generation: completedGeneration,
+          });
+        }
+        this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
+          to: 'complete',
+          reason: decision.lastReason,
+          generation: completedGeneration,
+        });
+      } else {
+        this.deps.logger.info('[goal] completion audit skipped — lifecycle no longer current', {
+          sessionId,
+        });
       }
-      this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
-        to: 'complete',
-        reason: decision.lastReason,
-        generation: completedGeneration,
-      });
       if (isCurrentTurn()) this.stopSession(sessionId);
       return;
     }
