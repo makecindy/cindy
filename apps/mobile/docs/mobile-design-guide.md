@@ -14,7 +14,7 @@
 - **灰度环境**:除品牌 teal(就绪态)和 Heart Orange(运行/thinking 态)两个语义色外,界面全是黑白之间的灰阶。不引入任何品牌蓝 / 绿 / 红等装饰色。
 - **圆角走四档阶梯**(与 `src/theme/tokens.ts` 的 `radius` 一致,守护测试拦截阶梯外值):`micro`(4,缩略图内 chip、勾选指示器等微元素)/ `control`(8,卡片内层控件)/ `container`(12,卡片 / 容器)/ `pill`(9999,交互元素)。**禁止**阶梯外中间值(0 / 3 / 6 / 28 等)与字面量圆角。根规范 `docs/design-rules/DESIGN.md` §5 的三档制约束的是桌面 surface;其「Mobile」节明确把 §15.13 / §16 之外的 mobile 布局细节委托给 `apps/mobile` 的实现,mobile 圆角阶梯以 `tokens.ts` 为准。
 - **零阴影**:层次靠背景色差 + 1px 边框,不用 `shadow*` / `elevation`。
-- **字重克制**:只用 400 / 500,极少量大写微标签可用 600。**UI chrome 无 700+**。唯一例外是根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」已登记的域——原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`)与登录品牌画布(`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。这些是用户内容语义与品牌画布,不算 chrome;chrome 本身的上限仍是 600。
+- **字重克制**:只用 400 / 500,极少量大写微标签可用 600。**UI chrome 无 700+**。唯一例外是根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」已登记的域——原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`)与登录品牌画布(`app/(auth)/login.tsx`、`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。这些是用户内容语义与品牌画布,不算 chrome;chrome 本身的上限仍是 600。
 - **手机只做减法**(详见 `mobile-current-execution-plan.md`):主层信息量不超过桌面主层;视觉轻、触控够(可见图标小,hitSlop 补足热区)。
 
 ---
@@ -83,7 +83,7 @@
 
 `regular '400'` · `medium '500'`(默认) · `semibold '600'`(仅限大写微标签等少量强调) · `bold '700'`(**仅限已登记豁免域**,见下)。**UI chrome 不超过 600。**
 
-`bold '700'` 只允许用在根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」登记的两处:原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong`)与登录品牌画布(`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。除此之外一律不得使用 700,新增用途必须先改根规范的登记表。
+`bold '700'` 只允许用在根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」登记的两处:原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong`)与登录品牌画布(`app/(auth)/login.tsx`、`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。除此之外一律不得使用 700,新增用途必须先改根规范的登记表。
 
 ### 等宽 `monoFont`
 
@@ -203,7 +203,7 @@ function Foo() {
 - [ ] `makeStyles` 在**模块级**定义。
 - [ ] 字号 / 行高 / 字重 / 圆角 / 图标尺寸全走 token,无裸数字(必要微调写注释)。
 - [ ] 等宽用 `monoFont`。
-- [ ] 无 `shadow*` / `elevation`、无中间圆角、**UI chrome 字重 ≤ 600**(已登记豁免域除外:原生 Markdown strong `src/session/MessageRenderer.tsx`、登录品牌画布 `src/components/LoginSkinControls.tsx` / `src/auth/loginSkinLayout.ts` —— 这两处保留 `bold '700'`,验收时不要按 ≤ 600 降档)。
+- [ ] 无 `shadow*` / `elevation`、无中间圆角、**UI chrome 字重 ≤ 600**(已登记豁免域除外:原生 Markdown strong `src/session/MessageRenderer.tsx`、登录品牌画布 `app/(auth)/login.tsx` / `src/components/LoginSkinControls.tsx` / `src/auth/loginSkinLayout.ts` —— 这两处保留 `bold '700'`,验收时不要按 ≤ 600 降档)。
 - [ ] 复用了 `MobilePrimitives`,没有重复造按钮/卡片/空态。
 - [ ] 在模拟器 light + dark(Cmd+Shift+A)都目检过。
 
