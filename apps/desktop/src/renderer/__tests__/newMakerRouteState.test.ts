@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  consumeNewMakerDialogueTargetRequest,
   makeDialogueNewMakerRouteState,
   readNewMakerDialogueTargetRequest,
 } from '@/features/cc-agent/lib/newMakerRouteState';
@@ -43,5 +44,35 @@ describe('new maker dialogue route target request', () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it('consumes an applied target request without changing the original or other route state', () => {
+    const original = {
+      workspacePrompt: 'dialogue',
+      dialogueTargetRequest: {
+        requestId: 'request-a',
+        deviceId: 'remote-a',
+        deviceName: 'Remote A',
+      },
+      preserved: { source: 'sidebar' },
+    };
+
+    const consumed = consumeNewMakerDialogueTargetRequest(original);
+
+    expect(consumed).toEqual({
+      workspacePrompt: 'dialogue',
+      preserved: { source: 'sidebar' },
+    });
+    expect(readNewMakerDialogueTargetRequest(consumed)).toBeNull();
+    expect(readNewMakerDialogueTargetRequest(original)).toMatchObject({
+      requestId: 'request-a',
+      deviceId: 'remote-a',
+    });
+  });
+
+  it('leaves unrelated or non-object history state untouched', () => {
+    const unrelated = { workspacePrompt: 'generic' };
+    expect(consumeNewMakerDialogueTargetRequest(unrelated)).toBe(unrelated);
+    expect(consumeNewMakerDialogueTargetRequest(null)).toBeNull();
   });
 });

@@ -123,7 +123,10 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
-import { readNewMakerDialogueTargetRequest } from './lib/newMakerRouteState';
+import {
+  consumeNewMakerDialogueTargetRequest,
+  readNewMakerDialogueTargetRequest,
+} from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
@@ -2078,7 +2081,11 @@ export function NewMakerDraftRoute() {
       deviceName: dialogueTargetRequest.deviceName,
       workingDir: null,
     });
-  }, [applyDraftTarget, dialogueTargetRequest]);
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: consumeNewMakerDialogueTargetRequest(location.state),
+    });
+  }, [applyDraftTarget, dialogueTargetRequest, location, navigate]);
 
   // 弹窗确认添加后的落点:SSH 立即建会话 + navigate;device-link 把当前草稿指向被控端项目,
   // 首条消息发出时走既有 create-on-send 链路(见下方 isDeviceLinkDraft 分支)。

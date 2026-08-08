@@ -207,6 +207,10 @@ describe('Dialogue sidebar section', () => {
     expect(newMakerDraftRouteSource).toMatch(
       /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
     );
+    expect(newMakerDraftRouteSource).toContain(
+      'state: consumeNewMakerDialogueTargetRequest(location.state)',
+    );
+    expect(newMakerDraftRouteSource).toContain('replace: true');
     expect(handler).toContain("navigate('/cc-agent/new'");
     expect((sidebarSource.match(/onCreateDialogue={handleCreateDialogue}/g) ?? []).length).toBe(2);
     expect(sidebarSource).toContain('createDisabled={dialogueCreatePending}');

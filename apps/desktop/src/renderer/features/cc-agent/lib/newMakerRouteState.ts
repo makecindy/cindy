@@ -46,3 +46,14 @@ export function readNewMakerDialogueTargetRequest(
   if (deviceId === null && deviceName !== null) return null;
   return { requestId: record.requestId, deviceId, deviceName };
 }
+
+/**
+ * dialogueTargetRequest 是一次性导航指令。首次应用后从当前 history entry 移除，避免用户
+ * 浏览器后退到旧的 /cc-agent/new 记录时再次迁移草稿目标；其它 route state 必须原样保留。
+ */
+export function consumeNewMakerDialogueTargetRequest(state: unknown): unknown {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
+  if (!Object.prototype.hasOwnProperty.call(state, 'dialogueTargetRequest')) return state;
+  const { dialogueTargetRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
+  return remainingState;
+}
