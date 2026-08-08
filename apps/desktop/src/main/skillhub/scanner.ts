@@ -146,6 +146,14 @@ function normalizeScope(engine: string, rawScope: string): SkillScope {
   return rawScope as SkillScope;
 }
 
+function realPathOrNormalized(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.normalize(value);
+  }
+}
+
 function normalizeSkillEntityPath(c: AgentCustomization): AgentCustomization {
   if (
     c.kind === 'skill' &&
@@ -172,14 +180,20 @@ export async function scanAllSkills(
   maker: Maker,
 ): Promise<ScanResult> {
   const projects = params.projects ?? [];
-  // ProjectInput 带 hash，maker 只要 project root；建反查表用于补回 projectHash 字段。
-  const hashByProjectRoot = new Map<string, string>();
+  const projectByWorkingDir = new Map<string, ProjectInput>();
+  const workingDirs: string[] = [];
   for (const p of projects) {
     if (p.projectRoot && path.isAbsolute(p.projectRoot)) {
-      hashByProjectRoot.set(p.projectRoot, p.hash);
+      workingDirs.push(p.projectRoot);
+      projectByWorkingDir.set(path.normalize(p.projectRoot), p);
+      projectByWorkingDir.set(realPathOrNormalized(p.projectRoot), p);
     }
   }
-  const workingDirs = Array.from(hashByProjectRoot.keys());
+  const projectForWorkingDir = (workingDir?: string): ProjectInput | undefined => {
+    if (!workingDir) return undefined;
+    return projectByWorkingDir.get(path.normalize(workingDir))
+      ?? projectByWorkingDir.get(realPathOrNormalized(workingDir));
+  };
 
   let listed: { items: AgentCustomization[]; errors: Array<{ path?: string; message: string }> };
   try {
@@ -198,18 +212,16 @@ export async function scanAllSkills(
   const HIDDEN_SCOPES = new Set(['system', 'admin']);
   const isBackupPath = (p: string) => /\.bak\.\d+$/.test(path.basename(p));
   const isGenericPath = (p: string) => /\/\.agents\/skills\//.test(p.replace(/\\/g, '/'));
-  const seenItems = new Map<string, { winner: AgentCustomization; all: AgentCustomization[] }>();
+  const seenItems = new Map<string, { winner: AgentCustomization; all: AgentCustomization[]; realPath: string }>();
   for (const item of listed.items) {
     const c = normalizeSkillEntityPath(item);
     if (HIDDEN_SCOPES.has(c.scope)) continue;
     if (isBackupPath(c.absolutePath)) continue;
-    let realKey: string;
-    try {
-      realKey = fs.realpathSync(c.absolutePath);
-    } catch {
-      realKey = c.absolutePath;
-    }
-    const existing = seenItems.get(realKey);
+    const realKey = realPathOrNormalized(c.absolutePath);
+    const normalizedScope = normalizeScope(c.engine, c.scope);
+    const project = normalizedScope === 'project' ? projectForWorkingDir(c.workingDir) : undefined;
+    const dedupeKey = project ? `${realKey}\0project:${project.hash}` : realKey;
+    const existing = seenItems.get(dedupeKey);
     if (existing) {
       existing.all.push(c);
       if (!isGenericPath(existing.winner.absolutePath) && isGenericPath(c.absolutePath)) {
@@ -217,14 +229,15 @@ export async function scanAllSkills(
       }
       continue;
     }
-    seenItems.set(realKey, { winner: c, all: [c] });
+    seenItems.set(dedupeKey, { winner: c, all: [c], realPath: realKey });
   }
-  const deduped = Array.from(seenItems.entries()).map(([realPath, v]) => ({ ...v, realPath }));
+  const deduped = Array.from(seenItems.values());
 
   // ── AgentCustomization → SkillhubSkill ──────────────────────────────────────
   const skills: Skill[] = deduped.map(({ winner: c, all, realPath }) => {
     const engine = c.engine as Skill['engine'];
-    const projectHash = c.workingDir ? hashByProjectRoot.get(c.workingDir) : undefined;
+    const project = projectForWorkingDir(c.workingDir);
+    const projectHash = project?.hash;
     // skill 类型的 identity 始终是目录名（= market slug），不依赖 frontmatter name。
     // Codex RPC 可能从 frontmatter 取 name 导致与目录名不一致，统一用 basename(realPath)。
     const canonicalName = c.kind === 'skill' ? path.basename(realPath) : c.name;
@@ -268,7 +281,7 @@ export async function scanAllSkills(
       frontmatter: c.frontmatter,
       parseError: c.parseError,
       registryEntry: null,            // 下面 join 阶段填
-      ...(c.workingDir ? { projectRoot: c.workingDir } : {}),
+      ...(project ? { projectRoot: project.projectRoot } : {}),
       ...(projectHash ? { projectHash } : {}),
     };
     return skill;

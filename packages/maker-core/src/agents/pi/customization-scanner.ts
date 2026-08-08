@@ -35,7 +35,6 @@ function hasGitMarker(dir: string): boolean {
   }
 }
 
-/** Find the nearest Git root without spawning Git or walking above a nested repository. */
 function findNearestGitRoot(workingDir: string): string | null {
   let current = canonicalDirectory(workingDir);
   while (true) {
@@ -64,12 +63,7 @@ function agentSkillAncestors(workingDir: string): string[] {
 
 export function buildPiSources(workingDirs: string[]): SourceDef[] {
   const sources: SourceDef[] = [
-    {
-      engine: 'pi',
-      kind: 'skill',
-      scope: 'user',
-      dir: path.join(os.homedir(), '.agents', 'skills'),
-    },
+    { engine: 'pi', kind: 'skill', scope: 'user', dir: path.join(os.homedir(), '.agents', 'skills') },
   ];
   const seen = new Set<string>();
 
@@ -80,14 +74,7 @@ export function buildPiSources(workingDirs: string[]): SourceDef[] {
       const key = `${workingDir}\0${canonicalDirectory(dir)}`;
       if (seen.has(key)) return;
       seen.add(key);
-      sources.push({
-        engine: 'pi',
-        kind: 'skill',
-        scope: 'repo',
-        dir,
-        workingDir,
-        runtimeStatus: 'discovered',
-      });
+      sources.push({ engine: 'pi', kind: 'skill', scope: 'repo', dir, workingDir, runtimeStatus: 'discovered' });
     };
 
     addProjectSource(path.join(workingDir, '.pi', 'skills'));
@@ -101,22 +88,14 @@ export function buildPiSources(workingDirs: string[]): SourceDef[] {
 function dedupePiItems(items: AgentCustomization[]): AgentCustomization[] {
   const seen = new Set<string>();
   return items.filter((item) => {
-    // Preserve the same physical skill when it belongs to a different scope or
-    // working directory: those entries carry different trust/project meaning.
-    const key = [
-      item.scope,
-      item.workingDir ?? '',
-      canonicalDirectory(item.absolutePath),
-    ].join('\0');
+    const key = [item.scope, item.workingDir ?? '', canonicalDirectory(item.absolutePath)].join('\0');
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
-export async function scanPiCustomizations(
-  opts: ListCustomizationsOptions,
-): Promise<ListCustomizationsResult> {
+export async function scanPiCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
   if (opts.kinds && opts.kinds.length > 0 && !opts.kinds.includes('skill')) {
     return { items: [], errors: [] };
   }

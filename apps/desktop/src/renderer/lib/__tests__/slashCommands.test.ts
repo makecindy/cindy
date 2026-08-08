@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   filterSlashCommands,
+  firstAvailableSlashCommandIndex,
   isSlashCommandUnavailable,
   mergeCommands,
+  nextAvailableSlashCommandIndex,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 
@@ -73,5 +75,29 @@ describe('Pi project skill availability', () => {
     const available = skill({ scope: 'user', path: '/home/user/.agents/skills/demo' });
 
     expect(mergeCommands([], [], [discovered, available])).toEqual([available]);
+  });
+
+  it('initializes and moves keyboard focus past unavailable project skills', () => {
+    const commands = [
+      skill({ name: 'first', scope: 'repo', runtimeStatus: 'discovered' }),
+      skill({ name: 'second', scope: 'user' }),
+      skill({ name: 'third', scope: 'repo', runtimeStatus: 'discovered' }),
+      skill({ name: 'fourth', scope: 'user' }),
+    ];
+
+    expect(firstAvailableSlashCommandIndex(commands)).toBe(1);
+    expect(nextAvailableSlashCommandIndex(commands, 1, 1)).toBe(3);
+    expect(nextAvailableSlashCommandIndex(commands, 3, 1)).toBe(1);
+    expect(nextAvailableSlashCommandIndex(commands, 1, -1)).toBe(3);
+  });
+
+  it('keeps focus stable when every matching command is unavailable', () => {
+    const commands = [
+      skill({ name: 'first', scope: 'repo', runtimeStatus: 'discovered' }),
+      skill({ name: 'second', scope: 'repo', runtimeStatus: 'discovered' }),
+    ];
+
+    expect(firstAvailableSlashCommandIndex(commands)).toBe(0);
+    expect(nextAvailableSlashCommandIndex(commands, 0, 1)).toBe(0);
   });
 });

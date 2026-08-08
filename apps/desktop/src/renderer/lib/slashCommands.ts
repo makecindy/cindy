@@ -30,6 +30,27 @@ export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
     && command.runtimeStatus === 'discovered';
 }
 
+/** First available command index, or 0 when nothing is available/present. */
+export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
+  const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
+  return index >= 0 ? index : 0;
+}
+
+/** Move with wraparound while skipping unavailable discovered project skills. */
+export function nextAvailableSlashCommandIndex(
+  commands: readonly UnifiedCommand[],
+  current: number,
+  delta: 1 | -1,
+): number {
+  if (commands.length === 0) return current;
+  let index = current;
+  for (let step = 0; step < commands.length; step++) {
+    index = (index + delta + commands.length) % commands.length;
+    if (!isSlashCommandUnavailable(commands[index])) return index;
+  }
+  return current;
+}
+
 // device-link 远程会话下 desktop 命令**全量可用**:业务语义在「会话归属设备」的命令
 // (/goal /learn /cmd)由控制端 main(commands/builtins.ts)按 ctx.deviceId 经隧道路由
 // 到被控端对应 channel(maker:goal:* / learn:* / desktop-cmd:run,均在 REMOTE_INVOKE_ALLOWLIST);

@@ -202,8 +202,10 @@ import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import {
   filterSlashCommands,
+  firstAvailableSlashCommandIndex,
   isSlashCommandUnavailable,
   loadAllCommands,
+  nextAvailableSlashCommandIndex,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 import {
@@ -3707,10 +3709,15 @@ export function ChatInput({
   const [slashFocus, setSlashFocus] = useState(0);
   const [atFocus, setAtFocus] = useState(0);
 
-  // Reset focus when the list shrinks below current index
+  // Keep keyboard focus on an executable row when filtering or runtime status changes.
   useEffect(() => {
-    if (slashFocus >= filteredCommands.length) setSlashFocus(0);
-  }, [filteredCommands.length, slashFocus]);
+    if (
+      slashFocus >= filteredCommands.length
+      || (filteredCommands[slashFocus] && isSlashCommandUnavailable(filteredCommands[slashFocus]))
+    ) {
+      setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
+    }
+  }, [filteredCommands, slashFocus]);
   useEffect(() => {
     if (
       atFocus >= filteredAt.length ||
@@ -3802,7 +3809,7 @@ export function ChatInput({
         switch (e.key) {
           case 'ArrowDown':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => (i + 1) % filteredCommands.length);
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, 1));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -3812,7 +3819,7 @@ export function ChatInput({
             return false;
           case 'ArrowUp':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, -1));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -3822,7 +3829,11 @@ export function ChatInput({
             return false;
           case 'Enter':
           case 'Tab':
-            if (slashOpen && filteredCommands[slashFocus]) {
+            if (
+              slashOpen
+              && filteredCommands[slashFocus]
+              && !isSlashCommandUnavailable(filteredCommands[slashFocus])
+            ) {
               insertSlashCommand(filteredCommands[slashFocus]);
               return true;
             }

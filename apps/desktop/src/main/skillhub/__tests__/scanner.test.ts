@@ -100,6 +100,83 @@ describe('scanAllSkills', () => {
     });
   });
 
+  it('keeps a shared ancestor skill in every project that discovered it', async () => {
+    const firstRoot = path.resolve('/repo/apps/first');
+    const secondRoot = path.resolve('/repo/apps/second');
+    const sharedSkill = path.resolve('/repo/.agents/skills/shared-skill');
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [firstRoot, secondRoot].map((workingDir) => ({
+          engine: 'pi' as const,
+          kind: 'skill' as const,
+          scope: 'repo',
+          name: 'shared-skill',
+          absolutePath: sharedSkill,
+          mdPath: path.join(sharedSkill, 'SKILL.md'),
+          workingDir,
+          runtimeStatus: 'discovered' as const,
+          files: [],
+        })),
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({
+      projects: [
+        { projectRoot: firstRoot, hash: 'first123' },
+        { projectRoot: secondRoot, hash: 'second456' },
+      ],
+    }, maker);
+
+    expect(result.skills).toHaveLength(2);
+    expect(result.skills.map((skill) => skill.projectHash).sort()).toEqual([
+      'first123',
+      'second456',
+    ]);
+    expect(result.skills.map((skill) => skill.projectRoot).sort()).toEqual([
+      firstRoot,
+      secondRoot,
+    ].sort());
+  });
+
+  it('maps a canonical scanner workingDir back to the original symlink project root', async () => {
+    const projectRoot = path.resolve('/workspace/project-link');
+    const canonicalRoot = path.resolve('/workspace/project-real');
+    const skillDir = path.join(canonicalRoot, '.pi', 'skills', 'pi-demo');
+    const realpathSyncSpy = vi.spyOn(fs, 'realpathSync').mockImplementation((value) => {
+      const candidate = String(value);
+      if (candidate === projectRoot) return canonicalRoot;
+      return candidate;
+    });
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'pi',
+          kind: 'skill',
+          scope: 'repo',
+          name: 'pi-demo',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          workingDir: canonicalRoot,
+          runtimeStatus: 'discovered',
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({
+      projects: [{ projectRoot, hash: 'linked123' }],
+    }, maker);
+
+    expect(result.skills[0]).toMatchObject({
+      scope: 'project',
+      projectRoot,
+      projectHash: 'linked123',
+    });
+    realpathSyncSpy.mockRestore();
+  });
+
   it('ignores non-absolute projectRoot values before calling maker', async () => {
     const maker = {
       listCustomizations: vi.fn(async () => ({ errors: [], items: [] })),
