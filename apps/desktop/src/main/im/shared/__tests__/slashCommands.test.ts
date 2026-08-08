@@ -434,7 +434,7 @@ describe('IM slash commands', () => {
       expect(text).toContain('项目：XDMaker'); // 目录名, 不是绝对路径
       expect(text).toContain('Agent：claude-code');
       expect(text).toContain('模型：claude-opus-4-8');
-      expect(text).toContain('强度：xhigh');
+      expect(text).toContain('推理强度：xhigh');
       expect(text).toContain('权限：auto');
     });
 
@@ -494,7 +494,7 @@ describe('IM slash commands', () => {
       const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
       expect(text).toContain('Agent：codex');
       expect(text).toContain('模型：gpt-5.6-sol');
-      expect(text).toContain('强度：medium');
+      expect(text).toContain('推理强度：medium');
       expect(text).toContain('权限：plan');
     });
 
