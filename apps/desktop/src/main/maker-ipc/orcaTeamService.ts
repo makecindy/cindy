@@ -181,7 +181,10 @@ export interface OrcaTeamServiceDeps {
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null;
-  resumeWorkerSession(worker: OrcaWorkerRecordSnapshot, link: OrcaWorkerLinkSnapshot): Promise<void>;
+  resumeWorkerSession(
+    worker: OrcaWorkerRecordSnapshot,
+    link: OrcaWorkerLinkSnapshot,
+  ): Promise<'ready' | 'fenced'>;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
@@ -594,7 +597,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // running/error worker can be dormant too, and must rehydrate through the Worker-specific
         // path so its stored permission mode and Orca vendor options are preserved.
         if (!wasLiveBeforeDispatch) {
-          await deps.resumeWorkerSession(target, link);
+          const resumeResult = await deps.resumeWorkerSession(target, link);
+          if (resumeResult === 'fenced') {
+            return {
+              dispatched: false,
+              dispatchOutcome: {
+                ...createHostSendFailure(
+                  'SESSION_NOT_FOUND',
+                  `worker session ${params.targetSessionId} is unavailable because its Orca team is ending or has ended`,
+                ),
+                source: params.dispatchMeta.source,
+                context: params.dispatchMeta.context,
+              },
+            };
+          }
         }
         result = await deps.dispatchWorkerMessage({
           targetSessionId: params.targetSessionId,

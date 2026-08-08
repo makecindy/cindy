@@ -628,13 +628,32 @@ describe('sendToSession ordering', () => {
     );
 
     expect(resumeBranch).toContain('const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);');
+    expect(resumeBranch).toContain('return withSendToSessionLock(target.sessionId, async () => {');
+    expect(countOccurrences(
+      resumeBranch,
+      'isOrcaWorkerSessionDisableFenced(target.sessionId)',
+    )).toBe(2);
     expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
     expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
     expectOrder(resumeBranch, 'const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);', 'const opts = buildCreateOptsWithStderr({');
     expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
+    const afterRemoteEnsure = resumeBranch.slice(
+      resumeBranch.indexOf('await ensureRemoteReadyForSessionStart({ createOpts: opts });'),
+    );
+    expectOrder(
+      afterRemoteEnsure,
+      'await ensureRemoteReadyForSessionStart({ createOpts: opts });',
+      'if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return \'fenced\';',
+    );
+    expectOrder(
+      afterRemoteEnsure,
+      'if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return \'fenced\';',
+      'await bootstrapSession(opts);',
+    );
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
-    expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain('const result = await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain("return result === 'fenced' ? 'fenced' : 'ready';");
+    expect(switchFocusIpcBlock).toContain('const resumeResult = await resumeOrcaWorkerSessionIfMissing(target);');
     expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
   });
 
@@ -667,7 +686,8 @@ describe('sendToSession ordering', () => {
     expect(orcaWorkerCreationServiceSource).toContain(
       "return agent === 'codex' || agent === 'pi';",
     );
-    expect(orcaLifecycleServiceSource).toContain('createWorkerInTeam({ ...params, teamId: team.id })');
+    expect(orcaLifecycleServiceSource).toContain('const created = await deps.createWorkerInTeam({');
+    expect(orcaLifecycleServiceSource).toContain('teamId: team.id,');
   });
 
   it('delegates worker terminal runtime to OrcaTeamService', () => {
@@ -758,15 +778,37 @@ describe('sendToSession ordering', () => {
       'async function disableOrcaInternal',
       'ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA',
     );
+    const activeDisableBlock = disableBlock.slice(disableBlock.indexOf('const workers ='));
     const serviceArchiveBlock = extractBetween(
       orcaTeamServiceSource,
       'async function archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult> {',
       'return {',
     );
 
-    expect(disableBlock).toContain('orcaTeamService.clearAutoBridgeState(w.sessionId);');
-    expect(disableBlock).not.toContain('clearWorkerAutoBridgeState(w.sessionId);');
-    expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await sess.abort();');
+    expect(activeDisableBlock).toContain('await withOrcaWorkerDisableFence(');
+    expect(activeDisableBlock).toContain('beforeClose: () => orcaTeamService.clearAutoBridgeState(w.sessionId),');
+    expect(activeDisableBlock).not.toContain('clearWorkerAutoBridgeState(w.sessionId);');
+    expect(activeDisableBlock).toContain('await withOrcaWorkerSessionLocks(');
+    expect(activeDisableBlock).toContain('withSendToSessionLock,');
+    expect(activeDisableBlock).toContain('await closeOrcaWorkerRuntimeWhileLocked(');
+    expect(activeDisableBlock).toContain("cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');");
+    expect(activeDisableBlock).toContain('forgetKnownOrcaWorkerSession(w.sessionId);');
+    expectOrder(
+      activeDisableBlock,
+      'await withOrcaWorkerDisableFence(',
+      'await withOrcaWorkerSessionLocks(',
+    );
+    expectOrder(
+      activeDisableBlock,
+      'await closeOrcaWorkerRuntimeWhileLocked(',
+      "await markTeamEnded(team.id, 'completed');",
+    );
+    expectOrder(
+      activeDisableBlock,
+      "await archiveWorkersByTeam(team.id);",
+      'await clearLeadOrcaRoleState(leadSessionId);',
+    );
+    expect(source).toContain('isSessionSendFenced: isOrcaWorkerSessionDisableFenced,');
     expect(source).toContain('archiveWorker: (params) => orcaTeamService.archiveWorker(params),');
     expect(serviceArchiveBlock).toContain('clearRuntimeState(worker.sessionId);');
     expect(serviceArchiveBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');");
@@ -775,6 +817,42 @@ describe('sendToSession ordering', () => {
     expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');");
     expectOrder(serviceArchiveBlock, "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');", 'await deps.archiveWorkerSession(worker.sessionId);');
     expectOrder(serviceArchiveBlock, 'await deps.archiveWorkerSession(worker.sessionId);', "await deps.updateWorkerStatus(worker.id, 'done');");
+  });
+
+  it('rechecks the Orca shutdown fence inside the send_to_session route lock', () => {
+    const sendToSessionBlock = extractSendToSessionSource();
+    const jumpBranch = sendToSessionBlock.slice(
+      sendToSessionBlock.indexOf('const prev = sendToSessionLocks.get(targetSessionId);'),
+    );
+    const fenceCheck = 'isOrcaWorkerSessionDisableFenced(targetSessionId)';
+
+    expect(jumpBranch).toContain(fenceCheck);
+    expectOrder(jumpBranch, 'const run = waitPrev.then(async () => {', fenceCheck);
+    expectOrder(jumpBranch, fenceCheck, 'maker.getSessionMeta(targetSessionId)');
+    expectOrder(jumpBranch, fenceCheck, 'await bootstrapSession(createOpts);');
+  });
+
+  it('finishes async queue preparation before the final fence check and synchronous enqueue', () => {
+    const dispatchBlock = extractDispatchOrEnqueueOrcaInterAgentMessageSource();
+    const queuedBlock = extractBetween(
+      dispatchBlock,
+      'const enqueueQueuedMessage = async',
+      '\n\n    if (deps.isSessionSendFenced(params.targetSessionId)) {',
+    );
+    const adapterBlock = extractBetween(
+      source,
+      'prepareQueuedMessageQueue: async (sessionId) => {',
+      '    sendToSessionInternal,',
+    );
+
+    expectOrder(queuedBlock, 'await deps.prepareQueuedMessageQueue', 'deps.isSessionSendFenced');
+    expectOrder(queuedBlock, 'deps.isSessionSendFenced', 'registerQueuedOrcaInterAgentAcceptedCallback');
+    expectOrder(queuedBlock, 'registerQueuedOrcaInterAgentAcceptedCallback', 'deps.enqueueQueuedMessage');
+    expect(adapterBlock).toContain('await inputCoordinator.ensureQueueRestored(sessionId)');
+    expect(adapterBlock).toContain(
+      'enqueueQueuedMessage: (sessionId, item) => inputCoordinator.enqueue(sessionId, item)',
+    );
+    expect(adapterBlock).not.toContain('void (async () => {');
   });
 
   it('keeps worker idle/archive adapters passing the caller lead session id', () => {
@@ -863,7 +941,7 @@ describe('sendToSession ordering', () => {
     const block = extractDispatchOrEnqueueOrcaInterAgentMessageSource();
     const liveBlock = extractBetween(
       block,
-      'const live = deps.getLiveSession(params.targetSessionId);',
+      'const directResult = await deps.withSessionLock(params.targetSessionId, async () => {',
       'const result = await deps.sendToSessionInternal({',
     );
     const fallbackBlock = extractBetween(
@@ -876,7 +954,9 @@ describe('sendToSession ordering', () => {
     expect(block).toContain('targetTitle: dbRow.title,');
     expect(block).toContain('targetLastUserSendAt: dbRow.userSendAt !== null');
     expect(block).toContain('...dispatchReceipt,');
-    expect(liveBlock).toContain("return { ok: true, mode: 'dispatched', clientId, dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };");
+    expect(liveBlock).toContain("mode: 'dispatched',");
+    expect(liveBlock).toContain('...dispatchReceipt,');
+    expect(liveBlock).toContain('deps.isSessionSendFenced(params.targetSessionId)');
     expect(liveBlock).not.toContain('isQueuedCollabDispatchResult(result)');
     expect(fallbackBlock).toContain('targetTitle: result.targetTitle,');
     expect(fallbackBlock).toContain('targetLastUserSendAt: result.targetLastUserSendAt,');

@@ -1064,6 +1064,30 @@ describe('maker SEND transaction', () => {
     expect(newSession.send).toHaveBeenCalled();
   });
 
+  it('rejects a fenced Orca Worker before reading or recreating its Session', async () => {
+    const { deps } = createDeps({
+      isSessionSendFenced: vi.fn(() => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('disabled-worker', 'hello', {
+        id: 'disabled-worker',
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'deepseek-v4-flash',
+        orcaRole: 'worker',
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: 'SESSION_NOT_FOUND',
+      outcome: { code: 'SESSION_NOT_FOUND' },
+    });
+
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
   it('returns rehydrate failure without sending when active Orca rehydrate fails', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const { deps } = createDeps({
