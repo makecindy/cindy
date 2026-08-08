@@ -11,6 +11,7 @@ import { getDbClient, tryGetDbClient } from '../../localDb/client/current';
 import { hookGroupContextCursors, hookGroupMessages } from '../../localDb/schema';
 import type { Logger } from '../../logger';
 import {
+  getGroupWindowNamespaceStats,
   maybeLogGroupWindowNamespaceStats,
   maybeSweepExpiredGroupWindowCursors,
   prepareGroupWindowText,
@@ -30,7 +31,25 @@ const CURSOR_MAX_KEYS = 1000;
 const CURSOR_ROLLBACK_MAX_ATTEMPTS = 3;
 const CURSOR_ROLLBACK_RETRY_DELAY_MS = 25;
 
-export type GroupWindowRetentionPolicy = { keepPerKey: number; keepPerNamespace: number };
+/**
+ * 群消息池的保留上限 —— **按存储大小, 不按条数**。
+ *
+ * 按条数(旧策略: 每群 500 条)在活跃群里几天就把去年的内容挤没了, 而这个池子的
+ * 用途正是回查很久以前的对话(「去年谁说了啥」)。字节口径由 `hook_group_message_stats`
+ * 的 SQLite 触发器在增删改时自动维护, 判定几乎零额外开销。
+ *
+ * `maxRowsPerNamespace` 只是防止极端行数膨胀的安全阀(海量空消息把行开销撑爆),
+ * 设得足够高, 正常使用永远碰不到 —— 它不是日常清理手段。
+ */
+/** 触发回收后收敛到上限的这个比例, 避免超限后每插一条都删一条。 */
+const RETENTION_LOW_WATER_RATIO = 0.9;
+
+export type GroupWindowRetentionPolicy = {
+  /** 该 provider 命名空间保留的正文字节上限。 */
+  maxTextBytesPerNamespace: number;
+  /** 安全阀: 行数上限。 */
+  maxRowsPerNamespace: number;
+};
 
 export interface GroupWindowEntryInput {
   provider: string;
@@ -109,43 +128,56 @@ export async function recordGroupWindowEntry(
     return true;
   }
 
-  const keyFilter = and(
-    eq(hookGroupMessages.provider, entry.provider),
-    eq(hookGroupMessages.chatId, entry.chatId),
-    eq(hookGroupMessages.threadId, entry.threadId),
-  );
-  const oldestKept = await db
-    .select({ id: hookGroupMessages.id })
-    .from(hookGroupMessages)
-    .where(keyFilter)
-    .orderBy(desc(hookGroupMessages.id))
-    .limit(1)
-    .offset(retention.keepPerKey - 1);
-  const threshold = oldestKept[0]?.id;
-  if (threshold !== undefined) {
-    await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.id, threshold)));
-  }
-
-  const oldestNamespaceRowKept = await db
-    .select({ id: hookGroupMessages.id })
-    .from(hookGroupMessages)
-    .where(eq(hookGroupMessages.provider, entry.provider))
-    .orderBy(desc(hookGroupMessages.id))
-    .limit(1)
-    .offset(retention.keepPerNamespace - 1);
-  const namespaceThreshold = oldestNamespaceRowKept[0]?.id;
-  if (namespaceThreshold !== undefined) {
-    await db
-      .delete(hookGroupMessages)
-      .where(
-        and(
-          eq(hookGroupMessages.provider, entry.provider),
-          lt(hookGroupMessages.id, namespaceThreshold),
-        ),
-      );
-  }
+  await enforceNamespaceRetention(entry.provider, retention);
   await maybeLogGroupWindowNamespaceStats(entry.provider);
   return true;
+}
+
+/**
+ * 按存储大小回收一个 provider 命名空间的群历史。
+ *
+ * 删的是**最旧的行**(按自增 id), 跨群一视同仁 —— 与「保留最近这段时间」的直觉
+ * 一致。刻意不再有「每群只留 N 条」那一级: 它会让活跃群几天内就把去年的内容挤没,
+ * 而这个池子的用途正是回查很久以前的对话。
+ *
+ * 触发即回收到**低水位**(上限的 90%)而不是刚好压线, 否则超限后每插一条都要删一条,
+ * 每次入库都带一次删除。
+ */
+async function enforceNamespaceRetention(
+  provider: string,
+  retention: GroupWindowRetentionPolicy,
+): Promise<void> {
+  const db = getDbClient().drizzle;
+  const stats = await getGroupWindowNamespaceStats(provider);
+  const overBytes = stats.textBytes > retention.maxTextBytesPerNamespace;
+  const overRows = stats.rows > retention.maxRowsPerNamespace;
+  if (!overBytes && !overRows) return;
+
+  // 行数安全阀按行数直接切; 字节按平均行大小估算要删多少行, 再由低水位收敛 ——
+  // 单行大小差异很大(一条纯表情 vs 一条长文), 估算不准也没关系: 下一次入库会
+  // 继续收, 而低水位保证不会每条都触发。
+  const targetBytes = Math.floor(retention.maxTextBytesPerNamespace * RETENTION_LOW_WATER_RATIO);
+  const targetRows = Math.floor(retention.maxRowsPerNamespace * RETENTION_LOW_WATER_RATIO);
+  const avgRowBytes = stats.rows > 0 ? Math.max(1, stats.textBytes / stats.rows) : 1;
+  const rowsToDropForBytes = overBytes
+    ? Math.ceil((stats.textBytes - targetBytes) / avgRowBytes)
+    : 0;
+  const rowsToDropForRows = overRows ? stats.rows - targetRows : 0;
+  const dropCount = Math.max(rowsToDropForBytes, rowsToDropForRows);
+  if (dropCount <= 0) return;
+
+  const boundary = await db
+    .select({ id: hookGroupMessages.id })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, provider))
+    .orderBy(hookGroupMessages.id)
+    .limit(1)
+    .offset(dropCount);
+  const threshold = boundary[0]?.id;
+  if (threshold === undefined) return; // 命名空间里的行还不够删, 留着
+  await db
+    .delete(hookGroupMessages)
+    .where(and(eq(hookGroupMessages.provider, provider), lt(hookGroupMessages.id, threshold)));
 }
 
 async function readPersistedCursor(provider: string, cursorKey: string): Promise<number> {

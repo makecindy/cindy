@@ -30,7 +30,7 @@ import {
   recordGroupMessage as recordScopedGroupMessage,
   resetGroupContextCursors,
   sweepGroupWindowExpired,
-  WINDOW_KEEP_PER_PRINCIPAL,
+  GROUP_WINDOW_RETENTION,
 } from '../groupWindow.js';
 
 const PRINCIPAL_ID = '9';
@@ -346,55 +346,51 @@ describe('recordGroupMessage', () => {
     }
   });
 
-  it('群历史不按时间过期，但每个 principal + 群/topic 只保留最近 500 条', async () => {
-    for (let i = 0; i < 502; i += 1) {
+  it('单个群写入远超旧的 500 条上限也一条不删 —— 保留改按大小', async () => {
+    // 旧策略是每群只留最近 500 条。活跃群里那可能就是几天, 而这个池子的用途
+    // 正是回查很久以前的对话(「去年谁说了啥」)。
+    for (let i = 0; i < 1200; i += 1) {
       await recordGroupMessage(frame({ messageId: `m${i}`, text: `msg ${i}` }));
     }
     const rows = sqlite
       .prepare('SELECT COUNT(*) AS n FROM hook_group_messages WHERE chat_id = ?')
       .get('-900') as { n: number };
-    expect(rows.n).toBe(500);
+    expect(rows.n).toBe(1200);
     const oldest = sqlite
       .prepare('SELECT message_id FROM hook_group_messages ORDER BY id ASC LIMIT 1')
       .get() as { message_id: string };
-    expect(oldest.message_id).toBe('m2');
+    expect(oldest.message_id).toBe('m0');
   });
 
-  it('每个 principal 跨群和 topic 只保留最近的总量上限', async () => {
-    sqlite
-      .prepare(
-        `WITH RECURSIVE seq(n) AS (
-           SELECT 1
-           UNION ALL
-           SELECT n + 1 FROM seq WHERE n < ?
-         )
-         INSERT INTO hook_group_messages
-           (provider, chat_id, thread_id, message_id, chat_name, author, is_bot, text, file_names, sent_at, created_at)
-         SELECT 'telegram:9', '-' || n, '', 'old-' || n, 'Group ' || n, '@x', 0, 'old', NULL, n, n
-         FROM seq`,
-      )
-      .run(WINDOW_KEEP_PER_PRINCIPAL);
-
-    await recordGroupMessage(frame({ chatId: '-new', messageId: 'newest' }));
-
-    const count = sqlite
-      .prepare("SELECT COUNT(*) AS n FROM hook_group_messages WHERE provider = 'telegram:9'")
-      .get() as { n: number };
-    expect(count.n).toBe(WINDOW_KEEP_PER_PRINCIPAL);
-    expect(
-      sqlite
-        .prepare(
-          "SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'old-1'",
-        )
-        .get(),
-    ).toBeUndefined();
-    expect(
-      sqlite
-        .prepare(
-          "SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'newest'",
-        )
-        .get(),
-    ).toBeDefined();
+  it('超过字节上限时删最旧的, 并收敛到低水位', async () => {
+    // 用一个很小的上限把回收逼出来 —— 真实默认值(1 GiB)正常使用碰不到。
+    const previousBytes = GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace;
+    GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = 2_000; // 约 20 条 100 字节的消息
+    try {
+      const body = 'x'.repeat(100);
+      for (let i = 0; i < 60; i += 1) {
+        await recordGroupMessage(frame({ messageId: `b${i}`, text: body }));
+      }
+      const stats = sqlite
+        .prepare("SELECT text_bytes AS b, row_count AS n FROM hook_group_message_stats WHERE provider = 'telegram:9'")
+        .get() as { b: number; n: number };
+      // 收敛到低水位(上限的 90%)以内, 而不是刚好压线。
+      expect(stats.b).toBeLessThanOrEqual(2_000);
+      expect(stats.n).toBeGreaterThan(0);
+      // 删的是最旧的: 最早那几条不在了, 最新那条还在。
+      expect(
+        sqlite
+          .prepare("SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'b0'")
+          .get(),
+      ).toBeUndefined();
+      expect(
+        sqlite
+          .prepare("SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'b59'")
+          .get(),
+      ).toBeDefined();
+    } finally {
+      GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = previousBytes;
+    }
   });
 });
 

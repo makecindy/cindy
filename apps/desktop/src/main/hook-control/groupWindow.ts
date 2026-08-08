@@ -36,10 +36,28 @@ export type { GroupContextAssembly };
 
 const log = createLogger('hook-group-window');
 
-/** 每个 principal + 群/topic 窗口永久保留的最近行数。 */
-const WINDOW_KEEP_PER_KEY = 500;
-/** 每个 principal 跨全部群/topic 永久保留的最近行数。 */
-export const WINDOW_KEEP_PER_PRINCIPAL = 10_000;
+/**
+ * 每个 principal 的群历史保留上限 —— **按存储大小, 不按条数**(Chris 2026-08-08)。
+ *
+ * 旧策略是每群 500 条 + 每 principal 10000 条。活跃群里 500 条可能就是几天,
+ * 而这个池子的用途正是回查很久以前的对话(「去年谁说了啥」)—— 按条数把它删没了。
+ *
+ * 1 GiB 正文字节按一条群消息 100~300 字节估, 大约是几百万到上千万条; 一个日活
+ * 500 条的群一年约 20~50 MB, 也就是几十个活跃群存好几年。碰不到的默认值正是
+ * 目的: 它是安全阀, 不是日常清理。
+ */
+export const WINDOW_MAX_TEXT_BYTES_PER_PRINCIPAL = 1024 * 1024 * 1024;
+/** 安全阀: 防止海量极短消息把行开销撑爆。正常使用碰不到。 */
+export const WINDOW_MAX_ROWS_PER_PRINCIPAL = 5_000_000;
+
+/**
+ * 生效中的保留上限。做成可变对象只为让测试用一个小阈值把回收逼出来 —— 真实
+ * 默认值大到正常使用碰不到, 拿默认值写回归等于在测试里灌 1 GiB 数据。
+ */
+export const GROUP_WINDOW_RETENTION = {
+  maxTextBytesPerNamespace: WINDOW_MAX_TEXT_BYTES_PER_PRINCIPAL,
+  maxRowsPerNamespace: WINDOW_MAX_ROWS_PER_PRINCIPAL,
+};
 
 /**
  * 从 externalKey 解析 Telegram 群/topic lane。
@@ -109,7 +127,7 @@ export async function recordGroupMessage(
       fileNames: payload.fileNames,
       sentAt: payload.sentAt,
     },
-    { keepPerKey: WINDOW_KEEP_PER_KEY, keepPerNamespace: WINDOW_KEEP_PER_PRINCIPAL },
+    GROUP_WINDOW_RETENTION,
   );
 }
 
