@@ -95,6 +95,7 @@ import {
   getActiveDataOwnerPushStamp,
   type AppSessionMode,
 } from './appSessionState.js';
+import { shouldTeardownColdStartRuntime } from './authColdStartBoundary.js';
 import {
   claimLegacyOwnerNamespace,
   recordLegacyGhostMigrationResult,
@@ -2220,9 +2221,10 @@ async function runColdStartRefreshFlow(
       return snapshotLoggedOutAuthState();
     }
     const previousAppSession = getActiveAppSession();
-    const needsColdStartAccountBoundary =
-      previousAppSession.mode !== 'cloud' ||
-      previousAppSession.dataOwnerId !== refreshData.membership.id;
+    const needsColdStartAccountBoundary = shouldTeardownColdStartRuntime(
+      previousAppSession,
+      refreshData.membership.id,
+    );
     if (accountSwitchTeardown && needsColdStartAccountBoundary) {
       // Cold-start refresh may outlive initialize()'s startup timeout. Keep
       // the owner boundary held for the entire late commit sequence so stale

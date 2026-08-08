@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { shouldTeardownColdStartRuntime } from '../authColdStartBoundary';
 
 /** Regression guard for login progress that is intentionally owned by Electron main. */
 describe('auth login-flow reset', () => {
@@ -192,21 +194,40 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('preservePersistedRefreshToken: true');
   });
 
-  it('does not tear down a same-account runtime during cold-start recovery', () => {
-    const coldStart = source.indexOf('async function runColdStartRefreshFlow(');
-    const coldEnd = source.indexOf('\n}\n\nasync function loadLoginProviders()', coldStart);
-    const coldBody = source.slice(coldStart, coldEnd);
+  it('does not call teardown for a fresh signed-out/null cold-start session', () => {
+    const teardown = vi.fn();
+    const previousAppSession = {
+      mode: 'signed-out' as const,
+      dataOwnerId: null,
+      generation: 0,
+    };
 
-    // Automatic relaunch restores the same cloud account. The startup DB and
-    // device-link runtime must remain alive; teardown is only for a real owner
-    // boundary (signed-out/local mode or a different account).
-    expect(coldBody).toContain('const previousAppSession = getActiveAppSession();');
-    expect(coldBody).toContain(
-      "previousAppSession.mode !== 'cloud' ||\n      previousAppSession.dataOwnerId !== refreshData.membership.id",
-    );
-    expect(coldBody).toContain(
-      'if (accountSwitchTeardown && needsColdStartAccountBoundary) {',
-    );
+    if (shouldTeardownColdStartRuntime(previousAppSession, 'account-1')) {
+      teardown();
+    }
+
+    expect(teardown).not.toHaveBeenCalled();
+  });
+
+  it('tears down only an already-committed runtime that crosses an owner boundary', () => {
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'cloud', dataOwnerId: 'account-1', generation: 1 },
+        'account-1',
+      ),
+    ).toBe(false);
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'cloud', dataOwnerId: 'account-1', generation: 1 },
+        'account-2',
+      ),
+    ).toBe(true);
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'local', dataOwnerId: 'local-v1', generation: 1 },
+        'account-1',
+      ),
+    ).toBe(true);
   });
 
   it('drops a runtime refresh result after logout or a newer login changes auth generation', () => {
