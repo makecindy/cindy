@@ -15,6 +15,7 @@ import {
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   DL_UNSUBSCRIBE_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
+  isCoalesciblePushChannel,
   topicForPush,
   type MakerEventBatchPayload,
 } from '@cindy/device-link';
@@ -41,16 +42,17 @@ vi.mock('../settings-store', () => ({
 import { __testing, handleControllerOffline } from '../dispatch';
 import * as subscriptions from '../subscriptions';
 
-/** 微批窗口(dispatch 内部常量);推进定时器用。 */
+/** 微批窗口与退避间隔(dispatch 内部常量);推进定时器用。 */
 const WINDOW_MS = 120;
+const MAKER_EVENT_BATCH_RETRY_MS = 250;
 
-type SentPush = { dst: string; channel: string; payload: unknown };
+type SentPush = { dst: string; channel: string; payload: unknown; ownerStamp?: unknown };
 
 function mkClient(over: { sendPush?: ReturnType<typeof vi.fn> } = {}) {
   const sent: SentPush[] = [];
   const sendPush = over.sendPush
-    ?? vi.fn((dst: string, channel: string, payload: unknown) => {
-      sent.push({ dst, channel, payload });
+    ?? vi.fn((dst: string, channel: string, payload: unknown, ownerStamp?: unknown) => {
+      sent.push({ dst, channel, payload, ownerStamp });
     });
   return {
     client: {
@@ -247,7 +249,7 @@ describe('[4] 生命周期与背压', () => {
     // 背压期间继续产生事件:累积进同一批,不丢
     __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } });
     failing = false;
-    vi.advanceTimersByTime(250); // 退避重试间隔
+    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS); // 退避重试间隔
     const batch = sendPush.mock.calls.at(-1)![2] as MakerEventBatchPayload;
     expect(batch.events).toHaveLength(2);
     expect(batch.events).toEqual([
@@ -272,27 +274,138 @@ describe('[4] 生命周期与背压', () => {
     expect(h.sent).toHaveLength(0);
 
     status = 'online';
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
     expect(batchesIn(h.sent)).toHaveLength(1);
   });
 });
 
 describe('[5] 与拥塞取舍(#2167)的一致性', () => {
-  it('批 channel 与 maker:event 同属可驱逐档:拥塞时不退回 BACKPRESSURE 风暴', async () => {
-    // 漏登记会让启用微批的控制端在拥塞时重新遭遇逐帧 BACKPRESSURE——正是微批
-    // 要消除的那一个。判据正本在 packages/device-link/src/client.ts。
-    const src = await import('node:fs/promises').then((fs) =>
-      fs.readFile(
-        new URL('../../../../../../packages/device-link/src/client.ts', import.meta.url),
-        'utf8',
-      ),
-    );
-    const table = src.slice(
-      src.indexOf('const COALESCIBLE_PUSH_CHANNELS'),
-      src.indexOf(']);', src.indexOf('const COALESCIBLE_PUSH_CHANNELS')),
-    );
-    expect(table).toContain("'maker:event'");
-    expect(table).toContain('MAKER_EVENT_BATCH_CHANNEL');
+  it('批 channel 与 maker:event 同属可驱逐档:拥塞时不退回 BACKPRESSURE 风暴', () => {
+    // 漏登记会让启用微批的控制端在拥塞时重新遭遇逐帧 BACKPRESSURE——正是微批要
+    // 消除的那一个。直接问判据函数(client.ts 的唯一入口),不耦合源码文本。
+    expect(isCoalesciblePushChannel('maker:event')).toBe(true);
+    expect(isCoalesciblePushChannel(MAKER_EVENT_BATCH_CHANNEL)).toBe(true);
+    // 反向:不可合并的事件流不得混进该档
+    expect(isCoalesciblePushChannel('local-db:messages:created')).toBe(false);
+    expect(isCoalesciblePushChannel('maker:interaction-request')).toBe(false);
+  });
+});
+
+describe('[7] 归属切换与背压的交互(review 首轮 P1)', () => {
+  it('ownerStamp 切换且旧段正背压:旧段不被覆盖,恢复后按段序全部发出', () => {
+    let failing = true;
+    const sendPush = vi.fn((
+      _dst: string,
+      channel: string,
+      _payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      if (failing && channel === MAKER_EVENT_BATCH_CHANNEL) {
+        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+      }
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+    const stampA = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+    const stampB = { dataOwnerId: 'owner-b', ownerGeneration: 2 };
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } }, stampA);
+    vi.advanceTimersByTime(WINDOW_MS); // 首次 flush 遭背压,旧段保留
+    expect(sendPush).toHaveBeenCalledTimes(1);
+
+    // 归属切换:新事件必须进新段,绝不能覆盖仍待重试的旧段
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } }, stampB);
+    failing = false;
+    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
+
+    // 自定义 sendPush 不填充 h.sent,直接读 mock.calls:[dst, channel, payload, ownerStamp]
+    const delivered = sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL);
+    const succeeded = delivered.slice(1); // 第 1 次是遭背压那次
+    expect(succeeded).toHaveLength(2);
+    expect((succeeded[0]![2] as MakerEventBatchPayload).events)
+      .toEqual([{ sessionId: 's1', event: { i: 0 } }]);
+    expect((succeeded[1]![2] as MakerEventBatchPayload).events)
+      .toEqual([{ sessionId: 's1', event: { i: 1 } }]);
+    // 段序 = 归属切换顺序,ownerStamp 分别随段下发
+    expect(succeeded[0]![3]).toEqual(stampA);
+    expect(succeeded[1]![3]).toEqual(stampB);
+  });
+
+  it('持续背压 + 到量:不退化为逐事件同步 sendPush(退避期间不插队)', () => {
+    const sendPush = vi.fn((_dst: string, channel: string, _payload: unknown) => {
+      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+      }
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 先攒到量触发一次 flush(遭背压)
+    for (let i = 0; i < 64; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    expect(sendPush).toHaveBeenCalledTimes(1);
+
+    // 再来 64 条:退避中,一次都不该再同步发送(旧实现每条都会试一次)
+    for (let i = 64; i < 128; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    expect(sendPush).toHaveBeenCalledTimes(1);
+
+    // 退避到点才重试一次
+    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
+    expect(sendPush).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('[8] 跨 channel 顺序(review 首轮 P2)', () => {
+  it('同会话的其它推送先收口事件批:确认卡不会插到攒批的文本前面', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'delta' } });
+    expect(h.sent).toHaveLength(0); // 还在攒批
+
+    // 紧跟一条有顺序语义的同会话推送:必须先把批发出去
+    __testing.forwardPush('maker:interaction-request', { sessionId: 's1', request: { id: 'r1' } });
+    expect(h.sent.map((s) => s.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:interaction-request',
+    ]);
+  });
+
+  it('其它会话的推送不触发本会话收口(按 sessionId 精确)', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1', 'session:s2']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    __testing.forwardPush('maker:status-changed', { sessionId: 's2', status: 'closed' });
+    // s1 的批未被 s2 的推送带出去
+    expect(h.sent.map((s) => s.channel)).toEqual(['maker:status-changed']);
+
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(batchesIn(h.sent)).toHaveLength(1);
+  });
+});
+
+describe('[9] 字节估算按 UTF-8(review 首轮)', () => {
+  it('多字节内容按 UTF-8 计:中文事件到量 flush,阈值不被 UTF-16 低估架空', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 每条约 30KB UTF-8(中文 3 字节/字);9 条即越过 256KB 字节阈值,
+    // 而按 UTF-16 码元只有约 90K「长度」——旧估算不会触发 flush。
+    const text = '中'.repeat(10_000);
+    for (let i = 0; i < 9; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { text } });
+    }
+    // 未到条数上限(64),靠字节阈值提前发出
+    expect(batchesIn(h.sent)).toHaveLength(1);
   });
 });
 

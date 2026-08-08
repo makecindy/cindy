@@ -3033,4 +3033,25 @@ describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)',
       vi.useRealTimers();
     }
   });
+
+  it('批内 sessionId 与顶层不一致的条目被丢弃:不绕过 topic 隔离', () => {
+    // topic 路由只按**顶层** sessionId,批内混入其它会话的事件会把本端未订阅的
+    // 会话数据投进来(坏帧/恶意帧场景)。fail-closed 跳过该条,不整批丢。
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, {
+        sessionId: 's-own',
+        events: [
+          { sessionId: 's-other', persistId: 'p-x', event: { type: 'text', data: { text: 'leak', isFinal: true } } },
+          { sessionId: 's-own', persistId: 'p-y', event: { type: 'text', data: { text: 'mine', isFinal: true } } },
+        ],
+      });
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s-other')).toHaveLength(0);
+      expect(remoteSessionStore.getMessages('s-own')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s-own')[0]).toMatchObject({ content: 'mine' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

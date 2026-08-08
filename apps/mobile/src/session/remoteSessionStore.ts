@@ -2129,7 +2129,12 @@ export const remoteSessionStore = {
       const batch = parseMakerEventBatchPayload(payload);
       if (!batch) return;
       for (const event of batch.events) {
-        if (isRecord(event)) this.applyMakerEventPush(event);
+        if (!isRecord(event)) continue;
+        // 只消费与批顶层 sessionId 一致的条目:topic 隔离是按**顶层** sessionId
+        // 路由的,批内混入其它会话的事件会绕过隔离,把本端未订阅的会话数据投进来
+        // (坏帧/恶意帧场景)。fail-closed 跳过,不整批丢。
+        if (readString(event, 'sessionId') !== batch.sessionId) continue;
+        this.applyMakerEventPush(event);
       }
       return;
     }

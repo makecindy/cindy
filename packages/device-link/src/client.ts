@@ -77,11 +77,20 @@ const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
 
+/**
+ * 该 push channel 是否属于可驱逐档(latest-wins 腾位的唯一判据入口)。
+ * 导出供上层断言「新增的聚合/整流 channel 已与其源 channel 同档」——漏登记会让
+ * 拥塞时退回 BACKPRESSURE 风暴,而这类漏登记只有对着判据本身断言才拦得住。
+ */
+export function isCoalesciblePushChannel(channel: string): boolean {
+  return COALESCIBLE_PUSH_CHANNELS.has(channel);
+}
+
 function isCoalesciblePushEnvelope(env: Envelope): boolean {
   if (env.kind !== 'push') return false;
   const payload = env.payload as { channel?: unknown } | undefined;
   return typeof payload?.channel === 'string'
-    && COALESCIBLE_PUSH_CHANNELS.has(payload.channel);
+    && isCoalesciblePushChannel(payload.channel);
 }
 /** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
 const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
