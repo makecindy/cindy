@@ -1268,7 +1268,7 @@ describe('session-agent-switch handoff injection', () => {
     const transaction = createMakerSendTransaction(deps);
 
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
-      persistUserMessage: { clientId: 'client-1', content: '新消息' },
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
     });
 
     // wire:前缀注入
@@ -1278,7 +1278,7 @@ describe('session-agent-switch handoff injection', () => {
     );
     // 落库:用户原文,不带交接段(display 与 sent 分离)
     const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1];
-    expect(persisted?.content).toBe('新消息');
+    expect(persisted?.content).toBe('{"text":"新消息","images":[],"files":[]}');
     expect(consumePendingHandoff).toHaveBeenCalledWith('session-1');
   });
 
@@ -1318,7 +1318,7 @@ describe('session-agent-switch handoff injection', () => {
     const transaction = createMakerSendTransaction(deps);
 
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
-      persistUserMessage: { clientId: 'client-1', content: '新消息' },
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
     });
 
     expect(session.send).toHaveBeenCalledWith(
@@ -1326,7 +1326,7 @@ describe('session-agent-switch handoff injection', () => {
       expect.anything(),
     );
     const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1];
-    expect(persisted?.content).toBe('新消息');
+    expect(persisted?.content).toBe('{"text":"新消息","images":[],"files":[]}');
   });
 
   it('计划对账在交接段外层(对账在前、交接在后)', async () => {
@@ -1338,7 +1338,7 @@ describe('session-agent-switch handoff injection', () => {
     const transaction = createMakerSendTransaction(deps);
 
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
-      persistUserMessage: { clientId: 'client-1', content: '新消息' },
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
     });
     expect(session.send).toHaveBeenCalledWith(
       { type: 'user', content: 'RECONCILE-NOTE\n\nHANDOFF-TEXT\n\n新消息' },
@@ -1369,18 +1369,18 @@ describe('session-agent-switch handoff injection', () => {
       expect.anything(),
     );
 
-    // /compact 等斜杠控制消息(白名单判据:落库内容以 '/' 开头)
+    // /compact 等斜杠控制消息(落库是 stringifyUserContent 信封,判据须解开信封)
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '/compact' }, undefined, {
-      persistUserMessage: { clientId: 'c3', content: '/compact' },
+      persistUserMessage: { clientId: 'c3', content: '{"text":"/compact","images":[],"files":[]}' },
     });
     expect(session.send).toHaveBeenLastCalledWith(
       { type: 'user', content: '/compact' },
       expect.anything(),
     );
 
-    // coordinator 的合成续跑指令([UI_ACTION_TRIGGER] 前缀)
+    // coordinator 的合成续跑指令([UI_ACTION_TRIGGER] 前缀,信封形态)
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '[UI_ACTION_TRIGGER]Continue' }, undefined, {
-      persistUserMessage: { clientId: 'c4', content: '[UI_ACTION_TRIGGER]Continue' },
+      persistUserMessage: { clientId: 'c4', content: '{"text":"[UI_ACTION_TRIGGER]Continue"}' },
     });
     expect(session.send).toHaveBeenLastCalledWith(
       { type: 'user', content: '[UI_ACTION_TRIGGER]Continue' },

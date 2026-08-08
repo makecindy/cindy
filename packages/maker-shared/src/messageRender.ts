@@ -463,6 +463,16 @@ export function dedupeToolMediaByUrl<TMedia extends MessageRenderToolMediaLike>(
   return out;
 }
 
+/**
+ * 子代理归属判定:desktop 投影出顶层 parentToolUseId;mobile / main 原始行只有
+ * agentMeta.parentUuid。二者任一存在即视为子代理内部消息。
+ */
+function hasSubagentParent(message: MessageRenderSourceMessageLike): boolean {
+  if (message.parentToolUseId) return true;
+  const parentUuid = message.agentMeta?.parentUuid;
+  return typeof parentUuid === 'string' && parentUuid.length > 0;
+}
+
 export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
   options: MessageRenderTodoGroupingOptions = {},
@@ -502,7 +512,10 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     if (!source) continue;
     // 子代理内部的计划调用不属于顶层面板:它们的 owner 是那个 Agent/Task 工具行,
     // 混进来会顶掉主线程计划(顶层"最新计划"按位置竞争,历史病 §3.1.5)。
-    if (message.parentToolUseId) continue;
+    // 两套字段都认:desktop 投影出顶层 parentToolUseId;mobile 保留原始
+    // agentMeta.parentUuid(normalizeRemoteMessages 不投影,父行滑出分页窗口
+    // 时孤儿子消息回退顶层流,不认 meta 就会把子代理清单当顶层计划)。
+    if (hasSubagentParent(message)) continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const previous = lastSessionBySource.get(source);
@@ -606,7 +619,7 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
     if (!isAgentPlanToolName(toolNameOf(message))) continue;
     // 与 findMessageTodoInsertions 同一条边界:子代理内部的计划调用不参与
     // 顶层"最新计划事件"的判定,否则子调用会让顶层 insertion 判为过期。
-    if (message.parentToolUseId) continue;
+    if (hasSubagentParent(message)) continue;
     latestPlanIndex = index;
     latestPlanMessage = message;
   }

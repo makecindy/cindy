@@ -18,6 +18,7 @@ import {
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
+  extractPlainText,
   prependHandoffToUserMessage,
   prependNoteToWireUserMessage,
   type HandoffWireMessage,
@@ -747,18 +748,20 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       //    时注入——内部控制轮次都不落可显示 user 行。
       // 失败静默跳过:对账是锦上添花,不能挡发送。
       const soForReconcile = (outgoingSendOpts ?? {}) as MakerSendOptions;
-      const reconcilePersistContent =
-        typeof soForReconcile.persistUserMessage?.content === 'string'
-          ? soForReconcile.persistUserMessage.content
-          : null;
+      // 落库内容是 stringifyUserContent 信封({"text":...}),裸 startsWith 只会
+      // 看到 '{'——必须先抽出纯文本再分类,否则 /compact、[UI_ACTION_TRIGGER]
+      // 一类控制消息全部漏网(review P2)。
+      const reconcilePersistText =
+        soForReconcile.persistUserMessage?.content !== undefined
+          ? extractPlainText(soForReconcile.persistUserMessage.content).trim()
+          : '';
       const isOrdinaryUserTurn =
         soForReconcile.origin === undefined &&
         soForReconcile.persistUserMessage?.autoResume !== true &&
         soForReconcile.persistUserMessage?.origin === undefined &&
-        reconcilePersistContent !== null &&
-        reconcilePersistContent.length > 0 &&
-        !reconcilePersistContent.startsWith('/') &&
-        !reconcilePersistContent.startsWith('[UI_ACTION_TRIGGER]');
+        reconcilePersistText.length > 0 &&
+        !reconcilePersistText.startsWith('/') &&
+        !reconcilePersistText.startsWith('[UI_ACTION_TRIGGER]');
       const planReconcileNote = isOrdinaryUserTurn
         ? ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null)
         : null;
