@@ -189,6 +189,34 @@ function installSurfaceObservers(record: SurfaceRecord): void {
   wc.once('destroyed', () => cleanupSurface(record, true));
 }
 
+function installOwnerObservers(record: SurfaceRecord, hostContents: WebContents): () => void {
+  const popupContents = record.webContents;
+  const handleOwnerDestroyed = () => {
+    if (surfaces.get(record.surfaceId) !== record) return;
+    cleanupSurface(record, false);
+    if (!popupContents.isDestroyed()) popupContents.close();
+  };
+  const handleOwnerNavigation = (
+    _event: Electron.Event,
+    _url: string,
+    isSameDocument: boolean,
+    isMainFrame: boolean,
+  ) => {
+    if (!isMainFrame || isSameDocument || surfaces.get(record.surfaceId) !== record) return;
+    // A full renderer reload keeps the same host WebContents, but loses the
+    // runtime tab↔surface map. Close before the old renderer disappears so a
+    // stale view cannot cover the new page or block sidebar reparent forever.
+    cleanupSurface(record, true);
+    if (!popupContents.isDestroyed()) popupContents.close();
+  };
+  hostContents.once('destroyed', handleOwnerDestroyed);
+  hostContents.on('did-start-navigation', handleOwnerNavigation);
+  return () => {
+    hostContents.removeListener('destroyed', handleOwnerDestroyed);
+    hostContents.removeListener('did-start-navigation', handleOwnerNavigation);
+  };
+}
+
 /** Adopt Chromium's exact popup WebContents; never create a replacement context. */
 export function createRsbNativePopupSurface(
   hostContents: WebContents,
@@ -226,30 +254,7 @@ export function createRsbNativePopupSurface(
   view.setBounds(record.requestedBounds);
   view.setVisible(false);
   installSurfaceObservers(record);
-  const handleOwnerDestroyed = () => {
-    if (surfaces.get(surfaceId) !== record) return;
-    cleanupSurface(record, false);
-    if (!popupContents.isDestroyed()) popupContents.close();
-  };
-  const handleOwnerNavigation = (
-    _event: Electron.Event,
-    _url: string,
-    isSameDocument: boolean,
-    isMainFrame: boolean,
-  ) => {
-    if (!isMainFrame || isSameDocument || surfaces.get(surfaceId) !== record) return;
-    // A full renderer reload keeps the same host WebContents, but loses the
-    // runtime tab↔surface map. Close before the old renderer disappears so a
-    // stale view cannot cover the new page or block sidebar reparent forever.
-    cleanupSurface(record, true);
-    if (!popupContents.isDestroyed()) popupContents.close();
-  };
-  hostContents.once('destroyed', handleOwnerDestroyed);
-  hostContents.on('did-start-navigation', handleOwnerNavigation);
-  record.detachOwnerObservers = () => {
-    hostContents.removeListener('destroyed', handleOwnerDestroyed);
-    hostContents.removeListener('did-start-navigation', handleOwnerNavigation);
-  };
+  record.detachOwnerObservers = installOwnerObservers(record, hostContents);
   record.claimTimer = setTimeout(() => {
     if (surfaces.get(surfaceId) !== record || record.tabId) return;
     log.warn('disposing unclaimed native popup surface', { surfaceId });
@@ -258,6 +263,105 @@ export function createRsbNativePopupSurface(
   }, RSB_NATIVE_POPUP_CLAIM_TIMEOUT_MS);
   record.claimTimer.unref?.();
   return surfaceId;
+}
+
+/**
+ * Move an unclaimed native popup to the renderer that will receive its one-shot
+ * route payload. This is main-only: renderer IPC must never be able to choose a
+ * different owner. Claimed surfaces stay pinned to the tab that already owns
+ * their surface id.
+ */
+export function transferRsbNativePopupSurface(
+  surfaceId: string,
+  nextOwnerWebContents: WebContents,
+): 'transferred' | 'retryable' | 'gone' {
+  const record = surfaces.get(surfaceId);
+  if (!record) return 'gone';
+  if (record.webContents.isDestroyed()) {
+    cleanupSurface(record, false);
+    return 'gone';
+  }
+  // A queued payload can outlive its surface timer or race a renderer claim.
+  // Neither state may be transferred or sent as a second claim opportunity.
+  if (record.tabId !== null || record.sessionId !== null) return 'gone';
+  if (nextOwnerWebContents.isDestroyed()) return 'retryable';
+
+  let nextOwnerWindow: BrowserWindow | null = null;
+  try {
+    nextOwnerWindow = BrowserWindow.fromWebContents(nextOwnerWebContents);
+  } catch {
+    return 'retryable';
+  }
+  if (!nextOwnerWindow || nextOwnerWindow.isDestroyed()) return 'retryable';
+  if (
+    record.ownerWebContents?.id === nextOwnerWebContents.id &&
+    record.ownerWindow === nextOwnerWindow
+  ) {
+    return 'transferred';
+  }
+
+  const previousOwnerWindow = record.ownerWindow;
+  const previousOwnerWebContents = record.ownerWebContents;
+  record.detachOwnerObservers?.();
+  record.detachOwnerObservers = null;
+
+  try {
+    if (!previousOwnerWindow.isDestroyed()) {
+      previousOwnerWindow.contentView.removeChildView(record.view);
+    }
+  } catch (err) {
+    // Electron does not guarantee whether a throwing native remove detached
+    // the view. Fail closed instead of retaining an ambiguously parented view.
+    cleanupSurface(record, false);
+    if (!record.webContents.isDestroyed()) record.webContents.close();
+    log.warn('failed to detach native popup view for owner transfer', { surfaceId, err });
+    return 'gone';
+  }
+
+  try {
+    nextOwnerWindow.contentView.addChildView(record.view);
+  } catch (err) {
+    let restored = false;
+    if (
+      previousOwnerWebContents &&
+      !previousOwnerWebContents.isDestroyed() &&
+      !previousOwnerWindow.isDestroyed()
+    ) {
+      try {
+        previousOwnerWindow.contentView.addChildView(record.view);
+        record.detachOwnerObservers = installOwnerObservers(record, previousOwnerWebContents);
+        applyVisibility(record);
+        restored = true;
+      } catch {
+        restored = false;
+      }
+    }
+    if (!restored) {
+      cleanupSurface(record, false);
+      if (!record.webContents.isDestroyed()) record.webContents.close();
+    }
+    log.warn('failed to attach native popup view to transferred owner', {
+      surfaceId,
+      restored,
+      err,
+    });
+    return restored ? 'retryable' : 'gone';
+  }
+
+  record.ownerWindow = nextOwnerWindow;
+  record.ownerWebContents = nextOwnerWebContents;
+  record.detachOwnerObservers = installOwnerObservers(record, nextOwnerWebContents);
+  applyVisibility(record);
+  return 'transferred';
+}
+
+/** Release a queued surface that was never exposed to or claimed by a renderer. */
+export function disposeUnclaimedRsbNativePopupSurface(surfaceId: string): boolean {
+  const record = surfaces.get(surfaceId);
+  if (!record || record.tabId !== null || record.sessionId !== null) return false;
+  cleanupSurface(record, false);
+  if (!record.webContents.isDestroyed()) record.webContents.close();
+  return true;
 }
 
 /** Pin the ordinary `<webview>` opener while its child still depends on WindowProxy. */

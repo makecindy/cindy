@@ -44,6 +44,9 @@ import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxA
 import {
   attributeRsbNativePopupSurface,
   createRsbNativePopupSurface,
+  disposeUnclaimedRsbNativePopupSurface,
+  getRsbNativePopupOwnerWebContents,
+  transferRsbNativePopupSurface,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 
 /**
@@ -175,17 +178,11 @@ export const RSB_BROWSER_COMMAND_CHANNEL = 'rsb:browser-command';
  *  'right-tab-prev/next' = guest 内按右侧栏 tab 切换键时,由 Shell 按 tab strip
  *  顺序循环激活相邻 tab。 */
 export type RsbBrowserCommand =
-  | 'go-back'
-  | 'go-forward'
-  | 'reload'
-  | 'close-tab'
-  | 'right-tab-prev'
-  | 'right-tab-next';
+  'go-back' | 'go-forward' | 'reload' | 'close-tab' | 'right-tab-prev' | 'right-tab-next';
 
 /** guest before-input-event 命中后的动作。 */
 export type RsbGuestShortcutAction =
-  | { kind: 'focus-url-bar' }
-  | { kind: 'command'; command: RsbBrowserCommand };
+  { kind: 'focus-url-bar' } | { kind: 'command'; command: RsbBrowserCommand };
 
 interface GuestKeyInput {
   code?: string;
@@ -495,9 +492,20 @@ interface QueuedBrowserPopup {
 
 let queuedBrowserPopups: QueuedBrowserPopup[] = [];
 
+function disposeQueuedBrowserPopup(payload: RsbBrowserPopupPayload): void {
+  if (payload.nativePopupSurfaceId) {
+    disposeUnclaimedRsbNativePopupSurface(payload.nativePopupSurfaceId);
+  }
+}
+
 function pruneQueuedBrowserPopups(now = Date.now()): void {
   const cutoff = now - RSB_BROWSER_POPUP_BUFFER_TTL_MS;
-  queuedBrowserPopups = queuedBrowserPopups.filter((entry) => entry.receivedAt >= cutoff);
+  const retained: QueuedBrowserPopup[] = [];
+  for (const entry of queuedBrowserPopups) {
+    if (entry.receivedAt >= cutoff) retained.push(entry);
+    else disposeQueuedBrowserPopup(entry.payload);
+  }
+  queuedBrowserPopups = retained;
 }
 
 function enqueueBrowserPopup(payload: RsbBrowserPopupPayload): void {
@@ -505,10 +513,11 @@ function enqueueBrowserPopup(payload: RsbBrowserPopupPayload): void {
   pruneQueuedBrowserPopups(receivedAt);
   queuedBrowserPopups.push({ payload, receivedAt });
   if (queuedBrowserPopups.length > RSB_BROWSER_POPUP_BUFFER_LIMIT) {
-    queuedBrowserPopups.splice(
+    const dropped = queuedBrowserPopups.splice(
       0,
       queuedBrowserPopups.length - RSB_BROWSER_POPUP_BUFFER_LIMIT,
     );
+    for (const entry of dropped) disposeQueuedBrowserPopup(entry.payload);
   }
 }
 
@@ -539,8 +548,24 @@ export function flushRsbBrowserPopupQueue(): void {
       queuedBrowserPopups = pending.slice(index);
       return;
     }
+    const entry = pending[index];
+    const surfaceId = entry.payload.nativePopupSurfaceId;
+    if (surfaceId) {
+      const transfer = transferRsbNativePopupSurface(surfaceId, target);
+      if (transfer === 'retryable') {
+        // Never expose a surface id to a renderer that cannot own/claim it.
+        // Preserve FIFO only for a live surface that rolled back safely.
+        queuedBrowserPopups = pending.slice(index);
+        return;
+      }
+      if (transfer === 'gone') {
+        // Dead/claimed stale entries must not block later one-shot popups until
+        // their independent buffer TTL expires.
+        continue;
+      }
+    }
     try {
-      target.send(RSB_BROWSER_POPUP_CHANNEL, pending[index].payload);
+      target.send(RSB_BROWSER_POPUP_CHANNEL, entry.payload);
     } catch {
       queuedBrowserPopups = pending.slice(index);
       return;
@@ -552,16 +577,14 @@ export function setRsbPopupHostResolver(resolver: (() => WebContents | null) | n
   popupHostResolver = resolver;
   if (!resolver) {
     // 生产只在 bootstrap 注入一次;null 是测试/停用路径,同时清掉跨 case backlog。
+    for (const entry of queuedBrowserPopups) disposeQueuedBrowserPopup(entry.payload);
     queuedBrowserPopups = [];
     return;
   }
   flushRsbBrowserPopupQueue();
 }
 
-function sendBrowserPopup(
-  hostContents: WebContents,
-  payload: RsbBrowserPopupPayload,
-): void {
+function sendBrowserPopup(hostContents: WebContents, payload: RsbBrowserPopupPayload): void {
   if (!popupHostResolver) {
     // 启动早期 / 单测未注入 resolver 时保留原始同步直发路径。
     if (!hostContents.isDestroyed()) hostContents.send(RSB_BROWSER_POPUP_CHANNEL, payload);
@@ -670,20 +693,24 @@ export function installBrowserGuestHandlers(
         // Electron supplies this runtime-only field when createWindow is used
         // to adopt Chromium's already-created popup browsing context. It is
         // intentionally absent from BrowserWindowConstructorOptions.d.ts.
-        const popupContents = (
-          options as typeof options & { webContents?: WebContents }
-        ).webContents;
+        const popupContents = (options as typeof options & { webContents?: WebContents })
+          .webContents;
         if (!popupContents) {
           throw new Error('Electron did not provide popup WebContents to createWindow');
         }
-        const surfaceId = createRsbNativePopupSurface(hostContents, popupContents);
+        // Adopt nested popups under the native parent's current owner. The
+        // parent can move from main → detached while its route payload waits;
+        // re-reading ownership here avoids retaining the creating-host closure.
+        const popupOwnerContents =
+          getRsbNativePopupOwnerWebContents(guestContents.id) ?? hostContents;
+        const surfaceId = createRsbNativePopupSurface(popupOwnerContents, popupContents);
         if (!surfaceId) {
           popupContents.close();
           return popupContents;
         }
         // Popup-of-popup keeps the same security and WindowProxy semantics.
-        installBrowserGuestHandlers(hostContents, popupContents);
-        routeBrowserPopup(hostContents, guestContents.id, {
+        installBrowserGuestHandlers(popupOwnerContents, popupContents);
+        routeBrowserPopup(popupOwnerContents, guestContents.id, {
           url: details.url,
           disposition: details.disposition,
           nativePopupSurfaceId: surfaceId,
@@ -699,9 +726,7 @@ export function installBrowserGuestHandlers(
   guestContents.on('before-input-event', (event, input) => {
     if (!isGuestShortcutKeyDownType(input.type)) return;
     const store = getAppShortcutStore();
-    const action = resolveGuestShortcutAction(input, (id) =>
-      store.getEffectiveCombos(id),
-    );
+    const action = resolveGuestShortcutAction(input, (id) => store.getEffectiveCombos(id));
     if (!action) return;
     event.preventDefault();
     let target: WebContents | null = null;
@@ -730,7 +755,10 @@ export function installWebviewHardener(): void {
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
       // (绝不回落到浏览器分区,那会让 cindy-ghost:// 内容跑进错误 session)。
-      if (typeof params.partition === 'string' && params.partition.startsWith(GHOST_PARTITION_PREFIX)) {
+      if (
+        typeof params.partition === 'string' &&
+        params.partition.startsWith(GHOST_PARTITION_PREFIX)
+      ) {
         const ghost = resolveGhostWebviewAttach(params.partition, params.src);
         if (!ghost) {
           e.preventDefault();
