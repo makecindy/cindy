@@ -235,7 +235,6 @@ async function flushQueue(): Promise<void> {
       queuedKeys.delete(key);
       const record = records.get(key);
       if (!record || record.snapshot.status !== 'queued') continue;
-      publish(record, { status: 'loading' });
       markRetryable(record);
     }
     return;

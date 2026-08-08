@@ -114,7 +114,7 @@ async function readToLength(handle: fs.promises.FileHandle, size: number): Promi
   return buffer.subarray(0, offset);
 }
 
-/** open 之后的根内复核(异步侧),失败一律按不可信拒绝。 */
+/** open 后根内复核：确定性路径失败返回 false，无法判定的 I/O 错误抛出。 */
 async function verifyStillWithinRoot(
   handleStat: fs.BigIntStats,
   filePath: string,
@@ -139,7 +139,8 @@ async function verifyStillWithinRoot(
 /**
  * 读取一个"必须是普通文件"的文件,拒绝符号链接,限量读取。
  *
- * - 非普通文件 / 超过 maxBytes / 符号链接或根内复核不过 → 返回 null;
+ * - 非普通文件 / 超过 maxBytes / 符号链接或确定性根内复核不过 → 返回 null;
+ * - 根内复核遇到无法判定的 I/O 错误 → 抛出 BoundedFileReadUncertainError;
  * - open 失败(含 O_NOFOLLOW 平台对 symlink 的 ELOOP 拒绝、ENOENT)→ 抛出,
  *   由调用方决定语义。
  *

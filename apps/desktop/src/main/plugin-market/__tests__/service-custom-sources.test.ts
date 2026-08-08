@@ -683,9 +683,15 @@ describe('PluginMarketService 自定义市场图标', () => {
       currentProjectionSpy.mockRestore();
     }
 
-    const lstatSpy = vi
-      .spyOn(fs.promises, 'lstat')
-      .mockRejectedValueOnce(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation((async (
+      target: fs.PathLike,
+      options?: fs.StatOptions,
+    ) => {
+      if (String(target).endsWith(path.join('plugins', 'alpha', 'assets', 'icon.png'))) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return realLstat(target, options as never);
+    }) as typeof fs.promises.lstat);
     const uncertainItem = (await h.service.snapshot()).items[0]!;
     lstatSpy.mockRestore();
     await expect(
