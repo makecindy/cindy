@@ -8,9 +8,11 @@
 import './browser-runtime-env.js';
 import fs from 'node:fs';
 import nodePath from 'node:path';
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, session } from 'electron';
+import { BROWSER_PARTITION } from '../../shared/webviewPartition.js';
 import {
   createBrowserControlRuntime,
+  setBrowserControlRuntimeConfig,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 
@@ -19,12 +21,15 @@ import { extractBrowserAvailability, type BrowserAvailability } from './browser-
 import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
 import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
+import { closePreviewTabs as closePreviewTabsImpl } from './browser-preview-tabs.js';
+import { dispatchTabOp } from '../rsb-browser-bridge/renderer-bridge.js';
 import {
   BrowserBackendController,
   BrowserBackendHealthService,
   ExternalChromeBackend,
   RsbWebviewBackend,
   type BackendKind,
+  isPreviewUrl,
 } from './browser-backend/index.js';
 import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
@@ -39,6 +44,9 @@ import {
 } from '../rsb-browser-bridge/active-session.js';
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
+import { createLocalPreviewServer } from './local-html-preview-server.js';
+import { setPreviewCleanupImpl } from './preview-cleanup.js';
+import { setLivePreviewOrigin } from './browser-backend/preview-guard.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 
@@ -95,6 +103,53 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
     },
   }),
 );
+
+// Sandboxed local HTML preview: serves workspace-local HTML over a tokenized
+// loopback origin. The origin is granted to the SSRF policy ONLY after the
+// listener is up; any listener error/close revokes it immediately (see
+// local-html-preview-server.ts) so a freed port is never trusted by policy.
+const localPreviewServer = createLocalPreviewServer({
+  logger,
+  applyPreviewOrigins: (previewOrigins) => {
+    // Keep the preview guard's live-origin view in sync: a URL shaped like a
+    // preview URL must ALSO match the origin the current server actually
+    // authorizes, otherwise a stale URL (restart, port reuse) would be
+    // treated as a live preview page (new Codex reviewer P0, round 23).
+    setLivePreviewOrigin(previewOrigins[0] ?? null);
+    setBrowserControlRuntimeConfig(buildManagedConfig({ previewOrigins }));
+    // The RSB partition is PERSISTENT: an earlier local service on the same
+    // 127.0.0.1:<port> may have left a scope=/ Service Worker registered on
+    // this origin. worker-src 'none' blocks NEW registrations but cannot
+    // unregister an existing one — the stale SW would intercept
+    // /preview/<token>/... before the server responds and answer with a
+    // synthetic document carrying NO CSP (codex-connector P1, round 27).
+    // Clear the partition's service workers for each granted origin. This
+    // fire-and-forget is a FALLBACK for non-createLocalPreviewUrl grant
+    // paths; the primary await + fail-closed path is inside
+    // createLocalPreviewUrl (Codex P1, round 27d). The vendored Chrome path
+    // clears via CDP before goto (sync.mjs patch).
+    if (previewOrigins.length > 0) {
+      void clearStaleServiceWorkers(previewOrigins).catch(() => {});
+    }
+    // Revocation (listener error/close, dispose) must close still-open
+    // preview tabs at the SAME moment the grant disappears: the vendored
+    // persistent guard cannot re-read the live policy, so a freed port
+    // could otherwise be seized by another local process and the stale tab
+    // would load same-origin content (Copilot P1, round 13). Pass the
+    // REVOKED origin so the close only touches tabs of that origin — a
+    // fire-and-forget close still running when the next preview round starts
+    // must not close the NEW round's tabs (Greptile P1, round 27h).
+    if (previewOrigins.length === 0) {
+      void closePreviewTabs(lastGrantedPreviewOrigin);
+      lastGrantedPreviewOrigin = null;
+    } else {
+      lastGrantedPreviewOrigin = previewOrigins[0] ?? null;
+    }
+  },
+});
+
+/** Last origin granted to the preview guard, for origin-scoped tab cleanup on revocation. */
+let lastGrantedPreviewOrigin: string | null = null;
 
 const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
 
@@ -256,6 +311,11 @@ export function getBrowserMcpDeps(): {
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
+  createLocalPreviewUrl(input: {
+    workingDir: string;
+    localPath: string;
+    sessionId?: string;
+  }): Promise<{ url: string }>;
 } {
   return {
     // L2 user-recipe layer (userData/browser-recipes); merged over the bundled
@@ -267,6 +327,38 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
+    createLocalPreviewUrl: async (input) => {
+      const { url } = await localPreviewServer.createPreviewUrl(input);
+      // The RSB partition is PERSISTENT: an earlier local service on the same
+      // 127.0.0.1:<port> may have left a scope=/ Service Worker registered on
+      // this origin. worker-src 'none' only stops NEW registrations; the stale
+      // SW would intercept /preview/<token>/... before the server responds and
+      // answer with a synthetic document without CSP (codex-connector P1,
+      // round 27). The grant must NOT resolve while a stale SW can still
+      // pre-empt the first navigation — await the clear for THIS origin
+      // (bounded) and FAIL CLOSED if it fails or times out (Codex P1,
+      // round 27d/27e).
+      const origin = new URL(url).origin;
+      try {
+        await Promise.race([
+          clearStaleServiceWorkers([origin]),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
+        ]);
+      } catch {
+        // Fail-closed AND revoke: ensureStarted() already published the
+        // origin via applyPreviewOrigins() before we awaited the SW clear —
+        // if the clear failed, leaving the grant up would let a stale scope=/
+        // SW intercept /preview/<64hex>/... before the server validates the
+        // token and answer with a no-CSP page. dispose() triggers revokeOrigin
+        // → applyPreviewOrigins([]) and closes the listener (codex-connector
+        // P1, round 27l).
+        localPreviewServer.dispose();
+        throw new Error(
+          `preview origin ${origin} not granted: failed to clear stale Service Workers (fail-closed, grant revoked)`,
+        );
+      }
+      return { url };
+    },
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
     logger,
@@ -427,7 +519,124 @@ export async function openBrowserForLogin(): Promise<void> {
  * NOTE: updater force-quit (updateService.ts) bypasses `before-quit`, so this may
  * not run on the auto-update relaunch path; stale-lock recovery covers that case.
  */
+/**
+ * Close every managed-browser tab whose URL is a sandboxed preview URL.
+ *
+ * After the preview listener is gone and its origin revoked, a still-open
+ * preview tab keeps its persistent navigation guard alive (it was created
+ * with the then-valid grant) and would keep allowing same-origin document
+ * navigations — a local process seizing the freed port could then serve
+ * untrusted content into that tab (Copilot P1, round 11). The vendored
+ * guard cannot re-read the live policy (policy is passed per-call), so the
+ * host closes the tabs: the guard dies with the tab, closing the window.
+ */
+/**
+ * Clear Service Worker registrations for the granted preview origins in the
+ * PERSISTENT RSB partition. worker-src 'none' only stops NEW registrations;
+ * a scope=/ SW an earlier local service left on the same 127.0.0.1:<port>
+ * would still intercept /preview/<token>/... before the server responds and
+ * return a synthetic document without CSP (codex-connector P1, round 27).
+ *
+ * Rejects on failure — callers decide the policy: createLocalPreviewUrl
+ * treats a failed clear as fail-closed (refuse the preview), the
+ * applyPreviewOrigins fallback swallows it (Codex P1, round 27d/27e).
+ */
+async function clearStaleServiceWorkers(origins: string[]): Promise<void> {
+  const rsbSession = session.fromPartition(BROWSER_PARTITION);
+  for (const origin of origins) {
+    // storages: ['serviceworkers'] clears only SW registrations/caches for
+    // the exact origin — cookies/localStorage (login state) are untouched.
+    await rsbSession.clearStorageData({ origin, storages: ['serviceworkers'] });
+  }
+}
+
+async function closePreviewTabs(revokedOrigin?: string | null): Promise<void> {
+  await closePreviewTabsImpl({
+    revokedOrigin,
+    everCalled: () => vendoredRuntime.everCalled(),
+    listVendoredTabs: async () => {
+      const tabsRes = await vendoredRuntime.call({ action: 'tabs' });
+      return (
+        tabsRes.data as
+          | { tabs?: Array<{ targetId?: string; suggestedTargetId?: string; url?: string }> }
+          | undefined
+      )?.tabs;
+    },
+    closeVendoredTab: async (targetId) => {
+      try {
+        await vendoredRuntime.call({ action: 'close', targetId });
+        return true;
+      } catch {
+        // The re-sweep (browser-preview-tabs, round 25) will re-enumerate and
+        // retry a tab whose close failed, so the survivor cannot keep
+        // trusting the stale preview origin.
+        return false;
+      }
+    },
+    listRsbTabs: () => {
+      const registry = getRsbBrowserBridge();
+      return registry
+        .listAll()
+        .map((record) => ({
+          tabId: record.tabId,
+          sessionId: record.sessionId,
+          wc: registry.getWebContentsByTabId(record.tabId),
+        }))
+        .filter((row): row is { tabId: string; sessionId: string; wc: NonNullable<typeof row.wc> } => row.wc !== null)
+        .map((row) => ({
+          tabId: row.tabId,
+          sessionId: row.sessionId,
+          wc: {
+            getURL: () => row.wc.getURL?.(),
+            isDestroyed: () => row.wc.isDestroyed(),
+          },
+        }));
+    },
+    closeRsbTab: async (sessionId, tabId) => {
+      // Close through the renderer bridge so the PERSISTENT tab store row
+      // is removed too (round 18) — see browser-preview-tabs.ts. Returns
+      // false on rejection OR business failure (ok:false after one retry)
+      // so the registration survives for the next revocation (round 22).
+      const bridge = { getHostWebContents: () => readMainWindowForBackend(), logger };
+      try {
+        let result = await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge);
+        if (result?.ok === false) {
+          logger.warn?.(`[preview] RSB close tab ok:false, retrying: ${sessionId}/${tabId}`);
+          result = await dispatchTabOp({ op: 'close', sessionId, tabId }, bridge);
+        }
+        return result?.ok !== false;
+      } catch {
+        return false;
+      }
+    },
+    isPreviewUrl,
+  });
+}
+
+// Register the preview cleanup with preview-cleanup.ts (round 23, new Codex
+// reviewer): updateService statically imports THAT module — never this one —
+// so the updater does not pull the whole browser runtime (sharp) into its
+// dependency chain, and no runtime dynamic import() is needed (which
+// architecture-invariants.md §2 forbids in Electron main).
+setPreviewCleanupImpl(() => {
+  localPreviewServer.dispose();
+  // Return the tab-close promise so callers that bypass before-quit (updater
+  // force-quit) can boundedly await it before exiting (codex-connector P1,
+  // round 20).
+  return closePreviewTabs();
+});
+
 export function disposeBrowserRuntime(): Promise<void> {
+  // Revoke the preview origin + close its listener first, so the SSRF policy
+  // never outlives the port it trusts.
+  localPreviewServer.dispose();
+  // Close preview tabs BEFORE stopping the runtime: their persistent guard
+  // would otherwise outlive the revoked grant (port-seizure window,
+  // Copilot P1, round 11). AWAIT the closure (bounded, so quit cannot hang
+  // on a stuck tabs/close round-trip): starting it fire-and-forget and
+  // stopping the runtime immediately races the tabs/close calls against
+  // shutdown, and an orphaned preview tab could survive
+  // (codex-connector P1, round 13).
   // Always stop the vendored Chrome directly, NOT through the active controller.
   // The controller may currently point at RsbWebviewBackend, whose dispose only
   // releases control listeners and does not own the external Chrome process. If
@@ -442,5 +651,13 @@ export function disposeBrowserRuntime(): Promise<void> {
   // the browser runtime, an unconditional stop would START services during
   // quit, which is an exit-hang amplifier. If the runtime WAS used, `stop` is
   // idempotent and safe regardless of which backend is currently active.
-  return stopRuntimeForQuitIfUsed(vendoredRuntime, logger);
+  return (async () => {
+    // Bounded await so a stuck tabs/close round-trip cannot hang quit
+    // (codex-connector P1, round 13).
+    await Promise.race([
+      closePreviewTabs().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+    return stopRuntimeForQuitIfUsed(vendoredRuntime, logger);
+  })();
 }

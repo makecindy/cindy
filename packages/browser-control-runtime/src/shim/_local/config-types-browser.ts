@@ -48,6 +48,13 @@ export type BrowserSsrFPolicyConfig = {
    */
   allowedHostnames?: string[];
   /**
+   * Exact HTTP origins (scheme + host + port) whose request hostname may be
+   * promoted into `allowedHostnames` for THAT request URL only (re-evaluated
+   * per navigation hop). Used by the sandboxed local HTML preview server;
+   * other ports / loopback hosts / schemes stay blocked.
+   */
+  allowedOrigins?: string[];
+  /**
    * Hostname allowlist patterns for browser navigation.
    * Supports exact hosts and "*.example.com" wildcard subdomains.
    */

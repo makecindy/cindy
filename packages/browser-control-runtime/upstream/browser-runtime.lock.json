@@ -21,10 +21,74 @@
     {
       "file": "extension/src/browser/config.ts",
       "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "preserve exact-origin preview allowlist (allowedOrigins) from the host config for the sandboxed local HTML preview server"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "exact-origin allowlist must also unblock the resolver early-return"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "exact-origin allowlist must reach the resolved policy object"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "resolve exact-origin allowlist per request URL in the navigation guard (allowedOrigins only promotes the matching origin's hostname; redirects/subframes re-evaluate with their own URL)"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "apply resolveSsrFPolicyForUrl before the private-network gates in assertBrowserNavigationAllowed"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "import the host-settable runtime config getter so the preview route guard can re-check the LIVE origin allowlist on every request (round 26: a revoked preview origin must stop being trusted immediately)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "compute the exact preview origin (if any) before installing the navigation route guard — drives both the persistent guard and exact-origin enforcement for preview pages"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "enforce exact-origin equality for preview pages inside the route handler (public origins, other loopback services and file:// all abort)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "clear stale Service Worker storage for the preview origin BEFORE goto and FAIL CLOSED on clear failure — worker-src blocks NEW registrations, but a persistent profile may hold an old SW (scope / or /preview/ or any other scope covering /preview/<token>/) from an earlier local service on the same 127.0.0.1:<port>, which would intercept the preview load before the server responds and answer with a synthetic document carrying no CSP (codex-connector P1, round 27; widened to whole-origin SW storage clear, round 27e; fail-closed on clear failure, round 27g)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "keep the navigation route guard alive for exact-origin preview pages (sandboxed local HTML preview) so page-initiated navigations stay blocked after the initial goto"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "when goto fails on a preview target, remove the preview route guard AND close the page — the preview HTML may already be executing (slow-resource timeout) while the caller swallows non-policy errors and keeps the alive tab; a guard-less survivor would navigate unchecked (round 18 + Greptile P1, round 27)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "track + hand over the installed route guard per page: a newer navigation must unroute the previous guard, otherwise a stale preview guard keeps blocking every later page-initiated navigation on that tab (playwright route.continue() does not fall back to older matching handlers)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "unroute the previous guard before installing the new one, and record the new handler for the next takeover"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "disable RTCPeerConnection on preview pages via addInitScript: CSP connect-src does not constrain WebRTC ICE/STUN/TURN traffic, so previewed pages could exfiltrate data chunked into TURN credentials (codex-connector P1, round 7; --disable-webrtc probed INEFFECTIVE in real Chrome, API still constructable)"
+    },
+    {
+      "file": "extension/src/infra/net/ssrf.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)"
+    },
+    {
+      "file": "extension/src/sdk-security-runtime.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl from the shim so the navigation guard can promote exact-origin allowlist entries"
     }
   ],
   "fileCount": 335,
-  "contentHash": "1bc2c6ddddf76824846b6e14ce5bf27e3b222b3283c9fbf2beda1d4283d3040a",
+  "contentHash": "0cc9e6ce5ef7bf4caffdda701b3ad6ff5b527d1cf4e53e84f17f6b625a8eb1fa",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

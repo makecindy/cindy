@@ -78,6 +78,9 @@ const desktopDbExclude = [
 const desktopGitIntegrationInclude = [
   'src/main/**/*.git-integration.test.ts',
 ];
+const desktopE2eIntegrationInclude = [
+  'src/main/**/*.e2e-integration.test.ts',
+];
 
 export function desktopUnitWorkerCount(
   availableParallelism = os.availableParallelism(),
@@ -140,6 +143,7 @@ export default {
           ),
           exclude: [
             '**/*.git-integration.test.ts',
+            '**/*.e2e-integration.test.ts',
             'src/main/localDb/**',
             'src/main/__tests__/*Migration.test.ts',
             'src/main/__tests__/schemaDriftRepair.test.ts',
@@ -160,6 +164,14 @@ export default {
           coverage: 'allowlist',
           command: vitestBin('run', `--maxWorkers=${desktopUnitWorkerCount()}`),
           include: desktopGitIntegrationInclude,
+        },
+        'e2e-integration': {
+          status: 'manual',
+          reason: 'Real-browser e2e (system Chrome + listening server) is explicit because it boots Chrome and needs a network-capable host; excluded from the fast unit tier (round 23, new Codex reviewer).',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', `--maxWorkers=${desktopUnitWorkerCount()}`),
+          include: desktopE2eIntegrationInclude,
         },
         db: {
           status: 'manual',

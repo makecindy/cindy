@@ -148,6 +148,31 @@ describe('RSB store', () => {
       expect(ipc.list).toHaveBeenCalledTimes(1);
     });
 
+    it('drops persisted sandbox-preview rows at hydrate and deletes them from the store (round 27e)', async () => {
+      // A stale preview row (crash-leftover) must not re-materialize: the
+      // tokenized origin is process-local, so the preview guard would park
+      // it on about:blank forever. The row is filtered from the UI and
+      // best-effort-deleted from the persisted store.
+      const previewUrl =
+        'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+      ipc.list.mockResolvedValueOnce({
+        tabs: [
+          { id: 'p1', kind: 'web-browser', position: 0, state: { url: previewUrl } },
+          { id: 't1', kind: 'web-browser', position: 1, state: { url: 'https://example.com/' } },
+        ],
+        activeTabId: 'p1',
+      });
+      await store.ensureHydrated('s1');
+      const bucket = store.getBucket('s1');
+      expect(bucket.tabs.map((t) => t.id)).toEqual(['t1']);
+      // dropped preview was the active tab → active falls back to the survivor
+      expect(bucket.activeTabId).toBe('t1');
+      expect(ipc.close).toHaveBeenCalledWith({ id: 'p1' });
+      // the fallback active is PERSISTED so the DB never ends up all-inactive
+      // (next hydrate would restore null forever; codex-connector P2, round 27i)
+      expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: 't1' });
+    });
+
     it('dedupes concurrent calls into a single IPC', async () => {
       let resolveList!: (v: { tabs: unknown[]; activeTabId: null }) => void;
       ipc.list.mockReturnValueOnce(
@@ -1120,5 +1145,57 @@ describe('device-link remote sessions (memory-only tabs)', () => {
     // 本地会话仍走 IPC(边界只对远程生效)。
     await store.addTab('local-s1', 'file-browser' as never, null);
     expect(stub.upsert).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () => {
+  const PREVIEW_URL =
+    'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+  let ipc: IpcStub;
+
+  beforeEach(async () => {
+    store = await import('../store');
+    store._resetStore();
+    _resetTabKindRegistry();
+    ipc = makeIpcStub();
+    installIpc(ipc);
+    _resetPopupTabsForTests();
+  });
+
+  afterEach(() => {
+    store._resetStore();
+    _resetTabKindRegistry();
+    _resetPopupTabsForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('addTab does not persist a preview tab, but keeps it in memory', async () => {
+    await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    expect(store.getBucket('s1').tabs).toHaveLength(1);
+    expect(ipc.upsert).not.toHaveBeenCalled();
+  });
+
+  it('patchTabState on a preview tab updates memory but does NOT persist', async () => {
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.upsert.mockClear();
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'Preview' }));
+    expect(store.getBucket('s1').tabs[0].state).toMatchObject({ title: 'Preview' });
+    expect(ipc.upsert).not.toHaveBeenCalled();
+  });
+
+  it('setActiveTab on a preview tab does NOT persist', async () => {
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.setActive.mockClear();
+    await store.setActiveTab('s1', tab.id);
+    expect(store.getBucket('s1').activeTabId).toBe(tab.id);
+    expect(ipc.setActive).not.toHaveBeenCalled();
+  });
+
+  it('closeTab on a preview tab does NOT call ipc.close', async () => {
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.close.mockClear();
+    await store.closeTab('s1', tab.id);
+    expect(store.getBucket('s1').tabs).toHaveLength(0);
+    expect(ipc.close).not.toHaveBeenCalled();
   });
 });

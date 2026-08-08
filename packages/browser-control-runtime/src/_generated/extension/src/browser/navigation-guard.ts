@@ -11,6 +11,7 @@ import { isIP } from "node:net";
 import {
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
@@ -121,6 +122,12 @@ export async function assertBrowserNavigationAllowed(
   } catch {
     throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);
   }
+
+  // LOCAL PATCH (Cindy, via sync.mjs): promote exact-origin allowlist entries
+  // (scheme+host+port) into the hostname allowlist for THIS request URL only.
+  // Redirect chains and subframe navigations re-enter this function with their
+  // own URL, so the origin-scoped trust cannot leak to other ports or hosts.
+  opts.ssrfPolicy = resolveSsrFPolicyForUrl(parsed, opts.ssrfPolicy);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
     if (isAllowedNonNetworkNavigationUrl(parsed)) {

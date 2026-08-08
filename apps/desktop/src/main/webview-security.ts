@@ -40,6 +40,14 @@ import {
   resolveGhostWebviewAttach,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
+// Preview guard must NOT come from rsb-webview-backend: importing it there
+// would eagerly load @cindy/browser-control-runtime before browser.ts
+// initializes the runtime environment, freezing CONFIG_DIR to the default
+// path and breaking managed-Chrome profiles (codex-connector P1, round 12).
+import {
+  guardPreviewPageNavigation,
+  isPreviewUrl,
+} from './mcp-integrations/browser-backend/preview-guard.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
 import {
   attributeRsbNativePopupSurface,
@@ -588,6 +596,27 @@ export function installBrowserGuestHandlers(
   guestContents: WebContents,
 ): void {
   guestContents.setWindowOpenHandler((details) => {
+    // Preview pages never get popups (parity with the CSP sandbox on the
+    // external-Chrome path). Checked HERE — inside the existing handler —
+    // so the controlled-tab routing below stays intact for every other
+    // page; replacing the handler from the RSB guard would bypass popup
+    // routing entirely (round-6 review).
+    // Fail-closed: getURL missing OR throwing on a destroyed/abnormal
+    // WebContents denies the popup outright — an unreadable guest must not
+    // fall through to the allow branch (Copilot P1, round 27 + 27i). Without
+    // this, `getURL?.() ?? ''` yields '' on a missing method, isPreviewUrl('')
+    // is false, and the popup would be allowed.
+    let guestUrl: string;
+    try {
+      const raw = guestContents.getURL?.();
+      if (typeof raw !== 'string' || raw === '') return { action: 'deny' };
+      guestUrl = raw;
+    } catch {
+      return { action: 'deny' };
+    }
+    if (isPreviewUrl(guestUrl)) {
+      return { action: 'deny' };
+    }
     if (!isRoutablePopupUrl(details.url) && !isInitialBlankPopupUrl(details.url)) {
       return { action: 'deny' };
     }
@@ -684,6 +713,14 @@ export function installWebviewHardener(): void {
       );
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
+      // Preview navigation guard at ATTACH time — before any page script
+      // runs. The open path (previewLocalHtml without targetId) loads the
+      // page to dom-ready BEFORE main gets the WebContents, so attaching
+      // here (instead of lazily in the backend) closes the window where an
+      // entry HTML's synchronous script could location.href away
+      // (Greptile + codex-connector P1, round 8). No-op for non-preview
+      // pages (the guard keys off the current URL).
+      guardPreviewPageNavigation(guestContents);
       if (pendingGhostAttach) {
         const ghostId = pendingGhostAttach.id;
         pendingGhostAttach = null;

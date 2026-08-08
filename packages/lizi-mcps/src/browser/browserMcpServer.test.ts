@@ -709,3 +709,108 @@ describe('createBrowserMcpServer', () => {
     await h.cleanup();
   });
 });
+
+describe('previewLocalHtml', () => {
+  const SESSION = { agentKind: 'claude', workingDir: 'C:/work', sessionId: 'session-1' };
+  const PREVIEW_URL = 'http://127.0.0.1:49152/preview/<token>/index.html';
+
+  function resultOf(res: unknown) {
+    const content = (res as { content?: unknown[] }).content;
+    const first = content?.[0] as { text?: string } | undefined;
+    return JSON.parse(first?.text ?? '{}') as {
+      ok: boolean;
+      errorCode?: string;
+      url?: string;
+      action?: string;
+    };
+  }
+
+  it('fails closed without a session workingDir', async () => {
+    const h = await makeHarness({
+      createLocalPreviewUrl: async () => ({ url: PREVIEW_URL }),
+    });
+    const res = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'previewLocalHtml', localPath: 'dist/index.html' } },
+    });
+    expect(resultOf(res).errorCode).toBe('BROWSER_RUNTIME_LOCAL_PREVIEW_NO_WORKDIR');
+    expect(h.calls).toHaveLength(0);
+    await h.cleanup();
+  });
+
+  it('fails when the host helper is not injected', async () => {
+    const h = await makeHarness({ getSessionContext: () => SESSION });
+    const res = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'previewLocalHtml', localPath: 'dist/index.html' } },
+    });
+    expect(resultOf(res).errorCode).toBe('BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE');
+    expect(h.calls).toHaveLength(0);
+    await h.cleanup();
+  });
+
+  it('rejects SSH remote sessions (workingDir is on the remote host)', async () => {
+    const h = await makeHarness({
+      getSessionContext: () => ({ ...SESSION, remoteHostId: 'ssh-host-1' }),
+      createLocalPreviewUrl: async () => ({ url: PREVIEW_URL }),
+    });
+    const res = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'previewLocalHtml', localPath: 'dist/index.html' } },
+    });
+    expect(resultOf(res).errorCode).toBe('BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE');
+    expect(h.calls).toHaveLength(0);
+    await h.cleanup();
+  });
+
+  it('maps a host-side PATH_NOT_ALLOWED rejection to the dedicated error code', async () => {
+    const h = await makeHarness({
+      getSessionContext: () => SESSION,
+      createLocalPreviewUrl: async () => {
+        throw new Error('PATH_NOT_ALLOWED: 路径越界');
+      },
+    });
+    const res = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'previewLocalHtml', localPath: '../escape.html' } },
+    });
+    expect(resultOf(res).errorCode).toBe('BROWSER_RUNTIME_LOCAL_PREVIEW_PATH_NOT_ALLOWED');
+    expect(h.calls).toHaveLength(0);
+    await h.cleanup();
+  });
+
+  it('opens a new tab when no targetId is given', async () => {
+    const h = await makeHarness({
+      getSessionContext: () => SESSION,
+      createLocalPreviewUrl: async () => ({ url: PREVIEW_URL }),
+    });
+    const res = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'previewLocalHtml', localPath: 'dist/index.html' } },
+    });
+    const parsed = resultOf(res);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.url).toBe(PREVIEW_URL);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]).toMatchObject({ action: 'open', url: PREVIEW_URL });
+    await h.cleanup();
+  });
+
+  it('navigates the existing tab when targetId is given', async () => {
+    const h = await makeHarness({
+      getSessionContext: () => SESSION,
+      createLocalPreviewUrl: async () => ({ url: PREVIEW_URL }),
+    });
+    const res = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'browser',
+        args: { action: 'previewLocalHtml', localPath: 'dist/index.html', targetId: 'tab-9' },
+      },
+    });
+    expect(resultOf(res).ok).toBe(true);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]).toMatchObject({ action: 'navigate', url: PREVIEW_URL, targetId: 'tab-9' });
+    await h.cleanup();
+  });
+});

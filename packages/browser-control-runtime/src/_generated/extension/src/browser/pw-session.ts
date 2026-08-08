@@ -14,6 +14,7 @@ import {
   parseFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "../../../../shim/number-runtime.js";
+import { getRuntimeConfig } from "../../../../shim/runtime-config-snapshot.js";
 import { normalizeOptionalString } from "../../../../shim/string-coerce-runtime.js";
 import type {
   Browser,
@@ -1347,6 +1348,11 @@ async function continueRouteSafely(route: Route): Promise<void> {
 }
 
 /** Navigate a page while guarding requested URL and redirect chain. */
+const previewRouteGuards = new WeakMap<
+  Page,
+  (route: Route, request: Request) => Promise<void>
+>();
+
 export async function gotoPageWithNavigationGuard(
   opts: {
     cdpUrl: string;
@@ -1360,6 +1366,21 @@ export async function gotoPageWithNavigationGuard(
     browserProxyMode: opts.browserProxyMode,
   });
   let blockedError: unknown = null;
+  // LOCAL PATCH (Cindy, via sync.mjs): the exact-origin preview
+  // allowlist entry this navigation lands on, if any. For such pages
+  // the route guard stays alive for the page lifetime AND enforces
+  // EXACT origin equality — the SSRF policy alone would permit
+  // ordinary public HTTP(S) destinations, so a previewed page could
+  // otherwise location.href its DOM/CSSOM to a public origin.
+  let previewOrigin: string | null = null;
+  try {
+    const entryUrl = new URL(opts.url);
+    if (opts.ssrfPolicy?.allowedOrigins?.includes(entryUrl.origin)) {
+      previewOrigin = entryUrl.origin;
+    }
+  } catch {
+    previewOrigin = null;
+  }
 
   const handler = async (route: Route, request: Request) => {
     if (blockedError) {
@@ -1370,6 +1391,42 @@ export async function gotoPageWithNavigationGuard(
     const isSubframeDocument =
       !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
     if (!isTopLevel && !isSubframeDocument) {
+      await continueRouteSafely(route);
+      return;
+    }
+    // LOCAL PATCH (Cindy, via sync.mjs): preview pages navigate only
+    // within their exact origin — any other destination (public
+    // sites, other loopback services, file://) is aborted regardless
+    // of what the SSRF policy would allow. The origin must also be
+    // STILL authorized by the LIVE host config (round 26): the guard
+    // captured `previewOrigin` at goto time, but the host may have
+    // revoked the preview since — a freed loopback port seized by
+    // another local process must never be loadable into a survivor
+    // tab, even via a same-origin navigation. Fail-closed: any read
+    // failure or missing allowlist entry aborts the navigation.
+    if (previewOrigin !== null) {
+      let stillAuthorized = false;
+      try {
+        const liveOrigins =
+          getRuntimeConfig?.()?.browser?.ssrfPolicy?.allowedOrigins;
+        stillAuthorized = Array.isArray(liveOrigins) && liveOrigins.includes(previewOrigin);
+      } catch {
+        stillAuthorized = false;
+      }
+      if (!stillAuthorized) {
+        await route.abort().catch(() => {});
+        return;
+      }
+      let sameOrigin = false;
+      try {
+        sameOrigin = new URL(request.url()).origin === previewOrigin;
+      } catch {
+        sameOrigin = false;
+      }
+      if (!sameOrigin) {
+        await route.abort().catch(() => {});
+        return;
+      }
       await continueRouteSafely(route);
       return;
     }
@@ -1391,20 +1448,129 @@ export async function gotoPageWithNavigationGuard(
     await continueRouteSafely(route);
   };
 
+  // LOCAL PATCH (Cindy, via sync.mjs): take over any route guard this
+  // function previously installed for the same page. A stale preview
+  // guard would otherwise keep aborting every later page-initiated
+  // navigation on that tab once it was navigated to a normal site.
+  const previousGuard = previewRouteGuards.get(opts.page);
+  if (previousGuard) {
+    await opts.page.unroute("**", previousGuard).catch(() => {});
+  }
+  previewRouteGuards.set(opts.page, handler);
   await opts.page.route("**", handler);
+  // LOCAL PATCH (Cindy, via sync.mjs): kill WebRTC on preview pages.
+  // CSP cannot constrain RTCPeerConnection ICE/STUN/TURN traffic (a
+  // previewed page could exfiltrate data chunked into TURN
+  // credentials); --disable-webrtc was probed INEFFECTIVE (API still
+  // constructable), so the constructor is shadowed before ANY page
+  // script runs (addInitScript runs on every navigation, incl. the
+  // first). Scoped to the preview origin (round-10 P2): a tab that
+  // navigates to a normal WebRTC-dependent site afterwards keeps
+  // RTCPeerConnection.
+  if (previewOrigin !== null) {
+    try {
+    await opts.page
+      .addInitScript(() => {
+        try {
+          // Judge the PARSED URL, not the raw href: a userinfo
+          // variant (`http://x@127.0.0.1:<port>/preview/...`) keeps
+          // an authorized origin but its serialized href does not
+          // match an anchored regex, so an href-based test would
+          // silently skip the kill and leave RTCPeerConnection alive
+          // on a page that still counts as a preview (codex-connector
+          // P1, round 27).
+          const __u = new URL(window.location.href);
+          if (
+            __u.protocol === "http:" &&
+            __u.hostname === "127.0.0.1" &&
+            /^\/preview\/[a-f0-9]{64}\//.test(__u.pathname)
+          ) {
+            Object.defineProperty(window, "RTCPeerConnection", {
+              value: undefined,
+              configurable: true,
+            });
+            Object.defineProperty(window, "webkitRTCPeerConnection", {
+              value: undefined,
+              configurable: true,
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    } catch (err) {
+      // Fail-closed (round 13) + cleanup (round 15): a failed
+      // addInitScript (CDP / target error) must REFUSE the preview
+      // navigation — and the route guard installed above must be
+      // removed so a normal page is not left with a preview-only
+      // route that aborts its own navigations.
+      await opts.page.unroute("**", handler).catch(() => {});
+      previewRouteGuards.delete(opts.page);
+      throw err;
+    }
+  }
   try {
+    // LOCAL PATCH (Cindy, via sync.mjs): clear stale Service Worker
+    // storage for the preview origin BEFORE goto. A persistent
+    // profile may hold an old SW from an earlier local service on the
+    // same 127.0.0.1:<port>; worker-src 'none' only blocks NEW
+    // registrations, and the stale SW would intercept
+    // /preview/<token>/... before the server responds, answering with
+    // a synthetic document that carries NO CSP. Clearing the whole
+    // origin's service-worker storage (Storage.clearDataForOrigin)
+    // covers ANY registration scope (/, /preview/, ...), not just a
+    // hard-coded root scope (codex-connector P1, round 27 + 27e).
+    if (previewOrigin !== null) {
+      try {
+        const cdp = await opts.page.context().newCDPSession(opts.page);
+        await cdp.send("Storage.clearDataForOrigin", {
+          origin: previewOrigin,
+          storageTypes: "service_workers",
+        });
+        await cdp.detach().catch(() => {});
+      } catch (clearErr) {
+        // Fail-closed: a failed SW clear would let the stale worker
+        // intercept the tokenized request and restore the outbound
+        // channels this cleanup closes — rethrow so the outer
+        // goto-failure path tears down the guard AND the page
+        // (codex-connector P1, round 27g).
+        throw clearErr;
+      }
+    }
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {
       throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     return response;
   } catch (err) {
+    // LOCAL PATCH (Cindy, via sync.mjs): goto failed — the page did
+    // NOT land on the preview origin, so the preview-only route
+    // guard must be removed; otherwise the tab's normal navigations
+    // stay blocked by a stale guard (codex-connector P1, round 18).
+    // A preview-target failure can leave the untrusted HTML already
+    // executing (slow-resource timeout) while the caller swallows
+    // non-policy errors and keeps the alive tab: close the page so no
+    // guard-less survivor can navigate unchecked (Greptile P1,
+    // round 27). Non-preview failures keep round-18 behavior.
+    if (previewOrigin !== null) {
+      await opts.page.unroute("**", handler).catch(() => {});
+      previewRouteGuards.delete(opts.page);
+      await opts.page.close().catch(() => {});
+    }
     if (blockedError) {
       throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     throw err;
   } finally {
-    await opts.page.unroute("**", handler).catch(() => {});
+    // LOCAL PATCH (Cindy, via sync.mjs): keep the navigation guard
+    // alive for preview pages (previewOrigin !== null). Without this,
+    // page-initiated navigations after the initial goto would run
+    // unchecked; the guard lives for the page lifetime and is torn
+    // down with the page (Playwright removes routes on close).
+    if (previewOrigin === null) {
+      await opts.page.unroute("**", handler).catch(() => {});
+      previewRouteGuards.delete(opts.page);
+    }
     if (blockedError) {
       await closeBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,

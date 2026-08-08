@@ -21,6 +21,15 @@ const desktopTestInclude = [
 const gitIntegrationTestInclude = [
   'src/main/**/*.git-integration.test.ts',
 ];
+// Real-browser e2e (Chrome + listening server) is NOT part of the fast unit
+// tier: it boots a system Chrome and a loopback HTTP server, and a Chrome-less
+// runner (bare CI) cannot run it at all. Moved out of the standard unit
+// include (round 23, new Codex reviewer): the file lives in __tests__/ but
+// its `.e2e-integration.test.ts` suffix opts it out of `standard` and into
+// the dedicated e2e-integration project below.
+const e2eIntegrationTestInclude = [
+  'src/main/**/*.e2e-integration.test.ts',
+];
 
 export default defineConfig({
   define: {
@@ -97,7 +106,7 @@ export default defineConfig({
         test: {
           name: 'standard',
           include: desktopTestInclude,
-          exclude: [...gitIntegrationTestInclude, ...cliTestExclude],
+          exclude: [...gitIntegrationTestInclude, ...e2eIntegrationTestInclude, ...cliTestExclude],
         },
       },
       {
@@ -105,6 +114,15 @@ export default defineConfig({
         test: {
           name: 'git-integration',
           include: gitIntegrationTestInclude,
+          exclude: cliTestExclude,
+          globalSetup: ['src/test/vitest/desktopTestResourceLock.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'e2e-integration',
+          include: e2eIntegrationTestInclude,
           exclude: cliTestExclude,
           globalSetup: ['src/test/vitest/desktopTestResourceLock.ts'],
         },

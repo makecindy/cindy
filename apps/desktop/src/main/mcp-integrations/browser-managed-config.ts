@@ -66,7 +66,8 @@ const MANAGED_CDP_PORT = 18800;
  *    surface is accepted as inherent to browser automation (it's the same
  *    capability the `act:evaluate` tool already exposes), not a regression.
  */
-export function buildManagedConfig(): BrowserRuntimeConfig {
+export function buildManagedConfig(opts?: { previewOrigins?: string[] }): BrowserRuntimeConfig {
+  const previewOrigins = opts?.previewOrigins ?? [];
   return {
     browser: {
       enabled: true,
@@ -75,6 +76,10 @@ export function buildManagedConfig(): BrowserRuntimeConfig {
       ssrfPolicy: {
         allowRfc2544BenchmarkRange: true,
         allowIpv6UniqueLocalRange: true,
+        // Only the exact preview-server origin(s) get an SSRF exception —
+        // scheme+host+port must match; other loopback hosts/ports stay blocked.
+        // Default (no previewOrigins) keeps the current no-local-network posture.
+        ...(previewOrigins.length > 0 ? { allowedOrigins: previewOrigins } : {}),
       },
       profiles: {
         [MANAGED_PROFILE]: {
