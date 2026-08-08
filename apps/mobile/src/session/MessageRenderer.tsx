@@ -154,6 +154,7 @@ import {
 import {
   groupMobileMarkdownSelectableBlocks,
   isMobileMarkdownImageDirectUrl,
+  mobileMarkdownImageAltChipText,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
   mobileMarkdownInlineImageSize,
@@ -161,6 +162,7 @@ import {
   parseMobileMarkdownInlines,
   type MobileMarkdownBlockGroup,
   type MobileMarkdownInline,
+  type MobileMarkdownTextRunGroupingOptions,
 } from '@/session/messageMarkdown';
 import {
   extractSessionLinkIds,
@@ -324,6 +326,12 @@ const MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS = 1400;
 /** Cold-open history fill is useful, but bounded so a short/duplicate host page cannot drain history forever. */
 const MAX_INITIAL_HISTORY_AUTOFILL_PAGES = 3;
 const MOBILE_MESSAGE_ESTIMATED_ITEM_SIZE = 140;
+const ANDROID_SELECTABLE_TEXT_RUN_MAX_BLOCKS = 12;
+const ANDROID_SELECTABLE_TEXT_RUN_MAX_UTF16_LENGTH = 1800;
+const ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS: MobileMarkdownTextRunGroupingOptions = {
+  maxTextRunBlocks: ANDROID_SELECTABLE_TEXT_RUN_MAX_BLOCKS,
+  maxTextRunUtf16Length: ANDROID_SELECTABLE_TEXT_RUN_MAX_UTF16_LENGTH,
+};
 /** Running work groups expose only the same latest-five activity window as desktop. */
 const MAX_LIVE_WORK_ACTIVITIES = 5;
 // LegendList 预渲距离(px,视口外每侧):约 1 屏,挂载集小 → 滚动 mount 帧压进一帧内(见 listperf 实测)。
@@ -420,6 +428,10 @@ function MarkdownSelectableText({
  */
 function MarkdownSelectableSpan(props: ComponentProps<typeof Text>) {
   return <UITextView maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} {...props} />;
+}
+
+function isTextRunContinuationGroup(group: MobileMarkdownBlockGroup): boolean {
+  return group.type === 'text_run' && group.textRunContinuation === true;
 }
 
 /** Composer-ready user message body with product quotes kept out of raw text. */
@@ -3386,8 +3398,16 @@ function MarkdownBody({
     ),
     [onOpenSessionLink, openMarkdownImage, sessionLinkTitles, sessionReferenceDetails, streaming, styles],
   );
+  const textRunGroupingOptions = selectable === true && Platform.OS === 'android'
+    ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS
+    : undefined;
   // 连续纯文本块合并为 text_run(跨段选择),代码块/表格/mermaid/含直连图块保持独立。
-  const groups = useMemo(() => groupMobileMarkdownSelectableBlocks(blocks), [blocks]);
+  // Android selectable Text 在超长原生文本视图里会偶发高度/滚动协商异常,长 run 分块
+  // 后仍保留块内跨段选择,同时避免单个 LegendList item 内出现巨型 selectable Text。
+  const groups = useMemo(
+    () => groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions),
+    [blocks, textRunGroupingOptions],
+  );
   // 块可选中且 iOS → 嵌套 span 必须是 UITextView 家族;其余场景缺省 RN Text。
   const spanFor = useCallback((blockSelectable: boolean) => (
     blockSelectable && allowIosUITextView && Platform.OS === 'ios'
@@ -3397,7 +3417,8 @@ function MarkdownBody({
   // 文本运行组:连续纯文本块(段落/标题/列表项)合进同一个原生文本视图,
   // 原生选择手柄即可横跨段落(单个 text view 是 iOS/Android 原生选择的天然边界)。
   // 段间距用「lineHeight = markdownBodyGap 的空行 span」还原:原生文本树内没有块级 gap 可用,
-  // 一个高度恰为 gap 的空行在视觉上与原块间距一致。列表项在树内表达为「marker 前缀 span + 正文」
+  // 一个高度恰为 gap 的空行在视觉上与原块间距一致。由单块切出的 continuation 不插间距。
+  // 列表项在树内表达为「marker 前缀 span + 正文」
   // (无悬挂缩进;任务项以 ☑/☐ 字符替代原边框小方块)。
   const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
     const runSelectable = selectable === true;
@@ -3412,7 +3433,7 @@ function MarkdownBody({
       >
         {group.blocks.flatMap((block, index) => {
           const spans: ReactNode[] = [];
-          if (index > 0) {
+          if (index > 0 && !block.textRunContinuation) {
             spans.push(
               <RunSpan key={`${block.key}:gap`} style={{ lineHeight: layout.markdownBodyGap }}>
                 {'\n\n'}
@@ -3422,7 +3443,7 @@ function MarkdownBody({
           const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
             ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
             : styles.messageText;
-          if (block.type === 'list_item') {
+          if (block.type === 'list_item' && !block.textRunContinuation) {
             const task = typeof block.checked === 'boolean';
             spans.push(
               <RunSpan
@@ -3441,15 +3462,16 @@ function MarkdownBody({
   };
   return (
     <View
-      style={[styles.markdownBody, { gap: layout.markdownBodyGap }]}
+      style={styles.markdownBody}
       testID="message.markdownBody"
     >
-      {groups.map((group) => {
-        if (group.type === 'text_run') {
-          return renderTextRun(group);
-        }
-        const block = group.block;
-        if (block.type === 'mermaid') {
+      {groups.flatMap((group, groupIndex) => {
+        const renderedGroup = (() => {
+          if (group.type === 'text_run') {
+            return renderTextRun(group);
+          }
+          const block = group.block;
+          if (block.type === 'mermaid') {
           // 内联图表按「图片」形态呈现:无卡片 chrome、无标签文字、无按钮,
           // 就是一块圆角图表;点击任意位置打开沉浸式全屏详情(透明 Pressable
           // 盖住整块——WebView 会吞掉触摸事件,不盖层拿不到点击)。
@@ -3625,6 +3647,14 @@ function MarkdownBody({
             {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
           </MarkdownSelectableText>
         );
+        })();
+        if (groupIndex === 0 || isTextRunContinuationGroup(group)) {
+          return [renderedGroup];
+        }
+        return [
+          <View key={`${group.key}:body-gap`} style={{ height: layout.markdownBodyGap }} />,
+          renderedGroup,
+        ];
       })}
     </View>
   );
@@ -3986,6 +4016,9 @@ function renderInline(
       // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
       // 点开后由 ImageLightbox 经 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
+        const imageChipText = inline.alt
+          ? mobileMarkdownImageAltChipText(inline.alt)
+          : i18n.t('message.renderer.imageFallbackTitle');
         return (
           <SpanText
             key={spanKey(`image:${index}:${inline.url}`)}
@@ -3993,7 +4026,7 @@ function renderInline(
             style={clickableInlineStyle(styles, openImageChip, ctx.baseStyle)}
             testID="message.markdownInlineImageChip"
           >
-            {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
+            {imageChipText}
           </SpanText>
         );
       }
@@ -6098,7 +6131,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },
-  markdownBody: { gap: 10 },
+  markdownBody: {},
   // 外链 / 会话深链等一切可点行内元素:**只有下划线**,不加粗、不换色、不换字体
   // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只有 text-decoration)。
   //

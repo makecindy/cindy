@@ -1788,8 +1788,16 @@ export class ClaudeCodeAgent extends BaseAgent {
     let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    // Claude's native OAuth Auto classifier bypasses canUseTool entirely. Once a host MCP
+    // is registered, that would also bypass Cindy's trusted-server and prompt policies,
+    // leaving permission requests with no Cindy interaction surface. Keep native Auto for
+    // MCP-free sessions, but route host-MCP sessions through SDK default so canUseTool owns
+    // the decision.
+    const hasRegisteredMcpServers = (): boolean => registeredMcpServerNames.size > 0;
     const usesNativeClaudeAutoReview = (): boolean =>
-      !nativeAutoReviewUnavailable && mutableAutoReviewCredentialMode === 'oauth-bearer';
+      !nativeAutoReviewUnavailable
+      && mutableAutoReviewCredentialMode === 'oauth-bearer'
+      && !hasRegisteredMcpServers();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -1862,6 +1870,11 @@ export class ClaudeCodeAgent extends BaseAgent {
      */
     const effectiveSdkPermissionMode = (): SdkPermissionMode =>
       mutablePlanMode || planTurnActive ? 'plan' : toSdkPermissionMode(mutablePermissionMode);
+    // Only queries that actually started in native Auto need the post-init
+    // downgrade. A host MCP can already have made a query start in `default`;
+    // retrying that no-op and treating a transport failure as fatal would close
+    // an otherwise safe session.
+    const nativeAutoQueries = new WeakSet<Query>();
 
     /**
      * **本次 turn** 目标 SDK 权限档: 只看 `planTurnActive`(本轮是否 plan turn), **不含**
@@ -2389,7 +2402,23 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 在远端不存在); 但 factory 还可能注入 host 侧 http server (协同恢复通道),
         // 所以审批归属快照不在此处定稿, 挪到 factory 调用后按 startParams 重算。
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
-        const remotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
+        const requestedRemotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
+        const remoteHasMcpServers = Object.keys(remoteMcpServers ?? {}).length > 0;
+        // effectiveSdkPermissionMode() is computed from the local registration snapshot,
+        // which still includes in-process SDK MCPs that were just filtered out above.
+        // Restore native OAuth Auto when the remote query has no serializable MCP surface;
+        // the Desktop factory will still downgrade it before opening the query if it later
+        // injects a host HTTP MCP (for example the collaboration bridge).
+        const remotePermissionMode =
+          requestedRemotePermissionMode === 'default'
+          && mutablePermissionMode === 'auto'
+          && !mutablePlanMode
+          && !planTurnActive
+          && !nativeAutoReviewUnavailable
+          && mutableAutoReviewCredentialMode === 'oauth-bearer'
+          && !remoteHasMcpServers
+            ? 'auto'
+            : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = buildClaudeRemoteToolGuards(
           this.deps.capabilityRouting,
@@ -2705,6 +2734,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
         registeredMcpServerNames = hostMcpServerNames;
         nonHarnessMcpServerNames = hostMcpServerNames;
+        // The factory may inject host HTTP MCPs and downgrade OAuth Auto to
+        // default before opening cc-manager. Track the post-factory mode so a
+        // later SDK init cannot repeat that downgrade and turn a harmless
+        // control-RPC failure into a fatal close.
+        const finalRemotePermissionMode =
+          (startParams.permissionMode as SdkPermissionMode | undefined) ?? remotePermissionMode;
+        sdkInPlanMode = finalRemotePermissionMode === 'plan';
         // 记入 closure: handle.close / U2 兜底需要 await remoteQuery.close()。
         activeRemoteQuery = remoteQuery as unknown as { close: () => Promise<void>; detach?: () => Promise<void> };
 
@@ -2740,6 +2776,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
         })().catch(() => undefined);
 
+        if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
         return remoteQuery;
       }
 
@@ -2822,7 +2859,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 计划模式开启时 SDK 跑 plan; 读 mutable 值让 rewind/fork 重建拿到当前档而非创建时快照。
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
-      return sdkQuery({
+      const query = sdkQuery({
         prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
           abortController,
@@ -2940,6 +2977,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             : {}),
         },
       });
+      if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
+      return query;
     };
 
     // ── 死 handle 终结器 —— U2 (远端 daemon 突死) 与 crash (SDK 流异常) 共用 ──
@@ -3737,6 +3776,43 @@ export class ClaudeCodeAgent extends BaseAgent {
               continue;
             }
             if (noteSdkInitMcpServerNames(rawMsg)) {
+              // User/project/local settings MCPs are only revealed by the SDK init
+              // payload, after the query has already started. Native OAuth Auto skips
+              // canUseTool, so immediately hand later turns back to Cindy when that
+              // payload reports any connected MCP server. Do this before the optional
+              // provenance RPC below: a slow status call must not prolong native Auto.
+              if (
+                mutablePermissionMode === 'auto'
+                && !mutablePlanMode
+                && !planTurnActive
+                && mutableAutoReviewCredentialMode === 'oauth-bearer'
+                && hasRegisteredMcpServers()
+                && nativeAutoQueries.has(currentQ)
+              ) {
+                try {
+                  await currentQ.setPermissionMode(effectiveSdkPermissionMode());
+                  nativeAutoQueries.delete(currentQ);
+                } catch (error) {
+                  // Keeping this query alive would leave connected MCP tools under the
+                  // native classifier, which bypasses Cindy's canUseTool policy. Close
+                  // and surface a terminal stream failure instead of failing open.
+                  log.error('failed to downgrade native Auto after SDK settings MCP init', {
+                    error: String(error),
+                  });
+                  try {
+                    await currentQ.close();
+                  } catch (closeError) {
+                    log.warn('failed to close query after native Auto downgrade failure', {
+                      error: String(closeError),
+                    });
+                  }
+                  throw new Error(
+                    `[MCP_APPROVAL_MODE_DOWNGRADE_FAILED] ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                  );
+                }
+              }
               await refreshSdkMcpProvenance(currentQ);
             }
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
