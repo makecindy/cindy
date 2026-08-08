@@ -159,10 +159,9 @@ interface TurnState {
   /** First text-delta resolves this lazily (avoids creating a card for empty turns). */
   streamingHandle: StreamingTextHandle | null;
   /**
-   * In-flight promise for the streaming handle creation. Singleton: when a
-   * burst of deltas arrives before the channel returns the first message_id,
-   * all callers await this same promise instead of each minting a new card.
-   * Without it we get one card per delta — a flood of orphan cards.
+   * Cached streaming surface result: a handle, or null after initialization
+   * fails. Singleton: a burst of deltas shares this promise instead of minting
+   * duplicate cards or retrying a failed initialization on every event.
    */
   streamingHandlePromise: Promise<StreamingTextHandle | null> | null;
   /**
@@ -171,7 +170,7 @@ interface TurnState {
    * 累积缓冲, 流式增量追加。过程区时间线状态经 presenter.activity 暴露。
    */
   presenter: TurnPresenter;
-  /** Managed images discovered in tool output for durable text channels. */
+  /** Managed images discovered in tool output for terminal delivery. */
   mediaAbsPaths: string[];
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
