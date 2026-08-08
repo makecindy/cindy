@@ -148,13 +148,13 @@ function StatCell({
     <div className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg bg-[var(--surface-chip)] px-3 py-2">
       <span
         className={cn(
-          'truncate text-14 font-semibold leading-[20px] tabular-nums',
+          'truncate text-14 font-semibold leading-[1.429] tabular-nums',
           warning ? 'text-[var(--warning-accent)]' : 'text-[var(--text-primary)]',
         )}
       >
         {value}
       </span>
-      <span className="truncate text-11 leading-[14px] text-[var(--text-tertiary)]">
+      <span className="truncate text-11 leading-[1.273] text-[var(--text-tertiary)]">
         {label}
       </span>
     </div>
@@ -270,7 +270,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
 
   // 折叠态的一行摘要: 今日 $ (异常标橙) · Token · 连续天数 · 近 30 天 $
   const collapsedSummary = (
-    <span className="min-w-0 flex-1 truncate text-right text-11 leading-[18px] tabular-nums text-[var(--text-tertiary)]">
+    <span className="min-w-0 flex-1 truncate text-right text-11 leading-[1.636] tabular-nums text-[var(--text-tertiary)]">
       <span className={cn(showLocalSpendAnomaly && 'font-medium text-[var(--warning-accent)]')}>
         {t('usageDashboard.collapsedToday', {
           v: hasSpendValue ? formatMoney(displayTodaySpend) : UNKNOWN_VALUE,

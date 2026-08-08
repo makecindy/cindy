@@ -836,7 +836,7 @@ export function AgentActionRow({
             'bg-[var(--chat-input-chip-bg)]',
             'border-[var(--chat-input-chip-border)]',
             'text-[var(--chat-input-chip-text)]',
-            'font-mono text-13 leading-[18px] whitespace-nowrap',
+            'font-mono text-13 leading-[1.385] whitespace-nowrap',
             'cursor-pointer transition-colors',
             'group-hover:bg-[var(--cmd-palette-item-hover)]',
             'min-w-0 max-w-full',
@@ -953,7 +953,7 @@ export function AgentActionRow({
         <div
           data-agent-action-raw-command="true"
           title={rawCommand}
-          className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-12 leading-[18px] text-[var(--msg-tool-card-chevron)]"
+          className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-12 leading-[1.5] text-[var(--msg-tool-card-chevron)]"
         >
           {rawCommand}
         </div>

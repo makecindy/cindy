@@ -1731,7 +1731,7 @@ export function ChatInput({
           // 多行列表 "1. / 2. / 3." 的点和正文会逐行漂移;等宽数字让前缀宽度
           // 一致、列表自然对齐。ComposerListIndentDecoration 会额外为整条列表
           // 行保留换行后的视觉缩进。
-          'text-15 leading-[22px] font-normal tabular-nums',
+          'text-15 leading-[1.467] font-normal tabular-nums',
           'text-[var(--chat-input-text)]',
           'focus:outline-none',
           // Tailwind can't target ProseMirror placeholder pseudo — handled
