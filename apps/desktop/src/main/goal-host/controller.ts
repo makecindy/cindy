@@ -1813,6 +1813,9 @@ export class GoalController {
       // 捕获完成轮次的 generation(await 期间 pause/clear/新 /goal 可能替换
       // this.turns,事件若读当前 boundary 会被盖上新生命周期的 generation)。
       const completedGeneration = this.turns.get(sessionId)?.generation ?? 0;
+      // 同样捕获 lifecycleId:await 期间替换 Goal 时,收口事件若读当前 turns owner
+      // 会盖上新生命周期 id,与 accepted 补发的 dispatch(原 boundary 盖章)错配。
+      const completedLifecycleId = this.turns.get(sessionId)?.lifecycleId;
       await this.trackCompletion(
         turn,
         (async () => {
@@ -1845,6 +1848,9 @@ export class GoalController {
           to: 'complete',
           reason: decision.lastReason,
           generation: completedGeneration,
+          // 捕获的 lifecycleId:await 期间替换 Goal 时不得盖新生命周期 id
+          // (与 accepted 补发的 dispatch 同生命周期配对)。
+          lifecycleId: completedLifecycleId,
         });
         if (decision.status !== state.status) {
           this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
@@ -1852,12 +1858,14 @@ export class GoalController {
             to: 'complete',
             reason: decision.lastReason,
             generation: completedGeneration,
+            lifecycleId: completedLifecycleId,
           });
         }
         this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
           to: 'complete',
           reason: decision.lastReason,
           generation: completedGeneration,
+          lifecycleId: completedLifecycleId,
         });
         // 收口事件已真实记录:accepted 补发 turn-dispatched 以此为准(Greptile P1,
         // finalized 可能在 storage await 期间提前置位但事件未写)。

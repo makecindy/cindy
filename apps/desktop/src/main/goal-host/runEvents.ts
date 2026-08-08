@@ -109,6 +109,14 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         'budget-consumed',
         'terminal',
       ]);
+      // lifecycleId 序号(g\d+ 单调递增):同 at 跨生命周期时按序号排序——
+      // 旧生命周期的事件(含 terminal)排在新生命周期的 turn-dispatched 之前,
+      // 保持因果顺序(同毫秒换代不把"新 run 开始"排到"旧 run 结束"之前)。
+      const lifecycleSeqOf = (id?: string): number => {
+        if (!id) return Number.MAX_SAFE_INTEGER;
+        const m = /^g(\d+)$/.exec(id);
+        return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+      };
       return ring
         .map((evt, idx) => ({
           _seq: idx,
@@ -118,9 +126,7 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         .sort((a, b) => {
           const byAt = (a.at ?? 0) - (b.at ?? 0);
           if (byAt !== 0) return byAt;
-          // 同 at:仅同 lifecycleId(同生命周期)用 turnIndex 与派发/收口类型次序——
-          // 跨生命周期换代时新 run 的 turn-dispatched 不得排到旧 run 的 terminal
-          // 之前,直接回退到插入序 _seq。
+          // 同 at 且同 lifecycleId(同生命周期)用 turnIndex 与派发/收口类型次序。
           if (a.lifecycleId && a.lifecycleId === b.lifecycleId) {
             const byTurn = a.turnIndex - b.turnIndex;
             if (byTurn !== 0) return byTurn;
@@ -132,6 +138,9 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
             if (aD && bF) return -1;
             if (aF && bD) return 1;
           }
+          // 同 at 跨生命周期:按生命周期序号先后(旧生命周期先落)。
+          const byLifecycle = lifecycleSeqOf(a.lifecycleId) - lifecycleSeqOf(b.lifecycleId);
+          if (byLifecycle !== 0) return byLifecycle;
           // 显式插入序号作最终 tie-breaker(规范不保证 sort 稳定)。
           return a._seq - b._seq;
         })
