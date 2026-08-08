@@ -63,6 +63,7 @@ import {
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   dropAllControllers,
+  flushMakerEventBatchesOnReconnect,
   flushRemoteInvokeResultOutboxOnReconnect,
   forgetControllerInvokeState,
   handleControllerOffline,
@@ -471,6 +472,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     handleContactsDeviceLinkStatusChanged(status === 'online');
     if (status === 'online') {
+      // 断线前攒的 maker:event 批最先出去:它在时间上早于离线积压与重连后的
+      // 一切新推送,晚发会让控制端在终态之后又收到旧文本(见 dispatch 注释)。
+      flushMakerEventBatchesOnReconnect();
       replayActiveSubscriptions('ws-online');
       // 重连即投递被控端积压的 invoke-result:离线期间 outbox 只做慢速 TTL 出清,
       // 不再自旋重试,上线事件是它的主投递触发点。

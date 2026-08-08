@@ -897,6 +897,21 @@ function flushMakerEventBatchesForSessionPush(
   flushMakerEventBatchSession(dst, stage, sessionId);
 }
 
+/**
+ * 投递离线积压 / 重连恢复之前排空该控制端的全部事件批。
+ *
+ * 与 canFlushMakerEventBatchNow 的关系:这条路径**刻意绕过**退避闸门。闸门防的是
+ * 「窗口满时反复徒劳重试」,而这里的触发条件恰恰是「链路刚恢复」——断线时置的
+ * retrying 已经过期,不清掉它,断线前的批就会排在离线积压之后送达(review 第三轮)。
+ * 清位后由 flush 自己按实际结果重新决定是否再进退避。
+ */
+function flushMakerEventBatchesBeforeBacklogDrain(dst: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage || stage.batches.size === 0) return;
+  stage.retrying = false;
+  flushMakerEventBatchStage(dst, stage);
+}
+
 /** 丢弃单个会话的待发批(退订该会话流时调用);stage 空则一并回收定时器。 */
 function dropMakerEventBatch(dst: string, sessionId: string): void {
   const stage = makerEventBatchStages.get(dst);
@@ -1503,6 +1518,8 @@ function handleLinkOpen(
   syncForwarding();
   flushRemoteInvokeResultOutbox(src);
   if (!knownModernController) {
+    // 同上:投递离线积压前先排空该控制端的事件批,保住跨积压的顺序。
+    flushMakerEventBatchesBeforeBacklogDrain(src);
     for (const queued of offlinePushQueue.drain(src, [LEGACY_TOPIC])) {
       sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
     }
@@ -2044,6 +2061,17 @@ export function flushRemoteInvokeResultOutboxOnReconnect(): void {
   flushRemoteInvokeResultOutbox();
 }
 
+/**
+ * ws-online 的事件批收口入口(index.ts 接线,与 outbox 的重连 flush 并列)。
+ * 断线前攒的批必须最先出去:它在时间上早于离线积压与重连后的一切新推送,
+ * 晚发就会让控制端在终态之后又收到旧文本(review 第三轮)。
+ */
+export function flushMakerEventBatchesOnReconnect(): void {
+  for (const dst of [...makerEventBatchStages.keys()]) {
+    flushMakerEventBatchesBeforeBacklogDrain(dst);
+  }
+}
+
 function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
   const client = activeClient;
   if (!client) {
@@ -2390,6 +2418,10 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     notifySessionsSubscribed(src);
   }
   if (isSub && topics.length > 0) {
+    // 先排空断线前的事件批,再投递离线积压(review 第三轮):断线期间同会话的
+    // 新事件与终态推送进的是 offlinePushQueue,而旧批留在内存等重试 timer;
+    // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
+    flushMakerEventBatchesBeforeBacklogDrain(src);
     for (const queued of offlinePushQueue.drain(src, topics)) {
       sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
     }

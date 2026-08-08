@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkError,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
   isCoalesciblePushChannel,
@@ -40,7 +41,11 @@ vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, handleControllerOffline } from '../dispatch';
+import {
+  __testing,
+  flushMakerEventBatchesOnReconnect,
+  handleControllerOffline,
+} from '../dispatch';
 import * as subscriptions from '../subscriptions';
 
 /** 微批窗口与退避间隔(dispatch 内部常量);推进定时器用。 */
@@ -491,6 +496,59 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
       'maker:event',
     ]);
     expect((h.sent[0]!.payload as MakerEventBatchPayload).events).toHaveLength(1);
+  });
+});
+
+describe('[11] 重连恢复的顺序(review 第三轮)', () => {
+  it('订阅重放 drain 离线积压之前先排空断线前的事件批', () => {
+    // 断线期间同会话的新事件/终态进 offlinePushQueue,旧批留在内存等重试;
+    // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
+    let status = 'online';
+    const h = mkClient();
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 在线时入批(窗口未到)
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'before-drop' } });
+    expect(h.sent).toHaveLength(0);
+
+    // relay 断线:同会话新事件进离线积压
+    status = 'connecting';
+    __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'closed' });
+    expect(h.sent).toHaveLength(0);
+
+    // 重连 + 控制端重新订阅:批必须先于积压投递
+    status = 'online';
+    __testing.handleSubscriptionFrame('ctrl-1', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'], capabilities: [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1] }],
+    });
+
+    const channels = h.sent.map((s) => s.channel);
+    expect(channels.indexOf(MAKER_EVENT_BATCH_CHANNEL)).toBe(0);
+    expect(channels).toContain('maker:status-changed');
+    expect(channels.indexOf(MAKER_EVENT_BATCH_CHANNEL))
+      .toBeLessThan(channels.indexOf('maker:status-changed'));
+  });
+
+  it('ws-online 收口入口清掉断线时的退避位,批不被闸门永久卡住', () => {
+    let status = 'online';
+    const h = mkClient();
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    // 断线期间窗口到点:flush 失败并置退避位
+    status = 'connecting';
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(h.sent).toHaveLength(0);
+
+    // 重连事件:清退避位并立即投出
+    status = 'online';
+    flushMakerEventBatchesOnReconnect();
+    expect(batchesIn(h.sent)).toHaveLength(1);
   });
 });
 
