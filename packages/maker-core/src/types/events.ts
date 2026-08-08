@@ -10,6 +10,7 @@
  */
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
 
 export type AgentEventType =
   | 'text'                  // 流式文本输出（增量或完整）
@@ -394,4 +395,6 @@ export interface ForkSdkSessionResult {
    * upToMessageId 锚点能在新 jsonl 里查到。
    */
   uuidMap: Map<string, string>;
+  /** Pi-only runtime command catalog captured from the forked runtime, if available. */
+  runtimeCapabilities?: PiRuntimeCapabilityManifest;
 }

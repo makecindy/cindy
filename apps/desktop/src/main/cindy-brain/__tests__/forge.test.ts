@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from '@cindy/plugin-protocol';
 
 import {
   FORGE_GUIDE,
@@ -696,6 +697,33 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('写死 whenToUse 发现面与二级分派 RULES 契约', () => {
+    expect(FORGE_GUIDE).toContain('给模型做插件发现与判断的唯一字段');
+    expect(FORGE_GUIDE).toContain(`最多 ${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符`);
+    expect(FORGE_GUIDE).toContain('花名册 → `ghost_info` → `ghost_call`');
+    expect(FORGE_GUIDE).toContain(
+      '禁止塞入"必须/不得"式行为规则、工具调用顺序、参数协议、错误码与重试策略',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '"whenToUse": "管理项目时找我;必须先调用 list_tools(category=project),再调用 call_tool;遇到 INVALID_ARGS 不得改用其它工具"',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '"whenToUse": "需要查询、创建或更新项目、任务、成员、迭代与发布状态时找我"',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '`list_tools(category)` 返回工具明细时,必须在同一份结果里一并下发该类目的',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '传 category 返回该类目下所有操作的名称、说明与该类目 RULES',
+    );
+    expect(FORGE_GUIDE).toContain('`rules: [规则键]`');
+    expect(FORGE_GUIDE).toContain('参数 schema **和本次自纠必需的规则**');
+    expect(FORGE_GUIDE).not.toContain('这是你影响 AI 行为的**唯一合法通道**');
+    expect(FORGE_GUIDE).not.toContain('description(花名册自述)');
+    expect(FORGE_GUIDE).not.toContain('选错会拖累所有会话');
+    expect(FORGE_GUIDE).not.toContain('所有意识的工具清单会一起被你一家撑爆');
+  });
+
   it('向量检索示例按请求维度回放,不把回执 dim 当作请求判据', () => {
     expect(FORGE_GUIDE).toContain('const requestedDim = undefined');
     expect(FORGE_GUIDE).toContain('requestedDim 来自这次请求而不是回执');

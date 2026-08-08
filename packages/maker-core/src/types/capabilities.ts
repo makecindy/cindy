@@ -74,6 +74,12 @@ export interface Capabilities {
   multimodal: MultimodalCapability;
 
   /** Session 操作 */
+  /**
+   * Pi runtime command catalog queried from the live session. This is a
+   * capability of the session contract; the manifest itself may still be
+   * undefined while discovery is pending or unavailable.
+   */
+  runtimeCapabilities?: CapabilityStatus;
   fork: CapabilityStatus;
   rewind: CapabilityStatus;
   /** 同一 SDK session 内的原生分支树；与创建独立 Cindy 会话的 fork 正交。 */

@@ -38,6 +38,7 @@ function catalog(): Catalog {
     { ...model('gpt-image-2'), group: 'image' },
     { ...model('seedance-fast'), group: 'video' },
     { ...model('seedance-pro'), group: 'video' },
+    { ...model('bytedance/seedance-2.5'), group: 'video' },
     { ...model('happyhorse'), group: 'video' },
     { ...model('voyage/voyage-4'), group: 'embedding' },
   ]);
@@ -49,6 +50,7 @@ function catalog(): Catalog {
   xd.videoModels = [
     { id: 'seedance-fast', name: 'Seedance Fast' },
     { id: 'seedance-pro', name: 'Seedance Pro' },
+    { id: 'bytedance/seedance-2.5', name: 'Seedance 2.5' },
     { id: 'happyhorse', name: 'HappyHorse' },
   ];
   xd.videoDefaults = {
@@ -114,6 +116,7 @@ describe('provider access policy', () => {
       expect(xd?.videoModels?.map((item) => item.id)).toEqual([
         'seedance-fast',
         'seedance-pro',
+        'bytedance/seedance-2.5',
       ]);
       expect(xd?.videoDefaults).toEqual({
         standard: 'seedance-fast',
@@ -125,6 +128,7 @@ describe('provider access policy', () => {
         'xd-only-model',
         'seedance-fast',
         'seedance-pro',
+        'bytedance/seedance-2.5',
       ]);
       expect(xd?.models.codex).toEqual([]);
     },
@@ -165,7 +169,11 @@ describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', ()
     const xd = projected.providers.find((p) => p.id === 'xd');
     expect(xd?.imageModels).toEqual([]);
     expect(xd?.imageDefaults).toBeUndefined();
-    expect(xd?.videoModels?.map((m) => m.id)).toEqual(['seedance-fast', 'seedance-pro']);
+    expect(xd?.videoModels?.map((m) => m.id)).toEqual([
+      'seedance-fast',
+      'seedance-pro',
+      'bytedance/seedance-2.5',
+    ]);
   });
 
   it.each(['cn', 'dev'] as const)(

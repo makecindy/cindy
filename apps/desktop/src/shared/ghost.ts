@@ -1,4 +1,4 @@
-import { GHOST_OAUTH_SCOPES_MAX, isValidCindyVersion } from '@cindy/plugin-protocol';
+import { GHOST_MANIFEST_SUMMARY_MAX_CHARS, GHOST_OAUTH_SCOPES_MAX, isValidCindyVersion } from '@cindy/plugin-protocol';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
@@ -27,6 +27,9 @@ export const GHOST_MANIFEST_FILE = 'ghost.json';
  * 安全预算，但最终写进 .cindy 的清单必须落在这个上限内。
  */
 export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
+
+/** ghost.json 的 description / whenToUse 字符上限，正本在 plugin-protocol。 */
+export { GHOST_MANIFEST_SUMMARY_MAX_CHARS };
 
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
@@ -2348,11 +2351,11 @@ export function validateGhostManifestLocaleResource(
     }
     return value;
   };
-  const description = optionalText('description', 300);
+  const description = optionalText('description', GHOST_MANIFEST_SUMMARY_MAX_CHARS);
   if (isPlainObject(description) && typeof description.error === 'string') {
     return { ok: false, reason: description.error };
   }
-  const whenToUse = optionalText('whenToUse', 300);
+  const whenToUse = optionalText('whenToUse', GHOST_MANIFEST_SUMMARY_MAX_CHARS);
   if (isPlainObject(whenToUse) && typeof whenToUse.error === 'string') {
     return { ok: false, reason: whenToUse.error };
   }
@@ -2813,15 +2816,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (
     raw.description !== undefined &&
-    (typeof raw.description !== 'string' || raw.description.trim().length === 0 || raw.description.length > 300)
+    (typeof raw.description !== 'string' || raw.description.trim().length === 0 || raw.description.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'description 必须是 1–300 字符的非空字符串' };
+    return { ok: false, reason: `description 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串` };
   }
   if (
     raw.whenToUse !== undefined &&
-    (typeof raw.whenToUse !== 'string' || raw.whenToUse.trim().length === 0 || raw.whenToUse.length > 300)
+    (typeof raw.whenToUse !== 'string' || raw.whenToUse.trim().length === 0 || raw.whenToUse.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'whenToUse 必须是 1–300 字符的非空字符串' };
+    return { ok: false, reason: `whenToUse 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串` };
   }
   if (raw.icon !== undefined) {
     if (!isSafeGhostRelativePath(raw.icon)) {
