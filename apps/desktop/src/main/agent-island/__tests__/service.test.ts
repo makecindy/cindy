@@ -75,6 +75,7 @@ const mocks = vi.hoisted(() => ({
   browserWindowGetAllWindows: vi.fn<() => BrowserWindow[]>(() => []),
   readLayoutPreferences: vi.fn<() => Map<number, AgentIslandLayoutPreference>>(() => new Map()),
   writeLayoutPreference: vi.fn(),
+  writeLayoutPreferences: vi.fn(),
   tapWindowBroadcast: vi.fn(),
   showMessageBox: vi.fn(),
   openExternal: vi.fn(),
@@ -122,6 +123,7 @@ vi.mock('../../localDb/ipc/sessions.js', () => ({
 vi.mock('../layoutPreferenceStore.js', () => ({
   readAgentIslandLayoutPreferences: mocks.readLayoutPreferences,
   writeAgentIslandLayoutPreference: mocks.writeLayoutPreference,
+  writeAgentIslandLayoutPreferences: mocks.writeLayoutPreferences,
 }));
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -158,6 +160,7 @@ beforeEach(() => {
   mocks.readLayoutPreferences.mockReset();
   mocks.readLayoutPreferences.mockReturnValue(new Map());
   mocks.writeLayoutPreference.mockReset();
+  mocks.writeLayoutPreferences.mockReset();
   mocks.tapWindowBroadcast.mockReset();
   mocks.showMessageBox.mockReset();
   mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
@@ -3932,6 +3935,89 @@ describe('AgentIslandService native publishing', () => {
     expect(framesById.get(2)).toMatchObject({ width: 460 });
   });
 
+  it('does not reuse an identity-less compact width on a multi-display notch screen', async () => {
+    mocks.readLayoutPreferences.mockReturnValueOnce(new Map<number, AgentIslandLayoutPreference>([
+      [1, { compactContentWidth: 500, centerXRatio: 0.25 }],
+    ]));
+    const builtInDisplay = {
+      id: 1,
+      label: 'Built-in Retina Display',
+      bounds: { x: 0, y: 0, width: 1728, height: 1117 },
+      internal: false,
+    };
+    const externalDisplay = {
+      id: 2,
+      label: 'Mi Monitor',
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 },
+      internal: false,
+    };
+    mocks.displays.splice(0, mocks.displays.length, builtInDisplay, externalDisplay);
+
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+
+    const setNativeScreenMetrics = (
+      service as unknown as {
+        handleNativeScreenMetrics(metrics: {
+          screens: Array<{
+            displayId: number;
+            frame: { x: number; y: number; width: number; height: number };
+            hasNotch: boolean;
+            notchWidth: number;
+            topBarHeight: number;
+            menuBarHeight: number;
+            safeAreaTop: number;
+            isMain: boolean;
+            signature: string;
+          }>;
+          preferredDisplayId: number | null;
+        }): void;
+      }
+    ).handleNativeScreenMetrics.bind(service);
+    setNativeScreenMetrics({
+      preferredDisplayId: 1,
+      screens: [
+        {
+          displayId: 1,
+          frame: builtInDisplay.bounds,
+          hasNotch: true,
+          notchWidth: 256,
+          topBarHeight: 37,
+          menuBarHeight: 37,
+          safeAreaTop: 37,
+          isMain: true,
+          signature: 'builtin-notch',
+        },
+        {
+          displayId: 2,
+          frame: externalDisplay.bounds,
+          hasNotch: false,
+          notchWidth: 0,
+          topBarHeight: 25,
+          menuBarHeight: 25,
+          safeAreaTop: 0,
+          isMain: false,
+          signature: 'external',
+        },
+      ],
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
+    expect(framesById.get(1)).toMatchObject({ x: 684, width: 360, contentWidth: 320 });
+    expect(framesById.get(2)).toMatchObject({ width: 250, contentWidth: 210 });
+  });
+
   it('applies native layout preferences to the emitting display instead of the current target display', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
@@ -4008,10 +4094,216 @@ describe('AgentIslandService native publishing', () => {
     expect(mocks.writeLayoutPreference).toHaveBeenLastCalledWith(1, {
       compactContentWidth: 500,
       centerXRatio: 0.5,
+      displayName: 'Built-in Retina Display',
+      displayIndex: 1,
+      displayInternal: false,
+      displayBounds: mocks.primaryDisplay.bounds,
     });
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(1)).toMatchObject({ width: 540, contentWidth: 500 });
     expect(framesById.get(2)).toMatchObject({ width: 360, contentWidth: 320 });
+  });
+
+  it('remaps saved layout preferences by display identity when runtime ids change', async () => {
+    mocks.readLayoutPreferences.mockReturnValueOnce(new Map<number, AgentIslandLayoutPreference>([
+      [1, {
+        compactContentWidth: 500,
+        displayName: 'Mi Monitor',
+        displayIndex: 2,
+        displayInternal: false,
+        displayBounds: { x: 1728, y: 0, width: 1512, height: 982 },
+      }],
+    ]));
+    const builtInDisplay = {
+      id: 1,
+      label: 'Built-in Retina Display',
+      bounds: { x: 0, y: 0, width: 1728, height: 1117 },
+      internal: true,
+    };
+    const externalDisplay = {
+      id: 2,
+      label: 'Mi Monitor',
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 },
+      internal: false,
+    };
+    mocks.displays.splice(0, mocks.displays.length, builtInDisplay, externalDisplay);
+
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+
+    const setNativeScreenMetrics = (
+      service as unknown as {
+        handleNativeScreenMetrics(metrics: {
+          screens: Array<{
+            displayId: number;
+            frame: { x: number; y: number; width: number; height: number };
+            hasNotch: boolean;
+            notchWidth: number;
+            topBarHeight: number;
+            menuBarHeight: number;
+            safeAreaTop: number;
+            isMain: boolean;
+            signature: string;
+          }>;
+          preferredDisplayId: number | null;
+        }): void;
+      }
+    ).handleNativeScreenMetrics.bind(service);
+    setNativeScreenMetrics({
+      preferredDisplayId: 1,
+      screens: [
+        {
+          displayId: 1,
+          frame: builtInDisplay.bounds,
+          hasNotch: true,
+          notchWidth: 256,
+          topBarHeight: 37,
+          menuBarHeight: 37,
+          safeAreaTop: 37,
+          isMain: true,
+          signature: 'builtin-notch',
+        },
+        {
+          displayId: 2,
+          frame: externalDisplay.bounds,
+          hasNotch: false,
+          notchWidth: 0,
+          topBarHeight: 25,
+          menuBarHeight: 25,
+          safeAreaTop: 0,
+          isMain: false,
+          signature: 'external',
+        },
+      ],
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
+    expect(framesById.get(1)).toMatchObject({ width: 360, contentWidth: 320 });
+    expect(framesById.get(2)).toMatchObject({ width: 540, contentWidth: 500 });
+    const persisted = mocks.writeLayoutPreferences.mock.calls.at(-1)?.[0] as Map<number, AgentIslandLayoutPreference> | undefined;
+    expect(persisted?.get(2)).toEqual(expect.objectContaining({
+      compactContentWidth: 500,
+      displayName: 'Mi Monitor',
+    }));
+    expect(persisted?.has(1)).toBe(false);
+  });
+
+  it('moves exchanged display preferences as one atomic snapshot', async () => {
+    const builtInDisplay = {
+      id: 1,
+      label: 'Built-in Retina Display',
+      bounds: { x: 0, y: 0, width: 1728, height: 1117 },
+      internal: false,
+    };
+    const externalDisplay = {
+      id: 2,
+      label: 'Mi Monitor',
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 },
+      internal: false,
+    };
+    mocks.readLayoutPreferences.mockReturnValueOnce(new Map<number, AgentIslandLayoutPreference>([
+      [1, {
+        compactContentWidth: 500,
+        displayName: 'Mi Monitor',
+        displayIndex: 2,
+        displayInternal: false,
+        displayBounds: externalDisplay.bounds,
+      }],
+      [2, {
+        compactContentWidth: 300,
+        displayName: 'Built-in Retina Display',
+        displayIndex: 1,
+        displayInternal: false,
+        displayBounds: builtInDisplay.bounds,
+      }],
+    ]));
+    mocks.displays.splice(0, mocks.displays.length, builtInDisplay, externalDisplay);
+
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+
+    const setNativeScreenMetrics = (
+      service as unknown as {
+        handleNativeScreenMetrics(metrics: {
+          screens: Array<{
+            displayId: number;
+            frame: { x: number; y: number; width: number; height: number };
+            hasNotch: boolean;
+            notchWidth: number;
+            topBarHeight: number;
+            menuBarHeight: number;
+            safeAreaTop: number;
+            isMain: boolean;
+            signature: string;
+          }>;
+          preferredDisplayId: number | null;
+        }): void;
+      }
+    ).handleNativeScreenMetrics.bind(service);
+    setNativeScreenMetrics({
+      preferredDisplayId: 1,
+      screens: [
+        {
+          displayId: 1,
+          frame: builtInDisplay.bounds,
+          hasNotch: true,
+          notchWidth: 256,
+          topBarHeight: 37,
+          menuBarHeight: 37,
+          safeAreaTop: 37,
+          isMain: true,
+          signature: 'builtin-notch',
+        },
+        {
+          displayId: 2,
+          frame: externalDisplay.bounds,
+          hasNotch: false,
+          notchWidth: 0,
+          topBarHeight: 25,
+          menuBarHeight: 25,
+          safeAreaTop: 0,
+          isMain: false,
+          signature: 'external',
+        },
+      ],
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
+    expect(framesById.get(1)).toMatchObject({ width: 360, contentWidth: 320 });
+    expect(framesById.get(2)).toMatchObject({ width: 540, contentWidth: 500 });
+    expect(mocks.writeLayoutPreferences).toHaveBeenCalledTimes(1);
+    const persisted = mocks.writeLayoutPreferences.mock.calls[0]?.[0] as Map<number, AgentIslandLayoutPreference>;
+    expect(Array.from(persisted.keys())).toEqual([2, 1]);
+    expect(persisted.get(1)).toEqual(expect.objectContaining({
+      compactContentWidth: 300,
+      displayName: 'Built-in Retina Display',
+    }));
+    expect(persisted.get(2)).toEqual(expect.objectContaining({
+      compactContentWidth: 500,
+      displayName: 'Mi Monitor',
+    }));
   });
 
   it('re-publishes native frames when a wake refresh keeps the same screen signature', async () => {
