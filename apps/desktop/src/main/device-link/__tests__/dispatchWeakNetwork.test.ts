@@ -36,6 +36,7 @@ vi.mock('../settings-store', () => ({
 import {
   __testing,
   flushRemoteInvokeResultOutboxOnReconnect,
+  handleControllerOffline,
   setDispatchPresenceOfflineCheck,
 } from '../dispatch';
 
@@ -312,6 +313,80 @@ describe('[5] outbox flush 的 presence 显式离线门禁', () => {
     // 定向轮(link-open 路径):不看门禁,直接投递
     __testing.flushRemoteInvokeResultOutbox('ctrl-a');
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('presence 滞后为 offline 但控制端已 link-open 回归:全量轮不再拦它(定向轮失败后的无参重试照样投递)', () => {
+    // codex review 同族第 3 次指出的缺口:定向轮首发被 BACKPRESSURE 打回后,末尾排的
+    // 重试是**无参全量轮**、丢掉 onlySrc 证据 —— 判据若只看 presence,这个已建链的
+    // peer 会被持续跳过到 presence 更新或 TTL 丢结果。判据带上 accepted link 后 fail-open。
+    setDispatchPresenceOfflineCheck(() => true); // presence 停留在陈旧的 offline
+    const sendInvokeResult = vi.fn().mockImplementation(() => {
+      throw backpressure();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 还没有 accepted link:全量轮被门禁挡住(不 trySend)
+    let calls = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult.mock.calls.length).toBe(calls);
+
+    // 控制端 link-open 回归 → accepted link 成立;它触发的定向轮仍被背压打回,
+    // 条目保留、末尾排下无参全量重试。
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-1', undefined);
+    expect(__testing.getActiveControllers().map((c) => c.deviceId)).toEqual(['ctrl-a']);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 无参全量重试:presence 判据仍说离线,但 accepted link 是更新的可达证据 → 放行
+    sendInvokeResult.mockImplementation(() => {});
+    calls = sendInvokeResult.mock.calls.length;
+    vi.advanceTimersByTime(500);
+    expect(sendInvokeResult.mock.calls.length).toBeGreaterThan(calls);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('presence 宣告离线拆掉 accepted link 后:全量轮重新受门禁约束', () => {
+    // 可达证据不得比链路活得更久 —— presence 说离线时 index.ts 会调
+    // handleControllerOffline 拆掉该控制端的 accepted link 与订阅,此后必须回到
+    // 「presence 说了算」,否则一次历史建链会永久豁免门禁。
+    setDispatchPresenceOfflineCheck(() => true);
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-1', undefined);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // accepted link 在场:全量轮放行
+    sendInvokeResult.mockImplementation(() => {
+      throw notConnected();
+    });
+    let calls = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult.mock.calls.length).toBeGreaterThan(calls);
+
+    // presence 宣告离线 → 拆链:证据随链路一起消失,门禁重新生效
+    handleControllerOffline('ctrl-a');
+    calls = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult.mock.calls.length).toBe(calls);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
   });
 
   it('presence 判据未接线(null)时 fail-open:行为与门禁不存在时一致', () => {
