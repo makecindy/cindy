@@ -4800,6 +4800,27 @@ export class CodexAgent extends BaseAgent {
       }
     }
 
+    async function withCodexGenerationPaused<T>(
+      turnId: string | null | undefined,
+      pauseId: string,
+      run: () => Promise<T>,
+    ): Promise<T> {
+      if (!turnId) {
+        // Without a turn id the wait cannot be paired with a reliable resume
+        // boundary. Keep the interaction usable, but fail closed for TPS.
+        translatorRt.generationTimingReliable = false;
+        return run();
+      }
+      pauseCodexGeneration(translatorRt, turnId, pauseId);
+      try {
+        return await run();
+      } finally {
+        // Covers user decisions, server-side resolution, cancellation and
+        // resolver failures without leaking human wait into model duration.
+        resumeCodexGeneration(translatorRt, turnId, pauseId);
+      }
+    }
+
     /**
      * 计划模式审批闭环 (对齐官方 TUI plan_implementation 流程, 全部代码驱动):
      * plan turn 结束 → 把捕获的 proposed plan 发给用户审批 (plan_review, 复用
@@ -4939,14 +4960,7 @@ export class CodexAgent extends BaseAgent {
       opts?: { forcePrompt?: boolean; autoReviewAction?: ReviewableAction },
     ): Promise<ApprovalDecision> {
       const timingPauseId = `approval:${kind}:${requestId}`;
-      if (turnId) {
-        pauseCodexGeneration(translatorRt, turnId, timingPauseId);
-      } else {
-        // Without a turn id the approval cannot be paired with a reliable resume
-        // boundary. Keep the turn usable, but fail closed for TPS publication.
-        translatorRt.generationTimingReliable = false;
-      }
-      try {
+      return withCodexGenerationPaused(turnId, timingPauseId, async () => {
         let forcePrompt =
           opts?.forcePrompt === true ||
           (req.kind === 'permission' &&
@@ -5049,9 +5063,7 @@ export class CodexAgent extends BaseAgent {
               finalize('decline');
             });
         });
-      } finally {
-        if (turnId) resumeCodexGeneration(translatorRt, turnId, timingPauseId);
-      }
+      });
     }
 
     /**
@@ -6334,6 +6346,10 @@ export class CodexAgent extends BaseAgent {
       const questions = normalizeRequestUserInputQuestions(params.questions);
       if (questions.length === 0) return { answers: {} };
       const kind = classifyUserInputRequest(params);
+      const activeToolContext = activeToolContexts.get(params.itemId);
+      const hasToolGenerationBoundary =
+        activeToolContext?.type === 'mcpToolCall'
+        || activeToolContext?.type === 'dynamicToolCall';
       log.debug('native requestUserInput received', {
         requestId,
         threadId: params.threadId,
@@ -6342,7 +6358,7 @@ export class CodexAgent extends BaseAgent {
         kind,
         questionCount: questions.length,
       });
-      return userInputBroker.track(
+      const waitForUserInput = () => userInputBroker.track(
         {
           kind: 'request_user_input',
           connectionId,
@@ -6363,6 +6379,15 @@ export class CodexAgent extends BaseAgent {
           settle(response);
         },
       );
+      // mcpToolCall/dynamicToolCall already pause generation through their item
+      // lifecycle. Only the native fallback needs its own human-wait boundary.
+      return kind === 'ask_user_question' && !hasToolGenerationBoundary
+        ? withCodexGenerationPaused(
+            params.turnId,
+            `user-input:${requestId}`,
+            waitForUserInput,
+          )
+        : waitForUserInput();
     };
 
     const dynamicToolCall = async (
