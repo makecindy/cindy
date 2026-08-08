@@ -901,8 +901,7 @@ body.resizing-pane [data-ghost-webview] {
   width: 36%;
   border-radius: 2px;
   background: var(--text-tertiary);
-  /* steps(36):1.5s / 36 步 = 24fps(§14.4 低帧率原则,同 ghost-card-sweep)。 */
-  animation: session-card-prog 1.5s steps(36, end) infinite;
+  animation: session-card-prog 1.5s ease-in-out infinite;
 }
 @keyframes session-card-prog {
   0% {
@@ -1138,9 +1137,7 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 .ghost-card-sweep {
-  /* steps(53):2.2s / 53 步 ≈ 24fps(§14.4 低帧率原则)。常驻扫光锁到电影帧率,
-     合成帧减半以上;轻微颗粒感与纸面质感相合,肉眼近似无损。 */
-  animation: ghost-card-sweep 2.2s steps(53, end) infinite;
+  animation: ghost-card-sweep 2.2s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .ghost-card-sweep {
