@@ -40,6 +40,7 @@ import {
   parseTransportPayload,
   byteLength,
 } from './transport.js';
+import { MAKER_EVENT_BATCH_CHANNEL } from './topics.js';
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 /** RFC 6455 1013 Try Again Later:relay 因拥塞主动断连(如 inbound backpressure)。 */
 const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
@@ -48,11 +49,13 @@ const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
  * 黑名单 → 白名单 → 收缩到单通道)。push 单 FIFO 上混着三类语义,只有第一类
  * 可以参与传输层 latest-wins:
  *
- * - 自相似有损事件流(本表,现仅 maker:event):流内每帧价值均匀且整流已是
- *   契约——旧语义拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按
+ * - 自相似有损事件流(本表:maker:event 及其微批帧):流内每帧价值均匀且整流
+ *   已是契约——旧语义拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按
  *   best-effort 放弃),换成丢最旧不引入新的损失面;转录内容由受保护的
  *   local-db:messages:created + 控制端消息对账自愈,会话运行态由受保护的
- *   status / activity 通道承载。
+ *   status / activity 通道承载。微批帧(MAKER_EVENT_BATCH_CHANNEL)与逐帧
+ *   **必须同档**:它只是同一事件流的聚合体,漏登记会让启用微批的控制端在拥塞
+ *   时退回 BACKPRESSURE 风暴(正是微批要消除的那一个)。
  * - 键控/终态快照(sessions:activity、maker:input:projection):看似「镜像」
  *   但**不满足跨帧可替代**——快照按 sessionId 键控,会话的 completed/error
  *   收尾快照是该键的最后一帧,被其它键/其它通道的洪峰驱逐后不会再有后继帧
@@ -69,6 +72,7 @@ const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
  */
 const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
+  MAKER_EVENT_BATCH_CHANNEL,
 ]);
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;

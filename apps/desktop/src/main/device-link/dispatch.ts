@@ -37,6 +37,8 @@ import {
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
+  MAKER_EVENT_BATCH_CHANNEL,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
@@ -44,6 +46,7 @@ import {
   type InvokeResultPayload,
   type LinkClosePayload,
   type LinkOpenPayload,
+  type MakerEventBatchPayload,
   type PushOwnerStamp,
   type Topic,
 } from '@cindy/device-link';
@@ -575,6 +578,211 @@ const SESSION_ACTIVITY_DRAIN_RETRY_MS = 250;
 /** 可靠窗口软上限:活动镜像最多占半窗,剩余留给 invoke-result 与其它推送。 */
 const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
 
+/**
+ * `maker:event` 微批(per-(控制端, sessionId) 累积,与 activity staging 同骨架但
+ * 语义相反:activity 是状态镜像只留最新值,事件流是有序流,批内**全部保留**)。
+ *
+ * 为什么要它:activity 整流(#1401)、拥塞取舍(#2167)、重连冷却(#2185)都不减少
+ * **出站帧数**——agent 长思考期间 maker:event 仍是每事件一帧,2026-08-08 线上单
+ * 毫秒 119 帧、8-07 单小时 5168 次 BACKPRESSURE,聚合速率还招来 relay 1013 断连。
+ * 批把「每事件一帧」压成「每窗口一帧」,直接砍掉这条链路的源头流量。
+ *
+ * 时序契约:同一会话的事件对启用批的控制端**全部**走批路径,没有旁路——否则
+ * 缓冲里的旧事件会排在直发的新事件之后,顺序即被破坏。
+ */
+const MAKER_EVENT_BATCH_WINDOW_MS = 120;
+/** 单批事件数上限:到量立即 flush(不等窗口),避免长思考把一帧撑得过大。 */
+const MAKER_EVENT_BATCH_MAX_EVENTS = 64;
+/**
+ * 单批字节上限(估算值,到量立即 flush)。刻意远小于可靠传输单消息上限
+ * (MAX_TRANSPORT_MESSAGE_BYTES 4MB / 64 片 × 128KB):批的目的是减少帧数,
+ * 不是制造需要分片的大帧——分片会把一帧放大成多帧,反噬本次优化。
+ */
+const MAKER_EVENT_BATCH_MAX_BYTES = 256 * 1024;
+/**
+ * 单会话缓冲的事件数硬上限(背压滞留时的兜底)。maker:event 是自相似有损流
+ * (与 #2167 的可驱逐判据同源),溢出丢**最旧**、保留最新:转录内容由受保护的
+ * messages:created + 控制端消息对账自愈。无上限则背压期间内存无界。
+ */
+const MAKER_EVENT_BATCH_MAX_BUFFERED_EVENTS = 512;
+/** 背压/离线时的重试间隔(与 activity staging 同款,不新造节奏)。 */
+const MAKER_EVENT_BATCH_RETRY_MS = 250;
+
+interface MakerEventBatch {
+  events: unknown[];
+  bytes: number;
+  ownerStamp?: PushOwnerStamp;
+  droppedOldest: number;
+}
+
+interface MakerEventBatchStage {
+  /** sessionId → 该会话的待发事件;Map 插入序即会话首次入批顺序。 */
+  batches: Map<string, MakerEventBatch>;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const makerEventBatchStages = new Map<string, MakerEventBatchStage>();
+
+function makerEventBatchOwnerStampEquals(
+  a: PushOwnerStamp | undefined,
+  b: PushOwnerStamp | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.dataOwnerId === b.dataOwnerId && a.ownerGeneration === b.ownerGeneration;
+}
+
+/**
+ * 把一条 maker:event 收进目标控制端的批。到量(条数/字节)或 ownerStamp 变化
+ * 立即 flush 该会话,否则等窗口定时器统一 flush。
+ */
+function stageMakerEventPush(
+  dst: string,
+  sessionId: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
+  let stage = makerEventBatchStages.get(dst);
+  if (!stage) {
+    stage = { batches: new Map(), timer: null };
+    makerEventBatchStages.set(dst, stage);
+  }
+  let batch = stage.batches.get(sessionId);
+  // ownerStamp 是数据归属水印,批内必须一致:变化即先把旧批发走再开新批。
+  if (batch && !makerEventBatchOwnerStampEquals(batch.ownerStamp, ownerStamp)) {
+    flushMakerEventBatch(dst, stage, sessionId);
+    batch = undefined;
+  }
+  if (!batch) {
+    batch = { events: [], bytes: 0, droppedOldest: 0, ...(ownerStamp ? { ownerStamp } : {}) };
+    stage.batches.set(sessionId, batch);
+  }
+  batch.events.push(payload);
+  batch.bytes += estimateMakerEventBytes(payload);
+  while (batch.events.length > MAKER_EVENT_BATCH_MAX_BUFFERED_EVENTS) {
+    const dropped = batch.events.shift();
+    batch.bytes = Math.max(0, batch.bytes - estimateMakerEventBytes(dropped));
+    batch.droppedOldest += 1;
+  }
+  if (
+    batch.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
+    || batch.bytes >= MAKER_EVENT_BATCH_MAX_BYTES
+  ) {
+    flushMakerEventBatch(dst, stage, sessionId);
+    return;
+  }
+  scheduleMakerEventBatchFlush(dst, stage);
+}
+
+/** 读 push payload 顶层 sessionId(与 topicForPush 的 session-scoped 判据同一字段)。 */
+function readPushSessionId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const sessionId = (payload as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
+}
+
+function estimateMakerEventBytes(payload: unknown): number {
+  try {
+    return JSON.stringify(payload)?.length ?? 0;
+  } catch {
+    // 不可序列化的 payload 交给 sendPush 报错处理;这里只保证估算不抛。
+    return 0;
+  }
+}
+
+function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage): void {
+  if (stage.timer) return;
+  stage.timer = setTimeout(() => {
+    stage.timer = null;
+    const current = makerEventBatchStages.get(dst);
+    if (current) flushMakerEventBatchStage(dst, current);
+  }, MAKER_EVENT_BATCH_WINDOW_MS);
+  (stage.timer as unknown as { unref?: () => void }).unref?.();
+}
+
+/** flush 该控制端的全部会话批(窗口到点 / 显式收口)。 */
+function flushMakerEventBatchStage(dst: string, stage: MakerEventBatchStage): void {
+  for (const sessionId of [...stage.batches.keys()]) {
+    if (!flushMakerEventBatch(dst, stage, sessionId)) return; // 背压:保留其余,已排重试
+  }
+}
+
+/**
+ * 发送单个会话的批。返回 false 表示遇到背压/离线并已排退避重试(事件保留在
+ * 缓冲里,不丢);其它错误按 best-effort 丢弃该批,不堵住整个 stage。
+ */
+function flushMakerEventBatch(
+  dst: string,
+  stage: MakerEventBatchStage,
+  sessionId: string,
+): boolean {
+  const batch = stage.batches.get(sessionId);
+  if (!batch || batch.events.length === 0) {
+    stage.batches.delete(sessionId);
+    return true;
+  }
+  if (!activeClient || activeClient.getStatus() !== 'online') {
+    scheduleMakerEventBatchRetry(dst, stage);
+    return false;
+  }
+  if (batch.droppedOldest > 0) {
+    log.warn(
+      `maker:event batch dropped ${batch.droppedOldest} oldest event(s) for ${shortId(dst)} `
+      + `session ${sessionId.slice(0, 8)} (buffer cap under sustained backpressure)`,
+    );
+    batch.droppedOldest = 0;
+  }
+  const payload: MakerEventBatchPayload = { sessionId, events: batch.events };
+  try {
+    if (batch.ownerStamp === undefined) {
+      activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload);
+    } else {
+      activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, batch.ownerStamp);
+    }
+    stage.batches.delete(sessionId);
+    return true;
+  } catch (err) {
+    if (err instanceof DeviceLinkError && err.code === 'BACKPRESSURE') {
+      scheduleMakerEventBatchRetry(dst, stage);
+      return false;
+    }
+    // PAYLOAD_TOO_LARGE / LINK_NOT_OPEN 等:沿 maker:event 既有 best-effort 语义
+    // 丢弃该批(逐帧路径同样会丢),不让一批坏帧堵死后续会话。
+    stage.batches.delete(sessionId);
+    log.warn(`maker:event batch dropped for ${shortId(dst)}: ${String(err)}`);
+    return true;
+  }
+}
+
+function scheduleMakerEventBatchRetry(dst: string, stage: MakerEventBatchStage): void {
+  if (stage.timer) return;
+  stage.timer = setTimeout(() => {
+    stage.timer = null;
+    const current = makerEventBatchStages.get(dst);
+    if (current) flushMakerEventBatchStage(dst, current);
+  }, MAKER_EVENT_BATCH_RETRY_MS);
+  (stage.timer as unknown as { unref?: () => void }).unref?.();
+}
+
+/** 丢弃单个会话的待发批(退订该会话流时调用);stage 空则一并回收定时器。 */
+function dropMakerEventBatch(dst: string, sessionId: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage) return;
+  if (!stage.batches.delete(sessionId)) return;
+  if (stage.batches.size === 0) clearMakerEventBatchStage(dst);
+}
+
+function clearMakerEventBatchStage(dst: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage) return;
+  if (stage.timer) clearTimeout(stage.timer);
+  makerEventBatchStages.delete(dst);
+}
+
+function clearAllMakerEventBatchStages(): void {
+  for (const dst of [...makerEventBatchStages.keys()]) clearMakerEventBatchStage(dst);
+}
+
 interface SessionActivityStage {
   /** sessionId → 最新 payload + source owner;Map 插入序即更新序。 */
   queue: Map<string, { payload: unknown; ownerStamp?: PushOwnerStamp }>;
@@ -719,6 +927,18 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // silent no-op, so route queueable pushes through the offline backlog instead.
   const relayOnline = activeClient.getStatus() === 'online';
   const liveTargets = relayOnline ? dsts : [];
+  // 微批只对声明了能力的控制端启用;只在 maker:event 这一条 channel 上查询,
+  // 不给其它 channel 增加每帧 capability 查询开销。
+  const batchTargets = channel === MAKER_PUSH.EVENT && liveTargets.length > 0
+    ? new Set(
+      liveTargets.filter(
+        (dst) => subscriptions.controllerSupports(
+          dst,
+          CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+        ),
+      ),
+    )
+    : null;
   const offlineTargets = subscriptions
     .getKnownControllersForTopic(topic)
     .filter((dst) => !liveTargets.includes(dst));
@@ -737,6 +957,17 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       stageSessionActivityPush(dst, remotePayload, ownerStamp);
       continue;
+    }
+    // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
+    // 「每窗口一帧」(见 stageMakerEventPush)。未声明能力的控制端照旧逐帧,
+    // 因此旧控制端零感知。sessionId 取自 topic 路由所用的同一字段,取不到时
+    // 不入批(topicForPush 已保证 session-scoped 帧必有它,这里只是防御)。
+    if (channel === MAKER_PUSH.EVENT && batchTargets?.has(dst)) {
+      const sessionId = readPushSessionId(remotePayload);
+      if (sessionId) {
+        stageMakerEventPush(dst, sessionId, remotePayload, ownerStamp);
+        continue;
+      }
     }
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
@@ -910,6 +1141,7 @@ export function dropAllControllers(
   acceptedLinkControllers.clear();
   offlinePushQueue.clear();
   clearAllSessionActivityStages();
+  clearAllMakerEventBatchStages();
   cancelAllLinkAcceptRetries();
   syncForwarding();
 }
@@ -923,6 +1155,7 @@ export function dropAllControllers(
 export function handleControllerOffline(deviceId: string): void {
   acceptedLinkControllers.delete(deviceId);
   clearSessionActivityStage(deviceId);
+  clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
@@ -938,6 +1171,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 export function purgeRevokedController(deviceId: string): void {
   offlinePushQueue.clear(deviceId);
   clearSessionActivityStage(deviceId);
+  clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
   subscriptions.forgetKnownController(deviceId);
   topicSubscriptionControllers.delete(deviceId);
@@ -984,6 +1218,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       clearRemoteInvokeStateFor(src);
       offlinePushQueue.clear(src);
       clearSessionActivityStage(src);
+      clearMakerEventBatchStage(src);
       cancelLinkAcceptRetry(src);
       acceptedLinkControllers.delete(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
@@ -1994,6 +2229,11 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     subscriptions.unsubscribe(src, topics);
     // 退订 sessions 后暂存里的活动快照不应再投递(含已排期的重试)。
     if (topics.includes('sessions')) clearSessionActivityStage(src);
+    // 退订 session:<id> 后该会话的待发事件批同样不应再投递(控制端已不要这条流)。
+    for (const topic of topics) {
+      const sessionId = topic.startsWith('session:') ? topic.slice('session:'.length) : null;
+      if (sessionId) dropMakerEventBatch(src, sessionId);
+    }
   }
   syncForwarding();
   if (isSub && topics.includes('sessions')) {
@@ -2272,6 +2512,7 @@ export const __testing = {
     activeClient = null;
     offlinePushQueue.clear();
     clearAllSessionActivityStages();
+  clearAllMakerEventBatchStages();
     cancelAllLinkAcceptRetries();
     setBroadcastTapListener(null);
   },
