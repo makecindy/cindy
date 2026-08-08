@@ -189,6 +189,7 @@ import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
+  flushRsbBrowserPopupQueue,
   installWebviewHardener,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
@@ -1262,6 +1263,7 @@ const rsbWindowController = new RsbWindowController({
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
   isQuitting: () => isQuitting,
   canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
+  onPopupHostAvailable: flushRsbBrowserPopupQueue,
   log: createLogger('right-sidebar-window-controller'),
 });
 registerRsbWindowIpc({
@@ -1334,10 +1336,10 @@ setRsbPopupOpenerResolver((webContentsId) => {
 setRsbPopupOpenerReportSubscriber((listener) =>
   getRsbBrowserBridge().onReport((record) => listener(record.webContentsId)),
 );
-// popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
-// detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
-// 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
-setRsbPopupHostResolver(() => rsbWindowController.getHostWebContents());
+// popup 路由目标使用严格 ready host:detached 子窗握手前返回 null,main 队列暂存;
+// markReady 后 controller 通知 flush 到子窗。这样不会把一次性 OAuth URL 留在
+// 主窗 preload、随后无法跨 renderer 交给分离窗口。
+setRsbPopupHostResolver(() => rsbWindowController.getPopupHostWebContents());
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.

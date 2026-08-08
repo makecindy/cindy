@@ -479,32 +479,99 @@ function isRoutablePopupUrl(url: string): boolean {
  * popup 路由目标 host 的动态解析钩子(bootstrap 注入 rsbWindowController 的
  * getHostWebContents,与 tab-op bridge 同一来源)。popup 路由可能经过异步等待
  * (归属反查 / deferred URL 捕获),期间用户 detach 侧边栏或切换视图会让捕获时的
- * hostContents 过时 —— 旧 renderer 的 Shell 已退订,fanOut 不缓冲,消息发过去
- * 就是丢弃。发送时刻动态解析当前 host 才能落到活着的订阅者。
+ * hostContents 过时 —— 旧 renderer 即使由 preload 暂存,也只会在错误窗口稍后
+ * 补收。发送时刻动态解析当前 host,才能立即落到当前形态的活跃订阅者。
  */
 let popupHostResolver: (() => WebContents | null) | null = null;
 
+/** OAuth popup 只出现一次;host 交接期间在 main 内存中保留的最大条数与寿命。 */
+export const RSB_BROWSER_POPUP_BUFFER_LIMIT = 8;
+export const RSB_BROWSER_POPUP_BUFFER_TTL_MS = 30_000;
+
+interface QueuedBrowserPopup {
+  payload: RsbBrowserPopupPayload;
+  receivedAt: number;
+}
+
+let queuedBrowserPopups: QueuedBrowserPopup[] = [];
+
+function pruneQueuedBrowserPopups(now = Date.now()): void {
+  const cutoff = now - RSB_BROWSER_POPUP_BUFFER_TTL_MS;
+  queuedBrowserPopups = queuedBrowserPopups.filter((entry) => entry.receivedAt >= cutoff);
+}
+
+function enqueueBrowserPopup(payload: RsbBrowserPopupPayload): void {
+  const receivedAt = Date.now();
+  pruneQueuedBrowserPopups(receivedAt);
+  queuedBrowserPopups.push({ payload, receivedAt });
+  if (queuedBrowserPopups.length > RSB_BROWSER_POPUP_BUFFER_LIMIT) {
+    queuedBrowserPopups.splice(
+      0,
+      queuedBrowserPopups.length - RSB_BROWSER_POPUP_BUFFER_LIMIT,
+    );
+  }
+}
+
+function resolveCurrentPopupHost(): WebContents | null {
+  if (!popupHostResolver) return null;
+  try {
+    const current = popupHostResolver();
+    return current && !current.isDestroyed() ? current : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Host 形态变为可投递时由 RsbWindowController 通知。队列在 main,所以 detached
+ * ready 后能从主窗交接到子窗,不依赖两个 renderer 各自隔离的 preload 内存。
+ */
+export function flushRsbBrowserPopupQueue(): void {
+  pruneQueuedBrowserPopups();
+  if (queuedBrowserPopups.length === 0) return;
+  const target = resolveCurrentPopupHost();
+  if (!target) return;
+
+  const pending = queuedBrowserPopups;
+  queuedBrowserPopups = [];
+  for (let index = 0; index < pending.length; index += 1) {
+    if (target.isDestroyed()) {
+      queuedBrowserPopups = pending.slice(index);
+      return;
+    }
+    try {
+      target.send(RSB_BROWSER_POPUP_CHANNEL, pending[index].payload);
+    } catch {
+      queuedBrowserPopups = pending.slice(index);
+      return;
+    }
+  }
+}
+
 export function setRsbPopupHostResolver(resolver: (() => WebContents | null) | null): void {
   popupHostResolver = resolver;
+  if (!resolver) {
+    // 生产只在 bootstrap 注入一次;null 是测试/停用路径,同时清掉跨 case backlog。
+    queuedBrowserPopups = [];
+    return;
+  }
+  flushRsbBrowserPopupQueue();
 }
 
 function sendBrowserPopup(
   hostContents: WebContents,
   payload: RsbBrowserPopupPayload,
 ): void {
-  // 优先发给"当前"host(detach / 视图切换后是新 renderer);解析失败或未注入
-  // (启动早期 / 单测)回落到调用方捕获的 hostContents。
-  let current: WebContents | null = null;
-  if (popupHostResolver) {
-    try {
-      current = popupHostResolver();
-    } catch {
-      current = null;
-    }
+  if (!popupHostResolver) {
+    // 启动早期 / 单测未注入 resolver 时保留原始同步直发路径。
+    if (!hostContents.isDestroyed()) hostContents.send(RSB_BROWSER_POPUP_CHANNEL, payload);
+    return;
   }
-  const target = current && !current.isDestroyed() ? current : hostContents;
-  if (target.isDestroyed()) return;
-  target.send(RSB_BROWSER_POPUP_CHANNEL, payload);
+
+  // 统一先入有界队列再 flush:既保证早到 payload 的顺序,也保证 send 抛错或
+  // detached host 未 ready 时 payload 仍留在 main,等待下一次 host 可用通知。
+  enqueueBrowserPopup(payload);
+  flushRsbBrowserPopupQueue();
 }
 
 /**

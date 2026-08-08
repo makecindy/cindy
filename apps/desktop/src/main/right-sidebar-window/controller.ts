@@ -54,6 +54,8 @@ export interface RsbWindowControllerDeps {
   isQuitting: () => boolean;
   /** Popup WindowProxy depends on the ordinary webview opener staying alive. */
   canCloseWindow?: () => boolean;
+  /** attached main 或 detached ready host 可投递时,通知 main 刷新一次性 popup 队列。 */
+  onPopupHostAvailable?: () => void;
   log: ControllerLogger;
 }
 
@@ -152,6 +154,7 @@ export class RsbWindowController {
     } else {
       // queued 调用方早已返回；attach 时必须把 ownership 显式交回主 renderer。
       this.flushDeferredCommandsToAttachedHost();
+      this.deps.onPopupHostAvailable?.();
       this.close();
     }
     // open()/close() 已各自广播,但两者都可能命中"窗口状态没变"的幂等分支
@@ -169,6 +172,7 @@ export class RsbWindowController {
       w.resolve();
     }
     this.flushDeferredCommandsToDetachedHost();
+    this.deps.onPopupHostAvailable?.();
   }
 
   /**
@@ -340,7 +344,7 @@ export class RsbWindowController {
   /**
    * RSB host webContents —— rsb-browser-bridge 的 pin/unpin 通知与 tab-op dispatch
    * 目标窗口。detached 且子窗口已握手 ready → 子窗口;否则回落主窗(内嵌形态)。
-   * ready 前子 renderer 尚未挂完 popup 等一次性 push 的订阅,过早切 host 会丢消息。
+   * 一次性 popup 使用下方更严格的 getPopupHostWebContents,不走此 fallback。
    */
   getHostWebContents(): WebContents | null {
     if (
@@ -351,6 +355,20 @@ export class RsbWindowController {
       !this.winRef.isDestroyed()
     ) {
       return this.winRef.webContents;
+    }
+    const main = this.deps.getMainWindow();
+    return main && !main.isDestroyed() ? main.webContents : null;
+  }
+
+  /**
+   * 一次性 popup 的严格可投递 host。与普通 bridge 的主窗 fallback 不同:
+   * detached 子窗口未 ready 时返回 null,让 main 队列等握手后跨 renderer flush。
+   */
+  getPopupHostWebContents(): WebContents | null {
+    if (this.deps.settings.read().detached) {
+      return this.ready && !this.closing && this.winRef && !this.winRef.isDestroyed()
+        ? this.winRef.webContents
+        : null;
     }
     const main = this.deps.getMainWindow();
     return main && !main.isDestroyed() ? main.webContents : null;

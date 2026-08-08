@@ -2,7 +2,7 @@
 //  - open / close / setDetached 的落盘 + 广播行为
 //  - 用户关窗(closed 事件)在 quitting / 非 quitting 下 lastOpen 的差异
 //  - ensureOpenForAutomation:非 detached no-op、开窗等 ready、超时、窗口先关
-//  - getHostWebContents 三态(detached+ready → 子窗;否则主窗)
+//  - getHostWebContents / getPopupHostWebContents 的普通 fallback 与严格 ready 边界
 //  - setContext 缓存 + 仅窗口开着时转发;routeCommand 原子裁决宿主并处理 deferred intent
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -64,6 +64,7 @@ function makeHarness(
   const broadcasts: Array<{ detached: boolean; open: boolean }> = [];
   const sends: Array<{ channel: string; payload: unknown }> = [];
   const sendTargets: number[] = [];
+  const onPopupHostAvailable = vi.fn();
 
   const deps: RsbWindowControllerDeps = {
     settings: {
@@ -89,6 +90,7 @@ function makeHarness(
     contextChannel: 'ctx-channel',
     commandChannel: 'cmd-channel',
     isQuitting: () => quitting,
+    onPopupHostAvailable,
     log: { info: vi.fn(), warn: vi.fn() },
   };
   const controller = new RsbWindowController(deps);
@@ -100,6 +102,7 @@ function makeHarness(
     broadcasts,
     sends,
     sendTargets,
+    onPopupHostAvailable,
     getSettings: () => settings,
     setQuitting: (v: boolean) => {
       quitting = v;
@@ -308,21 +311,27 @@ describe('getHostWebContents', () => {
   it('非 detached → 主窗 webContents', () => {
     const h = makeHarness();
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+    expect(h.controller.getPopupHostWebContents()).toBe(h.mainWin.webContents);
   });
 
-  it('detached + 窗口关 → 回落主窗', () => {
+  it('detached + 窗口关 → 普通 host 回落主窗,popup host 等待', () => {
     const h = makeHarness({ detached: true });
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+    expect(h.controller.getPopupHostWebContents()).toBeNull();
   });
 
-  it('detached + 未 ready 回落主窗;ready 后使用子窗口;关窗后回落主窗', () => {
+  it('detached + 未 ready 仅普通 host 回落主窗;ready 后 popup 跨窗 flush', () => {
     const h = makeHarness({ detached: true });
     h.controller.open();
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+    expect(h.controller.getPopupHostWebContents()).toBeNull();
     h.controller.markReady();
     expect(h.controller.getHostWebContents()).toBe(h.windows[0].webContents);
+    expect(h.controller.getPopupHostWebContents()).toBe(h.windows[0].webContents);
+    expect(h.onPopupHostAvailable).toHaveBeenCalledTimes(1);
     h.windows[0].emitClosed();
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+    expect(h.controller.getPopupHostWebContents()).toBeNull();
   });
 
   it('异步 closing 阶段立即排除旧子窗口 host', () => {
@@ -335,6 +344,19 @@ describe('getHostWebContents', () => {
     expect(h.controller.getState().open).toBe(false);
     expect(h.controller.getSidebarWebContents()).toBeNull();
     expect(h.controller.getHostWebContents()).toBe(h.mainWin.webContents);
+    expect(h.controller.getPopupHostWebContents()).toBeNull();
+  });
+
+  it('合并回主窗后通知 popup 队列向 attached host flush', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.open();
+    h.controller.markReady();
+    h.onPopupHostAvailable.mockClear();
+
+    h.controller.setDetached(false);
+
+    expect(h.controller.getPopupHostWebContents()).toBe(h.mainWin.webContents);
+    expect(h.onPopupHostAvailable).toHaveBeenCalledTimes(1);
   });
 });
 
