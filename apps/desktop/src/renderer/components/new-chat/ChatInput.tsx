@@ -988,6 +988,22 @@ export function ChatInput({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
+  // ── 推荐提示词 ────────────────────────────────────────────────────
+  // 设置开关:从 localStorage 读,默认开启
+  const [recommendationEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('prompt-recommendation-enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  // 推荐词渲染成一层 overlay 盖在编辑器上(原生 placeholder 由 CSS 隐藏)——
+  // Tiptap Placeholder 的文本在 extension 创建时定型,运行期改不动,所以不走它。
+  const [recommendedPrompt, setRecommendedPrompt] = useState<string | null>(null);
+  // handleKeyDown / onUpdate 是稳定闭包,读不到 state,走 ref 取值
+  const recommendedPromptRef = useRef<string | null>(null);
+  recommendedPromptRef.current = recommendedPrompt;
+  const showRecommendationRef = useRef(false);
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
   const composerSendShortcutLabel = getComposerSendShortcutLabel(
     composerSendShortcutPreference,
@@ -1060,6 +1076,115 @@ export function ChatInput({
   onStopRef.current = onStop;
   const showStopButtonRef = useRef(showStopButton);
   showStopButtonRef.current = showStopButton;
+
+  // ── 推荐提示词:turn 结束(showStopButton true→false)→ 调 IPC 预测 ────
+  // messages 在流式期间每个 delta 都变,放进 deps 会让本 effect 反复重跑并把
+  // prevShowStopRef 冲掉,从而永远检测不到那次跳变 —— 所以走 ref 读最新值。
+  const prevShowStopRef = useRef(false);
+  // turnGen: 每次新 turn 开始递增,预测请求携带代次;落地时检查代次与 sessionId
+  // 是否仍匹配,避免旧请求覆盖新轮推荐或跨 session 残留。
+  // 递增分两层:render 阶段同步检测 showStopButton false→true 跳变,关闭「用户操作
+  // → React render」之间旧 Promise 落地的空窗;useEffect 里照旧做清除推荐 UI 的副作用。
+  const turnGenRef = useRef(0);
+  const prevShowStopRender = useRef(false);
+  const prevSessionIdRef = useRef(sessionId);
+  // useLayoutEffect 在 React commit 后、浏览器绘制前同步执行，比 useEffect 更接近
+  // render 阶段的时序，同时避免 React concurrent rendering 下 render 被丢弃但 ref
+  // 已被错误修改的风险。防御纵深：发送时已通过 turnGenRef.current += 1 立即失效
+  // 旧预测（见 handleSend），此处作为兜底处理 showStopButton 跳变场景。
+  useLayoutEffect(() => {
+    const turnStarting = showStopButton && !prevShowStopRender.current;
+    prevShowStopRender.current = showStopButton;
+    if (turnStarting) {
+      turnGenRef.current += 1;
+    }
+  });
+  // sessionId 切换时同步更新预测相关 ref。使用 useLayoutEffect 而非 render 阶段直接
+  // 修改 ref，避免 concurrent rendering 的潜在风险。sessionId 在 commit 后立即更新
+  // ref，旧 session 预测请求若在 commit→layout effect 之间返回，仍会因 sessionId
+  // 不匹配被落地校验拒绝（defense-in-depth）。
+  useLayoutEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      prevShowStopRef.current = false;
+      turnGenRef.current = 0;
+      prevShowStopRender.current = false;
+      showRecommendationRef.current = false;
+      setRecommendedPrompt(null);
+    }
+  }, [sessionId]);
+  useEffect(() => {
+    // sessionId 变化时清除推荐 UI（ref 已在 render 阶段同步更新）
+    setRecommendedPrompt(null);
+  }, [sessionId]);
+  // messages 是可选 prop,缺省按空历史处理(空历史不发预测请求)。
+  const messagesRef = useRef(messages ?? []);
+  messagesRef.current = messages ?? [];
+  useEffect(() => {
+    const wasRunning = prevShowStopRef.current;
+    prevShowStopRef.current = showStopButton;
+    // 新 turn 开始 → 清除推荐 UI(代次已在 render 阶段同步递增)
+    if (showStopButton) {
+      showRecommendationRef.current = false;
+      setRecommendedPrompt(null);
+    }
+    // device-link 远程会话 & SSH 远程会话:maker:predict-prompt 不在 allowlist,且远程对话内容
+    // 不应送到控制端本地 provider/凭证 —— 跳过预测。
+    if (wasRunning && !showStopButton && recommendationEnabled && sessionId && !deviceLinkDeviceId && !remoteHostId) {
+      // 冷加载帧:runtimeAgentKind 尚未确认时就默认 claude-code,会将其他引擎的会话内容
+      // 发给 Claude Code provider —— 跳过预测,等 agent 身份确认后再恢复。
+      if (runtimeAgentKind == null) return;
+      const latestMessages = messagesRef.current;
+      const ed = editorRef.current;
+      if (
+        latestMessages.length > 0 &&
+        ed &&
+        !ed.isDestroyed &&
+        composerDocIsEmpty(ed.state.doc)
+      ) {
+        const contextMsgs = latestMessages.slice(-20).map((m) => ({
+          role: m.role,
+          content: m.content,
+        }));
+        // 捕获请求时刻的 sessionId 与 turnGen 快照,落地前校验是否仍匹配。
+        const requestSessionId = sessionId;
+        const requestTurnGen = turnGenRef.current;
+        window.electronAPI.maker
+          .predictNextPrompt({
+            sessionId,
+            agentKind: runtimeAgentKind,
+            messages: contextMsgs,
+            workingDir: workingDir ?? undefined,
+          })
+          .then((result) => {
+            // 请求往返期间用户可能已经切换会话、发起新 turn 或开始打字 —— 落地前
+            // 重新确认 sessionId、turnGen、编辑器状态,否则旧上下文的推荐会覆盖当前轮。
+            const cur = editorRef.current;
+            if (
+              result?.prompt &&
+              cur &&
+              !cur.isDestroyed &&
+              composerDocIsEmpty(cur.state.doc) &&
+              !showStopButtonRef.current &&
+              prevSessionIdRef.current === requestSessionId &&
+              turnGenRef.current === requestTurnGen
+            ) {
+              showRecommendationRef.current = true;
+              setRecommendedPrompt(result.prompt);
+            }
+          })
+          .catch(() => {
+            // 预测失败静默处理:不显示推荐,也不回落任何默认文案。
+          });
+      }
+    }
+    // 新 turn 开始 → 立即撤掉推荐
+    if (showStopButton) {
+      showRecommendationRef.current = false;
+      setRecommendedPrompt(null);
+    }
+  }, [showStopButton, sessionId, recommendationEnabled, runtimeAgentKind]);
+
   // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
   // BEFORE falling through to the existing stop / history shortcuts. That
   // way the user's mental model stays consistent: esc = "back out of the
@@ -2013,6 +2138,30 @@ export function ChatInput({
           return true;
         }
 
+        // Tab — 填入推荐提示词(编辑器为空 + 推荐激活 + 无修饰键)。
+        // 放在 captureKey 之后:palette 打开时 Tab 归 palette。
+        // 放在 cycle-permission-mode 之前:裸 Tab 不会误触 Shift+Tab 权限轮切。
+        if (
+          event.key === 'Tab' &&
+          !event.shiftKey &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.repeat &&
+          !event.isComposing &&
+          showRecommendationRef.current &&
+          recommendedPromptRef.current
+        ) {
+          if (composerDocIsEmpty(view.state.doc)) {
+            event.preventDefault();
+            // 先撤推荐(overlay 与正文同位置,不先撤会有一帧重叠),再插入文本。
+            showRecommendationRef.current = false;
+            setRecommendedPrompt(null);
+            view.dispatch(view.state.tr.insertText(recommendedPromptRef.current));
+            return true;
+          }
+        }
+
         // cycle-permission-mode (registry 默认 Shift+Tab, 用户可改绑) —— 输入框
         // 聚焦时轮切会话权限模式。放在 captureKey 之后: palette 打开时 Tab 归
         // palette。IME composition / repeat 跳过; 可用模式不足 2 个时不消费,
@@ -2212,6 +2361,12 @@ export function ChatInput({
       const syntheticRangeEnd = syntheticAtRangeEndRef.current;
       if (syntheticRangeEnd !== null && transaction.docChanged) {
         syntheticAtRangeEndRef.current = transaction.mapping.map(syntheticRangeEnd, 1);
+      }
+      // 编辑器一旦非空就彻底撤掉推荐(不只是隐藏)。留着 state 的话,发送后正文被
+      // 清空的那一帧 overlay 会重新出现 —— 那就是提交后闪一下推荐词的来源。
+      if (!composerDocIsEmpty(ed.state.doc) && recommendedPromptRef.current) {
+        showRecommendationRef.current = false;
+        setRecommendedPrompt(null);
       }
       if (
         !suppressListNormalizationRef.current &&
@@ -2565,6 +2720,28 @@ export function ChatInput({
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
   }, [composerMutationLocked, editor]);
+  /**
+   * 发送后把光标还回输入框。
+   *
+   * 派发期间 `composerEditorLocked` 会走上面的 `setEditable(false)`,contenteditable
+   * 一关浏览器就把焦点丢给 `<body>`;派发结束只恢复可编辑、不恢复焦点 —— 于是回车
+   * 发送完光标就没了,要接着打字得先点回输入框(推荐提示词的 Tab 也会因此失效)。
+   *
+   * 只在「派发前确实聚焦过」时补(标记在 dispatchSend 里同步记下),所以不抢焦点:
+   * 未聚焦就发送、或 disabled / 语音占用导致的上锁都不会触发。
+   *
+   * 必须排在上面那个 setEditable effect 之后:同一次 commit 里 effect 按声明序跑,
+   * 解锁时要等 setEditable(true) 先把 contenteditable 装回去,focus() 才落得进去。
+   */
+  const restoreFocusAfterDispatchRef = useRef(false);
+  useEffect(() => {
+    if (sendDispatchInFlight) return;
+    if (!restoreFocusAfterDispatchRef.current) return;
+    restoreFocusAfterDispatchRef.current = false;
+    const ed = editorRef.current;
+    if (!ed || ed.isDestroyed || !ed.isEditable) return;
+    ed.commands.focus();
+  }, [sendDispatchInFlight]);
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -4160,7 +4337,13 @@ export function ChatInput({
       // Local/SSH sends keep the live composer while references and runtime
       // settings settle; remote sends must stay editable after their
       // click-time snapshot is cleared.
-      if (!optimisticallyClearRemoteComposer) setSendDispatchInFlight(true);
+      if (!optimisticallyClearRemoteComposer) {
+        // 上锁会 setEditable(false) 把焦点打飞。这里同步(state 更新前)记下派发瞬间
+        // 是否聚焦,解锁后由 restoreFocusAfterDispatch effect 还原。只在真会上锁的
+        // 分支记,否则标记会滞留到下一次派发的解锁时机上误触发。
+        restoreFocusAfterDispatchRef.current = editor?.isFocused ?? false;
+        setSendDispatchInFlight(true);
+      }
       try {
         let serializedContent = serializedAtClick;
         if (!serializedContent) {
@@ -4588,6 +4771,11 @@ export function ChatInput({
             return;
           }
         }
+        // 发送新消息时立即递增 turnGen，让任何还未落地的旧 turn 预测结果失效。
+        // 必须在所有异步操作（effort settle / reference 解析）之前递增，防止
+        // device-link 乐观发送清空编辑器后、异步准备完成前旧预测写回输入框。
+        turnGenRef.current += 1;
+
         let result: boolean | void;
         let effortForSend = activeEffort;
         try {
@@ -4595,6 +4783,12 @@ export function ChatInput({
             const coordinator = effortChangeCoordinatorRef.current;
             let runtimeSettled = false;
             let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            // 同一次派发里的第二段上锁。用 `||` 而不是直接赋值:本地路径此时已被上面
+            // 那次上锁 setEditable(false) 打掉焦点,重新读 isFocused 会是 false、把先前
+            // 记住的 true 覆盖掉;`||` 既保住它,又能为 remote optimistic 那条没走上面
+            // 分支的路径补上标记。
+            restoreFocusAfterDispatchRef.current =
+              restoreFocusAfterDispatchRef.current || (editor?.isFocused ?? false);
             setSendDispatchInFlight(true);
             try {
               await Promise.race([
@@ -6085,6 +6279,8 @@ export function ChatInput({
   const hasMessage = !isEditorEmpty(editor);
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
   const canSend = hasMessage || hasAttachments || browserComments.length > 0;
+  // 推荐 overlay 的唯一可见判据:有推荐词 + 输入框空 + 不在语音态。
+  const showRecommendationOverlay = !!recommendedPrompt && !hasMessage && !voiceInput.isBusy;
   const hasVoiceDraftText = voiceInput.draftText.trim().length > 0;
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   const sendButtonDisabled = Boolean(
@@ -6525,16 +6721,38 @@ export function ChatInput({
               state={voiceInput.state}
               className="w-full"
             >
-              <EditorContent
-                editor={editor}
-                className={cn(
-                  'w-[calc(100%+11px)] -mr-[11px]',
-                  // Disabled gets the same visual cue as the old textarea
-                  composerMutationLocked && 'cursor-not-allowed opacity-60',
-                  voiceInput.isBusy && 'cursor-default',
+              <div
+                className="relative w-full"
+                // 推荐词生效时由 CSS 关掉原生 placeholder,避免两行字叠在一起。
+                data-recommendation-active={showRecommendationOverlay ? 'true' : undefined}
+              >
+                <EditorContent
+                  editor={editor}
+                  className={cn(
+                    'w-[calc(100%+11px)] -mr-[11px]',
+                    // Disabled gets the same visual cue as the old textarea
+                    composerMutationLocked && 'cursor-not-allowed opacity-60',
+                    voiceInput.isBusy && 'cursor-default',
+                  )}
+                  data-voice-draft-active={voiceInput.draftText ? 'true' : undefined}
+                />
+                {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
+                    py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
+                    向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
+                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
+                {showRecommendationOverlay && (
+                  <div
+                    className={cn(
+                      'pointer-events-none absolute left-0 top-0 w-full truncate py-[3px]',
+                      'text-[15px] leading-[22px] font-normal',
+                      'text-[var(--chat-input-placeholder-subtle)]',
+                    )}
+                    aria-hidden="true"
+                  >
+                    {recommendedPrompt}
+                  </div>
                 )}
-                data-voice-draft-active={voiceInput.draftText ? 'true' : undefined}
-              />
+              </div>
             </VoiceInputPointerHintLayer>
 
             {inSessionGoalEnabled && (
@@ -6769,7 +6987,15 @@ export function ChatInput({
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}
                   />
-                  <span ref={sendButtonRef} className="inline-flex rounded-full">
+                  {/* mousedown 吃掉默认行为:否则点发送会把焦点从 contenteditable
+                      挪到 button 上,发完光标就没了(接着打字要先点回输入框),
+                      推荐提示词的 Tab 也会因为编辑器失焦而落到原生焦点导航上。
+                      只压默认的「点击聚焦」,click 照常触发,键盘 Tab 聚焦不受影响。 */}
+                  <span
+                    ref={sendButtonRef}
+                    className="inline-flex rounded-full"
+                    onMouseDown={(event) => event.preventDefault()}
+                  >
                     {mainSlotIsStop ? (
                       <SendButton
                         disabled={false}

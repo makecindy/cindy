@@ -6,7 +6,7 @@
  *
  *   1. **HTTP `/v1/models`**(启动时 / 登录成功 / 本机凭证被认领给当前 owner /
  *      暂时性失败的有限次重试 / 用户在设置页手动重试):订阅 OAuth Bearer +
- *      `anthropic-beta: oauth-2025-04-20`(与 title-one-shot 同一套已验证的头)。
+ *      `anthropic-beta: oauth-2025-04-20`(与 provider-one-shot 同一套已验证的头)。
  *      即时出清单;响应可能不带 effort/fast 能力信息,此时按确定性默认合成
  *      (见 mapAnthropicHttpModels),等 SDK 通道精化。
  *   2. **SDK `supportedModels()`**(每次 claude-code 会话 init 后捕获,经

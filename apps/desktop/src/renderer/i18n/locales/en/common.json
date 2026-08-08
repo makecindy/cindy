@@ -2342,6 +2342,11 @@
       },
       "toggleAria": "Toggle question navigation rail"
     },
+    "promptRecommendation": {
+      "label": "Prompt recommendations in input",
+      "description": "After a reply finishes, the input shows a predicted follow-up prompt. Press Tab to fill it in.",
+      "toggleAria": "Toggle prompt recommendations"
+    },
     "collaboration": {
       "loading": "Loading collaboration settings…",
       "title": "Collaboration",
