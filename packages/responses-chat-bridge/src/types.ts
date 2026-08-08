@@ -492,7 +492,8 @@ export function isUnsupportedResponsesImageErrorPayload(payload: string | null):
 
 /**
  * Extracts the raw upstream error from a litellm gateway rejection so the caller can display a
- * provider message instead of the wrapper prefix. Falls back to the original payload.
+ * provider message instead of the wrapper prefix. Returns null when it cannot extract an image
+ * deserialization rejection.
  */
 export function litellmImageErrorPayload(payload: string | null): string | null {
   if (!payload) return null;
