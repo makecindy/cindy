@@ -1,7 +1,52 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { parseGetPluginResponse } from '@cindy/plugin-protocol';
 import { describe, expect, it } from 'vitest';
+
+import { isPluginManifestIncompatibilityError } from '../protocolErrors';
+
+function parserError(parse: () => unknown): unknown {
+  try {
+    parse();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('Expected the protocol parser to reject the response');
+}
+
+function invalidManifestResponse(schemaVersion = 2): Record<string, unknown> {
+  return {
+    schemaVersion,
+    plugin: {
+      id: `c${'a'.repeat(24)}`,
+      ghostId: 'acme-helper',
+      name: 'Acme Helper',
+      description: null,
+      author: null,
+      scope: 'public',
+      organizationId: null,
+      defaultInstall: false,
+      currentRelease: {
+        id: 'release-1',
+        version: '1.0.0',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 42,
+        publishedAt: '2026-07-23T00:00:00.000Z',
+        manifest: {
+          schemaVersion: 2,
+          id: 'acme-helper',
+          name: 'Acme Helper',
+          version: '1.0.0',
+          kind: 'chip',
+          entry: 'index.js',
+          slots: ['tool'],
+          tools: 'not an array',
+        },
+      },
+    },
+  };
+}
 
 /**
  * The IPC registration module imports Electron and the full Ghost host graph,
@@ -28,8 +73,21 @@ describe('Plugin Market IPC error boundary', () => {
     const body = registerSource.slice(start, end);
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
+    expect(body).toContain('isPluginManifestIncompatibilityError(error)');
+    expect(body).toContain("throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');");
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
     expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(12);
+  });
+
+  it('recognizes only manifest failures from the market protocol as incompatibilities', () => {
+    const manifestError = parserError(() => parseGetPluginResponse(invalidManifestResponse()));
+    const schemaError = parserError(() =>
+      parseGetPluginResponse(invalidManifestResponse(1)),
+    );
+
+    expect(isPluginManifestIncompatibilityError(manifestError)).toBe(true);
+    expect(isPluginManifestIncompatibilityError(schemaError)).toBe(false);
+    expect(isPluginManifestIncompatibilityError(new Error('network failed'))).toBe(false);
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {
