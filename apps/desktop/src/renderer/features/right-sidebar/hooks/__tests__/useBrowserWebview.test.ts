@@ -23,6 +23,7 @@ interface MockWebview {
   goBack: ReturnType<typeof vi.fn>;
   goForward: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  setZoomFactor: ReturnType<typeof vi.fn>;
 }
 
 let mockWebview: MockWebview;
@@ -120,6 +121,7 @@ function makeMockWebview(initialUrl: string): MockWebview {
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
+    setZoomFactor: vi.fn(),
   };
 }
 
@@ -159,6 +161,21 @@ describe('useBrowserWebview', () => {
     expect(acquire).not.toHaveBeenCalled();
     expect(result!.wrapper).toBeNull();
     expect(result!.webview).toBeNull();
+  });
+
+  it('reapplies page zoom after navigation', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => result!.setZoomFactor(1.25));
+    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+
+    act(() => mockWebview.dispatch('did-navigate', { url: 'https://example.com/' }));
+    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    expect(mockWebview.setZoomFactor).toHaveBeenCalledTimes(2);
   });
 
   it('does not materialize a hidden tab until it becomes visible', async () => {

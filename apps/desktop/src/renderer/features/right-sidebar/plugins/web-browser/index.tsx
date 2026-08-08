@@ -2,9 +2,10 @@
  * web-browser plugin —— RSB 内嵌浏览器(对标设计稿 F3,**不做** F4 newtab 卡片)。
  *
  * 设计要点:
- *   - **state 最小化**:`{ url, title, favicon }` —— 重启 / 切 session 后能完整恢复
- *     "用户上次看的页面 + tab pill 标题 + 图标"。webview 内部的 cookie / history /
- *     sessionStorage 等由 BROWSER_PARTITION 自带持久化,跟 plugin state 完全独立。
+ *   - **state 最小化**:`{ url, title, favicon, zoomFactor }` —— 重启 / 切 session
+ *     后能恢复用户上次看的页面、tab pill 标题 / 图标与该标签的网页缩放。webview
+ *     内部的 cookie / history / sessionStorage 等由 BROWSER_PARTITION 自带持久化,
+ *     跟 plugin state 完全独立。
  *   - **默认 about:blank** —— 跟 Codex 一致(plan 顶部 "用户确认")。F4 newtab 卡片
  *     设计稿暂搁置,空标签就是空白页 + URL bar 提示。
  *   - **plugin state ↔ webview 状态双向同步**:
@@ -28,6 +29,10 @@ import type { TabKindPlugin } from '../../types';
 const BrowserTabBody = lazy(() =>
   import('./BrowserTabBody').then((module) => ({ default: module.BrowserTabBody })),
 );
+import {
+  DEFAULT_BROWSER_ZOOM_FACTOR,
+  normalizeBrowserZoomFactor,
+} from './lib/browserZoom';
 
 /** plugin state shape —— 反序列化口径:JSON identity 即可恢复。 */
 export interface WebBrowserState {
@@ -43,6 +48,8 @@ export interface WebBrowserState {
    *  应当回到静默态,因为 webview 会重新加载),但运行时仍然写进 state 走 patchState
    *  统一通道,UI 通过 state 拿。 */
   isAudible: boolean;
+  /** Current page zoom for this tab. Kept separate from the app window zoom. */
+  zoomFactor: number;
   /** Runtime-only id of a Chromium-created popup adopted by main. Hydration
    * intentionally drops it because native surfaces do not survive restart. */
   nativePopupSurfaceId?: string;
@@ -53,7 +60,28 @@ const DEFAULT_STATE: WebBrowserState = {
   title: '',
   favicon: null,
   isAudible: false,
+  zoomFactor: DEFAULT_BROWSER_ZOOM_FACTOR,
 };
+
+export function hydrateWebBrowserState(raw: unknown): WebBrowserState {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_STATE };
+  const obj = raw as Record<string, unknown>;
+  const url = typeof obj.url === 'string' ? obj.url : DEFAULT_STATE.url;
+  const title = typeof obj.title === 'string' ? obj.title : DEFAULT_STATE.title;
+  const favicon =
+    typeof obj.favicon === 'string'
+      ? normalizePersistableFavicon(obj.favicon)
+      : obj.favicon === null
+      ? null
+      : DEFAULT_STATE.favicon;
+  return {
+    url,
+    title,
+    favicon,
+    isAudible: false,
+    zoomFactor: normalizeBrowserZoomFactor(obj.zoomFactor),
+  };
+}
 
 /**
  * Tab pill 标题:有 title → 显示 title;否则 → "新标签" i18n 占位。
@@ -138,19 +166,7 @@ const plugin: TabKindPlugin<WebBrowserState> = {
   // hydrate:容忍持久化 schema 演进。Phase 2 时期空 state(`null`)→ default。
   // isAudible 不从持久化恢复(重启后 webview 重新加载,默认静默才合理)。
   // favicon 再消毒一次:存量坏数据(超大 / blob: / 非白名单)在显示层也不放行。
-  hydrateState: (raw): WebBrowserState => {
-    if (!raw || typeof raw !== 'object') return { ...DEFAULT_STATE };
-    const obj = raw as Record<string, unknown>;
-    const url = typeof obj.url === 'string' ? obj.url : DEFAULT_STATE.url;
-    const title = typeof obj.title === 'string' ? obj.title : DEFAULT_STATE.title;
-    const favicon =
-      typeof obj.favicon === 'string'
-        ? normalizePersistableFavicon(obj.favicon)
-        : obj.favicon === null
-        ? null
-        : DEFAULT_STATE.favicon;
-    return { url, title, favicon, isAudible: false };
-  },
+  hydrateState: hydrateWebBrowserState,
 };
 
 registerTabKind(plugin as unknown as TabKindPlugin, import.meta.hot);

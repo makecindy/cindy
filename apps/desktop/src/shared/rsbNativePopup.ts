@@ -36,7 +36,9 @@ export type RsbNativePopupEvent =
   | { surfaceId: string; type: 'closed' };
 
 export type RsbNativePopupCommand =
-  { command: 'navigate'; url: string } | { command: 'reload' | 'go-back' | 'go-forward' | 'stop' };
+  | { command: 'navigate'; url: string }
+  | { command: 'set-zoom-factor'; zoomFactor: number }
+  | { command: 'reload' | 'go-back' | 'go-forward' | 'stop' };
 
 export interface RsbNativePopupClaimInput {
   surfaceId: string;
