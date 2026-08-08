@@ -82,13 +82,28 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       // 与 record 同样浅拷贝(含 budget):返回新对象,消费者修改返回值
       // 不会污染环内数据。
       // 按 at 稳定排序(快终态时 turn-dispatched 的 at 早于 finalize,但落环晚;
-      // 消费者按返回顺序看时间线必须 dispatch 在前,Codex P1)。
+      // 消费者按返回顺序看时间线必须 dispatch 在前,Codex P1)。同 at + 同 turnIndex
+      // 时按类型优先级(派发类在收口类之前,Greptile P1:同毫秒快终态不再错序)。
+      const typeOrder = [
+        'resumed',
+        'turn-dispatched',
+        'turn-finalized',
+        'state-transition',
+        'stall-detected',
+        'budget-consumed',
+        'terminal',
+      ];
       return ring
         .map((evt) => ({
           ...evt,
           budget: evt.budget ? { ...evt.budget } : undefined,
         }))
-        .sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || a.turnIndex - b.turnIndex);
+        .sort(
+          (a, b) =>
+            (a.at ?? 0) - (b.at ?? 0) ||
+            a.turnIndex - b.turnIndex ||
+            typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type),
+        );
     },
     clear() {
       ring.length = 0;

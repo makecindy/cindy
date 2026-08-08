@@ -544,6 +544,10 @@ export class GoalController {
 
     if (existing) {
       const session = await this.deps.ensureSession(sessionId);
+      // dormant 目标无 entryBoundary 时(undefined === undefined)boundary 判等失效,
+      // 必须显式 disposed 检查(reviewer P1:登出/切账号期间不得继续
+      // stopSession/storage.update/attachListener/emit 旧账号状态)。
+      if (this.disposed) return null;
       if (this.turns.get(sessionId) !== entryBoundary) return null;
       if (!session) {
         this.deps.logger.warn('[goal] setGoal edit: no live session', { sessionId });

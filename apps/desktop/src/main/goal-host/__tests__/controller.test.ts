@@ -446,7 +446,7 @@ describe('GoalController', () => {
     expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
   });
 
-  it('migrates the Goal listener to the switched session so the new engine turn can finalize ()', async () => {
+  it('migrates the Goal listener to the switched session so the new engine turn can finalize', async () => {
     const oldSession = new FakeSession('s1', 'claude-code');
     const switchedSession = new FakeSession('s1', 'codex');
     let live: FakeSession = oldSession;
