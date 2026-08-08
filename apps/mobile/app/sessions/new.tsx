@@ -4238,11 +4238,23 @@ export default function NewRemoteSessionScreen() {
           );
           const pairChanged = resolved.model !== effectiveDraft.model
             || resolved.providerId !== effectiveDraft.providerId;
-          if (!pairChanged) return null;
+          // codex review P2:来源未变也按 fresh 精确行校准——fresh 目录就绪时始终
+          // 重校准 effort + Fast 支持(provider revision 只改能力不删行:撤销档位/
+          // Fast 时组合不变也要关),不得因 pairChanged=false 提前返回发旧参数。
           return {
             ...resolved,
             effort: reconcileEffortAfterFallback(rows, resolved, effectiveDraft.effort),
-            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+            ...(effectiveDraft.fastMode && (
+              pairChanged
+              || !resolved.providerId
+              || !isFastRestorable(
+                effectiveDraft.agentKind,
+                resolved.providerId,
+                resolved.model,
+                rows,
+                targetAgentHasFast(selectedDeviceId, effectiveDraft.agentKind),
+              )
+            ) ? { fastMode: false } : {}),
           };
         },
         authGateHint: agentAuthGateHint(agentKindSnapshot),
@@ -4660,11 +4672,27 @@ export default function NewRemoteSessionScreen() {
           g.catalogKnown,
         );
         const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
+        // codex review P2:目录就绪时**始终**按 fresh 精确行校准(来源未变也按新
+        // 目录校准运行选项)——provider revision 只改能力不删行(撤销 effort 档位
+        // /Fast 支持)时,组合不变沿用旧 effort/fastMode 会发送目录已不支持的参数
+        // 被被控端拒绝。fail-open(catalogKnown=false)时 rows 不可信,保持信任语义。
         effectiveDraft = {
           ...effectiveDraft,
           ...resolved,
-          ...(pairChanged ? {
+          ...(g.catalogKnown ? {
             effort: reconcileEffortAfterFallback(g.rows, resolved, effectiveDraft.effort),
+            ...(effectiveDraft.fastMode && (
+              pairChanged
+              || !resolved.providerId
+              || !isFastRestorable(
+                effectiveDraft.agentKind,
+                resolved.providerId,
+                resolved.model,
+                g.rows,
+                targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind),
+              )
+            ) ? { fastMode: false } : {}),
+          } : pairChanged ? {
             ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
           } : {}),
         };
