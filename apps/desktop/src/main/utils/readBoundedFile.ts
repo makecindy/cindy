@@ -29,6 +29,7 @@ export interface ReadBoundedFileOptions {
   /**
    * 已 realpath 的根目录。传入时在 open 之后复核:路径此刻 stat 的 dev/ino
    * 与句柄一致,且 realpath(filePath) 落在该根内;任一不成立返回 null。
+   * 根内复核遇到无法确定的 I/O 错误时可能抛出 BoundedFileReadUncertainError。
    */
   containWithin?: string;
   /** 特殊文件场景使用非阻塞打开，避免 FIFO 在 Main 中永久等待。 */

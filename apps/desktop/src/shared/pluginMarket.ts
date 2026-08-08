@@ -26,8 +26,9 @@ export interface PluginMarketItem {
   publishedAt: string;
   icon: PluginIconMetadata | null;
   /**
-   * 自定义市场图标的本地身份键。只证明 Main 可按当前来源事实读取这一版图标，
-   * 不包含本地路径或字节；服务端市场与未声明 icon 的自定义插件不携带。
+   * 自定义市场图标的本地身份键。它是 Main 根据当前来源事实计算的本地投影身份，
+   * 不包含本地路径或字节；读取失败或事实不确定时也可能携带该键并由 localIcons
+   * 返回 missing/retryable。服务端市场与未声明 icon 的自定义插件不携带。
    */
   customIconKey?: string;
   installState: PluginMarketInstallState;

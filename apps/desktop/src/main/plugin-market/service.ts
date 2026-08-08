@@ -306,18 +306,18 @@ function installedGhostRawManifestDigest(dir: string): string | null {
  * 自定义市场图标的不可逆身份键。Renderer 只拿摘要，不拿来源路径；来源被移除
  * 后重加、Git revision、文件内容或 manifest 同版改写都会产生新键。
  */
-function customMarketIconKey(
+async function customMarketIconKey(
   owner: ActiveAppSession,
   config: MarketSourceConfig,
   plugin: DiscoveredMarketPlugin,
   openedIconStat?: fs.BigIntStats,
-): string | null {
+): Promise<string | null> {
   if (plugin.manifest.icon === undefined) return null;
   const iconPath = path.join(plugin.dir, ...plugin.manifest.icon.split('/'));
   let iconFingerprint: string;
   let projectionUncertain = false;
   try {
-    const stat = openedIconStat ?? fs.lstatSync(iconPath, { bigint: true });
+    const stat = openedIconStat ?? (await fs.promises.lstat(iconPath, { bigint: true }));
     iconFingerprint = `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
   } catch (error) {
     projectionUncertain = !isDeterministicLocalIconReadFailure(error);
@@ -652,7 +652,7 @@ export class PluginMarketService {
                 continue;
               }
               if (
-                customMarketIconKey(owner, discovered.config, plugin) !==
+                (await customMarketIconKey(owner, discovered.config, plugin)) !==
                   entry.request.expectedIconKey &&
                 !entry.request.expectedIconKey.startsWith('1')
               ) {
@@ -681,7 +681,7 @@ export class PluginMarketService {
                       ? localIconRetryable(entry.request)
                       : localIconMissing(entry.request);
                 } else if (
-                  customMarketIconKey(owner, discovered.config, plugin, read.stat) !==
+                  (await customMarketIconKey(owner, discovered.config, plugin, read.stat)) !==
                   entry.request.expectedIconKey
                 ) {
                   results[entry.index] = entry.request.expectedIconKey.startsWith('1')
@@ -948,7 +948,7 @@ export class PluginMarketService {
             {
               config: discovered.config,
               plugin,
-              iconKey: customMarketIconKey(owner, discovered.config, plugin),
+              iconKey: await customMarketIconKey(owner, discovered.config, plugin),
             },
             this.localInstallSnapshot(this.ledgerForOwner(owner)),
           ),
@@ -1163,7 +1163,7 @@ export class PluginMarketService {
           entries.push({
             config,
             plugin,
-            iconKey: customMarketIconKey(owner, config, plugin),
+            iconKey: await customMarketIconKey(owner, config, plugin),
           });
         }
       });

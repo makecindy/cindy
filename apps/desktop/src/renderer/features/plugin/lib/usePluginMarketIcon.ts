@@ -415,6 +415,7 @@ export function __resetPluginMarketIconStoreForTest(): void {
   queuedKeys.clear();
   unsettledLocalIconRequests.clear();
 
+  flushScheduled = false;
   flushInFlight = false;
   pruneScheduled = false;
   totalDataSize = 0;

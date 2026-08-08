@@ -665,9 +665,9 @@ describe('PluginMarketService 自定义市场图标', () => {
     ]);
     discoverSpy.mockRestore();
 
-    const lstatSpy = vi.spyOn(fs, 'lstatSync').mockImplementationOnce(() => {
-      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
-    });
+    const lstatSpy = vi
+      .spyOn(fs.promises, 'lstat')
+      .mockRejectedValueOnce(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
     const uncertainItem = (await h.service.snapshot()).items[0]!;
     lstatSpy.mockRestore();
     await expect(
