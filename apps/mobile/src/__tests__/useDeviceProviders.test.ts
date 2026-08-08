@@ -175,6 +175,13 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(src).toContain('const prevEpoch = getDeviceFetchEpoch(deviceId);');
     expect(src).toContain('const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;');
     expect(src).toContain('markDeviceFetchEpoch(deviceId, connectionEpoch);');
+    // mark 只在成功路径:effect 开头(reconnected 判定后)不得无条件 mark——否则
+    // refresh 失败后同 epoch 重挂载会把断线前旧缓存判「未重连」直接就绪且不重试
+    const reconnectedBlock = src.slice(
+      src.indexOf('const prevEpoch = getDeviceFetchEpoch(deviceId);'),
+      src.indexOf('const prevEpoch = getDeviceFetchEpoch(deviceId);') + 300,
+    );
+    expect(reconnectedBlock).not.toContain('markDeviceFetchEpoch');
     // 模块级 Map + 导出存取(跨组件卸载存活)
     expect(cacheSrc).toContain('const deviceFetchEpoch = new Map<string, number>();');
     expect(cacheSrc).toContain('export function markDeviceFetchEpoch(deviceId: string, epoch: number): void');

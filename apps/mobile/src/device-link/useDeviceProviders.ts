@@ -95,6 +95,11 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setLoading(false);
       setReadyFor(deviceId);
       setReadyGen(getDeviceProvidersGen(deviceId));
+      // payload 被采纳(拉取成功)才更新该设备缓存所属连接代际(codex review P1):
+      // 若在 refresh 前就 mark 新 epoch,刷新失败后同 epoch 重挂载会把断线前旧
+      // 缓存判为「未重连」直接标记就绪,且永不重试;只在成功路径更新,失败保持
+      // 旧代际 → 下次 effect 重跑仍判定 reconnected → 重试 fresh。
+      markDeviceFetchEpoch(deviceId, connectionEpoch);
     });
     // 代际变更(evict/clearAll/fresh 作废)主动推送:模块级 Map 变化不触发渲染,
     // 光靠渲染期代际比对,ready 失效要等下一次碰巧渲染(codex review P2)——收到
@@ -125,9 +130,10 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     // 重连(connectionEpoch 变化)后缓存命中也要强制刷新(codex review P1):
     // relay 断线期间被控端可能已改供应商且无 provider push,直接短路会无限期
     // 展示旧来源。该设备无代际记录(首次标记)走正常缓存命中快路径。
+    // 注:此处**不** mark 当前 epoch——mark 只发生在成功路径(payload 订阅回调 /
+    // 缓存命中快路径),refresh 失败时保持旧代际,同 epoch 重挂载仍会重试 fresh。
     const prevEpoch = getDeviceFetchEpoch(deviceId);
     const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;
-    markDeviceFetchEpoch(deviceId, connectionEpoch);
     if (cached && !reconnected) {
       setPayload(cached);
       setError(null);
@@ -137,6 +143,8 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setLoading(false);
       setReadyFor(deviceId);
       setReadyGen(getDeviceProvidersGen(deviceId));
+      // 缓存命中快路径:当前缓存即当前 epoch 获取的,确认标记(不依赖订阅回调)。
+      markDeviceFetchEpoch(deviceId, connectionEpoch);
       // 缓存命中分支也必须返回统一 cleanup(codex review P2):只退 payload 订阅会让
       // 代际订阅漏订存活——切走后旧设备的 evict 通知仍会 setReadyFor(null),误伤新设备。
       return () => {
