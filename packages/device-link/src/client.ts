@@ -40,29 +40,33 @@ import {
   parseTransportPayload,
   byteLength,
 } from './transport.js';
-import { SESSION_ACTIVITY_CHANNEL } from './topics.js';
-
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 /**
- * latest-wins 腾位适用的**可合并镜像通道白名单**(review 两轮 P1 收敛:先是
- * contacts-sync 黑名单,再反转为白名单)。push 单 FIFO 上混着两类语义:
+ * latest-wins 腾位适用的**可驱逐通道白名单**(review 三轮收敛:contacts-sync
+ * 黑名单 → 白名单 → 收缩到单通道)。push 单 FIFO 上混着三类语义,只有第一类
+ * 可以参与传输层 latest-wins:
  *
- * - 可合并镜像/可再生流(本表):agent 事件流、会话活动快照、输入投影。丢最旧
- *   帧只损失中间态,最新状态由后续帧或控制端 resync 补偿;其中 maker:event 在
- *   旧语义下拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按 best-effort
- *   放弃),换成丢最旧不引入新的损失面。
- * - 不可合并事件/流控数据(表外全部,fail-closed):local-db:messages:created、
- *   maker:interaction-request(确认卡)、fs-watch 事件、contacts-sync 分片
- *   (发送方以 BACKPRESSURE 为流控信号,见 contacts-sync sender)等。拥塞驱逐
- *   发生时 link 并未断开,reconnect reseed 不会跑——静默驱逐 = UI 永久漏一条
- *   消息/确认卡,或分片传输永远拼不出。这类通道维持原背压语义。
+ * - 自相似有损事件流(本表,现仅 maker:event):流内每帧价值均匀且整流已是
+ *   契约——旧语义拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按
+ *   best-effort 放弃),换成丢最旧不引入新的损失面;转录内容由受保护的
+ *   local-db:messages:created + 控制端消息对账自愈,会话运行态由受保护的
+ *   status / activity 通道承载。
+ * - 键控/终态快照(sessions:activity、maker:input:projection):看似「镜像」
+ *   但**不满足跨帧可替代**——快照按 sessionId 键控,会话的 completed/error
+ *   收尾快照是该键的最后一帧,被其它键/其它通道的洪峰驱逐后不会再有后继帧
+ *   补偿;sessions:activity 的 staging(dispatch 层 latest-wins)在 sendPush
+ *   成功后即删暂存、不再重试,link 不重连 reseed 也不会跑,驱逐 = 手机端
+ *   永远显示 running(review 第三轮)。传输层不做同键比较(head-only 前缀
+ *   约束下同键驱逐在多会话混流时够不着队头,机制无效),这类通道整体回到
+ *   原背压语义,由各自上游的整流/重试契约保证送达。
+ * - 不可合并事件/流控数据(local-db:messages:created、确认卡、fs-watch、
+ *   contacts-sync 分片等):静默驱逐 = UI 永久漏事件或传输永久拼不出。
  *
- * 新增 push 通道默认**不可驱逐**;确属镜像语义需在此显式登记。
+ * 新增 push 通道默认**不可驱逐**(fail-closed);要进本表必须论证「流内自
+ * 相似、无键控终态、丢帧可由受保护通道自愈」三点。
  */
 const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
-  SESSION_ACTIVITY_CHANNEL,
-  'maker:input:projection',
 ]);
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
