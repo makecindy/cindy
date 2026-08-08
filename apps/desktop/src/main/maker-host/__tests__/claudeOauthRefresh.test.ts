@@ -998,6 +998,41 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     );
   });
 
+  it('grant recovery 重试耗尽后仍等待异步 invalid_grant 耐久收口', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const onInvalidGrant = vi.fn(async () => handlerGate);
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      onCredentialRejected: () => {
+        throw Object.assign(new Error('primary sidecar unavailable'), { code: 'EACCES' });
+      },
+      onCredentialRejectionRecovery: () => false,
+      clearRejectedCredential: () => {
+        throw Object.assign(new Error('credential store unavailable'), { code: 'EACCES' });
+      },
+      onInvalidGrant,
+      fetchFn: (async () =>
+        jsonResponse(400, { error: 'invalid_grant' })) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    let settled = false;
+    void pending.finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(onInvalidGrant).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseHandler();
+    await expect(pending).resolves.toBeNull();
+  });
+
   it('主拒绝记录和精确清除都失败时,grant-scoped recovery 仍让 proof 可耐久', async () => {
     const current = fixtureOAuth({
       expiresAt: NOW - 1,
@@ -1223,6 +1258,30 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     refresher.acceptCredential(identity);
     expect(refresher.getOAuthForSpawn()).toBe(current);
     await expect(refresher.getValidOAuth()).resolves.toBe(current);
+  });
+
+  it('接受同 token 的新授权 revision 不会解除旧 revision 的拒绝 fence', () => {
+    const oldGrant = fixtureOAuth({ cindyAuthorizationRevision: 'login-revision-1' });
+    const newGrant = fixtureOAuth({ cindyAuthorizationRevision: 'login-revision-2' });
+    let stored = oldGrant;
+    const { deps } = makeDeps({ readOAuth: () => stored });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    expect(
+      refresher.rejectCredential({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: oldGrant,
+      }),
+    ).toBe(true);
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+
+    stored = newGrant;
+    refresher.acceptCredential(newGrant);
+    expect(refresher.getOAuthForSpawn()).toBe(newGrant);
+
+    stored = oldGrant;
+    expect(refresher.getOAuthForSpawn()).toBeNull();
   });
 
   it('one process keeps the old grant fenced while another accepts identical tokens with a new revision', () => {

@@ -425,9 +425,13 @@ export function acceptClaudeAiOAuthCredentialIdentity(
   identity: ClaudeAiOAuthCredentialIdentity,
 ): void {
   const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(identity);
+  const revision = getClaudeAiOAuthCredentialRejectionRevision(identity);
   for (let index = rejectedClaudeAiOAuthIdentities.length - 1; index >= 0; index -= 1) {
     const rejected = rejectedClaudeAiOAuthIdentities[index];
-    if (rejected.fingerprint === fingerprint) {
+    if (
+      rejected.fingerprint === fingerprint &&
+      rejected.authorizationRevision === revision
+    ) {
       rejectedClaudeAiOAuthIdentities.splice(index, 1);
     }
   }

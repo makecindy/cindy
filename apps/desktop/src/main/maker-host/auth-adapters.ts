@@ -433,7 +433,7 @@ export function readClaudeApiKey(): string | null {
  */
 export const CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS = 12_000;
 
-/** Detached invalid_grant cleanup may wait briefly for a synchronous binding writer. */
+/** Transactional invalid_grant cleanup may wait briefly for a synchronous binding writer. */
 const CLAUDE_INVALIDATION_SETUP_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_600] as const;
 /**
  * The final compare-and-broadcast also needs to outlive a normal 15s stale
@@ -475,14 +475,21 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     // 订阅 refresh token 被服务端作废(锁内确认的 invalid_grant)→ 清态 + 广播重登提示,
     // 不让用户停在「显示已连接、会话连环 401」的假状态。纯内存接线,构造期零文件系统
     // 副作用(authAdaptersImportPurity 约定)。
-    setClaudeOAuthInvalidGrantHandler((proof) => {
-      this.ensureRejectedCredentialDurability(proof);
-      void this.invalidateRejectedCredential(proof).catch(async (error) => {
+    setClaudeOAuthInvalidGrantHandler(async (proof) => {
+      // Keep the already-durable common path synchronous until the cleanup's
+      // own first wait. Only the exceptional false proof needs the additional
+      // awaited recovery loop.
+      if (proof.durabilityEstablished === false) {
+        await this.ensureRejectedCredentialDurability(proof);
+      }
+      try {
+        await this.invalidateRejectedCredential(proof);
+      } catch (error) {
         log.error('unexpected claude invalid_grant cleanup failure', {
           error: error instanceof Error ? error.message : String(error),
         });
         await this.broadcastInvalidGrantIfCurrent('claude_oauth_refresh_invalid_grant', proof);
-      });
+      }
     });
   }
 
@@ -534,28 +541,29 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     }
   }
 
-  private ensureRejectedCredentialDurability(proof: ClaudeOAuthInvalidGrantProof): void {
-    if (proof.durabilityEstablished !== false) return;
+  private async ensureRejectedCredentialDurability(
+    proof: ClaudeOAuthInvalidGrantProof,
+  ): Promise<boolean> {
+    if (proof.durabilityEstablished !== false) return true;
     try {
-      if (persistClaudeAiOAuthCredentialRejectionRecovery(proof.rejectedCredential)) return;
+      if (persistClaudeAiOAuthCredentialRejectionRecovery(proof.rejectedCredential)) return true;
     } catch (error) {
       log.warn('initial claude rejection recovery fence failed', {
         code: nestedErrorCode(error) ?? 'unknown',
       });
     }
-    void (async () => {
-      for (const delay of CLAUDE_INVALIDATION_BROADCAST_RETRY_DELAYS_MS) {
-        await waitForClaudeInvalidationRetry(delay);
-        try {
-          if (persistClaudeAiOAuthCredentialRejectionRecovery(proof.rejectedCredential)) return;
-        } catch (error) {
-          log.warn('retrying claude rejection recovery fence failed', {
-            code: nestedErrorCode(error) ?? 'unknown',
-          });
-        }
+    for (const delay of CLAUDE_INVALIDATION_BROADCAST_RETRY_DELAYS_MS) {
+      await waitForClaudeInvalidationRetry(delay);
+      try {
+        if (persistClaudeAiOAuthCredentialRejectionRecovery(proof.rejectedCredential)) return true;
+      } catch (error) {
+        log.warn('retrying claude rejection recovery fence failed', {
+          code: nestedErrorCode(error) ?? 'unknown',
+        });
       }
-      log.error('claude rejection recovery fence could not be persisted after retries');
-    })();
+    }
+    log.error('claude rejection recovery fence could not be persisted after retries');
+    return false;
   }
 
   /**

@@ -205,7 +205,7 @@ export interface ClaudeOAuthRefresherDeps {
   /** 锁冲突退避 sleep(测试注入 0 延迟)。 */
   sleep?: (ms: number) => Promise<void>;
   /** refresh token 被服务端作废(invalid_grant)时通知 —— adapter 按 proof 条件清理。 */
-  onInvalidGrant?: (proof: ClaudeOAuthInvalidGrantProof) => void;
+  onInvalidGrant?: (proof: ClaudeOAuthInvalidGrantProof) => void | Promise<void>;
   /** Record the token-global rejection before any owner-scoped cleanup decision. */
   onCredentialRejected?: (identity: ClaudeAiOAuthCredentialIdentity) => void;
   /** Write-only grant-scoped fallback when the primary rejection sidecar cannot be read. */
@@ -390,9 +390,13 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
 
   function acceptCredential(identity: ClaudeAiOAuthCredentialIdentity): void {
     const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(identity);
+    const revision = effectiveRejectionRevision(identity);
     for (let index = rejectedCredentials.length - 1; index >= 0; index -= 1) {
       const rejected = rejectedCredentials[index];
-      if (rejected.fingerprint === fingerprint) {
+      if (
+        rejected.fingerprint === fingerprint &&
+        rejected.authorizationRevision === revision
+      ) {
         rejectedCredentials.splice(index, 1);
       }
     }
@@ -881,7 +885,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
           // 库仍是失败那套凭证且服务端明确作废 → 刷新无望,通知 UI 重登。
           log.error('claude oauth refresh token revoked by server (invalid_grant)');
           try {
-            deps.onInvalidGrant?.({
+            await deps.onInvalidGrant?.({
               source: 'invalid_grant',
               owner,
               rejectedCredential: credentialIdentity(fresh),
@@ -1092,7 +1096,9 @@ function defaultLockDir(): string {
 }
 
 let defaultRefresher: ReturnType<typeof createClaudeOAuthRefresher> | null = null;
-let invalidGrantHandler: ((proof: ClaudeOAuthInvalidGrantProof) => void) | null = null;
+let invalidGrantHandler: (
+  (proof: ClaudeOAuthInvalidGrantProof) => void | Promise<void>
+) | null = null;
 
 function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
   if (!defaultRefresher) {
@@ -1223,7 +1229,7 @@ export function disconnectClaudeAiOAuth(): 'revoked' | 'confirmed-unbound' {
 
 /** refresh token 被服务端作废时的通知接线(auth-adapters 装配,内存操作零副作用)。 */
 export function setClaudeOAuthInvalidGrantHandler(
-  handler: ((proof: ClaudeOAuthInvalidGrantProof) => void) | null,
+  handler: ((proof: ClaudeOAuthInvalidGrantProof) => void | Promise<void>) | null,
 ): void {
   invalidGrantHandler = handler;
 }
