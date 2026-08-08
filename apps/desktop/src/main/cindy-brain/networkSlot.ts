@@ -52,6 +52,7 @@ import {
   GHOST_MEDIA_HASH_RE,
   GHOST_SECRET_EXCHANGE_TTL_DEFAULT_S,
   ghostNetworkHostMatches,
+  ghostSecretInjectMatches,
   type GhostConnectionDecl,
   type GhostFetchMethod,
   type GhostSecretOauthDecl,
@@ -1043,12 +1044,14 @@ export class GhostNetworkSlot {
     // ── 凭证注入:命中本次目标域名的每条声明凭证,保险库现读明文拼头
     // (交换型凭证在此换取/取缓存令牌)。未配置的凭证快速失败(带清晰
     // 指引),不发一个注定 401 的请求。
-    const inject0 = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url.hostname, net.hosts, requestHeaders, authAccount);
+    const inject0 = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url, method, net.hosts, requestHeaders, authAccount);
     if (inject0.error) return { ok: false, message: inject0.error };
-    let usedExchange = inject0.usedExchange;
-    const oauthInjected = new Map(inject0.oauthInjected);
-    const connectionInjected = new Map(inject0.connectionInjected);
+    let initialUsedExchange = inject0.usedExchange;
+    let initialOauthInjected = new Map(inject0.oauthInjected);
     let initialConnectionInjected = new Map(inject0.connectionInjected);
+    let retryUsedExchange = inject0.usedExchange;
+    let retryOauthInjected = new Map(inject0.oauthInjected);
+    let retryConnectionInjected = new Map(inject0.connectionInjected);
 
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
     const inflight = this.inflight.get(ghostId) ?? 0;
@@ -1107,21 +1110,21 @@ export class GhostNetworkSlot {
       const originalRequestMethod = method;
       for (let attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) {
-          this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
-          for (const [secretKey, accountId] of oauthInjected) {
+          if (retryUsedExchange) this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
+          for (const [secretKey, accountId] of retryOauthInjected) {
             this.deps.oauthTokens?.invalidateAccessToken(ghostId, secretKey, accountId);
           }
-          for (const input of connectionInjected.values()) {
+          for (const input of retryConnectionInjected.values()) {
             this.deps.connectionTokens?.invalidate({
               membershipId: input.membershipId,
               audience: input.audience,
             });
           }
-          const reInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url.hostname, net.hosts, requestHeaders, authAccount);
+          const reInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url, method, net.hosts, requestHeaders, authAccount);
           if (reInject.error) return { ok: false, message: reInject.error };
+          initialUsedExchange = reInject.usedExchange;
+          initialOauthInjected = new Map(reInject.oauthInjected);
           initialConnectionInjected = new Map(reInject.connectionInjected);
-          for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
-          for (const [k, v] of reInject.connectionInjected) connectionInjected.set(k, v);
           this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
             ghostId, callId, host: url.hostname,
           });
@@ -1130,9 +1133,13 @@ export class GhostNetworkSlot {
         let currentMethod: string = method;
         let currentBody = body;
         let bodyDropped = false;
+        let responseUsedExchange = initialUsedExchange;
+        let responseOauthInjected = new Map(initialOauthInjected);
         let responseConnectionInjected = new Map(initialConnectionInjected);
         let responseMethod = currentMethod;
         response = null;
+        let currentUsedExchange = initialUsedExchange;
+        let currentOauthInjected = initialOauthInjected;
         let currentConnectionInjected = initialConnectionInjected;
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
           const hopHeaders = { ...requestHeaders };
@@ -1140,14 +1147,15 @@ export class GhostNetworkSlot {
           // headers 语义;multipart 的 boundary 头留着会误导服务端)。
           if (bodyDropped) deleteHeaderVariants(hopHeaders, 'Content-Type');
           if (hop > 0) {
-            // 换了域名的跳转:上一跳注入的凭证不能跟着走,按新 host 重算
-            // (injectSecrets 开头会先把所有声明凭证头的大小写变体删干净)。
-            const hopInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, currentUrl.hostname, net.hosts, hopHeaders, authAccount);
+            // 每一跳都按实际 host / pathname / method 重新匹配凭证注入:换了
+            // 域名的跳转上一跳注入的凭证不能跟着走,同域不同 endpoint 的跳转
+            // 也要重新判断(injectSecrets 开头会先把所有声明凭证头的大小写
+            // 变体删干净)。
+            const hopInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, currentUrl, currentMethod, net.hosts, hopHeaders, authAccount);
             if (hopInject.error) return { ok: false, message: hopInject.error };
+            currentUsedExchange = hopInject.usedExchange;
+            currentOauthInjected = hopInject.oauthInjected;
             currentConnectionInjected = hopInject.connectionInjected;
-            usedExchange ||= hopInject.usedExchange;
-            for (const [k, v] of hopInject.oauthInjected) oauthInjected.set(k, v);
-            for (const [k, v] of hopInject.connectionInjected) connectionInjected.set(k, v);
           }
           if (currentConnectionInjected.size > 0) {
             let current: {
@@ -1183,6 +1191,8 @@ export class GhostNetworkSlot {
             signal: controller.signal,
             redirect: 'manual',
           });
+          responseUsedExchange = currentUsedExchange;
+          responseOauthInjected = currentOauthInjected;
           responseConnectionInjected = currentConnectionInjected;
           responseMethod = currentMethod;
           if (![301, 302, 303, 307, 308].includes(response.status)) break;
@@ -1232,9 +1242,35 @@ export class GhostNetworkSlot {
           });
           break;
         }
+        // 401 且 method 已降级(如 POST 经 3xx 变 GET)时,重放分支被
+        // responseMethod === originalRequestMethod 拦截;但被拒令牌的本地缓存
+        // 仍必须失效,否则后续相同调用会一直复用被拒令牌、永远 401 且无法
+        // 通过重试刷新(与上方 Connection 分支同一语义)。
         if (
           response.status === 401
-          && (usedExchange || oauthInjected.size > 0 || responseConnectionInjected.size > 0)
+          && responseMethod !== originalRequestMethod
+          && (responseUsedExchange || responseOauthInjected.size > 0)
+        ) {
+          if (responseUsedExchange) this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
+          for (const [secretKey, accountId] of responseOauthInjected) {
+            this.deps.oauthTokens?.invalidateAccessToken(ghostId, secretKey, accountId);
+          }
+          this.deps.log?.info('ghost fetch-request 401 exchange/oauth cache invalidated without replay', {
+            ghostId, callId, method: responseMethod, originalMethod: originalRequestMethod, host: url.hostname,
+          });
+          break;
+        }
+        retryUsedExchange = responseUsedExchange;
+        retryOauthInjected = responseOauthInjected;
+        retryConnectionInjected = responseConnectionInjected;
+        if (
+          response.status === 401
+          && responseMethod === originalRequestMethod
+          && (
+            responseUsedExchange
+            || responseOauthInjected.size > 0
+            || responseConnectionInjected.size > 0
+          )
           && attempt === 0
         ) {
           // 丢弃本次响应体(best-effort),换新令牌整链重试一次。
@@ -1467,7 +1503,8 @@ export class GhostNetworkSlot {
     ghostId: string,
     secrets: readonly GhostSecretDecl[],
     connectionDecls: readonly GhostConnectionDecl[],
-    hostname: string,
+    url: URL,
+    method: string,
     allHosts: readonly string[],
     headers: Record<string, string>,
     authAccount?: string,
@@ -1500,9 +1537,8 @@ export class GhostNetworkSlot {
       { membershipId: string; audience: string; hostname: string }
     >();
     for (const secret of secrets) {
-      const scope = secret.inject.hosts ?? allHosts;
-      if (!scope.some((pattern) => ghostNetworkHostMatches(pattern, hostname))) continue;
-      const resolved = await this.resolveSecretValue(ghostId, secret, hostname, authAccount);
+      if (!ghostSecretInjectMatches(secret.inject, url, method, allHosts)) continue;
+      const resolved = await this.resolveSecretValue(ghostId, secret, url.hostname, authAccount);
       if ('error' in resolved) {
         return { error: resolved.error, usedExchange, oauthInjected, connectionInjected };
       }
@@ -1520,11 +1556,11 @@ export class GhostNetworkSlot {
     // 与 secrets 同款快速失败,不发一个注定 401 的请求。
     if (connectionDecls.length > 0 && this.deps.connections) {
       const connHosts = this.deps.connections.hostsFor(ghostId);
-      if (connHosts.includes(hostname)) {
-        const tok = this.deps.connections.tokenFor(ghostId, hostname);
+      if (connHosts.includes(url.hostname)) {
+        const tok = this.deps.connections.tokenFor(ghostId, url.hostname);
         if (!tok) {
           return {
-            error: `连接地址 ${hostname} 的凭证读取失败——请到主界面侧边栏「插件」的本插件详情页重新添加该连接`,
+            error: `连接地址 ${url.hostname} 的凭证读取失败——请到主界面侧边栏「插件」的本插件详情页重新添加该连接`,
             usedExchange,
             oauthInjected,
             connectionInjected,

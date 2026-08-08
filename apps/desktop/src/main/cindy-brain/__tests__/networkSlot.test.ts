@@ -243,6 +243,57 @@ describe('networkSlot · headers 消毒与凭证注入', () => {
     expect(JSON.stringify(r2)).not.toContain('tvly-secret');
   });
 
+  it('凭证 endpoint allowlist 同时匹配精确 pathname 与 method；query 不参与', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: {
+          header: 'Authorization',
+          format: 'Bearer {value}',
+          paths: ['/v1/convert'],
+          methods: ['POST'],
+        },
+      }],
+    };
+    const scopedReadSecret = vi.fn(() => 'scoped-secret');
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network }),
+      readSecret: scopedReadSecret,
+    });
+
+    expect((await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/mcp' })).ok).toBe(true);
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(scopedReadSecret).not.toHaveBeenCalled();
+
+    expect((await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/v1/convert', method: 'GET' })).ok).toBe(true);
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBeUndefined();
+
+    expect((await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/v1/convert?output=pdf', method: 'POST', body: '{}' })).ok).toBe(true);
+    expect((fetchImpl.mock.calls[2][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
+    expect(scopedReadSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it('endpoint 未命中仍剥除意识伪造的主机托管凭证头', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: { header: 'Authorization', format: 'Bearer {value}', paths: ['/private'] },
+      }],
+    };
+    const { slot, fetchImpl } = makeSlot({ getGhost: () => fakeGhost({ network }) });
+    const r = await slot.handleFetchRequest('web-search', {
+      url: 'https://api.example.com/public',
+      headers: { authorization: 'Bearer forged' },
+    });
+    expect(r.ok).toBe(true);
+    expect(Object.keys(fetchImpl.mock.calls[0][1].headers as Record<string, string>)
+      .some((key) => key.toLowerCase() === 'authorization')).toBe(false);
+  });
+
   it('命中域名的凭证未配置 → 快速失败并指引设置页,不发请求', async () => {
     const { slot, fetchImpl } = makeSlot({ readSecret: () => null });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
@@ -326,6 +377,65 @@ describe('networkSlot · 重定向逐跳守门', () => {
     const hop2 = fetchImpl.mock.calls[1][1].headers as Record<string, string>;
     expect(hop2['X-Subscription-Token']).toBeUndefined();
     expect(hop2['X-Api-Key']).toBe('Bearer tvly-secret');
+  });
+
+  it('同域重定向逐跳按 path/method 重算凭证', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: {
+          header: 'Authorization',
+          format: 'Bearer {value}',
+          paths: ['/private'],
+          methods: ['GET'],
+        },
+      }],
+    };
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network }),
+      readSecret: () => 'scoped-secret',
+    });
+    fetchImpl
+      .mockResolvedValueOnce(redirectTo('https://api.example.com/public'))
+      .mockResolvedValueOnce(fakeResponse());
+    await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/private' });
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBeUndefined();
+
+    fetchImpl.mockReset();
+    fetchImpl
+      .mockResolvedValueOnce(redirectTo('https://api.example.com/private'))
+      .mockResolvedValueOnce(fakeResponse());
+    await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/public' });
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBeUndefined();
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
+  });
+
+  it('302 把 POST 降为 GET 后按下一跳实际 method 匹配 endpoint', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: { header: 'Authorization', format: 'Bearer {value}', paths: ['/private'], methods: ['GET'] },
+      }],
+    };
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network }),
+      readSecret: () => 'scoped-secret',
+    });
+    fetchImpl
+      .mockResolvedValueOnce(redirectTo('https://api.example.com/private'))
+      .mockResolvedValueOnce(fakeResponse());
+    await slot.handleFetchRequest('web-search', {
+      url: 'https://api.example.com/public',
+      method: 'POST',
+      body: '{}',
+    });
+    expect(fetchImpl.mock.calls[1][1].method).toBe('GET');
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
   });
 
   it('重定向次数超上限阻断', async () => {
@@ -1658,6 +1768,73 @@ describe('networkSlot · 凭证交换(key 换令牌二段式)', () => {
     expect(r.ok).toBe(true);
     if (r.ok && 'body' in r) expect(r.status).toBe(401);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST 经 302 降级为 GET 后 401:不重放原始 POST(副作用请求不重复)', async () => {
+    // 链路:POST /submit → 302 Location /result(降级 GET、丢 body)→ GET /result 401。
+    // 交换型凭证收到 401 本会作废重换后整链重试,但降级后重试会把原始 POST
+    // 再发一遍,违背"降级成 GET 后不得在 401 后重放副作用请求"的意图,因此
+    // 只有当最终响应 method 与原始 method 一致时才允许重试。
+    const { slot, fetchImpl } = makeExchangeSlot({
+      tokenResponses: [
+        () => fakeResponse({ body: '{"session":"tok-1"}' }),
+        () => fakeResponse({ body: '{"session":"tok-2"}' }),
+      ],
+      apiResponses: [
+        () => fakeResponse({ status: 302, headers: { location: 'https://aigc.example.com/result' } }),
+        () => fakeResponse({ status: 401, body: '{"error":"expired"}' }),
+      ],
+    });
+    const r = await slot.handleFetchRequest('web-search', {
+      url: 'https://aigc.example.com/submit',
+      method: 'POST',
+      body: 'payload=1',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok && 'body' in r) expect(r.status).toBe(401);
+    const api = apiCalls(fetchImpl);
+    // 只走一跳:原始 POST → 降级后的 GET /result(401)即止,没有第二次整链重试。
+    expect(api).toHaveLength(2);
+    expect(api[0][1].method).toBe('POST');
+    expect(api[0][1].body).toBe('payload=1');
+    expect(api[1][1].method).toBe('GET');
+    expect(api[1][1].body).toBeUndefined();
+    // 未重放原始 POST,令牌也不重换。
+    expect(exchangeCalls(fetchImpl)).toHaveLength(1);
+  });
+
+  it('POST 经 302 降级为 GET 后 401:被拒令牌的缓存仍失效(下次调用重换而非复用)', async () => {
+    // 修复回归:method 降级抑制重放的同时,被拒令牌的本地缓存必须失效;
+    // 否则后续相同调用会一直复用被拒令牌、永远 401 且无法刷新。
+    const { slot, fetchImpl } = makeExchangeSlot({
+      tokenResponses: [
+        () => fakeResponse({ body: '{"session":"tok-1"}' }),
+        () => fakeResponse({ body: '{"session":"tok-2"}' }),
+      ],
+      apiResponses: [
+        () => fakeResponse({ status: 302, headers: { location: 'https://aigc.example.com/result' } }),
+        () => fakeResponse({ status: 401, body: '{"error":"expired"}' }),
+        () => fakeResponse({ status: 302, headers: { location: 'https://aigc.example.com/result' } }),
+        () => fakeResponse({ status: 401, body: '{"error":"expired"}' }),
+      ],
+    });
+    for (let i = 0; i < 2; i++) {
+      const r = await slot.handleFetchRequest('web-search', {
+        url: 'https://aigc.example.com/submit',
+        method: 'POST',
+        body: 'payload=1',
+      });
+      expect(r.ok).toBe(true);
+      if (r.ok && 'body' in r) expect(r.status).toBe(401);
+    }
+    const api = apiCalls(fetchImpl);
+    // 两次调用各只走一跳(原始 POST → 降级后的 GET /result 401),均未重放。
+    expect(api).toHaveLength(4);
+    expect(api[1][1].method).toBe('GET');
+    expect(api[3][1].method).toBe('GET');
+    // 第二次调用重新走交换端点(缓存已被失效),取到的是新令牌。
+    const ex = exchangeCalls(fetchImpl);
+    expect(ex).toHaveLength(2);
   });
 
   it('交换端点非 2xx:整单结构化失败,错误带状态码与摘录、不发业务请求、不泄 key', async () => {
