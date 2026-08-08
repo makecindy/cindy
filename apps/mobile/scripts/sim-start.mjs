@@ -11,12 +11,14 @@
 // 8083、app 还连 8081,反而制造"看着像新版、其实是旧 bundle"的坑(正是本工具要消灭的)。
 //   - 8081 空闲 → 起在 8081。
 //   - 8081 已被**本 worktree** 占 → 说明 Metro 已在跑,直接 Fast Refresh 即可,不重开。
-//   - 8081 被**别的 worktree** 占 → 明确报错,让你先停掉那个(sim:whoami 看归属);
+//   - 8081 被**别的 worktree** 占 → 默认明确报错;传 `--takeover` 时仅在确认占用者是 Metro、
+//     且能读取它的 worktree 时为本次用户授权的切换停止它,然后重新启动当前版本。
 //     确实要换端口请 `--port <p>` 显式指定(你需自行把模拟器里的 app 指过去,如 dev menu)。
 //
 // 用法(仓库根):
 //   pnpm mobile:sim:start                 # Global，起在 8081(app 默认连这个)
 //   pnpm mobile:sim:start -- --region=cn  # 中国大陆版
+//   pnpm mobile:sim:start -- --region=cn --takeover # 显式接管另一个 Metro
 //   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
 
 import { execFileSync, spawn } from 'node:child_process';
@@ -28,7 +30,11 @@ import {
   extractMobileDevRegionArgs,
   withLocalMobileRegionConfig,
 } from './lib/mobile-dev-region.mjs';
-import { extractSimMetroPortArgs } from './lib/sim-whoami.mjs';
+import {
+  classifySimMetroListener,
+  extractSimMetroPortArgs,
+  extractSimTakeoverArgs,
+} from './lib/sim-whoami.mjs';
 import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
@@ -37,16 +43,22 @@ import {
   cwdOfPid,
   gitSourceIdentity,
   gitSourceOfPid,
-  isInside,
+  isMetroPid,
   listenerPid,
   portInUse,
+  terminateMetro,
 } from './sim-metro.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const DEFAULT_PORT = 8081;
 const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
-const portArgs = extractSimMetroPortArgs(regionPassthrough, DEFAULT_PORT);
+const { takeover, passthrough: takeoverPassthrough } = extractSimTakeoverArgs(regionPassthrough);
+const portArgs = extractSimMetroPortArgs(takeoverPassthrough, DEFAULT_PORT);
+if (takeover && portArgs.explicit) {
+  console.error(`✗ --takeover 只用于隐式默认端口 ${DEFAULT_PORT},不能和显式 --port 混用。`);
+  process.exit(1);
+}
 const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
 const localConfigStatus = formatMobileLocalConfigStatus(localConfigResult, worktreeRoot);
 if (localConfigStatus) console.log(localConfigStatus);
@@ -69,36 +81,63 @@ function git(args) {
 const branch = git(['branch', '--show-current']) || git(['rev-parse', '--short', 'HEAD']);
 const commit = git(['rev-parse', '--short', 'HEAD']);
 const sourceIdentity = gitSourceIdentity(worktreeRoot);
-const hasExplicitPort = portArgs.explicit;
 
-// 未显式指定端口时,坚持 8081(app 默认连这个),并按归属决定起 / 提示 / 拒绝。
+// 默认端口始终执行身份闸门;显式其它端口由开发者自行把 App 指过去。
 const args = ['exec', 'expo', 'start', '--dev-client', ...portArgs.passthrough];
-if (!hasExplicitPort) {
+if (portArgs.port === DEFAULT_PORT) {
   if (await portInUse(DEFAULT_PORT)) {
     const pid = listenerPid(DEFAULT_PORT);
     const cwd = pid ? cwdOfPid(pid) : null;
-    if (cwd && isInside(worktreeRoot, cwd)) {
+    const runningSource = pid ? gitSourceOfPid(pid) : null;
+    const listener = classifySimMetroListener({
+      cwd,
+      source: runningSource,
+      targetWorktree: worktreeRoot,
+    });
+
+    if (listener.confirmed && listener.isTarget) {
       // 是本 worktree 的 Metro —— 但还要确认它注入了**当前分支**的 git env,否则 build label branch
       // 会是旧值/unknown(如手动 `expo start` 起的、或起好后切过分支),"已在跑"就成了假证据。
-      const runningSource = pid ? gitSourceOfPid(pid) : null;
-      if (runningSource && runningSource === sourceIdentity) {
-        if (envChanged) {
+      if (runningSource === sourceIdentity) {
+        if (envChanged && !takeover) {
           console.error('✗ 已补/改 apps/mobile/.env,但 8081 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。');
-          console.error('  请先停掉它再 `pnpm mobile:sim:start`,新 env 才会生效。');
+          console.error('  需要刷新 env 时传 `--takeover` 重起,新 env 才会生效。');
           process.exit(1);
         }
-        console.log(`✓ Metro 已在 ${DEFAULT_PORT} 运行(本 worktree,源码指纹 ${sourceIdentity})。改 JS 直接 Fast Refresh,无需重开。`);
-        process.exit(0);
+        if (!envChanged) {
+          console.log(`✓ Metro 已在 ${DEFAULT_PORT} 运行(本 worktree,源码指纹 ${sourceIdentity})。改 JS 直接 Fast Refresh,无需重开。`);
+          process.exit(0);
+        }
+      } else if (!takeover) {
+        console.error(`✗ ${DEFAULT_PORT} 上是本 worktree 的 Metro,但源码指纹已过期(运行中=${runningSource || '(无)'} ≠ 当前=${sourceIdentity})。`);
+        console.error('  这通常表示 Metro 启动后又 amend/rebase/reset/改过文件。需要接管时传 `--takeover` 重起。');
+        process.exit(1);
       }
-      console.error(`✗ ${DEFAULT_PORT} 上是本 worktree 的 Metro,但源码指纹已过期(运行中=${runningSource || '(无)'} ≠ 当前=${sourceIdentity})。`);
-      console.error('  这通常表示 Metro 启动后又 amend/rebase/reset/改过文件。先停掉它再 `pnpm mobile:sim:start` 重起。');
+      if (!takeover && listener.isTarget) {
+        console.error(`✗ ${DEFAULT_PORT} 上是本 worktree 的 Metro,但无法确认它对应当前源码。`);
+        process.exit(1);
+      }
+    } else if (!takeover || !listener.confirmed) {
+      console.error(`✗ 端口 ${DEFAULT_PORT} 被其他进程占用:${cwd || '(未知进程)'}`);
+      console.error(`  本 app 无 expo-dev-client、只会连默认 ${DEFAULT_PORT};默认不会自动接管。`);
+      console.error('  只有确认它是本 Cindy worktree 的 Metro 后，传 `--takeover` 才能安全切换。');
       process.exit(1);
     }
-    console.error(`✗ 端口 ${DEFAULT_PORT} 被另一个 worktree 占用:${cwd || '(未知进程)'}`);
-    console.error(`  本 app 无 expo-dev-client、只会连默认 ${DEFAULT_PORT};起在别的端口 app 也连不过去。`);
-    console.error(`  先停掉那个 Metro(\`pnpm mobile:sim:whoami\` 看各端口归属)再跑;`);
-    console.error('  或 `pnpm mobile:sim:start -- --port <p>` 显式换端口(需自行把模拟器 app 指过去)。');
-    process.exit(1);
+
+    if (!pid || !isMetroPid(pid)) {
+      console.error(`✗ ${DEFAULT_PORT} 上的进程不是可确认的 Metro,拒绝接管。`);
+      process.exit(1);
+    }
+    const stopped = await terminateMetro(pid, { worktreeRoot });
+    if (!stopped) {
+      console.error(`✗ 无法在限定时间内停止旧 Metro(pid=${pid}),拒绝继续。`);
+      process.exit(1);
+    }
+    if (listener.isTarget) {
+      console.log(`✓ 已重启当前 worktree 的 Metro(pid=${pid}, cwd=${cwd})。`);
+    } else {
+      console.log(`✓ 已接管其他 Cindy worktree 的 Metro(pid=${pid}, cwd=${cwd})。`);
+    }
   }
 }
 // 统一规范化成 Expo 明确支持的 `--port <n>`，避免 `--port=<n>` 被本工具识别、
