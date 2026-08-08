@@ -241,6 +241,21 @@ describe('AppshotShortcutService', () => {
     expect(harness.service.state()).not.toHaveProperty('fallbackReason');
   });
 
+  it('does not re-register shortcuts when the Codex conflict state is unchanged', async () => {
+    const harness = createHarness({ runningBundleIds: new Set(['com.openai.codex']) });
+
+    await harness.service.start();
+    const registerCount = harness.globalShortcut.register.mock.calls.length;
+
+    await harness.service.refreshConflicts();
+    expect(harness.globalShortcut.register.mock.calls.length).toBe(registerCount);
+    expect(harness.retain).not.toHaveBeenCalled();
+
+    harness.runningBundleIds.clear();
+    await harness.service.refreshConflicts();
+    expect(harness.retain).toHaveBeenCalledWith('appshots-shortcut-service', expect.any(Function));
+  });
+
   it('falls back after conventional preferred registration fails and disables global capture when both fail', async () => {
     const conventional: AppshotShortcutPreferences = {
       preferred: { kind: 'accelerator', combo: { code: 'F16', meta: false, ctrl: false, alt: false, shift: false } },

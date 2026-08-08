@@ -106,6 +106,12 @@ export class AppshotShortcutService {
 
   async refreshConflicts(): Promise<void> {
     if (!this.started) return;
+    // The workspace monitor fires on every app launch/terminate/activation.
+    // Skip re-registration when the Codex conflict state did not change, so
+    // ordinary app switching does not churn global shortcuts.
+    const codexRunning = this.currentState.preferences.preferred.kind === 'dual-modifier'
+      && this.deps.getRunningBundleIds().has('com.openai.codex');
+    if (codexRunning === (this.currentState.fallbackReason === 'codex-running')) return;
     await this.reconcile(++this.generation);
   }
 

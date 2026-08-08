@@ -78,6 +78,33 @@ describe('MacWorkspaceApplicationMonitor', () => {
     expect(monitor.state()).toEqual(new Set(['com.openai.codex']));
   });
 
+  it('tolerates null bundle entries emitted by the JXA bridge', async () => {
+    const child = fakeProcess();
+    const onSnapshot = vi.fn();
+    const monitor = new MacWorkspaceApplicationMonitor({
+      spawnListener: () => child,
+      readSnapshot: vi.fn(async () => [
+        'com.openai.codex',
+        null as unknown as string,
+        '',
+      ]),
+      onSnapshot,
+    });
+
+    monitor.start();
+    child.stdout.emit(
+      'data',
+      Buffer.from('{"type":"snapshot","bundleIds":["com.openai.codex",null,123,""]}\n'),
+    );
+    expect(monitor.state()).toEqual(new Set(['com.openai.codex']));
+
+    await monitor.refresh();
+    expect(monitor.state()).toEqual(new Set(['com.openai.codex']));
+    expect(onSnapshot).toHaveBeenLastCalledWith(new Set(['com.openai.codex']));
+
+    monitor.stop();
+  });
+
   it('restarts the workspace listener after an unexpected exit and only parses stdout', () => {
     const firstChild = fakeProcess();
     const secondChild = fakeProcess();

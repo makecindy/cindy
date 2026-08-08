@@ -23,8 +23,12 @@ function parseSnapshotLine(line: string): WorkspaceSnapshotLine | null {
   try {
     const value = JSON.parse(line) as Partial<WorkspaceSnapshotLine>;
     if (value.type !== 'snapshot' || !Array.isArray(value.bundleIds)) return null;
-    if (value.bundleIds.some((item) => typeof item !== 'string' || item.length === 0)) return null;
-    return { type: 'snapshot', bundleIds: [...new Set(value.bundleIds)] };
+    // JXA bridges processes without a bundle identifier as literal nulls, so
+    // tolerate junk entries instead of rejecting the whole snapshot line.
+    const bundleIds = value.bundleIds.filter(
+      (item): item is string => typeof item === 'string' && item.length > 0,
+    );
+    return { type: 'snapshot', bundleIds: [...new Set(bundleIds)] };
   } catch {
     return null;
   }
@@ -117,8 +121,12 @@ export class MacWorkspaceApplicationMonitor {
     const refresh = this.deps.readSnapshot()
       .then((bundleIds) => {
         if (operation !== this.generation || eventGeneration !== this.eventGeneration) return;
-        if (bundleIds.some((value) => typeof value !== 'string' || value.length === 0)) return;
-        this.apply(bundleIds);
+        const validBundleIds = bundleIds.filter(
+          (value): value is string => typeof value === 'string' && value.length > 0,
+        );
+        // Preserve the last state when the whole fallback read was malformed.
+        if (bundleIds.length > 0 && validBundleIds.length === 0) return;
+        this.apply(validBundleIds);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -144,7 +152,8 @@ function publishSnapshot() {
   const bundleIds = [];
   for (let index = 0; index < applications.count; index += 1) {
     const identifier = applications.objectAtIndex(index).bundleIdentifier;
-    if (identifier) bundleIds.push(ObjC.unwrap(identifier));
+    const unwrapped = ObjC.unwrap(identifier);
+    if (unwrapped) bundleIds.push(unwrapped);
   }
   const line = JSON.stringify({ type: 'snapshot', bundleIds: bundleIds }) + '\n';
   $.NSFileHandle.fileHandleWithStandardOutput.writeData($(line).dataUsingEncoding($.NSUTF8StringEncoding));
@@ -172,7 +181,8 @@ const applications = $.NSWorkspace.sharedWorkspace.runningApplications;
 const bundleIds = [];
 for (let index = 0; index < applications.count; index += 1) {
   const identifier = applications.objectAtIndex(index).bundleIdentifier;
-  if (identifier) bundleIds.push(ObjC.unwrap(identifier));
+  const unwrapped = ObjC.unwrap(identifier);
+  if (unwrapped) bundleIds.push(unwrapped);
 }
 JSON.stringify(bundleIds);
 `;
@@ -190,11 +200,14 @@ export function readMacWorkspaceApplicationSnapshot(): Promise<readonly string[]
           return;
         }
         try {
-          const bundleIds = JSON.parse(stdout) as unknown;
-          if (!Array.isArray(bundleIds) || bundleIds.some((value) => typeof value !== 'string')) {
+          const rawBundleIds = JSON.parse(stdout) as unknown;
+          if (!Array.isArray(rawBundleIds)) {
             reject(new Error('invalid workspace application snapshot'));
             return;
           }
+          const bundleIds = rawBundleIds.filter(
+            (value): value is string => typeof value === 'string' && value.length > 0,
+          );
           resolve(bundleIds);
         } catch (parseError) {
           reject(parseError);
