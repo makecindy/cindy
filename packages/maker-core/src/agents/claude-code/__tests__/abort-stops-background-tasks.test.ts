@@ -2228,6 +2228,53 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
+  it('Stop can cancel a stuck runtime replay during cancellation rebuild', async () => {
+    const { handle, stream, events, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting for task'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    await handle.abort();
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'synthetic terminal observed');
+
+    const buildReplacement = sdkMock.query.getMockImplementation();
+    if (!buildReplacement) throw new Error('query mock implementation is unavailable');
+    let resolveReplay!: () => void;
+    let notifyReplayStarted!: () => void;
+    const replayStarted = new Promise<void>((resolve) => { notifyReplayStarted = resolve; });
+    const replayHold = new Promise<void>((resolve) => { resolveReplay = resolve; });
+    sdkMock.query.mockImplementationOnce((options: unknown) => {
+      const replacement = buildReplacement(options) as ReturnType<typeof createFakeQuery>;
+      replacement.setModel.mockImplementation(async () => {
+        notifyReplayStarted();
+        await replayHold;
+      });
+      void handle.setModel?.('claude-sonnet-5');
+      return replacement;
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'cancel rebuild replay' });
+    await replayStarted;
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.abort();
+    await expect(sendPromise).rejects.toThrow('Claude send cancelled before acceptance');
+    expect(fakeQueries).toHaveLength(2);
+    expect(fakeQueries[1]?.close).toHaveBeenCalledTimes(1);
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+
+    resolveReplay();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'retry after rebuild replay cancellation' });
+    expect(fakeQueries).toHaveLength(3);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
   it('Stop 后直接 commitRewindFiles 会在可用 Query 上回滚并保留后续重建状态', async () => {
     const { handle, stream, events, fakeQueries } = await startSessionWithStream();
 

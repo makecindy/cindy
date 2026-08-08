@@ -1391,6 +1391,16 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     const promptIter = rebuildArgs.prompt[Symbol.asyncIterator]();
     expect((await promptIter.next()).value?.message?.content).toBe('/compact');
 
+    // /compact may finish while the real user message is still converting.
+    // Its terminal payload must survive the accept-phase Stop boundary.
+    secondQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0.0035,
+      usage: { input_tokens: 220_000, output_tokens: 25 },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
     controller.abort();
     await handle.abort();
     resolveResize(path.join(os.tmpdir(), 'slow-stop.png'));
@@ -1399,6 +1409,14 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(secondQuery.close).toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'bridge_aborted')).toBe(true);
+    });
+    const abortedDone = events.find(
+      (e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'bridge_aborted',
+    );
+    expect(abortedDone?.data).toMatchObject({
+      total_cost_usd: 0.0035,
+      usage: { input_tokens: 220_000, output_tokens: 25 },
+      reason: 'bridge_aborted',
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(
@@ -1782,11 +1800,64 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('cancels a stuck first runtime replay before the product turn starts', async () => {
+    const { handle } = await startRewindableSession();
+    const events: AgentEvent[] = [];
+    void (async () => {
+      try { for await (const ev of handle.events()) events.push(ev); } catch { /* ignore */ }
+    })();
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+
+    const secondQuery = createFakeQuery();
+    let resolveReplay!: () => void;
+    let notifyReplayStarted!: () => void;
+    const replayStarted = new Promise<void>((resolve) => { notifyReplayStarted = resolve; });
+    const replayHold = new Promise<void>((resolve) => { resolveReplay = resolve; });
+    secondQuery.setModel.mockImplementation(async () => {
+      notifyReplayStarted();
+      await replayHold;
+    });
+    sdkMock.query.mockImplementationOnce(() => {
+      void handle.setModel?.('claude-sonnet-5');
+      return secondQuery;
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'cancel first replay' });
+    await replayStarted;
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.abort();
+    await expect(sendPromise).rejects.toThrow('Claude send cancelled before acceptance');
+    expect(secondQuery.close).toHaveBeenCalledTimes(1);
+    expect(
+      events.some((e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === true),
+    ).toBe(false);
+    expect(events.some((e) => e.type === 'done')).toBe(false);
+
+    resolveReplay();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events.some((e) => e.type === 'done')).toBe(false);
+
+    const thirdQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(thirdQuery);
+    await handle.send({ type: 'user', content: 'retry after first replay cancellation' });
+    const retryArgs = sdkMock.query.mock.calls[2]?.[0] as {
+      options: Record<string, unknown>;
+      prompt: AsyncIterable<{ message?: { content?: unknown } }>;
+    };
+    expect(retryArgs.options.forkSession).toBe(true);
+    expect(retryArgs.options.resumeSessionAt).toBe('assistant-uuid-1');
+    const promptIter = retryArgs.prompt[Symbol.asyncIterator]();
+    expect((await promptIter.next()).value?.message?.content).toBe('retry after first replay cancellation');
+
+    await handle.close();
+  });
+
   it('cancels a post-rebuild send if Stop arrives during accept replay', async () => {
-    // 反馈原型 (Codex review 3541310178): rebuild 后 turnInFlight/status 已登记,
-    // acceptingRebuiltSend 的第二轮 runtime drift replay 仍可能 await control request。
-    // 此时 Stop 若让 send 在真实用户输入 push 前 reject,必须补齐 terminal boundary,
-    // 否则 isTurnRunning 会永久停在 true。
+    // rebuild 后 turnInFlight/status 已登记，但第二轮 runtime drift replay 可能永远
+    // 卡在 control RPC。Stop 必须自己唤醒 send、封存旧 Query、补齐唯一 boundary，
+    // 不能等这个 RPC 日后返回；下一次 send 仍要从原 rewind checkpoint 重建。
     const { handle } = await startRewindableSession();
     const events: AgentEvent[] = [];
     void (async () => {
@@ -1813,19 +1884,14 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       void handle.setModel?.('claude-sonnet-5');
       return secondQuery;
     });
-    const controller = new AbortController();
-
-    const sendPromise = handle.send(
-      { type: 'user', content: 'cancel during accept replay' },
-      { signal: controller.signal },
-    );
+    const sendPromise = handle.send({
+      type: 'user',
+      content: 'cancel during accept replay',
+    });
     await acceptReplayStarted;
     expect(handle.isTurnRunning?.()).toBe(true);
 
-    controller.abort();
     await handle.abort();
-    resolveAcceptReplay();
-
     await expect(sendPromise).rejects.toThrow('Claude send cancelled before acceptance');
     expect(handle.isTurnRunning?.()).toBe(false);
     await vi.waitFor(() => {
@@ -1833,16 +1899,43 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'send_cancelled_before_acceptance'),
       ).toBe(true);
     });
-    expect(secondQuery.close).not.toHaveBeenCalled();
+    const doneCountAfterStop = events.filter((e) => e.type === 'done').length;
+    expect(doneCountAfterStop).toBe(1);
+    expect(secondQuery.close).toHaveBeenCalledTimes(1);
+    expect(secondQuery.interrupt).not.toHaveBeenCalled();
 
-    const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as {
+    const cancelledArgs = sdkMock.query.mock.calls[1]?.[0] as {
       prompt: AsyncIterable<{ message?: { content?: unknown } }> & { pending: number };
     };
-    expect(rebuildArgs.prompt.pending).toBe(0);
+    expect(cancelledArgs.prompt.pending).toBe(0);
+
+    // 旧 control RPC / provider result 即使迟到，也不能再发第二个 terminal。
+    secondQuery.stream.emit({
+      type: 'result',
+      stop_reason: null,
+      is_error: true,
+      subtype: 'error_during_execution',
+      result: 'late cancelled accept replay result',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+    resolveAcceptReplay();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events.filter((e) => e.type === 'done')).toHaveLength(doneCountAfterStop);
+
+    const thirdQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(thirdQuery);
     await handle.send({ type: 'user', content: 'next after accept replay cancellation' });
-    expect(sdkMock.query).toHaveBeenCalledTimes(2);
-    const promptIter = rebuildArgs.prompt[Symbol.asyncIterator]();
+    expect(sdkMock.query).toHaveBeenCalledTimes(3);
+    const retryArgs = sdkMock.query.mock.calls[2]?.[0] as {
+      options: Record<string, unknown>;
+      prompt: AsyncIterable<{ message?: { content?: unknown } }> & { pending: number };
+    };
+    expect(retryArgs.options.forkSession).toBe(true);
+    expect(retryArgs.options.resumeSessionAt).toBe('assistant-uuid-1');
+    const promptIter = retryArgs.prompt[Symbol.asyncIterator]();
     expect((await promptIter.next()).value?.message?.content).toBe('next after accept replay cancellation');
+    expect(retryArgs.prompt.pending).toBe(0);
 
     await handle.close();
   });
