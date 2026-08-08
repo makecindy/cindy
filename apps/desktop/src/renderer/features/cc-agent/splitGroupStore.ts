@@ -112,6 +112,29 @@ function removePane(root: SplitNode, sessionId: string): SplitNode | null {
   return first === root.first && second === root.second ? root : { ...root, first, second };
 }
 
+interface DetachedPane {
+  root: SplitNode | null;
+  pane: SplitPaneNode | null;
+}
+
+function detachPane(root: SplitNode, sessionId: string): DetachedPane {
+  if (root.type === 'pane') {
+    return root.sessionId === sessionId ? { root: null, pane: root } : { root, pane: null };
+  }
+
+  const first = detachPane(root.first, sessionId);
+  if (first.pane) {
+    return { root: first.root ? { ...root, first: first.root } : root.second, pane: first.pane };
+  }
+
+  const second = detachPane(root.second, sessionId);
+  if (second.pane) {
+    return { root: second.root ? { ...root, second: second.root } : root.first, pane: second.pane };
+  }
+
+  return { root, pane: null };
+}
+
 interface CoerceContext {
   seenKeys: Set<string>;
   seenSessionIds: Set<string>;
@@ -366,6 +389,41 @@ export const splitGroupStore = {
         (node) => makeSplit(node as SplitPaneNode),
       ),
     });
+    return true;
+  },
+
+  moveSession(sessionIdInput: string, anchorSessionIdInput: string, side: DropSide): boolean {
+    ensureHydrated();
+    const sessionId = normalizeSessionId(sessionIdInput);
+    const anchorSessionId = normalizeSessionId(anchorSessionIdInput);
+    if (!sessionId || !anchorSessionId || sessionId === anchorSessionId || !state.root) return false;
+
+    const panes = getSplitPanes(state.root);
+    if (!panes.some((pane) => pane.sessionId === sessionId)) return false;
+    if (!panes.some((pane) => pane.sessionId === anchorSessionId)) return false;
+
+    const detached = detachPane(state.root, sessionId);
+    if (!detached.pane || !detached.root) return false;
+
+    const existingKeys = new Set<string>();
+    collectNodeKeys(detached.root, existingKeys);
+    existingKeys.add(detached.pane.key);
+    const makeSplit = (anchorPane: SplitPaneNode): SplitBranchNode => ({
+      type: 'split',
+      key: nextUniqueKey('split', existingKeys),
+      direction: directionForSide(side),
+      fraction: 0.5,
+      first: isBeforeSide(side) ? detached.pane! : anchorPane,
+      second: isBeforeSide(side) ? anchorPane : detached.pane!,
+    });
+
+    const nextRoot = replaceNode(
+      detached.root,
+      (node) => node.type === 'pane' && node.sessionId === anchorSessionId,
+      (node) => makeSplit(node as SplitPaneNode),
+    );
+    if (nextRoot === detached.root) return false;
+    emit({ root: nextRoot });
     return true;
   },
 

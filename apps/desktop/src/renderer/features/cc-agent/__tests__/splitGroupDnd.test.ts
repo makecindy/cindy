@@ -3,14 +3,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SPLIT_GROUP_PANE_MIME,
   SPLIT_GROUP_SESSION_MIME,
   SPLIT_GROUP_SESSION_LINK_MIME,
+  hasSplitGroupPaneType,
   hasSplitGroupSessionType,
   isSplitGroupComposerDropTarget,
   isSplitGroupDragSource,
   needsDedicatedSplitGroupDragHandle,
   resolveSplitDropSide,
   shouldStartSplitGroupDrag,
+  writeSplitGroupPaneDragData,
   writeSplitGroupSessionDragData,
 } from '../splitGroupDnd';
 
@@ -51,6 +54,22 @@ describe('splitGroupDnd', () => {
       'cindy://session/session-remote?device=device-b',
     );
     expect(writeSplitGroupSessionDragData(dataTransfer, '   ')).toBe(false);
+  });
+
+  it('向目标 pane 拖拽写入独立 MIME，避免误创建新 pane', () => {
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: 'none',
+      setData: (format: string, data: string) => values.set(format, data),
+    };
+
+    expect(writeSplitGroupPaneDragData(dataTransfer, ' session-a ')).toBe(true);
+    expect(dataTransfer.effectAllowed).toBe('move');
+    expect(values.get(SPLIT_GROUP_PANE_MIME)).toBe('session-a');
+    expect(values.get('text/plain')).toBe('session-a');
+    expect(hasSplitGroupPaneType([SPLIT_GROUP_PANE_MIME])).toBe(true);
+    expect(hasSplitGroupPaneType([SPLIT_GROUP_SESSION_MIME])).toBe(false);
+    expect(writeSplitGroupPaneDragData(dataTransfer, '   ')).toBe(false);
   });
 
   it.each([

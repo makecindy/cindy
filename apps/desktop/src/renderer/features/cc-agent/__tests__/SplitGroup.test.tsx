@@ -1153,6 +1153,59 @@ describe('SplitGroup', () => {
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(4);
   });
 
+  it('从 pane 标题拖动到另一个 pane 时重排，而不是创建重复 pane', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+    const sourceHandle = view.container.querySelector(
+      '[data-split-pane-session-id="session-c"] [data-split-pane-drag-handle]',
+    );
+    const targetView = screen.getByTestId('session-view-session-a');
+    const dropTarget = targetView.closest('[data-split-drop-target="pane"]');
+    if (!(sourceHandle instanceof HTMLElement) || !(dropTarget instanceof HTMLElement)) {
+      throw new Error('pane drag handle or drop target missing');
+    }
+    vi.spyOn(dropTarget, 'getBoundingClientRect').mockReturnValue({
+      left: 100,
+      right: 500,
+      top: 50,
+      bottom: 350,
+      width: 400,
+      height: 300,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    });
+    const dragDataTransfer = {
+      effectAllowed: 'none',
+      setData: vi.fn(),
+    };
+    const dropDataTransfer = {
+      types: ['application/x-cindy-split-pane'],
+      dropEffect: 'none',
+      getData: (format: string) =>
+        format === 'application/x-cindy-split-pane' ? 'session-c' : '',
+    };
+
+    await act(async () => {
+      fireEvent.dragStart(sourceHandle, { dataTransfer: dragDataTransfer });
+      fireEvent.dragOver(targetView, { clientX: 110, clientY: 200, dataTransfer: dropDataTransfer });
+      fireEvent.drop(targetView, { clientX: 110, clientY: 200, dataTransfer: dropDataTransfer });
+      await Promise.resolve();
+    });
+
+    expect(dragDataTransfer.setData).toHaveBeenCalledWith(
+      'application/x-cindy-split-pane',
+      'session-c',
+    );
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-a', 'session-c', 'session-b'],
+    );
+    expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
+  });
+
   it('关闭分支后提升 sibling 时保留其它 pane 的已挂载视图', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
