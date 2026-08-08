@@ -468,9 +468,33 @@ export function dedupeToolMediaByUrl<TMedia extends MessageRenderToolMediaLike>(
  * agentMeta.parentUuid。二者任一存在即视为子代理内部消息。
  */
 function hasSubagentParent(message: MessageRenderSourceMessageLike): boolean {
-  if (message.parentToolUseId) return true;
-  const parentUuid = message.agentMeta?.parentUuid;
-  return typeof parentUuid === 'string' && parentUuid.length > 0;
+  const explicit =
+    message.parentToolUseId ??
+    message.agentMeta?.parentToolUseId ??
+    message.agentMeta?.parent_tool_use_id;
+  if (typeof explicit === 'string' && explicit.trim().length > 0) {
+    // 显式的 tool-parent 字段本身就是归属证明,不需要形态消歧。
+    return isSubagentParentId(explicit) || !looksLikeLegacyTranscriptUuid(explicit);
+  }
+  // 裸 parentUuid 不足以证明子代理归属:旧 Claude 导入把普通 transcript 链边
+  // 也存在这个字段(同 latestMessageText.logic.ts 的既定判据),把它一律当子
+  // 代理会让旧会话的顶层计划被面板与对账整段过滤掉。只认 SDK tool-use id 形态。
+  const nested = (message as { source?: { agentMeta?: Record<string, unknown> | null } }).source;
+  for (const candidate of [message.agentMeta?.parentUuid, nested?.agentMeta?.parentUuid]) {
+    if (typeof candidate === 'string' && isSubagentParentId(candidate)) return true;
+  }
+  return false;
+}
+
+/** Live Claude/Codex SDK tool-use ids;裸 uuid 形态的 legacy transcript 链边不算。 */
+const SUBAGENT_PARENT_ID_RE = /^(?:toolu|call)[_-]/iu;
+
+function isSubagentParentId(value: string): boolean {
+  return SUBAGENT_PARENT_ID_RE.test(value.trim());
+}
+
+function looksLikeLegacyTranscriptUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.trim());
 }
 
 export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMessageLike>(

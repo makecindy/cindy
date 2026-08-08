@@ -936,6 +936,41 @@ describe('message render todo grouping', () => {
    *  3. Codex 不同 turn 的 update_plan 被并成同一 session。
    */
   describe('plan ownership boundaries', () => {
+    it('treats a bare legacy transcript parentUuid as top-level, not subagent', () => {
+      // 旧 Claude 导入把普通 transcript 链边也存在 agentMeta.parentUuid(裸 uuid
+      // 形态)。一律当子代理会让旧会话的顶层计划被面板与对账整段过滤掉;只认
+      // SDK tool-use id 形态(toolu_/call_ 前缀),与 latestMessageText 同判据。
+      const legacyTopLevelPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-legacy', 'TodoWrite', {
+          todos: [
+            { content: 'Legacy step', status: 'in_progress' },
+            { content: 'Legacy follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: '4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f' },
+      };
+
+      expect(findLatestMessageTodoInsertion([legacyTopLevelPlan])).toMatchObject({
+        key: 'todo-todo-legacy',
+        todos: [
+          { content: 'Legacy step', status: 'in_progress' },
+          { content: 'Legacy follow-up', status: 'pending' },
+        ],
+      });
+
+      // 真正的 SDK tool 父级(toolu_ 前缀)仍然按子代理排除。
+      const realSubagentPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub2', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent step', status: 'in_progress' },
+            { content: 'Subagent follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: 'toolu_01ABCDEF' },
+      };
+      expect(findLatestMessageTodoInsertion([realSubagentPlan])).toBeNull();
+    });
+
     it('starts a new session when an ordinary user turn intervenes', () => {
       const staleTodo = tool('todo-old', 'TodoWrite', {
         todos: [
