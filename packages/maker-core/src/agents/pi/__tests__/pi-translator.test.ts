@@ -67,7 +67,12 @@ describe('pi translator', () => {
     translatePiEvent(
       ev({
         type: 'message_end',
-        message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], usage: { input: 100, output: 20, cacheRead: 5, cacheWrite: 3 } },
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'hi' }],
+          usage: { input: 100, output: 20, cacheRead: 5, cacheWrite: 3 },
+          duration: 1_200,
+        },
       }),
       queue,
       ctx,
@@ -81,6 +86,8 @@ describe('pi translator', () => {
     expect(usage.outputTokens).toBe(20);
     expect(usage.cacheReadTokens).toBe(5);
     expect(usage.cacheCreationTokens).toBe(3);
+    expect(usage.durationMs).toBeGreaterThanOrEqual(1_200);
+    expect(usage.turnDurationMs).toBeGreaterThanOrEqual(0);
     // 快照累计 input+output。
     expect(usageSnapshotOf(ctx).tokenUsage).toBe(120);
     // done.data.result 带上最终回复文本 —— register.ts 的 will-assistant-message 出口钩子
@@ -90,6 +97,28 @@ describe('pi translator', () => {
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
     }));
+  });
+
+  it('does not fall back to full turn wall-clock time when Pi omits generation duration', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'answer after a tool' }],
+          usage: { input: 10, output: 5 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+    expect(usage).not.toHaveProperty('durationMs');
+    expect(usage.turnDurationMs).toEqual(expect.any(Number));
   });
 
   it('done.result carries the last assistant message text (multi-message turn) and resets per turn', () => {
@@ -408,12 +437,15 @@ describe('pi translator', () => {
 
       translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
       const done = events.find((e) => e.type === 'done');
-      expect((done?.data as { usage?: unknown }).usage).toEqual({
+      expect((done?.data as { usage?: unknown }).usage).toMatchObject({
         inputTokens: 100,
         outputTokens: 20,
         cacheReadTokens: 5,
         cacheCreationTokens: 2,
       });
+      expect(
+        (done?.data as { usage?: { turnDurationMs?: unknown } }).usage?.turnDurationMs,
+      ).toEqual(expect.any(Number));
     });
 
     it('only counts the increment — progress frames report cumulative totals', () => {

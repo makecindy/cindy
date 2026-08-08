@@ -18,7 +18,7 @@ vi.mock('../../../shared/brandRegion', () => ({
 
 import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { formatModelShort } from '../usageFormat';
-import { buildTurnUsageTooltipLines } from '../turnUsageTooltip';
+import { buildTurnUsageTooltipLines, formatTurnDuration } from '../turnUsageTooltip';
 
 // t 桩: 返回 `key` 或 `key|{json opts}`, 便于断言哪条 i18n key 被用到及其插值。
 const t = ((key: string, opts?: Record<string, unknown>) =>
@@ -185,6 +185,63 @@ describe('buildTurnUsageTooltipLines — 无金额 (token 回退) tooltip', () =
     const out = buildTurnUsageTooltipLines({ details, t });
     expect(out).toContain('usageDetails.noBilledCost');
     expect(out.some((l) => l.includes('priceUnavailable'))).toBe(false);
+  });
+});
+
+describe('buildTurnUsageTooltipLines — 输出速度', () => {
+  it('有输出 token 和有效耗时时显示平均 TPS', () => {
+    const details = buildTurnUsageDetails({
+      inputTokens: 2,
+      outputTokens: 235,
+      cacheCreateTokens: 25_470,
+      durationMs: 8_954,
+      model: 'anthropic/claude-opus-5',
+    })!;
+
+    expect(buildTurnUsageTooltipLines({ details, t, costUsd: 0.17 })).toContain(
+      'usageDetails.performanceRateLine|{"rate":"26.2"}',
+    );
+  });
+
+  it('does not hide a valid sub-100ms generation behind an arbitrary threshold', () => {
+    const details = buildTurnUsageDetails({ outputTokens: 2, durationMs: 50 })!;
+    expect(buildTurnUsageTooltipLines({ details, t })).toContain(
+      'usageDetails.performanceRateLine|{"rate":"40"}',
+    );
+  });
+
+  it('旧消息没有耗时时不显示 TPS', () => {
+    const details = buildTurnUsageDetails({ outputTokens: 235 })!;
+    expect(
+      buildTurnUsageTooltipLines({ details, t }).some((line) =>
+        line.startsWith('usageDetails.performanceLine'),
+      ),
+    ).toBe(false);
+  });
+
+  it('shows full-turn wall-clock separately from generation speed', () => {
+    const details = buildTurnUsageDetails({
+      outputTokens: 100,
+      durationMs: 2_000,
+      turnDurationMs: 12_345,
+    })!;
+    const out = buildTurnUsageTooltipLines({ details, t });
+    expect(out).toContain('usageDetails.performanceLine|{"rate":"50","duration":"12.3s"}');
+  });
+
+  it('shows wall-clock alone without a fake missing-speed placeholder', () => {
+    const details = buildTurnUsageDetails({
+      inputTokens: 100,
+      turnDurationMs: 12_345,
+    })!;
+    expect(buildTurnUsageTooltipLines({ details, t })).toContain(
+      'usageDetails.timeLine|{"duration":"12.3s"}',
+    );
+  });
+
+  it('normalizes rounded minute boundaries instead of showing 1m 60s', () => {
+    expect(formatTurnDuration(59_960)).toBe('1m 00s');
+    expect(formatTurnDuration(119_600)).toBe('2m 00s');
   });
 });
 

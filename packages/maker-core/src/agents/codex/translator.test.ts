@@ -19,6 +19,9 @@ import {
   translateAccountRateLimitsUpdated,
   translateItemNotification,
   translatePlanUpdatedNotification,
+  beginCodexGenerationTurn,
+  codexGenerationDurationMs,
+  finalizeCodexGenerationTurn,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
@@ -92,6 +95,65 @@ describe('translateAccountRateLimitsUpdated', () => {
         secondary: { usedPercent: 25, windowMinutes: 10080, windowDurationMins: 60 },
       },
     });
+  });
+});
+
+describe('Codex generation timing', () => {
+  it('includes TTFT and thinking while excluding a tool interval', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+    translateItemNotification('started', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      startedAtMs: 4_000,
+      item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'inProgress' },
+    }, q, ctx);
+    translateItemNotification('completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      completedAtMs: 10_000,
+      item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
+    }, q, ctx);
+    translateItemNotification('started', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      startedAtMs: 11_000,
+      item: { type: 'agentMessage', id: 'msg-1', text: '' },
+    }, q, ctx);
+    translateItemNotification('updated', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
+    }, q, ctx);
+    translateItemNotification('completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      completedAtMs: 11_500,
+      item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
+    }, q, ctx);
+    finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
+    await collect(q);
+    // 1s→4s includes initial TTFT/thinking; 4s→10s tool time is excluded;
+    // 10s→12s includes the post-tool API call through final turn completion.
+    expect(codexGenerationDurationMs(rt)).toBe(5_000);
+  });
+
+  it('omits timing when a tool completion has no matching start boundary', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+    translateItemNotification('completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      completedAtMs: 3_500,
+      item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
+    }, q, ctx);
+    finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
+    await collect(q);
+    expect(codexGenerationDurationMs(rt)).toBeUndefined();
   });
 });
 

@@ -3928,6 +3928,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const doneData = event.data as
           | {
               total_cost_usd?: unknown;
+              duration_ms?: unknown;
+              duration_api_ms?: unknown;
               usage?: {
                 input_tokens?: number;
                 output_tokens?: number;
@@ -4079,6 +4081,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 deltas,
                 'unknown',
                 perModel,
+                typeof doneData?.duration_api_ms === 'number' ? doneData.duration_api_ms : undefined,
+                typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined,
               );
               recordTurnSpend(turnMoney);
               recordSessionTurnSpend(session.id, turnMoney);
@@ -4130,6 +4134,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 deltas,
                 'unknown',
                 perModel,
+                typeof doneData?.duration_api_ms === 'number' ? doneData.duration_api_ms : undefined,
+                typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined,
               );
               if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
                 const changedScheduleId = await recordSchedulerTurnCost({
@@ -4167,6 +4173,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               doneData?.usage,
               undefined,
               resolvedModel,
+              undefined,
+              typeof doneData?.duration_api_ms === 'number' ? doneData.duration_api_ms : undefined,
+              typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined,
             );
             // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
             // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
@@ -4269,6 +4278,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             completionTokens?: number;
             reasoningTokens?: number;
             cachedTokens?: number;
+            durationMs?: number;
+            turnDurationMs?: number;
           };
           const promptTokens = Number(u.promptTokens) || 0;
           const completionTokens = Number(u.completionTokens) || 0;
@@ -4355,6 +4366,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               cacheReadTokens: cachedTokens,
               cacheCreateTokens: 0,
               model: turnModel,
+              durationMs: u.durationMs,
+              turnDurationMs: u.turnDurationMs,
             });
             const recordCodexUsageOnly = async () => {
               if (!turnAssistantPersistId) return;
@@ -4507,6 +4520,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             const turnUsageDetails = buildTurnUsageDetails({
               ...tokens,
               model: turnModel,
+              durationMs:
+                typeof (rawUsage as { durationMs?: unknown }).durationMs === 'number'
+                  ? (rawUsage as { durationMs: number }).durationMs
+                  : undefined,
+              turnDurationMs:
+                typeof (rawUsage as { turnDurationMs?: unknown }).turnDurationMs === 'number'
+                  ? (rawUsage as { turnDurationMs: number }).turnDurationMs
+                  : undefined,
             });
 
             // Pi 也必须进 daily_model_usage，否则首页仪表盘会把 Pi 的

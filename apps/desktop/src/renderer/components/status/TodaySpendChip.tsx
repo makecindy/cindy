@@ -90,6 +90,8 @@ import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLi
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import {
   buildTurnUsageTooltipLines,
+  formatOutputTokenRate,
+  formatTurnDuration,
   getTurnUsageSuggestion,
 } from '@/lib/turnUsageTooltip';
 import { aggregateAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
@@ -743,6 +745,11 @@ function toQuotaHoverCardTurnUsage(
     totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
     inputTokensText: formatCompactTokens(details.inputTokens),
     outputTokensText: formatCompactTokens(details.outputTokens),
+    outputRateText: formatOutputTokenRate(details),
+    turnDurationText:
+      typeof details.turnDurationMs === 'number'
+        ? formatTurnDuration(details.turnDurationMs)
+        : null,
     cacheLineText: formatQuotaCacheLine(details, t),
     model: quotaTurnModel(details, t),
     ...(details.perModelCost

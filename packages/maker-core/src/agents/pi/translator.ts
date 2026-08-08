@@ -33,6 +33,10 @@ interface PiAssistantMessage {
   role: 'assistant';
   content?: Array<Record<string, unknown>>;
   usage?: PiUsage;
+  /** provider-reported duration when the runtime supplies one. */
+  duration?: number;
+  /** pi timestamps assistant messages at generation start (milliseconds). */
+  timestamp?: number;
   model?: string;
   stopReason?: string;
 }
@@ -71,6 +75,10 @@ export interface PiTranslateContext {
    * 不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
    */
   finalAssistantText: string;
+  /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
+  turnWallClockStartedAt: number;
+  generationDurationMs: number;
+  hasReportedDuration: boolean;
   /**
    * 每个子代理调用(taskId)最近一次上报的**累计**委派用量。进度帧报累计值,这里存上次值
    * 用来算增量,避免同一批用量被反复加进 turn 记账。与其它 turn 计数器同点(agent_start)清空。
@@ -93,6 +101,9 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     thinkingSeq: 0,
     thinkingBlocks: new Map(),
     finalAssistantText: '',
+    turnWallClockStartedAt: 0,
+    generationDurationMs: 0,
+    hasReportedDuration: false,
     delegatedUsage: new Map(),
   };
 }
@@ -229,6 +240,9 @@ export function translatePiEvent(
       ctx.turnCacheRead = 0;
       ctx.turnCacheWrite = 0;
       ctx.finalAssistantText = '';
+      ctx.turnWallClockStartedAt = Date.now();
+      ctx.generationDurationMs = 0;
+      ctx.hasReportedDuration = false;
       // 与其它 turn 计数器同点清:新 turn 的委派用量不该跟上一 turn 的累计值作差,
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
@@ -255,6 +269,20 @@ export function translatePiEvent(
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
       applyUsage(ctx, message.usage);
+      const messageDurationMs =
+        typeof message.duration === 'number' &&
+        Number.isFinite(message.duration) &&
+        message.duration > 0
+          ? message.duration
+          : typeof message.timestamp === 'number' &&
+              Number.isFinite(message.timestamp) &&
+              message.timestamp > 0
+            ? Date.now() - message.timestamp
+            : 0;
+      if (messageDurationMs > 0) {
+        ctx.generationDurationMs += messageDurationMs;
+        ctx.hasReportedDuration = true;
+      }
       const fullText = assistantTextOf(message);
       if (fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。
@@ -346,6 +374,13 @@ export function translatePiEvent(
             outputTokens: ctx.turnOutput,
             cacheReadTokens: ctx.turnCacheRead,
             cacheCreationTokens: ctx.turnCacheWrite,
+            // durationMs is deliberately generation-only. If Pi does not report a
+            // per-assistant generation duration, omit it instead of charging tool
+            // execution / user waits to TPS.
+            ...(ctx.hasReportedDuration ? { durationMs: ctx.generationDurationMs } : {}),
+            ...(ctx.turnWallClockStartedAt > 0
+              ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
+              : {}),
           },
         },
         source: 'pi',

@@ -23,6 +23,8 @@ export interface QuotaHoverCardTurnUsage {
   totalTokensText?: string | null;
   inputTokensText?: string | null;
   outputTokensText?: string | null;
+  outputRateText?: string | null;
+  turnDurationText?: string | null;
   cacheLineText?: string | null;
   model?: string | null;
   perModelCost?: ReadonlyArray<{
@@ -318,6 +320,26 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
           <span className="text-[var(--text-secondary)]">{t('quotaCard.cacheLabel')}</span>
           <span className="text-right font-medium text-[var(--text-primary)]">
             {turnUsage.cacheLineText}
+          </span>
+        </div>
+      ) : null}
+
+      {turnUsage.turnDurationText != null ? (
+        <div
+          data-testid="quota-performance"
+          className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums"
+        >
+          <span className="text-[var(--text-secondary)]">{t('quotaCard.timeLabel')}</span>
+          <span
+            data-testid="quota-performance-value"
+            className="ml-auto text-right font-medium text-[var(--text-primary)]"
+          >
+            {turnUsage.outputRateText != null
+              ? t('quotaCard.timeAndRateValue', {
+                  duration: turnUsage.turnDurationText,
+                  rate: turnUsage.outputRateText,
+                })
+              : turnUsage.turnDurationText}
           </span>
         </div>
       ) : null}

@@ -75,6 +75,15 @@ export interface CodexRuntimeState {
   reasoningTextLen: Map<string, number>;
   /** item.id → agentMessage 已 emit 文本字符长度(citation 归一化后的空间,见 handleAgentMessage)。 */
   itemTextLen: Map<string, number>;
+  /** Current model-active interval start; null while tools/approvals own the turn. */
+  generationStartedAt: number | null;
+  /** Tool-like items currently executing. Parallel tools keep generation paused until all finish. */
+  generationPendingToolIds: Set<string>;
+  /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
+  generationDurationMs: number;
+  generationTurnId: string | null;
+  /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
+  generationTimingReliable: boolean;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
   /** 尚未 emit 的 Web Search 候选输入，供跨 started/updated/completed 快照补全。 */
@@ -105,12 +114,124 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
     itemTextLen: new Map(),
+    generationStartedAt: null,
+    generationPendingToolIds: new Set(),
+    generationDurationMs: 0,
+    generationTurnId: null,
+    generationTimingReliable: true,
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
     lastAuthErrorKey: null,
     networkRetryNotice: null,
   };
+}
+
+/** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
+export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
+  rt.generationStartedAt = null;
+  rt.generationPendingToolIds.clear();
+  rt.generationDurationMs = 0;
+  rt.generationTurnId = null;
+  rt.generationTimingReliable = true;
+}
+
+function timingValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function closeCodexGenerationInterval(rt: CodexRuntimeState, endedAt: number): void {
+  const startedAt = rt.generationStartedAt;
+  rt.generationStartedAt = null;
+  if (startedAt === null) return;
+  if (endedAt < startedAt) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  rt.generationDurationMs += endedAt - startedAt;
+}
+
+export function beginCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  startedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) {
+    resetCodexGenerationTiming(rt);
+    rt.generationTurnId = turnId;
+  }
+  if (rt.generationStartedAt === null && rt.generationPendingToolIds.size === 0) {
+    rt.generationStartedAt = startedAt;
+  }
+}
+
+export function finalizeCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  completedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) return;
+  if (rt.generationPendingToolIds.size > 0) {
+    rt.generationTimingReliable = false;
+    rt.generationStartedAt = null;
+    return;
+  }
+  closeCodexGenerationInterval(rt, completedAt);
+}
+
+export function codexGenerationDurationMs(rt: CodexRuntimeState): number | undefined {
+  return rt.generationTimingReliable && rt.generationDurationMs > 0
+    ? rt.generationDurationMs
+    : undefined;
+}
+
+const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'commandExecution',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageGeneration',
+  'imageView',
+  'fileChange',
+]);
+
+function noteCodexGenerationBoundary(
+  rt: CodexRuntimeState,
+  phase: ItemPhase,
+  item: { id?: unknown; type?: unknown },
+  notification: { turnId?: unknown; startedAtMs?: unknown; completedAtMs?: unknown },
+): void {
+  const turnId = notification.turnId;
+  if (typeof turnId !== 'string') return;
+  if (rt.generationTurnId !== turnId) {
+    const fallbackStart = phase === 'started'
+      ? timingValue(notification.startedAtMs) ?? Date.now()
+      : Date.now();
+    beginCodexGenerationTurn(rt, turnId, fallbackStart);
+  }
+  if (typeof item.type !== 'string' || !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)) {
+    return;
+  }
+  if (typeof item.id !== 'string' || item.id.length === 0) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (phase === 'started') {
+    if (rt.generationPendingToolIds.has(item.id)) return;
+    const startedAt = timingValue(notification.startedAtMs) ?? Date.now();
+    if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, startedAt);
+    rt.generationPendingToolIds.add(item.id);
+    return;
+  }
+  if (phase !== 'completed') return;
+  if (!rt.generationPendingToolIds.delete(item.id)) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.size === 0) {
+    rt.generationStartedAt = timingValue(notification.completedAtMs) ?? Date.now();
+  }
 }
 
 // ── 上下文 ────────────────────────────────────────────────────────────────────
@@ -174,6 +295,12 @@ export function translateItemNotification(
     ctx.log.warn('item missing type field', { phase, itemKeys: Object.keys(item) });
     return;
   }
+  noteCodexGenerationBoundary(
+    ctx.rt,
+    phase,
+    item as { id?: unknown; type?: unknown },
+    notification as { turnId?: unknown; startedAtMs?: unknown; completedAtMs?: unknown },
+  );
 
   switch (itemType) {
     case 'agentMessage':

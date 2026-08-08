@@ -10,6 +10,7 @@ describe('aggregateTurnUsageDetails', () => {
       outputTokens: 20,
       cacheReadTokens: 100,
       cacheCreateTokens: 5,
+      durationMs: 1_000,
       model: 'claude-fable-5[1m]',
       perModelCost: [{ model: 'claude-fable-5', money: usdMoney(2.5) }],
     });
@@ -18,6 +19,7 @@ describe('aggregateTurnUsageDetails', () => {
       outputTokens: 7,
       cacheReadTokens: 50,
       cacheCreateTokens: 2,
+      durationMs: 500,
       models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
       perModelCost: [
         { model: 'claude-fable-5', money: usdMoney(1.25) },
@@ -32,6 +34,7 @@ describe('aggregateTurnUsageDetails', () => {
       cacheReadTokens: 150,
       cacheCreateTokens: 7,
       totalTokens: 197,
+      durationMs: 1_500,
       models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
     });
     expect(aggregated?.perModelCost).toEqual([
@@ -79,5 +82,17 @@ describe('aggregateTurnUsageDetails', () => {
         },
       ]),
     ).toBeNull();
+  });
+
+  it('keeps valid duration and drops invalid duration values', () => {
+    expect(buildTurnUsageDetails({ outputTokens: 20, durationMs: 800 })).toMatchObject({
+      durationMs: 800,
+    });
+    expect(buildTurnUsageDetails({ outputTokens: 20, durationMs: 0 })).not.toHaveProperty(
+      'durationMs',
+    );
+    expect(
+      buildTurnUsageDetails({ outputTokens: 20, durationMs: Number.NaN }),
+    ).not.toHaveProperty('durationMs');
   });
 });

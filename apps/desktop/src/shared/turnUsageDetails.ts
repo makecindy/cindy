@@ -21,6 +21,10 @@ export interface TurnUsageDetails {
   cacheCreateTokens: number;
   /** 展示用总 token：input + output + cacheRead + cacheCreate。 */
   totalTokens: number;
+  /** 可证明的纯模型生成耗时；不含工具执行/用户等待，用于计算输出速率。 */
+  durationMs?: number;
+  /** 整轮 wall-clock 耗时，仅供诊断展示；绝不用于计算输出速率。 */
+  turnDurationMs?: number;
   /** cacheRead / (input + cacheRead + cacheCreate)，无输入分母时为 null。 */
   cacheHitRate: number | null;
   /** 本轮主要模型；能确定时填写。 */
@@ -52,10 +56,16 @@ export interface BuildTurnUsageDetailsInput {
     | null
     | undefined
   >;
+  durationMs?: number;
+  turnDurationMs?: number;
 }
 
 function sanitizeToken(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function sanitizeDuration(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function sanitizeModel(value: unknown): string | undefined {
@@ -146,6 +156,8 @@ export function aggregateTurnUsageDetails(
     outputTokens: details.reduce((sum, item) => sum + item.outputTokens, 0),
     cacheReadTokens: details.reduce((sum, item) => sum + item.cacheReadTokens, 0),
     cacheCreateTokens: details.reduce((sum, item) => sum + item.cacheCreateTokens, 0),
+    durationMs: details.reduce((sum, item) => sum + (item.durationMs ?? 0), 0) || undefined,
+    turnDurationMs: details.reduce((sum, item) => sum + (item.turnDurationMs ?? 0), 0) || undefined,
     model: modelNames.length === 1 ? modelNames[0] : undefined,
     models: modelNames,
     perModelCost: [...perModel.entries()].map(([model, money]) => ({ model, money })),
@@ -166,6 +178,8 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const model = sanitizeModel(input.model);
   const models = uniqueModels(input.models);
   const perModelCost = sanitizePerModelCost(input.perModelCost);
+  const durationMs = sanitizeDuration(input.durationMs);
+  const turnDurationMs = sanitizeDuration(input.turnDurationMs);
 
   return {
     inputTokens,
@@ -174,6 +188,8 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     cacheCreateTokens,
     totalTokens,
     cacheHitRate,
+    ...(durationMs ? { durationMs } : {}),
+    ...(turnDurationMs ? { turnDurationMs } : {}),
     ...(model ? { model } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
@@ -195,6 +211,8 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
       models: Array.isArray(raw.models)
         ? raw.models.filter((m): m is string => typeof m === 'string')
         : undefined,
+      durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : undefined,
+      turnDurationMs: typeof raw.turnDurationMs === 'number' ? raw.turnDurationMs : undefined,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
             e && typeof e === 'object'
