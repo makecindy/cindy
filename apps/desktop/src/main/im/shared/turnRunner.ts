@@ -1836,22 +1836,30 @@ export function createTurnRunner(
     if (!data || typeof data.fullText !== 'string') return;
     const urls = extractRenderableXdtImageUrls(data.fullText);
     if (urls.length === 0) return;
+    const absPaths: string[] = [];
+    for (const url of urls) {
+      try {
+        const { absPath } = url.startsWith('cindy-media://')
+          ? resolveCindyMediaUrl(url)
+          : resolveXdtImageUrl(url);
+        absPaths.push(absPath);
+        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`[${channel}/turn] resolve managed image failed`, {
+          kind: 'managed-image-resolve',
+          source: url.startsWith('cindy-media://') ? 'cindy-media' : 'xdt-image',
+          error,
+        });
+      }
+    }
+    if (absPaths.length === 0) return;
     // streamingHandle 可能还没 spawn (e.g. 工具调用先于任何 text delta) — 触发
     // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
     // O(1) 同步 push, 不阻塞事件循环。
     void ensureStreamingHandle(turn).then((handle) => {
       if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力
-      for (const url of urls) {
-        try {
-          const { absPath } = url.startsWith('cindy-media://')
-            ? resolveCindyMediaUrl(url)
-            : resolveXdtImageUrl(url);
-          handle.addExtraImageAbsPath(absPath);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
-        }
-      }
+      for (const absPath of absPaths) handle.addExtraImageAbsPath(absPath);
     });
   }
 
@@ -2521,6 +2529,9 @@ export function createTurnRunner(
           error,
         });
       }
+      if (output.kind === 'rich-card') {
+        await sendFallbackMedia(turn, userId, state.scopeKey);
+      }
     }
     settleTurnTerminal(turn);
     log.info(
@@ -2530,6 +2541,31 @@ export function createTurnRunner(
     // 收口完成(最终卡片已 finalize)后再派发下一条排队消息 — IM 时间线保持
     // "上一轮输出 → 下一条开始流式"的自然顺序。
     maybeDispatchNextQueued(state, userId);
+  }
+
+  async function sendFallbackMedia(
+    turn: TurnState,
+    userId: string,
+    threadTs: string | undefined,
+  ): Promise<void> {
+    for (const absPath of turn.mediaAbsPaths) {
+      try {
+        const result = await output.im.sendFile(userId, absPath, undefined, { threadTs });
+        if (result.ok) continue;
+        log.error(`${channel} media fallback failed`, {
+          kind: 'terminal-media-fallback',
+          source: 'sendFile',
+          reason: result.reason ?? 'UNKNOWN',
+        });
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} media fallback failed`, {
+          kind: 'terminal-media-fallback',
+          source: 'sendFile',
+          error,
+        });
+      }
+    }
   }
 
   async function handleTurnErrorAsync(

@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     removeMessageReaction: vi.fn(),
     sendText: vi.fn(),
     sendMarkdownText: vi.fn(),
+    sendFile: vi.fn(),
     startStreamingText: vi.fn(),
     patchMarkdownCard: vi.fn(),
     sendInteractiveCard: vi.fn(),
@@ -531,6 +532,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.removeMessageReaction.mockResolvedValue(undefined);
     mocks.feishuIm.sendText.mockResolvedValue(undefined);
     mocks.feishuIm.sendMarkdownText.mockResolvedValue(undefined);
+    mocks.feishuIm.sendFile.mockResolvedValue({ ok: true, messageId: 'file-1' });
     mocks.feishuIm.startStreamingText.mockResolvedValue({
       messageId: 'stream-1',
       append: vi.fn(),
@@ -599,6 +601,75 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
     expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers generated images after plain-text fallback when streaming init fails', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/generated.png',
+      mimeType: 'image/png',
+    });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://generated.png' }) },
+    });
+    h.emit({ type: 'text', data: { text: 'image ready', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/generated.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.sendFile).toHaveBeenCalledTimes(1);
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues media fallback and settles safely when one generated image send fails', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.resolveXdtImageUrl.mockImplementation((url: string) => ({
+      absPath: url.endsWith('first.png') ? '/tmp/first.png' : '/tmp/second.png',
+      mimeType: 'image/png',
+    }));
+    mocks.feishuIm.sendFile
+      .mockResolvedValueOnce({ ok: false, reason: 'UPLOAD_FAIL' })
+      .mockResolvedValueOnce({ ok: true, messageId: 'file-2' });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'tool_result_full',
+      data: {
+        fullText: JSON.stringify({
+          xdt_image_urls: ['xdt-image://first.png', 'xdt-image://second.png'],
+        }),
+      },
+    });
+    h.emit({ type: 'text', data: { text: 'images ready', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledTimes(2);
+    });
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      'feishu media fallback failed',
+      expect.objectContaining({
+        kind: 'terminal-media-fallback',
+        source: 'sendFile',
+        reason: 'UPLOAD_FAIL',
+      }),
+    );
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(mocks.logger.error.mock.calls)).not.toContain('/tmp/first.png');
   });
 
   it('settles the turn and logs safely when streaming init and plain-text fallback both fail', async () => {
