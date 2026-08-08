@@ -494,11 +494,16 @@ describe('PluginMarketService 自定义市场图标', () => {
       });
     }) as typeof fs.promises.open);
     try {
-      await expect(
-        h.service.localIcons([{ pluginId: item.pluginId, expectedIconKey: item.customIconKey! }]),
-      ).resolves.toEqual([
-        { pluginId: item.pluginId, expectedIconKey: item.customIconKey, status: 'missing' },
+      const results = await h.service.localIcons([
+        { pluginId: item.pluginId, expectedIconKey: item.customIconKey! },
       ]);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        pluginId: item.pluginId,
+        expectedIconKey: item.customIconKey,
+      });
+      expect(['missing', 'retryable']).toContain(results[0]?.status);
+      expect(results[0]?.status).not.toBe('loaded');
       expect(restoredOldGeneration).toBe(true);
     } finally {
       openSpy.mockRestore();
@@ -570,6 +575,56 @@ describe('PluginMarketService 自定义市场图标', () => {
     await expect(h.service.localIcons([request])).resolves.toEqual([
       { ...request, status: 'missing' },
     ]);
+  });
+
+  it('returns retryable when the icon changes during the verified read', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/alpha', id: 'alpha', icon: 'assets/icon.png', iconBytes: 'ALPHA' },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const item = (await h.service.snapshot()).items[0]!;
+    const request = { pluginId: item.pluginId, expectedIconKey: item.customIconKey! };
+    const iconPath = await fs.promises.realpath(
+      path.join(dir, 'plugins', 'alpha', 'assets', 'icon.png'),
+    );
+    const realOpen = fs.promises.open;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      if (String(args[0]) !== iconPath) return handle;
+      const realStat = handle.stat.bind(handle);
+      let statCalls = 0;
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') {
+            return async (options?: fs.StatOptions) => {
+              const stat = (await realStat(options as never)) as unknown as fs.BigIntStats;
+              statCalls += 1;
+              if (statCalls !== 2) return stat;
+              return new Proxy(stat, {
+                get(statTarget, statKey) {
+                  if (statKey === 'mtimeNs') return statTarget.mtimeNs + 1n;
+                  const value = Reflect.get(statTarget, statKey);
+                  return typeof value === 'function' ? value.bind(statTarget) : value;
+                },
+              }) as fs.BigIntStats;
+            };
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      await expect(h.service.localIcons([request])).resolves.toEqual([
+        { ...request, status: 'retryable' },
+      ]);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it('keeps discovery and projection uncertainty retryable', async () => {

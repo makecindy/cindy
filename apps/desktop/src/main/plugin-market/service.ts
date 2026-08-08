@@ -642,6 +642,7 @@ export class PluginMarketService {
                   {
                     containWithin: plugin.dir,
                     nonBlocking: true,
+                    verifyContentStability: true,
                   },
                 );
                 if (read === null) {

@@ -17,9 +17,10 @@ import {
   usePluginMarketIcon,
 } from '../usePluginMarketIcon';
 
-function customItem(id: string, key = id.padEnd(64, 'a').slice(0, 64)): PluginMarketItem {
+function customItem(id: string, key?: string, market = 'team-lib'): PluginMarketItem {
+  const iconKey = key ?? id.padEnd(64, 'a').slice(0, 64);
   return {
-    pluginId: `custom:team-lib:${id}`,
+    pluginId: `custom:${market}/${id}`,
     ghostId: id,
     name: id,
     description: null,
@@ -27,11 +28,11 @@ function customItem(id: string, key = id.padEnd(64, 'a').slice(0, 64)): PluginMa
     scope: 'public',
     organizationId: null,
     defaultInstall: false,
-    releaseId: `custom:team-lib:${id}:1.0.0`,
+    releaseId: `custom:${market}/${id}:1.0.0`,
     version: '1.0.0',
     publishedAt: '2026-08-06T00:00:00.000Z',
     icon: null,
-    customIconKey: key,
+    customIconKey: iconKey,
     installState: 'not-installed',
     enabled: null,
     sourceType: 'local-market',
@@ -40,6 +41,11 @@ function customItem(id: string, key = id.padEnd(64, 'a').slice(0, 64)): PluginMa
 }
 
 let localIcons: ReturnType<typeof vi.fn>;
+
+function ConsumerForSourceSplit({ item }: { item: PluginMarketItem }) {
+  const icon = usePluginMarketIcon(item, { deferUntilVisible: false });
+  return <span>{icon.iconDataUrl ? 'loaded' : 'pending'}</span>;
+}
 
 beforeEach(() => {
   __resetPluginMarketIconStoreForTest();
@@ -236,6 +242,60 @@ describe('usePluginMarketIcon', () => {
       expect(
         screen.getAllByTestId('serialized-icon').every((node) => node.textContent === 'loaded'),
       ).toBe(true),
+    );
+    view.unmount();
+  });
+
+  it('does not mix different marketplace sources in one IPC batch', async () => {
+    const teamItems = Array.from({ length: 5 }, (_, index) => customItem(`team-${index}`));
+    const otherItems = Array.from({ length: 4 }, (_, index) =>
+      customItem(`other-${index}`, undefined, 'other-market'),
+    );
+    const pending: Array<{
+      requests: PluginMarketLocalIconRequest[];
+      resolve: (results: PluginMarketLocalIconResult[]) => void;
+    }> = [];
+    localIcons.mockImplementation(
+      (requests: PluginMarketLocalIconRequest[]) =>
+        new Promise<PluginMarketLocalIconResult[]>((resolve) =>
+          pending.push({ requests, resolve }),
+        ),
+    );
+
+    const view = render(
+      <>
+        {[...teamItems, ...otherItems].map((item) => (
+          <span key={item.pluginId}>
+            <ConsumerForSourceSplit item={item} />
+          </span>
+        ))}
+      </>,
+    );
+    await waitFor(() => expect(localIcons).toHaveBeenCalledTimes(1));
+    expect(
+      pending[0]!.requests.every((request) => request.pluginId.startsWith('custom:team-lib/')),
+    ).toBe(true);
+    await act(async () =>
+      pending[0]!.resolve(
+        pending[0]!.requests.map((request) => ({
+          ...request,
+          status: 'loaded',
+          dataUrl: 'data:image/png;base64,AAAA',
+        })),
+      ),
+    );
+    await waitFor(() => expect(localIcons).toHaveBeenCalledTimes(2));
+    expect(
+      pending[1]!.requests.every((request) => request.pluginId.startsWith('custom:other-market/')),
+    ).toBe(true);
+    await act(async () =>
+      pending[1]!.resolve(
+        pending[1]!.requests.map((request) => ({
+          ...request,
+          status: 'loaded',
+          dataUrl: 'data:image/png;base64,AAAA',
+        })),
+      ),
     );
     view.unmount();
   });

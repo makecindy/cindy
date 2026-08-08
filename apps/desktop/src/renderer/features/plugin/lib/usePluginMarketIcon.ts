@@ -13,6 +13,7 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
 } from '../../../../shared/pluginMarket';
+import { parseCustomMarketPluginId } from '../../../../shared/pluginMarket';
 
 type LocalIconStatus = 'idle' | 'queued' | 'loading' | 'loaded' | 'missing' | 'retryable';
 
@@ -55,6 +56,10 @@ let totalDataSize = 0;
 
 function requestKey(request: PluginMarketLocalIconRequest): string {
   return `${request.pluginId}:${request.expectedIconKey}`;
+}
+
+function requestMarketKey(request: PluginMarketLocalIconRequest): string {
+  return parseCustomMarketPluginId(request.pluginId)?.marketName ?? request.pluginId;
 }
 
 function recordFor(request: PluginMarketLocalIconRequest): LocalIconRecord {
@@ -235,10 +240,19 @@ async function flushQueue(): Promise<void> {
     }
     return;
   }
-  for (const key of queuedKeys) {
+  const pendingKeys = [...queuedKeys];
+  const firstPendingRecord = pendingKeys
+    .map((key) => records.get(key))
+    .find((record): record is LocalIconRecord => record?.snapshot.status === 'queued');
+  const batchMarket = firstPendingRecord ? requestMarketKey(firstPendingRecord.request) : null;
+  for (const key of pendingKeys) {
     queuedKeys.delete(key);
     const record = records.get(key);
     if (!record || record.snapshot.status !== 'queued') continue;
+    if (batchMarket !== null && requestMarketKey(record.request) !== batchMarket) {
+      queuedKeys.add(key);
+      continue;
+    }
     publish(record, { status: 'loading' });
     batch.push({ record, attempt: (record.loadAttempt += 1) });
     if (batch.length === BATCH_SIZE) break;

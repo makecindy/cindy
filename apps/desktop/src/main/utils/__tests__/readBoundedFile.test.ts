@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  BoundedFileReadChangedError,
   BoundedFileReadUncertainError,
   GHOST_MANIFEST_MAX_BYTES,
   readBoundedFileNoFollow,
@@ -139,9 +140,11 @@ describe('readBoundedFileNoFollow', () => {
       .spyOn(fs.promises, 'stat')
       .mockRejectedValueOnce(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
     try {
-      await expect(
-        readBoundedFileNoFollow(file, 1024, { containWithin: workDir }),
-      ).rejects.toBeInstanceOf(BoundedFileReadUncertainError);
+      const error = await readBoundedFileNoFollow(file, 1024, { containWithin: workDir }).catch(
+        (value: unknown) => value,
+      );
+      expect(error).toBeInstanceOf(BoundedFileReadUncertainError);
+      expect(error).toMatchObject({ code: 'EACCES' });
     } finally {
       statSpy.mockRestore();
     }
@@ -174,6 +177,46 @@ describe('readBoundedFileNoFollow', () => {
       expect(bytes?.toString('utf8')).toBe(payload);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('开启内容稳定性校验时,读取期间版本变化返回可重试错误', async () => {
+    const file = path.join(workDir, 'changed.json');
+    await fs.promises.writeFile(file, '{"ok":true}');
+    const realOpen = fs.promises.open;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      const realStat = handle.stat.bind(handle);
+      let statCalls = 0;
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') {
+            return async (options?: fs.StatOptions) => {
+              const stat = (await realStat(options as never)) as unknown as fs.BigIntStats;
+              statCalls += 1;
+              if (statCalls !== 2) return stat;
+              return new Proxy(stat, {
+                get(statTarget, statKey) {
+                  if (statKey === 'mtimeNs') return statTarget.mtimeNs + 1n;
+                  const value = Reflect.get(statTarget, statKey);
+                  return typeof value === 'function' ? value.bind(statTarget) : value;
+                },
+              }) as fs.BigIntStats;
+            };
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      await expect(
+        readBoundedFileNoFollow(file, 1024, { verifyContentStability: true }),
+      ).rejects.toBeInstanceOf(BoundedFileReadChangedError);
+    } finally {
+      openSpy.mockRestore();
     }
   });
 

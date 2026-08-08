@@ -33,6 +33,8 @@ export interface ReadBoundedFileOptions {
   containWithin?: string;
   /** 特殊文件场景使用非阻塞打开，避免 FIFO 在 Main 中永久等待。 */
   nonBlocking?: boolean;
+  /** 读取前后句柄版本变化时抛出可重试错误，而不是把瞬态变化降级为 null。 */
+  verifyContentStability?: boolean;
 }
 
 export interface BoundedFileRead {
@@ -42,12 +44,25 @@ export interface BoundedFileRead {
 }
 
 export class BoundedFileReadUncertainError extends Error {
-  readonly code = 'FILE_READ_UNCERTAIN';
+  readonly code: string;
 
   constructor(cause?: unknown) {
     super('File could not be safely verified');
     this.name = 'BoundedFileReadUncertainError';
+    this.code =
+      typeof (cause as NodeJS.ErrnoException | undefined)?.code === 'string'
+        ? ((cause as NodeJS.ErrnoException).code as string)
+        : 'FILE_READ_UNCERTAIN';
     if (cause !== undefined) this.cause = cause;
+  }
+}
+
+export class BoundedFileReadChangedError extends Error {
+  readonly code = 'FILE_CONTENT_CHANGED';
+
+  constructor() {
+    super('File content changed while it was being read');
+    this.name = 'BoundedFileReadChangedError';
   }
 }
 
@@ -166,7 +181,10 @@ export async function readBoundedFileNoFollowWithStat(
     }
     const bytes = await readToLength(handle, Number(stat.size));
     const finalStat = await handle.stat({ bigint: true });
-    if (!sameHandleVersion(stat, finalStat)) return null;
+    if (!sameHandleVersion(stat, finalStat)) {
+      if (options?.verifyContentStability) throw new BoundedFileReadChangedError();
+      return null;
+    }
     return { bytes, stat: finalStat };
   } finally {
     await handle.close();
