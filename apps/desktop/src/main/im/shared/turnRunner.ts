@@ -100,6 +100,7 @@ import {
   beginInteractionRoute,
   type InteractionRouteLease,
 } from '../../maker-ipc/interactionRouter';
+import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff';
 import {
@@ -215,6 +216,7 @@ interface TurnState {
    * cleanup path via releaseTurnInteractionRoute. Null when the turn has no policy.
    */
   hostTurnLeaseRelease: (() => void) | null;
+  groupHistoryAccessRelease: (() => void) | null;
   /** Terminal classification consumed by chunked-text commitFinal. */
   terminalKind: 'done' | 'aborted' | 'error';
   terminalErrorCode: string | null;
@@ -243,6 +245,7 @@ interface QueuedSend {
   /** Durable route side effects run only after provider acceptance, never on enqueue. */
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   turnPermissionPolicy?: TurnPermissionPolicy;
+  groupHistoryAccess?: GroupHistoryAccessScope;
 }
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
@@ -347,6 +350,7 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  groupHistoryAccess?: GroupHistoryAccessScope;
 }
 
 export interface ImTurnTerminal {
@@ -674,6 +678,7 @@ export function createTurnRunner(
       releaseHeadlessSetupTurn: null,
       interactionRouteLease: null,
       hostTurnLeaseRelease: null,
+      groupHistoryAccessRelease: null,
       terminalKind: 'done',
       terminalErrorCode: null,
       chunkedReplyBegun: false,
@@ -750,6 +755,7 @@ export function createTurnRunner(
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -864,6 +870,13 @@ export function createTurnRunner(
           // 两个 surface 都需要:channel 与 desktop 的策略同样必须扛住热切。
           if (item.turnPermissionPolicy) {
             item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
+          }
+          if (item.groupHistoryAccess) {
+            item.turn.groupHistoryAccessRelease = beginGroupHistoryAccess({
+              sessionId: rowId,
+              sessionInstanceId: state.makerSession.instanceId,
+              scope: item.groupHistoryAccess,
+            });
           }
           item.turn.interactionRouteLease =
             item.turnPermissionPolicy?.confirmationSurface === 'desktop'
@@ -2092,6 +2105,9 @@ export function createTurnRunner(
   }
 
   function releaseTurnInteractionRoute(turn: TurnState, reason: string): void {
+    const releaseGroupHistoryAccess = turn.groupHistoryAccessRelease;
+    turn.groupHistoryAccessRelease = null;
+    releaseGroupHistoryAccess?.();
     const lease = turn.interactionRouteLease;
     turn.interactionRouteLease = null;
     lease?.release(reason);

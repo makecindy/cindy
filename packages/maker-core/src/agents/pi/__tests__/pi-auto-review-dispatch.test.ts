@@ -289,6 +289,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
+  it('把 session 花名册快照追加到 Pi system prompt', async () => {
+    const deps = buildDeps();
+    deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'roster-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const idx = captured.args.indexOf('--append-system-prompt');
+    expect(captured.args[idx + 1]).toContain('GHOST ROSTER PROMPT');
+    expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir: cwd });
+    await handle.close();
+  });
+
   it('does not inherit an unmanaged ripgrep path from the host process env', async () => {
     const previous = process.env.CINDY_PI_MANAGED_RG_PATH;
     process.env.CINDY_PI_MANAGED_RG_PATH = path.join(cwd, 'rogue-rg');

@@ -2,6 +2,7 @@ import { join as pathJoin } from 'node:path';
 
 import {
   createLiziMcpProviders,
+  resolveLiziMcpSessionContext,
   type LiziMcpProvider,
   type LiziMcpSessionContext,
   type LspServerPool,
@@ -10,6 +11,7 @@ import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import { getCindyGhostsMcpDeps, type GhostGrantLiveSessionState } from './ghost.js';
+import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
@@ -456,6 +458,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   // 全名由 shared/ghost.ts isGhostCallToolName 兼容匹配)。常注册不设
   // plugin gate——工具面恒定是缓存前缀稳定的前提,"没装任何意识"表现为
   // ghost_list 返回空清单而非 server 消失,LLM 不困惑、老会话即时生效。
+  gated.push({
+    name: 'cindy_group_history',
+    isEnabled: () => true,
+    toClaudeSdkConfig: (ctx) => ({
+      type: 'sdk',
+      name: 'cindy_group_history',
+      instance: createGroupHistoryMcpServer({
+        getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+      }),
+    }),
+  });
+
   gated.push({
     name: 'cindy',
     isEnabled: () => true,

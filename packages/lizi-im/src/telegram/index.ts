@@ -85,6 +85,19 @@ const POLL_TIMEOUT_SEC = 50;
  * 同一批 getUpdates 里到齐; 静默 1s 后合并成单个事件, 不各起一轮 turn。
  */
 const ALBUM_SETTLE_MS = 1_000;
+/**
+ * 超过该时限的消息视为「离线期积压重放」, 不再起 turn。
+ *
+ * Telegram 会替离线的 bot 保留最长 24h 的 update, 一上线整批推来。官方 bot
+ * 服务端为此设了 10 分钟闸(2026-07-27 实踩: 上线后整批历史消息被诈尸回复,
+ * 半夜给离线桌面派了过期任务), 个人 bot 此前一道闸都没有 —— 而它跑在桌面端,
+ * 天天关机开机, 暴露面比常驻服务端大得多。
+ *
+ * 阈值比官方宽是**有意的**: 服务端离线 = 故障, 桌面关机 = 预期状态。用户合上
+ * 电脑一小时再打开, 那条正等回复的消息仍然该被处理; 但跨夜、跨半天的整批积压
+ * 用户早已不在等, 逐条回答只会刷屏并派出过期任务。
+ */
+const STALE_MESSAGE_MS = 60 * 60 * 1_000;
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
@@ -1284,13 +1297,38 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.albumsInFlight.clear();
   }
 
+  /**
+   * 返回消息超龄的毫秒数; 未超龄、或时间戳缺失/不可信时返回 null(按新鲜处理)。
+   *
+   * 缺时间戳时选择放行而非拦截: 拦错等于吞掉用户当下发的消息, 比多回一条
+   * 陈旧消息严重得多。
+   */
+  private staleMessageAgeMs(m: TgMessage): number | null {
+    if (!Number.isFinite(m.date) || m.date <= 0) return null;
+    const age = Date.now() - m.date * 1_000;
+    return age > STALE_MESSAGE_MS ? age : null;
+  }
+
+  /** 只记录时长与 Telegram 侧序号 — 不写用户内容, 也不写 chat / user id。 */
+  private logStaleSkip(ageMs: number, chatType: string, messageId: number): void {
+    this.log.info(
+      `telegram stale message skipped (${Math.round(ageMs / 1_000)}s old ${chatType} message=${messageId})`,
+    );
+  }
+
   private async processInboundMessage(
     m: TgMessage,
     siblings: TgMessage[] = [],
     opts: { skipGroupWindow?: boolean } = {},
   ): Promise<void> {
     if (!m.from) return;
+    const staleFor = this.staleMessageAgeMs(m);
     if (m.chat.type === 'private') {
+      if (staleFor !== null) {
+        // 陌生人提示也一并跳过 —— 隔夜再回一句「我不认识你」同样是诈尸。
+        this.logStaleSkip(staleFor, 'private', m.message_id);
+        return;
+      }
       if (String(m.from.id) !== this.ownerUserId) {
         // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
         // per-user 冷却防刷屏; 不进任何业务链路。
@@ -1323,6 +1361,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // 缓冲入口已逐条入窗, 这里跳过避免重复(入窗本身幂等, 跳过纯省一次写)。
       if (!opts.skipGroupWindow) {
         this.emitGroupWindow(groupWindowEntryOf(m));
+      }
+      // 群消息的历史价值与「该不该现在回答」是两件事: 上面照常入窗(数据面),
+      // 这里只拦 turn 触发 —— 隔夜的 @ 不再唤起一轮回答。
+      if (staleFor !== null) {
+        this.logStaleSkip(staleFor, m.chat.type, m.message_id);
+        return;
       }
 
       let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);

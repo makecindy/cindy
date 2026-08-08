@@ -835,7 +835,7 @@ export const SessionItem = memo(function SessionItem({
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。
         // 用 ProjectAction 同款瞬时反馈,跟 Cursor / Codex sidebar 的体感一致。
         'text-left text-sm font-medium',
-        !isEditing && (splitDragEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'),
+        !isEditing && 'cursor-pointer',
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
         isActive
