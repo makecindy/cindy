@@ -429,6 +429,7 @@ describe('Orca lead/worker dispatcher', () => {
       },
       {
         kind: 'host-send',
+        accepted: false,
         code: 'SEND_FAILED',
         message: '[PRECONDITION_FAILED] ORCA_TEAM_INACTIVE: team team-1 has already ended',
       },
