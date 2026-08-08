@@ -920,12 +920,22 @@ function joinAnthropicMessagesPath(baseUrl: string): string {
   return url.toString();
 }
 
+/** fetch 实现的可注入类型;缺省走吃系统代理的 outboundUndiciFetch。 */
+export type UtilityFetchImpl = typeof undiciFetch;
+
 /**
  * Execute one provider-native request and classify failures without retaining
  * arbitrary upstream response bodies. The wire controls both request shape and
  * response parser; callers remain responsible for provider fallback semantics.
+ *
+ * Exported so the title one-shot channel can reuse the exact same wire fetcher
+ * (request shapes, response parsers, failure classification) instead of keeping
+ * its own per-wire copies — see maker-host/title-one-shot.ts. The optional
+ * `fetchImpl` / `instructions` fields exist for that caller: title needs to inject
+ * a test fetch and pass a Codex Responses `instructions` constraint. Existing
+ * callers (help / summary / voice / plugin) leave them unset and are unaffected.
  */
-async function requestProviderHttpText(input: {
+export async function requestProviderHttpText(input: {
   wire: ProviderWire;
   endpoint: string;
   headers?: Record<string, string>;
@@ -940,10 +950,25 @@ async function requestProviderHttpText(input: {
   retryWithMinimalBodyOnInvalidRequest?: boolean;
   /** Some private Responses-compatible endpoints reject max_output_tokens. */
   supportsMaxOutputTokens?: boolean;
+  /** Optional Responses `instructions` field (system-style output constraint). */
+  instructions?: string;
+  /** 可注入 fetch(测试用);缺省走模块级 outboundUndiciFetch。 */
+  fetchImpl?: UtilityFetchImpl;
+  /** 外部取消信号(如会话被取消):联动到内部 AbortController,与 timeout 共同中止请求。 */
+  signal?: AbortSignal;
 }): Promise<string> {
+  const fetchImpl = input.fetchImpl ?? undiciFetch;
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 90_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (input.signal?.aborted) {
+    // 外部信号在调用前已中止：abort 事件早已触发，再挂监听不会生效；立即中止内部
+    // controller，避免请求仍发出、只能等内部 timeout 才结束。
+    controller.abort();
+  } else {
+    input.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
   try {
     const supportsRequestedReasoning = Boolean(
       input.wire !== 'anthropic-messages'
@@ -956,6 +981,7 @@ async function requestProviderHttpText(input: {
     const buildBody = (minimal: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
+        ...(input.instructions ? { instructions: input.instructions } : {}),
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
         ...(!minimal ? {
           tools: [],
@@ -988,7 +1014,7 @@ async function requestProviderHttpText(input: {
             : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
-    const send = (minimal: boolean) => undiciFetch(input.endpoint, {
+    const send = (minimal: boolean) => fetchImpl(input.endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -1038,6 +1064,7 @@ async function requestProviderHttpText(input: {
     throw new UtilityTextExecutionError({ reason: 'request_failed' });
   } finally {
     clearTimeout(timeout);
+    input.signal?.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -1108,7 +1135,7 @@ function chatCompletionEmptyFingerprint(parsed: unknown): Record<string, unknown
 }
 
 /** Direct request for a user provider runtime selected by the schedule. */
-async function requestCustomProviderText(input: {
+export async function requestCustomProviderText(input: {
   agentKind: AgentKind;
   baseUrl: string;
   requestPath?: string;
@@ -1121,11 +1148,23 @@ async function requestCustomProviderText(input: {
   maxTokens?: number;
   timeoutMs?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
+  /** Optional Responses `instructions` field (passed through to the responses wire). */
+  instructions?: string;
+  /** 可注入 fetch(测试用);缺省走模块级 outboundUndiciFetch。 */
+  fetchImpl?: UtilityFetchImpl;
+  /** 外部取消信号,透传到 requestProviderHttpText。 */
+  signal?: AbortSignal;
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
     'Content-Type': 'application/json',
   };
+  // buildUserProvider 会省略与 agent 默认一致的 wireProtocol（Pi 默认 openai-chat，
+  // 见 packages/model-providers/src/user-provider.ts 的 defaultWireProtocol）；
+  // undefined 时按 agent 默认补全，避免 Pi 的 BYOM 本地端点（Ollama/vLLM 的
+  // /v1/chat/completions）被误当成 Responses 打到 /responses。
+  const effectiveWireProtocol =
+    input.wireProtocol ?? (input.agentKind === 'pi' ? 'openai-chat' : 'openai-responses');
   // safeStorage 有当前凭证时覆盖历史 header；没有时仅 api-key 策略允许保留旧版
   // header-only 配置，以便用户升级后继续可用。OAuth 与 none 仍必须清掉复制进来的凭证头。
   const preserveLegacyApiKeyHeaders =
@@ -1138,17 +1177,23 @@ async function requestCustomProviderText(input: {
   }
   if (input.credential) {
     headers.Authorization = `Bearer ${input.credential}`;
-    if (input.agentKind === 'claude-code' && input.authStrategy === 'api-key-header') {
+    // Anthropic wire + api-key-header 时补 x-api-key(与 agentKind 无关,review 反馈)
+    if (
+      input.authStrategy === 'api-key-header'
+      && (input.agentKind === 'claude-code' || effectiveWireProtocol === 'anthropic-messages')
+    ) {
       headers['x-api-key'] = input.credential;
     }
   }
-  if (input.agentKind === 'claude-code') {
+  if (input.agentKind === 'claude-code' || effectiveWireProtocol === 'anthropic-messages') {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
   }
+  // wire 显式声明 anthropic-messages 时（自定义 Codex/Pi 供应商也允许，见
+  // custom-provider-store.ts）→ 走 Anthropic wire，与 agentKind 无关（review 反馈）。
   const wire: ProviderWire =
-    input.agentKind === 'claude-code'
+    effectiveWireProtocol === 'anthropic-messages' || input.agentKind === 'claude-code'
       ? 'anthropic-messages'
-      : input.wireProtocol === 'openai-chat'
+      : effectiveWireProtocol === 'openai-chat'
         ? 'chat-completions'
         : 'responses';
   return requestProviderHttpText({
@@ -1166,6 +1211,9 @@ async function requestCustomProviderText(input: {
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
     reasoningEffort: input.reasoningEffort,
+    instructions: input.instructions,
+    fetchImpl: input.fetchImpl,
+    signal: input.signal,
     retryWithMinimalBodyOnInvalidRequest: true,
   });
 }

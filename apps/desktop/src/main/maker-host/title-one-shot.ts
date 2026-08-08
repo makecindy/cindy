@@ -47,11 +47,21 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from './model-disable-store.js';
+import { isProviderRouteMutationInProgress } from './provider-route.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import { outboundUndiciFetch } from './outbound-fetch.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { validateTitleOutput } from './title-output-validation.js';
+// 复用通用轻量模型 one-shot 的 wire fetcher 与自定义供应商执行器,避免标题通道维护
+// 自己一份 per-wire fetch / 凭证读取副本(收敛动机见 issue #2097)。这两个导出是纯加法,
+// 既有调用方(help / summary / voice / 插件)不受影响;fetchImpl 注入位供标题单测用。
+import {
+  requestProviderHttpText,
+  requestCustomProviderText,
+} from '../utility-model/oneShotCandidates.js';
+import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 
 const log = createLogger('maker-host:title-one-shot');
 
@@ -84,6 +94,18 @@ export interface TitleTarget {
   /** 上游 base(anthropic/openai 取自 catalog routing.upstream;xd 取 server 下发 endpoint)。 */
   upstream: string;
 }
+
+/**
+ * 标题 oneShot 的内部诊断结果。自动起名仍通过 `generateTitleViaProvider()` 消费
+ * string / null 兼容口径；手动 AI 重命名使用本结果区分可操作的失败原因。
+ */
+export type TitleOneShotResult =
+  | { status: 'ok'; title: string }
+  | { status: 'unsupported-provider' }
+  | { status: 'failed' };
+
+/** 当前实现具备完整凭证与 wire 契约的供应商；目标暂不可用不等于供应商不受支持。 */
+const TITLE_ONE_SHOT_PROVIDER_IDS = new Set(['anthropic', 'openai', 'xd']);
 
 /** 注入点 —— 便于单测(mock fetch / 伪造凭证 / 伪造 provider)。缺省均返回 null(回落启发式)。 */
 export interface TitleOneShotDeps {
@@ -180,11 +202,17 @@ function pickXdTitleModel(provider: Provider): CatalogModel | null {
 }
 
 /**
- * 据 providerId 组装标题目标(模型 + 最低 effort + wire + upstream)。
- * provider 无 titleModel / 无对应路由 / 未知 provider → null(不参与智能起名)。
+ * 据 providerId 组装内置供应商标题目标(模型 + 最低 effort + wire + upstream)。
+ * 只服务内置三家(anthropic / openai / xd):它们的凭证与端点需要特殊处理
+ * (anthropic 订阅 OAuth、openai ChatGPT 桥凭证、xd 网关 server 下发端点),
+ * 与通用层 `requestBuiltinProviderText` 的内置分派同口径。
  *
- * wire 按 provider 分派:内置三家协议各异且无法纯靠 authStrategy 区分(anthropic 与 openai
- * 同为 oauth-passthrough 但 wire 不同),故按 id 显式分派。**新增供应商的标题支持 = 加一个 case。**
+ * **用户 / 预设供应商(如 DeepSeek)不走本函数**:它们由 `tryCustomProviderTitle`
+ * 经数据驱动的通用路由(requestCustomProviderText)派发,新增预设 / 自定义供应商
+ * 无需改本文件(#2046 / #2097)。wire 按 provider id 分派仅因内置三家协议各异且
+ * 无法纯靠 authStrategy 区分(anthropic 与 openai 同为 oauth-passthrough 但 wire 不同)。
+ *
+ * provider 无 titleModel / 无对应路由 / 未知 provider → null(由调用方兜底 status)。
  *
  * 注意:anthropic / openai 的 titleModel 是各自订阅通道内有效的静态值(haiku /
  * gpt-5.4-mini 在 ChatGPT 后端有效);xd 是动态清单供应商,**标题模型从网关实时
@@ -240,109 +268,173 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
   }
 }
 
-// ── wire fetchers(各自一次 fetch;失败 / 空 → 抛错,由编排层吞成 null)─────────────
+// ── 用户 / 预设供应商的数据驱动标题路由(#2046 / #2097)─────────────────────
+//
+// 内置三家(anthropic / openai / xd)各需特殊凭证与端点,保留在 buildTitleTarget 的
+// 显式分派里(与通用层 requestBuiltinProviderText 同口径)。其余供应商(预设 / 自定义,
+// 如 DeepSeek)没有 titleModel、凭证按 routing 数据解析,统一走 requestCustomProviderText
+// —— 新增供应商无需改本文件。这是 #2097 收敛的第一步:消除 default: return null,
+// 让 DeepSeek 等供应商标题可用;内置三家的 fetcher 也已统一复用 requestProviderHttpText,
+// 不再各自维护一份 HTTP 副本。
 
-/** Anthropic Messages:Bearer 订阅 OAuth + anthropic-beta;model 经 toSdkModelString 还原 wire 串。 */
-async function fetchAnthropicTitle(
-  upstream: string,
-  modelId: string,
-  prompt: string,
-  oauthToken: string,
-  fetchImpl: FetchImpl,
-  signal: AbortSignal,
-): Promise<string> {
-  const res = await fetchImpl(`${trimTrailingSlash(upstream)}/v1/messages`, {
-    method: 'POST',
-    signal,
-    headers: {
-      authorization: `Bearer ${oauthToken}`,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'oauth-2025-04-20',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: toSdkModelString(modelId),
-      max_tokens: TITLE_MAX_TOKENS,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) throw new Error(`anthropic messages HTTP ${res.status}`);
-  const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
-  return (json.content ?? [])
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text ?? '')
-    .join('')
-    .trim();
-}
-
-/** ChatGPT codex 后端 Responses:Bearer + chatgpt-account-id + originator;SSE 流式,读 output_text。 */
-async function fetchCodexTitle(
-  upstream: string,
-  modelId: string,
-  effort: Effort | null,
-  prompt: string,
-  creds: { accessToken: string; accountId: string },
-  fetchImpl: FetchImpl,
-  signal: AbortSignal,
-): Promise<string> {
-  const body: Record<string, unknown> = {
-    model: modelId,
-    instructions: CODEX_TITLE_INSTRUCTIONS,
-    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
-    tools: [],
-    tool_choice: 'auto',
-    parallel_tool_calls: false,
-    store: false,
-    stream: true,
+/**
+ * 在该 (供应商, agent) 的可选聊天模型里取最经济者(标题语义 = 最经济模型)。
+ * titleModel 不参与:用户 / 预设供应商不声明 titleModel,且本分支只服务非内置供应商。
+ * 逻辑对齐 pickXdTitleModel(成本升序 + isModelSelectableForNewRoute + 停用过滤)。
+ */
+function pickCheapestChatModel(provider: Provider, agentKind: AgentKind): CatalogModel | null {
+  const overrides = readModelDisableOverrides();
+  const candidates: CatalogModel[] = [];
+  for (const model of provider.models[agentKind] ?? []) {
+    if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) continue;
+    if (isModelDisabled(overrides, provider.id, model.id)) continue;
+    candidates.push(model);
+  }
+  if (candidates.length === 0) return null;
+  const costRank = (m: CatalogModel): number => {
+    const c = m.cost;
+    if (!c) return Number.POSITIVE_INFINITY;
+    return (typeof c.input === 'number' ? c.input : 0) + (typeof c.output === 'number' ? c.output : 0);
   };
-  if (effort) body.reasoning = { effort };
-
-  const res = await fetchImpl(`${trimTrailingSlash(upstream)}/responses`, {
-    method: 'POST',
-    signal,
-    headers: {
-      authorization: `Bearer ${creds.accessToken}`,
-      'chatgpt-account-id': creds.accountId,
-      'OpenAI-Beta': 'responses=experimental',
-      originator: 'codex_cli_rs',
-      session_id: randomUUID(),
-      'content-type': 'application/json',
-      accept: 'text/event-stream',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`codex responses HTTP ${res.status}`);
-  return parseResponsesSse(await res.text());
+  // 全无 cost 时 costRank 差为 NaN（Infinity - Infinity）：显式 tie-break 按 id 排序，避免随机选模型。
+  return [...candidates].sort((a, b) => costRank(a) - costRank(b) || a.id.localeCompare(b.id))[0];
 }
 
-/** XD 网关 litellm:Bearer 网关 key,OpenAI chat-completions 形状。 */
-async function fetchGatewayTitle(
-  upstream: string,
-  modelId: string,
-  prompt: string,
-  gatewayKey: string,
+/**
+ * 读自定义供应商凭证。返回 ok=false 表示需要的凭证缺失(→ failed,而非 unsupported);
+ * ok=true 时 value 是要塞进 Authorization 的 Bearer(none 策略为空串)。
+ * 对齐 oneShotCandidates 的 requestExplicitProviderText / hasOneshotProviderCredential。
+ */
+function readCustomProviderCredential(
+  provider: Provider,
+  agentKind: AgentKind,
+  routing: { authStrategy: string; headerOverride?: Record<string, string> },
+): { ok: true; value: string } | { ok: false } {
+  if (routing.authStrategy === 'none') return { ok: true, value: '' };
+  if (routing.authStrategy === 'oauth-token') {
+    const token = readCachedGenericOAuthAccessToken(provider.id, provider.auth?.oauth);
+    return token ? { ok: true, value: token } : { ok: false };
+  }
+  if (routing.authStrategy === 'api-key-header') {
+    const key = readCustomProviderKey(provider.id, agentKind);
+    if (key) return { ok: true, value: key };
+    // 旧版 header-only 配置(凭证直接写在 headerOverride):执行侧同样认,放行。
+    const hasLegacy = Object.entries(routing.headerOverride ?? {}).some(([key, value]) => {
+      const normalized = key.toLowerCase();
+      return (
+        (normalized === 'authorization' || normalized === 'x-api-key')
+        && value.trim().length > 0
+      );
+    });
+    return hasLegacy ? { ok: true, value: '' } : { ok: false };
+  }
+  return { ok: false };
+}
+
+/**
+ * 数据驱动的用户 / 预设供应商标题派发。返回非 null 表示已尝试(含 ok / failed /
+ * unsupported-provider);返回 null 表示该供应商不适用本分支(未在目录 / 是内置供应商),
+ * 由调用方按 TITLE_ONE_SHOT_PROVIDER_IDS 兜底 status。
+ */
+async function tryCustomProviderTitle(
+  providerId: string,
+  args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
+  _deps: TitleOneShotDeps,
   fetchImpl: FetchImpl,
-  signal: AbortSignal,
-): Promise<string> {
-  const res = await fetchImpl(`${trimTrailingSlash(upstream)}/chat/completions`, {
-    method: 'POST',
-    signal,
-    headers: {
-      authorization: `Bearer ${gatewayKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: modelId,
-      max_tokens: TITLE_MAX_TOKENS,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) throw new Error(`gateway chat HTTP ${res.status}`);
-  const json = (await res.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
-  return (json.choices ?? [])
-    .map((c) => (typeof c.message?.content === 'string' ? c.message.content : ''))
-    .join('')
-    .trim();
+): Promise<TitleOneShotResult | null> {
+  const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
+  // 未在目录,或内置供应商(内置无目标由 buildTitleTarget 的 null 兜底)→ 不适用本分支。
+  if (!provider || provider.source === 'builtin') return null;
+
+  // 路由变更窗口(用户编辑/删除该自定义供应商)期间 config 与 safeStorage 更新不是原子的,
+  // 继续读 catalog route + 凭证可能把旧 endpoint 配新 key(或反过来)发到错误 upstream。
+  // 与通用层 requestExplicitProviderText / provider-route.ts 同口径 fail-closed(review P1)。
+  if (isProviderRouteMutationInProgress(providerId)) {
+    log.debug('title oneShot skipped: provider route mutation in progress', { providerId, agentKind: args.agentKind });
+    return { status: 'failed' };
+  }
+
+  const routing = provider.routing[args.agentKind];
+  if (!routing || routing.disabled || !routing.upstream) {
+    return { status: 'unsupported-provider' };
+  }
+  // 与通用层 requestExplicitProviderText 对齐:不支持的 authStrategy 视为不可路由,
+  // 归类 unsupported-provider(而非凭证缺失的 failed)。
+  if (
+    routing.authStrategy !== 'api-key-header'
+    && routing.authStrategy !== 'oauth-token'
+    && routing.authStrategy !== 'none'
+  ) {
+    return { status: 'unsupported-provider' };
+  }
+  const model = pickCheapestChatModel(provider, args.agentKind);
+  if (!model) return { status: 'unsupported-provider' };
+
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
+  const onExternalAbort = () => controller.abort();
+  if (args.signal?.aborted) {
+    controller.abort();
+  } else {
+    args.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  try {
+    const cred = readCustomProviderCredential(provider, args.agentKind, routing);
+    if (!cred.ok) {
+      log.debug('title oneShot skipped: no custom provider credential', { providerId, agentKind: args.agentKind });
+      return { status: 'failed' };
+    }
+    // 派发紧前重查停用轴(对齐内置分支的 canDispatchNow)。
+    const overrides = readModelDisableOverrides();
+    if (isProviderDisabled(overrides, providerId) || isModelDisabled(overrides, providerId, model.id)) {
+      log.debug('title oneShot skipped: route disabled before dispatch', { providerId, model: model.id });
+      return { status: 'failed' };
+    }
+    const text = await requestCustomProviderText({
+      agentKind: args.agentKind,
+      baseUrl: routing.upstream,
+      requestPath: routing.requestPath,
+      wireProtocol: routing.wireProtocol,
+      headers: routing.headerOverride,
+      credential: cred.value,
+      authStrategy: routing.authStrategy as 'api-key-header' | 'oauth-token' | 'none',
+      model: model.id,
+      prompt: args.prompt,
+      maxTokens: TITLE_MAX_TOKENS,
+      timeoutMs: TITLE_TIMEOUT_MS,
+      fetchImpl,
+      signal: controller.signal,
+    });
+    const normalized = validateTitleOutput(text, TITLE_OUTPUT_MAX_CHARS);
+    const title = normalized ? Array.from(normalized).slice(0, 40).join('') : null;
+    if (!title) {
+      log.warn('title oneShot rejected invalid model output', {
+        providerId,
+        model: model.id,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return { status: 'failed' };
+    }
+    log.info('title oneShot done', {
+      providerId,
+      model: model.id,
+      elapsedMs: Date.now() - startedAt,
+      chars: Array.from(title).length,
+    });
+    return { status: 'ok', title };
+  } catch (err) {
+    log.warn('title oneShot failed', {
+      providerId,
+      model: model.id,
+      elapsedMs: Date.now() - startedAt,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { status: 'failed' };
+  } finally {
+    clearTimeout(timeout);
+    args.signal?.removeEventListener('abort', onExternalAbort);
+  }
 }
 
 /** 解析 Responses SSE 文本:累加 output_text.delta,有 response.completed 则以其 final 文本为准。 */
@@ -376,14 +468,14 @@ export function parseResponsesSse(raw: string): string {
 }
 
 /**
- * 标题 oneShot 主入口:解析本会话 provider → titleModel → 单次 HTTP 起标题。
- * 任何环节失败(无 titleModel / 凭证缺失 / HTTP 错 / 空响应 / 超时)→ 返回 null,调用方回落启发式。
+ * 标题 oneShot 诊断入口:解析本会话 provider → titleModel → 单次 HTTP 起标题。
+ * 仅区分“当前供应商不支持”与通用失败，供手动 AI 重命名给出可操作提示。
  * 全程不打印 token(只记 providerId / model / wire / 耗时)。
  */
-export async function generateTitleViaProvider(
+export async function generateTitleViaProviderResult(
   args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
   deps: TitleOneShotDeps = {},
-): Promise<string | null> {
+): Promise<TitleOneShotResult> {
   // 默认走吃系统代理的 undici fetch:上游可能是境外端点(catalog routing.upstream)。
   const fetchImpl = deps.fetchImpl ?? outboundUndiciFetch;
   const readSessionProviderId = deps.readSessionProviderId ?? (async () => null);
@@ -413,13 +505,25 @@ export async function generateTitleViaProvider(
 
   if (!providerId) {
     log.debug('title oneShot skipped: no connected provider', { agentKind: args.agentKind });
-    return null;
+    return { status: 'failed' };
   }
 
   const target = buildTitleTarget(providerId);
   if (!target) {
-    log.debug('title oneShot skipped: no title target', { providerId, agentKind: args.agentKind });
-    return null;
+    // 内置三家之外的用户 / 预设供应商(如 DeepSeek)走数据驱动的通用路由,不再落
+    // default: null(#2046 / #2097)。tryCustomProviderTitle 返回 null 表示该供应商
+    // 不适用此分支(未在目录 / 是内置供应商),由下方 status 兜底。
+    const custom = await tryCustomProviderTitle(providerId, args, deps, fetchImpl);
+    if (custom) return custom;
+    const status = TITLE_ONE_SHOT_PROVIDER_IDS.has(providerId)
+      ? 'failed'
+      : 'unsupported-provider';
+    log.debug('title oneShot skipped: no title target', {
+      providerId,
+      agentKind: args.agentKind,
+      status,
+    });
+    return { status };
   }
   // 标题模型这份拷贝被用户停用 → 跳过(回落启发式起名)。rail 条目带 buildRegistry
   // 烘焙的 disabled 标志。查找必须跨该供应商的**所有 agent** 清单(findCatalogModel,
@@ -437,7 +541,7 @@ export async function generateTitleViaProvider(
       model: target.model,
       reason: initialUnavailableReason,
     });
-    return null;
+    return { status: 'failed' };
   }
 
   const startedAt = Date.now();
@@ -445,7 +549,11 @@ export async function generateTitleViaProvider(
   const timeout = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
   // 外部 signal(发送被取消)联动到本次请求。
   const onExternalAbort = () => controller.abort();
-  args.signal?.addEventListener('abort', onExternalAbort);
+  if (args.signal?.aborted) {
+    controller.abort();
+  } else {
+    args.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   // 派发紧前重查(PR #744 review 第二十一轮):OAuth 刷新等凭证获取是可能数秒的
   // await,期间该 (来源, 标题模型) 可能被用户停用或被热刷新标成 retired —— 凭证
@@ -493,52 +601,82 @@ export async function generateTitleViaProvider(
         const oauth = await readAnthropicOAuth();
         if (!oauth?.accessToken) {
           log.debug('title oneShot skipped: no anthropic OAuth', { providerId });
-          return null;
+          return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-refresh')) return null;
-        text = await fetchAnthropicTitle(
-          target.upstream,
-          target.model,
-          args.prompt,
-          oauth.accessToken,
+        if (!canDispatchNow('after-credential-refresh')) {
+          return { status: 'failed' };
+        }
+        text = await requestProviderHttpText({
+          wire: 'anthropic-messages',
+          endpoint: `${trimTrailingSlash(target.upstream)}/v1/messages`,
+          headers: {
+            authorization: `Bearer ${oauth.accessToken}`,
+            'anthropic-version': '2023-06-01',
+            'anthropic-beta': 'oauth-2025-04-20',
+          },
+          model: toSdkModelString(target.model),
+          prompt: args.prompt,
+          maxTokens: TITLE_MAX_TOKENS,
+          timeoutMs: TITLE_TIMEOUT_MS,
           fetchImpl,
-          controller.signal,
-        );
+          signal: controller.signal,
+        });
         break;
       }
       case 'codex-responses': {
         const creds = readCodexCreds();
         if (!creds) {
           log.debug('title oneShot skipped: no codex creds', { providerId });
-          return null;
+          return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-read')) return null;
-        text = await fetchCodexTitle(
-          target.upstream,
-          target.model,
-          target.effort,
-          args.prompt,
-          creds,
+        if (!canDispatchNow('after-credential-read')) {
+          return { status: 'failed' };
+        }
+        text = await requestProviderHttpText({
+          wire: 'responses',
+          endpoint: `${trimTrailingSlash(target.upstream)}/responses`,
+          headers: {
+            authorization: `Bearer ${creds.accessToken}`,
+            'chatgpt-account-id': creds.accountId,
+            'OpenAI-Beta': 'responses=experimental',
+            originator: 'codex_cli_rs',
+            session_id: randomUUID(),
+            accept: 'text/event-stream',
+          },
+          model: target.model,
+          prompt: args.prompt,
+          reasoningEffort:
+            target.effort === 'low' || target.effort === 'medium' || target.effort === 'high'
+              ? target.effort
+              : undefined,
+          instructions: CODEX_TITLE_INSTRUCTIONS,
+          supportsMaxOutputTokens: false,
+          timeoutMs: TITLE_TIMEOUT_MS,
           fetchImpl,
-          controller.signal,
-        );
+          signal: controller.signal,
+        });
         break;
       }
       case 'gateway-chat': {
         const key = readGatewayKey();
         if (!key) {
           log.debug('title oneShot skipped: no gateway key', { providerId });
-          return null;
+          return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-read')) return null;
-        text = await fetchGatewayTitle(
-          target.upstream,
-          target.model,
-          args.prompt,
-          key,
+        if (!canDispatchNow('after-credential-read')) {
+          return { status: 'failed' };
+        }
+        text = await requestProviderHttpText({
+          wire: 'chat-completions',
+          endpoint: `${trimTrailingSlash(target.upstream)}/chat/completions`,
+          headers: { authorization: `Bearer ${key}` },
+          model: target.model,
+          prompt: args.prompt,
+          maxTokens: TITLE_MAX_TOKENS,
+          timeoutMs: TITLE_TIMEOUT_MS,
           fetchImpl,
-          controller.signal,
-        );
+          signal: controller.signal,
+        });
         break;
       }
     }
@@ -555,7 +693,7 @@ export async function generateTitleViaProvider(
         wire: target.wire,
         elapsedMs: Date.now() - startedAt,
       });
-      return null;
+      return { status: 'failed' };
     }
     log.info('title oneShot done', {
       providerId,
@@ -564,18 +702,30 @@ export async function generateTitleViaProvider(
       elapsedMs: Date.now() - startedAt,
       chars: Array.from(title).length,
     });
-    return title;
+    return { status: 'ok', title };
   } catch (err) {
-    log.warn('title oneShot failed (swallowed)', {
+    log.warn('title oneShot failed', {
       providerId,
       model: target.model,
       wire: target.wire,
       elapsedMs: Date.now() - startedAt,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { status: 'failed' };
   } finally {
     clearTimeout(timeout);
     args.signal?.removeEventListener('abort', onExternalAbort);
   }
+}
+
+/**
+ * 自动起名的兼容入口：失败继续折叠为 null，让既有调用方回落启发式标题。
+ * 手动重命名需要失败语义时应调用 `generateTitleViaProviderResult()`。
+ */
+export async function generateTitleViaProvider(
+  args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
+  deps: TitleOneShotDeps = {},
+): Promise<string | null> {
+  const result = await generateTitleViaProviderResult(args, deps);
+  return result.status === 'ok' ? result.title : null;
 }

@@ -19,8 +19,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { regenerateSessionTitleFor } from '@/lib/makerTransport';
 import { SessionRenameInput } from '../features/cc-agent/SessionRenameInput';
 
+const toastWarning = vi.hoisted(() => vi.fn());
+
 vi.mock('@/lib/makerTransport', () => ({
   regenerateSessionTitleFor: vi.fn(),
+}));
+vi.mock('@/lib/toast', () => ({
+  toast: { warning: toastWarning },
+}));
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({ warn: vi.fn() }),
+}));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 afterEach(() => {
@@ -156,6 +167,42 @@ describe('SessionRenameInput AI rename fills edit state', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith('AI 标题');
+  });
+
+  it.each([
+    ['TITLE_NO_MATERIAL', 'aiRename:noMaterial'],
+    ['TITLE_PROVIDER_UNSUPPORTED', 'aiRename:providerUnsupported'],
+  ])('maps %s to the matching user action', async (code, expectedKey) => {
+    vi.mocked(regenerateSessionTitleFor).mockRejectedValue(
+      new Error(`[${code}] safe main-process message`),
+    );
+    const { container } = render(
+      createElement(Harness, { onCommit: () => {}, onCancel: () => {} }),
+    );
+
+    fireEvent.click(container.querySelector('button')!);
+
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(expectedKey));
+    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('input')?.value).toBe('旧标题');
+  });
+
+  it('keeps the generic fallback for an old host returning null or an unknown error', async () => {
+    vi.mocked(regenerateSessionTitleFor).mockResolvedValueOnce({ title: null });
+    const first = render(createElement(Harness, { onCommit: () => {}, onCancel: () => {} }));
+    fireEvent.click(first.container.querySelector('button')!);
+    await waitFor(() =>
+      expect(toastWarning).toHaveBeenCalledWith('ccAgent.rename.aiRenameFailed'),
+    );
+    first.unmount();
+
+    toastWarning.mockClear();
+    vi.mocked(regenerateSessionTitleFor).mockRejectedValueOnce(new Error('[UNKNOWN] failed'));
+    const second = render(createElement(Harness, { onCommit: () => {}, onCancel: () => {} }));
+    fireEvent.click(second.container.querySelector('button')!);
+    await waitFor(() =>
+      expect(toastWarning).toHaveBeenCalledWith('ccAgent.rename.aiRenameFailed'),
+    );
   });
 
   it('Escape after fill cancels without committing', async () => {
