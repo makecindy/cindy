@@ -61,6 +61,52 @@ export function isLoopbackProviderUrl(value: unknown): value is string {
   }
 }
 
+export interface SplitProviderEndpointUrl {
+  baseUrl: string;
+  requestPath: string;
+}
+
+/**
+ * 把用户粘贴的完整推理端点还原成 routing 的 baseUrl + requestPath 表达。
+ *
+ * 只识别调用方已经确定的默认协议路径，避免猜测任意 URL 的哪一段属于租户 base path。
+ * 无 query 时 requestPath 留空，让既有默认值继续生效；endpoint 自带 query 时则保留为
+ * 显式 requestPath，确保后续探测与真实请求仍按原地址发送。
+ */
+export function splitProviderEndpointUrl(
+  value: string,
+  defaultRequestPath: string,
+): SplitProviderEndpointUrl | null {
+  if (!isProviderRequestPath(defaultRequestPath) || defaultRequestPath.includes('?')) {
+    throw new TypeError('invalid default provider request path');
+  }
+  try {
+    const url = new URL(value.trim());
+    const endpointPathname = defaultRequestPath === '/'
+      ? url.pathname
+      : url.pathname.replace(/\/+$/, '');
+    if (
+      (url.protocol !== 'http:' && url.protocol !== 'https:')
+      || url.username
+      || url.password
+      || url.hash
+      || !endpointPathname.endsWith(defaultRequestPath)
+    ) {
+      return null;
+    }
+    const basePath = endpointPathname.slice(0, -defaultRequestPath.length).replace(/\/+$/, '');
+    url.pathname = basePath || '/';
+    const requestPath = url.search ? `${defaultRequestPath}${url.search}` : '';
+    url.search = '';
+    return {
+      baseUrl: basePath ? url.toString() : url.origin,
+      requestPath,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 把已验证的精确推理路径追加到 base URL，同时保留 base query。
  * requestPath 自带的 query 追加在 base query 后，fragment 一律不进入请求。

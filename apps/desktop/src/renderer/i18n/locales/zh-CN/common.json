@@ -1333,8 +1333,9 @@
           "wireProtocol": "上游协议",
           "baseUrl": "基础 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
-          "requestPath": "精确请求路径（可选）",
-          "requestPathHelp": "留空会使用所选协议的标准路径。只有供应商使用非标准推理接口时，才填写以 / 开头的路径。",
+          "requestPath": "覆盖默认请求路径",
+          "requestPathPlaceholder": "使用默认路径",
+          "requestPathHelp": "通常无需设置。仅当供应商文档明确要求使用其他推理路径时再填写。",
           "apiKey": "API 密钥",
           "apiKeyPlaceholder": "API 密钥",
           "apiKeyEditPlaceholder": "保持不变(已保存)",
@@ -1446,7 +1447,7 @@
           "modelsAutoNote": "模型清单将在授权成功后自动获取，无需手动填写。"
         },
         "advanced": {
-          "label": "高级配置（模型 / 请求头）"
+          "label": "高级连接设置"
         }
       },
       "models": {

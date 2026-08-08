@@ -1482,7 +1482,10 @@ export function registerProviderHandlers(
 
   // 测试连接：查询型结构化返回（规则 13 例外条款——renderer 需要 code 渲染分类文案）。
   // 入参非法 / saved 解析失败（供应商不存在等）仍走 throwIpcError。
-  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (event, input: unknown) => {
+    // 连接测试同样会把 Renderer 提供的 API key / 自定义 headers 发往目标 endpoint；
+    // 必须与模型获取一致，只允许 Cindy 自有顶层页面调用，避免 Main 成为凭证请求代理。
+    assertTrustedProviderMutationSender(event);
     const parsed = parseTestInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid test-connection input');
     try {

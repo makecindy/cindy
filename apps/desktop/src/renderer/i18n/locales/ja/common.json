@@ -1333,8 +1333,9 @@
           "wireProtocol": "上流プロトコル",
           "baseUrl": "ベース URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
-          "requestPath": "正確なリクエストパス（任意）",
-          "requestPathHelp": "空欄の場合は選択したプロトコルの標準パスを使用します。プロバイダーが標準外の推論エンドポイントを使う場合のみ、/ で始まるパスを入力してください。",
+          "requestPath": "デフォルトのリクエストパスを上書き",
+          "requestPathPlaceholder": "デフォルトのパスを使用",
+          "requestPathHelp": "通常は設定不要です。プロバイダーのドキュメントで別の推論パスが明示的に必要な場合にのみ設定してください。",
           "apiKey": "API キー",
           "apiKeyPlaceholder": "API キー",
           "apiKeyEditPlaceholder": "変更しない(保存済み)",
@@ -1446,7 +1447,7 @@
           "modelsAutoNote": "モデル一覧は認可の完了後に自動取得されます。手動入力は不要です。"
         },
         "advanced": {
-          "label": "詳細設定（モデル / リクエストヘッダー）"
+          "label": "詳細な接続設定"
         }
       },
       "models": {

@@ -4,6 +4,7 @@ import {
   appendProviderRequestPath,
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  splitProviderEndpointUrl,
 } from '../provider-url.js';
 
 describe('isProviderRequestPath', () => {
@@ -118,5 +119,60 @@ describe('appendProviderRequestPath', () => {
   it('rejects invalid paths before URL construction', () => {
     expect(() => appendProviderRequestPath('https://custom.example', '/my path'))
       .toThrow('invalid provider request path');
+  });
+});
+
+describe('splitProviderEndpointUrl', () => {
+  it('splits a full Anthropic Messages endpoint while preserving the tenant base path', () => {
+    expect(
+      splitProviderEndpointUrl(
+        'https://token-plan.example/apps/anthropic/v1/messages',
+        '/v1/messages',
+      ),
+    ).toEqual({
+      baseUrl: 'https://token-plan.example/apps/anthropic',
+      requestPath: '',
+    });
+  });
+
+  it('splits a full endpoint with a trailing slash', () => {
+    expect(
+      splitProviderEndpointUrl(
+        'https://token-plan.example/apps/anthropic/v1/messages/',
+        '/v1/messages',
+      ),
+    ).toEqual({
+      baseUrl: 'https://token-plan.example/apps/anthropic',
+      requestPath: '',
+    });
+  });
+
+  it('moves an endpoint query into the explicit request path', () => {
+    expect(
+      splitProviderEndpointUrl(
+        'https://chat.example/v1/chat/completions?tenant=alpha',
+        '/chat/completions',
+      ),
+    ).toEqual({
+      baseUrl: 'https://chat.example/v1',
+      requestPath: '/chat/completions?tenant=alpha',
+    });
+  });
+
+  it('splits a root-level endpoint without leaving a synthetic trailing slash', () => {
+    expect(
+      splitProviderEndpointUrl('https://responses.example/responses', '/responses'),
+    ).toEqual({
+      baseUrl: 'https://responses.example',
+      requestPath: '',
+    });
+  });
+
+  it.each([
+    'https://custom.example/v1',
+    'https://user:pass@custom.example/v1/messages',
+    'https://custom.example/v1/messages#debug',
+  ])('does not reinterpret a non-matching or unsafe URL: %s', (url) => {
+    expect(splitProviderEndpointUrl(url, '/v1/messages')).toBeNull();
   });
 });

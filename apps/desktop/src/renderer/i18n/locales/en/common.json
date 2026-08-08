@@ -1333,8 +1333,9 @@
           "wireProtocol": "Upstream protocol",
           "baseUrl": "Base URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
-          "requestPath": "Exact request path (optional)",
-          "requestPathHelp": "Leave empty to use the standard path for the selected protocol. Enter a path beginning with / only when the provider uses a non-standard inference endpoint.",
+          "requestPath": "Override default request path",
+          "requestPathPlaceholder": "Use default path",
+          "requestPathHelp": "Usually not needed. Set this only when the provider documentation explicitly requires a different inference path.",
           "apiKey": "API key",
           "apiKeyPlaceholder": "API key",
           "apiKeyEditPlaceholder": "Unchanged (saved)",
@@ -1446,7 +1447,7 @@
           "modelsAutoNote": "The model list is fetched automatically after you authorize — no manual entry needed."
         },
         "advanced": {
-          "label": "Advanced (models / headers)"
+          "label": "Advanced connection settings"
         }
       },
       "models": {

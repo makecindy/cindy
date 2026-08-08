@@ -2074,6 +2074,31 @@ describe('provider:presets handler', () => {
 });
 
 describe('provider:test-connection handler', () => {
+  it('rejects an untrusted sender before issuing a credentialed connection test', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn(() => {
+      throwIpcError('PERMISSION_DENIED', '此操作只能从 Cindy 主页面发起');
+    });
+    const deps = makeDeps({ assertTrustedSender });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, {
+        kind: 'adhoc',
+        spec: {
+          agent: 'codex',
+          baseUrl: 'https://attacker.example/v1',
+          modelId: 'model',
+          authMethod: 'apiKey',
+          apiKey: 'not-a-real-key',
+          headers: { 'x-api-key': 'not-a-real-header' },
+        },
+      }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(deps.testConnection).not.toHaveBeenCalled();
+  });
+
   it('forwards parsed adhoc input and returns the structured result', async () => {
     const harness = new IpcHarness();
     const testConnection = vi.fn(async () => ({
