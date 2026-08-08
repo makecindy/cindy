@@ -18,6 +18,7 @@ import {
   isGhostEligibleSessionRow,
   normalizeTurnUsage,
   readStatusIsRunning,
+  withGhostAssistantHookModel,
   type GhostSubscriptionGatewayDeps,
 } from '../subscriptionGateway';
 import {
@@ -64,6 +65,7 @@ function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
     },
     now: () => 1_000,
     newHookId: () => `hook-${++hookSeq}`,
+    resolveMessageHookContext: () => ({}),
     ...overrides,
   };
   return { gw: new GhostSubscriptionGateway(deps), sent, running, deps };
@@ -286,15 +288,22 @@ describe('will- 拦截', () => {
   });
 
   it('allow 继续问下一个;全 allow 放行', async () => {
-    const { gw, sent, running } = makeGateway({ listGhosts: () => HOOK_GHOSTS });
+    const context = { model: 'gpt-5.6' };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => HOOK_GHOSTS,
+      resolveMessageHookContext: () => context,
+    });
     running.add('h1').add('h2');
     const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    expect(sent[0]?.payload).toMatchObject({ name: 'will-user-message', data: context });
     gw.handleVerdict('h1', {
       type: 'event-verdict',
       hookId: (sent[0].payload as { hookId: string }).hookId,
       action: 'allow',
     });
     await vi.waitFor(() => expect(sent).toHaveLength(2));
+    const secondData = (sent[1]?.payload as { data: Record<string, unknown> }).data;
+    expect(secondData).toEqual({ sessionId: 's1', text: 'hi', model: 'gpt-5.6' });
     gw.handleVerdict('h2', {
       type: 'event-verdict',
       hookId: (sent[1].payload as { hookId: string }).hookId,
@@ -397,6 +406,13 @@ describe('will- 拦截', () => {
     expect(sent).toHaveLength(3);
   });
 
+  it('无匹配钩子时不读取上下文', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'gpt-5.6' }));
+    const { gw } = makeGateway({ listGhosts: () => [], resolveMessageHookContext });
+    expect(await gw.screenUserMessage({ sessionId: 's1', text: 'hi' })).toEqual({ action: 'allow' });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
+  });
+
   it('verdict 归属校验:冒名/未知 hookId 静默丢;迟到 verdict 无副作用', async () => {
     const { gw, sent, running } = makeGateway({ listGhosts: () => [HOOK_GHOSTS[0]] });
     running.add('h1');
@@ -418,6 +434,25 @@ describe('will- 拦截', () => {
     const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
     await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS + 10);
     expect(await p).toEqual({ action: 'allow' });
+  });
+
+  it('上下文读取挂死:无上下文投递但仍保留整体超时', async () => {
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      resolveMessageHookContext: () => new Promise<never>(() => {}),
+    });
+    running.add('h1');
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2);
+    expect((sent[0].payload as { data: unknown }).data).toEqual({ sessionId: 's1', text: 'hi' });
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2 + 1);
+    expect(await p).toEqual({ action: 'allow' });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId,
+      action: 'block',
+    });
   });
 
   it('投递失败计入熔断并放行;成功裁决清零失败计数', async () => {
@@ -458,10 +493,21 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
     ghost('h2', { hooks: ['will-assistant-message'] }),
   ];
 
-  it('全 allow → 放行', async () => {
-    const { gw, sent, running } = makeGateway({ listGhosts: () => OUT_GHOSTS });
+  it('使用本轮模型快照而不是下一轮选择', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'next-model' }));
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => OUT_GHOSTS,
+      resolveMessageHookContext,
+    });
     running.add('h1').add('h2');
-    const p = gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' });
+    const p = withGhostAssistantHookModel(Promise.resolve('claude-opus-5'), () =>
+      gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' }),
+    );
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.payload).toMatchObject({
+      data: { model: 'claude-opus-5' },
+    });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
     gw.handleVerdict('h1', {
       type: 'event-verdict',
       hookId: (sent[0].payload as { hookId: string }).hookId,
