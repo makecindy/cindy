@@ -504,9 +504,7 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
       gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' }),
     );
     await vi.waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]?.payload).toMatchObject({
-      data: { model: 'claude-opus-5' },
-    });
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'claude-opus-5' } });
     expect(resolveMessageHookContext).not.toHaveBeenCalled();
     gw.handleVerdict('h1', {
       type: 'event-verdict',

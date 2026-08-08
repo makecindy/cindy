@@ -38,6 +38,7 @@ import {
   type GhostEventThinkingData,
   type GhostEventTurnEndData,
   type GhostEventTurnStartData,
+  type GhostMessageHookData,
   type GhostPipeEventPush,
   type GhostSubscribeTopic,
   type InstalledGhost,
@@ -57,7 +58,6 @@ type HookVerdict = {
   height?: number;
 };
 
-type GhostMessageHookData = { sessionId: string; text: string; model?: string };
 type MessageHookContext = Pick<GhostMessageHookData, 'model'>;
 const assistantHookContext = new AsyncLocalStorage<Promise<MessageHookContext>>();
 
