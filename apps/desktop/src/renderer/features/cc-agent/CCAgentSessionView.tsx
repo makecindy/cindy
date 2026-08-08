@@ -1866,6 +1866,15 @@ export function CCAgentSessionView({
               log.warn('plan command: failed to toggle plan mode', err);
             });
           } else {
+            // 能力已加载但明确不支持:若冷启动 / 老被控端能力未决期间(sessionCaps == null)
+            // 乐观 toggle 遗留了开启状态,这里自动关闭 —— 否则菜单入口隐藏后用户无法用
+            // 现有 UI 关掉,且状态会跨重启残留(Greptile P1)。
+            const snapshot = makerChatStore.getSnapshot(payload.sessionId);
+            if (snapshot.planModeEnabled) {
+              void setPlanMode(false).catch((err: unknown) => {
+                log.warn('plan command: failed to reset plan mode on unsupported session', err);
+              });
+            }
             toast.warning(t('newChat.collaboration.planModeUnsupportedRemote'));
           }
         }
@@ -2442,6 +2451,24 @@ export function CCAgentSessionView({
       const commands = cached.length > 0 ? cached : await getHelpCommandsSnapshot();
       const hit = commands.find((c) => c.name.toLowerCase() === cmdName);
       if (hit?.kind !== 'desktop') return false;
+      // desktop 候选 → forceReload 复核归属(Codex P2):allCommandsRef 是会话挂载时的
+      // 快照,会话期间新增/启用的同名 skill 不会被它感知 —— palette 打开会 forceReload
+      // 显示新 skill,但发送路径仍按旧归属把 /plan 当 desktop 执行。复核为 agent-skill
+      // 则放行给 agent(与 mergeCommands 优先级 agent-skill > desktop 一致)。仅 desktop
+      // 候选才二次拉取,非 desktop 命令零额外成本。
+      try {
+        const agentKind = dbToMakerAgentKind(session?.agentKind);
+        const fresh = await loadAllCommands(
+          agentKind,
+          session?.workingDir,
+          { skipAgentSkills: isRemoteSession, forceReload: true },
+          remoteDeviceId,
+        );
+        const freshHit = fresh.find((c) => c.name.toLowerCase() === cmdName);
+        if (freshHit && freshHit.kind !== 'desktop') return false;
+      } catch {
+        // 复核失败沿用旧判断,不阻断发送。
+      }
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。
       if (hit.name === 'issue') {
@@ -2459,7 +2486,7 @@ export function CCAgentSessionView({
       });
       return true;
     },
-    [getHelpCommandsSnapshot, session?.workingDir, sessionId, remoteDeviceId],
+    [getHelpCommandsSnapshot, session?.agentKind, session?.workingDir, isRemoteSession, sessionId, remoteDeviceId],
   );
 
   const maybeShowContextUsage = useCallback(

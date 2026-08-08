@@ -51,12 +51,13 @@ function planBranchSource(): string {
   const idx = sessionViewSource.indexOf("payload.command === 'plan'");
   if (idx < 0) throw new Error('plan branch missing');
   // 动态定位到分支收尾,不依赖固定长度 slice(注释加长会推远断言,Codex P1 / Copilot):
-  // 取 .catch( 与「不支持 toast」两者中更靠后的位置 + 余量(Codex:老被控端不支持时 toast)。
+  // 取 .catch( /「不支持 toast」/「遗留状态自愈 setPlanMode(false)」中最靠后的位置 + 余量。
   const catchIdx = sessionViewSource.indexOf('.catch(', idx);
   const toastIdx = sessionViewSource.indexOf('planModeUnsupportedRemote', idx);
-  const markers = [catchIdx, toastIdx].filter((v) => v >= 0);
+  const healIdx = sessionViewSource.indexOf('setPlanMode(false)', idx);
+  const markers = [catchIdx, toastIdx, healIdx].filter((v) => v >= 0);
   if (markers.length === 0) throw new Error('no branch end marker after plan branch');
-  return sessionViewSource.slice(idx, Math.max(...markers) + 160);
+  return sessionViewSource.slice(idx, Math.max(...markers) + 200);
 }
 
 describe('/plan slash command contract', () => {
@@ -91,14 +92,29 @@ describe('/plan slash command contract', () => {
     expect(guardIdx).toBeLessThan(planIdx);
   });
 
-  it('runs /plan when capabilities are still loading (sessionCaps == null); toasts when loaded but planMode unsupported', () => {
+  it('runs /plan when capabilities are still loading (sessionCaps == null); toasts + self-heals when loaded but planMode unsupported', () => {
     const branch = planBranchSource();
     // 整个 capabilities 未加载(null,冷启动/远程拉取慢) → 不吞命令;
     // capabilities 已加载但 planMode 缺失(device-link 老被控端,undefined = 不支持)
-    // 或 supported === false → toast 提示而非静默吞掉(Codex)。
+    // 或 supported === false → toast 提示而非静默吞掉(Codex);
+    // 冷启动(null)期间乐观 toggle 遗留的开启状态在此自动关闭(Greptile P1)。
     expect(branch).toContain('(sessionCaps == null || sessionCaps.planMode?.supported === true)');
     expect(branch).toContain('planModeUnsupportedRemote');
     expect(branch).toContain('toast.warning(');
+    expect(branch).toContain('setPlanMode(false)');
+  });
+
+  it('re-verifies command ownership with forceReload before dispatching a desktop command', () => {
+    // Codex P2:allCommandsRef 是会话挂载时的快照,会话期间新增/启用的同名 skill 不
+    // 会被它感知 —— desktop 候选必须 forceReload 复核归属,复核为 agent-skill 则放行
+    // 给 agent(与 mergeCommands 优先级 agent-skill > desktop 一致)。
+    const idx = sessionViewSource.indexOf('const maybeDispatchDesktopSlashCommand');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const region = sessionViewSource.slice(idx, idx + 1600);
+    expect(region).toContain('forceReload: true');
+    expect(region).toContain('skipAgentSkills: isRemoteSession');
+    expect(region).toContain('freshHit && freshHit.kind !== \'desktop\'');
+    expect(region).toContain('return false');
   });
 
   it('toggles plan mode based on the current state when supported', () => {
