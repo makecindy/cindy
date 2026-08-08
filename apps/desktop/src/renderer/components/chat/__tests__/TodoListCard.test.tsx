@@ -160,7 +160,13 @@ describe('TodoListCard flyout interaction', () => {
 
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
     fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole('button', { name: 'Close Plan' }));
+    const closeButton = screen.getByRole('button', { name: 'Close Plan' });
+
+    expect(closeButton.classList.contains('hover:bg-[var(--model-item-hover)]')).toBe(true);
+    expect(closeButton.classList.contains('hover:bg-[var(--surface-hover)]')).toBe(false);
+    expect(closeButton.classList.contains('focus-visible:outline-none')).toBe(true);
+
+    fireEvent.click(closeButton);
 
     expect(onDismiss).toHaveBeenCalledOnce();
   });

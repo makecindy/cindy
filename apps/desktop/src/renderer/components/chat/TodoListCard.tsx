@@ -264,9 +264,9 @@ export function TodoListCard({
                   className={cn(
                     'absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full',
                     'text-[var(--msg-tool-card-chevron)] transition-colors',
-                    'hover:bg-[var(--surface-hover)] hover:text-[var(--msg-tool-card-text)]',
+                    'hover:bg-[var(--model-item-hover)] hover:text-[var(--msg-tool-card-text)]',
                     'active:scale-[0.98]',
-                    'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                   )}
                 >
                   <X size={14} aria-hidden="true" />
