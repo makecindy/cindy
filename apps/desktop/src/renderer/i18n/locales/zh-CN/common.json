@@ -2040,6 +2040,7 @@
         "project": "切换项目工作区",
         "model": "查看或切换模型",
         "permission": "查看或切换权限模式",
+        "settings": "查看当前项目与 Agent 设置",
         "ctr": "接管桌面端的任务",
         "exctr": "退出远程控制"
       },
@@ -3035,6 +3036,9 @@
           "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
+        "agentUnsupportedOnChannelHint": "{{agent}} Agent 不支持此渠道的逐条权限确认，消息将无法处理。请改用 Claude Code 或 Codex。",
+        "agentUnsupportedOnChannelModeHint": "切换 Agent 后发送 /new，若新的 Agent 仍提示权限模式问题，请再发送 /permission 调整权限模式。",
+        "permissionModeUnsupportedOnChannelHint": "当前 Agent 不支持以此权限模式在该渠道运行，消息将无法处理。请发送 /permission 调整权限模式。",
         "modelLabel": "模型配置",
         "loading": "正在读取新对话配置…",
         "loadFailed": "读取新对话配置失败",
@@ -3237,6 +3241,14 @@
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
+        "upgradeNotice": {
+          "single": "已自动更新企业插件“{{name}}”",
+          "multiple_one": "已自动更新 {{count}} 个企业插件",
+          "multiple_other": "已自动更新 {{count}} 个企业插件",
+          "singleWithPermissions": "已自动更新企业插件“{{name}}”，新增权限：{{permissions}}",
+          "multipleWithPermissions_one": "已自动更新 {{count}} 个企业插件，其中有插件新增了权限",
+          "multipleWithPermissions_other": "已自动更新 {{count}} 个企业插件，其中有插件新增了权限"
+        },
         "removalNotice": {
           "single": "插件“{{name}}”已被组织移除，本机副本与数据已清理",
           "multiple_one": "{{count}} 个插件已被组织移除，本机副本与数据已清理",
@@ -3475,6 +3487,8 @@
         "networkSecretGhostInputDetail": "凭证由这个插件自己的设置界面收集，录入时会经过插件页面；随后一次性交给主机加密保管，存入后插件无法读回，主机只在请求它声明的域名时注入。",
         "networkSecretIdentity": "将使用你的登录邮箱作为凭证「{{name}}」",
         "networkSecretIdentityDetail": "值取自当前登录账号的邮箱，请求时由主机自动派生注入；无需填写。插件可读取该邮箱，用于在它的设置界面里展示当前身份。",
+        "networkSecretGhCli": "将优先使用本机 GitHub CLI 登录作为凭证「{{name}}」",
+        "networkSecretGhCliDetail": "主机按需读取本机 gh 登录令牌，并且只注入 GitHub API 请求；插件代码无法读取或保存令牌。若 gh 不可用，可在插件设置中配置备用 Personal Access Token。",
         "networkSecretOrganizationIdentity": "将使用你的 Cindy 企业身份作为凭证「{{name}}」",
         "networkSecretOrganizationIdentityDetail": "Cindy 会按需签发短时身份断言，仅由主机发送给明确列出的服务域名；插件代码无法读取或保存令牌。",
         "networkSecretOauth": "将引导你在 {{host}} 完成 OAuth 授权({{name}})",
@@ -4249,6 +4263,9 @@
     "cacheLabel": "缓存",
     "modelLabel": "模型",
     "staleData": "数据更新于 {{minutes}} 分钟前",
+    "paceTrendFast": "按当前平均速度偏快（粗略趋势）",
+    "paceTrendNormal": "按当前平均速度正常（粗略趋势）",
+    "paceTrendSlow": "按当前平均速度偏慢（粗略趋势）",
     "waiting": "Claude 订阅余量会在下一轮完成后更新。"
   },
   "usageDetails": {
@@ -4479,7 +4496,6 @@
     "review": {
       "turn": {
         "title": "本条消息的变更",
-        "currentWorkspace": "当前工作区",
         "localOnly": "本条消息的精确变更暂不支持远程任务。",
         "partialNotice": "本条消息包含无法精确追踪的命令或工具写入；以下仅展示已精确捕获的部分，不能视为完整补丁。",
         "emptyTitle": "没有已记录的变更",
@@ -5611,7 +5627,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 登录已失效",
-    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请打开 ChatGPT App 重新登录后重试。",
+    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请在 Cindy 中重新登录后重试。",
     "instanceIsolatedInvalidated": "Cindy 当前使用的是单独登录的 ChatGPT 账号。该登录已失效。请在 Cindy 中重新登录后重试。",
     "unknownInvalidated": "Cindy 当前的 ChatGPT 登录已失效。请重新登录后重试。",
     "recovered": "ChatGPT 登录已恢复，请重试。",
@@ -6292,6 +6308,7 @@
       "actionUnavailable": "本条消息包含无法安全撤销的文件变更",
       "actionFailed": "未能应用本条消息的改动，请重试",
       "partial": "仅记录了可精确捕获的部分变更",
+      "partialNone": "有文件被更改，但内容未能记录，无法在此审查或撤销",
       "partialReversible": "仅撤销或重新应用已精确记录的变更；未记录的改动不会由此操作处理",
       "partialActionHint": "仅撤销或重新应用已精确记录的文件变更",
       "showMore": "再显示 {{count}} 个文件",

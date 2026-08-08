@@ -918,7 +918,13 @@ export async function captureKnownFileBefore(input: KnownFileWriteCapture): Prom
   const pending = ensurePending(input.sessionId, input.provider, input.cwd);
   const target = safeRelativeTarget(input.cwd, input.targetPath);
   if (!target) {
-    addIncompleteReason(pending, 'outside-workspace');
+    // A known write target literally outside the workspace (agent temp files,
+    // scratchpad, OS temp dirs) is a deliberate scope exclusion, not a capture
+    // loss: turn change tracking only covers the workspace tree. Recording
+    // 'outside-workspace' here spawned a dead-end "+0 -0" partial card for
+    // turns that never touched the workspace at all. The realpath escape check
+    // below still records the reason — there the workspace tree appears
+    // touched, which is worth flagging.
     return;
   }
   if (detectSensitivePath(target.relativePath, { allowEnvTemplates: true })) {

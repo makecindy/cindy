@@ -60,7 +60,7 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
     expect(loginSource).toContain('testID="login.identifierInput"');
     expect(loginSource).toContain('testID="login.continueButton"');
     expect(loginSource).toContain('testID="login.ssoEntryButton"');
-    // Apple 圆钮(iOS)计入行 count:apple 1 + nonAppleProviders + SSO 1
+    // Apple 圆钮(当前平台有可用路径时)计入行 count:apple 1 + nonAppleProviders + SSO 1
     expect(loginSource).toContain("socialProviders.includes('apple') ? 1 : 0");
     expect(loginSource).toContain('nonAppleProviders.length');
     expect(loginSource).toContain(
@@ -382,13 +382,14 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
     // accessibilityState.busy 无障碍语义(非视觉,对齐桌面 aria-disabled;见 LoginSkinButton),
     // 不传原生 disabled——视觉/交互态不变。
     // 渲染层读源码断言(login.tsx 依赖 expo/RN,node vitest 不加载,沿用仓内既有模式)。
-    // 1. in-flight guard 存在:两个圆钮 onPress 各一(native-social + ssoEntry),≥2 处
+    // 1. in-flight guard 存在:两个圆钮 onPress 各一(social + ssoEntry),≥2 处
     // FRAGILE:源码字面匹配——重排版空格仍匹配(\s* 容差),但变量改名(disabled→别的)或
     // 改写为 if-block 会假失败;改 onPress guard 时同步更新此正则,或抽成纯函数测行为。
     const guardMatches = loginSource.match(/if\s*\(\s*disabled\s*\)\s*return\s*;/g) ?? [];
     expect(guardMatches.length).toBeGreaterThanOrEqual(2);
-    // 2. 非 in-flight 派发路径保留(native-social dispatch 仍在,措辞 verbatim)
+    // 2. 非 in-flight 派发路径保留:iOS native + Global Android browser。
     expect(loginSource).toMatch(/type:\s*'native-social',\s*provider/);
+    expect(loginSource).toContain("type: 'start-social-browser'");
     // 3. SSO 非 in-flight 路径保留(clearAuthError + setSsoOrgMode)
     expect(loginSource).toContain('auth.clearAuthError();');
     expect(loginSource).toContain('setSsoOrgMode(true);');

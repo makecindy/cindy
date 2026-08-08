@@ -28,13 +28,11 @@ import {
   SHARE_EXCLUDE_ATTR,
   ShareImageSelectionNotMountedError,
   ShareImageTooLargeError,
-  shareSiteHostForRegion,
 } from '@/lib/shareConversationImage';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useBrandLogo } from '@/hooks/useBrandLogo';
 import shareCharacterSrc from '@/assets/cindy-share-character.jpg';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { shareSelectionStore, useShareSelectionCount } from './shareSelectionStore';
 
 const log = createLogger('ShareSelectionBar');
@@ -100,7 +98,6 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
       contentWidth,
       logoSrc,
       characterSrc: shareCharacterSrc,
-      siteHost: shareSiteHostForRegion(CURRENT_CINDY_REGION),
     });
   }, [contentWidth, logoSrc, sessionId]);
 

@@ -360,17 +360,26 @@ describe('buildRenderItems — key stability', () => {
       createdAt: 3,
       completedAt: 4,
     };
+    // The store only records 'outside-workspace' for suspicious captures (symlink
+    // escapes, fail-closed provider diff blocks) — that evidence must stay visible.
+    const escaped: TurnChangeSetSummary = {
+      ...base,
+      id: 'cs-escape',
+      incompleteReasons: ['outside-workspace'],
+      createdAt: 5,
+      completedAt: 6,
+    };
 
     const { items } = buildRenderItems(
       [mkUser('u1'), mkAssistant('a1'), mkUser('u2')],
       undefined,
       undefined,
-      { turnChangeSets: [noEvidence, truncated] },
+      { turnChangeSets: [noEvidence, truncated, escaped] },
     );
     const cards = items.filter(
       (item): item is Extract<RenderItem, { type: 'turn_changes' }> => item.type === 'turn_changes',
     );
-    expect(cards.map((card) => card.changeSet.id)).toEqual(['cs-too-large']);
+    expect(cards.map((card) => card.changeSet.id)).toEqual(['cs-too-large', 'cs-escape']);
   });
 
   it('keeps opaque command artifacts as fallback chips without duplicating exact files', () => {

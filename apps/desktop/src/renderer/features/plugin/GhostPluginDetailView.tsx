@@ -121,6 +121,7 @@ function permissionItemIcon(item: GhostPermissionItem): LucideIcon {
   if (
     item.labelKey === 'networkSecret' ||
     item.labelKey === 'networkSecretOauth' ||
+    item.labelKey === 'networkSecretGhCli' ||
     item.labelKey === 'networkSecretIdentity'
   ) {
     return KeyRound;

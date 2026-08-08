@@ -2040,6 +2040,7 @@
         "project": "프로젝트 워크스페이스 전환",
         "model": "모델 보기·전환",
         "permission": "권한 모드 보기·전환",
+        "settings": "프로젝트와 Agent 설정 보기",
         "ctr": "데스크톱 세션 원격 제어",
         "exctr": "원격 제어 종료"
       },
@@ -3035,6 +3036,9 @@
           "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
+        "agentUnsupportedOnChannelHint": "{{agent}} Agent는 이 채널에서 메시지별 권한 확인을 지원하지 않아 메시지를 처리할 수 없습니다. Claude Code 또는 Codex로 전환하세요.",
+        "agentUnsupportedOnChannelModeHint": "Agent를 전환하고 /new를 보낸 후에도 새 Agent에서 권한 모드 문제가 표시되면 /permission을 보내 권한 모드를 조정하세요.",
+        "permissionModeUnsupportedOnChannelHint": "현재 Agent는 이 권한 모드로 이 채널에서 실행할 수 없어 메시지를 처리할 수 없습니다. /permission을 보내 지원되는 권한 모드로 변경하세요.",
         "modelLabel": "모델 설정",
         "loading": "새 대화 설정을 불러오는 중…",
         "loadFailed": "새 대화 설정을 불러오지 못했습니다",
@@ -3237,6 +3241,14 @@
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "upgradeNotice": {
+          "single": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다.",
+          "multiple_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "multiple_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "singleWithPermissions": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다. 새 권한: {{permissions}}",
+          "multipleWithPermissions_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 새 권한이 추가되었습니다.",
+          "multipleWithPermissions_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 일부 플러그인에 새 권한이 추가되었습니다."
+        },
         "removalNotice": {
           "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
           "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",
@@ -3475,6 +3487,8 @@
         "networkSecretGhostInputDetail": "이 자격 증명은 플러그인 자체 설정 화면에서 입력받으므로 입력 시점에 플러그인 페이지를 거칩니다. 이후 호스트에 한 번만 전달되어 암호화 저장되며, 저장 후에는 플러그인이 다시 읽을 수 없습니다. 주입은 선언된 도메인 요청 시에만 호스트가 수행합니다.",
         "networkSecretIdentity": "로그인 이메일을 자격 증명 \"{{name}}\"(으)로 사용합니다",
         "networkSecretIdentityDetail": "값은 로그인된 계정의 이메일에서 가져오며, 요청 시 호스트가 자동으로 파생하여 주입합니다. 입력할 필요가 없으며, 플러그인은 설정 화면에 현재 신원을 표시하기 위해 이 이메일을 읽을 수 있습니다.",
+        "networkSecretGhCli": "자격 증명 \"{{name}}\"에는 로컬 GitHub CLI 로그인을 우선 사용합니다",
+        "networkSecretGhCliDetail": "호스트는 필요할 때만 로컬 gh 로그인 토큰을 읽어 GitHub API 요청에만 주입합니다. 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다. gh를 사용할 수 없으면 플러그인 설정에서 예비 Personal Access Token을 구성할 수 있습니다.",
         "networkSecretOrganizationIdentity": "Cindy 조직 사용자 신원을 자격 증명 \"{{name}}\"(으)로 사용합니다",
         "networkSecretOrganizationIdentityDetail": "Cindy가 필요할 때 단기 신원 어설션을 발급하며, 호스트만 명시된 서비스 호스트로 전송합니다. 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다.",
         "networkSecretOauth": "{{host}}에서 OAuth 인증을 진행하도록 안내합니다({{name}})",
@@ -4249,6 +4263,9 @@
     "cacheLabel": "캐시",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
+    "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
+    "paceTrendNormal": "현재 평균 사용 속도는 보통입니다(대략적인 추세)",
+    "paceTrendSlow": "현재 평균 사용 속도는 느린 편입니다(대략적인 추세)",
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
@@ -4479,7 +4496,6 @@
     "review": {
       "turn": {
         "title": "이 메시지의 변경 사항",
-        "currentWorkspace": "현재 작업 공간",
         "localOnly": "메시지별 정확한 변경 사항은 아직 원격 작업에서 사용할 수 없습니다.",
         "partialNotice": "이 메시지에는 정확히 추적할 수 없는 명령 또는 도구 쓰기가 포함되어 있습니다. 아래에는 캡처된 일부만 표시되며 완전한 패치가 아닙니다.",
         "emptyTitle": "기록된 변경 사항 없음",
@@ -5611,7 +5627,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 로그인이 더 이상 유효하지 않습니다",
-    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. ChatGPT App을 열어 다시 로그인한 후 재시도하세요.",
+    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "instanceIsolatedInvalidated": "Cindy는 현재 별도로 로그인한 ChatGPT 계정을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "unknownInvalidated": "Cindy의 현재 ChatGPT 로그인이 만료되었습니다. 다시 로그인한 후 재시도하세요.",
     "recovered": "ChatGPT 로그인이 복구되었습니다. 다시 시도하세요.",
@@ -6292,6 +6308,7 @@
       "actionUnavailable": "이 메시지에는 안전하게 실행 취소할 수 없는 파일 변경 사항이 포함되어 있습니다",
       "actionFailed": "변경 사항을 적용하지 못했습니다. 다시 시도하세요",
       "partial": "정확히 캡처된 변경 사항만 표시됩니다",
+      "partialNone": "파일이 변경되었지만 내용을 기록하지 못해 여기에서 검토하거나 실행 취소할 수 없습니다",
       "partialReversible": "실행 취소와 다시 적용은 정확히 캡처된 변경 사항만 처리하며 캡처되지 않은 변경 사항은 처리하지 않습니다",
       "partialActionHint": "정확히 캡처된 파일 변경 사항만 실행 취소하거나 다시 적용합니다",
       "showMore": "파일 {{count}}개 더 보기",

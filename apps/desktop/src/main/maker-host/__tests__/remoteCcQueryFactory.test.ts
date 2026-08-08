@@ -24,6 +24,19 @@ const ccManagerClientSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 
 describe('remoteCcQueryFactory cleanup wiring', () => {
+  it('finalizes OAuth Auto after MCP injection and before opening the remote query', () => {
+    const injection = source.indexOf('mutableParams.mcpServers =');
+    const finalize = source.indexOf(
+      'routeInjectedRemoteMcpApprovalsThroughCindy(startParams, injectedServerCount)',
+      injection,
+    );
+    const openCall = source.indexOf('return await openCcManagerSession({', finalize);
+
+    expect(injection).toBeGreaterThan(-1);
+    expect(finalize).toBeGreaterThan(injection);
+    expect(openCall).toBeGreaterThan(finalize);
+  });
+
   it('calls mcpCleanup before rethrowing when openCcManagerSession fails', () => {
     const openCall = source.indexOf('return await openCcManagerSession({');
     expect(openCall).toBeGreaterThan(-1);

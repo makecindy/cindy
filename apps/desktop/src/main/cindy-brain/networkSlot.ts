@@ -24,6 +24,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
+import { isCindyOfficialTrustInfo } from './GhostManager.js';
 
 import {
   GHOST_FETCH_BODY_MAX_BYTES,
@@ -66,6 +67,8 @@ export interface NetworkSlotDeps {
    * 即生效);未配置 / 读失败返回 null。
    */
   readSecret(ghostId: string, secretKey: string): string | null;
+  /** source:'gh-cli' 的宿主 GitHub CLI 登录 token；不可用返回 null。 */
+  readGhCliToken?: () => Promise<string | null>;
   /**
    * 当前登录账号的邮箱(source:'login-email' 凭证的值来源;现读登录态,
    * 登出/切号下一单即生效)。未登录 / 登录态缺 email 返回 null。
@@ -1012,6 +1015,13 @@ export class GhostNetworkSlot {
     if (!net || (net.hosts.length === 0 && connectionDecls.length === 0)) {
       return { ok: false, message: '本意识未声明域名白名单(身份卡缺 network.hosts),请意识作者更新声明' };
     }
+    const ghCliSecrets = net.secrets?.filter((secret) => secret.source === 'gh-cli') ?? [];
+    if (
+      ghCliSecrets.length > 0 &&
+      (ghost.manifest.id !== 'cindy-github' || !isCindyOfficialTrustInfo(ghost.trust))
+    ) {
+      return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };
+    }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。
     const connectionHosts =
@@ -1529,7 +1539,8 @@ export class GhostNetworkSlot {
 
   /**
    * 解析一条凭证的注入值:无 exchange 声明 = 保险库原始值(source:'login-email'
-   * 则是登录邮箱);有 exchange = 换来的令牌(缓存命中直接用;用户改了 key /
+   * 则是登录邮箱;source:'gh-cli' 先取本机 gh 登录 token,再回落同 key 的 PAT);
+   * 有 exchange = 换来的令牌(缓存命中直接用;用户改了 key /
    * 换了登录账号或缓存过期则重换,单飞去重——交换缓存按 sourceValue 失配重换,
    * 登录邮箱变更天然生效)。
    */
@@ -1546,6 +1557,23 @@ export class GhostNetworkSlot {
       }
     | { error: string }
   > {
+    if (secret.source === 'gh-cli') {
+      let ghToken: string | null = null;
+      try {
+        ghToken = (await this.deps.readGhCliToken?.()) ?? null;
+      } catch (error) {
+        this.deps.log?.warn('ghost gh-cli credential source failed', {
+          ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (ghToken && ghToken.trim().length > 0) return { value: ghToken.trim() };
+      const fallback = this.deps.readSecret(ghostId, secret.key);
+      if (fallback && fallback.length > 0) return { value: fallback };
+      return {
+        error: `凭证「${secret.label}」不可用——未检测到本机 gh 登录，且尚未配置备用 Personal Access Token；请先运行 gh auth login，或到主界面侧边栏「插件」的本插件详情页填写 PAT`,
+      };
+    }
     if (secret.source === 'oidc-token') {
       const manager = this.deps.connectionTokens;
       if (!manager) {

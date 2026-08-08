@@ -47,6 +47,22 @@ export interface PluginRemovalUserNotice {
   name: string | null;
 }
 
+export interface PluginUpgradePermissionNotice {
+  /** Shared permission item identity; Renderer resolves labelKey through i18n. */
+  key: string;
+  labelKey: string;
+  labelArgs?: Record<string, string>;
+}
+
+export interface PluginUpgradeUserNotice {
+  count: number;
+  name: string | null;
+  /** Added permissions for the sole upgraded plugin; null for multi-plugin batches. */
+  permissions: PluginUpgradePermissionNotice[] | null;
+  /** Whether any upgrade in the aggregate added permissions. */
+  hasPermissionExpansion: boolean;
+}
+
 /** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;

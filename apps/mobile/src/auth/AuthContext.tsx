@@ -142,6 +142,11 @@ export type MobileLoginAction =
       code: string;
     }
   | { type: 'start-sso'; connectionId: string; label: string }
+  | {
+      type: 'start-social-browser';
+      provider: SocialProvider;
+      label: string;
+    }
   | { type: 'native-social'; provider: SocialProvider }
   | { type: 'select-account'; accountId: string }
   | { type: 'request-sso-verification-code' }
@@ -917,6 +922,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             action.type === 'discover' ||
             action.type === 'request-code' ||
             action.type === 'verify-code' ||
+            action.type === 'start-social-browser' ||
             action.type === 'native-social';
           if (startsBuildRealmFlow) {
             pendingAuthRealmRef.current = null;
@@ -924,6 +930,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           const loginRealm = pendingAuthRealmRef.current ?? BUILD_AUTH_REGION;
           const client = authClientFor(did, loginRealm);
+          const startBrowserAuthorization = async (input: {
+            previousState: AuthFlowState;
+            kind: 'social' | 'sso';
+            providerOrConnectionId: string;
+            label: string;
+          }): Promise<boolean> => {
+            const { codeVerifier, codeChallenge } = await createPkcePair();
+            const state = createState();
+            await setSecureItem(
+              PENDING_OAUTH_KEY,
+              JSON.stringify({
+                codeVerifier,
+                deviceId: did,
+                state,
+                createdAt: Date.now(),
+                label: input.label,
+                realm: loginRealm,
+              } satisfies PendingOAuth),
+            );
+            updateLoginState(
+              reduceAuthFlow(input.previousState, {
+                type: 'browser-started',
+                label: input.label,
+              }),
+            );
+            const authUrl = client.buildAuthorizeUrl({
+              kind: input.kind,
+              providerOrConnectionId: input.providerOrConnectionId,
+              redirectUri: MOBILE_REDIRECT_URL,
+              codeChallenge,
+              state,
+            });
+            const result = await WebBrowser.openAuthSessionAsync(
+              authUrl,
+              MOBILE_REDIRECT_URL,
+            );
+            if (result.type === 'success') {
+              await completeOAuthCallback(result.url);
+              return true;
+            }
+            await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+            pendingAuthRealmRef.current = null;
+            updateLoginState(null);
+            throw authCodeError('USER_CANCELLED');
+          };
 
           if (action.type === 'reset') {
             pendingAccountTokenRef.current = null;
@@ -1096,6 +1147,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
             return true;
           }
+          if (action.type === 'start-social-browser') {
+            const previousState = loginStateRef.current;
+            if (
+              previousState?.step !== 'identifier' ||
+              !previousState.providers.social.includes(action.provider)
+            ) {
+              throw authCodeError('SOCIAL_PROVIDER_UNAVAILABLE');
+            }
+            return startBrowserAuthorization({
+              previousState,
+              kind: 'social',
+              providerOrConnectionId: action.provider,
+              label: action.label,
+            });
+          }
           if (action.type === 'start-sso') {
             const previousState = loginStateRef.current;
             if (
@@ -1108,44 +1174,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ) {
               throw authCodeError('INVALID_AUTH_ACTION');
             }
-            const { codeVerifier, codeChallenge } = await createPkcePair();
-            const state = createState();
-            await setSecureItem(
-              PENDING_OAUTH_KEY,
-              JSON.stringify({
-                codeVerifier,
-                deviceId: did,
-                state,
-                createdAt: Date.now(),
-                label: action.label,
-                realm: loginRealm,
-              } satisfies PendingOAuth),
-            );
-            updateLoginState(
-              reduceAuthFlow(previousState, {
-                type: 'browser-started',
-                label: action.label,
-              }),
-            );
-            const authUrl = client.buildAuthorizeUrl({
+            return startBrowserAuthorization({
+              previousState,
               kind: 'sso',
               providerOrConnectionId: action.connectionId,
-              redirectUri: MOBILE_REDIRECT_URL,
-              codeChallenge,
-              state,
+              label: action.label,
             });
-            const result = await WebBrowser.openAuthSessionAsync(
-              authUrl,
-              MOBILE_REDIRECT_URL,
-            );
-            if (result.type === 'success') {
-              await completeOAuthCallback(result.url);
-              return true;
-            }
-            await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
-            pendingAuthRealmRef.current = null;
-            updateLoginState(null);
-            throw authCodeError('USER_CANCELLED');
           }
           if (action.type === 'select-account') {
             const accountToken = pendingAccountTokenRef.current;

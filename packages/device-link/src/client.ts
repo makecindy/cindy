@@ -40,8 +40,45 @@ import {
   parseTransportPayload,
   byteLength,
 } from './transport.js';
-
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
+/** RFC 6455 1013 Try Again Later:relay 因拥塞主动断连(如 inbound backpressure)。 */
+const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
+/**
+ * latest-wins 腾位适用的**可驱逐通道白名单**(review 三轮收敛:contacts-sync
+ * 黑名单 → 白名单 → 收缩到单通道)。push 单 FIFO 上混着三类语义,只有第一类
+ * 可以参与传输层 latest-wins:
+ *
+ * - 自相似有损事件流(本表,现仅 maker:event):流内每帧价值均匀且整流已是
+ *   契约——旧语义拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按
+ *   best-effort 放弃),换成丢最旧不引入新的损失面;转录内容由受保护的
+ *   local-db:messages:created + 控制端消息对账自愈,会话运行态由受保护的
+ *   status / activity 通道承载。
+ * - 键控/终态快照(sessions:activity、maker:input:projection):看似「镜像」
+ *   但**不满足跨帧可替代**——快照按 sessionId 键控,会话的 completed/error
+ *   收尾快照是该键的最后一帧,被其它键/其它通道的洪峰驱逐后不会再有后继帧
+ *   补偿;sessions:activity 的 staging(dispatch 层 latest-wins)在 sendPush
+ *   成功后即删暂存、不再重试,link 不重连 reseed 也不会跑,驱逐 = 手机端
+ *   永远显示 running(review 第三轮)。传输层不做同键比较(head-only 前缀
+ *   约束下同键驱逐在多会话混流时够不着队头,机制无效),这类通道整体回到
+ *   原背压语义,由各自上游的整流/重试契约保证送达。
+ * - 不可合并事件/流控数据(local-db:messages:created、确认卡、fs-watch、
+ *   contacts-sync 分片等):静默驱逐 = UI 永久漏事件或传输永久拼不出。
+ *
+ * 新增 push 通道默认**不可驱逐**(fail-closed);要进本表必须论证「流内自
+ * 相似、无键控终态、丢帧可由受保护通道自愈」三点。
+ */
+const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:event',
+]);
+/** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
+const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
+
+function isCoalesciblePushEnvelope(env: Envelope): boolean {
+  if (env.kind !== 'push') return false;
+  const payload = env.payload as { channel?: unknown } | undefined;
+  return typeof payload?.channel === 'string'
+    && COALESCIBLE_PUSH_CHANNELS.has(payload.channel);
+}
 /** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
 const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 /** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
@@ -176,6 +213,18 @@ export interface DeviceLinkTiming {
    * 由重连 resync 补偿,invoke-result 的原请求方早已超时,整队放弃无损。
    */
   stalledLinkPendingMaxAgeMs: number;
+  /**
+   * relay 主动拥塞断连(close 1013 Try Again Later,如 inbound backpressure)
+   * 后的重连冷却下限:连续第 N 次拥塞断连后,下一次重连至少等
+   * min(congestionBackoffBaseMs × 2^(N-1), congestionBackoffMaxMs),与普通
+   * 退避取 max。普通退避在稳定在线(reconnectStableResetMs)后归零,而拥塞
+   * 断连恰恰常发生在「在线很久 → 出站洪峰 → 被踢」之后——若冷却随稳定期
+   * 归零,客户端会以 1s 级节奏反复「重连 → 全量重放洪峰 → 再被踢」
+   * (2026-08-08 线上:两次 1013 间隔仅 15s,第二条连接只活了 7s)。
+   * 连续拥塞计数同样只在稳定在线一个 reconnectStableResetMs 后清零。
+   */
+  congestionBackoffBaseMs: number;
+  congestionBackoffMaxMs: number;
 }
 
 const DEFAULT_TIMING: DeviceLinkTiming = {
@@ -191,7 +240,43 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   transportMaxRetryAttempts: TRANSPORT_MAX_RETRY_ATTEMPTS,
   presenceRetryIntervalMs: 500,
   stalledLinkPendingMaxAgeMs: 60_000,
+  congestionBackoffBaseMs: 5_000,
+  congestionBackoffMaxMs: 30_000,
 };
+
+/**
+ * 重连延迟计算(包内部工具,为确定性单测保持具名导出;**不属于稳定公共
+ * API 面**,外部不应依赖):普通指数退避与拥塞冷却下限取 max,再做向下抖动
+ * (0.7x–1.0x,与 scheduleReconnect 既有抖动语义一致)。
+ * 入参钳制(review P2,防误用产生 NaN/负延迟):attempt / congestionCloseStreak
+ * 取整并夹到 ≥0(非有限值按 0),random 夹到 [0,1];streak=0 表示无拥塞信号。
+ */
+export function computeReconnectDelayMs(input: {
+  attempt: number;
+  congestionCloseStreak: number;
+  reconnectBaseMs: number;
+  reconnectMaxMs: number;
+  congestionBackoffBaseMs: number;
+  congestionBackoffMaxMs: number;
+  random: number;
+}): number {
+  const attempt = Number.isFinite(input.attempt) ? Math.max(0, Math.floor(input.attempt)) : 0;
+  const streak = Number.isFinite(input.congestionCloseStreak)
+    ? Math.max(0, Math.floor(input.congestionCloseStreak))
+    : 0;
+  const random = Number.isFinite(input.random) ? Math.min(Math.max(input.random, 0), 1) : 0;
+  const base = Math.min(
+    input.reconnectBaseMs * 2 ** attempt,
+    input.reconnectMaxMs,
+  );
+  const congestionFloor = streak > 0
+    ? Math.min(
+      input.congestionBackoffBaseMs * 2 ** (streak - 1),
+      input.congestionBackoffMaxMs,
+    )
+    : 0;
+  return Math.round(Math.max(base, congestionFloor) * (0.7 + random * 0.3));
+}
 
 export type DeviceLinkStatus = 'stopped' | 'connecting' | 'online';
 
@@ -316,6 +401,10 @@ interface PeerTransportState {
   receive: Map<string, ReceiveStreamState>;
   highestAckSeq: number;
   lastReplayEpoch: number;
+  /** latest-wins 腾位驱逐的聚合计数(自上次告警起),仅服务日志聚合。 */
+  pushAdmissionDropCount: number;
+  /** 上次输出 latest-wins 驱逐告警的单调时刻;0 表示从未输出。 */
+  pushAdmissionDropLogAt: number;
 }
 
 interface PendingInboundLinkOffer {
@@ -359,6 +448,15 @@ export class DeviceLinkClient {
   private status: DeviceLinkStatus = 'stopped';
   private stopped = true;
   private reconnectAttempt = 0;
+  /**
+   * 连续 relay 拥塞断连(1013)计数,驱动重连冷却下限(computeReconnectDelayMs)。
+   * 与 reconnectAttempt 生命周期刻意不同:attempt 在稳定在线后归零以恢复快速
+   * 重连,本计数只在稳定在线满 reconnectStableResetMs 后清零——拥塞信号不因
+   * 「重连握手成功」而失效,否则回到「重连 → 重放洪峰 → 再被踢」的紧循环。
+   * connectNow / restartConnection(用户显式等待的前台恢复/唤醒)清 attempt
+   * 但不清本计数:立即重连可以,但若再被踢,冷却按更深一档生效。
+   */
+  private congestionCloseStreak = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStableTimer: ReturnType<typeof setTimeout> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -428,6 +526,8 @@ export class DeviceLinkClient {
     if (!this.stopped) return;
     this.stopped = false;
     this.reconnectAttempt = 0;
+    // 全新生命周期(登录/切号后 start):不背上一世代的拥塞冷却。
+    this.congestionCloseStreak = 0;
     void this.connect('start');
   }
 
@@ -437,12 +537,32 @@ export class DeviceLinkClient {
    * 供"用户正在等"的场景(如移动端回到前台)opt-in,绕开指数退避——
    * 不改默认退避曲线(桌面端断线重连仍走 scheduleReconnect 的 1s→30s)。
    * 已 online 时为空操作,不打断健康连接;stopped 时等价于 start()。
+   *
+   * 拥塞冷却例外(review P1):relay 刚以 1013 拥塞断连、冷却计时器在跑时,
+   * 默认**不** un-park——事故形态下恰是在途请求经 waitUntilOnline → connectNow
+   * 把每次 1013 后的冷却清掉,「重连 → 重放洪峰 → 再被踢」的循环因此掐不断。
+   * 只有显式用户意图(移动端回前台)传 overrideCongestionCooldown 保留立即重连;
+   * 被 park 的调用方等冷却计时器到点自然重连(封顶 congestionBackoffMaxMs)。
    */
-  connectNow(reason = 'connect-now'): void {
+  connectNow(reason = 'connect-now', opts?: { overrideCongestionCooldown?: boolean }): void {
     // online 时强制重建请用 restartConnection —— 它才是「半开假活」场景的入口,
     // 且已包含 resetLinkStateForReconnect(此处曾有一个等价的 { force } 分支,
     // 生产代码从未使用,只有测试在调,故收敛为单一入口)。
     if (this.status === 'online') return;
+    if (this.stopped) {
+      // stopped → 等价 start():全新生命周期不背上一世代的拥塞冷却(review P1,
+      // 与 start() 的清零语义对齐)。
+      this.congestionCloseStreak = 0;
+    } else if (
+      this.congestionCloseStreak > 0
+      && this.reconnectTimer
+      && !opts?.overrideCongestionCooldown
+    ) {
+      this.log.debug(
+        `connectNow(${reason}) parked: congestion cool-down active (streak=${this.congestionCloseStreak})`,
+      );
+      return;
+    }
     this.stopped = false;
     this.reconnectAttempt = 0;
     if (this.reconnectTimer) {
@@ -1195,6 +1315,12 @@ export class DeviceLinkClient {
         `relay replaced this device connection; keeping reconnect backoff warm${reason ? ` (${reason})` : ''}`,
       );
     }
+    if (code === RELAY_TRY_AGAIN_LATER_CLOSE_CODE) {
+      this.congestionCloseStreak++;
+      this.log.warn(
+        `relay signalled congestion (close=1013${reason ? `, ${reason}` : ''}); reconnect cool-down engaged (streak=${this.congestionCloseStreak})`,
+      );
+    }
     // 可分类的失败(鉴权/顶号/超限/版本)记为 issue 供 UI 展示原因;普通断线
     // 不产生也不清除 issue —— 401 重连风暴里穿插的网络失败不该把原因洗掉。
     const kind = classifyConnectionIssue(code, reason, this.lastSocketErrorMessage);
@@ -1245,16 +1371,23 @@ export class DeviceLinkClient {
 
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
-    const base = Math.min(
-      this.timing.reconnectBaseMs * 2 ** this.reconnectAttempt,
-      this.timing.reconnectMaxMs,
-    );
-    // 向下抖动(0.7x–1.0x):打散同 deviceId 双连风暴 / 服务重启后的全端齐步重连,
-    // 上界不变,文档承诺的最大退避(reconnectMaxMs)仍然成立。
-    const delay = Math.round(base * (0.7 + Math.random() * 0.3));
+    // 普通指数退避与拥塞冷却下限取 max;向下抖动(0.7x–1.0x)打散同 deviceId
+    // 双连风暴 / 服务重启后的全端齐步重连,上界不变,文档承诺的最大退避
+    // (reconnectMaxMs / congestionBackoffMaxMs)仍然成立。
+    const delay = computeReconnectDelayMs({
+      attempt: this.reconnectAttempt,
+      congestionCloseStreak: this.congestionCloseStreak,
+      reconnectBaseMs: this.timing.reconnectBaseMs,
+      reconnectMaxMs: this.timing.reconnectMaxMs,
+      congestionBackoffBaseMs: this.timing.congestionBackoffBaseMs,
+      congestionBackoffMaxMs: this.timing.congestionBackoffMaxMs,
+      random: Math.random(),
+    });
     this.reconnectAttempt++;
     this.setStatus('connecting');
-    this.log.debug(`scheduling device-link reconnect in ${delay}ms (attempt=${this.reconnectAttempt})`);
+    this.log.debug(
+      `scheduling device-link reconnect in ${delay}ms (attempt=${this.reconnectAttempt}, congestionStreak=${this.congestionCloseStreak})`,
+    );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.connect('backoff-reconnect');
@@ -2072,15 +2205,33 @@ export class DeviceLinkClient {
       peer.pending.size < MAX_TRANSPORT_PENDING_MESSAGES
       && peer.pendingBytes + reservedBytes <= MAX_TRANSPORT_PENDING_BYTES
     );
+    // link 已 ready 时,native send buffer 满就在**任何驱逐/腾位之前**拒绝:
+    // 该帧本轮注定入不了队,先驱逐再拒绝会在连续调用下逐步清空本可重试的
+    // 镜像历史,却一帧未纳(review P1)。link 未恢复时不检——帧只进有界
+    // pending 等重放,不触碰 socket。
+    if (peer.linkReady) {
+      this.assertWebSocketCapacity(this.measureReliableFrames(frames));
+    }
     if (!hasPendingCapacity()) {
       if (env.kind === 'invoke-result') {
         // invoke-result 是控制端确认被控端存活的唯一凭据，绝不能被堆积的可丢弃
         // 帧饿死：丢弃整个队头可丢弃前缀（fresh push 一并放弃——单 FIFO 无法同时
         // 做到 push 无损与 result 抢占），让 result 成为最早可交付的 live seq。
         this.dropDiscardablePendingPrefix(env.dst, peer, false, 'to make room for invoke-result');
+      } else if (env.kind === 'push' && isCoalesciblePushEnvelope(env)) {
+        // 可合并镜像 push（COALESCIBLE_PUSH_CHANNELS）是尽力而为的状态镜像
+        // （控制端重连/回前台会整体 resync + 重新订阅）。拥塞即对端未在 ACK：
+        // 2026-08-07 线上该形态一小时内 5168 次连续 BACKPRESSURE（maker:event），
+        // 镜像状态一条都没交付，只放大重试风暴。latest-wins：只从队头驱逐最旧
+        // 的可合并镜像帧直到放得下（剩余镜像历史保留，对端恢复后仍可交付最新
+        // 状态）；队头是 live 帧或白名单外 push 时无位可让，维持原 BACKPRESSURE
+        // 语义。只删队头 → baseSeq 单调前移，无 seq 空洞。
+        this.dropOldestDiscardableForPushAdmission(env.dst, peer, reservedBytes);
       } else {
-        // 其它帧的入队压力只做 TTL 兜底清扫：过期 push 已无实时价值，先出队腾位；
-        // 新鲜 push 之间维持原有 BACKPRESSURE 语义，不互相驱逐。
+        // live invoke 与白名单外 push（不可合并事件流/流控数据，见
+        // COALESCIBLE_PUSH_CHANNELS 注释）的入队压力只做 TTL 兜底清扫：过期
+        // push 已无实时价值，先出队腾位；新鲜 push 不互相驱逐（这两类帧不能
+        // 以丢镜像为代价抢占）。
         this.dropDiscardablePendingPrefix(env.dst, peer, true, 'after pending push TTL expiry');
       }
     }
@@ -2090,12 +2241,8 @@ export class DeviceLinkClient {
         `reliable transport buffer is full for peer ${env.dst.slice(0, 8)}`,
       );
     }
-    // link 暂未恢复时先进入有界 pending，等 link-open/link-accept 后再发。
-    // 已经 ready 的初次发送若 native send buffer 满，则在占用 seq 前拒绝，
-    // 避免一个从未发出的 seq 堵住累计 ACK。
-    if (peer.linkReady) {
-      this.assertWebSocketCapacity(this.measureReliableFrames(frames));
-    }
+    // link 暂未恢复时帧先进入有界 pending，等 link-open/link-accept 后再发
+    // （ws 容量已在驱逐前预检）。
     const pending: PendingReliableMessage = {
       seq,
       envelope: env,
@@ -2227,6 +2374,8 @@ export class DeviceLinkClient {
         receive: new Map(),
         highestAckSeq: 0,
         lastReplayEpoch: this.connEpoch,
+        pushAdmissionDropCount: 0,
+        pushAdmissionDropLogAt: 0,
       };
       this.peerTransport.set(dst, peer);
     }
@@ -2424,7 +2573,9 @@ export class DeviceLinkClient {
   }
 
   /**
-   * 可丢弃帧判据（重连重放与 invoke-result 腾位两条路径共用的不变量）：
+   * 可丢弃帧判据（重连重放与 invoke-result 腾位两条路径共用的不变量;
+   * push latest-wins 腾位用更窄的白名单判据,见
+   * dropOldestDiscardableForPushAdmission）：
    * best-effort push，以及 timeout / relay-error 后被 dropReliablePendingForRequest
    * 换成 transport-skip 占位 payload 的帧——其外层 kind 仍是原 invoke /
    * invoke-result，但已无任何业务副作用。两者都可以通过推进 baseSeq 让接收端
@@ -2502,6 +2653,66 @@ export class DeviceLinkClient {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
     }
+  }
+
+  /**
+   * push 入队的拥塞腾位（latest-wins）：只从队头连续移除最旧的可驱逐帧，直到
+   * 放得下新帧或队头变成不可驱逐帧。与 dropDiscardablePendingPrefix 的区别是「按需
+   * 腾位」而非「整段前缀丢弃」：对端只是暂时未 ACK 时，队列里较新的镜像历史保留
+   * 下来，恢复后仍能交付；被驱逐的最旧镜像由控制端 resync 补偿，不是静默丢数据。
+   *
+   * 可驱逐判据比 isDiscardablePending 更窄（白名单，fail-closed）：只有
+   * COALESCIBLE_PUSH_CHANNELS 里的镜像 push 与 transport-skip 占位可被驱逐。
+   * 白名单外的 push（不可合并事件流如 local-db:messages:created、确认卡、
+   * 以 BACKPRESSURE 为流控信号的 contacts-sync 分片）被静默驱逐时 link 并未
+   * 断开、reconnect reseed 不会跑，等价于 UI 永久漏事件或传输永久拼不出——
+   * 它们与 live invoke/invoke-result 一样是腾位边界。队头不可驱逐时无位可让
+   * （跨过会制造 seq 空洞），调用方按容量复检结果维持原 BACKPRESSURE 语义。
+   * 只删队头 → baseSeq 单调前移，接收端按新基线整体跳过被驱逐 seq，无空洞、
+   * 不挂累计 ACK。
+   *
+   * 生产反例（2026-08-07，P0 度量实锤）：对端停 ACK 时新鲜 push 之间互相背压，
+   * 每条新 push 都抛 BACKPRESSURE，一小时 5168 次（maker:event），镜像零交付。
+   * 告警按 peer 聚合（PUSH_ADMISSION_DROP_LOG_INTERVAL_MS 窗口）：洪峰期驱逐
+   * 逐条 warn 会把 5168 次背压风暴换成 5168 行日志风暴（review P2）。
+   */
+  private dropOldestDiscardableForPushAdmission(
+    dst: string,
+    peer: PeerTransportState,
+    reservedBytes: number,
+  ): number {
+    let dropped = 0;
+    while (
+      peer.pending.size >= MAX_TRANSPORT_PENDING_MESSAGES
+      || peer.pendingBytes + reservedBytes > MAX_TRANSPORT_PENDING_BYTES
+    ) {
+      const head = peer.pending.entries().next();
+      if (head.done) break;
+      const [seq, pending] = head.value;
+      if (
+        !isTransportSkipPayload(pending.envelope.payload)
+        && !isCoalesciblePushEnvelope(pending.envelope)
+      ) break;
+      this.removePendingEntry(peer, seq, pending);
+      dropped += 1;
+    }
+    if (dropped > 0) {
+      peer.pushAdmissionDropCount += dropped;
+      const now = this.monotonicNow();
+      // 首次驱逐(lastLogAt=0)立即告警,之后按窗口聚合——单调时钟起点接近 0,
+      // 纯差值判据会把进程早期的首次驱逐静默吞掉。
+      if (
+        peer.pushAdmissionDropLogAt === 0
+        || now - peer.pushAdmissionDropLogAt >= PUSH_ADMISSION_DROP_LOG_INTERVAL_MS
+      ) {
+        this.log.warn(
+          `dropped ${peer.pushAdmissionDropCount} oldest discardable pending frame(s) for peer ${dst.slice(0, 8)} latest-wins push admission (aggregated since last report)`,
+        );
+        peer.pushAdmissionDropCount = 0;
+        peer.pushAdmissionDropLogAt = now;
+      }
+    }
+    return dropped;
   }
 
   private ensureRetryTimer(dst: string): void {
@@ -2792,6 +3003,9 @@ export class DeviceLinkClient {
       if (this.stopped || this.status !== 'online') return;
       this.reconnectAttempt = 0;
       this.shortLivedStreak = 0;
+      // 拥塞冷却与普通退避在同一稳定判据下清零:稳定在线一个窗口说明出站
+      // 速率已被 relay 接受,下一次普通断线不再背负拥塞冷却。
+      this.congestionCloseStreak = 0;
       if (this.connectionIssue?.kind === 'unstable') this.setConnectionIssue(null);
     }, this.timing.reconnectStableResetMs);
   }

@@ -1,4 +1,4 @@
-import { GHOST_OAUTH_SCOPES_MAX, isValidCindyVersion } from '@cindy/plugin-protocol';
+import { GHOST_MANIFEST_SUMMARY_MAX_CHARS, GHOST_OAUTH_SCOPES_MAX, isValidCindyVersion } from '@cindy/plugin-protocol';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
@@ -27,6 +27,9 @@ export const GHOST_MANIFEST_FILE = 'ghost.json';
  * 安全预算，但最终写进 .cindy 的清单必须落在这个上限内。
  */
 export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
+
+/** ghost.json 的 description / whenToUse 字符上限，正本在 plugin-protocol。 */
+export { GHOST_MANIFEST_SUMMARY_MAX_CHARS };
 
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
@@ -791,6 +794,9 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   授权换来的 access token——用户在意识设置页填 client 凭证并点"连接账号",
  *   主机跑授权流程并保管全部令牌,出网时现取新鲜 token 注入(见
  *   GhostSecretOauthDecl;必须同时声明 oauth 详单)。
+ * - 'gh-cli':仅供官方 cindy-github 使用。主机优先现读本机 GitHub CLI 的
+ *   `gh auth token`,不可用时回落到同 key 经 /secrets 保存的 PAT。两种值都
+ *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
  *   JWT。只有当前组织的 Plugin Market organization 安装记录和 manifest digest
  *   校验通过时,Host 才根据当前组织和插件 id 推导 audience;插件不能声明或读取。
@@ -800,7 +806,7 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  * 改走 source:'oauth' + tokenBroker:'feishu';存量已装清单由内置意识播种器
  * 按指纹覆盖自愈,未覆盖前该意识加载被拒属预期。)
  */
-export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth', 'oidc-token'] as const;
+export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth', 'gh-cli', 'oidc-token'] as const;
 export type GhostSecretSource = (typeof GHOST_SECRET_SOURCES)[number];
 
 /**
@@ -1438,7 +1444,10 @@ export interface InstalledGhost {
   };
 }
 
-/** 插件包的来源与审核等级；决定 UI 徽标，不改变运行时 slot 权限。 */
+/**
+ * 插件包的来源与审核等级；通常只决定 UI 徽标。保留的 gh-cli 凭证来源还会
+ * 要求 cindy-github 具备 cindy-official Host receipt，防止第三方仅自报 id。
+ */
 export type GhostTrustLevel =
   | 'cindy-official'
   | 'reviewed'
@@ -1763,8 +1772,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     // 来源分档文案:登录邮箱派生 vs 用户自填(意识 settingsHtml 收单——宿主
     // 凭证渲染已退役,user 凭证只剩这一档)。收单档文案不许说"意识代码无法
     // 读取"这种过头话:录入瞬间明文经过意识页面,知情同意面要如实。
-    // user/login-email/oauth 保持历史 key,不影响存量插件;企业身份是新的高风险
-    // Host 托管来源,单独带 source 后缀,从其它来源切换时必须重新确认。
+    // user/login-email/oauth/gh-cli 保持历史 key,不影响存量插件；gh-cli
+    // 只改变 Host 来源文案，不把“自动复用 gh”误报成新增权限确认。
     if (secret.source === 'oauth' && secret.oauth) {
       // OAuth 凭证:展示授权域名 + scopes 全量如实列出(通用声明式的知情
       // 同意面——平台不预设 provider,用户看到的就是全部授权事实)。detail
@@ -1794,6 +1803,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'networkSecretOrganizationIdentity',
         labelArgs: { name: secret.label },
         detailKey: 'networkSecretOrganizationIdentityDetail',
+      });
+      continue;
+    }
+    if (secret.source === 'gh-cli') {
+      items.push({
+        key: `network:secret:${secret.key}`,
+        kind: 'network',
+        labelKey: 'networkSecretGhCli',
+        labelArgs: { name: secret.label },
+        detailKey: 'networkSecretGhCliDetail',
       });
       continue;
     }
@@ -1993,11 +2012,27 @@ export interface GhostPermissionDiff {
  * 形态),只看 key+detail 会把"说明/成本面变了"漏判成"权限面没变",更新时
  * 用户看不到重新确认。
  */
+function permissionDetailKeyForFingerprint(item: GhostPermissionItem): string {
+  // cindy-github 从存量 PAT(source:user)升级为 Host 优先 gh-cli 时，凭证仍由
+  // Main 只注入同一个 network secret key 与同一组目标；变化的是设置页/权限
+  // 页对“凭证从哪里来”的说明，不是插件获得了新权限。两档共用历史 key 的
+  // 同时也必须共用审阅指纹，否则升级会被误判成扩权并要求存量用户重新确认。
+  // gh-cli 的 manifest 校验只允许官方 cindy-github，因此这个兼容等价不会
+  // 放宽其它插件；其它 detailKey/detailArgs 变化仍按新说明完整性规则复核。
+  if (
+    item.detailKey === 'networkSecretGhostInputDetail' ||
+    item.detailKey === 'networkSecretGhCliDetail'
+  ) {
+    return 'networkSecretGithubCredentialDetail';
+  }
+  return item.detailKey ?? '';
+}
+
 function ghostPermissionItemFingerprint(item: GhostPermissionItem): string {
   const args = item.detailArgs
     ? Object.entries(item.detailArgs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     : [];
-  return JSON.stringify([item.key, item.detail ?? '', item.detailKey ?? '', args]);
+  return JSON.stringify([item.key, item.detail ?? '', permissionDetailKeyForFingerprint(item), args]);
 }
 
 /**
@@ -2316,11 +2351,11 @@ export function validateGhostManifestLocaleResource(
     }
     return value;
   };
-  const description = optionalText('description', 300);
+  const description = optionalText('description', GHOST_MANIFEST_SUMMARY_MAX_CHARS);
   if (isPlainObject(description) && typeof description.error === 'string') {
     return { ok: false, reason: description.error };
   }
-  const whenToUse = optionalText('whenToUse', 300);
+  const whenToUse = optionalText('whenToUse', GHOST_MANIFEST_SUMMARY_MAX_CHARS);
   if (isPlainObject(whenToUse) && typeof whenToUse.error === 'string') {
     return { ok: false, reason: whenToUse.error };
   }
@@ -2781,15 +2816,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (
     raw.description !== undefined &&
-    (typeof raw.description !== 'string' || raw.description.trim().length === 0 || raw.description.length > 300)
+    (typeof raw.description !== 'string' || raw.description.trim().length === 0 || raw.description.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'description 必须是 1–300 字符的非空字符串' };
+    return { ok: false, reason: `description 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串` };
   }
   if (
     raw.whenToUse !== undefined &&
-    (typeof raw.whenToUse !== 'string' || raw.whenToUse.trim().length === 0 || raw.whenToUse.length > 300)
+    (typeof raw.whenToUse !== 'string' || raw.whenToUse.trim().length === 0 || raw.whenToUse.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'whenToUse 必须是 1–300 字符的非空字符串' };
+    return { ok: false, reason: `whenToUse 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串` };
   }
   if (raw.icon !== undefined) {
     if (!isSafeGhostRelativePath(raw.icon)) {
@@ -3669,7 +3704,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (typeof s.label !== 'string' || s.label.trim().length === 0 || s.label.length > 64) {
           return { ok: false, reason: 'network.secrets[].label 必须是 1–64 字符的非空字符串' };
         }
-        // 来源:缺省 'user';login-email / oauth / oidc-token 均由主机托管。
+        // 来源:缺省 'user';login-email / oauth / gh-cli / oidc-token 均由主机托管。
         // 归一化:'user' 不落清单(与缺省同义,权限 diff 不 churn)。
         let source: GhostSecretSource | undefined;
         if (s.source !== undefined) {
@@ -3684,6 +3719,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           }
           if (s.source === 'login-email') source = 'login-email';
           if (s.source === 'oauth') source = 'oauth';
+          if (s.source === 'gh-cli') source = 'gh-cli';
           if (s.source === 'oidc-token') source = 'oidc-token';
         }
         // 旧 input 字段已退役：Setup Runtime 直接从 Secret 声明生成 Host 表单，
@@ -3722,6 +3758,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           return {
             ok: false,
             reason: `network.secrets[].source 为 ${source} 时不允许声明 exchange(登录态凭证不外送交换端点)`,
+          };
+        }
+        if (source === 'gh-cli' && s.exchange !== undefined) {
+          return {
+            ok: false,
+            reason: 'network.secrets[].source 为 gh-cli 时不允许声明 exchange(GitHub token 只能直接注入 GitHub API)',
           };
         }
         if (
@@ -3799,6 +3841,25 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             return {
               ok: false,
               reason: 'network.secrets[].source 为 oidc-token 时 inject.hosts 只允许精确域名，不允许通配',
+            };
+          }
+        }
+        if (source === 'gh-cli') {
+          if (raw.id !== 'cindy-github') {
+            return {
+              ok: false,
+              reason: 'network.secrets[].source 为 gh-cli 时仅允许官方 cindy-github 插件使用',
+            };
+          }
+          if (
+            inj.header !== 'Authorization' ||
+            inj.format !== 'Bearer {value}' ||
+            injectHosts?.length !== 1 ||
+            injectHosts[0] !== 'api.github.com'
+          ) {
+            return {
+              ok: false,
+              reason: 'network.secrets[].source 为 gh-cli 时 inject 必须固定为 api.github.com 的 Authorization: Bearer {value}',
             };
           }
         }
@@ -4320,14 +4381,16 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     const secretByKey = new Map<
       string,
-      { hostDerivedSource: 'login-email' | 'oidc-token' | null }
+      { hostDerivedSource: 'login-email' | 'gh-cli' | 'oidc-token' | null }
     >([
       ...(network?.secrets ?? []).map(
         (s) => [
           s.key,
           {
             hostDerivedSource:
-              s.source === 'login-email' || s.source === 'oidc-token' ? s.source : null,
+              s.source === 'login-email' || s.source === 'gh-cli' || s.source === 'oidc-token'
+                ? s.source
+                : null,
           },
         ] as const,
       ),

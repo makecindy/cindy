@@ -22,6 +22,7 @@ import {
   GHOST_ICON_MAX_BYTES,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_MANIFEST_FILE,
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SKILL_MD_MAX_BYTES,
   validateGhostManifest,
   type GhostManifest,
@@ -1054,8 +1055,8 @@ my-ghost/
   "schemaVersion": 2,
   "id": "my-ghost",            // 小写字母/数字/连字符,1–32 位,全局唯一
   "name": "我的意识",           // 展示名
-  "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–300 字
-  "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;缺省时花名册回落用 description
+  "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字
+  "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;花名册会折叠连续空白,异常数据会截断;缺省时花名册回落用 description
   "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
@@ -1099,6 +1100,32 @@ my-ghost/
 
 不要为“当前开发环境版本”机械填写 \`minCindyVersion\`。旧插件和不依赖新版宿主能力的
 插件应省略它；只有确认更早版本无法解析或安装时，才填写能工作的最早正式版本。
+
+### whenToUse:只写发现线索,不写使用规则
+
+在作者契约里,\`whenToUse\` 是专门给模型做插件发现与判断的唯一字段;
+\`description\` 给人看(装入确认框/详情页),不要拿它兼任模型路由说明。
+\`whenToUse\` 最多 ${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符,花名册会完整展示有效内容,折叠连续空白并对异常数据做防御性截断。模型从花名册命中目标后,
+正常发现链是**花名册 → \`ghost_info\` → \`ghost_call\`**;只有不知道用户装了什么时才查
+\`ghost_list\`。未声明 \`whenToUse\` 时宿主会用 \`description\` 兼容回落,但高质量插件
+必须单独写好 \`whenToUse\`,不要依赖回落。
+
+只写用户意图、业务对象和常见说法的**场景枚举**,回答"什么情况下应该想到这个插件"。
+禁止塞入"必须/不得"式行为规则、工具调用顺序、参数协议、错误码与重试策略。
+跨工具或类目共用的规则放进 §3.5 的 **\`list_tools(category)\` RULES**;
+单个工具怎么调用放进工具及参数 \`description\`。
+
+反例(错把使用规则塞进发现面):
+
+\`\`\`json
+"whenToUse": "管理项目时找我;必须先调用 list_tools(category=project),再调用 call_tool;遇到 INVALID_ARGS 不得改用其它工具"
+\`\`\`
+
+改正版(只保留场景枚举):
+
+\`\`\`json
+"whenToUse": "需要查询、创建或更新项目、任务、成员、迭代与发布状态时找我"
+\`\`\`
 
 ### 2.1 本地化资源(locales)
 
@@ -1258,7 +1285,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/确认框)
-    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
+    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"gh-cli"=仅官方 cindy-github 可用,优先复用本机 gh 登录、不可用时回落同 key 的设置页 PAT;"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
     "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
     "url": "https://example.com/settings/keys",     // 可选:控制台/申请地址(仅 https)。调用前缺凭证时,主机 Setup 卡会在输入框旁展示本地化的「获取凭证」入口；settingsHtml 也可用 <a href> 逐字引用它,点击经主机转系统浏览器打开(见 §4.8「外链」)
     "inject": {                                     // 必填:这条凭证怎么进请求
@@ -1319,8 +1346,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
   话术)、\`connection:<key>\`(该连接声明下至少添加一条)、
   \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空且不能是宿主保留键;键名主机无先验,
   label 必填)。Node 凭证同样可参与 setup.requires。
-- 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` 源凭证恒就绪,
-  引用它同样拒(没有配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
+- 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` /
+  \`gh-cli\` / \`oidc-token\` 这类 Host 派生或优先来源不允许引用(没有可靠的
+  同步配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
 - **绝大多数意识不需要写本字段**:不声明时主机走启发式——声明过凭证/连接的意识,
   任一项配好即算就绪;什么都没声明的恒就绪。只有启发式判不准才需要显式声明,两种
   典型:"必须**同时**配 A 和 B"(多组声明)、"凭证全是**可选项**、一个不配也能用"
@@ -1345,8 +1373,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 \`\`\`
 
 措辞套路(实测有效):description 写清"干什么 + 返回什么";参数 description 里直接
-写行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——AI 会照做。
-这是你影响 AI 行为的**唯一合法通道**,不要试图在别处塞指令。
+写该工具自己的行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——
+AI 会照做。直接声明工具时,工具/参数 description 是使用规则的落点;两段式目录的
+跨工具规则走 §3.5 的类目 RULES。两者都不要塞进 \`whenToUse\`。
 
 ### 3.1 @ 插件入口
 
@@ -1355,22 +1384,24 @@ Composer 的 \`@\` 面板只展示已安装且可用的插件入口；插件作�
 
 ## 3.5 工具面设计:直接声明,还是两段式目录
 
-工具怎么摆有两种形态,按"数量 × 粒度"选,选错会拖累所有会话:
+工具怎么摆有两种形态,按"数量 × 粒度"选,选错会让单插件详情和全量查询结果臃肿:
 
 **直接声明(默认,绝大多数意识用这个)**:每个工具在 tools 里逐条声明(§3 的写法)。
 适用:工具是"意图级"的——一个工具对应用户会说的一句话(如"生成音乐"、"部署站点"),
-数量一只手到一打(主机硬上限 16 项,超了直接拒装)。收益全在明处:AI 靠 description
-自然语言触发命中率最高;装入弹窗把每个工具如实列给用户;工具名不存在主机直接拦。
+数量一只手到一打(主机硬上限 16 项,超了直接拒装)。收益全在明处:模型通过
+\`ghost_info\` 拿到插件详情后,靠各工具 description 选择具体能力;装入弹窗把每个工具
+如实列给用户;工具名不存在主机直接拦。
 
 **两段式目录(大工具面专用)**:要包的能力是"端点级"的几十上百个操作(典型:给一个
 大 API 面做接入,操作粒度是 list_xxx / get_xxx / create_xxx)时,**别把它们全塞进
-tools**——所有意识的工具清单会一起被你一家撑爆,别的意识也跟着遭殃。改为只声明两个
-元工具,目录和分发表放进 main.js 自己维护:
+tools**——本插件的 \`ghost_info\` 单条详情会被撑大,不知道装了什么时 \`ghost_list\`
+的全量结果也会被拖重,而且 tools 硬上限 16 根本装不下。改为只声明两个元工具,
+目录和分发表放进 main.js 自己维护:
 
 \`\`\`json
 "tools": [{
   "name": "list_tools",
-  "description": "列出本意识可用的操作。不传 category 返回类目概览(类目名+数量);传 category 返回该类目下所有操作的名称与说明。",
+  "description": "列出本意识可用的操作。不传 category 返回类目概览(类目名+数量);传 category 返回该类目下所有操作的名称、说明与该类目 RULES。",
   "parameters": { "type": "object", "properties": { "category": { "type": "string", "description": "类目名,来自概览" } } }
 }, {
   "name": "call_tool",
@@ -1390,11 +1421,17 @@ tools**——所有意识的工具清单会一起被你一家撑爆,别的意识
 
 - 元工具名固定叫 \`list_tools\` / \`call_tool\`,不要自创同义词;
 - \`list_tools\` 支持类目下钻:不传 category 给概览,传了给明细——目录大时别一次全量倒出;
-- \`call_tool\` 收到不认识的 name 或不合法的 args,失败交卷的 message 里**附上该操作正确的
-  参数 schema**——AI 会照着自纠重试,比干巴巴报错省一轮追问;
+- \`list_tools(category)\` 返回工具明细时,必须在同一份结果里一并下发该类目的
+  **RULES**,让模型在调用前拿到适用规则。推荐每个工具用 \`rules: [规则键]\`
+  声明引用,结果顶层用 \`rules: { 规则键: 完整规则正文 }\` 去重下发;也可以直接
+  下发清晰的 RULES 段,但不能只给工具名与说明、把必要规则留到调用失败后才说;
+- \`call_tool\` 收到不认识的 name 时,失败结果附可用工具名与回查
+  \`list_tools(category)\` 的提示;收到不合法的 args 时,失败结果必须附该工具正确的
+  参数 schema **和本次自纠必需的规则**(规则正文或能在本结果中解析的引用)——AI 会照着
+  自纠重试,比干巴巴报错省一轮追问;
 - 权限透明的代价自己补:装入弹窗只会逐条列出 list_tools / call_tool 两个元工具,用户
-  看不出背后有多少操作。把能力范围如实写进 ghost.json 的 description(花名册自述),
-  别让用户装完才发现。
+  看不出背后有多少操作。把给人看的能力范围如实写进 ghost.json 的 description,
+  再把模型应在什么场景发现你的场景枚举写进 whenToUse,别让人或模型装完才发现。
 
 分界线的手感:一打以内、意图级 → 直接声明;几十以上、端点级 → 两段式。两段式首次
 使用多一跳(先翻目录),目录进上下文后,同一会话的后续调用与直接声明无异。
@@ -2229,6 +2266,16 @@ BroadcastChannel、日志或任何自存路径(review 必查)。凭证只会注�
 当前登录邮箱,拿来只读展示"用的是哪个身份";未登录时 saved:false 无 identity,
 照"请重新登录"画)——确认框已如实披露,除展示外别拿它做别的;对该 key 的
 PUT/DELETE 一律 405(派生身份不可配置)。
+
+**GitHub CLI 优先凭证(source:"gh-cli",保留能力)**:仅官方 \`cindy-github\`
+插件可声明。主机每次 GitHub API 请求时优先复用本机 \`gh auth token\` 的登录态；
+本机没装 gh、未登录或读取超时时,再回落到同一 key 经 \`/secrets\` 保存的备用 PAT。
+两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
+Renderer、Agent、KV 和日志都拿不到。设置页 GET \`/secrets\` 对这条 key 额外返回
+\`hostSource:"gh-cli"\` 与 \`hostAvailable:boolean\`,其中 \`saved/tail\` 仍只描述备用
+PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能读取 gh 的账号或 token。
+此来源的注入形态固定为 \`api.github.com\` 的
+\`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
 **Cindy 企业身份断言(source:"oidc-token",可选)**:适用于接入 Cindy Connection
 Auth 的企业服务。主机只在当前登录账号属于组织 Membership、且该插件拥有当前组织的
@@ -3484,8 +3531,10 @@ if (r.ok && r.confirmed) {
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
   inject.format 没有 {value} 占位、inject.header 用了 Host/Cookie 等协议关键头、
   inject.hosts 不是 hosts 声明条目的子集、有详单但 slots 没有 "network"、
-  secret.source 不是 "user"/"login-email"/"oauth"/"oidc-token"、
+  secret.source 不是 "user"/"login-email"/"oauth"/"gh-cli"/"oidc-token"、
   source:"login-email" 或 source:"oidc-token" 声明了 url 或 exchange、
+  source:"gh-cli" 不是官方 cindy-github、注入形态不是 api.github.com 的
+  Authorization Bearer、或声明了 exchange、
   声明了 user 凭证但没声明 settingsHtml、遗留 input 字段值不是 "ghost")
 - exchange 声明格式错(url 非 https/域名不在 hosts 白名单、bodyFormat 不是恰含一个
   {value}、contentType 不在白名单、tokenPath 不是点分路径、ttlSeconds 越界)

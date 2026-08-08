@@ -1434,7 +1434,9 @@ export function TodaySpendChip({
   // (含滚动动画的每一帧), 直接进 tick effect 依赖会让定时器反复重建。
   const resetsAtSignature = chipWindows.map((window) => window.resetsAtMs ?? 'na').join(',');
   const chipResetsAtMsList = React.useMemo(
-    () => chipWindows.map((window) => window.resetsAtMs),
+    () => resetsAtSignature === ''
+      ? []
+      : resetsAtSignature.split(',').map((value) => (value === 'na' ? null : Number(value))),
     [resetsAtSignature],
   );
 

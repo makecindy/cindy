@@ -43,6 +43,7 @@ vi.mock('../useFileChipContextMenu', () => ({
   useFileChipContextMenu: mocks.useFileChipContextMenu,
 }));
 
+import { SidebarHostSessionProvider } from '@/features/right-sidebar/lib/sidebarHostSession';
 import { TurnChangesCard } from '../TurnChangesCard';
 import type { TurnChangeSetSummary } from '../../../../shared/turnChangeSet';
 
@@ -155,7 +156,25 @@ describe('TurnChangesCard file actions', () => {
     expect(mocks.openTurnReview).toHaveBeenCalledWith(
       'session-1',
       ['change-1'],
-      { selectedDiffId: 'file-1' },
+      { selectedDiffId: 'file-1', hostSessionId: null },
+    );
+  });
+
+  it('routes review to the sidebar host bucket when embedded in the collab panel', () => {
+    // 协同面板里 worker 流内嵌于 lead 的 RSB tab:review tab 必须开到 lead 的
+    // 可见桶(hostSessionId),否则落进 worker 自己的桶,点了没有任何反应。
+    render(
+      <SidebarHostSessionProvider sessionId="lead-1">
+        <TurnChangesCard sessionId="session-1" changeSet={CHANGE_SET} />
+      </SidebarHostSessionProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /src\/test\.ts/ }));
+
+    expect(mocks.openTurnReview).toHaveBeenCalledWith(
+      'session-1',
+      ['change-1'],
+      { selectedDiffId: 'file-1', hostSessionId: 'lead-1' },
     );
   });
 
@@ -212,6 +231,32 @@ describe('TurnChangesCard file actions', () => {
     await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith(
       'chat.turnChanges.reapplyPartialSuccess',
     ));
+  });
+
+  it('renders a zero-file evidence card as a pure warning without +0 -0 or dead-end actions', () => {
+    // 零文件但带变更证据(如 sensitive-file / diff-too-large)的卡:内容没录下,
+    // +0 -0 会被误读成「没有变化」,「审查」必然打开空面板。只保留警示文案。
+    render(
+      <TurnChangesCard
+        sessionId="session-1"
+        changeSet={{
+          ...CHANGE_SET,
+          state: 'partial',
+          isReversible: false,
+          incompleteReasons: ['sensitive-file'],
+          files: [],
+          fileCount: 0,
+          additions: 0,
+          deletions: 0,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('chat.turnChanges.partialTitle')).toBeTruthy();
+    expect(screen.getByText('chat.turnChanges.partialNone')).toBeTruthy();
+    expect(screen.queryByText(/\+0/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.turnChanges.review' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.turnChanges.undoAria' })).toBeNull();
   });
 
   it('does not offer undo for a non-reversible patch', () => {

@@ -174,8 +174,11 @@ const XD_PROVIDER: Provider = {
   videoModels: [
     { id: 'seedance-fast', name: 'Seedance 快速' },
     { id: 'seedance-pro', name: 'Seedance Pro' },
+    { id: 'bytedance/seedance-2.5', name: 'Seedance 2.5' },
     { id: 'happyhorse', name: 'HappyHorse 1.0' },
   ],
+  // 2.5 刻意不接管 best:它只到 720p,而 seedance-pro 有 1080p —— 让 tier=best
+  // 指向 2.5 会把"要 1080p"的单子从可用变成明拒。2.5 需显式点名。
   videoDefaults: {
     standard: 'seedance-fast',
     best: 'seedance-pro',

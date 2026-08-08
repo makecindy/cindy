@@ -121,7 +121,13 @@ const MAX_ELAPSED_MS = 1_500;
 class ScanBudget {
   private files = 0;
   private dirs = 0;
-  constructor(private readonly startedAt: number, private readonly deadlineMs: number) {}
+  constructor(
+    private readonly startedAt: number,
+    private readonly deadlineMs: number,
+    readonly maxDepth: number,
+    readonly maxFiles: number,
+    readonly maxDirEntries: number,
+  ) {}
 
   countDir(): void {
     if (++this.dirs > MAX_DIRS) throw new SubagentScanBudgetError(`dirs>${MAX_DIRS}`);
@@ -129,7 +135,9 @@ class ScanBudget {
   }
 
   countFile(): void {
-    if (++this.files > MAX_FILES) throw new SubagentScanBudgetError(`files>${MAX_FILES}`);
+    if (++this.files > this.maxFiles) {
+      throw new SubagentScanBudgetError(`files>${this.maxFiles}`);
+    }
     this.checkTime();
   }
 
@@ -199,7 +207,7 @@ async function isDirectory(p: string): Promise<boolean> {
 }
 
 /**
- * 流式读一个目录的条目,条目数超 {@link MAX_DIR_ENTRIES} 立即抛。
+ * 流式读一个目录的条目,条目数超扫描预算立即抛。
  *
  * 打不开的目录(权限 / 竞态删除)当作空目录,只跳过它自己;但**条目过多要抛** —— 那种情况下
  * 结果不可信,静默截断会让上层以为「扫完了,没人声明 model」。
@@ -215,8 +223,8 @@ async function readDirEntriesBounded(dir: string, budget: ScanBudget): Promise<D
   const entries: Dirent[] = [];
   // for-await 在 break / throw 时会自动关闭目录句柄。
   for await (const ent of handle) {
-    if (entries.length >= MAX_DIR_ENTRIES) {
-      throw new SubagentScanBudgetError(`dirEntries>${MAX_DIR_ENTRIES}`);
+    if (entries.length >= budget.maxDirEntries) {
+      throw new SubagentScanBudgetError(`dirEntries>${budget.maxDirEntries}`);
     }
     entries.push(ent);
     budget.checkTime();
@@ -278,7 +286,9 @@ async function collectMarkdownFiles(
 ): Promise<string[]> {
   // 深度上限也是预算的一部分,超了同样**抛**而不是返回空:深层目录里若有声明了 model 的定义,
   // 静默截断会让上层判成「没人声明」→ 又把覆盖用的 env 设回去(本 PR 要修的 bug)。
-  if (depth > MAX_DEPTH) throw new SubagentScanBudgetError(`depth>${MAX_DEPTH}`);
+  if (depth > budget.maxDepth) {
+    throw new SubagentScanBudgetError(`depth>${budget.maxDepth}`);
+  }
   // 软链环兜底:按真实路径去重。realpath 失败(悬空链)就跳过这个目录。
   let real: string;
   try {
@@ -451,6 +461,27 @@ export interface DiscoverSubagentsOptions {
   deadlineMs?: number;
   /** 测试注入起始时刻(避免依赖真实时钟)。 */
   now?: () => number;
+  /**
+   * 递归深度上限,有效范围 1..{@link MAX_DEPTH};非法值或超过缺省上限时回退缺省值。
+   * 测试可注入较小值,避免为触发预算创建大量目录。
+   */
+  maxDepth?: number;
+  /**
+   * .md 文件数上限,有效范围 1..{@link MAX_FILES};非法值或超过缺省上限时回退缺省值。
+   * 测试可注入较小值,避免为触发预算创建大量文件。
+   */
+  maxFiles?: number;
+  /**
+   * 单目录条目数上限,有效范围 1..{@link MAX_DIR_ENTRIES};非法值或超过缺省上限时回退缺省值。
+   * 测试可注入较小值,避免为触发预算创建大量目录条目。
+   */
+  maxDirEntries?: number;
+}
+
+function resolveBudgetLimit(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= fallback
+    ? value
+    : fallback;
 }
 
 /**
@@ -475,7 +506,13 @@ async function scanSubagentDefinitions(
   opts: DiscoverSubagentsOptions,
   deadlineMs: number,
 ): Promise<DiscoveredSubagent[]> {
-  const budget = new ScanBudget((opts.now ?? Date.now)(), deadlineMs);
+  const budget = new ScanBudget(
+    (opts.now ?? Date.now)(),
+    deadlineMs,
+    resolveBudgetLimit(opts.maxDepth, MAX_DEPTH),
+    resolveBudgetLimit(opts.maxFiles, MAX_FILES),
+    resolveBudgetLimit(opts.maxDirEntries, MAX_DIR_ENTRIES),
+  );
   const visitedDirs = new Set<string>();
   const scoped: Array<{ dir: string; scope: DiscoveredSubagent['scope'] }> = [
     // 顺序 = 跨作用域优先级从高到低(项目近者 > 项目远者 > 用户)。

@@ -1,8 +1,4 @@
-import type {
-  Capabilities,
-  PermissionMode,
-  TurnPermissionPolicy,
-} from '@cindy/maker-core';
+import type { TurnPermissionPolicy } from '@cindy/maker-core';
 
 import { channelForceConfirmToolCall } from '../shared/channelToolPolicy';
 
@@ -41,27 +37,4 @@ export function createWechatTurnPermissionPolicy(
       : {}),
     forceConfirmToolCall: channelForceConfirmToolCall,
   };
-}
-
-export function supportsWechatTurnPermissionMode(
-  capabilities: Capabilities,
-  mode: PermissionMode,
-): boolean {
-  const policy = capabilities.turnPermissionPolicy;
-  return (
-    policy?.supported.supported === true &&
-    !policy.unsupportedPermissionModes.includes(mode)
-  );
-}
-
-export function createWechatTurnPermissionPolicyForMode(
-  taskId: string,
-  capabilities: Capabilities,
-  mode: PermissionMode,
-  options?: Parameters<typeof createWechatTurnPermissionPolicy>[1],
-): TurnPermissionPolicy {
-  if (!supportsWechatTurnPermissionMode(capabilities, mode)) {
-    throw new Error(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:${mode}`);
-  }
-  return createWechatTurnPermissionPolicy(taskId, options);
 }

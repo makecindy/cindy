@@ -47,7 +47,13 @@ import {
   type ActiveAppSession,
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
-import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
+import {
+  GhostManager,
+  isCindyOfficialTrustInfo,
+  type GhostHostTrustOverride,
+  type InstallRejection,
+  type UninstallRejection,
+} from './GhostManager.js';
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
@@ -244,6 +250,7 @@ import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
@@ -1088,6 +1095,10 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
   return dispatcherSingleton;
 }
 
+export function hasPendingGhostCalls(ghostId: string): boolean {
+  return getGhostPipeDispatcher().hasPendingCallsFor(ghostId);
+}
+
 let agentSlotSingleton: GhostAgentSlot | null = null;
 
 /** Agent 新回合槽单例：一次性点击票、后台权限与模板替换的统一守门点。 */
@@ -1121,6 +1132,14 @@ export function getGhostErrandSlot(): GhostErrandSlot {
     });
   }
   return errandSlotSingleton;
+}
+
+export function hasRunningGhostErrand(ghostId: string): boolean {
+  return getGhostErrandSlot().hasActiveErrandFor(ghostId);
+}
+
+export function hasRunningGhostCindyWork(ghostId: string): boolean {
+  return getGhostCindySlot().hasInflightWorkFor(ghostId);
 }
 
 /** maker-ipc 完成初始化后注入真实派活 runner;传 null 用于退出清理。 */
@@ -3123,9 +3142,10 @@ function getGhostOauthReauthSuggest(runtimeManifest: GhostManifest): GhostSetupR
 }
 
 /**
- * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
- * Unlike the legacy plugin-page projection this path is strict: storage or
- * manifest drift errors propagate and therefore block dispatch.
+ * Runtime-authoritative setup assessment used by ghost_info, ghost_list and
+ * ghost_call. Discovery callers treat assessment failures as best-effort and
+ * omit setup; ghost_call preflight is strict, so storage or manifest drift
+ * errors block dispatch.
  */
 export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const ghost = findAvailableGhost(ghostId);
@@ -3297,6 +3317,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
         return ghost ? { ...ghost, manifest: withRuntimeFiloGoogleClient(ghost.manifest) } : null;
       },
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
+      readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
       // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
@@ -3522,7 +3543,12 @@ export async function installAndDock(
    * 可信。做成必填而不是可选,是为了让新增装入路径无法"忘记取锁"——签名逼着
    * 它交出 id,锁在这里自动获取(外层已持有时按可重入 no-op)。
    */
-  opts: { ghostId: string; enable?: boolean; expectedPackageSha256?: string },
+  opts: {
+    ghostId: string;
+    enable?: boolean;
+    expectedPackageSha256?: string;
+    trustOverride?: GhostHostTrustOverride;
+  },
 ): Promise<InstalledGhost> {
   return withGhostInstallLock(opts.ghostId, () => installAndDockLocked(manager, lizFilePath, opts));
 }
@@ -3530,7 +3556,12 @@ export async function installAndDock(
 async function installAndDockLocked(
   manager: GhostManager,
   lizFilePath: string,
-  opts: { ghostId: string; enable?: boolean; expectedPackageSha256?: string },
+  opts: {
+    ghostId: string;
+    enable?: boolean;
+    expectedPackageSha256?: string;
+    trustOverride?: GhostHostTrustOverride;
+  },
 ): Promise<InstalledGhost> {
   // 默认沉睡(2026-07-09 Lizi 定案):装入 ≠ 授权运行,用户在确认框显式勾选
   // "立即开启"才带电;沉睡态面板不渲染、总机不列、沙箱不拉起。
@@ -3539,6 +3570,7 @@ async function installAndDockLocked(
     ...(opts.expectedPackageSha256
       ? { expectedPackageSha256: opts.expectedPackageSha256 }
       : {}),
+    ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
   });
   if ('rejection' in result) throwInstallError(result.rejection);
   // 纵深防御:调用方给错 id 意味着刚才那把锁上在了错误的键上(等于没上锁)。
@@ -3587,6 +3619,9 @@ export async function installOrUpdateMarketGhostPackage(
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
+    beforeCommitInLock?: () => void;
+    /** 仅 server-market 主机路径可传；custom/local 不传。 */
+    officialCindyGithub?: boolean;
   },
 ): Promise<InstalledGhost> {
   // 卡点:按 ghostId 上锁,覆盖 inspect → 落位整段。服务端与自定义两条市场路径
@@ -3606,6 +3641,8 @@ async function installOrUpdateMarketGhostPackageLocked(
     permissionBaselineManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
+    beforeCommitInLock?: () => void;
+    officialCindyGithub?: boolean;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -3624,6 +3661,10 @@ async function installOrUpdateMarketGhostPackageLocked(
         '下载包清单与市场 Release 不一致',
       );
     }
+    const trustOverride: GhostHostTrustOverride | undefined =
+      expected.officialCindyGithub === true && expected.ghostId === 'cindy-github'
+        ? 'cindy-official'
+        : undefined;
     requireGhostAvailableForActiveSession(expected.ghostId);
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     if (expected.reviewedManifest) {
@@ -3687,9 +3728,11 @@ async function installOrUpdateMarketGhostPackageLocked(
         ghostId: expected.ghostId,
         enable: true,
         expectedPackageSha256: inspected.packageSha256,
+        ...(trustOverride ? { trustOverride } : {}),
       });
     }
 
+    expected.beforeCommitInLock?.();
     const runtime = getGhostRuntime();
     runtime.stop(expected.ghostId);
     getGhostNodeRuntimeBroker().stop(expected.ghostId);
@@ -3700,6 +3743,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
       result = await manager.update(cindyFilePath, {
         expectedPackageSha256: inspected.packageSha256,
+        ...(trustOverride ? { trustOverride } : {}),
       });
     } catch (error) {
       spawnIfResident(installed);
@@ -3982,6 +4026,15 @@ export function registerGhostIpc(): void {
       key: s.key,
       saved: isConnectionSecretReady(s.inject.hosts ?? [], connectionResolution),
     }));
+    const isOfficialCindyGithub =
+      ghost.manifest.id === 'cindy-github' && isCindyOfficialTrustInfo(ghost.trust);
+    const ghCliSecretDecls = isOfficialCindyGithub
+      ? networkSecretDecls.filter((s) => s.source === 'gh-cli')
+      : [];
+    const ghCliAvailable =
+      ghCliSecretDecls.length > 0
+        ? await getSharedGhCliTokenSource().probeAvailability()
+        : false;
     return handleGhostSecretsRequest({
       method,
       pathname,
@@ -3989,6 +4042,11 @@ export function registerGhostIpc(): void {
       userSecretKeys,
       identitySecretKeys,
       managedSecretStates,
+      hostCredentialStates: ghCliSecretDecls.map((s) => ({
+        key: s.key,
+        source: 'gh-cli' as const,
+        available: ghCliAvailable,
+      })),
       getLoginEmail: () => getAuthState().user?.email ?? null,
       ghostId,
       vault: {

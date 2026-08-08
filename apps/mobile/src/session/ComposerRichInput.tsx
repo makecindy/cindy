@@ -95,6 +95,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       document,
       editable,
       maxHeight,
+      platform: Platform.OS === 'ios' ? 'ios' as const : Platform.OS === 'android' ? 'android' as const : 'default' as const,
       placeholder,
       theme,
     });

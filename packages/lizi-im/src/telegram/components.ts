@@ -12,12 +12,9 @@
 import type { IMCardActionEvent, InteractiveCardSpec } from '../types.js';
 import type { TgCallbackQuery } from './api.js';
 import { decodeCallbackData, encodeCallbackData, encodeMessageId, encodeLaneUserId } from './codec.js';
+import { TELEGRAM_CARD_LAYOUT } from './cardLayout.js';
+import { capRenderedText } from './htmlCap.js';
 import { markdownToTelegramHtml } from './markdown.js';
-
-const BUTTON_LABEL_MAX = 64;
-/** label 短于此值时允许两键并排。 */
-const PAIR_LABEL_MAX = 12;
-const CARD_TEXT_MAX = 3800;
 
 export interface TelegramInlineKeyboardButton {
   text: string;
@@ -30,7 +27,7 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
 } {
   const title = spec.title ? `<b>${escapeTitle(spec.title)}</b>\n\n` : '';
   const { html: body } = markdownToTelegramHtml(spec.body);
-  const html = capCardText(`${title}${body}`);
+  const html = capRenderedText(`${title}${body}`, TELEGRAM_CARD_LAYOUT.cardTextMax);
 
   // 无按钮时必须显式下发空键盘: 省略 reply_markup 只会改文本, Telegram 保留旧键盘,
   // 于是已收口的卡片(过期/已解决)仍带着可点的按钮。
@@ -40,10 +37,10 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
   let pendingPair: TelegramInlineKeyboardButton | null = null;
   for (const button of spec.buttons) {
     const rendered: TelegramInlineKeyboardButton = {
-      text: button.label.slice(0, BUTTON_LABEL_MAX),
+      text: button.label.slice(0, TELEGRAM_CARD_LAYOUT.buttonLabelMax),
       callback_data: encodeCallbackData(button.id, button.payload ?? {}),
     };
-    if (button.label.length <= PAIR_LABEL_MAX) {
+    if (button.label.length <= TELEGRAM_CARD_LAYOUT.pairLabelMax) {
       if (pendingPair) {
         rows.push([pendingPair, rendered]);
         pendingPair = null;
@@ -113,37 +110,4 @@ export function parseCallbackQuery(q: TgCallbackQuery): IMCardActionEvent | null
 
 function escapeTitle(title: string): string {
   return title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-/**
- * HTML 安全截断: 纯字符切片可能切在标签(<a href=...)或实体(&amp;)中间,
- * parse_mode=HTML 的 sendMessage 会 400 整条失败。截点回退到完整边界,
- * 再栈扫描闭合未配对标签(Telegram HTML 子集无自闭合标签)。
- */
-function capCardText(html: string): string {
-  if (html.length <= CARD_TEXT_MAX) return html;
-  let cut = html.slice(0, CARD_TEXT_MAX - 1);
-  const lastOpen = cut.lastIndexOf('<');
-  if (lastOpen > cut.lastIndexOf('>')) cut = cut.slice(0, lastOpen);
-  const lastAmp = cut.lastIndexOf('&');
-  if (lastAmp !== -1 && !cut.slice(lastAmp).includes(';') && cut.length - lastAmp <= 10) {
-    cut = cut.slice(0, lastAmp);
-  }
-  const stack: string[] = [];
-  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^>]*)?>/g;
-  let m: RegExpExecArray | null;
-  while ((m = tagRe.exec(cut)) !== null) {
-    const name = m[2].toLowerCase();
-    if (m[1]) {
-      const idx = stack.lastIndexOf(name);
-      if (idx !== -1) stack.splice(idx, 1);
-    } else {
-      stack.push(name);
-    }
-  }
-  const closers = stack
-    .reverse()
-    .map((name) => `</${name}>`)
-    .join('');
-  return `${cut}…${closers}`;
 }

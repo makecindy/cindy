@@ -4,6 +4,7 @@ import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   GHOST_CINDY_EMBED_MAX_TEXTS,
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
@@ -304,6 +305,23 @@ describe('ghost · 清单校验', () => {
       ...goodManifest(),
       locales: { en: 'GHOST.JSON' },
     }).ok).toBe(false);
+  });
+
+  it('locale description / whenToUse 共用协议仓字符上限', () => {
+    const manifest = validateGhostManifest({
+      ...goodManifest(),
+      description: 'Base description',
+      whenToUse: 'Base recall',
+    });
+    expect(manifest.ok).toBe(true);
+    if (!manifest.ok) return;
+    expect(validateGhostManifestLocaleResource({
+      description: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS),
+      whenToUse: 'y'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS),
+    }, manifest.manifest).ok).toBe(true);
+    expect(validateGhostManifestLocaleResource({
+      description: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1),
+    }, manifest.manifest).ok).toBe(false);
   });
 
   it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
@@ -1773,7 +1791,7 @@ describe('ghost · description(自我介绍)', () => {
     const chip = validateGhostManifest({ ...goodChipManifest(), description: '画图小助手' });
     expect(chip.ok && chip.manifest.description).toBe('画图小助手');
 
-    for (const bad of ['', '  ', 'x'.repeat(301), 42]) {
+    for (const bad of ['', '  ', 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1), 42]) {
       expect(validateGhostManifest({ ...goodManifest(), description: bad }).ok, JSON.stringify(bad)).toBe(false);
     }
   });
@@ -1823,7 +1841,10 @@ describe('ghost · whenToUse(语义召回线索)', () => {
     const chip = validateGhostManifest({ ...goodChipManifest(), whenToUse: '需要出图时找我' });
     expect(chip.ok && chip.manifest.whenToUse).toBe('需要出图时找我');
     expect(validateGhostManifest({ ...goodChipManifest(), whenToUse: '' }).ok).toBe(false);
-    expect(validateGhostManifest({ ...goodChipManifest(), whenToUse: 'x'.repeat(301) }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodChipManifest(),
+      whenToUse: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1),
+    }).ok).toBe(false);
   });
 });
 
@@ -2332,6 +2353,118 @@ describe('ghost · network 详单校验', () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('source');
+  });
+
+  it('secrets.source:gh-cli 仅允许官方 GitHub 插件的固定 GitHub API 注入形态', () => {
+    const valid = validateGhostManifest({
+      ...goodManifest(),
+      id: 'cindy-github',
+      slots: ['panel', 'network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub authentication',
+            source: 'gh-cli',
+            url: 'https://github.com/settings/tokens',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.github.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(valid.ok, valid.ok ? '' : valid.reason).toBe(true);
+    if (valid.ok) {
+      const item = ghostPermissionItems(valid.manifest).find(
+        (entry) => entry.key === 'network:secret:github_pat',
+      );
+      expect(item?.labelKey).toBe('networkSecretGhCli');
+      expect(item?.detailKey).toBe('networkSecretGhCliDetail');
+
+      const prior = validateGhostManifest({
+        ...goodManifest(),
+        id: 'cindy-github',
+        slots: ['panel', 'network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.github.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub authentication',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                hosts: ['api.github.com'],
+              },
+            },
+          ],
+        },
+      });
+      expect(prior.ok).toBe(true);
+      if (prior.ok) {
+        expect(diffGhostPermissionItems(prior.manifest, valid.manifest).added).toEqual([]);
+        expect(ghostPermissionBaselineKey(prior.manifest)).toBe(
+          ghostPermissionBaselineKey(valid.manifest),
+        );
+        expect(
+          unreviewedGhostPermissionItems(
+            prior.manifest,
+            prior.manifest,
+            valid.manifest,
+          ),
+        ).toEqual([]);
+      }
+    }
+
+    for (const fixture of [
+      { id: 'github-helper' },
+      { header: 'X-GitHub-Token' },
+      { format: 'token {value}' },
+      { hosts: undefined },
+      { hosts: ['objects.githubusercontent.com'] },
+      {
+        exchange: {
+          url: 'https://api.github.com/token',
+          bodyFormat: '{"token":"{value}"}',
+          tokenPath: 'token',
+        },
+      },
+    ]) {
+      const id = 'id' in fixture ? fixture.id : 'cindy-github';
+      const result = validateGhostManifest({
+        ...goodManifest(),
+        id,
+        slots: ['panel', 'network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.github.com', 'objects.githubusercontent.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub authentication',
+              source: 'gh-cli',
+              inject: {
+                header: 'header' in fixture ? fixture.header : 'Authorization',
+                format: 'format' in fixture ? fixture.format : 'Bearer {value}',
+                ...('hosts' in fixture
+                  ? fixture.hosts === undefined
+                    ? {}
+                    : { hosts: fixture.hosts }
+                  : { hosts: ['api.github.com'] }),
+              },
+              ...('exchange' in fixture ? { exchange: fixture.exchange } : {}),
+            },
+          ],
+        },
+      });
+      expect(result.ok, JSON.stringify(fixture)).toBe(false);
+    }
   });
 
   it('权限清单:login-email 凭证用"将使用登录邮箱"分档文案,key 与 user 凭证同构', () => {

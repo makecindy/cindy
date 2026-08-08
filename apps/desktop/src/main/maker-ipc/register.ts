@@ -78,6 +78,7 @@ import {
   type GhostSetupInteractionSnapshot,
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -286,7 +287,10 @@ import {
   applyNewMakerWorktreeBranchPreference,
   getNewMakerWorktreeBranchPreference,
 } from '../maker-host/newMakerWorktreeBranchPreferenceCache.js';
-import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
+import {
+  rehydrateCloseSuppression,
+  withRehydrateCloseSuppressed,
+} from '../maker-host/rehydrateCloseSuppression.js';
 import { handleCloseSessionRequest } from './closeSessionRequest.js';
 import {
   createOrcaIdleReleaseWatcher,
@@ -1842,30 +1846,15 @@ initGhostSetupCoordinator({
   bridge: ghostSetupInteractionBridge,
   assess: (ghostId) => getGhostSetupAssessment(ghostId),
   validateTarget: (ghostId, tool, workingDir) => {
-    const ghost = getGhostManager()
-      .list()
-      .find((candidate) => candidate.manifest.id === ghostId);
-    if (!ghost || !isGhostAvailableForActiveSession(ghostId)) {
-      return {
-        ok: false,
-        errorCode: 'GHOST_NOT_FOUND',
-        message: t('newChat.pluginSetup.targetNotFound'),
-      };
-    }
-    if (!ghost.enabled) {
-      return {
-        ok: false,
-        errorCode: 'GHOST_ASLEEP',
-        message: t('newChat.pluginSetup.targetDisabled'),
-      };
-    }
-    if (isGhostDisabledForWorkdir(ghostId, workingDir)) {
-      return {
-        ok: false,
-        errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-        message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-      };
-    }
+    // Coordinator 的 UI 只消费 TARGET_UNAVAILABLE 状态；这里的 message 会随
+    // ensureReady 结果回到模型，因此与 ghost_info / ghost_call 共用同一口径。
+    const visibility = classifyGhostVisibility(ghostId, workingDir ?? null, {
+      listGhosts: () => getGhostManager().list(),
+      isAvailableForActiveSession: isGhostAvailableForActiveSession,
+      isDisabledForWorkdir: isGhostDisabledForWorkdir,
+    });
+    if (!visibility.ok) return visibility;
+    const ghost = visibility.ghost;
     if (tool && !(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
       return {
         ok: false,
@@ -3430,6 +3419,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let shouldMarkTurnStatusIdleAfterBroadcast = false;
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
+      // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
+      // 若 claim 悬挂会导致 UI 永久「正在生成」。区分「claim 悬挂」与「done 未到达」。
+      if (isContinuationBoundary && (event.type === 'done' || event.type === 'status')) {
+        log.debug('turn continuation boundary event skipped from turn-finalize', {
+          sessionId: session.id,
+          eventType: event.type,
+          turnContinuationId: event.turnContinuationId,
+        });
+      }
       if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId) {
         pendingCodexAccountUsageSnapshot = event.data;
       }
@@ -4634,7 +4632,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
           interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
           autoResumeBookkeeping.teardown(session.id);
-          agentInputCoordinatorHolder?.onSessionClosed(session.id);
+          // rehydrate / 凭证切换 close-rebuild 窗口:同一逻辑会话进程内重建,
+          // 协调器状态应连续。窗口内保留 input boundary(不 abort,避免取消
+          // 驱动本次重建的 signal → #1930 cancelled-before-dispatch),但
+          // **其余清理必须照常执行**(activeTurn / steer / queue 状态不能残留,
+          // 否则 rebuild 失败或 close 后不 rebuild 时 coordinator 残留旧状态
+          // 阻塞后续发送)。其余清理(凭证切换 / git snapshot / Orca hydration
+          // 标记 / wiring teardown)照常。
+          agentInputCoordinatorHolder?.onSessionClosed(session.id, {
+            preserveInputBoundary: rehydrateCloseSuppression.isSuppressed(session.id),
+          });
           // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
           pendingCredentialSwitchHolder?.onSessionClosed(session.id);
           deferredCodexRestartHolder?.onSessionSettled();

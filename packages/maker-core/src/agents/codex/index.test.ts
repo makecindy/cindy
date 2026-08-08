@@ -433,11 +433,12 @@ function installFakeHost(
     discardPendingDescendantLineage: vi.fn(),
   };
 
+  const getHost = vi.fn(async () => host);
   Object.defineProperty(agent, 'getHost', {
-    value: async () => host,
+    value: getHost,
   });
 
-  return host;
+  return Object.assign(host, { getHost });
 }
 
 async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEvent> {
@@ -3170,11 +3171,14 @@ describe('CodexAgent.startSession developerInstructions', () => {
       'ALWAYS call send_to_lead when complete or blocked.',
       'worker_id=worker-test-id',
     ].join('\n');
-    const baselineAgent = new CodexAgent(createDeps(runtimeConfig));
+    const baselineAgent = new CodexAgent(createDeps(runtimeConfig, {
+      getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
+    }));
     const baselineHost = installFakeHost(baselineAgent);
     const registerCodexSystemPromptForThread = vi.fn();
     const proxyAgent = new CodexAgent(createDeps(runtimeConfig, {
       registerCodexSystemPromptForThread,
+      getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
     }));
     const proxyHost = installFakeHost(proxyAgent, undefined, { codexProxyActive: true });
 
@@ -3209,6 +3213,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
       historyHasProductPrompt: false,
     });
     expect(baselineParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(baselineParams.developerInstructions).toContain('GHOST ROSTER PROMPT');
     expect(baselineParams.developerInstructions).toContain('send_to_lead');
     expect(baselineParams.developerInstructions).toContain('worker_id=worker-test-id');
 
@@ -3284,7 +3289,10 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
-      { registerCodexSystemPromptForThread },
+      {
+        registerCodexSystemPromptForThread,
+        getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
+      },
     ));
     const host = installFakeHost(agent, undefined, {
       codexProxyActive: true,
@@ -3305,6 +3313,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     expect(params.modelProvider).toBe('cindy_openai');
     expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('GHOST ROSTER PROMPT');
     expect(params.developerInstructions).toContain('USER PROMPT');
     expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
     expect(handle.codexProductPromptDelivery).toEqual({
@@ -3681,10 +3690,12 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
   it('keeps developerInstructions for remote sessions when their host is not proxy-active', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
+    const getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
       {
         registerCodexSystemPromptForThread,
+        getGhostRosterPrompt,
       },
     ));
     const host = installFakeHost(agent);
@@ -3701,6 +3712,8 @@ describe('CodexAgent.startSession developerInstructions', () => {
       developerInstructions?: string;
     };
     expect(startParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(startParams.developerInstructions).not.toContain('GHOST ROSTER PROMPT');
+    expect(getGhostRosterPrompt).not.toHaveBeenCalled();
     expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
     await handle.close();
   });
@@ -4994,8 +5007,12 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     expect(result.newSdkSessionId).toMatch(/^fork-thread-/);
-    expect(createdTransports).toHaveLength(1);
+    // Fork runs on its own ephemeral host (fault-radius isolation): a second
+    // transport is spawned for the fork and retired when it finishes, while
+    // the explicit credential session host stays untouched and open.
+    expect(createdTransports).toHaveLength(2);
     expect(createdTransports[0].closed).toBe(false);
+    expect(createdTransports[1].closed).toBe(true);
     expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
 
     await handle.close();
@@ -12130,6 +12147,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
     expect(startParams.dynamicTools?.[0]?.description).toContain('provide a generic list');
     expect(startParams.dynamicTools?.[0]?.description).toContain('Ask 1 to 3 short questions in a single call');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('returns the awaited result as a JSON string');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('JSON.parse(raw)');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Do not read .content or .structuredContent');
     expect(startParams.dynamicTools?.[0]?.inputSchema?.properties?.questions?.description).toContain('Bundle independent choices');
 
     const openAiAgent = new CodexAgent(createDeps());
@@ -13415,7 +13435,7 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
   });
 
-  it('retires the captured host and rejects when a forked child cannot be unloaded', async () => {
+  it('retires the ephemeral fork host and rejects when a forked child cannot be unloaded', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
     host.unsubscribeThread.mockRejectedValueOnce(new Error('unsubscribe failed'));
@@ -13433,15 +13453,100 @@ describe('CodexAgent.forkSdkSession', () => {
     })).rejects.toThrow('unsubscribe failed');
 
     expect(retireHostKey).toHaveBeenCalledWith(
-      'local',
-      'Codex fork child fork-thread-id could not be unloaded safely',
+      expect.stringMatching(/^local-fork:/),
+      'Codex fork host is single-use',
       expect.objectContaining({
         failIfActive: false,
-        logPrefix: 'codex fork child cleanup',
-        expectedGeneration: 0,
+        logPrefix: 'codex fork host cleanup',
       }),
     );
     expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
+  });
+
+  it('retires the ephemeral fork host after a successful fork', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent);
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    expect(retireHostKey).toHaveBeenCalledTimes(1);
+    expect(retireHostKey).toHaveBeenCalledWith(
+      expect.stringMatching(/^local-fork:/),
+      'Codex fork host is single-use',
+      expect.objectContaining({
+        failIfActive: false,
+        logPrefix: 'codex fork host cleanup',
+      }),
+    );
+  });
+
+  it('requests excludeTurns on thread/fork when the daemon supports it', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'source-thread-id',
+      persistExtendedHistory: true,
+      excludeTurns: true,
+    });
+  });
+
+  it('omits excludeTurns for daemons older than 0.145.0', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.144.6' });
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    const forkParams = host.request.mock.calls.find(([m]) => m === Method.ThreadFork)?.[1] as
+      | { excludeTurns?: boolean }
+      | undefined;
+    expect(forkParams).toBeDefined();
+    expect(forkParams?.excludeTurns).toBeUndefined();
+  });
+
+  it('preserves source provider credentials on an isolated fork host', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      model: 'gpt-5.4',
+      providerId: 'custom-provider',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    expect(host.getHost).toHaveBeenCalledWith(
+      undefined,
+      'provider-oauth',
+      expect.objectContaining({
+        keyOverride: expect.stringMatching(/^local-fork:/),
+        hostPurpose: 'control-plane',
+      }),
+    );
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+      threadId: 'source-thread-id',
+    }));
   });
 
   it('forks from a temporary rollout copy without unsafe payload lines', async () => {

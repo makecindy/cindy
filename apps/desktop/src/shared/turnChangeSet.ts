@@ -78,9 +78,11 @@ export interface PersistedTurnChangeSetV1 {
 /**
  * Reasons that only say "the capture may not have seen everything", without any
  * evidence that a change actually happened (opaque tools ran, the turn failed, or
- * another session overlapped). Reasons outside this set (diff-too-large,
- * outside-workspace, sensitive-file, …) prove real changes existed but were not
- * recorded.
+ * another session overlapped). Reasons outside this set prove changes existed but
+ * were not recorded — including 'outside-workspace', which the store only records
+ * for suspicious cases (a workspace path whose realpath escapes via symlink, or a
+ * provider diff block rejected as unsafe); literal out-of-workspace targets are
+ * skipped at capture time without recording any reason.
  */
 const NO_CHANGE_EVIDENCE_REASONS: ReadonlySet<TurnChangeIncompleteReason> = new Set([
   'opaque-tool',
