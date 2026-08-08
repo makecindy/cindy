@@ -34,11 +34,15 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 > **这一节只放两侧真的跑同一份代码/同一份数据的东西。** 一旦列进来，维护者就会跳过
 > 双路核对——所以「个人侧独有」「官方侧独有」的能力不能放这里，哪怕它在共享目录下。
+>
+> 还要写清同源的**是哪一段**：共用一个实现，不等于进入它之前的判定也一样。群历史
+> 检索就是这样——检索本身两侧同一份代码，但"这一轮有没有权限查、能查多大范围"是
+> 各写各的，私聊上给出的答案还不同（第四节 2e）。
 
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
-| 群历史检索核心 | `im/shared/groupHistoryAccess.ts` | 官方侧由 `hook-control/groupHistoryScope.ts` 把官方 externalKey 解析成同一套 access scope，两侧检索走同一实现 |
+| 群历史检索**实现** | `im/shared/groupHistoryAccess.ts` | 检索本身与 access scope 这个类型两侧共用。**但产生 scope 的那一步各写各的**——个人是 `im/telegram/adapter.ts` 的 `groupHistoryAccessFor`，官方是 `hook-control/groupHistoryScope.ts` 的 `groupHistoryAccessForExternalKey`。两者在**群轮次**上给出同一档（lane-only，只查当前群/topic），**在私聊上给的不一样**：见第四节 2e |
 | 群消息本地库的**保留策略** | `im/shared/groupWindowCore.ts` | 上限数值（每命名空间 1 GiB 正文 + 500 万行安全阀）、回收低水位（0.9）与回收实现都在这一处；两侧把同一份 `DEFAULT_GROUP_WINDOW_RETENTION` 传进同一个 `recordGroupWindowEntry`。**额度靠 provider 命名空间隔离**：官方 `telegram:<principalId>`、个人 `telegram-personal:<botId>`，统计与回收都按 provider 过滤，两个账号各算各的、消息不串。一个边界要记住：两侧各持有一份 `{ ...DEFAULT }` **可变副本**（为的是测试能用小阈值把回收逼出来），所以共享的是"模块初始化时的那组数字"，运行期改一侧不会传导到另一侧 |
 
 ### 放在共享目录、但**只有一侧消费**的
@@ -101,6 +105,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧**全轮次**生效（`noReplyScope: 'all-turns'`）：`streamingText.finalize` 的哨兵判定不带 ambient 门控。但**「零出站」只在惰性占位还没建过消息时成立**——哨兵前已经有正文流出的轮次消息已经发出去了，finalize 走的是**尽力撤回**：`deleteMessage` 失败被 `catch` 吞掉，那条停在过程态的消息就留在聊天里。官方只在 ambient 轮次生效，且删不掉时**不吞**——`discardProgressMessage` 返回 false，标 `retainAmbientCleanup` 并留给下一拍重试。`presentationCapabilities.ts` 把范围差异明写为**跨服务端 TODO**，即「想统一但要动服务端」，**不是**已裁决的产品差异，所以只登记在这里、不进第三节 | 待判：要统一得改服务端的哨兵判定。失败出口的差异（吞 vs 重试）一并判 |
 | 2c | **链接预览关闭两边各写一套，覆盖面还不一样** | 个人侧读契约 `linkPreviewDisabled: true`，driver 在**答案这条路**上全部消费——正文/过程消息的发送、分段发送、编辑，以及 HTML 解析失败后的纯文本回落；**卡片消息、陌生人提示、主人通知不带**。官方侧**不读这个契约**（在服务端仓 `telegram/client.ts` 里写死 `{ is_disabled: true }`），且只写在两处：`sendAdaptiveMessage` / `editAdaptiveMessage` 的 **HTML 回落**分支；纯文本的 `sendMessage` / `editMessageText`（权限卡、通知、附件转发、续跑提示，以及 adaptive 最后一层纯文本回落）都不带，链接预览按 Telegram 默认开着。两侧的 rich 主路径（`rich_message` payload）都不带这个参数，其预览行为**未核**——非公开 API | 待判：要么把参数补进官方的纯文本出站，要么把这条策略升进 `cindy-protocol` 两侧共用。跨仓 |
 | 2d | **行为档位（表情、回复引用）两边各写一套** | 三档形状与默认值两侧**逐字相同**：`emojiReactions` off/minimal/expressive 默认 minimal、`replyQuoteGroup` off/first/all 默认 first、`replyQuoteDm` off/first 默认 off。但声明有两份——官方读 `cindy-protocol` 的 `DEFAULT_TELEGRAM_BEHAVIOR`（服务端与桌面的官方那一半都用它，正本存服务端；桌面 hydrate 失败时**故意留「未知」而不套基线**，见 `hook-control/manager.ts`），个人读 `@cindy/im` 的 `TELEGRAM_DEFAULT_BEHAVIOR` + 本地 owner-scoped JSON（`im/telegram/behaviorStore.ts`）。值现在一样，但没有任何东西拦着它们分叉。注意：`turnPresenter.ts` / `presentationCapabilities.ts` 里「不含 replyQuote」的裁决说的是**不进共享能力契约**，不是「两个 bot 该长得不一样」——别把它读成有意差异 | 待判：个人侧能否直接改读 `cindy-protocol` 的 `DEFAULT_TELEGRAM_BEHAVIOR`（值一样，是最省事的一次真统一），先核 `@cindy/im` 对 `cindy-protocol` 的依赖方向允不允许（`docs/dev-rules/architecture-invariants.md`）。**与第 6 行分工**：那行是「何时打表情」的判据，这行是「档位的声明与默认值」 |
+| 2e | **私聊里能不能跨群检索：个人有、官方没有** | **群轮次两侧一致**（都 lane-only，只查当前群/topic）。差别只在私聊。个人：`groupHistoryAccessFor` 在无 lane（即 DM）时给 `access: 'owner'`，owner 可以显式指定别的 lane，跨群查这个 bot 名下全部群历史。官方：私聊的 externalKey 不是群 lane，`groupHistoryAccessForExternalKey` 返回 `undefined`，MCP 直接以 `NO_ACTIVE_TELEGRAM_SCOPE` 拒绝——**官方 bot 私聊里这个工具根本不可用**（MCP 工具自己的说明也写着「只有主人触发的个人 Telegram 轮次可显式指定其它精确 lane」）。个人侧「群轮次一律 lane-only」有 2026-07-30 的明确裁决（群里的可控文本能借 owner 轮次把别的 lane 检索出来回帖泄漏，而检索类调用没有确认卡兜底）；**官方私聊这一档没有对应裁决**——是没接，不是判过，所以归缺口不归第三节 | 待判，**不在本 PR 改代码**。补之前先答一个产品问题：官方 bot 绑的是一个主账号，它的私聊该不该看到该账号名下全部群的历史。答「该」才是接线问题（DM 的 externalKey 里有 principal，能推出 `telegram:<principalId>` 的 owner 档）；答「不该」就把这行升进第三节当有意差异 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
