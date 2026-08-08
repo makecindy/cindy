@@ -53,14 +53,23 @@ describe('mobile:sim takeover and JSON arguments', () => {
 });
 
 describe('mobile:sim Metro identity', () => {
-  it('normalizes path separators and trailing slashes', () => {
+  it('rejects non-Cindy paths and missing source identities', () => {
     expect(classifySimMetroListener({
-      cwd: '/repo/apps/mobile/',
+      cwd: '/other/project',
       source: 'branch@commit',
-      targetWorktree: '/repo/',
-    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: true });
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: null,
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: 'branch@commit',
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: false });
   });
-});
 
 describe('mobile:sim:whoami bundle identity', () => {
   it.each([
