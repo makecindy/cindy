@@ -129,7 +129,8 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | # | 缺口 | 现状 | 归属 |
 |---|---|---|---|
 | 1 | **个人 bot 缺 3 条命令** | `/unbind`（清当前 chat 的项目映射）、`/effort`（思考强度）、`/agent`（切 Agent）官方有、个人无，目前只能在桌面端改。注册表已显式登记并由 CI 拦住 | 每条各自独立 PR |
-| 1b | **官方命令镜像没有跨仓校验** | 注册表里官方那一半是手抄的声明性镜像，服务端单方面加减命令这边不会红 | 待判：把 `TELEGRAM_COMMANDS` 放进 `cindy-protocol` 两侧生成，或在服务端加反向校验。要跨仓改动与一次协议版本推进 |
+| 1b | **官方命令镜像没有跨仓校验** | 注册表里官方那一半是手抄的声明性镜像，服务端单方面加减命令这边不会红。**别名维度是同一个洞的另一半，见 1c** | 待判：把 `TELEGRAM_COMMANDS` 放进 `cindy-protocol` 两侧生成，或在服务端加反向校验。要跨仓改动与一次协议版本推进 |
+| 1c | **隐藏别名 `/exitctr` 只有个人 bot 认** | 个人：`botCommands.ts` 的 `exctr` 带 `aliases: ['exitctr']`，`tokenizeBotCommand` 归一化后走同一条 `executeDetach`（`botCommands.test.ts` 的归一化用例 + `slashCommands.test.ts` 的「`/exitctr` 与 `/exctr` 同路径」各钉一条）。它是**老拼写的向后兼容**——旧 switch 里的 `case '/exitctr':` 删掉后改用别名接住。官方：服务端 `controller.ts` 的 `handleCommand` 只精确匹配 `exctr`，`/exitctr` 一路落到函数末尾的兜底 `reply(t.help)`——**用户拿到一段帮助文案，而 session 接管并没有解除**。这比回一句「未知命令」更容易误判成已生效。**结构上也拦不住**：注册表的 `aliases` 没有 surface 维度（`surfaces` 只描述命令本身），CI 又只校验规范命令名，所以别名两侧不一致永远不会红 | 待判，**不在本 PR 改代码**。两条路：服务端也认这个拼写（`command === "exctr" \|\| command === "exitctr"`），或给注册表的 alias 加 surface 维度并纳入镜像校验——后者顺带把 1b 一起补上 |
 | 2 | **msg.op 动词只接了一个** | 服务端全套动词在 `xindong/cindy-server#349`（未合）；桌面侧目前只消费 `react`（ack 表情，见 `hook-control/ackReactions.ts` 的 `HOOK_FEATURE_MESSAGE_OPS` 判据）。`send` / `edit` / `delete` / `typing` / `media` 未接线 | #1855 第三刀。**这是把官方 bot 的出站改由桌面驱动的关键一步**——接完之后两侧的发射与收口才可能走同一份代码，而不是各写一套 |
 | 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧**全轮次**生效（`noReplyScope: 'all-turns'`）：`streamingText.finalize` 的哨兵判定不带 ambient 门控。但**「零出站」只在惰性占位还没建过消息时成立**——哨兵前已经有正文流出的轮次消息已经发出去了，finalize 走的是**尽力撤回**：`deleteMessage` 失败被 `catch` 吞掉，那条停在过程态的消息就留在聊天里。官方只在 ambient 轮次生效，且删不掉时**不吞**——`discardProgressMessage` 返回 false，标 `retainAmbientCleanup` 并留给下一拍重试。`presentationCapabilities.ts` 把范围差异明写为**跨服务端 TODO**，即「想统一但要动服务端」，**不是**已裁决的产品差异，所以只登记在这里、不进第三节 | 待判：要统一得改服务端的哨兵判定。失败出口的差异（吞 vs 重试）一并判 |
 | 2c | **链接预览关闭两边各写一套，覆盖面还不一样** | 个人侧读契约 `linkPreviewDisabled: true`，driver 在**答案这条路**上全部消费——正文/过程消息的发送、分段发送、编辑，以及 HTML 解析失败后的纯文本回落；**卡片消息、陌生人提示、主人通知不带**。官方侧**不读这个契约**（在服务端仓 `telegram/client.ts` 里写死 `{ is_disabled: true }`），且只写在两处：`sendAdaptiveMessage` / `editAdaptiveMessage` 的 **HTML 回落**分支；纯文本的 `sendMessage` / `editMessageText`（权限卡、通知、附件转发、续跑提示，以及 adaptive 最后一层纯文本回落）都不带，链接预览按 Telegram 默认开着。两侧的 rich 主路径（`rich_message` payload）都不带这个参数，其预览行为**未核**——非公开 API | 待判：要么把参数补进官方的纯文本出站，要么把这条策略升进 `cindy-protocol` 两侧共用。跨仓 |
@@ -174,8 +175,12 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
    / `progressSilent` 这种字段要数它实际挂在哪几个调用点上——个人侧的链接预览只关在
    答案那条路上，卡片与提示类消息并不带（见第四节 2c），字段名读起来却像"全关"。
 6. 命令的**分类**以 `botCommands.ts` 的 `parityNote` 为准——本表只是把它的结论摊开讲，
-   两边对不上时改本表、不改注册表。但注意注册表里**官方那一半是跨仓镜像**：改命令时
-   服务端的 `TELEGRAM_COMMANDS` 也要一起核对，CI 拦不住它漂移。
+   两边对不上时改本表、不改注册表。但注册表有两处**盖不住**的地方，都得手工核：
+   - **官方那一半是跨仓镜像**：改命令时服务端的 `TELEGRAM_COMMANDS` 也要一起核对，
+     CI 拦不住它漂移（缺口 1b）。
+   - **`aliases` 没有 surface 维度**：`surfaces` 只描述命令本身，别名跟着命令走，
+     所以「这个别名只有一侧认」既表达不出来、也不会红（缺口 1c 的 `/exitctr` 就是）。
+     新增或修改别名时，必须手工去服务端的命令分发里确认那个拼写认不认。
 
 ## 相关
 
