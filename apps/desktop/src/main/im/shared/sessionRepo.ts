@@ -56,6 +56,15 @@ export interface ImSessionRow {
    * IM turn 启动前 hydrate 进 session-provider-store,保证按选中供应商路由。
    */
   providerId: string | null;
+  /**
+   * 该会话的归属分组。`dialogue` = 托管目录里的临时对话, 它的目录末段是内部
+   * 名字(UUID / `telegram-<botId>`), **不是项目名**。
+   *
+   * schema 里 workspaceKind 与路径是解耦的 —— 只比对目录等于不等于渠道托管目录
+   * 判不出来(接管一条 desktop 的 dialogue 会话时路径根本不是渠道自己那条)。
+   * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
+   */
+  workspaceKind?: 'project' | 'dialogue' | null;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -150,6 +159,7 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
+        workspaceKind: row.workspaceKind ?? null,
       };
     },
 
@@ -189,6 +199,7 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
+        workspaceKind: row.workspaceKind ?? null,
       };
     },
 
@@ -207,6 +218,7 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
+        workspaceKind: row.workspaceKind ?? null,
       };
     },
 

@@ -98,9 +98,19 @@ export function createSlashHandlers(
    * 都切, 不用 path.basename: 它只认当前平台的分隔符, 而远程控制下一条 Windows
    * 会话完全可能由 macOS 上的主进程渲染); 目录为空则退回「对话」而不是空串。
    */
-  function workspaceDisplayName(workingDir: string | null | undefined, botContextId: string): string {
+  function workspaceDisplayName(
+    workingDir: string | null | undefined,
+    botContextId: string,
+    /**
+     * 该会话的归属分组(只读路径带得出来时传)。schema 里它与路径是**解耦**的:
+     * 接管一条 desktop 的对话会话时, 目录既不是项目、也不等于本渠道的托管目录
+     * (末段常是内部 UUID), 只比对路径判不出来, 会把 UUID 当项目名报出去。
+     */
+    workspaceKind?: 'project' | 'dialogue' | null,
+  ): string {
     // 没有 project 卡文案的渠道(它是可选契约)退回一个中性词, 不硬造。
     const dialogueName = ui.cards.project?.dialogueName ?? '—';
+    if (workspaceKind === 'dialogue') return dialogueName;
     if (!workingDir) return dialogueName;
     if (workingDir === adapter.sessions.ensureWorkingDir(botContextId)) return dialogueName;
     return workingDir.split(/[\\/]/).filter(Boolean).pop() ?? dialogueName;
@@ -400,7 +410,11 @@ export function createSlashHandlers(
           listProjectsForControl(),
           repo.findActiveSession(ctx.botContextId, ctx.userId),
         ]);
-        const currentName = workspaceDisplayName(current?.workingDir, ctx.botContextId);
+        const currentName = workspaceDisplayName(
+          current?.workingDir,
+          ctx.botContextId,
+          current?.workspaceKind,
+        );
         const spec = cards.buildProjectPickerCard({
           botAppId: ctx.botContextId,
           projects,
@@ -450,7 +464,11 @@ export function createSlashHandlers(
         const effective = row ?? (await repo.prepareNewSession(ctx.botContextId, ctx.userId));
         // 项目显示成目录名而不是绝对路径: 官方 bot 那边显示的是工作区别名(短名),
         // 两边给出的粒度得一样, 否则同一个项目在两个 bot 里看着像两个东西。
-        const workspace = workspaceDisplayName(effective.workingDir, ctx.botContextId);
+        const workspace = workspaceDisplayName(
+          effective.workingDir,
+          ctx.botContextId,
+          effective.workspaceKind,
+        );
         await safeSendText(
           ctx.userId,
           render({

@@ -521,6 +521,26 @@ describe('IM slash commands', () => {
       expect(text).toContain('权限：plan');
     });
 
+    it('接管的是 desktop 对话会话 → 显示「对话」, 不把内部 UUID 当项目名', async () => {
+      // workspaceKind 与路径在 schema 里是解耦的: 一条 dialogue 会话的目录既不是
+      // 项目、也不等于本渠道的托管目录(末段常是内部 UUID), 只比对路径判不出来。
+      const { bindingStore } = await import('../../binding');
+      (bindingStore.get as ReturnType<typeof vi.fn>).mockReturnValueOnce('attached-dialogue');
+      const repo = makeRepo({
+        peekSessionById: vi.fn(async () => ({
+          ...defaultRow,
+          id: 'attached-dialogue',
+          workingDir: 'D:\\dialogues\\9f1c2b7e-0a44-4c1d-9b3e-77d0f2a1c8e5',
+          workspaceKind: 'dialogue' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：对话（托管目录）');
+      expect(text).not.toContain('9f1c2b7e');
+    });
+
     it('binding 指向的会话已失效 → 回落到渠道自己那行, 只读不 detach', async () => {
       const { bindingStore } = await import('../../binding');
       (bindingStore.get as ReturnType<typeof vi.fn>).mockReturnValueOnce('gone-session');
