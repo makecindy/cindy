@@ -999,6 +999,14 @@ describe('message render todo grouping', () => {
         createdAt: at(8),
         automationOrigin: { kind: 'scheduler', scheduleId: 's1' },
       };
+      // 子代理内部的 user 行(agentMeta.parentUuid)同样不是用户开新话题。
+      const subagentUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sub-user-1',
+        content: '子任务内部输入',
+        createdAt: at(9),
+        agentMeta: { parentUuid: 'toolu_parent_1' },
+      };
       const progress = tool('todo-live-2', 'TodoWrite', {
         todos: [
           { content: 'Long work', status: 'completed' },
@@ -1015,6 +1023,7 @@ describe('message render todo grouping', () => {
           schedulerRow,
           projectedSyntheticRow,
           projectedSchedulerRow,
+          subagentUserRow,
           progress,
         ]),
       ).toMatchObject({

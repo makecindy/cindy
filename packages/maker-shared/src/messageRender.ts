@@ -504,7 +504,11 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
         message.isSyntheticTrigger === true ||
         (message.automationOrigin !== undefined && message.automationOrigin !== null) ||
         meta?.autoResume === true ||
-        (meta?.origin !== undefined && meta?.origin !== null);
+        (meta?.origin !== undefined && meta?.origin !== null) ||
+        // 子代理内部的 user 行(带 parentUuid/parentToolUseId)是子任务的输入,
+        // 不是用户开新话题——当边界会把主线程进行中的计划切成新 session、换 key
+        // 重挂载 TodoListCard。
+        hasSubagentParent(message);
       if (!syntheticUserRow) lastUserIndex = index;
       continue;
     }

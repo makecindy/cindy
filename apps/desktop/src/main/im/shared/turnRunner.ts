@@ -102,7 +102,9 @@ import {
 } from '../../maker-ipc/interactionRouter';
 import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
-import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff';
+import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
+import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
+import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
   cancelPending,
   registerPending,
@@ -853,12 +855,31 @@ export function createTurnRunner(
       // 交接注入自己接——切换后首条消息若来自 IM 渠道,新引擎同样需要交接上下文
       // (2026-07-20 审计)。落库(persistUserMessage)仍是渠道原文。
       const pendingHandoff = await agentHandoffPending.peek(rowId);
-      const outgoingMessage = pendingHandoff
+      const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(
             item.userMessage as Parameters<typeof prependHandoffToUserMessage>[0],
             pendingHandoff,
           )
         : item.userMessage;
+      // 计划对账:IM 渠道续聊同样是"用户真的开口"的普通新轮次,与
+      // makerSendTransaction 的注入同语义(未收口旧计划让 agent 顺手交代)。
+      // IM 消息天然无斜杠控制/合成触发形态,来源即真人,免白名单分类;
+      // 读库失败静默跳过,不挡发送。
+      const planReconcileNote = await (async () => {
+        try {
+          const rows = await listMessagesForAgentHandoff(rowId, 1000);
+          const summary = summarizeOpenPlan(rows);
+          return summary ? buildPlanReconcileNote(summary) : null;
+        } catch {
+          return null;
+        }
+      })();
+      const outgoingMessage = planReconcileNote
+        ? prependNoteToWireUserMessage(
+            withHandoff as Parameters<typeof prependNoteToWireUserMessage>[0],
+            planReconcileNote,
+          )
+        : withHandoff;
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
