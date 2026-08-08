@@ -3099,6 +3099,8 @@ function ExpandedView({
                     createDisabled={dialogueCreatePending}
                     sortBy={dialogueSortBy}
                     onSortByChange={setDialogueSortBy}
+                    status={filter.status}
+                    onStatusChange={filter.setStatus}
                   />
                 </>
               )}

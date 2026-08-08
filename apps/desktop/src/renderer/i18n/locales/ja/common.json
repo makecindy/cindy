@@ -6577,7 +6577,7 @@
       "loadingDialogues": "読み込み中…",
       "noDialogues": "セッションはありません",
       "dialogueSettings": "会話を整理",
-      "dialogueSettingsAria": "会話を整理（並び替え：{{sortBy}}）",
+      "dialogueSettingsAria": "会話を整理（状態：{{status}}、並び替え：{{sortBy}}）",
       "dialogueSortHeading": "並び替え",
       "dialogueSort": {
         "recency": "新しい順",
