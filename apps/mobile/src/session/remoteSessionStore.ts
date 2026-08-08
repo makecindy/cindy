@@ -2,7 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import {
   MAKER_EVENT_BATCH_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
-  parseMakerEventBatchPayload,
+  expandMakerEventBatchPayload,
   type SessionActivityPayload,
 } from '@cindy/device-link';
 import {
@@ -2126,14 +2126,10 @@ export const remoteSessionStore = {
     // 相同**的处理路径——批只是传输层的聚合,不引入新的应用语义;单条形状不符
     // 时跳过该条而不丢整批。
     if (channel === MAKER_EVENT_BATCH_CHANNEL) {
-      const batch = parseMakerEventBatchPayload(payload);
-      if (!batch) return;
-      for (const event of batch.events) {
+      // 拆包与 fail-closed 的 topic 隔离判据在共享包里(desktop 作为控制端时也用
+      // 同一份,见 expandMakerEventBatchPayload 注释)。
+      for (const event of expandMakerEventBatchPayload(payload)) {
         if (!isRecord(event)) continue;
-        // 只消费与批顶层 sessionId 一致的条目:topic 隔离是按**顶层** sessionId
-        // 路由的,批内混入其它会话的事件会绕过隔离,把本端未订阅的会话数据投进来
-        // (坏帧/恶意帧场景)。fail-closed 跳过,不整批丢。
-        if (readString(event, 'sessionId') !== batch.sessionId) continue;
         this.applyMakerEventPush(event);
       }
       return;

@@ -15,8 +15,11 @@ import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
 import {
   DeviceLinkClient,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  MAKER_EVENT_BATCH_CHANNEL,
+  expandMakerEventBatchPayload,
   DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -57,6 +60,7 @@ import {
   writeDeviceLinkSetting,
 } from './settings-store';
 import { keepAwakeController } from './power-blocker';
+import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
 import {
   wireInboundDispatch,
@@ -244,6 +248,20 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * 词典同步的对端选择只看「在线 + 是桌面」,不看 remoteControlEnabled ——
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
  */
+/**
+ * 本机**作为控制端**声明的端到端能力(append-only)。`openLink` 与 `subscribe` 两处
+ * 必须用同一份 —— 只在一处声明会让另一条路径静默降级(mobile 侧 review 实测过这个坑)。
+ */
+const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  // 桌面控制桌面时同样收微批:批的收益是**relay 帧数**,只要有一个控制端不支持,
+  // 被控端就得为它保留逐帧流,聚合出站速率照旧能招来 1013 并连带踢掉已启用微批的
+  // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
+  // maker:event 订阅者零改动。
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+] as const;
+
 const presenceOnlineByDevice = new Map<string, boolean>();
 
 const presenceNameByDevice = new Map<string, string>();
@@ -621,6 +639,21 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         })
       ) {
         handleIncomingContactsRelayFrame(env.src, p.payload);
+      }
+      return;
+    }
+    // 微批拆包放在 main:renderer 侧有多个按 channel 过滤的 onRemotePush 订阅者
+    // (会话视图 / 草稿路由 / learn / 文件浏览),在这里展开成原样的 maker:event
+    // 事件流,它们全都零改动。批内条目的 sessionId 与顶层不一致即跳过(topic 隔离
+    // fail-closed,与 mobile 拆包同判据)。
+    if (p.channel === MAKER_EVENT_BATCH_CHANNEL) {
+      for (const event of expandMakerEventBatchPayload(p.payload)) {
+        broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, {
+          deviceId: env.src,
+          channel: MAKER_PUSH.EVENT,
+          payload: event,
+          ...(p.ownerStamp ? { ownerStamp: p.ownerStamp } : {}),
+        });
       }
       return;
     }
@@ -1338,10 +1371,7 @@ export async function openRemoteLink(
       controllerName: deviceName(),
       protocolVersion: 1,
       appVersion: app.getVersion(),
-      capabilities: [
-        CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
-        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-      ],
+      capabilities: [...CONTROLLER_CAPABILITIES],
     });
   };
   // 结算所有权由 tracker.guardInvoke 统一声明(第一个 settle 的 guard 打标,
@@ -1496,10 +1526,7 @@ export async function remoteSubscribe(
         {
           topics: liveTopics,
           controllerName: deviceName(),
-          capabilities: [
-            CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
-            CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-          ],
+          capabilities: [...CONTROLLER_CAPABILITIES],
         },
       ],
     });

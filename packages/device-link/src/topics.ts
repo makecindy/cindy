@@ -99,6 +99,27 @@ export function parseMakerEventBatchPayload(
 }
 
 /**
+ * 拆开微批帧,返回**可安全消费**的原 `maker:event` payload 序列(形状不符 / 无条目
+ * 返回空数组)。
+ *
+ * 只保留 `sessionId` 与批顶层一致的条目:topic 隔离是按**顶层** sessionId 路由的,
+ * 批内混入其它会话的事件会绕过隔离,把接收端未订阅的会话数据投进来(坏帧 / 恶意帧
+ * 场景)。fail-closed 逐条跳过,不整批丢。
+ *
+ * 放在共享包里是因为**两个控制端都要拆**:mobile 直接喂自己的 store,desktop 作为
+ * 控制端时在 main 里展开成原样的 `maker:event` 广播(renderer 的多个按 channel 过滤
+ * 的订阅者因此零改动)。同一条 fail-closed 判据只能有一份。
+ */
+export function expandMakerEventBatchPayload(payload: unknown): unknown[] {
+  const batch = parseMakerEventBatchPayload(payload);
+  if (!batch) return [];
+  return batch.events.filter((event) => {
+    if (!event || typeof event !== 'object') return false;
+    return (event as { sessionId?: unknown }).sessionId === batch.sessionId;
+  });
+}
+
+/**
  * 会话**列表级**读模型 channel:会话行的增 / 改。归 `sessions` topic。
  * `sessions:created` 只带 {sessionId}(无 row 数据)→ 控制端据此重拉列表;
  * `sessions:patched` 带 {sessionId, patch} → 控制端可直接 apply。
