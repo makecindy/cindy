@@ -715,6 +715,15 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
         .filter((skill) => skill.scope === 'project')
         .map((skill) => skill.name),
     );
+    const loadedProjectBaseDirs = new Map(
+      result.commands.flatMap((command) => {
+        const baseDir = command.sourceInfo?.baseDir;
+        if (command.source !== 'skill' || command.sourceInfo?.scope !== 'project' || !baseDir) {
+          return [];
+        }
+        return [[command.name, canonicalPath(baseDir)] as const];
+      }),
+    );
     expect(discoveredProjectNames).toEqual(new Set([
       'skill:ancestor-agents-skill',
       'skill:project-agents-skill',
@@ -722,6 +731,11 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
     ]));
     expect([...loadedProjectNames].every((name) => discoveredProjectNames.has(name))).toBe(true);
     expect([...discoveredProjectNames].filter((name) => !loadedProjectNames.has(name))).toEqual([]);
+    expect(loadedProjectBaseDirs).toEqual(new Map([
+      ['skill:ancestor-agents-skill', canonicalPath(path.join(fixture.repoRoot, '.agents'))],
+      ['skill:project-agents-skill', canonicalPath(path.join(fixture.workingDir, '.agents'))],
+      ['skill:project-pi-skill', canonicalPath(path.join(fixture.workingDir, '.pi'))],
+    ]));
 
     expect(skills).toEqual([
       {

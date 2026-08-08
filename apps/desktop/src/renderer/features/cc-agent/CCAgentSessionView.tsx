@@ -1200,7 +1200,10 @@ export function CCAgentSessionView({
     // (与 ChatInput palette 同源)。否则此 cache 取的是控制端命令,maybeDispatchDesktopSlashCommand
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
-    loadAllCommands(agentKind, wd, { skipAgentSkills: isRemoteSession }, remoteDeviceId)
+    loadAllCommands(agentKind, wd, {
+      skipAgentSkills: isRemoteSession,
+      sessionId: session?.id,
+    }, remoteDeviceId)
       .then((cmds) => {
         if (!cancelled) setAllCommands(cmds);
       })
@@ -1210,7 +1213,7 @@ export function CCAgentSessionView({
     return () => {
       cancelled = true;
     };
-  }, [session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   // Keep lastWorkingDir in sync so Settings can distinguish a real project
   // scope from「新对话默认值」. Standalone dialogues have an internal runtime
@@ -1751,13 +1754,13 @@ export function CCAgentSessionView({
       return await loadAllCommands(
         agentKind,
         session?.workingDir,
-        { skipAgentSkills: isRemoteSession },
+        { skipAgentSkills: isRemoteSession, sessionId: session?.id },
         remoteDeviceId,
       );
     } catch {
       return [];
     }
-  }, [session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   const insertHelpCard = useCallback(async () => {
     const commands = await getHelpCommandsSnapshot();

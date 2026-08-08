@@ -177,6 +177,19 @@ describe('scanPiCustomizations', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('does not inherit ancestor skills for a missing working directory', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    const missingCwd = path.join(repo, 'deleted-project');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    writeSkill(repo, path.join('.agents', 'skills'), 'ancestor-skill');
+
+    const result = await scanPiCustomizations({ workingDirs: [missingCwd] });
+
+    expect(projectItems(result)).toEqual([]);
+    expect(result.errors).toEqual([]);
+  });
+
   it('keeps same-name skills from distinct project sources', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');

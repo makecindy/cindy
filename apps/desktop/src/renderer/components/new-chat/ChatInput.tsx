@@ -3401,7 +3401,7 @@ export function ChatInput({
       loadAllCommands(
         paletteAgentKind,
         workingDir,
-        { ...opts, skipAgentSkills: isRemoteSession },
+        { ...opts, skipAgentSkills: isRemoteSession, sessionId },
         deviceLinkDeviceId,
       )
         .then((cmds) => {
@@ -3411,7 +3411,7 @@ export function ChatInput({
           if (slashCommandLoadSeqRef.current === seq) setMergedCommands([]);
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId],
+    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId],
   );
   // context(workingDir / agentKind / remote)变化时先同步清空命令缓存:切换会话(尤其
   // local→remote)那一瞬,reloadSlashCommands 是异步的,清空可避免 palette 在刷新完成前

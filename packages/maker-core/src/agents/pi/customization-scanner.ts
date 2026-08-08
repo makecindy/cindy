@@ -19,10 +19,20 @@ import type {
 import { scanCustomizationSources, type SourceDef } from '../shared/customization-scanner.js';
 
 function canonicalDirectory(dir: string): string {
+  const resolved = path.resolve(dir);
+  if (!fs.existsSync(resolved)) return resolved;
   try {
-    return fs.realpathSync(dir);
+    return fs.realpathSync(resolved);
   } catch {
-    return path.resolve(dir);
+    return resolved;
+  }
+}
+
+function isExistingDirectory(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
   }
 }
 
@@ -69,7 +79,7 @@ export function buildPiSources(workingDirs: string[]): SourceDef[] {
   const seen = new Set<string>();
 
   for (const input of workingDirs) {
-    if (!input || !path.isAbsolute(input)) continue;
+    if (!input || !path.isAbsolute(input) || !isExistingDirectory(input)) continue;
     const workingDir = canonicalDirectory(input);
     const addProjectSource = (dir: string): void => {
       const key = `${workingDir}\0${canonicalDirectory(dir)}`;

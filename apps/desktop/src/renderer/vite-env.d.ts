@@ -4671,7 +4671,7 @@ interface ElectronAPI {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean },
+      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
     ) => Promise<{
       success: boolean;
       error?: string;

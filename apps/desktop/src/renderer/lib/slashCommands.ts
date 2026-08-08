@@ -86,7 +86,9 @@ export function mergeCommands(
   for (const tier of tiers) {
     for (const cmd of tier) {
       if (seen.has(cmd.name)) {
-        log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+        if (!isSlashCommandUnavailable(cmd)) {
+          log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+        }
         continue;
       }
       seen.add(cmd.name);
@@ -132,7 +134,7 @@ export function filterSlashCommands(
 export async function loadAllCommands(
   agentKind: AgentKind,
   workingDir: string | null | undefined,
-  opts?: { forceReload?: boolean; skipAgentSkills?: boolean },
+  opts?: { forceReload?: boolean; skipAgentSkills?: boolean; sessionId?: string },
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
   const api = window.electronAPI.maker;
@@ -154,6 +156,7 @@ export async function loadAllCommands(
   const skillParams = {
     ...(workingDir ? { workingDir } : {}),
     ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
+    ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
   };
   const skillP: Promise<SkillRes> = shouldLoadSkills
     ? (
