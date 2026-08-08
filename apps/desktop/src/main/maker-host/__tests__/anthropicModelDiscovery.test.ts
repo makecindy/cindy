@@ -861,8 +861,35 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     expect(anthropicIds()).toEqual(['claude-account-a']);
   });
 
+  it('同一授权刷新期间迟到的 SDK 能力捕获仍可生效', async () => {
+    const preRefreshSource = currentSdkSource();
+    credentialsMock.accessToken = 'test-token-refreshed';
+    credentialsMock.refreshToken = 'refresh-token-rotated';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+
+    noteAnthropicSdkSupportedModelsFromSource(
+      [
+        {
+          value: 'claude-opus-same-account',
+          displayName: 'Same Account Opus',
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'high', 'xhigh'],
+        },
+      ],
+      preRefreshSource,
+    );
+
+    expect(anthropicIds()).toEqual(['claude-opus-same-account']);
+    expect(anthropicModel('claude-opus-same-account')?.efforts).toEqual([
+      'low',
+      'high',
+      'xhigh',
+    ]);
+  });
+
   it('没有稳定授权 revision 的外部凭证仍以 token 指纹隔离账号', async () => {
     credentialsMock.authorizationRevision = 'cindy-unattributed-v1';
+    const staleExternalSdkSource = currentSdkSource();
     noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
     await waitForAnthropicDiscoveryIdleForTest();
 
@@ -871,6 +898,11 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     credentialsMock.credentialFingerprint = 'b'.repeat(64);
 
     expect(observeAnthropicCredentialEpoch({ allowHydration: false })).toBe(false);
+    expect(anthropicIds()).toEqual([]);
+    noteAnthropicSdkSupportedModelsFromSource(
+      [{ value: 'claude-account-a-late', displayName: 'Late Account A' }],
+      staleExternalSdkSource,
+    );
     expect(anthropicIds()).toEqual([]);
   });
 

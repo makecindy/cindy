@@ -161,6 +161,21 @@ function accessTokenFingerprint(accessToken: string): string {
   return createHash('sha256').update(accessToken, 'utf8').digest('hex');
 }
 
+function sdkSourceMatchesCredential(
+  source: AnthropicSdkModelSource,
+  credential: ClaudeAiOAuthCredentialIdentity,
+): boolean {
+  const currentRevision = getClaudeAiOAuthSessionAuthorizationRevision(credential);
+  if (source.authorizationRevision !== currentRevision) return false;
+  // SDK capabilities describe the authorization/account, not one short-lived
+  // access token. Explicit Cindy revisions survive normal token rotation; only
+  // unattributed legacy credentials still need the access-token fence.
+  return (
+    currentRevision !== CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION ||
+    source.accessTokenFingerprint === accessTokenFingerprint(credential.accessToken)
+  );
+}
+
 /** 最近一次生效的发现结果(含缓存加载),合并时的能力字段保留源。 */
 let lastApplied: CatalogModel[] = [];
 /**
@@ -1001,11 +1016,7 @@ export function noteAnthropicSdkSupportedModels(
   const context = credentialContextFor(credential);
   const generation = activateCredentialEpoch(context.epoch);
   if (!source) return;
-  const currentRevision = getClaudeAiOAuthSessionAuthorizationRevision(credential);
-  if (
-    source.accessTokenFingerprint !== accessTokenFingerprint(credential.accessToken) ||
-    source.authorizationRevision !== currentRevision
-  ) {
+  if (!sdkSourceMatchesCredential(source, credential)) {
     log.info('stale anthropic SDK model capture discarded after credential replacement');
     return;
   }
