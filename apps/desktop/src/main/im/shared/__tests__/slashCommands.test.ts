@@ -521,6 +521,24 @@ describe('IM slash commands', () => {
       expect(text).toContain('权限：plan');
     });
 
+    it('POSIX 根目录的项目仍显示成项目, 不被改判成「对话」', async () => {
+      // '/' 按分隔符切完一段不剩。取不到末段就回落到「对话」的话, 一个货真价实
+      // 的项目会被报成对话 —— listProjectsForControl 并不排除根目录, 它在选择器
+      // 里就显示成 '/'。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({
+          ...defaultRow,
+          workingDir: '/',
+          workspaceKind: 'project' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：/');
+      expect(text).not.toContain('项目：对话');
+    });
+
     it('接管的是 desktop 对话会话 → 显示「对话」, 不把内部 UUID 当项目名', async () => {
       // workspaceKind 与路径在 schema 里是解耦的: 一条 dialogue 会话的目录既不是
       // 项目、也不等于本渠道的托管目录(末段常是内部 UUID), 只比对路径判不出来。

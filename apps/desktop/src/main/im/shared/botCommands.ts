@@ -105,6 +105,10 @@ export const BOT_COMMANDS = [
     surfaces: ['personal', 'official'],
     telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.project',
     requiresRichCards: true,
+    // 官方 bot 的 /workspace 是同义命令(服务端两条菜单文案逐字相同)。个人侧用
+    // 别名接住这个拼写: 用户从官方 bot 沿用过来不会撞「未知命令」, 也不多占一个
+    // 菜单位。下面 workspace 那条 official-only 定义的 parityNote 说的就是这里。
+    aliases: ['workspace'],
   },
   {
     command: 'model',

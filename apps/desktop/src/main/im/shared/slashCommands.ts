@@ -113,7 +113,10 @@ export function createSlashHandlers(
     if (workspaceKind === 'dialogue') return dialogueName;
     if (!workingDir) return dialogueName;
     if (workingDir === adapter.sessions.ensureWorkingDir(botContextId)) return dialogueName;
-    return workingDir.split(/[\\/]/).filter(Boolean).pop() ?? dialogueName;
+    // 取不到末段就保留目录本身: POSIX 根目录 `/` 切完一段不剩, 回落到「对话」
+    // 会把一个货真价实的项目报成对话(listProjectsForControl 并不排除根目录,
+    // 它在选择器里就显示成 `/`)。
+    return workingDir.split(/[\\/]/).filter(Boolean).pop() ?? workingDir;
   }
 
   async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {

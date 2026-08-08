@@ -58,7 +58,7 @@ describe('bot command registry', () => {
       ['help', false, null],
       ['stop', false, null],
       ['session', true, null],
-      ['project', true, null],
+      ['project', true, ['workspace']],
       ['model', true, null],
       ['permission', true, null],
       ['settings', false, null],
@@ -94,6 +94,15 @@ describe('bot command registry', () => {
     });
     expect(parsePersonalBotCommand('/HELP')).toBeNull();
     expect(parsePersonalBotCommand('/unknown')).toBeNull();
+  });
+
+  it('官方的 /workspace 拼写在个人 bot 上归一到 /project', () => {
+    // 用户从官方 bot 沿用这个拼写过来不该撞「未知命令」—— parityNote 声称个人侧
+    // 用别名接住它, 这条钉住那句话是真的。
+    expect(parsePersonalBotCommand('/workspace')).toMatchObject({
+      definition: { command: 'project' },
+      invocation: '/workspace',
+    });
   });
 
   it('分词唯一入口: 未登记命令也返回同一份分词结果', () => {
