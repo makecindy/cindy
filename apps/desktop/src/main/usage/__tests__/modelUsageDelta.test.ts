@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeModelUsageDeltas, type ModelUsageCumulative } from '../modelUsageDelta';
+import {
+  ClaudeOutputLagTimingGuard,
+  computeModelUsageDeltas,
+  type ModelUsageCumulative,
+  type ModelUsageDeltaEntry,
+} from '../modelUsageDelta';
 
 function snap(over: Partial<ModelUsageCumulative> = {}): ModelUsageCumulative {
   return {
@@ -106,5 +111,59 @@ describe('computeModelUsageDeltas', () => {
       '': { costUSD: 1 },
     });
     expect(deltas).toEqual([]);
+  });
+});
+
+describe('ClaudeOutputLagTimingGuard', () => {
+  const lagged: ModelUsageDeltaEntry[] = [
+    {
+      model: 'claude-opus-4-8',
+      costUsdDelta: 0,
+      inputTokensDelta: 100,
+      outputTokensDelta: 7,
+      cacheReadTokensDelta: 20_000,
+      cacheCreateTokensDelta: 0,
+    },
+  ];
+  const settled: ModelUsageDeltaEntry[] = [
+    {
+      model: 'claude-opus-4-8',
+      costUsdDelta: 0,
+      inputTokensDelta: 100,
+      outputTokensDelta: 3_200,
+      cacheReadTokensDelta: 20_000,
+      cacheCreateTokensDelta: 0,
+    },
+  ];
+
+  it('suppresses the detected turn and the following backfill turn only', () => {
+    const guard = new ClaudeOutputLagTimingGuard();
+    expect(guard.evaluate('session-1', lagged, true)).toEqual({
+      detected: true,
+      suppressTiming: true,
+    });
+    expect(guard.evaluate('session-1', settled, true)).toEqual({
+      detected: false,
+      suppressTiming: true,
+    });
+    expect(guard.evaluate('session-1', settled, true)).toEqual({
+      detected: false,
+      suppressTiming: false,
+    });
+  });
+
+  it('keeps a lagged continuation product turn suppressed through its final segment', () => {
+    const guard = new ClaudeOutputLagTimingGuard();
+    expect(guard.evaluate('session-1', lagged, false).suppressTiming).toBe(true);
+    expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(true);
+    expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(true);
+    expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(false);
+  });
+
+  it('clears pending suppression per session', () => {
+    const guard = new ClaudeOutputLagTimingGuard();
+    guard.evaluate('session-1', lagged, true);
+    guard.clear('session-1');
+    expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(false);
   });
 });

@@ -60,7 +60,7 @@ describe('aggregateTurnUsageDetails', () => {
 
   it('does not require timing for segments that contribute no output tokens', () => {
     const timed = buildTurnUsageDetails({ outputTokens: 20, durationMs: 1_000 });
-    const inputOnly = buildTurnUsageDetails({ inputTokens: 10 });
+    const inputOnly = buildTurnUsageDetails({ inputTokens: 10, durationMs: 500 });
 
     expect(aggregateTurnUsageDetails([timed, inputOnly])).toMatchObject({ durationMs: 1_000 });
   });
