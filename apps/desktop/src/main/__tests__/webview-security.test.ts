@@ -210,6 +210,7 @@ describe('BLANK_POPUP_WINDOW_WEB_PREFERENCES(popup WebContents 安全集)', () =
 
 describe('installBrowserGuestHandlers(main-owned popup)', () => {
   afterEach(() => {
+    vi.useRealTimers();
     setRsbPopupOpenerResolver(null);
     setRsbPopupHostResolver(null);
     nativeSurfaceMocks.create.mockClear();
