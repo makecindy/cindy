@@ -2240,6 +2240,15 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(authDowngrade).toBeGreaterThan(-1);
     const afterAuth = goalSlice.slice(authDowngrade, authDowngrade + 800);
     expect(afterAuth).toMatch(/guardResult = await runGuard\(\);/);
+    // re-fence 循环内每轮 runGuard 后同步设备检查(greptile P1):二次 runGuard 的
+    // await 期间设备切换 → 提前 break,交设备切换分支按 started 语义降级,不再向
+    // 旧设备 commit(会话落旧设备 + 当前页面无法接管 + 用户可能重复创建)。
+    // 断言用位置比较(循环内 runGuard 之后、genAt break 之前有设备 break)。
+    const runGuardIdx = afterAuth.indexOf('guardResult = await runGuard();');
+    const deviceBreakIdx = afterAuth.indexOf('if (!ensureDeviceAlive()) break;');
+    expect(runGuardIdx).toBeGreaterThan(-1);
+    expect(deviceBreakIdx).toBeGreaterThan(-1);
+    expect(deviceBreakIdx).toBeGreaterThan(runGuardIdx);
   });
 
   it('goal commit segment: started 后无裸 return,goal.set 先于本地同步(round-22 Spec P1-2/P1-3)', () => {

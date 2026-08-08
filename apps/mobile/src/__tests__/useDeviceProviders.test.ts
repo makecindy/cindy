@@ -176,6 +176,10 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(src).toContain('const prevEpoch = getDeviceFetchEpoch(deviceId);');
     expect(src).toContain('const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;');
     expect(src).toContain('markDeviceFetchEpoch(deviceId, connectionEpoch);');
+    // 首帧 readyFor 初始化同步核对连接代际(codex P2):重连后 hook 重挂载,缓存属
+    // 旧 epoch 时首帧保持未就绪,避免外层 auto-default 按旧目录首行写草稿。
+    expect(src).toContain('const cachedAtEpoch = getDeviceFetchEpoch(deviceId);');
+    expect(src).toContain('cachedAtEpoch !== undefined && cachedAtEpoch !== connectionEpoch) return null;');
     // mark 只在成功路径:effect 开头(reconnected 判定后)不得无条件 mark——否则
     // refresh 失败后同 epoch 重挂载会把断线前旧缓存判「未重连」直接就绪且不重试
     const reconnectedBlock = src.slice(

@@ -4854,6 +4854,10 @@ export default function NewRemoteSessionScreen() {
             // 切换 commit 分支的 re-fence 同口径)。
             for (let pass = 0; pass < 2; pass += 1) {
               guardResult = await runGuard();
+              // re-fence 的 runGuard await 期间设备切换:提前 break,立即交下方
+              // 设备切换分支按 started 账本语义 resolveStartedDowngradeOrCommit
+              // 降级(不裸 return 留 retain-only,也不继续向旧设备 commit)。
+              if (!ensureDeviceAlive()) break;
               if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
             }
             if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {

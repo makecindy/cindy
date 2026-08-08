@@ -65,9 +65,17 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
   // `readyFor === deviceId` 计算,不依赖 effect 先跑,故无「loading 初值 false」窗口;
   // 代际比对兜住「同设备 evict 后重拉中/重拉失败」——旧 payload 在重拉窗口期不再
   // 被当作就绪目录(codex review P2)。
-  const [readyFor, setReadyFor] = useState<string | null>(
-    deviceId && getCachedDeviceProviders(deviceId) ? deviceId : null,
-  );
+  const [readyFor, setReadyFor] = useState<string | null>(() => {
+    if (!deviceId) return null;
+    if (!getCachedDeviceProviders(deviceId)) return null;
+    const cachedAtEpoch = getDeviceFetchEpoch(deviceId);
+    // 缓存属旧连接代际(重连后 hook 重挂载)→ 首帧保持未就绪(codex review P2):
+    // 否则消费者先看到一次 ready:true,外层 auto-default effect 可能按旧目录首行
+    // 写草稿并设置 autoDefaultDeviceRef,fresh 目录到达后不再重新选默认项;由 effect
+    // 判 reconnected 强制 fresh。无记录 = 该设备首次标记(缓存命中快路径语义)。
+    if (cachedAtEpoch !== undefined && cachedAtEpoch !== connectionEpoch) return null;
+    return deviceId;
+  });
   const [readyGen, setReadyGen] = useState<number>(() =>
     deviceId ? getDeviceProvidersGen(deviceId) : 0,
   );

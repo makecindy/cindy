@@ -669,14 +669,21 @@ async function createSessionIdempotent(
           downgrade: () => ledger('precreated'),
           restoreStarted: () => ledger('session-create-started'),
         });
-        // 降级成功(downgraded)→ 账本回 precreated;降级失败(commit)→ restoreStarted
-        // 已把账本写回 started。两种结果都复位 sessionCreateStarted(codex review P1):
-        // 失败时保留 true 会让 retry 拒绝重试、prepareForEdit 报 cleanup pending、
-        // recovery 不回收 started 记录 = 永久锁死(外层 failTask 只记 create-failed、
-        // 无修复账本阶段的路径)。复位后 task 可重试——重试重新 persist started →
-        // 二次鉴权 → 若降级成功则账本回 precreated 可被 recovery 回收;持续写盘
-        // 失败是极端罕见,用户至少能通过重试/返回编辑离开失败页。
-        task.precreatedWorktreeSessionCreateStarted = false;
+        // 降级成功(downgraded)→ 账本回 precreated,复位 sessionCreateStarted
+        // (codex review P1:失败时保留 true 会让 retry 拒绝重试、prepareForEdit 报
+        // cleanup pending、recovery 不回收 started 记录 = 永久锁死)。
+        if (decision === 'downgraded') {
+          task.precreatedWorktreeSessionCreateStarted = false;
+        } else {
+          // 降级失败(commit)→ restoreStarted 已把账本写回 started:仅复位内存标志
+          // 不够(codex review P2)——用户未点重试/返回编辑就退出应用时,冷启动
+          // recovery 对 started 永不回收该 worktree;重试一次持久降级回 precreated
+          // (成功则复位标志 + recovery 可回收;仍失败保持 started 现状,极端写盘失败,
+          // task 至少可重试——重试重新 persist started → 二次鉴权 → 降级成功则
+          // 账本回 precreated 可回收)。
+          const retried = await ledger('precreated');
+          if (retried) task.precreatedWorktreeSessionCreateStarted = false;
+        }
         task.params.onUnauthenticated();
         throw new Error(task.params.authGateHint);
       }

@@ -384,9 +384,16 @@ describe('newSessionCreation pipeline', () => {
     // recovery 不回收 = 永久锁死(codex review P1)。修复后两种结果都复位任务。
     const rec = await import('@/session/precreatedWorktreeRecovery');
     const original = rec.registerPendingPrecreatedWorktree;
+    let precreatedWrites = 0;
     const spy = vi.spyOn(rec, 'registerPendingPrecreatedWorktree')
       .mockImplementation(async (accountId, record) => {
-        if (record.phase === 'precreated') return false; // 降级写盘失败
+        if (record.phase === 'precreated') {
+          precreatedWrites += 1;
+          // 首次降级写盘失败(commit 分支),中止前重试一次持久降级成功——重试
+          // 必须真正走 original 写盘,否则调用方以为成功但账本未变。
+          if (precreatedWrites <= 1) return false;
+          return original(accountId, record);
+        }
         return original(accountId, record);
       });
     try {
@@ -414,10 +421,11 @@ describe('newSessionCreation pipeline', () => {
       await flushPipeline();
       expect(getNewSessionCreationTask('s23')?.status).toBe('create-failed');
       expect(maker.createSession).not.toHaveBeenCalled();
-      // 降级失败 → restoreStarted 把账本写回 started(recovery 保守不回收,
-      // 但任务可返回编辑,不再报 cleanup pending 锁死)
+      // 降级失败 → 中止前重试一次持久降级成功 → 账本回 precreated(recovery 可
+      // 回收未认领 worktree),且任务可返回编辑(codex review P2)
       const pending = await listPendingPrecreatedWorktrees('owner-a');
-      expect(pending[0]?.phase).toBe('session-create-started');
+      expect(pending[0]?.phase).toBe('precreated');
+      expect(precreatedWrites).toBeGreaterThanOrEqual(2);
       const prepared = await prepareNewSessionCreationForEdit('s23');
       expect(prepared).not.toBeNull();
       expect(maker.worktree.discardPrecreated).toHaveBeenCalled();
