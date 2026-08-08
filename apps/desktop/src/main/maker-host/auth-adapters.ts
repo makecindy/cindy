@@ -426,13 +426,6 @@ export function readClaudeApiKey(): string | null {
   return readOwnerScopedXdGatewayKey();
 }
 
-/**
- * cc 401 回调(getFreshSubscriptionToken)的总预算。必须显著小于 cc 侧
- * oauth_token_refresh control 请求的 30s 超时(反编译 eqf=30000),超时快速返回 null
- * 让 cc 落磁盘兜底,不把 turn 吊在锁等待 + 慢网络上。
- */
-export const CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS = 12_000;
-
 /** Transactional invalid_grant cleanup may wait briefly for a synchronous binding writer. */
 const CLAUDE_INVALIDATION_SETUP_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_600] as const;
 /**
@@ -852,34 +845,29 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
    * 按需刷:凭证库已比失败 token 新 → 直接返回不刷(防多会话同时 401 连环旋转);
    * 仍旧才单飞刷新;失败返回 null(绝不把已知坏 token 递回去)。
    *
-   * 超时预算 12s —— 必须显著小于 cc 侧 control 请求的 30s(反编译 eqf=30000):
-   * 超时快速返回 null 让 cc 落磁盘兜底(host 刷新总会写回凭证库,在途刷新即使超过
-   * 预算也会完成写回,cc 第二条恢复路 tengu_oauth_401_recovered_from_disk 能捡到),
-   * 不把整个 turn 吊在一次慢网络上。
+   * 普通网络刷新由 refresher 自己的 10s HTTP 超时和有界锁等待收口；这里不能另设
+   * 更短的 Promise.race。invalid_grant 只有在 durable rejection / recovery fence 真正
+   * 落盘后才能报告完成，否则进程恰在回调返回后退出会让旧 grant 在重启后复活。
+   * cc SDK 的 control 请求仍保留自己的 30s 总超时。
    */
   async getFreshSubscriptionToken(
     staleToken?: string,
     staleAuthorizationRevision?: string,
   ): Promise<SubscriptionTokenRefreshResult | null> {
-    const timeout = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS).unref?.(),
-    );
     // staleToken = 该会话实际撞 401 的那枚(spawn 注入 / 上次回调返回)。库值已比它新
     // (后台预续期换代)时刷新器直接返回库值,不再消耗一次轮换 —— 防多个长会话对同
     // 一枚旧 token 群体 401 时串行连环旋转。
-    const refresh = getValidClaudeAiOAuth({
+    const oauth = await getValidClaudeAiOAuth({
       forceRefresh: true,
       staleToken,
       staleAuthorizationRevision,
-    }).then((oauth) => {
-      if (!oauth?.accessToken) return null;
-      const authorizationRevision = getClaudeAiOAuthSessionAuthorizationRevision(oauth);
-      return {
-        token: oauth.accessToken,
-        authorizationRevision,
-      };
     });
-    return Promise.race([refresh, timeout]);
+    if (!oauth?.accessToken) return null;
+    const authorizationRevision = getClaudeAiOAuthSessionAuthorizationRevision(oauth);
+    return {
+      token: oauth.accessToken,
+      authorizationRevision,
+    };
   }
 
   // cancelLogin 不实现 —— Claude 走 renderer useApiKey hook 的同步弹窗式登录,

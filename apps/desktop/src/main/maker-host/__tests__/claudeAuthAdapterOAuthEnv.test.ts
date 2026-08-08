@@ -487,16 +487,25 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     await expect(adapter.getFreshSubscriptionToken()).resolves.toBeNull();
   });
 
-  it('getFreshSubscriptionToken:超过回调预算快速返回 null(cc 落磁盘兜底)', async () => {
+  it('getFreshSubscriptionToken:超过旧回调预算仍等待刷新完成', async () => {
     const mod = await import('../auth-adapters.js');
-    // 刷新耗时 = 预算 + 3s → race 应在预算到点返回 null,而不是等刷新完成。
-    h.refreshDelayMs = mod.CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS + 3000;
+    // invalid_grant 的 durable rejection 可能超过旧 12s 预算；适配器不能先报告完成。
+    const formerAdapterBudgetMs = 12_000;
+    h.refreshDelayMs = formerAdapterBudgetMs + 3000;
     const adapter = new mod.DesktopClaudeAuthAdapter();
     vi.useFakeTimers();
     try {
-      const pending = adapter.getFreshSubscriptionToken();
-      await vi.advanceTimersByTimeAsync(mod.CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS + 1);
-      await expect(pending).resolves.toBeNull();
+      let settled = false;
+      const pending = adapter.getFreshSubscriptionToken().finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(formerAdapterBudgetMs + 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2999);
+      await expect(pending).resolves.toEqual({
+        token: 'at-live',
+        authorizationRevision: 'login-revision-1',
+      });
     } finally {
       vi.useRealTimers();
     }
