@@ -57,6 +57,7 @@ import {
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
 import {
+  CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION,
   fingerprintClaudeAiOAuthCredentialIdentity,
   getClaudeAiOAuthSessionAuthorizationRevision,
   hasClaudeAiOAuth,
@@ -107,17 +108,20 @@ function credentialEpochFor(identity: ClaudeAiOAuthCredentialIdentity): Anthropi
 }
 
 function credentialEpochKey(epoch: AnthropicCredentialEpoch): string {
-  return `${epoch.credentialFingerprint}:${epoch.authorizationRevision}`;
+  // A Cindy browser authorization revision is the stable grant/account epoch:
+  // access and refresh tokens may both rotate without changing it. Keep the
+  // token fingerprint only for legacy/externally claimed credentials that have
+  // no durable authorization revision, where it remains the sole account fence.
+  return epoch.authorizationRevision === CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION
+    ? `credential:${epoch.credentialFingerprint}`
+    : `authorization:${epoch.authorizationRevision}`;
 }
 
 function sameCredentialEpoch(
   left: AnthropicCredentialEpoch | null,
   right: AnthropicCredentialEpoch,
 ): boolean {
-  return (
-    left?.credentialFingerprint === right.credentialFingerprint &&
-    left.authorizationRevision === right.authorizationRevision
-  );
+  return left !== null && credentialEpochKey(left) === credentialEpochKey(right);
 }
 
 function parseCredentialEpoch(value: unknown): AnthropicCredentialEpoch | null {

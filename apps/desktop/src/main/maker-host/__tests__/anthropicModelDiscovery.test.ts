@@ -51,6 +51,7 @@ const credentialsMock = vi.hoisted(() => ({
   snapshotCurrentGuardBeforeActions: [] as Array<(() => void) | null>,
 }));
 vi.mock('../claude-credentials-store.js', () => ({
+  CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION: 'cindy-unattributed-v1',
   hasClaudeAiOAuth: () => authState.loggedIn,
   readClaudeAiOAuth: () =>
     authState.loggedIn
@@ -833,6 +834,44 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     expect(observeAnthropicCredentialEpoch()).toBe(true);
     expect(anthropicIds()).toEqual([]);
     await waitForAnthropicDiscoveryIdleForTest();
+  });
+
+  it('同一 Cindy 授权轮换 token 时保留模型与磁盘缓存', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    await expect(fsp.access(cache)).resolves.toBeUndefined();
+
+    // A routine refresh rotates both token bytes, but the explicit browser
+    // authorization revision remains the stable account/grant boundary.
+    credentialsMock.accessToken = 'test-token-refreshed';
+    credentialsMock.refreshToken = 'refresh-token-rotated';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+
+    expect(observeAnthropicCredentialEpoch({ allowHydration: false })).toBe(true);
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    // The same stable authorization must also accept the pre-refresh LKG after
+    // a process restart instead of stranding the provider when /v1/models is down.
+    resetAnthropicDiscoveryForTest();
+    setAnthropicDiscoveredModels([]);
+    await loadAnthropicModelsFromDiskCache();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+  });
+
+  it('没有稳定授权 revision 的外部凭证仍以 token 指纹隔离账号', async () => {
+    credentialsMock.authorizationRevision = 'cindy-unattributed-v1';
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+
+    credentialsMock.accessToken = 'external-token-b';
+    credentialsMock.refreshToken = 'external-refresh-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+
+    expect(observeAnthropicCredentialEpoch({ allowHydration: false })).toBe(false);
+    expect(anthropicIds()).toEqual([]);
   });
 
   it('只读 provider 查询首次发现换号时 fail-closed 且不发上游请求,可信查询随后补拉', async () => {
