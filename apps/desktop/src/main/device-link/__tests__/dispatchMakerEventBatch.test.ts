@@ -237,10 +237,16 @@ describe('[4] 生命周期与背压', () => {
     expect(h.sent).toHaveLength(0);
   });
 
-  it('背压:事件保留在缓冲里退避重试,不丢;恢复后一并发出', () => {
-    let failing = true;
-    const sendPush = vi.fn((_dst: string, channel: string, _payload: unknown) => {
-      if (failing && channel === MAKER_EVENT_BATCH_CHANNEL) {
+  it('发送失败即就地降级为逐帧 best-effort,缓冲不跨越失败存在', () => {
+    // 强不变量(review 四轮结论):flush 返回时缓冲必为空——要么整批发出,要么
+    // 降级逐帧(旧语义)。缓冲不滞留 = 顺序问题整族消失。
+    const sendPush = vi.fn((
+      _dst: string,
+      channel: string,
+      _payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
         throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
       }
     });
@@ -249,39 +255,36 @@ describe('[4] 生命周期与背压', () => {
     subscribeBatchController('ctrl-1', ['session:s1']);
 
     __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
-    vi.advanceTimersByTime(WINDOW_MS);
-    expect(sendPush).toHaveBeenCalledTimes(1); // 首次尝试遭背压
-
-    // 背压期间继续产生事件:累积进同一批,不丢
     __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } });
-    failing = false;
-    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS); // 退避重试间隔
-    const batch = sendPush.mock.calls.at(-1)![2] as MakerEventBatchPayload;
-    expect(batch.events).toHaveLength(2);
-    expect(batch.events).toEqual([
-      { sessionId: 's1', event: { i: 0 } },
-      { sessionId: 's1', event: { i: 1 } },
-    ]);
+    vi.advanceTimersByTime(WINDOW_MS);
+
+    // 批被拒 → 两条事件各自以逐帧 maker:event 发出(顺序不变)
+    const perEvent = sendPush.mock.calls.filter((c) => c[1] === 'maker:event');
+    expect(perEvent).toHaveLength(2);
+    expect(perEvent.map((c) => (c[2] as { event: { i: number } }).event.i)).toEqual([0, 1]);
+
+    // 缓冲已空:再推进任何时间都不会有第二次投递
+    const before = sendPush.mock.calls.length;
+    vi.advanceTimersByTime(10_000);
+    expect(sendPush.mock.calls.length).toBe(before);
   });
 
-  it('relay 离线:不发送、保留事件,上线后由重试投出', () => {
+  it('relay 离线:同样就地降级(逐帧 best-effort 自行吞掉失败),不滞留', () => {
+    let status = 'online';
     const h = mkClient();
-    let status = 'connecting';
     h.client.getStatus = vi.fn(() => status) as never;
     __testing.setActiveClient(h.client as never);
     subscribeBatchController('ctrl-1', ['session:s1']);
 
-    // 离线期间 forwardPush 走离线队列而非批(liveTargets 为空),这里直接验证
-    // 批 stage 在 relay 离线时不会盲发:先在线入批,再切离线推进窗口。
-    status = 'online';
     __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
     status = 'connecting';
     vi.advanceTimersByTime(WINDOW_MS);
-    expect(h.sent).toHaveLength(0);
 
+    // 未以批帧发出;缓冲已空,不会在恢复后突然补投陈旧事件
+    expect(batchesIn(h.sent)).toHaveLength(0);
     status = 'online';
-    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
-    expect(batchesIn(h.sent)).toHaveLength(1);
+    vi.advanceTimersByTime(10_000);
+    expect(batchesIn(h.sent)).toHaveLength(0);
   });
 });
 
@@ -297,72 +300,24 @@ describe('[5] 与拥塞取舍(#2167)的一致性', () => {
   });
 });
 
-describe('[7] 归属切换与背压的交互(review 首轮 P1)', () => {
-  it('ownerStamp 切换且旧段正背压:旧段不被覆盖,恢复后按段序全部发出', () => {
-    let failing = true;
-    const sendPush = vi.fn((
-      _dst: string,
-      channel: string,
-      _payload: unknown,
-      _ownerStamp?: unknown,
-    ) => {
-      if (failing && channel === MAKER_EVENT_BATCH_CHANNEL) {
-        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
-      }
-    });
-    const h = mkClient({ sendPush });
+describe('[7] 归属切换分段(review 首轮 P1)', () => {
+  it('窗口内 ownerStamp 切换:分两段按序发出,各段带自己的水印', () => {
+    const h = mkClient();
     __testing.setActiveClient(h.client as never);
     subscribeBatchController('ctrl-1', ['session:s1']);
     const stampA = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
     const stampB = { dataOwnerId: 'owner-b', ownerGeneration: 2 };
 
     __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } }, stampA);
-    vi.advanceTimersByTime(WINDOW_MS); // 首次 flush 遭背压,旧段保留
-    expect(sendPush).toHaveBeenCalledTimes(1);
-
-    // 归属切换:新事件必须进新段,绝不能覆盖仍待重试的旧段
     __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } }, stampB);
-    failing = false;
-    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
+    vi.advanceTimersByTime(WINDOW_MS);
 
-    // 自定义 sendPush 不填充 h.sent,直接读 mock.calls:[dst, channel, payload, ownerStamp]
-    const delivered = sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL);
-    const succeeded = delivered.slice(1); // 第 1 次是遭背压那次
-    expect(succeeded).toHaveLength(2);
-    expect((succeeded[0]![2] as MakerEventBatchPayload).events)
-      .toEqual([{ sessionId: 's1', event: { i: 0 } }]);
-    expect((succeeded[1]![2] as MakerEventBatchPayload).events)
-      .toEqual([{ sessionId: 's1', event: { i: 1 } }]);
-    // 段序 = 归属切换顺序,ownerStamp 分别随段下发
-    expect(succeeded[0]![3]).toEqual(stampA);
-    expect(succeeded[1]![3]).toEqual(stampB);
-  });
-
-  it('持续背压 + 到量:不退化为逐事件同步 sendPush(退避期间不插队)', () => {
-    const sendPush = vi.fn((_dst: string, channel: string, _payload: unknown) => {
-      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
-        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
-      }
-    });
-    const h = mkClient({ sendPush });
-    __testing.setActiveClient(h.client as never);
-    subscribeBatchController('ctrl-1', ['session:s1']);
-
-    // 先攒到量触发一次 flush(遭背压)
-    for (let i = 0; i < 64; i++) {
-      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
-    }
-    expect(sendPush).toHaveBeenCalledTimes(1);
-
-    // 再来 64 条:退避中,一次都不该再同步发送(旧实现每条都会试一次)
-    for (let i = 64; i < 128; i++) {
-      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
-    }
-    expect(sendPush).toHaveBeenCalledTimes(1);
-
-    // 退避到点才重试一次
-    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
-    expect(sendPush).toHaveBeenCalledTimes(2);
+    const batches = batchesIn(h.sent);
+    expect(batches).toHaveLength(2);
+    expect(batches[0]!.events).toEqual([{ sessionId: 's1', event: { i: 0 } }]);
+    expect(batches[1]!.events).toEqual([{ sessionId: 's1', event: { i: 1 } }]);
+    expect(h.sent[0]!.ownerStamp).toEqual(stampA);
+    expect(h.sent[1]!.ownerStamp).toEqual(stampB);
   });
 });
 
@@ -417,7 +372,9 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
       .toBeLessThan(h.sent.findIndex((s) => s.channel === SESSION_ACTIVITY_CHANNEL));
   });
 
-  it('退避中跨 channel 收口不再尝试:交错 push 不产生额外的注定失败发送', () => {
+  it('批发送失败后缓冲即空:交错 push 不会与滞留批产生顺序竞争', () => {
+    // 第四轮的根因:只要缓冲能跨越失败存在,大批被拒而小终态帧通过就会乱序。
+    // 现在 flush 返回即空,交错 push 之前不可能存在"待发批"。
     const sendPush = vi.fn((
       _dst: string,
       channel: string,
@@ -432,53 +389,38 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
     __testing.setActiveClient(h.client as never);
     subscribeBatchController('ctrl-1', ['session:s1']);
 
-    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
-    vi.advanceTimersByTime(WINDOW_MS);
-    const batchAttempts = () =>
-      sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL).length;
-    expect(batchAttempts()).toBe(1); // 退避已生效
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'delta' } });
+    // 交错帧触发收口:批被拒 → 降级逐帧,缓冲清空
+    __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'closed' });
 
-    // 交错 10 条同会话其它 channel:一次都不该再试批
-    for (let i = 0; i < 10; i++) {
-      __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'running' });
-    }
-    expect(batchAttempts()).toBe(1);
+    const channels = sendPush.mock.calls.map((c) => c[1]);
+    // 顺序:批尝试 → 降级的逐帧事件 → 终态帧
+    expect(channels).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:event',
+      'maker:status-changed',
+    ]);
+    // 之后不再有任何滞留投递
+    const before = sendPush.mock.calls.length;
+    vi.advanceTimersByTime(10_000);
+    expect(sendPush.mock.calls.length).toBe(before);
   });
 
-  it('待重试段按上限切片发送:不把滞留段撑成一个超限逻辑消息', () => {
-    let failing = true;
-    const sendPush = vi.fn((
-      _dst: string,
-      channel: string,
-      _payload: unknown,
-      _ownerStamp?: unknown,
-    ) => {
-      if (failing && channel === MAKER_EVENT_BATCH_CHANNEL) {
-        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
-      }
-    });
-    const h = mkClient({ sendPush });
+  it('单会话事件量远超单批上限:按上限切片,每帧不超限且顺序无损', () => {
+    const h = mkClient();
     __testing.setActiveClient(h.client as never);
     subscribeBatchController('ctrl-1', ['session:s1']);
 
-    // 触发退避,然后在退避期间累积到远超单批上限(64)的事件量
-    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
-    vi.advanceTimersByTime(WINDOW_MS);
-    for (let i = 1; i < 200; i++) {
+    // 200 条:到量 flush 三次(64×3),余 8 条随窗口发出
+    for (let i = 0; i < 200; i++) {
       __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
     }
+    vi.advanceTimersByTime(WINDOW_MS);
 
-    failing = false;
-    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
-    const delivered = sendPush.mock.calls
-      .filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL)
-      .slice(1) // 第 1 次是遭背压那次
-      .map((c) => c[2] as MakerEventBatchPayload);
-    // 200 条按 64 上限切成 4 片(64+64+64+8),每片都不超上限,事件一条不丢
-    expect(delivered.every((b) => b.events.length <= 64)).toBe(true);
-    expect(delivered.reduce((n, b) => n + b.events.length, 0)).toBe(200);
-    // 切片顺序 = 原始顺序
-    const flat = delivered.flatMap((b) => b.events) as Array<{ event: { i: number } }>;
+    const batches = batchesIn(h.sent);
+    expect(batches.every((b) => b.events.length <= 64)).toBe(true);
+    expect(batches.reduce((n, b) => n + b.events.length, 0)).toBe(200);
+    const flat = batches.flatMap((b) => b.events) as Array<{ event: { i: number } }>;
     expect(flat.map((e) => e.event.i)).toEqual([...Array(200).keys()]);
   });
 
@@ -532,21 +474,14 @@ describe('[11] 重连恢复的顺序(review 第三轮)', () => {
       .toBeLessThan(channels.indexOf('maker:status-changed'));
   });
 
-  it('ws-online 收口入口清掉断线时的退避位,批不被闸门永久卡住', () => {
-    let status = 'online';
+  it('ws-online 收口入口:窗口内的批在重连后立即投出,不落到积压之后', () => {
     const h = mkClient();
-    h.client.getStatus = vi.fn(() => status) as never;
     __testing.setActiveClient(h.client as never);
     subscribeBatchController('ctrl-1', ['session:s1']);
 
+    // 窗口内(尚未到点)发生重连事件:批应被立即收口
     __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
-    // 断线期间窗口到点:flush 失败并置退避位
-    status = 'connecting';
-    vi.advanceTimersByTime(WINDOW_MS);
     expect(h.sent).toHaveLength(0);
-
-    // 重连事件:清退避位并立即投出
-    status = 'online';
     flushMakerEventBatchesOnReconnect();
     expect(batchesIn(h.sent)).toHaveLength(1);
   });

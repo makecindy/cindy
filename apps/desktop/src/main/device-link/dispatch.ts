@@ -588,8 +588,28 @@ const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
  * 毫秒 119 帧、8-07 单小时 5168 次 BACKPRESSURE,聚合速率还招来 relay 1013 断连。
  * 批把「每事件一帧」压成「每窗口一帧」,直接砍掉这条链路的源头流量。
  *
- * 时序契约:同一会话的事件对启用批的控制端**全部**走批路径,没有旁路——否则
- * 缓冲里的旧事件会排在直发的新事件之后,顺序即被破坏。
+ * ── 顺序不变量与它的代价(review 四轮收敛的结论)────────────────────────────
+ *
+ * 批天然引入一条「延迟发送」旁路,而同会话的其它 session-scoped 推送走「立即
+ * 发送」主路。只要缓冲能跨越一次失败继续存在,两条路径的相对顺序就无法用局部
+ * 补丁保证——review 四轮从四个不同时序切入,全是这同一件事:交错 push 直发、
+ * activity 分支提前 continue、断线积压 drain 先于旧批、退避期大批被拒而小终态
+ * 帧通过。前三轮各补一处,第四轮证明补丁修不完。
+ *
+ * 所以这里**去掉了退避重试**,换成一条强不变量:
+ *
+ *   **缓冲的生命周期不跨越任何一次发送失败。** flush 要么整批发出,要么就地
+ *   降级为逐帧 best-effort 发送(与本 PR 之前的旧语义完全一致),两种情况都让
+ *   缓冲立刻清空。
+ *
+ * 于是「同会话有待发批」这个状态只存在于「窗口内、且尚未尝试发送」的区间,
+ * 收口点(flushMakerEventBatchesForSessionPush)一次调用即可保证清空,顺序问题
+ * 整族消失,而不是每轮补一个新场景。
+ *
+ * 代价与为什么可接受:拥塞时不再保留事件等窗口恢复。但那本来不是本 PR 的目标
+ * (常态减帧才是),而拥塞时的取舍是 #2167 的职责——降级后的逐帧发送正好落回
+ * 它的可驱逐档语义。删掉退避同时也删掉了它带来的全部复杂性(段滞留、闸门、
+ * 重连清位),这是缩回原始范围,不是新增机制。
  */
 const MAKER_EVENT_BATCH_WINDOW_MS = 120;
 /** 单批事件数上限:到量立即 flush(不等窗口),避免长思考把一帧撑得过大。 */
@@ -600,38 +620,22 @@ const MAKER_EVENT_BATCH_MAX_EVENTS = 64;
  * 不是制造需要分片的大帧——分片会把一帧放大成多帧,反噬本次优化。
  */
 const MAKER_EVENT_BATCH_MAX_BYTES = 256 * 1024;
-/**
- * 单会话缓冲的事件数硬上限(背压滞留时的兜底)。maker:event 是自相似有损流
- * (与 #2167 的可驱逐判据同源),溢出丢**最旧**、保留最新:转录内容由受保护的
- * messages:created + 控制端消息对账自愈。无上限则背压期间内存无界。
- */
-const MAKER_EVENT_BATCH_MAX_BUFFERED_EVENTS = 512;
-/** 背压/离线时的重试间隔(与 activity staging 同款,不新造节奏)。 */
-const MAKER_EVENT_BATCH_RETRY_MS = 250;
 
 /**
- * 一个待发批段。**按 ownerStamp 分段**而不是「切换即覆盖」:ownerStamp 是数据
- * 归属水印、批内必须一致,而旧段可能正因背压/离线滞留待重试——直接用新段覆盖
- * 同一会话的 map 槽会静默丢掉旧段全部事件(review 首轮三家同时指出)。分段后
- * 同会话按段 FIFO 发送,旧段发不出就停在原位,新事件进新段。
+ * 一个待发批段。按 ownerStamp 分段:ownerStamp 是数据归属水印、批内必须一致,
+ * 同一窗口内发生归属切换时新事件进新段,段间 FIFO——保证切换前后顺序不变。
+ * (缓冲不跨失败存在,所以段最多因窗口内切换而出现,不会因滞留而堆积。)
  */
 interface MakerEventBatchSegment {
   events: unknown[];
   bytes: number;
   ownerStamp?: PushOwnerStamp;
-  droppedOldest: number;
 }
 
 interface MakerEventBatchStage {
   /** sessionId → 该会话的待发段序列(FIFO);Map 插入序即会话首次入批顺序。 */
   batches: Map<string, MakerEventBatchSegment[]>;
   timer: ReturnType<typeof setTimeout> | null;
-  /**
-   * 正在背压/离线退避中。到量 flush 必须看它:批一旦因背压滞留,其 events 长度
-   * 仍在阈值之上,后续**每条**新事件都会再次触发到量 flush → 逐事件同步 sendPush
-   * 抛异常,退化成本 PR 要消除的那种逐帧 admission 风暴(review 首轮 P1)。
-   */
-  retrying: boolean;
 }
 
 const makerEventBatchStages = new Map<string, MakerEventBatchStage>();
@@ -646,8 +650,8 @@ function makerEventBatchOwnerStampEquals(
 }
 
 /**
- * 把一条 maker:event 收进目标控制端的批。到量(条数/字节)或 ownerStamp 变化
- * 立即 flush 该会话,否则等窗口定时器统一 flush。
+ * 把一条 maker:event 收进目标控制端的批。到量(条数/字节)立即 flush,否则等
+ * 窗口定时器统一 flush。
  */
 function stageMakerEventPush(
   dst: string,
@@ -657,7 +661,7 @@ function stageMakerEventPush(
 ): void {
   let stage = makerEventBatchStages.get(dst);
   if (!stage) {
-    stage = { batches: new Map(), timer: null, retrying: false };
+    stage = { batches: new Map(), timer: null };
     makerEventBatchStages.set(dst, stage);
   }
   let segments = stage.batches.get(sessionId);
@@ -665,73 +669,21 @@ function stageMakerEventPush(
     segments = [];
     stage.batches.set(sessionId, segments);
   }
-  // 只往**最后一段**追加,且 ownerStamp 必须一致;不一致就新开一段(旧段可能正
-  // 待重试,不能被覆盖)。段间 FIFO 保证归属切换前后的事件顺序不变。
   let tail = segments.at(-1);
   if (!tail || !makerEventBatchOwnerStampEquals(tail.ownerStamp, ownerStamp)) {
-    tail = { events: [], bytes: 0, droppedOldest: 0, ...(ownerStamp ? { ownerStamp } : {}) };
+    tail = { events: [], bytes: 0, ...(ownerStamp ? { ownerStamp } : {}) };
     segments.push(tail);
   }
   tail.events.push(payload);
   tail.bytes += estimateMakerEventBytes(payload);
-  trimMakerEventBatchBuffer(dst, sessionId, segments);
-  // 到量即发,但要过统一的主动发送闸门(见 canFlushMakerEventBatchNow)。
   if (
-    canFlushMakerEventBatchNow(stage)
-    && (tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
-      || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES)
+    tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
+    || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES
   ) {
     flushMakerEventBatchSession(dst, stage, sessionId);
     return;
   }
   scheduleMakerEventBatchFlush(dst, stage);
-}
-
-/**
- * **主动** flush 的唯一准入判据(到量路径与跨 channel 收口路径共用)。
- *
- * 退避中一律拒绝:滞留段的长度/字节仍在阈值之上,任何主动入口都会反复触发同步
- * sendPush 抛异常,退化成本 PR 要消除的逐帧 admission 风暴。review 两轮各抓到
- * 一个入口(第一轮:到量;第二轮:跨 channel 收口),所以判据收敛成这一个函数——
- * 新增主动入口必须过它,而不是各自记得检查 retrying。
- *
- * 唯一允许绕过的入口是退避 timer 自己(它就是退避的驱动者)。
- */
-function canFlushMakerEventBatchNow(stage: MakerEventBatchStage): boolean {
-  return !stage.retrying;
-}
-
-/**
- * 单会话缓冲的总量兜底(跨全部待发段):maker:event 是自相似有损流(与 #2167 的
- * 可驱逐判据同源),溢出丢**最旧**、保留最新——转录内容由受保护的
- * messages:created + 控制端消息对账自愈。无上限则背压期间内存无界。
- */
-function trimMakerEventBatchBuffer(
-  dst: string,
-  sessionId: string,
-  segments: MakerEventBatchSegment[],
-): void {
-  let total = segments.reduce((n, seg) => n + seg.events.length, 0);
-  while (total > MAKER_EVENT_BATCH_MAX_BUFFERED_EVENTS) {
-    const head = segments[0];
-    if (!head) break;
-    const dropped = head.events.shift();
-    head.bytes = Math.max(0, head.bytes - estimateMakerEventBytes(dropped));
-    head.droppedOldest += 1;
-    total -= 1;
-    if (head.events.length === 0) {
-      // 空段出队,但把丢弃计数并进下一段,告警不丢。
-      const next = segments[1];
-      if (next) next.droppedOldest += head.droppedOldest;
-      else {
-        log.warn(
-          `maker:event batch dropped ${head.droppedOldest} oldest event(s) for ${shortId(dst)} `
-          + `session ${sessionId.slice(0, 8)} (buffer cap under sustained backpressure)`,
-        );
-      }
-      segments.shift();
-    }
-  }
 }
 
 /** 读 push payload 顶层 sessionId(与 topicForPush 的 session-scoped 判据同一字段)。 */
@@ -764,90 +716,61 @@ function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage):
   (stage.timer as unknown as { unref?: () => void }).unref?.();
 }
 
-/** flush 该控制端的全部会话批(窗口到点 / 退避重试 / 显式收口)。 */
+/** flush 该控制端的全部会话批(窗口到点 / 显式收口)。 */
 function flushMakerEventBatchStage(dst: string, stage: MakerEventBatchStage): void {
   for (const sessionId of [...stage.batches.keys()]) {
-    if (!flushMakerEventBatchSession(dst, stage, sessionId)) return; // 背压:保留其余,已排重试
+    flushMakerEventBatchSession(dst, stage, sessionId);
   }
-  stage.retrying = false;
 }
 
 /**
- * 按段 FIFO 发送某会话的待发批。返回 false 表示遇到背压/离线并已排退避重试
- * (该段及其后**保留**在缓冲里,不丢);其它错误按 best-effort 丢弃该段,
- * 不堵住后续段与其它会话。
+ * 发送某会话的待发批,**返回时缓冲一定为空**(强不变量,见本段顶部注释):
+ * 按段 FIFO、段内按上限切片;任一切片发送失败即就地降级为逐帧 best-effort
+ * 发送该切片的事件(与本 PR 之前的旧语义一致,含 compactOversizedPushPayload
+ * 兜底),不保留、不重试。
  */
 function flushMakerEventBatchSession(
   dst: string,
   stage: MakerEventBatchStage,
   sessionId: string,
-): boolean {
+): void {
   const segments = stage.batches.get(sessionId);
-  if (!segments || segments.length === 0) {
-    stage.batches.delete(sessionId);
-    return true;
-  }
-  if (!activeClient || activeClient.getStatus() !== 'online') {
-    scheduleMakerEventBatchRetry(dst, stage);
-    return false;
-  }
-  while (segments.length > 0) {
-    const segment = segments[0]!;
-    if (segment.events.length === 0) {
-      segments.shift();
-      continue;
-    }
-    if (segment.droppedOldest > 0) {
-      log.warn(
-        `maker:event batch dropped ${segment.droppedOldest} oldest event(s) for ${shortId(dst)} `
-        + `session ${sessionId.slice(0, 8)} (buffer cap under sustained backpressure)`,
-      );
-      segment.droppedOldest = 0;
-    }
-    // 按上限**切片**发送,而不是整段一帧:退避期间段可以累积到缓冲上限
-    // (512 条),整段发会撑爆可靠传输的单逻辑消息上限、走 PAYLOAD_TOO_LARGE
-    // 分支一次丢掉整段(review 第二轮)。切片后未发出的部分留在段头等重试。
-    const slice = takeMakerEventBatchSlice(segment);
-    const payload: MakerEventBatchPayload = { sessionId, events: slice };
-    try {
-      if (segment.ownerStamp === undefined) {
-        activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload);
-      } else {
-        activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
-      }
-      if (segment.events.length === 0) segments.shift();
-    } catch (err) {
-      const sliceBytes = sumMakerEventBytes(slice);
-      // 切片未发出:放回段头,顺序不变(切片本就取自段头)。
-      segment.events.unshift(...slice);
-      segment.bytes += sliceBytes;
-      if (err instanceof DeviceLinkError && err.code === 'BACKPRESSURE') {
-        scheduleMakerEventBatchRetry(dst, stage);
-        return false;
-      }
-      // PAYLOAD_TOO_LARGE / LINK_NOT_OPEN 等:沿 maker:event 既有 best-effort 语义
-      // 丢弃**该切片**(逐帧路径同样会丢),继续尝试段内其余事件。
-      segment.events.splice(0, slice.length);
-      segment.bytes = Math.max(0, segment.bytes - sliceBytes);
-      if (segment.events.length === 0) segments.shift();
-      log.warn(`maker:event batch slice dropped for ${shortId(dst)}: ${String(err)}`);
-    }
-  }
   stage.batches.delete(sessionId);
-  return true;
+  if (stage.batches.size === 0 && stage.timer) {
+    clearTimeout(stage.timer);
+    stage.timer = null;
+  }
+  if (!segments) return;
+  for (const segment of segments) {
+    while (segment.events.length > 0) {
+      const slice = takeMakerEventBatchSlice(segment);
+      if (slice.length === 0) break;
+      const payload: MakerEventBatchPayload = { sessionId, events: slice };
+      try {
+        if (!activeClient || activeClient.getStatus() !== 'online') {
+          throw new DeviceLinkError('NOT_CONNECTED', 'relay offline');
+        }
+        if (segment.ownerStamp === undefined) {
+          activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload);
+        } else {
+          activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
+        }
+      } catch {
+        // 降级为逐帧:sendPushBestEffort 吞掉每条的失败并保留超大帧裁剪,
+        // 顺序仍是原顺序。批不因失败滞留 —— 那正是顺序问题的唯一来源。
+        for (const event of slice) {
+          sendPushBestEffort(dst, MAKER_PUSH.EVENT, event, segment.ownerStamp);
+        }
+      }
+    }
+  }
 }
 
 /**
  * 从段头取一片:条数 ≤ MAX_EVENTS 且累计字节 ≤ MAX_BYTES,但**至少一条**
  * (单条即超阈值的事件已在入批前被拦到逐帧路径,这里的至少一条只是防死循环)。
- * 取出的事件同步从段里移除;发送失败时由调用方放回段头。
+ * 取出的事件同步从段里移除。
  */
-function sumMakerEventBytes(events: readonly unknown[]): number {
-  let total = 0;
-  for (const event of events) total += estimateMakerEventBytes(event);
-  return total;
-}
-
 function takeMakerEventBatchSlice(segment: MakerEventBatchSegment): unknown[] {
   const slice: unknown[] = [];
   let bytes = 0;
@@ -863,21 +786,21 @@ function takeMakerEventBatchSlice(segment: MakerEventBatchSegment): unknown[] {
   return slice;
 }
 
-function scheduleMakerEventBatchRetry(dst: string, stage: MakerEventBatchStage): void {
-  // 置位后到量 flush 不再插队(见 stageMakerEventPush),避免退化成逐事件同步发送。
-  stage.retrying = true;
-  if (stage.timer) return;
-  stage.timer = setTimeout(() => {
-    stage.timer = null;
-    const current = makerEventBatchStages.get(dst);
-    if (current) flushMakerEventBatchStage(dst, current);
-  }, MAKER_EVENT_BATCH_RETRY_MS);
-  (stage.timer as unknown as { unref?: () => void }).unref?.();
+/**
+ * 收口某控制端的全部待发批。用在「即将投递更晚产生的积压」的时点:离线积压
+ * drain 之前、relay 重连之后——批在时间上早于它们,晚发就会让控制端在终态之后
+ * 又收到旧文本(review 第三轮)。flush 返回时缓冲必为空(成功或降级)。
+ */
+function flushMakerEventBatchesFor(dst: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage || stage.batches.size === 0) return;
+  flushMakerEventBatchStage(dst, stage);
 }
 
 /**
  * 在转发同会话的**其它** channel 之前收口该会话的事件批,保住跨 channel 顺序。
- * 只在该控制端确实有待发批时才做,常态下是一次 Map 查询。
+ * 因为 flush 返回时缓冲必为空(成功或降级),这一次调用就足以保证后续帧排在
+ * 全部已暂存事件之后——不需要再考虑退避、断线等中间状态(review 四轮的结论)。
  */
 function flushMakerEventBatchesForSessionPush(
   dst: string,
@@ -887,29 +810,9 @@ function flushMakerEventBatchesForSessionPush(
   if (channel === MAKER_EVENT_BATCH_CHANNEL) return;
   const stage = makerEventBatchStages.get(dst);
   if (!stage || stage.batches.size === 0) return;
-  // 退避中不尝试(与到量路径同一闸门,review 第二轮 P1):否则每条交错 push 都
-  // 会额外产生一次注定失败的同步发送。此时顺序不保证——但那时本帧自身的
-  // sendPush 大概率同样受阻(同一个满窗口),退化为旧语义(拥塞时 maker:event
-  // 本就被丢弃),不值得为它把交错帧也压进缓冲。
-  if (!canFlushMakerEventBatchNow(stage)) return;
   const sessionId = readPushSessionId(payload);
   if (!sessionId || !stage.batches.has(sessionId)) return;
   flushMakerEventBatchSession(dst, stage, sessionId);
-}
-
-/**
- * 投递离线积压 / 重连恢复之前排空该控制端的全部事件批。
- *
- * 与 canFlushMakerEventBatchNow 的关系:这条路径**刻意绕过**退避闸门。闸门防的是
- * 「窗口满时反复徒劳重试」,而这里的触发条件恰恰是「链路刚恢复」——断线时置的
- * retrying 已经过期,不清掉它,断线前的批就会排在离线积压之后送达(review 第三轮)。
- * 清位后由 flush 自己按实际结果重新决定是否再进退避。
- */
-function flushMakerEventBatchesBeforeBacklogDrain(dst: string): void {
-  const stage = makerEventBatchStages.get(dst);
-  if (!stage || stage.batches.size === 0) return;
-  stage.retrying = false;
-  flushMakerEventBatchStage(dst, stage);
 }
 
 /** 丢弃单个会话的待发批(退订该会话流时调用);stage 空则一并回收定时器。 */
@@ -930,7 +833,6 @@ function clearMakerEventBatchStage(dst: string): void {
 function clearAllMakerEventBatchStages(): void {
   for (const dst of [...makerEventBatchStages.keys()]) clearMakerEventBatchStage(dst);
 }
-
 interface SessionActivityStage {
   /** sessionId → 最新 payload + source owner;Map 插入序即更新序。 */
   queue: Map<string, { payload: unknown; ownerStamp?: PushOwnerStamp }>;
@@ -1519,7 +1421,7 @@ function handleLinkOpen(
   flushRemoteInvokeResultOutbox(src);
   if (!knownModernController) {
     // 同上:投递离线积压前先排空该控制端的事件批,保住跨积压的顺序。
-    flushMakerEventBatchesBeforeBacklogDrain(src);
+    flushMakerEventBatchesFor(src);
     for (const queued of offlinePushQueue.drain(src, [LEGACY_TOPIC])) {
       sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
     }
@@ -2068,7 +1970,7 @@ export function flushRemoteInvokeResultOutboxOnReconnect(): void {
  */
 export function flushMakerEventBatchesOnReconnect(): void {
   for (const dst of [...makerEventBatchStages.keys()]) {
-    flushMakerEventBatchesBeforeBacklogDrain(dst);
+    flushMakerEventBatchesFor(dst);
   }
 }
 
@@ -2421,7 +2323,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     // 先排空断线前的事件批,再投递离线积压(review 第三轮):断线期间同会话的
     // 新事件与终态推送进的是 offlinePushQueue,而旧批留在内存等重试 timer;
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
-    flushMakerEventBatchesBeforeBacklogDrain(src);
+    flushMakerEventBatchesFor(src);
     for (const queued of offlinePushQueue.drain(src, topics)) {
       sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
     }
