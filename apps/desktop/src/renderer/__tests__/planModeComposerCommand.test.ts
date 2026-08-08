@@ -70,5 +70,10 @@ describe('/plan composer command', () => {
     expect(isPlanModeComposerCommandText('  /PLAN  ', true)).toBe(true);
     expect(isPlanModeComposerCommandText('/plan explain this', true)).toBe(false);
     expect(isPlanModeComposerCommandText('/plan', false)).toBe(false);
+    expect(
+      isPlanModeComposerCommandText('/plan', true, [
+        { kind: 'agent-skill', name: 'PLAN', source: 'skill' },
+      ]),
+    ).toBe(false);
   });
 });

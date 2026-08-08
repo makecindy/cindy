@@ -4230,7 +4230,11 @@ export function ChatInput({
         if (
           attachmentsForSend.length === 0 &&
           commentsForSend.length === 0 &&
-          isPlanModeComposerCommandText(editorText, planModeEntry !== undefined)
+          isPlanModeComposerCommandText(
+            editorText,
+            planModeEntry !== undefined,
+            mergedCommands,
+          )
         ) {
           planModeEntry?.onToggle(!planModeEntry.enabled);
           isRestoringRef.current = true;

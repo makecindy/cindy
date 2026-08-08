@@ -37,6 +37,14 @@ export function consumePlanModeComposerCommand(
   return true;
 }
 
-export function isPlanModeComposerCommandText(text: string, available: boolean): boolean {
-  return available && text.trim().toLowerCase() === `/${PLAN_MODE_COMPOSER_COMMAND}`;
+export function isPlanModeComposerCommandText(
+  text: string,
+  available: boolean,
+  commands: readonly UnifiedCommand[] = [],
+): boolean {
+  return (
+    available &&
+    !commands.some((command) => command.name.toLowerCase() === PLAN_MODE_COMPOSER_COMMAND) &&
+    text.trim().toLowerCase() === `/${PLAN_MODE_COMPOSER_COMMAND}`
+  );
 }
