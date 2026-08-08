@@ -1,11 +1,15 @@
 import {
   isPublicHttpResourceUrl,
   type BrowserControlRequest,
+  type BrowserControlResult,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 import { z } from 'zod';
 
-import type { BrowserMcpDeps } from '../types.js';
+import {
+  INLINE_IMAGE_TARGET_BYTES,
+  type BrowserMcpDeps,
+} from '../types.js';
 import type { BrowserToolRegistry } from './tool-registry.js';
 import {
   buildExtractFnSource,
@@ -205,6 +209,127 @@ function errorResult(action: string, message: string): {
       },
     ],
     isError: true,
+  };
+}
+
+function browserScreenshotError(
+  errorCode: 'BROWSER_SCREENSHOT_INVALID' | 'BROWSER_SCREENSHOT_TOO_LARGE',
+  message: string,
+): {
+  content: Array<{ type: 'text'; text: string }>;
+  isError: true;
+} {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: resultText({ ok: false, action: 'screenshot', errorCode, message }),
+      },
+    ],
+    isError: true,
+  };
+}
+
+function screenshotMetadata(
+  result: BrowserControlResult,
+  mimeType: string,
+  bytes: number,
+  originalBytes: number,
+): Record<string, unknown> {
+  const rawData = result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+    ? result.data as Record<string, unknown>
+    : {};
+  const boundedString = (key: string, maxChars: number): string | undefined => {
+    const value = rawData[key];
+    return typeof value === 'string' ? value.slice(0, maxChars) : undefined;
+  };
+  const boundedCount = (key: string): number | undefined => {
+    const value = rawData[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : undefined;
+  };
+  const annotationCount = Array.isArray(rawData.annotations)
+    ? rawData.annotations.length
+    : undefined;
+  return {
+    ok: true,
+    action: 'screenshot',
+    data: {
+      ...(boundedString('targetId', 512) ? { targetId: boundedString('targetId', 512) } : {}),
+      ...(boundedString('tabId', 512) ? { tabId: boundedString('tabId', 512) } : {}),
+      ...(boundedString('url', 4_096) ? { url: boundedString('url', 4_096) } : {}),
+      ...(typeof rawData.labels === 'boolean' ? { labels: rawData.labels } : {}),
+      ...(boundedCount('labelsCount') !== undefined
+        ? { labelsCount: boundedCount('labelsCount') }
+        : {}),
+      ...(boundedCount('labelsSkipped') !== undefined
+        ? { labelsSkipped: boundedCount('labelsSkipped') }
+        : {}),
+      ...(annotationCount !== undefined ? { annotationCount } : {}),
+      mimeType,
+      bytes,
+      ...(bytes !== originalBytes ? { originalBytes } : {}),
+    },
+  };
+}
+
+async function screenshotToolResult(
+  result: BrowserControlResult,
+  deps: BrowserMcpDeps,
+) {
+  if (!result.ok) {
+    return {
+      content: [{ type: 'text' as const, text: resultText(result) }],
+      isError: true,
+    };
+  }
+  if (!deps.resolveScreenshot) {
+    return browserScreenshotError(
+      'BROWSER_SCREENSHOT_INVALID',
+      '当前 host 无法把浏览器截图解析为模型图片输入。',
+    );
+  }
+
+  const resolved = await deps.resolveScreenshot(result);
+  const originalBytes = resolved.buffer.byteLength;
+  let buffer = resolved.buffer;
+  let mimeType: string = resolved.mimeType;
+
+  if (buffer.byteLength > INLINE_IMAGE_TARGET_BYTES) {
+    const compressed = await deps.compressInlineImage?.(buffer, mimeType, {
+      targetBytes: INLINE_IMAGE_TARGET_BYTES,
+    });
+    if (!compressed || compressed.buffer.byteLength > INLINE_IMAGE_TARGET_BYTES) {
+      return browserScreenshotError(
+        'BROWSER_SCREENSHOT_TOO_LARGE',
+        '浏览器截图超过模型内联传输上限，且无法安全压缩。请缩小窗口后重试。',
+      );
+    }
+    buffer = compressed.buffer;
+    mimeType = compressed.mime;
+  }
+
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mimeType) || buffer.byteLength === 0) {
+    return browserScreenshotError(
+      'BROWSER_SCREENSHOT_INVALID',
+      '浏览器截图没有返回受支持的有效图片。',
+    );
+  }
+
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: resultText(screenshotMetadata(result, mimeType, buffer.byteLength, originalBytes)),
+      },
+      {
+        type: 'image' as const,
+        data: buffer.toString('base64'),
+        mimeType,
+      },
+    ],
+    isError: false,
   };
 }
 
@@ -614,6 +739,9 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           } as BrowserControlRequest);
         } else {
           result = await runtime.call(toRuntimeRequest(args));
+        }
+        if (args.action === 'screenshot') {
+          return await screenshotToolResult(result, deps);
         }
         // For extract, the runtime call may succeed (evaluate ran) while the
         // in-page extract reports ok:false (invalid selector); surface that as an
