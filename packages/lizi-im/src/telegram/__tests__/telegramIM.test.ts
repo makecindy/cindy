@@ -166,6 +166,7 @@ function groupMessage(args: {
   messageId: number;
   mentionBot?: boolean;
   threadId?: number;
+  hasProtectedContent?: boolean;
   ageSec?: number;
 }): TgUpdate {
   const text = args.mentionBot ? `@${BOT.username} ${args.text}` : args.text;
@@ -177,6 +178,7 @@ function groupMessage(args: {
       chat: { id: -100200, type: 'supergroup', title: 'Ops' },
       date: nowSec(args.ageSec),
       text,
+      ...(args.hasProtectedContent ? { has_protected_content: true } : {}),
       ...(args.mentionBot
         ? { entities: [{ type: 'mention', offset: 0, length: BOT.username.length + 1 }] }
         : {}),
@@ -331,6 +333,34 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(events).toHaveLength(2));
     expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '你在?' });
     expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '帮我看看这个' });
+  });
+
+  it('受保护群的消息一个字都不落本地窗口, 但仍可照常触发一轮', async () => {
+    // 「禁止保存内容」的群: 与官方 bot 服务端「has_protected_content 的消息
+    // 不中继」同一条边界 —— 本地池是个人 bot 的记忆, 不能成为绕过它的通道。
+    // 触发判定不受影响: owner @ 机器人照常起 turn, 只是不留历史。
+    const events: IMMessageEvent[] = [];
+    const windowEntries: TelegramGroupWindowEntry[] = [];
+    im.onMessage((e) => events.push(e));
+    im.onGroupWindowMessage((e) => windowEntries.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '机密闲聊', fromId: 222, messageId: 40, hasProtectedContent: true }),
+      groupMessage({
+        text: '看一下',
+        fromId: 111,
+        messageId: 41,
+        mentionBot: true,
+        hasProtectedContent: true,
+      }),
+      // 同一用例里放一条未保护消息, 证明判据只挡带标的那些。
+      groupMessage({ text: '普通闲聊', fromId: 222, messageId: 42 }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    await vi.waitFor(() => expect(windowEntries).toHaveLength(1));
+    expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '看一下' });
+    expect(windowEntries[0]).toMatchObject({ messageId: '42', text: '普通闲聊' });
+    expect(windowEntries.some((e) => e.text.includes('机密'))).toBe(false);
   });
 
   it('群多人: 全员 @bot 可触发且共享同一条群 lane; 命令仍 owner 专属', async () => {
@@ -1430,6 +1460,84 @@ describe('TelegramIM', () => {
     await handle2.finalize('一张图的回答');
     expect(api.calls.filter((c) => c.method === 'sendMediaGroup').length).toBe(1);
     expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(1);
+  });
+
+  describe('相册发送失败的回落判据', () => {
+    // Telegram 没有发送端幂等键: 一次 sendMediaGroup 只要被接受, 图片就已经在
+    // 聊天里了 —— 哪怕响应在网络上丢了。逐张补发会让用户看到两套同样的图, 且
+    // 无法分辨哪些是重复。只有 400(确定性拒绝相册形状)才可以安全回落。
+
+    function threeImages(): string[] {
+      return ['x1.png', 'x2.png', 'x3.png'].map((name) => {
+        const abs = path.join(tmpDir, name);
+        fs.writeFileSync(abs, 'fake-png');
+        return abs;
+      });
+    }
+
+    async function sendAlbumWith(
+      failure: unknown,
+    ): Promise<{ groups: number; singles: number }> {
+      await connect();
+      const originalForm = api.callForm.bind(api);
+      api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+        if (method === 'sendMediaGroup') throw failure;
+        return originalForm(method, form, signal);
+      }) as FakeApi['callForm'];
+      const handle = await im.startStreamingText(Number(OWNER_ID).toString());
+      for (const abs of threeImages()) handle.addExtraImageAbsPath?.(abs);
+      await handle.finalize('三张图的回答');
+      return {
+        groups: api.calls.filter((c) => c.method === 'sendMediaGroup').length,
+        singles: api.calls.filter((c) => c.method === 'sendPhoto').length,
+      };
+    }
+
+    it('某张图读不出来 → 逐张回落, 其余照发(不因一张丢整组)', async () => {
+      // 本地读盘失败时请求根本没发出, 一张都没进聊天 —— 与 Telegram 回 400
+      // 同一类确定性失败。把它混进 uncertain 会让整组静默消失。
+      await connect();
+      const present = ['ok1.png', 'ok2.png'].map((name) => {
+        const abs = path.join(tmpDir, name);
+        fs.writeFileSync(abs, 'fake-png');
+        return abs;
+      });
+      const missing = path.join(tmpDir, 'gone.png'); // 故意不创建
+      const handle = await im.startStreamingText(Number(OWNER_ID).toString());
+      for (const abs of [present[0], missing, present[1]]) handle.addExtraImageAbsPath?.(abs);
+      await handle.finalize('三张图, 其中一张缺失');
+      // 相册组装即失败, 一次 sendMediaGroup 都没打成
+      expect(api.calls.filter((c) => c.method === 'sendMediaGroup')).toHaveLength(0);
+      // 两张可读的仍然逐张发了出去; 缺失那张在读盘处失败, 不产生出站
+      expect(api.calls.filter((c) => c.method === 'sendPhoto')).toHaveLength(2);
+    });
+
+    it('400 拒绝 → 逐张回落(确定一张都没进聊天)', async () => {
+      const { singles } = await sendAlbumWith(
+        new TelegramApiError('sendMediaGroup', 400, 'Bad Request: wrong file identifier'),
+      );
+      expect(singles).toBe(3);
+    });
+
+    it('网络错误 → 不逐张补发(可能已经发出去了)', async () => {
+      const { singles } = await sendAlbumWith(new TypeError('fetch failed'));
+      // 这一组宁可丢失也不重复 —— 重复的图进了聊天记录就撤不回来了。
+      expect(singles).toBe(0);
+    });
+
+    it('5xx → 不逐张补发', async () => {
+      const { singles } = await sendAlbumWith(
+        new TelegramApiError('sendMediaGroup', 500, 'Internal Server Error'),
+      );
+      expect(singles).toBe(0);
+    });
+
+    it('429 限流 → 不逐张补发', async () => {
+      const { singles } = await sendAlbumWith(
+        new TelegramApiError('sendMediaGroup', 429, 'Too Many Requests', 3),
+      );
+      expect(singles).toBe(0);
+    });
   });
 
   it('connect 后把命令菜单注册到 owner scope; disconnect 清理', async () => {

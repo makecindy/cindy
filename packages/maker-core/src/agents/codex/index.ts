@@ -22,6 +22,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 
@@ -374,6 +375,22 @@ function isLocalControlPlaneHostKey(key: string): boolean {
 }
 
 /**
+ * 一次性 fork host key。thread/fork 的响应体与源 thread 历史成正比、无上界,
+ * 不能与正在服务活跃 session 的共享 host 同进程 —— 单条超限 NDJSON 会熔断整条
+ * 连接,把无关 session 一起拖下水(故障半径隔离,见 forkSdkSession)。
+ * 随机后缀保证并发 fork 互不复用。
+ */
+const LOCAL_FORK_HOST_PREFIX = 'local-fork:';
+
+function localForkHostKey(): string {
+  return `${LOCAL_FORK_HOST_PREFIX}${randomUUID()}`;
+}
+
+function isLocalForkHostKey(key: string): boolean {
+  return key.startsWith(LOCAL_FORK_HOST_PREFIX);
+}
+
+/**
  * maker permissionMode → app-server { approvalPolicy, approvalsReviewer, sandbox }。
  *
  * Phase 2 起 'ask' 走 'on-request' — server 真发 CommandExecutionRequestApproval,
@@ -464,6 +481,18 @@ function supportsCodexCapabilityRoutingProtocol(userAgent: string | undefined): 
  */
 function supportsCodexResumeExcludeTurns(userAgent: string | undefined): boolean {
   return codexUserAgentAtLeast(userAgent, [0, 125, 0]);
+}
+
+/**
+ * `thread/fork.excludeTurns` was verified against the app-server bundled with
+ * Codex 0.145.0. Without it, the fork response inlines the entire source-thread
+ * history in one NDJSON line — a 47MB rollout produced a 31MiB single line that
+ * exceeded the client's 16MiB maxLineBytes guard and killed the whole
+ * connection (2026-08-08 field incident). Older daemons keep the legacy
+ * full-history fork response.
+ */
+function supportsCodexForkExcludeTurns(userAgent: string | undefined): boolean {
+  return codexUserAgentAtLeast(userAgent, [0, 145, 0]);
 }
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
@@ -10048,41 +10077,30 @@ export class CodexAgent extends BaseAgent {
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
     let stripCopyPath: string | undefined;
-    let utilityHostKey: string | undefined;
-    let utilityHost: AppServerHost | undefined;
-    let utilityHostGeneration: number | undefined;
-    let utilityHostWasRegistered = false;
+    // 故障半径隔离(2026-08-08 实排):thread/fork 的响应体与源 thread 历史成正比、
+    // 无上界 —— 47MB rollout 实测产出 31MiB 单行 NDJSON,超过 client 16MiB
+    // maxLineBytes 守卫后整条连接被熔断,当时共享 utility host 上挂着的 5 个活跃
+    // session 全部同时报错。fork 是离线控制面操作(不跑 turn、无订阅者),改用
+    // 唯一 key 的一次性 app-server:超限只让 fork 自己失败,不波及活跃任务。
+    const forkHostKey = localForkHostKey();
+    let forkHost: AppServerHost | undefined;
     const createdThreadIds = new Set<string>();
     const cleanupCreatedThreads = async (): Promise<void> => {
-      if (!utilityHost || !utilityHostKey || createdThreadIds.size === 0) return;
+      if (!forkHost || createdThreadIds.size === 0) return;
       for (const threadId of createdThreadIds) {
         try {
-          // Codex 0.145 keeps a forked child loaded in the shared app-server.
-          // Unload it before the new Cindy Session resumes with its own MCP
-          // instance URL; otherwise thread/resume.config is ignored and the
-          // child remains bound to the utility host's spawn-level URL.
-          await utilityHost.unsubscribeThread(threadId);
+          // Codex 0.145 keeps a forked child loaded in the app-server. Unload
+          // it before the new Cindy Session resumes with its own MCP instance
+          // URL; otherwise thread/resume.config is ignored and the child
+          // remains bound to this host's spawn-level URL. The ephemeral host
+          // is retired right after, but graceful unload also flushes the
+          // child's state before the process dies.
+          await forkHost.unsubscribeThread(threadId);
         } catch (error) {
-          const reason = `Codex fork child ${threadId} could not be unloaded safely`;
-          log.warn('fork child cleanup failed; retiring shared app-server', {
+          log.warn('fork child cleanup failed; ephemeral fork host will be retired', {
             threadId,
             error: error instanceof Error ? error.message : String(error),
           });
-          try {
-            await this.retireHostKey(utilityHostKey, reason, {
-              failIfActive: false,
-              logPrefix: 'codex fork child cleanup',
-              ...(utilityHostWasRegistered ? { expectedHost: utilityHost } : {}),
-              ...(utilityHostGeneration !== undefined
-                ? { expectedGeneration: utilityHostGeneration }
-                : {}),
-            });
-          } catch (retireError) {
-            log.warn('fork child cleanup host retire threw', {
-              threadId,
-              error: retireError instanceof Error ? retireError.message : String(retireError),
-            });
-          }
           throw error;
         }
       }
@@ -10093,20 +10111,28 @@ export class CodexAgent extends BaseAgent {
       upToMessageId: opts.upToMessageId,
       tailTurnsToDrop,
       stripEncryptedReasoning: opts.stripEncryptedReasoning === true,
-      note: 'Codex 精确 fork: thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
+      forkHostKey,
+      note: 'Codex 精确 fork: 独立一次性 host 上 thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
     });
     try {
-      const utility = await this.getUtilityHost();
-      utilityHostKey = utility.key;
-      utilityHost = utility.host;
-      utilityHostGeneration = this.hostGenerations.get(utility.key) ?? 0;
-      utilityHostWasRegistered = this.hosts.get(utility.key) === utility.host;
-      const { host } = utility;
-      await host.ensureStarted();
+      const forkCredentialMode = resolveAgentCredentialMode({
+        agentKind: 'codex',
+        providerId: opts.providerId,
+        model: opts.model,
+      });
+      const host = await this.getHost(undefined, forkCredentialMode, {
+        keyOverride: forkHostKey,
+        hostPurpose: 'control-plane',
+      });
+      forkHost = host;
+      const initResp = await host.ensureStarted();
+      // createSafeForkRolloutCopy 扫描 this.codexHome;之前由共享 host 启动时填充,
+      // 隔离后 fork 可能是本进程第一台 host,须自己补上。
+      if (initResp.codexHome) this.codexHome = initResp.codexHome;
       // Imported Codex threads may still live under another CODEX_HOME. Resume
       // already asks the desktop host to link/adopt their state and rollout;
       // fork must cross the same preparation boundary before thread/fork or the
-      // utility app-server cannot resolve a freshly imported thread.
+      // fork app-server cannot resolve a freshly imported thread.
       const preparedRolloutResult = await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
       const preparedRolloutPath = typeof preparedRolloutResult === 'string'
         ? preparedRolloutResult
@@ -10121,6 +10147,10 @@ export class CodexAgent extends BaseAgent {
       const params: ThreadForkParams = {
         threadId: opts.sourceSdkSessionId,
         persistExtendedHistory: true,
+        // 响应体瘦身:fork 后 Cindy 自己的会话数据负责历史展示,thread.turns 全量
+        // 回传只会撑爆单行上限。老 daemon 不认识该字段则保持 legacy 行为 —— 此时
+        // 一次性 host 的隔离仍兜住故障半径。
+        ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
         ...(stripCopyPath ? { path: stripCopyPath } : {}),
         ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
       };
@@ -10132,6 +10162,8 @@ export class CodexAgent extends BaseAgent {
           threadId: newSdkSessionId,
           numTurns: tailTurnsToDrop,
         };
+        // thread/rollback 没有 excludeTurns 对应物,响应仍可能携带完整历史;
+        // 超限时熔断的只是这台一次性 host,活跃 session 不受影响。
         const rollbackResp = await host.request<ThreadRollbackResponse>(
           Method.ThreadRollback,
           rollbackParams,
@@ -10146,6 +10178,20 @@ export class CodexAgent extends BaseAgent {
       try {
         await cleanupCreatedThreads();
       } finally {
+        // 一次性 host 用完即收,无论成败。key 唯一、无 session 绑定,
+        // retire 不会波及任何共享 host 或活跃会话。
+        if (forkHost) {
+          await this.retireHostKey(forkHostKey, 'Codex fork host is single-use', {
+            failIfActive: false,
+            logPrefix: 'codex fork host cleanup',
+            expectedHost: forkHost,
+          }).catch((err) => {
+            log.warn('fork host retire failed', {
+              forkHostKey,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
         if (stripCopyPath) {
           await fs.rm(path.dirname(stripCopyPath), { recursive: true, force: true }).catch((err) => {
             log.warn('strip encrypted rollout temp cleanup failed', {
@@ -10238,10 +10284,10 @@ export class CodexAgent extends BaseAgent {
   async forceDisposeLocalHostForAuthChange(reason = 'CodexAgent local auth changed'): Promise<void> {
     const keys = new Set<string>([hostKey()]);
     for (const key of this.hosts.keys()) {
-      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key)) keys.add(key);
     }
     for (const key of this.hostPromises.keys()) {
-      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key)) keys.add(key);
     }
     await Promise.all(Array.from(keys, (key) =>
       this.retireHostKey(key, reason, {
@@ -10402,7 +10448,10 @@ export class CodexAgent extends BaseAgent {
     // 立即 push, 让所有 live thread 通过 server 端 reload_user_config 拿到新值
     try {
       const localSessionHosts = Array.from(this.hosts.entries()).filter(
-        ([key]) => !key.startsWith('remote:') && !isLocalControlPlaneHostKey(key),
+        ([key]) =>
+          !key.startsWith('remote:') &&
+          !isLocalControlPlaneHostKey(key) &&
+          !isLocalForkHostKey(key),
       );
       if (localSessionHosts.length === 0) {
         log.info('setMemory ◀ no live app-server, will apply on next session');

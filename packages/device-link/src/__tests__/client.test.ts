@@ -16,6 +16,8 @@ import {
   makeTransportSkipPayload,
   parseTransportPayload,
 } from '../transport.js';
+import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
+import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -2072,10 +2074,8 @@ describe('DeviceLinkClient', () => {
     for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
       h.client.sendPush('dev-b', 'maker:event', { i });
     }
-    // push 之间不互相驱逐：新鲜 push 溢出仍按原语义被背压拒绝
-    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'overflow' })).toThrow(
-      expect.objectContaining({ code: 'BACKPRESSURE' }),
-    );
+    // （push 拥塞入队的 latest-wins 语义见专项用例
+    //   「缓冲被未 ACK 的 push 占满时，新 push latest-wins 驱逐最旧帧入队」）
 
     // invoke-result 是控制端的存活凭据：丢弃整个队头可丢弃前缀（fresh push
     // 一并放弃），立即入队发出，不留任何 push 排在 result 之前
@@ -2143,49 +2143,319 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('push 入队压力只做 TTL 兜底清扫（单调时钟计量），新鲜 push 之间仍互相背压', async () => {
-    // TTL 用单调时钟：墙钟被 NTP 向前校正超过 TTL 时，刚入队的 push 不得被误判过期
+  it('缓冲被未 ACK 的 push 占满时，新 push latest-wins 驱逐最旧帧入队，不再 BACKPRESSURE', async () => {
+    // 生产反例（2026-08-07，P0 度量实锤）：对端停 ACK 时新鲜 push 互相背压，
+    // 一小时 5168 次 BACKPRESSURE（maker:event），镜像零交付只放大重试风暴。
+    // 现改为按需腾位：只丢最旧的可丢弃帧，较新的镜像历史保留给对端恢复后交付。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'latest-wins-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+
+    // 满员后的新 push：只驱逐最旧的 1 条（seq=1）腾位，自身入队；
+    // baseSeq 前移到 2，接收端整体跳过被驱逐的 seq，无空洞
+    expect(() =>
+      h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' }),
+    ).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    let meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
+    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
+    expect(meta.baseSeq).toBe(2);
+
+    // 连续洪峰：每条新 push 轮换掉一条最旧帧，队列保持满员而不再抛背压
+    expect(() =>
+      h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' }),
+    ).not.toThrow();
+    meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
+    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 2);
+    expect(meta.baseSeq).toBe(3);
+    h.client.stop();
+  });
+
+  it('push 拥塞腾位不跨 live 帧：队头是 live invoke 时新 push 维持 BACKPRESSURE', async () => {
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, requestTimeoutMs: 5_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink('dev-b', {
+      controllerName: 'Test',
+      protocolVersion: 1,
+      appVersion: '1',
+    });
+    const sentOpen = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: sentOpen.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'remote-stream',
+      },
+    });
+    await open;
+
+    // 队头 seq=1 是仍在等待响应的 live invoke，其后被 push 填满：
+    // live 帧是可丢弃前缀的边界，push 腾位不得跨越（会留 seq 空洞）
+    const p = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+    p.catch(() => {});
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 1; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'overflow' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('流控 push(contacts-sync)满员入队不驱逐镜像帧,维持 BACKPRESSURE 交发送方流控', async () => {
+    // contacts-sync sender 对 BACKPRESSURE 做阻塞等待重试(它的流控协议),
+    // 它的帧不得触发 latest-wins 驱逐别人——满员时按原语义拒收即可。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'flow-controlled-in-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    expect(() =>
+      h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('已入队的流控 push 是腾位边界:镜像洪峰驱逐到它即止,分片不被静默丢弃', async () => {
+    // 反例(review P2):contacts-sync 的 cipher-chunk 一旦被 maker:event 洪峰
+    // 静默驱逐,发送方以为已送达,接收端永远拼不出本次传输。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'flow-controlled-boundary-stream');
+
+    // 队形:2 条镜像(seq1-2) + 1 条 contacts 分片(seq3) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', 'maker:event', { i: 1 });
+    h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk', index: 0 });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 3; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 洪峰驱逐 seq1、seq2 两条镜像后,队头是 contacts 分片:边界生效,第三条拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(3);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    h.client.stop();
+  });
+
+  it('白名单外的事件流 push(messages:created)不参与 latest-wins:不驱逐别人,也不被驱逐', async () => {
+    // review P1(第二轮):local-db:messages:created 是不可合并的事件流——拥塞
+    // 驱逐发生时 link 未断,reconnect reseed 不会跑,静默驱逐 = UI 永久漏一条消息。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'event-stream-guard-stream');
+
+    // 方向一:满员时它自己入队不驱逐镜像,维持 BACKPRESSURE
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    expect(() =>
+      h.client.sendPush('dev-b', 'local-db:messages:created', { messageId: 'm1' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('已入队的事件流 push 是腾位边界:镜像洪峰驱逐到 messages:created 即止', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'event-stream-boundary-stream');
+
+    // 队形:1 条镜像(seq1) + 1 条 messages:created(seq2) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', 'local-db:messages:created', { messageId: 'm1' });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 第一条洪峰驱逐 seq1 镜像入队;第二条队头已是 messages:created,拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    h.client.stop();
+  });
+
+  it('键控终态快照(sessions:activity)不参与 latest-wins:收尾快照不被 maker:event 洪峰驱逐', async () => {
+    // review P2(第三轮):activity 按 sessionId 键控,completed/error 收尾快照是
+    // 该键最后一帧;staging 在 sendPush 成功后即删暂存不再重试,link 不重连
+    // reseed 不会跑——被驱逐 = 手机端永远显示 running。
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'activity-final-stream');
+
+    // 队形:1 条镜像(seq1) + 会话 A 的 completed 快照(seq2) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', SESSION_ACTIVITY_CHANNEL, { sessionId: 'a', status: 'completed' });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 洪峰驱逐 seq1 镜像后,队头是 activity 收尾快照:边界生效,后续洪峰拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    // activity 满员入队也不驱逐别人(不在白名单)
+    expect(() =>
+      h.client.sendPush('dev-b', SESSION_ACTIVITY_CHANNEL, { sessionId: 'b', status: 'running' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    h.client.stop();
+  });
+
+  it('WebSocket 缓冲满时 push 在驱逐前拒绝:不为无法入队的帧清空镜像历史', async () => {
+    // review P1:容量预检若晚于驱逐,连续调用会逐步清空本可重试的镜像历史,
+    // 却一帧未纳。预检先行后,ws 满那一轮必须一条都不驱逐。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'ws-precheck-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    h.current().bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'rejected' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+
+    // ws 恢复后的下一条 push 只驱逐本轮的 1 条(baseSeq=2):
+    // 证明 ws 满那一轮没有发生任何驱逐,否则基线会更靠后
+    h.current().bufferedAmount = 0;
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'admitted' })).not.toThrow();
+    const pushFrames = h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    expect(parseTransportPayload(pushFrames.at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    h.client.stop();
+  });
+
+  it('live invoke 入队压力只做 TTL 兜底清扫(单调时钟计量):过期 push 出队,新鲜 push 不被 invoke 驱逐', async () => {
+    // TTL 用单调时钟:墙钟被 NTP 向前校正超过 TTL 时,刚入队的 push 不得被误判过期。
+    // (push 入队已改 latest-wins,TTL 路径由 live invoke 的入队压力触达。)
     const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
     let nowMs = 10_000;
     const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
     try {
       const warn = vi.fn();
       const h = makeHarness({
-        timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+        timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000, requestTimeoutMs: 5_000 },
         logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
       });
       h.client.start();
       await tick();
       h.current().ack();
-      await establishInboundReliableLink(h, 'ttl-stream');
+      await establishInboundReliableLink(h, 'ttl-invoke-stream');
 
       h.client.sendPush('dev-b', 'maker:event', { text: 'old-1' });
       h.client.sendPush('dev-b', 'maker:event', { text: 'old-2' });
-      // 只推进单调时钟：前两条 push 超龄，后续 push 保持新鲜
+      // 只推进单调时钟:前两条 push 超龄,后续 push 保持新鲜
       nowMs += TRANSPORT_PENDING_PUSH_MAX_AGE_MS + 1;
       for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
         h.client.sendPush('dev-b', 'maker:event', { i });
       }
 
-      // 缓冲满：新 push 触发 TTL 兜底清扫，只有 2 条过期 push 出队，新 push 入队
-      expect(() =>
-        h.client.sendPush('dev-b', 'maker:event', { text: 'fresh-after-sweep' }),
-      ).not.toThrow();
+      // 缓冲满:live invoke 触发 TTL 兜底清扫,2 条过期 push 出队,invoke 入队
+      const p1 = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+      p1.catch(() => {});
+      await tick();
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('dropped 2 discardable pending frame(s)'),
       );
-      const frames = h.current().sent.filter(
-        (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
-      );
-      const meta = parseTransportPayload(frames[frames.length - 1].payload)!.meta;
-      expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
-      expect(meta.baseSeq).toBe(3);
 
-      // 填回满员后队头是新鲜 push：不互相驱逐，仍按原语义背压
+      // 填回满员后队头是新鲜 push:invoke 不得驱逐它们,维持 BACKPRESSURE
       h.client.sendPush('dev-b', 'maker:event', { text: 'refill' });
-      expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'overflow' })).toThrow(
-        expect.objectContaining({ code: 'BACKPRESSURE' }),
-      );
+      let backpressured: unknown;
+      const p2 = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+      await p2.catch((err: unknown) => { backpressured = err; });
+      expect(backpressured).toEqual(expect.objectContaining({ code: 'BACKPRESSURE' }));
       h.client.stop();
     } finally {
       clock.mockRestore();
@@ -3676,16 +3946,16 @@ describe('DeviceLinkClient', () => {
         await makeLinkDownPeer(h);
 
         // link down:push 只入队不发送,填满 pending(64 条)
+        // (用可合并镜像通道 maker:event:白名单外通道不参与 latest-wins)
         for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
-          h.client.sendPush('ctrl-1', 'sessions', { i });
+          h.client.sendPush('ctrl-1', 'maker:event', { i });
         }
-        // 第 65 条:队头未过滞留阈值 → 仍是 BACKPRESSURE(原有语义不变)
-        expect(() => h.client.sendPush('ctrl-1', 'sessions', { overflow: true })).toThrow(
-          /reliable transport buffer is full/,
-        );
+        // 第 65 条:队头未过滞留阈值 → latest-wins 驱逐最旧 push 腾位入队,
+        // 不再 BACKPRESSURE(link 恢复后仍可交付较新镜像)
+        expect(() => h.client.sendPush('ctrl-1', 'maker:event', { overflow: true })).not.toThrow();
         // 滞留超阈值后:入队前整队放弃,新帧不再被顶回
         nowMs += 51;
-        expect(() => h.client.sendPush('ctrl-1', 'sessions', { after: true })).not.toThrow();
+        expect(() => h.client.sendPush('ctrl-1', 'maker:event', { after: true })).not.toThrow();
         h.client.stop();
       } finally {
         clock.mockRestore();

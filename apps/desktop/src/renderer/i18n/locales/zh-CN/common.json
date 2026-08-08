@@ -2040,6 +2040,7 @@
         "project": "切换项目工作区",
         "model": "查看或切换模型",
         "permission": "查看或切换权限模式",
+        "settings": "查看当前项目与 Agent 设置",
         "ctr": "接管桌面端的任务",
         "exctr": "退出远程控制"
       },
@@ -5626,7 +5627,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 登录已失效",
-    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请打开 ChatGPT App 重新登录后重试。",
+    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请在 Cindy 中重新登录后重试。",
     "instanceIsolatedInvalidated": "Cindy 当前使用的是单独登录的 ChatGPT 账号。该登录已失效。请在 Cindy 中重新登录后重试。",
     "unknownInvalidated": "Cindy 当前的 ChatGPT 登录已失效。请重新登录后重试。",
     "recovered": "ChatGPT 登录已恢复，请重试。",

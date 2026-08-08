@@ -2040,6 +2040,7 @@
         "project": "프로젝트 워크스페이스 전환",
         "model": "모델 보기·전환",
         "permission": "권한 모드 보기·전환",
+        "settings": "프로젝트와 Agent 설정 보기",
         "ctr": "데스크톱 세션 원격 제어",
         "exctr": "원격 제어 종료"
       },
@@ -5626,7 +5627,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 로그인이 더 이상 유효하지 않습니다",
-    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. ChatGPT App을 열어 다시 로그인한 후 재시도하세요.",
+    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "instanceIsolatedInvalidated": "Cindy는 현재 별도로 로그인한 ChatGPT 계정을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "unknownInvalidated": "Cindy의 현재 ChatGPT 로그인이 만료되었습니다. 다시 로그인한 후 재시도하세요.",
     "recovered": "ChatGPT 로그인이 복구되었습니다. 다시 시도하세요.",

@@ -198,3 +198,37 @@ test("client CI keeps the complete two-shard unit gate on Windows", () => {
 	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
 	assert.match(gate, /^        run: test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
 });
+
+test("client CI runs Linux checks and complete unit shards in parallel behind stable verify", () => {
+	const workflow = readText(".github/workflows/ci.yml");
+	const checks = workflowJob(workflow, "verify-checks");
+	assert.ok(checks, "client CI must define independent Linux verification checks");
+	assert.doesNotMatch(checks, /^    needs:/m);
+	assert.match(checks, /^        run: pnpm test:runner$/m);
+	assert.doesNotMatch(checks, /node scripts\/test-workspaces\.mjs --tier unit/);
+
+	const shards = workflowJob(workflow, "linux-unit-shards");
+	assert.ok(shards, "client CI must define Linux unit shards");
+	assert.match(shards, /^    runs-on: ubuntu-latest$/m);
+	assert.doesNotMatch(shards, /^    needs:/m);
+	assert.match(shards, /^      fail-fast: false$/m);
+	assert.match(shards, /^        shard: \[1, 2\]$/m);
+	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
+	assert.match(shards, /^      - name: Reject cindy-protocol rollback or divergence$/m);
+	assert.match(shards, /^        if: \$\{\{ github\.event_name == 'pull_request' \}\}$/m);
+	assert.match(shards, /^          CINDY_PROTOCOL_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}$/m);
+	assert.match(shards, /^        run: node scripts\/check-submodule-forward\.mjs$/m);
+	assert.match(shards, /^        run: pnpm exec node scripts\/test-workspaces\.mjs --tier unit$/m);
+	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
+
+	const gate = workflowJob(workflow, "verify");
+	assert.ok(gate, "client CI must preserve the stable verify check");
+	assert.match(gate, /^    name: verify$/m);
+	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
+	assert.match(gate, /^      - verify-checks$/m);
+	assert.match(gate, /^      - linux-unit-shards$/m);
+	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
+	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
+	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
+	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
+});
