@@ -125,6 +125,13 @@ export class GhostPipeDispatcher {
     return this.pending.size;
   }
 
+  hasPendingCallsFor(ghostId: string): boolean {
+    for (const entry of this.pending.values()) {
+      if (entry.ghostId === ghostId) return true;
+    }
+    return false;
+  }
+
   /**
    * 派活主入口(ghost 总机的 callGhostTool 回调)。
    * 永不 reject——一切失败都折叠成结构化 GhostToolCallResult。

@@ -195,6 +195,7 @@ export interface BuildPiAgentOpts {
   makerMemory?: AgentDeps['makerMemory'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
+  getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -378,5 +379,6 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiNativeProviders: () => resolvePiNativeProviders(),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
+    getGhostRosterPrompt: opts.getGhostRosterPrompt,
   });
 }
