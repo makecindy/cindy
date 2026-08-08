@@ -15,8 +15,13 @@
  * 1. **当代优先**:当代视图有该设备就只看当代;跨代事实仅在当代未知时兜底。
  * 2. **fail-open**:从未观察到离线的设备一律放行——恢复窗口的首发不能被拦死,
  *    收敛交给既有事件(重试前置门 / presence 翻转重放 / link-open 定向 flush)。
- * 3. **单帧让位**:收到该设备任一 presence 帧(无论 online / offline)即丢弃跨代
- *    结论,判据改由当代视图回答。
+ * 3. **单帧让位**:观察到该设备的任一当代证据即丢弃跨代结论,判据改由当代视图
+ *    回答。证据有两类,都表示「这一代已经有它的新消息了」:权威 presence 帧,
+ *    以及**来自它的任何入站帧**(帧能到达就证明对端活着且 relay 路由通;这与
+ *    client 层 onReliableFrameBeforeLink 的判断同源)。后者是必需的,不只是加强:
+ *    控制端 link-open 回归后,定向 flush 若因 BACKPRESSURE 失败,后续重试是无参
+ *    的全量轮、不再携带 onlySrc 证据,只靠 presence 让位会让这个已建链的 peer
+ *    被门禁持续跳到 presence 更新或 TTL 删条目(review P2)。
  * 4. **链路作用域**:reset()(登出 / 失去持有权)整体清空,不串到下一段链路或账号。
  */
 
@@ -28,8 +33,11 @@ export interface PresenceOfflineGate {
    * offline 结论。只存 offline——online 的设备本就该放行,陈旧的 online 无门禁价值。
    */
   carryOverGenerationEnd(currentOnlineView: Iterable<readonly [string, boolean]>): void;
-  /** 收到该设备的权威 presence 帧:跨代结论让位给当代事实。 */
-  observePresence(deviceId: string): void;
+  /**
+   * 观察到该设备的当代证据(权威 presence 帧,或来自它的任何入站帧):跨代结论
+   * 让位。入站帧路径在热路径上调用,集合空时立即返回。
+   */
+  observeReachable(deviceId: string): void;
   /** 链路 / 账号翻篇:清空跨代事实。 */
   reset(): void;
   /** 只读:当前保留的跨代离线设备数(供测试与诊断)。 */
@@ -59,7 +67,9 @@ export function createPresenceOfflineGate(
       }
     },
 
-    observePresence(deviceId: string): void {
+    observeReachable(deviceId: string): void {
+      // 热路径(每个入站帧)短路:绝大多数时刻没有跨代结论待清。
+      if (carriedOverOffline.size === 0) return;
       carriedOverOffline.delete(deviceId);
     },
 

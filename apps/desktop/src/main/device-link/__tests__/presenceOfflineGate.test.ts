@@ -20,7 +20,7 @@ function makeView() {
   /** 复刻 onPresenceChanged:写当代视图 + 让位跨代结论。 */
   const observe = (id: string, online: boolean): void => {
     view.set(id, online);
-    gate.observePresence(id);
+    gate.observeReachable(id);
   };
   return { view, gate, endGeneration, observe };
 }
@@ -70,6 +70,28 @@ describe('presenceOfflineGate', () => {
     observe('dev-off', false);
     expect(gate.isExplicitlyOffline('dev-off')).toBe(true);
     expect(gate.carriedOverCount()).toBe(0); // 由当代视图承担,不再需要跨代兜底
+  });
+
+  it('入站帧也是当代可达证据:link-open 回归的 peer 不被跨代结论持续拦住', () => {
+    // review P2:定向 flush(link-open 触发)若因 BACKPRESSURE 失败,后续重试是
+    // 无参全量轮、不再携带 onlySrc 证据。若只有 presence 帧能让位,这个已建链的
+    // peer 会被门禁一直跳到 presence 更新或 TTL 删条目。
+    const { gate, endGeneration, observe } = makeView();
+    observe('dev-back', false);
+    endGeneration();
+    expect(gate.isExplicitlyOffline('dev-back')).toBe(true);
+
+    // 控制端回归:它的入站帧(link-open / invoke / push 任一)即当代可达证据
+    gate.observeReachable('dev-back');
+    expect(gate.isExplicitlyOffline('dev-back')).toBe(false);
+    expect(gate.carriedOverCount()).toBe(0);
+  });
+
+  it('入站帧证据不覆盖当代权威 offline:presence 说离线仍然拦(presence 是持续权威源)', () => {
+    const { gate, observe } = makeView();
+    observe('dev-off', false); // 当代 presence 明确离线
+    gate.observeReachable('dev-off'); // 一帧迟到的入站帧不推翻当代权威结论
+    expect(gate.isExplicitlyOffline('dev-off')).toBe(true);
   });
 
   it('多次连续断线不累积错误结论;reset(登出/失去持有权)整体翻篇', () => {
