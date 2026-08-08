@@ -387,6 +387,40 @@ describe('useBrowserWebview', () => {
     expect(result!.favicon).toBe('');
   });
 
+  it('skips non-persistable favicon candidates and keeps a safe fallback', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: [
+          `data:image/png;base64,${'x'.repeat(20 * 1024)}`,
+          'blob:https://example.com/favicon',
+          `https://example.com/${'x'.repeat(20 * 1024)}`,
+          'https://example.com/favicon.ico',
+        ],
+      });
+    });
+    expect(result!.favicon).toBe('https://example.com/favicon.ico');
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['data:image/png;base64,eA=='],
+      });
+    });
+    expect(result!.favicon).toBe('');
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['blob:https://example.com/favicon'],
+      });
+    });
+    expect(result!.favicon).toBe('');
+  });
+
   it('does not treat a suppressed stale navigation report as a missing favicon', () => {
     let result: UseBrowserWebviewResult | null = null;
     render(createElement(HookProbe, {

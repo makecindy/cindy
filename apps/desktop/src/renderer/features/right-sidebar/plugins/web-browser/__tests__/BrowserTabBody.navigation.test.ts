@@ -422,6 +422,29 @@ describe('BrowserTabBody navigation', () => {
     expect(patchState).toHaveBeenCalledWith({ favicon: null });
   });
 
+  it('does not persist an unsafe favicon reported by a native popup', () => {
+    registerNativePopupTab('tab-browser', 'session-a', 'surface-oauth');
+    nativePopupHook.mockReturnValue({
+      ...makeBrowserState({
+        wrapper: null,
+        webview: null,
+        favicon: 'data:image/png;base64,eA==',
+      }),
+      closed: false,
+    });
+    const patchState = vi.fn();
+
+    render(renderBrowserTab(
+      'https://www.taptap.cn/',
+      patchState,
+      true,
+      { favicon: 'https://www.taptap.cn/favicon.ico' },
+    ));
+
+    expect(patchState).toHaveBeenCalledWith({ favicon: null });
+    expect(patchState).not.toHaveBeenCalledWith({ favicon: 'data:image/png;base64,eA==' });
+  });
+
   it('does not run browser shortcuts while an editable target has focus', () => {
     const reload = vi.fn();
     const goBack = vi.fn();

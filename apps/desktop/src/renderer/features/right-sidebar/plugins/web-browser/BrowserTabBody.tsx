@@ -39,6 +39,7 @@ import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
+import { normalizePersistableFavicon } from '../../lib/faviconPersistence';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
 import {
   forceKillBrowserTab,
@@ -201,7 +202,9 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     // null 表示当前 webview 代际尚未观测到 favicon，不能据此清掉持久化图标；
     // 空串才是 page-favicon-updated 明确报告 "无图标"。
     if (browser.favicon === null) return;
-    const nextFavicon = browser.favicon || null;
+    // WebView 和原生 popup 是两套事件源，必须在共用写入边界再做一次过滤，
+    // 避免 data/blob URL 或超长字符串进入 tab state。
+    const nextFavicon = normalizePersistableFavicon(browser.favicon);
     if (nextFavicon === state.favicon) return;
     ctx.patchState({ favicon: nextFavicon });
   }, [browser.favicon, ctx, state.favicon]);

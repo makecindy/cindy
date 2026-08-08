@@ -35,6 +35,7 @@ import {
   reportRsbBrowserTab,
   subscribeTabResourceEvent,
 } from '../lib/rsbBrowserBridge';
+import { selectPersistableFavicon } from '../lib/faviconPersistence';
 
 /** 2 秒内最多允许 12 次 renderer 主动导航;网页自身导航不计入。 */
 export const BROWSER_NAVIGATION_FUSE_LIMIT = 12;
@@ -245,7 +246,7 @@ export function useBrowserWebview(
 
     const onTitle = (e: Electron.PageTitleUpdatedEvent) => setTitle(e.title);
     const onFavicon = (e: Electron.PageFaviconUpdatedEvent) => {
-      setFavicon(e.favicons.find((candidate) => candidate.trim().length > 0) ?? '');
+      setFavicon(selectPersistableFavicon(e.favicons));
     };
     const onDidNavigate = (e: Electron.DidNavigateEvent) => {
       const previousUrl = urlRef.current;

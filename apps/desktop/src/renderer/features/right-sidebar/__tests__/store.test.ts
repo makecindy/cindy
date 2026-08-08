@@ -246,6 +246,31 @@ describe('RSB store', () => {
       expect(store.getBucket('s1').activeTabId).toBe(prevActiveId);
     });
 
+    it('rejects oversized persisted state before optimistic insertion', async () => {
+      const before = store.getBucket('s1');
+      const listener = vi.fn();
+      const onOptimisticAdd = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+
+      const rejection = store.addTab(
+        's1',
+        'web-browser',
+        { favicon: `data:image/png;base64,${'x'.repeat(20 * 1024)}` },
+        { onOptimisticAdd },
+      );
+      await expect(rejection).rejects.toMatchObject({
+        code: 'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+      });
+      await expect(rejection).rejects.toThrow(/tab state JSON too large/);
+
+      expect(store.getBucket('s1')).toBe(before);
+      expect(listener).not.toHaveBeenCalled();
+      expect(onOptimisticAdd).not.toHaveBeenCalled();
+      expect(ipc.upsert).not.toHaveBeenCalled();
+      expect(ipc.setActive).not.toHaveBeenCalled();
+      unsubscribe();
+    });
+
     it('falls back to memory-only when the first persist hits a missing session FK', async () => {
       ipc.upsert.mockRejectedValueOnce(new Error('SQLITE_CONSTRAINT_FOREIGNKEY: FOREIGN KEY constraint failed'));
       const tab = await store.addTab('ghost-race', 'web-browser', { url: 'https://example.com' });
@@ -902,6 +927,30 @@ describe('RSB store', () => {
       ).rejects.toThrow('boom');
       const bucket = store.getBucket('s1');
       expect((bucket.tabs[0].state as { selectedFilePath: string | null }).selectedFilePath).toBeNull();
+    });
+
+    it('rejects oversized persisted patches without notifying or writing', async () => {
+      const a = await store.addTab('s1', 'web-browser', { favicon: null });
+      ipc.upsert.mockClear();
+      const before = store.getBucket('s1');
+      const listener = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+
+      const oversizedFavicon = `data:image/png;base64,${'x'.repeat(20 * 1024)}`;
+      const rejection = store.patchTabState('s1', a.id, (current) => ({
+        ...(current as object),
+        favicon: oversizedFavicon,
+      }));
+      await expect(rejection).rejects.toMatchObject({
+        code: 'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+      });
+      await expect(rejection).rejects.toThrow(/tab state JSON too large/);
+
+      expect(store.getBucket('s1')).toBe(before);
+      expect(store.getBucket('s1').tabs[0].state).toEqual({ favicon: null });
+      expect(listener).not.toHaveBeenCalled();
+      expect(ipc.upsert).not.toHaveBeenCalled();
+      unsubscribe();
     });
 
     it('serializes DB writes and coalesces the latest pending state per tab', async () => {
