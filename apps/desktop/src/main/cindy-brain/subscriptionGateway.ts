@@ -62,10 +62,13 @@ type MessageHookContext = Pick<GhostMessageHookData, 'model'>;
 const userHookContext = new AsyncLocalStorage<MessageHookContext>();
 const assistantHookContext = new AsyncLocalStorage<Promise<MessageHookContext>>();
 
-function boundMessageHookContext(context: Promise<MessageHookContext>): Promise<MessageHookContext> {
+function boundMessageHookContext(
+  context: Promise<MessageHookContext>,
+  timeoutMs: number,
+): Promise<MessageHookContext> {
   let timer: ReturnType<typeof setTimeout>;
   const fallback = new Promise<MessageHookContext>((resolve) => {
-    timer = setTimeout(() => resolve({}), GHOST_HOOK_TIMEOUT_MS / 2);
+    timer = setTimeout(() => resolve({}), timeoutMs);
     timer.unref?.();
   });
   return Promise.race([context.catch(() => ({})), fallback]).finally(() => clearTimeout(timer));
@@ -75,6 +78,7 @@ function boundMessageHookContext(context: Promise<MessageHookContext>): Promise<
 export function withGhostAssistantHookModel<T>(model: Promise<string>, task: () => T): T {
   const context = boundMessageHookContext(
     model.then((value) => (value && value !== 'unknown' ? { model: value } : {})),
+    GHOST_ASSISTANT_HOOK_TIMEOUT_MS / 2,
   );
   return assistantHookContext.run(context, task);
 }
@@ -290,7 +294,7 @@ export class GhostSubscriptionGateway {
       const ghostId = ghost.manifest.id;
       const e = this.entry(ghostId);
       if (e.hookFused) continue;
-      context ??= this.resolveMessageHookContext(input.sessionId);
+      context ??= this.resolveMessageHookContext(input.sessionId, GHOST_HOOK_TIMEOUT_MS / 2);
 
       const verdict = await this.askOne(ghost, e, 'will-user-message', {
         sessionId: input.sessionId,
@@ -351,7 +355,10 @@ export class GhostSubscriptionGateway {
       const ghostId = ghost.manifest.id;
       const e = this.entry(ghostId);
       if (e.hookFused) continue;
-      context ??= this.resolveMessageHookContext(input.sessionId);
+      context ??= this.resolveMessageHookContext(
+        input.sessionId,
+        GHOST_ASSISTANT_HOOK_TIMEOUT_MS / 2,
+      );
 
       const verdict = await this.askOne(ghost, e, 'will-assistant-message', {
         sessionId: input.sessionId,
@@ -419,9 +426,14 @@ export class GhostSubscriptionGateway {
       resolveVerdict = resolve;
     });
     this.pendingHooks.set(hookId, { ghostId, resolve: resolveVerdict });
-    const timer = setTimeout(() => {
-      if (this.pendingHooks.delete(hookId)) resolveVerdict(null); // 超时 = fail-open
-    }, timeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const armTimeout = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (this.pendingHooks.delete(hookId)) resolveVerdict(null); // 超时 = fail-open
+      }, timeoutMs);
+    };
+    armTimeout();
 
     let deliverFailure: string | null = null;
     void (async () => {
@@ -440,6 +452,9 @@ export class GhostSubscriptionGateway {
         ts: this.deps.now(),
         data,
       });
+      // Wake/context resolution must remain bounded, but a successful delivery
+      // starts a fresh decision window so setup latency cannot consume it.
+      if (this.pendingHooks.has(hookId)) armTimeout();
     })().catch((err) => {
       if (this.pendingHooks.delete(hookId)) {
         deliverFailure = `deliver: ${err instanceof Error ? err.message : String(err)}`;
@@ -457,10 +472,13 @@ export class GhostSubscriptionGateway {
     return verdict;
   }
 
-  private resolveMessageHookContext(sessionId: string): MessageHookContext | Promise<MessageHookContext> {
+  private resolveMessageHookContext(
+    sessionId: string,
+    timeoutMs: number,
+  ): MessageHookContext | Promise<MessageHookContext> {
     try {
       const context = (this.deps.resolveMessageHookContext ?? readMessageHookContext)(sessionId);
-      return context instanceof Promise ? boundMessageHookContext(context) : context;
+      return context instanceof Promise ? boundMessageHookContext(context, timeoutMs) : context;
     } catch {
       return {};
     }

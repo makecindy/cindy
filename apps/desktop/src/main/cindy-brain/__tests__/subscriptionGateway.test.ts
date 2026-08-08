@@ -457,7 +457,35 @@ describe('will- 拦截', () => {
     expect(await p).toEqual({ action: 'allow' });
   });
 
-  it('上下文读取挂死:无上下文投递但仍保留整体超时', async () => {
+  it('成功投递后重新获得完整的裁决窗口', async () => {
+    let finishWake!: () => void;
+    const wake = vi.fn(() => new Promise<void>((resolve) => {
+      finishWake = resolve;
+    }));
+    const { gw, sent } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      isRunning: () => false,
+      wake,
+    });
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS - 100);
+    finishWake();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    let settled = false;
+    void p.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(settled).toBe(false);
+
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'allow',
+    });
+    expect(await p).toEqual({ action: 'allow' });
+  });
+
+  it('上下文读取挂死:无上下文投递后仍获得完整裁决窗口', async () => {
     const { gw, sent, running } = makeGateway({
       listGhosts: () => [HOOK_GHOSTS[0]],
       resolveMessageHookContext: () => new Promise<never>(() => {}),
@@ -467,7 +495,7 @@ describe('will- 拦截', () => {
     await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2);
     expect((sent[0].payload as { data: unknown }).data).toEqual({ sessionId: 's1', text: 'hi' });
     const hookId = (sent[0].payload as { hookId: string }).hookId;
-    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2 + 1);
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS + 1);
     expect(await p).toEqual({ action: 'allow' });
     gw.handleVerdict('h1', {
       type: 'event-verdict',
@@ -541,6 +569,30 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
     expect(await p).toEqual({ action: 'allow' });
     // 下发的事件名是出口钩子名。
     expect((sent[0].payload as { name: string }).name).toBe('will-assistant-message');
+  });
+
+  it('出口钩子按自身预算等待较慢的本轮模型快照', async () => {
+    let resolveModel!: (model: string) => void;
+    const model = new Promise<string>((resolve) => {
+      resolveModel = resolve;
+    });
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [OUT_GHOSTS[0]] });
+    running.add('h1');
+    const p = withGhostAssistantHookModel(model, () =>
+      gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' }),
+    );
+
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS);
+    expect(sent).toHaveLength(0);
+    resolveModel('claude-opus-5');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'claude-opus-5' } });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'allow',
+    });
+    expect(await p).toEqual({ action: 'allow' });
   });
 
   it('rewrite 链式叠加:h2 看到 h1 改写后的文本,末个署名', async () => {
