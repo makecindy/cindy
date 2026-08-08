@@ -1728,6 +1728,79 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('returns exact Orca archive ids through the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(
+      async (client) => {
+        await seedSession(client, 'lead');
+        await seedSession(client, 'active-worker', { orcaRole: 'worker' });
+        await seedSession(client, 'archived-worker', {
+          orcaRole: 'worker',
+          status: 'archived',
+        });
+        await seedSession(client, 'deleted-worker', {
+          orcaRole: 'worker',
+          status: 'deleted',
+        });
+        await seedSession(client, 'orphan-worker', { orcaRole: 'worker' });
+        await client.exec(
+          'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+          ['active-team', 'lead', 'active', 1, 1],
+        );
+        await client.exec(
+          'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+          ['inactive-team', 'lead', 'completed', 1, 1],
+        );
+        for (const [id, teamId, sessionId] of [
+          ['active-link', 'active-team', 'active-worker'],
+          ['archived-link', 'active-team', 'archived-worker'],
+          ['deleted-link', 'active-team', 'deleted-worker'],
+          ['orphan-link', 'inactive-team', 'orphan-worker'],
+        ]) {
+          await client.exec(
+            'INSERT INTO orca_workers (id, team_id, session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+            [id, teamId, sessionId, 'idle', 1, 1],
+          );
+        }
+
+        await expect(
+          client.tx('orca.archiveWorkersByTeam', { teamId: 'active-team', now: 100 }),
+        ).resolves.toEqual(['active-worker']);
+        await expect(
+          client.tx('orca.reconcileInactiveTeamWorkersForLead', {
+            leadSessionId: 'lead',
+            now: 200,
+          }),
+        ).resolves.toEqual(['orphan-worker']);
+
+        await expect(
+          client.query<{ id: string; status: string; updated_at: number }>(
+            'SELECT id, status, updated_at FROM sessions WHERE id != ? ORDER BY id',
+            ['lead'],
+          ),
+        ).resolves.toEqual([
+          { id: 'active-worker', status: 'archived', updated_at: 100 },
+          { id: 'archived-worker', status: 'archived', updated_at: 1 },
+          { id: 'deleted-worker', status: 'deleted', updated_at: 1 },
+          { id: 'orphan-worker', status: 'archived', updated_at: 200 },
+        ]);
+        await expect(
+          client.query<{ id: string; status: string; updated_at: number }>(
+            'SELECT id, status, updated_at FROM orca_workers ORDER BY id',
+          ),
+        ).resolves.toEqual([
+          { id: 'active-link', status: 'idle', updated_at: 1 },
+          { id: 'archived-link', status: 'idle', updated_at: 1 },
+          { id: 'deleted-link', status: 'idle', updated_at: 1 },
+          { id: 'orphan-link', status: 'done', updated_at: 200 },
+        ]);
+      },
+      { useInlineWorker },
+    );
+  });
+
   it('serializes the same worker label across independent database workers', async () => {
     await withTwoClients(async ([first, second]) => {
       await seedSession(first, 'lead');

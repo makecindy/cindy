@@ -1,3 +1,5 @@
+import { constants as fsConstants, promises as fs } from 'node:fs';
+import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonObjectArg } from '../json-object-arg.js';
@@ -24,6 +26,7 @@ export interface ComputerMcpServerOptions {
 
 const DESCRIPTION_LIST =
   'Discover local desktop computer-use tools. These tools operate on the user desktop through the installed driver. ' +
+  "For iOS work, cindy_ios_simulator is the default embedded-simulator route; use this server for macOS Simulator.app only after the user explicitly requests an external window. " +
   'Use read-only status/get_accessibility_tree/list_apps/list_windows/get_window_state before click/type_text/press_key/hotkey.';
 
 const DESCRIPTION_CALL =
@@ -85,6 +88,56 @@ const ELEMENT_INDEX_ACTION_TOOLS = new Set<ComputerMcpToolName>([
   'press_key',
   'scroll',
 ]);
+
+/** Actions that can change a target app after resolving its model-supplied PID. */
+const TARGETED_MUTATING_TOOLS = new Set<ComputerMcpToolName>([
+  'click',
+  'double_click',
+  'right_click',
+  'drag',
+  'type_text',
+  'set_value',
+  'press_key',
+  'hotkey',
+  'scroll',
+]);
+
+const MAX_REPLAY_TURNS = 1_000;
+const MAX_REPLAY_DIRECTORY_ENTRIES = 10_000;
+const MAX_REPLAY_ACTION_BYTES = 256 * 1024;
+const MAX_REPLAY_TOTAL_ACTION_BYTES = 2 * 1024 * 1024;
+const MAX_REPLAY_TOTAL_DELAY_MS = 5 * 60 * 1_000;
+const MAX_REPLAY_WALL_CLOCK_MS = 10 * 60 * 1_000;
+const MAX_REPLAY_RESULT_SUMMARY_CHARS = 2_048;
+const MAX_REPLAY_TOTAL_RESULT_CHARS = 64 * 1024;
+const REPLAY_READ_FLAGS =
+  fsConstants.O_RDONLY |
+  (process.platform === 'win32'
+    ? 0
+    : (fsConstants.O_NONBLOCK ?? 0) | (fsConstants.O_NOFOLLOW ?? 0));
+
+interface ReplayTrajectoryAction {
+  turn: string;
+  tool: ComputerMcpToolName;
+  args: Record<string, unknown>;
+}
+
+interface ComputerDispatchOptions {
+  forceFreshProcessIdentity?: boolean;
+  pathWorkingDirOverride?: string;
+}
+
+type ComputerMcpTextResult = ReturnType<typeof textResult>;
+
+type ReplayTrajectoryPreparation =
+  | { error: ComputerMcpTextResult }
+  | {
+      directory: string;
+      workingRoot: string;
+      actions: ReplayTrajectoryAction[];
+      delayMs: number;
+      stopOnError: boolean;
+    };
 
 function serializeJsonSchema(schema: z.ZodObject<z.ZodRawShape>): unknown {
   try {
@@ -252,7 +305,7 @@ export function createComputerMcpServer(
         inputSchema: z.toJSONSchema(z.object(tool.inputShape).strict()),
       })),
       workflow:
-        'Start with status and check_permissions. Then use get_accessibility_tree/list_windows, optionally narrow list_windows with query/workspace_root/process_name (for example, {"process_name":"Simulator"}), inspect a target with get_window_state, perform one action, and call get_window_state again to verify. Targeted actions such as click/type_text require pid; include window_id whenever the target window is known, and always for coordinates. Use get_window_state with {"capture_mode":"vision"} for screenshots and normally omit screenshot_out_file. Element indices are only valid for the latest snapshot of the same pid/window_id: pass the snapshot_id from get_window_state along with element_index, and re-observe when an action is rejected with STALE_SNAPSHOT. Use start_recording/stop_recording/replay_trajectory only when the user explicitly asks for recording or replay.',
+        'Start with status and check_permissions. For iOS work, use cindy_ios_simulator first; this server may inspect the external Xcode/Simulator desktop UI read-only, but mutating external iOS workflows are not available until Cindy has a host-issued authorization flow. Otherwise use get_accessibility_tree/list_windows, optionally narrow list_windows with query/workspace_root/process_name (for example, {"process_name":"Simulator"}), inspect a target with get_window_state, perform one action, and call get_window_state again to verify. Targeted actions such as click/type_text require pid; include window_id whenever the target window is known, and always for coordinates. Use get_window_state with {"capture_mode":"vision"} for screenshots and normally omit screenshot_out_file. Element indices are only valid for the latest snapshot of the same pid/window_id: pass the snapshot_id from get_window_state along with element_index, and re-observe when an action is rejected with STALE_SNAPSHOT. Use start_recording/stop_recording/replay_trajectory only when the user explicitly asks for recording or replay.',
     }),
   );
 
@@ -263,8 +316,8 @@ export function createComputerMcpServer(
       name: z.enum(COMPUTER_TOOL_NAMES).describe('Tool name from list_tools'),
       args: jsonObjectArg('Arguments object for the selected tool'),
     },
-    async ({ name, args }) => {
-      const result = await handleCallTool(name, args);
+    async ({ name, args }, extra) => {
+      const result = await handleCallTool(name, args, extra.signal);
       // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / COMPUTER_DRIVER_ERROR 返回给
       // 模型自纠之前在这里落一条日志(见 tool-error-telemetry.ts)。
       logToolResultErrorCode({
@@ -278,7 +331,12 @@ export function createComputerMcpServer(
     },
   );
 
-  async function handleCallTool(name: string, args: Record<string, unknown> | undefined) {
+  async function handleCallTool(
+    name: string,
+    args: Record<string, unknown> | undefined,
+    signal?: AbortSignal,
+    dispatchOptions?: ComputerDispatchOptions,
+  ) {
     const def = getComputerTool(name);
     if (!def) {
       return textResult({ ok: false, errorCode: 'UNKNOWN_TOOL', data: { requested: name } }, true);
@@ -293,9 +351,31 @@ export function createComputerMcpServer(
     if (!parsed.success) {
       return validationError(name, schema, parsed.error);
     }
+    if (signal?.aborted) return replayCancelledResult();
     const callContext = readCallContext(options);
     const sessionId = callContext?.sessionId;
     const parsedData = parsed.data as Record<string, unknown>;
+
+    // Resolve every local path before a guard reads it. In particular,
+    // trajectory inspection must never follow a model-supplied path outside
+    // the current task working directory.
+    const pathGuardError = await guardPathArgs(
+      name as ComputerMcpToolName,
+      parsedData,
+      dispatchOptions?.pathWorkingDirOverride,
+    );
+    if (pathGuardError) return pathGuardError;
+
+    if (name === 'replay_trajectory') {
+      return replayTrajectoryWithGuards(parsedData, signal);
+    }
+
+    const externalIosGuard = await guardExternalIosDesktopWorkflow(
+      name as ComputerMcpToolName,
+      parsedData,
+      dispatchOptions?.forceFreshProcessIdentity === true,
+    );
+    if (externalIosGuard) return externalIosGuard;
 
     // 快照代际护栏:element_index 指向"某次 get_window_state 的第几项",观察和
     // 动作之间 UI 树变化时会静默作用到错误元素。带 snapshot_id 的动作在此校验
@@ -304,11 +384,6 @@ export function createComputerMcpServer(
     if (staleResult) return staleResult;
     // snapshot_id 是 MCP 层的护栏参数,driver 不认识,派发前剥掉。
     delete parsedData.snapshot_id;
-
-    // 路径边界护栏:把 LLM 指定的本地文件路径(截图 / 调试图 / 录制目录等)
-    // 约束到当前 session workingDir,阻断 prompt 注入的任意写/读(见 COMPUTER_PATH_ARGS)。
-    const pathGuardError = await guardPathArgs(name as ComputerMcpToolName, parsedData);
-    if (pathGuardError) return pathGuardError;
 
     const parsedArgs = withSessionArg(
       name as ComputerMcpToolName,
@@ -343,6 +418,574 @@ export function createComputerMcpServer(
   }
 
   /**
+   * Cindy's embedded simulator is the default iOS route. This guard uses
+   * host-resolved PID provenance so the model cannot relabel Xcode/Simulator
+   * and then drive Run/click/hotkey through generic desktop automation.
+   */
+  async function guardExternalIosDesktopWorkflow(
+    name: ComputerMcpToolName,
+    parsedData: Record<string, unknown>,
+    forceFreshProcessIdentity = false,
+  ) {
+    if (name === 'launch_app') {
+      const target = classifyExternalIosTarget({
+        name: parsedData.name,
+        bundleId: parsedData.bundle_id,
+        executable: parsedData.name,
+      });
+      if (target === 'simulator') {
+        return embeddedIosSimulatorPreferredResult('Simulator.app');
+      }
+      if (target === 'xcode') {
+        return embeddedIosSimulatorPreferredResult('Xcode');
+      }
+      return null;
+    }
+
+    if (
+      !TARGETED_MUTATING_TOOLS.has(name) ||
+      typeof parsedData.pid !== 'number'
+    ) {
+      return null;
+    }
+    return guardMutatingProcessTarget(parsedData.pid, name, forceFreshProcessIdentity);
+  }
+
+  async function guardMutatingProcessTarget(
+    pid: number,
+    tool: ComputerMcpToolName,
+    forceFreshProcessIdentity = false,
+  ) {
+    if (!deps.resolveProcessIdentity) return targetProvenanceUnavailableResult();
+
+    let identity;
+    try {
+      identity = forceFreshProcessIdentity
+        ? await deps.resolveProcessIdentity(pid, { forceFresh: true })
+        : await deps.resolveProcessIdentity(pid);
+    } catch (err) {
+      deps.logger?.warn('failed to resolve Computer Use target process for iOS routing guard', {
+        pid,
+        tool,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return targetProvenanceUnavailableResult();
+    }
+    if (
+      !identity ||
+      identity.pid !== pid ||
+      ![identity.name, identity.command, identity.executable, identity.bundleId].some(
+        (value) => typeof value === 'string' && value.trim().length > 0,
+      )
+    ) {
+      return targetProvenanceUnavailableResult();
+    }
+    const target = classifyExternalIosTarget(identity);
+    if (!target) return null;
+
+    return embeddedIosSimulatorPreferredResult(target === 'xcode' ? 'Xcode' : 'Simulator.app');
+  }
+
+  function trajectoryValidationFailedResult(message: string, turn?: string) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: 'TRAJECTORY_VALIDATION_FAILED',
+        data: {
+          message,
+          ...(turn ? { turn } : {}),
+        },
+      },
+      true,
+    );
+  }
+
+  function replayCancelledResult() {
+    return textResult(
+      {
+        ok: false,
+        errorCode: 'REQUEST_CANCELLED',
+        data: { message: 'Trajectory replay stopped because the request was cancelled.' },
+      },
+      true,
+    );
+  }
+
+  function replayBudgetExceededResult() {
+    return textResult(
+      {
+        ok: false,
+        errorCode: 'REPLAY_BUDGET_EXCEEDED',
+        data: { message: 'Trajectory replay exceeded Cindy\'s bounded execution budget.' },
+      },
+      true,
+    );
+  }
+
+  async function readBoundedReplayAction(
+    actionFile: Awaited<ReturnType<typeof fs.open>>,
+    signal?: AbortSignal,
+  ): Promise<{ text: string; bytes: number }> {
+    const chunks: Buffer[] = [];
+    let position = 0;
+    while (position <= MAX_REPLAY_ACTION_BYTES) {
+      if (signal?.aborted) throw new DOMException('Replay cancelled', 'AbortError');
+      const remaining = MAX_REPLAY_ACTION_BYTES + 1 - position;
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
+      const { bytesRead } = await actionFile.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    if (position > MAX_REPLAY_ACTION_BYTES) {
+      throw new Error('Recorded action exceeds the per-action byte limit.');
+    }
+    return {
+      text: Buffer.concat(chunks, position).toString('utf8'),
+      bytes: position,
+    };
+  }
+
+  async function waitForReplayDelay(delayMs: number, signal?: AbortSignal): Promise<boolean> {
+    if (delayMs <= 0) return signal?.aborted !== true;
+    return new Promise((resolve) => {
+      if (signal?.aborted) {
+        resolve(false);
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(true);
+      }, delayMs);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  async function prepareReplayTrajectory(
+    parsedData: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ReplayTrajectoryPreparation> {
+    const directory = parsedData.dir;
+    const workingDir = options.getSessionContext?.().workingDir ?? '';
+    if (typeof directory !== 'string' || !workingDir) {
+      return {
+        error: trajectoryValidationFailedResult(
+          'Cindy could not safely resolve the trajectory directory.',
+        ),
+      };
+    }
+
+    let workingRoot: string;
+    let trajectoryRoot: string;
+    const candidates: string[] = [];
+    try {
+      workingRoot = await fs.realpath(workingDir);
+      // handleCallTool already constrained `directory` against the original
+      // workingDir spelling. Canonicalize both sides before comparing again so
+      // a legitimate symlinked workspace (including macOS /var -> /private/var)
+      // is not rejected by a lexical alias mismatch.
+      trajectoryRoot = await fs.realpath(directory);
+      await resolvePathInsideRoot(workingRoot, trajectoryRoot);
+
+      let entryCount = 0;
+      const trajectoryDirectory = await fs.opendir(trajectoryRoot);
+      for await (const entry of trajectoryDirectory) {
+        if (signal?.aborted) return { error: replayCancelledResult() };
+        entryCount += 1;
+        if (entryCount > MAX_REPLAY_DIRECTORY_ENTRIES) {
+          return {
+            error: trajectoryValidationFailedResult(
+              `Trajectory directory exceeds the ${MAX_REPLAY_DIRECTORY_ENTRIES}-entry safety limit.`,
+            ),
+          };
+        }
+        if (!entry.name.startsWith('turn-')) continue;
+        candidates.push(entry.name);
+        if (candidates.length > MAX_REPLAY_TURNS) {
+          return {
+            error: trajectoryValidationFailedResult(
+              `Trajectory exceeds the ${MAX_REPLAY_TURNS}-turn safety limit.`,
+            ),
+          };
+        }
+      }
+      candidates.sort();
+    } catch (error) {
+      if (signal?.aborted) return { error: replayCancelledResult() };
+      deps.logger?.warn('failed to inspect Computer Use trajectory directory', {
+        directory,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        error: trajectoryValidationFailedResult(
+          'Cindy could not read the trajectory directory before replay.',
+        ),
+      };
+    }
+
+    const actions: ReplayTrajectoryAction[] = [];
+    let totalActionBytes = 0;
+    for (const turn of candidates) {
+      try {
+        if (signal?.aborted) return { error: replayCancelledResult() };
+        const turnPath = await resolvePathInsideRoot(
+          workingRoot,
+          path.join(trajectoryRoot, turn),
+        );
+        if (!(await fs.lstat(turnPath)).isDirectory()) {
+          return {
+            error: trajectoryValidationFailedResult(
+              'Recorded turn must be a real directory, not a file or symbolic link.',
+              turn,
+            ),
+          };
+        }
+
+        const actionPath = await resolvePathInsideRoot(
+          workingRoot,
+          path.join(turnPath, 'action.json'),
+        );
+        if ((await fs.lstat(actionPath)).isSymbolicLink()) {
+          return {
+            error: trajectoryValidationFailedResult(
+              'Recorded action must be a real file, not a symbolic link.',
+              turn,
+            ),
+          };
+        }
+        const canonicalActionPath = await fs.realpath(actionPath);
+        await resolvePathInsideRoot(workingRoot, canonicalActionPath);
+        const actionFile = await fs.open(actionPath, REPLAY_READ_FLAGS);
+        let actionText: string;
+        try {
+          const stat = await actionFile.stat();
+          if (!stat.isFile() || stat.size > MAX_REPLAY_ACTION_BYTES) {
+            return {
+              error: trajectoryValidationFailedResult(
+                'The recorded action is not a bounded regular JSON file.',
+                turn,
+              ),
+            };
+          }
+          const currentCanonicalPath = await fs.realpath(actionPath);
+          await resolvePathInsideRoot(workingRoot, currentCanonicalPath);
+          const currentStat = await fs.stat(currentCanonicalPath);
+          if (currentStat.dev !== stat.dev || currentStat.ino !== stat.ino) {
+            return {
+              error: trajectoryValidationFailedResult(
+                'The recorded action changed while Cindy was opening it.',
+                turn,
+              ),
+            };
+          }
+          const boundedAction = await readBoundedReplayAction(actionFile, signal);
+          totalActionBytes += boundedAction.bytes;
+          if (totalActionBytes > MAX_REPLAY_TOTAL_ACTION_BYTES) {
+            return {
+              error: trajectoryValidationFailedResult(
+                `Trajectory exceeds the ${MAX_REPLAY_TOTAL_ACTION_BYTES}-byte aggregate safety limit.`,
+                turn,
+              ),
+            };
+          }
+          actionText = boundedAction.text;
+        } finally {
+          await actionFile.close();
+        }
+
+        const rawAction: unknown = JSON.parse(actionText);
+        if (!rawAction || typeof rawAction !== 'object' || Array.isArray(rawAction)) {
+          return {
+            error: trajectoryValidationFailedResult(
+              'The recorded action must be a JSON object.',
+              turn,
+            ),
+          };
+        }
+        const action = rawAction as Record<string, unknown>;
+        const tool = action.tool;
+        if (typeof tool !== 'string' || tool === 'replay_trajectory') {
+          return {
+            error: trajectoryValidationFailedResult(
+              'Nested or unnamed trajectory replay actions are not allowed.',
+              turn,
+            ),
+          };
+        }
+        const definition = getComputerTool(tool);
+        if (!definition) {
+          return {
+            error: trajectoryValidationFailedResult(
+              `Recorded tool ${tool} is not exposed by this Cindy version.`,
+              turn,
+            ),
+          };
+        }
+        const toolName = tool as ComputerMcpToolName;
+        const rawArgs = action.arguments ?? {};
+        if (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) {
+          return {
+            error: trajectoryValidationFailedResult(
+              'Recorded tool arguments must be a JSON object.',
+              turn,
+            ),
+          };
+        }
+        const normalized = normalizeCompatibilityArgs(tool, rawArgs as Record<string, unknown>);
+        if (normalized.conflict) {
+          return {
+            error: trajectoryValidationFailedResult(
+              `Recorded tool ${tool} contains conflicting compatibility arguments.`,
+              turn,
+            ),
+          };
+        }
+        const parsed = z.object(definition.inputShape).strict().safeParse(normalized.args);
+        if (!parsed.success) {
+          return {
+            error: trajectoryValidationFailedResult(
+              `Recorded tool ${tool} does not match the current Cindy schema.`,
+              turn,
+            ),
+          };
+        }
+        const args = parsed.data as Record<string, unknown>;
+        const nestedPathError = await guardPathArgs(toolName, args, workingRoot);
+        if (nestedPathError) return { error: nestedPathError };
+        const externalIosGuard = await guardExternalIosDesktopWorkflow(toolName, args);
+        if (externalIosGuard) return { error: externalIosGuard };
+        actions.push({ turn, tool: toolName, args });
+      } catch (error) {
+        if (signal?.aborted) return { error: replayCancelledResult() };
+        deps.logger?.warn('failed to validate Computer Use trajectory action', {
+          directory,
+          turn,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          error: trajectoryValidationFailedResult(
+            'Cindy could not safely validate this recorded action.',
+            turn,
+          ),
+        };
+      }
+    }
+
+    if (actions.length === 0) {
+      return {
+        error: trajectoryValidationFailedResult(
+          'No replayable turn directories were found in the trajectory.',
+        ),
+      };
+    }
+    const delayMs = typeof parsedData.delay_ms === 'number' ? parsedData.delay_ms : 500;
+    if (delayMs * Math.max(actions.length - 1, 0) > MAX_REPLAY_TOTAL_DELAY_MS) {
+      return {
+        error: trajectoryValidationFailedResult(
+          `Trajectory exceeds the ${MAX_REPLAY_TOTAL_DELAY_MS}-millisecond aggregate delay limit.`,
+        ),
+      };
+    }
+    return {
+      directory,
+      workingRoot,
+      actions,
+      delayMs,
+      stopOnError: parsedData.stop_on_error !== false,
+    };
+  }
+
+  function serializeReplaySummaryValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value) ?? '';
+    } catch {
+      return String(value);
+    }
+  }
+
+  function replayResultSummary(result: ComputerMcpTextResult, maxChars: number): string {
+    const raw = result.content.find((block) => block.type === 'text')?.text ?? '';
+    let summary = raw;
+    try {
+      const payload: unknown = JSON.parse(raw);
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const envelope = payload as Record<string, unknown>;
+        const data = envelope.data;
+        if (envelope.ok === true && Object.hasOwn(envelope, 'data')) {
+          // Match the driver's replay contract: summarize the recorded tool's
+          // own result, not Cindy's surrounding { ok, tool, data } envelope.
+          summary = serializeReplaySummaryValue(data);
+        } else if (typeof envelope.errorCode === 'string') {
+          const message = data && typeof data === 'object' && !Array.isArray(data)
+            ? (data as Record<string, unknown>).message
+            : undefined;
+          if (envelope.errorCode === 'COMPUTER_DRIVER_ERROR' && typeof message === 'string') {
+            summary = message;
+          } else {
+            summary = typeof message === 'string'
+              ? `${envelope.errorCode}: ${message}`
+              : envelope.errorCode;
+          }
+        }
+      }
+    } catch {
+      // Preserve non-JSON text returned by an older or custom host.
+    }
+    if (summary.length <= maxChars) return summary;
+    if (maxChars <= 1) return summary.slice(0, maxChars);
+    return `${summary.slice(0, maxChars - 1)}…`;
+  }
+
+  async function replayTrajectoryWithGuards(
+    parsedData: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    const prepared = await prepareReplayTrajectory(parsedData, signal);
+    if ('error' in prepared) return prepared.error;
+
+    const startedAt = Date.now();
+    let attempted = 0;
+    let succeeded = 0;
+    let failed = 0;
+    let resultSummaryChars = 0;
+    const turns: Array<{
+      turn: string;
+      tool: ComputerMcpToolName;
+      ok: boolean;
+      result_summary: string;
+    }> = [];
+    let firstFailure: { turn: string; tool: ComputerMcpToolName; error: string } | undefined;
+
+    for (const [index, action] of prepared.actions.entries()) {
+      if (signal?.aborted) return replayCancelledResult();
+      if (Date.now() - startedAt >= MAX_REPLAY_WALL_CLOCK_MS) {
+        return replayBudgetExceededResult();
+      }
+      attempted += 1;
+      // Re-enter Cindy's normal dispatch path immediately before every action.
+      // This closes both PID-reuse and mutable-action-file races that a single
+      // preflight followed by the driver's nested replay would leave open.
+      const result = await handleCallTool(action.tool, action.args, signal, {
+        forceFreshProcessIdentity: true,
+        // Preflight normalized nested path arguments against this canonical
+        // root. Reuse it so a symlink spelling of the session workingDir does
+        // not make those immutable absolute paths look lexically out of scope.
+        pathWorkingDirOverride: prepared.workingRoot,
+      });
+      if (signal?.aborted) return replayCancelledResult();
+      const isError = result.isError === true;
+      const summaryBudget = Math.max(
+        0,
+        Math.min(
+          MAX_REPLAY_RESULT_SUMMARY_CHARS,
+          MAX_REPLAY_TOTAL_RESULT_CHARS - resultSummaryChars,
+        ),
+      );
+      const summary = replayResultSummary(result, summaryBudget);
+      resultSummaryChars += summary.length;
+      turns.push({
+        turn: action.turn,
+        tool: action.tool,
+        ok: !isError,
+        result_summary: summary,
+      });
+      if (isError) {
+        failed += 1;
+        firstFailure ??= {
+          turn: action.turn,
+          tool: action.tool,
+          error: summary,
+        };
+        if (prepared.stopOnError) break;
+      } else {
+        succeeded += 1;
+      }
+      if (index < prepared.actions.length - 1) {
+        const completedDelay = await waitForReplayDelay(prepared.delayMs, signal);
+        if (!completedDelay) return replayCancelledResult();
+      }
+    }
+
+    return textResult({
+      ok: true,
+      tool: 'replay_trajectory',
+      data: {
+        directory: prepared.directory,
+        attempted,
+        succeeded,
+        failed,
+        stop_on_error: prepared.stopOnError,
+        turns,
+        ...(firstFailure ? { first_failure: firstFailure } : {}),
+      },
+    });
+  }
+
+  function classifyExternalIosTarget(input: {
+    name?: unknown;
+    bundleId?: unknown;
+    command?: unknown;
+    executable?: unknown;
+  }): 'xcode' | 'simulator' | null {
+    const name = typeof input.name === 'string' ? input.name.trim().toLowerCase() : '';
+    const bundleId = typeof input.bundleId === 'string' ? input.bundleId.trim().toLowerCase() : '';
+    const command = typeof input.command === 'string' ? input.command.trim().toLowerCase() : '';
+    const executable = typeof input.executable === 'string' ? input.executable.trim().toLowerCase() : '';
+    const provenance = [name, command, executable].filter(Boolean).join(' ');
+    const nameBasename = name.replace(/\\/g, '/').split('/').at(-1) ?? '';
+
+    if (
+      bundleId === 'com.apple.iphonesimulator' ||
+      /(^|[\s/])simulator(?:\.app)?(?:[\s/]|$)/.test(provenance)
+    ) {
+      return 'simulator';
+    }
+    if (
+      bundleId === 'com.apple.dt.xcode' ||
+      /^xcode(?:[-_.][a-z0-9][a-z0-9._-]*)?(?:\.app)?$/i.test(nameBasename) ||
+      /(^|[\s/])xcode(?:\.app)?(?:[\s/]|$)/.test(provenance)
+    ) {
+      return 'xcode';
+    }
+    return null;
+  }
+
+  function embeddedIosSimulatorPreferredResult(target: 'Xcode' | 'Simulator.app') {
+    return textResult(
+      {
+        ok: false,
+        errorCode: 'EMBEDDED_IOS_SIMULATOR_PREFERRED',
+        data: {
+          message:
+            `Use cindy_ios_simulator for Cindy's embedded viewer. External ${target} automation is unavailable until Cindy can issue an explicit host authorization.`,
+          next_tool: 'cindy_ios_simulator',
+          blocked_target: target,
+        },
+      },
+      true,
+    );
+  }
+
+  function targetProvenanceUnavailableResult() {
+    return textResult(
+      {
+        ok: false,
+        errorCode: 'TARGET_PROVENANCE_UNAVAILABLE',
+        data: {
+          message:
+            'Cindy could not verify the target process identity, so this mutating desktop action was blocked. Refresh the target window and try again.',
+        },
+      },
+      true,
+    );
+  }
+
+  /**
    * 把工具入参里的本地文件路径约束到 session workingDir。返回 null 放行(路径
    * 已被替换为约束后的绝对路径),返回结果对象表示以 PATH_NOT_ALLOWED 拒绝。
    * 无 workingDir 时对显式传入的路径 fail-closed(driver 侧无 in-package 默认可回落,
@@ -351,10 +994,11 @@ export function createComputerMcpServer(
   async function guardPathArgs(
     name: ComputerMcpToolName,
     parsedData: Record<string, unknown>,
+    workingDirOverride?: string,
   ) {
     const argNames = COMPUTER_PATH_ARGS[name];
     if (!argNames) return null;
-    const workingDir = options.getSessionContext?.().workingDir ?? '';
+    const workingDir = workingDirOverride ?? options.getSessionContext?.().workingDir ?? '';
     for (const key of argNames) {
       const value = parsedData[key];
       if (typeof value !== 'string' || value.length === 0) continue;

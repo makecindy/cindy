@@ -1,16 +1,9 @@
 {
   "$schema": "./glossary.schema.json",
   "version": 1,
-  "locales": [
-    "en",
-    "zh-CN",
-    "ja",
-    "ko"
-  ],
+  "locales": ["en", "zh-CN", "ja", "ko"],
   "sourceLocale": "en",
-  "punctuationExempt": [
-    "desktop:settings.help.qnaFeedbackBodyTemplate"
-  ],
+  "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
       "id": "active",
@@ -286,9 +279,7 @@
         ]
       },
       "note": "产品一级概念，四语统一保留英文原词。zh-CN 现状 44:5 已是主流；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故三语一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 \"Agent\"→「代理」的 4 处和 \"Subagent models\" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 \"SSH agent\" / \"probe agent\"），是与产品 Agent 同形的另一个概念。",
-      "exempt": [
-        "desktop:settings.remote."
-      ]
+      "exempt": ["desktop:settings.remote."]
     },
     {
       "id": "author",
@@ -332,12 +323,8 @@
         ]
       },
       "forbidden": {
-        "ja": [
-          "オートメーション"
-        ],
-        "ko": [
-          "오토메이션"
-        ]
+        "ja": ["オートメーション"],
+        "ko": ["오토메이션"]
       },
       "note": "scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
       "exempt": [
@@ -376,9 +363,7 @@
       },
       "checkCase": false,
       "forbidden": {
-        "zh-CN": [
-          "聊天"
-        ]
+        "zh-CN": ["聊天"]
       },
       "note": "Chat 专指任务内人与 AI 交流的过程与内容（对话区 / 对话正文 / 对话记录 / 继续对话），中文「对话」。指那个可打开可删除的条目时用 Session（中文「任务」）——此前 Chat 与 Session 混用同一个中文词的问题已随 2026-07-31 的改名解决：英文侧指容器的 Chat 已改为 Session。「聊天」一律禁用。ja / ko 保留各自既有译法。"
     },
@@ -401,9 +386,7 @@
         ]
       },
       "note": "Orca 多 Agent 功能名，中文用「协同」（现状 21:2）。可见 bug：设置导航项写「协作」，点进去页面标题写「协同」。条件禁用：settings.contacts 里的「协作经历」是 collaboration history，属另一个语义，英文源不含独立 Collaboration 一词时不判违规。",
-      "exempt": [
-        "desktop:settings.contacts."
-      ]
+      "exempt": ["desktop:settings.contacts."]
     },
     {
       "id": "collapse",
@@ -559,17 +542,8 @@
         "ko": "추론 강도"
       },
       "forbidden": {
-        "zh-CN": [
-          "思考强度",
-          "思考深度",
-          "推理深度",
-          "努力程度",
-          "推理力度"
-        ],
-        "ja": [
-          "推論レベル",
-          "推論の強度"
-        ]
+        "zh-CN": ["思考强度", "思考深度", "推理深度", "努力程度", "推理力度"],
+        "ja": ["推論レベル", "推論の強度"]
       },
       "note": "模型的推理投入档位（low/medium/high/…）。用「推理强度」有三重依据：①同类工具 i18n 里断层第一（GitHub 代码搜索共现量级 1452，第二名「思考强度」431）；②OpenAI 简中帮助中心即用此词；③跨 provider 中立——Cindy 的 create_worker 用一个 effort 同时映射 Codex reasoning effort 与 Claude thinking 预算，而 Anthropic 官方简中叫「努力程度」、OpenAI 叫「推理强度」，需要不偏向任一方的词。禁用项各有硬理由：「思考深度」「推理深度」会与国内产品普遍的「深度思考」开关撞车，且语义错误（低 effort 是想得少，不是想得浅）；「努力程度」在中文里强烈指向人的绩效评价；「推理等级/级别」未入禁用但不推荐——Cindy 已有 model tier 概念，「等级」易被读成模型档位。"
     },
@@ -584,10 +558,7 @@
       },
       "checkCase": false,
       "forbidden": {
-        "zh-CN": [
-          "工单",
-          "议题"
-        ],
+        "zh-CN": ["工单", "议题"],
         "ja": [
           {
             "text": "課題",
@@ -658,10 +629,7 @@
         "ko": "플러그인"
       },
       "forbidden": {
-        "zh-CN": [
-          "Plugin",
-          "plugin"
-        ]
+        "zh-CN": ["Plugin", "plugin"]
       },
       "note": "中文一律「插件」，不保留英文原词（现状 94:4）。历史上 Ghost / Plugin 两种叫法并存，对外统一为「插件」。",
       "exempt": []
@@ -687,9 +655,7 @@
         "ko": "프로젝트"
       },
       "forbidden": {
-        "zh-CN": [
-          "Project"
-        ]
+        "zh-CN": ["Project"]
       },
       "note": "中文一律「项目」（现状 119:15）。同一个侧边栏里筛选叫「项目」、批量操作提示叫「Project」是既有 bug。小写 project 不入 forbidden——它常出现在路径与文件名里（project.json）。",
       "exempt": []
@@ -712,10 +678,7 @@
         ]
       },
       "forbidden": {
-        "zh-CN": [
-          "提供方",
-          "提供商"
-        ],
+        "zh-CN": ["提供方", "提供商"],
         "ja": [
           {
             "text": "提供元",
@@ -726,10 +689,7 @@
             "whenEn": "Provider"
           }
         ],
-        "ko": [
-          "공급자",
-          "제공업체"
-        ]
+        "ko": ["공급자", "제공업체"]
       },
       "note": "中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 \"source\"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。(2026-07 更新:billing 弃用「点数」概念改用金额/余额,creditParityCny/Usd 两条文案已删除,对应豁免一并移除。)",
       "exempt": [
@@ -767,9 +727,7 @@
       },
       "checkCase": false,
       "forbidden": {
-        "ja": [
-          "残量"
-        ],
+        "ja": ["残量"],
         "zh-CN": [
           {
             "text": "额度",
@@ -826,9 +784,7 @@
       },
       "checkCase": false,
       "forbidden": {
-        "zh-CN": [
-          "会话"
-        ]
+        "zh-CN": ["会话"]
       },
       "note": "面向用户叫「任务」——它是左侧列表里可单独打开/删除/分享的条目，有自己的独立空间、可以同时跑多个；「对话」表达不出这个并行性（2026-07-31 裁决，替代此前的「对话」）。任务内人与 AI 交流的过程与内容仍叫「对话」，见 alsoAllowed 与 chat 条目。「会话」继续禁用于产品概念。但英文的 session 在本仓实际承载**五个**不同概念，其中最容易译错、也最影响用户行为的是 Agent 运行时会话——已单独立为 agent-session 条目，中文叫「Agent 会话」，务必先读它再改这类文案；余下三类（登录/绑定校验、SSH 远程与传输、操作系统桌面）与 mobile 语音连接会话都与产品无关，存量译法不在本条约束内，见本条 exempt。代码与内部标识仍用 Session，本条只约束 UI 文案。ja / ko 用音译 `セッション` / `세션`，本次一并收敛：改名前这两种语言就在混用（音译 271 / 277 处 vs `会話`・`대화` 16 / 11 处），改完英文后不一致放大到 133 处，2026-07-31 逐条判断后统一到音译（详见 docs/product-rules/task-and-conversation-naming.md §5.1）。日韩不存在中文那种一词多义问题，所以 `タスク` / `작업`（task）无需像中文那样改写成「自动化」。交流过程仍用 `会話` / `대화`，chat history 仍用 `チャット履歴` / `채팅 기록`。概念分层与判定规则见 docs/product-rules/task-and-conversation-naming.md。",
       "exempt": [
@@ -907,9 +863,7 @@
           }
         ]
       },
-      "exempt": [
-        "desktop:chat.userMessage.forkErrors.unsupportedHistory"
-      ],
+      "exempt": ["desktop:chat.userMessage.forkErrors.unsupportedHistory"],
       "note": "Agent / 引擎的**运行时**会话（SDK Query 的生命周期），不是 session 条目说的那个产品条目。中文必须叫「Agent 会话」而不是「任务」——两者的区别是用户会不会因此做一个多余的动作：记忆、MCP、内置工具、LSP、权限开关这类设置都在「下一个 Agent 会话」生效，而同一条任务里 /clear、rewind、重启都会开新的 Agent 会话，说「新建任务才生效」会让用户白开一条任务、还割裂上下文。forbidden 规则只覆盖英文源字面写了 agent session 的 key（精确、无误报）；英文只写 session 的那批（`The Codex session state` / `Session is inactive` / `in-flight sessions`）**机器判不出来**——英语本身不区分这两个意思，同一句里两个所指并存也是合法的（`The historical agent session ... so a new session can't be started`：前半指运行时、后半指条目，已登记 exempt）。所以这批只能靠人读英文源判断，判据与全部踩坑记录见 docs/product-rules/task-and-conversation-naming.md §6.0.2。session 条目的 exempt 里另有三类同样叫 session 的东西：登录/绑定校验会话、SSH 远程与传输会话、操作系统桌面会话，以及 mobile 的语音连接会话——它们各自稳定、极少改动，故未单独立条目。"
     },
     {
@@ -962,12 +916,8 @@
         ]
       },
       "forbidden": {
-        "ja": [
-          "技能"
-        ],
-        "ko": [
-          "기술"
-        ]
+        "ja": ["技能"],
+        "ko": ["기술"]
       },
       "note": "中文用「技能」（现状 32:26 领先），偶尔保留英文 Skill 也允许，故 zh-CN 不设 forbidden——硬性禁用会逼出别扭的中文。ja / ko 则禁用 技能 / 기술：那是与 スキル / 스킬 并存的同义漂移，且只出现在 skillhub 内部（3 / 3 处）。ko 的 기술 是多义词（技术 / 记述 / 技能），两处非 Skill 义已按 key 豁免。SkillHub 作为产品名单独登记在 skillhub 条目。(2026-07 补充:alsoAllowed 允许保留英文,那就必须是规范形态 Skill——caseStandardFor 会把这类条目一并纳入大小写检查,skillhub 里原有 10 处小写 skill 已统一。)",
       "exempt": [
@@ -985,12 +935,8 @@
         "ko": "SkillHub"
       },
       "forbidden": {
-        "ja": [
-          "スキルハブ"
-        ],
-        "ko": [
-          "스킬 허브"
-        ]
+        "ja": ["スキルハブ"],
+        "ko": ["스킬 허브"]
       },
       "note": "产品名，四语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。"
     },
@@ -1036,9 +982,7 @@
         ]
       },
       "forbidden": {
-        "zh-CN": [
-          "线程"
-        ]
+        "zh-CN": ["线程"]
       },
       "note": "按语境分四类：①指产品内那个条目 → 跟随 session 叫「任务」（2026-07-31 随 session 改名一并更新）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 \"persistent work thread\" → 改写为「持续推进的工作」。「线程」一律禁用。"
     },
@@ -1052,17 +996,9 @@
         "ko": "사용량"
       },
       "forbidden": {
-        "zh-CN": [
-          "使用情况",
-          "使用表现"
-        ],
-        "ja": [
-          "使用状況",
-          "利用状況"
-        ],
-        "ko": [
-          "사용 현황"
-        ]
+        "zh-CN": ["使用情况", "使用表现"],
+        "ja": ["使用状況", "利用状況"],
+        "ko": ["사용 현황"]
       },
       "note": "中文用「用量」（现状 37:6 压倒性）。「使用情况」「使用表现」是同义漂移，禁用。注意 usage 在英文里也有「用法」义（如 CLI usage），那属于另一个概念，不在本条约束范围。豁免遥测说明两处:那里的 usage 指「启动与留存情况」这类使用行为,不是计费口径的用量指标。硬套成「用量」会写出「启动与留存用量」这种不通的话——zh-CN 用的是「留存情况」+「使用环境」,ja/ko 的「継続利用状況」「지속 사용 현황」同理。",
       "exempt": [
@@ -1093,6 +1029,17 @@
       "note": "设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。"
     },
     {
+      "id": "ios-simulator",
+      "status": "proposed",
+      "en": "iOS Simulator",
+      "translations": {
+        "zh-CN": "iOS 模拟器",
+        "ja": "iOS シミュレータ",
+        "ko": "iOS 시뮬레이터"
+      },
+      "note": "Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。"
+    },
+    {
       "id": "worker",
       "status": "decided",
       "en": "Worker",
@@ -1115,10 +1062,7 @@
       },
       "checkCase": false,
       "forbidden": {
-        "zh-CN": [
-          "任务空间",
-          "工作空间"
-        ]
+        "zh-CN": ["任务空间", "工作空间"]
       },
       "note": "Agent 干活所在的那个目录，中文一律「工作目录」（现状 43:0，四语唯一译法）。**不绑项目的任务也有工作目录**：Cindy 在 userData/dialogues/<日期>/<sessionId>/ 下自动分配一个空目录，用来存 Agent 产出的文件；对话消息存在数据库里，与该目录无关。这个目录不要另起名字——「独立任务空间」「任务空间」「工作空间」一类新造说法一并禁用（2026-07-31 裁决），免得同一个东西攒出多套称呼。「工作区」不入 forbidden：它是 Workspace 的合法译法，见 worktree 条目 note（那里已裁定「工作区」只留给 Workspace、working directory 用「工作目录」，本条把该裁决提为独立条目并加上门禁）。"
     },
@@ -1145,9 +1089,7 @@
         ]
       },
       "note": "Git worktree 是外部工具的既定概念，四语一律保留英文小写原词（现状 21 处最多）。desktop:chat 一个模块里就有 worktree / 工作区 / 工作树 三种写法。特别要紧的是「工作区」——它同时被用于 worktree、Workspace、working tree 三个不同英文概念，必须让出来只表示 Workspace；working directory 用「工作目录」。条件禁用只在英文源含 Worktree 时生效，不影响 Workspace 的正常翻译。豁免导入提示那一句：英文原文同时出现 worktree 与 main workspace，条件禁用是按整句英文判定的，无法区分句内两个概念——那里的「主工作区」正是 Workspace，必须保留，否则会把「不影响主工作区」这条安全边界说成「不影响主 worktree」。",
-      "exempt": [
-        "desktop:sessionShare.import.useWorktreeHint"
-      ]
+      "exempt": ["desktop:sessionShare.import.useWorktreeHint"]
     },
     {
       "id": "token-plan",

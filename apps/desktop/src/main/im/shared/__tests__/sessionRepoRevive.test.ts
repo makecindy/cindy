@@ -8,7 +8,11 @@
  *   - createSession 的 INSERT 带 onConflictDoUpdate 兜并发竞态,冲突时只翻
  *     status 不碰上下文列。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import type { SessionRouteLock } from '../../../localDb/sessionRouteLock';
+
+type SessionRouteLockMock = SessionRouteLock &
+  MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
 
 const mocks = vi.hoisted(() => {
   const updateWhere = vi.fn(async (_where: unknown) => {});
@@ -89,7 +93,22 @@ vi.mock('../../defaultSessionSettings', () => ({
 }));
 
 import { createImSessionRepo, type ImSessionRow } from '../sessionRepo';
+import { setSessionRouteLockImplementation } from '../../../localDb/sessionRouteLock';
 import type { ImOrchestratorConfig, ImSessionNamespace } from '../types';
+
+const routeLock = vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
+  task(),
+) as SessionRouteLockMock;
+
+beforeEach(() => {
+  routeLock.mockClear();
+  routeLock.mockImplementation(async (_sessionId, task) => task());
+  setSessionRouteLockImplementation(routeLock);
+});
+
+afterEach(() => {
+  setSessionRouteLockImplementation(null);
+});
 
 const ns: ImSessionNamespace = {
   source: 'feishu',
@@ -163,6 +182,7 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:created', {
         sessionId: 'feishu_bot_user',
       });
+      expect(routeLock).toHaveBeenCalledWith('feishu_bot_user', expect.any(Function));
     },
   );
 
@@ -207,6 +227,7 @@ describe('sessionRepo.createSession upsert 兜竞态(#748)', () => {
     await makeRepo().createSession('bot', 'user', undefined, preparedDefaults);
 
     expect(mocks.insertValues).toHaveBeenCalledTimes(1);
+    expect(routeLock).toHaveBeenCalledWith('feishu_bot_user', expect.any(Function));
     expect(mocks.insertConflict).toHaveBeenCalledTimes(1);
     const conflictArg = mocks.insertConflict.mock.calls[0][0] as {
       target: unknown;

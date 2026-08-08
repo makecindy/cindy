@@ -23,10 +23,7 @@ import {
   exportSessionShare,
   type SessionShareExportOutcome,
 } from '../../session-share/sessionShareExport.js';
-import {
-  SHARE_FILE_EXT,
-  SHARE_FILE_EXTENSIONS,
-} from '../../session-share/xdtshareFormat.pure.js';
+import { SHARE_FILE_EXT, SHARE_FILE_EXTENSIONS } from '../../session-share/xdtshareFormat.pure.js';
 import {
   cancelShareDraft,
   cleanupReplacedSessionMediaRefs,
@@ -38,9 +35,12 @@ import {
   type SharePreview,
   type ShareImportDraftPrefs,
 } from '../../session-share/sessionShareImport.js';
-import { getDbClient } from '../client/current.js';
+import { getDbClient, tryGetDbClient } from '../client/current.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
+import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.js';
 import {
   broadcastSessionPatched,
+  captureSessionRecycleScope,
   recycleSessionWorktreeForStatusChange,
 } from './sessions.js';
 
@@ -57,7 +57,10 @@ export type SessionShareExportResponse = SessionShareExportOutcome | { status: '
 export type SessionShareInspectResponse = InspectResult | { status: 'canceled' };
 
 /** 统一错误出口:业务码原样透传,未知错误按 fallbackCode 抛。 */
-function rethrowIpc(err: unknown, fallbackCode: 'SHARE_EXPORT_FAILED' | 'SHARE_IMPORT_FAILED'): never {
+function rethrowIpc(
+  err: unknown,
+  fallbackCode: 'SHARE_EXPORT_FAILED' | 'SHARE_IMPORT_FAILED',
+): never {
   const code = (err as { code?: unknown }).code;
   const message = err instanceof Error ? err.message : String(err);
   if (isIpcErrorCode(code)) throwIpcError(code, message);
@@ -170,17 +173,41 @@ export function registerSessionShareIpc(): void {
       const overwrite = payload.overwrite === true;
       const useWorktree = payload.useWorktree === true;
       try {
-        const result = await commitShareImport({ draftId, workingDir, draftPrefs, overwrite, useWorktree });
+        const ownerScopeKey = activeOwnerScopeKey();
+        const importDbClient = getDbClient();
+        const recycleScope = captureSessionRecycleScope(importDbClient);
+        const refCompensationScope = captureMediaRefCompensationScope(ownerScopeKey);
+        const isStillCurrent = (): boolean =>
+          !isAppSessionBoundaryPending() &&
+          activeOwnerScopeKey() === ownerScopeKey &&
+          tryGetDbClient() === importDbClient;
+        const assertStillValid = (): void => {
+          if (!isStillCurrent()) {
+            throw new Error('Session share import owner changed during import');
+          }
+          refCompensationScope.assertStillValid();
+        };
+        const result = await commitShareImport(
+          { draftId, workingDir, draftPrefs, overwrite, useWorktree },
+          { dbClient: importDbClient, assertStillValid, refCompensationScope },
+        );
         // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI/资源收尾：
         // - 广播 patched 让 sidebar/会话视图立即移除旧任务；
         // - 经统一回收链在 route lock 下复验 deleted，关闭 runtime 并回收旧 worktree；
         // - 删除旧 session 名下的媒体引用，引用归零的共享 blob 交 recycler 回收。
         // 不直接删除转录或媒体字节：同 resume id/内容的新任务可能复用它们。
         for (const replaced of result.replacedSessions) {
-          broadcastSessionPatched(replaced.id, { status: 'deleted' });
-          await recycleSessionWorktreeForStatusChange(replaced.id, 'deleted');
+          if (!isStillCurrent()) break;
+          broadcastSessionPatched(replaced.id, { status: 'deleted' }, recycleScope.ownerScope);
+          await recycleSessionWorktreeForStatusChange(replaced.id, 'deleted', recycleScope);
         }
-        await cleanupReplacedSessionMediaRefs(result.replacedSessions);
+        if (isStillCurrent()) {
+          await cleanupReplacedSessionMediaRefs(result.replacedSessions, importDbClient.drizzle);
+        }
+        // The cleanup awaits above may outlive the captured owner even though
+        // the DB transaction itself completed under the correct client. Never
+        // project that old-owner session id into the replacement Renderer.
+        assertStillValid();
         // replacedSessions 是 main 内部收尾信息，不暴露给 renderer/preload 契约。
         const publicResult: CommitShareImportResult = {
           sessionId: result.sessionId,
@@ -190,7 +217,9 @@ export function registerSessionShareIpc(): void {
         };
         // 在此补发(fire-and-forget;workdir 由通知内部的资格查询回填)——否则订阅
         // 了 session 的意识对导入会话只见 switched/archived 不见 created(review P2)。
-        notifyGhostSessionEvent('created', { sessionId: result.sessionId });
+        if (isStillCurrent()) {
+          notifyGhostSessionEvent('created', { sessionId: result.sessionId });
+        }
         return publicResult;
       } catch (err) {
         log.warn('session share commit failed', {
@@ -212,7 +241,10 @@ export function registerSessionShareIpc(): void {
   // 会话(PR4);其它忽略。放本模块因为分享文件识别是它的域;目录分支为通用能力。
   ipcMain.handle(
     'local-db:session-share:classify-path',
-    async (_e, request?: { path?: unknown }): Promise<{ kind: 'share' | 'directory' | 'other' }> => {
+    async (
+      _e,
+      request?: { path?: unknown },
+    ): Promise<{ kind: 'share' | 'directory' | 'other' }> => {
       const raw = typeof request?.path === 'string' ? request.path : '';
       if (!raw) return { kind: 'other' };
       const stat = await fsp.stat(raw).catch(() => null);
@@ -240,8 +272,7 @@ function sanitizeDraftPrefs(raw: unknown): ShareImportDraftPrefs | null {
     permissionMode: typeof r.permissionMode === 'string' ? r.permissionMode : undefined,
     planMode: r.planMode === true,
     fastMode: r.fastMode === true,
-    providerId:
-      typeof r.providerId === 'string' && r.providerId.length > 0 ? r.providerId : null,
+    providerId: typeof r.providerId === 'string' && r.providerId.length > 0 ? r.providerId : null,
   };
 }
 

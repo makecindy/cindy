@@ -2,13 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 
-import type {
-  DbTransport,
-  DbTransportTerminationInfo,
-  LogEvent,
-  RpcRequest,
-  VecStatusEvent,
-  WorkerMessage,
+import {
+  createDbTransportError,
+  DB_TRANSPORT_NOT_SENT,
+  DB_TRANSPORT_OUTCOME_UNKNOWN,
+  type DbTransport,
+  type DbTransportTerminationInfo,
+  type LogEvent,
+  type RpcRequest,
+  type VecStatusEvent,
+  type WorkerMessage,
 } from './DbTransport.js';
 
 const WORKER_CODE = `
@@ -300,6 +303,10 @@ function dispatchTx(readyDb, payload) {
       return orcaRemoveWorker(readyDb, request.args);
     case 'orca.cancelStaleTeams':
       return orcaCancelStaleTeams(readyDb, request.args);
+    case 'orca.archiveWorkersByTeam':
+      return orcaArchiveWorkersByTeam(readyDb, request.args);
+    case 'orca.reconcileInactiveTeamWorkersForLead':
+      return orcaReconcileInactiveTeamWorkersForLead(readyDb, request.args);
     case 'sessions.renameTitles':
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
@@ -555,7 +562,7 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
     'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
@@ -566,6 +573,11 @@ function sessionsSetStatus(readyDb, args) {
     for (const sessionId of sessionIds) {
       const existing = selectSession.get(sessionId);
       if (!existing) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
+      if (existing.status === 'deleted') {
+        throw Object.assign(new Error('已删除的任务不能恢复或归档: ' + sessionId), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }
       const updated = updateSession.get(status, now, sessionId);
       if (!updated) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       applied.push({
@@ -732,13 +744,13 @@ function orcaRemoveWorker(readyDb, args) {
   const now = expectNumber(payload.now, 'now');
   const selectWorker = readyDb.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = readyDb.prepare('DELETE FROM orca_workers WHERE id = ?');
-  const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ?");
+  const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   return readyDb.transaction(() => {
     const row = selectWorker.get(workerId);
     if (!row) return null;
     deleteWorker.run(workerId);
-    archiveSession.run(now, row.sessionId);
-    return row.sessionId;
+    const archived = archiveSession.run(now, row.sessionId);
+    return archived.changes > 0 ? row.sessionId : null;
   })();
 }
 
@@ -750,6 +762,50 @@ function orcaCancelStaleTeams(readyDb, args) {
   const cancel = readyDb.prepare("UPDATE orca_teams SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE lead_session_id = ? AND status = 'active' AND id != ?");
   readyDb.transaction(() => {
     cancel.run(now, now, leadSessionId, keepTeamId);
+  })();
+}
+
+function orcaArchiveWorkersByTeam(readyDb, args) {
+  const payload = asRecord(args, 'orca.archiveWorkersByTeam args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const now = expectNumber(payload.now, 'now');
+  const selectCandidates = readyDb.prepare(
+    "SELECT sessions.id FROM orca_workers INNER JOIN sessions ON orca_workers.session_id = sessions.id WHERE orca_workers.team_id = ? AND sessions.status = 'active' ORDER BY sessions.id",
+  );
+  const archiveSession = readyDb.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+  );
+  return readyDb.transaction(() => {
+    const candidates = selectCandidates.all(teamId);
+    const updatedIds = [];
+    for (const { id } of candidates) {
+      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
+  })();
+}
+
+function orcaReconcileInactiveTeamWorkersForLead(readyDb, args) {
+  const payload = asRecord(args, 'orca.reconcileInactiveTeamWorkersForLead args');
+  const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
+  const now = expectNumber(payload.now, 'now');
+  const selectCandidates = readyDb.prepare(
+    "SELECT sessions.id FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id INNER JOIN sessions ON orca_workers.session_id = sessions.id WHERE orca_teams.lead_session_id = ? AND orca_teams.status != 'active' AND sessions.status = 'active' ORDER BY sessions.id",
+  );
+  const finishWorkers = readyDb.prepare(
+    "UPDATE orca_workers SET status = 'done', updated_at = ? WHERE team_id IN (SELECT id FROM orca_teams WHERE lead_session_id = ? AND status != 'active')",
+  );
+  const archiveSession = readyDb.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+  );
+  return readyDb.transaction(() => {
+    const candidates = selectCandidates.all(leadSessionId);
+    finishWorkers.run(now, leadSessionId);
+    const updatedIds = [];
+    for (const { id } of candidates) {
+      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
   })();
 }
 
@@ -1802,7 +1858,12 @@ export class WorkerThreadTransport implements DbTransport {
 
   send<R = unknown>(op: string, args?: unknown, transferList?: unknown[]): Promise<R> {
     if (this.closed || this.closing) {
-      return Promise.reject(new Error('db worker transport is closed'));
+      return Promise.reject(
+        createDbTransportError(
+          DB_TRANSPORT_NOT_SENT,
+          'db worker transport is closed',
+        ),
+      );
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
@@ -1820,7 +1881,8 @@ export class WorkerThreadTransport implements DbTransport {
       }
       if (this.queued.length >= this.maxQueuedRpcs) {
         reject(
-          new Error(
+          createDbTransportError(
+            DB_TRANSPORT_NOT_SENT,
             `db worker RPC queue overloaded: op="${op}" inFlight=${this.pending.size}` +
               ` queued=${this.queued.length}`,
           ),
@@ -1862,7 +1924,13 @@ export class WorkerThreadTransport implements DbTransport {
       // Worker may already be down; terminate below still releases resources.
     } finally {
       this.closed = true;
-      this.rejectAllPending(new Error('db worker transport closed'));
+      this.rejectAllPending(
+        createDbTransportError(
+          DB_TRANSPORT_OUTCOME_UNKNOWN,
+          'db worker transport closed',
+        ),
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport closed'),
+      );
       await this.worker.terminate();
     }
   }
@@ -1903,7 +1971,8 @@ export class WorkerThreadTransport implements DbTransport {
       }
       this.queued.splice(index, 1);
       item.reject(
-        new Error(
+        createDbTransportError(
+          DB_TRANSPORT_NOT_SENT,
           `db worker RPC queue timeout: op="${item.req.op}" id=${item.req.id}` +
             ` exceeded ${this.rpcTimeoutMs / 1000}s total budget`,
         ),
@@ -1937,7 +2006,8 @@ export class WorkerThreadTransport implements DbTransport {
       }
       this.pending.delete(id);
       pending.reject(
-        new Error(
+        createDbTransportError(
+          DB_TRANSPORT_OUTCOME_UNKNOWN,
           `db worker RPC timeout: op="${op}" id=${id} exceeded ${this.rpcTimeoutMs / 1000}s` +
             ` wallElapsedMs=${verdict.wallElapsedMs}`,
         ),
@@ -1961,7 +2031,13 @@ export class WorkerThreadTransport implements DbTransport {
     } catch (err) {
       clearTimeout(timeout);
       this.pending.delete(id);
-      item.reject(toError(err));
+      item.reject(
+        createDbTransportError(
+          DB_TRANSPORT_NOT_SENT,
+          toError(err).message,
+          err,
+        ),
+      );
       this.drainQueue();
     }
   }
@@ -1982,14 +2058,20 @@ export class WorkerThreadTransport implements DbTransport {
       if (workerTerminated) return;
       workerTerminated = true;
       const error = toError(err);
-      this.rejectAllPending(error);
+      this.rejectAllPending(
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, error.message, error),
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, error.message, error),
+      );
       this.emitTerminated({ code: null, signal: null, error });
     });
     worker.on('exit', (code) => {
       if (workerTerminated) return;
       workerTerminated = true;
       const err = new Error(`db worker exited with code ${code}`);
-      this.rejectAllPending(err);
+      this.rejectAllPending(
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, err.message, err),
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, err.message, err),
+      );
       this.emitTerminated({ code, signal: null });
     });
     return worker;
@@ -2058,15 +2140,15 @@ export class WorkerThreadTransport implements DbTransport {
     for (const cb of listeners) cb(event);
   }
 
-  private rejectAllPending(err: Error): void {
+  private rejectAllPending(pendingError: Error, queuedError: Error = pendingError): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
-      pending.reject(err);
+      pending.reject(pendingError);
     }
     this.pending.clear();
     for (const queued of this.queued.splice(0)) {
       if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
-      queued.reject(err);
+      queued.reject(queuedError);
     }
   }
 

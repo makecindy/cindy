@@ -102,6 +102,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
 import { parseGhostCommandWord, splitGhostDirective } from '@/cindy-brain/ghostCommand';
+import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
 import {
   GhostFulfillmentContext,
   GhostSummonCard,
@@ -111,10 +112,7 @@ import { AutomationOriginBadge } from './AutomationOriginBadge';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
-import {
-  SentAgentReferenceChip,
-  sentAgentReferenceDisplayLabel,
-} from './SentAgentReferenceChip';
+import { SentAgentReferenceChip, sentAgentReferenceDisplayLabel } from './SentAgentReferenceChip';
 import { parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
 
 /**
@@ -552,14 +550,32 @@ function renderContentWithoutPastedText(
         // A real mention is always preceded by whitespace or sits at line start.
         const prev = parts[pi - 1];
         if (prev && prev.length > 0 && !/\s$/.test(prev)) {
-          nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences, interactive));
+          nodes.push(
+            ...renderTextWithLinks(
+              part,
+              `${li}-${pi}`,
+              onImageClick,
+              sessionId,
+              sessionReferences,
+              interactive,
+            ),
+          );
           continue;
         }
 
         // Only render as chip if it looks like a real path
         if (!looksLikePath(ref)) {
           // Not a path — render as plain text
-          nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences, interactive));
+          nodes.push(
+            ...renderTextWithLinks(
+              part,
+              `${li}-${pi}`,
+              onImageClick,
+              sessionId,
+              sessionReferences,
+              interactive,
+            ),
+          );
           continue;
         }
 
@@ -620,7 +636,9 @@ function renderContentWithoutPastedText(
                   const result = await resolveLocalPathSmart(ref, workingDir);
                   if (result.status === 'multiple') {
                     toast.error(
-                      t('chat.markdownRenderer.duplicateFiles', { count: result.candidates.length }),
+                      t('chat.markdownRenderer.duplicateFiles', {
+                        count: result.candidates.length,
+                      }),
                     );
                     return;
                   }
@@ -642,7 +660,16 @@ function renderContentWithoutPastedText(
           );
         }
       } else {
-        nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences, interactive));
+        nodes.push(
+          ...renderTextWithLinks(
+            part,
+            `${li}-${pi}`,
+            onImageClick,
+            sessionId,
+            sessionReferences,
+            interactive,
+          ),
+        );
       }
     }
   }
@@ -854,8 +881,7 @@ export function renderContent(
           // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
           {...(interactive && onPastedTextChipClick
             ? {
-                onClick: (event) =>
-                  onPastedTextChipClick(token.text, event.currentTarget),
+                onClick: (event) => onPastedTextChipClick(token.text, event.currentTarget),
               }
             : {})}
         />
@@ -921,7 +947,8 @@ export function UserMessage({
   // Capability gate: 没传 agentKind (调用方未升级) → 默认两者都允许 (兼容旧路径)
   // 传了 agentKind → 按 capabilities.fork/rewind.supported 决定 icon 显示
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
-  const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  const makerKind: MakerAgentKind =
+    agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
@@ -985,7 +1012,10 @@ export function UserMessage({
   // 对不上模板按普通文本原样显示)。copy / fork / rewind / 编辑预填全部用
   // 剥离后的正文——这些路径重发都走发送期再展开,带着旧指令会叠加双份。
   // orca / hook 消息不经意识展开,跳过解析。
-  const ghostSplit = orcaCommunication || hookSource ? null : splitGhostDirective(displayContent);
+  const ghostSplit =
+    orcaCommunication || hookSource
+      ? null
+      : (splitGhostDirective(displayContent) ?? splitHostCapabilityDirective(displayContent));
   const ghostDirective = ghostSplit?.directive ?? null;
   const ghostBody = ghostSplit?.body ?? displayContent;
   // quotesEncoded 消息按正文顺序解析全部引用块,支持引用与回复交错。
@@ -1088,11 +1118,7 @@ export function UserMessage({
   const collapseMeasureBody = useMemo(
     () =>
       bubbleBody === ghostBody
-        ? projectSentInlinePlainText(
-            displayBubbleBody,
-            bubblePastedRanges,
-            bubbleAgentReferences,
-          )
+        ? projectSentInlinePlainText(displayBubbleBody, bubblePastedRanges, bubbleAgentReferences)
         : displayBubbleBody,
     [bubbleAgentReferences, bubbleBody, bubblePastedRanges, displayBubbleBody, ghostBody],
   );
@@ -1531,7 +1557,8 @@ export function UserMessage({
                       <div
                         className={cn(
                           'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
-                          longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
+                          longMessageCollapsed &&
+                            (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
                       >
                         {quoteSegments.map((segment, index) =>
@@ -1608,7 +1635,8 @@ export function UserMessage({
                       <div
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
-                          longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
+                          longMessageCollapsed &&
+                            (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
                       >
                         {longMessageCollapsed
