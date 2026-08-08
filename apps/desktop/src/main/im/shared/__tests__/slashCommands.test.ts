@@ -539,6 +539,38 @@ describe('IM slash commands', () => {
       expect(text).not.toContain('项目：对话');
     });
 
+    it('Windows 盘符根目录显示成 C:/, 不缩成 C:', async () => {
+      // 切完只剩 `C:` —— 它在 Windows 里指「该盘的当前目录」, 不是根目录, 拿它
+      // 当项目名会指向另一个地方。远程控制下一条 Windows 会话完全可能由 macOS
+      // 上的主进程渲染, 所以这条不能靠 path.win32 或运行平台兜。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({
+          ...defaultRow,
+          workingDir: 'C:/',
+          workspaceKind: 'project' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：C:/');
+      expect(text).not.toContain('项目：对话');
+    });
+
+    it('Windows 项目目录仍取末段, 不受盘符段影响', async () => {
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({
+          ...defaultRow,
+          workingDir: 'C:\\Users\\chris\\cindy',
+          workspaceKind: 'project' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：cindy');
+    });
+
     it('接管的是 desktop 对话会话 → 显示「对话」, 不把内部 UUID 当项目名', async () => {
       // workspaceKind 与路径在 schema 里是解耦的: 一条 dialogue 会话的目录既不是
       // 项目、也不等于本渠道的托管目录(末段常是内部 UUID), 只比对路径判不出来。
