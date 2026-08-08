@@ -24,6 +24,7 @@ import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook
 import {
   assembleGroupWindowContext,
   createFenceNeutralizer,
+  DEFAULT_GROUP_WINDOW_RETENTION,
   recordGroupWindowEntry,
   resetGroupWindowCursors,
   type GroupContextAssembly,
@@ -37,27 +38,16 @@ export type { GroupContextAssembly };
 const log = createLogger('hook-group-window');
 
 /**
- * 每个 principal 的群历史保留上限 —— **按存储大小, 不按条数**(Chris 2026-08-08)。
+ * 官方 bot 这一侧生效的保留上限 —— 数值取共享默认值, 但**这份对象是官方独有的**。
  *
- * 旧策略是每群 500 条 + 每 principal 10000 条。活跃群里 500 条可能就是几天,
- * 而这个池子的用途正是回查很久以前的对话(「去年谁说了啥」)—— 按条数把它删没了。
+ * 额度本来就按 provider 命名空间(`telegram:<principalId>`)各算各的: 统计表以
+ * provider 为主键、回收也按 provider 过滤。两个账号同时在用就是两份独立额度,
+ * 个人 bot 的 `telegram-personal:<botId>` 更是另一块 —— 谁也吃不掉谁的份。
  *
- * 1 GiB 正文字节按一条群消息 100~300 字节估, 大约是几百万到上千万条; 一个日活
- * 500 条的群一年约 20~50 MB, 也就是几十个活跃群存好几年。碰不到的默认值正是
- * 目的: 它是安全阀, 不是日常清理。
+ * 做成可变对象只为让测试用小阈值把回收逼出来; 拿 1 GiB 默认值写回归等于在测试
+ * 里灌一 GB 数据。
  */
-export const WINDOW_MAX_TEXT_BYTES_PER_PRINCIPAL = 1024 * 1024 * 1024;
-/** 安全阀: 防止海量极短消息把行开销撑爆。正常使用碰不到。 */
-export const WINDOW_MAX_ROWS_PER_PRINCIPAL = 5_000_000;
-
-/**
- * 生效中的保留上限。做成可变对象只为让测试用一个小阈值把回收逼出来 —— 真实
- * 默认值大到正常使用碰不到, 拿默认值写回归等于在测试里灌 1 GiB 数据。
- */
-export const GROUP_WINDOW_RETENTION = {
-  maxTextBytesPerNamespace: WINDOW_MAX_TEXT_BYTES_PER_PRINCIPAL,
-  maxRowsPerNamespace: WINDOW_MAX_ROWS_PER_PRINCIPAL,
-};
+export const GROUP_WINDOW_RETENTION = { ...DEFAULT_GROUP_WINDOW_RETENTION };
 
 /**
  * 从 externalKey 解析 Telegram 群/topic lane。

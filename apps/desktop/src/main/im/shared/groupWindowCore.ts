@@ -41,15 +41,32 @@ const CURSOR_ROLLBACK_RETRY_DELAY_MS = 25;
  * `maxRowsPerNamespace` 只是防止极端行数膨胀的安全阀(海量空消息把行开销撑爆),
  * 设得足够高, 正常使用永远碰不到 —— 它不是日常清理手段。
  */
-/** 触发回收后收敛到上限的这个比例, 避免超限后每插一条都删一条。 */
-const RETENTION_LOW_WATER_RATIO = 0.9;
-
 export type GroupWindowRetentionPolicy = {
   /** 该 provider 命名空间保留的正文字节上限。 */
   maxTextBytesPerNamespace: number;
   /** 安全阀: 行数上限。 */
   maxRowsPerNamespace: number;
 };
+
+/** 触发回收后收敛到上限的这个比例, 避免超限后每插一条都删一条。 */
+const RETENTION_LOW_WATER_RATIO = 0.9;
+
+/**
+ * 保留上限的**默认数值** —— 官方与个人 bot 共用同一组数字, 但各自持有一份。
+ *
+ * 数据与额度是天然分离的: 每条记录带 provider 命名空间(官方
+ * `telegram:<principalId>`、个人 `telegram-personal:<botId>`), 统计表以 provider
+ * 为主键、回收也按 provider 过滤 —— 两个账号同时在用就是两个命名空间、两份独立
+ * 额度, 谁也吃不掉谁的份, 消息更不会串。这里共享的只是「1 GiB 这个数」, 不是
+ * 这 1 GiB 本身。
+ *
+ * 1 GiB 按一条群消息 100~300 字节估约几百万到上千万条; 日活 500 条的群一年
+ * 20~50 MB。碰不到正是目的: 它是安全阀, 不是日常清理。
+ */
+export const DEFAULT_GROUP_WINDOW_RETENTION: Readonly<GroupWindowRetentionPolicy> = Object.freeze({
+  maxTextBytesPerNamespace: 1024 * 1024 * 1024,
+  maxRowsPerNamespace: 5_000_000,
+});
 
 export interface GroupWindowEntryInput {
   provider: string;

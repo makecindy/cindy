@@ -362,6 +362,40 @@ describe('recordGroupMessage', () => {
     expect(oldest.message_id).toBe('m0');
   });
 
+  it('额度按命名空间各算各的 —— 一个账号写爆不影响另一个', async () => {
+    // 两个账号同时在用时消息绝不能串, 额度也不能共用: 统计表以 provider 为主键,
+    // 回收也按 provider 过滤。个人 bot 的 telegram-personal:<botId> 同理另算。
+    const previousBytes = GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace;
+    GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = 2_000;
+    try {
+      // 另一个账号先放一条, 之后不再碰它。
+      sqlite
+        .prepare(
+          `INSERT INTO hook_group_messages
+             (provider, chat_id, thread_id, message_id, chat_name, author, is_bot, text, file_names, sent_at, created_at)
+           VALUES ('telegram:other', '-77', '', 'other-1', 'Other', '@y', 0, 'kept', NULL, 1, 1)`,
+        )
+        .run();
+
+      const body = 'x'.repeat(100);
+      for (let i = 0; i < 60; i += 1) {
+        await recordGroupMessage(frame({ messageId: `c${i}`, text: body }));
+      }
+
+      // 本账号被回收到低水位, 另一个账号一条不少。
+      const mine = sqlite
+        .prepare("SELECT COUNT(*) AS n FROM hook_group_messages WHERE provider = 'telegram:9'")
+        .get() as { n: number };
+      const other = sqlite
+        .prepare("SELECT COUNT(*) AS n FROM hook_group_messages WHERE provider = 'telegram:other'")
+        .get() as { n: number };
+      expect(mine.n).toBeLessThan(60);
+      expect(other.n).toBe(1);
+    } finally {
+      GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace = previousBytes;
+    }
+  });
+
   it('超过字节上限时删最旧的, 并收敛到低水位', async () => {
     // 用一个很小的上限把回收逼出来 —— 真实默认值(1 GiB)正常使用碰不到。
     const previousBytes = GROUP_WINDOW_RETENTION.maxTextBytesPerNamespace;

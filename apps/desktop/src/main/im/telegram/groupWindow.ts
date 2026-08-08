@@ -22,6 +22,7 @@ import type { TelegramGroupWindowEntry } from '@cindy/im';
 import {
   assembleGroupWindowContext,
   createFenceNeutralizer,
+  DEFAULT_GROUP_WINDOW_RETENTION,
   GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS,
   recordGroupWindowEntry,
   resetGroupWindowCursors,
@@ -35,6 +36,17 @@ const log = createLogger('telegram-group-window');
 
 /** 窗口行的 provider 列值 — 与官方通道('telegram')隔离。 */
 export const TELEGRAM_PERSONAL_WINDOW_PROVIDER = 'telegram-personal';
+
+/**
+ * 个人 bot 这一侧生效的保留上限 —— 数值与官方同源, 但**这份对象是个人独有的**。
+ *
+ * 个人 bot 的群里允许非主人使用(受限权限), 消息量只会比官方那边更大, 所以同样
+ * 需要这道闸。额度按 provider 命名空间(`telegram-personal:<botId>`)独立计算, 与
+ * 官方的 `telegram:<principalId>` 各是各的一块 —— 换绑不同 bot 也各自独立。
+ *
+ * 做成可变对象只为让测试用小阈值把回收逼出来。
+ */
+export const TELEGRAM_PERSONAL_GROUP_WINDOW_RETENTION = { ...DEFAULT_GROUP_WINDOW_RETENTION };
 
 /**
  * provider 按 bot 命名空间(`telegram-personal:<botId>`): 换绑不同 bot 后,
@@ -56,17 +68,20 @@ function providerOf(botId: string): string {
 
 /** 入窗(幂等: 同 (provider,chat,thread,message) 唯一键重复插入直接忽略)。 */
 export async function recordTelegramGroupMessage(entry: TelegramGroupWindowEntry): Promise<void> {
-  await recordGroupWindowEntry({
-    provider: providerOf(entry.botId),
-    chatId: entry.chatId,
-    threadId: entry.threadId,
-    messageId: entry.messageId,
-    chatName: entry.chatName,
-    author: entry.author,
-    text: entry.text,
-    fileNames: entry.fileNames,
-    sentAt: entry.sentAt,
-  });
+  await recordGroupWindowEntry(
+    {
+      provider: providerOf(entry.botId),
+      chatId: entry.chatId,
+      threadId: entry.threadId,
+      messageId: entry.messageId,
+      chatName: entry.chatName,
+      author: entry.author,
+      text: entry.text,
+      fileNames: entry.fileNames,
+      sentAt: entry.sentAt,
+    },
+    TELEGRAM_PERSONAL_GROUP_WINDOW_RETENTION,
+  );
 }
 
 /**
