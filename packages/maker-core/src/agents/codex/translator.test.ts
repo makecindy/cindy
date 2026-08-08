@@ -10,7 +10,7 @@
  *   4. willRetry=false → 不论 auth 与否都 push
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   extractRolloutUpdatePlanFunctionCallEvent,
@@ -102,44 +102,53 @@ describe('translateAccountRateLimitsUpdated', () => {
 
 describe('Codex generation timing', () => {
   it('includes TTFT and thinking while excluding a tool interval', async () => {
+    let now = 4_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     const ctx = makeCtx(rt);
-    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
-    translateItemNotification('started', {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      startedAtMs: 4_000,
-      item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'inProgress' },
-    }, q, ctx);
-    translateItemNotification('completed', {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      completedAtMs: 10_000,
-      item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
-    }, q, ctx);
-    translateItemNotification('started', {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      startedAtMs: 11_000,
-      item: { type: 'agentMessage', id: 'msg-1', text: '' },
-    }, q, ctx);
-    translateItemNotification('updated', {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
-    }, q, ctx);
-    translateItemNotification('completed', {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      completedAtMs: 11_500,
-      item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
-    }, q, ctx);
-    finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
-    await collect(q);
-    // 1s→4s includes initial TTFT/thinking; 4s→10s tool time is excluded;
-    // 10s→12s includes the post-tool API call through final turn completion.
-    expect(codexGenerationDurationMs(rt)).toBe(5_000);
+    try {
+      beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+      translateItemNotification('started', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 400_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'inProgress' },
+      }, q, ctx);
+      now = 10_000;
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 406_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
+      }, q, ctx);
+      now = 11_000;
+      translateItemNotification('started', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 407_000,
+        item: { type: 'agentMessage', id: 'msg-1', text: '' },
+      }, q, ctx);
+      translateItemNotification('updated', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
+      }, q, ctx);
+      now = 11_500;
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 407_500,
+        item: { type: 'agentMessage', id: 'msg-1', text: 'hello' },
+      }, q, ctx);
+      finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
+      await collect(q);
+      // Local 1s→4s includes initial TTFT/thinking; 4s→10s tool time is excluded;
+      // 10s→12s includes the post-tool API call. Remote timestamps are offset by 396s.
+      expect(codexGenerationDurationMs(rt)).toBe(5_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('omits timing when a tool completion has no matching start boundary', async () => {
@@ -157,6 +166,34 @@ describe('Codex generation timing', () => {
     await collect(q);
     expect(codexGenerationDurationMs(rt)).toBeUndefined();
   });
+
+  it('omits timing when an item arrives before the local turn-start boundary', async () => {
+    let now = 2_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    try {
+      translateItemNotification('started', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 500_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'inProgress' },
+      }, q, makeCtx(rt));
+      now = 4_000;
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 502_000,
+        item: { type: 'commandExecution', id: 'tool-1', command: 'pwd', status: 'completed' },
+      }, q, makeCtx(rt));
+      finalizeCodexGenerationTurn(rt, 'turn-1', 5_000);
+      await collect(q);
+      expect(codexGenerationDurationMs(rt)).toBeUndefined();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('omits timing for completion-only file changes without a start boundary', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();

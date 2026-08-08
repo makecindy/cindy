@@ -136,10 +136,6 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
   rt.generationTimingReliable = true;
 }
 
-function timingValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
 function closeCodexGenerationInterval(rt: CodexRuntimeState, endedAt: number): void {
   const startedAt = rt.generationStartedAt;
   rt.generationStartedAt = null;
@@ -228,15 +224,20 @@ function noteCodexGenerationBoundary(
   rt: CodexRuntimeState,
   phase: ItemPhase,
   item: { id?: unknown; type?: unknown },
-  notification: { turnId?: unknown; startedAtMs?: unknown; completedAtMs?: unknown },
+  notification: { turnId?: unknown },
 ): void {
   const turnId = notification.turnId;
   if (typeof turnId !== 'string') return;
+  // App-server timestamps may originate on a remote SSH host whose wall clock
+  // differs from the desktop. Keep every generation boundary in the local
+  // receipt-time domain so interval subtraction never mixes clocks.
+  const receivedAt = Date.now();
   if (rt.generationTurnId !== turnId) {
-    const fallbackStart = phase === 'started'
-      ? timingValue(notification.startedAtMs) ?? Date.now()
-      : Date.now();
-    beginCodexGenerationTurn(rt, turnId, fallbackStart);
+    beginCodexGenerationTurn(rt, turnId, receivedAt);
+    // The authoritative local turn-start boundary was not observed. Starting
+    // at this item receipt would drop TTFT/thinking, so keep the state usable
+    // for pause pairing but fail closed for TPS.
+    rt.generationTimingReliable = false;
   }
   if (
     typeof item.type !== 'string' ||
@@ -250,12 +251,7 @@ function noteCodexGenerationBoundary(
   }
   const pauseId = `item:${item.id}`;
   if (phase === 'started') {
-    pauseCodexGeneration(
-      rt,
-      turnId,
-      pauseId,
-      timingValue(notification.startedAtMs) ?? Date.now(),
-    );
+    pauseCodexGeneration(rt, turnId, pauseId, receivedAt);
     return;
   }
   if (phase !== 'completed') return;
@@ -265,12 +261,7 @@ function noteCodexGenerationBoundary(
     rt.generationTimingReliable = false;
     return;
   }
-  resumeCodexGeneration(
-    rt,
-    turnId,
-    pauseId,
-    timingValue(notification.completedAtMs) ?? Date.now(),
-  );
+  resumeCodexGeneration(rt, turnId, pauseId, receivedAt);
 }
 
 // ── 上下文 ────────────────────────────────────────────────────────────────────
@@ -338,7 +329,7 @@ export function translateItemNotification(
     ctx.rt,
     phase,
     item as { id?: unknown; type?: unknown },
-    notification as { turnId?: unknown; startedAtMs?: unknown; completedAtMs?: unknown },
+    notification as { turnId?: unknown },
   );
 
   switch (itemType) {
