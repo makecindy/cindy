@@ -229,6 +229,46 @@ describe('recordTurnCostOnMessage', () => {
     });
   });
 
+  it('已有明细无需补耗时时不做冗余二次写入', async () => {
+    const { deps, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: DETAILS },
+    );
+
+    await expect(
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(1);
+  });
+
+  it('补耗时的二次写入失效时保留第一次成功结果', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, runCostCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: terminal },
+    );
+    let callCount = 0;
+    deps.patchAgentMeta = vi.fn(async (_sessionId, _clientId, patch) => {
+      callCount += 1;
+      if (callCount > 1) return null;
+      return {
+        previous: { turnUsageDetails: terminal },
+        next: { turnUsageDetails: terminal, ...patch },
+      };
+    });
+
+    await expect(
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(true);
+
+    expect(callCount).toBe(2);
+    expect(runCostCalls).toHaveLength(1);
+    expect(broadcasts[0]?.turnUsageDetails).toEqual(DETAILS);
+  });
+
   it('价格未知时仍可单独持久化并广播 token/cache 明细', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await expect(recordTurnUsageOnMessage({

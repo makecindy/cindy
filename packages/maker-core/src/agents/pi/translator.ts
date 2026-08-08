@@ -35,8 +35,6 @@ interface PiAssistantMessage {
   usage?: PiUsage;
   /** provider-reported duration when the runtime supplies one. */
   duration?: number;
-  /** pi timestamps assistant messages at generation start (milliseconds). */
-  timestamp?: number;
   model?: string;
   stopReason?: string;
 }
@@ -279,11 +277,7 @@ export function translatePiEvent(
         Number.isFinite(message.duration) &&
         message.duration > 0
           ? message.duration
-          : typeof message.timestamp === 'number' &&
-              Number.isFinite(message.timestamp) &&
-              message.timestamp > 0
-            ? Date.now() - message.timestamp
-            : 0;
+          : 0;
       if (messageDurationMs > 0) {
         ctx.generationDurationMs += messageDurationMs;
       } else if ((message.usage?.output ?? 0) > 0) {

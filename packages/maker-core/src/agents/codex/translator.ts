@@ -84,6 +84,9 @@ export interface CodexRuntimeState {
   generationTurnId: string | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
+  /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
+  generationHeartbeatAt: number | null;
+  generationHeartbeatTimer: ReturnType<typeof setInterval> | null;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
   /** 尚未 emit 的 Web Search 候选输入，供跨 started/updated/completed 快照补全。 */
@@ -119,6 +122,8 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationDurationMs: 0,
     generationTurnId: null,
     generationTimingReliable: true,
+    generationHeartbeatAt: null,
+    generationHeartbeatTimer: null,
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
@@ -127,8 +132,39 @@ export function newCodexRuntimeState(): CodexRuntimeState {
   };
 }
 
+const CODEX_GENERATION_HEARTBEAT_MS = 5_000;
+const CODEX_GENERATION_SUSPEND_GAP_MS = 30_000;
+
+function stopCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  if (rt.generationHeartbeatTimer !== null) clearInterval(rt.generationHeartbeatTimer);
+  rt.generationHeartbeatTimer = null;
+  rt.generationHeartbeatAt = null;
+}
+
+function sampleCodexGenerationHeartbeat(rt: CodexRuntimeState, now = Date.now()): void {
+  const previous = rt.generationHeartbeatAt;
+  if (
+    previous !== null &&
+    now - previous > CODEX_GENERATION_HEARTBEAT_MS + CODEX_GENERATION_SUSPEND_GAP_MS
+  ) {
+    rt.generationTimingReliable = false;
+  }
+  rt.generationHeartbeatAt = now;
+}
+
+function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
+  rt.generationHeartbeatAt = Date.now();
+  const timer = setInterval(() => {
+    sampleCodexGenerationHeartbeat(rt);
+  }, CODEX_GENERATION_HEARTBEAT_MS);
+  timer.unref?.();
+  rt.generationHeartbeatTimer = timer;
+}
+
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
 export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
   rt.generationDurationMs = 0;
@@ -139,6 +175,8 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
 function closeCodexGenerationInterval(rt: CodexRuntimeState, endedAt: number): void {
   const startedAt = rt.generationStartedAt;
   rt.generationStartedAt = null;
+  sampleCodexGenerationHeartbeat(rt);
+  stopCodexGenerationHeartbeat(rt);
   if (startedAt === null) return;
   if (endedAt < startedAt) {
     rt.generationTimingReliable = false;
@@ -158,6 +196,7 @@ export function beginCodexGenerationTurn(
   }
   if (rt.generationStartedAt === null && rt.generationPendingToolIds.size === 0) {
     rt.generationStartedAt = startedAt;
+    startCodexGenerationHeartbeat(rt);
   }
 }
 
@@ -170,6 +209,7 @@ export function finalizeCodexGenerationTurn(
   if (rt.generationPendingToolIds.size > 0) {
     rt.generationTimingReliable = false;
     rt.generationStartedAt = null;
+    stopCodexGenerationHeartbeat(rt);
     return;
   }
   closeCodexGenerationInterval(rt, completedAt);
@@ -208,6 +248,7 @@ export function resumeCodexGeneration(
     return;
   }
   if (rt.generationPendingToolIds.size === 0) rt.generationStartedAt = resumedAt;
+  if (rt.generationPendingToolIds.size === 0) startCodexGenerationHeartbeat(rt);
 }
 
 const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
@@ -230,7 +271,8 @@ function noteCodexGenerationBoundary(
   if (typeof turnId !== 'string') return;
   // App-server timestamps may originate on a remote SSH host whose wall clock
   // differs from the desktop. Keep every generation boundary in the local
-  // receipt-time domain so interval subtraction never mixes clocks.
+  // receipt-time domain so interval subtraction never mixes remote clocks.
+  // A separate event-loop heartbeat fails closed on suspend-sized local jumps.
   const receivedAt = Date.now();
   if (rt.generationTurnId !== turnId) {
     beginCodexGenerationTurn(rt, turnId, receivedAt);

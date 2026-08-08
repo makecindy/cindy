@@ -142,10 +142,17 @@ async function patchAgentMetaPreservingTurnDuration(
   const previousUsage = normalizeTurnUsageDetails(first.previous.turnUsageDetails);
   if (!previousUsage) return { result: first, turnUsageDetails };
   const mergedUsage = mergeTurnUsageDetailsForMessage(previousUsage, turnUsageDetails);
+  const needsMergePatch =
+    (turnUsageDetails.totalTokens <= 0 && previousUsage.totalTokens > 0) ||
+    (previousUsage.turnDurationMs ?? 0) > (turnUsageDetails.turnDurationMs ?? 0);
+  if (!needsMergePatch) return { result: first, turnUsageDetails };
   const second = await deps.patchAgentMeta(sessionId, clientId, {
     turnUsageDetails: mergedUsage,
   });
-  if (!second) return null;
+  // The first patch already persisted the segment cost/usage. If the message
+  // is rewound between the two writes, keep the original success semantics so
+  // ledger side effects and broadcasts are not silently skipped.
+  if (!second) return { result: first, turnUsageDetails };
   return {
     result: { previous: first.previous, next: second.next },
     turnUsageDetails: mergedUsage,

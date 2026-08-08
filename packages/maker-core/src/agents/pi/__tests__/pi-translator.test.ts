@@ -99,9 +99,10 @@ describe('pi translator', () => {
     }));
   });
 
-  it('does not fall back to full turn wall-clock time when Pi omits generation duration', () => {
+  it('does not infer generation duration from Pi wall-clock timestamps', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
+    const timestamp = Date.now() - 1_200;
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(
       ev({
@@ -110,6 +111,7 @@ describe('pi translator', () => {
           role: 'assistant',
           content: [{ type: 'text', text: 'answer after a tool' }],
           usage: { input: 10, output: 5 },
+          timestamp,
         },
       }),
       queue,

@@ -217,6 +217,19 @@ describe('Codex generation timing', () => {
     finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
     expect(codexGenerationDurationMs(rt)).toBe(3_000);
   });
+
+  it('omits timing when the model-active event loop has a suspend-sized gap', () => {
+    const wallClockSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const rt = newCodexRuntimeState();
+      beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+      wallClockSpy.mockReturnValue(40_000);
+      finalizeCodexGenerationTurn(rt, 'turn-1', 2_000);
+      expect(codexGenerationDurationMs(rt)).toBeUndefined();
+    } finally {
+      wallClockSpy.mockRestore();
+    }
+  });
 });
 
 describe('translateErrorNotification', () => {
