@@ -46,6 +46,9 @@ export function collectSessionListSnapshot(): CachedDeviceSessionsSnapshot[] {
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */
 const LIST_LIMIT = 200;
 
+/** 与本地侧栏 / local-db:sessions:list 的现行产品上限一致。 */
+const ARCHIVED_LIST_LIMIT = 1000;
+
 /** 满窗口时每轮最多补查多少个缺席缓存 id，避免退化成无界 N+1。 */
 const MISSING_STATUS_PROBE_LIMIT = 8;
 
@@ -383,6 +386,7 @@ async function runRefreshRemoteDeviceSessions(
   const sleep = opts.sleep ?? realSleep;
   const maxAttempts = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const status = opts.status ?? 'active';
+  const listLimit = status === 'archived' ? ARCHIVED_LIST_LIMIT : LIST_LIMIT;
   const deviceName = name ?? remoteProjectsStore.getDeviceName(deviceId) ?? deviceId;
   const epoch = remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
   let timeoutAttempts = 0;
@@ -392,7 +396,7 @@ async function runRefreshRemoteDeviceSessions(
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
     try {
       const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:list', [
-        LIST_LIMIT,
+        listLimit,
         status,
         { includePinned: true },
       ]);
@@ -405,10 +409,9 @@ async function runRefreshRemoteDeviceSessions(
           .getDeviceSessions(deviceId, status)
           .filter((session) => !incomingIds.has(session.id))
           .map((session) => session.id);
-        // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace；archived 没有分页入口，
-        // 因此始终以最近 LIST_LIMIT 条作为权威显示窗口，不能把旧缓存合并回来长期保留
-        // 断线期间已删除 / 取消归档的陈旧行。active 满窗口仍用既有 sessions:get 有界轮询。
-        if (sessions.length < LIST_LIMIT || status === 'archived') {
+        // archived 使用与本地侧栏一致的 1000 条产品窗口，可直接替换并清掉断线期间的
+        // 删除 / 取消归档陈旧行；active 仍保持 200 条轻量窗口，满窗时有界补查缺席缓存。
+        if (status === 'archived' || sessions.length < LIST_LIMIT) {
           if (status === 'active') {
             missingStatusProbeQueues.delete(deviceId);
             for (const sessionId of missingSessionIds) {
