@@ -475,6 +475,7 @@ interface MessageActions {
   onPreviewRewind?: (clientId: string, draft: MobileMessageDraft) => void;
   onEnterShareSelection?: (clientId: string) => void;
   shareSelectionActive?: boolean;
+  shareSelectionBusy?: boolean;
   /** 待发送气泡(pending_send 项)的展开态与队列操作回调。 */
   pendingSend?: PendingSendBubbleActions;
   onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
@@ -505,6 +506,7 @@ export function MessageRenderer({
   onEnterShareSelection,
   onVisibleShareableMessageIdsReaderChange,
   shareSelectionActive,
+  shareSelectionBusy,
   onQuoteSelection,
   pendingSend,
   onReadTextFilePreview,
@@ -555,6 +557,7 @@ export function MessageRenderer({
     reader: ((viewport: ShareableMessageViewport) => Promise<readonly string[]>) | null,
   ) => void;
   shareSelectionActive?: boolean;
+  shareSelectionBusy?: boolean;
   /** DEV-only:把内部列表控制器暴露给性能 harness 驱动自动滚动(临时,profiling/回归测量用)。 */
   devExposeList?: (api: {
     scrollTo: (y: number) => void;
@@ -817,6 +820,7 @@ export function MessageRenderer({
     // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
     pendingSend,
     shareSelectionActive,
+    shareSelectionBusy,
     busyClientId,
     busyAction,
     firstUserMessageClientId,
@@ -838,6 +842,7 @@ export function MessageRenderer({
     onResolveRemoteMedia,
     pendingSend,
     shareSelectionActive,
+    shareSelectionBusy,
     viewportLayout.contentWidth,
   ]);
   // chat-text-quote:选区采集 context。仅「会话页传了采集回调 + iOS」时启用
@@ -2249,7 +2254,7 @@ function MessageBubble({
   return (
     <View style={styles.shareSelectionRow}>
       <View style={styles.shareSelectionGutter}>
-        <ShareMessageCheckbox clientId={clientId} />
+        <ShareMessageCheckbox clientId={clientId} disabled={actions.shareSelectionBusy === true} />
       </View>
       <View style={styles.shareSelectionContent}>{messageNode}</View>
     </View>
@@ -6101,7 +6106,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   shareSelectionGutter: {
     alignItems: 'center',
     paddingTop: spacing.sm,
-    width: spacing.xl,
+    width: spacing.xl * 2,
   },
   shareSelectionContent: {
     flex: 1,

@@ -10,7 +10,7 @@ import { Directory, File, Paths } from "expo-file-system";
 import { Image as NativeImage, StyleSheet, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
-const EXPORT_TIMEOUT_MS = 15_000;
+const EXPORT_TIMEOUT_MS = 20_000;
 const EXPORT_SCALE = 2;
 const EXPORT_DIR_NAME = "conversation-share";
 

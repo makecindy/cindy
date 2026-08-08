@@ -1,14 +1,20 @@
 import { Check } from "lucide-react-native";
-import { Pressable, StyleSheet } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
-import { iconSize, iconStroke, radius, spacing } from "@/theme/tokens";
+import { iconSize, iconStroke, radius } from "@/theme/tokens";
 import {
   shareSelectionStore,
   useIsMessageSelected,
 } from "@/session/shareSelectionStore";
 
-export function ShareMessageCheckbox({ clientId }: { clientId: string }) {
+export function ShareMessageCheckbox({
+  clientId,
+  disabled = false,
+}: {
+  clientId: string;
+  disabled?: boolean;
+}) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -18,23 +24,21 @@ export function ShareMessageCheckbox({ clientId }: { clientId: string }) {
     <Pressable
       accessibilityLabel={t("session.shareImage.checkboxLabel")}
       accessibilityRole="checkbox"
-      accessibilityState={{ checked: selected }}
-      hitSlop={spacing.sm}
+      accessibilityState={{ checked: selected, disabled }}
+      disabled={disabled}
       onPress={() => shareSelectionStore.toggle(clientId)}
-      style={({ pressed }) => [
-        styles.button,
-        selected && styles.selected,
-        pressed && styles.pressed,
-      ]}
+      style={({ pressed }) => [styles.button, pressed && styles.pressed]}
       testID={`session.shareImage.checkbox.${clientId}`}
     >
-      {selected ? (
-        <Check
-          color={colors.ctaText}
-          size={iconSize.sm}
-          strokeWidth={iconStroke.bold}
-        />
-      ) : null}
+      <View style={[styles.mark, selected && styles.selected]}>
+        {selected ? (
+          <Check
+            color={colors.ctaText}
+            size={iconSize.sm}
+            strokeWidth={iconStroke.bold}
+          />
+        ) : null}
+      </View>
     </Pressable>
   );
 }
@@ -42,6 +46,12 @@ export function ShareMessageCheckbox({ clientId }: { clientId: string }) {
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     button: {
+      alignItems: "center",
+      height: 44,
+      justifyContent: "center",
+      width: 44,
+    },
+    mark: {
       alignItems: "center",
       borderColor: colors.borderStrong,
       borderRadius: radius.pill,

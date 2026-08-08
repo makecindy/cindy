@@ -1,4 +1,6 @@
 import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
+import { buildKatexLoaderJs } from "@/session/mathWebViewHtml";
+import { MOBILE_MERMAID_SCRIPT_URLS } from "@/session/mermaidWebViewHtml";
 import {
   buildSelectableMarkdownCss,
   buildSelectableMarkdownFragmentHtml,
@@ -23,6 +25,7 @@ export interface ConversationShareWebViewColors {
   textPrimary: string;
   textSecondary: string;
   textTertiary: string;
+  dark?: boolean;
   syntax: NonNullable<SelectableMarkdownHtmlOptions["syntaxColors"]>;
 }
 
@@ -80,7 +83,7 @@ export function buildConversationShareHtml({
     "<head>",
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">',
-    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none';\">",
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline' https://cdn.jsdelivr.net https://registry.npmmirror.com; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://registry.npmmirror.com; font-src https://cdn.jsdelivr.net https://registry.npmmirror.com data:; object-src 'none'; base-uri 'none'; form-action 'none';\">",
     `<style id="share-style">${markdownCss}${buildConversationShareCss({ background, surfaceElevated: colors.surfaceElevated, textPrimary: colors.textPrimary, textSecondary: colors.textSecondary, textTertiary: colors.textTertiary, width })}</style>`,
     "</head>",
     "<body>",
@@ -90,6 +93,7 @@ export function buildConversationShareHtml({
     `<div class="share-lockup">${character}${logo}</div>`,
     "</footer>",
     "</main>",
+    buildConversationShareRichContentScript(colors.dark === true),
     buildExportScript(),
     "</body>",
     "</html>",
@@ -253,7 +257,143 @@ function buildConversationShareCss({
       font-weight: 500;
       letter-spacing: 1px;
     }
+    .share-mermaid {
+      width: 100%;
+      overflow: visible;
+    }
+    .share-mermaid svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-width: none;
+    }
   `;
+}
+
+function buildConversationShareRichContentScript(dark: boolean): string {
+  const mermaidUrls = JSON.stringify(MOBILE_MERMAID_SCRIPT_URLS);
+  const mermaidTheme = dark ? "dark" : "default";
+  const renderKatexJs = [
+    'document.querySelectorAll("[data-latex]").forEach(function (element) {',
+    "  try {",
+    '    window.katex.render(element.getAttribute("data-latex") || "", element, {',
+    '      displayMode: element.hasAttribute("data-katex-display"),',
+    "      throwOnError: false,",
+    '      strict: "ignore",',
+    "    });",
+    "  } catch (error) { /* 保留公式源码 */ }",
+    "});",
+    "clearTimeout(mathFallback);",
+    "mathDone = true;",
+    "maybeReady();",
+  ].join("");
+  const katexLoader = buildKatexLoaderJs(renderKatexJs);
+
+  return `<script>
+(function () {
+  var mathNodes = document.querySelectorAll('[data-latex]');
+  var mermaidNodes = document.querySelectorAll('[data-mermaid-source]');
+  var mathDone = mathNodes.length === 0;
+  var mermaidDone = mermaidNodes.length === 0;
+  var ready = false;
+  window.__cindyConversationShareRichContentReady = false;
+
+  function maybeReady() {
+    if (!ready && mathDone && mermaidDone) {
+      ready = true;
+      window.__cindyConversationShareRichContentReady = true;
+    }
+  }
+
+  function renderMermaidNodes() {
+    try {
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: '${mermaidTheme}',
+        fontFamily: 'inherit',
+        flowchart: { useMaxWidth: false, htmlLabels: false },
+        sequence: { useMaxWidth: false },
+        class: { useMaxWidth: false },
+        state: { useMaxWidth: false },
+        er: { useMaxWidth: false },
+        gantt: { useMaxWidth: false, useWidth: 760 },
+        journey: { useMaxWidth: false },
+        pie: { useMaxWidth: false },
+      });
+    } catch (error) {
+      mermaidDone = true;
+      maybeReady();
+      return;
+    }
+
+    var jobs = Array.prototype.map.call(mermaidNodes, function (node, index) {
+      var source = node.getAttribute('data-mermaid-source') || '';
+      var repaired = node.getAttribute('data-mermaid-repaired-source') || '';
+      function renderSource(value) {
+        return window.mermaid.parse(value).then(function () {
+          return window.mermaid.render('cindy-share-mermaid-' + index, value);
+        });
+      }
+      return renderSource(source).catch(function () {
+        return repaired ? renderSource(repaired) : Promise.reject(new Error('mermaid-render-failed'));
+      }).then(function (rendered) {
+        var replacement = document.createElement('div');
+        replacement.className = 'share-mermaid';
+        replacement.innerHTML = rendered.svg;
+        var pre = node.closest('pre');
+        if (pre) pre.replaceWith(replacement);
+      }).catch(function () {
+        return undefined;
+      });
+    });
+    Promise.all(jobs).then(function () {
+      mermaidDone = true;
+      maybeReady();
+    });
+  }
+
+  if (!mathDone) {
+    var mathFallback = setTimeout(function () {
+      mathDone = true;
+      maybeReady();
+    }, 13000);
+    ${katexLoader}
+  }
+
+  if (!mermaidDone) {
+    (function attemptMermaid(index) {
+      var urls = ${mermaidUrls};
+      if (index >= urls.length) {
+        mermaidDone = true;
+        maybeReady();
+        return;
+      }
+      var finished = false;
+      var timer = setTimeout(fail, 6000);
+      function fail() {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        attemptMermaid(index + 1);
+      }
+      var script = document.createElement('script');
+      script.src = urls[index];
+      script.onload = function () {
+        if (finished) return;
+        if (!window.mermaid) { fail(); return; }
+        finished = true;
+        clearTimeout(timer);
+        renderMermaidNodes();
+      };
+      script.onerror = fail;
+      document.head.appendChild(script);
+    })(0);
+  }
+
+  maybeReady();
+})();
+</script>`;
 }
 
 function buildExportScript(): string {
@@ -263,13 +403,31 @@ function buildExportScript(): string {
   function post(payload) {
     if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(payload));
   }
+  function waitForRichContent() {
+    if (window.__cindyConversationShareRichContentReady === true) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var deadline = Date.now() + 14000;
+      function check() {
+        if (window.__cindyConversationShareRichContentReady === true || Date.now() >= deadline) {
+          resolve();
+          return;
+        }
+        setTimeout(check, 25);
+      }
+      check();
+    });
+  }
   function waitForImages() {
     var images = Array.prototype.slice.call(document.images);
     return Promise.all(images.map(function (image) {
-      if (image.complete) return Promise.resolve();
-      return new Promise(function (resolve) {
-        image.addEventListener('load', resolve, { once: true });
-        image.addEventListener('error', resolve, { once: true });
+      var loaded = image.complete
+        ? Promise.resolve()
+        : new Promise(function (resolve) {
+          image.addEventListener('load', resolve, { once: true });
+          image.addEventListener('error', resolve, { once: true });
+        });
+      return loaded.then(function () {
+        return image.decode ? image.decode().catch(function () {}) : undefined;
       });
     }));
   }
@@ -289,7 +447,7 @@ function buildExportScript(): string {
       return;
     }
     removeExternalImages(stage);
-    waitForImages().then(function () {
+    waitForRichContent().then(waitForImages).then(function () {
       var rect = stage.getBoundingClientRect();
       var width = Math.max(stage.scrollWidth, Math.ceil(rect.width));
       var height = Math.max(stage.scrollHeight, Math.ceil(rect.height));

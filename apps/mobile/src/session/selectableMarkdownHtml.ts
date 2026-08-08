@@ -7,6 +7,7 @@ import {
 import { tokenizeCode } from '@/session/codeHighlight';
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
+import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 // lineHeight 取别名:本模块内 `lineHeight` 是正文行高的局部变量(来自 options)。
 import { lightColors, lineHeight as lineHeightScale, typeScale } from '@/theme/tokens';
 import { i18n } from '@/i18n';
@@ -436,8 +437,13 @@ function renderBlock(block: MobileMarkdownBlock, ctx: RenderContext): string {
       // 与聊天消息流同一个 tokenizer(session/codeHighlight),着色口径一致;
       // 每个非 plain 片段包一层 <span class="syn-*">,颜色见 css 里的 .syn-* 规则。
       return `<pre><code>${highlightCodeHtml(block.text, block.language)}</code></pre>`;
-    case 'mermaid':
-      return `<pre><code>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
+    case 'mermaid': {
+      const repaired = repairMermaidSource(block.text);
+      const repairedAttribute = repaired === block.text
+        ? ''
+        : ` data-mermaid-repaired-source="${escapeAttribute(repaired)}"`;
+      return `<pre><code data-mermaid-source="${escapeAttribute(block.text)}"${repairedAttribute}>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
+    }
     case 'math':
       // display 公式:data-latex 存源码,文档级 KaTeX runtime(见
       // buildMathRuntimeScript)加载后原位渲染;CDN 失败时保持源码 <pre> 展示。

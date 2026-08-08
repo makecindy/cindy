@@ -5445,6 +5445,7 @@ export default function SessionScreen() {
         textPrimary: colors.textPrimary,
         textSecondary: colors.textSecondary,
         textTertiary: colors.textTertiary,
+        dark: mode === 'dark',
       },
       contentWidth: windowDimensions.width,
       logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
@@ -8398,6 +8399,7 @@ export default function SessionScreen() {
                     onEnterShareSelection={enterShareSelection}
                     onVisibleShareableMessageIdsReaderChange={handleVisibleShareableMessageIdsReaderChange}
                     shareSelectionActive={shareSelectionActive}
+                    shareSelectionBusy={conversationShareBusy}
                     // chat-text-quote:选中消息文字 → 引用进本会话草稿(截断后写
                     // chatQuoteStore,composer 胶囊即时刷新)。Composer 不可用态不启用;
                     // 回调已 memoize,保持 SelectionQuoteContext value 稳定。

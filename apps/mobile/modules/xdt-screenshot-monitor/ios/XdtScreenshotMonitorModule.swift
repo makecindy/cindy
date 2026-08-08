@@ -3,7 +3,7 @@ import UIKit
 import WebKit
 
 private let onScreenshot = "onScreenshot"
-private let conversationShareRenderTimeout: TimeInterval = 15
+private let conversationShareRenderTimeout: TimeInterval = 20
 private let conversationShareMaxOutputPixels: CGFloat = 12_000_000
 
 public class XdtScreenshotMonitorModule: Module {
@@ -122,24 +122,57 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
 
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     let script = """
-      (function () {
-      const stage = document.getElementById('xdt-content');
-      if (!stage) throw new Error('stage-not-found');
-      Array.from(stage.querySelectorAll('img')).forEach((image) => {
-        const source = image.getAttribute('src') || '';
-        if (!source.startsWith('data:')) image.replaceWith(document.createTextNode(image.getAttribute('alt') || ''));
-      });
-      const rect = stage.getBoundingClientRect();
-      return {
-        width: Math.max(stage.scrollWidth, Math.ceil(rect.width)),
-        height: Math.max(stage.scrollHeight, Math.ceil(rect.height))
-      };
+      return (async function () {
+        const stage = document.getElementById('xdt-content');
+        if (!stage) throw new Error('stage-not-found');
+        Array.from(stage.querySelectorAll('img')).forEach((image) => {
+          const source = image.getAttribute('src') || '';
+          if (!source.startsWith('data:')) image.replaceWith(document.createTextNode(image.getAttribute('alt') || ''));
+        });
+        await new Promise((resolve) => {
+          const deadline = Date.now() + 14_000;
+          const check = () => {
+            if (window.__cindyConversationShareRichContentReady === true || Date.now() >= deadline) {
+              resolve();
+              return;
+            }
+            setTimeout(check, 25);
+          };
+          check();
+        });
+        await Promise.all(Array.from(document.images).map(async (image) => {
+          if (!image.complete) {
+            await new Promise((resolve) => {
+              image.addEventListener('load', resolve, { once: true });
+              image.addEventListener('error', resolve, { once: true });
+            });
+          }
+          if (image.decode) {
+            try { await image.decode(); } catch (_) {}
+          }
+        }));
+        if (document.fonts && document.fonts.ready) {
+          try { await document.fonts.ready; } catch (_) {}
+        }
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const rect = stage.getBoundingClientRect();
+        return {
+          width: Math.max(stage.scrollWidth, Math.ceil(rect.width)),
+          height: Math.max(stage.scrollHeight, Math.ceil(rect.height))
+        };
       })();
     """
-    webView.evaluateJavaScript(script) { [weak self] value, error in
+    webView.callAsyncJavaScript(
+      script,
+      arguments: [:],
+      in: nil,
+      in: .page
+    ) { [weak self] result in
       guard let self else { return }
-      if let error {
-        self.finish(.failure(error))
+      guard case .success(let value) = result else {
+        if case .failure(let error) = result {
+          self.finish(.failure(error))
+        }
         return
       }
       guard
