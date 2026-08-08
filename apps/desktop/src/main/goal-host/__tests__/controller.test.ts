@@ -446,7 +446,7 @@ describe('GoalController', () => {
     expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
   });
 
-  it('migrates the Goal listener to the switched session so the new engine turn can finalize (reviewer P1)', async () => {
+  it('migrates the Goal listener to the switched session so the new engine turn can finalize ()', async () => {
     const oldSession = new FakeSession('s1', 'claude-code');
     const switchedSession = new FakeSession('s1', 'codex');
     let live: FakeSession = oldSession;
@@ -3370,7 +3370,7 @@ describe('GoalController', () => {
     const dispatched = events.find((e) => e.type === 'turn-dispatched');
     expect(resumed).toBeDefined();
     expect(dispatched).toBeDefined();
-    // resumeGoal 的 resumed 必须与其触发的首轮派发同代(reviewer P1:此前 gen 0 vs gen 1 脱节)。
+    // resumeGoal 的 resumed 必须与其触发的首轮派发同代(此前 gen 0 vs gen 1 脱节)。
     expect(resumed?.generation).toBe(dispatched?.generation);
     expect(resumed?.generation).toBeGreaterThanOrEqual(1);
   });

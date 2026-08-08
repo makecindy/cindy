@@ -459,7 +459,7 @@ export class GoalController {
     state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
     // 只允许补充/覆盖 helper 未计算/归一化的字段(from/to/generation/reason/at);
     // type/goalSessionId/turnIndex/budget 由 helper 负责,调用方不可意外覆盖。
-    // at 允许传入(reviewer P1:快终态重放顺序需要派发时刻锚点,如 dispatchAt),
+    // at 允许传入(快终态重放顺序需要派发时刻锚点,如 dispatchAt),
     // helper 内 extra.at ?? now 优先。
     // reason 单独定义(不放进 Pick):交叉类型对同名属性取交集,会把 reason 收窄成
     // string,无法接受 GoalState.lastReason 的 string | null;单独给 nullable 类型后
@@ -490,7 +490,7 @@ export class GoalController {
         : {}),
       ...extra,
       reason: extra?.reason ?? undefined,
-      // extra.at 优先(reviewer P1:dispatchAt 锚定重放顺序,不得被 now 覆盖)。
+      // extra.at 优先(dispatchAt 锚定重放顺序,不得被 now 覆盖)。
       at: extra?.at ?? this.now(),
     };
     try {
@@ -509,6 +509,11 @@ export class GoalController {
 
   /** `/goal X` 入口:无既有 goal 直接创建;已有 goal 直接改 objective 并续跑。 */
   async setGoal(input: SetGoalInput): Promise<GoalState | null> {
+    // dispose 后丢弃(登出/切账号期间捕获的 /goal、GOAL_SET 在 await
+    // storage.get/ensureSession 后不得创建新 boundary/持久化/attach listener/
+    // 广播状态;dispose 清 turns 后 entryBoundary 为 undefined,boundary 判等会
+    // 失效,必须显式守卫)。await 前后各查一次。
+    if (this.disposed) return null;
     const sessionId = input.sessionId;
     const objective = input.objective.trim();
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
@@ -533,6 +538,7 @@ export class GoalController {
       entryBoundary = takeoverBoundary;
     }
     const existing = await this.deps.storage.get(sessionId);
+    if (this.disposed) return null;
     if (this.turns.get(sessionId) !== entryBoundary) return null;
     const ts = this.now();
 
@@ -1213,7 +1219,7 @@ export class GoalController {
         reason: opts?.auto ? 'auto-resume' : 'manual-resume',
       });
     }
-    // #2105 P0:恢复边界事件(reviewer:resumed 此前只在 resumeActiveGoals 记录,
+    // #2105 P0:恢复边界事件(resumed 此前只在 resumeActiveGoals 记录,
     // 手动 resumeGoal 会直接从旧生命周期跳到新 generation 的 turn-dispatched,
     // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑。
     // **登记而非立即发出**(busy / 预算预检拦截 / session 缺失等派发前
@@ -1735,7 +1741,7 @@ export class GoalController {
     );
 
     // ── #2105 P0 观测:决策后计数快照 ─────────────────────────────────────
-    // 用决策后计数快照(reviewer: 传决策前 state 会让 turnIndex/预算落后一轮,
+    // 用决策后计数快照(传决策前 state 会让 turnIndex/预算落后一轮,
     // 首轮收口被记成第 0 轮)。decision 的 turnsUsed/tokensUsed/noProgressStreak
     // 是即将持久化的值;事件本身在确认提交后才发出(见下方),此处只预备快照。
     const postDecisionCounts: Pick<
@@ -2240,11 +2246,11 @@ export class GoalController {
     let dispatchBoundary: TurnAccumulator | undefined;
     let dispatchGeneration: number | undefined;
     /** onDispatching 时刻(重放顺序锚点):快终态时 finalize 事件可能先落环,
-     * 用派发时刻的 at 保证 dispatch 排在 finalize 前(Codex P1)。 */
+     * 用派发时刻的 at 保证 dispatch 排在 finalize 前。 */
     let dispatchAt: number | undefined;
     /** onDispatching 固化的恢复原因:快终态时 pendingResume 可能先被
      * stopSession/clearPendingResumeForBoundary 清掉,固化值保证 accepted 分支
-     * 仍能补发同代 resumed(Greptile P1)。 */
+     * 仍能补发同代 resumed。 */
     let dispatchResumeReason: string | undefined;
     const isCurrentDispatch = (): boolean =>
       dispatchBoundary != null &&

@@ -81,10 +81,14 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
     snapshot() {
       // 与 record 同样浅拷贝(含 budget):返回新对象,消费者修改返回值
       // 不会污染环内数据。
-      return ring.map((evt) => ({
-        ...evt,
-        budget: evt.budget ? { ...evt.budget } : undefined,
-      }));
+      // 按 at 稳定排序(快终态时 turn-dispatched 的 at 早于 finalize,但落环晚;
+      // 消费者按返回顺序看时间线必须 dispatch 在前,Codex P1)。
+      return ring
+        .map((evt) => ({
+          ...evt,
+          budget: evt.budget ? { ...evt.budget } : undefined,
+        }))
+        .sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || a.turnIndex - b.turnIndex);
     },
     clear() {
       ring.length = 0;
