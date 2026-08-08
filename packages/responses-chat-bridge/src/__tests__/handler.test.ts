@@ -326,6 +326,50 @@ describe('createResponsesChatHandler', () => {
     expect(res.chunks.join('')).toContain('slow down');
   });
 
+  it('normalizes known text-only image schema errors into an actionable response', async () => {
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({ authorization: 'Bearer secret' }),
+    }, {
+      fetchImpl: vi.fn(async () => new Response(
+        JSON.stringify({
+          error: "messages[0]: unknown variant 'image_url', expected 'text'",
+        }),
+        { status: 400 },
+      )) as typeof fetch,
+    });
+    const res = new FakeResponse();
+
+    await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
+
+    expect(res.status).toBe(400);
+    const response = JSON.parse(res.chunks.join('')) as { error: { code: string; message: string } };
+    expect(response.error.code).toBe('unsupported_feature');
+    expect(response.error.message).toContain('input_image');
+    expect(response.error.message).toContain('does not support image input');
+    expect(response.error.message).not.toContain("unknown variant 'image_url'");
+  });
+
+  it('normalizes known text-only image errors sent through SSE', async () => {
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({ authorization: 'Bearer secret' }),
+    }, {
+      fetchImpl: vi.fn(async () => streamResponse([
+        { error: { message: 'unknown variant image_url, expected one of: `text`', status: 400 } },
+      ])) as typeof fetch,
+    });
+    const res = new FakeResponse();
+
+    await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
+
+    const wire = res.chunks.join('');
+    expect(wire).toContain('event: response.failed');
+    expect(wire).toContain('input_image');
+    expect(wire).toContain('does not support image input');
+    expect(wire).not.toContain('unknown variant image_url');
+  });
+
   it('translates non-streaming Chat JSON into a non-streaming Responses response', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       id: 'chat_json',

@@ -37,6 +37,14 @@ describe('isUnsupportedResponsesImageErrorPayload', () => {
     expect(isUnsupportedResponsesImageErrorPayload(codexUnexpectedResponse(message))).toBe(true);
   });
 
+  it('accepts the bridge image message with user-facing recovery guidance', () => {
+    const message =
+      'Responses feature is not supported by the Chat Completions bridge: input_image\n\n' +
+      'This model does not support image input. Remove the image or switch to a vision-capable model.';
+
+    expect(isUnsupportedResponsesImageErrorPayload(codexUnexpectedResponse(message))).toBe(true);
+  });
+
   it('accepts a Codex error that retains the serialized bridge response body', () => {
     const payload = unsupportedFeaturePayload("input content part 'input_image'");
 

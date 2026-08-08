@@ -94,6 +94,22 @@ function responsesError(status: number, code: string, message: string): Record<s
   };
 }
 
+/**
+ * Some OpenAI-compatible text-only providers reject translated image parts as
+ * `image_url` where their schema accepts only `text`. Do not expose that raw
+ * provider JSON to the user when the actionable failure is known.
+ */
+function isUnsupportedImageInputUpstreamError(text: string): boolean {
+  return (
+    /\bimage_url\b/i.test(text) &&
+    /\bexpected(?:\s+one\s+of:?)?\s+['"`]?text['"`]?\b/i.test(text)
+  );
+}
+
+const UNSUPPORTED_IMAGE_INPUT_MESSAGE =
+  'Responses feature is not supported by the Chat Completions bridge: input_image\n\n' +
+  'This model does not support image input. Remove the image or switch to a vision-capable model.';
+
 async function readErrorText(upstream: Response): Promise<string> {
   try {
     return (await upstream.text()).slice(0, MAX_ERROR_BODY_CHARS);
@@ -255,10 +271,18 @@ export function createResponsesChatHandler(
         const text = await readErrorText(upstream);
         await reportUpstreamError(upstream.status, text);
         res.off('close', abortUpstream);
+        const unsupportedImageInput =
+          upstream.status === 400 && isUnsupportedImageInputUpstreamError(text);
         writeJson(
           res,
           upstream.status,
-          responsesError(upstream.status, 'upstream_error', text || `provider returned HTTP ${upstream.status}`),
+          responsesError(
+            upstream.status,
+            unsupportedImageInput ? 'unsupported_feature' : 'upstream_error',
+            unsupportedImageInput
+              ? UNSUPPORTED_IMAGE_INPUT_MESSAGE
+              : text || `provider returned HTTP ${upstream.status}`,
+          ),
         );
         return;
       }
@@ -375,14 +399,19 @@ export function createResponsesChatHandler(
           ? event.error
           : null;
         if (streamedError) {
+          const status = typeof streamedError.status === 'number' ? streamedError.status : 502;
           const message = typeof streamedError.message === 'string'
             ? streamedError.message
             : 'provider returned an error event';
           void reportUpstreamError(
-            typeof streamedError.status === 'number' ? streamedError.status : 502,
+            status,
             JSON.stringify(streamedError).slice(0, MAX_ERROR_BODY_CHARS),
           );
-          for (const output of translator.fail(message)) emit(output);
+          const normalizedMessage =
+            status === 400 && isUnsupportedImageInputUpstreamError(message)
+              ? UNSUPPORTED_IMAGE_INPUT_MESSAGE
+              : message;
+          for (const output of translator.fail(normalizedMessage)) emit(output);
           return;
         }
         for (const output of translator.push(event)) emit(output);

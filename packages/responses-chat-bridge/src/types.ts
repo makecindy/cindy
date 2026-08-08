@@ -379,9 +379,8 @@ export function isResponsesImageContentPartType(
 }
 
 function unsupportedResponsesFeatureFromMessage(message: string): string | null {
-  return message.startsWith(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX)
-    ? message.slice(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX.length)
-    : null;
+  if (!message.startsWith(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX)) return null;
+  return message.slice(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX.length).split('\n', 1)[0] ?? null;
 }
 
 function isUnsupportedResponsesImageFeature(feature: string): boolean {
