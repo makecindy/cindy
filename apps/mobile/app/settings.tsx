@@ -68,6 +68,7 @@ import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   refreshMobileVoiceDictionary,
+  subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import {
   buildMobileVoiceDictionaryEntryViews,
@@ -658,14 +659,34 @@ export default function SettingsScreen() {
     });
   }, [desktopDevices, deviceLink]);
 
+  // 页面打开后再由 effect 读取缓存和刷新。设备清单本身是异步 REST 请求，不能只
+  // 捕获点击瞬间的 desktopDevices=[]，否则清单稍后到达时历史缓存永远不会 hydrate。
   const openVoiceDictionary = useCallback(() => {
     setDictionaryScreenOpen(true);
-    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。
+  }, []);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen || desktopDevices.length === 0) return;
+    let cancelled = false;
+    // 进页面先把盘上缓存读进内存(离线也有内容可看),再拉一次最新的。这个 effect
+    // 同时依赖 desktopDevices，因此设备清单在页面打开后才到达时也会走同一条路径。
     void Promise.all(desktopDevices.map((host) => hydrateMobileVoiceDictionary(host.deviceId)))
-      .then(() => setDictionaryRevision((value) => value + 1))
+      .then(() => {
+        if (!cancelled) setDictionaryRevision((value) => value + 1);
+      })
       .catch(() => undefined);
     refreshVoiceDictionary();
-  }, [desktopDevices, refreshVoiceDictionary]);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopDevices, dictionaryScreenOpen, refreshVoiceDictionary]);
+
+  useEffect(() => {
+    if (!dictionaryScreenOpen) return;
+    return subscribeMobileVoiceDictionaryCache(() => {
+      setDictionaryRevision((value) => value + 1);
+    });
+  }, [dictionaryScreenOpen]);
 
   // dictionaryRevision 只作为依赖存在:缓存是模块级的,刷新完成后靠它触发重算。
   const dictionaryEntries = useMemo(

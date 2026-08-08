@@ -28,6 +28,7 @@ vi.mock('@/session/mobileVoiceHistoryStore', () => ({
 
 const {
   __resetMobileVoiceDictionaryCacheForTests,
+  applyMobileVoiceDictionarySnapshot,
   setMobileVoiceDictionaryAccountScope,
   clearAllMobileVoiceDictionaryCaches,
   hydrateMobileVoiceDictionary,
@@ -45,6 +46,20 @@ beforeEach(() => {
 });
 
 describe('mobileVoiceDictionaryCache', () => {
+  it('接收桌面主动推送的快照后立即可读并落盘', async () => {
+    await applyMobileVoiceDictionarySnapshot(HOST, {
+      ok: true,
+      entries: [{ text: '推送词', frequency: 4 }],
+    });
+
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([
+      { text: '推送词', frequency: 4, aliases: [] },
+    ]);
+    __resetMobileVoiceDictionaryCacheForTests();
+    await hydrateMobileVoiceDictionary(HOST);
+    expect(readCachedMobileVoiceDictionary(HOST)[0].text).toBe('推送词');
+  });
+
   it('拉取成功后缓存并落盘,重启后能恢复', async () => {
     await refreshMobileVoiceDictionary(HOST, async () => ({
       ok: true,
@@ -198,6 +213,37 @@ describe('mobileVoiceDictionaryCache', () => {
 });
 
 describe('账号分区', () => {
+  it('从 v1 未分区缓存迁移到当前账号,升级后不丢离线词典', async () => {
+    setMobileVoiceDictionaryAccountScope('user-a');
+    storage.set(
+      'xdt.mobileVoiceDictionary.v1.desktop-1',
+      JSON.stringify({
+        entries: [{ text: '旧版离线词', frequency: 2 }],
+        fetchedAt: 123,
+      }),
+    );
+
+    await hydrateMobileVoiceDictionary(HOST);
+
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([
+      { text: '旧版离线词', frequency: 2, aliases: [] },
+    ]);
+    expect(storage.has('xdt.mobileVoiceDictionary.v2.user-a.desktop-1')).toBe(true);
+    expect(storage.has('xdt.mobileVoiceDictionary.v1.desktop-1')).toBe(false);
+  });
+
+  it('匿名分区不接管 v1 未分区缓存,避免跨账号数据泄漏', async () => {
+    storage.set(
+      'xdt.mobileVoiceDictionary.v1.desktop-1',
+      JSON.stringify({ entries: [{ text: '不能泄漏' }], fetchedAt: 123 }),
+    );
+
+    await hydrateMobileVoiceDictionary(HOST);
+
+    expect(readCachedMobileVoiceDictionary(HOST)).toEqual([]);
+    expect(storage.has('xdt.mobileVoiceDictionary.v1.desktop-1')).toBe(true);
+  });
+
   it('切换账号后读不到上一个账号的快照 —— 即使清理没删干净', async () => {
     setMobileVoiceDictionaryAccountScope('user-a');
     await refreshMobileVoiceDictionary(HOST, async () => ({

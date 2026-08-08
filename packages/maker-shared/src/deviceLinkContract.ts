@@ -10,6 +10,9 @@ export const DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcrib
 export const DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 export const DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionary-learning';
 export const DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
+/** 桌面主动推给手机的只读词典快照；push 不受 remoteControlEnabled 控制门禁。 */
+export const DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL =
+  'device-link:voice:dictionary:snapshot';
 
 export type MobileVoiceCredentialSyncAsr = {
   provider: string;

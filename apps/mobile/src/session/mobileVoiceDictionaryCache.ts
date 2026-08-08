@@ -71,6 +71,7 @@ type CachedDictionary = {
 };
 
 const memoryCache = new Map<string, CachedDictionary>();
+const cacheListeners = new Set<() => void>();
 /**
  * 在途请求。键带账号分区 —— 只按 host 去重的话,账号切走之后新账号的刷新会拿到
  * 上一个账号那个还挂着的请求并一直等它,而那个请求的结果按代际检查又必然被丢弃:
@@ -116,6 +117,12 @@ export function readCachedMobileVoiceDictionarySnapshot(hostDeviceId: string): {
   };
 }
 
+/** 订阅缓存内容变化；设置页靠它接收桌面主动推送到达后的即时重绘。 */
+export function subscribeMobileVoiceDictionaryCache(listener: () => void): () => void {
+  cacheListeners.add(listener);
+  return () => cacheListeners.delete(listener);
+}
+
 /** 从盘上恢复缓存(App 启动或首次用到该 host 时调用一次)。 */
 export async function hydrateMobileVoiceDictionary(hostDeviceId: string): Promise<void> {
   const host = normalizeHostDeviceId(hostDeviceId);
@@ -125,7 +132,17 @@ export async function hydrateMobileVoiceDictionary(hostDeviceId: string): Promis
   const epoch = cacheEpoch;
   const scope = accountScope;
   try {
-    const raw = await AsyncStorage.getItem(storageKeyForHost(host, scope));
+    const currentKey = storageKeyForHost(host, scope);
+    let raw = await AsyncStorage.getItem(currentKey);
+    let migratedFromLegacy = false;
+    // v2 introduced account-scoped keys. The previous v1 cache was already
+    // stored in AsyncStorage, so read it once for the currently authenticated
+    // account and copy it into the new partition before removing the legacy
+    // value. Never import an unscoped snapshot into the anonymous partition.
+    if (!raw && scope) {
+      raw = await AsyncStorage.getItem(legacyStorageKeyForHost(host));
+      migratedFromLegacy = Boolean(raw);
+    }
     if (!raw) return;
     if (epoch !== cacheEpoch) return;
     const parsed = JSON.parse(raw) as Partial<CachedDictionary>;
@@ -139,6 +156,18 @@ export async function hydrateMobileVoiceDictionary(hostDeviceId: string): Promis
     const current = memoryCache.get(host);
     if (current && current.fetchedAt >= restored.fetchedAt) return;
     memoryCache.set(host, restored);
+
+    if (migratedFromLegacy) {
+      try {
+        await addHostToIndex(host);
+        await AsyncStorage.setItem(currentKey, JSON.stringify(restored));
+        // Only remove the unscoped value after the account-scoped copy exists.
+        await AsyncStorage.removeItem(legacyStorageKeyForHost(host));
+      } catch {
+        // Keep the in-memory snapshot usable; the next hydrate can retry the
+        // copy while the legacy value is still present.
+      }
+    }
   } catch {
     // 缓存读坏了就当没有:下一次拉取会重建。
   }
@@ -177,36 +206,7 @@ export async function refreshMobileVoiceDictionary(
   const task = (async () => {
     try {
       const result = await fetchSnapshot();
-      if (!result?.ok) return;
-      // 请求期间发生过账号边界清理:这份数据属于上一个账号,丢弃。
-      if (epoch !== cacheEpoch) return;
-      const next: CachedDictionary = {
-        entries: normalizeEntries(result.entries),
-        fetchedAt: Date.now(),
-        stateVector: normalizeStateVector(result.stateVector),
-      };
-      memoryCache.set(host, next);
-      // 顺序很关键:**先登记索引,再写快照**。两个写不是原子的,进程随时可能死在
-      // 中间 —— 索引里多一条(快照还没写)只是清理时删一个不存在的 key,无害;
-      // 反过来快照落了盘而索引没登记,登出就枚举不到它,下个账号用同一台电脑会
-      // hydrate 到上个账号的词典。宁可多登记,不可漏登记。
-      // 索引登记失败就不要写快照:写了也是枚举不到的孤儿,登出删不掉,下个账号
-      // 用同一台电脑会 hydrate 到上个账号的词典。缓存只在内存里有效即可。
-      try {
-        await addHostToIndex(host);
-      } catch {
-        return;
-      }
-      await AsyncStorage.setItem(storageKeyForHost(host, scope), JSON.stringify(next)).catch(
-        () => undefined,
-      );
-      // 落盘与索引写入都是异步的,清理完全可能发生在这中间 —— 那样这份属于上个
-      // 账号的快照会在删除之后重新出现在盘上。写完再确认一次代际,过期就自己清掉。
-      if (epoch !== cacheEpoch) {
-        memoryCache.delete(host);
-        // 只删自己刚写的那一份(按入口锁定的分区),不碰新账号已经提交的快照。
-        await AsyncStorage.removeItem(storageKeyForHost(host, scope)).catch(() => undefined);
-      }
+      await storeSnapshot(host, result, epoch, scope);
     } catch {
       // 桌面离线、老被控端不识别该 channel、隧道抖动 —— 一律沿用现有缓存。
     } finally {
@@ -215,6 +215,60 @@ export async function refreshMobileVoiceDictionary(
   })();
   inFlight.set(inFlightKey, task);
   return task;
+}
+
+/**
+ * 接收桌面主动推送的只读快照。
+ *
+ * push 不属于 relay 的远程控制调用，因此桌面关闭「允许被控」时手机仍能拿到词典。
+ * 与主动拉取共用同一条校验、账号代际和落盘路径，避免形成第二份缓存语义。
+ */
+export async function applyMobileVoiceDictionarySnapshot(
+  hostDeviceId: string,
+  result: MobileVoiceDictionarySnapshotResult,
+): Promise<void> {
+  const host = normalizeHostDeviceId(hostDeviceId);
+  if (!host) return;
+  const epoch = cacheEpoch;
+  const scope = accountScope;
+  await storeSnapshot(host, result, epoch, scope);
+}
+
+async function storeSnapshot(
+  host: string,
+  result: MobileVoiceDictionarySnapshotResult,
+  epoch: number,
+  scope: string,
+): Promise<void> {
+  if (!result?.ok || epoch !== cacheEpoch) return;
+  const next: CachedDictionary = {
+    entries: normalizeEntries(result.entries),
+    fetchedAt: Date.now(),
+    stateVector: normalizeStateVector(result.stateVector),
+  };
+  memoryCache.set(host, next);
+  for (const listener of cacheListeners) listener();
+  // 顺序很关键:**先登记索引,再写快照**。两个写不是原子的,进程随时可能死在
+  // 中间 —— 索引里多一条(快照还没写)只是清理时删一个不存在的 key,无害;
+  // 反过来快照落了盘而索引没登记,登出就枚举不到它,下个账号用同一台电脑会
+  // hydrate 到上个账号的词典。宁可多登记,不可漏登记。
+  // 索引登记失败就不要写快照:写了也是枚举不到的孤儿,登出删不掉,下个账号
+  // 用同一台电脑会 hydrate 到上个账号的词典。缓存只在内存里有效即可。
+  try {
+    await addHostToIndex(host);
+  } catch {
+    return;
+  }
+  await AsyncStorage.setItem(storageKeyForHost(host, scope), JSON.stringify(next)).catch(
+    () => undefined,
+  );
+  // 落盘与索引写入都是异步的,清理完全可能发生在这中间 —— 那样这份属于上个
+  // 账号的快照会在删除之后重新出现在盘上。写完再确认一次代际,过期就自己清掉。
+  if (epoch !== cacheEpoch) {
+    memoryCache.delete(host);
+    // 只删自己刚写的那一份(按入口锁定的分区),不碰新账号已经提交的快照。
+    await AsyncStorage.removeItem(storageKeyForHost(host, scope)).catch(() => undefined);
+  }
 }
 
 /**
@@ -304,6 +358,7 @@ export function __resetMobileVoiceDictionaryCacheForTests(): void {
   cacheEpoch += 1;
   memoryCache.clear();
   inFlight.clear();
+  cacheListeners.clear();
 }
 
 function normalizeEntries(raw: unknown): MobileVoiceCredentialSyncDictionaryEntry[] {

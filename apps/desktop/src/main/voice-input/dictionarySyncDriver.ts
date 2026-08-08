@@ -11,11 +11,12 @@
  * 交换的是整份 CRDT 状态,合并幂等且可交换,这次没送到,下次任一触发时机再送一次
  * 就收敛。为此触发点铺了三层:对端上线、本地变更(去抖)、以及长周期兜底。
  *
- * 手机不参与这条通道:移动端在后台不维持 WebSocket,收不到 push。它改用
- * `device-link:voice:dictionary:get` 主动向在线桌面拉一份只读快照。
+ * 手机不参与 CRDT 通道:移动端在后台不维持 WebSocket,不持有可写副本。手机上线和
+ * 桌面词典变化时,桌面改推一份只读全量快照;原有 invoke 拉取保留给旧版兼容兜底。
  */
 
 import { MAX_FRAME_BYTES } from '@cindy/device-link';
+import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
 import { buildStateVersionVector, type VoiceDictionarySyncState } from '@cindy/voice-input-core';
 
 import { createLogger } from '../logger.js';
@@ -63,6 +64,10 @@ export interface DictionarySyncTransport {
   sendState(deviceId: string, payload: DictionarySyncFramePayload): void;
   /** 当前在线的同账号**桌面**设备。 */
   listOnlineDesktopDevices(): string[];
+  /** 给手机发送只读全量快照(push 不经过远程控制门禁)。 */
+  sendMobileSnapshot(deviceId: string, payload: MobileVoiceDictionarySnapshotResult): void;
+  /** 当前在线、未撤销的同账号手机。 */
+  listOnlineMobileDevices(): string[];
 }
 
 let transport: DictionarySyncTransport | null = null;
@@ -116,6 +121,11 @@ export function handleDesktopPeerOnline(deviceId: string): void {
   sendStateTo(deviceId, 'peer-online', { requestReply: true });
 }
 
+/** 手机上线时立即推送一次只读全量快照，不要求桌面打开「允许被控」。 */
+export function handleMobilePeerOnline(deviceId: string): void {
+  sendMobileSnapshotTo(deviceId, 'mobile-online');
+}
+
 /**
  * 立即广播一次当前状态,不走去抖。
  *
@@ -127,17 +137,19 @@ export function broadcastDictionaryNow(): void {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
+  // 手机是只读消费者:开关刚切换时也要立即收到当前投影(关闭时为空表)。
+  broadcastMobileSnapshots('sync-setting-changed');
   // 索取回发:本机可能在关闭同步期间落后了,而对端不会主动告诉我们。
   broadcastToAllPeers('sync-enabled', { requestReply: true });
 }
 
 /** 本地词典变更:去抖后广播。连续学习事件不会打出一连串帧。 */
 export function notifyLocalDictionaryChanged(): void {
-  if (!isSyncEnabled()) return;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
     broadcastToAllPeers('local-change');
+    broadcastMobileSnapshots('local-change');
   }, BROADCAST_DEBOUNCE_MS);
   debounceTimer.unref?.();
 }
@@ -195,6 +207,34 @@ export function readDictionaryProjectionForMobile(): {
   // 全部事件」—— 这才是手机可以拿一份替代另一份的条件,而不是谁的时间戳大。
   const vector = buildStateVersionVector(voiceDictionarySyncStore.getState());
   return Object.keys(vector).length > 0 ? { entries, stateVector: vector } : { entries };
+}
+
+function broadcastMobileSnapshots(reason: string): void {
+  if (!transport) return;
+  const peers = transport.listOnlineMobileDevices();
+  if (peers.length === 0) return;
+  const payload = buildMobileSnapshot();
+  for (const deviceId of peers) sendMobileSnapshotTo(deviceId, reason, payload);
+}
+
+function sendMobileSnapshotTo(
+  deviceId: string,
+  reason: string,
+  payload: MobileVoiceDictionarySnapshotResult = buildMobileSnapshot(),
+): void {
+  if (!transport) return;
+  try {
+    transport.sendMobileSnapshot(deviceId, payload);
+  } catch (error) {
+    // push 是尽力而为的全量状态镜像；下次上线、变更或主动 invoke 会补齐。
+    log.warn(`mobile dictionary snapshot push failed (${reason}) to ${deviceId.slice(0, 8)}`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function buildMobileSnapshot(): MobileVoiceDictionarySnapshotResult {
+  return { ok: true, ...readDictionaryProjectionForMobile() };
 }
 
 function broadcastToAllPeers(reason: string, options?: { requestReply?: boolean }): void {
