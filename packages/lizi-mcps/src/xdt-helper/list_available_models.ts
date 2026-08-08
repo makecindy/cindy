@@ -1,6 +1,6 @@
 /**
  * xdt-helper/list_available_models.ts —— 列出每个 agent 当前 host 支持的 model。
- * 用于 create_worker 前确认 model 名拼写, Codex 和 Claude Code 模型不可跨用。
+ * 用于 create_worker 前确认 model 名拼写, 不同 agent 的模型不可跨用。
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -75,14 +75,15 @@ export interface ListAvailableModelsDeps {
 
 const DESCRIPTION = [
   '列出每个 agent 当前 host 支持的 model id 清单, 用于 create_worker 前确认 model 名拼写。',
-  'Codex 和 Claude Code 支持的 model 完全不同, 不可跨用。',
+  'Codex、Claude Code 和 Pi 支持的 model 不同, 不可跨用。',
   '',
   '参数:',
-  '- agent: 可选, codex 或 claude-code; 不传返两者',
+  '- agent: 可选, codex、claude-code 或 pi; 不传返三者',
   '',
   '返回值:',
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier}]',
+  '- pi: Pi agent 的可用 model 列表 [{id, label, tier}]',
   '- routes: 按 agent 列出可用 provider 路由 [{model_id, label, tier, provider_id, provider_name, is_default}]',
   '- 同一 model_id 可有多条 route; create_worker 可传 provider_id 精确选择, is_default 表示省略 provider_id 时的当前默认来源',
   '',
