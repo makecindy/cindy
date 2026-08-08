@@ -69,7 +69,12 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
   const ring: GoalRunEvent[] = [];
   return {
     record(evt: GoalRunEvent) {
-      ring.push(evt);
+      // 浅拷贝(含嵌套 budget)后存入环:snapshot/sink 消费者若意外修改事件对象,
+      // 不会反向污染内存环里的审计数据(Copilot suppressed)。sink 仍收原始 evt。
+      ring.push({
+        ...evt,
+        budget: evt.budget ? { ...evt.budget } : undefined,
+      });
       if (ring.length > capacity) ring.shift();
       sink?.(evt);
     },

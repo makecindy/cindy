@@ -416,6 +416,11 @@ export class GoalController {
   /** dispose 后为 true:in-flight 异步(如启动 resumeActiveGoals 扫描)不再产出观测事件。 */
   private disposed = false;
   /**
+   * firing 冲突时登记的续跑请求:由当前持有 firing 的 fireTurn 在 finally 释放后
+   * 单次调度(避免旧 fireTurn 悬挂时的每 debounceMs 轮询,Copilot suppressed)。
+   */
+  private readonly firingRetryRequested = new Set<string>();
+  /**
    * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
    * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
    * turn-dispatched 同代成对。以 **boundary 身份**绑定生命周期(generation 不足以区分"busy 重试同代派发"与"同 sessionId 新目标首轮",二者都是
@@ -2195,10 +2200,11 @@ export class GoalController {
     if (this.firing.has(sessionId)) {
       // 已在派发(并发旧 fireTurn 持有所有权):本次 fireTurn 不派发——**保留恢复标记**
       // (新恢复登记后若在此删除,旧 fireTurn 随后派发只记 turn-dispatched,
-      // 缺配对的 resumed)。**并安排防抖重试**(直接 return 会让恢复后的
-      // active 目标僵死——旧 fireTurn 因 lifecycle 被替换在派发前退出且不调度;重试
-      // 走同 boundary,onDispatching 消费标记)。串台由 boundary 身份校验防住。
-      this.scheduleContinuation(sessionId);
+      // 缺配对的 resumed)。**登记续跑请求而非立即调度**(Copilot suppressed:若直接
+      // scheduleContinuation,旧 fireTurn 悬挂(send 不 resolve)时会形成"每 debounceMs
+      // 一次"的轮询;由当前持有 firing 的 fireTurn 在 finally 释放后单次调度)。
+      // 串台由 boundary 身份校验防住。
+      this.firingRetryRequested.add(sessionId);
       return;
     }
     // 首轮 vs 续轮由 state 派生(turnsUsed===0 = 首轮尚未真正跑完),不再由调用方指定。
@@ -2366,7 +2372,12 @@ export class GoalController {
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
       }
-      // 清除残留恢复标记():正常派发时已在 onDispatching 消费删除,
+      // 消费 firing 冲突登记的续跑请求:firing 已释放,单次调度(Copilot suppressed:
+      // 避免旧 fireTurn 悬挂时的每 debounceMs 轮询;此处只在真正结束后触发一次)。
+      if (this.firingRetryRequested.delete(sessionId)) {
+        this.scheduleContinuation(sessionId);
+      }
+      // 清除残留恢复标记():正常派发时已在 accepted 分支消费删除,
       // 此处幂等兜底 send 失败/拒绝/未派发路径——按本次 dispatchBoundary 身份清理,
       // 并发新恢复登记的其他 boundary 标记不受影响。
       this.clearPendingResumeForBoundary(sessionId, dispatchBoundary ?? lifecycleBoundary);
