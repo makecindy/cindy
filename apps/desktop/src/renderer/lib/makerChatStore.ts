@@ -12175,19 +12175,20 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
-  // #2194 (review P1): 人工 Retry 是本地意图，但重试项（零产出克隆行 / 有产出
-  // 隐藏续跑指令）由 main 在 performRetryLastError 以**新 clientId** 生成并
-  // unshift 到 pendingQueue 队首，发送侧登记不到。利用投影回执里**队首
-  // clientId 的变化**做权威归属——显式 local-intent，不做文本猜测，也不给
-  // 并发到达的外部消息留误判窗口（维护者口径，#2222）。
-  const headBefore = getOrCreateState(sessionId).pendingQueue[0]?.clientId ?? null;
+  // #2194 (review P1): 人工 Retry 是本地意图，但重试项由 main 在
+  // performRetryLastError 以**新 clientId** 生成，发送侧登记不到。权威归属：
+  // 人工 retry 的零产出克隆项自带 `supersedesUserClientId`（仅 manual 非 auto
+  // 路径设置，见 agent-input-coordinator.ts），直接按字段辨认——不猜队首差分
+  // （异步窗口内可能混入外部入队）、不做文本猜测（维护者口径，#2222）。
+  // 有产出分支的隐藏续跑指令不带该字段也不产生可见气泡，无需标记。
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
   ).then(() => {
-    // 队首变了 = 本次重试生成的新项；队首不变 = superseded / no-op，不标记。
-    const headAfter = getOrCreateState(sessionId).pendingQueue[0]?.clientId ?? null;
-    if (headAfter && headAfter !== headBefore) markLocalSentUserMessage(sessionId, headAfter);
+    // superseded / no-op 时队列里没有克隆项，自然不标记。
+    for (const item of getOrCreateState(sessionId).pendingQueue) {
+      if (item.supersedesUserClientId) markLocalSentUserMessage(sessionId, item.clientId);
+    }
   });
 }
 

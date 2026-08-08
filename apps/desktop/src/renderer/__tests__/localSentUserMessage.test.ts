@@ -94,7 +94,11 @@ function projection(
   };
 }
 
-function queuedItem(clientId: string, text: string): AgentInputQueuedMessage {
+function queuedItem(
+  clientId: string,
+  text: string,
+  opts?: { supersedesUserClientId?: string },
+): AgentInputQueuedMessage {
   return {
     clientId,
     text,
@@ -103,6 +107,9 @@ function queuedItem(clientId: string, text: string): AgentInputQueuedMessage {
     effort: EFFORT,
     permissionMode: PERM,
     workingDir: WD,
+    ...(opts?.supersedesUserClientId && {
+      supersedesUserClientId: opts.supersedesUserClientId,
+    }),
     chatMessage: {
       clientId,
       role: 'user',
@@ -208,28 +215,42 @@ describe('isLocalSentUserMessage (#2194)', () => {
     expect(makerChatStore.isLocalSentUserMessage(sid, item.clientId)).toBe(false);
   });
 
-  // review P1: 人工 Retry 的重试项（零产出克隆行 / 有产出隐藏续跑指令）由 main
-  // 以新 clientId 生成并 unshift 到 pendingQueue 队首；renderer 按投影回执的
-  // 队首变化做权威归属——显式 local-intent，不做文本猜测（维护者口径，#2222）。
-  it('人工 Retry 生成的新队首项按本端发送登记，外部消息不受影响', async () => {
+  // review P1（第三轮）: 人工 Retry 的零产出克隆项自带 supersedesUserClientId
+  // （仅 manual 非 auto 设置），renderer 按字段直接辨认——不猜队首差分，
+  // 异步窗口内混入的外部入队不会被误认。
+  it('人工 Retry 的克隆项（带 supersedesUserClientId）按本端发送登记', async () => {
     const sid = `retry-${Math.random().toString(36).slice(2, 8)}`;
     retryLastError.mockResolvedValueOnce(
-      projection(sid, { pendingQueue: [queuedItem('retry-clone', 'failed text')] }),
+      projection(sid, {
+        pendingQueue: [queuedItem('retry-clone', 'failed text', { supersedesUserClientId: 'orig-user' })],
+      }),
     );
 
     await makerChatStore.retryLastError(sid);
     await flushPromises();
     expect(retryLastError).toHaveBeenCalledTimes(1);
 
-    // 新队首（重试项）被登记；同会话外部注入的消息不受影响。
     expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone')).toBe(true);
     expect(makerChatStore.isLocalSentUserMessage(sid, 'injected-from-im')).toBe(false);
   });
 
-  it('Retry 未生成新队首项（superseded / no-op）时不做标记', async () => {
+  it('Retry 回执里的外部入队项（无 supersedesUserClientId）不被误认', async () => {
+    const sid = `retry-race-${Math.random().toString(36).slice(2, 8)}`;
+    // Greptile P1 场景：retry 未生成新项，异步窗口内外部消息入队到队首。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('external-enqueue', 'from im')] }),
+    );
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'external-enqueue')).toBe(false);
+  });
+
+  it('Retry 未生成新项（superseded / no-op）时不做标记', async () => {
     const sid = `retry-noop-${Math.random().toString(36).slice(2, 8)}`;
 
-    // 默认 mock 返回空 pendingQueue——队首无变化，等价 superseded / no-op。
+    // 默认 mock 返回空 pendingQueue——无克隆项，等价 superseded / no-op。
     await makerChatStore.retryLastError(sid);
     await flushPromises();
 
