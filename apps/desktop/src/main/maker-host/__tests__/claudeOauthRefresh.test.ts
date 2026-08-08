@@ -814,6 +814,35 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     expect(onInvalidGrant2).not.toHaveBeenCalled();
   });
 
+  it('缺少 grant recovery 回调时立即 fail-closed,不进入无效的无限重试', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    const onInvalidGrant = vi.fn();
+    const sleep = vi.fn(async () => {
+      throw new Error('unexpected recovery retry');
+    });
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      onInvalidGrant,
+      onCredentialRejected: () => {
+        throw Object.assign(new Error('primary sidecar unavailable'), { code: 'EACCES' });
+      },
+      onCredentialRejectionRecovery: undefined,
+      clearRejectedCredential: undefined,
+      sleep,
+      fetchFn: (async () =>
+        jsonResponse(400, { error: 'invalid_grant' })) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    await expect(refresher.getValidOAuth({ forceRefresh: true })).resolves.toBeNull();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(onInvalidGrant).toHaveBeenCalledOnce();
+    expect(onInvalidGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ durabilityEstablished: false }),
+    );
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+  });
+
   it('owner 已切换时仍重试 ELOCKED 的 token-global 拒绝记录,但不清理新会话', async () => {
     const current = fixtureOAuth({ expiresAt: NOW - 1 });
     let generation = 7;

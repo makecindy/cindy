@@ -428,6 +428,11 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
   async function persistRejectedCredentialRecoveryAcrossRetries(
     identity: ClaudeAiOAuthCredentialIdentity,
   ): Promise<boolean> {
+    const recover = deps.onCredentialRejectionRecovery;
+    if (!recover) {
+      log.error('grant-scoped rejected credential recovery is unavailable; returning fail-closed');
+      return false;
+    }
     let attempt = 0;
     for (;;) {
       const delay =
@@ -435,14 +440,12 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
           Math.min(attempt, CREDENTIAL_REJECTION_RETRY_DELAYS_MS.length - 1)
         ];
       await sleep(delay);
-      if (deps.onCredentialRejectionRecovery) {
-        try {
-          if (deps.onCredentialRejectionRecovery(identity)) return true;
-        } catch (error) {
-          log.warn('retrying grant-scoped rejected credential recovery fence failed', {
-            code: nestedErrorCode(error) ?? 'unknown',
-          });
-        }
+      try {
+        if (recover(identity)) return true;
+      } catch (error) {
+        log.warn('retrying grant-scoped rejected credential recovery fence failed', {
+          code: nestedErrorCode(error) ?? 'unknown',
+        });
       }
       attempt += 1;
       if (attempt === CREDENTIAL_REJECTION_RETRY_DELAYS_MS.length) {
