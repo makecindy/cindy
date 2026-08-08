@@ -2422,6 +2422,41 @@ describe('ghost · network 详单校验', () => {
       }
     }
 
+    // gh-cli 凭证声明 endpoint 范围时,detail 必须带上收窄事实(与其它来源一致),
+    // 否则后续扩大/替换限制不会进入权限 diff 与更新确认。
+    const scoped = validateGhostManifest({
+      ...goodManifest(),
+      id: 'cindy-github',
+      slots: ['panel', 'network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub authentication',
+            source: 'gh-cli',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.github.com'],
+              paths: ['/v1/convert'],
+              methods: ['POST'],
+            },
+          },
+        ],
+      },
+      schemaVersion: 3,
+    });
+    expect(scoped.ok, scoped.ok ? '' : scoped.reason).toBe(true);
+    if (scoped.ok) {
+      const scopedItem = ghostPermissionItems(scoped.manifest).find(
+        (entry) => entry.key === 'network:secret:github_pat',
+      );
+      expect(scopedItem?.detail).toContain('Paths: /v1/convert');
+      expect(scopedItem?.detail).toContain('Methods: POST');
+    }
+
     for (const fixture of [
       { id: 'github-helper' },
       { header: 'X-GitHub-Token' },

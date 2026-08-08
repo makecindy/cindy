@@ -1052,7 +1052,7 @@ my-ghost/
 
 \`\`\`json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 2,           // 2 = 基线;声明了 inject.paths/methods(凭证端点收窄)时必须是 3,见 §4.7
   "id": "my-ghost",            // 小写字母/数字/连字符,1–32 位,全局唯一
   "name": "我的意识",           // 展示名
   "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字
@@ -1292,8 +1292,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "header": "Authorization",                    // 注入的请求头名(Host/Cookie 等协议关键头禁用)
       "format": "Bearer {value}",                   // 恰含一个 {value} 占位,其余静态文本
       "hosts": ["api.example.com"],                 // 可选:注入范围(hosts 声明条目的子集,逐字);缺省=全部
-      "paths": ["/v1/convert"],                     // 可选:精确 URL.pathname 白名单(大小写/尾斜杠敏感,不含 query);缺省=全部路径
+      "paths": ["/v1/convert"],                     // 可选:精确 URL.pathname 白名单,1–16 条(大小写/尾斜杠敏感,不含 query);缺省=全部路径
       "methods": ["POST"]                           // 可选:GET/POST/PUT/PATCH/DELETE 白名单;缺省=全部支持的方法
+    },                                              // 声明了 paths 或 methods 时,顶层 schemaVersion 必须写 3(旧客户端不认识这两个字段,会整包拒装而非静默放开)
     },
     "exchange": {                                   // 可选:key 换令牌二段式(服务要求先拿 key 换临时令牌时声明,主机照单代办,见 §4.7;与 oauth 互斥)
       "url": "https://api.example.com/token",       // 交换端点(https;域名必须命中 hosts 白名单)
@@ -3529,7 +3530,8 @@ if (r.ok && r.confirmed) {
 - 声明了 tool 槽但缺 tools(或反之)· panel.html 声明了但 slots 没有 "panel"
 - settingsHtml 路径不合法/文件不在包里 · settingsHeight 越界(160–800)或没配 settingsHtml 单独声明
 - panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——插件页内面板没有标准头)
-- keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 2
+- keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 2 或 3
+- inject.paths/methods 格式错(空数组、重复项、非法 pathname/方法、paths 超过 16 条) · 声明了 paths/methods 但 schemaVersion 不是 3(旧客户端会忽略收窄字段,故强制升级)
 - cindy 详单格式错(未知类目/动作、空数组、有详单但 slots 没有 "cindy")
 - agent 详单格式错(有详单但 slots 没有 "agent"，或 background / errand / schedule 都不是 true；只需点击触发时应省略 agent 字段)
 - node 详单格式错(槽/详单不成对、entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、

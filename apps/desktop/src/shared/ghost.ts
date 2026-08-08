@@ -1878,6 +1878,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'networkSecretGhCli',
         labelArgs: { name: secret.label },
         detailKey: 'networkSecretGhCliDetail',
+        // 与其它来源一致:声明了 endpoint 范围就把规范化事实写进 detail,
+        // 后续扩大/替换/删除限制都会被现有 key+detail diff 识别并要求复核。
+        ...(endpointScope !== undefined ? { detail: endpointScope } : {}),
       });
       continue;
     }
