@@ -18,6 +18,13 @@ describe('resolveDisplayContextWindow', () => {
     })).toBe(1_048_576);
   });
 
+  it('uses Kimi K3 model metadata instead of Claude Code defaults', () => {
+    expect(resolveDisplayContextWindow({
+      modelContextWindow: 1_048_576,
+      sdkContextWindow: 200_000,
+    })).toBe(1_048_576);
+  });
+
   it('keeps non-default SDK values as runtime ground truth', () => {
     expect(resolveDisplayContextWindow({
       modelContextWindow: 992_000,

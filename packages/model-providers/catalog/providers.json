@@ -399,7 +399,7 @@
             {
               "id": "kimi-k3",
               "name": "Kimi K3",
-              "contextWindow": 1000000
+              "contextWindow": 1048576
             },
             {
               "id": "kimi-k2.7-code",
@@ -420,15 +420,18 @@
           "models": [
             {
               "id": "kimi-k3",
-              "name": "Kimi K3"
+              "name": "Kimi K3",
+              "contextWindow": 1048576
             },
             {
               "id": "kimi-k2.7-code",
-              "name": "Kimi K2.7 Code"
+              "name": "Kimi K2.7 Code",
+              "contextWindow": 262144
             },
             {
               "id": "kimi-k2.6",
-              "name": "Kimi K2.6"
+              "name": "Kimi K2.6",
+              "contextWindow": 262144
             }
           ],
           "modelsUrl": "https://api.moonshot.cn/v1/models"
@@ -447,7 +450,7 @@
             {
               "id": "kimi-k3",
               "name": "Kimi K3",
-              "contextWindow": 1000000
+              "contextWindow": 1048576
             },
             {
               "id": "kimi-k2.7-code",
@@ -468,15 +471,18 @@
           "models": [
             {
               "id": "kimi-k3",
-              "name": "Kimi K3"
+              "name": "Kimi K3",
+              "contextWindow": 1048576
             },
             {
               "id": "kimi-k2.7-code",
-              "name": "Kimi K2.7 Code"
+              "name": "Kimi K2.7 Code",
+              "contextWindow": 262144
             },
             {
               "id": "kimi-k2.6",
-              "name": "Kimi K2.6"
+              "name": "Kimi K2.6",
+              "contextWindow": 262144
             }
           ],
           "modelsUrl": "https://api.moonshot.ai/v1/models"
