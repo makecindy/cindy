@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
 
+import { useDeviceLink } from './DeviceLinkContext';
 import {
   fetchDeviceProviders,
   getCachedDeviceProviders,
@@ -46,6 +47,11 @@ const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult {
   // hooks 规则:无条件取 transport(deviceId 空时其 call 会 reject,但本 hook 不会在空时调用)。
   const maker = useMobileMakerTransport(deviceId ?? '');
+  // 连接代际:重连/恢复时 +1。离线驱逐(evict)后重拉失败时,依赖 [deviceId, maker]
+  // 的 effect 不会因连接恢复重跑(maker.invoke 跨重连稳定,codex review P2)——把
+  // connectionEpoch 纳入 effect 依赖,连接恢复即重跑 effect、经 cache-miss 重新
+  // 拉取,不再永久停在 ready=false 的空目录。
+  const { connectionEpoch } = useDeviceLink();
   const [payload, setPayload] = useState<DeviceProvidersPayload>(
     deviceId ? getCachedDeviceProviders(deviceId) ?? EMPTY_PAYLOAD : EMPTY_PAYLOAD,
   );
@@ -134,7 +140,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       unsubscribe();
       unsubscribeGen();
     };
-  }, [deviceId, maker]);
+  }, [connectionEpoch, deviceId, maker]);
 
   return {
     providers: payload.providers,

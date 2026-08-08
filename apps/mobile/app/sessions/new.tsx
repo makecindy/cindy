@@ -4146,11 +4146,28 @@ export default function NewRemoteSessionScreen() {
             g.catalogKnown,
           );
           const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
+          // 目录就绪时**始终**按 fresh 精确行校准(codex review P2:来源未变时也按
+          // 新目录校准运行选项)——provider revision 可能只改能力不删行(撤销 effort
+          // 档位 / Fast 支持),组合不变沿用旧 effort/fastMode 会发送目录已不支持的
+          // 参数被被控端拒绝。fail-open(catalogKnown=false)时 rows 不可信,保持
+          // 信任语义(不校准,仅组合变化保守关 fast)。
           effectiveDraft = {
             ...effectiveDraft,
             ...resolved,
-            ...(pairChanged ? {
+            ...(g.catalogKnown ? {
               effort: reconcileEffortAfterFallback(g.rows, resolved, effectiveDraft.effort),
+              ...(effectiveDraft.fastMode && (
+                pairChanged
+                || !resolved.providerId
+                || !isFastRestorable(
+                  effectiveDraft.agentKind,
+                  resolved.providerId,
+                  resolved.model,
+                  g.rows,
+                  targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind),
+                )
+              ) ? { fastMode: false } : {}),
+            } : pairChanged ? {
               ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
             } : {}),
           };
