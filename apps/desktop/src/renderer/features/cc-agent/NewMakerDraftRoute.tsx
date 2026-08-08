@@ -2849,6 +2849,14 @@ export function NewMakerDraftRoute() {
       // 让 /plan 作为首条消息发给 agent;仅当 merged 列表明确命中 desktop /plan 才
       // toggle/提示(未命中或拉取失败降级为空列表时一律放行,Copilot)。
       if (/^\/plan\s*$/i.test(message.trim())) {
+        // composer 已带附件:消费 /plan 会走 ChatInput accepted 清理(clearSentComposer
+        // → clearFiles)把附件静默删掉,而「+」菜单 toggle 不动草稿(Codex P1,与会话路径
+        // CCAgentSessionView 一致)。附件存在时不消费 —— toast 引导用 + 菜单切换,
+        // 返回 false 让 ChatInput 保留草稿(文本 + 附件原样)。
+        if (files?.length) {
+          toast.info(t('newChat.collaboration.planModeToggleWithAttachments'));
+          return false;
+        }
         // 先做命令归属判断(与 ChatInput palette 合并语义一致:agent-skill > desktop):
         // 命中同名 agent skill(本地或被控端安装的 plan skill)时放行,让 /plan 作为
         // 首条消息发给 agent;仅当 merged 列表明确命中 desktop /plan 时才进入下方分支。

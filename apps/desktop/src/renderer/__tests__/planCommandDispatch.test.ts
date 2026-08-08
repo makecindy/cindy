@@ -183,9 +183,11 @@ describe('/plan slash command contract', () => {
     // 拉取期间用户切设备/工作区会串台,markSendInFlight 让 pill 立即拒绝。
     expect(region).toContain('markSendInFlight(true)');
     expect(region).toContain('markSendInFlight(false)');
-    // 返回 undefined(非 false):ChatInput 对 result === false 会跳过 clearSentComposer,
-    // 只有非 false 才会清空 composer 文本 —— /plan 命令文本不能留残影。
-    expect(region).not.toContain('return false');
+    // toggle/toast 分支返回 undefined(非 false):ChatInput 对 result === false 会跳过
+    // clearSentComposer,只有非 false 才会清空 composer 文本 —— /plan 命令文本不能留残影。
+    // 附件保护分支除外(Codex P1):composer 已带附件时不消费 /plan,return false 保留草稿。
     expect(region).toContain('return;');
+    expect(region).toContain('files?.length');
+    expect(region).not.toContain('handlePlanModeChange(!effectivePlanMode);\n            return false');
   });
 });
