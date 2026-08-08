@@ -164,7 +164,7 @@ interface TurnState {
    * all callers await this same promise instead of each minting a new card.
    * Without it we get one card per delta — a flood of orphan cards.
    */
-  streamingHandlePromise: Promise<StreamingTextHandle> | null;
+  streamingHandlePromise: Promise<StreamingTextHandle | null> | null;
   /**
    * 呈现大脑(正文累积 / 过程区合成), 与官方 bot 共用 im/shared/turnPresenter。
    * buffer-replace 策略: 保留个人 IM 渠道现有行为 —— isFinal 用该条全文整体替换
@@ -1840,7 +1840,7 @@ export function createTurnRunner(
     // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
     // O(1) 同步 push, 不阻塞事件循环。
     void ensureStreamingHandle(turn).then((handle) => {
-      if (!handle.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力
+      if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力
       for (const url of urls) {
         try {
           const { absPath } = url.startsWith('cindy-media://')
@@ -1879,7 +1879,7 @@ export function createTurnRunner(
   function handleToolUseEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyToolUse(event)) return;
     ensureActivityTicker(turn);
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
   /**
@@ -1897,7 +1897,7 @@ export function createTurnRunner(
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyRetryNotice(event)) return;
     ensureActivityTicker(turn);
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
   function ensureActivityTicker(turn: TurnState): void {
@@ -2349,10 +2349,10 @@ export function createTurnRunner(
     // deltas, 这时卡片会一直停在 "灵感正在路上..." placeholder 直到 done; done 之间
     // 几秒延迟里用户看着像 stuck。replace 一次保证用户即时看到回复内容。
     if (!turn.presenter.applyText(event)) return;
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
-  function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle> {
+  function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle | null> {
     if (turn.streamingHandle) return Promise.resolve(turn.streamingHandle);
     if (turn.streamingHandlePromise) return turn.streamingHandlePromise;
     // Singleton: subsequent concurrent callers await the same promise rather
@@ -2369,7 +2369,17 @@ export function createTurnRunner(
               });
       turn.streamingHandle = handle;
       return handle;
-    })();
+    })().catch((err) => {
+      const error = sanitizeSendOutcomeError(err);
+      log.warn(`${channel} streaming output initialization failed`, {
+        kind: 'streaming-output-init',
+        source: 'startStreamingText',
+        error,
+      });
+      // Cache the unavailable result for this turn. Retrying on every delta
+      // could mint duplicate cards if a late request succeeds after a timeout.
+      return null;
+    });
     return turn.streamingHandlePromise;
   }
 
@@ -2480,25 +2490,36 @@ export function createTurnRunner(
           `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    } else if (turn.presenter.wholeText().length === 0) {
-      // No streamed text at all — send a one-shot text so the user knows the
-      // turn ended. (Rare; normally agents emit at least one text block.)
+    } else {
+      // The output surface may fail before the first card exists. The Agent
+      // reply is already durable at this point, so use the independent plain
+      // text API instead of silently dropping a non-empty final response.
+      const fallbackText = composeStreamingView(turn) || '✅ (本轮无文本输出)';
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: '✅ (本轮无文本输出)',
+            text: fallbackText,
             terminal: turn.terminalKind,
             threadTs: state.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, '✅ (本轮无文本输出)', {
+          await output.im.sendText(userId, fallbackText, {
             threadTs: state.scopeKey,
           });
         }
-      } catch {
-        /* swallow */
+      } catch (err) {
+        if (output.kind === 'chunked-text') {
+          turn.terminalKind = 'error';
+          turn.terminalErrorCode = 'terminal_output_commit_failed';
+        }
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} plain-text fallback failed`, {
+          kind: 'terminal-output-fallback',
+          source: output.kind === 'chunked-text' ? 'commitFinal' : 'sendText',
+          error,
+        });
       }
     }
     settleTurnTerminal(turn);

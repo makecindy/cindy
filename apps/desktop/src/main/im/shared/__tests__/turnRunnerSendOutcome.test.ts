@@ -581,6 +581,56 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  it('falls back to plain text when the initial streaming card cannot be created', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(
+      new Error('card create failed without PROMPT_SECRET'),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'final answer', {
+        threadTs: undefined,
+      });
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles the turn and logs safely when streaming init and plain-text fallback both fail', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(
+      new Error('card create failed with TOKEN_VALUE'),
+    );
+    mocks.feishuIm.sendText.mockRejectedValueOnce(
+      new Error('fallback failed with ou_sensitive_openid'),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('plain-text fallback failed'),
+        expect.anything(),
+      );
+    });
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    const loggedPayload = JSON.stringify([
+      ...mocks.logger.warn.mock.calls,
+      ...mocks.logger.error.mock.calls,
+    ]);
+    expect(loggedPayload).not.toContain('PROMPT_SECRET');
+    expect(loggedPayload).not.toContain('TOKEN_VALUE');
+    expect(loggedPayload).not.toContain('ou_sensitive_openid');
+  });
+
   it('anchors direct IM capture to the durable accepted user message', async () => {
     mocks.persistUserMessage.mockResolvedValue({ clientId: 'im-anchor-client' });
     const h = setupSession(async () => ({ accepted: true }));
