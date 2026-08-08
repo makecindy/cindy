@@ -71,20 +71,33 @@ export interface AckReactions {
   reset(): void;
 }
 
+/**
+ * `react` 的三种去向。
+ *
+ * `skipped` 与 `failed` 必须分开: 前者是「本来就不该发」(老 server、off 档、
+ * 没有 triggerMessageId), 后者是「该发但没送出去」—— 只有后者要留着重连补发。
+ */
+type ReactOutcome = 'sent' | 'skipped' | 'failed';
+
 export function createAckReactions(deps: {
   serverFeatures: ReadonlyMap<string, readonly string[]>;
   /**
-   * 当前生效的表情档位。服务端经 provider.behavior.state 下发, 尚未到达时按
-   * 协议基线(minimal)——与个人 bot 出厂行为同值。
+   * 当前生效的表情档位。服务端经 provider.behavior.state 下发。
+   *
+   * 返回 `null` = **有效值还不知道**(连接刚起、还没收到 behavior.state)。这时
+   * 一帧都不发: 拿基线先斩后奏, 设置里关掉表情的用户会在每次重启后又被打一次。
+   * 整个 getter 缺席才按协议基线(minimal)—— 那是「没有这套配置」的语境。
    */
-  emojiReactions?: () => TelegramEmojiReactions;
+  emojiReactions?: () => TelegramEmojiReactions | null;
   /** 测试注入随机源, 让 expressive 档可确定化。 */
   random?: () => number;
   log: { info(msg: string): void; warn(msg: string): void };
 }): AckReactions {
   const { serverFeatures, log } = deps;
-  const modeOf = (): TelegramEmojiReactions =>
-    deps.emojiReactions?.() ?? DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions;
+  const modeOf = (): TelegramEmojiReactions | null =>
+    deps.emojiReactions === undefined
+      ? DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions
+      : deps.emojiReactions();
   const random = deps.random ?? Math.random;
 
   /**
@@ -97,25 +110,32 @@ export function createAckReactions(deps: {
   const everSupported = new Set<string>();
 
   function supports(connectionId: string): boolean {
-    const ok = serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_MESSAGE_OPS) === true;
+    const features = serverFeatures.get(connectionId);
+    // 快照缺席 = 这条连接当前离线(断线时会清), 不是「服务端说了不支持」。
+    if (features === undefined) return false;
+    const ok = features.includes(HOOK_FEATURE_MESSAGE_OPS);
     if (ok) everSupported.add(connectionId);
+    // 新 welcome 明确没有这条能力(滚动发布重连到旧节点): 撤销放行。继续往旧
+    // 节点发未协商的 msg.op 可能被拒, 甚至触发再次断连。
+    else everSupported.delete(connectionId);
     return ok;
   }
 
-  /** 返回是否真的送出去了 —— 终态送不出去要留着重连补发。 */
   function react(
     task: AckReactionTask,
     suffix: 'ack' | 'final' | 'final-fallback',
     emoji: string,
     send: (m: HookMessage) => boolean,
-  ): boolean {
-    if (task.triggerMessageId === null) return true;
+  ): ReactOutcome {
+    if (task.triggerMessageId === null) return 'skipped';
     // 断线时能力快照已被清 —— 那条连接曾经支持过就照常尝试, 让失败落进待补发。
-    if (!supports(task.connectionId) && !everSupported.has(task.connectionId)) return true;
+    if (!supports(task.connectionId) && !everSupported.has(task.connectionId)) return 'skipped';
+    const mode = modeOf();
+    // 有效档位还没到 —— 一帧不发, 等下一个任务。
+    if (mode === null) return 'skipped';
     // off 档一个表情都不发(含 👀 ack 与终态)—— 与个人 bot 的 off 同语义。
-    if (modeOf() === 'off') return true;
-    // 发不出去就算了: 表情是「正在做」的提示, 补发一个迟到的 👀 只会更奇怪。
-    // 任务本身的送达由 turn.end 的 outbox 保证, 与这里无关。
+    // 但**撤销**(空串)不受此限: 它正是「把已经打出去的那个收掉」。
+    if (mode === 'off' && emoji !== '') return 'skipped';
     return send(
       makeMessageOp({
         opId: `${task.requestId}:${suffix}`,
@@ -123,7 +143,9 @@ export function createAckReactions(deps: {
         scope: { externalKey: task.externalKey },
         action: { kind: 'react', targetMessageId: task.triggerMessageId, emoji },
       }),
-    );
+    )
+      ? 'sent'
+      : 'failed';
   }
 
   /**
@@ -141,6 +163,13 @@ export function createAckReactions(deps: {
    * 也没有更基础的可退。
    */
   const retryables = new Map<string, { task: AckReactionTask; failed: boolean }>();
+  /**
+   * 已经真的打出过 👀 的任务(requestId)。
+   *
+   * 用户可以在任务跑到一半时把表情改成 off。那之后终态按 off 什么都不发, 那条
+   * 消息就会永远挂着 👀 显示在处理中 —— 所以得记住谁欠一个收口。
+   */
+  const acked = new Set<string>();
 
   return {
     supports,
@@ -148,12 +177,20 @@ export function createAckReactions(deps: {
       pendingFinals.clear();
       retryables.clear();
       everSupported.clear();
+      acked.clear();
     },
     onReconnected(connectionId, send) {
+      // 新 welcome 明确没有 msg-op-v1(滚动发布落到旧节点): 这条连接的待补发
+      // 全部作废, 不往旧节点发它没协商过的帧。
+      const usable = supports(connectionId) || everSupported.has(connectionId);
       for (const [opId, entry] of [...pendingFinals]) {
         if (entry.task.connectionId !== connectionId) continue;
         pendingFinals.delete(opId);
-        if (react(entry.task, 'final', entry.emoji, send) && modeOf() === 'expressive') {
+        if (!usable) continue;
+        const outcome = react(entry.task, 'final', entry.emoji, send);
+        // 补发时 socket 又断了 —— 放回去等下一次重连, 否则那条消息永远挂着 👀。
+        if (outcome === 'failed') pendingFinals.set(opId, entry);
+        else if (outcome === 'sent' && modeOf() === 'expressive') {
           retryables.set(opId, { task: entry.task, failed: entry.failed });
         }
       }
@@ -161,23 +198,29 @@ export function createAckReactions(deps: {
     onAccepted(task, send) {
       // 受理的 👀 发不出去就算了: 补一个迟到的「正在做」只会更奇怪, 而终态会
       // 在重连后补上, 消息不会永远停在处理中。
-      react(task, 'ack', ACK_EMOJI, send);
+      if (react(task, 'ack', ACK_EMOJI, send) === 'sent') acked.add(task.requestId);
     },
     onFinished(task, status, send) {
       const failed = status === 'error';
+      const mode = modeOf();
+      const hadAck = acked.delete(task.requestId);
+      // 任务跑到一半用户把表情关了: 没打过 👀 就什么都不做(用户要的就是「别打」),
+      // 打过就必须收掉 —— 撤销(空串)而不是补一个终态, 否则等于无视用户的选择。
+      if (mode === 'off' && !hadAck) return;
       // expressive 只影响**终态**: ack 恒为 👀(与个人 bot 一致 —— 生动档也不
       // 拿开场表情做文章), 正负池分开取, 成功不会随机出 👎 一类。
       const emoji =
-        modeOf() === 'expressive'
-          ? pickExpressiveReaction(failed ? EXPRESSIVE_ERROR_POOL : EXPRESSIVE_DONE_POOL, random)
-          : failed
-            ? FAIL_EMOJI
-            : OK_EMOJI;
-      if (react(task, 'final', emoji, send)) {
-        if (modeOf() === 'expressive') {
-          retryables.set(`${task.requestId}:final`, { task, failed });
-        }
-      } else {
+        mode === 'off'
+          ? ''
+          : mode === 'expressive'
+            ? pickExpressiveReaction(failed ? EXPRESSIVE_ERROR_POOL : EXPRESSIVE_DONE_POOL, random)
+            : failed
+              ? FAIL_EMOJI
+              : OK_EMOJI;
+      const outcome = react(task, 'final', emoji, send);
+      if (outcome === 'sent') {
+        if (mode === 'expressive') retryables.set(`${task.requestId}:final`, { task, failed });
+      } else if (outcome === 'failed') {
         // 送不出去(断线)就记下来, 重连时补 —— 否则那条消息永远挂着 👀。
         pendingFinals.set(`${task.requestId}:final`, { task, emoji, failed });
       }

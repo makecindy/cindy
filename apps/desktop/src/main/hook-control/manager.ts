@@ -1104,24 +1104,26 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
    * off / minimal / expressive 选择。缓存在这里而不是塞进 lane: 它是 per-binding
    * 的全局开关, 而 Telegram lane 与 binding 一一对应。
    */
-  let telegramEmojiReactions: TelegramEmojiReactions = DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions;
+  let telegramEmojiReactions: TelegramEmojiReactions | null = null;
 
   /**
    * 把最新档位落进缓存并转告 dispatcher(ack 表情按它决定发什么、发不发)。
    */
-  function adoptTelegramEmojiReactions(next: TelegramEmojiReactions): void {
+  function adoptTelegramEmojiReactions(next: TelegramEmojiReactions | null): void {
     telegramEmojiReactions = next;
     dispatcher?.setEmojiReactionsMode(next);
   }
 
   /**
-   * 账号切换/停用时回到协议基线。
+   * 账号切换/停用时把档位打回**未知**, 而不是打回基线。
    *
-   * 档位是 per-binding 的用户设置 —— 换个账号还沿用上一位主人的选择就是串台。
+   * 档位是 per-binding 的用户设置 —— 换个账号还沿用上一位主人的选择就是串台;
+   * 而拿基线顶上同样不对: 新主人可能正是把表情关掉的那个, 在他的值到达前发
+   * 一轮 minimal 就是无视他的选择。未知期间一帧不发, 等 hydrate 落定。
    * 与 serverFeatures 的清理同理由: 留着比没有更糟。
    */
   function resetTelegramEmojiReactions(): void {
-    adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions);
+    adoptTelegramEmojiReactions(null);
   }
 
   /**
@@ -1136,14 +1138,23 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     const bindingId =
       bindingIdOverride ??
       (telegramLane.binding?.state === 'confirmed' ? telegramLane.binding.bindingId : null);
-    if (bindingId === null) return;
+    if (bindingId === null) return; // 还没确认绑定 —— 等 confirmed 回调再来
     void sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
       makeProviderBehaviorGet({
         requestId,
         provider: 'telegram',
         bindingId: currentBindingId,
       }),
-    ).catch(() => undefined);
+    )
+      .then((view) => adoptTelegramEmojiReactions(view.emojiReactions))
+      .catch(() => {
+        // 服务端不宣告 provider.behavior、或请求超时 —— 那就不存在服务端侧的
+        // 覆盖值, 协议基线**就是**确定的有效值。必须在这里落定, 否则档位永远
+        // 停在「未知」, ack 表情一次都不会发。
+        if (telegramEmojiReactions === null) {
+          adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions);
+        }
+      });
   }
 
   function telegramBehaviorView(payload: ProviderBehaviorStatePayload): TelegramHookBehaviorState {

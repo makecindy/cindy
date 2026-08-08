@@ -4181,6 +4181,8 @@ describe('官方 bot ack 表情(msg.op)', () => {
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
     d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
 
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first' }), c.send);
     await tick();
@@ -4197,6 +4199,8 @@ describe('官方 bot ack 表情(msg.op)', () => {
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
     d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
 
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'running' }), c.send);
     await tick();
@@ -4217,6 +4221,8 @@ describe('官方 bot ack 表情(msg.op)', () => {
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
     d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'running' }), c.send);
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
@@ -4240,6 +4246,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     const { d } = makeDispatcher({ runner: fr.runner });
     const online = collector();
     d.onConnected('conn-1', online.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
     await tick();
     expect(reactionEmojis(online.sent)).toEqual(['👀']);
@@ -4269,8 +4276,56 @@ describe('官方 bot ack 表情(msg.op)', () => {
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
     d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', dispatch({ requestId: 'no-trigger' }), c.send);
     await tick();
     expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+  });
+
+  it('档位还没 hydrate → 一帧不发, 不拿基线先斩后奏', async () => {
+    // 连接就绪与「用户选的档位到达」之间有一段空窗。这段时间里按 minimal 发,
+    // 关掉表情的用户每次重启都会又被打一次 —— 那正是本 PR 要修的 bug。
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'not-hydrated' }), c.send);
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+
+    // 空窗期收口的任务也一帧不发 —— 没打过 👀 就没有要收的东西。
+    fr.finish({ status: 'ok' });
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+
+    // 档位落定后, 后续任务照常。
+    d.setEmojiReactionsMode('minimal');
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
+    await tick();
+    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+  });
+
+  it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.setEmojiReactionsMode('minimal');
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
+    await tick();
+    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+
+    const draining = d.deactivateAccount();
+    fr.finish({ status: 'ok' });
+    await draining;
+    // manager 在停用时 reset 成未知(null); 新主人的值到达前一帧不发。
+    d.setEmojiReactionsMode(null);
+    d.activateAccount();
+    const next = collector();
+    d.onConnected('conn-2', next.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.handleDispatch('conn-2', telegramDispatch({ requestId: 'second-owner' }), next.send);
+    await tick();
+    expect(next.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
   });
 });

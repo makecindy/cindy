@@ -27,7 +27,7 @@ const TASK: AckReactionTask = {
 
 function harness(
   features: readonly string[] = [HOOK_FEATURE_MESSAGE_OPS],
-  emojiReactions: TelegramEmojiReactions = 'minimal',
+  emojiReactions: TelegramEmojiReactions | null = 'minimal',
   random: () => number = () => 0,
 ) {
   const sent: HookMessage[] = [];
@@ -36,13 +36,25 @@ function harness(
     return true;
   });
   const warn = vi.fn();
+  let mode = emojiReactions;
+  const serverFeatures = new Map<string, readonly string[]>([[CONN, features]]);
   const reactions = createAckReactions({
-    serverFeatures: new Map([[CONN, features]]),
-    emojiReactions: () => emojiReactions,
+    serverFeatures,
+    emojiReactions: () => mode,
     random,
     log: { info: () => undefined, warn },
   });
-  return { reactions, send, sent, warn };
+  return {
+    reactions,
+    send,
+    sent,
+    warn,
+    serverFeatures,
+    /** 模拟用户中途改设置 / manager hydrate 落定。 */
+    setMode(next: TelegramEmojiReactions | null) {
+      mode = next;
+    },
+  };
 }
 
 function opOf(message: HookMessage): {
@@ -227,6 +239,68 @@ describe('官方 bot ack 表情', () => {
       expect(h.sent).toHaveLength(1);
       expect(h.warn).toHaveBeenCalled();
     });
+  });
+
+  describe('档位未就绪与中途切换', () => {
+    it('有效档位还不知道(null) → 一帧不发; 落定后照常', () => {
+      // 连接就绪与「用户选的档位到达」之间有一段空窗。这段时间按基线发,
+      // 关掉表情的用户每次重启都会又被打一次 —— 那正是本 PR 要修的 bug。
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], null);
+      h.reactions.onAccepted(TASK, h.send);
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      expect(h.send).not.toHaveBeenCalled();
+
+      h.setMode('minimal');
+      h.reactions.onAccepted(TASK, h.send);
+      expect(opOf(h.sent[0]).action.emoji).toBe('👀');
+    });
+
+    it('打过 👀 之后用户切到 off → 撤销那个 👀, 不留在处理中', () => {
+      // off 的语义是「别给我打表情」, 不是「把已经打上的留在那」。补一个终态
+      // 表情同样违背用户的选择, 所以发空串(撤销)。
+      const h = harness();
+      h.reactions.onAccepted(TASK, h.send);
+      h.setMode('off');
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      expect(h.sent).toHaveLength(2);
+      expect(opOf(h.sent[1]).action).toMatchObject({ targetMessageId: '55', emoji: '' });
+    });
+
+    it('全程 off → 收口时也什么都不发(没打过就没有要收的)', () => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'off');
+      h.reactions.onAccepted(TASK, h.send);
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      expect(h.send).not.toHaveBeenCalled();
+    });
+  });
+
+  it('能力降级: 新 welcome 没有 msg-op-v1 → 新任务不发, 待补发也作废', () => {
+    // 「离线」与「服务端说了不支持」是两回事: 前者要留着重连补, 后者继续发
+    // 就是往旧节点丢它没协商过的帧, 可能被拒甚至触发再次断连。
+    const h = harness();
+    h.reactions.onAccepted(TASK, h.send);
+    h.reactions.onFinished(TASK, 'ok', vi.fn(() => false)); // 断线, 进待补发
+    expect(h.sent).toHaveLength(1);
+
+    h.serverFeatures.set(CONN, []); // 重连到不支持的旧节点
+    h.reactions.onReconnected(CONN, h.send);
+    expect(h.sent).toHaveLength(1); // 待补发被丢弃, 没往旧节点发
+    h.reactions.onAccepted({ ...TASK, requestId: 'req-2' }, h.send);
+    expect(h.sent).toHaveLength(1); // 新任务也不发
+    expect(h.reactions.supports(CONN)).toBe(false);
+  });
+
+  it('补发时又断了 → 留着下次重连再补, 不丢', () => {
+    // 先删后发、失败却不放回的话, 后续再重连便无内容可补, 消息永远挂着 👀。
+    const h = harness();
+    h.reactions.onAccepted(TASK, h.send);
+    h.reactions.onFinished(TASK, 'ok', vi.fn(() => false));
+    h.reactions.onReconnected(CONN, vi.fn(() => false)); // 补发时 socket 又关了
+    expect(h.sent).toHaveLength(1);
+    h.reactions.onReconnected(CONN, h.send);
+    expect(h.sent).toHaveLength(2);
+    expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+    expect(opOf(h.sent[1]).opId).toBe('req-1:final');
   });
 
   it('回执失败只记一行, 不抛不重试(表情是装饰, 不能影响任务)', () => {

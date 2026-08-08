@@ -347,9 +347,12 @@ export interface HookDispatcher {
   onMessageOpResult(payload: MessageOpResultPayload): void;
   /**
    * 用户的表情档位(off / minimal / expressive)。服务端经 provider.behavior.state
-   * 下发, manager 收到即转告 —— 没收到之前按协议基线 minimal。
+   * 下发, manager 收到即转告。
+   *
+   * `null` = **有效值还不知道**(连接刚起、behavior.state 还没到)。这时一帧都
+   * 不发: 拿基线先斩后奏, 设置里关掉表情的用户会在每次重启后又被打一次。
    */
-  setEmojiReactionsMode(mode: TelegramEmojiReactions): void;
+  setEmojiReactionsMode(mode: TelegramEmojiReactions | null): void;
   /**
    * task.cancel: 中断指定 requestId 的任务。排队中的直接摘除并回
    * turn.end(cancelled); 执行中的标记取消并 abort 对应 session, 收口时以
@@ -735,7 +738,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
   const serverFeatures = new Map<string, readonly string[]>();
   // 官方 bot 的 ack 表情(👀 → 👍/👎) —— 个人 bot 早有, 官方侧靠 msg.op 补上。
-  let emojiReactionsMode: TelegramEmojiReactions = 'minimal';
+  // null = 档位未就绪(见 setEmojiReactionsMode), 就绪前一帧不发。
+  let emojiReactionsMode: TelegramEmojiReactions | null = null;
   /** 连接不在时的发送器: 恒失败, 于是终态表情落进待补发队列。 */
   const OFFLINE_SEND = (): boolean => false;
   const ackReactions = createAckReactions({
@@ -2501,7 +2505,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 而该发到哪条连接由 ackReactions 自己记的 task 决定。
       ackReactions.onResult(payload, (connectionId) => sendFns.get(connectionId));
     },
-    setEmojiReactionsMode(mode: TelegramEmojiReactions) {
+    setEmojiReactionsMode(mode: TelegramEmojiReactions | null) {
       emojiReactionsMode = mode;
     },
     onConnected(connectionId, send, features) {
