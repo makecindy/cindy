@@ -31,7 +31,7 @@ import {
   parseInteraction,
 } from './components.js';
 import type { ButtonInteractionLike } from './components.js';
-import { startStreaming } from './streamingText.js';
+import { startStreaming, type DiscordImageUploadResult } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
@@ -965,21 +965,31 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return channel.messages.fetch(nativeMessageId);
   }
 
-  private async uploadImages(messageId: string, absPaths: string[]): Promise<void> {
+  private async uploadImages(
+    messageId: string,
+    absPaths: string[],
+  ): Promise<DiscordImageUploadResult> {
     const { channelId } = decodeMessageId(messageId);
     const client = this.gateway.client as unknown as {
       channels?: { fetch(channelId: string): Promise<unknown> };
     } | null;
     const channel = await client?.channels?.fetch(channelId);
     const send = isRecord(channel) ? channel.send : null;
-    if (typeof send !== 'function') return;
+    if (typeof send !== 'function') return { deliveredAbsPaths: [] };
     const files = absPaths.map((absPath) => ({
       attachment: absPath,
       name: path.basename(absPath),
     }));
+    const deliveredAbsPaths: string[] = [];
     for (const batch of batchDiscordUploadFiles(files)) {
-      await send.call(channel, { files: batch });
+      try {
+        await send.call(channel, { files: batch });
+        deliveredAbsPaths.push(...batch.map((file) => file.attachment));
+      } catch (error) {
+        return { deliveredAbsPaths, error };
+      }
     }
+    return { deliveredAbsPaths };
   }
 
   private async notifyExpiredInteraction(i: ButtonInteractionLike): Promise<void> {

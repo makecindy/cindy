@@ -10,21 +10,51 @@
  */
 
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+import {
+  collectXdtFileRefs,
+  isMarkdownCodePosition,
+  markdownCodeRanges,
+  normalizeXdtAbsPath,
+  transformXdtRefs,
+} from '@cindy/im';
 
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
 import { ingestMedia } from '../../cindy-media/ingest';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
 import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
+import { materializeSshRemoteFile } from '../../file-browser/ssh-media';
+import { readBoundedFileFollowLinks } from '../../utils/readBoundedFile';
 
-const LOCAL_MARKDOWN_IMAGE_RE = /!\[([^\]\r\n]{0,512})\]\(([^)\r\n]{1,4096})\)/g;
+// Destination scanning permits escaped characters and one balanced parenthesis
+// level, so a parenthesized Markdown title is captured before the outer `)`.
+const LOCAL_MARKDOWN_IMAGE_RE =
+  /!\[((?:\\[^\r\n]|[^\\\]\r\n]){0,512})\]\(((?:\\[^\r\n]|[^()\r\n]|\((?:\\[^\r\n]|[^()\r\n])*\)){1,4096})\)/g;
 const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+function localMarkdownImageMatches(text: string): RegExpMatchArray[] {
+  const codeRanges = markdownCodeRanges(text);
+  return Array.from(text.matchAll(LOCAL_MARKDOWN_IMAGE_RE)).filter(
+    (match) => match.index !== undefined && !isMarkdownCodePosition(codeRanges, match.index),
+  );
+}
+
+function markdownImageLabel(raw: string): string {
+  return raw.replace(/\\([\\[\]])/g, '$1').trim() || '图片';
+}
 
 interface LocalMarkdownImageDeps {
   realpath(value: string): Promise<string>;
-  stat(value: string): Promise<{ isFile(): boolean; size: number }>;
-  readFile(value: string): Promise<Uint8Array>;
+  readBoundedFile(
+    value: string,
+    maxBytes: number,
+    containWithin?: string,
+  ): Promise<Uint8Array | null>;
   ingest(params: {
     buffer: Uint8Array;
     mimeType: string;
@@ -35,8 +65,12 @@ interface LocalMarkdownImageDeps {
 
 const defaultDeps: LocalMarkdownImageDeps = {
   realpath: (value) => fs.realpath(value),
-  stat: (value) => fs.stat(value),
-  readFile: (value) => fs.readFile(value),
+  readBoundedFile: (value, maxBytes, containWithin) =>
+    readBoundedFileFollowLinks(
+      value,
+      maxBytes,
+      containWithin === undefined ? undefined : { containWithin },
+    ),
   ingest: async ({ buffer, mimeType, sessionId }) =>
     ingestMedia({
       buffer,
@@ -61,11 +95,28 @@ function isPathInside(parentAbs: string, childAbs: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function markdownLocalTarget(raw: string): string | null {
+function markdownImageDestination(raw: string): string {
   let target = raw.trim();
-  if (target.startsWith('<') && target.endsWith('>')) {
-    target = target.slice(1, -1).trim();
+  if (target.startsWith('<')) {
+    const closingBracket = target.indexOf('>');
+    // Markdown permits an optional title after an angle-bracket destination:
+    // `![alt](</private/file.png> "title")`. Extract only the destination.
+    // A malformed missing `>` remains fail-closed for local-path detection.
+    target = target.slice(1, closingBracket >= 0 ? closingBracket : target.length).trim();
+  } else {
+    // A plain destination may be followed by a quoted/parenthesized title:
+    // `![alt](/work/out.png "preview")`. Unescaped whitespace is not part of
+    // a plain Markdown destination, so only strip a syntactically complete title.
+    const titled = target.match(
+      /^(\S+)[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/,
+    );
+    if (titled) target = titled[1];
   }
+  return target;
+}
+
+function markdownLocalTarget(raw: string): string | null {
+  const target = markdownImageDestination(raw);
   if (!target || target.includes('\0') || !path.isAbsolute(target)) return null;
   return target;
 }
@@ -86,6 +137,141 @@ export interface MaterializedLocalMarkdownImages {
   text: string;
 }
 
+export interface MaterializedLocalMarkdownFiles {
+  /** 已复制到受控临时目录的文件与对外展示名，供 IM 渠道上传。 */
+  files: Array<{ absPath: string; displayName?: string }>;
+  /** 发送完成后必须递归清理的受控临时目录。 */
+  tempDirs: string[];
+  /** 所有内部文件引用均替换为可读标签，避免本机路径泄漏。 */
+  text: string;
+}
+
+/**
+ * 将最终 Markdown 的 xdt-file 引用收敛为可上传路径。
+ *
+ * 文件来源是模型输出，必须同时通过绝对路径、realpath 与 workingDir 包含校验；
+ * 未通过的引用不会发送，但仍会从正文中移除内部 URL，只留下可读标签。
+ */
+export async function materializeLocalMarkdownFiles(
+  params: {
+    text: string;
+    workingDir: string;
+    maxFiles?: number;
+    maxFileBytes?: number;
+    existingAbsPaths?: string[];
+    remoteHostId?: string | null;
+  },
+): Promise<MaterializedLocalMarkdownFiles> {
+  const refs = collectXdtFileRefs(params.text);
+  if (refs.length === 0) return { files: [], tempDirs: [], text: params.text };
+
+  const maxFiles = Math.max(0, params.maxFiles ?? 8);
+  const maxFileBytes = params.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  const existing = new Set<string>();
+  for (const absPath of params.existingAbsPaths ?? []) {
+    try {
+      existing.add(pathKey(await fs.realpath(absPath)));
+    } catch {
+      existing.add(pathKey(absPath));
+    }
+  }
+
+  let workingDirReal: string | null = null;
+  if (!params.remoteHostId) {
+    try {
+      workingDirReal = await fs.realpath(params.workingDir);
+    } catch {
+      // Fail closed: without a canonical root, no model-authored local file may be sent.
+    }
+  }
+
+  const accepted = new Set<string>();
+  const files: Array<{ absPath: string; displayName?: string }> = [];
+  let tempDir: string | null = null;
+  if (workingDirReal || params.remoteHostId) {
+    for (const ref of refs) {
+      if (files.length >= maxFiles) break;
+      try {
+        const candidate = normalizeXdtAbsPath(
+          decodeURIComponent(ref.url.slice('xdt-file://'.length)),
+        );
+        const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(candidate) || /^\\\\[^\\]/.test(candidate);
+        if (candidate.includes('\u0000') || (!path.isAbsolute(candidate) && !isWindowsAbsolute)) continue;
+        let sourcePath: string;
+        let buffer: Buffer;
+        if (params.remoteHostId) {
+          const remote = await materializeSshRemoteFile(
+            { remoteHostId: params.remoteHostId, workdir: params.workingDir },
+            candidate,
+            maxFileBytes,
+          );
+          if (!remote.ok) continue;
+          sourcePath = remote.cachePath;
+          buffer = await fs.readFile(sourcePath);
+          if (buffer.byteLength !== remote.size || buffer.byteLength > maxFileBytes) continue;
+        } else {
+          const targetReal = await fs.realpath(candidate);
+          if (!workingDirReal || !isPathInside(workingDirReal, targetReal)) continue;
+          const securelyRead = await readBoundedFileFollowLinks(targetReal, maxFileBytes, {
+            containWithin: workingDirReal,
+          });
+          if (!securelyRead || securelyRead.byteLength === 0) continue;
+          sourcePath = targetReal;
+          buffer = securelyRead;
+        }
+        const sourcePathKey = pathKey(sourcePath);
+        const key = `${params.remoteHostId ?? 'local'}:${sourcePathKey}`;
+        if (accepted.has(key) || existing.has(sourcePathKey)) continue;
+
+        tempDir ??= await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-im-file-'));
+        const extension = path.extname(candidate).slice(0, 32);
+        const stagedPath = path.join(tempDir, `${randomUUID()}${extension}`);
+        await fs.writeFile(stagedPath, buffer, { flag: 'wx', mode: 0o600 });
+        accepted.add(key);
+        files.push({
+          absPath: stagedPath,
+          displayName: ref.alt.trim() || `附件${extension}`,
+        });
+      } catch {
+        // A bad or missing file is omitted; the readable label remains below.
+      }
+    }
+  }
+
+  return {
+    files,
+    tempDirs: tempDir ? [tempDir] : [],
+    text: transformXdtRefs(params.text, {
+      file: ({ alt }) => alt.trim() || '附件',
+    }),
+  };
+}
+
+function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
+  const target = markdownImageDestination(rawTarget);
+  return (
+    target.startsWith('file://') ||
+    target.startsWith('/') ||
+    /^[A-Za-z]:[\\/]/.test(target) ||
+    /^\\\\[^\\]/.test(target)
+  );
+}
+
+/** Remove unresolved host-local image targets before a plain-text IM fallback. */
+export function sanitizeLocalMarkdownImageRefs(text: string): string {
+  const matches = localMarkdownImageMatches(text);
+  let sanitized = text;
+  for (let index = matches.length - 1; index >= 0; index -= 1) {
+    const match = matches[index];
+    if (!isSensitiveLocalMarkdownImageTarget(match[2])) continue;
+    const start = match.index;
+    if (start === undefined) continue;
+    const replacement = markdownImageLabel(match[1]);
+    sanitized = `${sanitized.slice(0, start)}${replacement}${sanitized.slice(start + match[0].length)}`;
+  }
+  return sanitized;
+}
+
 export async function materializeLocalMarkdownImages(
   params: {
     text: string;
@@ -95,10 +281,12 @@ export async function materializeLocalMarkdownImages(
     maxImageBytes?: number;
     /** 已由 tool_result side-channel 收集的图片；参与总数限制与去重。 */
     existingAbsPaths?: string[];
+    /** SSH host when local-looking paths belong to a remote desktop session. */
+    remoteHostId?: string | null;
   },
   deps: LocalMarkdownImageDeps = defaultDeps,
 ): Promise<MaterializedLocalMarkdownImages> {
-  const matches = Array.from(params.text.matchAll(LOCAL_MARKDOWN_IMAGE_RE));
+  const matches = localMarkdownImageMatches(params.text);
   if (matches.length === 0) return { absPaths: [], text: params.text };
 
   const maxImages = Math.max(0, params.maxImages ?? DEFAULT_MAX_IMAGES);
@@ -128,16 +316,31 @@ export async function materializeLocalMarkdownImages(
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index];
     const rawTarget = match[2].trim();
-    const managed = isManagedImageTarget(rawTarget);
+    const destination = markdownImageDestination(rawTarget);
+    const managed = isManagedImageTarget(destination);
     const localTarget = managed ? null : markdownLocalTarget(rawTarget);
     if (!managed && !localTarget) continue;
 
     try {
-      const resolvedSource = managed
-        ? deps.resolveMediaUrl(rawTarget).absPath
-        : (localTarget as string);
-      const sourceReal = await deps.realpath(resolvedSource);
-      if (!managed) {
+      let sourceReal: string;
+      let dedupeKey: string;
+      let containWithin: string | undefined;
+      let expectedSize: number | undefined;
+      if (managed) {
+        sourceReal = await deps.realpath(deps.resolveMediaUrl(destination).absPath);
+        dedupeKey = pathKey(sourceReal);
+      } else if (params.remoteHostId) {
+        const remote = await materializeSshRemoteFile(
+          { remoteHostId: params.remoteHostId, workdir: params.workingDir },
+          localTarget as string,
+          maxImageBytes,
+        );
+        if (!remote.ok) continue;
+        sourceReal = remote.cachePath;
+        dedupeKey = `ssh:${params.remoteHostId}:${remote.relPath}`;
+        expectedSize = remote.size;
+      } else {
+        sourceReal = await deps.realpath(localTarget as string);
         if (workingDirReal === undefined) {
           try {
             workingDirReal = await deps.realpath(params.workingDir);
@@ -146,19 +349,20 @@ export async function materializeLocalMarkdownImages(
           }
         }
         if (!workingDirReal || !isPathInside(workingDirReal, sourceReal)) continue;
+        dedupeKey = pathKey(sourceReal);
+        containWithin = workingDirReal;
       }
-      const dedupeKey = pathKey(sourceReal);
       const existing = materializedByRealPath.get(dedupeKey);
       if (existing) {
         acceptedMatchIndexes.add(index);
         continue;
       }
       if (materializedByRealPath.size >= maxImages) continue;
-
-      const stat = await deps.stat(sourceReal);
-      if (!stat.isFile() || stat.size <= 0 || stat.size > maxImageBytes) continue;
-      const buffer = await deps.readFile(sourceReal);
-      if (buffer.byteLength !== stat.size || buffer.byteLength > maxImageBytes) continue;
+      // This helper verifies the opened descriptor still resolves inside the
+      // trusted root before reading, closing both final- and parent-symlink races.
+      const buffer = await deps.readBoundedFile(sourceReal, maxImageBytes, containWithin);
+      if (expectedSize !== undefined && buffer?.byteLength !== expectedSize) continue;
+      if (!buffer || buffer.byteLength === 0 || buffer.byteLength > maxImageBytes) continue;
       const mimeType = sniffMediaMime(buffer);
       if (!mimeType?.startsWith('image/')) continue;
 
@@ -187,7 +391,7 @@ export async function materializeLocalMarkdownImages(
     const match = matches[index];
     const start = match.index;
     if (start === undefined) continue;
-    const replacement = match[1].trim() || '图片';
+    const replacement = markdownImageLabel(match[1]);
     text = `${text.slice(0, start)}${replacement}${text.slice(start + match[0].length)}`;
   }
 

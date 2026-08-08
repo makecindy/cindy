@@ -180,6 +180,69 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
   it('图片语法 + xdt-file 协议不算文件引用(与个人渠道收口同口径)', () => {
     expect(collectXdtFileRefs('![f](xdt-file:///tmp/x.txt)')).toEqual([]);
   });
+
+  it('parses an angle-bracket destination with an optional Markdown title', () => {
+    const text = '[报告](<xdt-file:///tmp/report.pdf> "下载")';
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告',
+        url: 'xdt-file:///tmp/report.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
+  });
+
+  it('parses a plain destination with an optional Markdown title', () => {
+    const quoted = '[报告](xdt-file:///tmp/report.pdf "下载")';
+    const parenthesized = '[报告](xdt-file:///tmp/report.pdf (下载))';
+
+    for (const text of [quoted, parenthesized]) {
+      expect(collectXdtFileRefs(text)).toEqual([
+        {
+          alt: '报告',
+          url: 'xdt-file:///tmp/report.pdf',
+          start: 0,
+          end: text.length,
+        },
+      ]);
+    }
+  });
+
+  it('ignores file references inside inline code and fenced code blocks', () => {
+    const inline = '`[报告](xdt-file:///tmp/inline.pdf)`';
+    const fenced = '```md\n[报告](xdt-file:///tmp/fenced.pdf)\n```';
+    const text = `${inline}\n${fenced}`;
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('ignores file references inside blockquote and list-container fences', () => {
+    const quoted = '> ~~~md\n> [报告](xdt-file:///tmp/quoted.pdf)\n> ~~~';
+    const listed = '- ```md\n  [报告](xdt-file:///tmp/listed.pdf)\n  ```';
+
+    expect(collectXdtFileRefs(`${quoted}\n${listed}`)).toEqual([]);
+  });
+
+  it('ignores file references inside four-space indented code blocks', () => {
+    const text = '正文\n\n    [报告](xdt-file:///tmp/indented.pdf)\n\n结尾';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('keeps a four-space list continuation eligible for attachment delivery', () => {
+    const text = '- 输出：\n    [报告](xdt-file:///tmp/list-report.pdf)';
+    const afterBlank = '- 输出：\n\n    [报告](xdt-file:///tmp/list-report.pdf)';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/list-report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('- 输出：\n    报告');
+    expect(collectXdtFileRefs(afterBlank)).toHaveLength(1);
+  });
 });
 
 describe('transformXdtRefs(收口正文改写共享原语)', () => {

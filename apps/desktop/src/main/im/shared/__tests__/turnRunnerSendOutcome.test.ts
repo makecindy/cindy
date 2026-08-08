@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     removeMessageReaction: vi.fn(),
     sendText: vi.fn(),
     sendMarkdownText: vi.fn(),
+    sendFile: vi.fn(),
     startStreamingText: vi.fn(),
     patchMarkdownCard: vi.fn(),
     sendInteractiveCard: vi.fn(),
@@ -69,6 +70,7 @@ const mocks = vi.hoisted(() => ({
   generateAndPersistFbotTitle: vi.fn(),
   desktopSessionRows: vi.fn(),
   materializeLocalMarkdownImages: vi.fn(),
+  materializeLocalMarkdownFiles: vi.fn(),
 }));
 
 vi.mock('../../../logger', () => ({
@@ -110,8 +112,10 @@ vi.mock('../../../imageCacheStore', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
 }));
 
-vi.mock('../localMarkdownImages', () => ({
+vi.mock('../localMarkdownImages', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../localMarkdownImages')>()),
   materializeLocalMarkdownImages: mocks.materializeLocalMarkdownImages,
+  materializeLocalMarkdownFiles: mocks.materializeLocalMarkdownFiles,
 }));
 
 vi.mock('../sessionRepo', () => ({
@@ -370,6 +374,7 @@ function setupSession(sendImpl: Parameters<typeof createSessionHarness>[0]): Ses
 
 function setupAttachedSession(
   sendImpl: Parameters<typeof createSessionHarness>[0],
+  remoteHostId: string | null = null,
 ): SessionHarness {
   const sessionId = 'desktop-attached-session';
   const h = createSessionHarness(sendImpl, sessionId);
@@ -385,6 +390,7 @@ function setupAttachedSession(
       fastMode: false,
       sdkSessionId: null,
       providerId: null,
+      remoteHostId,
     },
   ]);
   mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
@@ -537,6 +543,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.removeMessageReaction.mockResolvedValue(undefined);
     mocks.feishuIm.sendText.mockResolvedValue(undefined);
     mocks.feishuIm.sendMarkdownText.mockResolvedValue(undefined);
+    mocks.feishuIm.sendFile.mockResolvedValue({ ok: true, messageId: 'file-1' });
     mocks.feishuIm.startStreamingText.mockResolvedValue({
       messageId: 'stream-1',
       append: vi.fn(),
@@ -548,6 +555,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.cancelPending.mockReturnValue(null);
     mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
     mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
+    mocks.materializeLocalMarkdownFiles.mockResolvedValue({ files: [], tempDirs: [], text: '' });
   });
 
   afterEach(async () => {
@@ -585,6 +593,455 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect.stringContaining('错误'),
       expect.anything(),
     );
+  });
+
+  it('falls back to plain text when the initial streaming card cannot be created', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(
+      new Error('card create failed without PROMPT_SECRET'),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'final answer', {
+        threadTs: undefined,
+      });
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers generated images after plain-text fallback when streaming init fails', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/generated.png',
+      mimeType: 'image/png',
+    });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://generated.png' }) },
+    });
+    h.emit({ type: 'text', data: { text: 'image ready', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/generated.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.sendFile).toHaveBeenCalledTimes(1);
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('materializes inline managed images before rich-card plain-text fallback', async () => {
+    const managedUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    mocks.findActiveSession.mockResolvedValueOnce({
+      id: 'feishu-session',
+      agentKind: 'claude-code',
+      workingDir: '/srv/project',
+      model: 'claude-opus-4-7',
+      effort: 'xhigh',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+      sdkSessionId: null,
+      providerId: null,
+      remoteHostId: 'ssh-host-1',
+    });
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({
+      absPaths: ['/tmp/inline.png'],
+      text: 'image ready\ninline image',
+    });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'text',
+      data: { text: `image ready\n![inline image](${managedUrl})`, isFinal: true },
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/inline.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
+    expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith({
+      text: `image ready\n![inline image](${managedUrl})`,
+      workingDir: '/srv/project',
+      sessionId: 'feishu-session',
+      maxImages: 4,
+      existingAbsPaths: [],
+      remoteHostId: 'ssh-host-1',
+    });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'image ready\ninline image', {
+      threadTs: undefined,
+    });
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an attached SSH session host through rich-card fallback materialization', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({
+      absPaths: ['/tmp/remote-inline.png'],
+      text: 'remote image',
+    });
+    const h = setupAttachedSession(async () => ({ accepted: true }), 'ssh-host-attached');
+
+    await runDefaultTurn();
+    h.emit({
+      type: 'text',
+      data: { text: '![remote image](/srv/project/out.png)', isFinal: true },
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith(
+        expect.objectContaining({ remoteHostId: 'ssh-host-attached' }),
+      );
+    });
+  });
+
+  it('does not expose inline managed image URLs when fallback materialization fails', async () => {
+    const managedUrl = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockRejectedValueOnce(
+      new Error(`resolve failed for ${managedUrl}`),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'text',
+      data: { text: `image failed\n![private image](${managedUrl})`, isFinal: true },
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        'image failed\nprivate image',
+        { threadTs: undefined },
+      );
+    });
+    const loggedPayload = JSON.stringify([
+      ...mocks.logger.warn.mock.calls,
+      ...mocks.logger.error.mock.calls,
+    ]);
+    expect(loggedPayload).not.toContain(managedUrl);
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not expose rejected local image paths in rich-card plain-text fallback', async () => {
+    const localPath = '/Users/private/secret.png';
+    const rawText = `image unavailable\n![private image](${localPath})`;
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({ absPaths: [], text: rawText });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: rawText, isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        'image unavailable\nprivate image',
+        { threadTs: undefined },
+      );
+    });
+    expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).not.toContain(localPath);
+  });
+
+  it('leaves inline managed images to a healthy rich-card handle', async () => {
+    const managedUrl = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const handle = {
+      messageId: 'stream-inline',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValueOnce(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    const finalText = `image ready\n![inline image](${managedUrl})`;
+    h.emit({ type: 'text', data: { text: finalText, isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(handle.finalize).toHaveBeenCalledWith(finalText);
+    });
+    expect(mocks.materializeLocalMarkdownImages).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+  });
+
+  it('materializes xdt-file attachments before rich-card plain-text fallback', async () => {
+    const fileUrl = 'xdt-file:///F:/XDMaker/report.pdf';
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownFiles.mockResolvedValueOnce({
+      files: [{ absPath: 'F:\\XDMaker\\report.pdf', displayName: 'report' }],
+      tempDirs: [],
+      text: 'report ready\nreport',
+    });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({
+      type: 'text',
+      data: { text: `report ready\n[report](${fileUrl})`, isFinal: true },
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        'F:\\XDMaker\\report.pdf',
+        'report',
+        { threadTs: undefined },
+      );
+    });
+    expect(mocks.materializeLocalMarkdownFiles).toHaveBeenCalledWith({
+      text: `report ready\n[report](${fileUrl})`,
+      workingDir: 'F:\\XDMaker',
+      maxFiles: 8,
+      existingAbsPaths: [],
+      remoteHostId: null,
+    });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'report ready\nreport', {
+      threadTs: undefined,
+    });
+  });
+
+  it('does not resend media already delivered before an interaction boundary', async () => {
+    const firstHandle = {
+      messageId: 'stream-before-interaction',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => ['/tmp/already-delivered.png']),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockRejectedValueOnce(new Error('second card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/already-delivered.png',
+      mimeType: 'image/png',
+    });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-1' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: 'before ask', isFinal: true } });
+    await flushMicrotasks();
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://delivered.png' }) },
+    });
+    await flushMicrotasks();
+
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-media-boundary',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'after ask', {
+        threadTs: undefined,
+      });
+    });
+    expect(firstHandle.finalize).toHaveBeenCalledWith('before ask');
+    expect(firstHandle.addExtraImageAbsPath).toHaveBeenCalledWith('/tmp/already-delivered.png');
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+  });
+
+  it('does not resend media confirmed before an interaction finalize failure', async () => {
+    const firstHandle = {
+      messageId: 'stream-before-partial-failure',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(async () => {
+        throw new Error('later image batch failed');
+      }),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => ['/tmp/partially-delivered.png']),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockRejectedValueOnce(new Error('second card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/partially-delivered.png',
+      mimeType: 'image/png',
+    });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-partial' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: 'before ask', isFinal: true } });
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://partial.png' }) },
+    });
+    await flushMicrotasks();
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-partial-media',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'after ask', {
+        threadTs: undefined,
+      });
+    });
+    expect(firstHandle.finalize).toHaveBeenCalledWith('before ask');
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps unconfirmed interaction media in the fallback ledger', async () => {
+    const firstHandle = {
+      messageId: 'stream-before-failed-media',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => []),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockRejectedValueOnce(new Error('second card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/unconfirmed.png',
+      mimeType: 'image/png',
+    });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-2' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://unconfirmed.png' }) },
+    });
+    await flushMicrotasks();
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-unconfirmed-media',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/unconfirmed.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
+  });
+
+  it('continues media fallback and settles safely when one generated image send fails', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.resolveXdtImageUrl.mockImplementation((url: string) => ({
+      absPath: url.endsWith('first.png') ? '/tmp/first.png' : '/tmp/second.png',
+      mimeType: 'image/png',
+    }));
+    mocks.feishuIm.sendFile
+      .mockResolvedValueOnce({ ok: false, reason: 'UPLOAD_FAIL' })
+      .mockResolvedValueOnce({ ok: true, messageId: 'file-2' });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'tool_result_full',
+      data: {
+        fullText: JSON.stringify({
+          xdt_image_urls: ['xdt-image://first.png', 'xdt-image://second.png'],
+        }),
+      },
+    });
+    h.emit({ type: 'text', data: { text: 'images ready', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledTimes(2);
+    });
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      'feishu media fallback failed',
+      expect.objectContaining({
+        kind: 'terminal-media-fallback',
+        source: 'sendFile',
+        reason: 'UPLOAD_FAIL',
+      }),
+    );
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(mocks.logger.error.mock.calls)).not.toContain('/tmp/first.png');
+  });
+
+  it('settles the turn and logs safely when streaming init and plain-text fallback both fail', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(
+      new Error('card create failed with TOKEN_VALUE'),
+    );
+    mocks.feishuIm.sendText.mockRejectedValueOnce(
+      new Error('fallback failed with ou_sensitive_openid'),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('plain-text fallback failed'),
+        expect.anything(),
+      );
+    });
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    const loggedPayload = JSON.stringify([
+      ...mocks.logger.warn.mock.calls,
+      ...mocks.logger.error.mock.calls,
+    ]);
+    expect(loggedPayload).not.toContain('PROMPT_SECRET');
+    expect(loggedPayload).not.toContain('TOKEN_VALUE');
+    expect(loggedPayload).not.toContain('ou_sensitive_openid');
   });
 
   it('anchors direct IM capture to the durable accepted user message', async () => {
@@ -1895,6 +2352,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         sessionId: 'feishu-session',
         maxImages: 4,
         existingAbsPaths: [],
+        remoteHostId: null,
       });
       expect(commitFinal).toHaveBeenCalledWith({
         userId: 'ou_user',
@@ -2111,6 +2569,36 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(handle.finalize).toHaveBeenCalledTimes(1);
     });
     expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
+  });
+
+  it('falls back with accumulated text and media when a terminal error has no card', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/error-output.png',
+      mimeType: 'image/png',
+    });
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'text', data: { text: 'partial answer', isFinal: false } });
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://error-output.png' }) },
+    });
+    h.emit({ type: 'error', data: { message: 'tool failed', isTerminal: true } });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/error-output.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
+    const fallbackText = String(mocks.feishuIm.sendText.mock.calls[0]?.[1]);
+    expect(fallbackText).toContain('partial answer');
+    expect(fallbackText).toContain('❌ 错误：tool failed');
   });
 
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {

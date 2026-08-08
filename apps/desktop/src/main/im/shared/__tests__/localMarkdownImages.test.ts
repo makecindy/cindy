@@ -2,9 +2,19 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { materializeLocalMarkdownImages } from '../localMarkdownImages';
+const remoteFileMocks = vi.hoisted(() => ({
+  materializeSshRemoteFile: vi.fn(),
+}));
+
+vi.mock('../../../file-browser/ssh-media', () => remoteFileMocks);
+
+import {
+  materializeLocalMarkdownFiles,
+  materializeLocalMarkdownImages,
+  sanitizeLocalMarkdownImageRefs,
+} from '../localMarkdownImages';
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const tempRoots: string[] = [];
@@ -20,6 +30,14 @@ function makeDeps(mediaAbsPath: string) {
     realpath: (value: string) => fs.realpath(value),
     stat: (value: string) => fs.stat(value),
     readFile: (value: string) => fs.readFile(value),
+    readBoundedFile: (value: string, maxBytes: number, containWithin?: string) =>
+      import('../../../utils/readBoundedFile').then(({ readBoundedFileFollowLinks }) =>
+        readBoundedFileFollowLinks(
+          value,
+          maxBytes,
+          containWithin === undefined ? undefined : { containWithin },
+        ),
+      ),
     ingest: vi.fn(async () => ({ url: 'cindy-media://blobs/test.png' })),
     resolveMediaUrl: vi.fn(() => ({ absPath: mediaAbsPath })),
   };
@@ -29,6 +47,10 @@ afterEach(async () => {
   for (const root of tempRoots.splice(0)) {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe('materializeLocalMarkdownImages', () => {
@@ -41,7 +63,7 @@ describe('materializeLocalMarkdownImages', () => {
 
     const result = await materializeLocalMarkdownImages(
       {
-        text: `完成\n![测试图片](${sourcePath})\n![重复](${sourcePath})`,
+        text: `完成\n![测试图片](${sourcePath})\n![重复](<${sourcePath}> "caption")`,
         workingDir,
         sessionId: 'session-1',
       },
@@ -58,6 +80,178 @@ describe('materializeLocalMarkdownImages', () => {
       mimeType: 'image/png',
       sessionId: 'session-1',
     });
+  });
+
+  it('parses an optional Markdown title after a plain local destination', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `![preview](${sourcePath} "caption")`,
+          workingDir,
+          sessionId: 'session-title',
+        },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
+  });
+
+  it('parses an escaped closing bracket in a local image label', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const text = `![a\\]b](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-escaped-alt' },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'a]b' });
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('a]b');
+  });
+
+  it('captures a balanced parenthesized Markdown title without leaving a trailing bracket', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `![preview](${sourcePath} (caption))`,
+          workingDir,
+          sessionId: 'session-parenthesized-title',
+        },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
+  });
+
+  it('leaves local image examples inside Markdown code untouched and unsent', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+    const text = [
+      `\`![inline](${sourcePath})\``,
+      '```md',
+      `![fenced](${sourcePath})`,
+      '```',
+      '> ~~~md',
+      `> ![quoted](${sourcePath})`,
+      '> ~~~',
+      '',
+      `    ![indented](${sourcePath})`,
+    ].join('\n');
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-code-example' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe(text);
+    expect(deps.ingest).not.toHaveBeenCalled();
+  });
+
+  it('materializes a local image in a four-space list continuation', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'chart.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `- 输出：\n    ![chart](${sourcePath})`,
+          workingDir,
+          sessionId: 'session-list-continuation',
+        },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: '- 输出：\n    chart' });
+  });
+
+  it('materializes SSH Markdown images through the remote file service', async () => {
+    const cacheRoot = await makeTempRoot();
+    const cachePath = path.join(cacheRoot, 'remote-image.png');
+    const mediaAbsPath = path.join(cacheRoot, 'media-store.png');
+    await fs.writeFile(cachePath, PNG_BYTES);
+    remoteFileMocks.materializeSshRemoteFile.mockResolvedValue({
+      ok: true,
+      cachePath,
+      size: PNG_BYTES.length,
+      relPath: 'out.png',
+    });
+    const deps = makeDeps(mediaAbsPath);
+
+    const result = await materializeLocalMarkdownImages(
+      {
+        text: '![remote](/srv/project/out.png)',
+        workingDir: '/srv/project',
+        remoteHostId: 'ssh-host-1',
+        sessionId: 'session-ssh-image',
+      },
+      deps,
+    );
+
+    expect(remoteFileMocks.materializeSshRemoteFile).toHaveBeenCalledWith(
+      { remoteHostId: 'ssh-host-1', workdir: '/srv/project' },
+      '/srv/project/out.png',
+      20 * 1024 * 1024,
+    );
+    expect(result).toEqual({ absPaths: [mediaAbsPath], text: 'remote' });
+    expect(deps.ingest).toHaveBeenCalledWith({
+      buffer: PNG_BYTES,
+      mimeType: 'image/png',
+      sessionId: 'session-ssh-image',
+    });
+  });
+
+  it('does not reopen a validated local image path for reading', async () => {
+    const parent = await makeTempRoot();
+    const workingDir = path.join(parent, 'work');
+    const sourceDir = path.join(workingDir, 'slot');
+    const outsideDir = path.join(parent, 'outside');
+    const sourcePath = path.join(sourceDir, 'generated.png');
+    const outsidePath = path.join(outsideDir, 'generated.png');
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.mkdir(outsideDir);
+    const sourceBytes = Buffer.concat([PNG_BYTES, Buffer.from([0x01])]);
+    await fs.writeFile(sourcePath, sourceBytes);
+    const outsideBytes = Buffer.from(sourceBytes);
+    outsideBytes[outsideBytes.length - 1] ^= 0xff;
+    await fs.writeFile(outsidePath, outsideBytes);
+    const deps = makeDeps(path.join(parent, 'media-store.png'));
+    deps.stat = async (value: string) => {
+      const stat = await fs.stat(value);
+      await fs.rename(sourceDir, `${sourceDir}-original`);
+      await fs.symlink(outsideDir, sourceDir);
+      return stat;
+    };
+    deps.readBoundedFile = vi.fn(async () => null);
+
+    const result = await materializeLocalMarkdownImages(
+      {
+        text: `![preview](${sourcePath})`,
+        workingDir,
+        sessionId: 'session-race',
+      },
+      deps,
+    );
+
+    expect(result).toEqual({ absPaths: [], text: `![preview](${sourcePath})` });
+    expect(deps.ingest).not.toHaveBeenCalled();
   });
 
   it('拒绝 workingDir 外路径和伪装成图片的非图片字节', async () => {
@@ -177,5 +371,158 @@ describe('materializeLocalMarkdownImages', () => {
     expect(realpath).toHaveBeenCalledWith(alias);
     expect(result).toEqual({ absPaths: [], text: '图片' });
     expect(deps.ingest).not.toHaveBeenCalled();
+  });
+});
+
+describe('materializeLocalMarkdownFiles', () => {
+  it('accepts real files inside workingDir, dedupes them, and removes internal URLs', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+    const url = `xdt-file://${reportPath}`;
+    const result = await materializeLocalMarkdownFiles(
+      {
+        text: `ready\n[report](${url})\n[duplicate](${url})`,
+        workingDir,
+      },
+    );
+
+    tempRoots.push(...result.tempDirs);
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0].absPath).not.toBe(await fs.realpath(reportPath));
+    expect(result.files[0].displayName).toBe('report');
+    await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('%PDF-1.4');
+    expect(result.text).toBe('ready\nreport\nduplicate');
+  });
+
+  it('uploads from an immutable staged copy after the source path changes', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.txt');
+    await fs.writeFile(reportPath, 'approved content');
+
+    const result = await materializeLocalMarkdownFiles({
+      text: `[report](xdt-file://${reportPath})`,
+      workingDir,
+    });
+    tempRoots.push(...result.tempDirs);
+    await fs.writeFile(reportPath, 'replaced secret');
+
+    expect(result.files).toHaveLength(1);
+    await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('approved content');
+  });
+
+  it('materializes SSH workdir attachments through the remote file service', async () => {
+    const cacheRoot = await makeTempRoot();
+    const cachePath = path.join(cacheRoot, 'remote-cache.bin');
+    await fs.writeFile(cachePath, 'remote report');
+    remoteFileMocks.materializeSshRemoteFile.mockResolvedValue({
+      ok: true,
+      cachePath,
+      size: 13,
+      relPath: 'report.txt',
+    });
+
+    const result = await materializeLocalMarkdownFiles({
+      text: '[report](xdt-file:///srv/project/report.txt)',
+      workingDir: '/srv/project',
+      remoteHostId: 'ssh-host-1',
+    });
+    tempRoots.push(...result.tempDirs);
+
+    expect(remoteFileMocks.materializeSshRemoteFile).toHaveBeenCalledWith(
+      { remoteHostId: 'ssh-host-1', workdir: '/srv/project' },
+      '/srv/project/report.txt',
+      100 * 1024 * 1024,
+    );
+    expect(result.files).toHaveLength(1);
+    await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('remote report');
+  });
+
+  it('leaves xdt-file examples inside Markdown code untouched and unsent', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'secret.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+    const text = [
+      `\`[inline](xdt-file://${reportPath})\``,
+      '```md',
+      `[fenced](xdt-file://${reportPath})`,
+      '```',
+    ].join('\n');
+
+    await expect(materializeLocalMarkdownFiles({ text, workingDir })).resolves.toEqual({
+      files: [],
+      tempDirs: [],
+      text,
+    });
+  });
+
+  it('materializes an angle-bracket xdt-file destination and removes its title', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+    const result = await materializeLocalMarkdownFiles({
+      text: `[report](<xdt-file://${reportPath}> "download")`,
+      workingDir,
+    });
+    tempRoots.push(...result.tempDirs);
+
+    expect(result.files).toHaveLength(1);
+    expect(result.text).toBe('report');
+  });
+
+  it('rejects files outside workingDir and symlink escapes without exposing their paths', async () => {
+    const parent = await makeTempRoot();
+    const workingDir = path.join(parent, 'work');
+    const outsidePath = path.join(parent, 'secret.txt');
+    const outsideDir = path.join(parent, 'outside');
+    const outsideNestedPath = path.join(outsideDir, 'nested.txt');
+    const symlinkPath = path.join(workingDir, 'linked.txt');
+    const symlinkDir = path.join(workingDir, 'linked-dir');
+    await fs.mkdir(workingDir);
+    await fs.mkdir(outsideDir);
+    await fs.writeFile(outsidePath, 'secret');
+    await fs.writeFile(outsideNestedPath, 'nested secret');
+    await fs.symlink(outsidePath, symlinkPath);
+    await fs.symlink(outsideDir, symlinkDir);
+
+    const result = await materializeLocalMarkdownFiles({
+      text: `[outside](xdt-file://${outsidePath})\n[linked](xdt-file://${symlinkPath})\n[parent linked](xdt-file://${path.join(symlinkDir, 'nested.txt')})`,
+      workingDir,
+    });
+
+    expect(result).toEqual({ files: [], tempDirs: [], text: 'outside\nlinked\nparent linked' });
+    expect(result.text).not.toContain('xdt-file://');
+    expect(result.text).not.toContain(outsidePath);
+  });
+});
+
+describe('sanitizeLocalMarkdownImageRefs', () => {
+  it('removes absolute and file URL image targets while preserving readable labels', () => {
+    const text = [
+      '![unix](/Users/private/a.png)',
+      '![windows](C:\\Users\\private\\b.png)',
+      '![file url](file:///Users/private/c.png)',
+      '![remote](https://example.com/public.png)',
+    ].join('\n');
+
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe(
+      ['unix', 'windows', 'file url', '![remote](https://example.com/public.png)'].join('\n'),
+    );
+  });
+
+  it('removes angle-bracket local targets with optional Markdown titles', () => {
+    const text = [
+      '![unix](</Users/private/a.png> "caption")',
+      '![windows](<C:\\Users\\private\\b.png> "caption")',
+      '![file url](<file:///Users/private/c.png> "caption")',
+    ].join('\n');
+
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('unix\nwindows\nfile url');
+  });
+
+  it('removes a plain local target with a parenthesized title as one complete image', () => {
+    expect(sanitizeLocalMarkdownImageRefs('![preview](/Users/private/a.png (caption))')).toBe(
+      'preview',
+    );
   });
 });

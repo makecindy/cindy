@@ -25,6 +25,314 @@ interface ParsedXdtRef extends XdtImageRef {
   kind: 'image' | 'file';
 }
 
+export interface MarkdownCodeRange {
+  start: number;
+  end: number;
+}
+
+function runLength(text: string, start: number, char: string): number {
+  let end = start;
+  while (text[end] === char) end += 1;
+  return end - start;
+}
+
+function lineEndAfterNewline(text: string, start: number): number {
+  const newline = text.indexOf('\n', start);
+  return newline === -1 ? text.length : newline + 1;
+}
+
+function lineIndentColumns(text: string, start: number, end: number): number {
+  let columns = 0;
+  for (let cursor = start; cursor < end; cursor += 1) {
+    if (text[cursor] === ' ') columns += 1;
+    else if (text[cursor] === '\t') columns += 4 - (columns % 4);
+    else break;
+  }
+  return columns;
+}
+
+function isBlankLine(text: string, start: number, end: number): boolean {
+  return text.slice(start, end).trim() === '';
+}
+
+function previousLine(text: string, lineStart: number): { start: number; end: number } | null {
+  if (lineStart === 0) return null;
+  const end = text[lineStart - 1] === '\n' ? lineStart - 1 : lineStart;
+  const start = text.lastIndexOf('\n', Math.max(0, end - 1)) + 1;
+  return { start, end };
+}
+
+function listItemContentIndent(text: string, start: number, end: number): number | null {
+  const line = text.slice(start, end);
+  const match = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/);
+  if (!match) return null;
+  let columns = match[0].length - match[2].length;
+  for (const char of match[2]) {
+    columns += char === '\t' ? 4 - (columns % 4) : 1;
+  }
+  return columns;
+}
+
+function hasContainingListItem(text: string, lineStart: number, indent: number): boolean {
+  let cursor = lineStart;
+  while (true) {
+    const previous = previousLine(text, cursor);
+    if (!previous) return false;
+    cursor = previous.start;
+    if (isBlankLine(text, previous.start, previous.end)) continue;
+    const contentIndent = listItemContentIndent(text, previous.start, previous.end);
+    if (contentIndent !== null) {
+      return indent >= contentIndent && indent < contentIndent + 4;
+    }
+    if (lineIndentColumns(text, previous.start, previous.end) === 0) return false;
+  }
+}
+
+function isIndentedCodeStart(text: string, start: number, end: number): boolean {
+  const indent = lineIndentColumns(text, start, end);
+  if (indent < 4 || hasContainingListItem(text, start, indent)) return false;
+  const previous = previousLine(text, start);
+  return previous === null || isBlankLine(text, previous.start, previous.end);
+}
+
+function isIndentedCodeContinuation(text: string, start: number, end: number): boolean {
+  return lineIndentColumns(text, start, end) >= 4 || isBlankLine(text, start, end);
+}
+
+function fenceMarkerAtLine(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+): { start: number; marker: '`' | '~'; run: number } | null {
+  let cursor = lineStart;
+  let spaces = 0;
+  while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
+    cursor += 1;
+    spaces += 1;
+  }
+  while (cursor < lineEnd) {
+    if (text[cursor] === '>') {
+      cursor += 1;
+      if (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+    } else {
+      let markerEnd = cursor;
+      if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
+        markerEnd += 1;
+      } else {
+        let digits = 0;
+        while (markerEnd < lineEnd && digits < 9 && /[0-9]/.test(text[markerEnd])) {
+          markerEnd += 1;
+          digits += 1;
+        }
+        if (digits === 0 || (text[markerEnd] !== '.' && text[markerEnd] !== ')')) break;
+        markerEnd += 1;
+      }
+      if (text[markerEnd] !== ' ' && text[markerEnd] !== '\t') break;
+      cursor = markerEnd + 1;
+      while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+    }
+    spaces = 0;
+    while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
+      cursor += 1;
+      spaces += 1;
+    }
+  }
+  const marker = text[cursor];
+  if (marker !== '`' && marker !== '~') return null;
+  const run = runLength(text, cursor, marker);
+  return run >= 3 ? { start: cursor, marker, run } : null;
+}
+
+/** Locate fenced, indented, and inline Markdown code without copying large model output. */
+export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
+  const fences: MarkdownCodeRange[] = [];
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const openingLineEnd = lineEndAfterNewline(text, lineStart);
+    const opening = fenceMarkerAtLine(text, lineStart, openingLineEnd);
+    if (!opening) {
+      lineStart = openingLineEnd;
+      continue;
+    }
+
+    let searchLine = openingLineEnd;
+    let fenceEnd = text.length;
+    while (searchLine < text.length) {
+      const candidateLineEnd = lineEndAfterNewline(text, searchLine);
+      const closing = fenceMarkerAtLine(text, searchLine, candidateLineEnd);
+      if (closing?.marker === opening.marker && closing.run >= opening.run) {
+        const rest = text.slice(closing.start + closing.run, candidateLineEnd).trim();
+        if (rest === '') {
+          fenceEnd = candidateLineEnd;
+          break;
+        }
+      }
+      searchLine = candidateLineEnd;
+    }
+    fences.push({ start: lineStart, end: fenceEnd });
+    lineStart = fenceEnd;
+  }
+
+  const blocks = [...fences];
+  lineStart = 0;
+  while (lineStart < text.length) {
+    const fence = codeRangeAt(fences, lineStart);
+    if (fence) {
+      lineStart = fence.end;
+      continue;
+    }
+    const lineEnd = lineEndAfterNewline(text, lineStart);
+    if (!isIndentedCodeStart(text, lineStart, lineEnd)) {
+      lineStart = lineEnd;
+      continue;
+    }
+    const blockStart = lineStart;
+    let blockEnd = lineEnd;
+    lineStart = lineEnd;
+    while (lineStart < text.length) {
+      const nextFence = codeRangeAt(fences, lineStart);
+      if (nextFence) break;
+      const nextLineEnd = lineEndAfterNewline(text, lineStart);
+      if (
+        !isIndentedCodeContinuation(text, lineStart, nextLineEnd)
+      ) {
+        break;
+      }
+      blockEnd = nextLineEnd;
+      lineStart = nextLineEnd;
+    }
+    blocks.push({ start: blockStart, end: blockEnd });
+  }
+  blocks.sort((a, b) => a.start - b.start);
+
+  const ranges = [...blocks];
+  let blockIndex = 0;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const block = blocks[blockIndex];
+    if (block && cursor >= block.start) {
+      cursor = block.end;
+      blockIndex += 1;
+      continue;
+    }
+    if (text[cursor] !== '`') {
+      cursor += 1;
+      continue;
+    }
+    const openingRun = runLength(text, cursor, '`');
+    let search = cursor + openingRun;
+    let closingEnd = -1;
+    while (search < text.length && (!block || search < block.start)) {
+      const next = text.indexOf('`', search);
+      if (next === -1 || (block && next >= block.start)) break;
+      const closingRun = runLength(text, next, '`');
+      if (closingRun === openingRun) {
+        closingEnd = next + closingRun;
+        break;
+      }
+      search = next + closingRun;
+    }
+    if (closingEnd === -1) {
+      cursor += openingRun;
+      continue;
+    }
+    ranges.push({ start: cursor, end: closingEnd });
+    cursor = closingEnd;
+  }
+  return ranges.sort((a, b) => a.start - b.start);
+}
+
+function codeRangeAt(
+  ranges: readonly MarkdownCodeRange[],
+  position: number,
+): MarkdownCodeRange | null {
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const range = ranges[mid];
+    if (position < range.start) high = mid - 1;
+    else if (position >= range.end) low = mid + 1;
+    else return range;
+  }
+  return null;
+}
+
+export function isMarkdownCodePosition(
+  ranges: readonly MarkdownCodeRange[],
+  position: number,
+): boolean {
+  return codeRangeAt(ranges, position) !== null;
+}
+
+function angleReferenceEnd(text: string, closingAngle: number): number {
+  let cursor = closingAngle + 1;
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  if (text[cursor] === ')') return cursor;
+  const opener = text[cursor];
+  const closer = opener === '"' ? '"' : opener === "'" ? "'" : opener === '(' ? ')' : null;
+  if (!closer) return -1;
+  cursor += 1;
+  while (cursor < text.length) {
+    if (text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === closer) break;
+    if (text[cursor] === '\n' || text[cursor] === '\r') return -1;
+    cursor += 1;
+  }
+  if (text[cursor] !== closer) return -1;
+  cursor += 1;
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  return text[cursor] === ')' ? cursor : -1;
+}
+
+function plainReferenceBounds(
+  text: string,
+  schemeStart: number,
+  initialEndParen: number,
+): { endParen: number; urlEnd: number } {
+  let titleEnd = initialEndParen - 1;
+  while (text[titleEnd] === ' ' || text[titleEnd] === '\t') titleEnd -= 1;
+
+  const closingTitle = text[titleEnd];
+  let endParen = initialEndParen;
+  let openingTitle: '"' | "'" | '(';
+  if (closingTitle === '"' || closingTitle === "'") {
+    openingTitle = closingTitle;
+  } else {
+    let outerParen = initialEndParen + 1;
+    while (text[outerParen] === ' ' || text[outerParen] === '\t') outerParen += 1;
+    if (text[outerParen] !== ')') return { endParen: initialEndParen, urlEnd: initialEndParen };
+    openingTitle = '(';
+    titleEnd = initialEndParen;
+    endParen = outerParen;
+  }
+
+  let titleStart = titleEnd - 1;
+  while (titleStart > schemeStart) {
+    if (text[titleStart] === openingTitle) {
+      let slashes = 0;
+      for (let i = titleStart - 1; i >= schemeStart && text[i] === '\\'; i -= 1) slashes += 1;
+      if (slashes % 2 === 0) break;
+    }
+    if (text[titleStart] === '\n' || text[titleStart] === '\r') {
+      return { endParen: initialEndParen, urlEnd: initialEndParen };
+    }
+    titleStart -= 1;
+  }
+  if (text[titleStart] !== openingTitle) {
+    return { endParen: initialEndParen, urlEnd: initialEndParen };
+  }
+  let urlEnd = titleStart;
+  while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
+  if (urlEnd === titleStart || urlEnd <= schemeStart) {
+    return { endParen: initialEndParen, urlEnd: initialEndParen };
+  }
+  return { endParen, urlEnd };
+}
+
 /**
  * 判定 text[openBracket] 处是否**直接**开始一个 managed-media 引用。判据与
  * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 扫描遇 '[' 即
@@ -33,7 +341,12 @@ interface ParsedXdtRef extends XdtImageRef {
  * "直接"很关键: alt 里再出现 '[' 时返回 false —— 那个更内层的 '[' 才可能是
  * 起点, 外层的恢复循环会继续迭代到它。
  */
-function refStartsAt(text: string, openBracket: number): boolean {
+function refStartsAt(
+  text: string,
+  openBracket: number,
+  codeRanges: readonly MarkdownCodeRange[],
+): boolean {
+  if (codeRangeAt(codeRanges, openBracket)) return false;
   const image = openBracket > 0 && text[openBracket - 1] === '!';
   let altEnd = openBracket + 1;
   while (
@@ -46,9 +359,10 @@ function refStartsAt(text: string, openBracket: number): boolean {
   if (altEnd >= text.length || text[altEnd] === '[') return false;
 
   const urlStart = altEnd + 2;
+  const schemeStart = text[urlStart] === '<' ? urlStart + 1 : urlStart;
   return image
-    ? text.startsWith('xdt-image://', urlStart) || text.startsWith('cindy-media://', urlStart)
-    : text.startsWith('xdt-file://', urlStart);
+    ? text.startsWith('xdt-image://', schemeStart) || text.startsWith('cindy-media://', schemeStart)
+    : text.startsWith('xdt-file://', schemeStart);
 }
 
 /**
@@ -58,6 +372,7 @@ function refStartsAt(text: string, openBracket: number): boolean {
  */
 function parseXdtRefs(text: string): ParsedXdtRef[] {
   const refs: ParsedXdtRef[] = [];
+  const codeRanges = markdownCodeRanges(text);
   let cursor = 0;
   // ')' 查找的单调缓存。搜索起点跨候选严格递增(scheme 不匹配的路径根本不查
   // 括号; 恢复后新候选的 urlStart 在恢复点之后; 收下引用后 cursor = endParen
@@ -76,6 +391,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
   while (cursor < text.length) {
     const openBracket = text.indexOf('[', cursor);
     if (openBracket === -1) break;
+    const codeRange = codeRangeAt(codeRanges, openBracket);
+    if (codeRange) {
+      cursor = codeRange.end;
+      continue;
+    }
 
     const image = openBracket > 0 && text[openBracket - 1] === '!';
     const start = image ? openBracket - 1 : openBracket;
@@ -98,13 +418,15 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     if (altEnd >= text.length) break;
 
     const urlStart = altEnd + 2;
+    const angleWrapped = text[urlStart] === '<';
+    const schemeStart = angleWrapped ? urlStart + 1 : urlStart;
     const scheme = image
-      ? text.startsWith('xdt-image://', urlStart)
+      ? text.startsWith('xdt-image://', schemeStart)
         ? 'xdt-image://'
-        : text.startsWith('cindy-media://', urlStart)
+        : text.startsWith('cindy-media://', schemeStart)
           ? 'cindy-media://'
           : null
-      : text.startsWith('xdt-file://', urlStart)
+      : text.startsWith('xdt-file://', schemeStart)
         ? 'xdt-file://'
         : null;
     if (!scheme) {
@@ -112,8 +434,17 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       continue;
     }
 
-    const endParen = nextParen(urlStart + scheme.length);
-    if (endParen === -1) break;
+    const closingAngle = angleWrapped ? text.indexOf('>', schemeStart + scheme.length) : -1;
+    const initialEndParen = angleWrapped
+      ? closingAngle === -1
+        ? -1
+        : angleReferenceEnd(text, closingAngle)
+      : nextParen(schemeStart + scheme.length);
+    if (initialEndParen === -1) break;
+    const bounds = angleWrapped
+      ? { endParen: initialEndParen, urlEnd: closingAngle }
+      : plainReferenceBounds(text, schemeStart, initialEndParen);
+    const { endParen, urlEnd } = bounds;
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
     // 把整段错误改写。判据是 URL 段里出现**构成引用起点**的 '['(#1856 review
@@ -129,11 +460,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     // 重叠。恢复带来的 ')' 重复定位由上面的 nextParen 单调缓存兜住。
     let recovery = -1;
     for (
-      let bracket = text.indexOf('[', urlStart + scheme.length);
-      bracket !== -1 && bracket < endParen;
+      let bracket = text.indexOf('[', schemeStart + scheme.length);
+      bracket !== -1 && bracket < urlEnd;
       bracket = text.indexOf('[', bracket + 1)
     ) {
-      if (refStartsAt(text, bracket)) {
+      if (refStartsAt(text, bracket, codeRanges)) {
         recovery = bracket;
         break;
       }
@@ -142,11 +473,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       cursor = recovery;
       continue;
     }
-    if (endParen > urlStart + scheme.length) {
+    if (urlEnd > schemeStart + scheme.length) {
       refs.push({
         kind: image ? 'image' : 'file',
         alt: text.slice(altStart, altEnd),
-        url: text.slice(urlStart, endParen),
+        url: text.slice(schemeStart, urlEnd),
         start,
         end: endParen + 1,
       });

@@ -23,6 +23,7 @@ vi.mock('../../logger', () => ({
 
 import {
   makeSshChunkExecutor,
+  materializeSshRemoteFile,
   materializeSshRemoteMedia,
   serveSshRemoteMedia,
   toWorkdirRelPosix,
@@ -120,6 +121,27 @@ describe('serveSshRemoteMedia', () => {
       makeDeps(),
     );
     expect(r.status).toBe(415);
+  });
+
+  it('outbound attachment materialization accepts arbitrary workdir files', async () => {
+    const deps = makeDeps();
+    const result = await materializeSshRemoteFile(
+      origin,
+      '/home/u/proj/report.txt',
+      1024,
+      deps,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      cachePath: path.join(tmpDir, 'cached.png'),
+      size: 4,
+      relPath: 'report.txt',
+    });
+    expect(deps.request).toHaveBeenCalledWith('host-1', 'stat', {
+      workdir: '/home/u/proj',
+      relPath: 'report.txt',
+    });
   });
 
   it('stat 到目录 → 404', async () => {

@@ -322,6 +322,12 @@ export interface StreamingTextHandle {
    * 可选 — 不实现也合法 (e.g. 单纯 patch markdown 的轻量 handle 不支持图片)。
    */
   addExtraImageAbsPath?(absPath: string): void;
+  /**
+   * Return tool-result image paths that this handle has positively confirmed
+   * as delivered. Callers use this acknowledgement to retire only proven
+   * entries from their retry ledger after an interaction boundary.
+   */
+  getDeliveredExtraImageAbsPaths?(): readonly string[];
 }
 
 export interface SendFileResult {

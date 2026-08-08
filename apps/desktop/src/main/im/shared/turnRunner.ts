@@ -43,6 +43,8 @@ import path from 'node:path';
 const GROUP_APPROVAL_OWNER_DM_NOTE =
   '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
 
+import fs from 'node:fs/promises';
+
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import {
@@ -82,6 +84,7 @@ import type {
   TurnPermissionPolicy,
   UserMessage,
 } from '@cindy/maker-core';
+import { transformXdtRefs } from '@cindy/im';
 import type { IMAttachment, InteractiveCardSpec, StreamingTextHandle } from '@cindy/im';
 
 import { persistUserMessage } from '../messagePersistence';
@@ -119,7 +122,11 @@ import {
   type ImAuthCheckDeps,
 } from './authCheck';
 import { FBOT_DRAFT_TITLE, generateAndPersistFbotTitle } from './fbotTitle';
-import { materializeLocalMarkdownImages } from './localMarkdownImages';
+import {
+  materializeLocalMarkdownFiles,
+  materializeLocalMarkdownImages,
+  sanitizeLocalMarkdownImageRefs,
+} from './localMarkdownImages';
 import {
   createTurnActivity,
   markActivityWriting,
@@ -159,22 +166,27 @@ interface TurnState {
   /** First text-delta resolves this lazily (avoids creating a card for empty turns). */
   streamingHandle: StreamingTextHandle | null;
   /**
-   * In-flight promise for the streaming handle creation. Singleton: when a
-   * burst of deltas arrives before the channel returns the first message_id,
-   * all callers await this same promise instead of each minting a new card.
-   * Without it we get one card per delta — a flood of orphan cards.
+   * Cached streaming surface result: a handle, or null after initialization
+   * fails. Singleton: a burst of deltas shares this promise instead of minting
+   * duplicate cards or retrying a failed initialization on every event.
    */
-  streamingHandlePromise: Promise<StreamingTextHandle> | null;
+  streamingHandlePromise: Promise<StreamingTextHandle | null> | null;
   /**
    * 呈现大脑(正文累积 / 过程区合成), 与官方 bot 共用 im/shared/turnPresenter。
    * buffer-replace 策略: 保留个人 IM 渠道现有行为 —— isFinal 用该条全文整体替换
    * 累积缓冲, 流式增量追加。过程区时间线状态经 presenter.activity 暴露。
    */
   presenter: TurnPresenter;
-  /** Managed images discovered in tool output for durable text channels. */
+  /** Managed images discovered in tool output for terminal delivery. */
   mediaAbsPaths: string[];
+  /** Optional user-facing names for file paths in the terminal media ledger. */
+  mediaDisplayNames: Map<string, string>;
+  /** Private staging directories created for race-safe local-file fallback. */
+  mediaTempDirs: Set<string>;
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
+  /** SSH host when the session workdir lives on a remote machine. */
+  remoteHostId: string | null;
   done: boolean;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
@@ -551,6 +563,7 @@ export function createTurnRunner(
             fastMode: row.fastMode,
             sdkSessionId: row.sdkSessionId,
             providerId: row.providerId ?? null,
+            remoteHostId: row.remoteHostId ?? null,
           },
           attached: true,
           scopeKey,
@@ -675,7 +688,10 @@ export function createTurnRunner(
       streamingHandlePromise: null,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
+      mediaDisplayNames: new Map(),
+      mediaTempDirs: new Set(),
       workingDir: row.workingDir,
+      remoteHostId: row.remoteHostId ?? null,
       done: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
@@ -1857,22 +1873,30 @@ export function createTurnRunner(
     if (!data || typeof data.fullText !== 'string') return;
     const urls = extractRenderableXdtImageUrls(data.fullText);
     if (urls.length === 0) return;
+    const absPaths: string[] = [];
+    for (const url of urls) {
+      try {
+        const { absPath } = url.startsWith('cindy-media://')
+          ? resolveCindyMediaUrl(url)
+          : resolveXdtImageUrl(url);
+        absPaths.push(absPath);
+        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`[${channel}/turn] resolve managed image failed`, {
+          kind: 'managed-image-resolve',
+          source: url.startsWith('cindy-media://') ? 'cindy-media' : 'xdt-image',
+          error,
+        });
+      }
+    }
+    if (absPaths.length === 0) return;
     // streamingHandle 可能还没 spawn (e.g. 工具调用先于任何 text delta) — 触发
     // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
     // O(1) 同步 push, 不阻塞事件循环。
     void ensureStreamingHandle(turn).then((handle) => {
-      if (!handle.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力
-      for (const url of urls) {
-        try {
-          const { absPath } = url.startsWith('cindy-media://')
-            ? resolveCindyMediaUrl(url)
-            : resolveXdtImageUrl(url);
-          handle.addExtraImageAbsPath(absPath);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
-        }
-      }
+      if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力
+      for (const absPath of absPaths) handle.addExtraImageAbsPath(absPath);
     });
   }
 
@@ -1900,7 +1924,7 @@ export function createTurnRunner(
   function handleToolUseEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyToolUse(event)) return;
     ensureActivityTicker(turn);
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
   /**
@@ -1918,7 +1942,7 @@ export function createTurnRunner(
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyRetryNotice(event)) return;
     ensureActivityTicker(turn);
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
   function ensureActivityTicker(turn: TurnState): void {
@@ -2370,10 +2394,10 @@ export function createTurnRunner(
     // deltas, 这时卡片会一直停在 "灵感正在路上..." placeholder 直到 done; done 之间
     // 几秒延迟里用户看着像 stuck。replace 一次保证用户即时看到回复内容。
     if (!turn.presenter.applyText(event)) return;
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
-  function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle> {
+  function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle | null> {
     if (turn.streamingHandle) return Promise.resolve(turn.streamingHandle);
     if (turn.streamingHandlePromise) return turn.streamingHandlePromise;
     // Singleton: subsequent concurrent callers await the same promise rather
@@ -2390,7 +2414,17 @@ export function createTurnRunner(
               });
       turn.streamingHandle = handle;
       return handle;
-    })();
+    })().catch((err) => {
+      const error = sanitizeSendOutcomeError(err);
+      log.warn(`${channel} streaming output initialization failed`, {
+        kind: 'streaming-output-init',
+        source: 'startStreamingText',
+        error,
+      });
+      // Cache the unavailable result for this turn. Retrying on every delta
+      // could mint duplicate cards if a late request succeeds after a timeout.
+      return null;
+    });
     return turn.streamingHandlePromise;
   }
 
@@ -2501,25 +2535,47 @@ export function createTurnRunner(
           `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    } else if (turn.presenter.wholeText().length === 0) {
-      // No streamed text at all — send a one-shot text so the user knows the
-      // turn ended. (Rare; normally agents emit at least one text block.)
+    } else {
+      // The output surface may fail before the first card exists. The Agent
+      // reply is already durable at this point, so use the independent plain
+      // text API instead of silently dropping a non-empty final response.
+      if (output.kind === 'rich-card') {
+        await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        await materializeTurnLocalFiles(state, turn);
+      }
+      const fallbackText = composeStreamingView(turn) || '✅ (本轮无文本输出)';
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: '✅ (本轮无文本输出)',
+            text: fallbackText,
             terminal: turn.terminalKind,
             threadTs: state.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, '✅ (本轮无文本输出)', {
+          await output.im.sendText(userId, fallbackText, {
             threadTs: state.scopeKey,
           });
         }
-      } catch {
-        /* swallow */
+      } catch (err) {
+        if (output.kind === 'chunked-text') {
+          turn.terminalKind = 'error';
+          turn.terminalErrorCode = 'terminal_output_commit_failed';
+        }
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} plain-text fallback failed`, {
+          kind: 'terminal-output-fallback',
+          source: output.kind === 'chunked-text' ? 'commitFinal' : 'sendText',
+          error,
+        });
+      }
+      if (output.kind === 'rich-card') {
+        try {
+          await sendFallbackMedia(turn, userId, state.scopeKey);
+        } finally {
+          await cleanupFallbackMedia(turn);
+        }
       }
     }
     settleTurnTerminal(turn);
@@ -2530,6 +2586,52 @@ export function createTurnRunner(
     // 收口完成(最终卡片已 finalize)后再派发下一条排队消息 — IM 时间线保持
     // "上一轮输出 → 下一条开始流式"的自然顺序。
     maybeDispatchNextQueued(state, userId);
+  }
+
+  async function sendFallbackMedia(
+    turn: TurnState,
+    userId: string,
+    threadTs: string | undefined,
+  ): Promise<void> {
+    for (const absPath of turn.mediaAbsPaths) {
+      try {
+        const result = await output.im.sendFile(
+          userId,
+          absPath,
+          turn.mediaDisplayNames.get(absPath),
+          { threadTs },
+        );
+        if (result.ok) continue;
+        log.error(`${channel} media fallback failed`, {
+          kind: 'terminal-media-fallback',
+          source: 'sendFile',
+          reason: result.reason ?? 'UNKNOWN',
+        });
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} media fallback failed`, {
+          kind: 'terminal-media-fallback',
+          source: 'sendFile',
+          error,
+        });
+      }
+    }
+  }
+
+  async function cleanupFallbackMedia(turn: TurnState): Promise<void> {
+    for (const tempDir of turn.mediaTempDirs) {
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} media fallback cleanup failed`, {
+          kind: 'terminal-media-cleanup',
+          source: 'rm',
+          error,
+        });
+      }
+    }
+    turn.mediaTempDirs.clear();
   }
 
   async function handleTurnErrorAsync(
@@ -2583,23 +2685,36 @@ export function createTurnRunner(
         /* swallow */
       }
     } else {
+      if (turn && output.kind === 'rich-card') {
+        await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        await materializeTurnLocalFiles(state, turn);
+      }
+      const view = turn ? composeStreamingView(turn) : '';
+      const fallbackText = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: `❌ 错误：${msg}`,
+            text: fallbackText,
             terminal: 'error',
             threadTs: state.scopeKey,
             errorCode: turn?.terminalErrorCode ?? 'agent_turn_error',
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, `❌ 错误：${msg}`, {
+          await output.im.sendText(userId, fallbackText, {
             threadTs: state.scopeKey,
           });
         }
       } catch {
         /* swallow */
+      }
+      if (turn && output.kind === 'rich-card') {
+        try {
+          await sendFallbackMedia(turn, userId, state.scopeKey);
+        } finally {
+          await cleanupFallbackMedia(turn);
+        }
       }
     }
     if (turn) settleTurnTerminal(turn);
@@ -2608,8 +2723,18 @@ export function createTurnRunner(
     maybeDispatchNextQueued(state, userId);
   }
 
-  async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (output.kind !== 'chunked-text' || !turn.presenter.wholeText().includes('![')) return;
+  async function materializeTurnLocalImages(
+    state: SessionState,
+    turn: TurnState,
+    options: { richCardFallback?: boolean } = {},
+  ): Promise<void> {
+    const richCardFallback = options.richCardFallback === true;
+    if (
+      (!richCardFallback && output.kind !== 'chunked-text') ||
+      !turn.presenter.wholeText().includes('![')
+    ) {
+      return;
+    }
     try {
       const materialized = await materializeLocalMarkdownImages({
         text: turn.presenter.wholeText(),
@@ -2617,14 +2742,60 @@ export function createTurnRunner(
         sessionId: state.makerSession.id,
         maxImages: 4,
         existingAbsPaths: [...turn.mediaAbsPaths],
+        remoteHostId: turn.remoteHostId,
       });
       turn.presenter.replaceBody(materialized.text);
       for (const absPath of materialized.absPaths) {
         if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
       }
     } catch (err) {
-      log.warn(
-        `local markdown image materialization failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      const error = sanitizeSendOutcomeError(err);
+      log.warn('local markdown image materialization failed (non-fatal)', {
+        kind: 'terminal-media-materialization',
+        source: 'materializeLocalMarkdownImages',
+        error,
+      });
+    } finally {
+      if (richCardFallback) {
+        turn.presenter.replaceBody(
+          sanitizeLocalMarkdownImageRefs(
+            transformXdtRefs(turn.presenter.wholeText(), {
+              image: ({ alt }) => alt.trim() || '图片',
+            }),
+          ),
+        );
+      }
+    }
+  }
+
+  async function materializeTurnLocalFiles(state: SessionState, turn: TurnState): Promise<void> {
+    if (!turn.presenter.wholeText().includes('xdt-file://')) return;
+    try {
+      const materialized = await materializeLocalMarkdownFiles({
+        text: turn.presenter.wholeText(),
+        workingDir: state.workingDir,
+        maxFiles: 8,
+        existingAbsPaths: [...turn.mediaAbsPaths],
+        remoteHostId: turn.remoteHostId,
+      });
+      turn.presenter.replaceBody(materialized.text);
+      for (const tempDir of materialized.tempDirs) turn.mediaTempDirs.add(tempDir);
+      for (const file of materialized.files) {
+        if (!turn.mediaAbsPaths.includes(file.absPath)) turn.mediaAbsPaths.push(file.absPath);
+        if (file.displayName) turn.mediaDisplayNames.set(file.absPath, file.displayName);
+      }
+    } catch (err) {
+      const error = sanitizeSendOutcomeError(err);
+      log.warn('local markdown file materialization failed (non-fatal)', {
+        kind: 'terminal-file-materialization',
+        source: 'materializeLocalMarkdownFiles',
+        error,
+      });
+    } finally {
+      turn.presenter.replaceBody(
+        transformXdtRefs(turn.presenter.wholeText(), {
+          file: ({ alt }) => alt.trim() || '附件',
+        }),
       );
     }
   }
@@ -2816,6 +2987,7 @@ export function createTurnRunner(
     const turn = state?.queue[0];
     if (!turn?.streamingHandle) return;
     const view = composeStreamingView(turn);
+    let deliveredMediaAbsPaths: readonly string[] = [];
     if (view.length > 0) {
       try {
         await turn.streamingHandle.finalize(view);
@@ -2823,6 +2995,10 @@ export function createTurnRunner(
         log.warn(
           `finalizeActiveStream: finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
+      } finally {
+        // A channel can confirm early batches and then fail a later one. Read
+        // the ledger even on rejection so already-delivered media is not retried.
+        deliveredMediaAbsPaths = turn.streamingHandle.getDeliveredExtraImageAbsPaths?.() ?? [];
       }
     } else {
       // Empty card was minted but never written to — close it without a final
@@ -2831,6 +3007,11 @@ export function createTurnRunner(
     }
     turn.streamingHandle = null;
     turn.streamingHandlePromise = null;
+    if (deliveredMediaAbsPaths.length > 0) {
+      const delivered = new Set(deliveredMediaAbsPaths);
+      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
+      for (const absPath of delivered) turn.mediaDisplayNames.delete(absPath);
+    }
     turn.presenter.replaceBody('');
   }
 

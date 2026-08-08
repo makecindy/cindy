@@ -6,6 +6,11 @@ export const UPDATE_THROTTLE_MS = 1300;
 const INTERMEDIATE_EDIT_LIMIT = 1900;
 const IMAGE_ONLY_PLACEHOLDER = '🖼️';
 
+export interface DiscordImageUploadResult {
+  deliveredAbsPaths: string[];
+  error?: unknown;
+}
+
 export function startStreaming(
   deps: {
     send: (text: string) => Promise<string>;
@@ -13,7 +18,7 @@ export function startStreaming(
     markdownToDiscord: typeof markdownToDiscord;
     chunk: typeof chunkDiscordText;
     resolveImageUrl?: (url: string) => string;
-    uploadImages: (messageId: string, absPaths: string[]) => Promise<void>;
+    uploadImages: (messageId: string, absPaths: string[]) => Promise<DiscordImageUploadResult>;
   },
   initial?: string,
 ): Promise<StreamingTextHandle> {
@@ -29,6 +34,7 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
   private inFlight: Promise<void> | null = null;
   private done = false;
   private extraImageAbsPaths: string[] = [];
+  private deliveredExtraImageAbsPaths: string[] = [];
 
   private constructor(
     messageId: string,
@@ -60,6 +66,10 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
   addExtraImageAbsPath(absPath: string): void {
     if (this.done || !absPath || this.extraImageAbsPaths.includes(absPath)) return;
     this.extraImageAbsPaths.push(absPath);
+  }
+
+  getDeliveredExtraImageAbsPaths(): readonly string[] {
+    return this.deliveredExtraImageAbsPaths;
   }
 
   close(): void {
@@ -108,7 +118,12 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
     }
 
     if (imageAbsPaths.length > 0) {
-      await this.deps.uploadImages(this.messageId, imageAbsPaths);
+      const uploadResult = await this.deps.uploadImages(this.messageId, imageAbsPaths);
+      const delivered = new Set(uploadResult.deliveredAbsPaths);
+      this.deliveredExtraImageAbsPaths = this.extraImageAbsPaths.filter((absPath) =>
+        delivered.has(absPath),
+      );
+      if (uploadResult.error !== undefined) throw uploadResult.error;
     }
   }
 
