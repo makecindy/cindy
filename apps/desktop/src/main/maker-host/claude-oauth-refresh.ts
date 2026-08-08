@@ -428,19 +428,29 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
   async function persistRejectedCredentialRecoveryAcrossRetries(
     identity: ClaudeAiOAuthCredentialIdentity,
   ): Promise<boolean> {
-    if (!deps.onCredentialRejectionRecovery) return false;
-    for (const delay of CREDENTIAL_REJECTION_RETRY_DELAYS_MS) {
+    let attempt = 0;
+    for (;;) {
+      const delay =
+        CREDENTIAL_REJECTION_RETRY_DELAYS_MS[
+          Math.min(attempt, CREDENTIAL_REJECTION_RETRY_DELAYS_MS.length - 1)
+        ];
       await sleep(delay);
-      try {
-        if (deps.onCredentialRejectionRecovery(identity)) return true;
-      } catch (error) {
-        log.warn('retrying grant-scoped rejected credential recovery fence failed', {
-          code: nestedErrorCode(error) ?? 'unknown',
-        });
+      if (deps.onCredentialRejectionRecovery) {
+        try {
+          if (deps.onCredentialRejectionRecovery(identity)) return true;
+        } catch (error) {
+          log.warn('retrying grant-scoped rejected credential recovery fence failed', {
+            code: nestedErrorCode(error) ?? 'unknown',
+          });
+        }
+      }
+      attempt += 1;
+      if (attempt === CREDENTIAL_REJECTION_RETRY_DELAYS_MS.length) {
+        log.error(
+          'grant-scoped rejected credential recovery fence exhausted fast retries; continuing fail-closed',
+        );
       }
     }
-    log.error('grant-scoped rejected credential recovery fence exhausted retries');
-    return false;
   }
 
   /**
@@ -845,6 +855,9 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         if (!persisted && deps.clearRejectedCredential) {
           try {
             const result = deps.clearRejectedCredential(rejectedCredential);
+            if (result === 'cleared' || result === 'absent') {
+              invalidGrantDurabilityEstablished = true;
+            }
             log.warn('rejected claude oauth credential used exact-clear fallback', { result });
           } catch (error) {
             log.warn('exact-clear fallback for rejected claude oauth credential failed', {
@@ -853,10 +866,10 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
           }
         }
         // Token rejection is owner-independent. Do not let this refresh return
-        // while its only durable recovery write is still detached: a process
-        // exit in that window would lose the in-memory fence and revive the
-        // rejected grant on restart. The retry remains independent of owner
-        // changes; only the later UI-scoped cleanup uses the owner fence.
+        // until either the rejection fence or an exact removal is durable: a
+        // process exit with only the in-memory fence would revive the rejected
+        // grant on restart. Permanent storage failure therefore keeps this
+        // exceptional refresh pending with a capped retry delay (fail closed).
         if (!invalidGrantDurabilityEstablished) {
           invalidGrantDurabilityEstablished =
             await persistRejectedCredentialRecoveryAcrossRetries(rejectedCredential);

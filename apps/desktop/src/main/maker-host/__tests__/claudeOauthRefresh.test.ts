@@ -858,7 +858,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     const onCredentialRejected = vi.fn(() => {
       throw Object.assign(new Error('orphaned binding lock'), { code: 'ELOCKED' });
     });
-    const clearRejectedCredential = vi.fn(() => 'changed' as const);
+    const clearRejectedCredential = vi.fn(() => 'cleared' as const);
     const { deps } = makeDeps({
       readOAuth: () => current,
       onCredentialRejected,
@@ -998,23 +998,31 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     );
   });
 
-  it('grant recovery 重试耗尽后仍等待异步 invalid_grant 耐久收口', async () => {
+  it('grant recovery 与 handler 都未建立耐久性时继续等待,直到 recovery 真正落盘', async () => {
     const current = fixtureOAuth({ expiresAt: NOW - 1 });
-    let releaseHandler!: () => void;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
+    let releaseFinalRecovery!: () => void;
+    const finalRecoveryGate = new Promise<void>((resolve) => {
+      releaseFinalRecovery = resolve;
     });
-    const onInvalidGrant = vi.fn(async () => handlerGate);
+    let recoveryAttempts = 0;
+    const onCredentialRejectionRecovery = vi.fn(() => {
+      recoveryAttempts += 1;
+      return recoveryAttempts >= 12;
+    });
+    const onInvalidGrant = vi.fn();
     const { deps } = makeDeps({
       readOAuth: () => current,
       onCredentialRejected: () => {
         throw Object.assign(new Error('primary sidecar unavailable'), { code: 'EACCES' });
       },
-      onCredentialRejectionRecovery: () => false,
+      onCredentialRejectionRecovery,
       clearRejectedCredential: () => {
         throw Object.assign(new Error('credential store unavailable'), { code: 'EACCES' });
       },
       onInvalidGrant,
+      sleep: async () => {
+        if (recoveryAttempts >= 11) await finalRecoveryGate;
+      },
       fetchFn: (async () =>
         jsonResponse(400, { error: 'invalid_grant' })) as unknown as typeof fetch,
     });
@@ -1025,12 +1033,17 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     void pending.finally(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(onInvalidGrant).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(onCredentialRejectionRecovery).toHaveBeenCalledTimes(11));
     await Promise.resolve();
     expect(settled).toBe(false);
+    expect(onInvalidGrant).not.toHaveBeenCalled();
 
-    releaseHandler();
+    releaseFinalRecovery();
     await expect(pending).resolves.toBeNull();
+    expect(onCredentialRejectionRecovery).toHaveBeenCalledTimes(12);
+    expect(onInvalidGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ durabilityEstablished: true }),
+    );
   });
 
   it('主拒绝记录和精确清除都失败时,grant-scoped recovery 仍让 proof 可耐久', async () => {

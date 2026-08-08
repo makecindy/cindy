@@ -1770,6 +1770,10 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
   });
 
   afterEach(async () => {
+    // Clear as a logged-out snapshot. Otherwise clear() observes the still-live
+    // credential epoch and schedules an unawaited hydration/HTTP flight that can
+    // leak into the next test (most visible on slower Windows runners).
+    authState.loggedIn = false;
     vi.useRealTimers();
     await clearAnthropicDiscoveredModels();
     await waitForAnthropicDiscoveryIdleForTest();
