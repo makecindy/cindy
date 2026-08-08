@@ -1498,6 +1498,26 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
+  it('keeps an ordinary foreground Stop interrupt-only when no wake task was running', async () => {
+    const { handle, stream, events, fakeQuery, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'ordinary foreground turn' });
+    await handle.abort();
+
+    // Retiring a Query is only needed once Stop touched a wake task. Normal
+    // foreground cancellation stays on the provider's interrupt path.
+    expect(fakeQuery.interrupt).toHaveBeenCalledTimes(1);
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(fakeQueries).toHaveLength(1);
+
+    stream.emit(interruptedTurnResult());
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'ordinary stopped terminal observed');
+    await waitFor(() => handle.isTurnRunning?.() === false, 'ordinary stopped turn settled');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
   it('keeps the wake latch across task_updated patches that omit task_type', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
@@ -1551,6 +1571,36 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     stream.emit(turnResult('fresh turn complete'));
     await waitFor(() => events.filter(isProductTerminal).length === 2, 'fresh terminal observed');
     await waitFor(() => handle.isTurnRunning?.() === false, 'fresh turn settled');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('Stop closes a foreground Query even after every wake stopTask succeeds', async () => {
+    const { handle, stream, events, fakeQuery, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'foreground turn with wake task' });
+    stream.emit(taskStarted('task-stopped', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+
+    await handle.abort();
+
+    // A successful stopTask can still race an already queued SDK auto-continuation,
+    // so the provider Query must be replaced before another explicit user turn.
+    expect(fakeQuery.stopTask).toHaveBeenCalledWith('task-stopped');
+    expect(fakeQuery.close).toHaveBeenCalledTimes(1);
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'synthetic foreground terminal observed');
+
+    const eventCountAfterStop = events.length;
+    stream.emit(assistantText('late automatic continuation'));
+    stream.emit(turnResult('late automatic result'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toHaveLength(eventCountAfterStop);
+
+    await handle.send({ type: 'user', content: 'fresh turn after successful wake stop' });
+    expect(fakeQueries).toHaveLength(2);
+    stream.emit(turnResult('fresh turn complete'));
+    await waitFor(() => events.filter(isProductTerminal).length === 2, 'fresh terminal observed');
 
     stream.end();
     await handle.close().catch(() => undefined);

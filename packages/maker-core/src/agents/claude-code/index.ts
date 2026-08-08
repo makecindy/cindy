@@ -5107,7 +5107,16 @@ export class ClaudeCodeAgent extends BaseAgent {
           // to prevent a queued automatic continuation from escaping Stop.
           const cancelledContinuation = stoppedClaim ?? cancelActiveContinuation('user_stop');
           const hasUnconfirmedWakeTasks = [...runningBackgroundTasks.values()].some((info) => info.wake);
-          if (cancelledContinuation || hasUnconfirmedWakeTasks || hasRejectedStops) {
+          // A successful stopTask only proves that the task accepted cancellation; it
+          // cannot prove that the provider has not already queued its automatic wake
+          // continuation. Retire this Query whenever this Stop touched any wake task,
+          // not only when a stop was rejected or remains locally tracked.
+          if (
+            stopRequests.length > 0 ||
+            cancelledContinuation ||
+            hasUnconfirmedWakeTasks ||
+            hasRejectedStops
+          ) {
             // All cancellation sources share one terminal state: a cancelled
             // continuation claim, an unconfirmed wake task, or a rejected stop
             // means this Query must be retired. The provider tail is fenced by
