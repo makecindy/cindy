@@ -94,8 +94,12 @@ if (portArgs.port === DEFAULT_PORT) {
       source: runningSource,
       targetWorktree: worktreeRoot,
     });
+    const listenerSourceIdentity = listener.confirmed
+      ? gitSourceIdentity(listener.worktree)
+      : null;
+    const listenerConfirmed = listener.confirmed && listenerSourceIdentity === runningSource;
 
-    if (listener.confirmed && listener.isTarget) {
+    if (listenerConfirmed && listener.isTarget) {
       // 是本 worktree 的 Metro —— 但还要确认它注入了**当前分支**的 git env,否则 build label branch
       // 会是旧值/unknown(如手动 `expo start` 起的、或起好后切过分支),"已在跑"就成了假证据。
       if (runningSource === sourceIdentity) {

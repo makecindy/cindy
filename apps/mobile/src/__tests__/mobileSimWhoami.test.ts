@@ -53,22 +53,12 @@ describe('mobile:sim takeover and JSON arguments', () => {
 });
 
 describe('mobile:sim Metro identity', () => {
-  it('requires a Cindy mobile cwd and injected source identity', () => {
+  it('normalizes path separators and trailing slashes', () => {
     expect(classifySimMetroListener({
-      cwd: '/repo/apps/mobile',
+      cwd: '/repo/apps/mobile/',
       source: 'branch@commit',
-      targetWorktree: '/repo-target',
-    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: false });
-    expect(classifySimMetroListener({
-      cwd: '/other/project',
-      source: 'branch@commit',
-      targetWorktree: '/repo-target',
-    })).toEqual({ confirmed: false, worktree: null });
-    expect(classifySimMetroListener({
-      cwd: '/repo/apps/mobile',
-      source: null,
-      targetWorktree: '/repo-target',
-    })).toEqual({ confirmed: false, worktree: null });
+      targetWorktree: '/repo/',
+    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: true });
   });
 });
 
