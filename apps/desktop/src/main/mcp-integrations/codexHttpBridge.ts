@@ -24,7 +24,10 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import type { Logger } from '@cindy/maker-core';
-import { createCodexMcpThreadContextStore } from './codexMcpThreadContextStore.js';
+import {
+  createCodexMcpThreadContextStore,
+  isSameCodexMcpSessionContext,
+} from './codexMcpThreadContextStore.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
 
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
@@ -673,31 +676,6 @@ interface BlockedToolCall {
   context?: LiziMcpSessionContext;
 }
 
-/**
- * `tools/call`s from two different Codex threads coalesced into one JSON-RPC
- * batch. There is no single session context the request could run under, and
- * `extractCodexThreadId` correctly refuses to pick one — but "no context" means
- * the transport would run both calls with an EMPTY AsyncLocalStorage context,
- * and every provider that reads it (cindy_browser's `__mcpSessionId`, …) would
- * fall back to host-side UI-focus inference. That is the exact cross-session
- * mis-routing this boundary exists to prevent, so refusing to pick has to mean
- * refusing to run — fail closed, not fail open to whatever the user is looking
- * at. (Both threads being registered and enabled means the per-call checks
- * below cannot catch this shape.)
- */
-function hasAmbiguousThreadContext(messages: unknown[]): boolean {
-  let seen: string | undefined;
-  for (const message of messages) {
-    if (!isToolCallMessage(message)) continue;
-    const threadId = extractCodexThreadIdFromMessage(message);
-    // Undefined is `missing_thread_context`'s job, not ambiguity's.
-    if (!threadId) continue;
-    if (seen && seen !== threadId) return true;
-    seen = threadId;
-  }
-  return false;
-}
-
 function findBlockedToolCall(
   body: unknown,
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>,
@@ -706,11 +684,8 @@ function findBlockedToolCall(
   threadInstanceQuery: string | null = null,
 ): BlockedToolCall | undefined {
   const messages = Array.isArray(body) ? body : [body];
-  // ?session= 路由时 threadId 不参与任何判定 (强优先, 见下), ambiguity
-  // 检查同样豁免 — 否则伪造/串台的 batch threadId 反而有语义效力。
-  if (!sessionTokenCtx && hasAmbiguousThreadContext(messages)) {
-    return { reason: 'ambiguous_thread_context' };
-  }
+  const toolCallContexts: LiziMcpSessionContext[] = [];
+  let resolvedContext: LiziMcpSessionContext | undefined;
   for (const message of messages) {
     if (!isToolCallMessage(message)) continue;
     // Resolve each tools/call independently. Batch siblings such as MCP
@@ -730,6 +705,13 @@ function findBlockedToolCall(
     if (!context) {
       return { reason: 'missing_thread_context' };
     }
+    if (resolvedContext && !isSameCodexMcpSessionContext(resolvedContext, context)) {
+      return { reason: 'ambiguous_thread_context' };
+    }
+    resolvedContext ??= context;
+    toolCallContexts.push(context);
+  }
+  for (const context of toolCallContexts) {
     const raw = context?.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
     if (Array.isArray(raw) && raw.some((id) => id === pluginId)) {
       return { reason: 'disabled', context };
@@ -764,7 +746,9 @@ function contextForRequestRoute(
     if (!isToolCallMessage(message)) continue;
     sawToolCall = true;
     const context = contextForToolCallRoute(message, threadContextStore, instanceQuery);
-    if (!context || (resolved && resolved !== context)) return undefined;
+    if (!context || (resolved && !isSameCodexMcpSessionContext(resolved, context))) {
+      return undefined;
+    }
     resolved = context;
   }
   if (sawToolCall) return resolved;

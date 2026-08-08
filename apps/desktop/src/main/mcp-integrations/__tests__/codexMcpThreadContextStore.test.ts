@@ -38,8 +38,14 @@ describe('createCodexMcpThreadContextStore', () => {
 
   it('resolves cloned contexts for one host-owned session instance', () => {
     const store = createCodexMcpThreadContextStore();
-    const first = { ...ctx('session-1'), sessionInstanceId: 'instance-1' };
-    const alias = { ...first, vendorOptions: { ...first.vendorOptions } };
+    const first = {
+      ...ctx('session-1', { orcaRole: 'lead', pluginPolicy: { disabled: ['browser'] } }),
+      sessionInstanceId: 'instance-1',
+    };
+    const alias = {
+      ...first,
+      vendorOptions: { orcaRole: 'lead', pluginPolicy: { disabled: ['browser'] } },
+    };
 
     store.registerThreadContext('thread-1', first);
     expect(store.getContextForSessionInstanceId('instance-1')).toBe(first);
@@ -47,6 +53,23 @@ describe('createCodexMcpThreadContextStore', () => {
 
     store.registerThreadContext('thread-2', alias);
     expect(store.getContextForSessionInstanceId('instance-1')).toBe(first);
+  });
+
+  it('fail-closes aliases whose vendor options differ', () => {
+    const store = createCodexMcpThreadContextStore();
+    const first = {
+      ...ctx('session-1', { pluginPolicy: { disabled: ['browser'] } }),
+      sessionInstanceId: 'instance-1',
+    };
+    const differentPolicy = {
+      ...first,
+      vendorOptions: { pluginPolicy: { disabled: ['ssh'] } },
+    };
+
+    store.registerThreadContext('thread-1', first);
+    store.registerThreadContext('thread-2', differentPolicy);
+
+    expect(store.getContextForSessionInstanceId('instance-1')).toBeUndefined();
   });
 
   it('fail-closes duplicate claims with different stable identity', () => {
