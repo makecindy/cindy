@@ -75,35 +75,39 @@ function setState(patch: Partial<SkillhubState>): void {
 // 慢响应覆盖新项目列表的扫描结果。
 let scanRequestId = 0;
 
-export async function refresh(): Promise<void> {
+export async function refresh(): Promise<SkillhubSkill[]> {
   const myId = ++scanRequestId;
   setState({ loading: true, error: null });
   try {
     const result = await window.electronAPI.skillhub.scan({
       projects: state.projects.map((p) => ({ projectRoot: p.projectRoot, hash: p.hash })),
     });
-    if (myId !== scanRequestId) return;
+    if (myId !== scanRequestId) return state.skills;
     if (result.success) {
+      const skills = result.skills ?? [];
       setState({
-        skills: result.skills ?? [],
+        skills,
         sources: result.sources ?? [],
         loading: false,
         bootstrapped: true,
       });
+      return skills;
     } else {
       setState({
         error: result.error ?? 'scan failed with no error message',
         loading: false,
         bootstrapped: true,
       });
+      return state.skills;
     }
   } catch (err) {
-    if (myId !== scanRequestId) return;
+    if (myId !== scanRequestId) return state.skills;
     setState({
       error: err instanceof Error ? err.message : String(err),
       loading: false,
       bootstrapped: true,
     });
+    return state.skills;
   }
 }
 
@@ -223,7 +227,7 @@ function ensureAuthListener(): void {
 registerSyncStoreSetters({ setSyncResults, mergeSyncResults, setSyncError });
 
 interface UseSkillhubReturn extends SkillhubState {
-  refresh: () => Promise<void>;
+  refresh: () => Promise<SkillhubSkill[]>;
 }
 
 export function useSkillhub(): UseSkillhubReturn {

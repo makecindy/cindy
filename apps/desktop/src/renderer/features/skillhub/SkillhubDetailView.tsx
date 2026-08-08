@@ -45,6 +45,7 @@ import {
 } from './hooks/useSkillhub';
 import { triggerIncrementalSync } from './hooks/useSkillSync';
 import { type DetailState, deriveDetailActionState, deriveDetailState } from './lib/detailButtons';
+import { buildLocalSkillRoute, findLocalSkillRouteEntry } from './lib/localRoutes';
 import { isMarketDeleted as checkMarketDeleted, getCachedInfo, invalidate as invalidateInfo, refreshInfo } from './lib/infoDedupe';
 import {
   activePublishedReviewFromVersions,
@@ -979,27 +980,10 @@ export function SkillhubDetailView() {
   const metaResize = useMetaColumnResize();
 
   const entry = useMemo(() => {
-    const { kind, projectHash, name } = params as Record<string, string | undefined>;
-    if (!kind || !name) return null;
-    const decodedName = decodeURIComponent(name);
-    const engine = searchParams.get('engine');
-    const matchEngine = (s: SkillhubSkill) => !engine || s.engine === engine;
-    if (projectHash) {
-      return (
-        skills.find(
-          (s) =>
-            s.kind === kind &&
-            s.scope === 'project' &&
-            s.projectHash === projectHash &&
-            s.name === decodedName &&
-            matchEngine(s),
-        ) ?? null
-      );
-    }
-    return (
-      skills.find(
-        (s) => s.kind === kind && s.scope === 'global' && s.name === decodedName && matchEngine(s),
-      ) ?? null
+    return findLocalSkillRouteEntry(
+      skills,
+      params as Record<string, string | undefined>,
+      searchParams,
     );
   }, [params, searchParams, skills]);
 
@@ -2577,20 +2561,13 @@ export function SkillhubDetailView() {
             // + 旧 name 的 info 缓存(让新 name 重新查),然后刷新 scanner,
             // 最后导航到新 URL。先 await refresh 才 navigate,确保新 URL 落地时
             // skills 已包含新 entry,免得短暂闪一下"未找到"。
-            const newId = entry
-              ? `${entry.kind}:${entry.scope}:${entry.scope === 'project' ? `${entry.projectHash}:` : ''}${newName}`
-              : null;
-            const newUrl = entry
-              ? entry.scope === 'global'
-                ? `/skillhub/local/${entry.kind}/global/${encodeURIComponent(newName)}`
-                : `/skillhub/local/${entry.kind}/project/${entry.projectHash}/${encodeURIComponent(newName)}`
-              : null;
             invalidateInfo(entry.name);
             invalidateHash(newAbsolutePath);
-            // 在新 URL 上替换 lastEntryId,避免下次启动还指向旧 id
-            if (newId) setLastEntryId(newId);
-            void refreshSkillhub().then(() => {
-              if (newUrl) navigate(newUrl, { replace: true });
+            void refreshSkillhub().then((scannedSkills) => {
+              const renamed = scannedSkills.find((skill) => skill.absolutePath === newAbsolutePath);
+              if (!renamed) return;
+              setLastEntryId(renamed.id);
+              navigate(buildLocalSkillRoute(renamed), { replace: true });
             });
           }}
           onScanResult={setScanResult}

@@ -101,6 +101,51 @@ describe('scanAllSkills', () => {
     });
   });
 
+  it('gives same-name project skills from different physical sources distinct stable ids', async () => {
+    const projectRoot = path.resolve('/repo');
+    const piSkill = path.join(projectRoot, '.pi', 'skills', 'demo');
+    const agentsSkill = path.join(projectRoot, '.agents', 'skills', 'demo');
+    const items = [piSkill, agentsSkill].map((absolutePath) => ({
+      engine: 'pi' as const,
+      kind: 'skill' as const,
+      scope: 'repo' as const,
+      name: 'demo',
+      absolutePath,
+      mdPath: path.join(absolutePath, 'SKILL.md'),
+      workingDir: projectRoot,
+      runtimeStatus: 'discovered' as const,
+      files: [],
+    }));
+    const maker = {
+      listCustomizations: vi
+        .fn()
+        .mockResolvedValueOnce({ errors: [], items: [items[0]] })
+        .mockResolvedValueOnce({ errors: [], items })
+        .mockResolvedValueOnce({ errors: [], items: [items[0]] })
+        .mockResolvedValueOnce({ errors: [], items: items.toReversed() }),
+    } as unknown as Maker;
+
+    const params = { projects: [{ projectRoot, hash: 'abcd1234' }] };
+    const singleBefore = await scanAllSkills(params, maker);
+    const first = await scanAllSkills(params, maker);
+    const singleAfter = await scanAllSkills(params, maker);
+    const reversed = await scanAllSkills(params, maker);
+
+    expect(singleBefore.skills[0].id).toBe(singleAfter.skills[0].id);
+    expect(singleBefore.skills[0].sourceKey).toBeDefined();
+
+    expect(first.skills).toHaveLength(2);
+    expect(new Set(first.skills.map((skill) => skill.urlKey))).toEqual(
+      new Set(['skill:project:abcd1234:demo']),
+    );
+    expect(new Set(first.skills.map((skill) => skill.id))).toHaveLength(2);
+    expect(first.skills.every((skill) => /^[a-f0-9]{64}$/.test(skill.sourceKey ?? ''))).toBe(true);
+    expect(first.skills.every((skill) => skill.requiresSourceKey === true)).toBe(true);
+    expect(new Set(reversed.skills.map((skill) => skill.id))).toEqual(
+      new Set(first.skills.map((skill) => skill.id)),
+    );
+  });
+
   it('keeps a shared ancestor skill in every project that discovered it', async () => {
     const firstRoot = path.resolve('/repo/apps/first');
     const secondRoot = path.resolve('/repo/apps/second');

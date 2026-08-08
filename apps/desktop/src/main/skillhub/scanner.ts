@@ -14,6 +14,7 @@
  * Read-only for scan; write helpers gated by SKILL_PATH_WHITELIST.
  */
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,7 +39,8 @@ export interface SkillFileEntry {
 
 export interface Skill {
   /**
-   * Stable id — React key，含 engine 前缀防跨引擎同名冲突。
+   * Stable id — React key，含 engine 前缀防跨引擎同名冲突。同一 engine 下
+   * 若 URL 基键重复，会再追加 canonical source path 的不可逆 hash。
    *   global  → `${engine}:${kind}:global:${name}`
    *   project → `${engine}:${kind}:project:${projectHash}:${name}`
    */
@@ -49,6 +51,10 @@ export interface Skill {
    *   project → `${kind}:project:${projectHash}:${name}`
    */
   urlKey: string;
+  /** Pi customization 的 canonical physical source hash；Pi 条目始终提供。 */
+  sourceKey?: string;
+  /** 同一 URL 基键存在多个来源时，详情路由必须携带 sourceKey。 */
+  requiresSourceKey?: boolean;
   /** 来自哪个 agent 引擎。 */
   engine: 'claude-code' | 'codex' | 'pi';
   /** 发现该 skill 的所有引擎专属路径（去重后）。~/.agents/ 通用路径不算引擎。 */
@@ -240,7 +246,7 @@ export async function scanAllSkills(
   const deduped = Array.from(seenItems.values());
 
   // ── AgentCustomization → SkillhubSkill ──────────────────────────────────────
-  const skills: Skill[] = deduped.map(({ winner: c, all, realPath }) => {
+  const candidates = deduped.map(({ winner: c, all, realPath }) => {
     const engine = c.engine as Skill['engine'];
     const project = projectForWorkingDir(c.workingDir);
     const projectHash = project?.hash;
@@ -255,7 +261,33 @@ export async function scanAllSkills(
     const urlKey = scope === 'global'
       ? `${c.kind}:global:${canonicalName}`
       : `${c.kind}:project:${projectHash}:${canonicalName}`;
-    const id = `${engine}:${urlKey}`;
+    return { c, all, realPath, engine, project, projectHash, canonicalName, scope, urlKey };
+  });
+  const identityCounts = new Map<string, number>();
+  for (const candidate of candidates) {
+    const identity = `${candidate.engine}:${candidate.urlKey}`;
+    identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1);
+  }
+
+  const skills: Skill[] = candidates.map(({
+    c,
+    all,
+    realPath,
+    engine,
+    project,
+    projectHash,
+    canonicalName,
+    scope,
+    urlKey,
+  }) => {
+    const hasIdentityCollision = (identityCounts.get(`${engine}:${urlKey}`) ?? 0) > 1;
+    // Pi entries are new to this SkillHub projection. Give them a path-derived
+    // identity even when currently unique, so adding/removing a same-name source
+    // never changes the surviving Pi entry's React/storage identity.
+    const sourceKey = engine === 'pi' || hasIdentityCollision
+      ? createHash('sha256').update(realPath).digest('hex')
+      : undefined;
+    const id = `${engine}:${urlKey}${sourceKey ? `:source:${sourceKey}` : ''}`;
 
     const engineSet = new Map<Skill['engine'], Skill['linkedEngines'][number]>();
     for (const item of all) {
@@ -273,6 +305,8 @@ export async function scanAllSkills(
     const skill: Skill = {
       id,
       urlKey,
+      ...(sourceKey ? { sourceKey } : {}),
+      ...(hasIdentityCollision ? { requiresSourceKey: true } : {}),
       engine,
       linkedEngines,
       kind: c.kind as SkillKind,
