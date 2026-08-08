@@ -10,7 +10,15 @@ import { billingApi } from './api';
 import { clearLegacyBillingIntentStorage, newBillingIdempotencyKey } from './checkoutIntent';
 
 export type BillingCheckoutPhase =
-  'IDLE' | 'CREATING' | 'AWAITING_PAYMENT' | 'COMPLETED' | 'FAILED' | 'EXPIRED' | 'CANCELED';
+  | 'IDLE'
+  | 'CREATING'
+  | 'AWAITING_PAYMENT'
+  | 'COMPLETED'
+  | 'FULFILLMENT_PENDING'
+  | 'FULFILLMENT_FAILED'
+  | 'FAILED'
+  | 'EXPIRED'
+  | 'CANCELED';
 
 /**
  * In-memory only. A checkout session belongs to the open dialog: closing it
@@ -46,7 +54,13 @@ function phaseForOrder(order: BillingPaymentOrder): BillingCheckoutPhase {
   if (order.status === 'FAILED') return 'FAILED';
   if (order.status === 'EXPIRED') return 'EXPIRED';
   if (order.status === 'CANCELED') return 'CANCELED';
-  if (order.status === 'SUCCEEDED') return 'COMPLETED';
+  if (order.status === 'SUCCEEDED') {
+    if (order.fulfillmentStatus === 'PENDING' || order.fulfillmentStatus === 'NOT_STARTED') {
+      return 'FULFILLMENT_PENDING';
+    }
+    if (order.fulfillmentStatus === 'FAILED') return 'FULFILLMENT_FAILED';
+    return 'COMPLETED';
+  }
   return 'AWAITING_PAYMENT';
 }
 
@@ -54,7 +68,13 @@ function phaseForSubscription(subscription: BillingSubscription): BillingCheckou
   if (subscription.status === 'INCOMPLETE') return 'AWAITING_PAYMENT';
   if (subscription.status === 'INCOMPLETE_EXPIRED') return 'EXPIRED';
   if (subscription.status === 'CANCELED') return 'CANCELED';
-  if (subscription.status === 'TRIALING' || subscription.status === 'ACTIVE') return 'COMPLETED';
+  if (subscription.status === 'TRIALING' || subscription.status === 'ACTIVE') {
+    if (subscription.entitlementStatus === 'PENDING' || subscription.entitlementStatus === 'NOT_STARTED') {
+      return 'FULFILLMENT_PENDING';
+    }
+    if (subscription.entitlementStatus === 'FAILED') return 'FULFILLMENT_FAILED';
+    return 'COMPLETED';
+  }
   return 'FAILED';
 }
 
@@ -327,7 +347,9 @@ export function useBillingCheckout(accountId: string | null) {
   }, [accountId]);
 
   useEffect(() => {
-    const shouldPoll = state.open && state.phase === 'AWAITING_PAYMENT';
+    const shouldPoll =
+      state.open &&
+      (state.phase === 'AWAITING_PAYMENT' || state.phase === 'FULFILLMENT_PENDING');
     if (!shouldPoll) return;
     const session = sessionRef.current;
     const timer = window.setInterval(() => {
