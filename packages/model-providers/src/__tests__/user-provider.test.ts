@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 
 import { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from '../user-provider.js';
 import type { CustomProviderConfig } from '../types.js';
+import { BUNDLED_CATALOG } from '../catalog.js';
 
 const codexOnly: CustomProviderConfig = {
   id: 'openrouter',
@@ -103,6 +104,109 @@ describe('buildUserProvider (per-runtime)', () => {
       defaultEffort: 'high',
       group: 'custom:openrouter',
       defaultEnabled: true,
+    });
+  });
+
+  it('inherits registry effort capabilities for known models without changing the custom route', () => {
+    const provider = buildUserProvider(
+      {
+        ...codexOnly,
+        id: 'relay',
+        name: 'Relay',
+        runtimes: {
+          codex: {
+            ...codexOnly.runtimes.codex!,
+            models: [
+              { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' },
+              { id: 'chatgpt/gpt-5.6-sol', name: 'GPT-5.6-Sol (ChatGPT)' },
+              { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra' },
+              { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna' },
+              { id: 'z-ai/glm-5.2', name: 'GLM-5.2' },
+              { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+              { id: 'unregistered-model', name: 'Unregistered' },
+            ],
+          },
+          'claude-code': {
+            baseUrl: 'https://openrouter.ai/api/v1',
+            models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+
+    expect(provider.id).toBe('relay');
+    expect(provider.routing.codex?.upstream).toBe('https://openrouter.ai/api/v1');
+    expect(provider.models.codex).toEqual([
+      expect.objectContaining({ id: 'gpt-5.6-sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'high' }),
+      expect.objectContaining({ id: 'chatgpt/gpt-5.6-sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'high' }),
+      expect.objectContaining({ id: 'gpt-5.6-terra', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'high' }),
+      expect.objectContaining({ id: 'gpt-5.6-luna', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' }),
+      expect.objectContaining({ id: 'z-ai/glm-5.2', efforts: ['minimal', 'high', 'max'], defaultEffort: 'max' }),
+      expect.objectContaining({ id: 'claude-haiku-4-5', efforts: [], defaultEffort: null }),
+      expect.objectContaining({ id: 'unregistered-model', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' }),
+    ]);
+    expect(provider.models['claude-code']).toEqual([
+      expect.objectContaining({
+        id: 'gpt-5.6-sol',
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+      }),
+    ]);
+  });
+
+  it('uses the supplied registry when a newer catalog changes a known model capability', () => {
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+    if (!registry) throw new Error('missing bundled model registry');
+    const entry = registry.models.find((candidate) => candidate.id === 'openai/gpt-5.6-sol');
+    if (!entry) throw new Error('missing gpt-5.6-sol registry entry');
+    entry.perAgent = {
+      ...entry.perAgent,
+      codex: { ...entry.perAgent?.codex, efforts: ['high', 'ultra'], defaultEffort: 'ultra' },
+    };
+
+    const provider = buildUserProvider(
+      {
+        ...codexOnly,
+        runtimes: {
+          codex: {
+            ...codexOnly.runtimes.codex!,
+            models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+          },
+        },
+      },
+      { modelRegistry: registry },
+    );
+    const model = provider.models.codex?.find((candidate) => candidate.id === 'gpt-5.6-sol');
+    expect(model).toMatchObject({ efforts: ['high', 'ultra'], defaultEffort: 'ultra' });
+  });
+
+  it('requires a target-agent route before inheriting a canonical registry entry', () => {
+    const provider = buildUserProvider(
+      {
+        id: 'relay',
+        name: 'Relay',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' }],
+          },
+          'claude-code': {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+
+    expect(provider.models.codex?.[0]).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+    expect(provider.models['claude-code']?.[0]).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
     });
   });
 
