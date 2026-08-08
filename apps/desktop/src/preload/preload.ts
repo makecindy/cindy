@@ -386,6 +386,9 @@ const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored')
 const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
   'plugin-market:removal-notice-available',
 );
+const fanOutPluginUpgradeNoticeAvailable = createIpcFanOut(
+  'plugin-market:upgrade-notice-available',
+);
 const fanOutPluginMarketPackagePermissionReview = createIpcFanOut(
   'plugin-market:package-permission-review',
 );
@@ -934,9 +937,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 同步读不卡启动,与 app-shortcuts:get 同模式。
   layout: {
     getStateSync: (): { layout: unknown } => ipcRenderer.sendSync('layout:get'),
-    set: (layout: unknown): Promise<{ layout: unknown }> =>
+    set: (layout: unknown): Promise<{ layout: unknown; persisted: boolean }> =>
       ipcRenderer.invoke('layout:set', layout),
-    reset: (): Promise<{ layout: unknown }> => ipcRenderer.invoke('layout:reset'),
+    reset: (): Promise<{ layout: unknown; persisted: boolean }> =>
+      ipcRenderer.invoke('layout:reset'),
     onChanged: fanOutLayoutChanged,
   },
 
@@ -1215,6 +1219,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     > => ipcRenderer.invoke('plugin-market:consume-removal-notice'),
     onRemovalNoticeAvailable: fanOutPluginRemovalNoticeAvailable,
+    consumeUpgradeNotice: (): Promise<
+      import('../shared/pluginMarket').PluginUpgradeUserNotice | null
+    > => ipcRenderer.invoke('plugin-market:consume-upgrade-notice'),
+    onUpgradeNoticeAvailable: fanOutPluginUpgradeNoticeAvailable,
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
     pickLocalSource: (

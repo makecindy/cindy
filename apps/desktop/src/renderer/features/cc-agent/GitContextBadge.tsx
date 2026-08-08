@@ -122,7 +122,7 @@ function PrChip({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
           <span>#{prRef.prNumber}</span>
           {unresolved > 0 && (
             <span
-              className="inline-flex items-center gap-0.5 text-[10px] font-medium leading-none"
+              className="inline-flex items-center gap-0.5 text-10 font-medium leading-none"
               style={{ color: 'var(--status-bar-accent)' }}
               aria-label={t('ccAgent.gitContext.pr.unresolved', { count: unresolved })}
             >

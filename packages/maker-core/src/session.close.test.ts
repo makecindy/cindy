@@ -60,6 +60,125 @@ describe('Session close lifecycle', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects permission changes once transport shutdown has started', async () => {
+    const transportClose = createDeferred();
+    const close = vi.fn(() => transportClose.promise);
+    const setPermissionMode = vi.fn(async () => undefined);
+    const handle = {
+      id: 'thread-closing-permission',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setPermissionMode,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-closing-permission',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+        setPermissionModeMidSession: { supported: true },
+      } as never,
+      logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    const closing = session.close();
+
+    await expect(session.setPermissionMode('ask')).rejects.toThrow('is closing');
+    expect(setPermissionMode).not.toHaveBeenCalled();
+
+    transportClose.resolve();
+    await closing;
+  });
+
+  it('rejects a tracked permission change queued before transport shutdown', async () => {
+    const firstModeChange = createDeferred();
+    const transportClose = createDeferred();
+    const setPermissionMode = vi
+      .fn()
+      .mockImplementationOnce(() => firstModeChange.promise)
+      .mockResolvedValue(undefined);
+    const session = new Session({
+      id: 'session-queued-permission',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle: {
+        id: 'thread-queued-permission',
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        close: vi.fn(() => transportClose.promise),
+        setPermissionMode,
+        setInteractionResolver() {},
+      } as unknown as AgentSessionHandle,
+      capabilities: {
+        permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+        setPermissionModeMidSession: { supported: true },
+      } as never,
+      logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    const first = session.setPermissionModeTracked('ask');
+    await vi.waitFor(() => expect(setPermissionMode).toHaveBeenCalledTimes(1));
+    const queued = session.setPermissionModeTracked('ask');
+    const closing = session.close();
+
+    firstModeChange.resolve();
+    await first;
+    await expect(queued).rejects.toThrow(/is closing|is closed/);
+    expect(setPermissionMode).toHaveBeenCalledTimes(1);
+
+    transportClose.resolve();
+    await closing;
+  });
+
+  it('rejects a conditional permission restore queued before transport shutdown', async () => {
+    const firstModeChange = createDeferred();
+    const transportClose = createDeferred();
+    const setPermissionMode = vi
+      .fn()
+      .mockImplementationOnce(() => firstModeChange.promise)
+      .mockResolvedValue(undefined);
+    const session = new Session({
+      id: 'session-queued-restore',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle: {
+        id: 'thread-queued-restore',
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        close: vi.fn(() => transportClose.promise),
+        setPermissionMode,
+        setInteractionResolver() {},
+      } as unknown as AgentSessionHandle,
+      capabilities: {
+        permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+        setPermissionModeMidSession: { supported: true },
+      } as never,
+      logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    const first = session.setPermissionModeTracked('ask');
+    await vi.waitFor(() => expect(setPermissionMode).toHaveBeenCalledTimes(1));
+    const queued = session.setPermissionModeIfUnchanged(
+      { mode: 'ask', generation: 1 },
+      'ask',
+    );
+    const closing = session.close();
+
+    firstModeChange.resolve();
+    await first;
+    await expect(queued).rejects.toThrow(/is closing|is closed/);
+    expect(setPermissionMode).toHaveBeenCalledTimes(1);
+
+    transportClose.resolve();
+    await closing;
+  });
+
   it('does not publish closed when transport shutdown fails', async () => {
     const close = vi.fn(async () => {
       throw new Error('transport close failed');

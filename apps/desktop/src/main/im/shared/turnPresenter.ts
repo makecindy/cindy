@@ -101,7 +101,9 @@ export const DEFAULT_PRESENTER_POLICY: PresenterPolicy = {
  *
  * **单一真相源在 @cindy/im**(`telegram/presentationCapabilities.ts`),这里只做
  * **re-export**:契约值由同包 driver(index.ts)真正消费(typing 续命间隔/上限、
- * link preview 全档关闭都直接引用它,不再各写字面量);desktop 侧沿用旧名
+ * link preview 关闭都直接引用它,不再各写字面量 —— 注意 link preview 的覆盖面是
+ * **答案那条路**, 不是全档出站: 卡片、rich 主路径、提示类消息都不带, 详见契约字段
+ * 注释);desktop 侧沿用旧名
  * `DriverPresentationCapabilities` / `PERSONAL_DRIVER_CAPABILITIES` 作为 L1 呈现层的
  * 能力声明锚,依赖方向 desktop → @cindy/im 不成环。presenter 本体不做任何 IO。
  *

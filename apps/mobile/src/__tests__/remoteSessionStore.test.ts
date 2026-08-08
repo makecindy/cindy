@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAKER_EVENT_BATCH_CHANNEL } from '@cindy/device-link';
 import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -2966,5 +2967,91 @@ describe('引用调和(2026-07-18 首页重渲染风暴修复)', () => {
       ]);
     }
     expect(remoteSessionStore.getSessions()).toBe(snapshot);
+  });
+});
+
+describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)', () => {
+  it('批内事件按序走与逐帧完全相同的路径:流式增量拼接结果一致', () => {
+    vi.useFakeTimers();
+    try {
+      // 逐帧基线
+      pushMakerText('s-single', 'p-1', 'hello', false);
+      pushMakerText('s-single', 'p-1', ' world', false);
+      vi.runOnlyPendingTimers();
+      const single = remoteSessionStore.getMessages('s-single');
+
+      // 同样两条事件,这次由被控端合并成一帧微批下发
+      remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, {
+        sessionId: 's-batch',
+        events: [
+          { sessionId: 's-batch', persistId: 'p-1', event: { type: 'text', data: { text: 'hello', isFinal: false } } },
+          { sessionId: 's-batch', persistId: 'p-1', event: { type: 'text', data: { text: ' world', isFinal: false } } },
+        ],
+      });
+      vi.runOnlyPendingTimers();
+      const batched = remoteSessionStore.getMessages('s-batch');
+
+      expect(batched).toHaveLength(1);
+      expect(batched[0]).toMatchObject({ id: 'p-1', role: 'assistant', content: 'hello world' });
+      // 与逐帧结果逐字段一致(仅 sessionId 不同)
+      expect(batched[0]!.content).toBe(single[0]!.content);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('形状不符的批帧整体忽略;批内单条坏事件只跳过该条', () => {
+    vi.useFakeTimers();
+    try {
+      // 缺 events / events 为空 / 非数组:整帧忽略,不抛
+      for (const bad of [
+        { sessionId: 's-bad' },
+        { sessionId: 's-bad', events: [] },
+        { sessionId: 's-bad', events: 'nope' },
+        { events: [{}] },
+        null,
+      ]) {
+        expect(() =>
+          remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, bad),
+        ).not.toThrow();
+      }
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s-bad')).toHaveLength(0);
+
+      // 批内混入坏条目:好的照常生效
+      remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, {
+        sessionId: 's-mixed',
+        events: [
+          'not-an-object',
+          { sessionId: 's-mixed', persistId: 'p-9', event: { type: 'text', data: { text: 'ok', isFinal: true } } },
+        ],
+      });
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s-mixed')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s-mixed')[0]).toMatchObject({ content: 'ok' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('批内 sessionId 与顶层不一致的条目被丢弃:不绕过 topic 隔离', () => {
+    // topic 路由只按**顶层** sessionId,批内混入其它会话的事件会把本端未订阅的
+    // 会话数据投进来(坏帧/恶意帧场景)。fail-closed 跳过该条,不整批丢。
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, {
+        sessionId: 's-own',
+        events: [
+          { sessionId: 's-other', persistId: 'p-x', event: { type: 'text', data: { text: 'leak', isFinal: true } } },
+          { sessionId: 's-own', persistId: 'p-y', event: { type: 'text', data: { text: 'mine', isFinal: true } } },
+        ],
+      });
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s-other')).toHaveLength(0);
+      expect(remoteSessionStore.getMessages('s-own')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s-own')[0]).toMatchObject({ content: 'mine' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

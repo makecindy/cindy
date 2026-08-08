@@ -95,7 +95,7 @@ export function ExtraDirsButton({
               <span
                 className={cn(
                   'font-normal tabular-nums',
-                  dense ? 'text-[12.5px]' : 'text-[13px]',
+                  dense ? 'text-12' : 'text-13',
                 )}
               >
                 ×{count}

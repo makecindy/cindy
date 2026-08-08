@@ -25,6 +25,8 @@ import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { capturePiRuntimeCapabilityManifest } from '../runtime-capabilities.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
 const PLATFORM_KEY = `${process.platform}-${process.arch}`;
@@ -634,6 +636,26 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
       approve: false,
     });
     const skills = normalizeSkills(result.commands, fixture);
+
+    const manifest = await capturePiRuntimeCapabilityManifest(
+      { request: async () => ({ type: 'response', command: 'get_commands', success: true, data: { commands: result.commands } }) },
+      {},
+      1,
+      'ready',
+    );
+    expect(manifest.status).toBe('loaded');
+    expect(manifest.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'skill:global-skill',
+        description: 'fixture global-skill',
+        source: 'skill',
+        sourceInfo: expect.objectContaining({
+          source: 'auto',
+          scope: 'user',
+          baseDir: fixture.configHome,
+        }),
+      }),
+    ]));
 
     expect(skills).toEqual([{
       name: 'skill:global-skill',
