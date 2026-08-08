@@ -58,4 +58,42 @@ describe('market Ghost session boundary', () => {
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
     expect(body).toContain('releaseMutation?.();');
   });
+
+  it('rejects a current market install but detaches a historical local override', () => {
+    const updateStart = source.indexOf(
+      "ipcMain.handle('ghosts:update'",
+    );
+    const updateEnd = source.indexOf(
+      "ipcMain.handle('ghosts:pick-file'",
+      updateStart,
+    );
+    const body = source.slice(updateStart, updateEnd);
+
+    const ledgerReadIndex = body.indexOf(
+      'marketLedger.installationForGhost(inspected.manifest.id)',
+    );
+    const installedDigestIndex = body.indexOf(
+      'readInstalledGhostManifestDigest(inspected.manifest.id)',
+    );
+    const staleOverrideIndex = body.indexOf(
+      'const detachStaleMarketRecord = Boolean(',
+    );
+    const sourceConflictIndex = body.indexOf("'GHOST_SOURCE_CONFLICT'");
+    const runtimeStopIndex = body.indexOf('runtime.stop(inspected.manifest.id)');
+    const managerUpdateIndex = body.indexOf('result = await manager.update(');
+    const detachIndex = body.indexOf(
+      'marketLedger.markRemoved(inspected.manifest.id, null)',
+    );
+
+    expect(ledgerReadIndex).toBeGreaterThan(-1);
+    expect(installedDigestIndex).toBeGreaterThan(ledgerReadIndex);
+    expect(staleOverrideIndex).toBeGreaterThan(installedDigestIndex);
+    expect(body.slice(staleOverrideIndex, sourceConflictIndex)).toContain(
+      'marketRecord.manifestDigest !== undefined',
+    );
+    expect(sourceConflictIndex).toBeGreaterThan(staleOverrideIndex);
+    expect(runtimeStopIndex).toBeGreaterThan(sourceConflictIndex);
+    expect(managerUpdateIndex).toBeGreaterThan(runtimeStopIndex);
+    expect(detachIndex).toBeGreaterThan(managerUpdateIndex);
+  });
 });

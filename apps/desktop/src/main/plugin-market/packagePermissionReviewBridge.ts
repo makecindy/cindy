@@ -1,5 +1,5 @@
 /**
- * 官方市场真实包权限确认的 Main ↔ Renderer 往返桥。
+ * 市场真实包权限确认的 Main ↔ Renderer 往返桥。
  *
  * 它只保存“当前窗口对当前弹框的回答”，不保存包路径、安装状态或批准记录。
  * 安装事务本身仍停在 service.install() 的调用栈里；确认、取消或窗口销毁后，
@@ -35,6 +35,8 @@ export class PluginMarketPackagePermissionReviewBridge {
           requestId,
           manifest: facts.manifest,
           permissionDiff: facts.permissionDiff,
+          isUpdate: facts.isUpdate,
+          sourceType: facts.sourceType,
         });
       } finally {
         if (!delivered) this.settle(requestId, false);

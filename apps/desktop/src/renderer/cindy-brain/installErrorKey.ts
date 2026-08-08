@@ -13,6 +13,8 @@ export function ghostInstallErrorKey(code: string | undefined): string {
       return 'settings.ghosts.errors.commandConflict';
     case 'GHOST_ID_RESERVED':
       return 'settings.ghosts.errors.idReserved';
+    case 'GHOST_SOURCE_CONFLICT':
+      return 'settings.ghosts.errors.sourceConflict';
     case 'NOT_FOUND':
       return 'settings.ghosts.errors.sourceMissing';
     default:

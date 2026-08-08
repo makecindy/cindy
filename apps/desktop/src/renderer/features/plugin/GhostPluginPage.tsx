@@ -55,7 +55,6 @@ import {
 import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
-import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -67,10 +66,7 @@ import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkin
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import { resolveSystemLocale } from '../../../shared/locale';
 import {
-  diffGhostPermissionItems,
   ghostPanelKind,
-  ghostPermissionBaselineKey,
-  ghostPermissionItems,
   isOfficialGhostId,
   type GhostSetupStatus,
   type InstalledGhost,
@@ -96,11 +92,9 @@ import {
 } from './lib/ghostPluginViewModel';
 import { ignoredRoundStorageKey, isBatchFinished, updateRoundKey } from './lib/updateAllModel';
 import {
-  approveUpdateExpansion,
   getUpdateAllBatchState,
   reconcileUpdateAllBatch,
   setUpdateAllBatchHooks,
-  skipUpdateExpansion,
   startUpdateAllBatch,
   subscribeUpdateAllBatch,
 } from './lib/updateAllController';
@@ -656,7 +650,7 @@ export function GhostPluginPage() {
   }, [currentRoundKey, ignoredRoundKey]);
 
   // 批次状态住在模块级控制器里(生命周期长于本页:关弹窗离开 /plugins
-  // 后批次继续跑,回来仍保留待确认项的批准/跳过入口),页面只订阅快照。
+  // 后批次继续跑),页面只订阅快照。权限确认由统一安装事务负责。
   const updateBatch = useSyncExternalStore(subscribeUpdateAllBatch, getUpdateAllBatchState);
   const updateRows = updateBatch.rows;
   const batchRunning = updateBatch.running;
@@ -667,8 +661,8 @@ export function GhostPluginPage() {
   useEffect(() => {
     reconcileUpdateAllBatch(marketItems);
   }, [ghosts, marketItems, mode, dataOwnerId]);
-  // 有未完结批次(含待确认项)时横幅必须在场:它是重开批量弹窗的唯一入口,
-  // 「忽略本轮」不得顺带藏掉待确认项的批准/跳过路径。
+  // 有未完结批次时横幅必须在场:它是重开批量进度弹窗的唯一入口,
+  // 「忽略本轮」不得顺带藏掉正在执行的批次。
   const hasUnfinishedBatch = updateRows !== null && !isBatchFinished(updateRows);
   const bannerVisible =
     hasUnfinishedBatch ||
@@ -769,15 +763,14 @@ export function GhostPluginPage() {
     [t],
   );
 
-  /** 真实包的追加确认由窗口级 Host 在这一次 install IPC 事务内完成。 */
+  /** 真实包的唯一权限确认由窗口级 Host 在这一次 install IPC 事务内完成。 */
   const installReviewedMarketPackage = useCallback(
     async (input: {
-      detail: PluginMarketDetail;
-      lease: { pluginId: string };
+      pluginId: string;
       options: PluginMarketInstallOptions;
     }): Promise<InstalledGhost | null> => {
       const result = await window.electronAPI.pluginMarket.install(
-        input.detail.pluginId,
+        input.pluginId,
         input.options,
       );
       return result.ghost ?? null;
@@ -785,45 +778,28 @@ export function GhostPluginPage() {
     [],
   );
 
-  // 所有来源先展示详情清单；官方包下载后仍以真实包清单兜底发现额外权限。
+  // 目录详情只用于发现与预览；点击更新后由 Main 下载真实包并完成唯一确认。
   const handleMarketUpdate = useCallback(
     async (ghostId: string) => {
       const marketItem = marketByGhostId.get(ghostId);
       if (!marketItem || marketItem.installState !== 'update-available') return;
       const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
+      if (!installedGhost) {
+        toast.error(t('settings.ghosts.market.errors.stateChanged'));
+        await refreshMarket();
+        return;
+      }
       // 列表每张卡都有直达入口,同步互斥防止并发更新互相覆盖忙碌状态。
       const marketBusyLease = acquireMarketBusy(marketItem.pluginId);
       if (!marketBusyLease) return;
       try {
         const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
-        const diff = diffGhostPermissionItems(
-          installedGhost?.manifest ?? next.manifest,
-          next.manifest,
-        );
-        const approved = await confirm({
-          title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
-          description: t('settings.ghosts.updateConfirm.body', {
-            from: installedGhost?.manifest.version ?? next.version,
-            to: next.version,
-          }),
-          content: <GhostUpdateReview diff={diff} />,
-          maxWidth: 520,
-          confirmText: t('settings.ghosts.updateConfirm.confirm'),
-          cancelText: t('settings.ghosts.updateConfirm.cancel'),
-        });
-        if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
         const options: PluginMarketInstallOptions = {
           expectedReleaseId: next.releaseId,
-          expectedManifest: next.manifest,
-          allowPermissionExpansion: diff.added.length > 0,
-          ...(installedGhost
-            ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-            : {}),
         };
         const ghost = await installReviewedMarketPackage({
-          detail: next,
-          lease: marketBusyLease,
+          pluginId: next.pluginId,
           options,
         });
         if (!ghost) return;
@@ -845,7 +821,6 @@ export function GhostPluginPage() {
     },
     [
       acquireMarketBusy,
-      confirm,
       ghosts,
       isMarketBusyLeaseActive,
       installReviewedMarketPackage,
@@ -877,7 +852,7 @@ export function GhostPluginPage() {
   );
   const handleUpdateAll = useCallback(() => {
     const current = getUpdateAllBatchState();
-    // 运行中或还有待确认项的批次:重开弹窗接着处理,不重建批次。
+    // 运行中或还有未完成项的批次:重开弹窗查看进度,不重建批次。
     if (current.running || (current.rows !== null && !isBatchFinished(current.rows))) {
       setUpdateDialogOpen(true);
       return;
@@ -1144,52 +1119,12 @@ export function GhostPluginPage() {
           await refreshMarket();
           return;
         }
-        const diff = isUpdate
-          ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
-          : null;
-        const confirmed = await confirm({
-          title: isUpdate
-            ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
-            : t('settings.ghosts.market.installConfirmTitle', {
-                name: marketDetail.name,
-              }),
-          description: isUpdate
-            ? t('settings.ghosts.market.updateConfirmDescription')
-            : t(
-                marketDetail.sourceType === 'server'
-                  ? 'settings.ghosts.market.installConfirmDescription'
-                  : 'settings.ghosts.market.customInstallConfirmDescription',
-              ),
-          content: isUpdate ? (
-            <GhostUpdateReview diff={diff!} />
-          ) : (
-            <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
-          ),
-          maxWidth: 520,
-          confirmText: isUpdate
-            ? t('settings.ghosts.updateConfirm.confirm')
-            : t('settings.ghosts.market.install'),
-          cancelText: isUpdate
-            ? t('settings.ghosts.updateConfirm.cancel')
-            : t('settings.ghosts.installConfirm.cancel'),
-          autoFocusConfirm: true,
-        });
-        if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         const options: PluginMarketInstallOptions = {
           expectedReleaseId: marketDetail.releaseId,
-          expectedManifest: marketDetail.manifest,
-          ...(isUpdate && diff!.added.length > 0
-            ? {
-                allowPermissionExpansion: true,
-                ...(installedGhost
-                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-                  : {}),
-              }
-            : {}),
         };
         const ghost = await installReviewedMarketPackage({
-          detail: marketDetail,
-          lease: marketBusyLease,
+          pluginId: marketDetail.pluginId,
           options,
         });
         if (!ghost) return;
@@ -1221,7 +1156,6 @@ export function GhostPluginPage() {
     },
     [
       acquireMarketBusy,
-      confirm,
       ghosts,
       isMarketBusyLeaseActive,
       installReviewedMarketPackage,
@@ -1645,8 +1579,6 @@ export function GhostPluginPage() {
           open={updateDialogOpen}
           rows={updateRows}
           iconByGhostId={new Map(ghosts.map((ghost) => [ghost.manifest.id, ghost.iconDataUrl]))}
-          onApprove={(pluginId) => void approveUpdateExpansion(pluginId)}
-          onSkip={skipUpdateExpansion}
           onClose={() => setUpdateDialogOpen(false)}
         />
       ) : null}

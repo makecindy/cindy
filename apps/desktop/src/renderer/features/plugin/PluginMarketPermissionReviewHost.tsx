@@ -6,7 +6,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ghostPermissionItems } from '../../../shared/ghost';
 
 /**
- * 官方市场安装事务的真实包权限确认入口。
+ * 市场安装事务的真实包权限确认入口。
  *
  * Main 下载并检查真实包后把事务暂停在调用栈内，只向发起窗口投递这一张确认卡。
  * 无论确认、取消、Esc、遮罩关闭还是渲染异常，finally 都会把答案回给 Main；
@@ -22,7 +22,7 @@ export function PluginMarketPermissionReviewHost() {
       void (async () => {
         let confirmed = false;
         try {
-          const isUpdate = review.permissionDiff !== null;
+          const isUpdate = review.isUpdate;
           confirmed = await confirm({
             title: isUpdate
               ? t('settings.ghosts.updateConfirm.title', { name: review.manifest.name })
@@ -31,9 +31,13 @@ export function PluginMarketPermissionReviewHost() {
                 }),
             description: isUpdate
               ? t('settings.ghosts.market.updateConfirmDescription')
-              : t('settings.ghosts.market.installConfirmDescription'),
-            content: isUpdate ? (
-              <GhostUpdateReview diff={review.permissionDiff!} />
+              : t(
+                  review.sourceType === 'server'
+                    ? 'settings.ghosts.market.installConfirmDescription'
+                    : 'settings.ghosts.market.customInstallConfirmDescription',
+                ),
+            content: review.permissionDiff ? (
+              <GhostUpdateReview diff={review.permissionDiff} />
             ) : (
               <GhostPermissionList items={ghostPermissionItems(review.manifest)} />
             ),
