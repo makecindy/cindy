@@ -143,8 +143,29 @@ describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
 
     expect((await r.peekSession('bot1', 'u1'))?.workspaceKind).toBe('project');
     expect((await r.findActiveSession('bot1', 'u1'))?.workspaceKind).toBe('project');
-    // 这一行还是 active, 没走复活, 库里那一列仍是脏的 —— 下一次复活才落定。
-    expect(await kindOf(created.id)).toBe('dialogue');
+  });
+
+  it('active 的存量脏行就地回写, 不必等它哪天被归档', async () => {
+    // sidebar 的分组直接投影 DB 那一列(localDb/mapper.ts), 只在返回值上现算的话,
+    // 桌面端看到的这条会话会一直待在「对话」分组 —— 而它是 active, 可能永远等不到
+    // 那次归档。
+    const r = repo();
+    const created = await r.createSession('bot1', 'u1');
+    await db
+      .update(sessions)
+      .set({ workingDir: PROJECT_DIR, workspaceKind: 'dialogue' });
+
+    await r.findActiveSession('bot1', 'u1');
+
+    expect(await kindOf(created.id)).toBe('project');
+  });
+
+  it('归属本来就对时不写库, 不是每条消息都产生一次写入与重拉', async () => {
+    const r = repo();
+    await r.createSession('bot1', 'u1');
+    const before = (await db.select().from(sessions))[0]!.updatedAt;
+    await r.findActiveSession('bot1', 'u1');
+    expect((await db.select().from(sessions))[0]!.updatedAt).toBe(before);
   });
 
   it('存量脏行下一次复活时把库里那一列也修好', async () => {

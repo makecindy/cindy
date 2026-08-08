@@ -218,6 +218,11 @@ export function createImSessionRepo(
       const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
       const row = rows[0];
       if (!row) return null;
+      const workspaceKind = readWorkspaceKind(
+        row.workingDir,
+        row.workspaceKind ?? null,
+        botContextId,
+      );
       if (row.status !== 'active') {
         // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
         // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
@@ -237,6 +242,20 @@ export function createImSessionRepo(
         // 软删行已从 sidebar 消失,patched 增量对不存在的行无效;
         // created 触发 renderer 重拉列表,让会话重新出现。
         broadcastSessionCreated(row.id);
+      } else if (workspaceKind !== null && workspaceKind !== row.workspaceKind) {
+        // 存量脏行**就地回写**, 不等下一次归档。sidebar 的分组直接投影 DB 那一列
+        // (localDb/mapper.ts), 只在返回值上现算的话, 会话会一直待在错的分组里 ——
+        // 而它现在是 active, 可能永远等不到那次归档。
+        //
+        // 判据仍走 correctedWorkspaceKind 的 CASE(SQL 里现算), 不把 JS 算出来的值
+        // 写回去: 读和写之间行可能已被 `/project` 改过。
+        await db
+          .update(sessions)
+          .set({ ...correctedWorkspaceKind(botContextId), updatedAt: Date.now() })
+          .where(eq(sessions.id, id));
+        log.info(`corrected ${ns.source} session workspaceKind id=${row.id} -> ${workspaceKind}`);
+        // 行会跨分组移动, patched 增量覆盖不了归组变化 —— 与 switchSessionWorkingDir 同理。
+        broadcastSessionCreated(row.id);
       }
       return {
         id: row.id,
@@ -250,7 +269,7 @@ export function createImSessionRepo(
         providerId: row.providerId ?? null,
         // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
         // caller 拿到的和库里落定的才是同一个答案。
-        workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
+        workspaceKind,
       };
     },
 
