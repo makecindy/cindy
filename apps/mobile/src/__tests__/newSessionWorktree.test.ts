@@ -440,6 +440,30 @@ describe('shouldShowWorktreeToggle / caption key', () => {
     expect(shouldShowWorktreeToggle({ workspaceKind: 'project', workingDir: '/repo', eligibility: { status: 'probing' }, enabled: false })).toBe(true);
   });
 
+  it('确认不合格(ineligible)时开关行隐藏,即使记忆为 ON(2026-08-07 裁决)', () => {
+    for (const reason of ['gitMissing', 'notGitRepo', 'alreadyInWorktree'] as const) {
+      expect(shouldShowWorktreeToggle({
+        workspaceKind: 'project',
+        workingDir: '/repo',
+        eligibility: { status: 'ineligible', reason },
+        enabled: true,
+      })).toBe(false);
+      expect(shouldShowWorktreeToggle({
+        workspaceKind: 'project',
+        workingDir: '/repo',
+        eligibility: { status: 'ineligible', reason },
+        enabled: false,
+      })).toBe(false);
+    }
+    // 探测失败 ≠ 确认不合格:已 ON 时保持显示(fail closed 需要可见入口)。
+    expect(shouldShowWorktreeToggle({
+      workspaceKind: 'project',
+      workingDir: '/repo',
+      eligibility: { status: 'detect-failed' },
+      enabled: true,
+    })).toBe(true);
+  });
+
   it('caption key 覆盖探测中 / 三种不合格原因 / 探测失败;eligible 无 caption', () => {
     expect(worktreeEligibilityCaptionKey({ status: 'probing' })).toBe('session.new.worktreeDetecting');
     expect(worktreeEligibilityCaptionKey({ status: 'recovering' })).toBe('session.new.worktreeRecovering');
@@ -481,15 +505,12 @@ describe('shouldBlockNewSessionCreateForWorktree', () => {
     })).toBe(false);
   });
 
-  it('ON 时必须等当前目标 eligible，unsupported 也不能把显式选择静默降级成普通创建', () => {
+  it('ON 时探测未定必须拦截，unsupported 也不能把显式选择静默降级成普通创建', () => {
     expect(shouldBlockNewSessionCreateForWorktree({
       applicable: true, enabled: true, eligibility: { status: 'probing' }, preferenceSaving: false,
     })).toBe(true);
     expect(shouldBlockNewSessionCreateForWorktree({
-      applicable: true,
-      enabled: true,
-      eligibility: { status: 'ineligible', reason: 'notGitRepo' },
-      preferenceSaving: false,
+      applicable: true, enabled: true, eligibility: { status: 'detect-failed' }, preferenceSaving: false,
     })).toBe(true);
     expect(shouldBlockNewSessionCreateForWorktree({
       applicable: true, enabled: true, eligibility: eligible, preferenceSaving: false,
@@ -499,6 +520,24 @@ describe('shouldBlockNewSessionCreateForWorktree', () => {
     })).toBe(false);
     expect(shouldBlockNewSessionCreateForWorktree({
       applicable: true, enabled: true, eligibility: { status: 'unsupported' }, preferenceSaving: false,
+    })).toBe(true);
+  });
+
+  it('确认不合格(ineligible)+ ON 放行普通会话——记忆只对合格目录生效(2026-08-07 裁决)', () => {
+    for (const reason of ['gitMissing', 'notGitRepo', 'alreadyInWorktree'] as const) {
+      expect(shouldBlockNewSessionCreateForWorktree({
+        applicable: true,
+        enabled: true,
+        eligibility: { status: 'ineligible', reason },
+        preferenceSaving: false,
+      })).toBe(false);
+    }
+    // 偏好写入在途仍拦截,与资格无关。
+    expect(shouldBlockNewSessionCreateForWorktree({
+      applicable: true,
+      enabled: true,
+      eligibility: { status: 'ineligible', reason: 'notGitRepo' },
+      preferenceSaving: true,
     })).toBe(true);
   });
 });

@@ -5301,6 +5301,7 @@
     },
     "worktree": {
       "detecting": "Detecting environment…",
+      "detectFailed": "Environment detection failed; worktree unavailable for now",
       "gitMissing": "git not detected, please install it first",
       "notGitRepo": "Current directory is not a git repository",
       "alreadyInWorktree": "Already inside a worktree, nesting is not allowed",

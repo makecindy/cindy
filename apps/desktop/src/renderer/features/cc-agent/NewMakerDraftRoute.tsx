@@ -676,6 +676,10 @@ export function NewMakerDraftRoute() {
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(
     null,
   );
+  // 探测成功且确认目录不具备 worktree 资格(非 git / 无 git / 已在 worktree 内)= true:
+  // 发送门放行普通会话(2026-08-07 裁决,勾选记忆只对合格目录生效)。null = 探测中或
+  // 失败,维持 fail closed——「确认不是 git」和「探测不出来」不是一回事。
+  const [wtConfirmedIneligible, setWtConfirmedIneligible] = useState<boolean | null>(null);
   // repo-scoped 分支偏好以工作端 main 为权威。target ref 在换设备 / repo 的同步动作里先行
   // 改写，挡住 React commit 前一瞬间到达的旧 GET / APPLY / push；seq 另挡异步 GET 晚到。
   const wtBranchTargetRef = useRef<DraftWorktreeBranchTarget>({
@@ -2032,6 +2036,7 @@ export function NewMakerDraftRoute() {
         setWtBaseRepo(null);
         setWtSourceBranch('');
         setWtSupportsRecoveryKeyDiscard(null);
+        setWtConfirmedIneligible(null);
       }
       if (deviceChanged) {
         // A checkbox write belongs to the previous work device. Invalidate its
@@ -2816,6 +2821,9 @@ export function NewMakerDraftRoute() {
   const handleWtRecoveryKeyDiscardSupportChange = useCallback((supported: boolean | null) => {
     setWtSupportsRecoveryKeyDiscard(supported);
   }, []);
+  const handleWtConfirmedIneligibleChange = useCallback((confirmed: boolean | null) => {
+    setWtConfirmedIneligible(confirmed);
+  }, []);
   const handleWtNameChange = useCallback((name: string) => {
     setWtName(name);
   }, []);
@@ -2837,6 +2845,7 @@ export function NewMakerDraftRoute() {
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
+    confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
@@ -2847,6 +2856,7 @@ export function NewMakerDraftRoute() {
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
+    confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
@@ -2975,7 +2985,15 @@ export function NewMakerDraftRoute() {
         toast.warning(t('ccAgent.draft.deviceStillLoading'));
         return false;
       }
-      if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {
+      // 确认不合格(探测成功、目录无 worktree 资格)时勾选记忆不生效:整段 ON 门跳过,
+      // 按普通会话创建(2026-08-07 裁决)。confirmedIneligible === null(探测中/失败)
+      // 仍走 fail-closed —— 探测不出来不等于确认不是 git。
+      if (
+        selectedWorkingDir
+        && !isRemoteProjectDraft
+        && selectedWorktree.enabled
+        && selectedWorktree.confirmedIneligible !== true
+      ) {
         if (!selectedWorktree.baseRepo) {
           toast.error(t('ccAgent.draft.worktreeMissingRepo'));
           return false;
@@ -3052,6 +3070,7 @@ export function NewMakerDraftRoute() {
             if (
               effectiveWorkingDir &&
               wt.enabled &&
+              wt.confirmedIneligible !== true &&
               wt.baseRepo &&
               wt.supportsRecoveryKeyDiscard === true
             ) {
@@ -3748,7 +3767,14 @@ export function NewMakerDraftRoute() {
         ) {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
-        if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {
+        // 与 handleSend 同口径:确认不合格时勾选记忆不生效,整段 ON 门跳过、按普通
+        // 会话创建;null(探测中/失败)仍 fail closed(2026-08-07 裁决)。
+        if (
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.enabled
+          && selectedWorktree.confirmedIneligible !== true
+        ) {
           if (!selectedWorktree.baseRepo) {
             throw new Error(t('ccAgent.draft.worktreeMissingRepo'));
           }
@@ -3837,6 +3863,7 @@ export function NewMakerDraftRoute() {
           if (
             selectedWorkingDir
             && selectedWorktree.enabled
+            && selectedWorktree.confirmedIneligible !== true
             && selectedWorktree.baseRepo
             && selectedWorktree.supportsRecoveryKeyDiscard === true
           ) {
@@ -4079,8 +4106,13 @@ export function NewMakerDraftRoute() {
           navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
           return;
         }
+        // 确认不合格时按普通会话走(上方 ON 门已放行,这里必须一起排除,否则
+        // baseRepo 为 null 会命中下方的非空断言)。
         const useLocalGoalWorktree = Boolean(
-          selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled,
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.enabled
+          && selectedWorktree.confirmedIneligible !== true,
         );
         const goalSessionId = makeDraftSessionId();
         let goalWorkingDir = selectedWorkingDir;
@@ -4486,6 +4518,7 @@ export function NewMakerDraftRoute() {
                   onSourceBranchChange={handleWtSourceBranchChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
+                  onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}
                   onSuggestedNameChange={handleWtNameChange}
                   // SSH 远程仍禁用 worktree(远端 git 探测未落地);device-link 远程可用:
                   // 探测/建议名/创建全部经隧道在被控端执行(与 488cb33 前口径一致)。

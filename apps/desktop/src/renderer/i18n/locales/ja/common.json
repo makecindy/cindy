@@ -5299,6 +5299,7 @@
     },
     "worktree": {
       "detecting": "環境を検出中…",
+      "detectFailed": "環境の検出に失敗しました。worktree は現在使用できません",
       "gitMissing": "git が検出されません。先にインストールしてください",
       "notGitRepo": "現在のディレクトリは git リポジトリではありません",
       "alreadyInWorktree": "すでに worktree 内です。ネストは禁止です",
