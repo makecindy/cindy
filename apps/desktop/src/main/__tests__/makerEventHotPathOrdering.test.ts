@@ -86,6 +86,16 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource.match(/claudeTurnDurationMs,/g)).toHaveLength(3);
   });
 
+  it('uses the assistant API message id as Vertex output-lag evidence', () => {
+    const wireSessionSource = extractWireSessionSource();
+
+    expect(wireSessionSource).toContain('assistant_message_id?: unknown;');
+    expect(wireSessionSource).toContain(
+      "typeof doneData?.assistant_message_id === 'string'",
+    );
+    expect(wireSessionSource).toContain('? doneData.assistant_message_id');
+  });
+
   it('wakes deferred Goal resumes from the shared product-terminal idle boundary', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
