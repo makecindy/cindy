@@ -2108,13 +2108,14 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(goalEntryCheck).toBeLessThan(goalSetBusy);
     // 有界稳定循环:两段各含「每轮 runGuard 后同步核对 genAt」+ 耗尽降 unknown/fail-open
     expect(createSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(1);
-    // goal:prepare 循环(1)+ post-started 循环(前查 + 后查,2)+ 降级失败后 re-fence(1)
-    expect(goalSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(4);
+    // goal:prepare 循环(1)+ post-started 循环(前查 + 后查,2)+ 鉴权降级 re-fence(1)
+    //   + 设备切换 commit 分支 re-fence(1)
+    expect(goalSlice.match(/if \(getDeviceProvidersGen\(guardDeviceId\) === guardResult\.genAt\) break;/g) ?? []).toHaveLength(5);
     const failOpen = 'rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),';
     const failOpenCount = (slice: string): number =>
       slice.split(failOpen).length - 1;
     expect(failOpenCount(createSlice)).toBe(2); // 哨兵 + 耗尽
-    expect(failOpenCount(goalSlice)).toBe(4); // 哨兵 + prepare 耗尽 + started 后耗尽 + re-fence 耗尽
+    expect(failOpenCount(goalSlice)).toBe(5); // 哨兵 + prepare 耗尽 + started 后耗尽 + 鉴权降级 re-fence + 设备切换 re-fence
     // create:apply 后零 await 直至 handoff(同一 turn)。Standards P1:endpoint 必须
     // 在 apply 之后(endpoint 前移会让空 slice 假通过零 await)。
     const createApply = createSlice.indexOf('applyGuard(guardResult);');
@@ -2222,6 +2223,23 @@ describe('submit guard catalog wiring (source locks)', () => {
     const viewSource = readTextLf(resolve(process.cwd(), 'src/session/ContextSheetGoalView.tsx'), 'utf8');
     expect(viewSource).toContain('useState(initial?.objective ?? \'\')');
     expect(viewSource).toContain('useState(initial?.limits != null)');
+  });
+
+  it('鉴权降级失败 commit 分支与设备切换同口径 re-fence(codex P2)', () => {
+    // resolveStartedDowngradeOrCommit 的降级/恢复 await 窗口可能换代(来源恢复或
+    // 替换为 B)——鉴权降级失败(commit)分支必须像设备切换 commit 分支一样重跑
+    // 有界 runGuard + genAt 核对,否则用等待前的空/旧目录校准草稿(codex review P2)。
+    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    // 两处 commit 后的 re-fence(鉴权降级 + 设备切换)
+    const reFences = goalSlice.match(/for \(let pass = 0; pass < 2; pass \+= 1\) \{\s*\n\s*guardResult = await runGuard\(\);/g) ?? [];
+    expect(reFences.length).toBe(2);
+    // 鉴权降级 commit 分支(agentAuthGateHint 之后)与设备切换分支(ensureDeviceAlive
+    // 之后)之间,re-fence 循环位于各自 commit 判断之后;agentAuthGateHint 有 4 处,
+    // 用 lastIndexOf 定位最晚的鉴权降级分支(在 resolveStartedDowngradeOrCommit 内)
+    const authDowngrade = goalSlice.lastIndexOf('setGoalError(agentAuthGateHint(draft.agentKind));');
+    expect(authDowngrade).toBeGreaterThan(-1);
+    const afterAuth = goalSlice.slice(authDowngrade, authDowngrade + 800);
+    expect(afterAuth).toMatch(/guardResult = await runGuard\(\);/);
   });
 
   it('goal commit segment: started 后无裸 return,goal.set 先于本地同步(round-22 Spec P1-2/P1-3)', () => {

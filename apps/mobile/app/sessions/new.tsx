@@ -4848,6 +4848,19 @@ export default function NewRemoteSessionScreen() {
             // 降级失败 → 继续 commit(与设备切换降级失败同语义:恢复 volatile 后
             // 用捕获设备完成创建;目录虽空但创建可能仍成功,由 goal.set/外层
             // catch 兜底呈现失败)。
+            // 降级/恢复 await 窗口可能换代(codex review P2):重跑有界 guard,
+            // 耗尽降 unknown/fail-open——来源恢复或替换为 B 时用新目录校准草稿,
+            // 不再按等待前的空/旧目录回退默认路由或携带失效来源创建(与下方设备
+            // 切换 commit 分支的 re-fence 同口径)。
+            for (let pass = 0; pass < 2; pass += 1) {
+              guardResult = await runGuard();
+              if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+            }
+            if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+              guardResult = {
+                rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+              };
+            }
           }
         }
         // started 可靠落账后设备切换:不裸 return(会留 started retain-only,recovery
