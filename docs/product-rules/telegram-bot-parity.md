@@ -84,7 +84,6 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | `/workspace` | 独立命令 | `/project` 的**别名** | 服务端两条菜单文案逐字相同。个人 bot 用别名表达同义拼写，不重复占一个菜单位，因此不登记为独立命令——**不是缺口** |
 | 正文累积引擎 | `finalized-segments` 引擎：`isFinal` 是**逐条** agent_message 的完成信号，按消息边界切成已定稿段，完成态投影成 normalized messages 走折叠判定，`finalText()` 取定稿段合成 | `buffer-replace` 引擎：`isFinal` 用该条全文整体替换单一缓冲，无消息投影，`finalText()` 即整段缓冲 | 两侧 `isFinal` 的含义本来就不同，presenter 按 `mode` 实例化**两个独立引擎**（`createSegmentsEngine` / `createBufferEngine`）。**改正文累积相关逻辑时两个引擎要分别核对**——它们只共享接口，不共享实现 |
 | `/start` | **无** | **有** | Telegram 私聊首次交互必发 `/start`（START 按钮）；官方 bot 的首次交互走服务端 deep-link 绑定流程，不需要这条命令。见注册表 `parityNote`——这是**唯一一条个人侧独有**的命令 |
-| NO_REPLY 哨兵的生效范围 | 仅 ambient 轮次 | **所有轮次**（`noReplyScope: 'all-turns'`） | 个人侧 `streamingText.finalize` 的哨兵判定不带 ambient 门控：任何轮次命中整条 NO_REPLY 都撤占位、零出站。官方只在 ambient 轮次生效——`presentationCapabilities.ts` 把它记为**跨服务端 TODO**，即「想统一但要动服务端」，不是已裁决的产品差异 |
 | typing 保活总上限 | 10 分钟 + 设备在线门控 | 5 分钟（`typingKeepaliveMaxMs`） | 超过即停发，turn 异常悬挂时不无限打 API。官方那档带设备在线门控，跨服务端，本仓兑现不了——已在 `presentationCapabilities.ts` 声明为车道差异 |
 | lane 模型 | per-principal | per-chat | 已在 `presentationCapabilities.ts` 声明 |
 | 终稿特效 `messageEffectId` | 有 | 无 | 官方装饰位，已声明 |
@@ -98,7 +97,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 1 | **个人 bot 缺 3 条命令** | `/unbind`（清当前 chat 的项目映射）、`/effort`（思考强度）、`/agent`（切 Agent）官方有、个人无，目前只能在桌面端改。注册表已显式登记并由 CI 拦住 | 每条各自独立 PR |
 | 1b | **官方命令镜像没有跨仓校验** | 注册表里官方那一半是手抄的声明性镜像，服务端单方面加减命令这边不会红 | 待判：把 `TELEGRAM_COMMANDS` 放进 `cindy-protocol` 两侧生成，或在服务端加反向校验。要跨仓改动与一次协议版本推进 |
 | 2 | **msg.op 动词只接了一个** | 服务端全套动词在 `xindong/cindy-server#349`（未合）；桌面侧目前只消费 `react`（ack 表情，见 `hook-control/ackReactions.ts` 的 `HOOK_FEATURE_MESSAGE_OPS` 判据）。`send` / `edit` / `delete` / `typing` / `media` 未接线 | #1855 第三刀。**这是把官方 bot 的出站改由桌面驱动的关键一步**——接完之后两侧的发射与收口才可能走同一份代码，而不是各写一套 |
-| 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧全轮次生效。这是 `presentationCapabilities.ts` 明写的**跨服务端 TODO**，不是已裁决的差异——第三节那行只是登记现状 | 待判：要统一得改服务端的哨兵判定 |
+| 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧**全轮次**生效（`noReplyScope: 'all-turns'`）：`streamingText.finalize` 的哨兵判定不带 ambient 门控，任何轮次命中整条 NO_REPLY 都撤占位、零出站。官方只在 ambient 轮次生效——`presentationCapabilities.ts` 把它明写为**跨服务端 TODO**，即「想统一但要动服务端」，**不是**已裁决的产品差异，所以只登记在这里、不进第三节 | 待判：要统一得改服务端的哨兵判定 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
@@ -112,6 +111,8 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
    就进第四节并给出归属，**不要在当前 PR 里顺手补**——同族缺口一次覆盖比逐轮补边界
    便宜得多（`xindong/cindy-server#348` 十九轮 review 的教训）。
 3. 第四节里标「待核」的行，核完就把结论写回来，不要让它一直挂着。
+   **同一件事只能挂一档**——「有意不同」与「缺口」的区别就是「不要动它」和「该动它」，
+   两边都放等于同时说了两句相反的话。想让缺口带上现状说明，就把说明写进缺口那一行。
 4. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
    成功与失败要分开看——本表初版曾把只对成功收口成立的不变量泛化到失败路径。
 5. 命令的**分类**以 `botCommands.ts` 的 `parityNote` 为准——本表只是把它的结论摊开讲，
