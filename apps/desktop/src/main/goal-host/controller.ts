@@ -451,7 +451,9 @@ export class GoalController {
     type: GoalRunEventType,
     goalSessionId: string,
     state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
-    extra?: Partial<GoalRunEvent>,
+    // reason 允许 string | null(GoalState.lastReason 类型)——helper 内归一化为
+    // undefined,避免 strict 下把 null 赋给 reason?: string 的类型错误。
+    extra?: Omit<Partial<GoalRunEvent>, 'reason'> & { reason?: string | null },
   ): void {
     // dispose 后丢弃观测(reviewer P1:登出/切账号 reset 后,in-flight 的旧 controller
     // 扫描/收口不得把旧账号事件写回已清空的环)。
@@ -476,6 +478,7 @@ export class GoalController {
           }
         : {}),
       ...extra,
+      reason: extra?.reason ?? undefined,
       at: this.now(),
     };
     try {
@@ -1330,6 +1333,9 @@ export class GoalController {
       // listActive 是启动扫描快照；并发 Stop 可能已经立 cancelled boundary 或写成 paused。
       if (this.turns.has(snapshot.sessionId)) continue;
       const state = await this.deps.storage.get(snapshot.sessionId);
+      // per-goal await 期间可能已 dispose(reviewer P1:登出/切账号)——
+      // 不得重建 boundary / attach 旧 listener / emit 旧状态。
+      if (this.disposed) return;
       if (!state || state.status !== 'active' || this.turns.has(snapshot.sessionId)) continue;
       // 保守:只对**已经活着**的会话重挂 + 续跑;不在启动时强行 spawn agent
       //(开机就偷偷跑目标过于激进)。没活的留 dormant,等用户重发 /goal 时由
