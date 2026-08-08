@@ -314,6 +314,7 @@ export function createLiziMcpProviders(
         instance: createSchedulerMcpServer(opts.scheduler!, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
+          ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
           sessionId: ctx.sessionId,
           vendorOptions: ctx.vendorOptions,
         }),
@@ -353,6 +354,7 @@ export function createLiziMcpProviders(
         instance: createXdtHelperMcpServer(opts.xdtHelper!, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
+          ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
           sessionId: ctx.sessionId,
           vendorOptions: ctx.vendorOptions,
         }),
@@ -375,6 +377,7 @@ export function createLiziMcpProviders(
         instance: createOrcaMcpServer(opts.orca!, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
+          ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
           sessionId: ctx.sessionId,
           vendorOptions: ctx.vendorOptions,
         }),
