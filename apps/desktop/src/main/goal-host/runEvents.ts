@@ -76,7 +76,12 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         budget: evt.budget ? { ...evt.budget } : undefined,
       });
       if (ring.length > capacity) ring.shift();
-      sink?.(evt);
+      // best-effort:外部 sink 抛错不得冒泡影响业务流程(Copilot suppressed)。
+      try {
+        sink?.(evt);
+      } catch {
+        // 观测链路失败静默;环内数据不受影响。
+      }
     },
     snapshot() {
       // 与 record 同样浅拷贝(含 budget):返回新对象,消费者修改返回值
@@ -88,7 +93,15 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       // state-transition/budget-consumed/terminal 与随后立即调高上限的
       // budgetLimited→active 同毫秒时,不得把后发生的 active 排到 terminal 之前)。
       const dispatchGroup = new Set(['resumed', 'turn-dispatched']);
-      const finalizeGroup = new Set(['turn-finalized', 'terminal']);
+      // 收口类:所有派发后的终态/迁移/停滞事件都排在派发类之后(Codex P2:
+      // state-transition/budget-consumed/stall-detected 也必须 phase 后置)。
+      const closeoutGroup = new Set([
+        'turn-finalized',
+        'state-transition',
+        'stall-detected',
+        'budget-consumed',
+        'terminal',
+      ]);
       return ring
         .map((evt) => ({
           ...evt,
@@ -102,8 +115,8 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
           // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序(稳定排序)。
           const aD = dispatchGroup.has(a.type);
           const bD = dispatchGroup.has(b.type);
-          const aF = finalizeGroup.has(a.type);
-          const bF = finalizeGroup.has(b.type);
+          const aF = closeoutGroup.has(a.type);
+          const bF = closeoutGroup.has(b.type);
           if (aD && bF) return -1;
           if (aF && bD) return 1;
           return 0;

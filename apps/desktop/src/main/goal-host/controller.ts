@@ -322,6 +322,10 @@ interface TurnAccumulator {
   continuationTokens: number;
   /** 本轮是否已 finalize(去重 done / 终止 error 双触发)。 */
   finalized: boolean;
+  /** 收口审计事件(turn-finalized/terminal)已真实记录——finalized 可能在
+   * storage await 期间提前置位但事件未写(clear/pause/替换),accepted 补发
+   * turn-dispatched 需以此为准,避免孤儿派发(Greptile P1)。 */
+  auditFinalized?: boolean;
   /** 正常 turn 换代只递增 generation，不替换整个 Goal 生命周期 owner。 */
   generation: number;
   /** 显式 Stop 正在把 paused 落盘；迟到事件与自动恢复都必须停在这条边界外。 */
@@ -1817,6 +1821,9 @@ export class GoalController {
           reason: decision.lastReason,
           generation: completedGeneration,
         });
+        // 收口事件已真实记录:accepted 补发 turn-dispatched 以此为准(Greptile P1,
+        // finalized 可能在 storage await 期间提前置位但事件未写)。
+        turn.auditFinalized = true;
       } else {
         this.deps.logger.info('[goal] completion audit skipped — controller disposed', {
           sessionId,
@@ -2377,12 +2384,12 @@ export class GoalController {
         // 读 generation,快终态时 boundary 已被 stopSession 清掉会写成 0,与
         // finalize/terminal 脱节)。resumed 用 onDispatching 固化的恢复原因
         // (pendingResume 可能已被清理);at 用派发时刻保证重放顺序在 finalize 前。
-        // 发送条件:当前仍是本派发的 owner,或本派发已被 finalizeTurn 正常收口
-        // (turn.finalized——provider 快终态时 finalize 已跑,事件补发与收口配对)。
-        // clear/pause/替换 Goal 使 boundary 失效且无收口时,不写孤儿 dispatch
-        // 进审计流(Greptile P1:已清除/替换目标的旧派发不得混入时间线)。
+        // 发送条件:当前仍是本派发的 owner,或本派发的收口事件已真实记录
+        // (auditFinalized——finalizeTurn 置 finalized 后若在 storage await 期间
+        // clear/pause/替换,收口事件未写,不得补发;Greptile P1)。
         const boundaryStillLive =
-          this.turns.get(sessionId) === dispatchBoundary || dispatchBoundary?.finalized === true;
+          this.turns.get(sessionId) === dispatchBoundary ||
+          dispatchBoundary?.auditFinalized === true;
         if (!boundaryStillLive) {
           this.deps.logger.info('[goal] dispatch audit skipped — lifecycle replaced before accepted', {
             sessionId,
