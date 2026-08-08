@@ -1689,6 +1689,94 @@ describe('dormant scheduler manager', () => {
     });
   });
 
+  it('rotates discovery when contradictory peer probes arrive out of order', () => {
+    const harness = createTransport();
+    let round = 0;
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity: nextIdentity }),
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    const initialProbe = harness.pushes.find(
+      (push) => push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+    )?.payload as { nonce?: string };
+    const oldChannel = {
+      channel: 'discord' as const,
+      identity: nextIdentity,
+      bindingGeneration: peerBindingGeneration,
+    };
+    const newChannel = {
+      channel: 'discord' as const,
+      identity: nextIdentity,
+      bindingGeneration: nextLocalBindingGeneration,
+    };
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'probe',
+        sentAt: 3,
+        nonce: 'round-peer-new-000',
+        channels: [newChannel],
+      },
+    });
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'probe',
+        sentAt: 4,
+        nonce: 'round-peer-old-000',
+        channels: [oldChannel],
+      },
+    });
+
+    const refreshedProbe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    expect(refreshedProbe.nonce).not.toBe(initialProbe?.nonce);
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    // This advertisement belongs to the pre-conflict round and must not
+    // satisfy the fresh round, even though its channels match the stale probe.
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 5,
+        channels: [oldChannel],
+        inReplyTo: initialProbe?.nonce,
+      },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 6,
+        channels: [newChannel],
+        inReplyTo: refreshedProbe.nonce,
+      },
+    });
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: { channel: 'discord', identity: nextIdentity },
+      reason: 'peer-won',
+    });
+  });
+
   it('keeps overlapping snapshot responses isolated by request id', () => {
     const harness = createTransport();
     const manager = new ImSchedulerManager({
