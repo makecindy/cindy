@@ -76,7 +76,7 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         budget: evt.budget ? { ...evt.budget } : undefined,
       });
       if (ring.length > capacity) ring.shift();
-      // best-effort:外部 sink 抛错不得冒泡影响业务流程(Copilot suppressed)。
+      // best-effort:外部 sink 抛错不得冒泡影响业务流程。
       try {
         sink?.(evt);
       } catch {
@@ -86,14 +86,16 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
     snapshot() {
       // 与 record 同样浅拷贝(含 budget):返回新对象,消费者修改返回值
       // 不会污染环内数据。
-      // 按 at 稳定排序(快终态时 turn-dispatched 的 at 早于 finalize,但落环晚;
-      // 消费者按返回顺序看时间线必须 dispatch 在前,Codex P1)。同 at + 同 turnIndex
-      // 时:派发类(resumed/turn-dispatched)与收口类(turn-finalized/terminal)跨组时
-      // 派发在前(Greptile P1 同毫秒快终态);同组内保持插入序(Codex P2:预算停止的
-      // state-transition/budget-consumed/terminal 与随后立即调高上限的
-      // budgetLimited→active 同毫秒时,不得把后发生的 active 排到 terminal 之前)。
+      // 排序不变量(可验证,与评审过程无关):
+      //  1. 按 at 升序(快终态时 dispatch 的 at 早于收口,即使落环晚);
+      //  2. 同 at 且同 generation(同生命周期)按 turnIndex 升序;
+      //     跨 generation 换代时不用全局 turnIndex(新 run 的 turnIndex 小于旧
+      //     terminal,不得把"新 run 开始"排到"旧 run 结束"之前);
+      //  3. 同 at 且仍相等时,派发类(resumed/turn-dispatched)在收口类之前;
+      //  4. 其余保持插入序(预算停止的 terminal 与随后调高上限的
+      //     budgetLimited→active 同毫秒时,后者不得插到前者之前)。
       const dispatchGroup = new Set(['resumed', 'turn-dispatched']);
-      // 收口类:所有派发后的终态/迁移/停滞事件都排在派发类之后(Codex P2:
+      // 收口类:所有派发后的终态/迁移/停滞事件都排在派发类之后(同毫秒全序,
       // state-transition/budget-consumed/stall-detected 也必须 phase 后置)。
       const closeoutGroup = new Set([
         'turn-finalized',
@@ -110,8 +112,13 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         .sort((a, b) => {
           const byAt = (a.at ?? 0) - (b.at ?? 0);
           if (byAt !== 0) return byAt;
-          const byTurn = a.turnIndex - b.turnIndex;
-          if (byTurn !== 0) return byTurn;
+          // 同 at:仅同 generation(同生命周期)用 turnIndex——跨生命周期换代时
+          // 新 run 的 turnIndex 比旧 run 的 terminal 小,全局 turnIndex 会把
+          // "新 run 开始"排到"旧 run 结束"之前;跨 generation 保持插入序。
+          if ((a.generation ?? 0) === (b.generation ?? 0)) {
+            const byTurn = a.turnIndex - b.turnIndex;
+            if (byTurn !== 0) return byTurn;
+          }
           // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序(稳定排序)。
           const aD = dispatchGroup.has(a.type);
           const bD = dispatchGroup.has(b.type);

@@ -494,6 +494,9 @@ export class GoalController {
         : {}),
       ...extra,
       reason: extra?.reason ?? undefined,
+      // extra.generation 可能为 undefined(派发未固化时),不得覆盖已设的
+      // boundary.generation 破坏 schema——显式兜底。
+      generation: extra?.generation ?? boundary?.generation ?? 0,
       // extra.at 优先(dispatchAt 锚定重放顺序,不得被 now 覆盖)。
       at: extra?.at ?? this.now(),
     };
@@ -1949,6 +1952,9 @@ export class GoalController {
         to: 'budgetLimited',
         reason: lastReason,
       });
+      // 收口事件已真实记录:accepted 补发 turn-dispatched 以此为准(T56:
+      // 快终态 budgetLimited 走非 complete 分支,同样需要配对派发)。
+      turn.auditFinalized = true;
     }
 
     this.resetTurn(sessionId);
