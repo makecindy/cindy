@@ -5628,7 +5628,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",
-    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Open the ChatGPT App, sign in again, then retry.",
+    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
     "recovered": "ChatGPT sign-in has been restored. Please retry.",

@@ -583,17 +583,8 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       await refresh();
       return;
     }
-    if (credentialScope === 'system-shared') {
-      try {
-        const result = await window.electronAPI.openChatGPTApp();
-        if (!result.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
-      } catch {
-        toast.error(t('chatgptAuthRecovery.openAppFailed'));
-      }
-      return;
-    }
     await handleLogin();
-  }, [credentialScope, handleLogin, loggingIn, recoveryCheck, refresh, t]);
+  }, [handleLogin, loggingIn, recoveryCheck, refresh]);
 
   const recoveryDetail = reconnectRequired ? (
     <p className="text-12 leading-relaxed text-[var(--settings-integration-subtitle)]">
@@ -624,9 +615,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
             ? 'chatgptAuthRecovery.checking'
             : recoveryCheck === 'failed'
               ? 'chatgptAuthRecovery.recheck'
-              : credentialScope === 'system-shared'
-                ? 'chatgptAuthRecovery.openApp'
-                : 'chatgptAuthRecovery.relogin',
+              : 'chatgptAuthRecovery.relogin',
         )}
         onClick={() => void handleRecovery()}
         disabled={recoveryCheck === 'checking' || loggingIn}

@@ -5626,7 +5626,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT のログインが無効になりました",
-    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。ChatGPT App を開いて再度ログインしてから、再試行してください。",
+    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "instanceIsolatedInvalidated": "Cindy は現在、個別にログインした ChatGPT アカウントを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "unknownInvalidated": "Cindy の現在の ChatGPT ログインは無効になりました。再度ログインしてから、再試行してください。",
     "recovered": "ChatGPT ログインが復旧しました。再試行してください。",
