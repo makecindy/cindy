@@ -189,7 +189,9 @@ import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
+  flushRsbBrowserPopupQueue,
   installWebviewHardener,
+  prepareRsbBrowserPopupQueueForHost,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   setRsbPopupOpenerResolver,
@@ -207,7 +209,7 @@ import {
 } from './rsb-browser-bridge';
 import {
   getRsbNativePopupOwnerWebContents,
-  hasActiveRsbNativePopupSurfaces,
+  hasActiveRsbNativePopupSurfacesForOwner,
   registerRsbNativePopupSurfaceIpc,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
@@ -1232,7 +1234,7 @@ installWebviewHardener();
 // 通知用的 host webContents 通过 mainWindowRef lazy 取,主窗未就绪时静默跳过
 // (pin 状态由 main 端 registry 保权威,renderer 端会通过 reconciliation 跟上)。
 // ── 右侧栏独立子窗口(RSB window)────────────────────────────────────────
-// 「侧边栏在新窗口中显示」偏好 + 子窗口生命周期状态机。detached 且窗口开着时,
+// 「侧边栏在新窗口中显示」偏好 + 子窗口生命周期状态机。detached 且 renderer ready 时,
 // RSB host(pin/unpin 通知、tab-op dispatch 的目标 renderer)是子窗口而非主窗,
 // 下方三处 RSB bridge wiring 统一经 controller.getHostWebContents() 解析。
 // deps 全部是 lazy 闭包(mainWindowRef / isQuitting 在文件更靠后声明+赋值,
@@ -1261,12 +1263,16 @@ const rsbWindowController = new RsbWindowController({
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
   isQuitting: () => isQuitting,
-  canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
+  // A surface already transferred to the attached main window must not keep
+  // the now-empty detached window alive during reattach.
+  canCloseWindow: (win) => !hasActiveRsbNativePopupSurfacesForOwner(win.webContents.id),
+  onPopupHostAvailable: flushRsbBrowserPopupQueue,
   log: createLogger('right-sidebar-window-controller'),
 });
 registerRsbWindowIpc({
   controller: rsbWindowController,
   getMainWindow: () => mainWindowRef,
+  preparePopupHostTransition: prepareRsbBrowserPopupQueueForHost,
 });
 
 // ── 插件停靠面板独立窗口(ghost panel window)────────────────────────────
@@ -1334,10 +1340,10 @@ setRsbPopupOpenerResolver((webContentsId) => {
 setRsbPopupOpenerReportSubscriber((listener) =>
   getRsbBrowserBridge().onReport((record) => listener(record.webContentsId)),
 );
-// popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
-// detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
-// 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
-setRsbPopupHostResolver(() => rsbWindowController.getHostWebContents());
+// popup 路由目标使用严格 ready host:detached 子窗握手前返回 null,main 队列暂存;
+// markReady 后 controller 通知 flush 到子窗。这样不会把一次性 OAuth URL 留在
+// 主窗 preload、随后无法跨 renderer 交给分离窗口。
+setRsbPopupHostResolver(() => rsbWindowController.getPopupHostWebContents());
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.
@@ -1349,7 +1355,7 @@ registerTabOpResultHandler({
 // Phase 5: wire the host accessor into the backend module so the
 // RsbWebviewBackend's renderer-bridge can reach the host renderer for
 // tab-op dispatch, then register the Settings-driven backend toggle IPC.
-// The accessor resolves through the RSB window controller: detached + open →
+// The accessor resolves through the RSB window controller: detached + ready →
 // sidebar window renderer, otherwise the main window (lazy closure over
 // `mainWindowRef`, assigned later in `createMainWindow`). `ensureHost` lets
 // an automation tab-op pop the sidebar window first when the user prefers

@@ -3,8 +3,9 @@
  *
  * 为什么常驻而不是挂在 RightSidebarShell 上:popup 的产生方是 guest 页面
  * (window.open / target=_blank / 跨 host location 写入),它不关心用户此刻在
- * 哪个 route。订阅若随 Shell 生命周期,两类窗口必丢事件(preload 扇出不缓存,
- * "没人订阅"=丢):
+ * 哪个 route。常驻订阅让正常路径直接消费;preload 另有 8 条 / 30 秒的有界
+ * backlog,只兜首次挂载、route 交接与 detached 启动的短暂空窗。否则两类窗口
+ * 会把一次性 OAuth URL 留在缓冲直至过期:
  *   - 用户离开聊天视图(设置页等)期间,后台 agent 的 eager-spawn webview 触发
  *     popup —— OAuth 授权 URL 被丢弃,登录流程原地卡死;
  *   - main 端归属等待(事件驱动 report 等待 / deferred URL 捕获)期间用户切走,

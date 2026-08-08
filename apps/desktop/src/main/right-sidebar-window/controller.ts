@@ -11,7 +11,7 @@
  *  - 偏好 / lastOpen 落盘(settings-store),状态变化广播所有窗口
  *  - 渲染上下文中转(主窗上报 → 缓存 → 转发子窗口)
  *  - RSB host webContents 解析(浏览器自动化 backend 的 tab-op / pin 通知路由):
- *    detached && 窗口开 → 子窗口,否则主窗
+ *    detached && renderer ready → 子窗口,否则主窗
  *  - ensureOpenForAutomation:agent tab-op 在 B 态时先开窗、等 renderer ready 握手
  *
  * 不直接 import electron —— BrowserWindow 的创建 / 主窗引用 / 广播全部由
@@ -53,7 +53,9 @@ export interface RsbWindowControllerDeps {
   commandChannel: string;
   isQuitting: () => boolean;
   /** Popup WindowProxy depends on the ordinary webview opener staying alive. */
-  canCloseWindow?: () => boolean;
+  canCloseWindow?: (win: BrowserWindow) => boolean;
+  /** attached main 或 detached ready host 可投递时,通知 main 刷新一次性 popup 队列。 */
+  onPopupHostAvailable?: () => void;
   log: ControllerLogger;
 }
 
@@ -119,9 +121,14 @@ export class RsbWindowController {
     this.closing = false;
     this.ready = false;
     win.on('close', (event) => {
-      if (this.deps.isQuitting() || this.deps.canCloseWindow?.() !== false) return;
+      if (this.deps.isQuitting() || this.deps.canCloseWindow?.(win) !== false) return;
       event.preventDefault();
       this.closing = false;
+      // close() optimistically persists lastOpen=false before Electron emits
+      // this cancellable event. Restore the real open state when the popup
+      // guard keeps the window alive.
+      this.deps.settings.writePatch({ lastOpen: true });
+      this.broadcast();
       this.deps.log.warn('right-sidebar window close blocked by active browser popup');
     });
     win.on('closed', () => this.onClosed());
@@ -152,6 +159,7 @@ export class RsbWindowController {
     } else {
       // queued 调用方早已返回；attach 时必须把 ownership 显式交回主 renderer。
       this.flushDeferredCommandsToAttachedHost();
+      this.deps.onPopupHostAvailable?.();
       this.close();
     }
     // open()/close() 已各自广播,但两者都可能命中"窗口状态没变"的幂等分支
@@ -169,6 +177,7 @@ export class RsbWindowController {
       w.resolve();
     }
     this.flushDeferredCommandsToDetachedHost();
+    this.deps.onPopupHostAvailable?.();
   }
 
   /**
@@ -339,16 +348,32 @@ export class RsbWindowController {
 
   /**
    * RSB host webContents —— rsb-browser-bridge 的 pin/unpin 通知与 tab-op dispatch
-   * 目标窗口。detached 且子窗口活着 → 子窗口;否则回落主窗(内嵌形态)。
+   * 目标窗口。detached 且子窗口已握手 ready → 子窗口;否则回落主窗(内嵌形态)。
+   * 一次性 popup 使用下方更严格的 getPopupHostWebContents,不走此 fallback。
    */
   getHostWebContents(): WebContents | null {
     if (
       this.deps.settings.read().detached &&
+      this.ready &&
       !this.closing &&
       this.winRef &&
       !this.winRef.isDestroyed()
     ) {
       return this.winRef.webContents;
+    }
+    const main = this.deps.getMainWindow();
+    return main && !main.isDestroyed() ? main.webContents : null;
+  }
+
+  /**
+   * 一次性 popup 的严格可投递 host。与普通 bridge 的主窗 fallback 不同:
+   * detached 子窗口未 ready 时返回 null,让 main 队列等握手后跨 renderer flush。
+   */
+  getPopupHostWebContents(): WebContents | null {
+    if (this.deps.settings.read().detached) {
+      return this.ready && !this.closing && this.winRef && !this.winRef.isDestroyed()
+        ? this.winRef.webContents
+        : null;
     }
     const main = this.deps.getMainWindow();
     return main && !main.isDestroyed() ? main.webContents : null;
