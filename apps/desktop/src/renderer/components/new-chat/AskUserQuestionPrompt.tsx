@@ -21,6 +21,8 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 
+import { UserMessageUrlLink } from '@/components/chat/UserMessageUrlLink';
+import { findLinkifyMatches } from '@/components/chat/userMessageLinkify';
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { useAutoResize } from '@/hooks/useAutoResize';
 import { cn } from '@/lib/utils';
@@ -60,11 +62,36 @@ function AutoGrowingAnswerTextarea({
   );
 }
 
+/** Preserve plain question text while making its http(s) URLs actionable. */
+function QuestionTextWithLinks({ text, sessionId }: { text: string; sessionId?: string }) {
+  const result: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of findLinkifyMatches(text)) {
+    if (match.kind !== 'url') continue;
+    if (match.index > lastIndex) result.push(text.slice(lastIndex, match.index));
+    result.push(
+      <UserMessageUrlLink
+        key={`question-url-${match.index}-${match.text}`}
+        url={match.text}
+        sessionId={sessionId}
+      />,
+    );
+    lastIndex = match.index + match.length;
+  }
+
+  if (lastIndex === 0) return text;
+  if (lastIndex < text.length) result.push(text.slice(lastIndex));
+  return <>{result}</>;
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface AskUserQuestionPromptProps {
+  /** Current session; lets question links honor the configured opening preference. */
+  sessionId?: string;
   pending: PendingAskUser;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
   /**
@@ -98,6 +125,7 @@ interface AskUserQuestionPromptProps {
 // ---------------------------------------------------------------------------
 
 export function AskUserQuestionPrompt({
+  sessionId,
   pending,
   onAnswer,
   viewerState,
@@ -533,8 +561,10 @@ export function AskUserQuestionPrompt({
         {/* Question Row (header chip moved to top header bar above) */}
         <div className="flex flex-col gap-[8px]">
           <div className="flex items-center justify-between">
-            <span className="text-15 font-medium text-[var(--ask-header-text)]">
-              {currentQ?.question}
+            <span className="text-15 font-medium text-[var(--ask-header-text)] [overflow-wrap:anywhere]">
+              {currentQ?.question ? (
+                <QuestionTextWithLinks text={currentQ.question} sessionId={sessionId} />
+              ) : null}
             </span>
             {pageIndicator && (
               <span className="ml-4 shrink-0 text-13 text-[var(--ask-page-text)]">
