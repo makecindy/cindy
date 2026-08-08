@@ -16,6 +16,7 @@ import {
   DL_UNSUBSCRIBE_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
   isCoalesciblePushChannel,
+  SESSION_ACTIVITY_CHANNEL,
   topicForPush,
   type MakerEventBatchPayload,
 } from '@cindy/device-link';
@@ -392,6 +393,107 @@ describe('[8] 跨 channel 顺序(review 首轮 P2)', () => {
   });
 });
 
+describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review 第二轮)', () => {
+  it('activity 终态也先收口事件批:收口在所有 session-scoped 分支之前', () => {
+    // 第二轮实测漏洞:activity 分支自带 continue,收口放在它之后就永不生效,
+    // 手机端会先收到 completed(结束流式)再收到之前的文本批。
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1', 'sessions']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { text: 'delta' } });
+    expect(h.sent).toHaveLength(0);
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'completed' });
+
+    // 批必须先于 activity 发出
+    expect(h.sent[0]!.channel).toBe(MAKER_EVENT_BATCH_CHANNEL);
+    expect(h.sent.some((s) => s.channel === SESSION_ACTIVITY_CHANNEL)).toBe(true);
+    expect(h.sent.findIndex((s) => s.channel === MAKER_EVENT_BATCH_CHANNEL))
+      .toBeLessThan(h.sent.findIndex((s) => s.channel === SESSION_ACTIVITY_CHANNEL));
+  });
+
+  it('退避中跨 channel 收口不再尝试:交错 push 不产生额外的注定失败发送', () => {
+    const sendPush = vi.fn((
+      _dst: string,
+      channel: string,
+      _payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+      }
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: {} });
+    vi.advanceTimersByTime(WINDOW_MS);
+    const batchAttempts = () =>
+      sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL).length;
+    expect(batchAttempts()).toBe(1); // 退避已生效
+
+    // 交错 10 条同会话其它 channel:一次都不该再试批
+    for (let i = 0; i < 10; i++) {
+      __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'running' });
+    }
+    expect(batchAttempts()).toBe(1);
+  });
+
+  it('待重试段按上限切片发送:不把滞留段撑成一个超限逻辑消息', () => {
+    let failing = true;
+    const sendPush = vi.fn((
+      _dst: string,
+      channel: string,
+      _payload: unknown,
+      _ownerStamp?: unknown,
+    ) => {
+      if (failing && channel === MAKER_EVENT_BATCH_CHANNEL) {
+        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+      }
+    });
+    const h = mkClient({ sendPush });
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 触发退避,然后在退避期间累积到远超单批上限(64)的事件量
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
+    vi.advanceTimersByTime(WINDOW_MS);
+    for (let i = 1; i < 200; i++) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+
+    failing = false;
+    vi.advanceTimersByTime(MAKER_EVENT_BATCH_RETRY_MS);
+    const delivered = sendPush.mock.calls
+      .filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL)
+      .slice(1) // 第 1 次是遭背压那次
+      .map((c) => c[2] as MakerEventBatchPayload);
+    // 200 条按 64 上限切成 4 片(64+64+64+8),每片都不超上限,事件一条不丢
+    expect(delivered.every((b) => b.events.length <= 64)).toBe(true);
+    expect(delivered.reduce((n, b) => n + b.events.length, 0)).toBe(200);
+    // 切片顺序 = 原始顺序
+    const flat = delivered.flatMap((b) => b.events) as Array<{ event: { i: number } }>;
+    expect(flat.map((e) => e.event.i)).toEqual([...Array(200).keys()]);
+  });
+
+  it('单条即超批字节上限的事件走逐帧路径(保留 compact 兜底),且排在批之后', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
+    // 单条 ~300KB UTF-8:不入批,先收口批再逐帧发
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { big: 'x'.repeat(300_000) } });
+
+    expect(h.sent.map((s) => s.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:event',
+    ]);
+    expect((h.sent[0]!.payload as MakerEventBatchPayload).events).toHaveLength(1);
+  });
+});
+
 describe('[9] 字节估算按 UTF-8(review 首轮)', () => {
   it('多字节内容按 UTF-8 计:中文事件到量 flush,阈值不被 UTF-16 低估架空', () => {
     const h = mkClient();
@@ -404,8 +506,16 @@ describe('[9] 字节估算按 UTF-8(review 首轮)', () => {
     for (let i = 0; i < 9; i++) {
       __testing.forwardPush('maker:event', { sessionId: 's1', event: { text } });
     }
-    // 未到条数上限(64),靠字节阈值提前发出
-    expect(batchesIn(h.sent)).toHaveLength(1);
+    // 未到条数上限(64)就已发出:证明字节阈值生效(按 UTF-16 计不会触发)
+    const batches = batchesIn(h.sent);
+    expect(batches.length).toBeGreaterThan(0);
+    // 且每帧都在字节上限内(切片保证),事件一条不丢
+    for (const b of batches) {
+      const bytes = Buffer.byteLength(JSON.stringify(b.events), 'utf8');
+      expect(bytes).toBeLessThanOrEqual(256 * 1024);
+    }
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect(batchesIn(h.sent).reduce((n, b) => n + b.events.length, 0)).toBe(9);
   });
 });
 

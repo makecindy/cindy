@@ -675,10 +675,9 @@ function stageMakerEventPush(
   tail.events.push(payload);
   tail.bytes += estimateMakerEventBytes(payload);
   trimMakerEventBatchBuffer(dst, sessionId, segments);
-  // 到量即发,但**退避中不插队**:滞留段的长度仍在阈值之上,逐条触发只会重复
-  // 同步 sendPush 抛异常(review 首轮 P1)。退避由 timer 统一驱动。
+  // 到量即发,但要过统一的主动发送闸门(见 canFlushMakerEventBatchNow)。
   if (
-    !stage.retrying
+    canFlushMakerEventBatchNow(stage)
     && (tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
       || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES)
   ) {
@@ -686,6 +685,20 @@ function stageMakerEventPush(
     return;
   }
   scheduleMakerEventBatchFlush(dst, stage);
+}
+
+/**
+ * **主动** flush 的唯一准入判据(到量路径与跨 channel 收口路径共用)。
+ *
+ * 退避中一律拒绝:滞留段的长度/字节仍在阈值之上,任何主动入口都会反复触发同步
+ * sendPush 抛异常,退化成本 PR 要消除的逐帧 admission 风暴。review 两轮各抓到
+ * 一个入口(第一轮:到量;第二轮:跨 channel 收口),所以判据收敛成这一个函数——
+ * 新增主动入口必须过它,而不是各自记得检查 retrying。
+ *
+ * 唯一允许绕过的入口是退避 timer 自己(它就是退避的驱动者)。
+ */
+function canFlushMakerEventBatchNow(stage: MakerEventBatchStage): boolean {
+  return !stage.retrying;
 }
 
 /**
@@ -791,27 +804,63 @@ function flushMakerEventBatchSession(
       );
       segment.droppedOldest = 0;
     }
-    const payload: MakerEventBatchPayload = { sessionId, events: segment.events };
+    // 按上限**切片**发送,而不是整段一帧:退避期间段可以累积到缓冲上限
+    // (512 条),整段发会撑爆可靠传输的单逻辑消息上限、走 PAYLOAD_TOO_LARGE
+    // 分支一次丢掉整段(review 第二轮)。切片后未发出的部分留在段头等重试。
+    const slice = takeMakerEventBatchSlice(segment);
+    const payload: MakerEventBatchPayload = { sessionId, events: slice };
     try {
       if (segment.ownerStamp === undefined) {
         activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload);
       } else {
         activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
       }
-      segments.shift();
+      if (segment.events.length === 0) segments.shift();
     } catch (err) {
+      const sliceBytes = sumMakerEventBytes(slice);
+      // 切片未发出:放回段头,顺序不变(切片本就取自段头)。
+      segment.events.unshift(...slice);
+      segment.bytes += sliceBytes;
       if (err instanceof DeviceLinkError && err.code === 'BACKPRESSURE') {
         scheduleMakerEventBatchRetry(dst, stage);
         return false;
       }
       // PAYLOAD_TOO_LARGE / LINK_NOT_OPEN 等:沿 maker:event 既有 best-effort 语义
-      // 丢弃该段(逐帧路径同样会丢),继续尝试后续段。
-      segments.shift();
-      log.warn(`maker:event batch dropped for ${shortId(dst)}: ${String(err)}`);
+      // 丢弃**该切片**(逐帧路径同样会丢),继续尝试段内其余事件。
+      segment.events.splice(0, slice.length);
+      segment.bytes = Math.max(0, segment.bytes - sliceBytes);
+      if (segment.events.length === 0) segments.shift();
+      log.warn(`maker:event batch slice dropped for ${shortId(dst)}: ${String(err)}`);
     }
   }
   stage.batches.delete(sessionId);
   return true;
+}
+
+/**
+ * 从段头取一片:条数 ≤ MAX_EVENTS 且累计字节 ≤ MAX_BYTES,但**至少一条**
+ * (单条即超阈值的事件已在入批前被拦到逐帧路径,这里的至少一条只是防死循环)。
+ * 取出的事件同步从段里移除;发送失败时由调用方放回段头。
+ */
+function sumMakerEventBytes(events: readonly unknown[]): number {
+  let total = 0;
+  for (const event of events) total += estimateMakerEventBytes(event);
+  return total;
+}
+
+function takeMakerEventBatchSlice(segment: MakerEventBatchSegment): unknown[] {
+  const slice: unknown[] = [];
+  let bytes = 0;
+  while (segment.events.length > 0 && slice.length < MAKER_EVENT_BATCH_MAX_EVENTS) {
+    const next = segment.events[0];
+    const nextBytes = estimateMakerEventBytes(next);
+    if (slice.length > 0 && bytes + nextBytes > MAKER_EVENT_BATCH_MAX_BYTES) break;
+    segment.events.shift();
+    slice.push(next);
+    bytes += nextBytes;
+  }
+  segment.bytes = Math.max(0, segment.bytes - bytes);
+  return slice;
 }
 
 function scheduleMakerEventBatchRetry(dst: string, stage: MakerEventBatchStage): void {
@@ -838,6 +887,11 @@ function flushMakerEventBatchesForSessionPush(
   if (channel === MAKER_EVENT_BATCH_CHANNEL) return;
   const stage = makerEventBatchStages.get(dst);
   if (!stage || stage.batches.size === 0) return;
+  // 退避中不尝试(与到量路径同一闸门,review 第二轮 P1):否则每条交错 push 都
+  // 会额外产生一次注定失败的同步发送。此时顺序不保证——但那时本帧自身的
+  // sendPush 大概率同样受阻(同一个满窗口),退化为旧语义(拥塞时 maker:event
+  // 本就被丢弃),不值得为它把交错帧也压进缓冲。
+  if (!canFlushMakerEventBatchNow(stage)) return;
   const sessionId = readPushSessionId(payload);
   if (!sessionId || !stage.batches.has(sessionId)) return;
   flushMakerEventBatchSession(dst, stage, sessionId);
@@ -1018,6 +1072,14 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
       ),
     )
     : null;
+  // 本帧是否具备入批资格(与 dst 无关的部分,循环外算一次):
+  // 必须是 maker:event、能算出 sessionId、且单条不超批字节上限——单条超限的事件
+  // 入批会撑爆逻辑消息上限,且失去逐帧路径的 compactOversizedPushPayload 兜底。
+  const batchEligibleSessionId = batchTargets
+    ? readPushSessionId(remotePayload)
+    : null;
+  const batchEligible = batchEligibleSessionId !== null
+    && estimateMakerEventBytes(remotePayload) < MAKER_EVENT_BATCH_MAX_BYTES;
   const offlineTargets = subscriptions
     .getKnownControllersForTopic(topic)
     .filter((dst) => !liveTargets.includes(dst));
@@ -1032,6 +1094,22 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     }
   }
   for (const dst of liveTargets) {
+    const willBatch = batchEligible && batchTargets!.has(dst);
+    // 跨 channel 保序(review 两轮):**不入批**的帧必须排在该会话已暂存的事件
+    // 之后——否则 interaction-request / status-changed / activity 终态会插到攒批
+    // 的文本 delta 前面,控制端先收「已完成/确认卡」(结束流式消息)、120ms 后
+    // 才收到前面的文本,表现为「终态之后又冒出流式内容」。
+    // 位置要求两条,都由 review 实测推出:
+    //  - 必须在 activity 分支**之前**(它自带 continue,放后面对 activity 永不生效);
+    //  - 必须只对 !willBatch 的帧做,否则每条 maker:event 都会先收口上一批,
+    //    批被拆回逐帧、优化完全失效。
+    if (!willBatch && makerEventBatchStages.size > 0) {
+      flushMakerEventBatchesForSessionPush(dst, channel, remotePayload);
+    }
+    if (willBatch) {
+      stageMakerEventPush(dst, batchEligibleSessionId!, remotePayload, ownerStamp);
+      continue;
+    }
     // 会话活动是高频状态镜像:走 latest-wins 暂存整流,不直接冲可靠传输窗口。
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       stageSessionActivityPush(dst, remotePayload, ownerStamp);
@@ -1041,23 +1119,6 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     // 「每窗口一帧」(见 stageMakerEventPush)。未声明能力的控制端照旧逐帧,
     // 因此旧控制端零感知。sessionId 取自 topic 路由所用的同一字段,取不到时
     // 不入批(topicForPush 已保证 session-scoped 帧必有它,这里只是防御)。
-    if (channel === MAKER_PUSH.EVENT && batchTargets?.has(dst)) {
-      const sessionId = readPushSessionId(remotePayload);
-      if (sessionId) {
-        stageMakerEventPush(dst, sessionId, remotePayload, ownerStamp);
-        continue;
-      }
-    }
-    // 跨 channel 保序(review 首轮 P2):同会话的其它推送必须排在已暂存的事件
-    // **之后**——否则 interaction-request / status-changed 会插到攒批的文本
-    // delta 前面,控制端先收确认卡(结束当前流式消息)、120ms 后才收到前面的
-    // 文本,表现为「交互卡出现后又冒出流式内容」。先把该会话的批推进可靠
-    // FIFO,后续帧自然排在其后。
-    // 残留窗口:批因背压 flush 失败时顺序仍可能颠倒——那时本帧的 sendPush 大概率
-    // 同样受阻(同一窗口),退化为旧语义(拥塞时 maker:event 本就被丢弃)。
-    if (makerEventBatchStages.size > 0) {
-      flushMakerEventBatchesForSessionPush(dst, channel, remotePayload);
-    }
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
