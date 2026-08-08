@@ -12,6 +12,7 @@ function makeChannel(
   fetchImplementation: typeof fetch,
   beforeDispatch?: (model: string) => void,
   onAuthFailure?: Parameters<typeof createCodexImageChannel>[0]['onAuthFailure'],
+  getHostModel?: Parameters<typeof createCodexImageChannel>[0]['getHostModel'],
 ) {
   return createCodexImageChannel({
     hasOAuthLogin: () => true,
@@ -19,6 +20,7 @@ function makeChannel(
     fetchImplementation,
     beforeDispatch,
     onAuthFailure,
+    getHostModel,
   });
 }
 
@@ -44,9 +46,12 @@ describe('codexImageClient', () => {
     expect(String(url)).toBe('https://chatgpt.com/backend-api/codex/responses');
     expect((init?.headers as Record<string, string>)['ChatGPT-Account-Id']).toBe('account-id');
     const body = JSON.parse(String(init?.body)) as {
+      model: string;
       tools: Array<Record<string, unknown>>;
       tool_choice?: unknown;
     };
+    // 未提供账号解析时 host 模型保持静态兜底。
+    expect(body.model).toBe('gpt-5.5');
     expect(body.tools).toContainEqual(
       expect.objectContaining({
         type: 'image_generation',
@@ -176,5 +181,39 @@ describe('codexImageClient', () => {
     await expect(empty.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' })).rejects.toThrow(
       '没有图片',
     );
+  });
+
+  it('host 模型采用账号解析结果(订阅计划不含静态兜底模型时不再被上游拒绝)', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () =>
+      sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]),
+    );
+    const channel = makeChannel(doFetch, undefined, undefined, async () => 'gpt-5.6-luna');
+    await channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' });
+    const body = JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)) as { model: string };
+    expect(body.model).toBe('gpt-5.6-luna');
+  });
+
+  it('host 模型解析抛错 / 返回空白时退回静态兜底,不挡住出图', async () => {
+    const throwingFetch = vi.fn<typeof fetch>(async () =>
+      sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]),
+    );
+    const throwing = makeChannel(throwingFetch, undefined, undefined, async () => {
+      throw new Error('models cache missing');
+    });
+    await expect(
+      throwing.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
+    ).resolves.toMatchObject({ data: [{ b64_json: 'aW1hZ2U=' }] });
+    expect(
+      (JSON.parse(String(throwingFetch.mock.calls[0]?.[1]?.body)) as { model: string }).model,
+    ).toBe('gpt-5.5');
+
+    const blankFetch = vi.fn<typeof fetch>(async () =>
+      sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]),
+    );
+    const blank = makeChannel(blankFetch, undefined, undefined, async () => '   ');
+    await blank.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' });
+    expect(
+      (JSON.parse(String(blankFetch.mock.calls[0]?.[1]?.body)) as { model: string }).model,
+    ).toBe('gpt-5.5');
   });
 });

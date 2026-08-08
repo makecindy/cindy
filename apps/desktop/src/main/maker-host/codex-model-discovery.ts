@@ -272,3 +272,34 @@ export async function readCodexDiscoveredModelsForAuthRefresh(
     return [];
   }
 }
+
+/** Codex 图像通道的静态兜底 host 模型;与 cindy-brain codexImageClient 的兜底保持一致。 */
+const CODEX_IMAGE_HOST_PREFERRED_MODEL = 'gpt-5.5';
+
+/**
+ * Codex 图像通道 host 模型选型(纯函数)。
+ *
+ * Codex Responses 面需要一个「host 模型」编排 hosted image_generation tool,而订阅
+ * 计划不保证包含任意指定 host 模型(计划内没有时上游直接拒答)。策略:首选模型在
+ * 账号清单内就原样保留(存量账号零行为变化);否则取上游 priority 数值最小的模型
+ * (最接近账号默认选择的旗舰)。空清单返回 null,让通道侧保留静态兜底。
+ */
+export function pickCodexImageHostModel(
+  models: readonly CatalogModel[],
+  preferred: string = CODEX_IMAGE_HOST_PREFERRED_MODEL,
+): string | null {
+  if (models.length === 0) return null;
+  if (models.some((m) => m.id === preferred)) return preferred;
+  const order = (m: CatalogModel) => m.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  return [...models].sort((a, b) => order(a) - order(b))[0]?.id ?? null;
+}
+
+/**
+ * 从账号模型 cache 派生 Codex 图像通道的 host 模型。
+ * cache 读不到 / OAuth 未激活 / 清单为空 → null,通道侧退回静态兜底模型,不挡出图。
+ */
+export async function resolveCodexImageHostModel(): Promise<string | null> {
+  const models = await readCodexDiscoveredModels();
+  if (!models) return null;
+  return pickCodexImageHostModel(models);
+}
