@@ -136,8 +136,14 @@ describe('Claude credential + ownership recovery integration', () => {
     const backupFile = `${bindingFile}.bak`;
     fs.renameSync(bindingFile, backupFile);
     const renameSpy = vi.spyOn(fs, 'renameSync');
+    const projection = vi.fn(() => 'visible');
 
     expect(store.hasClaudeAiOAuth()).toBe(false);
+    expect(store.runWithClaudeAiOAuthCredentialSnapshotCurrent(
+      { accessToken: 'at-owner-a', refreshToken: 'rt-owner-a' },
+      projection,
+    )).toEqual({ state: 'changed' });
+    expect(projection).not.toHaveBeenCalled();
     expect(renameSpy).not.toHaveBeenCalled();
     expect(fs.existsSync(bindingFile)).toBe(false);
     expect(fs.existsSync(backupFile)).toBe(true);
@@ -187,8 +193,13 @@ describe('Claude credential + ownership recovery integration', () => {
       const backupContents = fs.readFileSync(stateFile, 'utf8');
       fs.renameSync(stateFile, backupFile);
       const renameSpy = vi.spyOn(fs, 'renameSync');
+      const projection = vi.fn(() => 'visible');
 
       expect(store.hasClaudeAiOAuth()).toBe(false);
+      expect(store.runWithClaudeAiOAuthCredentialSnapshotCurrent(credential, projection)).toEqual({
+        state: 'changed',
+      });
+      expect(projection).not.toHaveBeenCalled();
       expect(renameSpy).not.toHaveBeenCalled();
       expect(fs.existsSync(stateFile)).toBe(false);
       expect(fs.readFileSync(backupFile, 'utf8')).toBe(backupContents);

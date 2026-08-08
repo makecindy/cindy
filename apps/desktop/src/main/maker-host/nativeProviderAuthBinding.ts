@@ -552,6 +552,29 @@ export function runWithNativeProviderAuthCredentialRejectionForStorageMutation<T
 }
 
 /**
+ * Read-only credential projections also hold `.storage-write`, but must keep
+ * backup-only binding/rejection sidecars fail-closed and untouched. Hold the
+ * snapshot binding lock through the callback so the verdict and projection
+ * remain one atomic storage→binding observation without enabling recovery.
+ */
+export function runWithNativeProviderAuthCredentialRejectionForStorageSnapshot<T>(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision: string | null | undefined,
+  action: (decision: NativeProviderCredentialRejectionDecision) => T,
+): T {
+  return withBindingSnapshotLock(() =>
+    action(
+      resolveNativeProviderAuthCredentialRejectionUnlocked(
+        provider,
+        fingerprint,
+        authorizationRevision,
+      ),
+    ),
+  );
+}
+
+/**
  * Auto-claim callbacks already execute under the binding lock. Re-entering
  * proper-lockfile would report ELOCKED and incorrectly hide every credential;
  * this narrow probe reuses only that synchronous critical section.

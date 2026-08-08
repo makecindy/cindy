@@ -194,6 +194,22 @@ async function importStore(options: {
             typeof revision === 'string' && revision.length > 0 ? revision : null,
         },
       ),
+    runWithNativeProviderAuthCredentialRejectionForStorageSnapshot: <T>(
+      _provider: string,
+      fingerprint: string,
+      revision: string | null | undefined,
+      action: (decision: {
+        state: 'allowed' | 'rejected' | 'unreadable';
+        effectiveAuthorizationRevision: string | null;
+      }) => T,
+    ) =>
+      action(
+        options.credentialRejectionDecision?.(fingerprint, revision) ?? {
+          state: options.credentialRejectionState?.(fingerprint, revision) ?? 'allowed',
+          effectiveAuthorizationRevision:
+            typeof revision === 'string' && revision.length > 0 ? revision : null,
+        },
+      ),
     getNativeProviderAuthCredentialRejectionStateForBindingTransaction: (
       _provider: string,
       fingerprint: string,

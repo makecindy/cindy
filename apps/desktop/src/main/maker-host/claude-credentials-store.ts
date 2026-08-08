@@ -41,6 +41,7 @@ import {
   resolveNativeProviderAuthCredentialRejectionForBindingTransaction,
   resolveNativeProviderAuthCredentialRejectionForStorageMutation,
   runWithNativeProviderAuthCredentialRejectionForStorageMutation,
+  runWithNativeProviderAuthCredentialRejectionForStorageSnapshot,
   type NativeProviderAuthOwnerFence,
 } from './nativeProviderAuthBinding.js';
 
@@ -1135,7 +1136,7 @@ export function runWithClaudeAiOAuthCredentialSnapshotCurrent<T>(
       } else if (current.accessToken !== expected.accessToken) {
         return { state: 'changed' };
       }
-      return runWithNativeProviderAuthCredentialRejectionForStorageMutation(
+      return runWithNativeProviderAuthCredentialRejectionForStorageSnapshot(
         'anthropic',
         fingerprintClaudeAiOAuthCredentialIdentity(current),
         authorizationRevision(current),
