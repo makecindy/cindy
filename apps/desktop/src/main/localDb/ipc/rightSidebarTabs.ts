@@ -24,6 +24,7 @@ import { and, asc, eq } from 'drizzle-orm';
 
 import { getDbClient } from '../client/current';
 import { rightSidebarTabs, sessions } from '../schema';
+import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState.js';
 import {
   requireObject,
   requireString,
@@ -35,10 +36,6 @@ const log = createLogger('rightSidebarTabs');
 
 /** 单 session 最多 20 个 tab,超抛 RIGHT_SIDEBAR_TOO_MANY_TABS。 */
 const MAX_TABS_PER_SESSION = 20;
-/** 单行 state JSON 序列化字节上限,超抛 RIGHT_SIDEBAR_STATE_TOO_LARGE。
-    16KB 已远超浏览器 tab(url + title + favicon URL ~400B)/ 文件 tab(~500B)实际需要,
-    够防 plugin 误塞 dataURL / 大对象。 */
-const MAX_STATE_JSON_BYTES = 16 * 1024;
 
 export interface TabRow {
   id: string;
