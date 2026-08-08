@@ -265,6 +265,9 @@ const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
   'imageGeneration',
   'imageView',
 ]);
+// App-server v2 reports fileChange only after the patch is complete. With no
+// matching start event it is an output notification, not a pairable timing
+// boundary; handleFileChange still publishes its tool events below.
 
 function noteCodexGenerationBoundary(
   rt: CodexRuntimeState,
@@ -288,7 +291,7 @@ function noteCodexGenerationBoundary(
   }
   if (
     typeof item.type !== 'string' ||
-    (!CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type) && item.type !== 'fileChange')
+    !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)
   ) {
     return;
   }
@@ -302,12 +305,6 @@ function noteCodexGenerationBoundary(
     return;
   }
   if (phase !== 'completed') return;
-  // Codex v2 can emit fileChange as completion-only. Without its start boundary
-  // we cannot exclude file application time from the generation denominator.
-  if (item.type === 'fileChange' && !rt.generationPendingToolIds.has(pauseId)) {
-    rt.generationTimingReliable = false;
-    return;
-  }
   resumeCodexGeneration(rt, turnId, pauseId, receivedAt);
 }
 

@@ -194,7 +194,7 @@ describe('Codex generation timing', () => {
     }
   });
 
-  it('omits timing for completion-only file changes without a start boundary', async () => {
+  it('does not require a start boundary for completion-only file changes', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     beginCodexGenerationTurn(rt, 'turn-1', 1_000);
@@ -206,7 +206,7 @@ describe('Codex generation timing', () => {
     }, q, makeCtx(rt));
     finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
     await collect(q);
-    expect(codexGenerationDurationMs(rt)).toBeUndefined();
+    expect(codexGenerationDurationMs(rt)).toBe(3_000);
   });
 
   it('excludes approval waits from generation timing', () => {
