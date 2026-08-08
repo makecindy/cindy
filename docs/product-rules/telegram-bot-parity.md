@@ -16,7 +16,9 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 > 行**；差异可以有，但不能没人说得清。
 >
 > 写这张表时的教训：**不要读模块注释就下结论，要读那条路径最后真正交出去的是什么。**
-> 初版据此把「终稿保留过程区」写成了两侧差异，实际两侧在收口时都只交正文。
+> 初版据此把「终稿保留过程区」写成了两侧差异，实际两侧**成功收口**时都只交正文。
+> （失败收口两侧确有差异——个人侧留「过程区 + 正文 + 错误」，官方侧走独立错误字段，
+> 见第二节末行。成功与失败必须分开看。）
 
 判定口径三档：
 
@@ -36,7 +38,6 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
-| 进度节流**间隔** | `PresenterPolicy.intermediateThrottleMs` | 只有这一个值两侧都读。**长度上限不算**——见下表 |
 | 群历史检索核心 | `im/shared/groupHistoryAccess.ts` | 官方侧由 `hook-control/groupHistoryScope.ts` 把官方 externalKey 解析成同一套 access scope，两侧检索走同一实现 |
 
 ### 放在共享目录、但**只有一侧消费**的
@@ -46,6 +47,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | `im/shared/channelToolPolicy.ts` 的 `channelForceConfirmToolCall` | 只被个人 Telegram / 微信 / 钉钉的权限策略引用。**官方 bot 不挂**——见第三节的裁决。放在 `shared/` 下是因为个人侧三个渠道共用，不代表两个 bot 共用 |
 | `packages/lizi-im/src/telegram/presentationCapabilities.ts` | 只导出并由**个人 driver** 消费 `TELEGRAM_PERSONAL_CAPABILITIES`，没有官方 bot 共用的契约数据。它的作用是把车道差异写在一处，不是让两侧取同一份值 |
 | `PresenterPolicy.intermediateMaxRenderedChars`（长度上限） | **只有官方那条路消费**（`createProgressEmitter`）。个人侧用自己的私有常量 `INTERMEDIATE_EDIT_LIMIT = 3800`（`streamingText.ts`）判断何时停止编辑。**改共享的长度策略只会改到官方 bot**——两处独立维护，改一处必须核对另一处 |
+| `PresenterPolicy.intermediateThrottleMs`（节流间隔） | 个人路径是**双层节流**：`turnRunner` 的 `CARD_PATCH_THROTTLE_MS` 确实读共享值，但真正出站的 `streamingText.ts` 还有一份写死的 `TELEGRAM_UPDATE_THROTTLE_MS = 1500`（注释称「双层节流冗余但无害」）。**改共享值只改得动 runner 那层，driver 那层不跟**——所以这个值也不是同源，改它要连 driver 的常量一起核对 |
 | `im/shared/botCommands.ts` 的**官方那一半** | 官方 bot 的命令**仍由服务端 `TELEGRAM_COMMANDS` 下发**，本表对官方侧是「声明性镜像、不接线」。测试只用内联清单核对镜像，**服务端改了命令这边完全可能不同步**。个人侧那一半是真的单一真相源（菜单与分发直接读它）；官方那一半是跨仓镜像，**改命令要两个仓一起核对** |
 
 进度帧去重的三槽基线（`shouldEmitProgressFrame` / `createProgressEmitter`）同理：只在注入
@@ -81,6 +83,9 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | `/unlink` | 有 | 无 | 官方 bot 的关联由服务端持有；个人 bot 的 token 是用户自填的，解绑入口在桌面设置页 |
 | `/workspace` | 独立命令 | `/project` 的**别名** | 服务端两条菜单文案逐字相同。个人 bot 用别名表达同义拼写，不重复占一个菜单位，因此不登记为独立命令——**不是缺口** |
 | 正文累积引擎 | `finalized-segments` 引擎：`isFinal` 是**逐条** agent_message 的完成信号，按消息边界切成已定稿段，完成态投影成 normalized messages 走折叠判定，`finalText()` 取定稿段合成 | `buffer-replace` 引擎：`isFinal` 用该条全文整体替换单一缓冲，无消息投影，`finalText()` 即整段缓冲 | 两侧 `isFinal` 的含义本来就不同，presenter 按 `mode` 实例化**两个独立引擎**（`createSegmentsEngine` / `createBufferEngine`）。**改正文累积相关逻辑时两个引擎要分别核对**——它们只共享接口，不共享实现 |
+| `/start` | **无** | **有** | Telegram 私聊首次交互必发 `/start`（START 按钮）；官方 bot 的首次交互走服务端 deep-link 绑定流程，不需要这条命令。见注册表 `parityNote`——这是**唯一一条个人侧独有**的命令 |
+| NO_REPLY 哨兵的生效范围 | 仅 ambient 轮次 | **所有轮次**（`noReplyScope: 'all-turns'`） | 个人侧 `streamingText.finalize` 的哨兵判定不带 ambient 门控：任何轮次命中整条 NO_REPLY 都撤占位、零出站。官方只在 ambient 轮次生效——`presentationCapabilities.ts` 把它记为**跨服务端 TODO**，即「想统一但要动服务端」，不是已裁决的产品差异 |
+| typing 保活总上限 | 10 分钟 + 设备在线门控 | 5 分钟（`typingKeepaliveMaxMs`） | 超过即停发，turn 异常悬挂时不无限打 API。官方那档带设备在线门控，跨服务端，本仓兑现不了——已在 `presentationCapabilities.ts` 声明为车道差异 |
 | lane 模型 | per-principal | per-chat | 已在 `presentationCapabilities.ts` 声明 |
 | 终稿特效 `messageEffectId` | 有 | 无 | 官方装饰位，已声明 |
 
@@ -93,6 +98,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 1 | **个人 bot 缺 3 条命令** | `/unbind`（清当前 chat 的项目映射）、`/effort`（思考强度）、`/agent`（切 Agent）官方有、个人无，目前只能在桌面端改。注册表已显式登记并由 CI 拦住 | 每条各自独立 PR |
 | 1b | **官方命令镜像没有跨仓校验** | 注册表里官方那一半是手抄的声明性镜像，服务端单方面加减命令这边不会红 | 待判：把 `TELEGRAM_COMMANDS` 放进 `cindy-protocol` 两侧生成，或在服务端加反向校验。要跨仓改动与一次协议版本推进 |
 | 2 | **msg.op 动词只接了一个** | 服务端全套动词在 `xindong/cindy-server#349`（未合）；桌面侧目前只消费 `react`（ack 表情，见 `hook-control/ackReactions.ts` 的 `HOOK_FEATURE_MESSAGE_OPS` 判据）。`send` / `edit` / `delete` / `typing` / `media` 未接线 | #1855 第三刀。**这是把官方 bot 的出站改由桌面驱动的关键一步**——接完之后两侧的发射与收口才可能走同一份代码，而不是各写一套 |
+| 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧全轮次生效。这是 `presentationCapabilities.ts` 明写的**跨服务端 TODO**，不是已裁决的差异——第三节那行只是登记现状 | 待判：要统一得改服务端的哨兵判定 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
