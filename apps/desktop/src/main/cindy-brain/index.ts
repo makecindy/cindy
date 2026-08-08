@@ -31,6 +31,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostSetupProfile,
   type GhostSetupReauthSuggest,
   type GhostVideoRefMode,
   type GhostVideoResultParams,
@@ -97,6 +98,7 @@ import {
   type GhostKvStore,
 } from './ghostKvStore.js';
 import {
+  evaluateGhostSetup,
   evaluateGhostSetupAssessment,
   handleGhostSetupStatusRequest,
   parseOauthConnectSecretKey,
@@ -4732,6 +4734,127 @@ export function registerGhostIpc(): void {
       },
     }),
   );
+
+  // ── 插件列表授权状态批量查询(卡片开关颜色)────────────────────────
+  // 接受已装插件 id 数组,返回 id → GhostSetupProfile 的映射。
+  // 判定复用 setup-status 的同一套探针真身(同步毫秒级),不加缓存。
+  // 未知 id 静默跳过(不报错——列表渲染时的竞态窗口里可能已卸载)。
+  ipcMain.handle('ghosts:setup-profiles', (event, ids: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(ids)) {
+      throwIpcError('INVALID_PARAMS', 'ids must be a string array');
+    }
+    // 防御性上限：可信 renderer 里若出现 XSS/被导航后的脚本调用该 bridge，
+    // 传入超大数组会让后续逐项探针在 main 进程无界运行并卡住所有窗口。
+    // 已装插件数量作为硬上限，拒绝异常大请求。
+    // 先做长度上限检查，再遍历元素，避免超大数组的 .every 在 main 进程无界运行。
+    const installedCount = getGhostManager().list().length;
+    const maxIds = Math.max(installedCount, 200);
+    if (ids.length > maxIds) {
+      throwIpcError("INVALID_PARAMS", `ids exceeds maximum of ${maxIds}`);
+    }
+    if (!ids.every((id): id is string => typeof id === 'string')) {
+      throwIpcError('INVALID_PARAMS', 'ids must be a string array');
+    }
+    const oauthManager = getGhostOauthAccountManager();
+    const result: Record<string, GhostSetupProfile> = {};
+    // 一次性快照:availableGhosts() 内部调 GhostManager.list() 会触发全盘扫描;
+    // 先建 Map 再按 id 查,避免循环中对每个插件重复扫描 N 次。
+    const ghostMap = new Map(availableGhosts().map((g) => [g.manifest.id, g]));
+    for (const ghostId of ids) {
+      const ghost = ghostMap.get(ghostId);
+      if (!ghost) continue;
+      const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+      const requirementGroups = runtimeManifest.setup
+        ? runtimeManifest.setup.requires.map((g) => g.anyOf)
+        : [];
+      const implicitSecrets =
+        runtimeManifest.network?.secrets?.filter(
+          (s) => s.source !== 'login-email' && s.source !== 'oidc-token',
+        ) ?? [];
+      const implicitConnections = runtimeManifest.network?.connections ?? [];
+      const nodeSecrets = runtimeManifest.node?.secretBindings ?? [];
+      const hasSetupRequirements =
+        requirementGroups.length > 0 ||
+        implicitSecrets.length > 0 ||
+        implicitConnections.length > 0 ||
+        nodeSecrets.length > 0;
+
+      // 判定就绪度:复用 evaluateGhostSetup 的纯函数(与单个 setup-status 同口径)。
+      // kv 与单次 setup-status 同策略:同插件同次判定内最多读一次磁盘。
+      let kvSnapshot: Record<string, unknown> | null = null;
+      const status = evaluateGhostSetup(runtimeManifest, {
+        secretSaved: (key) => {
+          try {
+            return ghostSecretSaved(ghostId, key);
+          } catch (err) {
+            // 单个插件 secret 检查异常不中止整批查询:权限错误/磁盘故障时
+            // 退化为 false(视为未保存),不让一个插件的 I/O 故障拖垮整批 IPC。
+            if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+              log.warn('[ghosts:setup-profiles] secret check failed', { ghostId, key, err });
+            }
+            return false;
+          }
+        },
+        oauthStatus: (key) => {
+          const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
+          const accounts = oauthManager.listAccounts(ghostId, key);
+          return {
+            clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+            connected: accounts.filter((a) => a.status === 'connected').length,
+            expired: accounts.filter((a) => a.status === 'expired').length,
+          };
+        },
+        connectionCount: (key) => {
+          try {
+            return getGhostConnectionManager().list(ghostId, key).length;
+          } catch (err) {
+            // 单个插件连接凭据检查异常不中止整批查询：文件损坏/解密失败/权限错误时
+            // 退化为 0（视为无连接），不让一个插件的连接探针故障拖垮整批 IPC。
+            if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+              log.warn('[ghosts:setup-profiles] connection check failed', {
+                ghostId,
+                key,
+                err,
+              });
+            }
+            return 0;
+          }
+        },
+        kvValue: (key) => {
+          if (kvSnapshot === null) {
+            try {
+              kvSnapshot = ghostKv.readStrict(ghostId);
+            } catch (err) {
+              // 单个插件 KV 损坏不中止整批查询:文件缺失(ENOENT)正常返回空快照,
+              // 其他 I/O 错误(磁盘故障/权限/JSON 解析失败)也退化为空快照,
+              // 让该插件判为 missing 而不是拖垮整批 IPC。
+              if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+                log.warn('[ghosts:setup-profiles] kv read failed', { ghostId, err });
+              }
+              kvSnapshot = {};
+            }
+          }
+          return kvSnapshot[key];
+        },
+      });
+
+      // 授权细分状态:区分「未配置」与「已配置但过期/失败」。
+      // 过期授权优先于缺失——同时存在 reauth 和 missingGroups 时应显示红色。
+      const setupState: GhostSetupProfile['setupState'] = status.ready
+        ? 'ready'
+        : status.reauth.length > 0
+          ? 'failed'
+          : 'missing';
+
+      result[ghostId] = {
+        hasSetupRequirements,
+        setupReady: status.ready,
+        setupState,
+      };
+    }
+    return result;
+  });
 
   // ── 面板媒体换发(拖拽引渡 + 右键菜单)──────────────────────────────
   // 只由宿主 renderer(可信应用层)调用——意识面板零桥碰不到 IPC。
