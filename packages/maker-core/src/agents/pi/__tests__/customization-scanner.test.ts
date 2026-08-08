@@ -3,11 +3,34 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { isCustomizationPathInside } from '../../shared/customization-scanner.js';
 import { buildPiSources, scanPiCustomizations } from '../customization-scanner.js';
 
 const { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } = fs;
 
 const roots: string[] = [];
+
+function canCreateSymlink(kind: 'dir' | 'file'): boolean {
+  const probe = mkdtempSync(path.join(tmpdir(), `pi-customization-${kind}-link-probe-`));
+  try {
+    const target = path.join(probe, `target-${kind}`);
+    if (kind === 'dir') mkdirSync(target);
+    else writeFileSync(target, 'probe');
+    symlinkSync(
+      target,
+      path.join(probe, `link-${kind}`),
+      process.platform === 'win32' && kind === 'dir' ? 'junction' : kind,
+    );
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const canLinkDirectory = canCreateSymlink('dir');
+const canLinkFile = canCreateSymlink('file');
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -42,6 +65,29 @@ function projectItems(result: Awaited<ReturnType<typeof scanPiCustomizations>>) 
 }
 
 describe('scanPiCustomizations', () => {
+  it('uses Windows path semantics for drive and UNC containment', () => {
+    expect(isCustomizationPathInside(
+      'C:\\Repo',
+      'c:\\repo\\.pi\\skills\\demo',
+      path.win32,
+    )).toBe(true);
+    expect(isCustomizationPathInside(
+      'C:\\Repo',
+      'D:\\Repo\\.pi\\skills\\demo',
+      path.win32,
+    )).toBe(false);
+    expect(isCustomizationPathInside(
+      '\\\\server\\share\\repo',
+      '\\\\server\\share\\repo\\.pi\\skills\\demo',
+      path.win32,
+    )).toBe(true);
+    expect(isCustomizationPathInside(
+      '\\\\server\\share\\repo',
+      '\\\\server\\other\\repo\\.pi\\skills\\demo',
+      path.win32,
+    )).toBe(false);
+  });
+
   it('keeps only the shared user skill root', () => {
     const userSources = buildPiSources([]).filter((source) => source.scope === 'user');
 
@@ -205,6 +251,41 @@ describe('scanPiCustomizations', () => {
     expect(duplicates.map((item) => canonical(item.absolutePath))).toEqual(
       [canonical(first), canonical(second)].sort(),
     );
+  });
+
+  it.skipIf(!canLinkDirectory)('rejects project skill folders that resolve outside the repository', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    const outsideSkill = writeSkill(root, 'outside', 'linked-folder');
+    const skillsDir = path.join(repo, '.pi', 'skills');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    mkdirSync(skillsDir, { recursive: true });
+    symlinkSync(
+      outsideSkill,
+      path.join(skillsDir, 'linked-folder'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const result = await scanPiCustomizations({ workingDirs: [repo] });
+
+    expect(projectItems(result).map((item) => item.name)).not.toContain('linked-folder');
+    expect(result.errors).toEqual([]);
+  });
+
+  it.skipIf(!canLinkFile)('rejects project SKILL.md files that resolve outside the repository', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    const skillDir = path.join(repo, '.pi', 'skills', 'linked-file');
+    const outsideMd = path.join(root, 'outside-SKILL.md');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(outsideMd, '---\ndescription: external description\n---\n# External\n');
+    symlinkSync(outsideMd, path.join(skillDir, 'SKILL.md'));
+
+    const result = await scanPiCustomizations({ workingDirs: [repo] });
+
+    expect(projectItems(result).map((item) => item.name)).not.toContain('linked-file');
+    expect(result.errors).toEqual([]);
   });
 
   it.skipIf(process.platform === 'win32')('resolves a symlinked working directory for scanning while preserving its ownership path', async () => {

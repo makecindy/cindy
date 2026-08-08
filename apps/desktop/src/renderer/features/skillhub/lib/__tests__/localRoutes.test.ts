@@ -40,6 +40,27 @@ describe('local SkillHub routes', () => {
     );
   });
 
+  it('keeps a unique source stable when a same-name source appears later', () => {
+    const original = entry({ sourceKey: 'pi-source' });
+    const route = buildLocalSkillRoute(original);
+    const addedLater = entry({
+      id: 'pi:demo:agents-source',
+      absolutePath: '/repo/.agents/skills/demo',
+      sourceKey: 'agents-source',
+      requiresSourceKey: true,
+    });
+    const search = new URL(route, 'https://cindy.local').searchParams;
+
+    expect(route).toBe(
+      '/skillhub/local/skill/project/abcd1234/demo?engine=pi&source=pi-source',
+    );
+    expect(findLocalSkillRouteEntry(
+      [addedLater, original],
+      { kind: 'skill', projectHash: 'abcd1234', name: 'demo' },
+      search,
+    )).toBe(original);
+  });
+
   it('adds a source key and resolves each same-name physical source exactly', () => {
     const pi = entry({ id: 'pi:demo:pi-source', sourceKey: 'pi-source', requiresSourceKey: true });
     const agents = entry({

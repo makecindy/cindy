@@ -86,11 +86,20 @@ export function buildPiSources(workingDirs: string[]): SourceDef[] {
     // symlink paths and must remain distinguishable to SkillHub.
     const workingDir = path.resolve(input);
     const scanRoot = canonicalDirectory(input);
+    const projectBoundary = findNearestGitRoot(scanRoot) ?? scanRoot;
     const addProjectSource = (dir: string): void => {
       const key = `${workingDir}\0${canonicalDirectory(dir)}`;
       if (seen.has(key)) return;
       seen.add(key);
-      sources.push({ engine: 'pi', kind: 'skill', scope: 'repo', dir, workingDir, runtimeStatus: 'discovered' });
+      sources.push({
+        engine: 'pi',
+        kind: 'skill',
+        scope: 'repo',
+        dir,
+        workingDir,
+        runtimeStatus: 'discovered',
+        skillContainWithin: projectBoundary,
+      });
     };
 
     addProjectSource(path.join(scanRoot, '.pi', 'skills'));

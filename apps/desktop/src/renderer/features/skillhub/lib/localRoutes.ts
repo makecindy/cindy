@@ -34,7 +34,7 @@ export function buildLocalSkillRoute(entry: LocalSkillRouteEntry): string {
       ? `/skillhub/local/${entry.kind}/global/${name}`
       : `/skillhub/local/${entry.kind}/project/${entry.projectHash}/${name}`;
   const search = new URLSearchParams({ engine: entry.engine });
-  if (entry.requiresSourceKey && entry.sourceKey) search.set('source', entry.sourceKey);
+  if (entry.sourceKey) search.set('source', entry.sourceKey);
   return `${pathname}?${search.toString()}`;
 }
 
