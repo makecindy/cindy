@@ -7,6 +7,7 @@ import { createLiziMcpProviders } from '../providers.js';
 import { createXdtHelperMcpServer } from '../lizi_xdtHelperMcpServer.js';
 import {
   getLiziMcpSessionContext,
+  resolveLiziMcpSessionContext,
   runWithLiziMcpSessionContext,
 } from '../session-context.js';
 import type { OrcaMcpDeps } from '../orca/server.js';
@@ -357,6 +358,31 @@ describe('dynamic lizi MCP session context', () => {
       ok: false,
       errorCode: 'NO_SESSION_CONTEXT',
     });
+  });
+
+  it('keeps a sessionInstanceId-only captured context isolated from ambient ALS', () => {
+    const capturedContext: LiziMcpSessionContext = {
+      agentKind: 'claude-code',
+      workingDir: '',
+      sessionInstanceId: 'cc-instance',
+    };
+
+    const resolved = runWithLiziMcpSessionContext(
+      {
+        agentKind: 'codex',
+        workingDir: '/codex-repo',
+        sessionId: 'codex-session',
+        sessionInstanceId: 'codex-instance',
+      },
+      () => resolveLiziMcpSessionContext(capturedContext),
+    );
+
+    expect(resolved).toBe(capturedContext);
+    expect(resolved).toMatchObject({
+      agentKind: 'claude-code',
+      sessionInstanceId: 'cc-instance',
+    });
+    expect(resolved.sessionId).toBeUndefined();
   });
 
   it('keeps concurrent Claude Code and Codex helper calls on their own session ids', async () => {

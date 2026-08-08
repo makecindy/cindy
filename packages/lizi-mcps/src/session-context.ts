@@ -44,6 +44,7 @@ export function resolveLiziMcpSessionContext<T extends LiziMcpSessionContext>(
   // consult the ambient ALS store.
   if (
     fallback.sessionId ||
+    fallback.sessionInstanceId ||
     fallback.workingDir ||
     fallback.remoteHostId ||
     (fallback.vendorOptions && Object.keys(fallback.vendorOptions).length > 0)
