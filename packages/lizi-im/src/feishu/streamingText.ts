@@ -50,8 +50,10 @@ function fitCardToLimit(
   text: string,
   fullCard: unknown,
   buildCard: (visibleText: string) => unknown,
-): unknown {
-  if (cardRequestBytes(fullCard) <= FEISHU_CARD_REQUEST_MAX_BYTES) return fullCard;
+): { card: unknown; droppedMedia: boolean } {
+  if (cardRequestBytes(fullCard) <= FEISHU_CARD_REQUEST_MAX_BYTES) {
+    return { card: fullCard, droppedMedia: false };
+  }
 
   const chars = Array.from(text);
   const suffix = transportMessages.streaming.replyTruncated;
@@ -59,7 +61,10 @@ function fitCardToLimit(
   let high = chars.length;
   let fitted = buildCard(suffix);
   if (cardRequestBytes(fitted) > FEISHU_CARD_REQUEST_MAX_BYTES) {
-    return buildMarkdownCardV2(transportMessages.streaming.deliveryFailed);
+    return {
+      card: buildMarkdownCardV2(transportMessages.streaming.deliveryFailed),
+      droppedMedia: true,
+    };
   }
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
@@ -71,7 +76,7 @@ function fitCardToLimit(
       high = middle - 1;
     }
   }
-  return fitted;
+  return { card: fitted, droppedMedia: false };
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
@@ -89,6 +94,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    * 不参与 namespace 路由(@cindy/im 包对 lizi-art / 其它 host 命名空间不感知)。
    */
   private extraImageAbsPaths: string[] = [];
+  private deliveredExtraImageAbsPaths: string[] = [];
 
   constructor(messageId: string, openId: string, initial: string) {
     this.messageId = messageId;
@@ -153,6 +159,10 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     // dedupe by absPath — model 偶尔在同一 turn 多条 tool_result 重复同一张图
     if (this.extraImageAbsPaths.includes(absPath)) return;
     this.extraImageAbsPaths.push(absPath);
+  }
+
+  getDeliveredExtraImageAbsPaths(): readonly string[] {
+    return this.deliveredExtraImageAbsPaths;
   }
 
   // ── intermediate (throttled) patch ────────────────────────────────────────
@@ -243,6 +253,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     //     这里不再过 resolveFeishuMediaUrl (@cindy/im 包对其它 host namespace 不感知)。
     //     正文里已内联的同图(按 absPath)跳过,防"正文一张 + 尾部一张"双份。
     const extraImageKeys: string[] = [];
+    const uploadedExtraImageAbsPaths: string[] = [];
     const extrasToUpload = this.extraImageAbsPaths.filter((p) => !bodyImageAbsPaths.has(p));
     if (extrasToUpload.length > 0) {
       log.debug(
@@ -251,7 +262,8 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       const results = await Promise.all(
         extrasToUpload.map(async (absPath) => {
           try {
-            return await uploadImage(absPath);
+            const key = await uploadImage(absPath);
+            return key ? { absPath, key } : null;
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(
@@ -261,8 +273,10 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           }
         }),
       );
-      for (const k of results) {
-        if (k) extraImageKeys.push(k);
+      for (const result of results) {
+        if (!result) continue;
+        extraImageKeys.push(result.key);
+        uploadedExtraImageAbsPaths.push(result.absPath);
       }
     }
 
@@ -306,12 +320,15 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       } else {
         card = buildMarkdownCardV2(cardTextTrimmed.length > 0 ? cardText : transportMessages.streaming.emptyReply);
       }
-      card = fitCardToLimit(cardText, card, (visibleText) =>
+      const fitted = fitCardToLimit(cardText, card, (visibleText) =>
         hasAnyImage
           ? buildMixedMarkdownCardV2(visibleText, imageMap, extraImageKeys)
           : buildMarkdownCardV2(visibleText),
       );
-      await patchCardRaw(this.messageId, card);
+      await patchCardRaw(this.messageId, fitted.card);
+      if (!fitted.droppedMedia) {
+        this.deliveredExtraImageAbsPaths = uploadedExtraImageAbsPaths;
+      }
       this.flushed = this.buffer;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

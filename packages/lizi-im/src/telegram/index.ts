@@ -1642,6 +1642,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       ...(inner.addExtraImageAbsPath
         ? { addExtraImageAbsPath: (absPath: string) => inner.addExtraImageAbsPath?.(absPath) }
         : {}),
+      ...(inner.getDeliveredExtraImageAbsPaths
+        ? {
+            getDeliveredExtraImageAbsPaths: () => inner.getDeliveredExtraImageAbsPaths?.() ?? [],
+          }
+        : {}),
     };
     return wrapped;
   }

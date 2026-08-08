@@ -83,6 +83,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
   private inFlight: Promise<void> | null = null;
   private done = false;
   private extraImageAbsPaths: string[] = [];
+  private deliveredExtraImageAbsPaths: string[] = [];
   /**
    * 惰性占位(2026-07-30 review): 有真实正文才发首条消息 — ambient turn 的
    * NO_REPLY 沉默从"发 '…' 再删"变成从头到尾零消息零通知; 普通 turn 也不再
@@ -125,6 +126,10 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
   addExtraImageAbsPath(absPath: string): void {
     if (this.done || !absPath || this.extraImageAbsPaths.includes(absPath)) return;
     this.extraImageAbsPaths.push(absPath);
+  }
+
+  getDeliveredExtraImageAbsPaths(): readonly string[] {
+    return this.deliveredExtraImageAbsPaths;
   }
 
   close(): void {
@@ -203,6 +208,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       ...imageUrls,
       ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
     ]);
+    this.deliveredExtraImageAbsPaths = [...this.extraImageAbsPaths];
   }
 
   /**

@@ -43,6 +43,8 @@ import path from 'node:path';
 const GROUP_APPROVAL_OWNER_DM_NOTE =
   '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
 
+import fs from 'node:fs/promises';
+
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import {
@@ -179,6 +181,8 @@ interface TurnState {
   mediaAbsPaths: string[];
   /** Optional user-facing names for file paths in the terminal media ledger. */
   mediaDisplayNames: Map<string, string>;
+  /** Private staging directories created for race-safe local-file fallback. */
+  mediaTempDirs: Set<string>;
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
   done: boolean;
@@ -682,6 +686,7 @@ export function createTurnRunner(
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
       mediaDisplayNames: new Map(),
+      mediaTempDirs: new Set(),
       workingDir: row.workingDir,
       done: false,
       activityTicker: null,
@@ -2562,7 +2567,11 @@ export function createTurnRunner(
         });
       }
       if (output.kind === 'rich-card') {
-        await sendFallbackMedia(turn, userId, state.scopeKey);
+        try {
+          await sendFallbackMedia(turn, userId, state.scopeKey);
+        } finally {
+          await cleanupFallbackMedia(turn);
+        }
       }
     }
     settleTurnTerminal(turn);
@@ -2603,6 +2612,22 @@ export function createTurnRunner(
         });
       }
     }
+  }
+
+  async function cleanupFallbackMedia(turn: TurnState): Promise<void> {
+    for (const tempDir of turn.mediaTempDirs) {
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} media fallback cleanup failed`, {
+          kind: 'terminal-media-cleanup',
+          source: 'rm',
+          error,
+        });
+      }
+    }
+    turn.mediaTempDirs.clear();
   }
 
   async function handleTurnErrorAsync(
@@ -2656,23 +2681,36 @@ export function createTurnRunner(
         /* swallow */
       }
     } else {
+      if (turn && output.kind === 'rich-card') {
+        await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        await materializeTurnLocalFiles(state, turn);
+      }
+      const view = turn ? composeStreamingView(turn) : '';
+      const fallbackText = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: `❌ 错误：${msg}`,
+            text: fallbackText,
             terminal: 'error',
             threadTs: state.scopeKey,
             errorCode: turn?.terminalErrorCode ?? 'agent_turn_error',
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, `❌ 错误：${msg}`, {
+          await output.im.sendText(userId, fallbackText, {
             threadTs: state.scopeKey,
           });
         }
       } catch {
         /* swallow */
+      }
+      if (turn && output.kind === 'rich-card') {
+        try {
+          await sendFallbackMedia(turn, userId, state.scopeKey);
+        } finally {
+          await cleanupFallbackMedia(turn);
+        }
       }
     }
     if (turn) settleTurnTerminal(turn);
@@ -2735,6 +2773,7 @@ export function createTurnRunner(
         existingAbsPaths: [...turn.mediaAbsPaths],
       });
       turn.presenter.replaceBody(materialized.text);
+      for (const tempDir of materialized.tempDirs) turn.mediaTempDirs.add(tempDir);
       for (const file of materialized.files) {
         if (!turn.mediaAbsPaths.includes(file.absPath)) turn.mediaAbsPaths.push(file.absPath);
         if (file.displayName) turn.mediaDisplayNames.set(file.absPath, file.displayName);
@@ -2943,10 +2982,12 @@ export function createTurnRunner(
     if (!turn?.streamingHandle) return;
     const view = composeStreamingView(turn);
     let finalizedWithContent = false;
+    let deliveredMediaAbsPaths: readonly string[] = [];
     if (view.length > 0) {
       try {
         await turn.streamingHandle.finalize(view);
         finalizedWithContent = true;
+        deliveredMediaAbsPaths = turn.streamingHandle.getDeliveredExtraImageAbsPaths?.() ?? [];
       } catch (err) {
         log.warn(
           `finalizeActiveStream: finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -2960,8 +3001,9 @@ export function createTurnRunner(
     turn.streamingHandle = null;
     turn.streamingHandlePromise = null;
     if (finalizedWithContent) {
-      turn.mediaAbsPaths = [];
-      turn.mediaDisplayNames.clear();
+      const delivered = new Set(deliveredMediaAbsPaths);
+      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
+      for (const absPath of delivered) turn.mediaDisplayNames.delete(absPath);
     }
     turn.presenter.replaceBody('');
   }

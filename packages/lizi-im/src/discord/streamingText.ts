@@ -29,6 +29,7 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
   private inFlight: Promise<void> | null = null;
   private done = false;
   private extraImageAbsPaths: string[] = [];
+  private deliveredExtraImageAbsPaths: string[] = [];
 
   private constructor(
     messageId: string,
@@ -60,6 +61,10 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
   addExtraImageAbsPath(absPath: string): void {
     if (this.done || !absPath || this.extraImageAbsPaths.includes(absPath)) return;
     this.extraImageAbsPaths.push(absPath);
+  }
+
+  getDeliveredExtraImageAbsPaths(): readonly string[] {
+    return this.deliveredExtraImageAbsPaths;
   }
 
   close(): void {
@@ -109,6 +114,7 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
 
     if (imageAbsPaths.length > 0) {
       await this.deps.uploadImages(this.messageId, imageAbsPaths);
+      this.deliveredExtraImageAbsPaths = [...this.extraImageAbsPaths];
     }
   }
 

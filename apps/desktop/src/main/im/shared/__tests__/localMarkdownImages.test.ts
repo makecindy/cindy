@@ -190,25 +190,35 @@ describe('materializeLocalMarkdownFiles', () => {
     const reportPath = path.join(workingDir, 'report.pdf');
     await fs.writeFile(reportPath, '%PDF-1.4');
     const url = `xdt-file://${reportPath}`;
-    const deps = {
-      realpath: vi.fn((value: string) => fs.realpath(value)),
-      stat: vi.fn((value: string) => fs.stat(value)),
-    };
-
     const result = await materializeLocalMarkdownFiles(
       {
         text: `ready\n[report](${url})\n[duplicate](${url})`,
         workingDir,
       },
-      deps,
     );
 
-    expect(deps.realpath).toHaveBeenCalledWith(reportPath);
-    expect(deps.stat).toHaveBeenCalledWith(await fs.realpath(reportPath));
-    expect(result).toEqual({
-      files: [{ absPath: await fs.realpath(reportPath), displayName: 'report' }],
-      text: 'ready\nreport\nduplicate',
+    tempRoots.push(...result.tempDirs);
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0].absPath).not.toBe(await fs.realpath(reportPath));
+    expect(result.files[0].displayName).toBe('report');
+    await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('%PDF-1.4');
+    expect(result.text).toBe('ready\nreport\nduplicate');
+  });
+
+  it('uploads from an immutable staged copy after the source path changes', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.txt');
+    await fs.writeFile(reportPath, 'approved content');
+
+    const result = await materializeLocalMarkdownFiles({
+      text: `[report](xdt-file://${reportPath})`,
+      workingDir,
     });
+    tempRoots.push(...result.tempDirs);
+    await fs.writeFile(reportPath, 'replaced secret');
+
+    expect(result.files).toHaveLength(1);
+    await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('approved content');
   });
 
   it('rejects files outside workingDir and symlink escapes without exposing their paths', async () => {
@@ -225,7 +235,7 @@ describe('materializeLocalMarkdownFiles', () => {
       workingDir,
     });
 
-    expect(result).toEqual({ files: [], text: 'outside\nlinked' });
+    expect(result).toEqual({ files: [], tempDirs: [], text: 'outside\nlinked' });
     expect(result.text).not.toContain('xdt-file://');
     expect(result.text).not.toContain(outsidePath);
   });

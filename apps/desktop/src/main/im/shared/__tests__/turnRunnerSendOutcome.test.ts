@@ -553,7 +553,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.cancelPending.mockReturnValue(null);
     mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
     mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
-    mocks.materializeLocalMarkdownFiles.mockResolvedValue({ files: [], text: '' });
+    mocks.materializeLocalMarkdownFiles.mockResolvedValue({ files: [], tempDirs: [], text: '' });
   });
 
   afterEach(async () => {
@@ -763,6 +763,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
     mocks.materializeLocalMarkdownFiles.mockResolvedValueOnce({
       files: [{ absPath: 'F:\\XDMaker\\report.pdf', displayName: 'report' }],
+      tempDirs: [],
       text: 'report ready\nreport',
     });
     const h = setupSession(async () => ({ accepted: true }));
@@ -801,6 +802,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       finalize: vi.fn(),
       close: vi.fn(),
       addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => ['/tmp/already-delivered.png']),
     };
     mocks.feishuIm.startStreamingText
       .mockResolvedValueOnce(firstHandle)
@@ -839,6 +841,52 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(firstHandle.finalize).toHaveBeenCalledWith('before ask');
     expect(firstHandle.addExtraImageAbsPath).toHaveBeenCalledWith('/tmp/already-delivered.png');
     expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps unconfirmed interaction media in the fallback ledger', async () => {
+    const firstHandle = {
+      messageId: 'stream-before-failed-media',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => []),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockRejectedValueOnce(new Error('second card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/unconfirmed.png',
+      mimeType: 'image/png',
+    });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-2' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://unconfirmed.png' }) },
+    });
+    await flushMicrotasks();
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-unconfirmed-media',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/unconfirmed.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
   });
 
   it('continues media fallback and settles safely when one generated image send fails', async () => {
@@ -2434,6 +2482,36 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(handle.finalize).toHaveBeenCalledTimes(1);
     });
     expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
+  });
+
+  it('falls back with accumulated text and media when a terminal error has no card', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/error-output.png',
+      mimeType: 'image/png',
+    });
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'text', data: { text: 'partial answer', isFinal: false } });
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://error-output.png' }) },
+    });
+    h.emit({ type: 'error', data: { message: 'tool failed', isTerminal: true } });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
+        'ou_user',
+        '/tmp/error-output.png',
+        undefined,
+        { threadTs: undefined },
+      );
+    });
+    const fallbackText = String(mocks.feishuIm.sendText.mock.calls[0]?.[1]);
+    expect(fallbackText).toContain('partial answer');
+    expect(fallbackText).toContain('❌ 错误：tool failed');
   });
 
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {

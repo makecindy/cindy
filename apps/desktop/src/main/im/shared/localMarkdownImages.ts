@@ -9,8 +9,11 @@
  * 的引用则通过各自的安全解析器取回仓内路径；两类都重新核验文件与图片魔数。
  */
 
+import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { collectXdtFileRefs, normalizeXdtAbsPath, transformXdtRefs } from '@cindy/im';
 
@@ -22,6 +25,7 @@ import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 const LOCAL_MARKDOWN_IMAGE_RE = /!\[([^\]\r\n]{0,512})\]\(([^)\r\n]{1,4096})\)/g;
 const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 interface LocalMarkdownImageDeps {
   realpath(value: string): Promise<string>;
@@ -89,8 +93,10 @@ export interface MaterializedLocalMarkdownImages {
 }
 
 export interface MaterializedLocalMarkdownFiles {
-  /** 已通过工作目录边界校验的真实文件与对外展示名，供 IM 渠道上传。 */
+  /** 已复制到受控临时目录的文件与对外展示名，供 IM 渠道上传。 */
   files: Array<{ absPath: string; displayName?: string }>;
+  /** 发送完成后必须递归清理的受控临时目录。 */
+  tempDirs: string[];
   /** 所有内部文件引用均替换为可读标签，避免本机路径泄漏。 */
   text: string;
 }
@@ -106,18 +112,19 @@ export async function materializeLocalMarkdownFiles(
     text: string;
     workingDir: string;
     maxFiles?: number;
+    maxFileBytes?: number;
     existingAbsPaths?: string[];
   },
-  deps: Pick<LocalMarkdownImageDeps, 'realpath' | 'stat'> = defaultDeps,
 ): Promise<MaterializedLocalMarkdownFiles> {
   const refs = collectXdtFileRefs(params.text);
-  if (refs.length === 0) return { files: [], text: params.text };
+  if (refs.length === 0) return { files: [], tempDirs: [], text: params.text };
 
   const maxFiles = Math.max(0, params.maxFiles ?? 8);
+  const maxFileBytes = params.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const existing = new Set<string>();
   for (const absPath of params.existingAbsPaths ?? []) {
     try {
-      existing.add(pathKey(await deps.realpath(absPath)));
+      existing.add(pathKey(await fs.realpath(absPath)));
     } catch {
       existing.add(pathKey(absPath));
     }
@@ -125,13 +132,14 @@ export async function materializeLocalMarkdownFiles(
 
   let workingDirReal: string | null = null;
   try {
-    workingDirReal = await deps.realpath(params.workingDir);
+    workingDirReal = await fs.realpath(params.workingDir);
   } catch {
     // Fail closed: without a canonical root, no model-authored file may be sent.
   }
 
   const accepted = new Set<string>();
   const files: Array<{ absPath: string; displayName?: string }> = [];
+  let tempDir: string | null = null;
   if (workingDirReal) {
     for (const ref of refs) {
       if (files.length >= maxFiles) break;
@@ -141,16 +149,47 @@ export async function materializeLocalMarkdownFiles(
         );
         const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(candidate) || /^\\\\[^\\]/.test(candidate);
         if (candidate.includes('\u0000') || (!path.isAbsolute(candidate) && !isWindowsAbsolute)) continue;
-        const targetReal = await deps.realpath(candidate);
+        const targetReal = await fs.realpath(candidate);
         if (!isPathInside(workingDirReal, targetReal)) continue;
-        const stat = await deps.stat(targetReal);
-        if (!stat.isFile()) continue;
+        const beforeOpen = await fs.stat(targetReal);
+        if (!beforeOpen.isFile() || beforeOpen.size <= 0 || beforeOpen.size > maxFileBytes) continue;
         const key = pathKey(targetReal);
         if (accepted.has(key) || existing.has(key)) continue;
+
+        // Open the canonical path without following a final symlink, then
+        // compare the descriptor identity with the file that passed the path
+        // check. Once open, later renames/symlink swaps cannot change what is
+        // read. Uploads use a private copy, never the mutable source path.
+        const handle = await fs.open(
+          targetReal,
+          constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+        );
+        let buffer: Buffer;
+        try {
+          const opened = await handle.stat();
+          if (
+            !opened.isFile() ||
+            opened.dev !== beforeOpen.dev ||
+            opened.ino !== beforeOpen.ino ||
+            opened.size !== beforeOpen.size ||
+            opened.size > maxFileBytes
+          ) {
+            continue;
+          }
+          buffer = await handle.readFile();
+          if (buffer.byteLength !== opened.size || buffer.byteLength > maxFileBytes) continue;
+        } finally {
+          await handle.close();
+        }
+
+        tempDir ??= await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-im-file-'));
+        const extension = path.extname(targetReal).slice(0, 32);
+        const stagedPath = path.join(tempDir, `${randomUUID()}${extension}`);
+        await fs.writeFile(stagedPath, buffer, { flag: 'wx', mode: 0o600 });
         accepted.add(key);
         files.push({
-          absPath: targetReal,
-          ...(ref.alt.trim() ? { displayName: ref.alt.trim() } : {}),
+          absPath: stagedPath,
+          displayName: ref.alt.trim() || `附件${extension}`,
         });
       } catch {
         // A bad or missing file is omitted; the readable label remains below.
@@ -160,6 +199,7 @@ export async function materializeLocalMarkdownFiles(
 
   return {
     files,
+    tempDirs: tempDir ? [tempDir] : [],
     text: transformXdtRefs(params.text, {
       file: ({ alt }) => alt.trim() || '附件',
     }),

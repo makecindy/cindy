@@ -65,6 +65,20 @@ describe('feishu streaming text', () => {
     const card = mocks.patchCardRaw.mock.calls[0][1];
     expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
     expect(markdownContent(card)).toBe(messages.streaming.deliveryFailed);
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
+  });
+
+  it('acknowledges only extra images that were actually uploaded', async () => {
+    mocks.uploadImage.mockImplementation(async (absPath: string) =>
+      absPath.endsWith('ok.png') ? 'image-key' : null,
+    );
+    const handle = await start('ou_owner');
+    handle.addExtraImageAbsPath?.('/tmp/ok.png');
+    handle.addExtraImageAbsPath?.('/tmp/failed.png');
+
+    await handle.finalize('正文');
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(['/tmp/ok.png']);
   });
 
   it('patches a short user-visible notice when the final card shape is rejected', async () => {
