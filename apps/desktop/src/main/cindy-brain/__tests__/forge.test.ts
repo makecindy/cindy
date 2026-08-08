@@ -773,6 +773,7 @@ describe('FORGE_GUIDE', () => {
       'notify 槽',
       'will-user-message',
       'will-assistant-message',
+      '同轮插话(steer)时是当前运行中 turn 的模型 id',
       'event-verdict',
       'data-ghost-action',
       'data-ghost-prompt',

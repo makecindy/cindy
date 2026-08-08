@@ -775,6 +775,11 @@ import {
   writeGhostErrandSessionId,
 } from '../cindy-brain/errandPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
+import {
+  resolveGhostUserHookModel,
+  withGhostAssistantHookModel,
+  withGhostUserHookModel,
+} from '../cindy-brain/subscriptionGateway.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
   createGhostErrandSession,
@@ -3912,7 +3917,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           const doneResult = (event.data as { result?: unknown } | null)?.result;
           const replyText = typeof doneResult === 'string' ? doneResult : '';
           if (replyText.length > 0 && hasEnabledGhostAssistantHook()) {
-            runGhostAssistantReplyHook(session.id, turnAssistantPersistId, replyText);
+            const turnModel =
+              turnModelPromiseBySession.get(session.id) ?? Promise.resolve(session.model || 'unknown');
+            const assistantPersistId = turnAssistantPersistId;
+            withGhostAssistantHookModel(turnModel, () => {
+              runGhostAssistantReplyHook(session.id, assistantPersistId, replyText);
+            });
           }
         }
         // Worker turn 结束后交给 OrcaTeamService 处理 DB status、广播与 auto-bridge。
@@ -9993,8 +10003,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 意识拦截钩(订阅槽①):派发/落库前问已装钩子意识;fail-open 由
     // screenGhostUserMessage 内部收敛,快路径(无钩子意识)零开销。
-    screenUserMessage: (sessionId, agentFacingText) =>
-      screenGhostUserMessage(sessionId, agentFacingText),
+    screenUserMessage: (sessionId, agentFacingText, item) => {
+      const session = getStableSessionForTurnBoundary(sessionId);
+      const model = resolveGhostUserHookModel(
+        session?.isTurnRunning() === true,
+        session?.model,
+        item.createOpts.model,
+      );
+      return withGhostUserHookModel(model, () =>
+        screenGhostUserMessage(sessionId, agentFacingText),
+      );
+    },
     onUserMessageBlocked: (sessionId, item, verdict) =>
       broadcastGhostMessageBlocked({
         sessionId,
