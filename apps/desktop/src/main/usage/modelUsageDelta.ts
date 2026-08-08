@@ -161,8 +161,9 @@ export class ClaudeOutputLagTimingGuard {
     deltas: readonly ModelUsageDeltaEntry[],
     isProductTurnFinal: boolean,
     requestId?: string,
+    allowDetection = true,
   ): { detected: boolean; suppressTiming: boolean } {
-    const detected = detectOutputLag(deltas, requestId);
+    const detected = allowDetection && detectOutputLag(deltas, requestId);
     if (detected) this.detectedInCurrentTurnBySession.add(sessionId);
     const suppressTiming =
       this.suppressCurrentTurnBySession.has(sessionId) ||

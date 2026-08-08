@@ -94,6 +94,7 @@ describe('maker:event hot path ordering', () => {
       "typeof doneData?.assistant_message_id === 'string'",
     );
     expect(wireSessionSource).toContain('? doneData.assistant_message_id');
+    expect(wireSessionSource).toContain('doneData?.is_error !== true');
   });
 
   it('wakes deferred Goal resumes from the shared product-terminal idle boundary', () => {

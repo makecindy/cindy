@@ -4536,6 +4536,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const iterator = handle.events()[Symbol.asyncIterator]();
     const transport = createdTransports[0];
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
 
     transport.emitMockLine({
       method: 'turn/started',
@@ -4547,6 +4548,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     await agent.forceDisposeLocalHostForAuthChange('test forced retire');
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(handle.isTurnRunning?.()).toBe(false);
     expect(transport.closed).toBe(true);
     await expect(nextEvent(iterator)).resolves.toMatchObject({
@@ -6109,9 +6111,18 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const transport = createdTransports[0];
     expect(transport).toBeDefined();
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    transport!.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-close-heartbeat' } },
+    });
+    await waitForExpectation(() => {
+      expect(handle.isTurnRunning?.()).toBe(true);
+    });
 
     await handle.close();
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     const unsubscribe = transport!.lines
       .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
       .find((request) => request.method === Method.ThreadUnsubscribe);

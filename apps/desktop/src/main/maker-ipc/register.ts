@@ -3967,6 +3967,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               };
               modelUsage?: Record<string, unknown>;
               assistant_message_id?: unknown;
+              is_error?: unknown;
             }
           | undefined;
         const cumulative = doneData?.total_cost_usd;
@@ -3990,6 +3991,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           typeof doneData?.assistant_message_id === 'string'
             ? doneData.assistant_message_id
             : undefined,
+          doneData?.is_error !== true,
         );
         const claudeGenerationDurationMs = outputLagTiming.suppressTiming
           ? undefined

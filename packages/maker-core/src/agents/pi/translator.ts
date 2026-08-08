@@ -124,6 +124,12 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   ctx.generationHeartbeatAt = 0;
 }
 
+/** Release translator-owned resources when a Pi session ends outside a normal turn boundary. */
+export function disposePiTranslateContext(ctx: PiTranslateContext): void {
+  stopPiGenerationHeartbeat(ctx);
+  ctx.isStreaming = false;
+}
+
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
   if (
     ctx.generationHeartbeatAt > 0 &&

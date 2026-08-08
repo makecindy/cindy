@@ -116,6 +116,7 @@ import {
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
   pauseCodexGeneration,
+  resetCodexGenerationTiming,
   resumeCodexGeneration,
   translateReasoningSummaryTextDelta,
   translateReasoningSummaryPartAdded,
@@ -3930,6 +3931,7 @@ export class CodexAgent extends BaseAgent {
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
       closed = true;
+      resetCodexGenerationTiming(translatorRt);
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
@@ -8007,6 +8009,7 @@ export class CodexAgent extends BaseAgent {
       hostForcedRetire: ({ reason }) => {
         sessionHostForceRetired = true;
         subscriptionInvalidatedByTransport = false;
+        resetCodexGenerationTiming(translatorRt);
 
         const hadPendingWork =
           isTurnInFlight
@@ -8785,6 +8788,7 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      resetCodexGenerationTiming(translatorRt);
       clearReconnectStall();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);

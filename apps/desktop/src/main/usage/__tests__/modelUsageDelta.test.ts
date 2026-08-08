@@ -174,4 +174,16 @@ describe('ClaudeOutputLagTimingGuard', () => {
       suppressTiming: false,
     });
   });
+
+  it('does not arm next-turn suppression from a failed Vertex turn', () => {
+    const guard = new ClaudeOutputLagTimingGuard();
+    expect(guard.evaluate('session-1', lagged, true, 'msg_vrtx_1', false)).toEqual({
+      detected: false,
+      suppressTiming: false,
+    });
+    expect(guard.evaluate('session-1', settled, true)).toEqual({
+      detected: false,
+      suppressTiming: false,
+    });
+  });
 });
