@@ -340,45 +340,50 @@ function DetailHeader({
             不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
         <div className="flex flex-wrap items-center gap-3 gap-y-2">
           <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-            style={{
-              backgroundColor: 'var(--settings-integration-avatar-bg)',
-              border: '1px solid var(--settings-integration-avatar-border)',
-              color: 'var(--settings-integration-avatar-icon)',
-            }}
+            data-testid="provider-detail-identity"
+            className="flex min-w-0 flex-auto items-center gap-3"
           >
-            {icon}
-          </div>
-
-          <div className="flex min-w-0 flex-auto flex-col gap-0.5">
             <div
-              data-testid="provider-detail-metadata"
-              className="flex min-w-0 flex-wrap items-center gap-2"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+              style={{
+                backgroundColor: 'var(--settings-integration-avatar-bg)',
+                border: '1px solid var(--settings-integration-avatar-border)',
+                color: 'var(--settings-integration-avatar-icon)',
+              }}
             >
-              <span
-                className="min-w-0 truncate text-14 font-medium leading-tight"
-                style={{ color: 'var(--settings-section-title)' }}
-              >
-                {title}
-              </span>
-              {modelCount !== null && <ModelCountChip count={modelCount} />}
-              {subscriptionProduct && (
-                <CustomTag
-                  label={t('settings.providers.models.subscriptionProduct', {
-                    product: subscriptionProduct,
-                  })}
-                />
-              )}
-              {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
-              {badge}
+              {icon}
             </div>
-            <span
-              className="truncate text-13 leading-tight"
-              style={{ color: 'var(--settings-integration-subtitle)' }}
-            >
-              {subtitle}
-              {singleAgentNote ? ` · ${singleAgentNote}` : ''}
-            </span>
+
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div
+                data-testid="provider-detail-metadata"
+                className="flex min-w-0 flex-wrap items-center gap-2"
+              >
+                <span
+                  className="min-w-0 truncate text-14 font-medium leading-tight"
+                  style={{ color: 'var(--settings-section-title)' }}
+                >
+                  {title}
+                </span>
+                {modelCount !== null && <ModelCountChip count={modelCount} />}
+                {subscriptionProduct && (
+                  <CustomTag
+                    label={t('settings.providers.models.subscriptionProduct', {
+                      product: subscriptionProduct,
+                    })}
+                  />
+                )}
+                {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
+                {badge}
+              </div>
+              <span
+                className="truncate text-13 leading-tight"
+                style={{ color: 'var(--settings-integration-subtitle)' }}
+              >
+                {subtitle}
+                {singleAgentNote ? ` · ${singleAgentNote}` : ''}
+              </span>
+            </div>
           </div>
 
           {trailing}
