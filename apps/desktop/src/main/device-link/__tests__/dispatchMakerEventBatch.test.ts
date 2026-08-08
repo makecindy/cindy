@@ -255,9 +255,11 @@ describe('[4] 生命周期与背压', () => {
     expect(h.sent).toHaveLength(0);
   });
 
-  it('发送失败即就地降级为逐帧 best-effort,缓冲不跨越失败存在', () => {
-    // 强不变量(review 四轮结论):flush 返回时缓冲必为空——要么整批发出,要么
-    // 降级逐帧(旧语义)。缓冲不滞留 = 顺序问题整族消失。
+  it('批帧被拒即丢这一片:不降级逐帧、不重试、缓冲不跨越失败存在', () => {
+    // 强不变量:flush 返回时缓冲必为空。降级逐帧那条路径已删除(四轮 review 里两位
+    // reviewer 的要求互相抵触,不存在同时满足两侧的取值,推导见 dispatch.ts 的
+    // MakerEventBatchFlushOutcome 注释)——批帧发不出去就丢掉这一片,由控制端 resync
+    // 补偿,与 #2167 对可驱逐档 push 的取舍一致。
     const sendPush = vi.fn((
       _dst: string,
       channel: string,
@@ -267,38 +269,6 @@ describe('[4] 生命周期与背压', () => {
       if (channel === MAKER_EVENT_BATCH_CHANNEL) {
         throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
       }
-    });
-    const h = mkClient({ sendPush });
-    __testing.setActiveClient(h.client as never);
-    subscribeBatchController('ctrl-1', ['session:s1']);
-
-    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
-    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } });
-    vi.advanceTimersByTime(WINDOW_MS);
-
-    // 批被拒 → 两条事件各自以逐帧 maker:event 发出(顺序不变)
-    const perEvent = sendPush.mock.calls.filter((c) => c[1] === 'maker:event');
-    expect(perEvent).toHaveLength(2);
-    expect(perEvent.map((c) => (c[2] as { event: { i: number } }).event.i)).toEqual([0, 1]);
-
-    // 缓冲已空:再推进任何时间都不会有第二次投递
-    const before = sendPush.mock.calls.length;
-    vi.advanceTimersByTime(10_000);
-    expect(sendPush.mock.calls.length).toBe(before);
-  });
-
-  it('持续背压:逐帧每条都试(不因失败提前停手),但告警只有聚合的一条', () => {
-    // review 三轮收敛的结论:洪峰本质是**日志**问题,不是尝试问题。背压判据是尺寸
-    // 相关的(ws 容量含 additionalBytes、pending 容量含字节维度),大帧被拒时后面的
-    // 小帧仍可能通过 —— 按错误码整片放弃会误丢本可送达的事件。所以每条都试,
-    // 逐帧日志静默、成败聚合成一条。
-    const sendPush = vi.fn((
-      _dst: string,
-      _channel: string,
-      _payload: unknown,
-      _ownerStamp?: unknown,
-    ) => {
-      throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
     });
     const h = mkClient({ sendPush });
     __testing.setActiveClient(h.client as never);
@@ -309,55 +279,20 @@ describe('[4] 生命周期与背压', () => {
     }
     vi.advanceTimersByTime(WINDOW_MS);
 
-    // 一次批帧尝试 + 5 条逐帧尝试:交付机会一条都不放弃
+    // 一次批帧尝试,零逐帧尝试:不再重放 ≤64 次 admission / 驱逐判定 / throw
     expect(sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL)).toHaveLength(1);
-    expect(sendPush.mock.calls.filter((c) => c[1] === 'maker:event')).toHaveLength(5);
-    // 但告警只有聚合的那一条(而不是 5 条逐帧 WARN)——这是 review P1 的核心承诺
-    const degradeWarns = logSpy.warn.mock.calls
-      .map((c) => String(c[0]))
-      .filter((m) => m.includes('degraded to per-frame'));
-    expect(degradeWarns).toHaveLength(1);
-    expect(degradeWarns[0]).toContain('0 sent, 5 dropped');
-    expect(logSpy.warn.mock.calls.filter((c) => String(c[0]).includes('forwardPush'))).toHaveLength(0);
+    expect(sendPush.mock.calls.filter((c) => c[1] === 'maker:event')).toHaveLength(0);
 
-    // 缓冲仍然为空:强不变量不因逐帧全失败而破
+    // 告警只有聚合的一条(不是每帧一条),且带上丢弃条数
+    const warns = logSpy.warn.mock.calls.map((c) => String(c[0]));
+    expect(warns.filter((m) => m.includes('maker:event batch flush'))).toHaveLength(1);
+    expect(warns.find((m) => m.includes('maker:event batch flush')))
+      .toContain('dropped 5 event(s)');
+
+    // 缓冲已空:再推进任何时间都不会有第二次投递
     const before = sendPush.mock.calls.length;
     vi.advanceTimersByTime(10_000);
     expect(sendPush.mock.calls.length).toBe(before);
-  });
-
-  it('逐帧降级中某一条自身被拒:只跳过它,批尾照发(不连坐)', () => {
-    // review P1:「这一帧自己不合格」与「整条链路堵了」必须分开——前者连坐会把本可
-    // 送达的文本 / 状态增量一起丢掉。这里第 2 条超限且 compact 兜底也救不回。
-    const sendPush = vi.fn((
-      _dst: string,
-      channel: string,
-      payload: unknown,
-      _ownerStamp?: unknown,
-    ) => {
-      if (channel === MAKER_EVENT_BATCH_CHANNEL) {
-        throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
-      }
-      if ((payload as { event?: { i?: number } }).event?.i === 1) {
-        throw new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame exceeds max size');
-      }
-    });
-    const h = mkClient({ sendPush });
-    __testing.setActiveClient(h.client as never);
-    subscribeBatchController('ctrl-1', ['session:s1']);
-
-    for (let i = 0; i < 4; i += 1) {
-      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
-    }
-    vi.advanceTimersByTime(WINDOW_MS);
-
-    // 批被背压拒 → 逐帧降级;第 2 条(i=1)被拒,其余三条照样发出
-    const delivered = sendPush.mock.calls
-      .filter((c) => c[1] === 'maker:event')
-      .map((c) => (c[2] as { event: { i: number } }).event.i);
-    expect(delivered).toContain(0);
-    expect(delivered).toContain(2);
-    expect(delivered).toContain(3);
   });
 
   it('relay 离线:不做逐帧尝试(逐帧同样发不出去),直接丢弃且不滞留', () => {
@@ -490,10 +425,9 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
     __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'closed' });
 
     const channels = sendPush.mock.calls.map((c) => c[1]);
-    // 顺序:批尝试 → 降级的逐帧事件 → 终态帧
+    // 顺序:批尝试(被拒 → 整片丢弃,不降级)→ 终态帧
     expect(channels).toEqual([
       MAKER_EVENT_BATCH_CHANNEL,
-      'maker:event',
       'maker:status-changed',
     ]);
     // 之后不再有任何滞留投递
@@ -596,6 +530,70 @@ describe('[11] 重连恢复的顺序(review 第三轮)', () => {
     expect(channels).toContain('maker:status-changed');
     expect(channels.indexOf(MAKER_EVENT_BATCH_CHANNEL))
       .toBeLessThan(channels.indexOf('maker:status-changed'));
+  });
+
+  it('离线积压的 maker:event 在 drain 时也走批:恢复动作不重造洪峰', () => {
+    // review P1(故障半径三问的第 4 问):断线期间事件逐条进 offlinePushQueue,
+    // 重订阅时一次 drain 可能上百条;原先逐条 sendPush 就是同一 tick 内上百帧——
+    // 正是 8/8 招来 relay 1013 的那个形状,而且发生在刚重连、最脆弱的时刻。
+    let status = 'online';
+    const h = mkClient();
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    // 断线:30 条同会话事件进离线积压
+    status = 'connecting';
+    for (let i = 0; i < 30; i += 1) {
+      __testing.forwardPush('maker:event', { sessionId: 's1', event: { i } });
+    }
+    expect(h.sent).toHaveLength(0);
+    expect(__testing.queuedPushesFor('ctrl-1').length).toBe(30);
+
+    // 重连 + 重订阅:30 条积压压成 1 帧批,而不是 30 帧逐帧
+    status = 'online';
+    __testing.handleSubscriptionFrame('ctrl-1', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'], capabilities: [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1] }],
+    });
+
+    expect(h.sent.filter((x) => x.channel === 'maker:event')).toHaveLength(0);
+    const frames = batchesIn(h.sent);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.events).toHaveLength(30);
+    // 无损且保序
+    expect(frames[0]!.events.map((e) => (e as { event: { i: number } }).event.i))
+      .toEqual(Array.from({ length: 30 }, (_, i) => i));
+  });
+
+  it('积压里混有其它 channel:批与非批的相对顺序与在线主路一致', () => {
+    let status = 'online';
+    const h = mkClient();
+    h.client.getStatus = vi.fn(() => status) as never;
+    __testing.setActiveClient(h.client as never);
+    subscribeBatchController('ctrl-1', ['session:s1']);
+
+    status = 'connecting';
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 0 } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 1 } });
+    __testing.forwardPush('maker:status-changed', { sessionId: 's1', status: 'closed' });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { i: 2 } });
+
+    status = 'online';
+    __testing.handleSubscriptionFrame('ctrl-1', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'], capabilities: [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1] }],
+    });
+
+    // 终态帧前的两条事件先成一帧,终态帧其后,再一帧带最后一条事件
+    expect(h.sent.map((x) => x.channel)).toEqual([
+      MAKER_EVENT_BATCH_CHANNEL,
+      'maker:status-changed',
+      MAKER_EVENT_BATCH_CHANNEL,
+    ]);
+    const frames = batchesIn(h.sent);
+    expect(frames[0]!.events).toHaveLength(2);
+    expect(frames[1]!.events).toHaveLength(1);
   });
 
   it('ws-online 收口入口:窗口内的批在重连后立即投出,不落到积压之后', () => {

@@ -722,6 +722,40 @@ function stageMakerEventPush(
   scheduleMakerEventBatchFlush(dst, stage);
 }
 
+/**
+ * 投递该控制端的离线积压,**对启用微批的控制端同样走批**(review P1:恢复动作不得
+ * 重造触发条件,见 docs/dev-rules/remote-and-mobile-adaptation.md 的故障半径三问)。
+ *
+ * 不这样做的后果是实测量级的:断线期间同会话事件逐条进 offlinePushQueue,重订阅时
+ * 一次 drain 可能有上百条,原本逐条 sendPush 就是同一 tick 内上百帧——正是 8/8 线上
+ * 单毫秒 119 帧、招来 relay 1013 的那个形状,而这一帧洪峰恰好发生在刚重连、最脆弱的
+ * 时刻。走批之后同量积压压成个位数帧。
+ *
+ * 顺序规则与在线主路完全一致:`maker:event` 入批,其它 channel 先收口该会话的批再发,
+ * 因此积压内的跨 channel 相对顺序不变。drain 完立即收口(恢复要快,不等 120ms 窗口)。
+ */
+function drainOfflinePushQueueTo(src: string, topics: readonly string[]): void {
+  const batchCapable = subscriptions.controllerSupports(
+    src,
+    CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  );
+  for (const queued of offlinePushQueue.drain(src, topics)) {
+    const sessionId = batchCapable && queued.channel === MAKER_PUSH.EVENT
+      ? readPushSessionId(queued.payload)
+      : null;
+    if (
+      sessionId !== null
+      && estimateMakerEventBytes(queued.payload) < MAKER_EVENT_BATCH_MAX_BYTES
+    ) {
+      stageMakerEventPush(src, sessionId, queued.payload, queued.ownerStamp);
+      continue;
+    }
+    flushMakerEventBatchesForSessionPush(src, queued.channel, queued.payload);
+    sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
+  }
+  flushMakerEventBatchesFor(src);
+}
+
 /** 收口单个会话的待发批(到量 / 越界 / 跨 channel 收口共用),含聚合日志。 */
 function flushMakerEventBatchesForSession(dst: string, sessionId: string): void {
   const stage = makerEventBatchStages.get(dst);
@@ -762,73 +796,60 @@ function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage):
 }
 
 /**
- * 一次 flush 内的降级账本。它解决的是「降级不能自己变成本 PR 要消掉的那个洪峰」
- * (review 三轮收敛的最终形态)。收敛过程值得记下来,免得再来一遍:
+ * 一次 flush 的丢弃账本(聚合日志用)。
  *
- *  1. 最初逐帧降级无条件重放整个切片 → 队头不可驱逐时 ≤64 次失败、≤64 条 WARN,
- *     正是要消灭的逐事件 admission 与告警洪峰(greptile P1)。
- *  2. 改成「第一次失败就停」→ 又把「这一帧自己不合格」和「管子堵了」混为一谈,
- *     误丢本可送达的批尾(greptile P1 第二轮)。
- *  3. 于是按错误码区分 → 但 `BACKPRESSURE` **也是尺寸相关**的:ws 容量判据是
- *     `bufferedAmount + additionalBytes > cap`,pending 容量判据也含字节维度,
- *     所以大帧被拒时小帧仍可能通过(codex P1)。按错误码停手同样会误丢。
+ * 这里原本还有一条「批帧被拒 → 就地降级为逐帧 best-effort」的路径。它引出了 review
+ * 里最长的一族反馈,四轮都在同一段十几行代码上打转,而且两位 reviewer 的要求互相
+ * 抵触——记下来,免得有人再把它加回来:
  *
- * 结论:**洪峰本质上是日志问题,不是尝试问题。** 一次 `sendPush` 失败的代价只是一次
- * 函数调用加一次 throw,而少发一条本可送达的事件是用户可见的缺流。所以:
- *  - 切片内**每一条都尝试**,不因任何失败提前停手(尺寸相关的失败下后面的小帧还有戏);
- *  - 降级路径的逐帧日志静默(`quiet`),成败计数聚合成**一条**日志;
- *  - 唯一的例外是 relay 离线:`client.sendPush` 在非 online 时本就静默早退、成功率
- *    恒为 0,整轮直接不尝试(也不必逐条 throw)。
+ *  1. 无条件逐帧重放整个切片 → 队头不可驱逐时 ≤64 次失败、≤64 条 WARN,正是本 PR
+ *     要消灭的逐事件 admission 与告警洪峰(greptile P1)。
+ *  2. 改成「第一次失败就停」→ 把「这一帧自己不合格」当成「管子堵了」,误丢本可送达
+ *     的批尾(greptile P1 第二轮)。
+ *  3. 于是按错误码区分 → `BACKPRESSURE` 也尺寸相关(ws 容量判据含 additionalBytes、
+ *     pending 判据含字节维度),按码停手同样误丢(codex P1)。
+ *  4. 于是每条都试、只把日志聚合 → 又回到第 1 条:同步循环里没有 ACK 能释放窗口,
+ *     ≤64 次 admission + 驱逐判定 + throw/catch 依旧在洪峰时放大主进程压力,只是
+ *     WARN 被静默了(greptile P1 第三轮)。
+ *
+ * 第 1 与第 4 是同一条要求,第 2 与第 3 是它的反向要求 —— 这段代码不存在同时满足两侧
+ * 的取值。**所以把它整个删掉**:批帧发不出去就丢掉这一片,记一条聚合日志。
+ *
+ * 为什么可以直接丢:`maker:event` 与批 channel 都在 #2167 的 COALESCIBLE_PUSH_CHANNELS
+ * 白名单里 —— 拥塞时丢弃最旧的镜像帧、由控制端 resync 补偿,这正是那个 PR 定下的取舍,
+ * 本 PR 的职责是常态减帧而不是重新裁决拥塞语义。另外两条兜底也不再需要:批帧上限
+ * 256KB 远小于 MAX_FRAME_BYTES(2MB),不会 PAYLOAD_TOO_LARGE,所以逐帧路径的
+ * compactOversizedPushPayload 裁剪在这里没有用武之地;单条 ≥256KB 的事件本来就在入批
+ * 前被 forwardPush 拦到逐帧路径。
  */
 interface MakerEventBatchFlushOutcome {
   /**
-   * relay 离线:本轮后续切片与会话只清空缓冲、不再尝试发送。
+   * relay 离线:本轮后续切片与会话只清空缓冲、不再尝试发送(sendPush 在非 online 时
+   * 第一行就静默早退,成功率恒为 0)。
    *
    * 这是常态且预期的一档(push 的恢复语义一直是重连后 resync 补偿、不是重放),断线
    * 期间事件仍在产生,每 120ms 窗口一条 WARN 就是 8 条/秒的噪声 → 记 debug 而非 warn。
    */
   offline: boolean;
-  /** 因离线而未尝试发送、直接丢弃的事件数。 */
+  /** 本轮丢弃的事件数。 */
   droppedEvents: number;
-  /** 降级逐帧的成功条数。 */
-  degradedSent: number;
-  /** 降级逐帧中失败(背压 / 超限无解等)的条数;>0 才值得一条 WARN。 */
-  degradedFailed: number;
 }
 
 function createMakerEventBatchFlushOutcome(): MakerEventBatchFlushOutcome {
-  return { offline: false, droppedEvents: 0, degradedSent: 0, degradedFailed: 0 };
+  return { offline: false, droppedEvents: 0 };
 }
 
 function reportMakerEventBatchFlushOutcome(
   dst: string,
   outcome: MakerEventBatchFlushOutcome,
 ): void {
-  if (outcome.droppedEvents > 0) {
-    // 离线丢弃是预期常态,debug 级(理由见 outcome.offline 注释)。
-    log.debug(
-      `maker:event batch flush to ${shortId(dst)}: relay offline, `
-      + `dropped ${outcome.droppedEvents} event(s) without retry`,
-    );
-  }
-  if (outcome.degradedFailed > 0) {
-    // relay 在线却有帧进不去:异常信号,一次 flush 一条(不是每帧一条)。
-    log.warn(
-      `maker:event batch degraded to per-frame for ${shortId(dst)}: `
-      + `${outcome.degradedSent} sent, ${outcome.degradedFailed} dropped`,
-    );
-  }
-}
-
-/**
- * 批帧发送失败后,逐帧重放**有没有可能成功**。唯一说「没有」的是 relay 不在线:
- * `client.sendPush` 在非 online 时第一行就静默早退,逐帧成功率恒为 0。其余一切失败
- * (`BACKPRESSURE` / `PAYLOAD_TOO_LARGE` / 未知)都尺寸相关或帧相关——大帧被拒时小帧
- * 仍可能通过(ws 容量判据是 `bufferedAmount + additionalBytes`,pending 判据也含字节
- * 维度),所以必须逐帧试,不能按错误码整片放弃(codex P1)。
- */
-function shouldDegradeBatchToPerFrame(err: unknown): boolean {
-  return !(err instanceof DeviceLinkError && err.code === 'NOT_CONNECTED');
+  if (outcome.droppedEvents === 0) return;
+  const line = `maker:event batch flush to ${shortId(dst)}: `
+    + `${outcome.offline ? 'relay offline' : 'send rejected'}, `
+    + `dropped ${outcome.droppedEvents} event(s)`;
+  // 离线丢弃是预期常态(理由见 outcome.offline);relay 在线却被拒才是异常信号。
+  if (outcome.offline) log.debug(line);
+  else log.warn(line);
 }
 
 /** flush 该控制端的全部会话批(窗口到点 / 显式收口)。 */
@@ -879,23 +900,12 @@ function flushMakerEventBatchSession(
           activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
         }
       } catch (err) {
-        if (!shouldDegradeBatchToPerFrame(err)) {
+        // 发不出去就丢这一片(不降级、不重试、不滞留):理由与四轮 review 的推导见
+        // MakerEventBatchFlushOutcome 注释。relay 离线时后续切片连尝试都省掉。
+        if (err instanceof DeviceLinkError && err.code === 'NOT_CONNECTED') {
           outcome.offline = true;
-          outcome.droppedEvents += slice.length;
-          continue;
         }
-        // 降级为逐帧:**每一条都试**,不因任何失败提前停手 —— 失败大多与帧尺寸相关
-        // (ws 容量判据含 additionalBytes、pending 判据含字节维度),大帧被拒时后面的
-        // 小帧仍可能通过;少发一条本可送达的事件是用户可见的缺流,而多一次失败的
-        // sendPush 只是一次 throw。逐帧日志静默,成败计数聚合成一条(见 outcome 注释)。
-        // 顺序仍是原顺序;批不因失败滞留 —— 那正是顺序问题的唯一来源。
-        for (const event of slice) {
-          if (sendPushBestEffort(dst, MAKER_PUSH.EVENT, event, segment.ownerStamp, { quiet: true })) {
-            outcome.degradedSent += 1;
-          } else {
-            outcome.degradedFailed += 1;
-          }
-        }
+        outcome.droppedEvents += slice.length;
       }
     }
   }
@@ -1192,49 +1202,37 @@ export function pushToTopicSubscribers(
   forwardPush(channel, payload, ownerStamp);
 }
 
-/**
- * best-effort 转发一帧 push:失败只记日志、不抛。
- * @param opts.quiet 静默逐帧日志(调用方自己做聚合)。批降级路径用它:一次 flush
- *   最多 ≤64 帧,逐条 WARN 就是本 PR 要消掉的那个告警洪峰。
- * @returns 帧是否已交给可靠传输(含 compact 兜底后成功)。绝大多数调用方忽略返回值。
- */
 function sendPushBestEffort(
   dst: string,
   channel: string,
   payload: unknown,
   ownerStamp?: PushOwnerStamp,
-  opts?: { quiet?: boolean },
-): boolean {
-  if (!activeClient) return false;
-  const warn = (message: string): void => {
-    if (!opts?.quiet) log.warn(message);
-  };
+): void {
+  if (!activeClient) return;
   try {
     if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
     else activeClient.sendPush(dst, channel, payload, ownerStamp);
-    return true;
+    return;
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
-      warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      return false;
+      log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
+      return;
     }
 
     const compactPayload = compactOversizedPushPayload(channel, payload);
     if (!compactPayload) {
-      warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      return false;
+      log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
+      return;
     }
 
     try {
       if (ownerStamp === undefined) activeClient.sendPush(dst, channel, compactPayload);
       else activeClient.sendPush(dst, channel, compactPayload, ownerStamp);
-      warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
-      return true;
+      log.warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
     } catch (retryErr) {
-      warn(
+      log.warn(
         `forwardPush to ${shortId(dst)} failed after compact retry (${channel}): ${String(retryErr)}`,
       );
-      return false;
     }
   }
 }
@@ -1569,9 +1567,7 @@ function handleLinkOpen(
   if (!knownModernController) {
     // 同上:投递离线积压前先排空该控制端的事件批,保住跨积压的顺序。
     flushMakerEventBatchesFor(src);
-    for (const queued of offlinePushQueue.drain(src, [LEGACY_TOPIC])) {
-      sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
-    }
+    drainOfflinePushQueueTo(src, [LEGACY_TOPIC]);
   }
   log.info(`control link opened by ${shortId(src)} (${name})`);
 }
@@ -2471,9 +2467,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     // 新事件与终态推送进的是 offlinePushQueue,而旧批留在内存等重试 timer;
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
     flushMakerEventBatchesFor(src);
-    for (const queued of offlinePushQueue.drain(src, topics)) {
-      sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
-    }
+    drainOfflinePushQueueTo(src, topics);
   }
   return { ok: true, result: { ok: true } };
 }
