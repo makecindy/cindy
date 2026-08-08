@@ -80,7 +80,12 @@ export function buildPiSources(workingDirs: string[]): SourceDef[] {
 
   for (const input of workingDirs) {
     if (!input || !path.isAbsolute(input) || !isExistingDirectory(input)) continue;
-    const workingDir = canonicalDirectory(input);
+    // Scan through the physical directory so Git-boundary discovery is stable,
+    // but preserve the caller's lexical root for project ownership. Two project
+    // entries may intentionally refer to the same checkout through different
+    // symlink paths and must remain distinguishable to SkillHub.
+    const workingDir = path.resolve(input);
+    const scanRoot = canonicalDirectory(input);
     const addProjectSource = (dir: string): void => {
       const key = `${workingDir}\0${canonicalDirectory(dir)}`;
       if (seen.has(key)) return;
@@ -88,8 +93,8 @@ export function buildPiSources(workingDirs: string[]): SourceDef[] {
       sources.push({ engine: 'pi', kind: 'skill', scope: 'repo', dir, workingDir, runtimeStatus: 'discovered' });
     };
 
-    addProjectSource(path.join(workingDir, '.pi', 'skills'));
-    for (const ancestor of agentSkillAncestors(workingDir)) {
+    addProjectSource(path.join(scanRoot, '.pi', 'skills'));
+    for (const ancestor of agentSkillAncestors(scanRoot)) {
       addProjectSource(path.join(ancestor, '.agents', 'skills'));
     }
   }

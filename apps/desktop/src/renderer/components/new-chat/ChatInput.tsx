@@ -203,6 +203,7 @@ import { getModelById } from '@/lib/modelDefinitions';
 import {
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
+  hasAvailableSlashCommand,
   isSlashCommandUnavailable,
   loadAllCommands,
   nextAvailableSlashCommandIndex,
@@ -3808,7 +3809,9 @@ export function ChatInput({
     ));
     if (
       projectSkills.length === 0
-      || projectSkills.some((command) => command.runtimeStatus === 'loaded')
+      || projectSkills.some((command) => (
+        command.kind === 'agent-skill' && command.runtimeStatus === 'loaded'
+      ))
       || !projectSkills.some(isSlashCommandUnavailable)
     ) return;
     const attempt = piRuntimeRetryRef.current;
@@ -3857,6 +3860,9 @@ export function ChatInput({
             if (slashOpen && filteredCommands[slashFocus]) {
               if (isSlashCommandUnavailable(filteredCommands[slashFocus])) {
                 setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
+                if (!hasAvailableSlashCommand(filteredCommands) && trigger.kind === 'slash') {
+                  setSuppressedSlashAt(trigger.from);
+                }
                 return true;
               }
               insertSlashCommand(filteredCommands[slashFocus]);

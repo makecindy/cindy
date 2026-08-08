@@ -74,7 +74,7 @@ describe('scanPiCustomizations', () => {
     expect(items.map((item) => item.name)).not.toContain('above-repo');
     expect(items.map((item) => item.name)).not.toContain('legacy-path');
     expect(items.every((item) => item.runtimeStatus === 'discovered')).toBe(true);
-    expect(items.every((item) => item.workingDir === canonical(cwd))).toBe(true);
+    expect(items.every((item) => item.workingDir === path.resolve(cwd))).toBe(true);
   });
 
   it('stops ancestor discovery at a nested repository root', async () => {
@@ -207,7 +207,7 @@ describe('scanPiCustomizations', () => {
     );
   });
 
-  it.skipIf(process.platform === 'win32')('resolves a symlinked working directory before finding the Git root', async () => {
+  it.skipIf(process.platform === 'win32')('resolves a symlinked working directory for scanning while preserving its ownership path', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');
     const physicalCwd = path.join(repo, 'src');
@@ -220,6 +220,25 @@ describe('scanPiCustomizations', () => {
     const result = await scanPiCustomizations({ workingDirs: [linkedCwd] });
     const found = projectItems(result).find((item) => item.name === 'repo-skill');
 
-    expect(found?.workingDir).toBe(canonical(physicalCwd));
+    expect(found?.workingDir).toBe(path.resolve(linkedCwd));
+    expect(canonical(found?.absolutePath ?? '')).toBe(canonical(path.join(repo, '.agents', 'skills', 'repo-skill')));
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps lexical project aliases distinct for the same physical checkout', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    const linkedRepo = path.join(root, 'linked-repo');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    symlinkSync(repo, linkedRepo, 'dir');
+    writeSkill(repo, path.join('.pi', 'skills'), 'aliased-skill');
+
+    const items = projectItems(await scanPiCustomizations({ workingDirs: [repo, linkedRepo] }))
+      .filter((item) => item.name === 'aliased-skill');
+
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.workingDir).sort()).toEqual([
+      path.resolve(repo),
+      path.resolve(linkedRepo),
+    ].sort());
   });
 });

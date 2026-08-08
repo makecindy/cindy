@@ -181,18 +181,24 @@ export async function scanAllSkills(
 ): Promise<ScanResult> {
   const projects = params.projects ?? [];
   const projectByWorkingDir = new Map<string, ProjectInput>();
+  const projectsByCanonicalWorkingDir = new Map<string, ProjectInput[]>();
   const workingDirs: string[] = [];
   for (const p of projects) {
     if (p.projectRoot && path.isAbsolute(p.projectRoot)) {
       workingDirs.push(p.projectRoot);
       projectByWorkingDir.set(path.normalize(p.projectRoot), p);
-      projectByWorkingDir.set(realPathOrNormalized(p.projectRoot), p);
+      const canonicalRoot = realPathOrNormalized(p.projectRoot);
+      const aliases = projectsByCanonicalWorkingDir.get(canonicalRoot) ?? [];
+      aliases.push(p);
+      projectsByCanonicalWorkingDir.set(canonicalRoot, aliases);
     }
   }
   const projectForWorkingDir = (workingDir?: string): ProjectInput | undefined => {
     if (!workingDir) return undefined;
-    return projectByWorkingDir.get(path.normalize(workingDir))
-      ?? projectByWorkingDir.get(realPathOrNormalized(workingDir));
+    const lexicalMatch = projectByWorkingDir.get(path.normalize(workingDir));
+    if (lexicalMatch) return lexicalMatch;
+    const canonicalMatches = projectsByCanonicalWorkingDir.get(realPathOrNormalized(workingDir));
+    return canonicalMatches?.length === 1 ? canonicalMatches[0] : undefined;
   };
 
   let listed: { items: AgentCustomization[]; errors: Array<{ path?: string; message: string }> };

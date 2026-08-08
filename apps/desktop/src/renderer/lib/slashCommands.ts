@@ -30,6 +30,10 @@ export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
     && command.runtimeStatus === 'discovered';
 }
 
+export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): boolean {
+  return commands.some((command) => !isSlashCommandUnavailable(command));
+}
+
 /** First available command index, or 0 when nothing is available/present. */
 export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
   const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
@@ -175,6 +179,33 @@ export async function loadAllCommands(
   const agentBuiltin = (builtinRes.success && builtinRes.commands ? builtinRes.commands : []) as UnifiedCommand[];
   const agentSkill = (skillRes.success && skillRes.skills ? skillRes.skills : []) as UnifiedCommand[];
   return mergeCommands(desktop, agentBuiltin, agentSkill);
+}
+
+/**
+ * A Pi runtime catalog may finish after the palette/dispatch snapshot was
+ * created. Recheck desktop hits before executing them so a newly loaded
+ * same-name project skill keeps command ownership.
+ */
+export async function reconcilePiRuntimeCommandForDispatch(params: {
+  agentKind: AgentKind;
+  sessionId?: string;
+  commandName: string;
+  commands: UnifiedCommand[];
+  reload: () => Promise<UnifiedCommand[]>;
+}): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
+  const findCommand = (commands: UnifiedCommand[]) => commands.find(
+    (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
+  );
+  const current = findCommand(params.commands);
+  if (params.agentKind !== 'pi' || !params.sessionId || current?.kind !== 'desktop') {
+    return { command: current, commands: params.commands };
+  }
+  try {
+    const refreshed = await params.reload();
+    return { command: findCommand(refreshed), commands: refreshed };
+  } catch {
+    return { command: current, commands: params.commands };
+  }
 }
 
 /**

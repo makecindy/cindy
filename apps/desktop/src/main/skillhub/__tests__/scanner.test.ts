@@ -177,6 +177,47 @@ describe('scanAllSkills', () => {
     realpathSyncSpy.mockRestore();
   });
 
+  it('keeps lexical aliases of one physical project assigned to their own project entries', async () => {
+    const projectRoot = path.resolve('/workspace/project-real');
+    const linkedRoot = path.resolve('/workspace/project-link');
+    const skillDir = path.join(projectRoot, '.pi', 'skills', 'pi-demo');
+    const realpathSyncSpy = vi.spyOn(fs, 'realpathSync').mockImplementation((value) => {
+      const candidate = String(value);
+      if (candidate === linkedRoot) return projectRoot;
+      return candidate;
+    });
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [projectRoot, linkedRoot].map((workingDir) => ({
+          engine: 'pi' as const,
+          kind: 'skill' as const,
+          scope: 'repo' as const,
+          name: 'pi-demo',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          workingDir,
+          runtimeStatus: 'discovered' as const,
+          files: [],
+        })),
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({
+      projects: [
+        { projectRoot, hash: 'real1234' },
+        { projectRoot: linkedRoot, hash: 'link5678' },
+      ],
+    }, maker);
+
+    expect(result.skills.map((skill) => skill.projectHash).sort()).toEqual(['link5678', 'real1234']);
+    expect(result.skills.map((skill) => skill.projectRoot).sort()).toEqual([
+      linkedRoot,
+      projectRoot,
+    ].sort());
+    realpathSyncSpy.mockRestore();
+  });
+
   it('ignores non-absolute projectRoot values before calling maker', async () => {
     const maker = {
       listCustomizations: vi.fn(async () => ({ errors: [], items: [] })),

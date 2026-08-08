@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
+  hasAvailableSlashCommand,
   isSlashCommandUnavailable,
   mergeCommands,
   nextAvailableSlashCommandIndex,
+  reconcilePiRuntimeCommandForDispatch,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 
@@ -110,5 +112,36 @@ describe('Pi project skill availability', () => {
 
     expect(firstAvailableSlashCommandIndex(commands)).toBe(0);
     expect(nextAvailableSlashCommandIndex(commands, 0, 1)).toBe(0);
+    expect(hasAvailableSlashCommand(commands)).toBe(false);
+  });
+
+  it('refreshes a Pi desktop hit before dispatch so a loaded same-name skill wins', async () => {
+    const desktop: UnifiedCommand = { kind: 'desktop', name: 'help', description: 'Help' };
+    const loaded = skill({ name: 'help', scope: 'repo', runtimeStatus: 'loaded' });
+
+    await expect(reconcilePiRuntimeCommandForDispatch({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'help',
+      commands: [desktop],
+      reload: async () => [loaded],
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+  });
+
+  it('does not refresh a non-Pi desktop hit', async () => {
+    const desktop: UnifiedCommand = { kind: 'desktop', name: 'help', description: 'Help' };
+    let reloaded = false;
+
+    await expect(reconcilePiRuntimeCommandForDispatch({
+      agentKind: 'claude-code',
+      sessionId: 'session-1',
+      commandName: 'help',
+      commands: [desktop],
+      reload: async () => {
+        reloaded = true;
+        return [];
+      },
+    })).resolves.toEqual({ command: desktop, commands: [desktop] });
+    expect(reloaded).toBe(false);
   });
 });

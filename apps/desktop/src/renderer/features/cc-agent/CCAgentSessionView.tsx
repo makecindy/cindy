@@ -133,7 +133,12 @@ import {
   useControlledBy,
 } from '@/features/remote-device/ControlledBanner';
 import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
-import { loadAllCommands, dispatchCommand, type UnifiedCommand } from '@/lib/slashCommands';
+import {
+  loadAllCommands,
+  dispatchCommand,
+  reconcilePiRuntimeCommandForDispatch,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 import * as sessionService from '@/lib/sessionService';
 import { emitRefresh } from '@/lib/sessionsBus';
 import type { Session } from '@/lib/ccAgent.types';
@@ -2410,7 +2415,28 @@ export function CCAgentSessionView({
       const args = slashMatch[2] ?? '';
       const cached = allCommandsRef.current;
       const commands = cached.length > 0 ? cached : await getHelpCommandsSnapshot();
-      const hit = commands.find((c) => c.name.toLowerCase() === cmdName);
+      const agentKind = dbToMakerAgentKind(session?.agentKind);
+      const reconciled = await reconcilePiRuntimeCommandForDispatch({
+        agentKind,
+        sessionId: session?.id,
+        commandName: cmdName,
+        commands,
+        reload: () => loadAllCommands(
+          agentKind,
+          session?.workingDir,
+          {
+            skipAgentSkills: isRemoteSession,
+            sessionId: session?.id,
+            forceReload: true,
+          },
+          remoteDeviceId,
+        ),
+      });
+      if (reconciled.commands !== commands) {
+        allCommandsRef.current = reconciled.commands;
+        setAllCommands(reconciled.commands);
+      }
+      const hit = reconciled.command;
       if (hit?.kind !== 'desktop') return false;
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。
@@ -2429,7 +2455,15 @@ export function CCAgentSessionView({
       });
       return true;
     },
-    [getHelpCommandsSnapshot, session?.workingDir, sessionId, remoteDeviceId],
+    [
+      getHelpCommandsSnapshot,
+      isRemoteSession,
+      session?.agentKind,
+      session?.id,
+      session?.workingDir,
+      sessionId,
+      remoteDeviceId,
+    ],
   );
 
   const maybeShowContextUsage = useCallback(
