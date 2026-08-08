@@ -89,8 +89,8 @@ export interface MaterializedLocalMarkdownImages {
 }
 
 export interface MaterializedLocalMarkdownFiles {
-  /** 已通过工作目录边界校验的真实文件路径，供 IM 渠道上传。 */
-  absPaths: string[];
+  /** 已通过工作目录边界校验的真实文件与对外展示名，供 IM 渠道上传。 */
+  files: Array<{ absPath: string; displayName?: string }>;
   /** 所有内部文件引用均替换为可读标签，避免本机路径泄漏。 */
   text: string;
 }
@@ -111,7 +111,7 @@ export async function materializeLocalMarkdownFiles(
   deps: Pick<LocalMarkdownImageDeps, 'realpath' | 'stat'> = defaultDeps,
 ): Promise<MaterializedLocalMarkdownFiles> {
   const refs = collectXdtFileRefs(params.text);
-  if (refs.length === 0) return { absPaths: [], text: params.text };
+  if (refs.length === 0) return { files: [], text: params.text };
 
   const maxFiles = Math.max(0, params.maxFiles ?? 8);
   const existing = new Set<string>();
@@ -131,10 +131,10 @@ export async function materializeLocalMarkdownFiles(
   }
 
   const accepted = new Set<string>();
-  const absPaths: string[] = [];
+  const files: Array<{ absPath: string; displayName?: string }> = [];
   if (workingDirReal) {
     for (const ref of refs) {
-      if (absPaths.length >= maxFiles) break;
+      if (files.length >= maxFiles) break;
       try {
         const candidate = normalizeXdtAbsPath(
           decodeURIComponent(ref.url.slice('xdt-file://'.length)),
@@ -148,7 +148,10 @@ export async function materializeLocalMarkdownFiles(
         const key = pathKey(targetReal);
         if (accepted.has(key) || existing.has(key)) continue;
         accepted.add(key);
-        absPaths.push(targetReal);
+        files.push({
+          absPath: targetReal,
+          ...(ref.alt.trim() ? { displayName: ref.alt.trim() } : {}),
+        });
       } catch {
         // A bad or missing file is omitted; the readable label remains below.
       }
@@ -156,11 +159,39 @@ export async function materializeLocalMarkdownFiles(
   }
 
   return {
-    absPaths,
+    files,
     text: transformXdtRefs(params.text, {
       file: ({ alt }) => alt.trim() || '附件',
     }),
   };
+}
+
+function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
+  let target = rawTarget.trim();
+  if (target.startsWith('<') && target.endsWith('>')) {
+    target = target.slice(1, -1).trim();
+  }
+  return (
+    target.startsWith('file://') ||
+    target.startsWith('/') ||
+    /^[A-Za-z]:[\\/]/.test(target) ||
+    /^\\\\[^\\]/.test(target)
+  );
+}
+
+/** Remove unresolved host-local image targets before a plain-text IM fallback. */
+export function sanitizeLocalMarkdownImageRefs(text: string): string {
+  const matches = Array.from(text.matchAll(LOCAL_MARKDOWN_IMAGE_RE));
+  let sanitized = text;
+  for (let index = matches.length - 1; index >= 0; index -= 1) {
+    const match = matches[index];
+    if (!isSensitiveLocalMarkdownImageTarget(match[2])) continue;
+    const start = match.index;
+    if (start === undefined) continue;
+    const replacement = match[1].trim() || '图片';
+    sanitized = `${sanitized.slice(0, start)}${replacement}${sanitized.slice(start + match[0].length)}`;
+  }
+  return sanitized;
 }
 
 export async function materializeLocalMarkdownImages(

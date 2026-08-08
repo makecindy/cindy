@@ -112,7 +112,8 @@ vi.mock('../../../imageCacheStore', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
 }));
 
-vi.mock('../localMarkdownImages', () => ({
+vi.mock('../localMarkdownImages', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../localMarkdownImages')>()),
   materializeLocalMarkdownImages: mocks.materializeLocalMarkdownImages,
   materializeLocalMarkdownFiles: mocks.materializeLocalMarkdownFiles,
 }));
@@ -552,7 +553,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.cancelPending.mockReturnValue(null);
     mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
     mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
-    mocks.materializeLocalMarkdownFiles.mockResolvedValue({ absPaths: [], text: '' });
+    mocks.materializeLocalMarkdownFiles.mockResolvedValue({ files: [], text: '' });
   });
 
   afterEach(async () => {
@@ -712,6 +713,27 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
   });
 
+  it('does not expose rejected local image paths in rich-card plain-text fallback', async () => {
+    const localPath = '/Users/private/secret.png';
+    const rawText = `image unavailable\n![private image](${localPath})`;
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({ absPaths: [], text: rawText });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: rawText, isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        'image unavailable\nprivate image',
+        { threadTs: undefined },
+      );
+    });
+    expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).not.toContain(localPath);
+  });
+
   it('leaves inline managed images to a healthy rich-card handle', async () => {
     const managedUrl = `cindy-media://blobs/${'c'.repeat(64)}.png`;
     const handle = {
@@ -740,7 +762,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const fileUrl = 'xdt-file:///F:/XDMaker/report.pdf';
     mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
     mocks.materializeLocalMarkdownFiles.mockResolvedValueOnce({
-      absPaths: ['F:\\XDMaker\\report.pdf'],
+      files: [{ absPath: 'F:\\XDMaker\\report.pdf', displayName: 'report' }],
       text: 'report ready\nreport',
     });
     const h = setupSession(async () => ({ accepted: true }));
@@ -756,7 +778,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(mocks.feishuIm.sendFile).toHaveBeenCalledWith(
         'ou_user',
         'F:\\XDMaker\\report.pdf',
-        undefined,
+        'report',
         { threadTs: undefined },
       );
     });

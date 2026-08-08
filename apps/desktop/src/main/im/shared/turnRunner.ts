@@ -123,6 +123,7 @@ import { FBOT_DRAFT_TITLE, generateAndPersistFbotTitle } from './fbotTitle';
 import {
   materializeLocalMarkdownFiles,
   materializeLocalMarkdownImages,
+  sanitizeLocalMarkdownImageRefs,
 } from './localMarkdownImages';
 import {
   createTurnActivity,
@@ -176,6 +177,8 @@ interface TurnState {
   presenter: TurnPresenter;
   /** Managed images discovered in tool output for terminal delivery. */
   mediaAbsPaths: string[];
+  /** Optional user-facing names for file paths in the terminal media ledger. */
+  mediaDisplayNames: Map<string, string>;
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
   done: boolean;
@@ -678,6 +681,7 @@ export function createTurnRunner(
       streamingHandlePromise: null,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
+      mediaDisplayNames: new Map(),
       workingDir: row.workingDir,
       done: false,
       activityTicker: null,
@@ -2578,7 +2582,12 @@ export function createTurnRunner(
   ): Promise<void> {
     for (const absPath of turn.mediaAbsPaths) {
       try {
-        const result = await output.im.sendFile(userId, absPath, undefined, { threadTs });
+        const result = await output.im.sendFile(
+          userId,
+          absPath,
+          turn.mediaDisplayNames.get(absPath),
+          { threadTs },
+        );
         if (result.ok) continue;
         log.error(`${channel} media fallback failed`, {
           kind: 'terminal-media-fallback',
@@ -2706,9 +2715,11 @@ export function createTurnRunner(
     } finally {
       if (richCardFallback) {
         turn.presenter.replaceBody(
-          transformXdtRefs(turn.presenter.wholeText(), {
-            image: ({ alt }) => alt.trim() || '图片',
-          }),
+          sanitizeLocalMarkdownImageRefs(
+            transformXdtRefs(turn.presenter.wholeText(), {
+              image: ({ alt }) => alt.trim() || '图片',
+            }),
+          ),
         );
       }
     }
@@ -2724,8 +2735,9 @@ export function createTurnRunner(
         existingAbsPaths: [...turn.mediaAbsPaths],
       });
       turn.presenter.replaceBody(materialized.text);
-      for (const absPath of materialized.absPaths) {
-        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+      for (const file of materialized.files) {
+        if (!turn.mediaAbsPaths.includes(file.absPath)) turn.mediaAbsPaths.push(file.absPath);
+        if (file.displayName) turn.mediaDisplayNames.set(file.absPath, file.displayName);
       }
     } catch (err) {
       const error = sanitizeSendOutcomeError(err);
@@ -2947,7 +2959,10 @@ export function createTurnRunner(
     }
     turn.streamingHandle = null;
     turn.streamingHandlePromise = null;
-    if (finalizedWithContent) turn.mediaAbsPaths = [];
+    if (finalizedWithContent) {
+      turn.mediaAbsPaths = [];
+      turn.mediaDisplayNames.clear();
+    }
     turn.presenter.replaceBody('');
   }
 

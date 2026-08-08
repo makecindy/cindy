@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   materializeLocalMarkdownFiles,
   materializeLocalMarkdownImages,
+  sanitizeLocalMarkdownImageRefs,
 } from '../localMarkdownImages';
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -205,7 +206,7 @@ describe('materializeLocalMarkdownFiles', () => {
     expect(deps.realpath).toHaveBeenCalledWith(reportPath);
     expect(deps.stat).toHaveBeenCalledWith(await fs.realpath(reportPath));
     expect(result).toEqual({
-      absPaths: [await fs.realpath(reportPath)],
+      files: [{ absPath: await fs.realpath(reportPath), displayName: 'report' }],
       text: 'ready\nreport\nduplicate',
     });
   });
@@ -224,8 +225,23 @@ describe('materializeLocalMarkdownFiles', () => {
       workingDir,
     });
 
-    expect(result).toEqual({ absPaths: [], text: 'outside\nlinked' });
+    expect(result).toEqual({ files: [], text: 'outside\nlinked' });
     expect(result.text).not.toContain('xdt-file://');
     expect(result.text).not.toContain(outsidePath);
+  });
+});
+
+describe('sanitizeLocalMarkdownImageRefs', () => {
+  it('removes absolute and file URL image targets while preserving readable labels', () => {
+    const text = [
+      '![unix](/Users/private/a.png)',
+      '![windows](C:\\Users\\private\\b.png)',
+      '![file url](file:///Users/private/c.png)',
+      '![remote](https://example.com/public.png)',
+    ].join('\n');
+
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe(
+      ['unix', 'windows', 'file url', '![remote](https://example.com/public.png)'].join('\n'),
+    );
   });
 });
