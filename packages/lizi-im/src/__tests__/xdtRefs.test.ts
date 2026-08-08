@@ -180,6 +180,28 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
   it('图片语法 + xdt-file 协议不算文件引用(与个人渠道收口同口径)', () => {
     expect(collectXdtFileRefs('![f](xdt-file:///tmp/x.txt)')).toEqual([]);
   });
+
+  it('parses an angle-bracket destination with an optional Markdown title', () => {
+    const text = '[报告](<xdt-file:///tmp/report.pdf> "下载")';
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告',
+        url: 'xdt-file:///tmp/report.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
+  });
+
+  it('ignores file references inside inline code and fenced code blocks', () => {
+    const inline = '`[报告](xdt-file:///tmp/inline.pdf)`';
+    const fenced = '```md\n[报告](xdt-file:///tmp/fenced.pdf)\n```';
+    const text = `${inline}\n${fenced}`;
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
 });
 
 describe('transformXdtRefs(收口正文改写共享原语)', () => {

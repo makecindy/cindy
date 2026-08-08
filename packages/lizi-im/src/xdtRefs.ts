@@ -25,6 +25,134 @@ interface ParsedXdtRef extends XdtImageRef {
   kind: 'image' | 'file';
 }
 
+interface TextRange {
+  start: number;
+  end: number;
+}
+
+function runLength(text: string, start: number, char: string): number {
+  let end = start;
+  while (text[end] === char) end += 1;
+  return end - start;
+}
+
+function lineEndAfterNewline(text: string, start: number): number {
+  const newline = text.indexOf('\n', start);
+  return newline === -1 ? text.length : newline + 1;
+}
+
+/** Locate fenced and inline Markdown code without copying/masking large model output. */
+function markdownCodeRanges(text: string): TextRange[] {
+  const fences: TextRange[] = [];
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const openingLineEnd = lineEndAfterNewline(text, lineStart);
+    let markerStart = lineStart;
+    while (markerStart < openingLineEnd && markerStart - lineStart < 3 && text[markerStart] === ' ') {
+      markerStart += 1;
+    }
+    const marker = text[markerStart];
+    const openingRun = marker === '`' || marker === '~' ? runLength(text, markerStart, marker) : 0;
+    if (openingRun < 3) {
+      lineStart = openingLineEnd;
+      continue;
+    }
+
+    let searchLine = openingLineEnd;
+    let fenceEnd = text.length;
+    while (searchLine < text.length) {
+      const candidateLineEnd = lineEndAfterNewline(text, searchLine);
+      let candidate = searchLine;
+      while (candidate < candidateLineEnd && candidate - searchLine < 3 && text[candidate] === ' ') {
+        candidate += 1;
+      }
+      const closingRun = runLength(text, candidate, marker);
+      if (closingRun >= openingRun) {
+        const rest = text.slice(candidate + closingRun, candidateLineEnd).trim();
+        if (rest === '') {
+          fenceEnd = candidateLineEnd;
+          break;
+        }
+      }
+      searchLine = candidateLineEnd;
+    }
+    fences.push({ start: lineStart, end: fenceEnd });
+    lineStart = fenceEnd;
+  }
+
+  const ranges = [...fences];
+  let fenceIndex = 0;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const fence = fences[fenceIndex];
+    if (fence && cursor >= fence.start) {
+      cursor = fence.end;
+      fenceIndex += 1;
+      continue;
+    }
+    if (text[cursor] !== '`') {
+      cursor += 1;
+      continue;
+    }
+    const openingRun = runLength(text, cursor, '`');
+    let search = cursor + openingRun;
+    let closingEnd = -1;
+    while (search < text.length && (!fence || search < fence.start)) {
+      const next = text.indexOf('`', search);
+      if (next === -1 || (fence && next >= fence.start)) break;
+      const closingRun = runLength(text, next, '`');
+      if (closingRun === openingRun) {
+        closingEnd = next + closingRun;
+        break;
+      }
+      search = next + closingRun;
+    }
+    if (closingEnd === -1) {
+      cursor += openingRun;
+      continue;
+    }
+    ranges.push({ start: cursor, end: closingEnd });
+    cursor = closingEnd;
+  }
+  return ranges.sort((a, b) => a.start - b.start);
+}
+
+function codeRangeAt(ranges: readonly TextRange[], position: number): TextRange | null {
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const range = ranges[mid];
+    if (position < range.start) high = mid - 1;
+    else if (position >= range.end) low = mid + 1;
+    else return range;
+  }
+  return null;
+}
+
+function angleReferenceEnd(text: string, closingAngle: number): number {
+  let cursor = closingAngle + 1;
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  if (text[cursor] === ')') return cursor;
+  const opener = text[cursor];
+  const closer = opener === '"' ? '"' : opener === "'" ? "'" : opener === '(' ? ')' : null;
+  if (!closer) return -1;
+  cursor += 1;
+  while (cursor < text.length) {
+    if (text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === closer) break;
+    if (text[cursor] === '\n' || text[cursor] === '\r') return -1;
+    cursor += 1;
+  }
+  if (text[cursor] !== closer) return -1;
+  cursor += 1;
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  return text[cursor] === ')' ? cursor : -1;
+}
+
 /**
  * 判定 text[openBracket] 处是否**直接**开始一个 managed-media 引用。判据与
  * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 扫描遇 '[' 即
@@ -33,7 +161,8 @@ interface ParsedXdtRef extends XdtImageRef {
  * "直接"很关键: alt 里再出现 '[' 时返回 false —— 那个更内层的 '[' 才可能是
  * 起点, 外层的恢复循环会继续迭代到它。
  */
-function refStartsAt(text: string, openBracket: number): boolean {
+function refStartsAt(text: string, openBracket: number, codeRanges: readonly TextRange[]): boolean {
+  if (codeRangeAt(codeRanges, openBracket)) return false;
   const image = openBracket > 0 && text[openBracket - 1] === '!';
   let altEnd = openBracket + 1;
   while (
@@ -46,9 +175,10 @@ function refStartsAt(text: string, openBracket: number): boolean {
   if (altEnd >= text.length || text[altEnd] === '[') return false;
 
   const urlStart = altEnd + 2;
+  const schemeStart = text[urlStart] === '<' ? urlStart + 1 : urlStart;
   return image
-    ? text.startsWith('xdt-image://', urlStart) || text.startsWith('cindy-media://', urlStart)
-    : text.startsWith('xdt-file://', urlStart);
+    ? text.startsWith('xdt-image://', schemeStart) || text.startsWith('cindy-media://', schemeStart)
+    : text.startsWith('xdt-file://', schemeStart);
 }
 
 /**
@@ -58,6 +188,7 @@ function refStartsAt(text: string, openBracket: number): boolean {
  */
 function parseXdtRefs(text: string): ParsedXdtRef[] {
   const refs: ParsedXdtRef[] = [];
+  const codeRanges = markdownCodeRanges(text);
   let cursor = 0;
   // ')' 查找的单调缓存。搜索起点跨候选严格递增(scheme 不匹配的路径根本不查
   // 括号; 恢复后新候选的 urlStart 在恢复点之后; 收下引用后 cursor = endParen
@@ -76,6 +207,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
   while (cursor < text.length) {
     const openBracket = text.indexOf('[', cursor);
     if (openBracket === -1) break;
+    const codeRange = codeRangeAt(codeRanges, openBracket);
+    if (codeRange) {
+      cursor = codeRange.end;
+      continue;
+    }
 
     const image = openBracket > 0 && text[openBracket - 1] === '!';
     const start = image ? openBracket - 1 : openBracket;
@@ -98,13 +234,15 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     if (altEnd >= text.length) break;
 
     const urlStart = altEnd + 2;
+    const angleWrapped = text[urlStart] === '<';
+    const schemeStart = angleWrapped ? urlStart + 1 : urlStart;
     const scheme = image
-      ? text.startsWith('xdt-image://', urlStart)
+      ? text.startsWith('xdt-image://', schemeStart)
         ? 'xdt-image://'
-        : text.startsWith('cindy-media://', urlStart)
+        : text.startsWith('cindy-media://', schemeStart)
           ? 'cindy-media://'
           : null
-      : text.startsWith('xdt-file://', urlStart)
+      : text.startsWith('xdt-file://', schemeStart)
         ? 'xdt-file://'
         : null;
     if (!scheme) {
@@ -112,8 +250,14 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       continue;
     }
 
-    const endParen = nextParen(urlStart + scheme.length);
+    const closingAngle = angleWrapped ? text.indexOf('>', schemeStart + scheme.length) : -1;
+    const endParen = angleWrapped
+      ? closingAngle === -1
+        ? -1
+        : angleReferenceEnd(text, closingAngle)
+      : nextParen(schemeStart + scheme.length);
     if (endParen === -1) break;
+    const urlEnd = angleWrapped ? closingAngle : endParen;
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
     // 把整段错误改写。判据是 URL 段里出现**构成引用起点**的 '['(#1856 review
@@ -129,11 +273,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     // 重叠。恢复带来的 ')' 重复定位由上面的 nextParen 单调缓存兜住。
     let recovery = -1;
     for (
-      let bracket = text.indexOf('[', urlStart + scheme.length);
-      bracket !== -1 && bracket < endParen;
+      let bracket = text.indexOf('[', schemeStart + scheme.length);
+      bracket !== -1 && bracket < urlEnd;
       bracket = text.indexOf('[', bracket + 1)
     ) {
-      if (refStartsAt(text, bracket)) {
+      if (refStartsAt(text, bracket, codeRanges)) {
         recovery = bracket;
         break;
       }
@@ -142,11 +286,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       cursor = recovery;
       continue;
     }
-    if (endParen > urlStart + scheme.length) {
+    if (urlEnd > schemeStart + scheme.length) {
       refs.push({
         kind: image ? 'image' : 'file',
         alt: text.slice(altStart, altEnd),
-        url: text.slice(urlStart, endParen),
+        url: text.slice(schemeStart, urlEnd),
         start,
         end: endParen + 1,
       });

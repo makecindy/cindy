@@ -376,6 +376,38 @@ describe('materializeLocalMarkdownFiles', () => {
     await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('remote report');
   });
 
+  it('leaves xdt-file examples inside Markdown code untouched and unsent', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'secret.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+    const text = [
+      `\`[inline](xdt-file://${reportPath})\``,
+      '```md',
+      `[fenced](xdt-file://${reportPath})`,
+      '```',
+    ].join('\n');
+
+    await expect(materializeLocalMarkdownFiles({ text, workingDir })).resolves.toEqual({
+      files: [],
+      tempDirs: [],
+      text,
+    });
+  });
+
+  it('materializes an angle-bracket xdt-file destination and removes its title', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+    const result = await materializeLocalMarkdownFiles({
+      text: `[report](<xdt-file://${reportPath}> "download")`,
+      workingDir,
+    });
+    tempRoots.push(...result.tempDirs);
+
+    expect(result.files).toHaveLength(1);
+    expect(result.text).toBe('report');
+  });
+
   it('rejects files outside workingDir and symlink escapes without exposing their paths', async () => {
     const parent = await makeTempRoot();
     const workingDir = path.join(parent, 'work');
