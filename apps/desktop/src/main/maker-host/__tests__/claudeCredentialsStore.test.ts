@@ -552,14 +552,108 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     const root = makeRoot();
     const file = path.join(root, '.credentials.json');
     const { writeClaudeAiOAuth } = await importStore({ platform: 'linux', configDir: root });
+    const writeTargets: string[] = [];
+    const realWrite = fs.writeFileSync;
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(((target, data, options) => {
+      writeTargets.push(String(target));
+      return realWrite(target, data, options);
+    }) as typeof fs.writeFileSync);
 
-    writeClaudeAiOAuth(oauth);
+    try {
+      writeClaudeAiOAuth(oauth);
+    } finally {
+      writeSpy.mockRestore();
+    }
 
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
+    expect(writeTargets).not.toContain(file);
+    expect(writeTargets.some((target) => target.startsWith(`${file}.`) && target.endsWith('.tmp')))
+      .toBe(true);
     // Windows does not preserve POSIX permission bits even when mode is supplied.
     if (originalPlatform !== 'win32') {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it('leaves no malformed final file when an initial temp write fails partway', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'linux', configDir: root });
+    const realWrite = fs.writeFileSync;
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(((target, data, options) => {
+      if (String(target).endsWith('.tmp')) {
+        realWrite(target, String(data).slice(0, 8), options);
+        throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      }
+      return realWrite(target, data, options);
+    }) as typeof fs.writeFileSync);
+
+    try {
+      expect(() => writeClaudeAiOAuth(oauth)).toThrow(/ENOSPC/);
+    } finally {
+      writeSpy.mockRestore();
+    }
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readdirSync(root)).toEqual([]);
+
+    expect(() => writeClaudeAiOAuth(oauth)).not.toThrow();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
+  });
+
+  it('keeps the final path absent when atomic create publication fails', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'linux', configDir: root });
+    const linkSpy = vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    });
+
+    try {
+      expect(() => writeClaudeAiOAuth(oauth)).toThrow(/EPERM/);
+    } finally {
+      linkSpy.mockRestore();
+    }
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readdirSync(root)).toEqual([]);
+  });
+
+  it('keeps a complete final credential and warns when temp cleanup is blocked', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'linux', configDir: root });
+    const realUnlink = fs.unlinkSync;
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(((target) => {
+      if (String(target).endsWith('.tmp')) {
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realUnlink(target);
+    }) as typeof fs.unlinkSync);
+
+    try {
+      expect(() => writeClaudeAiOAuth(oauth)).not.toThrow();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
+    expect(logger.warn).toHaveBeenCalledWith('failed to remove staged claude credential temp file', {
+      code: 'EPERM',
+    });
+
+    const staged = fs
+      .readdirSync(root)
+      .find((name) => name.startsWith('.credentials.json.') && name.endsWith('.tmp'));
+    expect(staged).toBeDefined();
+    const stagedPath = path.join(root, staged!);
+    const unrelatedPath = path.join(root, '.credentials.json.not-managed.tmp');
+    fs.writeFileSync(unrelatedPath, 'do-not-delete');
+    const old = new Date(Date.now() - 120_000);
+    fs.utimesSync(stagedPath, old, old);
+    fs.utimesSync(unrelatedPath, old, old);
+
+    const { readClaudeAiOAuth } = await import('../claude-credentials-store.js');
+    expect(readClaudeAiOAuth()?.accessToken).toBe(oauth.accessToken);
+    expect(fs.existsSync(stagedPath)).toBe(false);
+    expect(fs.readFileSync(unrelatedPath, 'utf8')).toBe('do-not-delete');
   });
 
   it('never overwrites malformed JSON and leaves no temporary file behind', async () => {
@@ -696,6 +790,25 @@ describe('file-backed Claude credential store fail-closed reads', () => {
       readSpy.mockRestore();
     }
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ mcpOAuth: raced.mcpOAuth });
+  });
+
+  it('commits stale ownership but reports absent when the blob only has unrelated fields', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const original = JSON.stringify({ mcpOAuth: { keep: true } });
+    fs.writeFileSync(file, original);
+    const { clearClaudeAiOAuthWithBindingCommit } = await importStore({
+      platform: 'linux',
+      configDir: root,
+    });
+    const validate = vi.fn(() => true);
+    const commit = vi.fn(() => true);
+
+    expect(clearClaudeAiOAuthWithBindingCommit(validate, commit)).toBe('absent');
+
+    expect(validate).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
   });
 
   it('refuses to clear unreadable JSON and keeps the original bytes', async () => {

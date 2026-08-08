@@ -19,8 +19,15 @@ const h = vi.hoisted(() => ({
   conditionalClearResult: 'cleared' as 'cleared' | 'absent' | 'changed',
   conditionalClearCalls: [] as Array<{ accessToken: string; refreshToken?: string | null }>,
   clearError: null as Error | null,
+  pendingRevocationResult: true,
+  pendingRevocationError: null as Error | null,
+  invalidationValidationResult: true,
+  invalidationValidationResults: [] as boolean[],
+  credentialMatchState: 'same' as 'same' | 'changed' | 'absent' | 'unreadable',
+  clearErrorAfterCommit: null as Error | null,
   refresherInvalidated: 0,
   disconnectCalls: 0,
+  disconnectResultOverride: null as 'revoked' | 'confirmed-unbound' | null,
   gatewayRemovals: 0,
   unbindCalls: [] as Array<{
     provider: string;
@@ -89,8 +96,10 @@ vi.mock('../claude-credentials-store.js', () => ({
     if (h.clearError) throw h.clearError;
     if (h.conditionalClearResult === 'changed') return 'changed';
     if (!validate() || !commit()) return 'binding-changed';
+    if (h.clearErrorAfterCommit) throw h.clearErrorAfterCommit;
     return h.conditionalClearResult;
   },
+  getClaudeAiOAuthCredentialMatchState: () => h.credentialMatchState,
 }));
 
 vi.mock('../claude-oauth-refresh.js', () => ({
@@ -106,6 +115,7 @@ vi.mock('../claude-oauth-refresh.js', () => ({
   // disconnect = invalidate → clear(唯一断开入口,logout/IPC 都必须走它)
   disconnectClaudeAiOAuth: () => {
     h.disconnectCalls += 1;
+    if (h.disconnectResultOverride) return h.disconnectResultOverride;
     if (h.oauthState === 'absent') return 'confirmed-unbound';
     h.refresherInvalidated += 1;
     if (h.oauthState === 'binding-unreadable') {
@@ -149,7 +159,8 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
     _provider: string,
     owner: { dataOwnerId: string; generation: number },
   ) => ({ ...owner, operationId: 'invalid-grant-operation', intent: 'invalidate' }),
-  validateNativeProviderAuthInvalidation: () => true,
+  validateNativeProviderAuthInvalidation: () =>
+    h.invalidationValidationResults.shift() ?? h.invalidationValidationResult,
   abandonNativeProviderAuthOperation: () => true,
   bindNativeProviderAuth: vi.fn(),
   claimDetectedNativeProviderAuth: vi.fn(() => false),
@@ -172,7 +183,8 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
     owner: { dataOwnerId: string; generation: number },
   ) => {
     h.pendingRevocations.push({ provider, owner });
-    return true;
+    if (h.pendingRevocationError) throw h.pendingRevocationError;
+    return h.pendingRevocationResult;
   },
   unbindNativeProviderAuth: (
     provider: string,
@@ -220,8 +232,15 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     h.conditionalClearResult = 'cleared';
     h.conditionalClearCalls.length = 0;
     h.clearError = null;
+    h.pendingRevocationResult = true;
+    h.pendingRevocationError = null;
+    h.invalidationValidationResult = true;
+    h.invalidationValidationResults.length = 0;
+    h.credentialMatchState = 'same';
+    h.clearErrorAfterCommit = null;
     h.refresherInvalidated = 0;
     h.disconnectCalls = 0;
+    h.disconnectResultOverride = null;
     h.gatewayRemovals = 0;
     h.unbindCalls.length = 0;
     h.pendingRevocations.length = 0;
@@ -344,6 +363,65 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(h.refresherInvalidated).toBe(1);
     expect(h.unbindCalls).toEqual([]);
     expect(h.pendingRevocations).toEqual([]);
+    expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+    expect(h.refresherInvalidated).toBe(1);
+  });
+
+  it('invalid_grant cleanup 与 pending marker 都失败时,exact operation 仍有效则失效旧 refresher', async () => {
+    h.clearError = new Error('credential store unavailable');
+    h.pendingRevocationResult = false;
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.refresherInvalidated).toBe(1));
+
+    expect(h.pendingRevocations).toHaveLength(1);
+    expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('invalid_grant cleanup 失败后 exact operation 已被替换则不失效新 refresher', async () => {
+    h.clearError = new Error('credential store unavailable');
+    h.pendingRevocationError = new Error('pending marker unavailable');
+    h.invalidationValidationResult = false;
+    h.credentialMatchState = 'changed';
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.pendingRevocations).toHaveLength(1));
+
+    expect(h.refresherInvalidated).toBe(0);
+    expect(broadcasts).toEqual([]);
+  });
+
+  it('invalid_grant 主解绑已提交但收尾抛错时仍失效旧 refresher', async () => {
+    h.clearErrorAfterCommit = new Error('binding lock release failed');
+    h.pendingRevocationResult = false;
+    h.invalidationValidationResults.push(true, false);
+    h.credentialMatchState = 'absent';
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.refresherInvalidated).toBe(1));
+
+    expect(h.unbindCalls).toHaveLength(1);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });
 
@@ -527,6 +605,16 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(h.disconnectCalls).toBe(1);
     expect(h.cleared).toBe(0);
     expect(h.unbindCalls).toEqual([]);
+    expect(h.gatewayRemovals).toBe(1);
+  });
+
+  it('logout:stale OAuth binding 收口后确认凭证缺失,同一次调用继续移除 gateway key', async () => {
+    h.disconnectResultOverride = 'confirmed-unbound';
+    const adapter = await makeAdapter();
+
+    await expect(adapter.logout()).resolves.toBeUndefined();
+
+    expect(h.disconnectCalls).toBe(1);
     expect(h.gatewayRemovals).toBe(1);
   });
 

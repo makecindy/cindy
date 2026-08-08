@@ -920,7 +920,11 @@ export function disconnectClaudeAiOAuth(): 'revoked' | 'confirmed-unbound' {
   if (result === 'binding-changed') {
     throw new Error('Claude OAuth ownership changed during logout; cleanup did not complete');
   }
-  return 'revoked';
+  // A stale binding can outlive an external `claude logout` or manual removal.
+  // The transaction above must still close that binding, but an absent OAuth
+  // credential means the generic adapter should continue in the same logout
+  // call and remove its gateway key too.
+  return result === 'absent' ? 'confirmed-unbound' : 'revoked';
 }
 
 /** refresh token 被服务端作废时的通知接线(auth-adapters 装配,内存操作零副作用)。 */

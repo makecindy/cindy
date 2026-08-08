@@ -48,6 +48,8 @@ const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const CREDENTIAL_WRITE_LOCK_TARGET = '.storage-write';
 const CREDENTIAL_WRITE_LOCK_STALE_MS = 15_000;
 const CREDENTIAL_WRITE_LOCK_UPDATE_MS = 5_000;
+/** Only a later lock holder may reap a crashed writer's staged secret. */
+const CREDENTIAL_TEMP_STALE_MS = 60_000;
 /** 必须短于 lock stale;同步 security 调用期间事件循环无法执行 lock heartbeat。 */
 const SECURITY_COMMAND_TIMEOUT_MS = 2_000;
 
@@ -61,6 +63,47 @@ function keychainAccount(): string {
 
 function credentialsFilePath(): string {
   return path.join(claudeConfigDir(), '.credentials.json');
+}
+
+function cleanupStaleCredentialTempFiles(): void {
+  const dir = claudeConfigDir();
+  const prefix = `${path.basename(credentialsFilePath())}.`;
+  const managedSuffix = /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) {
+      log.warn('failed to scan stale claude credential temp files', {
+        code:
+          error && typeof error === 'object' && 'code' in error
+            ? String((error as NodeJS.ErrnoException).code)
+            : 'unknown',
+      });
+    }
+    return;
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
+    const suffix = entry.name.slice(prefix.length);
+    if (!managedSuffix.test(suffix)) continue;
+    const candidate = path.join(dir, entry.name);
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isFile() || now - stat.mtimeMs < CREDENTIAL_TEMP_STALE_MS) continue;
+      fs.unlinkSync(candidate);
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) {
+        log.warn('failed to reap stale claude credential temp file', {
+          code:
+            error && typeof error === 'object' && 'code' in error
+              ? String((error as NodeJS.ErrnoException).code)
+              : 'unknown',
+        });
+      }
+    }
+  }
 }
 
 /** OAuth 凭证段(claudeAiOauth)。 */
@@ -83,6 +126,12 @@ export interface ClaudeAiOAuthCredentialIdentity {
   accessToken: string;
   refreshToken?: string | null;
 }
+
+export type ClaudeAiOAuthCredentialMatchState =
+  | 'same'
+  | 'changed'
+  | 'absent'
+  | 'unreadable';
 
 export type ConditionalClaudeAiOAuthClearResult = 'cleared' | 'absent' | 'changed';
 export type ConditionalClaudeAiOAuthBindingClearResult =
@@ -175,6 +224,7 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
       : 'failed to acquire claude credential write lock; refusing to modify shared credentials';
     throw new Error(message, { cause });
   }
+  cleanupStaleCredentialTempFiles();
 
   const noFailure = Symbol('no-failure');
   let failure: unknown | typeof noFailure = noFailure;
@@ -235,6 +285,7 @@ function withCredentialSnapshotLock<T>(snapshot: () => T): T | null {
     }
     return null;
   }
+  cleanupStaleCredentialTempFiles();
 
   let value: T | null = null;
   try {
@@ -349,31 +400,47 @@ function writeBlobFile(blob: Record<string, unknown>, mode: BlobWriteMode): void
   const file = credentialsFilePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const contents = JSON.stringify(blob, null, 2);
-  if (mode === 'create') {
-    // `wx` 是 create-only:即使另一个 Cindy / Claude 进程刚刚创建了共享文件,
-    // 也只会 EEXIST 失败,绝不会像 rename 那样把对方的新 blob 覆盖掉。
-    fs.writeFileSync(file, contents, {
+  // Both initial creation and replacement stage complete bytes in a unique
+  // same-directory file first. In particular, writing the final create-only
+  // path directly can leave a truncated-but-existing credential store after
+  // ENOSPC/EIO or a process crash, permanently trapping fail-closed readers.
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, contents, {
       encoding: 'utf-8',
       flag: 'wx',
       mode: 0o600,
     });
-  } else {
-    // 已确认存在时仍用同目录原子替换;唯一临时名避免多个进程踩同一个固定 `.tmp`。
-    const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    // Windows FlushFileBuffers (used by fsyncSync) requires a writable handle.
+    const descriptor = fs.openSync(tmp, 'r+');
     try {
-      fs.writeFileSync(tmp, contents, {
-        encoding: 'utf-8',
-        flag: 'wx',
-        mode: 0o600,
-      });
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    if (mode === 'create') {
+      // link is an atomic no-overwrite publication on the same volume: a
+      // concurrent creator wins with EEXIST, while the visible final inode is
+      // complete from its first instant. Never fall back to a direct write or
+      // copy, which would recreate the partial-final failure mode.
+      fs.linkSync(tmp, file);
+    } else {
       fs.renameSync(tmp, file);
+    }
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
     } catch (error) {
-      try {
-        fs.unlinkSync(tmp);
-      } catch {
-        /* best-effort temp cleanup */
+      if (!isErrno(error, 'ENOENT')) {
+        // Do not include the credential path or platform error message: both
+        // can expose local identity/path details in uploaded diagnostics.
+        log.warn('failed to remove staged claude credential temp file', {
+          code:
+            error && typeof error === 'object' && 'code' in error
+              ? String((error as NodeJS.ErrnoException).code)
+              : 'unknown',
+        });
       }
-      throw error;
     }
   }
   try {
@@ -480,6 +547,28 @@ export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
 /** 是否存在可用的 Claude.ai OAuth 登录(有 accessToken)。 */
 export function hasClaudeAiOAuth(): boolean {
   return readClaudeAiOAuth() != null;
+}
+
+/**
+ * Recovery-only identity probe that intentionally ignores the ownership
+ * binding. An invalid_grant transaction can fail after the main binding was
+ * already committed, so its caller needs to distinguish that completed clear
+ * from a positively observed replacement token without exposing token bytes.
+ */
+export function getClaudeAiOAuthCredentialMatchState(
+  expected: ClaudeAiOAuthCredentialIdentity,
+): ClaudeAiOAuthCredentialMatchState {
+  const state = withCredentialSnapshotLock<ClaudeAiOAuthCredentialMatchState>(() => {
+    const result = readBlob();
+    if (result.kind === 'unreadable') return 'unreadable';
+    if (result.kind === 'absent') return 'absent';
+    const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+    if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
+      return 'absent';
+    }
+    return matchesClaudeAiOAuthIdentity(current, expected) ? 'same' : 'changed';
+  });
+  return state ?? 'unreadable';
 }
 
 /**
@@ -646,6 +735,10 @@ function clearClaudeAiOAuthFromStableBlob(
   result: Exclude<BlobReadResult, { kind: 'unreadable' }>,
 ): 'cleared' | 'absent' {
   if (result.kind === 'absent') return 'absent';
+  const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+  if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
+    return 'absent';
+  }
   const plan = planClaudeAiOAuthClear(result.value);
   switch (plan.action) {
     case 'noop':

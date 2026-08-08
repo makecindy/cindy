@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   cancelCalls: 0,
   clearCalls: 0,
   clearError: null as Error | null,
+  clearResult: 'cleared' as 'cleared' | 'absent',
   pendingResult: true,
   validationResult: null as boolean | null,
   unbindResult: null as boolean | null,
@@ -60,7 +61,7 @@ vi.mock('../claude-credentials-store.js', () => ({
     h.clearCalls += 1;
     if (h.clearError) throw h.clearError;
     if (!commitBinding()) return 'binding-changed';
-    return 'cleared';
+    return h.clearResult;
   },
   readClaudeAiOAuth: () => null,
   replaceClaudeAiOAuthIfMatches: vi.fn(() => 'written'),
@@ -153,6 +154,7 @@ describe('disconnectClaudeAiOAuth — shared logout transaction', () => {
     h.cancelCalls = 0;
     h.clearCalls = 0;
     h.clearError = null;
+    h.clearResult = 'cleared';
     h.pendingResult = true;
     h.validationResult = null;
     h.unbindResult = null;
@@ -166,7 +168,7 @@ describe('disconnectClaudeAiOAuth — shared logout transaction', () => {
   });
 
   it('clears the bound credential and persists revocation for the same owner generation', () => {
-    expect(() => disconnectClaudeAiOAuth()).not.toThrow();
+    expect(disconnectClaudeAiOAuth()).toBe('revoked');
 
     expect(h.clearCalls).toBe(1);
     expect(h.unbindCalls).toEqual([
@@ -199,6 +201,23 @@ describe('disconnectClaudeAiOAuth — shared logout transaction', () => {
         },
       },
     ]);
+    expect(h.events).toEqual([
+      'login-cancelled',
+      'logout-intent',
+      'revoke-staged',
+      'binding-check',
+      'credential-clear',
+      'binding-commit',
+    ]);
+  });
+
+  it('closes a stale binding but reports absent OAuth so the adapter can continue gateway logout', () => {
+    h.clearResult = 'absent';
+
+    expect(disconnectClaudeAiOAuth()).toBe('confirmed-unbound');
+
+    expect(h.clearCalls).toBe(1);
+    expect(h.unbindCalls).toHaveLength(1);
     expect(h.events).toEqual([
       'login-cancelled',
       'logout-intent',

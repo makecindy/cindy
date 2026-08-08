@@ -64,6 +64,7 @@ import {
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
 import {
   clearClaudeAiOAuthIfMatchesWithBindingCommit,
+  getClaudeAiOAuthCredentialMatchState,
   hasClaudeAiOAuth,
 } from './claude-credentials-store.js';
 import {
@@ -510,8 +511,39 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
         });
       }
       if (!pendingCommitted) {
-        log.info('claude invalid_grant cleanup superseded before pending revocation commit');
-        return;
+        // A failed pending-marker write is not, by itself, proof that a newer
+        // login superseded this cleanup. The original invalidate operation is
+        // already a durable fail-closed fence, so revalidate that exact nonce:
+        // only a confirmed replacement may keep the replacement refresher
+        // alive. When the same operation is still current, cancel the rejected
+        // credential's timer/in-flight generation even though cleanup must be
+        // retried later.
+        let invalidationStillCurrent = false;
+        try {
+          invalidationStillCurrent = validateNativeProviderAuthInvalidation(
+            'anthropic',
+            operation,
+          );
+        } catch (error) {
+          log.warn('revalidate claude invalid_grant operation after cleanup failure failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (!invalidationStillCurrent) {
+          if (!this.isInvalidGrantOwnerCurrent(proof)) return;
+          // `false` can also mean unbind committed its main-file change and
+          // then sidecar cleanup / lock release threw. Preserve a refresher only
+          // when the credential store positively proves that a different token
+          // replaced the rejected one; absent/same/unreadable remain fail-closed
+          // and must cancel the rejected generation.
+          const credentialState = getClaudeAiOAuthCredentialMatchState(
+            proof.rejectedCredential,
+          );
+          if (credentialState === 'changed') {
+            log.info('claude invalid_grant cleanup superseded by replacement credential');
+            return;
+          }
+        }
       }
     }
 
