@@ -2378,6 +2378,7 @@ export class PiAgent extends BaseAgent {
           scope: (it.scope === 'repo' ? 'repo' : 'user') as 'user' | 'repo',
           enabled: it.enabled ?? true,
           runtimeStatus: it.runtimeStatus,
+          runtimeCommandName: `skill:${it.name}`,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     };

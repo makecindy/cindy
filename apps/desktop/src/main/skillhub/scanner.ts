@@ -767,7 +767,16 @@ export async function renameLocalSkill(params: {
 
   // 必须有 SKILL.md
   const oldSkillMd = path.join(absolutePath, 'SKILL.md');
-  if (!fs.existsSync(oldSkillMd) || !fs.statSync(oldSkillMd).isFile()) {
+  let skillMdStat: fs.Stats;
+  try {
+    skillMdStat = fs.lstatSync(oldSkillMd);
+  } catch {
+    return { success: false, error: 'SKILL.md 不存在,无法改名' };
+  }
+  if (skillMdStat.isSymbolicLink()) {
+    return { success: false, error: '符号链接 SKILL.md 不支持重命名' };
+  }
+  if (!skillMdStat.isFile()) {
     return { success: false, error: 'SKILL.md 不存在,无法改名' };
   }
 

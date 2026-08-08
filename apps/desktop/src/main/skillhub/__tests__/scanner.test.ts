@@ -415,6 +415,25 @@ describe('skill file access', () => {
     );
   });
 
+  it.skipIf(process.platform === 'win32')('rejects renaming a skill whose SKILL.md is a symlink', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-rename-md-link-'));
+    tempRoots.push(root);
+    const skillRoot = path.join(root, 'project', '.pi', 'skills');
+    const skillDir = path.join(skillRoot, 'linked-md');
+    const outsideMd = path.join(root, 'outside.md');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(outsideMd, '---\nname: outside\n---\n# Outside\n', 'utf-8');
+    fs.symlinkSync(outsideMd, path.join(skillDir, 'SKILL.md'), 'file');
+
+    await expect(renameLocalSkill({
+      absolutePath: skillDir,
+      newName: 'renamed-linked-md',
+    })).resolves.toMatchObject({ success: false });
+    expect(fs.existsSync(skillDir)).toBe(true);
+    expect(fs.existsSync(path.join(skillRoot, 'renamed-linked-md'))).toBe(false);
+    expect(fs.readFileSync(outsideMd, 'utf-8')).toBe('---\nname: outside\n---\n# Outside\n');
+  });
+
   it('rejects project .pi skill symlinks that escape the physical skill root', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-escape-'));
     tempRoots.push(root);

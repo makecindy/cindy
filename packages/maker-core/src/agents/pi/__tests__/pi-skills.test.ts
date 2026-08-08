@@ -65,6 +65,7 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     expect(found?.source).toBe('skill');
     expect(found?.scope).toBe('repo');
     expect(found?.runtimeStatus).toBe('discovered');
+    expect(found?.runtimeCommandName).toBe('skill:demo-skill');
     expect(found?.description).toContain('demo skill');
   });
 

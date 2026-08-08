@@ -983,6 +983,11 @@ describe('Maker Pi runtime skill status', () => {
       ['two-skill', 'discovered'],
       ['user-collision', 'discovered'],
     ]);
+    expect(one.skills[0]).toMatchObject({
+      name: 'one-skill',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:one-skill',
+    });
     expect(two.skills.map((skill) => [skill.name, skill.runtimeStatus])).toEqual([
       ['one-skill', 'discovered'],
       ['one-skill', 'discovered'],

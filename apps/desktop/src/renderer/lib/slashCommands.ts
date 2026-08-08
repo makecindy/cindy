@@ -34,6 +34,12 @@ export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): b
   return commands.some((command) => !isSlashCommandUnavailable(command));
 }
 
+export function slashCommandInvocationName(command: UnifiedCommand): string {
+  return command.kind === 'agent-skill' && command.runtimeCommandName
+    ? command.runtimeCommandName
+    : command.name;
+}
+
 /** First available command index, or 0 when nothing is available/present. */
 export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
   const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));

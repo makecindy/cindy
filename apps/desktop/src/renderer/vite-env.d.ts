@@ -4684,6 +4684,7 @@ interface ElectronAPI {
         scope?: string;
         enabled?: boolean;
         runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+        runtimeCommandName?: string;
       }>;
     }>;
 

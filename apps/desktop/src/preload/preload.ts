@@ -5036,6 +5036,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         scope?: string;
         enabled?: boolean;
         runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+        runtimeCommandName?: string;
       }>;
     }> => ipcRenderer.invoke('maker:list-agent-skills', agentKind, params),
 

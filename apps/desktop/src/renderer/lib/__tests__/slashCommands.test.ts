@@ -8,6 +8,7 @@ import {
   mergeCommands,
   nextAvailableSlashCommandIndex,
   reconcilePiRuntimeCommandForDispatch,
+  slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 
@@ -70,6 +71,19 @@ describe('Pi project skill availability', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'discovered' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo' }))).toBe(false);
+  });
+
+  it('keeps the palette label while invoking Pi skills by their runtime command name', () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+
+    expect(loaded.name).toBe('demo');
+    expect(slashCommandInvocationName(loaded)).toBe('skill:demo');
+    expect(slashCommandInvocationName({ kind: 'desktop', name: 'help', description: 'Help' })).toBe('help');
   });
 
   it('keeps an available same-name skill ahead of a discovered project preview', () => {

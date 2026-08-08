@@ -164,7 +164,7 @@ function mergePiRuntimeSkillStatuses(
   manifest: PiRuntimeCapabilityManifest | undefined,
 ): ListAgentSkillsResult {
   if (manifest?.status !== 'loaded') return result;
-  const loadedProjectSkills = new Set(
+  const loadedProjectSkills = new Map(
     manifest.commands.flatMap((command) => {
       const baseDir = command.sourceInfo.baseDir;
       if (
@@ -173,25 +173,26 @@ function mergePiRuntimeSkillStatuses(
         || typeof baseDir !== 'string'
         || !command.name.startsWith('skill:')
       ) return [];
-      return [[
+      return [[[
         command.name.slice('skill:'.length),
         canonicalPiRuntimePath(baseDir),
-      ].join('\0')];
+      ].join('\0'), command.name] as const];
     }),
   );
   if (loadedProjectSkills.size === 0) return result;
   return {
     ...result,
-    skills: result.skills.map((skill) => (
-      skill.scope === 'repo'
-        && skill.path
-        && loadedProjectSkills.has([
+    skills: result.skills.map((skill) => {
+      const runtimeCommandName = skill.scope === 'repo' && skill.path
+        ? loadedProjectSkills.get([
           skill.name,
           canonicalPiRuntimePath(path.dirname(path.dirname(skill.path))),
         ].join('\0'))
-        ? { ...skill, runtimeStatus: 'loaded' as const }
-        : skill
-    )),
+        : undefined;
+      return runtimeCommandName
+        ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
+        : skill;
+    }),
   };
 }
 

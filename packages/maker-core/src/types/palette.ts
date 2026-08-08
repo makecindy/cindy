@@ -18,6 +18,8 @@ export interface AgentSlashCommand {
   enabled?: boolean;
   /** Pi discovery/runtime state; omitted for engines without a runtime truth layer. */
   runtimeStatus?: PiRuntimeCapabilityStatus;
+  /** Provider command name used for invocation when it differs from the palette label. */
+  runtimeCommandName?: string;
 }
 
 // ── New unified command model (palette refactor) ──────────────────────────
@@ -65,6 +67,8 @@ export interface AgentSkillCommand {
   enabled?: boolean;
   /** Pi discovery/runtime state; omitted for engines without a runtime truth layer. */
   runtimeStatus?: PiRuntimeCapabilityStatus;
+  /** Provider command name used for invocation when it differs from the palette label. */
+  runtimeCommandName?: string;
 }
 
 export type UnifiedCommand = DesktopCommandMeta | AgentBuiltinCommand | AgentSkillCommand;

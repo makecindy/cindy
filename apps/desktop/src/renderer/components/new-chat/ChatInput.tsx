@@ -207,6 +207,7 @@ import {
   isSlashCommandUnavailable,
   loadAllCommands,
   nextAvailableSlashCommandIndex,
+  slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 import {
@@ -3944,7 +3945,13 @@ export function ChatInput({
           } else {
             // Slash 也保持纯文本;SlashCommandDecoration 只负责视觉确认,
             // Backspace / 光标移动因此与普通文字完全一致。
-            replaceSlashCommandRunWithText(tr, editor.schema, from, runEnd, cmd.name);
+            replaceSlashCommandRunWithText(
+              tr,
+              editor.schema,
+              from,
+              runEnd,
+              slashCommandInvocationName(cmd),
+            );
           }
           return true;
         })
