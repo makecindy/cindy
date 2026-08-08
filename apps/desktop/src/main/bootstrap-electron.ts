@@ -401,6 +401,7 @@ import {
   broadcastClaudeAuthStateChanged,
   broadcastXaiAuthStateChanged,
   refreshProviderAccessAfterAuthChange,
+  setProviderAccessRuntimeRefreshListener,
   restartCodexAfterAuthModeChange,
   waitForInitialCustomMcpRefresh,
 } from './maker-host/index.js';
@@ -958,6 +959,27 @@ function attemptStartEmbeddingHost(): void {
 // ensureEmbeddingServiceForPluginVector(), 由它回调这里完成真正的启动 (启动需要
 // DbClient / api key / gateway url 这些只有 bootstrap 有的依赖)。
 registerEmbeddingHostLazyStart(attemptStartEmbeddingHost);
+
+let chatEmbeddingRuntimeReconcile: Promise<void> = Promise.resolve();
+
+function scheduleChatEmbeddingRuntimeReconcile(): void {
+  // Stop new enqueue work before an async host shutdown can run. The queued
+  // reconciliation re-reads the latest catalog so rapid refreshes are last-write-wins.
+  if (!isChatEmbeddingAvailable()) setChatEmbeddingEnabled(false);
+  chatEmbeddingRuntimeReconcile = chatEmbeddingRuntimeReconcile
+    .then(async () => {
+      if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled) {
+        attemptStartEmbeddingHost();
+      } else {
+        await shutdownChatEmbeddingConsumer();
+      }
+    })
+    .catch((err: unknown) => {
+      console.error('[bootstrap-electron] chat embedding runtime reconcile failed:', err);
+    });
+}
+
+setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件

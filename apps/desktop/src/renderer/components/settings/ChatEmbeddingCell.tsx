@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch';
 import { createLogger } from '@/lib/logger';
 import { useChatEmbedding } from '@/hooks/useChatEmbedding';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { chatEmbeddingFailureKey } from './chatEmbeddingError';
 
 const log = createLogger('ChatEmbeddingCell');
 
@@ -41,9 +42,7 @@ export function ChatEmbeddingCell() {
         );
       } catch (err) {
         log.warn('chatEmbeddingSet failed', err);
-        toast.error(
-          err instanceof Error ? err.message : t('settings.chatEmbedding.toast.toggleFailed'),
-        );
+        toast.error(t(chatEmbeddingFailureKey(err)));
         setEnabled(prev); // 回滚乐观值
       } finally {
         setPending(false);
