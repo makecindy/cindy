@@ -35,14 +35,17 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 > **这一节只放两侧真的跑同一份代码/同一份数据的东西。** 一旦列进来，维护者就会跳过
 > 双路核对——所以「个人侧独有」「官方侧独有」的能力不能放这里，哪怕它在共享目录下。
 >
-> 还要写清同源的**是哪一段**：共用一个实现，不等于进入它之前的判定也一样。群历史
-> 检索就是这样——检索本身两侧同一份代码，但"这一轮有没有权限查、能查多大范围"是
-> 各写各的，私聊上给出的答案还不同（第四节 2e）。
+> 还要写清同源的**是哪一段**，并且**指到真正干活的那个文件**。群历史检索被拆成三行
+> 就是这个原因：真正跑查询的是 `groupHistorySearch.ts`、管这一轮能不能查的是
+> `groupHistoryAccess.ts`、把两者串起来的是 MCP 入口——只写一个模块名会把维护者引到
+> 只负责权限租约的那一半，漏查真正的检索实现。而「这一轮有没有权限查、能查多大范围」
+> 那一步两侧各写各的，私聊上给出的答案还不同（第四节 2e）。
 
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
-| 群历史检索**实现** | `im/shared/groupHistoryAccess.ts` | 检索本身与 access scope 这个类型两侧共用。**但产生 scope 的那一步各写各的**——个人是 `im/telegram/adapter.ts` 的 `groupHistoryAccessFor`，官方是 `hook-control/groupHistoryScope.ts` 的 `groupHistoryAccessForExternalKey`。两者在**群轮次**上给出同一档（lane-only，只查当前群/topic），**在私聊上给的不一样**：见第四节 2e |
+| 群历史**检索实现** | `im/shared/groupHistorySearch.ts` | 真正执行查询的就是这一份：FTS（`hook_group_messages_fts` 的 MATCH）+ 中文 LIKE 兜底，**lane 条件写在 SQL 里**（MATCH 与 LIKE 用完全相同的 lane 条件，调用方没法先全局搜再事后过滤），加上结果映射（snippet / score / source）与上限（默认 8 条、最多 20 条、query 256 字）。两侧共用 |
+| 群历史检索的**逐 turn 授权租约** | `im/shared/groupHistoryAccess.ts` | 租约机制共用：`beginGroupHistoryAccess` 在 provider 真正开始这一轮之前登记作用域，终态 / 重排 / 失败时释放；`sessionInstanceId` 挡住「同一业务 session 重建后，旧 MCP 请求借用新实例权限」。**但产生 scope 的那一步各写各的**——个人是 `im/telegram/adapter.ts` 的 `groupHistoryAccessFor`，官方是 `hook-control/groupHistoryScope.ts` 的 `groupHistoryAccessForExternalKey`；群轮次两侧同为 lane-only，**私聊上给的不一样**，见第四节 2e。完整调用链：MCP 入口 `mcp-integrations/groupHistoryMcpServer.ts` 先 `readGroupHistoryAccess` 拿租约（拿不到直接 `NO_ACTIVE_TELEGRAM_SCOPE` 拒绝），再 `resolveTargetLane(scope, lane)` 定位，最后才调 `searchGroupHistory` |
 | 交互卡的**语义层**（`ask_user_question` / `plan_review` / 权限确认） | `im/shared/interactionCardModel.ts` | 选项集与决策模型两侧真跑同一份：至多 6 个选项（`MAX_OPTIONS`）、multiSelect 降级单选、只渲染第一问、plan 正文截断 1500（`MAX_PLAN_LEN`）、按钮文案的**产品级**上限 30（`BTN_LABEL_MAX`）、无选项降级时唯一按钮「继续」，以及 buttonId → 决策对象的构造与 header/body 拆分。官方那条链路由 `hook-control/interactions.ts` 直接 import 本模块（对 `@cindy/maker-core` 刻意只做 type-only 依赖，免得 hook 链路在运行期加载整个 barrel）。**渲染不在这里**——按钮文案来源、标题格式、省略号样式、尺寸上限都是各自渲染侧的事，见第三节 |
 | 群消息本地库的**保留策略** | `im/shared/groupWindowCore.ts` | 上限数值（每命名空间 1 GiB 正文 + 500 万行安全阀）、回收低水位（0.9）与回收实现都在这一处；两侧把同一份 `DEFAULT_GROUP_WINDOW_RETENTION` 传进同一个 `recordGroupWindowEntry`。**额度靠 provider 命名空间隔离**：官方 `telegram:<principalId>`、个人 `telegram-personal:<botId>`，统计与回收都按 provider 过滤，两个账号各算各的、消息不串。一个边界要记住：两侧各持有一份 `{ ...DEFAULT }` **可变副本**（为的是测试能用小阈值把回收逼出来），所以共享的是"模块初始化时的那组数字"，运行期改一侧不会传导到另一侧 |
 
@@ -150,7 +153,10 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
    挂了几轮「待核」，核完发现两侧本来就跑同一份回收实现。）
    **同一件事只能挂一档**——「有意不同」与「缺口」的区别就是「不要动它」和「该动它」，
    两边都放等于同时说了两句相反的话。想让缺口带上现状说明，就把说明写进缺口那一行。
-4. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
+4. 「单一真相源」那一栏**必须指到真正干活的文件**，不是那一族里最眼熟的模块名。
+   本表初版把群历史检索指到 `groupHistoryAccess.ts`（只管权限租约），真正跑 FTS 的
+   `groupHistorySearch.ts` 一个字没提——照这行去改检索逻辑的人会先扑空。
+5. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
    成功与失败要分开看——本表初版曾把只对成功收口成立的不变量泛化到失败路径。
    同理，**别把"通常这样"写成无条件**：长终稿会分段新发、原位编辑失败会 repost、
    第一帧建消息会推送、NO_REPLY 在已经建过消息时只是尽力撤回（删不掉就留着），
@@ -167,7 +173,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
    还有一条同族的：**布尔契约字段的名字说的是策略，不是覆盖面**。`linkPreviewDisabled`
    / `progressSilent` 这种字段要数它实际挂在哪几个调用点上——个人侧的链接预览只关在
    答案那条路上，卡片与提示类消息并不带（见第四节 2c），字段名读起来却像"全关"。
-5. 命令的**分类**以 `botCommands.ts` 的 `parityNote` 为准——本表只是把它的结论摊开讲，
+6. 命令的**分类**以 `botCommands.ts` 的 `parityNote` 为准——本表只是把它的结论摊开讲，
    两边对不上时改本表、不改注册表。但注意注册表里**官方那一半是跨仓镜像**：改命令时
    服务端的 `TELEGRAM_COMMANDS` 也要一起核对，CI 拦不住它漂移。
 
