@@ -1,7 +1,10 @@
 // @ts-nocheck —— 被测对象是 .mjs 开发工具模块，vitest 跑其纯函数。
 import { describe, expect, it, vi } from 'vitest';
 import {
+  classifySimMetroListener,
+  extractSimJsonArgs,
   extractSimMetroPortArgs,
+  extractSimTakeoverArgs,
   resolveMobileSimulatorBundleId,
 } from '../../scripts/lib/sim-whoami.mjs';
 
@@ -28,6 +31,45 @@ describe('mobile:sim:whoami Metro port', () => {
     expect(() => extractSimMetroPortArgs(['--port=8082', '-p', '8083'])).toThrow(/只能传一次/);
   });
 });
+
+describe('mobile:sim takeover and JSON arguments', () => {
+  it('extracts one explicit takeover flag', () => {
+    expect(extractSimTakeoverArgs(['--takeover', '--region=cn'])).toEqual({
+      takeover: true,
+      passthrough: ['--region=cn'],
+    });
+    expect(extractSimTakeoverArgs([])).toEqual({ takeover: false, passthrough: [] });
+    expect(() => extractSimTakeoverArgs(['--takeover', '--takeover'])).toThrow(/只能传一次/);
+  });
+
+  it('extracts one JSON output flag', () => {
+    expect(extractSimJsonArgs(['--json', '--port=8082'])).toEqual({
+      json: true,
+      passthrough: ['--port=8082'],
+    });
+    expect(extractSimJsonArgs([])).toEqual({ json: false, passthrough: [] });
+    expect(() => extractSimJsonArgs(['--json', '--json'])).toThrow(/只能传一次/);
+  });
+});
+
+describe('mobile:sim Metro identity', () => {
+  it('rejects non-Cindy paths and missing source identities', () => {
+    expect(classifySimMetroListener({
+      cwd: '/other/project',
+      source: 'branch@commit',
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: null,
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: 'branch@commit',
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: false });
+  });
 
 describe('mobile:sim:whoami bundle identity', () => {
   it.each([

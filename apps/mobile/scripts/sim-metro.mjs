@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import net from 'node:net';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 // 连接探测:连得上 = 有进程在监听。比 listen(127.0.0.1) 可靠 —— Metro 监听 *:port(可能带
 // SO_REUSEADDR),用 listen 探测会误判成空闲。
@@ -39,6 +39,105 @@ export function cwdOfPid(pid) {
   } catch {
     return null;
   }
+}
+
+export function commandOfPid(pid) {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
+export function processGroupOfPid(pid) {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'pgid='], { encoding: 'utf8' }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function processGroupMembers(groupId) {
+  try {
+    return execFileSync('ps', ['-g', String(groupId), '-o', 'pid=,command='], { encoding: 'utf8' })
+      .split('\n')
+      .map((line) => {
+        const match = line.trim().match(/^(\d+)\s+(.*)$/);
+        if (!match) return null;
+        return { pid: match[1], command: match[2], cwd: cwdOfPid(match[1]) };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function isMetroPid(pid) {
+  return /expo|metro/i.test(commandOfPid(pid));
+}
+
+export function isDedicatedMetroProcessGroup(entries, expectedWorktree = null) {
+  if (!entries.length) return false;
+  const normalizedRoot = expectedWorktree
+    ? resolve(expectedWorktree).replaceAll('\\', '/').replace(/\/+$/, '')
+    : null;
+  const allowedCwds = normalizedRoot
+    ? new Set([normalizedRoot, join(normalizedRoot, 'apps/mobile')])
+    : null;
+
+  return entries.every((entry) => {
+    const command = typeof entry === 'string' ? entry : entry.command;
+    const cwd = typeof entry === 'string' ? null : entry.cwd;
+    if (!command || !/(?:^|\/)(?:node|pnpm|sh|zsh)(?:\s|$)/.test(command)) return false;
+    if (!/(?:expo|metro|sim-start|mobile:sim:start|pnpm)/i.test(command)) return false;
+    if (normalizedRoot && (!cwd || !allowedCwds.has(resolve(cwd).replaceAll('\\', '/')))) return false;
+    return true;
+  });
+}
+
+/**
+ * Stop one confirmed Metro process group for an explicit simulator handoff.
+ * The caller must have already checked that the PID is a Cindy Metro listener.
+ * Tests can inject process inspection and waiting to avoid touching real processes.
+ */
+export async function terminateMetro(pid, options = {}) {
+  const run = options.execFile ?? execFileSync;
+  const wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const isAlive = options.isAlive ?? (() => Boolean(commandOfPid(pid)));
+  const signal = options.signal ?? 'TERM';
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const pollMs = options.pollMs ?? 100;
+  if (!Number.isFinite(pollMs) || pollMs <= 0) throw new Error('Metro 终止轮询间隔必须大于 0');
+
+  const groupId = options.groupId !== undefined ? options.groupId : processGroupOfPid(pid);
+  const currentGroupId = options.currentGroupId !== undefined
+    ? options.currentGroupId
+    : processGroupOfPid(process.pid);
+  const groupEntries = groupId
+    ? (options.groupEntries ?? processGroupMembers(groupId))
+    : [];
+  const canTerminateGroup = Boolean(
+    groupId
+    && currentGroupId
+    && groupId !== currentGroupId
+    && groupId !== '1'
+    && isDedicatedMetroProcessGroup(groupEntries, options.worktreeRoot),
+  );
+
+  try {
+    run('kill', canTerminateGroup
+      ? [`-${signal}`, `-${groupId}`]
+      : [`-${signal}`, String(pid)]);
+  } catch {
+    if (!isAlive()) return true;
+    return false;
+  }
+
+  for (let waitedMs = 0; waitedMs < timeoutMs; waitedMs += pollMs) {
+    if (!isAlive()) return true;
+    await wait(pollMs);
+  }
+  return !isAlive();
 }
 
 /** Read the exact source token injected by sim:start from a running Metro. */
