@@ -62,6 +62,15 @@ import { describe, expect, it } from 'vitest';
  *    跳过,不按内部 token 误判;多行三元只覆盖值首行;
  *  - fontSize 的相对比例值(em / rem / %,如编辑器标题系数)与算式派生值
  *    (`size * 0.86`、`17 / 1`,片段含 * 或 / 即跳过)—— 非静态可判;
+ *  - 内联字号盲区: `style={{ fontSize: <number | 'Npx'> }}` 形式的白名单档位
+ *    当前允许通过,但 `applyFontSettings` 只改写 `--text-*` 变量,这些字面量不会
+ *    响应设置页的 UI 字号缩放。已知约 39 处真实 UI 命中,集中在
+ *    `features/skillhub/`(约 27 处),另有 `MakerExperimentalView`、
+ *    `LegacyMigrationDialog`、两个 Lightbox 等; `codemirrorGithubTheme.ts`
+ *    与 `loginDesignTokens.ts` 属既有豁免域,`xtermPool.ts` 因 xterm API 需数字
+ *    入参属合法调用。收紧方向是静态内联字号默认判红,仅为 SVG/画布/第三方 API
+ *    登记精确豁免;本 PR 不处理,后续独立施工需改约 39 处 UI 调用点并完成设计核对
+ *    与 Light/Dark 双模式验收;
  *  - CSS font-weight 的动态值(var(...)、模板插值、calc())与
  *    initial/unset/revert 全局关键字(计算结果不引入梯外静态值)不判红;
  *  - .css 与字符串内嵌 CSS 的直接 font-size 声明值域(紧凑模式 -1px 派生、
