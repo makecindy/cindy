@@ -1311,8 +1311,8 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
-  /** 清单格式版本,恒 2(v1 声明型已于 2026-07-12 移除,无存量不留兼容)。 */
-  schemaVersion: 2;
+  /** 清单格式版本:2 = 基线(v1 声明型已于 2026-07-12 移除);3 = endpoint-scoped 凭证注入。 */
+  schemaVersion: 2 | 3;
   /** 唯一标识,同时是安装目录名与 panelKind 后缀。 */
   id: string;
   /** 展示名。 */
@@ -2800,8 +2800,8 @@ export function resolveGhostManifestLocale(
 export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (!isPlainObject(raw)) return { ok: false, reason: '清单不是对象' };
 
-  if (raw.schemaVersion !== 2) {
-    return { ok: false, reason: `schemaVersion 必须是 2,得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)` };
+  if (raw.schemaVersion !== 2 && raw.schemaVersion !== 3) {
+    return { ok: false, reason: `schemaVersion 必须是 2 或 3,得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)` };
   }
   if (!isValidGhostId(raw.id)) {
     return { ok: false, reason: 'id 必须是 1–32 位小写字母/数字/连字符(不能以连字符开头)' };
@@ -3890,6 +3890,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             injectHosts.push(ihNorm);
           }
         }
+        // endpoint-scoped 注入(paths / methods)必须声明 schemaVersion 3:
+        // 旧客户端不识别这两个字段,若放行会让收窄静默退化为整域注入(fail-open)。
+        // 声明新字段即升级版本,旧客户端对 v3 整包拒装——mixed-version fail-closed。
+        if (
+          (inj.paths !== undefined || inj.methods !== undefined)
+          && raw.schemaVersion !== 3
+        ) {
+          return {
+            ok: false,
+            reason: `network.secrets[].inject 声明了 paths/methods,必须使用 schemaVersion 3(旧版本客户端会忽略这些字段并退化为整域注入,故强制升级清单版本)`,
+          };
+        }
         let injectPaths: string[] | undefined;
         if (inj.paths !== undefined) {
           if (
@@ -4633,7 +4645,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   return {
     ok: true,
     manifest: {
-      schemaVersion: 2,
+      // 保留输入版本(v3 清单不得被降级回 v2,否则 manifestDigest 与打包时失配)。
+      schemaVersion: raw.schemaVersion as 2 | 3,
       id: raw.id,
       name: raw.name,
       version: raw.version,

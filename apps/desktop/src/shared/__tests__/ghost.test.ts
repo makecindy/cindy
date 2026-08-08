@@ -144,11 +144,11 @@ describe('ghost · 清单校验', () => {
     expect((v as { ok: true; manifest: GhostManifest }).manifest.panel).toBeUndefined();
   });
 
-  it('非对象 / schemaVersion 不是 2 → 拒绝(v1 声明型已移除)', () => {
+  it('非对象 / schemaVersion 非 2 或 3 → 拒绝(v1 声明型已移除)', () => {
     expect(validateGhostManifest(null).ok).toBe(false);
     expect(validateGhostManifest([]).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), schemaVersion: 1 }).ok).toBe(false);
-    expect(validateGhostManifest({ ...goodManifest(), schemaVersion: 3 }).ok).toBe(false);
+    expect(validateGhostManifest({ ...goodManifest(), schemaVersion: 4 }).ok).toBe(false);
   });
 
   it('id / name / version 的边界', () => {
@@ -2516,20 +2516,23 @@ describe('ghost · network 详单校验', () => {
     expect(dup.ok).toBe(false);
   });
 
-  it('secrets.inject.paths/methods 精确限制凭证范围并稳定归一化', () => {
+  it('secrets.inject.paths/methods 精确限制凭证范围并稳定归一化(schemaVersion 3)', () => {
     const r = validateGhostManifest(
-      withNet({
-        hosts: ['api.example.com'],
-        secrets: [{
-          ...goodSecret(),
-          inject: {
-            header: 'Authorization',
-            format: 'Bearer {value}',
-            paths: ['/v1/z', '/v1/convert'],
-            methods: ['POST', 'GET'],
-          },
-        }],
-      }),
+      withNet(
+        {
+          hosts: ['api.example.com'],
+          secrets: [{
+            ...goodSecret(),
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              paths: ['/v1/z', '/v1/convert'],
+              methods: ['POST', 'GET'],
+            },
+          }],
+        },
+        { schemaVersion: 3 },
+      ),
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -2546,10 +2549,13 @@ describe('ghost · network 详单校验', () => {
 
   it('secrets.inject.paths/methods 非空、无重复且只接受规范精确值', () => {
     const inject = (extra: Record<string, unknown>) =>
-      validateGhostManifest(withNet({
-        hosts: ['api.example.com'],
-        secrets: [{ ...goodSecret(), inject: { header: 'X-Token', format: '{value}', ...extra } }],
-      }));
+      validateGhostManifest(withNet(
+        {
+          hosts: ['api.example.com'],
+          secrets: [{ ...goodSecret(), inject: { header: 'X-Token', format: '{value}', ...extra } }],
+        },
+        { schemaVersion: 3 },
+      ));
     for (const paths of [[], ['v1/convert'], ['/v1/convert?x=1'], ['/a/../b'], ['/%2Fsecret'], ['/x', '/x']]) {
       expect(inject({ paths }).ok, JSON.stringify(paths)).toBe(false);
     }
@@ -2558,18 +2564,48 @@ describe('ghost · network 详单校验', () => {
     }
   });
 
+  it('schemaVersion 2 声明 paths/methods 拒装(旧客户端会静默忽略 → fail-open,强制升级 v3)', () => {
+    // 旧客户端不识别 paths/methods,放行会让收窄退化为整域注入;因此声明新字段
+    // 必须升级 schemaVersion 3,旧客户端对 v3 整包拒装(schemaVersion 严格相等)。
+    for (const extra of [
+      { paths: ['/v1/convert'] },
+      { methods: ['POST'] },
+      { paths: ['/v1/convert'], methods: ['POST'] },
+    ]) {
+      const r = validateGhostManifest(withNet({
+        hosts: ['api.example.com'],
+        secrets: [{ ...goodSecret(), inject: { header: 'X-Token', format: '{value}', ...extra } }],
+      }));
+      expect(r.ok, JSON.stringify(extra)).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('schemaVersion');
+    }
+  });
+
+  it('schemaVersion 3 的 host-only 清单照常放行(向后兼容)', () => {
+    const r = validateGhostManifest(
+      withNet({ hosts: ['api.example.com'], secrets: [goodSecret()] }, { schemaVersion: 3 }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.schemaVersion).toBe(3);
+    expect(r.manifest.network?.secrets?.[0]?.inject.hosts).toBeUndefined();
+  });
+
   it('旧 host-only secret 不改变权限 baseline；显式 endpoint 范围变化进入更新 diff', () => {
     const before = validateGhostManifest(
       withNet({ hosts: ['api.example.com'], secrets: [goodSecret()] }),
     );
     const scoped = validateGhostManifest(
-      withNet({
-        hosts: ['api.example.com'],
-        secrets: [{
-          ...goodSecret(),
-          inject: { header: 'Authorization', format: 'Bearer {value}', paths: ['/v1/convert'], methods: ['POST'] },
-        }],
-      }),
+      withNet(
+        {
+          hosts: ['api.example.com'],
+          secrets: [{
+            ...goodSecret(),
+            inject: { header: 'Authorization', format: 'Bearer {value}', paths: ['/v1/convert'], methods: ['POST'] },
+          }],
+        },
+        { schemaVersion: 3 },
+      ),
     );
     expect(before.ok && scoped.ok).toBe(true);
     if (!before.ok || !scoped.ok) return;
@@ -2602,18 +2638,21 @@ describe('ghost · network 详单校验', () => {
 
   it('声明 paths/methods 时 inject.hosts 排序归一化(权限 detail 稳定)', () => {
     const r = validateGhostManifest(
-      withNet({
-        hosts: ['api.example.com', 'cdn.example.com'],
-        secrets: [{
-          ...goodSecret(),
-          inject: {
-            header: 'X-Token',
-            format: '{value}',
-            hosts: ['cdn.example.com', 'api.example.com'],
-            paths: ['/v1/convert'],
-          },
-        }],
-      }),
+      withNet(
+        {
+          hosts: ['api.example.com', 'cdn.example.com'],
+          secrets: [{
+            ...goodSecret(),
+            inject: {
+              header: 'X-Token',
+              format: '{value}',
+              hosts: ['cdn.example.com', 'api.example.com'],
+              paths: ['/v1/convert'],
+            },
+          }],
+        },
+        { schemaVersion: 3 },
+      ),
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
