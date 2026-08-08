@@ -59,7 +59,17 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   const marketService = options.marketService ?? new SkillhubMarketService();
   const localImportGrants = new Map<string, LocalImportGrant>();
   const scannedSkillRootsBySender = new Map<number, Set<string>>();
+  const scanGenerationBySender = new Map<number, number>();
   const scanGrantCleanupRegistered = new WeakSet<object>();
+
+  const ensureScanGrantCleanup = (event: Electron.IpcMainInvokeEvent) => {
+    if (scanGrantCleanupRegistered.has(event.sender)) return;
+    scanGrantCleanupRegistered.add(event.sender);
+    event.sender.once('destroyed', () => {
+      scannedSkillRootsBySender.delete(event.sender.id);
+      scanGenerationBySender.delete(event.sender.id);
+    });
+  };
 
   const rememberScannedSkillRoots = (
     event: Electron.IpcMainInvokeEvent,
@@ -78,12 +88,6 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       }
     }
     scannedSkillRootsBySender.set(event.sender.id, roots);
-    if (!scanGrantCleanupRegistered.has(event.sender)) {
-      scanGrantCleanupRegistered.add(event.sender);
-      event.sender.once('destroyed', () => {
-        scannedSkillRootsBySender.delete(event.sender.id);
-      });
-    }
   };
 
   const hasScannedSkillGrant = (
@@ -176,12 +180,17 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       params: { projects?: import('./scanner').ProjectInput[] },
     ) => {
       assertTrustedAppRendererEvent(event);
+      ensureScanGrantCleanup(event);
+      const scanGeneration = (scanGenerationBySender.get(event.sender.id) ?? 0) + 1;
+      scanGenerationBySender.set(event.sender.id, scanGeneration);
       // A new scan attempt supersedes the previous snapshot immediately. If
       // discovery fails, stale paths must not remain authorized.
       scannedSkillRootsBySender.delete(event.sender.id);
       try {
         const result = await scanAllSkills(params ?? {}, options.getMaker());
-        rememberScannedSkillRoots(event, result.skills);
+        if (scanGenerationBySender.get(event.sender.id) === scanGeneration) {
+          rememberScannedSkillRoots(event, result.skills);
+        }
         return { success: true, ...result };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

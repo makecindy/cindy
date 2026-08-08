@@ -21,6 +21,7 @@ import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SlashCommands');
+const shadowedUnavailableSkillsByCommands = new WeakMap<UnifiedCommand[], Set<string>>();
 
 export type { UnifiedCommand } from '@cindy/maker-core';
 
@@ -132,6 +133,7 @@ export function mergeCommands(
 ): UnifiedCommand[] {
   const seen = new Set<string>();
   const result: UnifiedCommand[] = [];
+  const shadowedUnavailableSkills = new Set<string>();
   const availableSkills = agentSkill.filter((command) => !isSlashCommandUnavailable(command));
   const unavailableSkills = agentSkill.filter(isSlashCommandUnavailable);
   const tiers: UnifiedCommand[][] = [
@@ -143,7 +145,9 @@ export function mergeCommands(
   for (const tier of tiers) {
     for (const cmd of tier) {
       if (seen.has(cmd.name)) {
-        if (!isSlashCommandUnavailable(cmd)) {
+        if (isSlashCommandUnavailable(cmd)) {
+          shadowedUnavailableSkills.add(cmd.name.toLowerCase());
+        } else {
           log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
         }
         continue;
@@ -152,7 +156,17 @@ export function mergeCommands(
       result.push(cmd);
     }
   }
+  if (shadowedUnavailableSkills.size > 0) {
+    shadowedUnavailableSkillsByCommands.set(result, shadowedUnavailableSkills);
+  }
   return result;
+}
+
+function hasShadowedUnavailableSkill(
+  commands: UnifiedCommand[],
+  commandName: string,
+): boolean {
+  return shadowedUnavailableSkillsByCommands.get(commands)?.has(commandName.toLowerCase()) ?? false;
 }
 
 /**
@@ -297,7 +311,13 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   }
   let result = await reconcilePiRuntimeCommandForDispatch(params);
   for (const delayMs of retryDelaysMs) {
-    if (!result.command || !isSlashCommandUnavailable(result.command)) return result;
+    const shouldRetry = !result.command
+      || isSlashCommandUnavailable(result.command)
+      || (
+        result.command.kind === 'desktop'
+        && hasShadowedUnavailableSkill(result.commands, params.commandName)
+      );
+    if (!shouldRetry) return result;
     await sleep(delayMs);
     result = await reconcilePiRuntimeCommandForDispatch({
       ...params,

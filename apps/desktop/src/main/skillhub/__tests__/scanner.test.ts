@@ -576,7 +576,7 @@ describe('skill file access', () => {
     const { actualSkillMd, exposedDir, exposedPricingJson, exposedSkillMd } = createSymlinkedSkill();
 
     const grantedRoot = resolveExistingSkillPathForGrant(exposedDir);
-    expect(grantedRoot).toBe(fs.realpathSync(exposedDir));
+    expect(grantedRoot).toBe(fs.realpathSync.native(exposedDir));
     expect(isExistingSkillPathGranted(exposedSkillMd, new Set([grantedRoot!]))).toBe(true);
     expect(isExistingSkillPathGranted(actualSkillMd, new Set([grantedRoot!]))).toBe(false);
 

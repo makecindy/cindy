@@ -191,6 +191,50 @@ describe('registerSkillhubIpc usage handlers', () => {
     expect(afterDestroy).toMatchObject({ success: false });
   });
 
+  it('does not let an older concurrent scan overwrite the latest sender grant', async () => {
+    let resolveOlder!: (value: unknown) => void;
+    let resolveNewer!: (value: unknown) => void;
+    const older = new Promise((resolve) => { resolveOlder = resolve; });
+    const newer = new Promise((resolve) => { resolveNewer = resolve; });
+    scanAllSkills
+      .mockReturnValueOnce(older)
+      .mockReturnValueOnce(newer);
+    resolveExistingSkillPathForGrant.mockImplementation((candidate: string) => {
+      if (candidate.includes('/old-skill')) return '/physical/old-skill';
+      if (candidate.includes('/new-skill')) return '/physical/new-skill';
+      return null;
+    });
+    isExistingSkillPathGranted.mockImplementation((candidate: string, roots: Set<string>) => (
+      (candidate.includes('/old-skill') && roots.has('/physical/old-skill'))
+      || (candidate.includes('/new-skill') && roots.has('/physical/new-skill'))
+    ));
+    readSkillRawFile.mockResolvedValue({ success: true, content: 'raw' });
+    const sender = { id: 33, once: vi.fn() };
+    const scan = handlers.get('skillhub:scan');
+
+    const olderRequest = scan?.({ sender }, { projects: [{ projectRoot: '/old', hash: 'old' }] });
+    const newerRequest = scan?.({ sender }, { projects: [{ projectRoot: '/new', hash: 'new' }] });
+    resolveNewer({
+      skills: [{ absolutePath: '/physical/new-skill', discoveredPath: '/new/.pi/skills/new-skill' }],
+      sources: [],
+    });
+    await newerRequest;
+    resolveOlder({
+      skills: [{ absolutePath: '/physical/old-skill', discoveredPath: '/old/.pi/skills/old-skill' }],
+      sources: [],
+    });
+    await olderRequest;
+
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/new/.pi/skills/new-skill/SKILL.md' },
+    )).resolves.toMatchObject({ success: true });
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/old/.pi/skills/old-skill/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+  });
+
   it('issues a sender-bound grant for the file selected and inspected in main', async () => {
     showOpenDialog.mockResolvedValueOnce({
       canceled: false,

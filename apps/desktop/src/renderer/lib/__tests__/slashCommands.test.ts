@@ -246,6 +246,36 @@ describe('Pi project skill availability', () => {
     expect(reloads).toBe(3);
   });
 
+  it('keeps waiting when a Desktop command temporarily shadows a same-name Pi skill', async () => {
+    const desktop: UnifiedCommand = { kind: 'desktop', name: 'help', description: 'Help' };
+    const discovered = skill({ name: 'help', scope: 'repo', runtimeStatus: 'discovered' });
+    const loaded = skill({
+      name: 'help',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:help',
+    });
+    const sleeps: number[] = [];
+    let reloads = 0;
+    const initial = mergeCommands([desktop], [], [discovered]);
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'help',
+      commands: initial,
+      retryDelaysMs: [10, 20, 30],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload: async () => (
+        ++reloads < 3
+          ? mergeCommands([desktop], [], [discovered])
+          : mergeCommands([desktop], [], [loaded])
+      ),
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(sleeps).toEqual([10, 20]);
+    expect(reloads).toBe(3);
+  });
+
   it('starts the selected project runtime before resolving its first Pi skill command', async () => {
     const discovered = skill({
       name: 'demo',
