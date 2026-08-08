@@ -7,18 +7,35 @@
  */
 export class ProductTurnWallClockTracker {
   private readonly startedAtBySession = new Map<string, number>();
+  private readonly continuationPendingBySession = new Set<string>();
 
-  start(sessionId: string, startedAt = Date.now()): void {
+  preserveForContinuation(sessionId: string): void {
+    if (this.startedAtBySession.has(sessionId)) {
+      this.continuationPendingBySession.add(sessionId);
+    }
+  }
+
+  start(sessionId: string, startedAt = Date.now()): boolean {
     if (!Number.isFinite(startedAt)) {
-      this.startedAtBySession.delete(sessionId);
-      return;
+      this.clear(sessionId);
+      return false;
+    }
+    // Only a confirmed Claude silentStop auto-resume may reuse the existing
+    // product boundary. Any other running boundary starts a genuinely new turn
+    // and overwrites stale state left by an abnormal terminal path.
+    if (
+      this.continuationPendingBySession.delete(sessionId) &&
+      this.startedAtBySession.has(sessionId)
+    ) {
+      return false;
     }
     this.startedAtBySession.set(sessionId, startedAt);
+    return true;
   }
 
   finish(sessionId: string, completedAt = Date.now()): number | undefined {
     const startedAt = this.startedAtBySession.get(sessionId);
-    this.startedAtBySession.delete(sessionId);
+    this.clear(sessionId);
     if (startedAt === undefined || !Number.isFinite(completedAt)) return undefined;
     const durationMs = completedAt - startedAt;
     return durationMs > 0 && Number.isFinite(durationMs) ? durationMs : undefined;
@@ -26,6 +43,7 @@ export class ProductTurnWallClockTracker {
 
   clear(sessionId: string): void {
     this.startedAtBySession.delete(sessionId);
+    this.continuationPendingBySession.delete(sessionId);
   }
 }
 

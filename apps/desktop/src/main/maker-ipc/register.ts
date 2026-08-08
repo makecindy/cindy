@@ -3168,6 +3168,8 @@ function settleSilentStopDone(
   reason: 'exhausted' | 'skip' | 'send-failed',
 ): void {
   void finalizeTurnChangeSet(sessionId, null, 'complete');
+  productTurnWallClockTracker.clear(sessionId);
+  productTurnUsageTargetTracker.clear(sessionId);
   sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
   noteClaudeSessionTurnState(sessionId, false);
   agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
@@ -3227,6 +3229,9 @@ async function handleSilentStopTurnEnd(
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
   if (decision.action === 'resume') {
     try {
+      // The next Claude running boundary belongs to the same user-visible turn.
+      // Mark it before send(), which may synchronously emit status events.
+      productTurnWallClockTracker.preserveForContinuation(session.id);
       const clientId = randomUUID();
       const sendResult = await session.send(
         { type: 'user', content: SILENT_STOP_RESUME_PROMPT },
@@ -3463,8 +3468,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           });
           const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
           if (!wasInTurn && event.source === 'claude-code') {
-            productTurnWallClockTracker.start(session.id);
-            productTurnUsageTargetTracker.clear(session.id);
+            const startedProductTurn = productTurnWallClockTracker.start(session.id);
+            if (startedProductTurn) productTurnUsageTargetTracker.clear(session.id);
           }
           sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
           if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);

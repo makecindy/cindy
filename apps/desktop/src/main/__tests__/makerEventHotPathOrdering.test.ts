@@ -75,7 +75,13 @@ describe('maker:event hot path ordering', () => {
     const wireSessionSource = extractWireSessionSource();
 
     expect(wireSessionSource).toContain(
-      "if (!wasInTurn && event.source === 'claude-code') {\n            productTurnWallClockTracker.start(session.id);",
+      "const startedProductTurn = productTurnWallClockTracker.start(session.id);",
+    );
+    expect(wireSessionSource).toContain(
+      'if (startedProductTurn) productTurnUsageTargetTracker.clear(session.id);',
+    );
+    expect(source).toMatch(
+      /decision\.action === 'resume'[\s\S]*?productTurnWallClockTracker\.preserveForContinuation\(session\.id\);[\s\S]*?await session\.send\(/,
     );
     expect(wireSessionSource).toMatch(
       /event\.source === 'claude-code'\s*&&\s*!isContinuationBoundary\s*&&\s*!isSilentStopDone[\s\S]*?productTurnWallClockTracker\.finish\(session\.id\)/,

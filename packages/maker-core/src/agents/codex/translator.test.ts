@@ -209,6 +209,32 @@ describe('Codex generation timing', () => {
     expect(codexGenerationDurationMs(rt)).toBe(3_000);
   });
 
+  it('omits timing when context compaction has no matching start boundary', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(3_000);
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    try {
+      beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+      translateItemNotification('completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'contextCompaction', id: 'compact-1' },
+      }, q, makeCtx(rt));
+      finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
+      const events = await collect(q);
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'compact_boundary',
+          data: expect.objectContaining({ boundaryId: 'compact-1' }),
+        }),
+      ]);
+      expect(codexGenerationDurationMs(rt)).toBeUndefined();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('excludes approval waits from generation timing', () => {
     const rt = newCodexRuntimeState();
     beginCodexGenerationTurn(rt, 'turn-1', 1_000);

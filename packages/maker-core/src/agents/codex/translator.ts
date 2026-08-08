@@ -264,10 +264,14 @@ const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
   'webSearch',
   'imageGeneration',
   'imageView',
+  'contextCompaction',
 ]);
 // App-server v2 reports fileChange only after the patch is complete. With no
 // matching start event it is an output notification, not a pairable timing
 // boundary; handleFileChange still publishes its tool events below.
+// contextCompaction may likewise arrive completion-only. Keeping it in the
+// paired pause set makes that shape fail closed, while still excluding the
+// compaction interval if a future app-server supplies both boundaries.
 
 function noteCodexGenerationBoundary(
   rt: CodexRuntimeState,
