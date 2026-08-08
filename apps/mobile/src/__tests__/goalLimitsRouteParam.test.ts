@@ -7,10 +7,15 @@ describe('parseGoalLimitsRouteParam —— goal.set 失败接回 limits 严格�
       .toEqual({ maxTurns: 5, budgetTokens: 100000, noProgressLimit: 3 });
   });
 
-  it('ignores an all-null payload (no actual limit = same as not carrying limits)', () => {
-    // 全 null 与空对象同义:显式提交「全部无限」会覆盖被控端默认 noProgressLimit: 3
+  it('restores an explicit all-null payload (user chose "unlimited" for every limit)', () => {
+    // 三项字段明确存在且为 null = 用户把上限都选为「不限」的合法载荷(独立审核者
+    // P2 复核):接回必须原样恢复,否则重试省略 limits 会恢复被控端默认
+    // noProgressLimit:3,与用户选择不一致。空对象(无字段)才是「未携带」。
     expect(parseGoalLimitsRouteParam('{"maxTurns":null,"budgetTokens":null,"noProgressLimit":null}'))
-      .toBeUndefined();
+      .toEqual({ maxTurns: null, budgetTokens: null, noProgressLimit: null });
+    // 仅显式 null 一项 = 该项选「不限」,其余未携带 → 原样保留该项 null
+    expect(parseGoalLimitsRouteParam('{"maxTurns":null}'))
+      .toEqual({ maxTurns: null, budgetTokens: null, noProgressLimit: null });
   });
 
   it('accepts a payload with only some fields set', () => {

@@ -797,7 +797,17 @@ async function runPipeline(task: InternalTask): Promise<void> {
   }
   void subscribe(`session:${sessionId}`, params.deviceId, ['sessions', `session:${sessionId}`]).catch(() => undefined);
   try {
-    // 鉴权 fresh revalidate 与建链并行(对齐原 create() 的并行结构)。
+    await withTransientRemoteRetry(async () => {
+      assertTaskOwnerCurrent(task);
+      await openLink(params.deviceId);
+      assertTaskOwnerCurrent(task);
+      await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
+      assertTaskOwnerCurrent(task);
+    });
+    // 建链/订阅完成后再启动鉴权 fresh revalidate(codex review P2:将最终目录
+    // 刷新放到建链和订阅之后)——与建链并行启动时,listProviders 可能在建链完成
+    // 前就返回旧目录快照(来源 A),而建链期间工作站已替换为 B,后续拿旧 A 快照
+    // 重验仍会向已删除来源创建。改为建链后拉取,终检目录是「建链后最新」。
     const freshUnauthenticated = (async (): Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null } | null> => {
       if (!isTaskOwnerCurrent(task)) return null;
       try {
@@ -808,13 +818,6 @@ async function runPipeline(task: InternalTask): Promise<void> {
         return { unauthenticated: false, fresh: null };
       }
     })();
-    await withTransientRemoteRetry(async () => {
-      assertTaskOwnerCurrent(task);
-      await openLink(params.deviceId);
-      assertTaskOwnerCurrent(task);
-      await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
-      assertTaskOwnerCurrent(task);
-    });
     const auth = await freshUnauthenticated;
     assertTaskOwnerCurrent(task);
     if (auth?.unauthenticated) {

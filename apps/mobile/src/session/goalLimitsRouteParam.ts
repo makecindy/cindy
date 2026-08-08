@@ -30,9 +30,13 @@ export function parseGoalLimitsRouteParam(
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
   // 空对象 = 没有携带任何限制 → 整体忽略(等价于未传 limits,走被控端默认);
-  // 部分字段缺失(undefined)与 null 同义 = 该项走被控端默认;其余必须有限正整数。
-  if (!record.maxTurns && !record.budgetTokens && !record.noProgressLimit) return undefined;
-  for (const key of ['maxTurns', 'budgetTokens', 'noProgressLimit'] as const) {
+  // **字段存在**(含显式 null = 用户把该项选为「不限」)则原样恢复——全 null 是
+  // 用户把三项都选为「不限」的合法载荷,接回时不得省略,否则重试恢复被控端默认
+  // noProgressLimit:3,与用户选择不一致(独立审核者 P2 复核)。
+  // 字段存在但非 null 非有限正整数 → 任一非法整体忽略。
+  const keys = ['maxTurns', 'budgetTokens', 'noProgressLimit'] as const;
+  if (!keys.some((key) => key in record)) return undefined;
+  for (const key of keys) {
     const v = record[key];
     if (v !== undefined && v !== null && !isFinitePositiveInteger(v)) return undefined;
   }

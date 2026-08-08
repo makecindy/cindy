@@ -153,7 +153,10 @@ export async function fetchDeviceProvidersFresh(
         const cached = cache.get(deviceId);
         if (cached) {
           notifyDeviceProviders(deviceId, cached);
-        } else {
+        } else if (isCurrent()) {
+          // 仅 fresh 所属代际仍有效时才补拉(codex review P2):fresh 请求期间设备
+          // 可能已被驱逐/登出/切号(代际已变),此时补拉成功会重新写入已驱逐设备
+          // 或上一账号的目录——清理完成后不得复活旧目录。
           void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined);
         }
       }
