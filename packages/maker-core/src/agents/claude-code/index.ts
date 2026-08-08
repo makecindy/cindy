@@ -5123,11 +5123,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
             turnInFlight = false;
-          } else {
+          } else if (!sendInAcceptPhase) {
             // interrupt 成功且无后台任务需要清：被中断的 turn 会收到
             // error_during_execution result → translator 在 onTurnEnd 清
             // turnInFlight。这里显式补清以防 SDK 未 drain result 的极端
-            // 情况(确保不会 SESSION_RUNNING 永拒)。
+            // 情况(确保不会 SESSION_RUNNING 永拒)。accept 阶段不抢清:
+            // finishSendBeforeUserInput 需要 turnInFlight=true 才会补
+            // send_cancelled_before_acceptance 终态,提前清掉会吞 boundary。
             turnInFlight = false;
           }
         } catch (e) {
