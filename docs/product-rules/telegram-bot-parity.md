@@ -39,6 +39,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 |---|---|---|
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
 | 群历史检索核心 | `im/shared/groupHistoryAccess.ts` | 官方侧由 `hook-control/groupHistoryScope.ts` 把官方 externalKey 解析成同一套 access scope，两侧检索走同一实现 |
+| 群消息本地库的**保留策略** | `im/shared/groupWindowCore.ts` | 上限数值（每命名空间 1 GiB 正文 + 500 万行安全阀）、回收低水位（0.9）与回收实现都在这一处；两侧把同一份 `DEFAULT_GROUP_WINDOW_RETENTION` 传进同一个 `recordGroupWindowEntry`。**额度靠 provider 命名空间隔离**：官方 `telegram:<principalId>`、个人 `telegram-personal:<botId>`，统计与回收都按 provider 过滤，两个账号各算各的、消息不串。一个边界要记住：两侧各持有一份 `{ ...DEFAULT }` **可变副本**（为的是测试能用小阈值把回收逼出来），所以共享的是"模块初始化时的那组数字"，运行期改一侧不会传导到另一侧 |
 
 ### 放在共享目录、但**只有一侧消费**的
 
@@ -99,11 +100,11 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 2 | **msg.op 动词只接了一个** | 服务端全套动词在 `xindong/cindy-server#349`（未合）；桌面侧目前只消费 `react`（ack 表情，见 `hook-control/ackReactions.ts` 的 `HOOK_FEATURE_MESSAGE_OPS` 判据）。`send` / `edit` / `delete` / `typing` / `media` 未接线 | #1855 第三刀。**这是把官方 bot 的出站改由桌面驱动的关键一步**——接完之后两侧的发射与收口才可能走同一份代码，而不是各写一套 |
 | 2b | **NO_REPLY 哨兵官方只在 ambient 轮次生效** | 个人侧**全轮次**生效（`noReplyScope: 'all-turns'`）：`streamingText.finalize` 的哨兵判定不带 ambient 门控。但**「零出站」只在惰性占位还没建过消息时成立**——哨兵前已经有正文流出的轮次消息已经发出去了，finalize 走的是**尽力撤回**：`deleteMessage` 失败被 `catch` 吞掉，那条停在过程态的消息就留在聊天里。官方只在 ambient 轮次生效，且删不掉时**不吞**——`discardProgressMessage` 返回 false，标 `retainAmbientCleanup` 并留给下一拍重试。`presentationCapabilities.ts` 把范围差异明写为**跨服务端 TODO**，即「想统一但要动服务端」，**不是**已裁决的产品差异，所以只登记在这里、不进第三节 | 待判：要统一得改服务端的哨兵判定。失败出口的差异（吞 vs 重试）一并判 |
 | 2c | **链接预览关闭两边各写一套，覆盖面还不一样** | 个人侧读契约 `linkPreviewDisabled: true`，driver 在**答案这条路**上全部消费——正文/过程消息的发送、分段发送、编辑，以及 HTML 解析失败后的纯文本回落；**卡片消息、陌生人提示、主人通知不带**。官方侧**不读这个契约**（在服务端仓 `telegram/client.ts` 里写死 `{ is_disabled: true }`），且只写在两处：`sendAdaptiveMessage` / `editAdaptiveMessage` 的 **HTML 回落**分支；纯文本的 `sendMessage` / `editMessageText`（权限卡、通知、附件转发、续跑提示，以及 adaptive 最后一层纯文本回落）都不带，链接预览按 Telegram 默认开着。两侧的 rich 主路径（`rich_message` payload）都不带这个参数，其预览行为**未核**——非公开 API | 待判：要么把参数补进官方的纯文本出站，要么把这条策略升进 `cindy-protocol` 两侧共用。跨仓 |
+| 2d | **行为档位（表情、回复引用）两边各写一套** | 三档形状与默认值两侧**逐字相同**：`emojiReactions` off/minimal/expressive 默认 minimal、`replyQuoteGroup` off/first/all 默认 first、`replyQuoteDm` off/first 默认 off。但声明有两份——官方读 `cindy-protocol` 的 `DEFAULT_TELEGRAM_BEHAVIOR`（服务端与桌面的官方那一半都用它，正本存服务端；桌面 hydrate 失败时**故意留「未知」而不套基线**，见 `hook-control/manager.ts`），个人读 `@cindy/im` 的 `TELEGRAM_DEFAULT_BEHAVIOR` + 本地 owner-scoped JSON（`im/telegram/behaviorStore.ts`）。值现在一样，但没有任何东西拦着它们分叉。注意：`turnPresenter.ts` / `presentationCapabilities.ts` 里「不含 replyQuote」的裁决说的是**不进共享能力契约**，不是「两个 bot 该长得不一样」——别把它读成有意差异 | 待判：个人侧能否直接改读 `cindy-protocol` 的 `DEFAULT_TELEGRAM_BEHAVIOR`（值一样，是最省事的一次真统一），先核 `@cindy/im` 对 `cindy-protocol` 的依赖方向允不允许（`docs/dev-rules/architecture-invariants.md`）。**与第 6 行分工**：那行是「何时打表情」的判据，这行是「档位的声明与默认值」 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
 | 6 | ack / 结果表情 | 两侧都有，判据（何时打、打什么、撤不撤）是否等价**待核** | 待核 |
-| 7 | 群消息本地库与保留策略 | 个人侧按大小保留；官方侧的群窗口是否共用同一套保留判据**待核** | 待核 |
 
 ## 五、怎么用这张表
 
@@ -111,7 +112,10 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 2. 发现新的差异：先判它属于哪一档。是「有意不同」就补进第三节并写清裁决来源；是缺口
    就进第四节并给出归属，**不要在当前 PR 里顺手补**——同族缺口一次覆盖比逐轮补边界
    便宜得多（`xindong/cindy-server#348` 十九轮 review 的教训）。
-3. 第四节里标「待核」的行，核完就把结论写回来，不要让它一直挂着。
+3. 第四节里标「待核」的行，核完就把结论写回来，不要让它一直挂着。**核出来是同源
+   就搬进第一节**——缺口那一档写着「该动它」，而同源的东西不该动；把已经统一好的
+   能力留在缺口里，下一个人会去"补"一遍已经有的东西。（群消息保留策略就是这样：
+   挂了几轮「待核」，核完发现两侧本来就跑同一份回收实现。）
    **同一件事只能挂一档**——「有意不同」与「缺口」的区别就是「不要动它」和「该动它」，
    两边都放等于同时说了两句相反的话。想让缺口带上现状说明，就把说明写进缺口那一行。
 4. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
