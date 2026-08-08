@@ -22,8 +22,10 @@ export interface MarketplaceDiscoveryNoticeProps {
 
 export function MarketplaceDiscoveryNotice({ summary, action }: MarketplaceDiscoveryNoticeProps) {
   const { t } = useTranslation();
-  // emptyWithSkips 由既有字段推导(declared = accepted + skipped + unreadable 恒成立),
-  // 不在 IPC 上加冗余布尔。unreadable-only 的 0 可用不算:那是瞬时问题,刷新提示已覆盖。
+  // "清单有条目但可用 0"由既有字段推导,不在 IPC 上加冗余布尔。推导依据的不变量:
+  // discover.ts 对每个清单条目恰好计入 plugins/skipped/unreadable 三者之一,即
+  // declared = accepted + skipped + unreadable 恒成立——改 summary 字段语义时必须
+  // 同步审视这里。unreadable-only 的 0 可用不算:那是瞬时问题,刷新提示已覆盖。
   const emptyWithSkips = summary.pluginCount === 0 && summary.skippedCount > 0;
   return (
     <div
