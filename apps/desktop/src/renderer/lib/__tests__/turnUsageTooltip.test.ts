@@ -21,8 +21,13 @@ import { formatModelShort } from '../usageFormat';
 import { buildTurnUsageTooltipLines, formatTurnDuration } from '../turnUsageTooltip';
 
 // t 桩: 返回 `key` 或 `key|{json opts}`, 便于断言哪条 i18n key 被用到及其插值。
-const t = ((key: string, opts?: Record<string, unknown>) =>
-  opts ? `${key}|${JSON.stringify(opts)}` : key) as unknown as TFunction;
+const t = ((key: string, opts?: Record<string, unknown>) => {
+  if (key === 'usageDetails.durationSeconds') return `${opts?.value}秒`;
+  if (key === 'usageDetails.durationMinutesSeconds') {
+    return `${opts?.minutes}分 ${opts?.seconds}秒`;
+  }
+  return opts ? `${key}|${JSON.stringify(opts)}` : key;
+}) as unknown as TFunction;
 
 describe('formatModelShort', () => {
   it('claude 家族 → 简短标签 (剥 [1m] / 尾部日期)', () => {
@@ -226,7 +231,7 @@ describe('buildTurnUsageTooltipLines — 输出速度', () => {
       turnDurationMs: 12_345,
     })!;
     const out = buildTurnUsageTooltipLines({ details, t });
-    expect(out).toContain('usageDetails.performanceLine|{"rate":"50","duration":"12.3s"}');
+    expect(out).toContain('usageDetails.performanceLine|{"rate":"50","duration":"12.3秒"}');
   });
 
   it('shows wall-clock alone without a fake missing-speed placeholder', () => {
@@ -235,13 +240,15 @@ describe('buildTurnUsageTooltipLines — 输出速度', () => {
       turnDurationMs: 12_345,
     })!;
     expect(buildTurnUsageTooltipLines({ details, t })).toContain(
-      'usageDetails.timeLine|{"duration":"12.3s"}',
+      'usageDetails.timeLine|{"duration":"12.3秒"}',
     );
   });
 
   it('normalizes rounded minute boundaries instead of showing 1m 60s', () => {
     expect(formatTurnDuration(59_960)).toBe('1m 00s');
     expect(formatTurnDuration(119_600)).toBe('2m 00s');
+    expect(formatTurnDuration(12_345, t)).toBe('12.3秒');
+    expect(formatTurnDuration(119_600, t)).toBe('2分 00秒');
   });
 });
 

@@ -4270,6 +4270,8 @@
     "waiting": "Claude 订阅余量会在下一轮完成后更新。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
     "performanceLine": "速度 {{rate}} · 耗时 {{duration}}",
     "performanceRateLine": "速度 {{rate}}",
     "timeLine": "耗时 {{duration}}",

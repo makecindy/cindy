@@ -4270,6 +4270,8 @@
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}초",
+    "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
     "performanceLine": "속도 {{rate}} · 시간 {{duration}}",
     "performanceRateLine": "속도 {{rate}}",
     "timeLine": "시간 {{duration}}",

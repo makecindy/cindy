@@ -748,7 +748,7 @@ function toQuotaHoverCardTurnUsage(
     outputRateText: formatOutputTokenRate(details),
     turnDurationText:
       typeof details.turnDurationMs === 'number'
-        ? formatTurnDuration(details.turnDurationMs)
+        ? formatTurnDuration(details.turnDurationMs, t)
         : null,
     cacheLineText: formatQuotaCacheLine(details, t),
     model: quotaTurnModel(details, t),

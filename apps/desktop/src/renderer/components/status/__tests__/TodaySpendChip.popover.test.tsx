@@ -55,6 +55,8 @@ vi.mock('react-i18next', () => ({
         'quotaCard.valueLine': '本轮 token 价值：{{cost}}',
         'quotaCard.noBilledCost': '本轮费用暂不可用，仅显示用量',
         'usageDetails.costBreakdownHeader': '按模型拆分：',
+        'usageDetails.durationSeconds': '{{value}}秒',
+        'usageDetails.durationMinutesSeconds': '{{minutes}}分 {{seconds}}秒',
         'usageDetails.modelCostLine': '· {{model}} {{cost}}',
         'usageDetails.cacheLine': '缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}',
         'usageDetails.cacheLineNoRate': '缓存拆分：读取 {{read}} · 写入 {{create}}',
@@ -212,7 +214,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText('读 0 · 写 74.0k · 命中 0%')).toBeTruthy();
     const performance = screen.getByTestId('quota-performance');
     expect(within(performance).getByText('耗时')).toBeTruthy();
-    expect(within(performance).getByText('12.3s 速度：40')).toBeTruthy();
+    expect(within(performance).getByText('12.3秒 速度：40')).toBeTruthy();
     expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
     expect(screen.getByText('缓存命中率偏低，本轮较多上下文重新计费')).toBeTruthy();
     expect(document.activeElement).toBe(document.body);
@@ -258,7 +260,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     openCardFromHover();
     const performance = screen.getByTestId('quota-performance');
     expect(within(performance).getByText('耗时')).toBeTruthy();
-    expect(within(performance).getByText('12.3s')).toBeTruthy();
+    expect(within(performance).getByText('12.3秒')).toBeTruthy();
   });
 
   it('键盘聚焦打开时把焦点移入卡片，关闭后归还 trigger', () => {

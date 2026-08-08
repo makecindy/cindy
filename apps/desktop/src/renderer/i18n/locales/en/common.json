@@ -4272,6 +4272,8 @@
     "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}s",
+    "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
     "performanceLine": "TPS {{rate}} · Time {{duration}}",
     "performanceRateLine": "TPS {{rate}}",
     "timeLine": "Time {{duration}}",

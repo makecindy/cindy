@@ -45,18 +45,28 @@ export function formatOutputTokenRate(details: TurnUsageDetails): string | null 
   return rate >= 100 ? rate.toFixed(0) : rate.toFixed(1).replace(/\.0$/, '');
 }
 
-export function formatTurnDuration(durationMs: number): string | null {
+export function formatTurnDuration(durationMs: number, t?: TFunction): string | null {
   if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
   const seconds = durationMs / 1000;
   if (seconds < 60) {
     const precision = seconds >= 10 ? 1 : 2;
     const rounded = Number(seconds.toFixed(precision));
-    if (rounded < 60) return `${rounded}s`;
+    if (rounded < 60) {
+      return t
+        ? t('usageDetails.durationSeconds', { value: String(rounded) })
+        : `${rounded}s`;
+    }
   }
   const roundedSeconds = Math.round(seconds);
   const minutes = Math.floor(roundedSeconds / 60);
   const remainder = roundedSeconds % 60;
-  return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
+  const paddedSeconds = String(remainder).padStart(2, '0');
+  return t
+    ? t('usageDetails.durationMinutesSeconds', {
+        minutes: String(minutes),
+        seconds: paddedSeconds,
+      })
+    : `${minutes}m ${paddedSeconds}s`;
 }
 
 function modelLabel(details: TurnUsageDetails, t: TFunction): string | null {
@@ -134,7 +144,7 @@ export function buildTurnUsageTooltipLines({
   }));
   const outputRate = formatOutputTokenRate(details);
   const turnDuration = typeof details.turnDurationMs === 'number'
-    ? formatTurnDuration(details.turnDurationMs)
+    ? formatTurnDuration(details.turnDurationMs, t)
     : null;
   if (outputRate && turnDuration) {
     lines.push(t('usageDetails.performanceLine', {

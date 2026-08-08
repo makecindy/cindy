@@ -4270,6 +4270,8 @@
     "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
     "performanceLine": "速度 {{rate}} · 時間 {{duration}}",
     "performanceRateLine": "速度 {{rate}}",
     "timeLine": "時間 {{duration}}",
