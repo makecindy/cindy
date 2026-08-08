@@ -2156,16 +2156,18 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(sessionSource).toContain("from '@/session/goalLimitsRouteParam'");
     expect(sessionSource).toContain('parseGoalLimitsRouteParam(readRouteParam(params.goalLimits))');
     expect(sessionSource).toContain('setGoalRestore(null);');
+    // 换代清理 effect 也含 setGoalRestore(null)(codex P2)——「一次性消费」锚定
+    // handleSetGoal 成功路径的最后一处(lastIndexOf),不用首次命中。
     const setParamsBlock = sessionSource.slice(
-      sessionSource.indexOf('setGoalRestore(null);'),
-      sessionSource.indexOf('setGoalRestore(null);') + 400,
+      sessionSource.lastIndexOf('setGoalRestore(null);'),
+      sessionSource.lastIndexOf('setGoalRestore(null);') + 400,
     );
     expect(setParamsBlock).toContain('goalObjective: undefined');
     expect(setParamsBlock).toContain('goalLimits: undefined');
     expect(setParamsBlock).toContain('goalError: undefined');
     // 一次性消费必须发生在 goal.set 成功之后(与表单关闭同一段),不是任意位置
     const goalSetSuccess = sessionSource.indexOf('await maker.goal.set({ sessionId, ...input });');
-    const restoreClear = sessionSource.indexOf('setGoalRestore(null);');
+    const restoreClear = sessionSource.lastIndexOf('setGoalRestore(null);');
     expect(goalSetSuccess).toBeGreaterThan(-1);
     expect(restoreClear).toBeGreaterThan(goalSetSuccess);
     // initial 优先级:恢复载荷优先于 composer 文字带入;无载荷时 initialObjective
@@ -2176,6 +2178,32 @@ describe('submit guard catalog wiring (source locks)', () => {
     );
     expect(viewCall).toContain('initial={goalRestore ?? undefined}');
     expect(viewCall).toContain('initialObjective={goalRestore ? undefined : (draft.trim() || undefined)}');
+  });
+
+  it('goal 接回载荷按 sessionId 换代清理:切任务不残留旧 objective/limits(codex P2)', () => {
+    // 任务抽屉 router.replace 原地更新同一 SessionScreen 实例,goalRestore/goalError
+    // 只在首次挂载初始化——sessionId 变化必须清理,否则新任务 Goal 表单预填旧目标、
+    // 甚至把旧目标提交到新任务(codex review P2)。
+    const sessionSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    // 换代清理 effect 存在:prevSessionIdRef 记录上次 sessionId,变化时清 goalRestore + goalError
+    const cleanEffect = sessionSource.indexOf('prevSessionIdRef.current !== sessionId');
+    expect(cleanEffect).toBeGreaterThan(-1);
+    const effectBlock = sessionSource.slice(cleanEffect - 200, cleanEffect + 400);
+    expect(effectBlock).toContain('setGoalRestore(null);');
+    expect(effectBlock).toContain('setGoalError(null);');
+    expect(effectBlock).toContain('prevSessionIdRef.current = sessionId;');
+    // ref 与当前 sessionId 同步初始化(useRef(sessionId)):首次挂载 prev===cur 不触发
+    // 清理,保留路由带入的接回值(与「一次性消费」语义兼容)
+    const refInit = sessionSource.indexOf('useRef(sessionId)');
+    expect(refInit).toBeGreaterThan(-1);
+    expect(refInit).toBeLessThan(cleanEffect);
+    // 清理 effect 依赖 sessionId;位于 goalRestore 定义之后(初始化完成才可能清)
+    const restoreInit = sessionSource.indexOf('const [goalRestore, setGoalRestore]');
+    expect(restoreInit).toBeGreaterThan(-1);
+    expect(cleanEffect).toBeGreaterThan(restoreInit);
+    // 一次性消费不依赖本 effect:handleSetGoal 成功路径仍显式清 goalRestore(防误删
+    // 同任务内的路由清参语义)
+    expect(sessionSource).toContain('setGoalRestore(null);');
   });
 
   it('goal commit segment: started 后无裸 return,goal.set 先于本地同步(round-22 Spec P1-2/P1-3)', () => {

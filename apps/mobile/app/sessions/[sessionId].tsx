@@ -863,6 +863,20 @@ export default function SessionScreen() {
       setContextSheetOpen(true);
     }
   }, [goalError]);
+  // goal 接回载荷按任务换代清理(codex review P2):任务抽屉 router.replace 原地
+  // 更新同一 SessionScreen 实例,goalRestore/goalError 只在首次挂载初始化——切
+  // 任务后残留会让新任务的 Goal 表单预填旧任务的 objective/limits,甚至把旧目标
+  // 提交到新任务。prevSessionIdRef 与当前 sessionId 同步初始化:首次挂载
+  // (prev===cur)不触发清理,保留路由带入的接回值;同一任务内 router.setParams
+  // 清参由 handleSetGoal 成功路径处理,不依赖本 effect。
+  const prevSessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      setGoalRestore(null);
+      setGoalError(null);
+    }
+  }, [sessionId]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   // 圈点标注接线 api 的 ref 中转:hook 实例声明在 removeRemoteFileAttachment 之后
   // (依赖它做再编辑替换),而 onUploaded 闭包在此之前就要引用 decorate——回调
