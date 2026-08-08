@@ -42,6 +42,7 @@ export function formatOutputTokenRate(details: TurnUsageDetails): string | null 
   }
   const rate = (details.outputTokens * 1000) / durationMs;
   if (!Number.isFinite(rate) || rate <= 0) return null;
+  if (rate < 0.1) return '<0.1';
   return rate >= 100 ? rate.toFixed(0) : rate.toFixed(1).replace(/\.0$/, '');
 }
 

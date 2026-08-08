@@ -218,6 +218,14 @@ describe('Codex generation timing', () => {
     expect(codexGenerationDurationMs(rt)).toBe(3_000);
   });
 
+  it('omits timing when the first observed boundary is an interaction pause', () => {
+    const rt = newCodexRuntimeState();
+    pauseCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 2_000);
+    resumeCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 10_000);
+    finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
+    expect(codexGenerationDurationMs(rt)).toBeUndefined();
+  });
+
   it('omits timing when the model-active event loop has a suspend-sized gap', () => {
     const wallClockSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {

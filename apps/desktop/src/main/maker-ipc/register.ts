@@ -3966,6 +3966,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 cache_creation_input_tokens?: number;
               };
               modelUsage?: Record<string, unknown>;
+              request_id?: unknown;
             }
           | undefined;
         const cumulative = doneData?.total_cost_usd;
@@ -3986,6 +3987,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           modelUsageDeltas ?? [],
           !isContinuationBoundary,
+          typeof doneData?.request_id === 'string' ? doneData.request_id : undefined,
         );
         const claudeGenerationDurationMs = outputLagTiming.suppressTiming
           ? undefined

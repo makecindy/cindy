@@ -35,6 +35,8 @@ interface PiAssistantMessage {
   usage?: PiUsage;
   /** provider-reported duration when the runtime supplies one. */
   duration?: number;
+  /** Pi v0.83 generation-start wall-clock timestamp (milliseconds). */
+  timestamp?: number;
   model?: string;
   stopReason?: string;
 }
@@ -78,6 +80,9 @@ export interface PiTranslateContext {
   generationDurationMs: number;
   /** False when any reported output lacks compatible parent generation timing. */
   generationTimingReliable: boolean;
+  generationHeartbeatAt: number;
+  generationHeartbeatTimer: ReturnType<typeof setInterval> | null;
+  generationHeartbeatReliable: boolean;
   /**
    * 每个子代理调用(taskId)最近一次上报的**累计**委派用量。进度帧报累计值,这里存上次值
    * 用来算增量,避免同一批用量被反复加进 turn 记账。与其它 turn 计数器同点(agent_start)清空。
@@ -103,8 +108,40 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
     generationTimingReliable: true,
+    generationHeartbeatAt: 0,
+    generationHeartbeatTimer: null,
+    generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
   };
+}
+
+const PI_GENERATION_HEARTBEAT_MS = 5_000;
+const PI_GENERATION_SUSPEND_GAP_MS = 30_000;
+
+function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
+  if (ctx.generationHeartbeatTimer !== null) clearInterval(ctx.generationHeartbeatTimer);
+  ctx.generationHeartbeatTimer = null;
+  ctx.generationHeartbeatAt = 0;
+}
+
+function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
+  if (
+    ctx.generationHeartbeatAt > 0 &&
+    now - ctx.generationHeartbeatAt >
+      PI_GENERATION_HEARTBEAT_MS + PI_GENERATION_SUSPEND_GAP_MS
+  ) {
+    ctx.generationHeartbeatReliable = false;
+  }
+  ctx.generationHeartbeatAt = now;
+}
+
+function startPiGenerationHeartbeat(ctx: PiTranslateContext): void {
+  stopPiGenerationHeartbeat(ctx);
+  ctx.generationHeartbeatReliable = true;
+  ctx.generationHeartbeatAt = Date.now();
+  const timer = setInterval(() => samplePiGenerationHeartbeat(ctx), PI_GENERATION_HEARTBEAT_MS);
+  timer.unref?.();
+  ctx.generationHeartbeatTimer = timer;
 }
 
 export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
@@ -246,6 +283,7 @@ export function translatePiEvent(
       ctx.turnWallClockStartedAt = Date.now();
       ctx.generationDurationMs = 0;
       ctx.generationTimingReliable = true;
+      stopPiGenerationHeartbeat(ctx);
       // 与其它 turn 计数器同点清:新 turn 的委派用量不该跟上一 turn 的累计值作差,
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
@@ -258,6 +296,7 @@ export function translatePiEvent(
 
     case 'message_start': {
       ctx.thinkingBlocks.clear();
+      startPiGenerationHeartbeat(ctx);
       return;
     }
 
@@ -272,12 +311,21 @@ export function translatePiEvent(
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
       applyUsage(ctx, message.usage);
+      const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
+      samplePiGenerationHeartbeat(ctx);
       const messageDurationMs =
         typeof message.duration === 'number' &&
         Number.isFinite(message.duration) &&
-        message.duration > 0
+          message.duration > 0
           ? message.duration
-          : 0;
+          : hadGenerationHeartbeat &&
+              ctx.generationHeartbeatReliable &&
+              typeof message.timestamp === 'number' &&
+              Number.isFinite(message.timestamp) &&
+              message.timestamp > 0
+            ? Date.now() - message.timestamp
+            : 0;
+      stopPiGenerationHeartbeat(ctx);
       if (messageDurationMs > 0) {
         ctx.generationDurationMs += messageDurationMs;
       } else if ((message.usage?.output ?? 0) > 0) {
@@ -361,6 +409,7 @@ export function translatePiEvent(
 
     case 'agent_settled': {
       ctx.isStreaming = false;
+      stopPiGenerationHeartbeat(ctx);
       queue.push({
         type: 'done',
         data: {

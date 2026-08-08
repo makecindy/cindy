@@ -99,11 +99,12 @@ describe('pi translator', () => {
     }));
   });
 
-  it('does not infer generation duration from Pi wall-clock timestamps', () => {
+  it('reads Pi v0.83 generation duration from timestamp with a live heartbeat', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     const timestamp = Date.now() - 1_200;
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
     translatePiEvent(
       ev({
         type: 'message_end',
@@ -119,8 +120,33 @@ describe('pi translator', () => {
     );
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
     const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
-    expect(usage).not.toHaveProperty('durationMs');
+    expect(usage.durationMs).toEqual(expect.any(Number));
+    expect(usage.durationMs).toBeGreaterThanOrEqual(1_200);
     expect(usage.turnDurationMs).toEqual(expect.any(Number));
+  });
+
+  it('omits timestamp-derived timing after a suspend-sized heartbeat gap', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+      nowSpy.mockReturnValue(40_000);
+      translatePiEvent(
+        ev({
+          type: 'message_end',
+          message: { role: 'assistant', content: [], usage: { output: 5 }, timestamp: 1_000 },
+        }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+      expect(usage).not.toHaveProperty('durationMs');
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('omits timing when one of multiple output messages lacks duration', () => {

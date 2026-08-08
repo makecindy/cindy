@@ -138,7 +138,7 @@ describe('ClaudeOutputLagTimingGuard', () => {
 
   it('suppresses the detected turn and the following backfill turn only', () => {
     const guard = new ClaudeOutputLagTimingGuard();
-    expect(guard.evaluate('session-1', lagged, true)).toEqual({
+    expect(guard.evaluate('session-1', lagged, true, 'msg_vrtx_1')).toEqual({
       detected: true,
       suppressTiming: true,
     });
@@ -154,7 +154,7 @@ describe('ClaudeOutputLagTimingGuard', () => {
 
   it('keeps a lagged continuation product turn suppressed through its final segment', () => {
     const guard = new ClaudeOutputLagTimingGuard();
-    expect(guard.evaluate('session-1', lagged, false).suppressTiming).toBe(true);
+    expect(guard.evaluate('session-1', lagged, false, 'msg_vrtx_1').suppressTiming).toBe(true);
     expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(true);
     expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(true);
     expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(false);
@@ -162,8 +162,16 @@ describe('ClaudeOutputLagTimingGuard', () => {
 
   it('clears pending suppression per session', () => {
     const guard = new ClaudeOutputLagTimingGuard();
-    guard.evaluate('session-1', lagged, true);
+    guard.evaluate('session-1', lagged, true, 'msg_vrtx_1');
     guard.clear('session-1');
     expect(guard.evaluate('session-1', settled, true).suppressTiming).toBe(false);
+  });
+
+  it('does not suppress a legitimate short reply without Vertex evidence', () => {
+    const guard = new ClaudeOutputLagTimingGuard();
+    expect(guard.evaluate('session-1', lagged, true)).toEqual({
+      detected: false,
+      suppressTiming: false,
+    });
   });
 });

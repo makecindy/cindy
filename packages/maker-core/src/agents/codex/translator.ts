@@ -227,7 +227,12 @@ export function pauseCodexGeneration(
   pauseId: string,
   pausedAt = Date.now(),
 ): void {
-  if (rt.generationTurnId !== turnId) beginCodexGenerationTurn(rt, turnId, pausedAt);
+  if (rt.generationTurnId !== turnId) {
+    beginCodexGenerationTurn(rt, turnId, pausedAt);
+    // Keep the interaction pair consistent, but omit TPS because the missing
+    // turn-start boundary means TTFT/thinking before this pause is unknown.
+    rt.generationTimingReliable = false;
+  }
   if (!pauseId) {
     rt.generationTimingReliable = false;
     return;

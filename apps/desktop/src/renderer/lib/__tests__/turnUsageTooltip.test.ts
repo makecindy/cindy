@@ -18,7 +18,11 @@ vi.mock('../../../shared/brandRegion', () => ({
 
 import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { formatModelShort } from '../usageFormat';
-import { buildTurnUsageTooltipLines, formatTurnDuration } from '../turnUsageTooltip';
+import {
+  buildTurnUsageTooltipLines,
+  formatOutputTokenRate,
+  formatTurnDuration,
+} from '../turnUsageTooltip';
 
 // t 桩: 返回 `key` 或 `key|{json opts}`, 便于断言哪条 i18n key 被用到及其插值。
 const t = ((key: string, opts?: Record<string, unknown>) => {
@@ -44,6 +48,13 @@ describe('formatModelShort', () => {
   it('认不出 → 回退 (空串原样)', () => {
     expect(formatModelShort('deepseek-v3')).toBe('deepseek-v3');
     expect(formatModelShort('')).toBe('');
+  });
+});
+
+describe('formatOutputTokenRate', () => {
+  it('does not round a positive sub-0.1 TPS rate down to zero', () => {
+    const details = buildTurnUsageDetails({ outputTokens: 1, durationMs: 25_000 })!;
+    expect(formatOutputTokenRate(details)).toBe('<0.1');
   });
 });
 

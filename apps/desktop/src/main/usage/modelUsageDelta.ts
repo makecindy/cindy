@@ -131,7 +131,13 @@ export function computeModelUsageDeltas(
  *
  * 只判异常：调用方可据此打日志或隐藏不可靠 TPS，但不得改计费、token 或金额。
  */
-export function detectOutputLag(deltas: readonly ModelUsageDeltaEntry[]): boolean {
+export function detectOutputLag(
+  deltas: readonly ModelUsageDeltaEntry[],
+  requestId?: string,
+): boolean {
+  // A concise high-context reply is legitimate. Only the known Vertex request
+  // family is evidence that this shape means deferred output settlement.
+  if (!requestId?.startsWith('msg_vrtx_')) return false;
   const OUTPUT_FLOOR = 64;
   const INPUT_SIGNIFICANT = 10_000;
   return deltas.some((delta) => {
@@ -154,8 +160,9 @@ export class ClaudeOutputLagTimingGuard {
     sessionId: string,
     deltas: readonly ModelUsageDeltaEntry[],
     isProductTurnFinal: boolean,
+    requestId?: string,
   ): { detected: boolean; suppressTiming: boolean } {
-    const detected = detectOutputLag(deltas);
+    const detected = detectOutputLag(deltas, requestId);
     if (detected) this.detectedInCurrentTurnBySession.add(sessionId);
     const suppressTiming =
       this.suppressCurrentTurnBySession.has(sessionId) ||
