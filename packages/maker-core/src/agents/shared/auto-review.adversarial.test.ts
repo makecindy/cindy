@@ -102,6 +102,16 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     // macOS / BSD xargs 的 -J 替换
     `printf '/tmp/e.py' | xargs -J % python3 %`,
     `printf '/tmp/e.py' | xargs -J% python3 %`,
+    // 包装器自己缺 COMMAND:剥完壳命令位空着,由 stdin 的第一个输入项填上
+    `printf 'touch /outside/pwn' | xargs env`,
+    `printf 'touch /outside/pwn' | xargs command`,
+    `printf 'touch /outside/pwn' | xargs nohup`,
+    `printf 'touch /outside/pwn' | xargs setsid`,
+    `printf 'touch /outside/pwn' | xargs time`,
+    `printf 'touch /outside/pwn' | xargs timeout 5`,
+    `printf 'touch /outside/pwn' | xargs nice`,
+    `printf 'touch /outside/pwn' | xargs env FOO=1`,
+    `printf 'touch /outside/pwn' | parallel env`,
   ],
 
   '交互模式:stdin 进 REPL 逐行执行': [
@@ -179,6 +189,10 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     `GIT_PAGER="sudo cat /etc/shadow" git --paginate log`,
     `PAGER="sudo cat /etc/shadow" git log`,
     `GIT_SSH_COMMAND="sudo ssh" git fetch`,
+    `GIT_EDITOR="sudo cat /etc/shadow" git commit`,
+    `EDITOR="sudo cat /etc/shadow" git rebase -i`,
+    `VISUAL="sudo id" git commit`,
+    `GIT_SEQUENCE_EDITOR="sudo id" git rebase -i`,
     // rg 的外部程序选项:值是要启动的程序,不是搜索模式
     'rg --pre "sudo cat /etc/shadow" foo .',
     'rg --hostname-bin "sudo id" foo .',
@@ -309,6 +323,13 @@ describe('对抗语料 — 反向边界:读输入 ≠ 执行输入', () => {
       `printf 'x' | parallel echo {}`,
       `printf 'x' | parallel wc -l {}`,
       'cat list.txt | xargs -I{} node run.js {}',
+      // 包装器**带**了 COMMAND —— 命令位没空着,stdin 只是它的参数
+      `printf 'x' | xargs env python3 run.py`,
+      'cat list.txt | xargs grep foo',
+      'ls | xargs wc -l',
+      // 编辑器变量的值是普通程序名,不含红线内容
+      'GIT_EDITOR=true git rebase --continue',
+      'EDITOR=vim git commit',
     ];
     const wrong = commands.filter((c) => classifyShellCommand(c, roots, opts) !== 'prompt');
     expect(wrong, `以下日常写法被误升成红线或误放行:\n${wrong.join('\n')}`).toEqual([]);

@@ -712,6 +712,9 @@ const ENV_VARS_EXECUTING_THEIR_VALUE = 'LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD
   + '|(?:[A-Z][A-Z0-9_]*_)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL'
   + '|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV'
   + '|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS'
+  // 编辑器族与分页器同理:值是 git / 其它 CLI 会**启动的程序**
+  // (`GIT_EDITOR="sudo …" git commit`),不是数据(review 报)。
+  + '|(?:GIT_)?(?:SEQUENCE_)?EDITOR|VISUAL'
   + '|RUBYOPT|PATH';
 const ENV_EXECUTION_ASSIGNMENT = new RegExp(`(?:^|\\s)(?:${ENV_VARS_EXECUTING_THEIR_VALUE})=`);
 const ENV_EXECUTION_NAME = new RegExp(`^(?:${ENV_VARS_EXECUTING_THEIR_VALUE})$`);
@@ -1734,8 +1737,15 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
     // 反面同样重要:`printf 'x' | xargs python3 run.py` 里 stdin 只是 run.py 的 argv,
     // 程序位已被静态脚本占住 —— 递归自然返回 false,不回退成本 PR 已消除的那条误报。
     const nested = bin === 'xargs' ? xargsCommandTokens(tokens) : tokens.slice(1);
-    if (nested !== null && nested.length > 0
-      && interpreterReadsProgramFromStdin(unwrapWrappers(nested))) return true;
+    if (nested !== null && nested.length > 0) {
+      const inner = unwrapWrappers(nested);
+      // **包装器自己就缺 COMMAND**(`xargs env`、`xargs nohup`、`xargs timeout 5`、
+      // `xargs env FOO=1`):剥完壳什么都不剩 = 命令位空着,由 stdin 的第一个输入项填上,
+      // 那一项就是真正被执行的程序(review 报)。这一族按「剥壳后还剩不剩命令」统一判,
+      // 不逐个登记包装器名 —— 包装器集合已经在 `COMMAND_WRAPPERS` 里维护了一份。
+      if (inner.length === 0) return true;
+      if (interpreterReadsProgramFromStdin(inner)) return true;
+    }
     // 注:parallel 的 `{}` 占位符判定同样**不在这里** —— 与 xargs 一样,本分支拿到的
     // tokens 已被 `unwrapCommand` 剥掉 parallel 自己,挂在这里就是死代码。真正的调用点
     // 在 `highImpactExecutionNeedsConsent`,按未剥离的 literalTokens 判。
