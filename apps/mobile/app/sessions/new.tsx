@@ -244,6 +244,7 @@ import {
 } from '@/session/mobileVoicePrewarm';
 import {
   resolveMobileVoiceRecordingPermission,
+  shouldClearMobileVoiceStartPending,
   shouldCancelMobileVoiceForBackground,
   waitForMobileVoiceAppActive,
 } from '@/session/mobileVoiceStartup';
@@ -261,10 +262,7 @@ import {
   recordMobileVoiceInputHistoryForHost,
   updateMobileVoiceInputHistoryEntryForHost,
 } from '@/session/mobileVoiceHistoryStore';
-import {
-  hydrateMobileVoiceDictionary,
-  refreshMobileVoiceDictionary,
-} from '@/session/mobileVoiceDictionaryCache';
+import { refreshMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
 import {
   playMobileVoiceInputEndCue,
 } from '@/session/mobileVoiceCue';
@@ -1233,7 +1231,25 @@ export default function NewRemoteSessionScreen() {
   // 声明在 composerShowCreateButton 之前:pending 期就要占住创建槽。
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const voiceStartPendingSeqRef = useRef(0);
+  // The permission request starts before voiceStartupInFlightRef is set. Keep
+  // optimistic pending alive across that synchronous-to-async handoff.
+  const voiceStartRequestedRef = useRef(false);
   const voiceStartedOnPressInRef = useRef(false);
+  const clearVoiceStartPending = useCallback(() => {
+    voiceStartPendingSeqRef.current += 1;
+    setVoiceStartPending(false);
+  }, []);
+  useEffect(() => {
+    if (!voiceStartPending) return;
+    if (shouldClearMobileVoiceStartPending({
+      voiceState,
+      startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current,
+      recordingActive: voiceRecordingActiveRef.current,
+      hasController: Boolean(voiceControllerSessionRef.current),
+    })) {
+      setVoiceStartPending(false);
+    }
+  }, [voiceStartPending, voiceState]);
   // 语音生命周期内创建按钮常驻(与会话页发送槽同理,对齐桌面):录音中点创建
   // = 结束录音并用转写创建(create() 已有 listening 分支);否则首段转写落地的
   // 瞬间按钮冒出来,右对齐工具排会把语音胶囊整格推左。乐观 pending 期同理占位,
@@ -1248,6 +1264,9 @@ export default function NewRemoteSessionScreen() {
     || voiceState === 'refining';
   const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
+  // Keep Composer geometry stable while startup waits for the first PCM chunk.
+  // Pending reserves the listening slot without showing live listening content.
+  const voiceIsActiveLayout = voiceIsListening || voiceStartPending;
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
   // 只有一台可选设备时无可切换项:禁用下拉、隐藏 ⇕(用户反馈:单选项不要出选框)。
   const deviceHasChoices = deviceOptions.length > 1;
@@ -1430,13 +1449,14 @@ export default function NewRemoteSessionScreen() {
     voiceStartupInFlightRef.current = false;
     voiceStopInFlightRef.current = false;
     voiceRecordingActiveRef.current = false;
+    clearVoiceStartPending();
     setComposerVoiceHoldArmed(false);
     setVoiceState('idle');
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
     void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-  }, [setVoiceState]);
+  }, [clearVoiceStartPending, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -2799,11 +2819,16 @@ export default function NewRemoteSessionScreen() {
       // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
       // 被控端)就用上次缓存,绝不为它推迟开麦。
       void refreshMobileVoiceDictionary(selectedDeviceId, () => maker.getVoiceDictionary());
-      const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
-        takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null),
-        getMobileVoiceInputHistoryForHost(selectedDeviceId),
-        hydrateMobileVoiceDictionary(selectedDeviceId),
-      ]);
+      // Claiming a prewarm must not await its in-flight WebSocket handshake:
+      // BufferedAsrProvider already lets capture start concurrently and replays
+      // the early PCM once the connection settles.
+      const prewarmedVoice = takePrewarmedMobileVoiceAsr(selectedDeviceId);
+      // History and dictionary enrich refinement only. Load both behind the mic
+      // start; the retained array is read when refinement actually runs.
+      const localVoiceInputHistory: string[] = [];
+      void getMobileVoiceInputHistoryForHost(selectedDeviceId)
+        .then((history) => localVoiceInputHistory.push(...history))
+        .catch(() => undefined);
       claimedPrewarm = prewarmedVoice;
       const credential = prewarmedVoice?.credential
         ?? createMobileCindyVoiceCredential(selectedDeviceId);
@@ -2849,6 +2874,16 @@ export default function NewRemoteSessionScreen() {
         onDraftChanged: setFirstMessageDraft,
         onStateChanged: setVoiceState,
         onError: (message) => {
+          const failedController = createdController;
+          if (!failedController || voiceControllerSessionRef.current !== failedController) return;
+          voiceStartupSeqRef.current += 1;
+          voiceControllerSessionRef.current = null;
+          voiceStartupInFlightRef.current = false;
+          voiceStopInFlightRef.current = false;
+          voiceRecordingActiveRef.current = false;
+          clearVoiceStartPending();
+          setComposerVoiceHoldArmed(false);
+          void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
           setVoiceState('error');
           setVoiceError(message);
         },
@@ -2924,7 +2959,7 @@ export default function NewRemoteSessionScreen() {
       setVoiceError(formatRemoteError(err));
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
-  }, [openLink, selectedDeviceId, setFirstMessageDraft, voiceIsProcessing, voiceState]);
+  }, [clearVoiceStartPending, openLink, selectedDeviceId, setFirstMessageDraft, voiceIsProcessing, voiceState]);
 
   const finishVoiceRecording = useCallback(async (): Promise<string | null> => {
     if (voiceStopInFlightRef.current) return null;
@@ -2996,13 +3031,22 @@ export default function NewRemoteSessionScreen() {
     // 启动已在途/停止在途时不重复发起,也不把这次按下标成「已起录」。
     if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
     voiceStartedOnPressInRef.current = true;
+    voiceStartRequestedRef.current = true;
     const pendingSeq = ++voiceStartPendingSeqRef.current;
     setVoiceStartPending(true);
     void startVoiceRecording()
       .catch(() => undefined)
       .finally(() => {
-        // 只收自己世代的 pending(与会话页同款守卫)。
-        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+        // 启动 Promise 可能早于首个 PCM 完成;这时仍保持 pending,由
+        // listening 状态 effect 在真实采集开始后收口。
+        if (voiceStartPendingSeqRef.current !== pendingSeq) return;
+        if (shouldClearMobileVoiceStartPending({
+          voiceState: voiceStateTransitionRef.current,
+          startupSettled: true,
+          recordingActive: voiceRecordingActiveRef.current,
+          hasController: Boolean(voiceControllerSessionRef.current),
+        })) setVoiceStartPending(false);
+        voiceStartRequestedRef.current = false;
       });
   }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
@@ -3014,6 +3058,7 @@ export default function NewRemoteSessionScreen() {
       voicePermissionRequestAbortRef.current?.abort();
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
+      voiceStartPendingSeqRef.current += 1;
       voiceStartupSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
@@ -3186,7 +3231,7 @@ export default function NewRemoteSessionScreen() {
       {composerShowCreateButton ? renderCreateButton() : null}
     </>
   );
-  const renderComposerInputOverlay = () => voiceIsListening ? (
+  const renderComposerInputOverlay = () => voiceIsActiveLayout ? (
     <ScrollView
       ref={voiceDraftScrollRef}
       contentContainerStyle={styles.voiceDraftOverlayContent}
@@ -3205,7 +3250,7 @@ export default function NewRemoteSessionScreen() {
       showsVerticalScrollIndicator={false}
       style={styles.voiceDraftOverlay}
     >
-      {voiceDraftShowsListeningPrompt ? (
+      {voiceIsListening ? (voiceDraftShowsListeningPrompt ? (
         <View style={styles.voiceDraftListeningPrompt}>
           <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           <Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>
@@ -3231,7 +3276,7 @@ export default function NewRemoteSessionScreen() {
             <VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />
           </View>
         </View>
-      )}
+      )) : null}
     </ScrollView>
   ) : null;
 
@@ -4873,16 +4918,16 @@ export default function NewRemoteSessionScreen() {
                   accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                   autoFocus={visualFocusComposer}
                   cardActive={composerCardActive}
-                  caretHidden={voiceIsListening}
+                  caretHidden={voiceIsActiveLayout}
                   cursorColor={colors.inputCaret}
                   inputRef={firstMessageInputRef}
                   leading={renderComposerCollapsedAttachmentBadge()}
                   inputFrameHeight={composerResize.frameHeight}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
-                  inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                  inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                   inputOverlay={renderComposerInputOverlay()}
-                  inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
+                  inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}
                   inputTestID="newSession.firstMessageInput"
                   maxHeight={composerResize.inputMaxHeight}
                   multilineShape={!composerCardActive && composerInputIsMultiline}
@@ -4900,7 +4945,7 @@ export default function NewRemoteSessionScreen() {
                   onPressIn={() => {
                     if (voiceIsListening) void finishVoiceRecording();
                   }}
-                  placeholder={voiceIsListening ? '' : composerPlaceholder}
+                  placeholder={voiceIsActiveLayout ? '' : composerPlaceholder}
                   placeholderTextColor={colors.textTertiary}
                   resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
                   scrollEnabled={composerInputScrollEnabled}

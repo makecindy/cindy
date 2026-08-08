@@ -174,6 +174,103 @@ describe('mobileRealtimeAudio', () => {
     expect(streamRelease).toHaveBeenCalledTimes(1);
   });
 
+  it('prefers the fresh Expo AudioStream when the Apple custom binding is also linked', async () => {
+    const nativeModule = {
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      prewarm: vi.fn(async () => undefined),
+      addListener: vi.fn(() => ({ remove: vi.fn() })),
+    };
+    const streamStart = vi.fn(async () => undefined);
+    const streamStop = vi.fn();
+    const streamRelease = vi.fn();
+
+    class MockExpoAudioStream {
+      readonly id = 'apple-pcm-stream';
+      readonly sampleRate = 16_000;
+      readonly channels = 1;
+      readonly isStreaming = true;
+
+      addListener() {
+        return { remove: vi.fn() };
+      }
+
+      start = streamStart;
+      stop = streamStop;
+      release = streamRelease;
+    }
+
+    vi.mocked(requireNativeModule).mockImplementation((moduleName: string) => {
+      if (moduleName === 'XdtMobileRealtimeAudio') return nativeModule;
+      if (moduleName === 'ExpoAudio') return { AudioStream: MockExpoAudioStream };
+      throw new Error(`${moduleName} not linked`);
+    });
+    const {
+      __testing,
+      prewarmMobileRealtimeAudio,
+      startMobileRealtimeAudio,
+    } = await import('@/session/mobileRealtimeAudio');
+    __testing.resetNativeBindingForTests();
+
+    const stopCapture = await startMobileRealtimeAudio({ onChunk: vi.fn() });
+    expect(streamStart).toHaveBeenCalledTimes(1);
+    expect(nativeModule.start).not.toHaveBeenCalled();
+
+    // The legacy play-and-record warmup would force an extra session category
+    // transition immediately before AudioStream opens its input-only engine.
+    prewarmMobileRealtimeAudio();
+    expect(nativeModule.prewarm).not.toHaveBeenCalled();
+
+    await stopCapture();
+    expect(streamStop).toHaveBeenCalledTimes(1);
+    expect(streamRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops custom native capture when the first PCM chunk stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      type NativeEvent = 'onAudioChunk' | 'onAudioError';
+      const listeners = new Map<NativeEvent, (event: never) => void>();
+      const nativeStop = vi.fn(async () => undefined);
+      const nativeModule = {
+        start: vi.fn(async () => undefined),
+        stop: nativeStop,
+        prewarm: vi.fn(async () => undefined),
+        addListener(eventName: NativeEvent, listener: (event: never) => void) {
+          listeners.set(eventName, listener);
+          return { remove: () => listeners.delete(eventName) };
+        },
+      };
+
+      vi.mocked(requireNativeModule).mockImplementation((moduleName: string) => {
+        if (moduleName === 'XdtMobileRealtimeAudio') return nativeModule;
+        throw new Error(`${moduleName} not linked`);
+      });
+
+      const {
+        __testing,
+        startMobileRealtimeAudio,
+      } = await import('@/session/mobileRealtimeAudio');
+      __testing.resetNativeBindingForTests();
+
+      const onChunk = vi.fn();
+      const onError = vi.fn();
+      const stopCapture = await startMobileRealtimeAudio({ onChunk, onError });
+
+      await vi.advanceTimersByTimeAsync(6_001);
+
+      expect(onChunk).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(nativeStop).toHaveBeenCalledTimes(1);
+      expect(listeners.size).toBe(0);
+
+      await stopCapture();
+      expect(nativeStop).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves non-integer resampling phase across native buffer boundaries', async () => {
     const { __testing } = await import('@/session/mobileRealtimeAudio');
     const convert = __testing.createExpoAudioPcm16Converter(16_000);
