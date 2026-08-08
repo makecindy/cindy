@@ -5377,6 +5377,7 @@
       "loadingHint": "Still checking the collaboration setting. Try again shortly.",
       "planModeUnavailableRemoteDraft": "Plan mode is not available in remote drafts.",
       "planModeUnsupportedRemote": "Plan mode is not supported by this session.",
+      "planModeToggleWithAttachments": "To toggle plan mode without clearing your draft attachments, use the + menu.",
       "planModeCapabilitiesLoading": "Checking whether plan mode is available for this session…",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",

@@ -2594,6 +2594,18 @@ export function CCAgentSessionView({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
+      // 纯 /plan + 已带附件:接受命令会走 ChatInput 的 accepted 清理(clearSentComposer
+      // → clearFiles),把正在编辑的附件静默删掉,而「+」菜单 toggle 完全不动草稿
+      // (Codex)。附件存在时**不消费** /plan —— toast 引导用 + 菜单切换,返回 false
+      // 让 ChatInput 保留 composer(文本 + 附件原样)。
+      if (
+        deliveryMode !== 'steer' &&
+        files?.length &&
+        /^\/plan\s*$/i.test(message.trim())
+      ) {
+        toast.info(t('newChat.collaboration.planModeToggleWithAttachments'));
+        return false;
+      }
       if (deliveryMode !== 'steer' && (await maybeDispatchDesktopSlashCommand(message, files))) {
         return;
       }
