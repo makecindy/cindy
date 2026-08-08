@@ -457,7 +457,8 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     invalidateClaudeOAuthRefresh();
     try {
       if (hasClaudeAiOAuth()) clearClaudeAiOAuth();
-      // 凭证删除是 best-effort 的(clearClaudeAiOAuth 的 unlink 失败静默吞掉)。删干净了就
+      // clearClaudeAiOAuth 仅把「条目已经不存在」当幂等成功;不可读 / 其它删除失败会抛到
+      // 本层 catch。删干净了就
       // **不**留抑制标记 —— 服务端作废不是用户意图,本机 CLI 重新登录后仍应享有设计内的自动
       // 继承;可一旦没删掉,slot 空 + 凭证还在,下一次可信读取就会把这份刚被作废的凭证认领
       // 回来、拿它重启发现,再 401、再 invalidate,在「已连接 / 失效」之间打转
@@ -554,8 +555,8 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       // disconnect = 先失效刷新器再清凭证(唯一正确入口,见 claude-oauth-refresh 文档)
       // —— 否则「已断开」状态下在途刷新回写会让凭证复活。
       disconnectClaudeAiOAuth();
-      // 用户显式登出:留撤销标记。凭证删除是 best-effort(文件删除吞错),残留凭证不该在
-      // 下一次读连接态时被自动认领回来(PR #548 review)。
+      // 用户显式登出:留撤销标记。清除失败会原样上抛;残留凭证不该在下一次读连接态时被
+      // 自动认领回来(PR #548 review)。
       unbindNativeProviderAuth('anthropic', { revoked: true });
       return;
     }
