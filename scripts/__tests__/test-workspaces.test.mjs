@@ -117,6 +117,40 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	);
 });
 
+test("client CI builds model-access protocol before consumer checks", () => {
+	const workflow = fs.readFileSync(
+		path.join(ROOT, ".github", "workflows", "ci.yml"),
+		"utf8",
+	).replace(/\r\n/g, "\n");
+	const jobs = [
+		{
+			name: "verify",
+			body: workflow.match(/\n  verify:\n([\s\S]*?)\n  windows-unit-shards:/)?.[1],
+			consumerCommand: "run: pnpm --filter desktop typecheck",
+		},
+		{
+			name: "windows-unit-shards",
+			body: workflow.match(/\n  windows-unit-shards:\n([\s\S]*?)\n  windows-unit:/)?.[1],
+			consumerCommand: "run: pnpm test:unit",
+		},
+	];
+
+	for (const { name, body, consumerCommand } of jobs) {
+		assert.ok(body, `client CI must define the ${name} job`);
+		const installIndex = body.indexOf("run: pnpm install --frozen-lockfile");
+		const buildIndex = body.indexOf(
+			"run: pnpm --filter @cindy/model-access-protocol build",
+		);
+		const consumerIndex = body.indexOf(consumerCommand);
+		assert.ok(installIndex >= 0, `${name} must install dependencies`);
+		assert.ok(buildIndex > installIndex, `${name} must build protocol after install`);
+		assert.ok(
+			consumerIndex > buildIndex,
+			`${name} must build protocol before consumer checks`,
+		);
+	}
+});
+
 test("help groups copyable desktop, binary, and Mobile workflows", async () => {
 	const { printHelp } = await import("../help.mjs");
 	const lines = [];

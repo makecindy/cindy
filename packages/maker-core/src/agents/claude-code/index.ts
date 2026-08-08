@@ -5032,10 +5032,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           turnState.interruptRequested = true;
           turnState.interruptGeneration = turnState.generation;
         }
-        // 先关 turn-in-flight 再 interrupt：SDK retry backoff 期间不响应 interrupt
-        // (2026-08 实踩 OAuth 全池冷却 503 持续重试)，等它返回会让后续 send 被
-        // SESSION_RUNNING 永拒。generation 守卫(translator handleResult)保证旧 q
-        // 的迟到 error_during_execution result 被丢弃、不污染新 turn。
+        // 保持 turnInFlight 为 true 直到 interrupt 返回(或超时关 query)：
+        // 提前清掉会让 Session.isTurnRunning() 报 idle，并发 send 通过守卫后
+        // 把用户消息推进旧 q 的 inputQueue，然后在 interrupt 返回后被
+        // inputQueue.clear() 抹掉 → 用户消息丢失(review P1-A)。
+        // 5s 超时 + catch 兜底保证 turnInFlight 最终一定被清除，不会造成
+        // SESSION_RUNNING 永拒。generation 守卫(translator handleResult)保证
+        // 旧 q 的迟到 error_during_execution result 被丢弃、不污染新 turn。
         // sendInAcceptPhase 守卫: 并发 send 处于 accept 阶段时, 由 send 自己的
         // finishSendBeforeUserInput 负责清 turnInFlight + emit boundary,
         // abort 不能抢清, 否则 boundary 丢失(review 3541310178)。
@@ -5043,7 +5046,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 需要旧值)。
         const foregroundWasInFlight = turnInFlight;
         if (!sendInAcceptPhase) {
-          turnInFlight = false;
           pendingToolIds.clear();
         }
         // 用户 Stop 的产品语义 = 本会话所有模型调用停止:先发 stopTask 再 interrupt
@@ -5088,8 +5090,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // Query.
             const cancelledQuery = q;
             // 用 Stop 之前的 turnInFlight 快照判定 foreground 是否需要终态。
-            // turnInFlight 已被上方立即清除(防 SESSION_RUNNING 死锁)，但
-            // close-query 分支仍需要旧值决定是否补 boundary。
+            // close-query 分支需要旧值决定是否补 boundary。
             canceledBridgeQueries.add(cancelledQuery);
             // Query retirement always leaves a rebuild tombstone, even if the
             // synthetic boundary is rejected because the event queue is
@@ -5122,6 +5123,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
             turnInFlight = false;
+          } else {
+            // interrupt 成功且无后台任务需要清：被中断的 turn 会收到
+            // error_during_execution result → translator 在 onTurnEnd 清
+            // turnInFlight。这里显式补清以防 SDK 未 drain result 的极端
+            // 情况(确保不会 SESSION_RUNNING 永拒)。
+            turnInFlight = false;
           }
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);
@@ -5152,6 +5159,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           } else {
             // interrupt 真正抛错(非超时)，回收标记防误抑制(同 watchdog)。
             turnState.interruptRequested = false;
+            turnInFlight = false;
             log.warn('abort threw', { error: String(e) });
           }
         }
