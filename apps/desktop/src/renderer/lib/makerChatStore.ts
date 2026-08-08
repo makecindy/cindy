@@ -14605,6 +14605,11 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(delivery === 'turn' || delivery === 'steer' ? { delivery } : {}),
         ...(goalObjective ? { goalBadge: goalObjective } : {}),
         ...(hookSource ? { hookSource } : {}),
+        // 子代理内部的 user 行(SDK parent_tool_use_id):投影给计划归属判定,
+        // 否则 maker-shared 会把它当成"用户开新话题"切断主线程计划 session。
+        ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+          ? { parentToolUseId: m.agentMeta.parentUuid }
+          : {}),
       };
     }
     // /goal 达成记录:持久消息(role:'assistant' + 空 content + agentMeta.goalCompletion)

@@ -926,6 +926,7 @@ describe('message render todo grouping', () => {
         tool('plan2', 'update_plan', { plan: [{ step: 'Ship it', status: 'completed' }] }),
       ]),
     ).not.toHaveProperty('turnFailed');
+  });
 
   /**
    * 计划归属(ownership)。三个历史病根,都源于"同 source 的上一份计划没勾完
@@ -1007,6 +1008,14 @@ describe('message render todo grouping', () => {
         createdAt: at(9),
         agentMeta: { parentUuid: 'toolu_parent_1' },
       };
+      // 同轮 steer 插话(desktop 投影 delivery='steer')也不是新话题边界。
+      const steerUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'steer-1',
+        content: '顺便把日志也看下',
+        createdAt: at(10),
+        delivery: 'steer',
+      };
       const progress = tool('todo-live-2', 'TodoWrite', {
         todos: [
           { content: 'Long work', status: 'completed' },
@@ -1024,6 +1033,7 @@ describe('message render todo grouping', () => {
           projectedSyntheticRow,
           projectedSchedulerRow,
           subagentUserRow,
+          steerUserRow,
           progress,
         ]),
       ).toMatchObject({

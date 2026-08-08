@@ -1398,6 +1398,26 @@ describe('session-agent-switch handoff injection', () => {
     expect(peekPlanReconcileNote).not.toHaveBeenCalled();
   });
 
+  it('计划对账覆盖仅附件轮次(正文空,带图片/文件)', async () => {
+    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const { deps, session } = createDeps({ peekPlanReconcileNote });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: [{ type: 'image', source: 'img-1' }] },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'att-1',
+          content: '{"text":"","images":["img-1"],"files":[]}',
+        },
+      },
+    );
+
+    expect(peekPlanReconcileNote).toHaveBeenCalledWith('session-1');
+  });
+
   it('对账读取抛错时静默跳过,不挡发送', async () => {
     const { deps, session } = createDeps({
       peekPlanReconcileNote: vi.fn(async () => {

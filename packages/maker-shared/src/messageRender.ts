@@ -505,6 +505,11 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
         (message.automationOrigin !== undefined && message.automationOrigin !== null) ||
         meta?.autoResume === true ||
         (meta?.origin !== undefined && meta?.origin !== null) ||
+        // 同轮 steer 插话:turn 还在跑,用户在指挥进行中的活,不是开新话题
+        // (MessageStream 的 turn 分组同样把 steer 排除在新 turn 边界外)。当
+        // 边界会让插话后的 TaskCreate 清掉本轮 taskState、TodoWrite 换 key。
+        message.delivery === 'steer' ||
+        meta?.delivery === 'steer' ||
         // 子代理内部的 user 行(带 parentUuid/parentToolUseId)是子任务的输入,
         // 不是用户开新话题——当边界会把主线程进行中的计划切成新 session、换 key
         // 重挂载 TodoListCard。

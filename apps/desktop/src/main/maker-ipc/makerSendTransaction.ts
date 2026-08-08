@@ -751,15 +751,34 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 落库内容是 stringifyUserContent 信封({"text":...}),裸 startsWith 只会
       // 看到 '{'——必须先抽出纯文本再分类,否则 /compact、[UI_ACTION_TRIGGER]
       // 一类控制消息全部漏网(review P2)。
+      const reconcilePersistContent = soForReconcile.persistUserMessage?.content;
       const reconcilePersistText =
-        soForReconcile.persistUserMessage?.content !== undefined
-          ? extractPlainText(soForReconcile.persistUserMessage.content).trim()
+        reconcilePersistContent !== undefined
+          ? extractPlainText(reconcilePersistContent).trim()
           : '';
+      // 仅附件轮次(图片/文件,text 为空)同样是"用户真的开口":信封里带
+      // images/files 即认可显示 user 行,不要求正文非空(review P2)。
+      const reconcileHasAttachments = (() => {
+        if (typeof reconcilePersistContent !== 'string') return false;
+        if (!reconcilePersistContent.startsWith('{')) return false;
+        try {
+          const parsed = JSON.parse(reconcilePersistContent) as {
+            images?: unknown;
+            files?: unknown;
+          };
+          return (
+            (Array.isArray(parsed.images) && parsed.images.length > 0) ||
+            (Array.isArray(parsed.files) && parsed.files.length > 0)
+          );
+        } catch {
+          return false;
+        }
+      })();
       const isOrdinaryUserTurn =
         soForReconcile.origin === undefined &&
         soForReconcile.persistUserMessage?.autoResume !== true &&
         soForReconcile.persistUserMessage?.origin === undefined &&
-        reconcilePersistText.length > 0 &&
+        (reconcilePersistText.length > 0 || reconcileHasAttachments) &&
         !reconcilePersistText.startsWith('/') &&
         !reconcilePersistText.startsWith('[UI_ACTION_TRIGGER]');
       const planReconcileNote = isOrdinaryUserTurn
