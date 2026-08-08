@@ -613,6 +613,22 @@ const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
  * (常态减帧才是),而拥塞时的取舍是 #2167 的职责——降级后的逐帧发送正好落回
  * 它的可驱逐档语义。删掉退避同时也删掉了它带来的全部复杂性(段滞留、闸门、
  * 重连清位),这是缩回原始范围,不是新增机制。
+ *
+ * **已知且刻意接受的代价:窗口正好跨在断线时刻上的那 ≤120ms 事件不进可靠 pending**
+ * (review 同族第 3 次点到,不要再改成"离线时保留批"):逐帧世界里它们在产生瞬间就
+ * 被 sendPush 收进 pending,而 pending 是跨连接世代保留的
+ * (client.resetLinkStateForReconnect),link 重建后按原 seq 重放;批世界里它们还在
+ * 窗口内,flush 撞上 NOT_CONNECTED 即丢。三条理由说明不值得为它引机制:
+ *  1. 那批 pending 也不一定活得下来 —— replayPending 前会先 dropDiscardablePendingPrefix
+ *     丢掉队头连续的可丢弃前缀,而长思考期间队头恰恰就是 push,常见形态下逐帧世界
+ *     同样一条不剩;活下来的场景是队头压着 live invoke/invoke-result 的那一种。
+ *  2. 净账反而是赚的:pending 窗口是 64 **条消息**(MAX_TRANSPORT_PENDING_MESSAGES)。
+ *     批把 64 条事件压进一条消息,同一个窗口能装的事件量提高到 64×64 —— 断线时可
+ *     恢复的历史深度是逐帧世界的几十倍,代价是尾部 ≤120ms。
+ *  3. 唯一的补法(离线时保留批到重连收口)会把"缓冲跨越发送失败继续存在"重新引进来,
+ *     那是上面四轮顺序 bug 的同一个根因;而且离线可能持续几分钟,保留就必须配上限与
+ *     淘汰策略——那是新机制,不是本 PR 的范围。push 的恢复语义一直是重连后 resync
+ *     补偿(#1375),不是逐帧重放。
  */
 const MAKER_EVENT_BATCH_WINDOW_MS = 120;
 /** 单批事件数上限:到量立即 flush(不等窗口),避免长思考把一帧撑得过大。 */
