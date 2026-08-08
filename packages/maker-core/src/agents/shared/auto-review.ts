@@ -1517,8 +1517,11 @@ function analyzeInterpreterArgs(
   const inlineCodeFlags = new Set(INTERPRETER_INLINE_CODE_FLAGS(bin).map((f) => f.toLowerCase()));
   const operands: string[] = [];
   let usesInteractive = false;
+  let usesInlineCode = false;
   let optionsEnded = false;
-  for (const token of args) {
+  // 按**索引**扫描:命中内联代码 flag 后要跳过它的值、继续往后找交互开关,`for…of` 做不到。
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i] as string;
     // `--` 是**选项结束**标记,不是可以跳过的噪声:之后即使以 `-` 开头也是真实操作数
     // (`python3 -- -weird.py` 跑的就是名为 `-weird.py` 的脚本)。原来只 `continue`,
     // 于是它后面的操作数继续走选项分支、撞上 fail-closed,把脚本文件误判成不存在
@@ -1545,24 +1548,25 @@ function analyzeInterpreterArgs(
       if (supportsModuleStartup && (token === '-m' || token === '--module')) {
         return { scriptOperands: operands, usesModuleSelector: true, usesInteractive };
       }
-      // 内联代码 flag(`-c` / `-e` / `--eval` …)同样只有落在**真实选项位**才代表「程序是
-      // 字面量」。`python3 -X -c` 里的 `-c` 是 `-X` 的值 —— 按整串 argv 搜索会误判成源码
-      // 选项、把 stdin 即程序降进灰区(review 报,与 `-m` 是同一类错误的另一半)。
+      // 内联代码不能**提前返回**:交互开关可以写在它后面(`node -e 'x' -i`),提前返回就
+      // 永远看不到。实测 node v22 下 `node -e CODE -i` 会先跑 CODE、再把 stdin 当 REPL
+      // 输入逐行执行 —— 与 `-i -e` 同样危险(review 报,已用真实 node 复现)。
+      // 记下结论、跳过它的值,继续扫完剩余选项。
       if (inlineCodeFlags.has(token.toLowerCase())) {
-        return {
-          scriptOperands: operands, usesModuleSelector: false, usesInlineCode: true, usesInteractive,
-        };
+        usesInlineCode = true;
+        i += 1;                       // 载荷本身不是选项,不参与后续判定
+        continue;
       }
       // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
       if (valueless.has(token) || token.includes('=')) continue;
       // 表外选项:可能吃掉下一个参数 → 无法证明后面还有真正的脚本文件,fail-closed。
       // 这一步同时吃掉「`-m` 是某个未知选项的值」那种形态:扫描在此终止,`-m` 永远走不到
       // 上面的模块分支。
-      return { scriptOperands: [], usesModuleSelector: false, usesInteractive };
+      return { scriptOperands: [], usesModuleSelector: false, usesInlineCode, usesInteractive };
     }
     operands.push(token);
   }
-  return { scriptOperands: operands, usesModuleSelector: false, usesInteractive };
+  return { scriptOperands: operands, usesModuleSelector: false, usesInlineCode, usesInteractive };
 }
 
 /**

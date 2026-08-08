@@ -125,6 +125,12 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     `printf 'x' | node -i run.js`,
     `printf 'x' | node -i -e 'console.log(1)'`,
     `printf 'x' | node --interactive run.js`,
+    // 交互开关写在内联代码**后面**同样生效(实测 node v22:先跑 -e 的代码,再把 stdin
+    // 当 REPL 输入逐行执行)—— 解析不能在命中内联代码时提前返回
+    `printf 'x' | node -e 'console.log(1)' -i`,
+    `printf 'x' | node -e 'console.log(1)' --interactive`,
+    `printf 'x' | node --eval 'console.log(1)' -i`,
+    `printf 'x' | node -p '1' -i`,
     `printf 'x' | python3 -i script.py`,
     `printf 'x' | python3 -i -c 'print(1)'`,
   ],
@@ -388,6 +394,10 @@ describe('对抗语料 — 反向边界:读输入 ≠ 执行输入', () => {
       `printf 'x' | parallel echo {}`,
       `printf 'x' | parallel wc -l {}`,
       `printf 'x' | parallel --pipe python3 run.py`,
+      // 无交互开关的内联代码仍是灰区 —— 本 PR 有意的放宽,不因交互修复回归
+      `printf 'x' | node -e 'console.log(1)'`,
+      `printf 'x' | node --eval 'console.log(1)'`,
+      `printf 'x' | node -e 'console.log(1)' extra.txt`,
       // 读的是普通文件不是 fd 0
       `cat a.json | node -e "require('fs').readFile('a.json','utf8',(e,s)=>console.log(s))"`,
       'cat list.txt | xargs -I{} node run.js {}',
