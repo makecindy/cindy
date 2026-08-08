@@ -1847,14 +1847,20 @@ export function CCAgentSessionView({
         // 或 sender 缺失回退 broadcast)不会落到任何已挂载会话,避免误切当前会话;
         // 顶部已有 `payload.sessionId !== sessionId` 的跨窗口早退,能走到这里的
         // payload.sessionId 必等于当前会话。
-        // 能力门控:整个 capabilities 未加载(sessionCaps == null,冷启动/远程拉取较慢)
-        // 时不吞命令,直接 setPlanMode(对支持 planMode 的 agent 本就生效);
-        // capabilities 已加载但 planMode 缺失/不支持时 —— device-link 老被控端
-        // 序列化无 planMode 字段,useAgentCapabilities 文档明确 undefined = 不支持 ——
-        // 不执行 toggle 且 toast 提示,不能静默吞掉(Codex):/plan 已出现在 palette 且
-        // 发送路径已消费,若毫无反馈用户会以为命令没生效 —— 提示而非静默。
+        // 能力门控:
+        //  - capabilities 已加载且明确支持(planMode.supported === true) → toggle;
+        //  - capabilities 已加载但 planMode 缺失/不支持 —— device-link 老被控端序列化
+        //    无 planMode 字段,useAgentCapabilities 文档明确 undefined = 不支持 ——
+        //    不执行 toggle 且 toast 提示,不能静默吞掉(Codex):/plan 已出现在 palette
+        //    且发送路径已消费,若毫无反馈用户会以为命令没生效 —— 提示而非静默;
+        //  - capabilities 未加载(sessionCaps == null,冷启动/远程拉取较慢)→ **不乐观
+        //    toggle**,仅 toast 提示稍后重试:此时 toggle 无法验证归属,开启后能力解析
+        //    为不支持会遗留「菜单隐藏但状态开启、重启恢复」的状态(Greptile P1),且远程
+        //    老被控端的 setPlanMode RPC 会 reject 回滚,自愈不可靠(Codex)。
         if (payload.sessionId) {
-          if (sessionCaps == null || sessionCaps.planMode?.supported === true) {
+          if (sessionCaps == null) {
+            toast.info(t('newChat.collaboration.planModeCapabilitiesLoading'));
+          } else if (sessionCaps.planMode?.supported === true) {
             // 用 getSnapshot 取「当下」的 planModeEnabled 计算 next(而非闭包里的旧值):
             // 监听器不依赖 planModeEnabled,切换计划模式不会 teardown+re-subscribe,
             // 避免 main 恰好在空窗期推送其它 desktop 命令回流(如 /cmd result)被漏掉
@@ -1866,15 +1872,6 @@ export function CCAgentSessionView({
               log.warn('plan command: failed to toggle plan mode', err);
             });
           } else {
-            // 能力已加载但明确不支持:若冷启动 / 老被控端能力未决期间(sessionCaps == null)
-            // 乐观 toggle 遗留了开启状态,这里自动关闭 —— 否则菜单入口隐藏后用户无法用
-            // 现有 UI 关掉,且状态会跨重启残留(Greptile P1)。
-            const snapshot = makerChatStore.getSnapshot(payload.sessionId);
-            if (snapshot.planModeEnabled) {
-              void setPlanMode(false).catch((err: unknown) => {
-                log.warn('plan command: failed to reset plan mode on unsupported session', err);
-              });
-            }
             toast.warning(t('newChat.collaboration.planModeUnsupportedRemote'));
           }
         }
@@ -1886,23 +1883,6 @@ export function CCAgentSessionView({
     // planModeEnabled 不再进 deps:plan 分支改用 getSnapshot 取当下值,监听器保持稳定,
     // 切换计划模式不会 teardown+re-subscribe(避免漏掉空窗期推送的命令回流,Copilot)。
   }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t, setPlanMode, sessionCaps]);
-
-  // 能力解析兜底自愈(Greptile P1 第二轮):命令事件路径的自愈只在「用户再次输入 /plan」
-  // 时触发,而「能力从 null/未知解析为明确不支持」这个时刻不会经过命令监听器(它只是
-  // re-subscribe)。若冷启动(null)期间乐观 toggle 遗留了开启状态,能力落地后必须在此
-  // 自动关闭 —— 否则菜单/状态指示器被能力门控隐藏后,planModeEnabled 仍持久化为 true
-  // 且重启恢复。sessionCaps == null(能力未决)时不动,避免与正常加载流程竞争。
-  useEffect(() => {
-    if (!sessionId) return;
-    if (sessionCaps != null && sessionCaps.planMode?.supported !== true) {
-      const snap = makerChatStore.getSnapshot(sessionId);
-      if (snap.planModeEnabled) {
-        void setPlanMode(false).catch((err: unknown) => {
-          log.warn('plan command: reset plan mode after capabilities resolved unsupported', err);
-        });
-      }
-    }
-  }, [sessionId, sessionCaps, setPlanMode]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
@@ -2468,23 +2448,25 @@ export function CCAgentSessionView({
       const commands = cached.length > 0 ? cached : await getHelpCommandsSnapshot();
       const hit = commands.find((c) => c.name.toLowerCase() === cmdName);
       if (hit?.kind !== 'desktop') return false;
-      // desktop 候选 → forceReload 复核归属(Codex P2):allCommandsRef 是会话挂载时的
-      // 快照,会话期间新增/启用的同名 skill 不会被它感知 —— palette 打开会 forceReload
-      // 显示新 skill,但发送路径仍按旧归属把 /plan 当 desktop 执行。复核为 agent-skill
-      // 则放行给 agent(与 mergeCommands 优先级 agent-skill > desktop 一致)。仅 desktop
-      // 候选才二次拉取,非 desktop 命令零额外成本。
-      try {
-        const agentKind = dbToMakerAgentKind(session?.agentKind);
-        const fresh = await loadAllCommands(
-          agentKind,
-          session?.workingDir,
-          { skipAgentSkills: isRemoteSession, forceReload: true },
-          remoteDeviceId,
-        );
-        const freshHit = fresh.find((c) => c.name.toLowerCase() === cmdName);
-        if (freshHit && freshHit.kind !== 'desktop') return false;
-      } catch {
-        // 复核失败沿用旧判断,不阻断发送。
+      // desktop 候选:仅 /plan 需要 forceReload 复核归属(Copilot —— 其它 desktop 命令
+      // 无同名 skill 覆盖语义,每次执行都强制刷新+扫描是纯开销)。allCommandsRef 是会话
+      // 挂载时的快照,会话期间新增/启用的同名 plan skill 不会被它感知 —— palette 打开
+      // 会 forceReload 显示新 skill,但发送路径仍按旧归属把 /plan 当 desktop 执行。
+      // 复核为 agent-skill 则放行给 agent(与 mergeCommands 优先级 agent-skill > desktop 一致)。
+      if (cmdName === 'plan') {
+        try {
+          const agentKind = dbToMakerAgentKind(session?.agentKind);
+          const fresh = await loadAllCommands(
+            agentKind,
+            session?.workingDir,
+            { skipAgentSkills: isRemoteSession, forceReload: true },
+            remoteDeviceId,
+          );
+          const freshHit = fresh.find((c) => c.name.toLowerCase() === cmdName);
+          if (freshHit && freshHit.kind !== 'desktop') return false;
+        } catch {
+          // 复核失败沿用旧判断,不阻断发送。
+        }
       }
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。

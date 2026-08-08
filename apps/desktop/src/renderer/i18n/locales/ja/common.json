@@ -5375,6 +5375,7 @@
       "loadingHint": "協同設定を確認中です。しばらくしてから再試行してください。",
       "planModeUnavailableRemoteDraft": "リモート下書きでは計画モードを利用できません。",
       "planModeUnsupportedRemote": "このリモートデバイスは計画モードに対応していません。",
+      "planModeCapabilitiesLoading": "このセッションで計画モードが利用可能か確認中です...",
       "stopHint": "協同を停止",
       "stopAria": "協同を停止",
       "toggleOnAria": "協同モード中、クリックで停止",

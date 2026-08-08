@@ -12,9 +12,9 @@
  *   1) main:plan 命令已注册,且 draft(无 sessionId)只回发起窗口、不 broadcast;
  *   2) CCAgentSessionView:plan 分支要求 sessionId,并保留 effect 顶部对
  *      payload.sessionId !== sessionId 的早退(避免其它窗口的会话命令误切当前会话);
- *   3) CCAgentSessionView:capabilities 未加载(sessionCaps == null)时不吞命令;
- *      已加载但 planMode 缺失/不支持时不执行 toggle 且 toast 提示(Codex),并兜底
- *      关闭冷启动期间遗留的开启状态(Greptile P1);
+ *   3) CCAgentSessionView:capabilities 未加载(sessionCaps == null)时不乐观 toggle,
+ *      仅 toast 提示(避免遗留开启状态 + 远程 RPC 回滚,Greptile P1 / Codex);
+ *      已加载且 planMode 缺失/不支持时不执行 toggle 且 toast 提示(Codex);
  *   4) CCAgentSessionView:支持时按当前状态 toggle(setPlanMode(nextEnabled),
  *      nextEnabled 由 getSnapshot 取「当下」planModeEnabled 计算,监听器不依赖闭包旧值;
  *      且失败 rejection 被显式吞掉(不升级为未捕获的 Promise rejection);
@@ -53,11 +53,10 @@ function planBranchSource(): string {
   if (idx < 0) throw new Error('plan branch missing');
   // 动态定位到分支收尾,不依赖固定长度 slice(注释加长会推远断言,Codex P1 / Copilot):
   // 用分支内具体调用链锚定(而非宽泛的 .catch( —— 分支外残留 .catch( 会造成假阳性,
-  // Copilot):setPlanMode(nextEnabled).catch / 不支持 toast / 自愈 setPlanMode(false).catch。
+  // Copilot):setPlanMode(nextEnabled).catch / 不支持 toast。
   const catchIdx = sessionViewSource.indexOf('setPlanMode(nextEnabled).catch', idx);
   const toastIdx = sessionViewSource.indexOf('planModeUnsupportedRemote', idx);
-  const healIdx = sessionViewSource.indexOf('setPlanMode(false).catch', idx);
-  const markers = [catchIdx, toastIdx, healIdx].filter((v) => v >= 0);
+  const markers = [catchIdx, toastIdx].filter((v) => v >= 0);
   if (markers.length === 0) throw new Error('no branch end marker after plan branch');
   return sessionViewSource.slice(idx, Math.max(...markers) + 200);
 }
@@ -94,27 +93,30 @@ describe('/plan slash command contract', () => {
     expect(guardIdx).toBeLessThan(planIdx);
   });
 
-  it('runs /plan when capabilities are still loading (sessionCaps == null); toasts + self-heals when loaded but planMode unsupported', () => {
+  it('gates /plan on capabilities: no optimistic toggle while loading; toast when loaded but unsupported', () => {
     const branch = planBranchSource();
-    // 整个 capabilities 未加载(null,冷启动/远程拉取慢) → 不吞命令;
-    // capabilities 已加载但 planMode 缺失(device-link 老被控端,undefined = 不支持)
-    // 或 supported === false → toast 提示而非静默吞掉(Codex);
-    // 冷启动(null)期间乐观 toggle 遗留的开启状态在此自动关闭(Greptile P1)。
-    expect(branch).toContain('(sessionCaps == null || sessionCaps.planMode?.supported === true)');
+    // capabilities 未加载(sessionCaps == null,冷启动/远程拉取慢)→ **不乐观 toggle**,
+    // 仅 toast 提示稍后重试(Greptile P1:乐观开启 + 能力解析为不支持会遗留状态且远程
+    // setPlanMode RPC reject 回滚,自愈不可靠 —— Codex);
+    // capabilities 已加载且 planMode.supported === true → toggle;
+    // 已加载但缺失/不支持(device-link 老被控端,undefined = 不支持)→ toast 提示而非
+    // 静默吞掉(Codex)。
+    expect(branch).toContain('sessionCaps == null');
+    expect(branch).toContain('planModeCapabilitiesLoading');
+    expect(branch).toContain('sessionCaps.planMode?.supported === true');
     expect(branch).toContain('planModeUnsupportedRemote');
     expect(branch).toContain('toast.warning(');
-    // 断言具体调用链而非裸 setPlanMode(false)(Copilot):避免被分支外其它位置的
-    // setPlanMode(false) 命中假阳性,且保证 rejection 被显式 .catch 吞掉。
-    expect(branch).toContain('setPlanMode(false).catch');
   });
 
-  it('re-verifies command ownership with forceReload before dispatching a desktop command', () => {
-    // Codex P2:allCommandsRef 是会话挂载时的快照,会话期间新增/启用的同名 skill 不
-    // 会被它感知 —— desktop 候选必须 forceReload 复核归属,复核为 agent-skill 则放行
+  it('re-verifies /plan command ownership with forceReload before dispatching; other desktop commands skip it', () => {
+    // Codex P2:allCommandsRef 是会话挂载时的快照,会话期间新增/启用的同名 plan skill
+    // 不会被它感知 —— /plan 候选必须 forceReload 复核归属,复核为 agent-skill 则放行
     // 给 agent(与 mergeCommands 优先级 agent-skill > desktop 一致)。
+    // Copilot:复核收窄到 cmdName === 'plan',避免 /help /clear 每次执行都强制刷新+扫描。
     const idx = sessionViewSource.indexOf('const maybeDispatchDesktopSlashCommand');
     expect(idx).toBeGreaterThanOrEqual(0);
-    const region = sessionViewSource.slice(idx, idx + 1600);
+    const region = sessionViewSource.slice(idx, idx + 1700);
+    expect(region).toContain('cmdName === \'plan\'');
     expect(region).toContain('forceReload: true');
     expect(region).toContain('skipAgentSkills: isRemoteSession');
     expect(region).toContain('freshHit && freshHit.kind !== \'desktop\'');
