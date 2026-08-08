@@ -474,11 +474,38 @@ describe('recordGroupMessage', () => {
     });
   });
 
+  it('反复触发回收不会越删越多 —— 判据是绝对目标, 不是「再删掉多少」', async () => {
+    // 这条钉的是**跨进程**安全: dev 包与正式包、多个 --passive 实例可能共用同一
+    // userData, 进程内的 Promise 串行管不着它们。判据若是相对量(「再删掉 X 字节」),
+    // 两个进程各读一次同样的旧统计就会各删一遍, 低水位被删穿, 极端情况一路删到
+    // 只剩一行。
+    //
+    // 现在判据是绝对目标(保住最新的这么多), 边界完全由执行那一刻的库内数据决定
+    // —— 同一份目标跑多少次都落在同一条线上。这里连跑几十轮回收, 水位必须始终
+    // 停在 [低水位, 上限] 这个带里, 不会一路下沉。
+    await withByteLimit(2_000, async () => {
+      const body = 'x'.repeat(100);
+      let sawRecycle = false;
+      for (let i = 0; i < 60; i += 1) {
+        await recordGroupMessage(frame({ messageId: `idem${i}`, text: body }));
+        const { b } = namespaceStats();
+        expect(b).toBeLessThanOrEqual(2_000);
+        if (i >= 21) {
+          // 已经进入回收区间: 水位在带内来回, 绝不下沉到低水位以下。
+          expect(b).toBeGreaterThanOrEqual(LOW_WATER_OF_2000 - 100);
+          if (b <= LOW_WATER_OF_2000) sawRecycle = true;
+        }
+      }
+      expect(sawRecycle).toBe(true); // 确认这几十轮里真的发生过回收, 用例没空转
+    });
+  });
+
   it('并发入库不会把历史删过低水位 —— 同一命名空间的回收串行执行', async () => {
     // 每次回收各读一次统计再各算边界, 不串行的话后跑的那次会从已回收过的剩余
     // 记录再往后移边界, 把低水位以内的历史一起删掉。
-    // 注: better-sqlite3 是同步驱动, 这里复现不出真正的交错 —— 本例钉的是「并发
-    // 入库后仍停在低水位」这条不变量, 换成异步驱动或加了批量删除也不许破。
+    // 注: better-sqlite3 是同步驱动, 这里复现不出真正的交错。真正保证并发(以及
+    // 跨进程)安全的是判据本身 —— 绝对目标 + 单条 DELETE, 见上一条幂等用例;
+    // 本例钉的是「并发入库后仍停在低水位」这条不变量。
     await withByteLimit(2_000, async () => {
       const body = 'x'.repeat(100);
       for (let i = 0; i < 20; i += 1) {

@@ -5,7 +5,7 @@
  * 读写、GC、游标与统计均不得跨命名空间。
  */
 
-import { and, desc, eq, gt, gte, like, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, like, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../../localDb/client/current';
 import { hookGroupContextCursors, hookGroupMessages } from '../../localDb/schema';
@@ -56,13 +56,6 @@ export type GroupWindowRetentionPolicy = {
 
 /** 触发回收后收敛到上限的这个比例, 避免超限后每插一条都删一条。 */
 const RETENTION_LOW_WATER_RATIO = 0.9;
-/**
- * 一次入库最多收敛几轮。
- *
- * 边界按实际累计字节取, 正常一轮就到位; 多留几轮是兜住并发写入在两次统计之间
- * 又插了一批的情况, 同时保证不会无限循环。
- */
-const RETENTION_MAX_PASSES = 4;
 
 /**
  * 保留上限的**默认数值** —— 官方与个人 bot 共用同一组数字, 但各自持有一份。
@@ -204,90 +197,76 @@ async function runNamespaceRetention(
   provider: string,
   retention: GroupWindowRetentionPolicy,
 ): Promise<void> {
-  const targetBytes = Math.floor(retention.maxTextBytesPerNamespace * RETENTION_LOW_WATER_RATIO);
-  const targetRows = Math.floor(retention.maxRowsPerNamespace * RETENTION_LOW_WATER_RATIO);
-  let stats = await getGroupWindowNamespaceStats(provider);
-  // 只有真的越过上限才动手; 一旦动手就收到低水位, 而不是刚好压线。
+  const stats = await getGroupWindowNamespaceStats(provider);
+  // 只有真的越过上限才动手 —— 常态下回收的全部成本就是这一行统计读取。
+  // 一旦动手就收到低水位, 而不是刚好压线, 否则超限后每插一条都要删一条。
   if (
     stats.textBytes <= retention.maxTextBytesPerNamespace &&
     stats.rows <= retention.maxRowsPerNamespace
   )
     return;
-
-  for (let pass = 0; pass < RETENTION_MAX_PASSES; pass += 1) {
-    if (stats.textBytes <= targetBytes && stats.rows <= targetRows) return;
-    // 删不动了(只剩最新一行还超限, 比如单条超大消息配极小阈值): 留着, 不清空。
-    if (!(await dropOldestUntilLowWater(provider, stats, targetBytes, targetRows))) return;
-    stats = await getGroupWindowNamespaceStats(provider);
-  }
+  await keepNewestWithinTargets(
+    provider,
+    Math.floor(retention.maxTextBytesPerNamespace * RETENTION_LOW_WATER_RATIO),
+    Math.max(1, Math.floor(retention.maxRowsPerNamespace * RETENTION_LOW_WATER_RATIO)),
+  );
 }
 
 /**
- * 删掉最旧的行直到落进低水位; 返回是否真的删掉了行。
+ * 把该命名空间收敛到「最新的这些留下, 更旧的删掉」—— **一条 DELETE 说完**。
  *
- * 边界按**待删行实际累计的正文字节**取, 不按平均行大小估算 —— 一批空正文的附件
- * 消息后面跟着长文时, 平均值会让回收删掉一堆零字节的旧行却几乎不掉 `text_bytes`,
- * 于是此后每插一条都要再回收一次, 低水位形同虚设。
+ * 判据是**绝对目标**(保住最新的 targetBytes 字节 / targetRows 行), 不是相对量
+ * (「再删掉 X 字节」)。这条差别决定了并发安全:
+ *
+ * - 相对量要先读统计再算删多少。两个进程(dev + 正式包、多个 --passive 实例共用
+ *   同一 userData)各自读到同一份旧统计, 就会各删一遍, 低水位被删穿, 极端情况
+ *   一路删到只剩一行。进程内的 Promise 串行只管得住自己这一个进程。
+ * - 绝对目标下, 边界完全由**执行那一刻的库内数据**决定: 谁先跑谁把线划在同一
+ *   个位置, 后跑的那个重算一遍得到同一条线, 于是删不到任何东西。天然幂等,
+ *   重复执行、并发执行、跨进程执行结果都一样, 不需要锁、事务或版本号 CAS,
+ *   也就不需要动 schema。
+ *
+ * 边界取法: 从**最新往回**累计正文字节与行数, 累计量还在目标以内的那些留下,
+ * 比其中最旧那条还旧的全删。`rn = 1` 那一项保证最新一行永远留着 —— 阈值被配得
+ * 极小(或单条消息就超过阈值)时不能把整个命名空间清空。
+ *
+ * 整条走 query builder: main 侧的 drizzle 是 createDrizzleProxy 的代理, 只把
+ * builder 的终结方法转发给 worker RPC, 直接在 db 上跑 raw SQL 会落进代理内部
+ * 只会抛错的 fakeSqliteClient.prepare()(见 groupWindowRetentionProxy.test.ts)。
  */
-async function dropOldestUntilLowWater(
+async function keepNewestWithinTargets(
   provider: string,
-  stats: { rows: number; textBytes: number },
   targetBytes: number,
   targetRows: number,
-): Promise<boolean> {
+): Promise<void> {
   const db = getDbClient().drizzle;
-  // 至少留最新一行 —— 阈值被配得极小时不能把整个命名空间清空。
-  const maxDrop = Math.max(0, stats.rows - 1);
-  if (maxDrop === 0) return false;
-  const bytesToFree = Math.max(0, stats.textBytes - targetBytes);
-  const rowsToDrop = Math.max(0, stats.rows - targetRows);
-
-  // 最旧的 maxDrop 行里, 第一个同时满足「累计字节够」与「行数够」的位置就是边界。
-  //
-  // 必须整条走 **query builder**: main 侧拿到的 drizzle 是 createDrizzleProxy 的
-  // 代理, 只把 builder 的终结方法转发给 worker RPC。直接 `db.all(sql\`...\`)` 不经过
-  // builder, 会落进代理内部只会抛错的 fakeSqliteClient.prepare() —— 回收在生产上
-  // 100% 失败, 而单测若用真实 drizzle 建 harness 就会假绿(与 recentWorkdirs 的
-  // LRU 驱逐同一类踩坑, 见 localDb/ipc/__tests__/recentWorkdirsLru.test.ts)。
-  const oldest = db
+  const newest = db
     .select({
       id: hookGroupMessages.id,
       cumBytes:
-        sql<number>`sum(length(cast(${hookGroupMessages.text} as blob))) over (order by ${hookGroupMessages.id})`.as(
+        sql<number>`sum(length(cast(${hookGroupMessages.text} as blob))) over (order by ${hookGroupMessages.id} desc)`.as(
           'cum_bytes',
         ),
-      rn: sql<number>`row_number() over (order by ${hookGroupMessages.id})`.as('rn'),
+      rn: sql<number>`row_number() over (order by ${hookGroupMessages.id} desc)`.as('rn'),
     })
     .from(hookGroupMessages)
     .where(eq(hookGroupMessages.provider, provider))
-    .orderBy(hookGroupMessages.id)
-    .limit(maxDrop)
-    .as('oldest');
-  const boundary = await db
-    .select({ id: oldest.id })
-    .from(oldest)
-    .where(and(gte(oldest.cumBytes, bytesToFree), gte(oldest.rn, rowsToDrop)))
-    .orderBy(oldest.id)
-    .limit(1);
-  let threshold = boundary[0]?.id;
-  if (threshold === undefined) {
-    // 把能删的都删了也到不了低水位: 删到只剩最新一行为止, 而不是整轮 no-op ——
-    // 否则命名空间会长期挂在超限状态, 每次入库都白跑一遍回收。
-    const [last] = await db
-      .select({ id: hookGroupMessages.id })
-      .from(hookGroupMessages)
-      .where(eq(hookGroupMessages.provider, provider))
-      .orderBy(hookGroupMessages.id)
-      .limit(1)
-      .offset(maxDrop - 1);
-    threshold = last?.id;
-  }
-  if (threshold === undefined) return false;
-  const deleted = await db
+    .as('newest');
+  // 留下来的那批里最旧的一条; 比它还旧的全删。
+  const oldestKept = db
+    .select({ id: sql<number>`min(${newest.id})` })
+    .from(newest)
+    .where(
+      and(
+        lte(newest.rn, targetRows),
+        // rn = 1 兜底: 最新一行无论多大都留着, 绝不清空命名空间。
+        or(lte(newest.cumBytes, targetBytes), eq(newest.rn, 1)),
+      ),
+    );
+  await db
     .delete(hookGroupMessages)
-    .where(and(eq(hookGroupMessages.provider, provider), lte(hookGroupMessages.id, threshold)))
+    .where(and(eq(hookGroupMessages.provider, provider), lt(hookGroupMessages.id, oldestKept)))
     .run();
-  return deleted.changes > 0;
 }
 
 async function readPersistedCursor(provider: string, cursorKey: string): Promise<number> {
