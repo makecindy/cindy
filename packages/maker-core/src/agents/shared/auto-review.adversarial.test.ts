@@ -211,6 +211,9 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     `printf 'x' | node -e "const{exec}=require('child_process');exec(require('fs').readFileSync(0,'utf8'))"`,
     `printf 'x' | node -e "require('child_process').spawnSync(require('fs').readFileSync(0,'utf8'),{shell:true})"`,
     `printf 'x' | python3 -c "import sys,subprocess; subprocess.run(sys.stdin.read(),shell=True)"`,
+    // 读取侧的异步 / 流式 API 同样是从 fd 0 拿程序
+    `printf 'x' | node -e "require('fs').readFile(0,'utf8',(e,s)=>require('child_process').execSync(s))"`,
+    `printf 'x' | node -e "require('fs').createReadStream(0).on('data',d=>require('child_process').execSync(d))"`,
   ],
 
   '载荷被数据位剥离遮蔽后会丢失证据的位置': [
@@ -357,6 +360,8 @@ describe('对抗语料 — 反向边界:读输入 ≠ 执行输入', () => {
       `printf 'x' | parallel echo {}`,
       `printf 'x' | parallel wc -l {}`,
       `printf 'x' | parallel --pipe python3 run.py`,
+      // 读的是普通文件不是 fd 0
+      `cat a.json | node -e "require('fs').readFile('a.json','utf8',(e,s)=>console.log(s))"`,
       'cat list.txt | xargs -I{} node run.js {}',
       // 包装器**带**了 COMMAND —— 命令位没空着,stdin 只是它的参数
       `printf 'x' | xargs env python3 run.py`,

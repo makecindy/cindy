@@ -1722,7 +1722,7 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
  * 并直接认 `child_process` / `subprocess` 这两个模块名 —— 只列 `eval` 和少数几个方法名
  * 是漏判的直接成因(review 报)。
  */
-const PROGRAM_READS_STDIN = /\bstdin\b|\bSTDIN\b|<STDIN>|\/dev\/stdin|\breadFileSync\s*\(\s*0\b|\bopen\s*\(\s*0\b|\bgets\b/;
+const PROGRAM_READS_STDIN = /\bstdin\b|\bSTDIN\b|<STDIN>|\/dev\/stdin|\b(?:read|open|createReadStream)\w*\s*\(\s*0\b|\bgets\b/;
 const PROGRAM_EVALUATES_INPUT = /\b(?:eval|exec\w*|spawn\w*|system|popen|compile|instance_eval|class_eval|module_eval|assert)\s*\(|\b(?:new\s+)?Function\s*\(|\bvm\.runIn|\bchild_process\b|\bsubprocess\b|\beval\s+|\bsource\s+/;
 
 function interpreterProgramConsumesStdin(tokens: string[]): boolean {
