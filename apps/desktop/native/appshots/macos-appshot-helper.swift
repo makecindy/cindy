@@ -11,6 +11,24 @@ private let secureTextFieldRole = "AXSecureTextField"
 private let maximumCaptureDimension = 8_192
 private let outputDirectoryPrefix = "cindy-appshot-"
 
+private enum HelperMode: Equatable {
+  case selfTest
+  case capture(outputDirectory: String, selfTestBeforeCapture: Bool)
+}
+
+private func parseHelperMode(_ arguments: [String]) -> HelperMode? {
+  if arguments == ["--self-test"] { return .selfTest }
+  if arguments.count == 2, arguments[0] == "--output-dir" {
+    return .capture(outputDirectory: arguments[1], selfTestBeforeCapture: false)
+  }
+  if arguments.count == 3,
+     arguments[0] == "--self-test-and-capture",
+     arguments[1] == "--output-dir" {
+    return .capture(outputDirectory: arguments[2], selfTestBeforeCapture: true)
+  }
+  return nil
+}
+
 enum AppshotError: Error {
   case invalidOutput
   case screenPermission
@@ -65,6 +83,7 @@ private struct FixtureNode {
   let title: String?
   let value: String?
   let description: String?
+  let containsProtectedContent: Bool
   let children: [FixtureNode]
 
   init(
@@ -73,6 +92,7 @@ private struct FixtureNode {
     title: String? = nil,
     value: String? = nil,
     description: String? = nil,
+    containsProtectedContent: Bool = false,
     children: [FixtureNode] = []
   ) {
     self.role = role
@@ -80,8 +100,15 @@ private struct FixtureNode {
     self.title = title
     self.value = value
     self.description = description
+    self.containsProtectedContent = containsProtectedContent
     self.children = children
   }
+}
+
+private struct WindowCandidateFacts {
+  let title: String?
+  let frame: CGRect
+  let alpha: Double?
 }
 
 private func sanitized(_ value: String) -> String {
@@ -175,7 +202,7 @@ private func serializeFixture(
         ("role", Optional(node.role)),
         ("label", node.label),
         ("title", node.title),
-        ("value", node.value),
+        ("value", node.containsProtectedContent ? nil : node.value),
         ("description", node.description),
       ].compactMap { name, value in value.flatMap { $0.isEmpty ? nil : (name, $0) } }
       return TreeNodeSnapshot(fields: fields, children: node.children)
@@ -266,6 +293,7 @@ func serializeAccessibilityWindow(
   guard let window else {
     return AXSerialization(text: nil, truncated: false, unavailableReason: "unsupported")
   }
+  _ = NSAccessibility.setMayContainProtectedContent(true)
 
   let clock = ContinuousClock()
   var hitDeadline = false
@@ -293,6 +321,11 @@ func serializeAccessibilityWindow(
           children: []
         )
       }
+      let containsProtectedContent = safeAXPrimitive(
+        element,
+        NSAccessibility.Attribute.containsProtectedContent.rawValue as CFString,
+        beforeDeadline: beforeDeadline
+      ) == "true"
 
       var fields: [(String, String)] = []
       func add(_ name: String, _ value: @autoclosure () -> String?) {
@@ -302,7 +335,9 @@ func serializeAccessibilityWindow(
       add("role", role)
       add("label", safeAXString(element, kAXDescriptionAttribute as CFString, beforeDeadline: beforeDeadline))
       add("title", safeAXString(element, kAXTitleAttribute as CFString, beforeDeadline: beforeDeadline))
-      add("value", safeAXPrimitive(element, kAXValueAttribute as CFString, beforeDeadline: beforeDeadline))
+      if !containsProtectedContent {
+        add("value", safeAXPrimitive(element, kAXValueAttribute as CFString, beforeDeadline: beforeDeadline))
+      }
       add("description", safeAXString(element, kAXHelpAttribute as CFString, beforeDeadline: beforeDeadline))
       add("enabled", safeAXPrimitive(element, kAXEnabledAttribute as CFString, beforeDeadline: beforeDeadline))
       add("selected", safeAXPrimitive(element, kAXSelectedAttribute as CFString, beforeDeadline: beforeDeadline))
@@ -330,7 +365,9 @@ private func focusedAXWindow(for app: NSRunningApplication) -> AXUIElement? {
   AXUIElementSetMessagingTimeout(appElement, 0.1)
   guard let value = copyAXAttribute(appElement, kAXFocusedWindowAttribute as CFString),
         CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-  return (value as! AXUIElement)
+  let window = value as! AXUIElement
+  AXUIElementSetMessagingTimeout(window, 0.1)
+  return window
 }
 
 private func axBounds(_ element: AXUIElement?) -> CGRect? {
@@ -362,19 +399,62 @@ private func isFiniteNormalFrame(_ frame: CGRect) -> Bool {
     && frame.height > 1
 }
 
+private func selectedWindowIndex(
+  candidates: [WindowCandidateFacts],
+  axTitle: String?,
+  axBounds: CGRect?
+) -> Int? {
+  let eligible = candidates.indices.filter { index in
+    let candidate = candidates[index]
+    return candidate.alpha.map { $0 > 0 } == true && isFiniteNormalFrame(candidate.frame)
+  }
+  let usableTitle = axTitle.flatMap { $0.isEmpty ? nil : $0 }
+  let usableBounds = axBounds.flatMap { isFiniteNormalFrame($0) ? $0 : nil }
+  func uniqueMatch(where matches: (Int) -> Bool) -> Int? {
+    let matching = eligible.filter(matches)
+    return matching.count == 1 ? matching[0] : nil
+  }
+  switch (usableTitle, usableBounds) {
+  case let (title?, bounds?):
+    return uniqueMatch { index in
+      candidates[index].title == title && approximatelyMatches(candidates[index].frame, bounds)
+    }
+  case let (title?, nil):
+    return uniqueMatch { candidates[$0].title == title }
+  case let (nil, bounds?):
+    return uniqueMatch { approximatelyMatches(candidates[$0].frame, bounds) }
+  case (nil, nil):
+    return eligible.first
+  }
+}
+
 private func windowAlpha(_ window: SCWindow) -> Double? {
   guard let info = CGWindowListCopyWindowInfo([.optionIncludingWindow], window.windowID) as? [[String: Any]],
         let windowInfo = info.first else { return nil }
   return (windowInfo[kCGWindowAlpha as String] as? NSNumber)?.doubleValue
 }
 
-func frontmostTarget() async throws -> (app: NSRunningApplication, window: SCWindow, axWindow: AXUIElement?) {
-  guard let app = NSWorkspace.shared.frontmostApplication,
-        !app.isTerminated,
-        app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-        app.processIdentifier != getppid(),
-        app.activationPolicy != .prohibited else { throw AppshotError.noWindow }
+private func isEligibleFrontmostProcess(
+  processIdentifier: pid_t,
+  isTerminated: Bool,
+  activationPolicy: NSApplication.ActivationPolicy,
+  selfProcessIdentifier: pid_t
+) -> Bool {
+  guard !isTerminated,
+        processIdentifier != selfProcessIdentifier,
+        activationPolicy != .prohibited else { return false }
+  // The host (Cindy) stays eligible as a last-resort target: the composer
+  // action runs while Cindy is already active, and the spec verification
+  // matrix lists Cindy as a valid capture target when no other app window is
+  // visible. Normal invocations prefer the previously visible app behind
+  // Cindy, and the global-shortcut path captures before Cindy activates.
+  return true
+}
 
+private func captureTarget(
+  for app: NSRunningApplication,
+  preferredWindowID: CGWindowID?
+) async throws -> (app: NSRunningApplication, window: SCWindow, axWindow: AXUIElement?) {
   let axWindow = focusedAXWindow(for: app)
   let axTitle = axWindow.flatMap { safeAXString($0, kAXTitleAttribute as CFString) }
   let focusedBounds = axBounds(axWindow)
@@ -390,25 +470,93 @@ func frontmostTarget() async throws -> (app: NSRunningApplication, window: SCWin
     candidate.owningApplication?.processID == app.processIdentifier
       && candidate.windowLayer == 0
       && candidate.isOnScreen
-      && windowAlpha(candidate).map { $0 > 0 } != false
-      && isFiniteNormalFrame(candidate.frame)
   }
-  guard !candidates.isEmpty else { throw AppshotError.noWindow }
+  var selectedIndex: Int?
+  if let preferredWindowID {
+    selectedIndex = candidates.indices.first { candidates[$0].windowID == preferredWindowID }
+  }
+  if selectedIndex == nil {
+    let candidateFacts = candidates.map { candidate in
+      WindowCandidateFacts(
+        title: candidate.title,
+        frame: candidate.frame,
+        alpha: windowAlpha(candidate)
+      )
+    }
+    selectedIndex = selectedWindowIndex(
+      candidates: candidateFacts,
+      axTitle: axTitle,
+      axBounds: focusedBounds
+    )
+  }
+  guard let selectedIndex else { throw AppshotError.noWindow }
+  return (app, candidates[selectedIndex], axWindow)
+}
 
-  let titleAndBoundsMatch = candidates.first { candidate in
-    guard let axTitle, candidate.title == axTitle, let focusedBounds else { return false }
-    return approximatelyMatches(candidate.frame, focusedBounds)
+private struct PreviousWindowTarget {
+  let ownerProcessIdentifier: pid_t
+  let windowID: CGWindowID
+}
+
+private func firstVisibleForeignWindow(
+  from windowInfos: [[String: Any]],
+  selfProcessIdentifier: pid_t,
+  parentProcessIdentifier: pid_t
+) -> PreviousWindowTarget? {
+  for info in windowInfos {
+    guard let ownerPID = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+          ownerPID != selfProcessIdentifier,
+          ownerPID != parentProcessIdentifier,
+          (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue != 0,
+          (info[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true,
+          let windowIDNumber = info[kCGWindowNumber as String] as? NSNumber,
+          let bounds = info[kCGWindowBounds as String] as? [String: NSNumber],
+          (bounds["Width"]?.doubleValue ?? 0) > 1,
+          (bounds["Height"]?.doubleValue ?? 0) > 1 else { continue }
+    return PreviousWindowTarget(
+      ownerProcessIdentifier: ownerPID,
+      windowID: CGWindowID(windowIDNumber.uint32Value)
+    )
   }
-  let titleMatch = candidates.first { candidate in
-    guard let axTitle else { return false }
-    return candidate.title == axTitle
+  return nil
+}
+
+func frontmostTarget() async throws -> (app: NSRunningApplication, window: SCWindow, axWindow: AXUIElement?) {
+  guard let frontmost = NSWorkspace.shared.frontmostApplication else { throw AppshotError.noWindow }
+  let selfProcessIdentifier = ProcessInfo.processInfo.processIdentifier
+  let parentProcessIdentifier = getppid()
+  if frontmost.processIdentifier == parentProcessIdentifier
+      || frontmost.processIdentifier == selfProcessIdentifier {
+    // The host (Cindy) is frontmost whenever the composer action or the
+    // shortcut is invoked while Cindy is active. Like Codex, capture the app
+    // window the user was looking at before Cindy: the topmost visible
+    // non-host window. Fall back to the host window itself when nothing else
+    // is visible so the action never silently fails.
+    if let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .optionIncludingWindow], kCGNullWindowID)
+        as? [[String: Any]],
+       let previous = firstVisibleForeignWindow(
+         from: windowList,
+         selfProcessIdentifier: selfProcessIdentifier,
+         parentProcessIdentifier: parentProcessIdentifier
+       ),
+       let previousApp = NSRunningApplication(processIdentifier: previous.ownerProcessIdentifier),
+       isEligibleFrontmostProcess(
+         processIdentifier: previousApp.processIdentifier,
+         isTerminated: previousApp.isTerminated,
+         activationPolicy: previousApp.activationPolicy,
+         selfProcessIdentifier: selfProcessIdentifier
+       ) {
+      return try await captureTarget(for: previousApp, preferredWindowID: previous.windowID)
+    }
   }
-  let boundsMatch = candidates.first { candidate in
-    guard let focusedBounds else { return false }
-    return approximatelyMatches(candidate.frame, focusedBounds)
-  }
-  let selected = titleAndBoundsMatch ?? titleMatch ?? boundsMatch ?? candidates[0]
-  return (app, selected, axWindow)
+  guard isEligibleFrontmostProcess(
+    processIdentifier: frontmost.processIdentifier,
+    isTerminated: frontmost.isTerminated,
+    activationPolicy: frontmost.activationPolicy,
+    selfProcessIdentifier: selfProcessIdentifier
+  ) else { throw AppshotError.noWindow }
+  return try await captureTarget(for: frontmost, preferredWindowID: nil)
 }
 
 func isBlankImage(_ image: CGImage) -> Bool {
@@ -596,6 +744,21 @@ private func emitJSON(_ payload: [String: Any]) throws {
 }
 
 private func runSelfTest() -> Bool {
+  guard parseHelperMode(["--self-test"]) == .selfTest,
+        parseHelperMode(["--output-dir", "/private/tmp/cindy-appshot-test"]) == .capture(
+          outputDirectory: "/private/tmp/cindy-appshot-test",
+          selfTestBeforeCapture: false
+        ),
+        parseHelperMode([
+          "--self-test-and-capture",
+          "--output-dir",
+          "/private/tmp/cindy-appshot-test",
+        ]) == .capture(
+          outputDirectory: "/private/tmp/cindy-appshot-test",
+          selfTestBeforeCapture: true
+        ),
+        parseHelperMode(["--self-test-and-capture"]) == nil else { return false }
+
   let ordinaryLimits = SerializationLimits(maxNodes: 10, maxDepth: 4, maxBytes: 4_096)
   let secure = serializeFixture(
     FixtureNode(
@@ -654,16 +817,162 @@ private func runSelfTest() -> Bool {
     deadlineNode: 2,
     prepareNode: { preparedRoles.append($0.role) }
   )
-  return deadlineLimited.truncated
+  guard deadlineLimited.truncated
     && preparedRoles == ["AXWindow", "AXButton"]
     && deadlineLimited.text?.contains("button-0") == true
-    && deadlineLimited.text?.contains("button-1") == false
+    && deadlineLimited.text?.contains("button-1") == false else { return false }
+
+  let targetBounds = CGRect(x: 100, y: 100, width: 640, height: 480)
+  let conflictingIdentifiers = [
+    WindowCandidateFacts(
+      title: "Target",
+      frame: CGRect(x: 0, y: 0, width: 640, height: 480),
+      alpha: 1
+    ),
+    WindowCandidateFacts(title: "Other", frame: targetBounds, alpha: 1),
+  ]
+  guard selectedWindowIndex(
+    candidates: conflictingIdentifiers,
+    axTitle: "Target",
+    axBounds: targetBounds
+  ) == nil else { return false }
+
+  guard selectedWindowIndex(
+    candidates: [WindowCandidateFacts(title: "Other", frame: targetBounds, alpha: 1)],
+    axTitle: "Missing",
+    axBounds: CGRect(x: 900, y: 900, width: 640, height: 480)
+  ) == nil else { return false }
+
+  let alphaCandidates = [
+    WindowCandidateFacts(title: "Unknown alpha", frame: targetBounds, alpha: nil),
+    WindowCandidateFacts(title: "Visible", frame: targetBounds, alpha: 1),
+  ]
+  guard selectedWindowIndex(candidates: alphaCandidates, axTitle: nil, axBounds: nil) == 1 else {
+    return false
+  }
+
+  let duplicateMatches = [
+    WindowCandidateFacts(title: "Target", frame: targetBounds, alpha: 1),
+    WindowCandidateFacts(title: "Target", frame: targetBounds, alpha: 1),
+  ]
+  guard selectedWindowIndex(
+    candidates: duplicateMatches,
+    axTitle: "Target",
+    axBounds: targetBounds
+  ) == nil else { return false }
+  guard selectedWindowIndex(
+    candidates: duplicateMatches,
+    axTitle: "Target",
+    axBounds: nil
+  ) == nil else { return false }
+  guard selectedWindowIndex(
+    candidates: duplicateMatches,
+    axTitle: nil,
+    axBounds: targetBounds
+  ) == nil else { return false }
+
+  // The frontmost app may be the host process that spawned this helper (the
+  // composer attachment action runs while Cindy is active). Capturing Cindy
+  // itself is an approved spec scenario, so the parent PID must stay eligible.
+  guard isEligibleFrontmostProcess(
+    processIdentifier: 42,
+    isTerminated: false,
+    activationPolicy: .regular,
+    selfProcessIdentifier: 41
+  ) else { return false }
+  // The helper must never target itself or a terminated or prohibited app.
+  guard isEligibleFrontmostProcess(
+    processIdentifier: 42,
+    isTerminated: false,
+    activationPolicy: .regular,
+    selfProcessIdentifier: 42
+  ) == false,
+  isEligibleFrontmostProcess(
+    processIdentifier: 42,
+    isTerminated: true,
+    activationPolicy: .regular,
+    selfProcessIdentifier: 41
+  ) == false,
+  isEligibleFrontmostProcess(
+    processIdentifier: 42,
+    isTerminated: false,
+    activationPolicy: .prohibited,
+    selfProcessIdentifier: 41
+  ) == false else { return false }
+
+  func windowInfo(
+    pid: pid_t,
+    layer: Int = 0,
+    alpha: Double = 1,
+    onscreen: Bool = true,
+    windowID: UInt32 = 0,
+    width: CGFloat = 100,
+    height: CGFloat = 100
+  ) -> [String: Any] {
+    [
+      kCGWindowOwnerPID as String: NSNumber(value: pid),
+      kCGWindowLayer as String: NSNumber(value: layer),
+      kCGWindowAlpha as String: NSNumber(value: alpha),
+      kCGWindowIsOnscreen as String: NSNumber(value: onscreen),
+      kCGWindowNumber as String: NSNumber(value: windowID),
+      kCGWindowBounds as String: [
+        "Width": NSNumber(value: width),
+        "Height": NSNumber(value: height),
+      ],
+    ]
+  }
+  guard firstVisibleForeignWindow(
+    from: [
+      windowInfo(pid: 41),
+      windowInfo(pid: 50, windowID: 100),
+    ],
+    selfProcessIdentifier: 42,
+    parentProcessIdentifier: 41
+  )?.ownerProcessIdentifier == 50,
+  firstVisibleForeignWindow(
+    from: [
+      windowInfo(pid: 41),
+      windowInfo(pid: 42),
+      windowInfo(pid: 50, layer: 25),
+      windowInfo(pid: 50, alpha: 0),
+      windowInfo(pid: 50, width: 1, height: 1),
+      windowInfo(pid: 50, windowID: 200),
+    ],
+    selfProcessIdentifier: 42,
+    parentProcessIdentifier: 41
+  )?.windowID == 200,
+  firstVisibleForeignWindow(
+    from: [windowInfo(pid: 41), windowInfo(pid: 42)],
+    selfProcessIdentifier: 42,
+    parentProcessIdentifier: 41
+  ) == nil else { return false }
+
+  let protected = serializeFixture(
+    FixtureNode(
+      role: "AXStaticText",
+      label: "Account balance",
+      title: "Balance",
+      value: "secret-value",
+      description: "Visible structure",
+      containsProtectedContent: true
+    ),
+    limits: ordinaryLimits
+  )
+  return protected.text?.contains("role: AXStaticText") == true
+    && protected.text?.contains("Account balance") == true
+    && protected.text?.contains("Balance") == true
+    && protected.text?.contains("Visible structure") == true
+    && protected.text?.contains("secret-value") == false
 }
 
 private enum MacOSAppshotHelper {
   static func run() async {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if arguments == ["--self-test"] {
+    guard let mode = parseHelperMode(arguments) else {
+      FileHandle.standardError.write(Data("APPSHOT_INVALID_OUTPUT: invalid output directory\n".utf8))
+      exit(2)
+    }
+    if mode == .selfTest {
       guard runSelfTest() else { exit(1) }
       do {
         try emitJSON(["type": "self-test", "ok": true])
@@ -674,10 +983,13 @@ private enum MacOSAppshotHelper {
     }
 
     do {
-      guard arguments.count == 2, arguments[0] == "--output-dir" else {
-        throw AppshotError.invalidOutput
+      guard case let .capture(outputDirectory, selfTestBeforeCapture) = mode else {
+        throw AppshotError.nativeFailure
       }
-      let outputURL = try validatedOutputURL(argument: arguments[1])
+      if selfTestBeforeCapture, !runSelfTest() {
+        throw AppshotError.nativeFailure
+      }
+      let outputURL = try validatedOutputURL(argument: outputDirectory)
       let target = try await frontmostTarget()
       _ = try await captureWindow(target.window, to: outputURL)
       let accessibility = serializeAccessibilityWindow(
