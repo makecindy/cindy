@@ -40,27 +40,38 @@ import {
   parseTransportPayload,
   byteLength,
 } from './transport.js';
-import { DL_CONTACTS_SYNC_CHANNEL } from './contactsSyncProtocol.js';
+import { SESSION_ACTIVITY_CHANNEL } from './topics.js';
 
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 /**
- * 把 BACKPRESSURE 当流控信号的 push 通道:发送方对 BACKPRESSURE 做阻塞等待
- * 重试(见 contacts-sync sender 的 sendRelayFrame),帧是**有序数据流**而非可
- * 由 resync 再生的状态镜像。latest-wins 腾位对这类通道双向禁用——新帧满员时
- * 维持原背压语义交给发送方流控,已入队的帧也绝不被镜像洪峰驱逐:cipher-chunk
- * 被静默驱逐后发送方以为已送达,接收端却永远拼不出本次传输。
+ * latest-wins 腾位适用的**可合并镜像通道白名单**(review 两轮 P1 收敛:先是
+ * contacts-sync 黑名单,再反转为白名单)。push 单 FIFO 上混着两类语义:
+ *
+ * - 可合并镜像/可再生流(本表):agent 事件流、会话活动快照、输入投影。丢最旧
+ *   帧只损失中间态,最新状态由后续帧或控制端 resync 补偿;其中 maker:event 在
+ *   旧语义下拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按 best-effort
+ *   放弃),换成丢最旧不引入新的损失面。
+ * - 不可合并事件/流控数据(表外全部,fail-closed):local-db:messages:created、
+ *   maker:interaction-request(确认卡)、fs-watch 事件、contacts-sync 分片
+ *   (发送方以 BACKPRESSURE 为流控信号,见 contacts-sync sender)等。拥塞驱逐
+ *   发生时 link 并未断开,reconnect reseed 不会跑——静默驱逐 = UI 永久漏一条
+ *   消息/确认卡,或分片传输永远拼不出。这类通道维持原背压语义。
+ *
+ * 新增 push 通道默认**不可驱逐**;确属镜像语义需在此显式登记。
  */
-const FLOW_CONTROLLED_PUSH_CHANNELS: ReadonlySet<string> = new Set([
-  DL_CONTACTS_SYNC_CHANNEL,
+const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:event',
+  SESSION_ACTIVITY_CHANNEL,
+  'maker:input:projection',
 ]);
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
 
-function isFlowControlledPushEnvelope(env: Envelope): boolean {
+function isCoalesciblePushEnvelope(env: Envelope): boolean {
   if (env.kind !== 'push') return false;
   const payload = env.payload as { channel?: unknown } | undefined;
   return typeof payload?.channel === 'string'
-    && FLOW_CONTROLLED_PUSH_CHANNELS.has(payload.channel);
+    && COALESCIBLE_PUSH_CHANNELS.has(payload.channel);
 }
 /** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
 const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
@@ -2109,19 +2120,20 @@ export class DeviceLinkClient {
         // 帧饿死：丢弃整个队头可丢弃前缀（fresh push 一并放弃——单 FIFO 无法同时
         // 做到 push 无损与 result 抢占），让 result 成为最早可交付的 live seq。
         this.dropDiscardablePendingPrefix(env.dst, peer, false, 'to make room for invoke-result');
-      } else if (env.kind === 'push' && !isFlowControlledPushEnvelope(env)) {
-        // push 是尽力而为的状态镜像（控制端重连/回前台会整体 resync + 重新订阅）。
-        // 拥塞即对端未在 ACK：2026-08-07 线上该形态一小时内 5168 次连续
-        // BACKPRESSURE（maker:event），镜像状态一条都没交付，只放大重试风暴。
-        // latest-wins：只从队头驱逐最旧的可丢弃镜像帧直到放得下（剩余镜像历史
-        // 保留，对端恢复后仍可交付最新状态）；队头是 live 帧或流控 push 时无位
-        // 可让，维持原 BACKPRESSURE 语义。只删队头 → baseSeq 单调前移，无 seq 空洞。
+      } else if (env.kind === 'push' && isCoalesciblePushEnvelope(env)) {
+        // 可合并镜像 push（COALESCIBLE_PUSH_CHANNELS）是尽力而为的状态镜像
+        // （控制端重连/回前台会整体 resync + 重新订阅）。拥塞即对端未在 ACK：
+        // 2026-08-07 线上该形态一小时内 5168 次连续 BACKPRESSURE（maker:event），
+        // 镜像状态一条都没交付，只放大重试风暴。latest-wins：只从队头驱逐最旧
+        // 的可合并镜像帧直到放得下（剩余镜像历史保留，对端恢复后仍可交付最新
+        // 状态）；队头是 live 帧或白名单外 push 时无位可让，维持原 BACKPRESSURE
+        // 语义。只删队头 → baseSeq 单调前移，无 seq 空洞。
         this.dropOldestDiscardableForPushAdmission(env.dst, peer, reservedBytes);
       } else {
-        // live invoke 与流控 push（FLOW_CONTROLLED_PUSH_CHANNELS，发送方以
-        // BACKPRESSURE 为流控信号）的入队压力只做 TTL 兜底清扫：过期 push 已无
-        // 实时价值，先出队腾位；新鲜 push 不互相驱逐（这两类帧不能以丢镜像
-        // 为代价抢占）。
+        // live invoke 与白名单外 push（不可合并事件流/流控数据，见
+        // COALESCIBLE_PUSH_CHANNELS 注释）的入队压力只做 TTL 兜底清扫：过期
+        // push 已无实时价值，先出队腾位；新鲜 push 不互相驱逐（这两类帧不能
+        // 以丢镜像为代价抢占）。
         this.dropDiscardablePendingPrefix(env.dst, peer, true, 'after pending push TTL expiry');
       }
     }
@@ -2463,8 +2475,9 @@ export class DeviceLinkClient {
   }
 
   /**
-   * 可丢弃帧判据（重连重放、invoke-result 腾位、push latest-wins 腾位三条
-   * 路径共用的不变量）：
+   * 可丢弃帧判据（重连重放与 invoke-result 腾位两条路径共用的不变量;
+   * push latest-wins 腾位用更窄的白名单判据,见
+   * dropOldestDiscardableForPushAdmission）：
    * best-effort push，以及 timeout / relay-error 后被 dropReliablePendingForRequest
    * 换成 transport-skip 占位 payload 的帧——其外层 kind 仍是原 invoke /
    * invoke-result，但已无任何业务副作用。两者都可以通过推进 baseSeq 让接收端
@@ -2550,12 +2563,15 @@ export class DeviceLinkClient {
    * 腾位」而非「整段前缀丢弃」：对端只是暂时未 ACK 时，队列里较新的镜像历史保留
    * 下来，恢复后仍能交付；被驱逐的最旧镜像由控制端 resync 补偿，不是静默丢数据。
    *
-   * 可驱逐判据比 isDiscardablePending 更窄：流控 push（FLOW_CONTROLLED_PUSH_CHANNELS）
-   * 虽是 push kind，但发送方以 BACKPRESSURE 为流控信号、帧是有序数据流，被镜像
-   * 洪峰静默驱逐 = 发送方以为已送达而接收端永远拼不出传输——它们与 live
-   * invoke/invoke-result 一样是腾位边界。队头不可驱逐时无位可让（跨过会制造
-   * seq 空洞），调用方按容量复检结果维持原 BACKPRESSURE 语义。只删队头 →
-   * baseSeq 单调前移，接收端按新基线整体跳过被驱逐 seq，无空洞、不挂累计 ACK。
+   * 可驱逐判据比 isDiscardablePending 更窄（白名单，fail-closed）：只有
+   * COALESCIBLE_PUSH_CHANNELS 里的镜像 push 与 transport-skip 占位可被驱逐。
+   * 白名单外的 push（不可合并事件流如 local-db:messages:created、确认卡、
+   * 以 BACKPRESSURE 为流控信号的 contacts-sync 分片）被静默驱逐时 link 并未
+   * 断开、reconnect reseed 不会跑，等价于 UI 永久漏事件或传输永久拼不出——
+   * 它们与 live invoke/invoke-result 一样是腾位边界。队头不可驱逐时无位可让
+   * （跨过会制造 seq 空洞），调用方按容量复检结果维持原 BACKPRESSURE 语义。
+   * 只删队头 → baseSeq 单调前移，接收端按新基线整体跳过被驱逐 seq，无空洞、
+   * 不挂累计 ACK。
    *
    * 生产反例（2026-08-07，P0 度量实锤）：对端停 ACK 时新鲜 push 之间互相背压，
    * 每条新 push 都抛 BACKPRESSURE，一小时 5168 次（maker:event），镜像零交付。
@@ -2576,8 +2592,8 @@ export class DeviceLinkClient {
       if (head.done) break;
       const [seq, pending] = head.value;
       if (
-        !this.isDiscardablePending(pending)
-        || isFlowControlledPushEnvelope(pending.envelope)
+        !isTransportSkipPayload(pending.envelope.payload)
+        && !isCoalesciblePushEnvelope(pending.envelope)
       ) break;
       this.removePendingEntry(peer, seq, pending);
       dropped += 1;

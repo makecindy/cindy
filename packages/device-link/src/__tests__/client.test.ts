@@ -2292,6 +2292,60 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('白名单外的事件流 push(messages:created)不参与 latest-wins:不驱逐别人,也不被驱逐', async () => {
+    // review P1(第二轮):local-db:messages:created 是不可合并的事件流——拥塞
+    // 驱逐发生时 link 未断,reconnect reseed 不会跑,静默驱逐 = UI 永久漏一条消息。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'event-stream-guard-stream');
+
+    // 方向一:满员时它自己入队不驱逐镜像,维持 BACKPRESSURE
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    expect(() =>
+      h.client.sendPush('dev-b', 'local-db:messages:created', { messageId: 'm1' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('已入队的事件流 push 是腾位边界:镜像洪峰驱逐到 messages:created 即止', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'event-stream-boundary-stream');
+
+    // 队形:1 条镜像(seq1) + 1 条 messages:created(seq2) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', 'local-db:messages:created', { messageId: 'm1' });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 第一条洪峰驱逐 seq1 镜像入队;第二条队头已是 messages:created,拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    h.client.stop();
+  });
+
   it('WebSocket 缓冲满时 push 在驱逐前拒绝:不为无法入队的帧清空镜像历史', async () => {
     // review P1:容量预检若晚于驱逐,连续调用会逐步清空本可重试的镜像历史,
     // 却一帧未纳。预检先行后,ws 满那一轮必须一条都不驱逐。
@@ -3856,15 +3910,16 @@ describe('DeviceLinkClient', () => {
         await makeLinkDownPeer(h);
 
         // link down:push 只入队不发送,填满 pending(64 条)
+        // (用可合并镜像通道 maker:event:白名单外通道不参与 latest-wins)
         for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
-          h.client.sendPush('ctrl-1', 'sessions', { i });
+          h.client.sendPush('ctrl-1', 'maker:event', { i });
         }
         // 第 65 条:队头未过滞留阈值 → latest-wins 驱逐最旧 push 腾位入队,
         // 不再 BACKPRESSURE(link 恢复后仍可交付较新镜像)
-        expect(() => h.client.sendPush('ctrl-1', 'sessions', { overflow: true })).not.toThrow();
+        expect(() => h.client.sendPush('ctrl-1', 'maker:event', { overflow: true })).not.toThrow();
         // 滞留超阈值后:入队前整队放弃,新帧不再被顶回
         nowMs += 51;
-        expect(() => h.client.sendPush('ctrl-1', 'sessions', { after: true })).not.toThrow();
+        expect(() => h.client.sendPush('ctrl-1', 'maker:event', { after: true })).not.toThrow();
         h.client.stop();
       } finally {
         clock.mockRestore();
