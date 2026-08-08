@@ -763,6 +763,15 @@ export default function NewRemoteSessionScreen() {
       // useDeviceProviders 命中仍为 A 的缓存并标记 ready:true,UI 与后续选择与
       // 实际创建脱节。fresh 拉取会按设备与代际写回同一缓存并通知订阅者。
       const fresh = await fetchDeviceProvidersFresh(deviceId, () => maker.listProviders());
+      // 丢弃已换代的最终目录响应(codex review P2):fresh 在途期间若收到
+      // provider-changed / 登出驱逐 / 重连驱逐,代际变化只让它跳过缓存回写,
+      // Promise 仍正常返回旧响应——核对响应是否被采纳(被采纳 ⟺ 缓存就是该
+      // 响应对象;fresh 成功且 isCurrent 时 cache.set 的就是这个 payload)。
+      // 未采纳 → 目录已失效,按 unknown 处理(不交给 revalidateDraftAfterAuth,
+      // 避免普通创建管线按已删除来源 A 创建;下一轮 guard/重连会取最新目录)。
+      if (getCachedDeviceProviders(deviceId) !== fresh) {
+        return { unauthenticated: false, fresh: null };
+      }
       return {
         unauthenticated: fresh.providers.length > 0
           && connectedProvidersForAgent(fresh.providers, agentKind).length === 0,
