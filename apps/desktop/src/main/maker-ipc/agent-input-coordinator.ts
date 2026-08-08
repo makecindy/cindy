@@ -464,6 +464,15 @@ export interface AgentInputCoordinatorDeps {
     items: AgentInputQueuedMessage[],
   ) => void | Promise<void>;
   loadQueueSnapshot?: (sessionId: string) => Promise<AgentInputQueuedMessage[]>;
+  /**
+   * Durable lifecycle fence applied while restoring a crash snapshot. It is
+   * intentionally item-scoped so Orca can drop an ended team's traffic without
+   * disturbing ordinary user input (or any future restorable automation kind).
+   */
+  isQueueSnapshotItemCurrent?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ) => Promise<boolean>;
   getPersistedClientIds?: (sessionId: string, clientIds: string[]) => Promise<Set<string>>;
 }
 
@@ -847,6 +856,8 @@ export class AgentInputCoordinator {
   private readonly pendingAutoResumeRecoveries = new Map<string, PendingAutoResumeRecovery>();
   /** transient busy 期间同一 auto item 已尝试过的派发次数。 */
   private readonly autoResumeDispatchAttempts = new Map<string, number>();
+  /** Selective invalidation waits for the superseded send promise to unwind before draining tail. */
+  private readonly drainAfterStaleActiveTurns = new WeakSet<ActiveTurn>();
 
   constructor(private readonly deps: AgentInputCoordinatorDeps) {}
 
@@ -974,6 +985,48 @@ export class AgentInputCoordinator {
       this.maybePersistQueueSnapshot(sessionId);
       return;
     }
+    const staleLifecycleItems: AgentInputQueuedMessage[] = [];
+    if (this.deps.isQueueSnapshotItemCurrent && items.length > 0) {
+      const lifecycleResults = await Promise.all(
+        items.map(async (item) => {
+          try {
+            return {
+              item,
+              current: await this.deps.isQueueSnapshotItemCurrent!(sessionId, item),
+            };
+          } catch (err) {
+            log.warn('queue snapshot lifecycle check failed; dropping item', {
+              sessionId,
+              clientId: item.clientId,
+              error: errorMessage(err),
+            });
+            return { item, current: false };
+          }
+        }),
+      );
+      const currentState = this.getState(sessionId);
+      if (currentState !== preState || currentState.generation !== preGeneration) {
+        this.restoredQueueSessions.add(sessionId);
+        this.queueRestorePromises.delete(sessionId);
+        for (const item of items) {
+          this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        }
+        this.maybePersistQueueSnapshot(sessionId);
+        return;
+      }
+      items = lifecycleResults.flatMap(({ item, current }) => {
+        if (current) return [item];
+        staleLifecycleItems.push(item);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        return [];
+      });
+      if (staleLifecycleItems.length > 0) {
+        log.info('dropped lifecycle-stale queue item(s) from crash snapshot', {
+          sessionId,
+          dropped: staleLifecycleItems.length,
+        });
+      }
+    }
     // 去重:内存态 + DB 已落库的消息。DB 查询覆盖"消息已被 agent 接受落库但删快照
     // 写尚未提交"的崩溃窗口——该 clientId 已属 interrupted-turn 辖区,不应二次恢复。
     const existingIds = new Set(state.pendingQueue.map((q) => q.clientId));
@@ -1044,7 +1097,7 @@ export class AgentInputCoordinator {
     // 用读回内容预热变更检测缓存:没有丢弃/去重项时(最常见:空快照 + 空队列)
     // 收口点直接跳过,避免每次打开会话都发一次冗余覆盖写/删除。只要有丢弃项就
     // 留空，让 maybePersistQueueSnapshot 把清理后的快照写回盘面。
-    if (staleClearItems.length === 0) {
+    if (staleClearItems.length === 0 && staleLifecycleItems.length === 0) {
       this.lastQueueSnapshotJson.set(sessionId, JSON.stringify(items));
     } else {
       this.lastQueueSnapshotJson.delete(sessionId);
@@ -2354,6 +2407,110 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
+  /**
+   * Selectively invalidate queued traffic that belongs to an ended lifecycle.
+   * Unlike Stop/clear this preserves unrelated user and scheduler inputs. The
+   * active item is cancellable only before vendor dispatch becomes irreversible.
+   */
+  async discardQueuedItemsWhere(
+    sessionId: string,
+    predicate: (item: AgentInputQueuedMessage) => boolean,
+  ): Promise<{
+    pendingDiscarded: number;
+    activeCancelled: boolean;
+    recoveryDiscarded: boolean;
+  }> {
+    try {
+      await this.ensureQueueRestored(sessionId);
+    } catch (err) {
+      // The durable restore filter will apply on the next successful read. We
+      // still have to close the current process-local dispatch window now.
+      log.warn('queue restore failed during selective invalidation', {
+        sessionId,
+        error: errorMessage(err),
+      });
+    }
+
+    const state = this.getState(sessionId);
+    const removed = state.pendingQueue.filter(predicate);
+    const removedIds = new Set(removed.map((item) => item.clientId));
+    if (removed.length > 0) {
+      state.pendingQueue = state.pendingQueue.filter((item) => !removedIds.has(item.clientId));
+      for (const item of removed) {
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        this.removePendingCompactWaitClientId(state, item.clientId);
+      }
+      state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter(
+        (clientId) => !removedIds.has(clientId),
+      );
+      state.queueEditLocks = state.queueEditLocks.filter(
+        (clientId) => !removedIds.has(clientId),
+      );
+      if (
+        state.credentialSwitchWait &&
+        removedIds.has(state.credentialSwitchWait.clientId)
+      ) {
+        this.clearCredentialSwitchWait(state);
+      }
+    }
+
+    let activeCancelled = false;
+    const active = state.activeTurn;
+    if (active?.item && isActiveTurnBeforeVendorDispatch(active) && predicate(active.item)) {
+      activeCancelled = true;
+      this.drainAfterStaleActiveTurns.add(active);
+      this.abortInputBoundary(sessionId);
+      state.generation += 1;
+      state.activeTurn = null;
+      if (active.persisted) {
+        this.notifyUndispatchedUserTurn(sessionId, active.item, 'cancelled');
+      } else {
+        this.deps.onDiscardedQueuedMessage?.(sessionId, active.item);
+      }
+      this.removePendingCompactWaitClientId(state, active.item.clientId);
+      state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter(
+        (clientId) => clientId !== active.item?.clientId,
+      );
+      state.queueEditLocks = state.queueEditLocks.filter(
+        (clientId) => clientId !== active.item?.clientId,
+      );
+    }
+
+    let recoveryDiscarded = false;
+    if (
+      state.recovery?.kind === 'queue-head' &&
+      removedIds.has(state.recovery.clientId)
+    ) {
+      recoveryDiscarded = true;
+      state.recovery = null;
+      state.error = null;
+      state.stickyError = null;
+    } else if (
+      state.recovery?.kind === 'active-turn' &&
+      predicate(state.recovery.item)
+    ) {
+      recoveryDiscarded = true;
+      this.deps.onDiscardedQueuedMessage?.(sessionId, state.recovery.item);
+      state.recovery = null;
+      state.error = null;
+      state.stickyError = null;
+    }
+
+    if (state.pendingQueue.length === 0 && !state.activeTurn) {
+      state.queuePaused = false;
+      state.queuePausedByRestore = false;
+    }
+    this.emit(sessionId);
+    if (!state.queuePaused && !activeCancelled) {
+      this.scheduleDrain(sessionId, 'selective-queue-invalidation');
+    }
+    return {
+      pendingDiscarded: removed.length,
+      activeCancelled,
+      recoveryDiscarded,
+    };
+  }
+
   updateText(
     sessionId: string,
     clientId: string,
@@ -3070,7 +3227,7 @@ export class AgentInputCoordinator {
       // 不会抢发下一条。
       if (!head.bypassGhostHooks && this.deps.screenUserMessage) {
         const verdict = await this.deps.screenUserMessage(sessionId, getAgentFacingText(head));
-        if (!this.isActiveTurnCurrent(sessionId, active)) return;
+        if (this.discardOnStaleActiveTurn(sessionId, active)) return;
         if (verdict.action === 'block') {
           this.getState(sessionId).activeTurn = null;
           this.deps.onUserMessageBlocked?.(sessionId, head, verdict);
@@ -3106,7 +3263,7 @@ export class AgentInputCoordinator {
         }
       }
       const sdkSessionId = await this.deps.getSdkSessionId(sessionId).catch(() => undefined);
-      if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       // Freeze side-effect timestamps before entering vendor code. A dispatch
@@ -4383,6 +4540,10 @@ export class AgentInputCoordinator {
       }
     }
     this.discardDeferredResumableCandidate(sessionId, active, { surfaceError: false });
+    if (this.drainAfterStaleActiveTurns.has(active)) {
+      this.drainAfterStaleActiveTurns.delete(active);
+      this.scheduleDrain(sessionId, 'selectively-invalidated-active-settled');
+    }
     return true;
   }
 

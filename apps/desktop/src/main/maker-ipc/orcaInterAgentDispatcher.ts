@@ -27,6 +27,22 @@ const defaultLog = createLogger('maker-ipc');
 
 type OrcaInterAgentDispatchMode = 'dispatched' | 'queued';
 
+function stripIpcErrorPrefix(message: string): string {
+  const match = message.match(/^\[[^\]]+\]\s*(.*)$/);
+  return match?.[1] ?? message;
+}
+
+function isInactiveOrcaTeamSendFailure(result: AgentInputSendResult): boolean {
+  if (result.kind === 'host-send') {
+    return stripIpcErrorPrefix(result.message).startsWith('ORCA_TEAM_INACTIVE:');
+  }
+  return (
+    !result.dispatched &&
+    result.reason === 'cancelled-before-dispatch' &&
+    result.context.startsWith('ORCA_TEAM_INACTIVE/')
+  );
+}
+
 /** Orca lead/worker 派发结果，保留底层 dispatch outcome 供 MCP/IPC 区分排队、直发和失败根因。 */
 export type DispatchOrcaInterAgentMessageResult =
   | {
@@ -48,6 +64,8 @@ export type OrcaInterAgentMessageSource = 'lead' | 'worker';
 /** 一次 lead/worker 间消息派发请求，accepted 回调用于把业务副作用绑定到真正派发边界。 */
 export interface DispatchOrcaInterAgentMessageParams {
   targetSessionId: string;
+  /** Durable workflow scope; every automatic Orca message belongs to one team. */
+  teamId: string;
   rawContent: string;
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
@@ -138,7 +156,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     meta: TSessionMeta,
   ) => Promise<AgentInputCreateOpts>;
-  enqueueQueuedMessage: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  enqueueQueuedMessage: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ) => void | Promise<void>;
   sendToSessionInternal: (
     params: OrcaInterAgentSendToSessionInternalParams,
   ) => Promise<OrcaInterAgentSendToSessionInternalResult>;
@@ -149,6 +170,9 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
+  isOrcaTeamActive: (teamId: string) => Promise<boolean>;
+  /** Process-local last-moment fence for the DB-check-to-vendor race. */
+  assertOrcaTeamActiveBeforeVendorDispatch?: (teamId: string) => void;
   isSessionRunningError: (err: unknown) => boolean;
   log?: OrcaInterAgentDispatcherLogger;
 }
@@ -228,6 +252,13 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
       return;
     }
+    if (isInactiveOrcaTeamSendFailure(result)) {
+      queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
+      if (callback.didRun) {
+        await runAcceptedRollback(callback.rollback, sessionId, clientId, log);
+      }
+      return;
+    }
     if (callback.didRun) {
       queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
       await runAcceptedRollback(callback.rollback, sessionId, clientId, log);
@@ -251,6 +282,30 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   const dispatchOrEnqueueOrcaInterAgentMessage = async (
     params: DispatchOrcaInterAgentMessageParams,
   ): Promise<DispatchOrcaInterAgentMessageResult> => {
+    try {
+      if (!(await deps.isOrcaTeamActive(params.teamId))) {
+        return {
+          ok: false,
+          dispatchOutcome: {
+            ...createHostSendFailure(
+              'SEND_FAILED',
+              `ORCA_TEAM_INACTIVE: team ${params.teamId} has already ended`,
+            ),
+            source: params.meta.source,
+            context: params.meta.context,
+          },
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        dispatchOutcome: {
+          ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
+          source: params.meta.source,
+          context: params.meta.context,
+        },
+      };
+    }
     const [meta, dbRow] = await Promise.all([
       deps.getSessionMeta(params.targetSessionId).catch(() => null),
       deps.getSessionRowSnapshot(params.targetSessionId),
@@ -290,6 +345,14 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       }
       return { ok: false, dispatchOutcome };
     };
+    const failureFromThrown = (err: unknown): CollabDispatchFailureOutcome => ({
+      ...createHostSendFailure(
+        deps.isSessionRunningError(err) ? 'SESSION_RUNNING' : 'SEND_FAILED',
+        err instanceof Error ? err.message : String(err),
+      ),
+      source: params.meta.source,
+      context: params.meta.context,
+    });
     const dispatchReceipt = {
       targetTitle: dbRow.title,
       targetLastUserSendAt: dbRow.userSendAt !== null
@@ -312,13 +375,24 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         agentMessageText,
         persistedContent,
         rawContent: params.rawContent,
+        teamId: params.teamId,
         senderLabel: await resolveSenderLabel(),
         createOpts,
       });
+      try {
+        deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId);
+      } catch (err) {
+        return failureResult(failureFromThrown(err));
+      }
       if (params.onAccepted) {
         registerQueuedOrcaInterAgentAcceptedCallback(clientId, params.onAccepted, params.onAcceptedRollback);
       }
-      deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      try {
+        await deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      } catch (err) {
+        discardQueuedOrcaInterAgentAcceptedCallback(clientId);
+        return failureResult(failureFromThrown(err));
+      }
       log.info(logEvent, {
         targetSessionId: params.targetSessionId,
         clientId,
@@ -353,6 +427,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           source: params.meta.source,
           context: params.meta.context,
           onAccepted: runAccepted,
+          beforeVendorDispatch: () =>
+            deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId),
         });
         if (result.dispatched) {
           return { ok: true, mode: 'dispatched', clientId, dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };
@@ -372,6 +448,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         onAcceptedRollback: params.onAcceptedRollback,
         origin: {
           kind: 'orca',
+          teamId: params.teamId,
           senderLabel: await resolveSenderLabel(),
           displayText: params.rawContent,
         },
@@ -398,11 +475,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         context: params.meta.context,
       });
     } catch (err) {
-      return failureResult({
-        ...createHostSendFailure(deps.isSessionRunningError(err) ? 'SESSION_RUNNING' : 'SEND_FAILED', err instanceof Error ? err.message : String(err)),
-        source: params.meta.source,
-        context: params.meta.context,
-      });
+      return failureResult(failureFromThrown(err));
     }
   };
 
@@ -426,6 +499,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     source: string;
     context: string;
     onAccepted?: () => void | Promise<void>;
+    beforeVendorDispatch?: () => void;
   },
 ): Promise<CollabDirectDispatchResult> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, onAccepted } = params;
@@ -445,6 +519,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
         turnChangeSetStarted = true;
         await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
       },
+      onDispatching: params.beforeVendorDispatch,
     }),
     { source, context },
   );
@@ -496,6 +571,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   agentMessageText: string;
   persistedContent: string;
   rawContent: string;
+  teamId: string;
   senderLabel: string;
   createOpts: AgentInputCreateOpts;
 }): AgentInputQueuedMessage {
@@ -518,6 +594,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
     createOpts: params.createOpts,
     origin: {
       kind: 'orca',
+      teamId: params.teamId,
       senderLabel: params.senderLabel,
       displayText: params.rawContent,
     },

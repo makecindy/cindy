@@ -116,6 +116,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   if (
     !('fromMobileClient' in opts) &&
     !('expectedInputGeneration' in opts) &&
+    !('orcaTeamId' in opts) &&
     !('inputAbortSignal' in opts) &&
     !('signal' in opts)
   ) {
@@ -124,6 +125,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   const {
     fromMobileClient: _ignoredMobile,
     expectedInputGeneration: _ignoredGeneration,
+    orcaTeamId: _ignoredOrcaTeamId,
     inputAbortSignal: _ignoredAbortSignal,
     signal: _ignoredSignal,
     ...rest

@@ -79,6 +79,52 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it('rejects an inactive queued Orca team before session rehydrate has side effects', async () => {
+    const isOrcaTeamInputActive = vi.fn(async () => false);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      isOrcaTeamInputActive,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'lead-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      vendorOptions: {
+        orcaRole: 'lead',
+        orcaWorkflowId: 'team-old',
+        orcaLeadSessionId: 'lead-session',
+      },
+    };
+
+    await expect(
+      transaction.sendToAgentAccepted('lead-session', 'old worker report', createOpts, {
+        persistUserMessage: {
+          clientId: 'orca-old',
+          content: 'old worker report',
+          origin: {
+            kind: 'orca',
+            teamId: 'team-old',
+            senderLabel: 'Reviewer',
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+      outcome: {
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      },
+    });
+
+    expect(isOrcaTeamInputActive).toHaveBeenCalledWith('lead-session', 'team-old');
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(deps.ensureRemoteReadyForSessionStart).not.toHaveBeenCalled();
+    expect(deps.synthesizeOrcaVendorOptionsFromDb).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid sessionId before touching transaction dependencies', async () => {
     const { deps } = createDeps();
     const transaction = createMakerSendTransaction(deps);
