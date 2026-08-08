@@ -153,7 +153,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 | 域 | 范围 | 允许 | 理由 |
 | --- | --- | --- | --- |
-| 登录 / Splash 品牌画布 | `LoginControls.tsx`、`loginDesignTokens.ts`(Splash 借用同族面板)、`LegacyMigrationDialog.tsx`(仅字重)、`oauthResultPage.ts`(自包含品牌页生成器,raw CSS 为其常量载体) | 700 + 设计 px 字号 | §16 已登记 Bold,figma 画布坐标系 |
+| 登录 / Splash 品牌画布 | 桌面 `LoginControls.tsx`、`loginDesignTokens.ts`(Splash 借用同族面板)、`LegacyMigrationDialog.tsx`(仅字重)、`oauthResultPage.ts`(自包含品牌页生成器,raw CSS 为其常量载体)；手机 `apps/mobile/src/components/LoginSkinControls.tsx` 与 `apps/mobile/src/auth/loginSkinLayout.ts` | 700 + 设计 px 字号 | §16 已登记 Bold,两端共用同源登录画布与 figma 坐标系；桌面守卫只扫描 `apps/desktop/src/renderer`，手机端由自身守卫体系负责，本登记不扩展 PR #1553 的扫描范围 |
 | markdown 内容 | 桌面 DOM `<strong>`（必须解析为绝对 700；嵌套 strong 仍封顶 700）、CodeMirror strong 语法节点（`codemirrorGithubTheme.ts` 的 `t.strong` → `fontWeight: 'bold'`）、移动端原生 Markdown strong（`apps/mobile/src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`） | 700 / `bold` | 用户内容语义,非 UI chrome;编辑器内 strong 与两端渲染后的 strong 同权。当前桌面 Tailwind preflight 的相对 `bolder` 会使嵌套 strong 计算到更高档位，是已知实现缺口；规则不把该结果视为合规，待独立施工。 |
 | hljs 主题移植 | `globals.css` 内 hljs 规则 | `bold` | 第三方主题移植,保真优先 |
 | 外部页注入 | `browserCommentPreload.ts` | 系统字体族 | 注入他人网页,不强加 Inter |
