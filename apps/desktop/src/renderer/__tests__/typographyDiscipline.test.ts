@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest';
  *  1. Tailwind 字重类只许 font-normal / font-medium / font-semibold;
  *     font-bold 及以上、以下与任意值 font-[...] 一律禁止(豁免域除外)。
  *  2. Tailwind 任意值字号 text-[N<unit>]、无类型提示的长度函数、属性形式
- *     `[font-size:...]` 与 text-[length:<function>] 零容忍:
+ *     `[font-size:...]` 与 `text-[length:...]` 零容忍(`length:` 前缀一律命中,
+ *     已登记值走精确豁免):
  *     px/em/rem/pt/pc/ch/ex/q/cm/mm/in/vw/vh/vmin/vmax 全单位、大小写不敏感、
  *     含小数与 .75 形态、length: 前缀及 calc()/var() 函数均命中;已登记的
  *     code-font/compact 派生值只能按具体文件 + 具体命中精确豁免。token 类
