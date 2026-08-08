@@ -14,6 +14,7 @@ import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn.js';
+import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -164,7 +165,9 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
   );
 }
 
-function createHarness() {
+function createHarness(opts?: {
+  getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
+}) {
   let running = false;
   let turnGeneration = 0;
   let pendingInteraction = false;
@@ -286,6 +289,9 @@ function createHarness() {
       hasAssistantProgressAfter
         ? hasAssistantProgressAfter(sessionId, userClientId)
         : Promise.resolve(false),
+    ...(opts?.getRecoveryContextSnapshot
+      ? { getRecoveryContextSnapshot: opts.getRecoveryContextSnapshot }
+      : {}),
     beforeDispatchUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
@@ -2207,6 +2213,117 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(persist?.content).toBe(CONTINUE_AFTER_ERROR_PROMPT);
     expect(h.sendToAgent.mock.calls[1]?.[2]?.planMode).toBe(false);
     expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.originalSyntheticTrigger).toBe('continue');
+  });
+
+  it('active-turn retry with snapshot builds a checkpoint continuation', async () => {
+    const h = createHarness({
+      getRecoveryContextSnapshot: async () => ({
+        contextTokens: 150_000,
+        contextWindow: 200_000,
+        progressCount: 12,
+        recentProgress: [
+          { role: 'assistant', summary: 'Read config file' },
+          { role: 'tool_use', summary: 'tool read_file' },
+        ],
+      }),
+    });
+    const sid = 'retry-checkpoint-snapshot';
+    h.setHasAssistantProgressAfter(async () => true);
+
+    const original = makeItem('q-first', 'original long task');
+    h.coordinator.enqueue(sid, original);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    const sentContent = (h.sendToAgent.mock.calls[1]?.[1] as { content?: string })?.content;
+    expect(sentContent).toContain(CONTINUE_AFTER_ERROR_PROMPT);
+    expect(sentContent).toContain('[CINDY_RECOVERY_CHECKPOINT v1]');
+    expect(sentContent).toContain('recovery attempt');
+    const persist = h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage;
+    expect(persist?.content).toContain('[CINDY_RECOVERY_CHECKPOINT v1]');
+  });
+
+  it('active-turn retry falls back to generic continuation when snapshot read fails', async () => {
+    const h = createHarness({
+      getRecoveryContextSnapshot: async () => {
+        throw new Error('DB connection lost');
+      },
+    });
+    const sid = 'retry-checkpoint-snapshot-failure';
+    h.setHasAssistantProgressAfter(async () => true);
+
+    const original = makeItem('q-first', 'original long task');
+    h.coordinator.enqueue(sid, original);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    // Snapshot read threw → fallback to generic continuation without checkpoint.
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: CONTINUE_AFTER_ERROR_PROMPT,
+    });
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'recovery checkpoint read failed; using generic continuation',
+      expect.objectContaining({ sessionId: sid, error: 'DB connection lost' }),
+    );
+  });
+
+  it('active-turn retry supersedes when recovery is cleared during snapshot read', async () => {
+    const { promise, resolve } = deferred<RecoveryContextSnapshot>();
+    const h = createHarness({
+      getRecoveryContextSnapshot: async () => promise,
+    });
+    const sid = 'retry-checkpoint-superseded-during-snapshot';
+    h.setHasAssistantProgressAfter(async () => true);
+
+    const original = makeItem('q-first', 'original long task');
+    h.coordinator.enqueue(sid, original);
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    // Start retry — it will block on the snapshot read.
+    const retryPromise = h.coordinator.retryLastError(sid);
+    await flush();
+    // Snapshot still pending, sendToAgent not called yet.
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Clear the error while snapshot read is in-flight → new recovery ref.
+    h.coordinator.clearError(sid);
+    await flush();
+
+    // Resolve the snapshot; revalidation should detect the changed recovery
+    // and suppress the second dispatch.
+    resolve({
+      contextTokens: 100_000,
+      contextWindow: 200_000,
+      progressCount: 5,
+      recentProgress: [],
+    });
+    await retryPromise;
+    await flush();
+    // The retry was superseded — no second dispatch occurred.
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
   it('active-turn retry falls back to resending the original text when the turn produced nothing', async () => {
