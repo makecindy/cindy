@@ -3488,6 +3488,8 @@
         "networkSecretGhostInputDetail": "憑證由這個外掛自己的設定介面收集，錄入時會經過外掛頁面；隨後一次性交給主機加密保管，存入後外掛無法讀回，主機只在請求它宣告的域名時注入。",
         "networkSecretIdentity": "將使用你的登入郵箱作為憑證「{{name}}」",
         "networkSecretIdentityDetail": "值取自當前登入賬號的郵箱，請求時由主機自動派生注入；無需填寫。外掛可讀取該郵箱，用於在它的設定介面裡展示當前身份。",
+        "networkSecretGhCli": "將優先使用本機 GitHub CLI 登入作為憑證「{{name}}」",
+        "networkSecretGhCliDetail": "主機按需讀取本機 gh 登入令牌，並且只注入 GitHub API 請求；外掛程式碼無法讀取或儲存令牌。若 gh 不可用，可在外掛設定中配置備用 Personal Access Token。",
         "networkSecretOrganizationIdentity": "將使用你的 Cindy 企業身份作為憑證「{{name}}」",
         "networkSecretOrganizationIdentityDetail": "Cindy 會按需簽發短時身份斷言，僅由主機發送給明確列出的服務域名；外掛程式碼無法讀取或儲存令牌。",
         "networkSecretOauth": "將引導你在 {{host}} 完成 OAuth 授權({{name}})",
@@ -4495,7 +4497,6 @@
     "review": {
       "turn": {
         "title": "本條訊息的變更",
-        "currentWorkspace": "當前工作區",
         "localOnly": "本條訊息的精確變更暫不支援遠端任務。",
         "partialNotice": "本條訊息包含無法精確追蹤的命令或工具寫入；以下僅展示已精確捕獲的部分，不能視為完整補丁。",
         "emptyTitle": "沒有已記錄的變更",
@@ -6308,6 +6309,7 @@
       "actionUnavailable": "本條訊息包含無法安全撤銷的檔案變更",
       "actionFailed": "未能應用本條訊息的改動，請重試",
       "partial": "僅記錄了可精確捕獲的部分變更",
+      "partialNone": "檔案已被更改，但未能記錄內容，因此無法在此審查或撤銷",
       "partialReversible": "僅撤銷或重新應用已精確記錄的變更；未記錄的改動不會由此操作處理",
       "partialActionHint": "僅撤銷或重新應用已精確記錄的檔案變更",
       "showMore": "再顯示 {{count}} 個檔案",
