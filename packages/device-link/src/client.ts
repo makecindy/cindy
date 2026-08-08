@@ -245,9 +245,11 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
 };
 
 /**
- * 重连延迟计算(纯函数,便于确定性单测):普通指数退避与拥塞冷却下限取
- * max,再做向下抖动(0.7x–1.0x,与 scheduleReconnect 既有抖动语义一致)。
- * random 传 [0,1) 的随机数;congestionCloseStreak=0 表示无拥塞信号。
+ * 重连延迟计算(包内部工具,为确定性单测保持具名导出;**不属于稳定公共
+ * API 面**,外部不应依赖):普通指数退避与拥塞冷却下限取 max,再做向下抖动
+ * (0.7x–1.0x,与 scheduleReconnect 既有抖动语义一致)。
+ * 入参钳制(review P2,防误用产生 NaN/负延迟):attempt / congestionCloseStreak
+ * 取整并夹到 ≥0(非有限值按 0),random 夹到 [0,1];streak=0 表示无拥塞信号。
  */
 export function computeReconnectDelayMs(input: {
   attempt: number;
@@ -258,17 +260,22 @@ export function computeReconnectDelayMs(input: {
   congestionBackoffMaxMs: number;
   random: number;
 }): number {
+  const attempt = Number.isFinite(input.attempt) ? Math.max(0, Math.floor(input.attempt)) : 0;
+  const streak = Number.isFinite(input.congestionCloseStreak)
+    ? Math.max(0, Math.floor(input.congestionCloseStreak))
+    : 0;
+  const random = Number.isFinite(input.random) ? Math.min(Math.max(input.random, 0), 1) : 0;
   const base = Math.min(
-    input.reconnectBaseMs * 2 ** input.attempt,
+    input.reconnectBaseMs * 2 ** attempt,
     input.reconnectMaxMs,
   );
-  const congestionFloor = input.congestionCloseStreak > 0
+  const congestionFloor = streak > 0
     ? Math.min(
-      input.congestionBackoffBaseMs * 2 ** (input.congestionCloseStreak - 1),
+      input.congestionBackoffBaseMs * 2 ** (streak - 1),
       input.congestionBackoffMaxMs,
     )
     : 0;
-  return Math.round(Math.max(base, congestionFloor) * (0.7 + input.random * 0.3));
+  return Math.round(Math.max(base, congestionFloor) * (0.7 + random * 0.3));
 }
 
 export type DeviceLinkStatus = 'stopped' | 'connecting' | 'online';
@@ -530,12 +537,32 @@ export class DeviceLinkClient {
    * 供"用户正在等"的场景(如移动端回到前台)opt-in,绕开指数退避——
    * 不改默认退避曲线(桌面端断线重连仍走 scheduleReconnect 的 1s→30s)。
    * 已 online 时为空操作,不打断健康连接;stopped 时等价于 start()。
+   *
+   * 拥塞冷却例外(review P1):relay 刚以 1013 拥塞断连、冷却计时器在跑时,
+   * 默认**不** un-park——事故形态下恰是在途请求经 waitUntilOnline → connectNow
+   * 把每次 1013 后的冷却清掉,「重连 → 重放洪峰 → 再被踢」的循环因此掐不断。
+   * 只有显式用户意图(移动端回前台)传 overrideCongestionCooldown 保留立即重连;
+   * 被 park 的调用方等冷却计时器到点自然重连(封顶 congestionBackoffMaxMs)。
    */
-  connectNow(reason = 'connect-now'): void {
+  connectNow(reason = 'connect-now', opts?: { overrideCongestionCooldown?: boolean }): void {
     // online 时强制重建请用 restartConnection —— 它才是「半开假活」场景的入口,
     // 且已包含 resetLinkStateForReconnect(此处曾有一个等价的 { force } 分支,
     // 生产代码从未使用,只有测试在调,故收敛为单一入口)。
     if (this.status === 'online') return;
+    if (this.stopped) {
+      // stopped → 等价 start():全新生命周期不背上一世代的拥塞冷却(review P1,
+      // 与 start() 的清零语义对齐)。
+      this.congestionCloseStreak = 0;
+    } else if (
+      this.congestionCloseStreak > 0
+      && this.reconnectTimer
+      && !opts?.overrideCongestionCooldown
+    ) {
+      this.log.debug(
+        `connectNow(${reason}) parked: congestion cool-down active (streak=${this.congestionCloseStreak})`,
+      );
+      return;
+    }
     this.stopped = false;
     this.reconnectAttempt = 0;
     if (this.reconnectTimer) {

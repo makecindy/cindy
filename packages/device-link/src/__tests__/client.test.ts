@@ -4233,6 +4233,15 @@ describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
     expect(computeReconnectDelayMs({ ...timing, attempt: 6, congestionCloseStreak: 1, random: 0 }))
       .toBe(21_000);
   });
+
+  it('入参钳制:非法 attempt/streak/random 不产生 NaN 或负延迟', () => {
+    expect(computeReconnectDelayMs({ ...timing, attempt: -3, congestionCloseStreak: -1, random: 0 }))
+      .toBe(700);
+    expect(computeReconnectDelayMs({ ...timing, attempt: Number.NaN, congestionCloseStreak: 0, random: 2 }))
+      .toBe(1_000);
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0.9, congestionCloseStreak: 1.9, random: Number.NaN }))
+      .toBe(3_500);
+  });
 });
 
 describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
@@ -4269,6 +4278,76 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
 
     // 普通断线(1006)不计入拥塞连击
     h.current().emit('close', 1006, 'heartbeat lost');
+    expect(internals.congestionCloseStreak).toBe(0);
+    h.client.stop();
+  });
+
+  it('拥塞冷却不被请求路径打穿:waitUntilOnline 不 un-park,显式用户意图 override 才立即重连', async () => {
+    // review P1:事故形态下在途请求经 waitUntilOnline → connectNow 清掉冷却
+    // 计时器,每次 1013 后仍立即重连,循环掐不断。
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1,
+        reconnectMaxMs: 5,
+        // 冷却下限拉大,确保测试窗口内计时器不会自然到点
+        congestionBackoffBaseMs: 60_000,
+        congestionBackoffMaxMs: 60_000,
+        pingIntervalMs: 60_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const socketsBefore = h.sockets.length;
+
+    h.current().emit('close', 1013, 'inbound backpressure');
+    // 请求路径 un-park:冷却期间必须被 park,不新建连接,有界等待快速失败
+    await expect(h.client.waitUntilOnline(30)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+    expect(h.sockets.length).toBe(socketsBefore);
+
+    // 显式用户意图(移动端回前台):override 立即重连
+    h.client.connectNow('appstate-active', { overrideCongestionCooldown: true });
+    await tick();
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    h.client.stop();
+  });
+
+  it('非拥塞断线的 waitUntilOnline un-park 行为不变:立即打断退避重连', async () => {
+    const h = makeHarness({
+      timing: {
+        // 普通退避拉大:不 un-park 的话测试窗口内不会自然重连
+        reconnectBaseMs: 60_000,
+        reconnectMaxMs: 60_000,
+        pingIntervalMs: 60_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const socketsBefore = h.sockets.length;
+
+    h.current().emit('close', 1006, 'heartbeat lost');
+    const wait = h.client.waitUntilOnline(2_000);
+    await tick();
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    h.current().ack();
+    await expect(wait).resolves.toBeUndefined();
+    h.client.stop();
+  });
+
+  it('stopped 后经 connectNow 拉起 = 新生命周期:拥塞连击清零(与 start 对齐)', async () => {
+    const h = makeHarness({
+      timing: { reconnectBaseMs: 1, reconnectMaxMs: 5, pingIntervalMs: 60_000 },
+    });
+    const internals = h.client as unknown as { congestionCloseStreak: number };
+    h.client.start();
+    await tick();
+    h.current().ack();
+    h.current().emit('close', 1013, 'inbound backpressure');
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    h.client.stop();
+    h.client.connectNow('relaunch');
     expect(internals.congestionCloseStreak).toBe(0);
     h.client.stop();
   });
