@@ -87,7 +87,11 @@ export function summarizeOpenPlan(
   const openSteps = insertion.todos
     .filter((todo) => todo.status !== 'completed')
     .map((todo) => todo.content);
-  if (openSteps.length === 0) return null;
+  // 全勾完但 turn 以失败/中断收尾(turnCompleted:false 印记):面板按设计不走
+  // 全勾完兜底退场,这份计划的唯一收口通道就是下一轮对账——不给对账机会,
+  // 全绿胶囊会永久钉住。openSteps 为空照样生成摘要,注入文案对空清单有专门
+  // 分支(确认完成或清掉)。
+  if (openSteps.length === 0 && insertion.turnFailed !== true) return null;
   return { openSteps, totalSteps: insertion.todos.length };
 }
 
@@ -97,6 +101,16 @@ export function summarizeOpenPlan(
  * 结尾用与 agentHandoff 同款的"以下是用户的新消息"边界,让正文归位。
  */
 export function buildPlanReconcileNote(summary: OpenPlanSummary): string {
+  // 全勾完但 turn 失败收尾的清单:没有未完成步骤可列,让 agent 确认后收口
+  // (重发全完成的计划即产生新终态,或清掉)。
+  if (summary.openSteps.length === 0) {
+    return [
+      '[计划对账]上一轮的计划步骤已全部标记完成,但该轮以失败或中断结束,计划尚未收口。',
+      '处理用户消息时顺手确认:若这些工作确已完成,重新提交一次完整的已完成计划把它收口;',
+      '若实际未完成或已与当前任务无关,修订条目或用空计划清掉它。不要让它先于用户的问题。',
+    '== 对账说明结束,以下是用户的新消息 ==',
+    ].join('\n');
+  }
   const steps = summary.openSteps.slice(0, 6).map((step) => `- ${step}`).join('\n');
   const more =
     summary.openSteps.length > 6 ? `\n(另有 ${summary.openSteps.length - 6} 项未列出)` : '';

@@ -104,6 +104,39 @@ describe('summarizeOpenPlan', () => {
   });
 });
 
+  it('keeps a reconcile path for a fully-completed plan whose turn failed', () => {
+    // turn 以失败/中断收尾时 main 打 turnCompleted:false,面板按设计不走全勾完
+    // 兜底退场——这份全绿计划的唯一收口通道就是下一轮对账,不能因 openSteps
+    // 为空而跳过。
+    const summary = summarizeOpenPlan([
+      planRow(
+        [
+          { step: 'Done A', status: 'completed' },
+          { step: 'Done B', status: 'completed' },
+        ],
+        { turnCompleted: false },
+      ),
+    ]);
+
+    expect(summary).toEqual({ openSteps: [], totalSteps: 2 });
+    const note = buildPlanReconcileNote(summary!);
+    expect(note).toContain('全部标记完成');
+    expect(note).toContain('收口');
+    expect(note).toContain('清掉');
+    expect(note).toContain('以下是用户的新消息');
+  });
+
+  it('still skips a fully-completed plan without any failure stamp', () => {
+    expect(
+      summarizeOpenPlan([
+        planRow([
+          { step: 'A', status: 'completed' },
+          { step: 'B', status: 'completed' },
+        ]),
+      ]),
+    ).toBeNull();
+  });
+
 describe('buildPlanReconcileNote', () => {
   it('lists open steps and grants all three outcomes including deletion', () => {
     const note = buildPlanReconcileNote({
