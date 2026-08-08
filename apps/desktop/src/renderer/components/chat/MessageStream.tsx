@@ -263,6 +263,15 @@ interface MessageStreamProps {
   } | null;
   /** Opens the parent conversation and focuses the original fork point. */
   onOpenForkOrigin?: () => void;
+  /**
+   * #2194: whether a user message (by clientId) was sent from this renderer's
+   * composer. Only such messages force-pin the viewport to the tail; user
+   * messages injected by other entries (IM channels, a mobile client driving
+   * the session, scheduler runs) follow the ordinary near-bottom rule.
+   * Optional — consumers that cannot tell (tests, storybook) keep the legacy
+   * behavior of treating every new tail user message as a local send.
+   */
+  isLocalUserSend?: (clientId: string) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2311,6 +2320,7 @@ export function MessageStream({
   focusMessageRequestId,
   forkOrigin,
   onOpenForkOrigin,
+  isLocalUserSend,
 }: MessageStreamProps) {
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
@@ -3206,6 +3216,10 @@ export function MessageStream({
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
       newUserSend: userMessageObservation.isNewUserSend,
+      // #2194: 缺省 prop 时按既有语义视为本端发送（测试 / 其它消费方不变）。
+      sentFromThisRenderer: lastUserMsg
+        ? (isLocalUserSend?.(lastUserMsg.clientId) ?? true)
+        : false,
       nearBottom: isNearBottomRef.current,
     });
 
