@@ -11,10 +11,12 @@ import {
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_PENDING_MESSAGES,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
+  TRANSPORT_PENDING_PUSH_MAX_AGE_MS,
   encodeReliableFrames,
   makeTransportSkipPayload,
   parseTransportPayload,
 } from '../transport.js';
+import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -2228,6 +2230,146 @@ describe('DeviceLinkClient', () => {
       expect.stringContaining('latest-wins push admission'),
     );
     h.client.stop();
+  });
+
+  it('流控 push(contacts-sync)满员入队不驱逐镜像帧,维持 BACKPRESSURE 交发送方流控', async () => {
+    // contacts-sync sender 对 BACKPRESSURE 做阻塞等待重试(它的流控协议),
+    // 它的帧不得触发 latest-wins 驱逐别人——满员时按原语义拒收即可。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'flow-controlled-in-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    expect(() =>
+      h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('已入队的流控 push 是腾位边界:镜像洪峰驱逐到它即止,分片不被静默丢弃', async () => {
+    // 反例(review P2):contacts-sync 的 cipher-chunk 一旦被 maker:event 洪峰
+    // 静默驱逐,发送方以为已送达,接收端永远拼不出本次传输。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'flow-controlled-boundary-stream');
+
+    // 队形:2 条镜像(seq1-2) + 1 条 contacts 分片(seq3) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', 'maker:event', { i: 1 });
+    h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk', index: 0 });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 3; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 洪峰驱逐 seq1、seq2 两条镜像后,队头是 contacts 分片:边界生效,第三条拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(3);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    h.client.stop();
+  });
+
+  it('WebSocket 缓冲满时 push 在驱逐前拒绝:不为无法入队的帧清空镜像历史', async () => {
+    // review P1:容量预检若晚于驱逐,连续调用会逐步清空本可重试的镜像历史,
+    // 却一帧未纳。预检先行后,ws 满那一轮必须一条都不驱逐。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'ws-precheck-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    h.current().bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'rejected' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+
+    // ws 恢复后的下一条 push 只驱逐本轮的 1 条(baseSeq=2):
+    // 证明 ws 满那一轮没有发生任何驱逐,否则基线会更靠后
+    h.current().bufferedAmount = 0;
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'admitted' })).not.toThrow();
+    const pushFrames = h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    expect(parseTransportPayload(pushFrames.at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    h.client.stop();
+  });
+
+  it('live invoke 入队压力只做 TTL 兜底清扫(单调时钟计量):过期 push 出队,新鲜 push 不被 invoke 驱逐', async () => {
+    // TTL 用单调时钟:墙钟被 NTP 向前校正超过 TTL 时,刚入队的 push 不得被误判过期。
+    // (push 入队已改 latest-wins,TTL 路径由 live invoke 的入队压力触达。)
+    const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+    let nowMs = 10_000;
+    const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
+    try {
+      const warn = vi.fn();
+      const h = makeHarness({
+        timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000, requestTimeoutMs: 5_000 },
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      });
+      h.client.start();
+      await tick();
+      h.current().ack();
+      await establishInboundReliableLink(h, 'ttl-invoke-stream');
+
+      h.client.sendPush('dev-b', 'maker:event', { text: 'old-1' });
+      h.client.sendPush('dev-b', 'maker:event', { text: 'old-2' });
+      // 只推进单调时钟:前两条 push 超龄,后续 push 保持新鲜
+      nowMs += TRANSPORT_PENDING_PUSH_MAX_AGE_MS + 1;
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
+        h.client.sendPush('dev-b', 'maker:event', { i });
+      }
+
+      // 缓冲满:live invoke 触发 TTL 兜底清扫,2 条过期 push 出队,invoke 入队
+      const p1 = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+      p1.catch(() => {});
+      await tick();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('dropped 2 discardable pending frame(s)'),
+      );
+
+      // 填回满员后队头是新鲜 push:invoke 不得驱逐它们,维持 BACKPRESSURE
+      h.client.sendPush('dev-b', 'maker:event', { text: 'refill' });
+      let backpressured: unknown;
+      const p2 = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+      await p2.catch((err: unknown) => { backpressured = err; });
+      expect(backpressured).toEqual(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      h.client.stop();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('队头 skip 占位不再挡住腾位：invoke 超时成 skip 后，invoke-result 跨过 skip 与 push 入队，重连后第一个重放', async () => {
