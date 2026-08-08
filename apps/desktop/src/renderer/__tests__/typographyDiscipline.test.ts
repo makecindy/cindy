@@ -13,9 +13,11 @@ import { describe, expect, it } from 'vitest';
  *  2. Tailwind 任意值字号 text-[N<unit>]、无类型提示的长度函数、属性形式
  *     `[font-size:...]` 与 `text-[length:...]` 零容忍(`length:` 前缀一律命中,
  *     已登记值走精确豁免):
- *     px/em/rem/pt/pc/ch/ex/q/cm/mm/in/vw/vh/vmin/vmax 全单位、大小写不敏感、
- *     含小数与 .75 形态、length: 前缀及 calc()/var() 函数均命中;已登记的
- *     code-font/compact 派生值只能按具体文件 + 具体命中精确豁免。token 类
+ *     数字开头的任意值(单位不枚举,含现代 viewport / font-relative /
+ *     container-query 单位)、大小写不敏感、含小数与 .75 形态、length: 前缀
+ *     及已识别的长度函数均命中;已登记的 code-font/compact 派生值只能按
+ *     具体文件 + 具体命中精确豁免。对可解析为字号的关键字同样默认拒绝,
+ *     不要用开放集合的枚举代替默认拒绝;token 类
  *     text-<n> 的 <n> 必须在白名单内,语义类只收编 xs/sm/base/lg。
  *  3. fontWeight / fontSize 的值片段(冒号、JSX 属性 =、style 赋值、三元两臂,
  *     **允许跨行**)必须落梯:weight 任意数字字面量 ∈ {400,500,600}(550/650
@@ -305,7 +307,7 @@ export function findTwWeightViolations(text: string): Hit[] {
 export function findArbitrarySizes(text: string): Hit[] {
   return [
     ...text.matchAll(
-      /\btext-\[(?:(?:length:)?(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax|%)|length:[^\]\n]+|(?:calc|clamp|min|max)\([^\]\n]+\)|(?:length:)?(?:xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger))\]/gi,
+      /\btext-\[(?:(?:\d+(?:\.\d+)?|\.\d+)[^\]\n]*|length:[^\]\n]+|(?:calc|clamp|min|max)\([^\]\n]+\)|[a-z-]+)\]/gi,
     ),
     ...text.matchAll(/\[(?:font-size):[^\]\n]+\]/gi),
   ].map((m) => ({ match: m[0], index: m.index ?? 0 }));
@@ -748,13 +750,15 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findArbitrarySizes('text-[length:calc(9px+1vw)]')).toHaveLength(1);
       // `length:` 默认拒绝开放的 CSS 函数集合,不能退化为已知函数枚举。
       expect(findArbitrarySizes('text-[length:env(safe-area-inset-top,_9px)]')).toHaveLength(1);
+      // 数字开头的现代单位不得依赖单位枚举:动态 viewport、font-relative、container-query。
+      expect(findArbitrarySizes('text-[9dvh] text-[1lh] text-[1cqw]')).toHaveLength(3);
       // Tailwind 可推断为 length 的函数无需显式 `length:` 也必须拦截。
       expect(findArbitrarySizes('text-[calc(9px+1vw)] text-[clamp(9px,1vw,12px)]')).toHaveLength(2);
       expect(findArbitrarySizes('text-[length:var(--app-code-font-size)]')).toHaveLength(1);
       // Tailwind 任意属性形式同样会生成字号样式,不能绕过 text- 类守卫。
       expect(findArbitrarySizes('[font-size:9px] [font-size:17px]')).toHaveLength(2);
-      // 百分比与 CSS 字号关键字也是可生成 font-size 的任意值。
-      expect(findArbitrarySizes('text-[50%] text-[xx-small]')).toHaveLength(2);
+      // 百分比与 CSS 字号关键字也是可生成 font-size 的任意值;未知关键字同样默认拒绝。
+      expect(findArbitrarySizes('text-[50%] text-[xx-small] text-[future-size-keyword]')).toHaveLength(3);
       // 省略前导零的小数必须按完整 0.12px 识别(P2)
       expect(findArbitrarySizes('text-[.12px]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[12PX]')).toHaveLength(1);
