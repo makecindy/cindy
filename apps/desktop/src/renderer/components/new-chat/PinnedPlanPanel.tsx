@@ -60,10 +60,19 @@ export function PinnedPlanPanel({
     (allDone && fallbackCompletionVisibility?.identity === completionIdentity
       ? fallbackCompletionVisibility.deadlineMs
       : null);
+  const snapshotIdentity = insertion
+    ? JSON.stringify([
+        sessionId ?? 'unknown',
+        insertion.key,
+        insertion.updatedAtMs ?? insertion.createdAt ?? null,
+        insertion.todos.map((todo) => [todo.status, todo.content]),
+      ])
+    : null;
   const completedPlanExpired = Boolean(
     completionDeadlineMs !== null && completionDeadlineMs <= Date.now(),
   );
   const [hiddenInsertionKey, setHiddenInsertionKey] = useState<string | null>(null);
+  const [dismissedSnapshotIdentity, setDismissedSnapshotIdentity] = useState<string | null>(null);
 
   useEffect(() => {
     if (!insertion || !allDone) {
@@ -99,7 +108,8 @@ export function PinnedPlanPanel({
     !insertion ||
     insertion.todos.length < 2 ||
     completedPlanExpired ||
-    hiddenInsertionKey === insertion.key
+    hiddenInsertionKey === insertion.key ||
+    dismissedSnapshotIdentity === snapshotIdentity
   )
     return null;
 
@@ -114,6 +124,7 @@ export function PinnedPlanPanel({
         todos={insertion.todos}
         animated={animated}
         maxWidth={width}
+        onDismiss={() => setDismissedSnapshotIdentity(snapshotIdentity)}
       />
     </div>
   );

@@ -5699,7 +5699,8 @@
       "outputFile": "Output: {{path}}"
     },
     "planPill": {
-      "step": "Step {{current}} of {{total}}"
+      "step": "Step {{current}} of {{total}}",
+      "dismiss": "Close Plan"
     },
     "forkOrigin": {
       "label": "Created from another session"
