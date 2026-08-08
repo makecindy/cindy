@@ -2995,6 +2995,15 @@ export class AgentInputCoordinator {
     if (typeof projected.persistedContent === 'string' && projected.persistedContent.includes(RECOVERY_CHECKPOINT_MARKER)) {
       projected.persistedContent = projected.persistedContent.slice(0, projected.persistedContent.indexOf(RECOVERY_CHECKPOINT_MARKER));
     }
+    // chatMessage.content is the outbound payload sent to remote controllers
+    // (device-link); it must mirror the same strip so the checkpoint marker
+    // never leaks past transport boundaries.
+    if (projected.chatMessage && typeof projected.chatMessage.content === 'string' && projected.chatMessage.content.includes(RECOVERY_CHECKPOINT_MARKER)) {
+      projected.chatMessage = {
+        ...projected.chatMessage,
+        content: projected.chatMessage.content.slice(0, projected.chatMessage.content.indexOf(RECOVERY_CHECKPOINT_MARKER)),
+      };
+    }
     return projected;
   }
 

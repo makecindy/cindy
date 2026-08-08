@@ -55,6 +55,7 @@ import { getDbClient } from './client/current';
 import { messages, sessions } from './schema';
 import { createLogger } from '../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { boundedSummary } from '../maker-ipc/recoveryCoordinator.js';
 
 const log = createLogger('session-active-turn');
 
@@ -569,11 +570,7 @@ function summarizeRecoveryContent(raw: string): string {
     else if (typeof record.summary === 'string') summary = record.summary;
     else if (typeof record.command === 'string') summary = `command ${record.command}`;
   }
-  return summary
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 360);
+  return boundedSummary(summary);
 }
 
 /** 测试专用:重置模块内存态。 */

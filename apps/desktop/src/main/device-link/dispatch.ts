@@ -1893,8 +1893,10 @@ function stripRecoveryCheckpointFromMessage(record: Record<string, unknown>): Re
   const hasCheckpointInMeta = agentMeta && typeof agentMeta === 'object' && !Array.isArray(agentMeta) &&
     'recoveryCheckpoint' in (agentMeta as Record<string, unknown>);
   const content = record.content;
-  const hasCheckpointInContent = typeof content === 'string' &&
-    content.includes(RECOVERY_CHECKPOINT_MARKER);
+  const checkpointIdx = typeof content === 'string'
+    ? (content as string).indexOf(RECOVERY_CHECKPOINT_MARKER)
+    : -1;
+  const hasCheckpointInContent = checkpointIdx >= 0;
   if (!hasCheckpointInMeta && !hasCheckpointInContent) return record;
   const result: Record<string, unknown> = { ...record };
   if (hasCheckpointInMeta) {
@@ -1902,10 +1904,7 @@ function stripRecoveryCheckpointFromMessage(record: Record<string, unknown>): Re
     result.agentMeta = safeMeta;
   }
   if (hasCheckpointInContent) {
-    result.content = (content as string).slice(
-      0,
-      (content as string).indexOf(RECOVERY_CHECKPOINT_MARKER),
-    );
+    result.content = (content as string).slice(0, checkpointIdx);
   }
   return result;
 }

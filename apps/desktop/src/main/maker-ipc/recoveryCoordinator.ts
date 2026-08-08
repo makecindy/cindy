@@ -46,7 +46,7 @@ export function contextRatio(contextTokens: number, contextWindow: number): numb
   return Math.min(1, contextTokens / contextWindow);
 }
 
-function boundedSummary(value: string): string {
+export function boundedSummary(value: string): string {
   return value
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
