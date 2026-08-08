@@ -3894,7 +3894,7 @@ export function ChatInput({
   // ── Palette insertions ─────────────────────────────────────────────
   const insertSlashCommand = useCallback(
     (cmd: UnifiedCommand) => {
-      if (!editor || trigger.kind !== 'slash') return;
+      if (!editor || trigger.kind !== 'slash' || composerMutationLockedRef.current) return;
       const { from } = trigger;
       // Replace the WHOLE slash-run, not just up-to-caret: the user may
       // have moved the caret back inside the run (e.g. `/compa|ct`) and
