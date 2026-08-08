@@ -2307,23 +2307,11 @@ export class GoalController {
             if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
               this.goalDispatchAbortControllers.delete(sessionId);
             }
-            // #2105 P0:消费恢复标记——resumed 与 turn-dispatched 在真实派发边界同代
-            // 成对发出(busy/预算预检/session 缺失等派发前退出不得产生
-            // 孤儿恢复事件;以 boundary 身份校验——busy 重试同 boundary 可消费,
-            // 新目标换 boundary 自动失效,防旧标记串入)。
-            const pendingResume = this.pendingResumeEvents.get(sessionId);
-            if (pendingResume && pendingResume.boundary === dispatchBoundary) {
-              this.pendingResumeEvents.delete(sessionId);
-              this.recordRunEvent('resumed', sessionId, state, {
-                to: 'active',
-                reason: pendingResume.reason,
-              });
-            }
-            // #2105 P0:turn-dispatched 只能在真正跨过 vendor dispatch 边界后发出
-            // (reviewer: send 返回 accepted:false 时若已记录,会出现"已派发无收口"
-            // 的幽灵事件;onDispatching 是唯一的真实派发边界,且带 isCurrentDispatch
-            // 守卫,取消/竞态下不产生事件)。
-            this.recordRunEvent('turn-dispatched', sessionId, state);
+            // #2105 P0:resumed / turn-dispatched 事件**不在此处发**——Session.send 在
+            // handle.send 之前调用本回调、handle.send 完成后才置 accepted(取消/abort
+            // 窗口内回调已执行但 send 返回 accepted:false,会产生"已派发无收口"的
+            // 幽灵事件)。归属登记(goalTurnsInFlight)必须同步,事件等 send 返回
+            // accepted 后在 accepted 分支补发。
           },
           signal: dispatchAbortController.signal,
         },
@@ -2347,6 +2335,18 @@ export class GoalController {
         // onDispatching 是归属登记的唯一边界。不能在 await send 后再次 add：极快的
         // turn 可能已经发出终态并同步释放归属，重新登记会把后续用户 turn 误认成 Goal。
         baselineStarted = false;
+        // #2105 P0:send 确认 accepted 后才补发派发事件(reviewer P2:onDispatching 在
+        // handle.send 前触发,cancelled-before-dispatch 时 send 返回 accepted:false,
+        // 事件必须等 accepted 确认才记录,避免"已派发无收口"幽灵事件)。
+        const pendingResume = this.pendingResumeEvents.get(sessionId);
+        if (pendingResume && pendingResume.boundary === dispatchBoundary) {
+          this.pendingResumeEvents.delete(sessionId);
+          this.recordRunEvent('resumed', sessionId, state, {
+            to: 'active',
+            reason: pendingResume.reason,
+          });
+        }
+        this.recordRunEvent('turn-dispatched', sessionId, state);
       }
     } catch (e) {
       if (baselineStarted) {
