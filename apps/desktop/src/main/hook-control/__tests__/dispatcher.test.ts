@@ -344,6 +344,17 @@ describe('normalizeTaskSource', () => {
       await tick();
     }
     expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
+    expect(fr.calls[0]?.groupHistoryAccess).toEqual({
+      access: 'lane',
+      provider: 'telegram:9',
+      lane: { provider: 'telegram:9', chatId: '-900', threadId: '' },
+    });
+    expect(fr.calls[1]?.groupHistoryAccess).toEqual({
+      access: 'lane',
+      provider: 'telegram:9',
+      lane: { provider: 'telegram:9', chatId: '-900', threadId: '77' },
+    });
+    expect(fr.calls[2]?.groupHistoryAccess).toBeUndefined();
   });
 });
 

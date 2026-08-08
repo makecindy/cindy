@@ -648,6 +648,153 @@ describe('Scheduler', () => {
     await h.scheduler.stop();
   });
 
+  it('start() isolates legacy invalid interval cron records instead of blocking valid schedules', async () => {
+    const warn = vi.fn();
+    const local = makeHarness({ logger: { warn } });
+    local.storage.schedules.set('legacy-invalid', {
+      id: 'legacy-invalid',
+      name: 'legacy invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      intervalMs: 5 * 60_000,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: Date.UTC(2020, 0, 1, 0, 0, 0),
+    });
+    local.storage.schedules.set('valid', {
+      id: 'valid',
+      name: 'valid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '0 9 * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: Date.UTC(2020, 0, 1, 0, 0, 0),
+    });
+
+    await expect(local.scheduler.start()).resolves.toBeUndefined();
+
+    expect((await local.storage.get('legacy-invalid'))?.nextFireAt).toBeUndefined();
+    expect((await local.storage.get('valid'))?.nextFireAt).toBe(
+      Date.UTC(2026, 0, 1, 9, 0, 0),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'scheduler: skipped invalid active schedule during startup',
+      expect.objectContaining({ scheduleId: 'legacy-invalid' }),
+    );
+
+    await local.scheduler.stop();
+  });
+
+  it('keeps a legacy invalid cron quarantined when clearing its stale fire time fails', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    const staleFireAt = Date.UTC(2020, 0, 1, 0, 0, 0);
+    local.storage.schedules.set('legacy-invalid', {
+      id: 'legacy-invalid',
+      name: 'legacy invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: staleFireAt,
+    });
+    vi.spyOn(local.storage, 'update').mockRejectedValueOnce(new Error('database is locked'));
+
+    await local.scheduler.start();
+    expect((await local.storage.get('legacy-invalid'))?.nextFireAt).toBe(staleFireAt);
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns('legacy-invalid')).toHaveLength(0);
+    await local.scheduler.stop();
+  });
+
+  it('quarantines an invalid interval cron first discovered during periodic DB sync', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    local.storage.schedules.set('late-invalid', {
+      id: 'late-invalid',
+      name: 'late invalid cron',
+      prompt: 'p',
+      kind: 'cron',
+      cronExpr: '5abc * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      manual: false,
+      intervalMs: 5 * 60_000,
+      agentKind: 'claude-code',
+      workspaceKind: 'project',
+      useWorktree: false,
+      notify: { desktop: false, feishu: false },
+      status: 'active',
+      createdAt: 0,
+      updatedAt: 0,
+      nextFireAt: Date.UTC(2020, 0, 1, 0, 0, 0),
+    });
+
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns('late-invalid')).toHaveLength(0);
+
+    await local.storage.update('late-invalid', {
+      cronExpr: '* * * * *',
+      nextFireAt: local.clock.now(),
+    });
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).toHaveBeenCalledTimes(1);
+    await local.scheduler.stop();
+  });
+
+  it('does not execute a schedule whose cron becomes malformed after cache sync but before due-fire claim', async () => {
+    const local = makeHarness({ logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    const sch = await local.scheduler.create({ ...baseInput, intervalMs: 10_000 });
+
+    // Simulate a second instance writing invalid metadata while retaining the
+    // same due time. The first instance still has the valid cached copy and
+    // reaches claimDueFire before its 30s DB refresh.
+    await local.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+    local.clock.advance(10_000);
+    await local.scheduler.tick();
+
+    expect(local.runner.fire).not.toHaveBeenCalled();
+    expect(await local.scheduler.listRuns(sch.id)).toHaveLength(0);
+    expect((await local.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    await local.scheduler.stop();
+  });
+
   // ── intervalMs（"上次完成 + N" 语义）──
   // 这条线和 cron-槽位 完全分支：fireOne / start / resume / create 都要分别覆盖。
 
@@ -656,6 +803,61 @@ describe('Scheduler', () => {
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 5 * 60_000 });
     expect(sch.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 5, 30));
     expect(sch.intervalMs).toBe(5 * 60_000);
+  });
+
+  it('create() rejects invalid cron metadata even when intervalMs controls the first fire', async () => {
+    await expect(h.scheduler.create({
+      ...baseInput,
+      cronExpr: '5abc * * * *',
+      intervalMs: 5 * 60_000,
+    })).rejects.toThrow();
+    expect(h.storage.schedules.size).toBe(0);
+  });
+
+  it('rejects enabling a legacy manual interval schedule with malformed cron metadata', async () => {
+    const schedule = await h.scheduler.create({
+      ...baseInput,
+      manual: true,
+      intervalMs: 5 * 60_000,
+    });
+    await h.storage.update(schedule.id, { cronExpr: '5abc * * * *' });
+
+    await expect(h.scheduler.update(schedule.id, { manual: false })).rejects.toThrow();
+    expect(await h.storage.get(schedule.id)).toMatchObject({
+      manual: true,
+      cronExpr: '5abc * * * *',
+    });
+  });
+
+  it('rejects reactivating an expired interval schedule with malformed cron metadata', async () => {
+    const schedule = await h.scheduler.create({
+      ...baseInput,
+      intervalMs: 5 * 60_000,
+    });
+    await h.storage.update(schedule.id, {
+      status: 'expired',
+      cronExpr: '5abc * * * *',
+    });
+
+    await expect(h.scheduler.update(schedule.id, { name: 'try to reactivate' })).rejects.toThrow();
+    expect(await h.storage.get(schedule.id)).toMatchObject({
+      status: 'expired',
+      cronExpr: '5abc * * * *',
+      name: schedule.name,
+    });
+  });
+
+  it('resume() keeps an interval schedule paused when legacy cron metadata is invalid', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+    await h.scheduler.pause(sch.id);
+    await h.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+
+    await expect(h.scheduler.resume(sch.id)).rejects.toThrow();
+    expect((await h.storage.get(sch.id))?.status).toBe('paused');
   });
 
   it('intervalMs recurring fire schedules nextFireAt at finishedAt + intervalMs', async () => {
@@ -828,6 +1030,31 @@ describe('Scheduler', () => {
     expect(after?.intervalMs).toBe(10 * 60_000);
     // 触发字段变了 → 按 interval 冷启动重排：now + 10min = 00:11:00（不是 */30 壁钟槽位）
     expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 11, 0));
+  });
+
+  it('rejects an invalid cronExpr update even when interval scheduling remains authoritative', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+
+    await expect(h.scheduler.update(sch.id, { cronExpr: '5abc * * * *' })).rejects.toThrow();
+
+    const stored = await h.storage.get(sch.id);
+    expect(stored).toMatchObject({
+      cronExpr: '*/10 * * * *',
+      intervalMs: 10 * 60_000,
+    });
+  });
+
+  it('rejects interval-only re-arms when legacy cron metadata is malformed', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs: 10 * 60_000 });
+    await h.storage.update(sch.id, { cronExpr: '5abc * * * *' });
+    const before = await h.storage.get(sch.id);
+
+    await expect(h.scheduler.update(sch.id, { intervalMs: 5 * 60_000 })).rejects.toThrow();
+    expect(await h.storage.get(sch.id)).toEqual(before);
   });
 
   it('update(prompt only) leaves intervalMs and nextFireAt completely untouched', async () => {

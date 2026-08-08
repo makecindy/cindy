@@ -25,6 +25,7 @@ import type {
   PermissionMode,
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
+import type { GroupHistoryAccessScope } from './groupHistoryAccess';
 import type { ImOutputDriver, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
@@ -184,6 +185,8 @@ export interface ImChannelAdapter {
    * 该轮(fail-closed), 不会静默放开。
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
+  /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
+  groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────
