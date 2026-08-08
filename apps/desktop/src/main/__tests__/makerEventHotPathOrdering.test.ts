@@ -71,6 +71,21 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource.slice(0, broadcastIndex)).not.toContain('handleAgentEvent(sessionMetaForIsland');
   });
 
+  it('tracks Claude wall clock across continuation segments and only consumes it at product completion', () => {
+    const wireSessionSource = extractWireSessionSource();
+
+    expect(wireSessionSource).toContain(
+      "if (!wasInTurn && event.source === 'claude-code') {\n            productTurnWallClockTracker.start(session.id);",
+    );
+    expect(wireSessionSource).toMatch(
+      /event\.source === 'claude-code'\s*&&\s*!isContinuationBoundary\s*&&\s*!isSilentStopDone[\s\S]*?productTurnWallClockTracker\.finish\(session\.id\)/,
+    );
+    expect(wireSessionSource).toContain(
+      'const claudeTurnDurationMs =\n          completedTurnWallClockMs ??',
+    );
+    expect(wireSessionSource.match(/claudeTurnDurationMs,/g)).toHaveLength(3);
+  });
+
   it('wakes deferred Goal resumes from the shared product-terminal idle boundary', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');

@@ -21,7 +21,7 @@ describe('aggregateTurnUsageDetails', () => {
       cacheReadTokens: 50,
       cacheCreateTokens: 2,
       durationMs: 500,
-      turnDurationMs: 2_500,
+      turnDurationMs: 6_500,
       models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
       perModelCost: [
         { model: 'claude-fable-5', money: usdMoney(1.25) },
@@ -37,7 +37,7 @@ describe('aggregateTurnUsageDetails', () => {
       cacheCreateTokens: 7,
       totalTokens: 197,
       durationMs: 1_500,
-      turnDurationMs: 2_500,
+      turnDurationMs: 6_500,
       models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
     });
     expect(aggregated?.perModelCost).toEqual([

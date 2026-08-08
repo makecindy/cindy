@@ -693,6 +693,7 @@ import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
 } from './sessionTurnActivityTracker.js';
+import { ProductTurnWallClockTracker } from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
@@ -2380,6 +2381,7 @@ let pendingAgentSwitchApplyHolder:
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
+const productTurnWallClockTracker = new ProductTurnWallClockTracker();
 
 /**
  * Own the session input boundary while rewind stops an active turn and changes
@@ -3418,6 +3420,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let pendingCodexAccountUsageSnapshot: unknown | null = null;
       let shouldMarkTurnStatusIdleAfterBroadcast = false;
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
+      let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
       // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
       // 若 claim 悬挂会导致 UI 永久「正在生成」。区分「claim 悬挂」与「done 未到达」。
@@ -3454,6 +3457,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             clearPending: typeof event.turnAttemptToken === 'number',
           });
           const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
+          if (!wasInTurn && event.source === 'claude-code') {
+            productTurnWallClockTracker.start(session.id);
+          }
           sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
           if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);
           // 后台活动检测:turn 开始 → 该会话的 API 流量回归主线,后台横幅熄灭。
@@ -3500,6 +3506,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const rawTurn = (event.data as { raw?: { id?: unknown; status?: unknown } } | null)?.raw;
         const isSilentStopDone =
           (event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true;
+        if (
+          event.source === 'claude-code' &&
+          !isContinuationBoundary &&
+          !isSilentStopDone
+        ) {
+          completedTurnWallClockMs = productTurnWallClockTracker.finish(session.id);
+        }
         if (!isContinuationBoundary && !isSilentStopDone) {
           shouldMarkTurnTerminalIdleAfterBroadcast = true;
         }
@@ -3941,6 +3954,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           | undefined;
         const cumulative = doneData?.total_cost_usd;
         const modelUsage = doneData?.modelUsage;
+        const claudeTurnDurationMs =
+          completedTurnWallClockMs ??
+          (typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined);
         let modelUsageDeltas: ModelUsageDeltaEntry[] | undefined;
         if (modelUsage && typeof modelUsage === 'object') {
           const { next, deltas } = computeModelUsageDeltas(
@@ -4082,7 +4098,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 'unknown',
                 perModel,
                 typeof doneData?.duration_api_ms === 'number' ? doneData.duration_api_ms : undefined,
-                typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined,
+                claudeTurnDurationMs,
               );
               recordTurnSpend(turnMoney);
               recordSessionTurnSpend(session.id, turnMoney);
@@ -4135,7 +4151,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 'unknown',
                 perModel,
                 typeof doneData?.duration_api_ms === 'number' ? doneData.duration_api_ms : undefined,
-                typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined,
+                claudeTurnDurationMs,
               );
               if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
                 const changedScheduleId = await recordSchedulerTurnCost({
@@ -4175,7 +4191,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               resolvedModel,
               undefined,
               typeof doneData?.duration_api_ms === 'number' ? doneData.duration_api_ms : undefined,
-              typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined,
+              claudeTurnDurationMs,
             );
             // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
             // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
@@ -4674,6 +4690,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedCostUsdBySession.delete(session.id);
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
+          productTurnWallClockTracker.clear(session.id);
           // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
           clearClaudeSessionBackgroundActivity(session.id);
           clearSessionPersistState(session.id);

@@ -259,9 +259,10 @@ function noteCodexGenerationBoundary(
     return;
   }
   if (phase !== 'completed') return;
-  // Codex v2 emits fileChange as completion-only. Treat that shape as an
-  // instantaneous boundary; paired variants still pause when a start exists.
+  // Codex v2 can emit fileChange as completion-only. Without its start boundary
+  // we cannot exclude file application time from the generation denominator.
   if (item.type === 'fileChange' && !rt.generationPendingToolIds.has(pauseId)) {
+    rt.generationTimingReliable = false;
     return;
   }
   resumeCodexGeneration(

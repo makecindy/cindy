@@ -160,8 +160,9 @@ export function aggregateTurnUsageDetails(
   const durationMs = hasCompleteOutputTiming
     ? details.reduce((sum, item) => sum + (item.durationMs ?? 0), 0) || undefined
     : undefined;
-  // Each segment can carry the same whole-turn wall clock. Taking the maximum
-  // preserves the outer turn duration without multiplying it by segment count.
+  // Intermediate Claude continuation segments can carry their own SDK duration,
+  // while the final segment carries the full outer product-turn wall clock.
+  // Taking the maximum preserves that complete value without double-counting.
   const turnDurationMs =
     details.reduce((max, item) => Math.max(max, item.turnDurationMs ?? 0), 0) || undefined;
 
