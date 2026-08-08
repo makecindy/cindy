@@ -709,16 +709,20 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
  *    实测由确定性必问降进灰区,review 报)。
  *
  * 两处必须同源:一处认得、另一处认不得,正是「遮蔽把证据抹掉」这类漏判的成因。
- * 分页器按**整族**登记(`(?:[A-Z][A-Z0-9_]*_)?PAGER`):每个 CLI 都有自己的 `<TOOL>_PAGER`,
- * 只列 `PAGER` / `GIT_PAGER` 等于给一个换前缀就绕过的口子。
+ * 分页器 / 编辑器按**整族**登记(`(?:[A-Z][A-Z0-9_]*)?PAGER` / `…EDITOR`):每个 CLI 都有
+ * 自己的一份(`GIT_PAGER`、`GH_PAGER`、`GH_EDITOR`、`GIT_SEQUENCE_EDITOR`、`HGEDITOR`…),
+ * 逐个登记等于给一个换前缀就绕过的口子。前缀里的下划线也是**可选**的 —— `HGEDITOR`
+ * 这种连写形态同样存在。
  */
 const ENV_VARS_EXECUTING_THEIR_VALUE = 'LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+'
-  + '|(?:[A-Z][A-Z0-9_]*_)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL'
+  + '|(?:[A-Z][A-Z0-9_]*)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL'
   + '|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV'
   + '|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS'
   // 编辑器族与分页器同理:值是 git / 其它 CLI 会**启动的程序**
-  // (`GIT_EDITOR="sudo …" git commit`),不是数据(review 报)。
-  + '|(?:GIT_)?(?:SEQUENCE_)?EDITOR|VISUAL'
+  // (`GIT_EDITOR="sudo …" git commit`),不是数据。**按整族登记**,与 PAGER 同写法 ——
+  // 每个 CLI 都有自己的 `<TOOL>_EDITOR`(gh 的 `GH_EDITOR`、git 的 `GIT_SEQUENCE_EDITOR`…),
+  // 只列 `GIT_` 前缀等于给一个换前缀就绕过的口子(review 报,与 PAGER 那次同一个错误)。
+  + '|(?:[A-Z][A-Z0-9_]*)?EDITOR|VISUAL'
   + '|RUBYOPT|PATH';
 const ENV_EXECUTION_ASSIGNMENT = new RegExp(`(?:^|\\s)(?:${ENV_VARS_EXECUTING_THEIR_VALUE})=`);
 const ENV_EXECUTION_NAME = new RegExp(`^(?:${ENV_VARS_EXECUTING_THEIR_VALUE})$`);
@@ -1712,11 +1716,14 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
  * 读**,是 agent 处理 JSON 的日常写法,正是本 PR 要消除的那类误报。「读输入」和
  * 「把输入当代码跑」必须分开。
  *
- * 求值那半是尽力而为的黑名单(写法太多,列不全),所以只在**已经引用了 stdin** 的载荷上
- * 生效 —— 两个条件叠加后误报面很小,漏判也仍有灰区 AI 审阅器兜底。
+ * 求值那半是尽力而为的黑名单,所以只在**已经引用了 stdin** 的载荷上生效 —— 两个条件
+ * 叠加后误报面很小,漏判也仍有灰区 AI 审阅器兜底。名字按**族**写而不是逐个列:
+ * `exec\w*` / `spawn\w*` 一次覆盖 `execSync` / `execFile` / `spawnSync` 等全部变体,
+ * 并直接认 `child_process` / `subprocess` 这两个模块名 —— 只列 `eval` 和少数几个方法名
+ * 是漏判的直接成因(review 报)。
  */
 const PROGRAM_READS_STDIN = /\bstdin\b|\bSTDIN\b|<STDIN>|\/dev\/stdin|\breadFileSync\s*\(\s*0\b|\bopen\s*\(\s*0\b|\bgets\b/;
-const PROGRAM_EVALUATES_INPUT = /\b(?:eval|exec|execfile|compile|instance_eval|class_eval|module_eval|assert)\s*\(|\b(?:new\s+)?Function\s*\(|\bvm\.runIn|\bos\.system\s*\(|\bsubprocess\.(?:run|call|check_output|Popen)\s*\(|\beval\s+|\bsource\s+/;
+const PROGRAM_EVALUATES_INPUT = /\b(?:eval|exec\w*|spawn\w*|system|popen|compile|instance_eval|class_eval|module_eval|assert)\s*\(|\b(?:new\s+)?Function\s*\(|\bvm\.runIn|\bchild_process\b|\bsubprocess\b|\beval\s+|\bsource\s+/;
 
 function interpreterProgramConsumesStdin(tokens: string[]): boolean {
   const payload = interpreterInlineCodePayload(tokens) ?? shellSourceSelectorPayload(tokens);

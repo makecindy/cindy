@@ -200,6 +200,11 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     `printf 'x' | python3 -c "import sys; exec(sys.stdin.read())"`,
     `printf 'x' | ruby -e "eval(STDIN.read)"`,
     `printf 'x' | python3 -c "import sys,os; os.system(sys.stdin.read())"`,
+    // 交给 child_process / subprocess 执行也是「把输入当程序跑」
+    `printf 'x' | node -e "require('child_process').execSync(require('fs').readFileSync(0,'utf8'))"`,
+    `printf 'x' | node -e "const{exec}=require('child_process');exec(require('fs').readFileSync(0,'utf8'))"`,
+    `printf 'x' | node -e "require('child_process').spawnSync(require('fs').readFileSync(0,'utf8'),{shell:true})"`,
+    `printf 'x' | python3 -c "import sys,subprocess; subprocess.run(sys.stdin.read(),shell=True)"`,
   ],
 
   '载荷被数据位剥离遮蔽后会丢失证据的位置': [
@@ -211,6 +216,11 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     `EDITOR="sudo cat /etc/shadow" git rebase -i`,
     `VISUAL="sudo id" git commit`,
     `GIT_SEQUENCE_EDITOR="sudo id" git rebase -i`,
+    // 编辑器 / 分页器按整族登记:换个 CLI 前缀(含无下划线的连写)不能绕过
+    `GH_EDITOR="sudo cat /etc/shadow" gh issue create --editor`,
+    `HGEDITOR="sudo id" hg commit`,
+    `SVN_EDITOR="sudo id" svn commit`,
+    `MANPAGER="sudo id" man ls`,
     // rg 的外部程序选项:值是要启动的程序,不是搜索模式
     'rg --pre "sudo cat /etc/shadow" foo .',
     'rg --hostname-bin "sudo id" foo .',
@@ -348,6 +358,8 @@ describe('对抗语料 — 反向边界:读输入 ≠ 执行输入', () => {
       // 编辑器变量的值是普通程序名,不含红线内容
       'GIT_EDITOR=true git rebase --continue',
       'EDITOR=vim git commit',
+      'GH_EDITOR=vim gh issue create',
+      'MANPAGER=cat man ls',
     ];
     const wrong = commands.filter((c) => classifyShellCommand(c, roots, opts) !== 'prompt');
     expect(wrong, `以下日常写法被误升成红线或误放行:\n${wrong.join('\n')}`).toEqual([]);
