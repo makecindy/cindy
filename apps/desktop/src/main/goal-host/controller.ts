@@ -2377,6 +2377,18 @@ export class GoalController {
         // 读 generation,快终态时 boundary 已被 stopSession 清掉会写成 0,与
         // finalize/terminal 脱节)。resumed 用 onDispatching 固化的恢复原因
         // (pendingResume 可能已被清理);at 用派发时刻保证重放顺序在 finalize 前。
+        // 发送条件:当前仍是本派发的 owner,或本派发已被 finalizeTurn 正常收口
+        // (turn.finalized——provider 快终态时 finalize 已跑,事件补发与收口配对)。
+        // clear/pause/替换 Goal 使 boundary 失效且无收口时,不写孤儿 dispatch
+        // 进审计流(Greptile P1:已清除/替换目标的旧派发不得混入时间线)。
+        const boundaryStillLive =
+          this.turns.get(sessionId) === dispatchBoundary || dispatchBoundary?.finalized === true;
+        if (!boundaryStillLive) {
+          this.deps.logger.info('[goal] dispatch audit skipped — lifecycle replaced before accepted', {
+            sessionId,
+          });
+          return;
+        }
         if (dispatchResumeReason !== undefined) {
           this.recordRunEvent('resumed', sessionId, state, {
             to: 'active',

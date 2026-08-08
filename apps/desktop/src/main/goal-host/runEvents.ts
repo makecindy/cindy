@@ -83,27 +83,31 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       // 不会污染环内数据。
       // 按 at 稳定排序(快终态时 turn-dispatched 的 at 早于 finalize,但落环晚;
       // 消费者按返回顺序看时间线必须 dispatch 在前,Codex P1)。同 at + 同 turnIndex
-      // 时按类型优先级(派发类在收口类之前,Greptile P1:同毫秒快终态不再错序)。
-      const typeOrder = [
-        'resumed',
-        'turn-dispatched',
-        'turn-finalized',
-        'state-transition',
-        'stall-detected',
-        'budget-consumed',
-        'terminal',
-      ];
+      // 时:派发类(resumed/turn-dispatched)与收口类(turn-finalized/terminal)跨组时
+      // 派发在前(Greptile P1 同毫秒快终态);同组内保持插入序(Codex P2:预算停止的
+      // state-transition/budget-consumed/terminal 与随后立即调高上限的
+      // budgetLimited→active 同毫秒时,不得把后发生的 active 排到 terminal 之前)。
+      const dispatchGroup = new Set(['resumed', 'turn-dispatched']);
+      const finalizeGroup = new Set(['turn-finalized', 'terminal']);
       return ring
         .map((evt) => ({
           ...evt,
           budget: evt.budget ? { ...evt.budget } : undefined,
         }))
-        .sort(
-          (a, b) =>
-            (a.at ?? 0) - (b.at ?? 0) ||
-            a.turnIndex - b.turnIndex ||
-            typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type),
-        );
+        .sort((a, b) => {
+          const byAt = (a.at ?? 0) - (b.at ?? 0);
+          if (byAt !== 0) return byAt;
+          const byTurn = a.turnIndex - b.turnIndex;
+          if (byTurn !== 0) return byTurn;
+          // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序(稳定排序)。
+          const aD = dispatchGroup.has(a.type);
+          const bD = dispatchGroup.has(b.type);
+          const aF = finalizeGroup.has(a.type);
+          const bF = finalizeGroup.has(b.type);
+          if (aD && bF) return -1;
+          if (aF && bD) return 1;
+          return 0;
+        });
     },
     clear() {
       ring.length = 0;
