@@ -172,10 +172,10 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     <div className="mt-auto pt-1">
       {/* 胶囊整体承载 hover(方案 D):玻璃底色加深一档;悬停右侧操作按钮时用
         :has() 把胶囊底色还原,只让当前按钮高亮,避免双层叠色。
-        横向填满容器、向下填满、无圆角(直角矩形)。 */}
+        横向填满容器、向下填满、12px 容器圆角(rounded-xl)。 */}
       <div
         className={cn(
-          'flex h-12 items-center border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',
+          'flex h-12 items-center rounded-xl border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',
           'transition-colors hover:bg-[var(--sidebar-user-card-bg-hover)]',
           'has-[.flame-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
           'has-[.mobile-download-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
@@ -203,7 +203,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               <div
                 className={cn(
                   'flex h-10 w-10 items-center justify-center rounded-full',
-                  'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] text-[16px] font-medium text-[var(--sidebar-user-card-text)]',
+                  'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] text-16 font-medium text-[var(--sidebar-user-card-text)]',
                 )}
               >
                 {showNotSignedInGlyph ? (

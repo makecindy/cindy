@@ -35,9 +35,9 @@ describe('UserInfoSection — outer wrapper takes over full-row hover', () => {
     expect(source).toContain('mt-auto pt-1');
   });
 
-  it('visible user card uses the tokenized capsule style with rectangular corners', () => {
+  it('visible user card uses the tokenized capsule style with 12px container radius', () => {
     expect(source).toContain(
-      'flex h-12 items-center border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',
+      'flex h-12 items-center rounded-xl border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',
     );
   });
 
