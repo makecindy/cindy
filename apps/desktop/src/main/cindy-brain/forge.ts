@@ -2080,7 +2080,8 @@ cindy.onHostMessage(function (msg) {
   // 语义 = "主机停下来交给你做,做完继续":你可以在这窗口里做任何事(记账、
   // 经 network 槽过合规接口…),然后用三种动作之一收尾:
   if (msg.name === 'will-user-message') {
-    // msg.data = { sessionId, text };msg.hookId 原样带回。
+    // msg.data = { sessionId, text, model? };model 是本轮已选模型 id。
+    // msg.hookId 原样带回。
     if (/(内部代号|密钥)/.test(msg.data.text)) {
       // ① block:打回,不继续(reason 展示在被拦气泡上)。
       cindy.send({ type:'event-verdict', hookId: msg.hookId, action:'block', reason:'疑似包含敏感信息' });
@@ -2163,7 +2164,8 @@ AI 每轮回复完成后,主机把**全文**交给你——这是一个**通用�
 \`\`\`js
 cindy.onHostMessage(async function (msg) {
   if (msg.type !== 'event' || msg.name !== 'will-assistant-message') return;
-  // msg.data = { sessionId, text = 本轮 AI 回复全文 };msg.hookId 原样带回。
+  // msg.data = { sessionId, text = 本轮 AI 回复全文, model? };
+  // model 是生成本轮回复的模型 id;msg.hookId 原样带回。
   const polished = await cindy.fetch({ url: 'https://api.example.com/polish', method: 'POST',
                                        body: JSON.stringify({ text: msg.data.text }) });
   // ① rewrite:用改写正文替换回复(静默换文本,≤16000 字符)。

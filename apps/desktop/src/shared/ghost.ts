@@ -6188,10 +6188,7 @@ export type GhostDidEventData =
  * did- 分支带 topic/seq(每意识单调递增,可自查漏收;dropped = 上一段
  * 熄灯期溢出丢弃数);will- 分支带 hookId,意识须在超时窗内回
  * GhostPipeEventVerdict,不回视为放行。
- * model 是 user turn 的选择或已完成 assistant turn 的实际模型。
  */
-export type GhostMessageHookData = { sessionId: string; text: string; model?: string };
-
 export type GhostPipeEventPush =
   | {
       type: 'event';
@@ -6207,7 +6204,7 @@ export type GhostPipeEventPush =
       name: 'will-user-message';
       hookId: string;
       ts: number;
-      data: GhostMessageHookData;
+      data: { sessionId: string; text: string };
     }
   | {
       type: 'event';
@@ -6215,7 +6212,7 @@ export type GhostPipeEventPush =
       hookId: string;
       ts: number;
       /** text = 本轮 AI 回复全文;意识可放行/改写/自绘(见 GhostPipeEventVerdict)。 */
-      data: GhostMessageHookData;
+      data: { sessionId: string; text: string };
     }
   | {
       /** 随包 Node 进程发来的 JSON-RPC notification / MCP 进度事件。 */

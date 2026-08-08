@@ -38,7 +38,6 @@ import {
   type GhostEventThinkingData,
   type GhostEventTurnEndData,
   type GhostEventTurnStartData,
-  type GhostMessageHookData,
   type GhostPipeEventPush,
   type GhostSubscribeTopic,
   type InstalledGhost,
@@ -58,6 +57,7 @@ type HookVerdict = {
   height?: number;
 };
 
+type GhostMessageHookData = { sessionId: string; text: string; model?: string };
 type MessageHookContext = Pick<GhostMessageHookData, 'model'>;
 const assistantHookContext = new AsyncLocalStorage<Promise<MessageHookContext>>();
 
@@ -422,15 +422,16 @@ export class GhostSubscriptionGateway {
       if (!this.deps.isRunning(ghostId)) await this.deps.wake(ghost);
       const resolvedContext = context instanceof Promise ? await context : context;
       if (!this.pendingHooks.has(hookId)) return;
+      const data: GhostMessageHookData = {
+        ...input,
+        ...(resolvedContext.model ? { model: resolvedContext.model } : {}),
+      };
       this.deps.sendToGhost(ghostId, {
         type: 'event',
         name: hookName,
         hookId,
         ts: this.deps.now(),
-        data: {
-          ...input,
-          ...(resolvedContext.model ? { model: resolvedContext.model } : {}),
-        },
+        data,
       });
     })().catch((err) => {
       if (this.pendingHooks.delete(hookId)) {
