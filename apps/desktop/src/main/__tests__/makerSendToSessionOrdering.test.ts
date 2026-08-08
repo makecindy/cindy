@@ -832,6 +832,26 @@ describe('sendToSession ordering', () => {
     expectOrder(jumpBranch, fenceCheck, 'await bootstrapSession(createOpts);');
   });
 
+  it('rechecks the Orca shutdown fence after async fallback queue preparation', () => {
+    const enqueueBlock = extractBetween(
+      source,
+      'async function enqueueSendToSessionMessage(params: {',
+      '\n\n  const orcaInterAgentDispatcher:',
+    );
+    const fenceCheck = 'isOrcaWorkerSessionDisableFenced(params.targetSessionId)';
+
+    // end_team installs its fence before waiting for this route lock. Queue restore and create-opts
+    // preparation may yield while the fallback send holds the lock, so the only safe commit point is
+    // a final check after every await and immediately before callback registration + enqueue.
+    expect(enqueueBlock).toContain('): Promise<boolean>');
+    expectOrder(enqueueBlock, 'await buildCreateOptsForQueuedSession', fenceCheck);
+    expectOrder(enqueueBlock, 'await inputCoordinator.ensureQueueRestored', fenceCheck);
+    expectOrder(enqueueBlock, fenceCheck, 'registerQueuedOrcaInterAgentAcceptedCallback');
+    expectOrder(enqueueBlock, fenceCheck, 'inputCoordinator.enqueue');
+    expect(enqueueBlock).toContain('if (' + fenceCheck + ') return false;');
+    expect(enqueueBlock).toContain('return true;');
+  });
+
   it('finishes async queue preparation before the final fence check and synchronous enqueue', () => {
     const dispatchBlock = extractDispatchOrEnqueueOrcaInterAgentMessageSource();
     const queuedBlock = extractBetween(

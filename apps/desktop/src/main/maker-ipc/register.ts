@@ -1351,6 +1351,15 @@ type SendToSessionInternalResult =
       message: string;
     };
 
+function orcaSessionUnavailableResult(targetSessionId: string): SendToSessionInternalResult {
+  return {
+    ok: false,
+    errorCode: 'NOT_FOUND',
+    message:
+      `session ${targetSessionId} is unavailable because its Orca team is ending or has ended`,
+  };
+}
+
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
   sendToSession: (params: {
@@ -7176,12 +7185,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // this path wins the same per-session lock, otherwise end_team can fence
       // the Worker in that gap and this branch could still lazy-bootstrap it.
       if (isOrcaWorkerSessionDisableFenced(targetSessionId)) {
-        return {
-          ok: false as const,
-          errorCode: 'NOT_FOUND' as const,
-          message:
-            `session ${targetSessionId} is unavailable because its Orca team is ending or has ended`,
-        };
+        return orcaSessionUnavailableResult(targetSessionId);
       }
       const [meta, dbRow] = await Promise.all([
         maker.getSessionMeta(targetSessionId).catch(() => null),
@@ -7215,7 +7219,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await inputCoordinator.ensureQueueRestored(targetSessionId).catch(() => undefined);
       if (inputCoordinator.shouldQueueNewTurn(targetSessionId)) {
         const qClientId = explicitClientId ?? createId();
-        await enqueueSendToSessionMessage({
+        const queued = await enqueueSendToSessionMessage({
           targetSessionId,
           message,
           persistedContent: persistedContent ?? message,
@@ -7226,6 +7230,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           onAcceptedRollback,
           origin,
         });
+        if (!queued) return orcaSessionUnavailableResult(targetSessionId);
         return {
           ok: true as const,
           targetSessionId,
@@ -7264,7 +7269,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let live = maker.getSession(targetSessionId);
       if (live) {
         if (live.isTurnRunning?.()) {
-          await enqueueSendToSessionMessage({
+          const queued = await enqueueSendToSessionMessage({
             targetSessionId,
             message,
             persistedContent: persistedContent ?? message,
@@ -7275,6 +7280,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             origin,
           });
+          if (!queued) return orcaSessionUnavailableResult(targetSessionId);
           return {
             ok: true as const,
             targetSessionId,
@@ -7393,7 +7399,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 'send_to_session:live:queued-before-dispatch',
               );
             }
-            await enqueueSendToSessionMessage({
+            const queued = await enqueueSendToSessionMessage({
               targetSessionId,
               message,
               persistedContent: persistedContent ?? message,
@@ -7404,6 +7410,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               onAcceptedRollback,
               origin,
             });
+            if (!queued) return orcaSessionUnavailableResult(targetSessionId);
             return {
               ok: true as const,
               targetSessionId,
@@ -7496,7 +7503,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'send_to_session:resumed:queued-before-dispatch',
             );
           }
-          await enqueueSendToSessionMessage({
+          const queued = await enqueueSendToSessionMessage({
             targetSessionId,
             message,
             persistedContent: persistedContent ?? message,
@@ -7507,6 +7514,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             origin,
           });
+          if (!queued) return orcaSessionUnavailableResult(targetSessionId);
           return {
             ok: true as const,
             targetSessionId,
@@ -7841,7 +7849,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
-  }): Promise<void> {
+  }): Promise<boolean> {
     const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta);
     const queued: AgentInputQueuedMessage = {
       clientId: params.clientId,
@@ -7861,6 +7869,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createOpts,
       ...(params.origin ? { origin: params.origin } : {}),
     };
+    // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
+    // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
+    await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
+    // end_team 会先立 fence、再等待当前 route lock。上面的 create-opts / 恢复读取都可能
+    // yield；因此必须在所有 await 之后、callback 注册与同步 enqueue 之前做最终检查。
+    // 两个同步动作之间不可再插 await，否则又会留下「team 已结束但旧任务刚入队」窗口。
+    if (isOrcaWorkerSessionDisableFenced(params.targetSessionId)) return false;
     if (params.onAccepted) {
       orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
         params.clientId,
@@ -7868,14 +7883,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         params.onAcceptedRollback,
       );
     }
-    // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
-    // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
-    await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
     inputCoordinator.enqueue(params.targetSessionId, queued);
     log.info('send_to_session queued while target busy', {
       targetSessionId: params.targetSessionId,
       clientId: params.clientId,
     });
+    return true;
   }
 
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
@@ -10147,7 +10160,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         schedulerQueuedPromptDiscardWatchers.set(clientId, req.onDiscarded);
       }
       try {
-        await enqueueSendToSessionMessage({
+        const queued = await enqueueSendToSessionMessage({
           targetSessionId: req.sessionId,
           message: req.text,
           persistedContent: req.persistedContent,
@@ -10158,6 +10171,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           onAcceptedRollback: req.onAcceptedRollback,
           origin: req.origin,
         });
+        if (!queued) {
+          schedulerQueuedPromptDiscardWatchers.delete(clientId);
+          return { retry: true as const };
+        }
       } catch (err) {
         schedulerQueuedPromptDiscardWatchers.delete(clientId);
         throw err;
