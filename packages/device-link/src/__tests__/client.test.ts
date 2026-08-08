@@ -4335,6 +4335,64 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     h.client.stop();
   });
 
+  it('多 peer 拓扑:冷却是连接级的,两个控制端对称受影响、pending 均保留并在重连后各自重放', async () => {
+    // 故障半径三问 §3(remote-and-mobile-adaptation):被控端与 relay 只有一条
+    // 连接、服务多个控制端。1013 是连接级故障,冷却也只推迟连接级重连——必须
+    // 断言它不偏袒/不惩罚任何单个 peer:两边的 link 与 pending 处理完全对称,
+    // 且冷却期间不丢在途帧,重连后各自按原 seq 重放(#1187→#1405 的放大判例
+    // 正是「单 peer 故障升级成整条连接」,这里反向确认没有引入新的不对称)。
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1,
+        reconnectMaxMs: 5,
+        congestionBackoffBaseMs: 20,
+        congestionBackoffMaxMs: 20,
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000, // 重试计时器不参与本用例
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'stream-a', 1, 'ctrl-a');
+    await establishInboundReliableLink(h, 'stream-b', 1, 'ctrl-b');
+
+    // 在途帧用 invoke-result(live 帧,永不可丢弃):push 是 best-effort 镜像,
+    // 建链时会被可丢弃前缀清扫丢掉(#1375),验证不了「pending 跨冷却保留」。
+    // 它也正是「另一个 peer 的在途请求回包」这一关注点本身。
+    const reliableResultsTo = (dst: string): Envelope[] => h.current().sent.filter(
+      (e) => e.kind === 'invoke-result' && e.dst === dst && parseTransportPayload(e.payload) !== null,
+    );
+    h.client.sendInvokeResult('ctrl-a', 'req-a', { ok: true, result: 'a' });
+    h.client.sendInvokeResult('ctrl-b', 'req-b', { ok: true, result: 'b' });
+    expect(reliableResultsTo('ctrl-a')).toHaveLength(1);
+    expect(reliableResultsTo('ctrl-b')).toHaveLength(1);
+
+    // relay 拥塞踢掉整条共享连接
+    const socketsBefore = h.sockets.length;
+    h.current().emit('close', 1013, 'inbound backpressure');
+
+    // 冷却期内不重连(对两个 peer 一视同仁:谁都拿不到新连接,也没人被单独放行)
+    await tick(8);
+    expect(h.sockets.length).toBe(socketsBefore);
+
+    // 冷却到点:重连并重建两条 link → 两个 peer 的 pending 各自按原 seq 重放,
+    // 一条都没丢、也没有串到对方的 stream
+    await tick(30);
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    h.current().ack();
+    await establishInboundReliableLink(h, 'stream-a', 1, 'ctrl-a');
+    await establishInboundReliableLink(h, 'stream-b', 1, 'ctrl-b');
+    await tick();
+    const replayedA = reliableResultsTo('ctrl-a');
+    const replayedB = reliableResultsTo('ctrl-b');
+    expect(replayedA).toHaveLength(1);
+    expect(replayedB).toHaveLength(1);
+    expect(parseTransportPayload(replayedA[0]!.payload)!.meta.seq).toBe(1);
+    expect(parseTransportPayload(replayedB[0]!.payload)!.meta.seq).toBe(1);
+    h.client.stop();
+  });
+
   it('stopped 后经 connectNow 拉起 = 新生命周期:拥塞连击清零(与 start 对齐)', async () => {
     const h = makeHarness({
       timing: { reconnectBaseMs: 1, reconnectMaxMs: 5, pingIntervalMs: 60_000 },
