@@ -1,13 +1,16 @@
 import type { DropSide } from './splitGroupStore';
 import { buildSessionDeepLink } from '@/lib/deepLink';
-import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
+import {
+  isSessionLinkDropTarget,
+  SESSION_LINK_DROP_MIME,
+  SESSION_LINK_DROP_TARGET_SELECTOR,
+} from '@/lib/sessionLinkDrop';
 
 export const SPLIT_GROUP_SESSION_MIME = 'application/x-cindy-session-id';
 /** Backward-compatible feature-local name for the shared composer payload. */
 export { SESSION_LINK_DROP_MIME as SPLIT_GROUP_SESSION_LINK_MIME };
 /** 输入框优先消费任务拖放，分屏 pane 不应在 capture 阶段抢走。 */
-export const SPLIT_GROUP_COMPOSER_DROP_TARGET_SELECTOR =
-  '[data-split-group-composer-drop-target]';
+export const SPLIT_GROUP_COMPOSER_DROP_TARGET_SELECTOR = SESSION_LINK_DROP_TARGET_SELECTOR;
 export const SPLIT_GROUP_DRAG_HANDLE_SELECTOR = '[data-split-group-drag-handle]';
 export const SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR =
   'button, input, textarea, select, a[href], [role="menuitem"]';
@@ -51,8 +54,7 @@ export function hasSplitGroupSessionType(types: ArrayLike<string>): boolean {
 }
 
 export function isSplitGroupComposerDropTarget(target: EventTarget | null): boolean {
-  const element = typeof Element !== 'undefined' && target instanceof Element ? target : null;
-  return Boolean(element?.closest(SPLIT_GROUP_COMPOSER_DROP_TARGET_SELECTOR));
+  return isSessionLinkDropTarget(target);
 }
 
 export interface SplitDragSourceContext {

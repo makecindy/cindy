@@ -133,6 +133,10 @@ export function DraggableCardColumns<T>({
   const columnsRef = useRef(columns);
   const originalBucketsRef = useRef<string[][] | null>(null);
   const abortNextEndRef = useRef(false);
+  // Native DnD may move a card between columns while the pointer passes over
+  // the sidebar. Only persist a reorder when the final drop lands in one of
+  // this component's columns; external drops must restore the transient DOM.
+  const nativeDropDispositionRef = useRef<'internal' | 'external' | null>(null);
 
   itemsRef.current = items;
   getIdRef.current = getId;
@@ -152,6 +156,7 @@ export function DraggableCardColumns<T>({
     if (cols.length === 0) return;
 
     const onStart = () => {
+      nativeDropDispositionRef.current = null;
       document.body.classList.add(SORTING_BODY_CLASS);
       originalBucketsRef.current = readColumnIds(columnRefs.current, columnsRef.current);
     };
@@ -161,6 +166,8 @@ export function DraggableCardColumns<T>({
 
       const aborted = abortNextEndRef.current;
       abortNextEndRef.current = false;
+      const dropDisposition = nativeDropDispositionRef.current;
+      nativeDropDispositionRef.current = null;
 
       const movedId = evt.item.getAttribute('data-card-id');
       const toColumn = readColumnIndex(evt.to);
@@ -174,7 +181,7 @@ export function DraggableCardColumns<T>({
         restoreColumnDomOrder(columnRefs.current, originalBuckets);
       }
 
-      if (aborted) return;
+      if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
 
       if (current.length === newOrder.length && current.every((id, i) => id === newOrder[i])) {
         return;
@@ -195,7 +202,9 @@ export function DraggableCardColumns<T>({
         fallbackTolerance: 4,
         forceFallback,
         setData: (dataTransfer, dragEl) => {
-          dataTransfer.setData('Text', dragEl.textContent ?? '');
+          // Keep the browser-required plain-text slot empty: DOM text can contain
+          // task titles/previews and would leak if the drag leaves the app.
+          dataTransfer.setData('Text', '');
           const rect = dragEl.getBoundingClientRect();
           dataTransfer.setDragImage(
             dragEl,
@@ -207,6 +216,20 @@ export function DraggableCardColumns<T>({
         onEnd,
       }),
     );
+
+    // Native Sortable receives the document `drop` event after capture. Record
+    // whether the final target is inside any of this component's columns so
+    // onEnd can restore external drops without persisting an intermediate move.
+    const markDropDisposition = (event: Event) => {
+      const active = Sortable.active;
+      if (!active || !instances.includes(active)) return;
+      const target = event.target;
+      nativeDropDispositionRef.current =
+        target instanceof Node && cols.some((col) => col.contains(target))
+          ? 'internal'
+          : 'external';
+    };
+    document.addEventListener('drop', markDropDisposition, true);
 
     const abortIfActive = () => {
       const active = Sortable.active;
@@ -227,8 +250,10 @@ export function DraggableCardColumns<T>({
     return () => {
       window.removeEventListener('blur', abortIfActive);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('drop', markDropDisposition, true);
       document.body.classList.remove(SORTING_BODY_CLASS);
       originalBucketsRef.current = null;
+      nativeDropDispositionRef.current = null;
       instances.forEach((inst) => inst.destroy());
     };
   }, [columns, forceFallback, reducedMotion, groupId]);

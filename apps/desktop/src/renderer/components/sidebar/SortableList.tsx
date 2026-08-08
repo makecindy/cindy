@@ -137,6 +137,10 @@ export function SortableList<T>({
   // 标记下一次 onEnd 是"窗口失焦兜底"触发的——onEnd 里把 DOM 复位后直接 return,
   // 不调 onReorder, 避免用户切走窗口的瞬间被记下一次未授意的顺序变化。
   const abortNextEndRef = useRef(false);
+  // Native DnD must only persist a reorder when the final drop lands in this
+  // sortable container. Drops on the composer, split panes, or outside Cindy
+  // can still leave Sortable's DOM temporarily moved while the gesture passes.
+  const nativeDropDispositionRef = useRef<'internal' | 'external' | null>(null);
 
   // mount 时创建 Sortable；unmount 时销毁。后续 props 变化通过 option() 更新。
   useEffect(() => {
@@ -163,7 +167,9 @@ export function SortableList<T>({
       fallbackOnBody: true,
       fallbackTolerance: 4,
       setData: (dataTransfer, dragEl) => {
-        dataTransfer.setData('Text', dragEl.textContent ?? '');
+        // Keep the browser-required plain-text slot empty: DOM text can contain
+        // task titles/previews and would leak if the drag leaves the app.
+        dataTransfer.setData('Text', '');
         const rect = dragEl.getBoundingClientRect();
         dataTransfer.setDragImage(
           dragEl,
@@ -174,6 +180,7 @@ export function SortableList<T>({
       // 真正开拖（移动超过 fallbackTolerance）才触发,不是 pointerdown 即触发——
       // 所以"按下未拖"和"普通 hover"都不会上 grabbing 光标,只有真正拖动中才会。
       onStart: () => {
+        nativeDropDispositionRef.current = null;
         document.body.classList.add(SORTING_BODY_CLASS);
         onDragActiveChangeRef.current?.(true);
       },
@@ -185,6 +192,8 @@ export function SortableList<T>({
 
         const aborted = abortNextEndRef.current;
         abortNextEndRef.current = false;
+        const dropDisposition = nativeDropDispositionRef.current;
+        nativeDropDispositionRef.current = null;
 
         const oldIndex = evt.oldIndex;
         const newIndex = evt.newIndex;
@@ -202,7 +211,7 @@ export function SortableList<T>({
           }
         }
 
-        if (aborted) return;
+        if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
         if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
 
         const currentItems = itemsRef.current;
@@ -217,6 +226,17 @@ export function SortableList<T>({
       },
     });
     sortableRef.current = instance;
+
+    // Native Sortable receives the document `drop` event after capture. Record
+    // whether the final target is internal or external before onEnd restores
+    // the transient DOM move.
+    const markDropDisposition = (event: Event) => {
+      if (Sortable.active !== instance) return;
+      const target = event.target;
+      nativeDropDispositionRef.current =
+        target instanceof Node && el.contains(target) ? 'internal' : 'external';
+    };
+    document.addEventListener('drop', markDropDisposition, true);
 
     // 窗口失焦兜底：用户 Alt-Tab / 点窗口外 / 调出系统 UI 时，document 上的
     // pointerup/mouseup/touchend 都不会触发，SortableJS 的 fallback 拖拽会卡住。
@@ -242,6 +262,7 @@ export function SortableList<T>({
     return () => {
       window.removeEventListener('blur', abortIfActive);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('drop', markDropDisposition, true);
       // 拖动中组件被卸载时兜底清掉标记,避免 grabbing 光标残留到全局。
       document.body.classList.remove(SORTING_BODY_CLASS);
       onDragActiveChangeRef.current?.(false);
