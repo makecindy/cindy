@@ -4441,6 +4441,8 @@
       "filterTruncated": "Too many results, showing first {{limit}}; narrow the keyword",
       "deviceTooOld": "The remote device is running an older {{appName}} version that does not support remote file browsing. Please update it and try again",
       "loadFailed": "Failed to load the file tree",
+      "collapseTree": "Hide file tree",
+      "expandTree": "Show file tree",
       "unsupportedDropFile": "This file format cannot be previewed yet",
       "multipleDropFilesUnsupported": "Drop one file at a time"
     },

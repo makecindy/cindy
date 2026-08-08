@@ -4439,6 +4439,8 @@
       "filterTruncated": "结果过多，仅显示前 {{limit}} 条；请缩小关键词",
       "deviceTooOld": "对方设备的 {{appName}} 版本过旧，不支持远程文件浏览，请升级后重试",
       "loadFailed": "文件树加载失败",
+      "collapseTree": "隐藏文件树",
+      "expandTree": "显示文件树",
       "unsupportedDropFile": "暂时不支持展示该格式的文件",
       "multipleDropFilesUnsupported": "一次只能拖入一个文件"
     },

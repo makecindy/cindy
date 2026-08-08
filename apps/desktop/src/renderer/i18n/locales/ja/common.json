@@ -4439,6 +4439,8 @@
       "filterTruncated": "結果が多すぎます。先頭 {{limit}} 件のみ表示。キーワードを絞ってください",
       "deviceTooOld": "相手のデバイスの {{appName}} のバージョンが古く、リモートファイルブラウズに対応していません。アップデート後にもう一度お試しください",
       "loadFailed": "ファイルツリーの読み込みに失敗しました",
+      "collapseTree": "ファイルツリーを隠す",
+      "expandTree": "ファイルツリーを表示",
       "unsupportedDropFile": "この形式のファイルはまだプレビューできません",
       "multipleDropFilesUnsupported": "一度にドラッグできるファイルは1つだけです"
     },

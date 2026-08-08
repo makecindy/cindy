@@ -28,9 +28,25 @@
  * singleton 拿当前 dirty 状态,跟 doc 模式行为一致。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type DragEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-react';
+import {
+  ChevronsDownUp,
+  ChevronsLeft,
+  ChevronsRight,
+  FolderX,
+  RefreshCw,
+  Search,
+  X as XIcon,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
@@ -43,15 +59,13 @@ import {
   TREE_MIN_WIDTH,
   TREE_MAX_WIDTH,
 } from './useSessionScopedTreeWidth';
+import { useSessionScopedTreeCollapsed } from './useSessionScopedTreeCollapsed';
 import {
   FileTreeView,
   type FileTreeViewHandle,
 } from '@/features/cc-agent/workdir-browse/FileTreeView';
 import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
-import {
-  useFileTree,
-  type DirEntry,
-} from '@/features/cc-agent/workdir-browse/hooks/useFileTree';
+import { useFileTree, type DirEntry } from '@/features/cc-agent/workdir-browse/hooks/useFileTree';
 import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
 import { useConfirmSwitchAwayIfDirty } from '@/features/cc-agent/workdir-browse/hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from '@/features/cc-agent/workdir-browse/hooks/useProjectFileList';
@@ -133,7 +147,7 @@ function FileBrowserBodyWithWorkdir({
   // remoteHostId)时 deviceId 优先——SSH 二跳由被控端 device-op 处理,控制端
   // 不能把被控端的 hostId 发给自己的 main。
   const deviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
-    ctx.sessionId ? getSessionDeviceId(ctx.sessionId) ?? null : null,
+    ctx.sessionId ? (getSessionDeviceId(ctx.sessionId) ?? null) : null,
   );
   const remoteHostId = deviceId ? null : ctx.remoteHostId;
   const isRemote = Boolean(remoteHostId) || Boolean(deviceId);
@@ -141,7 +155,10 @@ function FileBrowserBodyWithWorkdir({
   const fileContent = useFileContent(workdir, state.selectedFilePath, remoteHostId, deviceId);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
   const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
-  const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null);
+  const externalFileContent = useFileContent(
+    externalFile?.workdir ?? workdir,
+    externalFile?.relPath ?? null,
+  );
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const confirmSwitchAway = useConfirmSwitchAwayIfDirty();
@@ -212,6 +229,7 @@ function FileBrowserBodyWithWorkdir({
     sessionId: ctx.sessionId,
     dynamicTreeMax,
   });
+  const { isTreeCollapsed, toggleTreeCollapsed } = useSessionScopedTreeCollapsed(ctx.sessionId);
 
   const handleSelectFile = useCallback(
     async (relPath: string) => {
@@ -356,7 +374,11 @@ function FileBrowserBodyWithWorkdir({
       const abs = toOsAbsolutePath(workdir, entry.relPath);
       const res = await window.electronAPI.showItemInFolder({ filePath: abs });
       if (!res.success) {
-        toast.error(t('ccAgent.workdirBrowse.revealFailed', { error: res.error ?? t('ccAgent.common.unknownError') }));
+        toast.error(
+          t('ccAgent.workdirBrowse.revealFailed', {
+            error: res.error ?? t('ccAgent.common.unknownError'),
+          }),
+        );
       }
     },
     [workdir, t],
@@ -611,7 +633,10 @@ function FileBrowserBodyWithWorkdir({
           可拖。双击复位到默认 200px。pointer-events 仅在 handle 上,不挡邻接 pane。
           (语义对齐 RightSidebar 主壳 resize handle 的样式) */}
       <div
-        className="relative h-full w-px shrink-0 cursor-col-resize bg-[var(--border-default)]"
+        className={cn(
+          'relative h-full w-px shrink-0 cursor-col-resize bg-[var(--border-default)]',
+          isTreeCollapsed && 'hidden',
+        )}
         onPointerDown={handleTreeDragStart}
         onDoubleClick={resetTreeWidth}
         role="separator"
@@ -635,7 +660,10 @@ function FileBrowserBodyWithWorkdir({
           tree / search 切换跟 doc 模式 sidebar 同 ergonomics:tree 模式显示文件树,
           search 模式显示 SearchPanel(ripgrep 项目级搜索)。 */}
       <div
-        className="rsb-fbody-tree-pane flex h-full shrink-0 flex-col overflow-hidden"
+        className={cn(
+          'rsb-fbody-tree-pane flex h-full shrink-0 flex-col overflow-hidden',
+          isTreeCollapsed && 'hidden',
+        )}
         style={{ width: treeWidth }}
       >
         <TreeHeader
@@ -644,6 +672,7 @@ function FileBrowserBodyWithWorkdir({
           onToggleSearch={handleToggleSearch}
           onCollapseAll={tree.collapseAll}
           onRefresh={handleRefresh}
+          onCollapseTree={toggleTreeCollapsed}
         />
         {/* tree 模式:常驻文件名筛选输入框 + (筛选结果列表 / 文件树)。
             注:className 必须**只在隐藏时**加 `hidden`,**不能**同时写 `block` ——
@@ -677,7 +706,9 @@ function FileBrowserBodyWithWorkdir({
                 onCopyFilePath={!isRemote ? handleCopyFilePath : undefined}
                 onRevealInFolder={!isRemote ? handleRevealInFolder : undefined}
                 onOpenInFileBrowser={ctx.sessionId ? handleOpenInFileBrowser : undefined}
-                onOpenInSidebarBrowser={!isRemote && ctx.sessionId ? handleOpenInSidebarBrowser : undefined}
+                onOpenInSidebarBrowser={
+                  !isRemote && ctx.sessionId ? handleOpenInSidebarBrowser : undefined
+                }
                 onOpenInBrowser={!isRemote ? handleOpenInBrowser : undefined}
               />
             </div>
@@ -701,6 +732,7 @@ function FileBrowserBodyWithWorkdir({
           />
         </div>
       </div>
+      {isTreeCollapsed && <CollapsedTreeRail onExpand={toggleTreeCollapsed} />}
       {isDraggingFile && (
         <div
           className="pointer-events-none absolute inset-2 z-20 rounded-xl border border-dashed border-[var(--drop-overlay-border)] bg-[var(--drop-overlay-bg)]"
@@ -723,7 +755,7 @@ function FileBrowserBodyWithWorkdir({
  *
  * 内容:
  *  - 左:workdir basename(项目名,从 workdir 路径末段提取)
- *  - 右(tree 模式):search / collapse-all / refresh 三个 icon 按钮
+ *  - 右(tree 模式):搜索、收起目录、刷新、隐藏文件树四个 icon 按钮
  *  - 右(search 模式):X 退出搜索(替代 search 按钮位置)
  *
  * 视觉对齐 doc 模式 WorkdirBrowseSidebar(参考 L570-678):
@@ -737,12 +769,14 @@ function TreeHeader({
   onToggleSearch,
   onCollapseAll,
   onRefresh,
+  onCollapseTree,
 }: {
   workdir: string;
   mode: TreeMode;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
   onRefresh: () => void;
+  onCollapseTree: () => void;
 }) {
   const { t } = useTranslation();
   // workdir basename:POSIX 用最后一段(/Users/sam/Documents/Cindy → Cindy);
@@ -756,8 +790,8 @@ function TreeHeader({
       </span>
       <div className="flex shrink-0 items-center gap-1.5">
         {mode === 'search' ? (
-          // search 模式:refresh / collapse 只对文件树有意义,搜索时不显示;只留 X
-          // 退出搜索回到 tree 模式(替代 search 按钮位置,跟 doc 模式同 ergonomics)。
+          // search 模式:refresh / collapse-all 只对文件树有意义;保留退出搜索和
+          // 隐藏文件树两个动作，避免用户必须先退出搜索才能收起这块 pane。
           <Tip text={t('ccAgent.workdirBrowse.searchPanel.exit')}>
             <button
               type="button"
@@ -798,7 +832,37 @@ function TreeHeader({
             </Tip>
           </>
         )}
+        <Tip text={t('rightSidebar.fileBrowser.collapseTree')}>
+          <button
+            type="button"
+            onClick={onCollapseTree}
+            aria-label={t('rightSidebar.fileBrowser.collapseTree')}
+            className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+          >
+            <ChevronsRight size={14} strokeWidth={2} />
+          </button>
+        </Tip>
       </div>
+    </div>
+  );
+}
+
+function CollapsedTreeRail({ onExpand }: { onExpand: () => void }) {
+  const { t } = useTranslation();
+  const label = t('rightSidebar.fileBrowser.expandTree');
+
+  return (
+    <div className="flex h-full w-8 shrink-0 items-start justify-center border-l border-[var(--border-default)] pt-2">
+      <Tip text={label}>
+        <button
+          type="button"
+          onClick={onExpand}
+          aria-label={label}
+          className="flex size-6 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+        >
+          <ChevronsLeft size={14} strokeWidth={2} />
+        </button>
+      </Tip>
     </div>
   );
 }

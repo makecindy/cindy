@@ -4439,6 +4439,8 @@
       "filterTruncated": "결과가 너무 많습니다. 처음 {{limit}}개만 표시. 키워드를 좁혀주세요",
       "deviceTooOld": "상대 기기의 {{appName}} 버전이 오래되어 원격 파일 탐색을 지원하지 않습니다. 업데이트 후 다시 시도해 주세요",
       "loadFailed": "파일 트리를 불러오지 못했습니다",
+      "collapseTree": "파일 트리 숨기기",
+      "expandTree": "파일 트리 표시",
       "unsupportedDropFile": "이 형식의 파일은 아직 미리 볼 수 없습니다",
       "multipleDropFilesUnsupported": "파일은 한 번에 하나만 드롭할 수 있습니다"
     },
