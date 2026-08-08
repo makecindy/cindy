@@ -92,8 +92,7 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       //     跨 generation 换代时不用全局 turnIndex(新 run 的 turnIndex 小于旧
       //     terminal,不得把"新 run 开始"排到"旧 run 结束"之前);
       //  3. 同 at 且仍相等时,派发类(resumed/turn-dispatched)在收口类之前;
-      //  4. 其余保持插入序(预算停止的 terminal 与随后调高上限的
-      //     budgetLimited→active 同毫秒时,后者不得插到前者之前)。
+      //  4. 其余按显式插入序号(不依赖引擎 sort 稳定性,插入序 = 落环序)。
       const dispatchGroup = new Set(['resumed', 'turn-dispatched']);
       // 收口类:所有派发后的终态/迁移/停滞事件都排在派发类之后(同毫秒全序,
       // state-transition/budget-consumed/stall-detected 也必须 phase 后置)。
@@ -105,7 +104,8 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         'terminal',
       ]);
       return ring
-        .map((evt) => ({
+        .map((evt, idx) => ({
+          _seq: idx,
           ...evt,
           budget: evt.budget ? { ...evt.budget } : undefined,
         }))
@@ -119,15 +119,17 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
             const byTurn = a.turnIndex - b.turnIndex;
             if (byTurn !== 0) return byTurn;
           }
-          // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序(稳定排序)。
+          // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序。
           const aD = dispatchGroup.has(a.type);
           const bD = dispatchGroup.has(b.type);
           const aF = closeoutGroup.has(a.type);
           const bF = closeoutGroup.has(b.type);
           if (aD && bF) return -1;
           if (aF && bD) return 1;
-          return 0;
-        });
+          // 显式插入序号作最终 tie-breaker(规范不保证 sort 稳定)。
+          return a._seq - b._seq;
+        })
+        .map(({ _seq: _omit, ...evt }) => evt);
     },
     clear() {
       ring.length = 0;

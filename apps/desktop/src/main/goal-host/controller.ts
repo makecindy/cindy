@@ -682,6 +682,9 @@ export class GoalController {
   }
 
   async updateGoal(sessionId: string, patch: GoalUpdatePatch): Promise<GoalState | null> {
+    // dispose 后丢弃(GOAL_UPDATE 捕获实例 await 期间登出/切账号,不得继续
+    // reconcile/持久化/emit 旧账号状态)。
+    if (this.disposed) return null;
     const normalized = normalizeGoalUpdatePatch(patch);
     const existingBoundary = this.turns.get(sessionId);
     const operationBoundary = existingBoundary ?? freshTurn();
@@ -764,6 +767,8 @@ export class GoalController {
       if (this.turns.get(sessionId) !== operationBoundary) return reconcileLifecycleChange();
       entryGeneration = operationBoundary.generation;
       const state = await this.deps.storage.get(sessionId);
+      // await 期间可能已 dispose(登出/切账号)——不得继续 reconcile/emit 旧账号状态。
+      if (this.disposed) return null;
       if (entryChanged()) return reconcileLifecycleChange();
       if (!state) return null;
       const objectiveChanged =
@@ -1919,6 +1924,10 @@ export class GoalController {
         to: status,
         reason: lastReason,
       });
+      // 收口事件已真实记录:accepted 补发 turn-dispatched 以此为准(所有 goal 收口
+      // 都配对——complete/budgetLimited 走终态分支,这里覆盖 paused/blocked/
+      // usageLimited 等非终态收口,它们同样 stopSession 删 boundary)。
+      turn.auditFinalized = true;
     }
     if (status !== state.status) {
       this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
