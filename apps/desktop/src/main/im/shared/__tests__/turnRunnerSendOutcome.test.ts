@@ -166,6 +166,11 @@ vi.mock('../fbotTitle', () => ({
 }));
 
 import { createTurnRunner, type ImTurnRunner } from '../turnRunner';
+import {
+  readGroupHistoryAccess,
+  resetGroupHistoryAccessForTests,
+  type GroupHistoryAccessScope,
+} from '../groupHistoryAccess';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
 import type { ImChannelAdapter } from '../types';
@@ -193,9 +198,7 @@ interface SessionHarness {
 }
 
 function createSessionHarness(
-  sendImpl: (
-    message: Parameters<Session['send']>[0],
-  ) => Promise<SessionSendResult>,
+  sendImpl: (message: Parameters<Session['send']>[0]) => Promise<SessionSendResult>,
   sessionId = 'feishu-session',
   options: {
     capabilities?: Capabilities;
@@ -219,6 +222,8 @@ function createSessionHarness(
   let interactionListener: Parameters<Session['setInteractionListener']>[0] = null;
   const session = {
     id: sessionId,
+    // group history 租约按 (sessionId, instanceId) 绑定 — harness 固定实例号。
+    instanceId: 'instance-1',
     agentKind: 'claude-code',
     capabilities: options.capabilities ?? ({} as Capabilities),
     send,
@@ -353,9 +358,7 @@ function getRunner(): ImTurnRunner {
   return runner;
 }
 
-function setupSession(
-  sendImpl: Parameters<typeof createSessionHarness>[0],
-): SessionHarness {
+function setupSession(sendImpl: Parameters<typeof createSessionHarness>[0]): SessionHarness {
   const h = createSessionHarness(sendImpl);
   mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
   return h;
@@ -408,21 +411,16 @@ interface TurnOverrides {
   userMessageId?: string;
   text?: string;
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
+  groupHistoryAccess?: GroupHistoryAccessScope;
 }
 
-async function runDefaultTurn(
-  onTurnComplete = vi.fn(),
-  overrides: TurnOverrides = {},
-) {
+async function runDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrides = {}) {
   const { turnPromise } = await startDefaultTurn(onTurnComplete, overrides);
   await turnPromise;
   return { onTurnComplete };
 }
 
-async function startDefaultTurn(
-  onTurnComplete = vi.fn(),
-  overrides: TurnOverrides = {},
-) {
+async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrides = {}) {
   const turnPromise = getRunner().runAgentTurn({
     botContextId: 'cli_test_bot',
     userId: 'ou_user',
@@ -431,6 +429,7 @@ async function startDefaultTurn(
     attachments: [],
     onTurnComplete,
     ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
+    ...(overrides.groupHistoryAccess ? { groupHistoryAccess: overrides.groupHistoryAccess } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -454,10 +453,7 @@ async function waitForAssertion(assertion: () => void): Promise<void> {
   throw lastError;
 }
 
-function expectSafeSendOutcomeLog(expected: {
-  source: string;
-  reason: string;
-}): void {
+function expectSafeSendOutcomeLog(expected: { source: string; reason: string }): void {
   expect(mocks.logger.error).toHaveBeenCalledWith(
     'feishu session send failed before dispatch',
     expect.objectContaining({
@@ -591,27 +587,42 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     await runDefaultTurn();
 
-    expect(mocks.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
-      h.session,
-      'im-anchor-client',
-    );
+    expect(mocks.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(h.session, 'im-anchor-client');
   });
 
   it('passes persisted null Pi providerId through cold IM session creation', async () => {
     // Pi core 将 null 解释为“清除显式来源”；undefined 会反查同名 BYOM provider。
     mocks.findActiveSession.mockResolvedValue({
-      id: 'feishu-session', agentKind: 'pi', workingDir: 'F:\\XDMaker', model: 'gpt-5',
-      effort: 'high', permissionMode: 'auto', fastMode: false, sdkSessionId: null, providerId: null,
+      id: 'feishu-session',
+      agentKind: 'pi',
+      workingDir: 'F:\\XDMaker',
+      model: 'gpt-5',
+      effort: 'high',
+      permissionMode: 'auto',
+      fastMode: false,
+      sdkSessionId: null,
+      providerId: null,
     });
-    mocks.listProviders.mockResolvedValue([{ id: 'xd', name: 'XD', source: 'builtin', connected: true,
-      agents: ['pi'], models: { pi: [{ id: 'gpt-5' }] }, routing: { pi: { upstream: 'https://gateway.example/v1', authStrategy: 'gateway-key' } } }]);
+    mocks.listProviders.mockResolvedValue([
+      {
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        connected: true,
+        agents: ['pi'],
+        models: { pi: [{ id: 'gpt-5' }] },
+        routing: { pi: { upstream: 'https://gateway.example/v1', authStrategy: 'gateway-key' } },
+      },
+    ]);
     const h = createSessionHarness(async () => ({ accepted: true }));
     const maker = createMakerHarness(h.session);
     mocks.getMaker.mockReturnValue(maker);
 
     await runDefaultTurn();
 
-    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'pi', providerId: null }));
+    expect(maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: 'pi', providerId: null }),
+    );
   });
 
   it('marks only an accepted attached IM turn headless and releases it on done', async () => {
@@ -659,10 +670,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('holds a host turn lease and applies channel policy timeout/state metadata', async () => {
     const h = setupSession(async () => ({ accepted: true }));
-    const handleTextInteraction = vi.fn(async () => ({
-      kind: 'permission',
-      behavior: 'allow',
-    } as const));
+    const handleTextInteraction = vi.fn(
+      async () =>
+        ({
+          kind: 'permission',
+          behavior: 'allow',
+        }) as const,
+    );
     const commitFinal = vi.fn(async () => undefined);
     const channelAdapter: ImChannelAdapter = {
       ...fakeAdapter,
@@ -725,10 +739,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         ? { destructive: true, reason: 'shell command contains `rm`' }
         : { destructive: false },
     );
-    const handleTextInteraction = vi.fn(async () => ({
-      kind: 'permission',
-      behavior: 'allow',
-    } as const));
+    const handleTextInteraction = vi.fn(
+      async () =>
+        ({
+          kind: 'permission',
+          behavior: 'allow',
+        }) as const,
+    );
     const channelAdapter: ImChannelAdapter = {
       ...fakeAdapter,
       channel: 'wechat',
@@ -779,9 +796,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const h = setupSession(async () => ({ accepted: true }));
     let resolveTextInteraction!: (decision: InteractionDecision) => void;
     const handleTextInteraction = vi.fn(
-      async () => new Promise<InteractionDecision>((resolve) => {
-        resolveTextInteraction = resolve;
-      }),
+      async () =>
+        new Promise<InteractionDecision>((resolve) => {
+          resolveTextInteraction = resolve;
+        }),
     );
     const cancelTextInteraction = vi.fn(
       (_userId: string, _requestId: string, decision: InteractionDecision) => {
@@ -895,10 +913,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         behavior: 'deny',
         reason: 'session_cleanup',
       });
-      expect(mocks.cancelPending).toHaveBeenCalledWith(
-        'interaction-fallback',
-        'session_cleanup',
-      );
+      expect(mocks.cancelPending).toHaveBeenCalledWith('interaction-fallback', 'session_cleanup');
       expect(mocks.cancelPending).toHaveBeenCalledOnce();
       if (cancelTextInteraction) {
         expect(cancelTextInteraction).toHaveBeenCalledWith(
@@ -1027,40 +1042,39 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       mode: 'bypassPermissions' as const,
       failureKind: 'mode',
     },
-  ])('classifies final turn-policy rejection when $label', async ({
-    capabilities,
-    mode,
-    failureKind,
-  }) => {
-    const h = createSessionHarness(
-      async () => {
-        throw new TurnPermissionPolicyUnsupportedError('claude-code', mode);
-      },
-      'feishu-session',
-      { capabilities },
-    );
-    mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+  ])(
+    'classifies final turn-policy rejection when $label',
+    async ({ capabilities, mode, failureKind }) => {
+      const h = createSessionHarness(
+        async () => {
+          throw new TurnPermissionPolicyUnsupportedError('claude-code', mode);
+        },
+        'feishu-session',
+        { capabilities },
+      );
+      mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
 
-    const dispatch = await getRunner().dispatchAgentTurn({
-      botContextId: 'cli_test_bot',
-      userId: 'ou_user',
-      userMessageId: `msg-policy-${failureKind}`,
-      text: 'policy failure',
-      attachments: [],
-      queueMode: 'external',
-      beforeProviderStart: vi.fn(async () => undefined),
-      turnPermissionPolicy: {
-        origin: { kind: 'im', channel: 'wechat' },
-        confirmationSurface: 'channel',
-        forceConfirmToolCall: () => false,
-      },
-    });
+      const dispatch = await getRunner().dispatchAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: `msg-policy-${failureKind}`,
+        text: 'policy failure',
+        attachments: [],
+        queueMode: 'external',
+        beforeProviderStart: vi.fn(async () => undefined),
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat' },
+          confirmationSurface: 'channel',
+          forceConfirmToolCall: () => false,
+        },
+      });
 
-    expect(dispatch).toEqual({
-      kind: 'rejected',
-      reason: `TURN_PERMISSION_POLICY_UNSUPPORTED:${failureKind}:${mode}`,
-    });
-  });
+      expect(dispatch).toEqual({
+        kind: 'rejected',
+        reason: `TURN_PERMISSION_POLICY_UNSUPPORTED:${failureKind}:${mode}`,
+      });
+    },
+  );
 
   it('does not suppress a requested close during no-op switch acquisition', async () => {
     const oldSession = createSessionHarness(async () => ({ accepted: true }));
@@ -1189,6 +1203,53 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('group history lease: live during the turn, released at terminal', async () => {
+    resetGroupHistoryAccessForTests();
+    const h = setupSession(async () => ({ accepted: true }));
+    const scope: GroupHistoryAccessScope = {
+      access: 'lane',
+      provider: 'telegram-personal:bot-1',
+      lane: { provider: 'telegram-personal:bot-1', chatId: '-100', threadId: '' },
+    };
+    const { turnPromise } = await startDefaultTurn(vi.fn(), { groupHistoryAccess: scope });
+
+    // beforeProviderStart 已跑(accepted): 租约在 (sessionId, instanceId) 上可读。
+    // 入队到 send 之间有多段 async(persist/prepare), 用重试断言等它建立。
+    await waitForAssertion(() => {
+      expect(
+        readGroupHistoryAccess({ sessionId: 'feishu-session', sessionInstanceId: 'instance-1' }),
+      ).toEqual(scope);
+    });
+    // 错 instanceId 读不到 — 重建实例不得借旧租约。
+    expect(
+      readGroupHistoryAccess({ sessionId: 'feishu-session', sessionInstanceId: 'instance-2' }),
+    ).toBeNull();
+
+    h.emit({ type: 'done', data: {} });
+    await turnPromise;
+    await flushMicrotasks();
+
+    expect(
+      readGroupHistoryAccess({ sessionId: 'feishu-session', sessionInstanceId: 'instance-1' }),
+    ).toBeNull();
+  });
+
+  it('group history lease: pre-dispatch failure leaves no residual access', async () => {
+    resetGroupHistoryAccessForTests();
+    setupSession(async () => ({ accepted: false, reason: 'cancelled-before-dispatch' }));
+    const scope: GroupHistoryAccessScope = {
+      access: 'lane',
+      provider: 'telegram-personal:bot-1',
+      lane: { provider: 'telegram-personal:bot-1', chatId: '-100', threadId: '' },
+    };
+    await runDefaultTurn(vi.fn(), { groupHistoryAccess: scope });
+    await flushMicrotasks();
+
+    expect(
+      readGroupHistoryAccess({ sessionId: 'feishu-session', sessionInstanceId: 'instance-1' }),
+    ).toBeNull();
   });
 
   it('keeps thrown send cleanup exactly once while aligning structured log fields', async () => {
@@ -1431,7 +1492,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     try {
       // pre-check 时 isTurnRunning=false, 但 send 时另一端抢先开了 turn —
       // 第一次 send 抛 SESSION_RUNNING, 应入队重试而不是回"启动 agent 失败"。
-      const err = new Error('SESSION_RUNNING: PROMPT_SECRET TOKEN_VALUE file body') as Error & { code?: string };
+      const err = new Error('SESSION_RUNNING: PROMPT_SECRET TOKEN_VALUE file body') as Error & {
+        code?: string;
+      };
       err.code = 'SESSION_RUNNING';
       const h = setupSession(async () => ({ accepted: true }));
       h.send.mockRejectedValueOnce(err);
@@ -1475,11 +1538,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
     expect(onRouteResolved).not.toHaveBeenCalled();
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', 'reaction-1');
-    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
-      'ou_user',
-      ui.agent.credentialBusy,
-      { threadTs: undefined },
-    );
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', ui.agent.credentialBusy, {
+      threadTs: undefined,
+    });
     expect(mocks.persistUserMessage).not.toHaveBeenCalled();
     expect(mocks.logger.error).not.toHaveBeenCalledWith(
       expect.stringContaining('session send failed before dispatch'),
@@ -1488,7 +1549,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   });
 
   it('queues a second message while the first turn is running and dispatches it after done', async () => {
-    mocks.feishuIm.reactToMessage.mockImplementation(async (messageId: string) => `reaction-${messageId}`);
+    mocks.feishuIm.reactToMessage.mockImplementation(
+      async (messageId: string) => `reaction-${messageId}`,
+    );
     const h = setupSession(async () => ({ accepted: true }));
     const firstComplete = vi.fn();
     const firstRouteResolved = vi.fn();
@@ -1538,7 +1601,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     expect(firstComplete).toHaveBeenCalledTimes(1);
     expect(secondRouteResolved).toHaveBeenCalledTimes(1);
-    expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-first', 'reaction-msg-first');
+    expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith(
+      'msg-first',
+      'reaction-msg-first',
+    );
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(2);
     // assistant 落库收口在 messagePersistBroadcaster(经 wireSessionToIpcExternal),
     // turnRunner 不再自写 — 自写会与 broadcaster 双份落库。
@@ -1550,7 +1616,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await flushMicrotasks();
 
     expect(secondComplete).toHaveBeenCalledTimes(1);
-    expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-second', 'reaction-msg-second');
+    expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith(
+      'msg-second',
+      'reaction-msg-second',
+    );
   });
 
   it('queues while a desktop-originated turn is running (attached takeover) and dispatches on its stray done', async () => {
@@ -1897,9 +1966,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       },
     });
     await flushMicrotasks();
-    expect(handle.replace.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
-      '正在自动重试',
-    );
+    expect(handle.replace.mock.calls.map((c) => String(c[0])).join('\n')).toContain('正在自动重试');
 
     // 重投成功, 但这一轮一个字都没输出。
     h.emit({ type: 'done', data: {} });
@@ -2154,7 +2221,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
           codex: [],
         },
         routing: {
-          'claude-code': { upstream: 'https://api.anthropic.com', authStrategy: 'oauth-passthrough' },
+          'claude-code': {
+            upstream: 'https://api.anthropic.com',
+            authStrategy: 'oauth-passthrough',
+          },
         },
       },
     ]);
@@ -2194,7 +2264,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
           codex: [],
         },
         routing: {
-          'claude-code': { upstream: 'https://api.anthropic.com', authStrategy: 'oauth-passthrough' },
+          'claude-code': {
+            upstream: 'https://api.anthropic.com',
+            authStrategy: 'oauth-passthrough',
+          },
         },
       },
       {

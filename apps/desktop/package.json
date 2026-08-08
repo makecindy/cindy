@@ -170,7 +170,8 @@
     "tar": "^7.5.21",
     "undici": "^8.3.0",
     "unist-util-visit": "^5.1.0",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",

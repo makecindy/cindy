@@ -565,7 +565,7 @@ export class GhostCindySlot {
    * 代办限流账(getInflightLimit),这个只回答「重启会打断什么」—— 理由见 handleModelRequest
    * 里那两个分支的注释。
    */
-  private mediaOps = 0;
+  private readonly mediaOps = new Map<string, number>();
   /** 异步代办任务表(jobId → 记录;惰性 sweep,过期即清)。 */
   private readonly jobs = new Map<string, CindyAsyncJob>();
   /**
@@ -621,7 +621,7 @@ export class GhostCindySlot {
       // 刻意用独立计数而不并入 inflight:那个是**代办限流账**(getInflightLimit),
       // 把面板里删素材 / 粘贴图算进去会让它们撞上「同时进行的代办已达上限」——
       // 那是行为变更,不是本改动该做的事。这里只服务于「重启会打断什么」的判定。
-      this.mediaOps += 1;
+      this.mediaOps.set(ghostId, (this.mediaOps.get(ghostId) ?? 0) + 1);
       try {
         return p.kind === 'deposit_media'
           ? await this.handleDepositMedia(ghostId, p)
@@ -634,7 +634,9 @@ export class GhostCindySlot {
         });
         return { ok: false, message: `${verb}失败:${message}` };
       } finally {
-        this.mediaOps -= 1;
+        const left = (this.mediaOps.get(ghostId) ?? 1) - 1;
+        if (left <= 0) this.mediaOps.delete(ghostId);
+        else this.mediaOps.set(ghostId, left);
       }
     }
     // 快问快答(text.oneshot):不经媒体生成链、不选型、秒级同步——单独
@@ -855,9 +857,10 @@ export class GhostCindySlot {
     }
 
     // 画面参数按**解析出的型号**二次校验:协议层值域是所有 provider 的
-    // 交集,单个型号支持的时长/帧率差异很大(seedance 4/6/8/10 秒,
-    // happyhorse 只有 5 秒)。不支持即明拒并列出该型号的可用值,不做最近似
-    // 降级——静默改成别的档位会让意识以为自己的参数生效了。
+    // 交集,单个型号支持的时长/帧率差异很大(seedance 2.0 是 4/6/8/10 秒,
+    // seedance 2.5 是 4–30 秒且没有 1080p,happyhorse 只有 5 秒)。不支持即
+    // 明拒并列出该型号的可用值,不做最近似降级——静默改成别的档位会让意识
+    // 以为自己的参数生效了。
     if (info.category === 'video' && presentVideoKeys.length > 0) {
       const caps = this.deps.videoCapabilities?.(model) ?? null;
       if (caps) {
@@ -1161,7 +1164,18 @@ export class GhostCindySlot {
     for (const count of this.inflight.values()) {
       if (count > 0) return true;
     }
-    return this.mediaOps > 0;
+    for (const count of this.mediaOps.values()) {
+      if (count > 0) return true;
+    }
+    return false;
+  }
+
+  /** 是否有指定 Ghost 的在途 Cindy 工作；jobs、inflight、mediaOps 三类来源按 Ghost 隔离。 */
+  hasInflightWorkFor(ghostId: string): boolean {
+    for (const job of this.jobs.values()) {
+      if (job.ghostId === ghostId && job.status === 'running') return true;
+    }
+    return (this.inflight.get(ghostId) ?? 0) > 0 || (this.mediaOps.get(ghostId) ?? 0) > 0;
   }
 
   private evictSettledJobs(ghostId: string): void {

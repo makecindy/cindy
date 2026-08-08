@@ -1095,6 +1095,10 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
   return dispatcherSingleton;
 }
 
+export function hasPendingGhostCalls(ghostId: string): boolean {
+  return getGhostPipeDispatcher().hasPendingCallsFor(ghostId);
+}
+
 let agentSlotSingleton: GhostAgentSlot | null = null;
 
 /** Agent 新回合槽单例：一次性点击票、后台权限与模板替换的统一守门点。 */
@@ -1128,6 +1132,14 @@ export function getGhostErrandSlot(): GhostErrandSlot {
     });
   }
   return errandSlotSingleton;
+}
+
+export function hasRunningGhostErrand(ghostId: string): boolean {
+  return getGhostErrandSlot().hasActiveErrandFor(ghostId);
+}
+
+export function hasRunningGhostCindyWork(ghostId: string): boolean {
+  return getGhostCindySlot().hasInflightWorkFor(ghostId);
 }
 
 /** maker-ipc 完成初始化后注入真实派活 runner;传 null 用于退出清理。 */
@@ -3130,9 +3142,10 @@ function getGhostOauthReauthSuggest(runtimeManifest: GhostManifest): GhostSetupR
 }
 
 /**
- * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
- * Unlike the legacy plugin-page projection this path is strict: storage or
- * manifest drift errors propagate and therefore block dispatch.
+ * Runtime-authoritative setup assessment used by ghost_info, ghost_list and
+ * ghost_call. Discovery callers treat assessment failures as best-effort and
+ * omit setup; ghost_call preflight is strict, so storage or manifest drift
+ * errors block dispatch.
  */
 export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const ghost = findAvailableGhost(ghostId);
@@ -3606,6 +3619,7 @@ export async function installOrUpdateMarketGhostPackage(
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
+    beforeCommitInLock?: () => void;
     /** 仅 server-market 主机路径可传；custom/local 不传。 */
     officialCindyGithub?: boolean;
   },
@@ -3627,6 +3641,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     permissionBaselineManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
+    beforeCommitInLock?: () => void;
     officialCindyGithub?: boolean;
   },
 ): Promise<InstalledGhost> {
@@ -3717,6 +3732,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       });
     }
 
+    expected.beforeCommitInLock?.();
     const runtime = getGhostRuntime();
     runtime.stop(expected.ghostId);
     getGhostNodeRuntimeBroker().stop(expected.ghostId);

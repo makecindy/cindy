@@ -1938,6 +1938,8 @@ describe('anyInflightWork（更新重启阻断探针）', () => {
       generateImage: vi.fn(async () => {
         // 请求已计入 inflight、但还没结算的那一刻。
         expect(slot.anyInflightWork()).toBe(true);
+        expect(slot.hasInflightWorkFor('art')).toBe(true);
+        expect(slot.hasInflightWorkFor('other')).toBe(false);
         await gate;
         return { buffer: new Uint8Array([1]), mimeType: 'image/png' };
       }),
@@ -1959,6 +1961,8 @@ describe('anyInflightWork（更新重启阻断探针）', () => {
     const { slot } = makeSlot({
       depositMedia: vi.fn(async () => {
         seenDuring = slot.anyInflightWork();
+        expect(slot.hasInflightWorkFor('art')).toBe(true);
+        expect(slot.hasInflightWorkFor('other')).toBe(false);
         await gate;
         return { hash: 'a'.repeat(64), bytes: PNG_BYTES.length, usedBytes: 10, quotaBytes: 100 };
       }),
@@ -2015,6 +2019,8 @@ describe('anyInflightWork（更新重启阻断探针）', () => {
     expect(res).toMatchObject({ ok: true, status: 'running' });
     // 受理即返回，job 仍在途 —— 此时没有任何 turn 级信号还亮着。
     expect(slot.anyInflightWork()).toBe(true);
+    expect(slot.hasInflightWorkFor('art')).toBe(true);
+    expect(slot.hasInflightWorkFor('other')).toBe(false);
     release();
   });
 });
