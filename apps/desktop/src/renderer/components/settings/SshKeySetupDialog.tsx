@@ -948,7 +948,7 @@ function CodeBlock({
         </button>
       </div>
       <pre
-        className="max-h-32 overflow-auto rounded-md border p-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap break-all"
+        className="max-h-32 overflow-auto rounded-md border p-2.5 text-11 leading-relaxed whitespace-pre-wrap break-all"
         style={{
           backgroundColor: 'var(--settings-input-bg, #faf9f5)',
           borderColor: 'var(--settings-input-border, #d7d7d4)',

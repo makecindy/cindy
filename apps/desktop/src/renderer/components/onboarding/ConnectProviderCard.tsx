@@ -32,7 +32,7 @@ function rowIcon(id: string, name: string, routing?: ProviderLogoRouting): React
   if (hasProviderLogo(id, routing)) {
     return <ProviderLogoMark providerId={id} routing={routing} size={16} />;
   }
-  return <span className="text-[13px] font-semibold leading-none">{providerMonogram(name)}</span>;
+  return <span className="text-13 font-semibold leading-none">{providerMonogram(name)}</span>;
 }
 
 export function ConnectProviderCard({ className }: { className?: string }) {
@@ -79,10 +79,10 @@ export function ConnectProviderCard({ className }: { className?: string }) {
       )}
     >
       <div className="flex flex-col gap-1">
-        <h2 className="text-[18px] font-medium leading-snug text-[var(--text-primary)]">
+        <h2 className="text-18 font-medium leading-snug text-[var(--text-primary)]">
           {t('onboarding.connectProvider.title')}
         </h2>
-        <p className="text-[13px] leading-relaxed text-[var(--text-secondary)]">
+        <p className="text-13 leading-relaxed text-[var(--text-secondary)]">
           {t('onboarding.connectProvider.desc')}
         </p>
       </div>
@@ -130,7 +130,7 @@ export function ConnectProviderCard({ className }: { className?: string }) {
               aria-controls="connect-provider-more"
               className="group flex w-full items-center gap-3.5 border-b border-[var(--border-default)] px-1 py-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
             >
-              <span className="flex flex-1 text-[13px] font-medium text-[var(--text-secondary)]">
+              <span className="flex flex-1 text-13 font-medium text-[var(--text-secondary)]">
                 {t('onboarding.connectProvider.othersToggle', { count: moreRows.length })}
               </span>
               <ChevronDown
@@ -152,14 +152,14 @@ export function ConnectProviderCard({ className }: { className?: string }) {
         <button
           type="button"
           onClick={onboarding.dismiss}
-          className="rounded-full px-3 py-1.5 text-[13px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+          className="rounded-full px-3 py-1.5 text-13 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
         >
           {t('onboarding.connectProvider.dismiss')}
         </button>
         <button
           type="button"
           onClick={() => navigate('/settings?tab=providers&wizard=1')}
-          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-13 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
         >
           <KeyRound size={13} />
           {t('onboarding.connectProvider.haveApiKey')}
@@ -193,16 +193,16 @@ function ProviderRow({
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center gap-2">
-          <span className="truncate text-[14px] font-medium text-[var(--text-primary)]">
+          <span className="truncate text-14 font-medium text-[var(--text-primary)]">
             {label}
           </span>
           {badge && (
-            <span className="shrink-0 rounded-full border border-[var(--border-default)] px-2 py-px text-[10px] font-medium uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
+            <span className="shrink-0 rounded-full border border-[var(--border-default)] px-2 py-px text-10 font-medium uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
               {badge}
             </span>
           )}
         </span>
-        <span className="truncate text-[11px] text-[var(--text-tertiary)]">{sub}</span>
+        <span className="truncate text-11 text-[var(--text-tertiary)]">{sub}</span>
       </span>
       <ChevronRight
         size={14}

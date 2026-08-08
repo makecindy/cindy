@@ -57,6 +57,8 @@ const config: Config = {
       fontFamily: {
         mono: ['var(--app-font-code, var(--app-font-code-default))'],
       },
+      // DESIGN.md §3 numeric 字号白名单的 Tailwind 权威来源之一。规范正本
+      // 与三处权威来源代码由守卫互验；lib/utils.ts 是单独校验的消费端去重列表。
       fontSize: {
         xs: ['var(--text-xs)', { lineHeight: 'var(--text-xs-line-height)' }],
         sm: ['var(--text-sm)', { lineHeight: 'var(--text-sm-line-height)' }],
@@ -67,7 +69,6 @@ const config: Config = {
         '3xl': ['var(--text-3xl)', { lineHeight: 'var(--text-3xl-line-height)' }],
         '4xl': ['var(--text-4xl)', { lineHeight: 'var(--text-4xl-line-height)' }],
         '5xl': ['var(--text-5xl)', { lineHeight: 'var(--text-5xl-line-height)' }],
-        9: 'var(--text-9)',
         10: 'var(--text-10)',
         11: 'var(--text-11)',
         12: 'var(--text-12)',
@@ -75,17 +76,9 @@ const config: Config = {
         14: 'var(--text-14)',
         15: 'var(--text-15)',
         16: 'var(--text-16)',
-        17: 'var(--text-17)',
         18: 'var(--text-18)',
-        19: 'var(--text-19)',
         20: 'var(--text-20)',
-        21: 'var(--text-21)',
-        22: 'var(--text-22)',
-        23: 'var(--text-23)',
         24: 'var(--text-24)',
-        25: 'var(--text-25)',
-        26: 'var(--text-26)',
-        27: 'var(--text-27)',
         28: 'var(--text-28)',
       },
       borderRadius: {

@@ -24,7 +24,11 @@ import { BrowserWindow } from 'electron';
 import type { SendOrigin } from '@cindy/maker-core';
 
 import type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
-import type { TurnUsageDetails } from '../shared/turnUsageDetails.js';
+import {
+  mergeTurnUsageDetailsForMessage,
+  normalizeTurnUsageDetails,
+  type TurnUsageDetails,
+} from '../shared/turnUsageDetails.js';
 import {
   patchMessageAgentMetaWithResult,
   readPriorUserRoundCost,
@@ -121,6 +125,41 @@ const defaultDeps: TurnCostDeps = {
   },
 };
 
+async function patchAgentMetaPreservingTurnDuration(
+  deps: Pick<TurnCostDeps, 'patchAgentMeta'>,
+  sessionId: string,
+  clientId: string,
+  patch: Record<string, unknown>,
+  turnUsageDetails: TurnUsageDetails | null | undefined,
+): Promise<{
+  result: MessageAgentMetaPatchResult;
+  turnUsageDetails: TurnUsageDetails | null | undefined;
+} | null> {
+  const first = await deps.patchAgentMeta(sessionId, clientId, patch);
+  if (!first) return null;
+  if (!turnUsageDetails) return { result: first, turnUsageDetails };
+
+  const previousUsage = normalizeTurnUsageDetails(first.previous.turnUsageDetails);
+  if (!previousUsage) return { result: first, turnUsageDetails };
+  const mergedUsage = mergeTurnUsageDetailsForMessage(previousUsage, turnUsageDetails);
+  const needsMergePatch =
+    (turnUsageDetails.totalTokens <= 0 && previousUsage.totalTokens > 0) ||
+    (turnUsageDetails.outputTokens <= 0 && previousUsage.outputTokens > 0) ||
+    (previousUsage.turnDurationMs ?? 0) > (turnUsageDetails.turnDurationMs ?? 0);
+  if (!needsMergePatch) return { result: first, turnUsageDetails };
+  const second = await deps.patchAgentMeta(sessionId, clientId, {
+    turnUsageDetails: mergedUsage,
+  });
+  // The first patch already persisted the segment cost/usage. If the message
+  // is rewound between the two writes, keep the original success semantics so
+  // ledger side effects and broadcasts are not silently skipped.
+  if (!second) return { result: first, turnUsageDetails };
+  return {
+    result: { previous: first.previous, next: second.next },
+    turnUsageDetails: mergedUsage,
+  };
+}
+
 /**
  * 把一笔 SDK 分段费用写到指定消息，并同时写入从本轮用户消息累计的展示费用。
  *
@@ -146,6 +185,7 @@ export async function recordTurnCostOnMessage(
   try {
     let userTurnMoney = normalized;
     let userTurnCostIsEstimate = normalized.kind === 'value-estimate';
+    let persistedTurnUsageDetails = turnUsageDetails;
     const patched = await deps.enqueue(`turn-cost:${sessionId}:${clientId}`, async () => {
       // This runs in the durable FIFO after prior assistant cost patches, so
       // the query sees every earlier segment of this user round.
@@ -178,8 +218,16 @@ export async function recordTurnCostOnMessage(
         patch.origin = turnOrigin;
       }
       if (turnUsageDetails) patch.turnUsageDetails = turnUsageDetails;
-      const result = await deps.patchAgentMeta(sessionId, clientId, patch);
-      if (!result) return null;
+      const patchedMeta = await patchAgentMetaPreservingTurnDuration(
+        deps,
+        sessionId,
+        clientId,
+        patch,
+        turnUsageDetails,
+      );
+      if (!patchedMeta) return null;
+      const { result } = patchedMeta;
+      persistedTurnUsageDetails = patchedMeta.turnUsageDetails;
       try {
         await deps.applyScheduleRunCostChange(result.previous, result.next);
       } catch (err) {
@@ -203,7 +251,7 @@ export async function recordTurnCostOnMessage(
       userTurnMoney,
       ...(userTurnMoney.currency === 'USD' ? { userTurnCostUsd: userTurnMoney.amount } : {}),
       userTurnCostIsEstimate,
-      ...(turnUsageDetails ? { turnUsageDetails } : {}),
+      ...(persistedTurnUsageDetails ? { turnUsageDetails: persistedTurnUsageDetails } : {}),
     };
     try {
       if (deps.broadcastWithOwnerScope) {
@@ -249,7 +297,8 @@ export type TurnUsageDeps = Pick<
  * —— 而 readPriorUserRoundCost 的契约本来就是「让收尾消息承载整轮总额」。所以这里读一次
  * 往轮累计,有则连同 userTurnCost 一起投影到消息与 payload(仍不含当前无价 segment)。
  *
- * turnUsageDetails 为空(整轮 0 token)时直接跳过:没有可展示的事实,不写空对象。
+ * turnUsageDetails 为空时直接跳过。0 token 的最终 continuation 仍可携带整轮耗时，
+ * 并与该消息先前已落下的 token 明细合并。
  */
 export async function recordTurnUsageOnMessage(
   args: {
@@ -263,6 +312,7 @@ export async function recordTurnUsageOnMessage(
   if (!sessionId || !clientId || !turnUsageDetails) return false;
   const ownerScope = captureOwnerScope();
   try {
+    let persistedTurnUsageDetails = turnUsageDetails;
     const outcome = await deps.enqueue(`turn-usage:${sessionId}:${clientId}`, async () => {
       // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
       // 每个 segment 已落库的费用。
@@ -277,8 +327,15 @@ export async function recordTurnUsageOnMessage(
           patch.userTurnCostUsd = userTurnMoney.amount;
         }
       }
-      const patched = await deps.patchAgentMeta(sessionId, clientId, patch);
-      if (!patched) return null;
+      const patchedMeta = await patchAgentMetaPreservingTurnDuration(
+        deps,
+        sessionId,
+        clientId,
+        patch,
+        turnUsageDetails,
+      );
+      if (!patchedMeta) return null;
+      persistedTurnUsageDetails = patchedMeta.turnUsageDetails ?? turnUsageDetails;
       return { userTurnMoney, userTurnCostIsEstimate: prior.hasEstimatedValue };
     });
     if (!outcome) return false;
@@ -290,7 +347,7 @@ export async function recordTurnUsageOnMessage(
       const payload: MessageTurnCostPayload = {
         sessionId,
         clientId,
-        turnUsageDetails,
+        turnUsageDetails: persistedTurnUsageDetails,
         ...(userTurnMoney
           ? {
               userTurnMoney,

@@ -3783,10 +3783,10 @@ function RailPanels({
 
   const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-foreground">
+      <span className="min-w-0 flex-1 truncate text-12 font-semibold text-foreground">
         {title}
       </span>
-      <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">
+      <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
         {t('ccAgent.sidebar.railNavCount', { count })}
       </span>
       {action}
@@ -3938,7 +3938,7 @@ function RailPanels({
                     {agg.dotTone && (
                       <AttentionDot size={5} tone={agg.dotTone} className="shrink-0" />
                     )}
-                    <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-tertiary)]">
+                    <span className="shrink-0 text-10 tabular-nums text-[var(--text-tertiary)]">
                       {p.sessions.length}
                     </span>
                     <ChevronRight

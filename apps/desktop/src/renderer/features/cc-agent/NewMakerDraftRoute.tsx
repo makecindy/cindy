@@ -4458,7 +4458,7 @@ export function NewMakerDraftRoute() {
                     type="button"
                     data-testid="create-agent-mode-pill"
                     disabled={wtCreating || sendInFlight}
-                    className="inline-flex h-[30px] min-w-20 max-w-[220px] items-center justify-center gap-1.5 rounded-full border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] px-3 text-[12px] font-medium leading-[14px] text-[var(--create-agent-control-text)] transition-colors hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--create-agent-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex h-[30px] min-w-20 max-w-[220px] items-center justify-center gap-1.5 rounded-full border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] px-3 text-12 font-medium leading-[1.167] text-[var(--create-agent-control-text)] transition-colors hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--create-agent-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                     aria-label={t('newChat.collaboration.modeLabel')}
                   >
                     <MessageSquare
@@ -4630,7 +4630,7 @@ export function NewMakerDraftRoute() {
                     被控设备上、属于那台机器的项目,而不是本机。放输入框正下方并与其水平居中
                     (父列 items-start,靠 self-center 相对 w-full 的输入框居中)。 */}
                 {isDeviceLinkDraft && (
-                  <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+                  <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-12 text-[var(--text-secondary)]">
                     <MonitorSmartphone
                       size={14}
                       strokeWidth={2}
@@ -4686,7 +4686,7 @@ export function NewMakerDraftRoute() {
                     {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
                         (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
                     <div className="mb-2.5 px-0.5">
-                      <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
+                      <div className="text-14 font-medium leading-[1.286] text-[var(--text-secondary)]">
                         {t('newChat.createAgent.quickStart')}
                       </div>
                     </div>
@@ -4725,7 +4725,7 @@ export function NewMakerDraftRoute() {
                           </span>
                           {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。
                               竖排下占满卡片宽度、左对齐 icon,靠父列 justify-between 贴底。 */}
-                          <span className="w-full min-w-0 text-13 font-semibold leading-[16px]">
+                          <span className="w-full min-w-0 text-13 font-semibold leading-[1.231]">
                             {t(labelKey)}
                           </span>
                         </button>

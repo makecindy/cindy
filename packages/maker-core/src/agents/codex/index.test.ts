@@ -4537,6 +4537,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const iterator = handle.events()[Symbol.asyncIterator]();
     const transport = createdTransports[0];
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
 
     transport.emitMockLine({
       method: 'turn/started',
@@ -4548,6 +4549,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     await agent.forceDisposeLocalHostForAuthChange('test forced retire');
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(handle.isTurnRunning?.()).toBe(false);
     expect(transport.closed).toBe(true);
     await expect(nextEvent(iterator)).resolves.toMatchObject({
@@ -6114,9 +6116,18 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const transport = createdTransports[0];
     expect(transport).toBeDefined();
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    transport!.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-close-heartbeat' } },
+    });
+    await waitForExpectation(() => {
+      expect(handle.isTurnRunning?.()).toBe(true);
+    });
 
     await handle.close();
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     const unsubscribe = transport!.lines
       .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
       .find((request) => request.method === Method.ThreadUnsubscribe);
@@ -12424,6 +12435,284 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     expect(result).toEqual({ decision: 'accept' });
     await handle.close();
+  });
+
+  it('excludes a server-resolved approval wait from the completed turn duration', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-approval-generation-timing',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.commandExecutionApproval ||
+        !handlers.serverRequestResolved ||
+        !handlers.turnStarted ||
+        !handlers.turnCompleted
+      ) {
+        throw new Error('expected approval timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+      handle.setInteractionResolver(interactionResolver);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      const approvalPromise = handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        itemId: 'approval-item-1',
+        command: 'pwd',
+        cwd: '/repo',
+      });
+      await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+
+      now = 10_000;
+      handlers.serverRequestResolved({
+        threadId: 'start-thread-id',
+        requestId: 'approval-item-1',
+      });
+      await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
+
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keeps descendant approval waits out of the root generation timer', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-descendant-approval-generation-timing',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.commandExecutionApproval
+        || !handlers.itemStarted
+        || !handlers.itemCompleted
+        || !handlers.turnStarted
+        || !handlers.turnCompleted
+      ) {
+        throw new Error('expected descendant approval timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const decision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(() => decision.promise);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'root-turn' } });
+      now = 2_000;
+      const collabItem = {
+        id: 'root-collab-item',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        agentsStates: {},
+      };
+      handlers.itemStarted({
+        threadId: 'start-thread-id',
+        turnId: 'root-turn',
+        item: collabItem,
+      } as never);
+
+      now = 3_000;
+      const approvalPromise = handlers.commandExecutionApproval({
+        threadId: 'child-thread',
+        turnId: 'child-turn',
+        itemId: 'child-command',
+        command: 'pwd',
+        cwd: '/repo',
+      });
+      now = 9_000;
+      decision.resolve({ kind: 'permission', behavior: 'allow' });
+      await expect(approvalPromise).resolves.toEqual({ decision: 'accept' });
+
+      now = 10_000;
+      handlers.itemCompleted({
+        threadId: 'start-thread-id',
+        turnId: 'root-turn',
+        item: { ...collabItem, status: 'completed' },
+      } as never);
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'root-turn', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each(['answered', 'server-resolved', 'resolver-failed'] as const)(
+    'excludes a native requestUserInput wait when it is %s',
+    async (outcome) => {
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installFakeHost(agent);
+        const handle = await agent.startSession({
+          sessionId: `session-native-user-input-timing-${outcome}`,
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const handlers = host.getThreadHandlers();
+        if (
+          !handlers?.requestUserInput
+          || !handlers.serverRequestResolved
+          || !handlers.turnStarted
+          || !handlers.turnCompleted
+        ) {
+          throw new Error('expected native user-input timing handlers');
+        }
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        const decision = deferred<InteractionDecision>();
+        const interactionResolver = vi.fn(() => decision.promise);
+        handle.setInteractionResolver(interactionResolver);
+
+        handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+        now = 2_000;
+        const responsePromise = handlers.requestUserInput({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          itemId: 'native-question-1',
+          questions: [{
+            id: 'q1',
+            header: 'Question',
+            question: 'Pick one',
+            isOther: false,
+            isSecret: false,
+            options: null,
+          }],
+        }, { requestId: `native-question-${outcome}` });
+        await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+
+        now = 10_000;
+        if (outcome === 'answered') {
+          decision.resolve({
+            kind: 'ask_user_question',
+            answers: { 'Pick one': 'yes' },
+          });
+        } else if (outcome === 'server-resolved') {
+          handlers.serverRequestResolved({
+            threadId: 'start-thread-id',
+            requestId: `native-question-${outcome}`,
+          });
+        } else {
+          decision.reject(new Error('interaction resolver failed'));
+        }
+        await responsePromise;
+
+        now = 12_000;
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+        });
+        await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+        const done = events.find((event) => event.type === 'done');
+        expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+        if (outcome === 'server-resolved') {
+          decision.resolve({ kind: 'ask_user_question', answers: {} });
+        }
+        await handle.close();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it('omits native requestUserInput timing when the turn id is missing', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-native-user-input-missing-turn-id',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.requestUserInput || !handlers.turnStarted || !handlers.turnCompleted) {
+        throw new Error('expected native user-input timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const decision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(() => decision.promise);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      const responsePromise = handlers.requestUserInput({
+        threadId: 'start-thread-id',
+        turnId: null as never,
+        itemId: 'native-question-without-turn',
+        questions: [{
+          id: 'q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          isSecret: false,
+          options: null,
+        }],
+      }, { requestId: 'native-question-without-turn' });
+      now = 10_000;
+      decision.resolve({ kind: 'ask_user_question', answers: { 'Pick one': 'yes' } });
+      await responsePromise;
+
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBeUndefined();
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('routes dynamic ask_user_question tool calls through ask_user_question', async () => {

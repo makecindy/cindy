@@ -54,7 +54,7 @@ export function SessionOrdinalBadgeKbd({ label }: { label: string }) {
     >
       {macParts ? (
         <>
-          <span className="text-[13px] leading-none">{macParts[1]}</span>
+          <span className="text-13 leading-none">{macParts[1]}</span>
           <span>{macParts[2]}</span>
         </>
       ) : (

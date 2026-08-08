@@ -464,6 +464,15 @@
         "label": "Sidebar card mode",
         "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
         "aria": "Toggle sidebar card mode"
+      },
+      "layout": {
+        "label": "Panel layout",
+        "hint": "Panel positions and widths persist across restarts. Restore the default arrangement if the layout becomes difficult to use.",
+        "reset": "Restore default layout",
+        "resetSuccess": "Default panel layout restored",
+        "resetFailed": "Could not restore the default panel layout",
+        "saved": "Panel position saved. Restore the default layout in Settings → Appearance.",
+        "saveFailed": "Could not save the panel position"
       }
     },
     "notifications": {
@@ -4263,6 +4272,8 @@
     "tokenLabel": "Tokens",
     "tokenBreakdown": "(input {{input}} · output {{output}})",
     "cacheLabel": "Cache",
+    "timeLabel": "Time",
+    "timeAndRateValue": "{{duration}} TPS:{{rate}}",
     "modelLabel": "Model",
     "staleData": "Data updated {{minutes}} minutes ago",
     "paceTrendFast": "Trending fast at the current average pace (rough estimate)",
@@ -4271,6 +4282,11 @@
     "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}s",
+    "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
+    "performanceLine": "TPS {{rate}} · Time {{duration}}",
+    "performanceRateLine": "TPS {{rate}}",
+    "timeLine": "Time {{duration}}",
     "costLine": "Cost this turn: {{cost}}",
     "valueLine": "Token value this turn: {{cost}}",
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",

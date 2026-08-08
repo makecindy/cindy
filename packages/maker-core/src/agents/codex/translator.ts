@@ -75,6 +75,18 @@ export interface CodexRuntimeState {
   reasoningTextLen: Map<string, number>;
   /** item.id → agentMessage 已 emit 文本字符长度(citation 归一化后的空间,见 handleAgentMessage)。 */
   itemTextLen: Map<string, number>;
+  /** Current model-active interval start; null while tools/approvals own the turn. */
+  generationStartedAt: number | null;
+  /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
+  generationPendingToolIds: Set<string>;
+  /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
+  generationDurationMs: number;
+  generationTurnId: string | null;
+  /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
+  generationTimingReliable: boolean;
+  /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
+  generationHeartbeatAt: number | null;
+  generationHeartbeatTimer: ReturnType<typeof setInterval> | null;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
   /** 尚未 emit 的 Web Search 候选输入，供跨 started/updated/completed 快照补全。 */
@@ -105,12 +117,199 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
     itemTextLen: new Map(),
+    generationStartedAt: null,
+    generationPendingToolIds: new Set(),
+    generationDurationMs: 0,
+    generationTurnId: null,
+    generationTimingReliable: true,
+    generationHeartbeatAt: null,
+    generationHeartbeatTimer: null,
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
     lastAuthErrorKey: null,
     networkRetryNotice: null,
   };
+}
+
+const CODEX_GENERATION_HEARTBEAT_MS = 5_000;
+const CODEX_GENERATION_SUSPEND_GAP_MS = 30_000;
+
+function stopCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  if (rt.generationHeartbeatTimer !== null) clearInterval(rt.generationHeartbeatTimer);
+  rt.generationHeartbeatTimer = null;
+  rt.generationHeartbeatAt = null;
+}
+
+function sampleCodexGenerationHeartbeat(rt: CodexRuntimeState, now = Date.now()): void {
+  const previous = rt.generationHeartbeatAt;
+  if (
+    previous !== null &&
+    now - previous > CODEX_GENERATION_HEARTBEAT_MS + CODEX_GENERATION_SUSPEND_GAP_MS
+  ) {
+    rt.generationTimingReliable = false;
+  }
+  rt.generationHeartbeatAt = now;
+}
+
+function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
+  rt.generationHeartbeatAt = Date.now();
+  const timer = setInterval(() => {
+    sampleCodexGenerationHeartbeat(rt);
+  }, CODEX_GENERATION_HEARTBEAT_MS);
+  timer.unref?.();
+  rt.generationHeartbeatTimer = timer;
+}
+
+/** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
+export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
+  rt.generationStartedAt = null;
+  rt.generationPendingToolIds.clear();
+  rt.generationDurationMs = 0;
+  rt.generationTurnId = null;
+  rt.generationTimingReliable = true;
+}
+
+function closeCodexGenerationInterval(rt: CodexRuntimeState, endedAt: number): void {
+  const startedAt = rt.generationStartedAt;
+  rt.generationStartedAt = null;
+  sampleCodexGenerationHeartbeat(rt);
+  stopCodexGenerationHeartbeat(rt);
+  if (startedAt === null) return;
+  if (endedAt < startedAt) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  rt.generationDurationMs += endedAt - startedAt;
+}
+
+export function beginCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  startedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) {
+    resetCodexGenerationTiming(rt);
+    rt.generationTurnId = turnId;
+  }
+  if (rt.generationStartedAt === null && rt.generationPendingToolIds.size === 0) {
+    rt.generationStartedAt = startedAt;
+    startCodexGenerationHeartbeat(rt);
+  }
+}
+
+export function finalizeCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  completedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) return;
+  if (rt.generationPendingToolIds.size > 0) {
+    rt.generationTimingReliable = false;
+    rt.generationStartedAt = null;
+    stopCodexGenerationHeartbeat(rt);
+    return;
+  }
+  closeCodexGenerationInterval(rt, completedAt);
+}
+
+export function codexGenerationDurationMs(rt: CodexRuntimeState): number | undefined {
+  return rt.generationTimingReliable && rt.generationDurationMs > 0
+    ? rt.generationDurationMs
+    : undefined;
+}
+
+export function pauseCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  pausedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) {
+    beginCodexGenerationTurn(rt, turnId, pausedAt);
+    // Keep the interaction pair consistent, but omit TPS because the missing
+    // turn-start boundary means TTFT/thinking before this pause is unknown.
+    rt.generationTimingReliable = false;
+  }
+  if (!pauseId) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.has(pauseId)) return;
+  if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, pausedAt);
+  rt.generationPendingToolIds.add(pauseId);
+}
+
+export function resumeCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  resumedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId || !rt.generationPendingToolIds.delete(pauseId)) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.size === 0) rt.generationStartedAt = resumedAt;
+  if (rt.generationPendingToolIds.size === 0) startCodexGenerationHeartbeat(rt);
+}
+
+const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'commandExecution',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageGeneration',
+  'imageView',
+  'contextCompaction',
+]);
+// App-server v2 reports fileChange only after the patch is complete. With no
+// matching start event it is an output notification, not a pairable timing
+// boundary; handleFileChange still publishes its tool events below.
+// contextCompaction may likewise arrive completion-only. Keeping it in the
+// paired pause set makes that shape fail closed, while still excluding the
+// compaction interval if a future app-server supplies both boundaries.
+
+function noteCodexGenerationBoundary(
+  rt: CodexRuntimeState,
+  phase: ItemPhase,
+  item: { id?: unknown; type?: unknown },
+  notification: { turnId?: unknown },
+): void {
+  const turnId = notification.turnId;
+  if (typeof turnId !== 'string') return;
+  // App-server timestamps may originate on a remote SSH host whose wall clock
+  // differs from the desktop. Keep every generation boundary in the local
+  // receipt-time domain so interval subtraction never mixes remote clocks.
+  // A separate event-loop heartbeat fails closed on suspend-sized local jumps.
+  const receivedAt = Date.now();
+  if (rt.generationTurnId !== turnId) {
+    beginCodexGenerationTurn(rt, turnId, receivedAt);
+    // The authoritative local turn-start boundary was not observed. Starting
+    // at this item receipt would drop TTFT/thinking, so keep the state usable
+    // for pause pairing but fail closed for TPS.
+    rt.generationTimingReliable = false;
+  }
+  if (
+    typeof item.type !== 'string' ||
+    !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)
+  ) {
+    return;
+  }
+  if (typeof item.id !== 'string' || item.id.length === 0) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  const pauseId = `item:${item.id}`;
+  if (phase === 'started') {
+    pauseCodexGeneration(rt, turnId, pauseId, receivedAt);
+    return;
+  }
+  if (phase !== 'completed') return;
+  resumeCodexGeneration(rt, turnId, pauseId, receivedAt);
 }
 
 // ── 上下文 ────────────────────────────────────────────────────────────────────
@@ -174,6 +373,12 @@ export function translateItemNotification(
     ctx.log.warn('item missing type field', { phase, itemKeys: Object.keys(item) });
     return;
   }
+  noteCodexGenerationBoundary(
+    ctx.rt,
+    phase,
+    item as { id?: unknown; type?: unknown },
+    notification as { turnId?: unknown },
+  );
 
   switch (itemType) {
     case 'agentMessage':

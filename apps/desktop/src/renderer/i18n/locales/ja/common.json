@@ -464,6 +464,15 @@
         "label": "サイドバーカードモード",
         "hint": "ピン留めセッションをタスク状況の要約付きカードで表示します。カードの高さは要約の長さで変わり、サイドバーを広げると 2〜3 列に自動配置されます。",
         "aria": "サイドバーカードモードを切り替える"
+      },
+      "layout": {
+        "label": "パネルレイアウト",
+        "hint": "パネルの位置と幅は次回起動時も保持されます。使いにくい配置になった場合は、初期レイアウトに戻せます。",
+        "reset": "初期レイアウトに戻す",
+        "resetSuccess": "パネルレイアウトを初期状態に戻しました",
+        "resetFailed": "パネルレイアウトを初期状態に戻せませんでした",
+        "saved": "パネル位置を保存しました。設定 → 外観から初期レイアウトに戻せます。",
+        "saveFailed": "パネル位置を保存できませんでした"
       }
     },
     "notifications": {
@@ -4261,6 +4270,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
     "cacheLabel": "キャッシュ",
+    "timeLabel": "時間",
+    "timeAndRateValue": "{{duration}} 速度:{{rate}} トークン/秒",
     "modelLabel": "モデル",
     "staleData": "データは {{minutes}} 分前に更新されました",
     "paceTrendFast": "現在の平均使用ペースは速めです（おおよその傾向）",
@@ -4269,6 +4280,11 @@
     "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "performanceLine": "速度 {{rate}} トークン/秒 · 時間 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} トークン/秒",
+    "timeLine": "時間 {{duration}}",
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
     "tokenLine": "Token: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",

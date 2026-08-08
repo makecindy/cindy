@@ -3,6 +3,7 @@ import { AppState, Platform } from 'react-native';
 import {
   DeviceLinkClient,
   DeviceLinkError,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -141,6 +142,17 @@ export interface DeviceLinkContextValue {
 }
 
 const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
+
+/**
+ * 本控制端声明的端到端可选能力(link-open 与 subscribe 两处共用同一份,漏一处会让
+ * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
+ */
+const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  // maker:event 微批:被控端把同一会话的连续事件合并成一帧,本端拆包后逐条消费
+  // (见 remoteSessionStore 的 MAKER_EVENT_BATCH_CHANNEL 分支)。
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
 // 响应性熔断;只用于判定并发返回的 unavailable 是否已被更晚目标应答推翻。
@@ -1234,7 +1246,7 @@ async function sendOpenLink(
       controllerName: mobileDeviceName(),
       protocolVersion: PROTOCOL_VERSION,
       appVersion: Constants.expoConfig?.version ?? '0.0.0',
-      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+      capabilities: CONTROLLER_CAPABILITIES,
     });
     // link-accept 只证明链路层活着,不证明 invoke 路径健康(review P1):事故形态
     // 正是 link-open 在被控端 IPC/DB 路径之外应答正常、invoke 全部挂死——若凭
@@ -1378,7 +1390,7 @@ async function sendSubscribe(
       args: [{
         topics,
         controllerName: mobileDeviceName(),
-        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+        capabilities: CONTROLLER_CAPABILITIES,
       }],
     });
   } catch (err) {

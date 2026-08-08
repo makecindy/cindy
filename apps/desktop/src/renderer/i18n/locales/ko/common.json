@@ -464,6 +464,15 @@
         "label": "사이드바 카드 모드",
         "hint": "고정된 세션을 작업 현황 요약이 담긴 카드로 표시합니다. 카드 높이는 요약 길이에 따라 달라지며, 사이드바를 넓히면 2~3열로 자동 배치됩니다.",
         "aria": "사이드바 카드 모드 전환"
+      },
+      "layout": {
+        "label": "패널 레이아웃",
+        "hint": "패널 위치와 너비는 다음 실행에도 유지됩니다. 사용하기 어려운 배치가 되면 기본 레이아웃으로 복원할 수 있습니다.",
+        "reset": "기본 레이아웃 복원",
+        "resetSuccess": "기본 패널 레이아웃을 복원했습니다",
+        "resetFailed": "기본 패널 레이아웃을 복원하지 못했습니다",
+        "saved": "패널 위치를 저장했습니다. 설정 → 외관에서 기본 레이아웃으로 복원할 수 있습니다.",
+        "saveFailed": "패널 위치를 저장하지 못했습니다"
       }
     },
     "notifications": {
@@ -4261,6 +4270,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
     "cacheLabel": "캐시",
+    "timeLabel": "시간",
+    "timeAndRateValue": "{{duration}} 속도:{{rate}} 토큰/초",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
     "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
@@ -4269,6 +4280,11 @@
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}초",
+    "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "performanceLine": "속도 {{rate}} 토큰/초 · 시간 {{duration}}",
+    "performanceRateLine": "속도 {{rate}} 토큰/초",
+    "timeLine": "시간 {{duration}}",
     "costLine": "이번 턴 비용: {{cost}}",
     "valueLine": "이번 턴 토큰 가치: {{cost}}",
     "tokenLine": "Token: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",

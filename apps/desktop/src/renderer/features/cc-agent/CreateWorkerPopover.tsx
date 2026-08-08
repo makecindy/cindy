@@ -650,7 +650,7 @@ export function CreateWorkerPopover({
         style={{ boxShadow: 'var(--shadow-menu)' }}
       >
         <div className="mb-5 flex items-center justify-between">
-          <span className="text-17 font-medium text-[var(--text-primary)]">{resolvedTitle}</span>
+          <span className="text-16 font-medium text-[var(--text-primary)]">{resolvedTitle}</span>
           <button
             type="button"
             aria-label={t('orca.createWorker.closeAria')}

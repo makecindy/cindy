@@ -880,7 +880,7 @@ export function SessionCard({
         >
           <div
             className={cn(
-              'min-w-0 text-[12.5px] font-semibold leading-[1.22] tracking-[-0.005em]',
+              'min-w-0 text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
               isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
               isEditing && 'invisible',
@@ -911,7 +911,7 @@ export function SessionCard({
                 setIsEditing(false);
               }}
               containerClassName="absolute inset-x-0 top-1/2 -translate-y-1/2"
-              inputClassName="h-6 text-[12.5px] font-semibold text-foreground"
+              inputClassName="h-6 text-12 font-semibold text-foreground"
               activeForeground={isActive}
             />
           )}
@@ -1184,7 +1184,7 @@ function TimeActionsSlot({
           dateTime={activityIso}
           title={formatSidebarTimeAbsolute(activityIso)}
           className={cn(
-            'text-[10.5px] font-medium leading-none tabular-nums',
+            'text-10 font-medium leading-none tabular-nums',
             isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
           )}
         >
