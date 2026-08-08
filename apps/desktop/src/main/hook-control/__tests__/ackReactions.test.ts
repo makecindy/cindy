@@ -319,6 +319,47 @@ describe('官方 bot ack 表情', () => {
     expect(h.reactions.supports(CONN)).toBe(false);
   });
 
+  it('断线期间切到 off → 重连补的是撤销, 不是原终态', () => {
+    // 待补项存的是断线前按 minimal/expressive 算好的表情; off 下 react 会把它
+    // 跳过, 于是每次重连都原样跳过 —— 👀 永久留在消息上, 表也永远不清。
+    const h = harness();
+    h.reactions.onAccepted(TASK, h.send);
+    h.reactions.onFinished(TASK, 'ok', vi.fn(() => false)); // 断线, 进待补发
+    h.setMode('off'); // 重连之前用户把表情关了
+    h.reactions.onReconnected(CONN, h.send);
+    expect(h.sent).toHaveLength(2);
+    expect(opOf(h.sent[1]).action).toMatchObject({ targetMessageId: '55', emoji: '' });
+    // 撤销的回执到达即收口, 表不残留。
+    h.reactions.onResult({ opId: 'req-1:final', ok: true, messageId: '55', error: null }, () => h.send);
+    h.reactions.onReconnected(CONN, h.send);
+    expect(h.sent).toHaveLength(2); // 没有再补
+  });
+
+  it('账号停用: 打过 👀 而终态没人发的任务, 停用时撤销那个 👀', () => {
+    // 运行中的任务因账号代次失效跳过 onFinished, 排队任务被直接清 —— 直接
+    // reset 会把欠账一笔勾销, 消息永远显示在处理中。
+    const h = harness();
+    h.reactions.onAccepted(TASK, h.send);
+    expect(h.sent).toHaveLength(1);
+    h.reactions.onAccountTeardown(() => h.send);
+    expect(h.sent).toHaveLength(2);
+    // 撤销(空串), 不是装一个 👍 —— 任务没跑完。
+    expect(opOf(h.sent[1]).action).toMatchObject({ targetMessageId: '55', emoji: '' });
+    h.reactions.reset();
+  });
+
+  it('账号停用: 终态在途(没等到回执)的再发一次, 不静默丢', () => {
+    const h = harness();
+    h.reactions.onAccepted(TASK, h.send);
+    h.reactions.onFinished(TASK, 'ok', h.send); // sent, 但回执没来
+    expect(h.sent).toHaveLength(2);
+    h.reactions.onAccountTeardown(() => h.send);
+    expect(h.sent).toHaveLength(3);
+    expect(opOf(h.sent[2]).opId).toBe('req-1:final'); // 同 opId, 服务端幂等
+    expect(opOf(h.sent[2]).action.emoji).toBe('👍');
+    h.reactions.reset();
+  });
+
   it('能力快照还没到时不丢待补发 —— 只有明确降级才作废', () => {
     // 「这一刻还不知道」与「服务端说了不支持」不能混同: 前者一次时序抖动就把
     // 待补发全丢了, 那条消息永远挂着 👀。

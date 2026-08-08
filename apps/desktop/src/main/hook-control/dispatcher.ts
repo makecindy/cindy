@@ -2257,6 +2257,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           if (task.commitContextCursor) finishTaskAsCancelled(task);
         }
       }
+      // 👀 的欠账要在 sendFns 清理**之前**结: 运行中的任务会因账号代次失效
+      // 跳过 onFinished, 排队任务被直接清 —— 直接 reset 会把它们的消息永远留在
+      // 处理中。
+      ackReactions.onAccountTeardown((cid) => sendFns.get(cid));
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();

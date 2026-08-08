@@ -67,6 +67,15 @@ export interface AckReactions {
   onReconnected(connectionId: string, send: (m: HookMessage) => boolean): void;
   /** 该连接握手时宣告了 msg-op-v1 吗(缺席 = 老 server, 整体不发)。 */
   supports(connectionId: string): boolean;
+  /**
+   * 账号停用/切换的收口(在 sendFns / serverFeatures 清理**之前**调, 之后再
+   * reset)。运行中的任务会因账号代次失效跳过 onFinished, 普通排队任务被直接
+   * 清出队列 —— 它们的 👀 没人收口, 直接 reset 就把欠账一笔勾销, 消息永远
+   * 显示在处理中。这里对「终态在途」的尽力再发一次, 对「只打过 👀」的发撤销。
+   */
+  onAccountTeardown(
+    sendFor: (connectionId: string) => ((m: HookMessage) => boolean) | undefined,
+  ): void;
   /** 账号切换 / 销毁: 清掉待补发与可回落表。 */
   reset(): void;
 }
@@ -184,15 +193,30 @@ export function createAckReactions(deps: {
    */
   const retryables = new Map<string, { task: AckReactionTask; failed: boolean }>();
   /**
-   * 已经真的打出过 👀 的任务(requestId)。
+   * 已经真的打出过 👀 的任务(requestId → 任务)。
    *
-   * 用户可以在任务跑到一半时把表情改成 off。那之后终态按 off 什么都不发, 那条
-   * 消息就会永远挂着 👀 显示在处理中 —— 所以得记住谁欠一个收口。
+   * 用户可以在任务跑到一半时把表情改成 off, 账号也可能在任务收口前被停用 ——
+   * 两种情况下那条消息都会永远挂着 👀 显示在处理中, 所以得记住谁欠一个收口。
+   * 存整个 task 而不只是 id: 账号 teardown 时要凭它把撤销发出去。
    */
-  const acked = new Set<string>();
+  const acked = new Map<string, AckReactionTask>();
 
   return {
     supports,
+    onAccountTeardown(sendFor) {
+      // 终态在途(打出去了但回执没到): 尽力再发一次, opId 不变、服务端幂等。
+      // 这一发之后就交给命运 —— 账号都没了, 没有下一次重连可等。
+      for (const entry of pendingFinals.values()) {
+        const send = sendFor(entry.task.connectionId);
+        if (send !== undefined) react(entry.task, 'final', entry.emoji, send);
+      }
+      // 只打过 👀、终态永远不会来的(运行中被代次作废 / 排队被直接清): 撤销
+      // 那个 👀。装一个 👍 是撒谎 —— 任务没跑完; 什么都不留才是真实状态。
+      for (const task of acked.values()) {
+        const send = sendFor(task.connectionId);
+        if (send !== undefined) react(task, 'final', '', send);
+      }
+    },
     reset() {
       pendingFinals.clear();
       retryables.clear();
@@ -214,6 +238,14 @@ export function createAckReactions(deps: {
           if (definitelyIncapable) pendingFinals.delete(opId);
           continue;
         }
+        // 断线期间用户切到 off: 原先记下的非空终态按 off 会被 react 跳过, 这条
+        // 待补项从此每次重连都原样跳过 —— 👀 永久留在消息上, 表也永远不清。
+        // off 的收口动作是**撤销**(空串), 把待补项就地改写; 表里的语义仍成立:
+        // 「这条消息欠一个收口」, 只是收口的内容跟着当前档位走。
+        if (modeOf() === 'off' && entry.emoji !== '') {
+          entry.emoji = '';
+          pendingFinals.set(opId, entry);
+        }
         // 重发即可, **不出表** —— 出表要等成功回执。补发本身同样可能在 flush
         // 之前断掉, 提前删掉就再也补不上了。opId 不变, 服务端按它去重。
         const outcome = react(entry.task, 'final', entry.emoji, send);
@@ -225,7 +257,7 @@ export function createAckReactions(deps: {
     onAccepted(task, send) {
       // 受理的 👀 发不出去就算了: 补一个迟到的「正在做」只会更奇怪, 而终态会
       // 在重连后补上, 消息不会永远停在处理中。
-      if (react(task, 'ack', ACK_EMOJI, send) === 'sent') acked.add(task.requestId);
+      if (react(task, 'ack', ACK_EMOJI, send) === 'sent') acked.set(task.requestId, task);
     },
     onFinished(task, status, send) {
       const failed = status === 'error';

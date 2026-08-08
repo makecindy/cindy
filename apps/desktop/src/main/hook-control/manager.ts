@@ -1164,7 +1164,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         bindingId: currentBindingId,
       }),
     )
-      .then((view) => adoptTelegramEmojiReactions(view.emojiReactions))
+      // bindingId 必须一起落 —— 丢掉它的话, behavior.state handler 刚记下的归属
+      // 会被这次覆盖成 null, 同一 binding 的下一个重复 confirmed 快照就被误判成
+      // 换绑, 档位被清回未知、hydration 窗口内的任务全部漏发 ack。
+      .then((view) => adoptTelegramEmojiReactions(view.emojiReactions, view.bindingId))
       .catch(() => {
         // 超时 / 断线是**暂时**失败: 服务端明明有这套设置, 只是这一次没问到。
         // 拿基线顶上就等于替用户做了选择(他可能正是把表情关掉的那个), 所以

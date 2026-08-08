@@ -4213,10 +4213,12 @@ describe('官方 bot ack 表情(msg.op)', () => {
     expect(reactionEmojis(c.sent)).toEqual(['👀', '👀', '👍']);
   });
 
-  it('表情始终跟随终态: 账号停用不发 turn.end 的队列任务也不补表情', async () => {
+  it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
     // 账号停用时普通队列不发终态是**既有** teardown 语义(本 PR 不动出站路径)。
-    // 表情收敛到 finishTaskAsCancelled 这唯一收口点, 于是它天然与终态同进退 ——
-    // 不会出现「终态没发、表情却变了」这种对不上的状态。
+    // 但 👀 是本 PR 打上去的 —— 运行中的任务因代次失效跳过收口、排队任务被直接
+    // 清, 它们的消息会永远显示在处理中。停用时对这些欠账发**撤销**(空串),
+    // 不装终态(任务没跑完, 👍 是撒谎)。
+    // 旧断言钉的是「表情数 == turn.end 数」—— 那正是把欠账一笔勾销的错误不变量。
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -4227,13 +4229,13 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
     await tick();
-    const endsBefore = c.sent.filter((m) => m.type === 'turn.end').length;
-    const reactionsBefore = reactionEmojis(c.sent).length;
+    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']); // 两条各一个在册
 
     const draining = d.deactivateAccount();
     await tick();
-    const endsAfter = c.sent.filter((m) => m.type === 'turn.end').length;
-    expect(reactionEmojis(c.sent).length - reactionsBefore).toBe(endsAfter - endsBefore);
+    // 两个 👀 都被撤销(空串), 没有任何一个被装成终态。
+    const after = reactionEmojis(c.sent).slice(2);
+    expect(after).toEqual(['', '']);
 
     // HookRunOutcome 只有 ok / error 两态, 取消由 dispatcher 侧改写。
     fr.finish({ status: 'ok' });
