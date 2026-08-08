@@ -40,6 +40,12 @@ const newMakerDraftRouteSource = readFileSync(
   'utf8',
 );
 
+function extractHandlerBlock(source: string, name: string): string {
+  const match = source.match(new RegExp(`const ${name}\\s*=\\s*[\\s\\S]*?(?:\\}, \\[|\\};)`));
+  expect(match, `expected to find handler ${name}`).not.toBeNull();
+  return match![0];
+}
+
 const remoteProjectsHookSource = readFileSync(
   resolve(__dirname, '..', 'features', 'device-link', 'useDeviceLinkRemoteProjects.ts'),
   'utf8',
@@ -178,20 +184,29 @@ describe('Dialogue sidebar section', () => {
     expect(dialogueSectionSource).toContain('className={HEADER_ACTIONS_CLASS}');
   });
 
-  it('creates a standalone dialogue and inherits an explicitly selected remote machine', () => {
-    expect(sidebarSource).toContain('resetDraftWorkspaceTargets();');
+  it('routes standalone dialogue targets through the mounted draft page transition', () => {
+    const handler = extractHandlerBlock(sidebarSource, 'handleCreateDialogue');
     expect(sidebarSource).toContain(
       'resolveDialogueDeviceTarget(selectedMachineId, switcherDevices)',
     );
-    expect(sidebarSource).toContain(
-      'deviceLinkDeviceId: selectedDialogueDeviceTarget.deviceId',
+    expect(handler).toContain(
+      'state: makeDialogueNewMakerRouteState(selectedDialogueDeviceTarget)',
     );
-    expect(sidebarSource).toContain(
-      'deviceLinkDeviceName: selectedDialogueDeviceTarget.deviceName',
+    expect(handler).not.toContain('resetDraftWorkspaceTargets');
+    expect(handler).not.toContain('patchNewMakerDraft');
+    expect(newMakerDraftRouteSource).toContain(
+      'readNewMakerDialogueTargetRequest(location.state)',
     );
-    expect(sidebarSource).toMatch(
-      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/,
+    expect(newMakerDraftRouteSource).toContain(
+      'handledDialogueTargetRequestRef.current === dialogueTargetRequest.requestId',
     );
+    expect(newMakerDraftRouteSource).toContain(
+      'patchCollab({ enabled: false });',
+    );
+    expect(newMakerDraftRouteSource).toMatch(
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+    );
+    expect(handler).toContain("navigate('/cc-agent/new'");
     expect(sidebarSource).toContain('onCreateDialogue={handleCreateDialogue}');
   });
 

@@ -103,7 +103,6 @@ import {
 } from '@/lib/sessionAttentionStore';
 import {
   patchDraft as patchNewMakerDraft,
-  resetDraftWorkspaceTargets,
 } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
 import { requestConversationSearch } from '@/state/conversationSearchRequest';
@@ -245,6 +244,7 @@ import {
   type DeletedScheduleGeneratedSessionResult,
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
 import { resolveDialogueDeviceTarget } from './lib/dialogueCreateTarget';
+import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
 
 const log = createLogger('CCAgentSidebarUpper');
 // perf-baseline(与 MessageStream 的 perf/session-switch 探针同通道):
@@ -1964,14 +1964,9 @@ function ExpandedView({
 
   const handleCreateDialogue = useCallback(() => {
     handleClearSelection();
-    resetDraftWorkspaceTargets();
-    if (selectedDialogueDeviceTarget) {
-      patchNewMakerDraft({
-        deviceLinkDeviceId: selectedDialogueDeviceTarget.deviceId,
-        deviceLinkDeviceName: selectedDialogueDeviceTarget.deviceName,
-      });
-    }
-    navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
+    navigate('/cc-agent/new', {
+      state: makeDialogueNewMakerRouteState(selectedDialogueDeviceTarget),
+    });
   }, [handleClearSelection, navigate, selectedDialogueDeviceTarget]);
 
   const handleLinkCodexProject = useCallback(
