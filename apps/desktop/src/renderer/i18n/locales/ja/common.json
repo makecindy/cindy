@@ -5374,7 +5374,7 @@
       "handoffRecoveredGoal": "前回は協同の開始が中断されました。ゴールは開始されておらず、その内容を入力欄に復元しました。",
       "loadingHint": "協同設定を確認中です。しばらくしてから再試行してください。",
       "planModeUnavailableRemoteDraft": "リモート下書きでは計画モードを利用できません。",
-      "planModeUnsupportedRemote": "このリモートデバイスは計画モードに対応していません。",
+      "planModeUnsupportedRemote": "このセッションでは計画モードを利用できません。",
       "planModeCapabilitiesLoading": "このセッションで計画モードが利用可能か確認中です…",
       "stopHint": "協同を停止",
       "stopAria": "協同を停止",

@@ -5374,7 +5374,7 @@
       "handoffRecoveredGoal": "上次开启协同时被中断，目标未启动，内容已恢复到输入框",
       "loadingHint": "正在确认协同设置，请稍后重试",
       "planModeUnavailableRemoteDraft": "远程草稿不支持计划模式。",
-      "planModeUnsupportedRemote": "此远程设备不支持计划模式。",
+      "planModeUnsupportedRemote": "此任务不支持计划模式。",
       "planModeCapabilitiesLoading": "正在确认此任务是否支持计划模式…",
       "stopHint": "停止协同",
       "stopAria": "停止协同",

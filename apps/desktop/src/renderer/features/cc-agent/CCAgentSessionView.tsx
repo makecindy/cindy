@@ -1372,7 +1372,7 @@ export function CCAgentSessionView({
     session?.providerId ?? null,
   );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
-  const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
+  const { capabilities: sessionCaps, loading: capabilitiesLoading } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
   // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
   // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
@@ -1853,12 +1853,14 @@ export function CCAgentSessionView({
         //    无 planMode 字段,useAgentCapabilities 文档明确 undefined = 不支持 ——
         //    不执行 toggle 且 toast 提示,不能静默吞掉(Codex):/plan 已出现在 palette
         //    且发送路径已消费,若毫无反馈用户会以为命令没生效 —— 提示而非静默;
-        //  - capabilities 未加载(sessionCaps == null,冷启动/远程拉取较慢)→ **不乐观
+        //  - capabilities 未加载(sessionCaps == null,冷启动/远程拉取较慢)或正在刷新
+        //    (capabilitiesLoading —— hook 在 evictDeviceCapabilities 后保留旧快照并标记
+        //    loading,期间 sessionCaps 可能是 stale 的 supported === true)→ **不乐观
         //    toggle**,仅 toast 提示稍后重试:此时 toggle 无法验证归属,开启后能力解析
         //    为不支持会遗留「菜单隐藏但状态开启、重启恢复」的状态(Greptile P1),且远程
         //    老被控端的 setPlanMode RPC 会 reject 回滚,自愈不可靠(Codex)。
         if (payload.sessionId) {
-          if (sessionCaps == null) {
+          if (sessionCaps == null || capabilitiesLoading) {
             toast.info(t('newChat.collaboration.planModeCapabilitiesLoading'));
           } else if (sessionCaps.planMode?.supported === true) {
             // 用 getSnapshot 取「当下」的 planModeEnabled 计算 next(而非闭包里的旧值):
@@ -1882,7 +1884,7 @@ export function CCAgentSessionView({
     return unsub;
     // planModeEnabled 不再进 deps:plan 分支改用 getSnapshot 取当下值,监听器保持稳定,
     // 切换计划模式不会 teardown+re-subscribe(避免漏掉空窗期推送的命令回流,Copilot)。
-  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t, setPlanMode, sessionCaps]);
+  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t, setPlanMode, sessionCaps, capabilitiesLoading]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
