@@ -21,7 +21,11 @@ import {
   EXPIRY_MARGIN_MS,
   type ClaudeOAuthRefresherDeps,
 } from '../claude-oauth-refresh.js';
-import type { ClaudeAiOAuth } from '../claude-credentials-store.js';
+import {
+  CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION,
+  type ClaudeAiOAuth,
+} from '../claude-credentials-store.js';
+import { NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS } from '../nativeProviderAuthBinding.js';
 
 const NOW = 1_800_000_000_000;
 
@@ -88,6 +92,7 @@ function makeDeps(overrides: Partial<ClaudeOAuthRefresherDeps> = {}): {
       return () => d;
     })(),
     sleep: async () => undefined,
+    clearRejectedCredential: () => 'changed',
     proactiveRenewal: false,
     ...overrides,
   };
@@ -170,6 +175,86 @@ describe('claude-oauth-refresh — 基础判定', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('authorization revision distinguishes a same-token r2 adoption from a later real r2 401', async () => {
+    const r2 = fixtureOAuth({
+      accessToken: 'at-same',
+      refreshToken: 'rt-same',
+      cindyAuthorizationRevision: 'login-revision-2',
+    });
+    const { deps, fetchMock } = makeDeps({ readOAuth: () => r2 });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    await expect(
+      refresher.getValidOAuth({
+        forceRefresh: true,
+        staleToken: 'at-same',
+        staleAuthorizationRevision: 'login-revision-1',
+      }),
+    ).resolves.toBe(r2);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await expect(
+      refresher.getValidOAuth({
+        forceRefresh: true,
+        staleToken: 'at-same',
+        staleAuthorizationRevision: 'login-revision-2',
+      }),
+    ).resolves.toMatchObject({ accessToken: 'at-new' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('markerless session baseline refreshes itself but adopts a same-token explicit r2', async () => {
+    const markerless = fixtureOAuth({ accessToken: 'at-same', refreshToken: 'rt-same' });
+    const markerlessDeps = makeDeps({ readOAuth: () => markerless });
+    const markerlessRefresher = createClaudeOAuthRefresher(markerlessDeps.deps);
+    await expect(
+      markerlessRefresher.getValidOAuth({
+        forceRefresh: true,
+        staleToken: 'at-same',
+        staleAuthorizationRevision: CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION,
+      }),
+    ).resolves.toMatchObject({ accessToken: 'at-new' });
+    expect(markerlessDeps.fetchMock).toHaveBeenCalledOnce();
+
+    const r2 = fixtureOAuth({
+      accessToken: 'at-same',
+      refreshToken: 'rt-same',
+      cindyAuthorizationRevision: 'login-revision-2',
+    });
+    const r2Deps = makeDeps({ readOAuth: () => r2 });
+    const r2Refresher = createClaudeOAuthRefresher(r2Deps.deps);
+    await expect(
+      r2Refresher.getValidOAuth({
+        forceRefresh: true,
+        staleToken: 'at-same',
+        staleAuthorizationRevision: CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION,
+      }),
+    ).resolves.toBe(r2);
+    expect(r2Deps.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('锁内按有效授权代次识别同 token 的 markerless r2,不再刷新 r1', async () => {
+    const r1 = fixtureOAuth({
+      expiresAt: NOW - 1,
+      cindyCredentialRejectionRevision: 'login-revision-1',
+    });
+    const r2 = fixtureOAuth({
+      expiresAt: NOW - 1,
+      cindyCredentialRejectionRevision: 'login-revision-2',
+    });
+    let reads = 0;
+    const { deps, fetchMock } = makeDeps({
+      readOAuth: () => {
+        reads += 1;
+        return reads === 1 ? r1 : r2;
+      },
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    await expect(refresher.getValidOAuth({ forceRefresh: true })).resolves.toBe(r2);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('无 refreshToken:非强制原样返回,强制返回 null,不发请求', async () => {
     const current = fixtureOAuth({ refreshToken: null, expiresAt: NOW - 1 });
     const { deps, fetchMock } = makeDeps({ readOAuth: () => current });
@@ -194,16 +279,82 @@ describe('claude-oauth-refresh — 基础判定', () => {
     expect(await hard.getValidOAuth({ forceRefresh: true })).toBeNull();
   });
 
+  it('token endpoint malformed JSON or reflected error text never becomes a credential verdict', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    const onInvalidGrant = vi.fn();
+    const malformed = createClaudeOAuthRefresher(
+      makeDeps({
+        readOAuth: () => current,
+        onInvalidGrant,
+        fetchFn: (async () =>
+          new Response('{"access_token":"parser-secret', {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })) as unknown as typeof fetch,
+      }).deps,
+    );
+    await expect(malformed.getValidOAuth({ forceRefresh: true })).resolves.toBeNull();
+
+    const reflected = createClaudeOAuthRefresher(
+      makeDeps({
+        readOAuth: () => current,
+        onInvalidGrant,
+        fetchFn: (async () =>
+          jsonResponse(400, {
+            error: 'reflected-refresh-token-secret',
+          })) as unknown as typeof fetch,
+      }).deps,
+    );
+    await expect(reflected.getValidOAuth({ forceRefresh: true })).resolves.toBeNull();
+    expect(onInvalidGrant).not.toHaveBeenCalled();
+  });
+
   it('写回凭证库失败 → 仍返回刷新后的新 token(本次可用,错误已记日志)', async () => {
     const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    const replaceOAuth = vi.fn(() => {
+      throw new Error('keychain write denied');
+    });
     const { deps } = makeDeps({
       readOAuth: () => current,
-      replaceOAuth: () => {
-        throw new Error('keychain write denied');
-      },
+      replaceOAuth,
     });
     const r = createClaudeOAuthRefresher(deps);
     expect((await r.getValidOAuth())?.accessToken).toBe('at-new');
+    expect(replaceOAuth).toHaveBeenCalledOnce();
+  });
+
+  it('ELOCKED write-back retries the full CAS beyond the orphaned storage lock window', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    const delays: number[] = [];
+    const replaceOAuth = vi.fn((_expected: ClaudeAiOAuth, _next: ClaudeAiOAuth) => {
+      void _expected;
+      void _next;
+      if (replaceOAuth.mock.calls.length <= 10) {
+        throw new Error('credential store is busy', {
+          cause: Object.assign(new Error('held'), { code: 'ELOCKED' }),
+        });
+      }
+      return 'written' as const;
+    });
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      replaceOAuth,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+
+    const out = await createClaudeOAuthRefresher(deps).getValidOAuth({ forceRefresh: true });
+
+    expect(out?.accessToken).toBe('at-new');
+    expect(delays.reduce((total, delay) => total + delay, 0)).toBeGreaterThan(
+      NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS,
+    );
+    expect(replaceOAuth).toHaveBeenCalledTimes(delays.length + 1);
+    for (const [expected, next] of replaceOAuth.mock.calls) {
+      expect(expected).toBe(current);
+      expect(next).toMatchObject({ accessToken: 'at-new', refreshToken: 'rt-new' });
+    }
   });
 
   it('进程内 single-flight:并发调用共享一次刷新请求,结束后可再刷', async () => {
@@ -603,9 +754,11 @@ describe('claude-oauth-refresh — 收尾语义', () => {
       resolveFetch = res;
     });
     const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn();
     const { deps } = makeDeps({
       readOAuth: () => (swapped ? switched : stale),
       onInvalidGrant,
+      onCredentialRejected,
       fetchFn: (() => gate) as unknown as typeof fetch,
     });
     const r = createClaudeOAuthRefresher(deps);
@@ -616,14 +769,23 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     const out = await pending;
     expect(out?.accessToken).toBe('at-new-account');
     expect(onInvalidGrant).not.toHaveBeenCalled();
+    expect(onCredentialRejected).toHaveBeenCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+    });
+
+    swapped = false;
+    expect(r.getOAuthForSpawn()).toBeNull();
   });
 
   it('invalid_grant(锁内确认)→ 通知 onInvalidGrant;传输类失败不通知', async () => {
     const current = fixtureOAuth({ expiresAt: NOW - 1 });
     const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn();
     const { deps } = makeDeps({
       readOAuth: () => current,
       onInvalidGrant,
+      onCredentialRejected,
       fetchFn: (async () =>
         jsonResponse(400, { error: 'invalid_grant' })) as unknown as typeof fetch,
     });
@@ -634,6 +796,11 @@ describe('claude-oauth-refresh — 收尾语义', () => {
       source: 'invalid_grant',
       owner: { dataOwnerId: 'owner-a', generation: 7 },
       rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+      durabilityEstablished: true,
+    });
+    expect(onCredentialRejected).toHaveBeenCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
     });
 
     const onInvalidGrant2 = vi.fn();
@@ -647,7 +814,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     expect(onInvalidGrant2).not.toHaveBeenCalled();
   });
 
-  it('invalid_grant 到达前 owner generation 已切换 → 丢弃旧回调,不清理新会话', async () => {
+  it('owner 已切换时仍重试 ELOCKED 的 token-global 拒绝记录,但不清理新会话', async () => {
     const current = fixtureOAuth({ expiresAt: NOW - 1 });
     let generation = 7;
     let resolveFetch!: (response: Response) => void;
@@ -655,10 +822,18 @@ describe('claude-oauth-refresh — 收尾语义', () => {
       resolveFetch = resolve;
     });
     const onInvalidGrant = vi.fn();
+    let rejectionAttempts = 0;
+    const onCredentialRejected = vi.fn(() => {
+      rejectionAttempts += 1;
+      if (rejectionAttempts === 1) {
+        throw Object.assign(new Error('binding lock busy'), { code: 'ELOCKED' });
+      }
+    });
     const { deps } = makeDeps({
       readOAuth: () => current,
       readOwnerScope: () => ({ dataOwnerId: 'owner-a', generation, boundaryPending: false }),
       onInvalidGrant,
+      onCredentialRejected,
       fetchFn: (() => gate) as unknown as typeof fetch,
     });
     const refresher = createClaudeOAuthRefresher(deps);
@@ -669,6 +844,426 @@ describe('claude-oauth-refresh — 收尾语义', () => {
 
     await expect(pending).resolves.toBeNull();
     expect(onInvalidGrant).not.toHaveBeenCalled();
+    expect(onCredentialRejected).toHaveBeenCalledTimes(2);
+    expect(onCredentialRejected).toHaveBeenLastCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+    });
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+  });
+
+  it('ELOCKED rejection persistence outlives an orphaned binding lock before exact-clear fallback', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    const delays: number[] = [];
+    const onCredentialRejected = vi.fn(() => {
+      throw Object.assign(new Error('orphaned binding lock'), { code: 'ELOCKED' });
+    });
+    const clearRejectedCredential = vi.fn(() => 'changed' as const);
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      onCredentialRejected,
+      clearRejectedCredential,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+      fetchFn: (async () =>
+        jsonResponse(400, { error: 'invalid_grant' })) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    await expect(refresher.getValidOAuth({ forceRefresh: true })).resolves.toBeNull();
+    expect(delays.reduce((total, delay) => total + delay, 0)).toBeGreaterThan(
+      NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS,
+    );
+    expect(onCredentialRejected).toHaveBeenCalledTimes(delays.length + 1);
+    expect(clearRejectedCredential).toHaveBeenCalledOnce();
+  });
+
+  it('owner 已切换且拒绝记录永久失败时仍执行 token 精确清除', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let generation = 7;
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn(() => {
+      throw Object.assign(new Error('sidecar permission denied'), { code: 'EACCES' });
+    });
+    const clearRejectedCredential = vi.fn(() => 'cleared' as const);
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      readOwnerScope: () => ({ dataOwnerId: 'owner-a', generation, boundaryPending: false }),
+      onInvalidGrant,
+      onCredentialRejected,
+      clearRejectedCredential,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    generation = 8;
+    resolveFetch(jsonResponse(400, { error: 'invalid_grant' }));
+
+    await expect(pending).resolves.toBeNull();
+    expect(onCredentialRejected).toHaveBeenCalledOnce();
+    expect(clearRejectedCredential).toHaveBeenCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+    });
+    expect(onInvalidGrant).not.toHaveBeenCalled();
+  });
+
+  it('owner 切换不会取消 grant-scoped 耐久恢复重试', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let generation = 7;
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn(() => {
+      throw Object.assign(new Error('primary sidecar unavailable'), { code: 'EACCES' });
+    });
+    let recoveryAttempts = 0;
+    const onCredentialRejectionRecovery = vi.fn(() => {
+      recoveryAttempts += 1;
+      return recoveryAttempts >= 2;
+    });
+    const clearRejectedCredential = vi.fn(() => {
+      throw Object.assign(new Error('credential store unavailable'), { code: 'EACCES' });
+    });
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      readOwnerScope: () => ({ dataOwnerId: 'owner-a', generation, boundaryPending: false }),
+      onInvalidGrant,
+      onCredentialRejected,
+      onCredentialRejectionRecovery,
+      clearRejectedCredential,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    generation = 8;
+    resolveFetch(jsonResponse(400, { error: 'invalid_grant' }));
+
+    await expect(pending).resolves.toBeNull();
+    await vi.waitFor(() => expect(onCredentialRejectionRecovery).toHaveBeenCalledTimes(2));
+    expect(onInvalidGrant).not.toHaveBeenCalled();
+  });
+
+  it('主拒绝记录和精确清除都失败时,grant-scoped recovery 仍让 proof 可耐久', async () => {
+    const current = fixtureOAuth({
+      expiresAt: NOW - 1,
+      cindyAuthorizationRevision: 'login-revision-1',
+    });
+    const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn(() => {
+      throw Object.assign(new Error('primary sidecar unreadable'), { code: 'EACCES' });
+    });
+    const onCredentialRejectionRecovery = vi.fn(() => true);
+    const clearRejectedCredential = vi.fn(() => {
+      throw Object.assign(new Error('credential store busy'), { code: 'EACCES' });
+    });
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      onInvalidGrant,
+      onCredentialRejected,
+      onCredentialRejectionRecovery,
+      clearRejectedCredential,
+      fetchFn: (async () =>
+        jsonResponse(400, { error: 'invalid_grant' })) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    await expect(refresher.getValidOAuth({ forceRefresh: true })).resolves.toBeNull();
+    expect(onCredentialRejected).toHaveBeenCalledOnce();
+    expect(onCredentialRejectionRecovery).toHaveBeenCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+      cindyAuthorizationRevision: 'login-revision-1',
+    });
+    expect(clearRejectedCredential).toHaveBeenCalledOnce();
+    expect(onInvalidGrant).toHaveBeenCalledWith({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: {
+        accessToken: 'at-old',
+        refreshToken: 'rt-old',
+        cindyAuthorizationRevision: 'login-revision-1',
+      },
+      durabilityEstablished: true,
+    });
+  });
+
+  it('shared reauthorization revision wins over a late invalid_grant with identical tokens', async () => {
+    const original = fixtureOAuth({
+      expiresAt: NOW - 1,
+      cindyAuthorizationRevision: 'login-revision-1',
+    });
+    let stored = original;
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn();
+    const { deps } = makeDeps({
+      readOAuth: () => stored,
+      onInvalidGrant,
+      onCredentialRejected,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // A second Cindy process commits a browser login that happens to receive
+    // the same token bytes. The shared, non-secret revision is the only signal
+    // available to the first process.
+    stored = {
+      ...original,
+      cindyAuthorizationRevision: 'login-revision-2',
+    };
+    resolveFetch(jsonResponse(400, { error: 'invalid_grant' }));
+
+    await expect(pending).resolves.toBe(stored);
+    expect(onCredentialRejected).toHaveBeenCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+      cindyAuthorizationRevision: 'login-revision-1',
+    });
+    expect(onInvalidGrant).not.toHaveBeenCalled();
+    expect(refresher.getOAuthForSpawn()).toBe(stored);
+  });
+
+  it('markerless r2 wins over a late markerless r1 invalid_grant in the first process', async () => {
+    const r1 = fixtureOAuth({
+      expiresAt: NOW - 1,
+      cindyCredentialRejectionRevision: 'login-revision-1',
+    });
+    const r2 = fixtureOAuth({
+      expiresAt: NOW - 1,
+      cindyCredentialRejectionRevision: 'login-revision-2',
+    });
+    let stored = r1;
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn();
+    const { deps } = makeDeps({
+      readOAuth: () => stored,
+      onInvalidGrant,
+      onCredentialRejected,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    stored = r2;
+    resolveFetch(jsonResponse(400, { error: 'invalid_grant' }));
+
+    await expect(pending).resolves.toBe(r2);
+    expect(onCredentialRejected).toHaveBeenCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+      cindyCredentialRejectionRevision: 'login-revision-1',
+    });
+    expect(onInvalidGrant).not.toHaveBeenCalled();
+    expect(refresher.getOAuthForSpawn()).toBe(r2);
+  });
+
+  it('authorization of a different identity does not forgive the rejected token', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const onInvalidGrant = vi.fn();
+    const onCredentialRejected = vi.fn();
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      onInvalidGrant,
+      onCredentialRejected,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    refresher.acceptCredential({ accessToken: 'at-other', refreshToken: 'rt-other' });
+    resolveFetch(jsonResponse(400, { error: 'invalid_grant' }));
+
+    await expect(pending).resolves.toBeNull();
+    expect(onCredentialRejected).toHaveBeenCalledWith({
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+    });
+    expect(onInvalidGrant).toHaveBeenCalledTimes(1);
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+  });
+
+  it('exact rejected credential stays suppressed across owner generations and replacement rollback', async () => {
+    let stored = fixtureOAuth();
+    let ownerGeneration = 7;
+    const replacement = fixtureOAuth({
+      accessToken: 'at-replacement',
+      refreshToken: 'rt-replacement',
+    });
+    const { deps, fetchMock } = makeDeps({
+      readOAuth: () => stored,
+      readOwnerScope: () => ({
+        dataOwnerId: 'owner-a',
+        generation: ownerGeneration,
+        boundaryPending: false,
+      }),
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    expect(
+      refresher.rejectCredential({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+      }),
+    ).toBe(true);
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+    await expect(refresher.getValidOAuth()).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    ownerGeneration = 8;
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+
+    stored = replacement;
+    expect(refresher.getOAuthForSpawn()).toBe(replacement);
+    await expect(refresher.getValidOAuth()).resolves.toBe(replacement);
+
+    for (let index = 0; index < 9; index += 1) {
+      expect(
+        refresher.rejectCredential({
+          source: 'invalid_grant',
+          owner: { dataOwnerId: 'owner-a', generation: ownerGeneration },
+          rejectedCredential: {
+            accessToken: `at-other-rejected-${index}`,
+            refreshToken: `rt-other-rejected-${index}`,
+          },
+        }),
+      ).toBe(true);
+    }
+
+    stored = fixtureOAuth();
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+    await expect(refresher.getValidOAuth()).resolves.toBeNull();
+  });
+
+  it('explicit authorization accepts the exact rejected identity again', async () => {
+    const current = fixtureOAuth();
+    const { deps } = makeDeps({ readOAuth: () => current });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const identity = { accessToken: 'at-old', refreshToken: 'rt-old' };
+
+    expect(
+      refresher.rejectCredential({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: identity,
+      }),
+    ).toBe(true);
+    expect(refresher.getOAuthForSpawn()).toBeNull();
+
+    refresher.acceptCredential(identity);
+    expect(refresher.getOAuthForSpawn()).toBe(current);
+    await expect(refresher.getValidOAuth()).resolves.toBe(current);
+  });
+
+  it('one process keeps the old grant fenced while another accepts identical tokens with a new revision', () => {
+    const oldGrant = fixtureOAuth({ cindyAuthorizationRevision: 'login-revision-1' });
+    const newGrant = fixtureOAuth({ cindyAuthorizationRevision: 'login-revision-2' });
+    let stored = oldGrant;
+    const { deps } = makeDeps({ readOAuth: () => stored });
+    const firstProcess = createClaudeOAuthRefresher(deps);
+    const secondProcess = createClaudeOAuthRefresher(deps);
+
+    expect(
+      firstProcess.rejectCredential({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: {
+          accessToken: oldGrant.accessToken,
+          refreshToken: oldGrant.refreshToken,
+          cindyAuthorizationRevision: oldGrant.cindyAuthorizationRevision,
+        },
+      }),
+    ).toBe(true);
+    expect(firstProcess.getOAuthForSpawn()).toBeNull();
+
+    stored = newGrant;
+    secondProcess.acceptCredential(newGrant);
+    expect(firstProcess.getOAuthForSpawn()).toBe(newGrant);
+
+    stored = oldGrant;
+    expect(firstProcess.getOAuthForSpawn()).toBeNull();
+  });
+
+  it('exact rejection fences an already in-flight refresh before it can write back', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const { deps, written } = makeDeps({
+      readOAuth: () => current,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(
+      refresher.rejectCredential({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+      }),
+    ).toBe(true);
+    resolveFetch(
+      jsonResponse(200, { access_token: 'at-new', refresh_token: 'rt-new', expires_in: 60 }),
+    );
+
+    await expect(pending).resolves.toBeNull();
+    expect(written).toHaveLength(0);
+  });
+
+  it('exact rejection fences every non-force waiter sharing an in-flight refresh', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const { deps, written } = makeDeps({
+      readOAuth: () => current,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const first = refresher.getValidOAuth();
+    const second = refresher.getValidOAuth();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    refresher.rejectCredential({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+    });
+    resolveFetch(
+      jsonResponse(200, { access_token: 'at-new', refresh_token: 'rt-new', expires_in: 60 }),
+    );
+
+    await expect(Promise.all([first, second])).resolves.toEqual([null, null]);
+    expect(written).toHaveLength(0);
   });
 });
 

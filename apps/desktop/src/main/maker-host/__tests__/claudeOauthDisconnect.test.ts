@@ -52,6 +52,10 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 
 vi.mock('../claude-credentials-store.js', () => ({
+  getClaudeAiOAuthCredentialRejectionRevision: () => null,
+  getClaudeAiOAuthSessionAuthorizationRevision: () => 'cindy-unattributed-v1',
+  fingerprintClaudeAiOAuthCredentialIdentity: () => 'test-fingerprint',
+  rejectClaudeAiOAuthCredentialIdentity: () => true,
   clearClaudeAiOAuthWithBindingCommit: (
     validateBinding: () => boolean,
     commitBinding: () => boolean,
@@ -68,6 +72,7 @@ vi.mock('../claude-credentials-store.js', () => ({
 }));
 
 vi.mock('../nativeProviderAuthBinding.js', () => ({
+  NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS: 15_000,
   captureNativeProviderAuthOwnerFence: () =>
     h.ownerId && !h.boundaryPending ? { dataOwnerId: h.ownerId, generation: h.generation } : null,
   beginNativeProviderAuthDisconnect: () => {

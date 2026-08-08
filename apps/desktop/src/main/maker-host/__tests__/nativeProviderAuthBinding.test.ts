@@ -29,18 +29,26 @@ import {
   abandonNativeProviderAuthOperation,
   beginNativeProviderAuthAuthorization,
   beginNativeProviderAuthDisconnect,
+  beginNativeProviderAuthInvalidation,
   beginNativeProviderAuthRevocation,
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   clearNativeProviderAuthAuthorizationPending,
+  getNativeProviderAuthCredentialRejectionState,
+  getNativeProviderAuthCredentialRejectionStateForBindingTransaction,
   getNativeProviderAuthBindingState,
   getNativeProviderAuthBindingStateForOperation,
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  invalidateNativeProviderAuthWithoutIntent,
+  markNativeProviderAuthCredentialRejectionRecovery,
+  markNativeProviderAuthCredentialRejected,
   markNativeProviderAuthRevocationPending,
   migrateLegacyNativeProviderAuthBindings,
+  resolveNativeProviderAuthCredentialRejection,
   restoreNativeProviderAuthForRecovery,
+  runWithNativeProviderAuthCredentialRejectionForStorageMutation,
   stageNativeProviderAuthAuthorization,
   unbindNativeProviderAuth,
   validateNativeProviderAuthRevocationPending,
@@ -137,6 +145,217 @@ describe('native provider auth atomic write retries', () => {
     expect(
       fs.readdirSync(userDataDir).filter((name) => name.startsWith('native-provider-auth.json.')),
     ).toEqual([]);
+  });
+
+  it.each(['EPERM', 'EEXIST'])(
+    'uses a rollback-safe backup swap for Windows %s owner-fence replacement',
+    (code) => {
+      migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true });
+      const realRename = fs.renameSync;
+      let firstPublish = true;
+      let publishes = 0;
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+        if (String(from).endsWith('.tmp') && String(to) === bindingFile) {
+          publishes += 1;
+          if (firstPublish) {
+            firstPublish = false;
+            throw Object.assign(new Error(code), { code });
+          }
+        }
+        return realRename(from, to);
+      }) as typeof fs.renameSync);
+
+      try {
+        expect(() => unbindNativeProviderAuth('anthropic', { revoked: true })).not.toThrow();
+      } finally {
+        renameSpy.mockRestore();
+      }
+      expect(publishes).toBe(2);
+      expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+        revoked: { anthropic: 'owner-a' },
+      });
+      expect(fs.existsSync(`${bindingFile}.bak`)).toBe(false);
+      expect(
+        fs.readdirSync(userDataDir).filter((name) => name.startsWith('native-provider-auth.json.')),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(['EPERM', 'EEXIST'])(
+    'uses the same Windows %s backup protocol for an existing operation sidecar',
+    (code) => {
+      bindNativeProviderAuth('anthropic');
+      const owner = { dataOwnerId: 'owner-a', generation: 1 };
+      beginNativeProviderAuthAuthorization('anthropic', owner);
+      const intentFile = path.join(userDataDir, 'native-provider-auth.intent', 'anthropic.json');
+      const realRename = fs.renameSync;
+      let firstPublish = true;
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+        if (String(from).endsWith('.tmp') && String(to) === intentFile && firstPublish) {
+          firstPublish = false;
+          throw Object.assign(new Error(code), { code });
+        }
+        return realRename(from, to);
+      }) as typeof fs.renameSync);
+
+      let revocation: ReturnType<typeof beginNativeProviderAuthRevocation> = null;
+      try {
+        revocation = beginNativeProviderAuthRevocation('anthropic', owner);
+      } finally {
+        renameSpy.mockRestore();
+      }
+      expect(revocation?.intent).toBe('revoke');
+      expect(JSON.parse(fs.readFileSync(intentFile, 'utf8'))).toMatchObject({
+        intent: 'revoke',
+        operationId: revocation?.operationId,
+      });
+      expect(fs.existsSync(`${intentFile}.bak`)).toBe(false);
+    },
+  );
+
+  it('keeps a backup-only owner state closed until a locked mutation restores it', () => {
+    migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true });
+    fs.renameSync(bindingFile, `${bindingFile}.bak`);
+    const renameSpy = vi.spyOn(fs, 'renameSync');
+
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+    expect(isNativeProviderAuthRevoked('anthropic')).toBe(true);
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(bindingFile)).toBe(false);
+    expect(fs.existsSync(`${bindingFile}.bak`)).toBe(true);
+
+    expect(unbindNativeProviderAuth('anthropic', { revoked: true })).toBe(true);
+    expect(renameSpy).toHaveBeenCalledWith(`${bindingFile}.bak`, bindingFile);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      revoked: { anthropic: 'owner-a' },
+    });
+    expect(fs.existsSync(`${bindingFile}.bak`)).toBe(false);
+    renameSpy.mockRestore();
+  });
+
+  it('keeps a backup-only operation closed until a locked cleanup restores it', () => {
+    bindNativeProviderAuth('anthropic');
+    const operation = beginNativeProviderAuthAuthorization('anthropic', {
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    })!;
+    const intentFile = path.join(userDataDir, 'native-provider-auth.intent', 'anthropic.json');
+    fs.renameSync(intentFile, `${intentFile}.bak`);
+    const renameSpy = vi.spyOn(fs, 'renameSync');
+
+    expect(isNativeProviderAuthRevoked('anthropic')).toBe(true);
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(intentFile)).toBe(false);
+    expect(abandonNativeProviderAuthOperation('anthropic', operation)).toBe(true);
+    expect(renameSpy).toHaveBeenCalledWith(`${intentFile}.bak`, intentFile);
+
+    renameSpy.mockRestore();
+    expect(fs.existsSync(intentFile)).toBe(false);
+    expect(fs.existsSync(`${intentFile}.bak`)).toBe(false);
+  });
+
+  it('keeps a backup-only pending fence closed until a locked rewrite restores it', () => {
+    bindNativeProviderAuth('anthropic');
+    expect(
+      markNativeProviderAuthRevocationPending('anthropic', {
+        dataOwnerId: 'owner-a',
+        generation: 1,
+      }),
+    ).toBe(true);
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    fs.renameSync(pendingFile, `${pendingFile}.bak`);
+    const renameSpy = vi.spyOn(fs, 'renameSync');
+
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+    expect(isNativeProviderAuthRevoked('anthropic')).toBe(true);
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(
+      markNativeProviderAuthRevocationPending('anthropic', {
+        dataOwnerId: 'owner-a',
+        generation: 1,
+      }),
+    ).toBe(true);
+    expect(renameSpy).toHaveBeenCalledWith(`${pendingFile}.bak`, pendingFile);
+    expect(fs.existsSync(pendingFile)).toBe(true);
+    expect(fs.existsSync(`${pendingFile}.bak`)).toBe(false);
+    renameSpy.mockRestore();
+  });
+
+  it('does not recover an unrelated provider sidecar during an anthropic read', () => {
+    bindNativeProviderAuth('anthropic');
+    const openAiOperation = beginNativeProviderAuthAuthorization('openai', {
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    })!;
+    const openAiIntentFile = path.join(userDataDir, 'native-provider-auth.intent', 'openai.json');
+    fs.renameSync(openAiIntentFile, `${openAiIntentFile}.bak`);
+    const realRename = fs.renameSync;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+      if (String(from) === `${openAiIntentFile}.bak` && String(to) === openAiIntentFile) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+
+    try {
+      expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
+      expect(isNativeProviderAuthRevoked('anthropic')).toBe(false);
+      expect(renameSpy).not.toHaveBeenCalledWith(`${openAiIntentFile}.bak`, openAiIntentFile);
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(abandonNativeProviderAuthOperation('openai', openAiOperation)).toBe(true);
+  });
+
+  it('fails closed when a backup cannot be restored and releases the lock for a later retry', () => {
+    migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true });
+    fs.renameSync(bindingFile, `${bindingFile}.bak`);
+    const realRename = fs.renameSync;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+      if (String(from) === `${bindingFile}.bak` && String(to) === bindingFile) {
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      }
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+    const hasCredential = vi.fn(() => true);
+
+    expect(claimDetectedNativeProviderAuth('anthropic', hasCredential)).toBe(false);
+    expect(hasCredential).not.toHaveBeenCalled();
+    expect(fs.existsSync(bindingFile)).toBe(false);
+    expect(fs.existsSync(`${bindingFile}.bak`)).toBe(true);
+    renameSpy.mockRestore();
+
+    expect(unbindNativeProviderAuth('anthropic', { revoked: true })).toBe(true);
+    expect(fs.existsSync(bindingFile)).toBe(true);
+    expect(fs.existsSync(`${bindingFile}.bak`)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      revoked: { anthropic: 'owner-a' },
+    });
+  });
+
+  it('clears a stale backup before its live operation and preserves the live fence on failure', () => {
+    bindNativeProviderAuth('anthropic');
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const first = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    const intentFile = path.join(userDataDir, 'native-provider-auth.intent', 'anthropic.json');
+    fs.writeFileSync(`${intentFile}.bak`, fs.readFileSync(intentFile, 'utf8'));
+    const realUnlink = fs.unlinkSync;
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(((target) => {
+      if (String(target) === `${intentFile}.bak`) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return realUnlink(target);
+    }) as typeof fs.unlinkSync);
+
+    expect(() => abandonNativeProviderAuthOperation('anthropic', first)).toThrow(/EACCES/);
+    expect(fs.existsSync(intentFile)).toBe(true);
+    expect(fs.existsSync(`${intentFile}.bak`)).toBe(true);
+    unlinkSpy.mockRestore();
+
+    expect(abandonNativeProviderAuthOperation('anthropic', first)).toBe(true);
+    expect(fs.existsSync(intentFile)).toBe(false);
+    expect(fs.existsSync(`${intentFile}.bak`)).toBe(false);
   });
 });
 
@@ -593,6 +812,86 @@ describe('claimDetectedNativeProviderAuth', () => {
     });
   });
 
+  it('reports unreadable invalidation state as an error instead of a newer-auth null', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    const operationFile = path.join(userDataDir, 'native-provider-auth.intent', 'anthropic.json');
+    fs.mkdirSync(path.dirname(operationFile), { recursive: true });
+    fs.writeFileSync(operationFile, '{ corrupt operation');
+
+    expect(() => beginNativeProviderAuthInvalidation('anthropic', owner)).toThrow(
+      /operation intent is unreadable during invalidation/,
+    );
+
+    fs.rmSync(operationFile);
+    fs.writeFileSync(bindingFile, '{ corrupt ownership');
+    expect(() => beginNativeProviderAuthInvalidation('anthropic', owner)).toThrow(
+      /ownership is unreadable during invalidation/,
+    );
+  });
+
+  it('still returns null when a real newer authorization supersedes invalidation', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    expect(beginNativeProviderAuthAuthorization('anthropic', owner)).not.toBeNull();
+
+    expect(beginNativeProviderAuthInvalidation('anthropic', owner)).toBeNull();
+  });
+
+  it('clears and unbinds a rejected credential without publishing an invalidate intent', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    const operationFile = path.join(userDataDir, 'native-provider-auth.intent', 'anthropic.json');
+    const clearCredential = vi.fn(() => {
+      expect(fs.existsSync(operationFile)).toBe(false);
+      return 'cleared' as const;
+    });
+
+    expect(invalidateNativeProviderAuthWithoutIntent('anthropic', owner, clearCredential)).toEqual({
+      state: 'committed',
+      value: 'cleared',
+    });
+    expect(clearCredential).toHaveBeenCalledOnce();
+    expect(fs.existsSync(operationFile)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty('anthropic');
+  });
+
+  it('does not touch the credential when a newer explicit auth intent already exists', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    expect(beginNativeProviderAuthAuthorization('anthropic', owner)).not.toBeNull();
+    const clearCredential = vi.fn(() => 'cleared' as const);
+
+    expect(invalidateNativeProviderAuthWithoutIntent('anthropic', owner, clearCredential)).toEqual({
+      state: 'changed',
+    });
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      anthropic: 'owner-a',
+    });
+  });
+
+  it('a crash during credential clear leaves no provider-global invalidation intent', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    const operationFile = path.join(userDataDir, 'native-provider-auth.intent', 'anthropic.json');
+
+    expect(() =>
+      invalidateNativeProviderAuthWithoutIntent('anthropic', owner, () => {
+        throw new Error('simulated process crash boundary');
+      }),
+    ).toThrow('simulated process crash boundary');
+    expect(fs.existsSync(operationFile)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      anthropic: 'owner-a',
+    });
+  });
+
   it('retries a revoke committed before crash and clears the leftover sidecar', () => {
     fs.mkdirSync(userDataDir, { recursive: true });
     const owner = { dataOwnerId: 'owner-a', generation: 1 };
@@ -641,20 +940,36 @@ describe('claimDetectedNativeProviderAuth', () => {
     expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
   });
 
-  it('另一进程持有 binding mutation lock 时拒绝并发覆盖归属文件', () => {
+  it('另一进程持有 binding mutation lock 时拒绝并发覆盖但保留只读快照', () => {
     fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({
+        anthropic: 'owner-a',
+        selfAuthorized: { anthropic: 'owner-a' },
+      }),
+    );
     const release = lockSync(path.join(userDataDir, '.native-provider-auth.write'), {
       realpath: false,
       stale: 15_000,
     });
     try {
       expect(() => claimDetectedNativeProviderAuth('anthropic', () => true)).toThrow();
-      expect(fs.existsSync(bindingFile)).toBe(false);
+      expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
+      expect(isNativeProviderAuthBound('anthropic')).toBe(true);
+      expect(isNativeProviderAuthRevoked('anthropic')).toBe(false);
+      expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
+      expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+        anthropic: 'owner-a',
+      });
     } finally {
       release();
     }
 
-    expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(true);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
+    expect(isNativeProviderAuthBound('anthropic')).toBe(true);
+    expect(isNativeProviderAuthRevoked('anthropic')).toBe(false);
+    expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
   });
 
   it('绑定文件读不出来时不认领,也不覆盖它', () => {
@@ -824,6 +1139,273 @@ describe('restoreNativeProviderAuthForRecovery', () => {
     session.boundaryPending = true;
     expect(restoreNativeProviderAuthForRecovery('openai', 'owner-b', () => true)).toBe(false);
     expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty('openai');
+  });
+});
+
+describe('durable native credential rejection fence', () => {
+  const fingerprint = 'a'.repeat(64);
+
+  function authorizeSameFingerprint(): string {
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const operation = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', operation)).toBe(true);
+    expect(bindNativeProviderAuth('anthropic', operation, fingerprint)).toBe(true);
+    return operation.operationId;
+  }
+
+  it('keeps an invalid grant rejected across restart while allowing only a later explicit revision', async () => {
+    const revision1 = authorizeSameFingerprint();
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1)).toBe(
+      'allowed',
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, null)).toBe(
+      'allowed',
+    );
+
+    expect(markNativeProviderAuthCredentialRejected('anthropic', fingerprint, revision1)).toBe(
+      true,
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1)).toBe(
+      'rejected',
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, null)).toBe(
+      'rejected',
+    );
+
+    const revision2 = authorizeSameFingerprint();
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision2)).toBe(
+      'allowed',
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1)).toBe(
+      'rejected',
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, null)).toBe(
+      'rejected',
+    );
+
+    vi.resetModules();
+    const restarted = await import('../nativeProviderAuthBinding.js');
+    expect(
+      restarted.getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision2),
+    ).toBe('allowed');
+    expect(
+      restarted.getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1),
+    ).toBe('rejected');
+    expect(
+      restarted.getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, null),
+    ).toBe('rejected');
+  });
+
+  it('recovery sidecar survives restart when the primary rejection record is unreadable', async () => {
+    const revision1 = authorizeSameFingerprint();
+    const rejectionFile = path.join(
+      userDataDir,
+      'native-provider-auth.rejected',
+      'anthropic',
+      `${fingerprint}.json`,
+    );
+    fs.writeFileSync(rejectionFile, '{ unreadable primary rejection state');
+
+    expect(() =>
+      markNativeProviderAuthCredentialRejected('anthropic', fingerprint, revision1),
+    ).toThrow(/rejection state is unreadable/i);
+    expect(
+      markNativeProviderAuthCredentialRejectionRecovery('anthropic', fingerprint, revision1),
+    ).toBe(true);
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1)).toBe(
+      'rejected',
+    );
+
+    vi.resetModules();
+    const restarted = await import('../nativeProviderAuthBinding.js');
+    expect(
+      restarted.getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1),
+    ).toBe('rejected');
+
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const operation = restarted.beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(restarted.stageNativeProviderAuthAuthorization('anthropic', operation)).toBe(true);
+    expect(restarted.bindNativeProviderAuth('anthropic', operation, fingerprint)).toBe(true);
+    const revision2 = operation.operationId;
+    expect(
+      restarted.getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision2),
+    ).toBe('allowed');
+    expect(
+      restarted.getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1),
+    ).toBe('rejected');
+  });
+
+  it('attributes a stripped marker to its read-time epoch and a stale rejection cannot kill r2', () => {
+    const revision1 = authorizeSameFingerprint();
+    const markerless = resolveNativeProviderAuthCredentialRejection('anthropic', fingerprint, null);
+    expect(markerless).toEqual({
+      state: 'allowed',
+      effectiveAuthorizationRevision: revision1,
+    });
+
+    const revision2 = authorizeSameFingerprint();
+    expect(
+      markNativeProviderAuthCredentialRejected(
+        'anthropic',
+        fingerprint,
+        markerless.effectiveAuthorizationRevision,
+      ),
+    ).toBe(true);
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision2)).toBe(
+      'allowed',
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision1)).toBe(
+      'rejected',
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, null)).toBe(
+      'rejected',
+    );
+  });
+
+  it('a markerless invalid_grant rejects rollback of its original explicit revision', () => {
+    const revision = authorizeSameFingerprint();
+    const markerless = resolveNativeProviderAuthCredentialRejection('anthropic', fingerprint, null);
+    expect(
+      markNativeProviderAuthCredentialRejected(
+        'anthropic',
+        fingerprint,
+        markerless.effectiveAuthorizationRevision,
+      ),
+    ).toBe(true);
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision)).toBe(
+      'rejected',
+    );
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, null)).toBe(
+      'rejected',
+    );
+  });
+
+  it('repairs a corrupt rejection record only through an explicit authorization', () => {
+    const firstRevision = authorizeSameFingerprint();
+    markNativeProviderAuthCredentialRejected('anthropic', fingerprint, firstRevision);
+    const rejectionFile = path.join(
+      userDataDir,
+      'native-provider-auth.rejected',
+      'anthropic',
+      `${fingerprint}.json`,
+    );
+    fs.writeFileSync(rejectionFile, '{ corrupt rejection state');
+
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, null)).toBe(
+      'unreadable',
+    );
+    const repairedRevision = authorizeSameFingerprint();
+    expect(
+      getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, repairedRevision),
+    ).toBe('allowed');
+    expect(
+      getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, firstRevision),
+    ).toBe('rejected');
+    expect(JSON.parse(fs.readFileSync(rejectionFile, 'utf8'))).toMatchObject({
+      authorizationRevision: repairedRevision,
+      rejected: false,
+      rejectionObserved: true,
+    });
+  });
+
+  it('a late r1 rejection cannot repair unreadable state and delete r2', () => {
+    const revision1 = authorizeSameFingerprint();
+    const revision2 = authorizeSameFingerprint();
+    const rejectionFile = path.join(
+      userDataDir,
+      'native-provider-auth.rejected',
+      'anthropic',
+      `${fingerprint}.json`,
+    );
+    fs.writeFileSync(rejectionFile, '{ corrupt rejection state');
+
+    expect(() =>
+      markNativeProviderAuthCredentialRejected('anthropic', fingerprint, revision1),
+    ).toThrow(/rejection state is unreadable/i);
+    expect(getNativeProviderAuthCredentialRejectionState('anthropic', fingerprint, revision2)).toBe(
+      'unreadable',
+    );
+    expect(fs.readFileSync(rejectionFile, 'utf8')).toBe('{ corrupt rejection state');
+  });
+
+  it.each(['EPERM', 'EEXIST'])(
+    'uses the rollback-safe Windows %s protocol when updating a rejection sidecar',
+    (code) => {
+      const revision = authorizeSameFingerprint();
+      const rejectionFile = path.join(
+        userDataDir,
+        'native-provider-auth.rejected',
+        'anthropic',
+        `${fingerprint}.json`,
+      );
+      const realRename = fs.renameSync;
+      let firstPublish = true;
+      let publishes = 0;
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+        if (String(from).endsWith('.tmp') && String(to) === rejectionFile) {
+          publishes += 1;
+          if (firstPublish) {
+            firstPublish = false;
+            throw Object.assign(new Error(code), { code });
+          }
+        }
+        return realRename(from, to);
+      }) as typeof fs.renameSync);
+
+      try {
+        expect(markNativeProviderAuthCredentialRejected('anthropic', fingerprint, revision)).toBe(
+          true,
+        );
+      } finally {
+        renameSpy.mockRestore();
+      }
+      expect(publishes).toBe(2);
+      expect(JSON.parse(fs.readFileSync(rejectionFile, 'utf8'))).toMatchObject({
+        authorizationRevision: revision,
+        rejected: true,
+        rejectionObserved: true,
+      });
+      expect(fs.existsSync(`${rejectionFile}.bak`)).toBe(false);
+    },
+  );
+
+  it('reads the rejection sidecar inside an auto-claim binding transaction without re-locking', () => {
+    const revision = authorizeSameFingerprint();
+    unbindNativeProviderAuth('anthropic');
+    expect(
+      claimDetectedNativeProviderAuth(
+        'anthropic',
+        () =>
+          getNativeProviderAuthCredentialRejectionStateForBindingTransaction(
+            'anthropic',
+            fingerprint,
+            revision,
+          ) === 'allowed',
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the binding lock through a storage-transaction rejection decision and callback', () => {
+    const revision = authorizeSameFingerprint();
+
+    const result = runWithNativeProviderAuthCredentialRejectionForStorageMutation(
+      'anthropic',
+      fingerprint,
+      revision,
+      (decision) => ({
+        decision,
+        nestedState: getNativeProviderAuthCredentialRejectionStateForBindingTransaction(
+          'anthropic',
+          fingerprint,
+          revision,
+        ),
+      }),
+    );
+
+    expect(result).toEqual({
+      decision: { state: 'allowed', effectiveAuthorizationRevision: revision },
+      nestedState: 'allowed',
+    });
   });
 });
 

@@ -55,7 +55,9 @@ import {
 import {
   getAnthropicModelDiscoveryFailure,
   loadAnthropicModelsFromDiskCache,
+  observeAnthropicCredentialEpoch,
   refreshAnthropicModelsFromHttp,
+  runWithAnthropicCredentialEpochProjection,
 } from './model-discovery/anthropic.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
@@ -79,7 +81,11 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { readClaudeApiKey, desktopCodexAuthAdapter } from './auth-adapters.js';
 import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
-import { hasClaudeAiOAuth, hasClaudeAiOAuthUnbound } from './claude-credentials-store.js';
+import {
+  hasClaudeAiOAuth,
+  hasClaudeAiOAuthUnbound,
+  hasClaudeAiOAuthUnboundForBindingTransaction,
+} from './claude-credentials-store.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import {
   getGrokAccessToken,
@@ -445,7 +451,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   setProviderViewsReader(() =>
     providerService.listProviders({
       allowSideEffects: false,
-      catalog: getActiveCatalog(),
+      getCatalog: getActiveCatalog,
     }),
   );
   if (activeLoaded) {
@@ -791,23 +797,30 @@ export function getDesktopProviderService(): ProviderService {
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
         // 才放行,其余降级为纯读(PR #548 review)。
-        if (!allowSideEffects) return hasClaudeAiOAuth();
-        claimNativeProviderAuthOnRead('anthropic', hasClaudeAiOAuthUnbound, () => {
-          // anthropic 的 live entitlement 证据只来自动态发现，而发现只在启动期与
-          // 显式 OAuth 登录成功时触发。绑定是在这两个时机之后才建立的，启动期那次
-          // 早被登录态 gate 掉——不在认领成功时补拉，目录虽可能有 Registry presence，
-          // 运行时仍缺少当前账号的可用性证据。
-          //
-          // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
-          // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
-          // 失败,明明有可用的缓存清单,用户还是一个模型都选不了(PR #548 review)。
-          void loadAnthropicModelsFromDiskCache()
-            .catch(() => undefined)
-            .finally(() => {
-              void refreshAnthropicModelsFromHttp();
-            });
-        });
-        return hasClaudeAiOAuth();
+        if (!allowSideEffects) {
+          if (!hasClaudeAiOAuth()) return false;
+          return observeAnthropicCredentialEpoch({ allowHydration: false });
+        }
+        claimNativeProviderAuthOnRead(
+          'anthropic',
+          hasClaudeAiOAuthUnboundForBindingTransaction,
+          () => {
+            // anthropic 的 live entitlement 证据只来自动态发现，而发现只在启动期与
+            // 显式 OAuth 登录成功时触发。绑定是在这两个时机之后才建立的，启动期那次
+            // 早被登录态 gate 掉——不在认领成功时补拉，目录虽可能有 Registry presence，
+            // 运行时仍缺少当前账号的可用性证据。
+            //
+            // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
+            // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
+            // 失败,明明有可用的缓存清单,用户还是一个模型都选不了(PR #548 review)。
+            void loadAnthropicModelsFromDiskCache()
+              .catch(() => undefined)
+              .finally(() => {
+                void refreshAnthropicModelsFromHttp();
+              });
+          },
+        );
+        return observeAnthropicCredentialEpoch();
       },
       // openai 的自愈挂在 adapter 的 reconcile 收口里(#294 既有形态),这里同样要受开关约束:
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
@@ -835,6 +848,22 @@ export function getDesktopProviderService(): ProviderService {
     // 同步的 `security` 子进程，同一次 listProviders 不该为此阻塞主线程两回（PR #548 review）。
     modelDiscoveryFailure: (providerId, connected) =>
       providerId === 'anthropic' ? getAnthropicModelDiscoveryFailure(connected) : null,
+    // 其它连接读取器（尤其 Codex OAuth）可能真的异步等待。等待期间若另一进程把
+    // Claude 凭证 A 换成 B，前面算出的 `anthropic:true` 与 A 清单都已过期。返回前在
+    // 共享凭证事务里重验一次，并把同步的目录读取 + registry 投影一起包住，避免
+    // 「重验后、投影前」再开一个跨进程换号窗口。
+    projectConnectionSnapshot: (options, connected, project) =>
+      runWithAnthropicCredentialEpochProjection(
+        { allowHydration: options.allowSideEffects },
+        // Preserve an earlier fail-closed result (for example the first
+        // read-only observer that retired A). The final guard may confirm B is
+        // now stable, but it must not turn that same in-flight snapshot back
+        // into connected=true.
+        (anthropic) => project({
+          ...connected,
+          anthropic: connected.anthropic === true && anthropic,
+        }),
+      ),
     // 「模型 / 供应商停用」override:main 侧持久化真源,烘焙进 ProviderView 后
     // renderer / IM / Orca / device-link 全部消费同一份准入事实。
     getModelAccess: readModelDisableOverrides,

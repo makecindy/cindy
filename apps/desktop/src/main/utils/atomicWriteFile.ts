@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
  * (由调用方的备份交换兜底)。
  */
 const TRANSIENT_RENAME_CODES = new Set(['EBUSY', 'EACCES', 'ENOTEMPTY']);
+const TRANSIENT_UNLINK_CODES = new Set(['EBUSY', 'EACCES', 'EPERM', 'ENOTEMPTY']);
 
 /** 同步小退避。状态文件都很小、重试上限低,阻塞时间可忽略。 */
 function sleepSync(ms: number): void {
@@ -24,6 +25,21 @@ export function renameSyncWithRetry(from: string, to: string): void {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
       if (attempt >= 3 || !code || !TRANSIENT_RENAME_CODES.has(code)) throw error;
+      sleepSync(20 * (attempt + 1));
+    }
+  }
+}
+
+/** Delete a material state file with the same short Windows AV/indexer retry policy. */
+export function unlinkSyncWithRetry(target: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.unlinkSync(target);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOENT') return;
+      if (attempt >= 3 || !code || !TRANSIENT_UNLINK_CODES.has(code)) throw error;
       sleepSync(20 * (attempt + 1));
     }
   }

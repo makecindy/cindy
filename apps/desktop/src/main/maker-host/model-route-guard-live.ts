@@ -43,10 +43,8 @@ import {
  * projections intentionally hide. Otherwise an old controller can name a
  * hidden media model and make checkModelRoute treat it as catalog-unknown.
  */
-async function listRouteGuardProviders(
-  catalog = getActiveCatalog(),
-): Promise<ProviderView[]> {
-  return getDesktopProviderService().listProviders({ catalog });
+async function listRouteGuardProviders(): Promise<ProviderView[]> {
+  return getDesktopProviderService().listProviders({ getCatalog: getActiveCatalog });
 }
 
 function tombstoneGuardOptions(
@@ -139,7 +137,7 @@ export async function verdictForModelRoute(
   const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
-    views = await listRouteGuardProviders(catalog);
+    views = await listRouteGuardProviders();
   } catch {
     const tombstoneVerdict = checkModelRoute([], agent, model, providerId, guardOptions);
     if (tombstoneVerdict.kind === 'reject') return tombstoneVerdict;
@@ -169,7 +167,7 @@ export async function resolveLenientSessionRoute(
   const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
-    views = await listRouteGuardProviders(catalog);
+    views = await listRouteGuardProviders();
   } catch {
     // 目录故障降级:override-only 保守裁决(同 overrideOnlyVerdict 语义)。命中即
     // 逐级丢弃;目录不可得时没有 pick 兜底可用,model 置空由调用方失败收口。

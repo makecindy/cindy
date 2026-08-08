@@ -8236,10 +8236,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   orcaTeamServiceForEvents = orcaTeamService;
 
   async function getProviderRoutingContext(): Promise<OrcaWorkerProviderRoutingContext> {
-    const catalog = getDesktopSelectableCatalog();
+    // The getter is invoked inside provider-service's final credential guard.
+    // Keep the exact same late snapshot for modelRegistry identity derivation
+    // after the provider views return.
+    let catalog = getDesktopSelectableCatalog();
     const views = await getDesktopProviderService().listProviders({
       allowSideEffects: true,
-      catalog,
+      getCatalog: () => {
+        catalog = getDesktopSelectableCatalog();
+        return catalog;
+      },
     });
     const modelRegistry = catalog.modelRegistry;
     // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见

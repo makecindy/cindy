@@ -24,7 +24,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lockSync } from 'proper-lockfile';
 
-import { renameSyncWithRetry } from '../utils/atomicWriteFile.js';
+import { renameSyncWithRetry, unlinkSyncWithRetry } from '../utils/atomicWriteFile.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   blobRoundtrips,
@@ -34,6 +34,14 @@ import {
 import {
   getNativeProviderAuthBindingState,
   getNativeProviderAuthBindingStateForCredentialTransaction,
+  invalidateNativeProviderAuthWithoutIntent,
+  markNativeProviderAuthCredentialRejected,
+  markNativeProviderAuthCredentialRejectionRecovery,
+  resolveNativeProviderAuthCredentialRejection,
+  resolveNativeProviderAuthCredentialRejectionForBindingTransaction,
+  resolveNativeProviderAuthCredentialRejectionForStorageMutation,
+  runWithNativeProviderAuthCredentialRejectionForStorageMutation,
+  type NativeProviderAuthOwnerFence,
 } from './nativeProviderAuthBinding.js';
 
 const log = desktopMakerLogger.child('claude-credentials-store');
@@ -54,6 +62,16 @@ const CREDENTIAL_TEMP_STALE_MS = 60_000;
 /** 必须短于 lock stale;同步 security 调用期间事件循环无法执行 lock heartbeat。 */
 const SECURITY_COMMAND_TIMEOUT_MS = 2_000;
 
+interface ActiveCredentialStorageLock {
+  assertOwned(): void;
+}
+
+let activeCredentialStorageLock: ActiveCredentialStorageLock | null = null;
+
+function refreshCredentialStorageLock(): void {
+  activeCredentialStorageLock?.assertOwned();
+}
+
 function keychainAccount(): string {
   try {
     return process.env.USER || os.userInfo().username;
@@ -66,10 +84,38 @@ function credentialsFilePath(): string {
   return path.join(claudeConfigDir(), '.credentials.json');
 }
 
+function credentialBackupPath(): string {
+  return `${credentialsFilePath()}.bak`;
+}
+
+/** Restore the only surviving snapshot, but only while `.storage-write` is held. */
+function recoverCredentialBackupIfMainMissingLocked(): void {
+  const file = credentialsFilePath();
+  const backup = credentialBackupPath();
+  if (fs.existsSync(file) || !fs.existsSync(backup)) return;
+  if (!activeCredentialStorageLock) {
+    throw new Error('claude credential backup requires the shared storage lock for recovery');
+  }
+  renameSyncWithRetry(backup, file);
+}
+
+/** A valid main file proves any concurrently visible backup is stale. */
+function cleanupCredentialBackupAfterValidReadLocked(): void {
+  if (process.platform === 'darwin' || !activeCredentialStorageLock) return;
+  unlinkSyncWithRetry(credentialBackupPath());
+}
+
+/** Delete backup first so a later recovery can never undo an explicit clear. */
+function deleteCredentialFileAndBackupLocked(): void {
+  unlinkSyncWithRetry(credentialBackupPath());
+  unlinkSyncWithRetry(credentialsFilePath());
+}
+
 function cleanupStaleCredentialTempFiles(): void {
   const dir = claudeConfigDir();
   const prefix = `${path.basename(credentialsFilePath())}.`;
-  const managedSuffix = /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i;
+  const managedSuffix =
+    /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i;
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -111,6 +157,12 @@ function cleanupStaleCredentialTempFiles(): void {
 export interface ClaudeAiOAuth {
   accessToken: string;
   refreshToken?: string | null;
+  /**
+   * Non-secret nonce written only after Cindy browser authorization. It makes
+   * two grants that happen to return the same token bytes distinct across
+   * concurrently running Cindy processes.
+   */
+  cindyAuthorizationRevision?: string | null;
   expiresAt?: number | null;
   scopes?: string[];
   subscriptionType?: string | null;
@@ -119,20 +171,26 @@ export interface ClaudeAiOAuth {
 }
 
 /**
- * Opaque in-memory fence for destructive cleanup. It must never be logged or
- * persisted: its only purpose is to prove that the credential rejected by the
- * server is still the one in the shared store when the delete lock is held.
+ * Opaque proof for destructive cleanup. Token bytes stay in memory and must
+ * never be logged; the optional non-secret authorization revision is already
+ * stored beside the credential. Together they prove that the rejected grant
+ * is still the one in the shared store when the delete lock is held.
  */
 export interface ClaudeAiOAuthCredentialIdentity {
   accessToken: string;
   refreshToken?: string | null;
+  /** See ClaudeAiOAuth.cindyAuthorizationRevision. Missing and null are equivalent. */
+  cindyAuthorizationRevision?: string | null;
+  /**
+   * Internal read-time epoch used only by the durable rejection sidecar. It is
+   * never written into Claude's credential blob or compared by destructive CAS.
+   */
+  cindyCredentialRejectionRevision?: string | null;
 }
 
-export type ClaudeAiOAuthCredentialMatchState =
-  | 'same'
-  | 'changed'
-  | 'absent'
-  | 'unreadable';
+export type ClaudeAiOAuthCredentialMatchState = 'same' | 'changed' | 'absent' | 'unreadable';
+export type ClaudeAiOAuthCredentialGuardResult<T> =
+  { state: 'current'; value: T } | { state: 'changed' };
 
 export type ConditionalClaudeAiOAuthClearResult = 'cleared' | 'absent' | 'changed';
 export type ConditionalClaudeAiOAuthBindingClearResult =
@@ -141,14 +199,238 @@ export type ConditionalClaudeAiOAuthReplaceResult = 'written' | 'absent' | 'chan
 export type ClaudeAiOAuthConditionalUpdateKind = 'refresh' | 'profile';
 export type ClaudeAiOAuthBindingCommitClearResult = 'cleared' | 'absent' | 'binding-changed';
 
-function matchesClaudeAiOAuthIdentity(
-  current: ClaudeAiOAuth,
-  expected: ClaudeAiOAuthCredentialIdentity,
-): boolean {
+interface RejectedClaudeAiOAuthFence {
+  fingerprint: string;
+  authorizationRevision: string | null;
+}
+
+/** In-memory fallback; hashes only. The durable source of truth lives under Electron userData. */
+const rejectedClaudeAiOAuthIdentities: RejectedClaudeAiOAuthFence[] = [];
+const credentialRejectionRevisionEvidence = new WeakMap<object, string | null>();
+/** Explicit callback baseline for a credential that predates Cindy authorization epochs. */
+export const CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION = 'cindy-unattributed-v1';
+
+function authorizationRevision(identity: ClaudeAiOAuthCredentialIdentity): string | null {
+  const revision = identity.cindyAuthorizationRevision;
+  return typeof revision === 'string' && revision.length > 0 ? revision : null;
+}
+
+function rejectionRevision(identity: ClaudeAiOAuthCredentialIdentity): string | null {
+  if (Object.prototype.hasOwnProperty.call(identity, 'cindyCredentialRejectionRevision')) {
+    const revision = identity.cindyCredentialRejectionRevision;
+    return typeof revision === 'string' && revision.length > 0 ? revision : null;
+  }
+  return authorizationRevision(identity);
+}
+
+/** Capture the binding-locked epoch before an async refresh request begins. */
+export function getClaudeAiOAuthCredentialRejectionRevision(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): string | null {
+  return credentialRejectionRevisionEvidence.has(identity)
+    ? (credentialRejectionRevisionEvidence.get(identity) ?? null)
+    : rejectionRevision(identity);
+}
+
+/**
+ * Every spawned session needs a baseline, including a first-run CLI credential
+ * whose durable rejection sidecar does not exist yet. Missing the env value is
+ * reserved for older hosts; this sentinel makes "markerless r1" distinguishable
+ * from a later explicit same-token r2 authorization.
+ */
+export function getClaudeAiOAuthSessionAuthorizationRevision(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): string {
   return (
-    current.accessToken === expected.accessToken &&
-    (current.refreshToken ?? null) === (expected.refreshToken ?? null)
+    getClaudeAiOAuthCredentialRejectionRevision(identity) ??
+    CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION
   );
+}
+
+/** Preserve read-time epoch evidence on an in-memory refreshed value without serializing it. */
+export function inheritClaudeAiOAuthCredentialRejectionRevision(
+  source: ClaudeAiOAuthCredentialIdentity,
+  target: ClaudeAiOAuth,
+): void {
+  credentialRejectionRevisionEvidence.set(
+    target,
+    getClaudeAiOAuthCredentialRejectionRevision(source),
+  );
+}
+
+/** One-way token-pair fingerprint. Never persist or log the source token bytes. */
+export function fingerprintClaudeAiOAuthCredentialIdentity(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): string {
+  const refreshToken =
+    typeof identity.refreshToken === 'string' && identity.refreshToken.length > 0
+      ? identity.refreshToken
+      : null;
+  // invalid_grant is a verdict on the refresh grant. Access tokens may rotate
+  // while the same refresh token remains authoritative; keying the fence by
+  // the pair would let an older access-token backup evade that verdict.
+  const rejectionKey = refreshToken
+    ? (['refresh-token', refreshToken] as const)
+    : (['access-token', identity.accessToken] as const);
+  return crypto.createHash('sha256').update(JSON.stringify(rejectionKey), 'utf8').digest('hex');
+}
+
+function getClaudeAiOAuthIdentityMatchState(
+  current: ClaudeAiOAuthCredentialIdentity,
+  expected: ClaudeAiOAuthCredentialIdentity,
+  storageMutation = false,
+): 'same' | 'changed' | 'unreadable' {
+  const currentRefreshToken =
+    typeof current.refreshToken === 'string' && current.refreshToken.length > 0
+      ? current.refreshToken
+      : null;
+  const expectedRefreshToken =
+    typeof expected.refreshToken === 'string' && expected.refreshToken.length > 0
+      ? expected.refreshToken
+      : null;
+  // Refresh/profile compare-and-swap must match the exact token pair. A
+  // standalone Claude process may rotate only the access token while keeping
+  // the grant; treating that as unchanged would overwrite its newer result.
+  if (
+    current.accessToken !== expected.accessToken ||
+    currentRefreshToken !== expectedRefreshToken
+  ) {
+    return 'changed';
+  }
+  return getClaudeAiOAuthAuthorizationRevisionMatchState(current, expected, storageMutation);
+}
+
+function getClaudeAiOAuthRejectedGrantMatchState(
+  current: ClaudeAiOAuthCredentialIdentity,
+  expected: ClaudeAiOAuthCredentialIdentity,
+  storageMutation = false,
+): 'same' | 'changed' | 'unreadable' {
+  const currentRefreshToken =
+    typeof current.refreshToken === 'string' && current.refreshToken.length > 0
+      ? current.refreshToken
+      : null;
+  const expectedRefreshToken =
+    typeof expected.refreshToken === 'string' && expected.refreshToken.length > 0
+      ? expected.refreshToken
+      : null;
+  // invalid_grant revokes the refresh grant, not one access-token rotation.
+  // When both snapshots carry that grant, a different access token is still
+  // the same destructive-cleanup identity. Access token remains authoritative
+  // only for credentials that have no refresh token at all.
+  if (currentRefreshToken !== null || expectedRefreshToken !== null) {
+    if (currentRefreshToken !== expectedRefreshToken) return 'changed';
+  } else if (current.accessToken !== expected.accessToken) {
+    return 'changed';
+  }
+  return getClaudeAiOAuthAuthorizationRevisionMatchState(current, expected, storageMutation);
+}
+
+function getClaudeAiOAuthAuthorizationRevisionMatchState(
+  current: ClaudeAiOAuthCredentialIdentity,
+  expected: ClaudeAiOAuthCredentialIdentity,
+  storageMutation: boolean,
+): 'same' | 'changed' | 'unreadable' {
+  const resolveRejection = storageMutation
+    ? resolveNativeProviderAuthCredentialRejectionForStorageMutation
+    : resolveNativeProviderAuthCredentialRejection;
+  const decision = resolveRejection(
+    'anthropic',
+    fingerprintClaudeAiOAuthCredentialIdentity(current),
+    authorizationRevision(current),
+  );
+  if (decision.state === 'unreadable') return 'unreadable';
+  return decision.effectiveAuthorizationRevision ===
+    getClaudeAiOAuthCredentialRejectionRevision(expected)
+    ? 'same'
+    : 'changed';
+}
+
+function isRejectedClaudeAiOAuthCredential(
+  current: ClaudeAiOAuth,
+  bindingTransaction = false,
+): boolean {
+  const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(current);
+  const revision = authorizationRevision(current);
+  const decision = bindingTransaction
+    ? resolveNativeProviderAuthCredentialRejectionForBindingTransaction(
+        'anthropic',
+        fingerprint,
+        revision,
+      )
+    : resolveNativeProviderAuthCredentialRejection('anthropic', fingerprint, revision);
+  if (decision.state === 'unreadable') return true;
+  if (
+    rejectedClaudeAiOAuthIdentities.some(
+      (identity) =>
+        identity.fingerprint === fingerprint &&
+        identity.authorizationRevision === decision.effectiveAuthorizationRevision,
+    )
+  ) {
+    return true;
+  }
+  if (decision.state === 'allowed') {
+    credentialRejectionRevisionEvidence.set(current, decision.effectiveAuthorizationRevision);
+  }
+  return decision.state !== 'allowed';
+}
+
+/** Persist the one-way rejection marker; callers that retry lock contention use this directly. */
+export function persistClaudeAiOAuthCredentialRejection(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): boolean {
+  return markNativeProviderAuthCredentialRejected(
+    'anthropic',
+    fingerprintClaudeAiOAuthCredentialIdentity(identity),
+    getClaudeAiOAuthCredentialRejectionRevision(identity),
+  );
+}
+
+export function persistClaudeAiOAuthCredentialRejectionRecovery(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): boolean {
+  return markNativeProviderAuthCredentialRejectionRecovery(
+    'anthropic',
+    fingerprintClaudeAiOAuthCredentialIdentity(identity),
+    getClaudeAiOAuthCredentialRejectionRevision(identity),
+  );
+}
+
+/** In-memory only: never log or persist either token. */
+export function rejectClaudeAiOAuthCredentialIdentity(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): boolean {
+  const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(identity);
+  const revision = getClaudeAiOAuthCredentialRejectionRevision(identity);
+  let changed = false;
+  if (
+    !rejectedClaudeAiOAuthIdentities.some(
+      (existing) =>
+        existing.fingerprint === fingerprint && existing.authorizationRevision === revision,
+    )
+  ) {
+    rejectedClaudeAiOAuthIdentities.push({
+      fingerprint,
+      authorizationRevision: revision,
+    });
+    changed = true;
+  }
+  // The in-memory fence above is already installed if this write throws. The
+  // refresher retries ELOCKED independently of owner/session changes; adapter
+  // cleanup remains a second exact-CAS fallback.
+  return persistClaudeAiOAuthCredentialRejection(identity) || changed;
+}
+
+/** Explicit browser authorization is the only authority that may accept the same identity again. */
+export function acceptClaudeAiOAuthCredentialIdentity(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): void {
+  const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(identity);
+  for (let index = rejectedClaudeAiOAuthIdentities.length - 1; index >= 0; index -= 1) {
+    const rejected = rejectedClaudeAiOAuthIdentities[index];
+    if (rejected.fingerprint === fingerprint) {
+      rejectedClaudeAiOAuthIdentities.splice(index, 1);
+    }
+  }
 }
 
 // ── 整个 blob 的读写(保留 claudeAiOauth 以外的字段) ───────────────────────────
@@ -211,6 +493,40 @@ function unreadableStoreError(cause: unknown): Error {
   });
 }
 
+/**
+ * execFile errors normally repeat the full argv in `message`. Large Keychain
+ * writes put the complete credential blob in `-X <hex>`, so never propagate
+ * that raw error (or attach it as a cause that an error-chain logger can walk).
+ */
+function safeMacKeychainWriteError(error: unknown): Error {
+  const status =
+    error && typeof error === 'object' && 'status' in error
+      ? (error as { status?: unknown }).status
+      : undefined;
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? (error as NodeJS.ErrnoException).code
+      : undefined;
+  const stderr = errorStderr(error).toLowerCase();
+  const reason = stderr.includes('user interaction is not allowed')
+    ? 'interaction-not-allowed'
+    : stderr.includes('already exists in the keychain')
+      ? 'item-exists'
+      : stderr.includes('could not be found in the keychain')
+        ? 'item-not-found'
+        : stderr.includes('authorization was denied')
+          ? 'authorization-denied'
+          : null;
+  const diagnostic = [
+    typeof code === 'string' && code.length > 0 ? `code=${code}` : null,
+    typeof status === 'number' ? `status=${status}` : null,
+    reason ? `reason=${reason}` : null,
+  ].filter(Boolean);
+  return new Error(
+    `claude keychain credential write failed${diagnostic.length > 0 ? ` (${diagnostic.join(', ')})` : ''}`,
+  );
+}
+
 function withCredentialWriteLock<T>(mutation: () => T): T {
   const dir = claudeConfigDir();
   fs.mkdirSync(dir, { recursive: true });
@@ -231,17 +547,26 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
       : 'failed to acquire claude credential write lock; refusing to modify shared credentials';
     throw new Error(message, { cause });
   }
-  cleanupStaleCredentialTempFiles();
+  const lock: ActiveCredentialStorageLock = {
+    assertOwned(): void {
+      if (compromised) throw compromised;
+    },
+  };
+  const previousActiveLock = activeCredentialStorageLock;
+  activeCredentialStorageLock = lock;
 
   const noFailure = Symbol('no-failure');
   let failure: unknown | typeof noFailure = noFailure;
   let value!: T;
   try {
-    if (compromised) throw compromised;
+    lock.assertOwned();
+    cleanupStaleCredentialTempFiles();
     value = mutation();
-    if (compromised) throw compromised;
+    lock.assertOwned();
   } catch (error) {
     failure = error;
+  } finally {
+    activeCredentialStorageLock = previousActiveLock;
   }
   try {
     release();
@@ -305,7 +630,7 @@ function withCredentialSnapshotLock<T>(snapshot: () => T, directoryAbsent: T): T
     return null;
   }
   let compromised: unknown = null;
-  let release: (() => void) | null = null;
+  let release: () => void;
   try {
     release = lockSync(path.join(dir, CREDENTIAL_WRITE_LOCK_TARGET), {
       realpath: false,
@@ -324,17 +649,25 @@ function withCredentialSnapshotLock<T>(snapshot: () => T, directoryAbsent: T): T
     return null;
   }
 
+  const lock: ActiveCredentialStorageLock = {
+    assertOwned(): void {
+      if (compromised) throw compromised;
+    },
+  };
+  const previousActiveLock = activeCredentialStorageLock;
+  activeCredentialStorageLock = lock;
   let value: T | null = null;
   try {
-    if (compromised) return null;
+    lock.assertOwned();
     value = snapshot();
-    if (compromised) return null;
+    lock.assertOwned();
   } catch (error) {
     log.warn('claude credential snapshot failed closed', {
       error: error instanceof Error ? error.message : String(error),
     });
     value = null;
   } finally {
+    activeCredentialStorageLock = previousActiveLock;
     try {
       release();
     } catch (error) {
@@ -348,6 +681,7 @@ function withCredentialSnapshotLock<T>(snapshot: () => T, directoryAbsent: T): T
 
 /** 读 keychain 条目的**原始文本值**(JSON 字符串),严格区分缺失与不可读。 */
 function readBlobRawMac(): RawBlobReadResult {
+  refreshCredentialStorageLock();
   try {
     const out = execFileSync(
       'security',
@@ -367,6 +701,8 @@ function readBlobRawMac(): RawBlobReadResult {
     return isMacKeychainItemNotFound(error)
       ? { kind: 'absent' }
       : { kind: 'unreadable', cause: error };
+  } finally {
+    refreshCredentialStorageLock();
   }
 }
 
@@ -390,26 +726,34 @@ function writeBlobMac(blob: Record<string, unknown>, mode: BlobWriteMode): void 
   // it to account names that need no escaping; unusual names stay a single,
   // literal argv element and cannot alter the command structure.
   const interactiveAccountSafe = /^[A-Za-z0-9._@+-]+$/.test(account);
-  if (interactiveAccountSafe && decideKeychainWriteMode(interactiveCmd.length) === 'stdin') {
-    execFileSync('security', ['-i'], {
-      env: securityEnvironment(),
-      input: interactiveCmd,
-      stdio: ['pipe', 'ignore', 'pipe'],
-      timeout: SECURITY_COMMAND_TIMEOUT_MS,
-    });
-  } else {
-    const args = ['add-generic-password'];
-    if (mode === 'update') args.push('-U');
-    args.push('-a', account, '-s', KEYCHAIN_SERVICE, '-X', hex);
-    execFileSync('security', args, {
-      env: securityEnvironment(),
-      stdio: ['ignore', 'ignore', 'pipe'],
-      timeout: SECURITY_COMMAND_TIMEOUT_MS,
-    });
+  refreshCredentialStorageLock();
+  try {
+    if (interactiveAccountSafe && decideKeychainWriteMode(interactiveCmd.length) === 'stdin') {
+      execFileSync('security', ['-i'], {
+        env: securityEnvironment(),
+        input: interactiveCmd,
+        stdio: ['pipe', 'ignore', 'pipe'],
+        timeout: SECURITY_COMMAND_TIMEOUT_MS,
+      });
+    } else {
+      const args = ['add-generic-password'];
+      if (mode === 'update') args.push('-U');
+      args.push('-a', account, '-s', KEYCHAIN_SERVICE, '-X', hex);
+      execFileSync('security', args, {
+        env: securityEnvironment(),
+        stdio: ['ignore', 'ignore', 'pipe'],
+        timeout: SECURITY_COMMAND_TIMEOUT_MS,
+      });
+    }
+  } catch (error) {
+    throw safeMacKeychainWriteError(error);
+  } finally {
+    refreshCredentialStorageLock();
   }
 }
 
 function deleteItemMac(): void {
+  refreshCredentialStorageLock();
   try {
     execFileSync(
       'security',
@@ -423,12 +767,15 @@ function deleteItemMac(): void {
   } catch (error) {
     // 读取后到删除前,Claude CLI 可能已先删掉同一条目;此时目标状态已经达成。
     if (!isMacKeychainItemNotFound(error)) throw error;
+  } finally {
+    refreshCredentialStorageLock();
   }
 }
 
 /** 读 ~/.claude/.credentials.json 的**原始文本值**,仅 ENOENT 算缺失。 */
 function readBlobRawFile(): RawBlobReadResult {
   try {
+    recoverCredentialBackupIfMainMissingLocked();
     const text = fs.readFileSync(credentialsFilePath(), 'utf-8').trim();
     return text.length > 0
       ? { kind: 'value', raw: text }
@@ -467,7 +814,35 @@ function writeBlobFile(blob: Record<string, unknown>, mode: BlobWriteMode): void
       // copy, which would recreate the partial-final failure mode.
       fs.linkSync(tmp, file);
     } else {
-      renameSyncWithRetry(tmp, file);
+      try {
+        renameSyncWithRetry(tmp, file);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code !== 'EPERM' && code !== 'EEXIST') throw error;
+
+        const backup = credentialBackupPath();
+        // The main blob was parsed successfully under `.storage-write`, so an
+        // older backup is stale and must be gone before starting a new swap.
+        unlinkSyncWithRetry(backup);
+        renameSyncWithRetry(file, backup);
+        try {
+          renameSyncWithRetry(tmp, file);
+        } catch (swapError) {
+          try {
+            renameSyncWithRetry(backup, file);
+          } catch {
+            // backup-only remains recoverable by the next locked reader.
+          }
+          throw swapError;
+        }
+        try {
+          unlinkSyncWithRetry(backup);
+        } catch (cleanupError) {
+          log.warn('stale claude credential backup cleanup deferred', {
+            code: errnoCode(cleanupError),
+          });
+        }
+      }
     }
   } finally {
     try {
@@ -503,8 +878,13 @@ function readBlob(): BlobReadResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.raw);
-  } catch (cause) {
-    return { kind: 'unreadable', cause };
+  } catch {
+    // Node's SyntaxError includes a slice of the rejected JSON. Credential
+    // blobs contain tokens, so never attach that parser error to a cause chain.
+    return {
+      kind: 'unreadable',
+      cause: new Error('claude credential store contains malformed JSON'),
+    };
   }
   if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {
@@ -512,6 +892,7 @@ function readBlob(): BlobReadResult {
       cause: new Error('credential store root must be a JSON object'),
     };
   }
+  cleanupCredentialBackupAfterValidReadLocked();
   return { kind: 'value', value: parsed as Record<string, unknown>, raw: result.raw };
 }
 
@@ -578,6 +959,7 @@ export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
     if (!oauth || typeof oauth.accessToken !== 'string' || oauth.accessToken.length === 0) {
       return null;
     }
+    if (isRejectedClaudeAiOAuthCredential(oauth)) return null;
     // Protect against the remaining binding-only legacy claim/unbind paths.
     if (getNativeProviderAuthBindingStateForCredentialTransaction('anthropic') !== 'bound') {
       return null;
@@ -608,9 +990,206 @@ export function getClaudeAiOAuthCredentialMatchState(
     if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
       return 'absent';
     }
-    return matchesClaudeAiOAuthIdentity(current, expected) ? 'same' : 'changed';
+    return getClaudeAiOAuthRejectedGrantMatchState(current, expected);
   }, 'absent');
   return state ?? 'unreadable';
+}
+
+/**
+ * Run one synchronous follow-up only while a cooperating Cindy login cannot
+ * replace the rejected credential. The storage lock stays held through the
+ * callback; callbacks may take the binding lock (the established
+ * storage→binding order) but must not re-enter the credential store or return
+ * a Promise. Confirmed absence still counts as current: the refresher may have
+ * already completed its exact-clear fallback before owner/UI cleanup runs.
+ */
+export function runWithClaudeAiOAuthCredentialNotReplaced<T>(
+  expected: ClaudeAiOAuthCredentialIdentity,
+  action: () => T,
+): ClaudeAiOAuthCredentialGuardResult<T> {
+  return withCredentialWriteLock(() => {
+    let result = readBlob();
+    if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+    result = stabilizeExistingBlob(result);
+    if (result.kind === 'value') {
+      const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+      if (current && typeof current.accessToken === 'string' && current.accessToken.length > 0) {
+        const match = getClaudeAiOAuthRejectedGrantMatchState(current, expected, true);
+        if (match === 'unreadable') {
+          throw new Error('claude credential authorization epoch is unreadable during guard');
+        }
+        if (match === 'changed') return { state: 'changed' };
+      }
+    }
+    return { state: 'current', value: action() };
+  });
+}
+
+/**
+ * Run one synchronous account-scoped mutation only while the expected Claude
+ * grant is positively present. Unlike the invalid_grant recovery guard above,
+ * absence is a changed boundary: model/catalog state must never be published
+ * after another process has already cleared the credential. The storage lock
+ * remains held through `action`, so a cooperating login cannot replace the
+ * grant between the comparison and the in-memory/cache commit.
+ */
+export function runWithClaudeAiOAuthCredentialCurrent<T>(
+  expected: ClaudeAiOAuthCredentialIdentity,
+  action: () => T,
+): ClaudeAiOAuthCredentialGuardResult<T> {
+  return withCredentialWriteLock(() => {
+    let result = readBlob();
+    if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+    result = stabilizeExistingBlob(result);
+    if (result.kind !== 'value') return { state: 'changed' };
+    const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+    if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
+      return { state: 'changed' };
+    }
+    const currentRefreshToken =
+      typeof current.refreshToken === 'string' && current.refreshToken.length > 0
+        ? current.refreshToken
+        : null;
+    const expectedRefreshToken =
+      typeof expected.refreshToken === 'string' && expected.refreshToken.length > 0
+        ? expected.refreshToken
+        : null;
+    if (currentRefreshToken !== null || expectedRefreshToken !== null) {
+      if (currentRefreshToken !== expectedRefreshToken) return { state: 'changed' };
+    } else if (current.accessToken !== expected.accessToken) {
+      return { state: 'changed' };
+    }
+    return runWithNativeProviderAuthCredentialRejectionForStorageMutation(
+      'anthropic',
+      fingerprintClaudeAiOAuthCredentialIdentity(current),
+      authorizationRevision(current),
+      (decision) => {
+        if (decision.state === 'unreadable') {
+          throw new Error(
+            'claude credential authorization epoch is unreadable during current guard',
+          );
+        }
+        const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(current);
+        if (
+          rejectedClaudeAiOAuthIdentities.some(
+            (identity) =>
+              identity.fingerprint === fingerprint &&
+              identity.authorizationRevision === decision.effectiveAuthorizationRevision,
+          )
+        ) {
+          return { state: 'changed' };
+        }
+        if (
+          decision.state !== 'allowed' ||
+          decision.effectiveAuthorizationRevision !==
+            getClaudeAiOAuthCredentialRejectionRevision(expected)
+        ) {
+          return { state: 'changed' };
+        }
+        return { state: 'current', value: action() };
+      },
+    );
+  });
+}
+
+/**
+ * Read-only counterpart used by untrusted provider snapshots. It holds the
+ * same cross-process storage lock through `action`, but never creates the
+ * Claude config directory and never performs mutation-only stale-temp cleanup.
+ * The binding/rejection lock is held second so token, owner and authorization
+ * epoch remain one atomic snapshot. `action` must stay synchronous and must not
+ * re-enter either credential or binding storage.
+ */
+export function runWithClaudeAiOAuthCredentialSnapshotCurrent<T>(
+  expected: ClaudeAiOAuthCredentialIdentity,
+  action: () => T,
+): ClaudeAiOAuthCredentialGuardResult<T> {
+  let actionError: unknown;
+  let actionFailed = false;
+  const guarded = withCredentialSnapshotLock<ClaudeAiOAuthCredentialGuardResult<T>>(
+    () => {
+      const result = readBlob();
+      if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+      if (result.kind !== 'value') return { state: 'changed' };
+      const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+      if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
+        return { state: 'changed' };
+      }
+      const currentRefreshToken =
+        typeof current.refreshToken === 'string' && current.refreshToken.length > 0
+          ? current.refreshToken
+          : null;
+      const expectedRefreshToken =
+        typeof expected.refreshToken === 'string' && expected.refreshToken.length > 0
+          ? expected.refreshToken
+          : null;
+      if (currentRefreshToken !== null || expectedRefreshToken !== null) {
+        if (currentRefreshToken !== expectedRefreshToken) return { state: 'changed' };
+      } else if (current.accessToken !== expected.accessToken) {
+        return { state: 'changed' };
+      }
+      return runWithNativeProviderAuthCredentialRejectionForStorageMutation(
+        'anthropic',
+        fingerprintClaudeAiOAuthCredentialIdentity(current),
+        authorizationRevision(current),
+        (decision) => {
+          // This callback already owns the binding lock. The plain state reader
+          // is intentionally lock-free; do not call the transaction variant.
+          if (getNativeProviderAuthBindingState('anthropic') !== 'bound') {
+            return { state: 'changed' as const };
+          }
+          if (decision.state === 'unreadable') return { state: 'changed' as const };
+          const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(current);
+          if (
+            rejectedClaudeAiOAuthIdentities.some(
+              (identity) =>
+                identity.fingerprint === fingerprint &&
+                identity.authorizationRevision === decision.effectiveAuthorizationRevision,
+            )
+          ) {
+            return { state: 'changed' as const };
+          }
+          if (
+            decision.state !== 'allowed' ||
+            decision.effectiveAuthorizationRevision !==
+              getClaudeAiOAuthCredentialRejectionRevision(expected)
+          ) {
+            return { state: 'changed' as const };
+          }
+          try {
+            return { state: 'current' as const, value: action() };
+          } catch (error) {
+            actionFailed = true;
+            actionError = error;
+            throw error;
+          }
+        },
+      );
+    },
+    { state: 'changed' },
+  );
+  // Snapshot readers normally fail closed. A caller projection error is not
+  // credential uncertainty and must retain its original semantics.
+  if (actionFailed) throw actionError;
+  return guarded ?? { state: 'changed' };
+}
+
+/** Run a synchronous cleanup only while the shared credential is still absent. */
+export function runWithClaudeAiOAuthCredentialAbsent<T>(
+  action: () => T,
+): ClaudeAiOAuthCredentialGuardResult<T> {
+  return withCredentialWriteLock(() => {
+    let result = readBlob();
+    if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+    result = stabilizeExistingBlob(result);
+    if (result.kind === 'value') {
+      const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+      if (current && typeof current.accessToken === 'string' && current.accessToken.length > 0) {
+        return { state: 'changed' };
+      }
+    }
+    return { state: 'current', value: action() };
+  });
 }
 
 /**
@@ -626,7 +1205,9 @@ export function getBoundClaudeAiOAuthState(): BoundClaudeAiOAuthState {
   if (result.kind === 'unreadable') return 'unreadable';
   if (result.kind === 'absent') return 'absent';
   const oauth = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
-  return typeof oauth?.accessToken === 'string' && oauth.accessToken.length > 0
+  return typeof oauth?.accessToken === 'string' &&
+    oauth.accessToken.length > 0 &&
+    !isRejectedClaudeAiOAuthCredential(oauth)
     ? 'present'
     : 'absent';
 }
@@ -636,7 +1217,23 @@ export function hasClaudeAiOAuthUnbound(): boolean {
   const result = readBlob();
   if (result.kind !== 'value') return false;
   const oauth = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
-  return typeof oauth?.accessToken === 'string' && oauth.accessToken.length > 0;
+  return (
+    typeof oauth?.accessToken === 'string' &&
+    oauth.accessToken.length > 0 &&
+    !isRejectedClaudeAiOAuthCredential(oauth)
+  );
+}
+
+/** Binding-locked auto-claim variant; never call outside claim/migration callbacks. */
+export function hasClaudeAiOAuthUnboundForBindingTransaction(): boolean {
+  const result = readBlob();
+  if (result.kind !== 'value') return false;
+  const oauth = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+  return (
+    typeof oauth?.accessToken === 'string' &&
+    oauth.accessToken.length > 0 &&
+    !isRejectedClaudeAiOAuthCredential(oauth, true)
+  );
 }
 
 /**
@@ -674,11 +1271,7 @@ function restoreBlobLocked(previous: Exclude<BlobReadResult, { kind: 'unreadable
     deleteItemMac();
     return;
   }
-  try {
-    fs.unlinkSync(credentialsFilePath());
-  } catch (error) {
-    if (!isErrno(error, 'ENOENT')) throw error;
-  }
+  deleteCredentialFileAndBackupLocked();
 }
 
 function logClaudeAiOAuthWritten(oauth: ClaudeAiOAuth): void {
@@ -761,7 +1354,11 @@ export function replaceClaudeAiOAuthIfMatches(
     if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
       return 'absent';
     }
-    if (!matchesClaudeAiOAuthIdentity(current, expected)) return 'changed';
+    const match = getClaudeAiOAuthIdentityMatchState(current, expected, true);
+    if (match === 'unreadable') {
+      throw new Error('claude credential authorization epoch is unreadable; refusing replacement');
+    }
+    if (match === 'changed') return 'changed';
     const merged = mergeConditionalClaudeAiOAuthUpdate(current, next, kind);
     writeBlob({ ...result.value, claudeAiOauth: merged }, 'update');
     log.info('claude oauth credential conditionally replaced', {
@@ -787,13 +1384,7 @@ function clearClaudeAiOAuthFromStableBlob(
       return 'absent';
     case 'delete':
       if (process.platform === 'darwin') deleteItemMac();
-      else {
-        try {
-          fs.unlinkSync(credentialsFilePath());
-        } catch (error) {
-          if (!isErrno(error, 'ENOENT')) throw error;
-        }
-      }
+      else deleteCredentialFileAndBackupLocked();
       break;
     case 'write':
       writeBlob(plan.next, 'update');
@@ -858,7 +1449,11 @@ export function clearClaudeAiOAuthIfMatches(
     if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
       return 'absent';
     }
-    if (!matchesClaudeAiOAuthIdentity(current, expected)) return 'changed';
+    const match = getClaudeAiOAuthRejectedGrantMatchState(current, expected, true);
+    if (match === 'unreadable') {
+      throw new Error('claude credential authorization epoch is unreadable; refusing exact clear');
+    }
+    if (match === 'changed') return 'changed';
 
     const plan = planClaudeAiOAuthClear(result.value);
     switch (plan.action) {
@@ -866,13 +1461,7 @@ export function clearClaudeAiOAuthIfMatches(
         return 'absent';
       case 'delete':
         if (process.platform === 'darwin') deleteItemMac();
-        else {
-          try {
-            fs.unlinkSync(credentialsFilePath());
-          } catch (error) {
-            if (!isErrno(error, 'ENOENT')) throw error;
-          }
-        }
+        else deleteCredentialFileAndBackupLocked();
         break;
       case 'write':
         writeBlob(plan.next, 'update');
@@ -902,17 +1491,52 @@ export function clearClaudeAiOAuthIfMatchesWithBindingCommit(
       result.kind === 'value'
         ? (result.value.claudeAiOauth as ClaudeAiOAuth | undefined)
         : undefined;
-    if (
-      current &&
-      typeof current.accessToken === 'string' &&
-      current.accessToken.length > 0 &&
-      !matchesClaudeAiOAuthIdentity(current, expected)
-    ) {
-      return 'changed';
+    if (current && typeof current.accessToken === 'string' && current.accessToken.length > 0) {
+      const match = getClaudeAiOAuthRejectedGrantMatchState(current, expected, true);
+      if (match === 'unreadable') {
+        throw new Error('claude credential authorization epoch is unreadable during cleanup');
+      }
+      if (match === 'changed') return 'changed';
     }
     if (!validateBinding()) return 'binding-changed';
     const cleared = clearClaudeAiOAuthFromStableBlob(result);
     if (!commitBinding()) return 'binding-changed';
     return cleared;
+  });
+}
+
+/**
+ * invalid_grant transaction that confirms the rejected grant under
+ * `.storage-write`, then takes the binding lock second and clears token +
+ * owner without ever publishing a pre-clear provider-global intent. This
+ * closes both live-process interleavings and the crash-then-standalone-writer
+ * variant of the former begin→clear window.
+ */
+export function clearClaudeAiOAuthIfMatchesWithBindingInvalidation(
+  expected: ClaudeAiOAuthCredentialIdentity,
+  expectedOwner: NativeProviderAuthOwnerFence,
+): ConditionalClaudeAiOAuthBindingClearResult {
+  return withCredentialWriteLock(() => {
+    let result = readBlob();
+    if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+    result = stabilizeExistingBlob(result);
+    const current =
+      result.kind === 'value'
+        ? (result.value.claudeAiOauth as ClaudeAiOAuth | undefined)
+        : undefined;
+    if (current && typeof current.accessToken === 'string' && current.accessToken.length > 0) {
+      const match = getClaudeAiOAuthRejectedGrantMatchState(current, expected, true);
+      if (match === 'unreadable') {
+        throw new Error('claude credential authorization epoch is unreadable during invalidation');
+      }
+      if (match === 'changed') return 'changed';
+    }
+
+    const bindingResult = invalidateNativeProviderAuthWithoutIntent(
+      'anthropic',
+      expectedOwner,
+      () => clearClaudeAiOAuthFromStableBlob(result),
+    );
+    return bindingResult.state === 'changed' ? 'binding-changed' : bindingResult.value;
   });
 }

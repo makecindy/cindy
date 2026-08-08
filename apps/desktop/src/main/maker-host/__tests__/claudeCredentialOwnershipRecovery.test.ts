@@ -53,6 +53,56 @@ afterEach(() => {
 });
 
 describe('Claude credential + ownership recovery integration', () => {
+  it('persists markerless invalid_grant epochs across restart and same-token reauthorization', async () => {
+    let binding = await import('../nativeProviderAuthBinding.js');
+    let store = await import('../claude-credentials-store.js');
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const operation1 = binding.beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(binding.stageNativeProviderAuthAuthorization('anthropic', operation1)).toBe(true);
+    const r1 = {
+      accessToken: 'same-access-token',
+      refreshToken: 'same-refresh-token',
+      cindyAuthorizationRevision: operation1.operationId,
+    };
+    const fingerprint = store.fingerprintClaudeAiOAuthCredentialIdentity(r1);
+    expect(
+      store.writeClaudeAiOAuthWithBindingCommit(r1, () =>
+        binding.bindNativeProviderAuth('anthropic', operation1, fingerprint),
+      ),
+    ).toBe(true);
+
+    const credentialFile = path.join(process.env.CLAUDE_CONFIG_DIR!, '.credentials.json');
+    const markerless = {
+      accessToken: r1.accessToken,
+      refreshToken: r1.refreshToken,
+    };
+    fs.writeFileSync(credentialFile, JSON.stringify({ claudeAiOauth: markerless }));
+    const requestCredential = store.readClaudeAiOAuth();
+    expect(requestCredential).toEqual(markerless);
+    expect(store.rejectClaudeAiOAuthCredentialIdentity(requestCredential!)).toBe(true);
+    expect(store.readClaudeAiOAuth()).toBeNull();
+
+    vi.resetModules();
+    binding = await import('../nativeProviderAuthBinding.js');
+    store = await import('../claude-credentials-store.js');
+    expect(store.readClaudeAiOAuth()).toBeNull();
+
+    const operation2 = binding.beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(binding.stageNativeProviderAuthAuthorization('anthropic', operation2)).toBe(true);
+    const r2 = { ...r1, cindyAuthorizationRevision: operation2.operationId };
+    expect(
+      store.writeClaudeAiOAuthWithBindingCommit(r2, () =>
+        binding.bindNativeProviderAuth('anthropic', operation2, fingerprint),
+      ),
+    ).toBe(true);
+    expect(store.readClaudeAiOAuth()).toEqual(r2);
+
+    fs.writeFileSync(credentialFile, JSON.stringify({ claudeAiOauth: markerless }));
+    expect(store.readClaudeAiOAuth()).toBeNull();
+    fs.writeFileSync(credentialFile, JSON.stringify({ claudeAiOauth: r1 }));
+    expect(store.readClaudeAiOAuth()).toBeNull();
+  });
+
   it('signed-out and boundary-pending processes cannot read an owner-bound shared token', async () => {
     const binding = await import('../nativeProviderAuthBinding.js');
     const store = await import('../claude-credentials-store.js');
@@ -506,6 +556,50 @@ describe('Claude credential + ownership recovery integration', () => {
     expect(
       JSON.parse(fs.readFileSync(path.join(h.userDataDir, 'native-provider-auth.json'), 'utf8')),
     ).toMatchObject({ anthropic: 'owner-a' });
+  });
+
+  it('invalid_grant clears the rejected grant and owner in one intentless transaction', async () => {
+    const binding = await import('../nativeProviderAuthBinding.js');
+    const store = await import('../claude-credentials-store.js');
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const rejected = {
+      accessToken: 'at-rejected',
+      refreshToken: 'rt-rejected',
+      cindyAuthorizationRevision: 'rejected-revision',
+    };
+
+    expect(binding.bindNativeProviderAuth('anthropic')).toBe(true);
+    store.writeClaudeAiOAuth(rejected);
+
+    expect(store.clearClaudeAiOAuthIfMatchesWithBindingInvalidation(rejected, owner)).toBe(
+      'cleared',
+    );
+    expect(store.readClaudeAiOAuth()).toBeNull();
+    expect(binding.getNativeProviderAuthBindingState('anthropic')).toBe('unbound');
+    expect(
+      fs.existsSync(path.join(h.userDataDir, 'native-provider-auth.intent', 'anthropic.json')),
+    ).toBe(false);
+  });
+
+  it('a newer authorization intent prevents intentless invalid_grant cleanup', async () => {
+    const binding = await import('../nativeProviderAuthBinding.js');
+    const store = await import('../claude-credentials-store.js');
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const rejected = {
+      accessToken: 'at-rejected',
+      refreshToken: 'rt-rejected',
+      cindyAuthorizationRevision: 'rejected-revision',
+    };
+
+    expect(binding.bindNativeProviderAuth('anthropic')).toBe(true);
+    store.writeClaudeAiOAuth(rejected);
+    expect(binding.beginNativeProviderAuthAuthorization('anthropic', owner)).not.toBeNull();
+
+    expect(store.clearClaudeAiOAuthIfMatchesWithBindingInvalidation(rejected, owner)).toBe(
+      'binding-changed',
+    );
+    expect(store.readClaudeAiOAuth()).toEqual(rejected);
+    expect(binding.getNativeProviderAuthBindingState('anthropic')).toBe('bound');
   });
 
   it('a crash after revoke staging leaves residual credentials unusable after restart', async () => {

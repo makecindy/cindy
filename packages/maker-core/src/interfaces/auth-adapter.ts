@@ -6,10 +6,14 @@
  * 接入端点 + 业务 flag 拆到 AgentRuntimeConfig。详见 §6.5 拆分依据。
  */
 
-import type { AuthState } from '../types/common.js';
+import type { AuthState } from "../types/common.js";
 
-export type AgentCredentialMode = 'gateway-key' | 'oauth-bearer' | 'provider-oauth';
-export type AgentLoginMode = 'browser' | 'device-code';
+/** Non-secret host epoch carried with a spawned Claude subscription token. */
+export const CINDY_CLAUDE_OAUTH_REVISION_ENV = "CINDY_CLAUDE_OAUTH_REVISION";
+
+export type AgentCredentialMode =
+  "gateway-key" | "oauth-bearer" | "provider-oauth";
+export type AgentLoginMode = "browser" | "device-code";
 
 export interface AuthLoginOptions {
   mode?: AgentLoginMode;
@@ -30,6 +34,18 @@ export interface AuthAdapterOptions {
    * 用它检查对应连接态；未传保持既有 adapter fallback。
    */
   providerId?: string | null;
+}
+
+/**
+ * Subscription refresh payload returned by revision-aware hosts.
+ *
+ * The string form remains accepted for older adapters.  A host that participates
+ * in authorization-epoch fencing must return this object so the running session
+ * advances the token and its non-secret revision together.
+ */
+export interface SubscriptionTokenRefreshResult {
+  token: string;
+  authorizationRevision?: string;
 }
 
 export interface AuthAdapter {
@@ -75,8 +91,15 @@ export interface AuthAdapter {
    * @param staleToken 该会话实际撞 401 的那枚 token(spawn 注入 / 上次回调返回)。
    *   实现侧凭它区分「凭证库早已换代(直接返回库值,不消耗刷新轮换)」与「库值就是
    *   失效的那枚(才真正刷新)」—— 防多个长会话对同一枚旧 token 群体 401 时连环旋转。
+   * @param staleAuthorizationRevision 会话 spawn 时捕获的非秘密授权代次。access token
+   *   字节恰好被重新授权复用时，它阻止旧会话的 401 强刷或清理新授权。
+   * @returns 旧 adapter 可继续返回 token 字符串；参与授权代次隔离的 host 必须返回
+   *   `{ token, authorizationRevision }`，让运行中会话原子更新两项基线。
    */
-  getFreshSubscriptionToken?(staleToken?: string): Promise<string | null>;
+  getFreshSubscriptionToken?(
+    staleToken?: string,
+    staleAuthorizationRevision?: string,
+  ): Promise<string | SubscriptionTokenRefreshResult | null>;
 
   /**
    * 取消正在进行的登录流程（可选）。

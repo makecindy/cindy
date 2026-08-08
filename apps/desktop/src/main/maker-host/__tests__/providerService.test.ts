@@ -91,7 +91,7 @@ describe('createProviderService', () => {
 
     const selectableXd = (await svc.listProviders()).find((provider) => provider.id === 'xd');
     const routingXd = (
-      await svc.listProviders({ catalog: fullCatalog })
+      await svc.listProviders({ getCatalog: () => fullCatalog })
     ).find((provider) => provider.id === 'xd');
 
     expect(
@@ -100,7 +100,7 @@ describe('createProviderService', () => {
     expect(
       Object.values(routingXd?.models ?? {}).flat().some((model) => model.id === capabilityModel.id),
     ).toBe(true);
-    expect(checkModelRoute(await svc.listProviders({ catalog: fullCatalog }), agent, capabilityModel.id, 'xd'))
+    expect(checkModelRoute(await svc.listProviders({ getCatalog: () => fullCatalog }), agent, capabilityModel.id, 'xd'))
       .toEqual({ kind: 'reject', reason: 'capability-model' });
   });
 

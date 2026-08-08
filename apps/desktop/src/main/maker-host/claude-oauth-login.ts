@@ -29,6 +29,7 @@ import { describeErrorChain } from '../utils/errorChain.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import {
+  fingerprintClaudeAiOAuthCredentialIdentity,
   writeClaudeAiOAuthWithBindingCommit,
   type ClaudeAiOAuth,
 } from './claude-credentials-store.js';
@@ -42,6 +43,7 @@ import {
   stageNativeProviderAuthAuthorization,
 } from './nativeProviderAuthBinding.js';
 import {
+  acceptClaudeOAuthCredential,
   backfillClaudeSubscriptionProfile,
   setClaudeOAuthLoginCancellationHandler,
 } from './claude-oauth-refresh.js';
@@ -119,19 +121,26 @@ async function exchangeCodeForTokens(
   // outboundFetch:换 token 是 main 自己发的 HTTPS 请求,不经浏览器。裸 undici fetch
   // 不吃系统代理,代理软件跑「系统代理」模式时授权页正常、这一步却直连出网,被上游按
   // 来源拒(实测 403)。
-  const res = await outboundFetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: `http://localhost:${port}/callback`,
-      client_id: CLIENT_ID,
-      code_verifier: codeVerifier,
-      state,
-    }),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await outboundFetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: `http://localhost:${port}/callback`,
+        client_id: CLIENT_ID,
+        code_verifier: codeVerifier,
+        state,
+      }),
+      signal,
+    });
+  } catch {
+    // Transport/proxy diagnostics may include the request body (authorization
+    // code + verifier). Replace them before the outer login logger/UI sees it.
+    throw new Error('Token exchange request failed');
+  }
   if (res.status !== 200) {
     throw new Error(
       res.status === 401
@@ -139,7 +148,29 @@ async function exchangeCodeForTokens(
         : `Token exchange failed (${res.status})`,
     );
   }
-  return (await res.json()) as TokenExchangeResponse;
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    // JSON parser errors quote malformed input. A truncated OAuth response can
+    // contain live token bytes, so replace it with a fixed error and no cause.
+    throw new Error('Token exchange returned malformed JSON');
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Token exchange returned malformed token fields');
+  }
+  const token = payload as Partial<TokenExchangeResponse>;
+  if (
+    typeof token.access_token !== 'string' ||
+    token.access_token.length === 0 ||
+    (token.refresh_token !== undefined && typeof token.refresh_token !== 'string') ||
+    (token.expires_in !== undefined &&
+      (typeof token.expires_in !== 'number' || !Number.isFinite(token.expires_in))) ||
+    (token.scope !== undefined && typeof token.scope !== 'string')
+  ) {
+    throw new Error('Token exchange returned malformed token fields');
+  }
+  return token as TokenExchangeResponse;
 }
 
 /**
@@ -367,6 +398,10 @@ export async function runClaudeOAuthLogin(opts?: {
     const oauth: ClaudeAiOAuth = {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token ?? null,
+      // Persist the non-secret operation nonce beside the credential. Two
+      // concurrent Cindy processes can then distinguish a newly authorized
+      // grant even when the OAuth server returns identical token bytes.
+      cindyAuthorizationRevision: authorizationOperation.operationId,
       expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
       scopes,
       subscriptionType: null,
@@ -384,7 +419,11 @@ export async function runClaudeOAuthLogin(opts?: {
     // consumed by the binding commit. This fixed storage→binding lock order
     // prevents two Cindy processes from finishing with token B bound to owner A.
     const bound = writeClaudeAiOAuthWithBindingCommit(oauth, () =>
-      bindNativeProviderAuth('anthropic', authorizationOperation!),
+      bindNativeProviderAuth(
+        'anthropic',
+        authorizationOperation!,
+        fingerprintClaudeAiOAuthCredentialIdentity(oauth),
+      ),
     );
     if (!bound) {
       // The credential transaction has definitely restored its previous blob.
@@ -403,6 +442,10 @@ export async function runClaudeOAuthLogin(opts?: {
       listener.fail('account_changed');
       return { ok: false, reason: 'account_changed' };
     }
+    // A server rejection is token-global, not owner-generation scoped. Only a
+    // completed explicit browser authorization may accept an identical token
+    // identity again; do this after both credential and owner commits succeed.
+    acceptClaudeOAuthCredential(oauth);
     void backfillClaudeSubscriptionProfile(tokens.access_token).catch((e) =>
       log.warn('post-login subscription profile backfill failed', {
         error: e instanceof Error ? e.message : String(e),

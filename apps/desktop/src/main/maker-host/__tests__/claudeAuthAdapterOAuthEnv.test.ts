@@ -18,12 +18,29 @@ const h = vi.hoisted(() => ({
   cleared: 0,
   conditionalClearResult: 'cleared' as 'cleared' | 'absent' | 'changed',
   conditionalClearCalls: [] as Array<{ accessToken: string; refreshToken?: string | null }>,
+  durableClearResult: 'cleared' as 'cleared' | 'absent' | 'changed',
+  durableClearCalls: [] as Array<{ accessToken: string; refreshToken?: string | null }>,
+  durableClearError: null as Error | null,
+  durableRejectionCalls: [] as Array<{
+    accessToken: string;
+    refreshToken?: string | null;
+  }>,
+  durableRejectionErrors: [] as Error[],
+  recoveryFenceCalls: [] as Array<{ accessToken: string; refreshToken?: string | null }>,
+  recoveryFenceErrors: [] as Error[],
   clearError: null as Error | null,
   pendingRevocationResult: true,
   pendingRevocationError: null as Error | null,
   invalidationValidationResult: true,
   invalidationValidationResults: [] as boolean[],
+  invalidationBeginCalls: 0,
+  invalidationBeginErrors: [] as Error[],
+  invalidationBeginReturnsNull: false,
+  invalidationBeginChangesCredentialOnError: false,
   credentialMatchState: 'same' as 'same' | 'changed' | 'absent' | 'unreadable',
+  credentialGuardCalls: 0,
+  credentialGuardErrors: [] as Error[],
+  conditionalClearChangesCredentialOnError: false,
   clearErrorAfterCommit: null as Error | null,
   refresherInvalidated: 0,
   disconnectCalls: 0,
@@ -47,6 +64,11 @@ const h = vi.hoisted(() => ({
     provider: string;
     owner: { dataOwnerId: string; generation: number };
   }>,
+  rejectedCredentials: [] as Array<{
+    source: 'invalid_grant';
+    owner: { dataOwnerId: string; generation: number };
+    rejectedCredential: { accessToken: string; refreshToken: string | null };
+  }>,
   ownerId: 'owner-a' as string | null,
   ownerGeneration: 7,
   boundaryPending: false,
@@ -55,11 +77,16 @@ const h = vi.hoisted(() => ({
         source: 'invalid_grant';
         owner: { dataOwnerId: string; generation: number };
         rejectedCredential: { accessToken: string; refreshToken: string | null };
+        durabilityEstablished?: boolean;
       }) => void)
     | null,
   /** getValidClaudeAiOAuth 的可注入延迟(测回调超时用)。 */
   refreshDelayMs: 0,
-  lastRefreshOpts: null as { staleToken?: string; forceRefresh?: boolean } | null,
+  lastRefreshOpts: null as {
+    staleToken?: string;
+    staleAuthorizationRevision?: string;
+    forceRefresh?: boolean;
+  } | null,
   encryptionAvailable: true,
   proxyReady: true,
   canUseGateway: true,
@@ -74,7 +101,9 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => h.encryptionAvailable },
 }));
 
-vi.mock('@cindy/maker-core', () => ({}));
+vi.mock('@cindy/maker-core', () => ({
+  CINDY_CLAUDE_OAUTH_REVISION_ENV: 'CINDY_CLAUDE_OAUTH_REVISION',
+}));
 
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: h.canUseGateway }),
@@ -93,17 +122,90 @@ vi.mock('../claude-credentials-store.js', () => ({
     commit: () => boolean,
   ) => {
     h.conditionalClearCalls.push(expected);
-    if (h.clearError) throw h.clearError;
+    if (h.clearError) {
+      if (h.conditionalClearChangesCredentialOnError) h.credentialMatchState = 'changed';
+      throw h.clearError;
+    }
     if (h.conditionalClearResult === 'changed') return 'changed';
     if (!validate() || !commit()) return 'binding-changed';
     if (h.clearErrorAfterCommit) throw h.clearErrorAfterCommit;
     return h.conditionalClearResult;
   },
+  clearClaudeAiOAuthIfMatchesWithBindingInvalidation: (
+    expected: { accessToken: string; refreshToken?: string | null },
+    owner: { dataOwnerId: string; generation: number },
+  ) => {
+    h.conditionalClearCalls.push(expected);
+    if (h.credentialMatchState === 'changed' || h.conditionalClearResult === 'changed') {
+      return 'changed';
+    }
+    h.invalidationBeginCalls += 1;
+    const setupError = h.invalidationBeginErrors.shift();
+    if (setupError) {
+      if (h.invalidationBeginChangesCredentialOnError) h.credentialMatchState = 'changed';
+      throw setupError;
+    }
+    if (h.invalidationBeginReturnsNull) return 'binding-changed';
+    const valid = h.invalidationValidationResults.shift() ?? h.invalidationValidationResult;
+    if (!valid) return 'binding-changed';
+    if (h.clearError) {
+      if (h.conditionalClearChangesCredentialOnError) h.credentialMatchState = 'changed';
+      throw h.clearError;
+    }
+    h.unbindCalls.push({ provider: 'anthropic', options: { expectedOwner: owner } });
+    if (h.clearErrorAfterCommit) throw h.clearErrorAfterCommit;
+    return h.conditionalClearResult;
+  },
+  clearClaudeAiOAuthIfMatches: (expected: {
+    accessToken: string;
+    refreshToken?: string | null;
+  }) => {
+    h.durableClearCalls.push(expected);
+    if (h.durableClearError) throw h.durableClearError;
+    return h.durableClearResult;
+  },
   getClaudeAiOAuthCredentialMatchState: () => h.credentialMatchState,
+  runWithClaudeAiOAuthCredentialNotReplaced: <T>(
+    _expected: { accessToken: string; refreshToken?: string | null },
+    action: () => T,
+  ) => {
+    h.credentialGuardCalls += 1;
+    const error = h.credentialGuardErrors.shift();
+    if (error) throw error;
+    return h.credentialMatchState === 'changed'
+      ? { state: 'changed' as const }
+      : { state: 'current' as const, value: action() };
+  },
+  getClaudeAiOAuthSessionAuthorizationRevision: (oauth: Record<string, unknown>) =>
+    typeof oauth.cindyAuthorizationRevision === 'string'
+      ? oauth.cindyAuthorizationRevision
+      : 'cindy-unattributed-v1',
+  persistClaudeAiOAuthCredentialRejection: (expected: {
+    accessToken: string;
+    refreshToken?: string | null;
+  }) => {
+    h.durableRejectionCalls.push(expected);
+    const error = h.durableRejectionErrors.shift();
+    if (error) throw error;
+    return true;
+  },
+  persistClaudeAiOAuthCredentialRejectionRecovery: (expected: {
+    accessToken: string;
+    refreshToken?: string | null;
+  }) => {
+    h.recoveryFenceCalls.push(expected);
+    const error = h.recoveryFenceErrors.shift();
+    if (error) throw error;
+    return true;
+  },
 }));
 
 vi.mock('../claude-oauth-refresh.js', () => ({
-  getValidClaudeAiOAuth: async (opts?: { staleToken?: string }) => {
+  getValidClaudeAiOAuth: async (opts?: {
+    staleToken?: string;
+    staleAuthorizationRevision?: string;
+    forceRefresh?: boolean;
+  }) => {
     h.lastRefreshOpts = opts ?? null;
     if (h.refreshDelayMs > 0) await new Promise((r) => setTimeout(r, h.refreshDelayMs));
     return h.oauth;
@@ -111,6 +213,17 @@ vi.mock('../claude-oauth-refresh.js', () => ({
   getClaudeAiOAuthForSpawn: () => h.oauth,
   invalidateClaudeOAuthRefresh: () => {
     h.refresherInvalidated += 1;
+  },
+  rejectClaudeOAuthCredential: (proof: (typeof h.rejectedCredentials)[number]) => {
+    const duplicate = h.rejectedCredentials.some(
+      (existing) =>
+        existing.owner.dataOwnerId === proof.owner.dataOwnerId &&
+        existing.owner.generation === proof.owner.generation &&
+        existing.rejectedCredential.accessToken === proof.rejectedCredential.accessToken &&
+        existing.rejectedCredential.refreshToken === proof.rejectedCredential.refreshToken,
+    );
+    if (!duplicate) h.rejectedCredentials.push(proof);
+    return true;
   },
   // disconnect = invalidate → clear(唯一断开入口,logout/IPC 都必须走它)
   disconnectClaudeAiOAuth: () => {
@@ -158,7 +271,16 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
   beginNativeProviderAuthInvalidation: (
     _provider: string,
     owner: { dataOwnerId: string; generation: number },
-  ) => ({ ...owner, operationId: 'invalid-grant-operation', intent: 'invalidate' }),
+  ) => {
+    h.invalidationBeginCalls += 1;
+    const error = h.invalidationBeginErrors.shift();
+    if (error) {
+      if (h.invalidationBeginChangesCredentialOnError) h.credentialMatchState = 'changed';
+      throw error;
+    }
+    if (h.invalidationBeginReturnsNull) return null;
+    return { ...owner, operationId: 'invalid-grant-operation', intent: 'invalidate' };
+  },
   validateNativeProviderAuthInvalidation: () =>
     h.invalidationValidationResults.shift() ?? h.invalidationValidationResult,
   abandonNativeProviderAuthOperation: () => true,
@@ -226,17 +348,32 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
       scopes: ['user:inference', 'user:profile'],
       subscriptionType: 'max',
       rateLimitTier: 'default_claude_max_20x',
+      cindyAuthorizationRevision: 'login-revision-1',
     };
     h.gatewayKey = 'sk-xd-gateway';
     h.cleared = 0;
     h.conditionalClearResult = 'cleared';
     h.conditionalClearCalls.length = 0;
+    h.durableClearResult = 'cleared';
+    h.durableClearCalls.length = 0;
+    h.durableClearError = null;
+    h.durableRejectionCalls.length = 0;
+    h.durableRejectionErrors.length = 0;
+    h.recoveryFenceCalls.length = 0;
+    h.recoveryFenceErrors.length = 0;
     h.clearError = null;
     h.pendingRevocationResult = true;
     h.pendingRevocationError = null;
     h.invalidationValidationResult = true;
     h.invalidationValidationResults.length = 0;
+    h.invalidationBeginCalls = 0;
+    h.invalidationBeginErrors.length = 0;
+    h.invalidationBeginReturnsNull = false;
+    h.invalidationBeginChangesCredentialOnError = false;
     h.credentialMatchState = 'same';
+    h.credentialGuardCalls = 0;
+    h.credentialGuardErrors.length = 0;
+    h.conditionalClearChangesCredentialOnError = false;
     h.clearErrorAfterCommit = null;
     h.refresherInvalidated = 0;
     h.disconnectCalls = 0;
@@ -244,6 +381,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     h.gatewayRemovals = 0;
     h.unbindCalls.length = 0;
     h.pendingRevocations.length = 0;
+    h.rejectedCredentials.length = 0;
     h.ownerId = 'owner-a';
     h.ownerGeneration = 7;
     h.boundaryPending = false;
@@ -275,6 +413,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(env.CLAUDE_CODE_OAUTH_SCOPES).toBe('user:inference user:profile');
     expect(env.CLAUDE_CODE_SUBSCRIPTION_TYPE).toBe('max');
     expect(env.CLAUDE_CODE_RATE_LIMIT_TIER).toBe('default_claude_max_20x');
+    expect(env.CINDY_CLAUDE_OAUTH_REVISION).toBe('login-revision-1');
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
@@ -283,6 +422,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     const adapter = await makeAdapter();
     const env = await adapter.getAuthEnv();
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('at-live');
+    expect(env.CINDY_CLAUDE_OAUTH_REVISION).toBe('cindy-unattributed-v1');
     expect(env.CLAUDE_CODE_OAUTH_SCOPES).toBeUndefined();
     expect(env.CLAUDE_CODE_SUBSCRIPTION_TYPE).toBeUndefined();
     expect(env.CLAUDE_CODE_RATE_LIMIT_TIER).toBeUndefined();
@@ -332,8 +472,17 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
 
   it('getFreshSubscriptionToken:透传刷新结果的 accessToken 与 staleToken 基线', async () => {
     const adapter = await makeAdapter();
-    await expect(adapter.getFreshSubscriptionToken('at-failed')).resolves.toBe('at-live');
-    expect(h.lastRefreshOpts).toMatchObject({ forceRefresh: true, staleToken: 'at-failed' });
+    await expect(
+      adapter.getFreshSubscriptionToken('at-failed', 'login-revision-0'),
+    ).resolves.toEqual({
+      token: 'at-live',
+      authorizationRevision: 'login-revision-1',
+    });
+    expect(h.lastRefreshOpts).toMatchObject({
+      forceRefresh: true,
+      staleToken: 'at-failed',
+      staleAuthorizationRevision: 'login-revision-0',
+    });
     h.oauth = null;
     await expect(adapter.getFreshSubscriptionToken()).resolves.toBeNull();
   });
@@ -367,7 +516,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(h.refresherInvalidated).toBe(1);
   });
 
-  it('invalid_grant cleanup 与 pending marker 都失败时,exact operation 仍有效则失效旧 refresher', async () => {
+  it('invalid_grant cleanup 失败时依靠 grant fence 广播,不写 provider-global marker', async () => {
     h.clearError = new Error('credential store unavailable');
     h.pendingRevocationResult = false;
     const adapter = await makeAdapter();
@@ -379,17 +528,17 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
       owner: { dataOwnerId: 'owner-a', generation: 7 },
       rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
     });
-    await vi.waitFor(() => expect(h.refresherInvalidated).toBe(1));
+    await vi.waitFor(() => expect(h.rejectedCredentials).toHaveLength(1));
 
-    expect(h.pendingRevocations).toHaveLength(1);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(h.refresherInvalidated).toBe(0);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });
 
-  it('invalid_grant cleanup 失败后 exact operation 已被替换则不失效新 refresher', async () => {
-    h.clearError = new Error('credential store unavailable');
-    h.pendingRevocationError = new Error('pending marker unavailable');
-    h.invalidationValidationResult = false;
-    h.credentialMatchState = 'changed';
+  it('authorization epoch 不可读时保持 grant fence,不写通用撤销 intent', async () => {
+    h.clearError = new Error('claude credential authorization epoch is unreadable', {
+      cause: Object.assign(new Error('binding permission denied'), { code: 'EACCES' }),
+    });
     const adapter = await makeAdapter();
     const broadcasts: string[] = [];
     adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
@@ -399,9 +548,34 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
       owner: { dataOwnerId: 'owner-a', generation: 7 },
       rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
     });
-    await vi.waitFor(() => expect(h.pendingRevocations).toHaveLength(1));
+    await vi.waitFor(() => expect(broadcasts).toHaveLength(1));
 
+    expect(h.conditionalClearCalls).toEqual([
+      { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    ]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(h.credentialMatchState).toBe('same');
+    expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('invalid_grant cleanup 失败后凭证已替换则不广播旧账号失效', async () => {
+    h.clearError = new Error('credential store unavailable');
+    h.conditionalClearChangesCredentialOnError = true;
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.conditionalClearCalls).toHaveLength(1));
+
+    expect(h.pendingRevocations).toEqual([]);
     expect(h.refresherInvalidated).toBe(0);
+    expect(h.rejectedCredentials).toHaveLength(1);
     expect(broadcasts).toEqual([]);
   });
 
@@ -419,9 +593,10 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
       owner: { dataOwnerId: 'owner-a', generation: 7 },
       rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
     });
-    await vi.waitFor(() => expect(h.refresherInvalidated).toBe(1));
+    await vi.waitFor(() => expect(h.rejectedCredentials).toHaveLength(1));
 
     expect(h.unbindCalls).toHaveLength(1);
+    expect(h.refresherInvalidated).toBe(0);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });
 
@@ -490,7 +665,9 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
   it('迟到的 invalid_grant proof 只条件清旧 token,新账号已替换时不解绑也不广播', async () => {
     const adapter = await makeAdapter();
     const broadcasts: string[] = [];
+    const replacements = vi.fn();
     adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+    adapter.setOnCredentialReplacementDetected(replacements);
     h.conditionalClearResult = 'changed';
 
     h.invalidGrantHandler?.({
@@ -504,7 +681,9 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(h.unbindCalls).toEqual([]);
     expect(h.pendingRevocations).toEqual([]);
     expect(broadcasts).toEqual([]);
+    expect(replacements).toHaveBeenCalledOnce();
     expect(h.refresherInvalidated).toBe(0);
+    expect(h.rejectedCredentials).toHaveLength(1);
   });
 
   it('有效 invalid_grant proof 只清匹配 token,并按原 owner generation 条件解绑', async () => {
@@ -524,17 +703,29 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
       {
         provider: 'anthropic',
         options: {
-          expectedOperation: {
-            dataOwnerId: 'owner-a',
-            generation: 7,
-            operationId: 'invalid-grant-operation',
-            intent: 'invalidate',
-          },
+          expectedOwner: { dataOwnerId: 'owner-a', generation: 7 },
         },
       },
     ]);
     expect(h.pendingRevocations).toEqual([]);
+    expect(h.rejectedCredentials).toHaveLength(1);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('refresher 未建立耐久拒绝时先补 grant-scoped recovery fence', async () => {
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+      durabilityEstablished: false,
+    });
+    await vi.waitFor(() => expect(broadcasts).toHaveLength(1));
+
+    expect(h.recoveryFenceCalls).toEqual([{ accessToken: 'at-old', refreshToken: 'rt-old' }]);
   });
 
   it('invalid_grant proof 的 owner generation 已过期时不触碰任何新会话状态', async () => {
@@ -552,6 +743,223 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(h.unbindCalls).toEqual([]);
     expect(h.pendingRevocations).toEqual([]);
     expect(h.refresherInvalidated).toBe(0);
+    expect(h.rejectedCredentials).toEqual([]);
+  });
+
+  it('a real newer auth operation leaves token durability to the refresher and stays silent', async () => {
+    h.invalidationBeginReturnsNull = true;
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    const replacements = vi.fn();
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+    adapter.setOnCredentialReplacementDetected(replacements);
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.rejectedCredentials).toHaveLength(1));
+
+    expect(h.invalidationBeginCalls).toBe(1);
+    expect(h.conditionalClearCalls).toEqual([
+      { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    ]);
+    expect(h.durableClearCalls).toEqual([]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(broadcasts).toEqual([]);
+    expect(replacements).not.toHaveBeenCalled();
+  });
+
+  it('setup lock contention retries owner cleanup without duplicating refresher durability', async () => {
+    const locked = Object.assign(new Error('binding lock busy'), { code: 'ELOCKED' });
+    h.durableRejectionErrors.push(locked);
+    h.invalidationBeginErrors.push(locked);
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+
+    await vi.waitFor(() => expect(h.rejectedCredentials).toHaveLength(1));
+    await vi.waitFor(() => expect(h.unbindCalls).toHaveLength(1));
+    expect(h.durableRejectionCalls).toEqual([]);
+    expect(h.invalidationBeginCalls).toBe(2);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(h.refresherInvalidated).toBe(0);
+    expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('final guarded broadcast survives the full stale-lock window', async () => {
+    vi.useFakeTimers();
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      h.credentialGuardErrors.push(
+        Object.assign(new Error('credential storage lock busy'), { code: 'ELOCKED' }),
+      );
+    }
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    try {
+      h.invalidGrantHandler?.({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+      });
+      expect(h.credentialGuardCalls).toBe(1);
+      expect(broadcasts).toEqual([]);
+
+      // 100 + 250 + 500 + 1s + 2s + 4s + 8s + 8s = 23.85s,
+      // deliberately longer than the shared storage lock's 15s stale window.
+      await vi.advanceTimersByTimeAsync(23_850);
+
+      expect(h.credentialGuardCalls).toBe(9);
+      expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replacement committed while final broadcast waits suppresses the old logout event', async () => {
+    vi.useFakeTimers();
+    h.credentialGuardErrors.push(
+      Object.assign(new Error('credential storage lock busy'), { code: 'ELOCKED' }),
+    );
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    const replacements = vi.fn();
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+    adapter.setOnCredentialReplacementDetected(replacements);
+
+    try {
+      h.invalidGrantHandler?.({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+      });
+      expect(h.credentialGuardCalls).toBe(1);
+
+      h.credentialMatchState = 'changed';
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(h.credentialGuardCalls).toBe(2);
+      expect(broadcasts).toEqual([]);
+      expect(replacements).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replacement committed after setup contention keeps the old identity fenced without broadcasting', async () => {
+    vi.useFakeTimers();
+    h.invalidationBeginErrors.push(
+      Object.assign(new Error('binding lock busy'), { code: 'ELOCKED' }),
+    );
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    try {
+      h.invalidGrantHandler?.({
+        source: 'invalid_grant',
+        owner: { dataOwnerId: 'owner-a', generation: 7 },
+        rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+      });
+      expect(h.invalidationBeginCalls).toBe(1);
+      expect(h.rejectedCredentials).toHaveLength(1);
+      expect(broadcasts).toEqual([]);
+
+      // The competing login commits while this cleanup is in its retry delay.
+      h.credentialMatchState = 'changed';
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(h.invalidationBeginCalls).toBe(1);
+      expect(h.conditionalClearCalls).toEqual([
+        { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+        { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+      ]);
+      expect(h.durableClearCalls).toEqual([]);
+      expect(h.unbindCalls).toEqual([]);
+      expect(h.pendingRevocations).toEqual([]);
+      expect(h.rejectedCredentials).toHaveLength(1);
+      expect(h.refresherInvalidated).toBe(0);
+      expect(broadcasts).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('permanent setup failure broadcasts the already-suppressed rejected credential', async () => {
+    h.invalidationBeginErrors.push(
+      Object.assign(new Error('binding permission denied'), { code: 'EACCES' }),
+    );
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.invalidationBeginCalls).toBe(1));
+
+    expect(h.conditionalClearCalls).toEqual([
+      { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    ]);
+    expect(h.durableClearCalls).toEqual([]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(h.rejectedCredentials).toHaveLength(1);
+    expect(h.refresherInvalidated).toBe(0);
+    expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('replacement committed before first setup cannot leave a stale invalidation intent', async () => {
+    h.credentialMatchState = 'changed';
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.rejectedCredentials).toHaveLength(1));
+
+    expect(h.invalidationBeginCalls).toBe(0);
+    expect(h.conditionalClearCalls).toEqual([
+      { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    ]);
+    expect(h.durableClearCalls).toEqual([]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(broadcasts).toEqual([]);
+  });
+
+  it('does not repeat the refresher durable-clear fallback after setup failure', async () => {
+    h.invalidationBeginErrors.push(
+      Object.assign(new Error('binding permission denied'), { code: 'EACCES' }),
+    );
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-rejected', refreshToken: 'rt-rejected' },
+    });
+    await vi.waitFor(() => expect(h.invalidationBeginCalls).toBe(1));
+
+    expect(h.durableClearCalls).toEqual([]);
+    expect(h.rejectedCredentials).toHaveLength(1);
+    expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });
 
   it('logout(订阅在连):清凭证同时失效刷新器,防在途刷新复活凭证', async () => {

@@ -49,10 +49,19 @@ import path from 'node:path';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 import {
+  acceptClaudeAiOAuthCredentialIdentity,
+  clearClaudeAiOAuthIfMatches,
   clearClaudeAiOAuthWithBindingCommit,
+  fingerprintClaudeAiOAuthCredentialIdentity,
+  getClaudeAiOAuthCredentialRejectionRevision,
+  getClaudeAiOAuthSessionAuthorizationRevision,
+  inheritClaudeAiOAuthCredentialRejectionRevision,
   readClaudeAiOAuth,
+  rejectClaudeAiOAuthCredentialIdentity,
+  persistClaudeAiOAuthCredentialRejectionRecovery,
   replaceClaudeAiOAuthIfMatches,
   type ClaudeAiOAuth,
+  type ClaudeAiOAuthCredentialIdentity,
   type ClaudeAiOAuthConditionalUpdateKind,
   type ConditionalClaudeAiOAuthReplaceResult,
 } from './claude-credentials-store.js';
@@ -63,6 +72,7 @@ import {
   captureNativeProviderAuthOwnerFence,
   getNativeProviderAuthBindingStateForOperation,
   markNativeProviderAuthRevocationPending,
+  NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS,
   unbindNativeProviderAuth,
   validateNativeProviderAuthRevocationPending,
 } from './nativeProviderAuthBinding.js';
@@ -99,6 +109,20 @@ const LOCK_RETRY_BASE_DELAY_MS = 1_000;
  */
 const LOCK_LOSER_POLL_ATTEMPTS = 6;
 const LOCK_LOSER_POLL_INTERVAL_MS = 500;
+// Rejection persistence shares the native-provider binding lock.  A process
+// crash can leave that proper-lockfile healthy until its 15s stale threshold;
+// keep retrying beyond that threshold so the orphan is reclaimed before we
+// fall back to an exact clear that needs the same lock.
+const CREDENTIAL_REJECTION_RETRY_DELAYS_MS = [
+  25, 50, 100, 200, 400, 800, 1_600, 3_200, 6_400, 6_400,
+] as const;
+const CREDENTIAL_REJECTION_RETRY_WINDOW_MS = CREDENTIAL_REJECTION_RETRY_DELAYS_MS.reduce(
+  (total, delay) => total + delay,
+  0,
+);
+if (CREDENTIAL_REJECTION_RETRY_WINDOW_MS <= NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS) {
+  throw new Error('Claude credential rejection retries must outlive the binding lock stale window');
+}
 
 /** 预续期 timer 最短延迟 —— 防 expiresAt 异常值导致 0ms 自旋。 */
 const PROACTIVE_MIN_DELAY_MS = 30_000;
@@ -156,8 +180,10 @@ export async function fetchSubscriptionProfile(
       rateLimitTier: data.organization?.rate_limit_tier ?? null,
     };
   } catch (e) {
+    // This request carries a bearer token. Transport errors are untrusted and
+    // may echo headers, so retain only a structural code.
     log.warn('subscription profile fetch failed (best-effort)', {
-      error: e instanceof Error ? e.message : String(e),
+      code: nestedErrorCode(e) ?? 'unknown',
     });
     return null;
   }
@@ -180,6 +206,14 @@ export interface ClaudeOAuthRefresherDeps {
   sleep?: (ms: number) => Promise<void>;
   /** refresh token 被服务端作废(invalid_grant)时通知 —— adapter 按 proof 条件清理。 */
   onInvalidGrant?: (proof: ClaudeOAuthInvalidGrantProof) => void;
+  /** Record the token-global rejection before any owner-scoped cleanup decision. */
+  onCredentialRejected?: (identity: ClaudeAiOAuthCredentialIdentity) => void;
+  /** Write-only grant-scoped fallback when the primary rejection sidecar cannot be read. */
+  onCredentialRejectionRecovery?: (identity: ClaudeAiOAuthCredentialIdentity) => boolean;
+  /** Owner-independent exact clear when the durable rejection marker cannot be written. */
+  clearRejectedCredential?: (
+    identity: ClaudeAiOAuthCredentialIdentity,
+  ) => 'cleared' | 'absent' | 'changed';
   /** 预续期开关(测试关掉避免悬挂 timer)。默认开。 */
   proactiveRenewal?: boolean;
 }
@@ -194,7 +228,9 @@ export interface ClaudeOAuthInvalidGrantProof {
   source: 'invalid_grant';
   owner: { dataOwnerId: string; generation: number };
   /** In-memory only. Never log or persist either token. */
-  rejectedCredential: { accessToken: string; refreshToken: string | null };
+  rejectedCredential: ClaudeAiOAuthCredentialIdentity;
+  /** False means the adapter must keep retrying the grant-scoped recovery fence. */
+  durabilityEstablished?: boolean;
 }
 
 function sameCommittedOwner(
@@ -231,9 +267,23 @@ export interface GetValidOAuthOptions {
    * 不传时退回「以库值为基线」的旧语义(仅锁内比对挡回调间并发)。
    */
   staleToken?: string;
+  /** Spawn-time authorization epoch; distinguishes identical token bytes reauthorized as r2. */
+  staleAuthorizationRevision?: string;
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function nestedErrorCode(error: unknown): string | null {
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!current || typeof current !== 'object') return null;
+    if ('code' in current && typeof (current as { code?: unknown }).code === 'string') {
+      return (current as { code: string }).code;
+    }
+    current = 'cause' in current ? (current as { cause?: unknown }).cause : null;
+  }
+  return null;
+}
 
 /**
  * 刷新器工厂 —— 依赖注入版,single-flight / generation / timer 状态挂在实例闭包上
@@ -243,6 +293,10 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
   getValidOAuth: (opts?: GetValidOAuthOptions) => Promise<ClaudeAiOAuth | null>;
   /** spawn 注入专用:立即返回现值,临期只触发后台刷新,绝不阻塞。 */
   getOAuthForSpawn: () => ClaudeAiOAuth | null;
+  /** Suppress only the credential identity proven rejected by the server. */
+  rejectCredential: (proof: ClaudeOAuthInvalidGrantProof) => boolean;
+  /** Explicit browser authorization may accept that exact identity again. */
+  acceptCredential: (identity: ClaudeAiOAuthCredentialIdentity) => void;
   /** 登出 / 凭证作废时调:在途刷新不写回、撤销预续期 timer。 */
   invalidate: () => void;
   /** 订阅身份后台回填(登录后调):锁外拉 profile → 拿锁重读 → 缺才 merge 写回。 */
@@ -254,6 +308,163 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
   // generation:invalidate() 递增;在途刷新拿着进入时的 gen,完成时 gen 变了就丢弃结果。
   let generation = 0;
   let proactiveTimer: NodeJS.Timeout | null = null;
+  const rejectedCredentials: Array<{
+    fingerprint: string;
+    authorizationRevision: string | null;
+  }> = [];
+
+  function authorizationRevision(identity: ClaudeAiOAuthCredentialIdentity): string | null {
+    const revision = identity.cindyAuthorizationRevision;
+    return typeof revision === 'string' && revision.length > 0 ? revision : null;
+  }
+
+  function effectiveRejectionRevision(identity: ClaudeAiOAuthCredentialIdentity): string | null {
+    return getClaudeAiOAuthCredentialRejectionRevision(identity);
+  }
+
+  function credentialIdentity(current: ClaudeAiOAuth): ClaudeAiOAuthCredentialIdentity {
+    const revision = authorizationRevision(current);
+    const rejectionRevision = getClaudeAiOAuthCredentialRejectionRevision(current);
+    return {
+      accessToken: current.accessToken,
+      refreshToken: current.refreshToken ?? null,
+      ...(revision ? { cindyAuthorizationRevision: revision } : {}),
+      ...(rejectionRevision !== revision
+        ? { cindyCredentialRejectionRevision: rejectionRevision }
+        : {}),
+    };
+  }
+
+  function sameCredentialIdentity(
+    current: ClaudeAiOAuthCredentialIdentity,
+    identity: ClaudeAiOAuthCredentialIdentity,
+  ): boolean {
+    return (
+      current.accessToken === identity.accessToken &&
+      (current.refreshToken ?? null) === (identity.refreshToken ?? null) &&
+      effectiveRejectionRevision(current) === effectiveRejectionRevision(identity)
+    );
+  }
+
+  /**
+   * A server-revoked token stays revoked across owner generations. Merely
+   * observing another token must not forget it: an external writer can later
+   * roll the old blob back. Only an explicit browser authorization accepts the
+   * same exact identity again.
+   */
+  function isRejectedCredential(current: ClaudeAiOAuth): boolean {
+    const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(current);
+    const revision = effectiveRejectionRevision(current);
+    return rejectedCredentials.some(
+      (identity) =>
+        identity.fingerprint === fingerprint && identity.authorizationRevision === revision,
+    );
+  }
+
+  function rememberRejectedCredential(identity: ClaudeAiOAuthCredentialIdentity): void {
+    const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(identity);
+    const revision = effectiveRejectionRevision(identity);
+    if (
+      !rejectedCredentials.some(
+        (existing) =>
+          existing.fingerprint === fingerprint && existing.authorizationRevision === revision,
+      )
+    ) {
+      rejectedCredentials.push({
+        fingerprint,
+        authorizationRevision: revision,
+      });
+    }
+    if (proactiveTimer) {
+      clearTimeout(proactiveTimer);
+      proactiveTimer = null;
+    }
+    log.info('rejected claude oauth credential suppressed in memory');
+  }
+
+  function rejectCredential(proof: ClaudeOAuthInvalidGrantProof): boolean {
+    if (!sameCommittedOwner(proof.owner, deps.readOwnerScope())) return false;
+    rememberRejectedCredential(proof.rejectedCredential);
+    return true;
+  }
+
+  function acceptCredential(identity: ClaudeAiOAuthCredentialIdentity): void {
+    const fingerprint = fingerprintClaudeAiOAuthCredentialIdentity(identity);
+    for (let index = rejectedCredentials.length - 1; index >= 0; index -= 1) {
+      const rejected = rejectedCredentials[index];
+      if (rejected.fingerprint === fingerprint) {
+        rejectedCredentials.splice(index, 1);
+      }
+    }
+  }
+
+  async function persistRejectedCredentialAcrossLockContention(
+    identity: ClaudeAiOAuthCredentialIdentity,
+  ): Promise<boolean> {
+    if (!deps.onCredentialRejected) return true;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        deps.onCredentialRejected(identity);
+        return true;
+      } catch (error) {
+        const code = nestedErrorCode(error);
+        const retrying =
+          code === 'ELOCKED' && attempt < CREDENTIAL_REJECTION_RETRY_DELAYS_MS.length;
+        log.warn('recording rejected claude oauth credential failed', {
+          code: code ?? 'unknown',
+          retrying,
+          attempt: attempt + 1,
+        });
+        if (!retrying) return false;
+        await sleep(CREDENTIAL_REJECTION_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+
+  function scheduleRejectedCredentialRecovery(identity: ClaudeAiOAuthCredentialIdentity): void {
+    if (!deps.onCredentialRejectionRecovery) return;
+    void (async () => {
+      for (const delay of CREDENTIAL_REJECTION_RETRY_DELAYS_MS) {
+        await sleep(delay);
+        try {
+          if (deps.onCredentialRejectionRecovery?.(identity)) return;
+        } catch (error) {
+          log.warn('retrying grant-scoped rejected credential recovery fence failed', {
+            code: nestedErrorCode(error) ?? 'unknown',
+          });
+        }
+      }
+      log.error('grant-scoped rejected credential recovery fence exhausted retries');
+    })();
+  }
+
+  /**
+   * The refresh response may rotate the only usable refresh token. A transient
+   * storage/binding ELOCKED must therefore retry the complete compare-and-swap
+   * rather than returning an in-memory token while leaving the revoked grant on
+   * disk. Re-running the full CAS also observes a competing account switch.
+   */
+  async function replaceRefreshedCredentialAcrossLockContention(
+    expected: ClaudeAiOAuth,
+    next: ClaudeAiOAuth,
+  ): Promise<ConditionalClaudeAiOAuthReplaceResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return deps.replaceOAuth(expected, next);
+      } catch (error) {
+        const code = nestedErrorCode(error);
+        const retrying =
+          code === 'ELOCKED' && attempt < CREDENTIAL_REJECTION_RETRY_DELAYS_MS.length;
+        log.warn('committing refreshed claude oauth credential failed', {
+          code: code ?? 'unknown',
+          retrying,
+          attempt: attempt + 1,
+        });
+        if (!retrying) throw error;
+        await sleep(CREDENTIAL_REJECTION_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
 
   // ── proper-lockfile 兼容的跨进程锁 ────────────────────────────────────────────
   function lockPath(): string {
@@ -431,38 +642,51 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
       });
     } catch (e) {
+      // A transport/proxy error may echo request data. This request contains a
+      // refresh token, so keep diagnostics structural and never log its text.
       log.warn('claude oauth refresh request failed (network)', {
-        error: e instanceof Error ? e.message : String(e),
+        code: nestedErrorCode(e) ?? 'unknown',
         elapsedMs: deps.now() - startedAt,
       });
       return { oauth: null, invalidGrant: false };
     }
     if (res.status !== 200) {
-      let errorCode = '';
+      let invalidGrant = false;
       try {
         const body = (await res.json()) as { error?: string };
-        errorCode = typeof body.error === 'string' ? body.error : '';
+        invalidGrant = body.error === 'invalid_grant';
       } catch {
         /* 非 JSON 响应 → 只留 status */
       }
       log.error('claude oauth refresh rejected by server', {
         status: res.status,
-        errorCode,
+        // Do not log arbitrary OAuth error strings: a proxy can reflect the
+        // submitted refresh token there. Only this strict, known enum is safe.
+        errorCode: invalidGrant ? 'invalid_grant' : 'unknown',
         elapsedMs: deps.now() - startedAt,
       });
-      return { oauth: null, invalidGrant: errorCode === 'invalid_grant' };
+      return { oauth: null, invalidGrant };
     }
     let data: RefreshTokenResponse;
     try {
       data = (await res.json()) as RefreshTokenResponse;
-    } catch (e) {
-      log.error('claude oauth refresh: malformed 200 response', {
-        error: e instanceof Error ? e.message : String(e),
-      });
+    } catch {
+      // JSON parser errors include a slice of malformed input, which can be a
+      // truncated access/refresh token response. Never attach that text.
+      log.error('claude oauth refresh: malformed 200 response');
       return { oauth: null, invalidGrant: false };
     }
-    if (!data.access_token) {
+    if (typeof data.access_token !== 'string' || data.access_token.length === 0) {
       log.error('claude oauth refresh: 200 response missing access_token');
+      return { oauth: null, invalidGrant: false };
+    }
+    if (
+      (data.refresh_token !== undefined && typeof data.refresh_token !== 'string') ||
+      (data.expires_in !== undefined &&
+        (typeof data.expires_in !== 'number' || !Number.isFinite(data.expires_in))) ||
+      (data.scope !== undefined && typeof data.scope !== 'string')
+    ) {
+      log.error('claude oauth refresh: malformed 200 token fields');
       return { oauth: null, invalidGrant: false };
     }
     const next: ClaudeAiOAuth = {
@@ -473,6 +697,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       expiresAt: typeof data.expires_in === 'number' ? deps.now() + data.expires_in * 1000 : null,
       scopes: data.scope ? data.scope.split(' ').filter(Boolean) : current.scopes,
     };
+    inheritClaudeAiOAuthCredentialRejectionRevision(current, next);
     // ⚠️ 此处不做订阅身份回填 —— rotated refresh token 必须最快落盘(写回在调用方
     // refreshWithLock),profile RTT(最长 10s)不能夹在「刷」与「写回」之间:旧 refresh
     // token 此刻已在服务端作废,落盘前进程崩溃 = 凭证库剩已作废值 → 下次 invalid_grant
@@ -543,13 +768,13 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
 
   // ── 锁内刷新流程(single-flight 包裹) ─────────────────────────────────────────
   /**
-   * @param preLockToken 进锁前观察到的 accessToken —— 锁内重读若已不同,说明其它
-   *   进程/调用刚刷过,直接采用新值不再刷(评审「比对后按需刷新」语义,防连环旋转)。
+   * @param preLockCredential 进锁前观察到的完整凭证身份 —— 锁内重读若 token 或显式
+   *   授权 revision 已不同,说明其它进程刚刷新/登录,直接采用新值不再刷。
    * @param force 锁内重读后即使未临期也刷(401 场景本地过期判断不可信,但仅当 token
    *   仍是进锁前那枚 —— 已换新的直接信任)。
    */
   async function refreshWithLock(
-    preLockToken: string,
+    preLockCredential: ClaudeAiOAuthCredentialIdentity,
     force: boolean,
     owner: { dataOwnerId: string; generation: number },
   ): Promise<ClaudeAiOAuth | null> {
@@ -565,7 +790,9 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
         const reread = deps.readOAuth();
         if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
-        if (reread?.accessToken && reread.accessToken !== preLockToken) return reread;
+        if (reread?.accessToken && !sameCredentialIdentity(reread, preLockCredential)) {
+          return isRejectedCredential(reread) ? null : reread;
+        }
         if (generation !== gen) return null; // 等待期间登出
         if (i < LOCK_LOSER_POLL_ATTEMPTS) await sleep(LOCK_LOSER_POLL_INTERVAL_MS);
       }
@@ -575,11 +802,12 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
       const fresh = deps.readOAuth();
       if (!fresh?.accessToken) return null;
+      if (isRejectedCredential(fresh)) return null;
       if (!sameCommittedOwner(owner, deps.readOwnerScope())) {
         log.info('claude oauth refresh discarded: owner changed while reading credential');
         return null;
       }
-      if (fresh.accessToken !== preLockToken) {
+      if (!sameCredentialIdentity(fresh, preLockCredential)) {
         // 别人已经刷过(锁内重读是唯一可信判定)→ 直接用,不再消耗一次轮换。
         log.info('claude oauth refresh skipped: credential already renewed by another writer');
         return fresh;
@@ -589,7 +817,43 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       if (!force && !expiringSoon) return fresh;
 
       const startedAt = deps.now();
+      let invalidGrantDurabilityEstablished = true;
       const { oauth: next, invalidGrant } = await requestRefresh(fresh);
+      if (invalidGrant) {
+        const rejectedCredential = credentialIdentity(fresh);
+        // The server's verdict is about the token itself, not the current Cindy
+        // owner generation. Record it before any logout/account-switch guard so
+        // the same blob cannot reappear through a later external rollback.
+        rememberRejectedCredential(rejectedCredential);
+        const persisted = await persistRejectedCredentialAcrossLockContention(rejectedCredential);
+        invalidGrantDurabilityEstablished = persisted;
+        if (!persisted && deps.onCredentialRejectionRecovery) {
+          try {
+            invalidGrantDurabilityEstablished =
+              deps.onCredentialRejectionRecovery(rejectedCredential);
+          } catch (error) {
+            log.warn('grant-scoped rejected credential recovery fence failed', {
+              code: nestedErrorCode(error) ?? 'unknown',
+            });
+          }
+        }
+        if (!persisted && deps.clearRejectedCredential) {
+          try {
+            const result = deps.clearRejectedCredential(rejectedCredential);
+            log.warn('rejected claude oauth credential used exact-clear fallback', { result });
+          } catch (error) {
+            log.warn('exact-clear fallback for rejected claude oauth credential failed', {
+              code: nestedErrorCode(error) ?? 'unknown',
+            });
+          }
+        }
+        // Token rejection is owner-independent. Keep its durable retry alive
+        // even if the user logs out or switches accounts before the UI-scoped
+        // invalid_grant proof below is eligible to fire.
+        if (!invalidGrantDurabilityEstablished) {
+          scheduleRejectedCredentialRecovery(rejectedCredential);
+        }
+      }
       if (generation !== gen) {
         // 刷新期间发生登出:结果作废,绝不写回(否则「已断开」状态凭证复活)。
         log.info('claude oauth refresh discarded: invalidated mid-flight (logout)');
@@ -599,19 +863,16 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         log.info('claude oauth refresh discarded: owner changed while request was in flight');
         return null;
       }
+      if (!invalidGrant && isRejectedCredential(fresh)) return null;
       if (!next) {
         if (invalidGrant) {
           // 与下方成功路径同款换代守卫:invalid_grant 报的是**本次刷新用的那枚**
           // refresh token;若 HTTP 在途期间凭证库已被换账号登录替换,invalidate 会把
           // 刚登录的新账号一并清掉 —— 先重读比对,库已换则采信新凭证、不触发失效。
           const postFail = deps.readOAuth();
-          if (
-            postFail?.accessToken &&
-            (postFail.accessToken !== fresh.accessToken ||
-              postFail.refreshToken !== fresh.refreshToken)
-          ) {
+          if (postFail?.accessToken && !sameCredentialIdentity(postFail, fresh)) {
             log.warn('invalid_grant hit a replaced credential; keeping the newly stored one');
-            return postFail;
+            return isRejectedCredential(postFail) ? null : postFail;
           }
           // 库仍是失败那套凭证且服务端明确作废 → 刷新无望,通知 UI 重登。
           log.error('claude oauth refresh token revoked by server (invalid_grant)');
@@ -619,10 +880,8 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
             deps.onInvalidGrant?.({
               source: 'invalid_grant',
               owner,
-              rejectedCredential: {
-                accessToken: fresh.accessToken,
-                refreshToken: fresh.refreshToken ?? null,
-              },
+              rejectedCredential: credentialIdentity(fresh),
+              durabilityEstablished: invalidGrantDurabilityEstablished,
             });
           } catch (e) {
             log.warn('onInvalidGrant handler threw', {
@@ -639,25 +898,21 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         return null;
       }
       const postFetch = deps.readOAuth();
-      if (
-        !postFetch?.accessToken ||
-        postFetch.accessToken !== fresh.accessToken ||
-        postFetch.refreshToken !== fresh.refreshToken
-      ) {
+      if (!postFetch?.accessToken || !sameCredentialIdentity(postFetch, fresh)) {
         // 刷新 HTTP 在途期间凭证库被外部替换 —— 换账号登录 / standalone claude 登录
         // 都不经本锁、不 bump generation(登出走 disconnect 已被 gen 检查拦住)。
         // 用旧账号的刷新结果写回会静默撤销用户换号 → 丢弃本次结果,采信库中当前凭证。
         log.warn(
           'claude oauth refresh discarded: credential store replaced mid-refresh (account switch?)',
         );
-        return postFetch?.accessToken ? postFetch : null;
+        return postFetch?.accessToken && !isRejectedCredential(postFetch) ? postFetch : null;
       }
       try {
-        const replacement = deps.replaceOAuth(fresh, next);
+        const replacement = await replaceRefreshedCredentialAcrossLockContention(fresh, next);
         if (replacement !== 'written') {
           log.warn('claude oauth refresh discarded: credential changed before conditional commit');
           const latest = deps.readOAuth();
-          return latest?.accessToken ? latest : null;
+          return latest?.accessToken && !isRejectedCredential(latest) ? latest : null;
         }
       } catch (e) {
         // 写回失败也返回内存新凭证让本次能用;若服务端旋转了 refresh token,凭证库里
@@ -723,6 +978,15 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       generation: scopeBeforeRead.generation,
     };
     if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
+    if (isRejectedCredential(current)) return null;
+
+    const currentRevision = getClaudeAiOAuthSessionAuthorizationRevision(current);
+    if (
+      opts?.staleAuthorizationRevision !== undefined &&
+      currentRevision !== opts.staleAuthorizationRevision
+    ) {
+      return current;
+    }
 
     if (opts?.staleToken && current.accessToken !== opts.staleToken) {
       // 库值已比失败的那枚新(后台预续期 / 其它会话换代)→ 直接交出,不消耗轮换。
@@ -750,7 +1014,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
     if (!inflight) {
       inflightOwner = owner;
       const pending = refreshWithLock(
-        current.accessToken,
+        credentialIdentity(current),
         opts?.forceRefresh ?? false,
         owner,
       ).finally(() => {
@@ -763,7 +1027,8 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
     }
     const refreshed = await inflight;
     if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
-    if (refreshed) return refreshed;
+    if (refreshed) return isRejectedCredential(refreshed) ? null : refreshed;
+    if (isRejectedCredential(current)) return null;
     // 刷新失败:非强制场景退回现有 token(临期未必已失效,让请求自然成败);
     // 强制场景绝不复用已确认失效的 token。
     return opts?.forceRefresh ? null : current;
@@ -779,6 +1044,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       generation: scopeBeforeRead.generation,
     };
     if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
+    if (isRejectedCredential(current)) return null;
     const expiresAt = typeof current.expiresAt === 'number' ? current.expiresAt : null;
     const expiringSoon = expiresAt !== null && expiresAt - deps.now() < EXPIRY_MARGIN_MS;
     if (expiringSoon && current.refreshToken) {
@@ -804,7 +1070,14 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
     log.info('claude oauth refresher invalidated (logout / credential cleared)');
   }
 
-  return { getValidOAuth, getOAuthForSpawn, invalidate, backfillSubscriptionProfile };
+  return {
+    getValidOAuth,
+    getOAuthForSpawn,
+    rejectCredential,
+    acceptCredential,
+    invalidate,
+    backfillSubscriptionProfile,
+  };
 }
 
 // ── 生产默认实例(懒初始化,import 零副作用 —— 见 authAdaptersImportPurity 约定) ──
@@ -828,6 +1101,9 @@ function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
       now: Date.now,
       lockDir: defaultLockDir,
       onInvalidGrant: (proof) => invalidGrantHandler?.(proof),
+      onCredentialRejected: rejectClaudeAiOAuthCredentialIdentity,
+      onCredentialRejectionRecovery: persistClaudeAiOAuthCredentialRejectionRecovery,
+      clearRejectedCredential: clearClaudeAiOAuthIfMatches,
     });
   }
   return defaultRefresher;
@@ -844,6 +1120,20 @@ export function getValidClaudeAiOAuth(opts?: GetValidOAuthOptions): Promise<Clau
 /** spawn 注入专用:立即返回现值不阻塞;临期触发后台刷新。 */
 export function getClaudeAiOAuthForSpawn(): ClaudeAiOAuth | null {
   return getDefaultRefresher().getOAuthForSpawn();
+}
+
+/**
+ * Install an in-memory fence for exactly the credential rejected by Anthropic.
+ * Unlike a global invalidate, this cannot cancel a same-session replacement.
+ */
+export function rejectClaudeOAuthCredential(proof: ClaudeOAuthInvalidGrantProof): boolean {
+  return getDefaultRefresher().rejectCredential(proof);
+}
+
+/** Explicit browser login is the only path that can reuse an identical token identity. */
+export function acceptClaudeOAuthCredential(identity: ClaudeAiOAuthCredentialIdentity): void {
+  acceptClaudeAiOAuthCredentialIdentity(identity);
+  defaultRefresher?.acceptCredential(identity);
 }
 
 /** 登出 / 凭证清除时调:放弃在途刷新写回、撤销预续期 timer。 */

@@ -5,9 +5,10 @@ import path from 'node:path';
 import { lockSync } from 'proper-lockfile';
 
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { renameSyncWithRetry } from '../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 type NativeProviderId = 'anthropic' | 'openai' | 'xai';
+type CredentialRejectionProviderId = 'anthropic';
 const NATIVE_PROVIDER_IDS = [
   'anthropic',
   'openai',
@@ -47,7 +48,7 @@ function bindingPath(): string {
 }
 
 const BINDING_WRITE_LOCK_TARGET = '.native-provider-auth.write';
-const BINDING_WRITE_LOCK_STALE_MS = 15_000;
+export const NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS = 15_000;
 const BINDING_WRITE_LOCK_UPDATE_MS = 5_000;
 
 export interface NativeProviderAuthOwnerFence {
@@ -66,6 +67,45 @@ function operationIntentPath(provider: NativeProviderId): string {
 
 function pendingRevocationPath(provider: NativeProviderId): string {
   return path.join(app.getPath('userData'), 'native-provider-auth.pending', `${provider}.json`);
+}
+
+const CREDENTIAL_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+
+function credentialRejectionPath(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+): string {
+  if (!CREDENTIAL_FINGERPRINT_PATTERN.test(fingerprint)) {
+    throw new Error('invalid native provider credential fingerprint');
+  }
+  return path.join(
+    app.getPath('userData'),
+    'native-provider-auth.rejected',
+    provider,
+    `${fingerprint}.json`,
+  );
+}
+
+function credentialRejectionRecoveryPath(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): string {
+  if (!CREDENTIAL_FINGERPRINT_PATTERN.test(fingerprint)) {
+    throw new Error('invalid native provider credential fingerprint');
+  }
+  const revision = normalizedAuthorizationRevision(authorizationRevision);
+  const revisionKey = crypto
+    .createHash('sha256')
+    .update(JSON.stringify(revision), 'utf8')
+    .digest('hex');
+  return path.join(
+    app.getPath('userData'),
+    'native-provider-auth.rejected-recovery',
+    provider,
+    fingerprint,
+    `${revisionKey}.json`,
+  );
 }
 
 type PendingRevocationRead =
@@ -87,17 +127,65 @@ type OperationIntentRead =
   | { kind: 'present'; operation: NativeProviderAuthOperationFence }
   | { kind: 'unreadable' };
 
-function readOperationIntent(provider: NativeProviderId): OperationIntentRead {
-  let raw: string;
+type CredentialRejectionRead =
+  | { kind: 'absent' }
+  | {
+      kind: 'present';
+      authorizationRevision: string | null;
+      rejected: boolean;
+      rejectionObserved: boolean;
+    }
+  | { kind: 'unreadable' };
+
+type CredentialRejectionRecoveryRead =
+  { kind: 'absent' } | { kind: 'present' } | { kind: 'unreadable' };
+
+export type NativeProviderCredentialRejectionState = 'allowed' | 'rejected' | 'unreadable';
+export interface NativeProviderCredentialRejectionDecision {
+  state: NativeProviderCredentialRejectionState;
+  /** Authorization epoch captured while the same binding lock was held. */
+  effectiveAuthorizationRevision: string | null;
+}
+
+type AtomicStateFileSnapshot =
+  { kind: 'absent' } | { kind: 'present'; raw: string } | { kind: 'unreadable' };
+
+let bindingMutationLockDepth = 0;
+
+/**
+ * A normal main-file read stays side-effect free. Backup-only recovery is
+ * allowed only inside the binding mutation lock; unlocked readers fail closed
+ * instead of racing a writer's two-rename Windows swap.
+ */
+function readAtomicStateFileSnapshot(file: string): AtomicStateFileSnapshot {
   try {
-    raw = fs.readFileSync(operationIntentPath(provider), 'utf8');
+    return { kind: 'present', raw: fs.readFileSync(file, 'utf8') };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
+      return { kind: 'unreadable' };
+    }
+  }
+  try {
+    fs.statSync(`${file}.bak`);
   } catch (error) {
     return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
       ? { kind: 'absent' }
       : { kind: 'unreadable' };
   }
+  if (bindingMutationLockDepth === 0) return { kind: 'unreadable' };
   try {
-    const value = JSON.parse(raw) as unknown;
+    const restored = readAtomicFileSync(file);
+    return restored === null ? { kind: 'unreadable' } : { kind: 'present', raw: restored };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
+function readOperationIntent(provider: NativeProviderId): OperationIntentRead {
+  const snapshot = readAtomicStateFileSnapshot(operationIntentPath(provider));
+  if (snapshot.kind !== 'present') return snapshot;
+  try {
+    const value = JSON.parse(snapshot.raw) as unknown;
     if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'unreadable' };
     const dataOwnerId = (value as { dataOwnerId?: unknown }).dataOwnerId;
     const generation = (value as { generation?: unknown }).generation;
@@ -131,16 +219,10 @@ function sameOperation(
 }
 
 function readPendingRevocation(provider: NativeProviderId): PendingRevocationRead {
-  let raw: string;
+  const snapshot = readAtomicStateFileSnapshot(pendingRevocationPath(provider));
+  if (snapshot.kind !== 'present') return snapshot;
   try {
-    raw = fs.readFileSync(pendingRevocationPath(provider), 'utf8');
-  } catch (error) {
-    return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
-      ? { kind: 'absent' }
-      : { kind: 'unreadable' };
-  }
-  try {
-    const value = JSON.parse(raw) as unknown;
+    const value = JSON.parse(snapshot.raw) as unknown;
     if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'unreadable' };
     const owner = (value as { dataOwnerId?: unknown }).dataOwnerId;
     const generation = (value as { generation?: unknown }).generation;
@@ -192,28 +274,351 @@ function readPendingRevocation(provider: NativeProviderId): PendingRevocationRea
   }
 }
 
-function atomicWriteJson(file: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+function readCredentialRejection(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+): CredentialRejectionRead {
+  const snapshot = readAtomicStateFileSnapshot(credentialRejectionPath(provider, fingerprint));
+  if (snapshot.kind !== 'present') return snapshot;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), {
-      encoding: 'utf8',
-      flag: 'wx',
-      mode: 0o600,
+    const value = JSON.parse(snapshot.raw) as unknown;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { kind: 'unreadable' };
+    }
+    const version = (value as { version?: unknown }).version;
+    const authorizationRevision = (value as { authorizationRevision?: unknown })
+      .authorizationRevision;
+    const rejected = (value as { rejected?: unknown }).rejected;
+    const rejectionObserved = (value as { rejectionObserved?: unknown }).rejectionObserved;
+    if (
+      version !== 1 ||
+      (authorizationRevision !== null &&
+        (typeof authorizationRevision !== 'string' || authorizationRevision.length === 0)) ||
+      typeof rejected !== 'boolean' ||
+      typeof rejectionObserved !== 'boolean'
+    ) {
+      return { kind: 'unreadable' };
+    }
+    return {
+      kind: 'present',
+      authorizationRevision,
+      rejected,
+      rejectionObserved,
+    };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
+function readCredentialRejectionRecovery(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): CredentialRejectionRecoveryRead {
+  const revision = normalizedAuthorizationRevision(authorizationRevision);
+  const snapshot = readAtomicStateFileSnapshot(
+    credentialRejectionRecoveryPath(provider, fingerprint, revision),
+  );
+  if (snapshot.kind !== 'present') return snapshot;
+  try {
+    const value = JSON.parse(snapshot.raw) as unknown;
+    return value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      (value as { version?: unknown }).version === 1 &&
+      (value as { authorizationRevision?: unknown }).authorizationRevision === revision &&
+      (value as { rejected?: unknown }).rejected === true
+      ? { kind: 'present' }
+      : { kind: 'unreadable' };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
+function atomicWriteJson(file: string, value: unknown): void {
+  atomicWriteFileSync(file, JSON.stringify(value, null, 2));
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    /* best-effort */
+  }
+}
+
+function normalizedAuthorizationRevision(revision: string | null | undefined): string | null {
+  return typeof revision === 'string' && revision.length > 0 ? revision : null;
+}
+
+function writeCredentialRejection(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision: string | null,
+  rejected: boolean,
+  rejectionObserved: boolean,
+): void {
+  atomicWriteJson(credentialRejectionPath(provider, fingerprint), {
+    version: 1,
+    authorizationRevision,
+    rejected,
+    rejectionObserved,
+    updatedAt: Date.now(),
+  });
+}
+
+function acceptNativeProviderAuthCredentialRevisionUnlocked(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision: string,
+): void {
+  if (!authorizationRevision) {
+    throw new Error('explicit native provider authorization requires a non-empty revision');
+  }
+  const current = readCredentialRejection(provider, fingerprint);
+  const rejectionObserved =
+    current.kind === 'present' ? current.rejectionObserved : current.kind !== 'absent';
+  // One fingerprint has one current authorization epoch. Keeping historical
+  // revisions would let an old credential backup become valid again after a
+  // later epoch was rejected. A prior rejection remains historical evidence
+  // that markerless copies are ambiguous even after explicit reauthorization.
+  writeCredentialRejection(provider, fingerprint, authorizationRevision, false, rejectionObserved);
+}
+
+function resolveNativeProviderAuthCredentialRejectionUnlocked(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): NativeProviderCredentialRejectionDecision {
+  const current = readCredentialRejection(provider, fingerprint);
+  const rawRevision = normalizedAuthorizationRevision(authorizationRevision);
+  let decision: NativeProviderCredentialRejectionDecision;
+  if (current.kind === 'absent') {
+    decision = { state: 'allowed', effectiveAuthorizationRevision: rawRevision };
+  } else if (current.kind === 'unreadable') {
+    decision = { state: 'unreadable', effectiveAuthorizationRevision: null };
+  } else if (current.rejected) {
+    decision = {
+      state: 'rejected',
+      effectiveAuthorizationRevision: current.authorizationRevision,
+    };
+  } else if (rawRevision === null && current.rejectionObserved) {
+    decision = {
+      state: 'rejected',
+      effectiveAuthorizationRevision: current.authorizationRevision,
+    };
+  } else if (rawRevision !== null && rawRevision !== current.authorizationRevision) {
+    // Claude's bundled CLI currently strips Cindy's unknown revision field. A
+    // markerless blob is therefore attributed to the current epoch under this
+    // lock. A positively different revision is an old rollback and stays closed.
+    decision = { state: 'rejected', effectiveAuthorizationRevision: rawRevision };
+  } else {
+    decision = {
+      state: 'allowed',
+      effectiveAuthorizationRevision: current.authorizationRevision,
+    };
+  }
+
+  if (decision.state === 'rejected') return decision;
+  const recoveryRevision = decision.effectiveAuthorizationRevision ?? rawRevision;
+  const recovery = readCredentialRejectionRecovery(provider, fingerprint, recoveryRevision);
+  if (recovery.kind === 'present') {
+    return { state: 'rejected', effectiveAuthorizationRevision: recoveryRevision };
+  }
+  if (recovery.kind === 'unreadable') {
+    return { state: 'unreadable', effectiveAuthorizationRevision: null };
+  }
+  return decision;
+}
+
+/**
+ * Cross-process, restart-safe verdict for one irreversible credential fingerprint.
+ * Missing authorization metadata is allowed only until this fingerprint has
+ * actually received an invalid_grant; afterwards only explicit Cindy revisions
+ * recorded under the same lock may use it again.
+ */
+export function getNativeProviderAuthCredentialRejectionState(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): NativeProviderCredentialRejectionState {
+  return resolveNativeProviderAuthCredentialRejection(provider, fingerprint, authorizationRevision)
+    .state;
+}
+
+export function resolveNativeProviderAuthCredentialRejection(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): NativeProviderCredentialRejectionDecision {
+  try {
+    return withBindingMutationLock(() =>
+      resolveNativeProviderAuthCredentialRejectionUnlocked(
+        provider,
+        fingerprint,
+        authorizationRevision,
+      ),
+    );
+  } catch {
+    return { state: 'unreadable', effectiveAuthorizationRevision: null };
+  }
+}
+
+/**
+ * Storage mutations already fail loudly and can retry lock contention. Keep
+ * the binding-lock error (including its nested ELOCKED code) intact instead of
+ * collapsing it into an unreadable verdict, otherwise a rotated refresh token
+ * could be returned in memory without ever reaching durable storage.
+ */
+export function resolveNativeProviderAuthCredentialRejectionForStorageMutation(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): NativeProviderCredentialRejectionDecision {
+  return withBindingMutationLock(() =>
+    resolveNativeProviderAuthCredentialRejectionUnlocked(
+      provider,
+      fingerprint,
+      authorizationRevision,
+    ),
+  );
+}
+
+/**
+ * Credential-store callers already hold `.storage-write`. Keep the binding
+ * lock through their synchronous follow-up so a rejection marker or explicit
+ * authorization cannot interleave between the decision and the guarded
+ * account-scoped commit. The callback must not re-enter binding state.
+ */
+export function runWithNativeProviderAuthCredentialRejectionForStorageMutation<T>(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision: string | null | undefined,
+  action: (decision: NativeProviderCredentialRejectionDecision) => T,
+): T {
+  return withBindingMutationLock(() =>
+    action(
+      resolveNativeProviderAuthCredentialRejectionUnlocked(
+        provider,
+        fingerprint,
+        authorizationRevision,
+      ),
+    ),
+  );
+}
+
+/**
+ * Auto-claim callbacks already execute under the binding lock. Re-entering
+ * proper-lockfile would report ELOCKED and incorrectly hide every credential;
+ * this narrow probe reuses only that synchronous critical section.
+ */
+export function getNativeProviderAuthCredentialRejectionStateForBindingTransaction(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): NativeProviderCredentialRejectionState {
+  return resolveNativeProviderAuthCredentialRejectionForBindingTransaction(
+    provider,
+    fingerprint,
+    authorizationRevision,
+  ).state;
+}
+
+export function resolveNativeProviderAuthCredentialRejectionForBindingTransaction(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): NativeProviderCredentialRejectionDecision {
+  if (bindingMutationLockDepth === 0) {
+    return { state: 'unreadable', effectiveAuthorizationRevision: null };
+  }
+  try {
+    return resolveNativeProviderAuthCredentialRejectionUnlocked(
+      provider,
+      fingerprint,
+      authorizationRevision,
+    );
+  } catch {
+    return { state: 'unreadable', effectiveAuthorizationRevision: null };
+  }
+}
+
+/** Record invalid_grant without persisting token bytes; only a SHA-256 fingerprint is accepted. */
+export function markNativeProviderAuthCredentialRejected(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): boolean {
+  return withBindingMutationLock(() => {
+    const current = readCredentialRejection(provider, fingerprint);
+    const rejectedRevision = normalizedAuthorizationRevision(authorizationRevision);
+    if (current.kind === 'unreadable') {
+      throw new Error('native provider credential rejection state is unreadable');
+    }
+    if (current.kind === 'present') {
+      // A stale request from r1 must not revoke a same-token r2 authorization
+      // that committed while the network request was in flight.
+      if (current.authorizationRevision !== rejectedRevision) {
+        if (current.rejectionObserved) return false;
+        writeCredentialRejection(
+          provider,
+          fingerprint,
+          current.authorizationRevision,
+          current.rejected,
+          true,
+        );
+        return true;
+      }
+      if (current.rejected && current.rejectionObserved) return false;
+    }
+    writeCredentialRejection(provider, fingerprint, rejectedRevision, true, true);
+    return true;
+  });
+}
+
+/**
+ * Write-only grant-scoped fallback used when the primary rejection sidecar is
+ * temporarily unreadable. It never reads or repairs that sidecar, so a stale
+ * r1 callback cannot overwrite an allowed r2 epoch; resolution matches this
+ * marker only to its exact fingerprint + authorization revision.
+ */
+export function markNativeProviderAuthCredentialRejectionRecovery(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision?: string | null,
+): boolean {
+  return withBindingMutationLock(() => {
+    const revision = normalizedAuthorizationRevision(authorizationRevision);
+    atomicWriteJson(credentialRejectionRecoveryPath(provider, fingerprint, revision), {
+      version: 1,
+      authorizationRevision: revision,
+      rejected: true,
+      updatedAt: Date.now(),
     });
-    renameSyncWithRetry(tmp, file);
+    return true;
+  });
+}
+
+/** Explicit browser authorization is the sole authority that records an allowed revision. */
+export function acceptNativeProviderAuthCredentialRevision(
+  provider: CredentialRejectionProviderId,
+  fingerprint: string,
+  authorizationRevision: string,
+): void {
+  withBindingMutationLock(() =>
+    acceptNativeProviderAuthCredentialRevisionUnlocked(
+      provider,
+      fingerprint,
+      authorizationRevision,
+    ),
+  );
+}
+
+/** Clear stale backup first so a failed clear keeps the main fence intact. */
+function clearAtomicStateFile(file: string): void {
+  for (const target of [`${file}.bak`, file]) {
     try {
-      fs.chmodSync(file, 0o600);
-    } catch {
-      /* best-effort */
+      fs.unlinkSync(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
     }
-  } catch (error) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      /* best-effort temp cleanup */
-    }
-    throw error;
   }
 }
 
@@ -225,7 +630,7 @@ function withBindingMutationLock<T>(mutation: () => T): T {
   try {
     release = lockSync(path.join(dir, BINDING_WRITE_LOCK_TARGET), {
       realpath: false,
-      stale: BINDING_WRITE_LOCK_STALE_MS,
+      stale: NATIVE_PROVIDER_AUTH_BINDING_LOCK_STALE_MS,
       update: BINDING_WRITE_LOCK_UPDATE_MS,
       onCompromised: (error) => {
         compromised = error;
@@ -250,7 +655,12 @@ function withBindingMutationLock<T>(mutation: () => T): T {
   let value!: T;
   try {
     if (compromised) throw compromised;
-    value = mutation();
+    bindingMutationLockDepth += 1;
+    try {
+      value = mutation();
+    } finally {
+      bindingMutationLockDepth -= 1;
+    }
     if (compromised) throw compromised;
   } catch (error) {
     failure = error;
@@ -283,11 +693,7 @@ export function captureNativeProviderAuthOwnerFence(): NativeProviderAuthOwnerFe
 }
 
 function clearPendingRevocation(provider: NativeProviderId): void {
-  try {
-    fs.unlinkSync(pendingRevocationPath(provider));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
-  }
+  clearAtomicStateFile(pendingRevocationPath(provider));
 }
 
 function clearOperationIntent(
@@ -298,11 +704,7 @@ function clearOperationIntent(
     const current = readOperationIntent(provider);
     if (current.kind !== 'present' || !sameOperation(current.operation, expected)) return false;
   }
-  try {
-    fs.unlinkSync(operationIntentPath(provider));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
-  }
+  clearAtomicStateFile(operationIntentPath(provider));
   return true;
 }
 
@@ -460,14 +862,17 @@ export function beginNativeProviderAuthInvalidation(
   return withBindingMutationLock(() => {
     if (!isNativeProviderAuthOwnerFenceCurrent(expectedOwner)) return null;
     const intent = readOperationIntent(provider);
-    if (
-      intent.kind === 'unreadable' ||
-      (intent.kind === 'present' && intent.operation.intent !== 'invalidate')
-    ) {
+    if (intent.kind === 'unreadable') {
+      throw new Error('native provider auth operation intent is unreadable during invalidation');
+    }
+    if (intent.kind === 'present' && intent.operation.intent !== 'invalidate') {
       return null;
     }
     const read = readBindingsOrFail();
-    if (!read.ok || read.bindings[provider] !== expectedOwner.dataOwnerId) return null;
+    if (!read.ok) {
+      throw new Error('native provider auth ownership is unreadable during invalidation');
+    }
+    if (read.bindings[provider] !== expectedOwner.dataOwnerId) return null;
     const operation = newOperation(expectedOwner, 'invalidate');
     writeOperationIntent(provider, operation);
     return operation;
@@ -723,17 +1128,13 @@ type BindingRead =
   | { ok: false; reason: 'badRevoked'; bindings: Omit<BindingFile, 'revoked'> };
 
 function readBindingsOrFail(): BindingRead {
-  let raw: string;
+  const snapshot = readAtomicStateFileSnapshot(bindingPath());
+  // 文件不存在 = 合法的首次状态（还没有任何人绑定过）；其它读失败（EACCES / EIO 等）
+  // 说明归属不明，不能当成空。backup-only 也是仍有唯一快照，不能按空处理。
+  if (snapshot.kind === 'absent') return { ok: true, bindings: {} };
+  if (snapshot.kind === 'unreadable') return { ok: false, reason: 'unreadable' };
   try {
-    raw = fs.readFileSync(bindingPath(), 'utf8');
-  } catch (err) {
-    // 文件不存在 = 合法的首次状态（还没有任何人绑定过）；其它读失败（EACCES / EIO 等）
-    // 说明归属不明，不能当成空。
-    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return { ok: true, bindings: {} };
-    return { ok: false, reason: 'unreadable' };
-  }
-  try {
-    const value = JSON.parse(raw) as unknown;
+    const value = JSON.parse(snapshot.raw) as unknown;
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return { ok: false, reason: 'unreadable' };
     }
@@ -859,13 +1260,14 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
   }
   if (readPendingRevocation(provider).kind !== 'absent') return true;
   const read = readBindingsOrFail();
-  return Boolean(read.ok && read.bindings.revoked && provider in read.bindings.revoked);
+  return !read.ok || Boolean(read.bindings.revoked && provider in read.bindings.revoked);
 }
 
 /** Bind newly completed native OAuth to the current data owner. */
 export function bindNativeProviderAuth(
   provider: NativeProviderId,
   expectedOperation?: NativeProviderAuthOperationFence,
+  credentialFingerprint?: string,
 ): boolean {
   return withBindingMutationLock(() => {
     const session = getActiveAppSession();
@@ -878,6 +1280,17 @@ export function bindNativeProviderAuth(
         !isNativeProviderAuthOwnerFenceCurrent(expectedOperation))
     ) {
       return false;
+    }
+    if (credentialFingerprint) {
+      if (!expectedOperation) {
+        throw new Error(
+          'credential fingerprint commit requires an explicit authorization operation',
+        );
+      }
+      if (provider !== 'anthropic') {
+        throw new Error('credential rejection epochs are only supported for Anthropic OAuth');
+      }
+      credentialRejectionPath('anthropic', credentialFingerprint);
     }
     if (expectedOperation) {
       const intent = readOperationIntent(provider);
@@ -909,6 +1322,13 @@ export function bindNativeProviderAuth(
         selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
         [provider]: owner,
       });
+      if (credentialFingerprint && expectedOperation) {
+        acceptNativeProviderAuthCredentialRevisionUnlocked(
+          'anthropic',
+          credentialFingerprint,
+          expectedOperation.operationId,
+        );
+      }
       clearPendingRevocation(provider);
       if (expectedOperation) clearOperationIntent(provider, expectedOperation);
       else clearOperationIntent(provider);
@@ -937,6 +1357,13 @@ export function bindNativeProviderAuth(
       selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
       [provider]: owner,
     });
+    if (credentialFingerprint && expectedOperation) {
+      acceptNativeProviderAuthCredentialRevisionUnlocked(
+        'anthropic',
+        credentialFingerprint,
+        expectedOperation.operationId,
+      );
+    }
     clearPendingRevocation(provider);
     if (expectedOperation) clearOperationIntent(provider, expectedOperation);
     else clearOperationIntent(provider);
@@ -1054,6 +1481,66 @@ export function unbindNativeProviderAuth(
     if (marking || opts?.requirePendingRevocation) clearPendingRevocation(provider);
     if (opts?.expectedOperation) clearOperationIntent(provider, opts.expectedOperation);
     return true;
+  });
+}
+
+export type NativeProviderAuthRejectedCredentialInvalidationResult<T> =
+  { state: 'committed'; value: T } | { state: 'changed' };
+
+/**
+ * Complete one server-rejected credential cleanup without first persisting a
+ * provider-global operation intent. The caller already holds the credential
+ * storage lock, so this takes the binding lock second and keeps it through the
+ * synchronous credential clear and owner unbind.
+ *
+ * Crash ordering is intentional: before `clearCredentialLocked` there is no
+ * durable binding mutation; after it, a crash can leave only an empty
+ * credential slot with the old owner binding. A later, different standalone
+ * credential can therefore recover normally instead of being hidden forever
+ * by a stale generic invalidate intent.
+ */
+export function invalidateNativeProviderAuthWithoutIntent<T>(
+  provider: NativeProviderId,
+  expectedOwner: NativeProviderAuthOwnerFence,
+  clearCredentialLocked: () => T,
+): NativeProviderAuthRejectedCredentialInvalidationResult<T> {
+  if (!isNativeProviderAuthOwnerFenceCurrent(expectedOwner)) return { state: 'changed' };
+  return withBindingMutationLock(() => {
+    if (!isNativeProviderAuthOwnerFenceCurrent(expectedOwner)) return { state: 'changed' };
+
+    const intent = readOperationIntent(provider);
+    if (intent.kind === 'unreadable') {
+      throw new Error('native provider auth operation intent is unreadable during invalidation');
+    }
+    if (intent.kind === 'present') return { state: 'changed' };
+
+    const pending = readPendingRevocation(provider);
+    if (pending.kind === 'unreadable') {
+      throw new Error('native provider auth revocation state is unreadable during invalidation');
+    }
+    if (pending.kind === 'present') return { state: 'changed' };
+
+    const read = readBindingsOrFail();
+    if (!read.ok) {
+      throw new Error('native provider auth ownership is unreadable during invalidation');
+    }
+    const bindings = read.bindings;
+    if (
+      bindings[provider] !== expectedOwner.dataOwnerId ||
+      bindings.revoked?.[provider] !== undefined
+    ) {
+      return { state: 'changed' };
+    }
+
+    const value = clearCredentialLocked();
+    delete bindings[provider];
+    if (bindings.selfAuthorized?.[provider] !== undefined) {
+      const selfAuthorized = { ...bindings.selfAuthorized };
+      delete selfAuthorized[provider];
+      bindings.selfAuthorized = selfAuthorized;
+    }
+    writeBindings(bindings);
+    return { state: 'committed', value };
   });
 }
 

@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { describeErrorChain } from '../../utils/errorChain.js';
+
 const originalPlatform = process.platform;
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalUser = process.env.USER;
@@ -26,6 +28,68 @@ const oauth = {
   refreshToken: 'new-refresh-token',
   expiresAt: 1_800_000_000_000,
 };
+
+function createCredentialRejectionRegistry() {
+  const records = new Map<
+    string,
+    { revision: string | null; rejected: boolean; rejectionObserved: boolean }
+  >();
+  const normalize = (revision?: string | null): string | null =>
+    typeof revision === 'string' && revision.length > 0 ? revision : null;
+  const decision = (fingerprint: string, rawRevision?: string | null) => {
+    const raw = normalize(rawRevision);
+    const current = records.get(fingerprint);
+    if (!current) {
+      return { state: 'allowed' as const, effectiveAuthorizationRevision: raw };
+    }
+    if (current.rejected) {
+      return {
+        state: 'rejected' as const,
+        effectiveAuthorizationRevision: current.revision,
+      };
+    }
+    if (raw === null && current.rejectionObserved) {
+      return {
+        state: 'rejected' as const,
+        effectiveAuthorizationRevision: current.revision,
+      };
+    }
+    if (raw !== null && raw !== current.revision) {
+      return { state: 'rejected' as const, effectiveAuthorizationRevision: raw };
+    }
+    return {
+      state: 'allowed' as const,
+      effectiveAuthorizationRevision: current.revision,
+    };
+  };
+  return {
+    accept: (fingerprint: string, revision: string) => {
+      records.set(fingerprint, {
+        revision,
+        rejected: false,
+        rejectionObserved: records.get(fingerprint)?.rejectionObserved ?? false,
+      });
+    },
+    decision,
+    state: (fingerprint: string, revision?: string | null) => decision(fingerprint, revision).state,
+    mark: (fingerprint: string, revision?: string | null) => {
+      const rejectedRevision = normalize(revision);
+      const current = records.get(fingerprint);
+      if (current && current.revision !== rejectedRevision) {
+        if (current.rejectionObserved) return false;
+        records.set(fingerprint, { ...current, rejectionObserved: true });
+        return true;
+      }
+      if (current?.rejected && current.rejectionObserved) return false;
+      records.set(fingerprint, {
+        revision: rejectedRevision,
+        rejected: true,
+        rejectionObserved: true,
+      });
+      return true;
+    },
+  };
+}
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: platform, configurable: true });
@@ -57,6 +121,22 @@ async function importStore(options: {
   bound?: boolean;
   bindingState?: 'bound' | 'unbound' | 'unreadable';
   bindingStateForCredentialTransaction?: () => 'bound' | 'unbound' | 'unreadable';
+  credentialRejectionState?: (
+    fingerprint: string,
+    revision?: string | null,
+  ) => 'allowed' | 'rejected' | 'unreadable';
+  credentialRejectionDecision?: (
+    fingerprint: string,
+    revision?: string | null,
+  ) => {
+    state: 'allowed' | 'rejected' | 'unreadable';
+    effectiveAuthorizationRevision: string | null;
+  };
+  credentialRejectionStateForBindingTransaction?: (
+    fingerprint: string,
+    revision?: string | null,
+  ) => 'allowed' | 'rejected' | 'unreadable';
+  markCredentialRejected?: (fingerprint: string, revision?: string | null) => boolean;
 }) {
   vi.resetModules();
   setPlatform(options.platform);
@@ -73,6 +153,74 @@ async function importStore(options: {
       options.bindingStateForCredentialTransaction?.() ??
       options.bindingState ??
       (options.bound === false ? 'unbound' : 'bound'),
+    getNativeProviderAuthCredentialRejectionState: (
+      _provider: string,
+      fingerprint: string,
+      revision?: string | null,
+    ) => options.credentialRejectionState?.(fingerprint, revision) ?? 'allowed',
+    resolveNativeProviderAuthCredentialRejection: (
+      _provider: string,
+      fingerprint: string,
+      revision?: string | null,
+    ) =>
+      options.credentialRejectionDecision?.(fingerprint, revision) ?? {
+        state: options.credentialRejectionState?.(fingerprint, revision) ?? 'allowed',
+        effectiveAuthorizationRevision:
+          typeof revision === 'string' && revision.length > 0 ? revision : null,
+      },
+    resolveNativeProviderAuthCredentialRejectionForStorageMutation: (
+      _provider: string,
+      fingerprint: string,
+      revision?: string | null,
+    ) =>
+      options.credentialRejectionDecision?.(fingerprint, revision) ?? {
+        state: options.credentialRejectionState?.(fingerprint, revision) ?? 'allowed',
+        effectiveAuthorizationRevision:
+          typeof revision === 'string' && revision.length > 0 ? revision : null,
+      },
+    runWithNativeProviderAuthCredentialRejectionForStorageMutation: <T>(
+      _provider: string,
+      fingerprint: string,
+      revision: string | null | undefined,
+      action: (decision: {
+        state: 'allowed' | 'rejected' | 'unreadable';
+        effectiveAuthorizationRevision: string | null;
+      }) => T,
+    ) =>
+      action(
+        options.credentialRejectionDecision?.(fingerprint, revision) ?? {
+          state: options.credentialRejectionState?.(fingerprint, revision) ?? 'allowed',
+          effectiveAuthorizationRevision:
+            typeof revision === 'string' && revision.length > 0 ? revision : null,
+        },
+      ),
+    getNativeProviderAuthCredentialRejectionStateForBindingTransaction: (
+      _provider: string,
+      fingerprint: string,
+      revision?: string | null,
+    ) =>
+      options.credentialRejectionStateForBindingTransaction?.(fingerprint, revision) ??
+      options.credentialRejectionState?.(fingerprint, revision) ??
+      'allowed',
+    resolveNativeProviderAuthCredentialRejectionForBindingTransaction: (
+      _provider: string,
+      fingerprint: string,
+      revision?: string | null,
+    ) =>
+      options.credentialRejectionDecision?.(fingerprint, revision) ?? {
+        state:
+          options.credentialRejectionStateForBindingTransaction?.(fingerprint, revision) ??
+          options.credentialRejectionState?.(fingerprint, revision) ??
+          'allowed',
+        effectiveAuthorizationRevision:
+          typeof revision === 'string' && revision.length > 0 ? revision : null,
+      },
+    markNativeProviderAuthCredentialRejected: (
+      _provider: string,
+      fingerprint: string,
+      revision?: string | null,
+    ) => options.markCredentialRejected?.(fingerprint, revision) ?? true,
+    markNativeProviderAuthCredentialRejectionRecovery: () => true,
   }));
   vi.doMock('node:child_process', () => ({
     execFileSync: options.execFileSync ?? vi.fn(),
@@ -222,6 +370,50 @@ describe('Claude credential shared write lock', () => {
     expect(fs.existsSync(missing)).toBe(false);
     expect(lockSync).not.toHaveBeenCalled();
     expect(execFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps a read-only current guard atomic without creating a missing Claude directory', async () => {
+    const root = makeRoot();
+    const missing = path.join(root, 'missing-claude-dir');
+    const credential = {
+      ...oauth,
+      cindyAuthorizationRevision: 'login-revision-1',
+    };
+    const execFileSync = vi.fn(() => JSON.stringify({ claudeAiOauth: credential }));
+    const lockSync = vi.fn(() => vi.fn());
+    const store = await importStore({
+      platform: 'darwin',
+      configDir: missing,
+      execFileSync,
+      lockSync,
+    });
+    const action = vi.fn(() => 'projected');
+
+    expect(store.runWithClaudeAiOAuthCredentialSnapshotCurrent(credential, action)).toEqual({
+      state: 'current',
+      value: 'projected',
+    });
+    expect(action).toHaveBeenCalledOnce();
+    expect(fs.existsSync(missing)).toBe(false);
+    expect(lockSync).not.toHaveBeenCalled();
+  });
+
+  it('read-only current guard preserves projection errors instead of misclassifying a switch', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const credential = {
+      ...oauth,
+      cindyAuthorizationRevision: 'login-revision-1',
+    };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: credential }));
+    const store = await importStore({ platform: 'linux', configDir: root });
+    const projectionError = new Error('projection failed');
+
+    expect(() =>
+      store.runWithClaudeAiOAuthCredentialSnapshotCurrent(credential, () => {
+        throw projectionError;
+      }),
+    ).toThrow(projectionError);
   });
 
   it('treats a missing macOS config directory and Keychain item as absent', async () => {
@@ -463,6 +655,290 @@ describe('Claude credential shared write lock', () => {
       'claude credential write lock release failed after mutation error',
       { error: 'release failed' },
     );
+  });
+});
+
+describe('Claude credential exact server-rejection fence', () => {
+  it('fences every access-token backup that shares the revoked refresh grant', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const rejected = {
+      accessToken: 'access-after-refresh',
+      refreshToken: 'shared-revoked-refresh',
+    };
+    const olderBackup = {
+      accessToken: 'access-before-refresh',
+      refreshToken: 'shared-revoked-refresh',
+    };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: rejected }));
+    const store = await importStore({ platform: 'linux', configDir: root });
+
+    expect(store.fingerprintClaudeAiOAuthCredentialIdentity(rejected)).toBe(
+      store.fingerprintClaudeAiOAuthCredentialIdentity(olderBackup),
+    );
+    expect(store.rejectClaudeAiOAuthCredentialIdentity(rejected)).toBe(true);
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: olderBackup }));
+    expect(store.readClaudeAiOAuth()).toBeNull();
+    expect(store.getClaudeAiOAuthCredentialMatchState(rejected)).toBe('same');
+    expect(store.clearClaudeAiOAuthIfMatches(rejected)).toBe('cleared');
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('runs a guarded action only before a same-token authorization revision is replaced', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const revision1 = { ...oauth, cindyAuthorizationRevision: 'login-revision-1' };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: revision1 }));
+    const store = await importStore({ platform: 'linux', configDir: root });
+    const action = vi.fn(() => 'started');
+
+    expect(store.runWithClaudeAiOAuthCredentialNotReplaced(revision1, action)).toEqual({
+      state: 'current',
+      value: 'started',
+    });
+    expect(action).toHaveBeenCalledOnce();
+
+    const revision2 = { ...oauth, cindyAuthorizationRevision: 'login-revision-2' };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: revision2 }));
+    expect(store.runWithClaudeAiOAuthCredentialNotReplaced(revision1, action)).toEqual({
+      state: 'changed',
+    });
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it('current-credential guard requires positive presence and accepts access rotation within one grant', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const revision1 = {
+      accessToken: 'access-a1',
+      refreshToken: 'shared-refresh',
+      cindyAuthorizationRevision: 'login-revision-1',
+    };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: revision1 }));
+    const store = await importStore({ platform: 'linux', configDir: root });
+    const action = vi.fn(() => 'committed');
+
+    expect(store.runWithClaudeAiOAuthCredentialCurrent(revision1, action)).toEqual({
+      state: 'current',
+      value: 'committed',
+    });
+
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        claudeAiOauth: { ...revision1, accessToken: 'access-a2' },
+      }),
+    );
+    expect(store.runWithClaudeAiOAuthCredentialCurrent(revision1, action)).toEqual({
+      state: 'current',
+      value: 'committed',
+    });
+
+    expect(store.rejectClaudeAiOAuthCredentialIdentity(revision1)).toBe(true);
+    expect(store.runWithClaudeAiOAuthCredentialCurrent(revision1, action)).toEqual({
+      state: 'changed',
+    });
+
+    fs.unlinkSync(file);
+    expect(store.runWithClaudeAiOAuthCredentialCurrent(revision1, action)).toEqual({
+      state: 'changed',
+    });
+    expect(action).toHaveBeenCalledTimes(2);
+  });
+
+  it('absent-credential guard runs cleanup only while no credential is present', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const store = await importStore({ platform: 'linux', configDir: root });
+    const action = vi.fn(() => 'cleaned');
+
+    expect(store.runWithClaudeAiOAuthCredentialAbsent(action)).toEqual({
+      state: 'current',
+      value: 'cleaned',
+    });
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: oauth }));
+    expect(store.runWithClaudeAiOAuthCredentialAbsent(action)).toEqual({ state: 'changed' });
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it('hides only the rejected identity from every public reader until explicit authorization', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const firstGrant = { ...oauth, cindyAuthorizationRevision: 'login-revision-1' };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: firstGrant }));
+    const store = await importStore({ platform: 'linux', configDir: root });
+
+    expect(store.readClaudeAiOAuth()).toEqual(firstGrant);
+    expect(store.hasClaudeAiOAuth()).toBe(true);
+    expect(store.getBoundClaudeAiOAuthState()).toBe('present');
+    expect(store.hasClaudeAiOAuthUnbound()).toBe(true);
+    expect(store.getClaudeAiOAuthCredentialMatchState(firstGrant)).toBe('same');
+
+    expect(store.rejectClaudeAiOAuthCredentialIdentity(firstGrant)).toBe(true);
+    expect(store.readClaudeAiOAuth()).toBeNull();
+    expect(store.hasClaudeAiOAuth()).toBe(false);
+    expect(store.getBoundClaudeAiOAuthState()).toBe('absent');
+    expect(store.hasClaudeAiOAuthUnbound()).toBe(false);
+    // Recovery code must still be able to prove and conditionally delete the
+    // hidden identity without exposing its bytes to ordinary consumers.
+    expect(store.getClaudeAiOAuthCredentialMatchState(firstGrant)).toBe('same');
+
+    const replacement = {
+      accessToken: 'replacement-access-token',
+      refreshToken: 'replacement-refresh-token',
+      expiresAt: oauth.expiresAt,
+    };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: replacement }));
+    expect(store.readClaudeAiOAuth()).toEqual(replacement);
+    expect(store.hasClaudeAiOAuth()).toBe(true);
+
+    for (let index = 0; index < 9; index += 1) {
+      store.rejectClaudeAiOAuthCredentialIdentity({
+        accessToken: `other-rejected-access-${index}`,
+        refreshToken: `other-rejected-refresh-${index}`,
+      });
+    }
+
+    // A non-cooperating external writer can roll the old blob back. Observing
+    // the replacement — or later rejections — must not retire the old fence.
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: firstGrant }));
+    expect(store.readClaudeAiOAuth()).toBeNull();
+
+    const explicitlyReauthorized = {
+      ...firstGrant,
+      cindyAuthorizationRevision: 'login-revision-2',
+    };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: explicitlyReauthorized }));
+    expect(store.readClaudeAiOAuth()).toEqual(explicitlyReauthorized);
+    expect(store.getClaudeAiOAuthCredentialMatchState(firstGrant)).toBe('changed');
+    expect(store.clearClaudeAiOAuthIfMatches(firstGrant)).toBe('changed');
+    expect(store.readClaudeAiOAuth()).toEqual(explicitlyReauthorized);
+
+    // The new authorization must not forgive an external rollback to the
+    // exact server-rejected grant revision.
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: firstGrant }));
+    expect(store.readClaudeAiOAuth()).toBeNull();
+
+    store.acceptClaudeAiOAuthCredentialIdentity(firstGrant);
+    expect(store.readClaudeAiOAuth()).toEqual(firstGrant);
+    expect(store.hasClaudeAiOAuth()).toBe(true);
+  });
+
+  it('persists a markerless rejection across process reload and blocks an r1 rollback after r2', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const registry = createCredentialRejectionRegistry();
+    const importOptions = {
+      platform: 'linux' as const,
+      configDir: root,
+      credentialRejectionDecision: registry.decision,
+      credentialRejectionState: registry.state,
+      markCredentialRejected: registry.mark,
+    };
+    const revision1 = 'login-revision-1';
+    const explicitR1 = { ...oauth, cindyAuthorizationRevision: revision1 };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: explicitR1 }));
+    const process1 = await importStore(importOptions);
+    const fingerprint = process1.fingerprintClaudeAiOAuthCredentialIdentity(explicitR1);
+    registry.accept(fingerprint, revision1);
+
+    // Claude's SDK rewrites the known fields and strips Cindy's revision. The
+    // read still captures r1 under the sidecar lock before the request starts.
+    const markerlessR1 = { ...oauth };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: markerlessR1 }));
+    const requestCredential = process1.readClaudeAiOAuth();
+    expect(requestCredential).toEqual(markerlessR1);
+    expect(process1.rejectClaudeAiOAuthCredentialIdentity(requestCredential!)).toBe(true);
+
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: explicitR1 }));
+    expect(process1.readClaudeAiOAuth()).toBeNull();
+    const process2 = await importStore(importOptions);
+    expect(process2.readClaudeAiOAuth()).toBeNull();
+
+    const revision2 = 'login-revision-2';
+    const explicitR2 = { ...oauth, cindyAuthorizationRevision: revision2 };
+    registry.accept(fingerprint, revision2);
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: explicitR2 }));
+    expect(process1.readClaudeAiOAuth()).toEqual(explicitR2);
+    expect(process2.readClaudeAiOAuth()).toEqual(explicitR2);
+
+    // Once this fingerprint has ever been rejected, a markerless copy is
+    // information-theoretically ambiguous with an r1 backup and stays closed.
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: markerlessR1 }));
+    expect(process1.readClaudeAiOAuth()).toBeNull();
+    expect(process2.readClaudeAiOAuth()).toBeNull();
+
+    // A non-cooperating backup restore cannot resurrect the old epoch in
+    // either the existing process or a newly loaded module.
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: explicitR1 }));
+    expect(process1.readClaudeAiOAuth()).toBeNull();
+    expect(process2.readClaudeAiOAuth()).toBeNull();
+  });
+
+  it('does not let a markerless r1 invalid_grant revoke same-token r2 committed in flight', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const registry = createCredentialRejectionRegistry();
+    const store = await importStore({
+      platform: 'linux',
+      configDir: root,
+      credentialRejectionDecision: registry.decision,
+      credentialRejectionState: registry.state,
+      markCredentialRejected: registry.mark,
+    });
+    const fingerprint = store.fingerprintClaudeAiOAuthCredentialIdentity(oauth);
+    registry.accept(fingerprint, 'login-revision-1');
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: oauth }));
+    const r1Request = store.readClaudeAiOAuth();
+    expect(r1Request).toEqual(oauth);
+
+    const r2 = { ...oauth, cindyAuthorizationRevision: 'login-revision-2' };
+    registry.accept(fingerprint, r2.cindyAuthorizationRevision);
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: r2 }));
+    expect(store.rejectClaudeAiOAuthCredentialIdentity(r1Request!)).toBe(true);
+    expect(store.readClaudeAiOAuth()).toEqual(r2);
+  });
+
+  it('treats an in-flight SDK marker strip as the same epoch for exact cleanup', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const registry = createCredentialRejectionRegistry();
+    const store = await importStore({
+      platform: 'linux',
+      configDir: root,
+      credentialRejectionDecision: registry.decision,
+      credentialRejectionState: registry.state,
+      markCredentialRejected: registry.mark,
+    });
+    const r1 = { ...oauth, cindyAuthorizationRevision: 'login-revision-1' };
+    const fingerprint = store.fingerprintClaudeAiOAuthCredentialIdentity(r1);
+    registry.accept(fingerprint, r1.cindyAuthorizationRevision);
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: r1 }));
+    const requestCredential = store.readClaudeAiOAuth()!;
+
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: oauth }));
+    store.rejectClaudeAiOAuthCredentialIdentity(requestCredential);
+    expect(store.getClaudeAiOAuthCredentialMatchState(requestCredential)).toBe('same');
+    expect(store.clearClaudeAiOAuthIfMatches(requestCredential)).toBe('cleared');
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('reports an unreadable rejection epoch instead of pretending the credential changed', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: oauth }));
+    const store = await importStore({
+      platform: 'linux',
+      configDir: root,
+      credentialRejectionDecision: () => ({
+        state: 'unreadable',
+        effectiveAuthorizationRevision: null,
+      }),
+    });
+
+    expect(store.getClaudeAiOAuthCredentialMatchState(oauth)).toBe('unreadable');
+    expect(() => store.clearClaudeAiOAuthIfMatches(oauth)).toThrow(/epoch is unreadable/i);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
   });
 });
 
@@ -740,6 +1216,49 @@ describe('macOS Claude credential store fail-closed reads', () => {
     expect(JSON.parse(Buffer.from(hex!, 'hex').toString('utf8'))).toEqual(expected);
   });
 
+  it('never propagates credential hex from a failed large argv Keychain write', async () => {
+    const leakedToken = 'must-not-appear-in-error-or-logs';
+    const before = {
+      claudeAiOauth: { accessToken: 'old-token' },
+      mcpOAuth: { payload: 'x'.repeat(3_000) },
+    };
+    let leakedHex = '';
+    const execFileSync = vi
+      .fn()
+      .mockImplementationOnce(() => JSON.stringify(before))
+      .mockImplementationOnce(() => JSON.stringify(before))
+      .mockImplementationOnce((_file: string, args: string[]) => {
+        leakedHex = args.at(-1) ?? '';
+        throw Object.assign(new Error(`Command failed: security ${args.join(' ')}`), {
+          status: 1,
+          stderr: Buffer.from(
+            'security: SecKeychainAddGenericPassword: User interaction is not allowed.\n',
+          ),
+        });
+      });
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'darwin', execFileSync });
+
+    let thrown: unknown;
+    try {
+      writeClaudeAiOAuth({ ...oauth, accessToken: leakedToken });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(
+      'claude keychain credential write failed (status=1, reason=interaction-not-allowed)',
+    );
+    expect((thrown as Error).message).not.toContain(leakedToken);
+    expect((thrown as Error).message).not.toContain(leakedHex);
+    expect((thrown as Error).cause).toBeUndefined();
+    expect(describeErrorChain(thrown)).toBe(
+      'claude keychain credential write failed (status=1, reason=interaction-not-allowed)',
+    );
+    expect(describeErrorChain(thrown)).not.toContain(leakedToken);
+    expect(describeErrorChain(thrown)).not.toContain(leakedHex);
+  });
+
   it.each(['{', '[]', '"text"', 'null'])(
     'refuses to overwrite malformed or non-object JSON: %s',
     async (stored) => {
@@ -814,8 +1333,9 @@ describe('file-backed Claude credential store fail-closed reads', () => {
 
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
     expect(writeTargets).not.toContain(file);
-    expect(writeTargets.some((target) => target.startsWith(`${file}.`) && target.endsWith('.tmp')))
-      .toBe(true);
+    expect(
+      writeTargets.some((target) => target.startsWith(`${file}.`) && target.endsWith('.tmp')),
+    ).toBe(true);
     // Windows does not preserve POSIX permission bits even when mode is supplied.
     if (originalPlatform !== 'win32') {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
@@ -885,9 +1405,12 @@ describe('file-backed Claude credential store fail-closed reads', () => {
       unlinkSpy.mockRestore();
     }
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
-    expect(logger.warn).toHaveBeenCalledWith('failed to remove staged claude credential temp file', {
-      code: 'EPERM',
-    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'failed to remove staged claude credential temp file',
+      {
+        code: 'EPERM',
+      },
+    );
 
     const staged = fs
       .readdirSync(root)
@@ -920,6 +1443,25 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     expect(() => writeClaudeAiOAuth(oauth)).toThrow(/credential store.*read/i);
     expect(fs.readFileSync(file, 'utf8')).toBe(original);
     expect(fs.existsSync(`${file}.tmp`)).toBe(false);
+  });
+
+  it('never exposes token bytes from a malformed JSON parser error', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const leakedToken = 'parser-must-not-echo-this-secret-token';
+    fs.writeFileSync(file, `{"claudeAiOauth":{"accessToken":"${leakedToken}"`);
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'linux', configDir: root });
+
+    let thrown: unknown;
+    try {
+      writeClaudeAiOAuth(oauth);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(describeErrorChain(thrown)).toContain('malformed JSON');
+    expect(describeErrorChain(thrown)).not.toContain(leakedToken);
   });
 
   it('treats non-ENOENT file errors as unreadable and performs zero writes', async () => {
@@ -1035,6 +1577,111 @@ describe('file-backed Claude credential store fail-closed reads', () => {
       expect(fs.readdirSync(root)).toEqual(['.credentials.json']);
     },
   );
+
+  it.each(['EPERM', 'EEXIST'])(
+    'uses a recoverable backup swap when Windows cannot overwrite an existing file with %s',
+    async (code) => {
+      const root = makeRoot();
+      const file = path.join(root, '.credentials.json');
+      const before = { claudeAiOauth: { accessToken: 'old-token' }, futureField: 'preserve' };
+      fs.writeFileSync(file, JSON.stringify(before));
+      const { writeClaudeAiOAuth } = await importStore({ platform: 'win32', configDir: root });
+      const realRename = fs.renameSync.bind(fs);
+      let publications = 0;
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+        if (String(from).endsWith('.tmp') && String(to) === file) {
+          publications += 1;
+          if (publications === 1) throw Object.assign(new Error(code), { code });
+        }
+        return realRename(from, to);
+      }) as typeof fs.renameSync);
+
+      try {
+        expect(() => writeClaudeAiOAuth(oauth)).not.toThrow();
+      } finally {
+        renameSpy.mockRestore();
+      }
+
+      expect(publications).toBe(2);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
+        ...before,
+        claudeAiOauth: oauth,
+      });
+      expect(fs.existsSync(`${file}.bak`)).toBe(false);
+    },
+  );
+
+  it('recovers a backup-only credential only while the shared storage lock is held', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const backup = `${file}.bak`;
+    fs.writeFileSync(backup, JSON.stringify({ claudeAiOauth: oauth }));
+    const store = await importStore({ platform: 'win32', configDir: root });
+
+    expect(store.hasClaudeAiOAuthUnbound()).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(backup)).toBe(true);
+
+    expect(store.readClaudeAiOAuth()).toEqual(oauth);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.existsSync(backup)).toBe(false);
+  });
+
+  it('retries backup deletion before removing the main credential', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const backup = `${file}.bak`;
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: oauth }));
+    fs.writeFileSync(backup, JSON.stringify({ claudeAiOauth: { accessToken: 'older' } }));
+    const { clearClaudeAiOAuth } = await importStore({ platform: 'win32', configDir: root });
+    const realUnlink = fs.unlinkSync.bind(fs);
+    const events: string[] = [];
+    let transientFailures = 2;
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(((target) => {
+      events.push(String(target));
+      if (String(target) === backup && transientFailures > 0) {
+        transientFailures -= 1;
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realUnlink(target);
+    }) as typeof fs.unlinkSync);
+
+    try {
+      expect(() => clearClaudeAiOAuth()).not.toThrow();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+
+    expect(events.filter((target) => target === backup).length).toBeGreaterThanOrEqual(3);
+    expect(events.indexOf(file)).toBeGreaterThan(events.indexOf(backup));
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(backup)).toBe(false);
+  });
+
+  it('keeps the main credential intact when its backup cannot be deleted safely', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const backup = `${file}.bak`;
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: oauth }));
+    fs.writeFileSync(backup, JSON.stringify({ claudeAiOauth: { accessToken: 'older' } }));
+    const { clearClaudeAiOAuth } = await importStore({ platform: 'win32', configDir: root });
+    const realUnlink = fs.unlinkSync.bind(fs);
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(((target) => {
+      if (String(target) === backup) {
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realUnlink(target);
+    }) as typeof fs.unlinkSync);
+
+    try {
+      expect(() => clearClaudeAiOAuth()).toThrow(/EPERM/);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
+    expect(fs.existsSync(backup)).toBe(true);
+  });
 
   it('preserves the old credential and removes its temp after persistent update contention', async () => {
     const root = makeRoot();
@@ -1182,7 +1829,27 @@ describe('file-backed Claude credential store fail-closed reads', () => {
       unknown: { preserve: true },
     });
 
+    const sameGrantWithRotatedAccess = {
+      accessToken: 'at-rotated-by-other-process',
+      refreshToken: current.refreshToken,
+    };
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ claudeAiOauth: sameGrantWithRotatedAccess, unknown: { preserve: true } }),
+    );
+    expect(
+      store.replaceClaudeAiOAuthIfMatches(current, {
+        accessToken: 'at-must-not-overwrite-rotation',
+        refreshToken: 'rt-refreshed',
+      }),
+    ).toBe('changed');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
+      claudeAiOauth: sameGrantWithRotatedAccess,
+      unknown: { preserve: true },
+    });
+
     const next = { accessToken: 'at-next', refreshToken: 'rt-next' };
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: current, unknown: { preserve: true } }));
     expect(store.replaceClaudeAiOAuthIfMatches(current, next)).toBe('written');
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
       claudeAiOauth: next,
