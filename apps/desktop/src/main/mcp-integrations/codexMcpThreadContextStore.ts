@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import type { LiziMcpSessionContext } from '@cindy/mcps';
 
 export interface CodexMcpThreadContextStore {
@@ -10,7 +12,12 @@ export interface CodexMcpThreadContextStore {
   registeredThreadCount(): number;
 }
 
-function sameSessionInstanceContext(
+/**
+ * Two aliases may share one request context only when every field that can
+ * affect routing or tool policy is equivalent. Object identity is deliberately
+ * ignored because registration clones contexts for descendant thread aliases.
+ */
+export function isSameCodexMcpSessionContext(
   left: LiziMcpSessionContext,
   right: LiziMcpSessionContext,
 ): boolean {
@@ -19,7 +26,8 @@ function sameSessionInstanceContext(
     left.sessionId === right.sessionId &&
     left.agentKind === right.agentKind &&
     left.workingDir === right.workingDir &&
-    left.remoteHostId === right.remoteHostId
+    left.remoteHostId === right.remoteHostId &&
+    isDeepStrictEqual(left.vendorOptions, right.vendorOptions)
   );
 }
 
@@ -53,9 +61,9 @@ export function createCodexMcpThreadContextStore(): CodexMcpThreadContextStore {
         if (context.sessionInstanceId !== sessionInstanceId) continue;
         // 同一个 session instance 可能暂时挂在多个 thread alias 上；注册流程
         // 会为每个 alias 展开出新的对象，因此不能用引用相等判断是否同一实例。
-        // 稳定的 host-owned identity 一致时复用第一个 context；其余冲突继续
-        // fail closed，避免把不同会话实例串到同一个 opaque route 上。
-        if (match && !sameSessionInstanceContext(match, context)) return undefined;
+        // 完整执行上下文一致时复用第一个 context；其余冲突继续 fail closed，
+        // 避免把不同会话实例或 tool policy 串到同一个 opaque route 上。
+        if (match && !isSameCodexMcpSessionContext(match, context)) return undefined;
         match ??= context;
       }
       return match;
