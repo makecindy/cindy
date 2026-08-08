@@ -98,8 +98,13 @@ function providerOf(principalId: string): string {
  * group.message 帧入窗。返回 true 表示本次确实插入，供调用方在幂等入窗后
  * 执行一次自动通讯录登记；重放/重连的同一条消息返回 false。
  *
- * 消息先落当前主账号的本地数据库，不做 TTL；每个群/topic 只保留最近 500
- * 条，避免未受信任群成员无限占用磁盘。引用与 prompt 仍只从本机窗口读取。
+ * 消息先落当前主账号的本地数据库，不做 TTL。**保留按容量不按条数**：每个
+ * provider 命名空间 1 GiB 正文 + 500 万行安全阀（`GROUP_WINDOW_RETENTION`，
+ * 数值来自共享核心的 `DEFAULT_GROUP_WINDOW_RETENTION`），碰不到才是常态。
+ * 旧注释写的「每个群/topic 只保留最近 500 条」已不是现行策略——按条数在活跃群
+ * 里几天就把去年的内容挤没了（理由见 `groupWindowCore.ts`）。那个 500 是
+ * `CONTEXT_READ_LIMIT`，拼上下文时的**读取**窗口，不是存储上限。
+ * 引用与 prompt 仍只从本机窗口读取。
  */
 export async function recordGroupMessage(
   payload: GroupMessagePayload,
