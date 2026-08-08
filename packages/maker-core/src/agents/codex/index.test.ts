@@ -433,11 +433,12 @@ function installFakeHost(
     discardPendingDescendantLineage: vi.fn(),
   };
 
+  const getHost = vi.fn(async () => host);
   Object.defineProperty(agent, 'getHost', {
-    value: async () => host,
+    value: getHost,
   });
 
-  return host;
+  return Object.assign(host, { getHost });
 }
 
 async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEvent> {
@@ -13535,13 +13536,20 @@ describe('CodexAgent.forkSdkSession', () => {
       tailTurnsToDrop: 0,
     });
 
-    // The isolated host is created through the same provider-oauth credential
-    // path as the source session; this prevents custom-provider forks from
-    // falling back to unrelated local credentials.
+    expect(host.getHost).toHaveBeenCalledWith(
+      undefined,
+      'provider-oauth',
+      expect.objectContaining({
+        keyOverride: expect.stringMatching(/^local-fork:/),
+        hostPurpose: 'control-plane',
+      }),
+    );
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
       threadId: 'source-thread-id',
     }));
-  });  it('forks from a temporary rollout copy without unsafe payload lines', async () => {
+  });
+
+  it('forks from a temporary rollout copy without unsafe payload lines', async () => {
     const agent = new CodexAgent(createDeps());
     let copied = '';
     const host = installFakeHost(agent, async (method, params) => {
