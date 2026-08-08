@@ -18,7 +18,7 @@ function reconnectCopyForScope(scope: CodexCredentialScope): {
   if (scope === 'system-shared') {
     return {
       description: 'chatgptAuthRecovery.systemSharedInvalidated',
-      confirmText: 'chatgptAuthRecovery.openApp',
+      confirmText: 'chatgptAuthRecovery.relogin',
     };
   }
   return {
@@ -111,22 +111,6 @@ export function useCodexSessionExpiredPrompt(options?: {
             closePrompt();
             return;
           }
-        }
-
-        if (credentialScope === 'system-shared') {
-          try {
-            const result = await window.electronAPI.openChatGPTApp();
-            if (mountedRef.current && !result.success) {
-              toast.error(t('chatgptAuthRecovery.openAppFailed'));
-            }
-          } catch {
-            if (mountedRef.current) {
-              toast.error(t('chatgptAuthRecovery.openAppFailed'));
-            }
-          } finally {
-            if (mountedRef.current) closePrompt();
-          }
-          return;
         }
 
         try {

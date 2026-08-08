@@ -24,6 +24,7 @@ import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook
 import {
   assembleGroupWindowContext,
   createFenceNeutralizer,
+  DEFAULT_GROUP_WINDOW_RETENTION,
   recordGroupWindowEntry,
   resetGroupWindowCursors,
   type GroupContextAssembly,
@@ -36,10 +37,17 @@ export type { GroupContextAssembly };
 
 const log = createLogger('hook-group-window');
 
-/** 每个 principal + 群/topic 窗口永久保留的最近行数。 */
-const WINDOW_KEEP_PER_KEY = 500;
-/** 每个 principal 跨全部群/topic 永久保留的最近行数。 */
-export const WINDOW_KEEP_PER_PRINCIPAL = 10_000;
+/**
+ * 官方 bot 这一侧生效的保留上限 —— 数值取共享默认值, 但**这份对象是官方独有的**。
+ *
+ * 额度本来就按 provider 命名空间(`telegram:<principalId>`)各算各的: 统计表以
+ * provider 为主键、回收也按 provider 过滤。两个账号同时在用就是两份独立额度,
+ * 个人 bot 的 `telegram-personal:<botId>` 更是另一块 —— 谁也吃不掉谁的份。
+ *
+ * 做成可变对象只为让测试用小阈值把回收逼出来; 拿 1 GiB 默认值写回归等于在测试
+ * 里灌一 GB 数据。
+ */
+export const GROUP_WINDOW_RETENTION = { ...DEFAULT_GROUP_WINDOW_RETENTION };
 
 /**
  * 从 externalKey 解析 Telegram 群/topic lane。
@@ -109,7 +117,7 @@ export async function recordGroupMessage(
       fileNames: payload.fileNames,
       sentAt: payload.sentAt,
     },
-    { keepPerKey: WINDOW_KEEP_PER_KEY, keepPerNamespace: WINDOW_KEEP_PER_PRINCIPAL },
+    GROUP_WINDOW_RETENTION,
   );
 }
 

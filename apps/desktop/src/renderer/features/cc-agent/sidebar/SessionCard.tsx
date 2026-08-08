@@ -22,7 +22,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -80,6 +80,14 @@ import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import { OpenInSplitMenu } from './OpenInSplitMenu';
+import {
+  SPLIT_GROUP_DRAG_HANDLE_SELECTOR,
+  SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR,
+  isSplitGroupDragSource,
+  needsDedicatedSplitGroupDragHandle,
+  shouldStartSplitGroupDrag,
+  writeSplitGroupSessionDragData,
+} from '../splitGroupDnd';
 
 const log = createLogger('SessionCard');
 
@@ -216,6 +224,7 @@ export function SessionCard({
   const [shareExportOpen, setShareExportOpen] = useState(false);
   const confirmPillRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
 
   // 归档/删除前那次 dirty-worktree 预检要在 main 侧跑 git status,是"点了归档、
   // 卡片还没消失"里剩下的最大一块等待。亮出 Confirm 胶囊 / 打开菜单到用户点下去
@@ -252,6 +261,62 @@ export function SessionCard({
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(displayTitle);
   const committedRef = useRef(false);
+
+  // 置顶卡片/宽列表使用原生 Sortable DnD：同一整卡的 dragstart 同时写入分屏 MIME，
+  // 由落点决定是侧栏内排序还是拖入右侧。普通 forceFallback 列表仍保留专用标题起手区；
+  // ProjectNode 内的卡片已有 data-no-drag 祖先，因此子任务仍可整卡分屏拖拽。
+  const [dragContainerState, setDragContainerState] = useState({
+    inSortableContainer: true,
+    sortableDragBlocked: false,
+    nativeSortable: false,
+  });
+  useEffect(() => {
+    const card = cardRef.current;
+    setDragContainerState({
+      inSortableContainer: Boolean(card?.closest('[data-sortable-id]')),
+      sortableDragBlocked: Boolean(card?.closest('[data-no-drag]')),
+      nativeSortable: Boolean(card?.closest('[data-sortable-native-dnd]')),
+    });
+  }, []);
+  const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
+  const splitDragEnabled = isSplitGroupDragSource({
+    editing: isEditing,
+    orcaRole: session.orcaRole,
+    ...dragContainerState,
+    hasDedicatedHandle: true,
+  });
+  const splitDragHandleActive = splitDragEnabled && needsSplitDragHandle;
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      const target =
+        dragStartTargetRef.current ?? (event.target instanceof Element ? event.target : null);
+      dragStartTargetRef.current = null;
+      const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
+      const startedOnInteractiveElement = Boolean(
+        target !== event.currentTarget && target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
+      );
+      if (!shouldStartSplitGroupDrag({
+        enabled: splitDragEnabled,
+        needsDedicatedHandle: needsSplitDragHandle,
+        startedOnDedicatedHandle,
+        startedOnInteractiveElement,
+      })) {
+        event.preventDefault();
+        return;
+      }
+      if (
+        !writeSplitGroupSessionDragData(event.dataTransfer, session.id, {
+          deviceId: session.deviceLinkDeviceId,
+        })
+      ) {
+        event.preventDefault();
+        return;
+      }
+      event.currentTarget.dataset.sessionDragging = 'true';
+    },
+    [needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
+  );
 
   // raw 由 SessionRenameInput 传入:输入框当前文本(Magic 生成的标题也先填入输入框,用户 Enter 确认后才走到这里)。
   const commitTitle = useCallback(
@@ -534,8 +599,24 @@ export function SessionCard({
       // 多选范围选取靠 getVisibleSidebarSessionIds 扫 [data-sidebar-session-row][data-session-id];
       // 卡片也打这个标记,shift 范围选才能把卡片纳入"可见行"。
       data-sidebar-session-row="true"
+      data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
+      draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerDownCapture={(event) => {
+        dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+      }}
+      onPointerUpCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onPointerCancelCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onDragStart={handleDragStart}
+      onDragEnd={(event) => {
+        dragStartTargetRef.current = null;
+        delete event.currentTarget.dataset.sessionDragging;
+      }}
       onPointerDown={(e) => {
         if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
           makerChatStore.ensureInitialMessages(session.id);
@@ -557,7 +638,10 @@ export function SessionCard({
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
-        'group/card relative w-full overflow-hidden text-left cursor-pointer',
+        'group/card relative w-full overflow-hidden text-left',
+        splitDragEnabled && !needsSplitDragHandle
+          ? 'cursor-grab active:cursor-grabbing'
+          : 'cursor-pointer',
         variant === 'list'
           ? cn(
               // 扁平行(类 Telegram / 对话列表):无描边、无卡片底色,仅 hover/active 行底色。
@@ -606,7 +690,15 @@ export function SessionCard({
             {/* 标题槽固定沿用常态时间槽的 20px 高度。改名框本身是 24px，编辑时
                 绝对定位居中覆盖文字槽位，不参与布局计算，避免整条置顶任务被撑高。
                 状态 / Agent / 自动化图标始终留在文字槽左侧，编辑态也不改变标题起点。 */}
-            <div className="relative flex h-5 min-w-0 flex-1 items-center gap-0">
+            <div
+              data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+              data-no-drag={splitDragHandleActive ? 'true' : undefined}
+              draggable={splitDragHandleActive}
+              className={cn(
+                'relative flex h-5 min-w-0 flex-1 items-center gap-0',
+                splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
+              )}
+            >
               <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
               {isEditing ? (
                 <SessionRenameInput
@@ -687,9 +779,13 @@ export function SessionCard({
               非运行、内容长短都不变,始终渲染占位)。等待交互 TapTap 蓝高亮
               (--card-status-awaiting),其余状态统一走次级色。 */}
           <p
+            data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+            data-no-drag={splitDragHandleActive ? 'true' : undefined}
+            draggable={splitDragHandleActive}
             className={cn(
               'mt-1 overflow-hidden text-11 leading-[1.45]',
               '[display:-webkit-box] [-webkit-line-clamp:1] [-webkit-box-orient:vertical]',
+              splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
               rightStatusKind !== 'time' && 'pr-5',
               awaitingText
                 ? isActive
@@ -773,7 +869,15 @@ export function SessionCard({
 
         {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
             24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
-        <div className="relative">
+        <div
+          data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+          data-no-drag={splitDragHandleActive ? 'true' : undefined}
+          draggable={splitDragHandleActive}
+          className={cn(
+            'relative',
+            splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
+          )}
+        >
           <div
             className={cn(
               'min-w-0 text-[12.5px] font-semibold leading-[1.22] tracking-[-0.005em]',
@@ -817,10 +921,14 @@ export function SessionCard({
             此处只放正文文字。 */}
         {cardPreview && (
           <p
+            data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+            data-no-drag={splitDragHandleActive ? 'true' : undefined}
+            draggable={splitDragHandleActive}
             className={cn(
               'mt-[4px] text-11 leading-[1.4]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
               'text-[var(--text-secondary)]',
+              splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
             )}
             style={{ WebkitLineClamp: cardPreviewLineClamp }}
           >

@@ -40,8 +40,43 @@ import {
   parseTransportPayload,
   byteLength,
 } from './transport.js';
-
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
+/**
+ * latest-wins 腾位适用的**可驱逐通道白名单**(review 三轮收敛:contacts-sync
+ * 黑名单 → 白名单 → 收缩到单通道)。push 单 FIFO 上混着三类语义,只有第一类
+ * 可以参与传输层 latest-wins:
+ *
+ * - 自相似有损事件流(本表,现仅 maker:event):流内每帧价值均匀且整流已是
+ *   契约——旧语义拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按
+ *   best-effort 放弃),换成丢最旧不引入新的损失面;转录内容由受保护的
+ *   local-db:messages:created + 控制端消息对账自愈,会话运行态由受保护的
+ *   status / activity 通道承载。
+ * - 键控/终态快照(sessions:activity、maker:input:projection):看似「镜像」
+ *   但**不满足跨帧可替代**——快照按 sessionId 键控,会话的 completed/error
+ *   收尾快照是该键的最后一帧,被其它键/其它通道的洪峰驱逐后不会再有后继帧
+ *   补偿;sessions:activity 的 staging(dispatch 层 latest-wins)在 sendPush
+ *   成功后即删暂存、不再重试,link 不重连 reseed 也不会跑,驱逐 = 手机端
+ *   永远显示 running(review 第三轮)。传输层不做同键比较(head-only 前缀
+ *   约束下同键驱逐在多会话混流时够不着队头,机制无效),这类通道整体回到
+ *   原背压语义,由各自上游的整流/重试契约保证送达。
+ * - 不可合并事件/流控数据(local-db:messages:created、确认卡、fs-watch、
+ *   contacts-sync 分片等):静默驱逐 = UI 永久漏事件或传输永久拼不出。
+ *
+ * 新增 push 通道默认**不可驱逐**(fail-closed);要进本表必须论证「流内自
+ * 相似、无键控终态、丢帧可由受保护通道自愈」三点。
+ */
+const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:event',
+]);
+/** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
+const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
+
+function isCoalesciblePushEnvelope(env: Envelope): boolean {
+  if (env.kind !== 'push') return false;
+  const payload = env.payload as { channel?: unknown } | undefined;
+  return typeof payload?.channel === 'string'
+    && COALESCIBLE_PUSH_CHANNELS.has(payload.channel);
+}
 /** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
 const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 /** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
@@ -316,6 +351,10 @@ interface PeerTransportState {
   receive: Map<string, ReceiveStreamState>;
   highestAckSeq: number;
   lastReplayEpoch: number;
+  /** latest-wins 腾位驱逐的聚合计数(自上次告警起),仅服务日志聚合。 */
+  pushAdmissionDropCount: number;
+  /** 上次输出 latest-wins 驱逐告警的单调时刻;0 表示从未输出。 */
+  pushAdmissionDropLogAt: number;
 }
 
 interface PendingInboundLinkOffer {
@@ -2072,15 +2111,33 @@ export class DeviceLinkClient {
       peer.pending.size < MAX_TRANSPORT_PENDING_MESSAGES
       && peer.pendingBytes + reservedBytes <= MAX_TRANSPORT_PENDING_BYTES
     );
+    // link 已 ready 时,native send buffer 满就在**任何驱逐/腾位之前**拒绝:
+    // 该帧本轮注定入不了队,先驱逐再拒绝会在连续调用下逐步清空本可重试的
+    // 镜像历史,却一帧未纳(review P1)。link 未恢复时不检——帧只进有界
+    // pending 等重放,不触碰 socket。
+    if (peer.linkReady) {
+      this.assertWebSocketCapacity(this.measureReliableFrames(frames));
+    }
     if (!hasPendingCapacity()) {
       if (env.kind === 'invoke-result') {
         // invoke-result 是控制端确认被控端存活的唯一凭据，绝不能被堆积的可丢弃
         // 帧饿死：丢弃整个队头可丢弃前缀（fresh push 一并放弃——单 FIFO 无法同时
         // 做到 push 无损与 result 抢占），让 result 成为最早可交付的 live seq。
         this.dropDiscardablePendingPrefix(env.dst, peer, false, 'to make room for invoke-result');
+      } else if (env.kind === 'push' && isCoalesciblePushEnvelope(env)) {
+        // 可合并镜像 push（COALESCIBLE_PUSH_CHANNELS）是尽力而为的状态镜像
+        // （控制端重连/回前台会整体 resync + 重新订阅）。拥塞即对端未在 ACK：
+        // 2026-08-07 线上该形态一小时内 5168 次连续 BACKPRESSURE（maker:event），
+        // 镜像状态一条都没交付，只放大重试风暴。latest-wins：只从队头驱逐最旧
+        // 的可合并镜像帧直到放得下（剩余镜像历史保留，对端恢复后仍可交付最新
+        // 状态）；队头是 live 帧或白名单外 push 时无位可让，维持原 BACKPRESSURE
+        // 语义。只删队头 → baseSeq 单调前移，无 seq 空洞。
+        this.dropOldestDiscardableForPushAdmission(env.dst, peer, reservedBytes);
       } else {
-        // 其它帧的入队压力只做 TTL 兜底清扫：过期 push 已无实时价值，先出队腾位；
-        // 新鲜 push 之间维持原有 BACKPRESSURE 语义，不互相驱逐。
+        // live invoke 与白名单外 push（不可合并事件流/流控数据，见
+        // COALESCIBLE_PUSH_CHANNELS 注释）的入队压力只做 TTL 兜底清扫：过期
+        // push 已无实时价值，先出队腾位；新鲜 push 不互相驱逐（这两类帧不能
+        // 以丢镜像为代价抢占）。
         this.dropDiscardablePendingPrefix(env.dst, peer, true, 'after pending push TTL expiry');
       }
     }
@@ -2090,12 +2147,8 @@ export class DeviceLinkClient {
         `reliable transport buffer is full for peer ${env.dst.slice(0, 8)}`,
       );
     }
-    // link 暂未恢复时先进入有界 pending，等 link-open/link-accept 后再发。
-    // 已经 ready 的初次发送若 native send buffer 满，则在占用 seq 前拒绝，
-    // 避免一个从未发出的 seq 堵住累计 ACK。
-    if (peer.linkReady) {
-      this.assertWebSocketCapacity(this.measureReliableFrames(frames));
-    }
+    // link 暂未恢复时帧先进入有界 pending，等 link-open/link-accept 后再发
+    // （ws 容量已在驱逐前预检）。
     const pending: PendingReliableMessage = {
       seq,
       envelope: env,
@@ -2227,6 +2280,8 @@ export class DeviceLinkClient {
         receive: new Map(),
         highestAckSeq: 0,
         lastReplayEpoch: this.connEpoch,
+        pushAdmissionDropCount: 0,
+        pushAdmissionDropLogAt: 0,
       };
       this.peerTransport.set(dst, peer);
     }
@@ -2424,7 +2479,9 @@ export class DeviceLinkClient {
   }
 
   /**
-   * 可丢弃帧判据（重连重放与 invoke-result 腾位两条路径共用的不变量）：
+   * 可丢弃帧判据（重连重放与 invoke-result 腾位两条路径共用的不变量;
+   * push latest-wins 腾位用更窄的白名单判据,见
+   * dropOldestDiscardableForPushAdmission）：
    * best-effort push，以及 timeout / relay-error 后被 dropReliablePendingForRequest
    * 换成 transport-skip 占位 payload 的帧——其外层 kind 仍是原 invoke /
    * invoke-result，但已无任何业务副作用。两者都可以通过推进 baseSeq 让接收端
@@ -2502,6 +2559,66 @@ export class DeviceLinkClient {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
     }
+  }
+
+  /**
+   * push 入队的拥塞腾位（latest-wins）：只从队头连续移除最旧的可驱逐帧，直到
+   * 放得下新帧或队头变成不可驱逐帧。与 dropDiscardablePendingPrefix 的区别是「按需
+   * 腾位」而非「整段前缀丢弃」：对端只是暂时未 ACK 时，队列里较新的镜像历史保留
+   * 下来，恢复后仍能交付；被驱逐的最旧镜像由控制端 resync 补偿，不是静默丢数据。
+   *
+   * 可驱逐判据比 isDiscardablePending 更窄（白名单，fail-closed）：只有
+   * COALESCIBLE_PUSH_CHANNELS 里的镜像 push 与 transport-skip 占位可被驱逐。
+   * 白名单外的 push（不可合并事件流如 local-db:messages:created、确认卡、
+   * 以 BACKPRESSURE 为流控信号的 contacts-sync 分片）被静默驱逐时 link 并未
+   * 断开、reconnect reseed 不会跑，等价于 UI 永久漏事件或传输永久拼不出——
+   * 它们与 live invoke/invoke-result 一样是腾位边界。队头不可驱逐时无位可让
+   * （跨过会制造 seq 空洞），调用方按容量复检结果维持原 BACKPRESSURE 语义。
+   * 只删队头 → baseSeq 单调前移，接收端按新基线整体跳过被驱逐 seq，无空洞、
+   * 不挂累计 ACK。
+   *
+   * 生产反例（2026-08-07，P0 度量实锤）：对端停 ACK 时新鲜 push 之间互相背压，
+   * 每条新 push 都抛 BACKPRESSURE，一小时 5168 次（maker:event），镜像零交付。
+   * 告警按 peer 聚合（PUSH_ADMISSION_DROP_LOG_INTERVAL_MS 窗口）：洪峰期驱逐
+   * 逐条 warn 会把 5168 次背压风暴换成 5168 行日志风暴（review P2）。
+   */
+  private dropOldestDiscardableForPushAdmission(
+    dst: string,
+    peer: PeerTransportState,
+    reservedBytes: number,
+  ): number {
+    let dropped = 0;
+    while (
+      peer.pending.size >= MAX_TRANSPORT_PENDING_MESSAGES
+      || peer.pendingBytes + reservedBytes > MAX_TRANSPORT_PENDING_BYTES
+    ) {
+      const head = peer.pending.entries().next();
+      if (head.done) break;
+      const [seq, pending] = head.value;
+      if (
+        !isTransportSkipPayload(pending.envelope.payload)
+        && !isCoalesciblePushEnvelope(pending.envelope)
+      ) break;
+      this.removePendingEntry(peer, seq, pending);
+      dropped += 1;
+    }
+    if (dropped > 0) {
+      peer.pushAdmissionDropCount += dropped;
+      const now = this.monotonicNow();
+      // 首次驱逐(lastLogAt=0)立即告警,之后按窗口聚合——单调时钟起点接近 0,
+      // 纯差值判据会把进程早期的首次驱逐静默吞掉。
+      if (
+        peer.pushAdmissionDropLogAt === 0
+        || now - peer.pushAdmissionDropLogAt >= PUSH_ADMISSION_DROP_LOG_INTERVAL_MS
+      ) {
+        this.log.warn(
+          `dropped ${peer.pushAdmissionDropCount} oldest discardable pending frame(s) for peer ${dst.slice(0, 8)} latest-wins push admission (aggregated since last report)`,
+        );
+        peer.pushAdmissionDropCount = 0;
+        peer.pushAdmissionDropLogAt = now;
+      }
+    }
+    return dropped;
   }
 
   private ensureRetryTimer(dst: string): void {

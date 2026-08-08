@@ -40,6 +40,12 @@ const newMakerDraftRouteSource = readFileSync(
   'utf8',
 );
 
+function extractHandlerBlock(source: string, name: string): string {
+  const match = source.match(new RegExp(`const ${name}\\s*=\\s*[\\s\\S]*?(?:\\}, \\[|\\};)`));
+  expect(match, `expected to find handler ${name}`).not.toBeNull();
+  return match![0];
+}
+
 const remoteProjectsHookSource = readFileSync(
   resolve(__dirname, '..', 'features', 'device-link', 'useDeviceLinkRemoteProjects.ts'),
   'utf8',
@@ -178,12 +184,38 @@ describe('Dialogue sidebar section', () => {
     expect(dialogueSectionSource).toContain('className={HEADER_ACTIONS_CLASS}');
   });
 
-  it('creates a standalone dialogue without inheriting a project draft directory', () => {
-    expect(sidebarSource).toContain('resetDraftWorkspaceTargets();');
-    expect(sidebarSource).toMatch(
-      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/,
+  it('routes standalone dialogue targets through the mounted draft page transition', () => {
+    const handler = extractHandlerBlock(sidebarSource, 'handleCreateDialogue');
+    expect(sidebarSource).toContain(
+      'resolveDialogueDeviceTarget(selectedMachineId, switcherDevices, deviceListSettled)',
     );
-    expect(sidebarSource).toContain('onCreateDialogue={handleCreateDialogue}');
+    expect(handler).toContain("selectedDialogueDeviceResolution.status === 'pending'");
+    expect(handler).toContain(
+      'state: makeDialogueNewMakerRouteState(selectedDialogueDeviceResolution.target)',
+    );
+    expect(handler).not.toContain('resetDraftWorkspaceTargets');
+    expect(handler).not.toContain('patchNewMakerDraft');
+    expect(newMakerDraftRouteSource).toContain(
+      'readNewMakerDialogueTargetRequest(location.state)',
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      'handledDialogueTargetRequestRef.current === dialogueTargetRequest.requestId',
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      'patchCollab({ enabled: false });',
+    );
+    expect(newMakerDraftRouteSource).toMatch(
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      'state: consumeNewMakerDialogueTargetRequest(location.state)',
+    );
+    expect(newMakerDraftRouteSource).toContain('replace: true');
+    expect(handler).toContain("navigate('/cc-agent/new'");
+    expect((sidebarSource.match(/onCreateDialogue={handleCreateDialogue}/g) ?? []).length).toBe(2);
+    expect(sidebarSource).toContain('createDisabled={dialogueCreatePending}');
+    expect(sidebarSource).toContain('isCreateDialogueDisabled={dialogueCreatePending}');
+    expect(dialogueSectionSource).toContain('disabled={createDisabled}');
   });
 
   it('allows the shared create route to send a standalone dialogue without picking a project', () => {

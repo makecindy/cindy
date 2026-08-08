@@ -211,6 +211,9 @@ export function createMessageHandler(
         userId: event.senderId,
         userMessageId: event.messageId,
         text: event.text,
+        // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
+        // 这里挡住第二条路径)。
+        ...(event.protectedContent === true ? { protectedContent: true } : {}),
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
