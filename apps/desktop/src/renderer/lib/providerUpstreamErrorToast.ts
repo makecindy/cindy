@@ -25,6 +25,47 @@ interface ProviderUpstreamErrorPayload {
   detail?: string;
 }
 
+function formatDiagnostics(payload: ProviderUpstreamErrorPayload): string {
+  const lines = [
+    'Cindy provider error',
+    `Time: ${new Date().toISOString()}`,
+    `Agent: ${payload.agent}`,
+    `Provider: ${payload.providerName ?? payload.providerId}`,
+    `Code: ${payload.code}`,
+    `HTTP status: ${payload.status}`,
+    `Retryable: ${payload.retryable ? 'yes' : 'no'}`,
+  ];
+  if (payload.detail) lines.push(`Detail: ${payload.detail}`);
+  return lines.join('\n');
+}
+
+function unknownErrorActions(payload: ProviderUpstreamErrorPayload) {
+  return [
+    {
+      label: i18n.t('providerError.openLogs'),
+      onClick: async () => {
+        try {
+          const result = await window.electronAPI.openLogsDir();
+          if (!result.success) toast.error(result.error || i18n.t('providerError.openLogsFailed'));
+        } catch {
+          toast.error(i18n.t('providerError.openLogsFailed'));
+        }
+      },
+    },
+    {
+      label: i18n.t('providerError.copyDiagnostics'),
+      onClick: async () => {
+        try {
+          await navigator.clipboard.writeText(formatDiagnostics(payload));
+          toast.success(i18n.t('providerError.diagnosticsCopied'));
+        } catch {
+          toast.error(i18n.t('providerError.copyDiagnosticsFailed'));
+        }
+      },
+    },
+  ];
+}
+
 /** exported for testing;正常订阅路径在 installProviderUpstreamErrorToastListener()。 */
 export function handleProviderUpstreamError(payload: ProviderUpstreamErrorPayload): void {
   const message = i18n.t(`providerError.${payload.code}`, {
@@ -34,9 +75,17 @@ export function handleProviderUpstreamError(payload: ProviderUpstreamErrorPayloa
     provider: payload.providerName ?? payload.providerId,
     message,
   });
+  if (payload.code === 'UNKNOWN') {
+    const options = { actions: unknownErrorActions(payload) };
+    if (payload.retryable) toast.warning(text, options);
+    else toast.error(text, options);
+    return;
+  }
   if (payload.retryable) toast.warning(text);
   else toast.error(text);
 }
+
+export { formatDiagnostics };
 
 /** 在 renderer 启动期挂一次(App.tsx);返回 unsubscribe 供 useEffect cleanup。 */
 export function installProviderUpstreamErrorToastListener(): () => void {

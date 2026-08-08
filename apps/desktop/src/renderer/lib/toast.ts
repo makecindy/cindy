@@ -33,6 +33,18 @@ export interface ToastOptions {
   source?: ToastSource;
   /** 关闭时回调 */
   onClose?: () => void;
+  /**
+   * Toast 内的轻量操作。用于把“去看日志”一类提示变成可执行的下一步；
+   * 不传时仍保持原来的纯文本 Toast 外观。
+   */
+  actions?: ToastAction[];
+}
+
+export interface ToastAction {
+  label: string;
+  /** 读屏名称；省略时使用 label。 */
+  ariaLabel?: string;
+  onClick: () => void | Promise<void>;
 }
 
 export interface ToastItem {
@@ -42,6 +54,7 @@ export interface ToastItem {
   duration: number;
   source?: ToastSource;
   onClose?: () => void;
+  actions?: ToastAction[];
   createdAt: number;
   /** 是否处于退出动画阶段（仍在 state 里但即将被移除） */
   exiting: boolean;
@@ -234,6 +247,7 @@ function createItem(variant: ToastVariant, message: string, options?: ToastOptio
       options?.duration ??
       (variant === 'error' || variant === 'warning' ? DEFAULT_ALERT_DURATION : DEFAULT_DURATION),
     ...(options?.source ? { source: options.source } : {}),
+    ...(options?.actions?.length ? { actions: options.actions } : {}),
     onClose: options?.onClose,
     createdAt: Date.now(),
     exiting: false,
