@@ -405,10 +405,10 @@ async function runRefreshRemoteDeviceSessions(
           .getDeviceSessions(deviceId, status)
           .filter((session) => !incomingIds.has(session.id))
           .map((session) => session.id);
-        // 未满 LIST_LIMIT 证明该状态集合完整，可安全 replace。active 满窗口时继续用既有
-        // sessions:get 有界轮询窗口外缓存 id 的终态；archived 满窗口只做同桶 merge，
-        // 归档/恢复 push 会负责迁移，避免为历史记录产生额外 N+1。
-        if (sessions.length < LIST_LIMIT) {
+        // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace；archived 没有分页入口，
+        // 因此始终以最近 LIST_LIMIT 条作为权威显示窗口，不能把旧缓存合并回来长期保留
+        // 断线期间已删除 / 取消归档的陈旧行。active 满窗口仍用既有 sessions:get 有界轮询。
+        if (sessions.length < LIST_LIMIT || status === 'archived') {
           if (status === 'active') {
             missingStatusProbeQueues.delete(deviceId);
             for (const sessionId of missingSessionIds) {

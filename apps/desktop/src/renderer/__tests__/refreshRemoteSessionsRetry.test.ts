@@ -370,6 +370,32 @@ describe('refreshRemoteDeviceSessions retry', () => {
     ]);
   });
 
+  it('archived 满窗口以最近 200 条替换旧缓存，清掉断线期间可能陈旧的窗口外行', async () => {
+    const d = did();
+    const recent = Array.from({ length: 200 }, (_, index) =>
+      session(`archived-recent-${index}`, { status: 'archived' }),
+    );
+    remoteProjectsStore.setDeviceSessions(
+      d,
+      'Mac B',
+      [session('stale-outside-window', { status: 'archived' })],
+      'archived',
+    );
+    invoke.mockResolvedValueOnce(recent);
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+      status: 'archived',
+    });
+
+    expect(remoteProjectsStore.getDeviceSessions(d, 'archived')).toHaveLength(200);
+    expect(remoteProjectsStore.getDeviceSessions(d, 'archived').map((s) => s.id)).not.toContain(
+      'stale-outside-window',
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('周期有界快照更新命中行但保留 200 条窗口外的有效会话', async () => {
     const d = did();
     const recent = Array.from({ length: 200 }, (_, index) =>
