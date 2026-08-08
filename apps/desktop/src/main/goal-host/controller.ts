@@ -838,6 +838,14 @@ export class GoalController {
         if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
         if (resumed) {
           next = resumed;
+          // #2105 P0:预算复活(budgetLimited → active,reviewer P2:消费者重放
+          // getGoalRunEvents 需要看到终态后的 active 迁移,否则"terminal 之后又有
+          // 派发/收口"无法解释)。迁移在持久化提交后记录,与 resumeGoal 语义对齐。
+          this.recordRunEvent('state-transition', sessionId, resumed, {
+            from: 'budgetLimited',
+            to: 'active',
+            reason: 'budget limit raised',
+          });
           this.resetTurn(sessionId);
           await this.deps.ensureSession(sessionId);
           if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
