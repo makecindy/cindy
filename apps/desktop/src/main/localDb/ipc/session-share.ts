@@ -29,6 +29,7 @@ import {
 } from '../../session-share/xdtshareFormat.pure.js';
 import {
   cancelShareDraft,
+  cleanupReplacedSessionMediaRefs,
   commitShareImport,
   inspectShareFile,
   unlockShareDraft,
@@ -38,6 +39,10 @@ import {
   type ShareImportDraftPrefs,
 } from '../../session-share/sessionShareImport.js';
 import { getDbClient } from '../client/current.js';
+import {
+  broadcastSessionPatched,
+  recycleSessionWorktreeForStatusChange,
+} from './sessions.js';
 
 const log = createLogger('session-share-ipc');
 
@@ -166,11 +171,27 @@ export function registerSessionShareIpc(): void {
       const useWorktree = payload.useWorktree === true;
       try {
         const result = await commitShareImport({ draftId, workingDir, draftPrefs, overwrite, useWorktree });
-        // 订阅槽①:分享导入建的会话不走普通"创建会话"handler,did-session-created
+        // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI/资源收尾：
+        // - 广播 patched 让 sidebar/会话视图立即移除旧任务；
+        // - 经统一回收链在 route lock 下复验 deleted，关闭 runtime 并回收旧 worktree；
+        // - 删除旧 session 名下的媒体引用，引用归零的共享 blob 交 recycler 回收。
+        // 不直接删除转录或媒体字节：同 resume id/内容的新任务可能复用它们。
+        for (const replaced of result.replacedSessions) {
+          broadcastSessionPatched(replaced.id, { status: 'deleted' });
+          await recycleSessionWorktreeForStatusChange(replaced.id, 'deleted');
+        }
+        await cleanupReplacedSessionMediaRefs(result.replacedSessions);
+        // replacedSessions 是 main 内部收尾信息，不暴露给 renderer/preload 契约。
+        const publicResult: CommitShareImportResult = {
+          sessionId: result.sessionId,
+          fidelity: result.fidelity,
+          notes: result.notes,
+          orcaWorkers: result.orcaWorkers,
+        };
         // 在此补发(fire-and-forget;workdir 由通知内部的资格查询回填)——否则订阅
         // 了 session 的意识对导入会话只见 switched/archived 不见 created(review P2)。
         notifyGhostSessionEvent('created', { sessionId: result.sessionId });
-        return result;
+        return publicResult;
       } catch (err) {
         log.warn('session share commit failed', {
           code: (err as { code?: unknown }).code,

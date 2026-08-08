@@ -29,6 +29,7 @@ import { isOrcaLeadSession } from '@/lib/orcaSessionIdentity';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import * as sessionService from '@/lib/sessionService';
 import { createLogger } from '@/lib/logger';
+import { SidebarHostSessionProvider } from '../../lib/sidebarHostSession';
 import { registerTabKind } from '../../registry';
 import { hasTabCloseInterceptor } from '../../store';
 import type { TabKindPlugin } from '../../types';
@@ -157,6 +158,9 @@ function OrcaWorkersTabBody({
   );
 
   return (
+    // 内嵌 worker 流里的审查等入口据此把 RSB tab 开到 lead 的可见桶,
+    // 而不是 worker 自己的(协同视图下不可见的)桶。
+    <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <OrcaWorkerPanel
       leadSessionId={ctx.sessionId}
       deviceId={leadSession?.deviceLinkDeviceId}
@@ -172,6 +176,7 @@ function OrcaWorkersTabBody({
       onSelectionIntentCleared={handleSelectionIntentCleared}
       onSearchJumpConsumed={handleSearchJumpConsumed}
     />
+    </SidebarHostSessionProvider>
   );
 }
 

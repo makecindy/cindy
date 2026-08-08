@@ -33,12 +33,12 @@ import { isRegistryTombstoneForConsumer } from '../model-plane/modelPlanePolicy.
 
 type RegistryEntries = NonNullable<Catalog['modelRegistry']>['models'];
 
-function baseCatalog(entries?: RegistryEntries): Catalog {
+function baseCatalog(entries?: RegistryEntries, schemaVersion: 1 | 2 = 1): Catalog {
   const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
   delete catalog.modelRegistry;
   if (entries) {
     catalog.modelRegistry = {
-      schemaVersion: 1,
+      schemaVersion,
       updatedAt: '2026-08-01T00:00:00.000Z',
       models: entries,
     };
@@ -121,6 +121,25 @@ describe('registry presence 实体化', () => {
     });
     expect(models('openai', 'claude-code').map((m) => m.id)).toContain('chatgpt/gpt-6');
     expect(models('openai', 'pi').map((m) => m.id)).toContain('chatgpt/gpt-6');
+  });
+
+  it('公共 Registry 的 newSessionDefault 不进入 CatalogModel；默认只信区域门控后的 /models', () => {
+    setActiveCatalog(
+      baseCatalog(
+        [gpt6Entry({ newSessionDefault: ['claude-code', 'codex'] })],
+        2,
+      ),
+    );
+
+    const codex = models('openai', 'codex').find((m) => m.id === 'gpt-6');
+    const claude = models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6');
+    const pi = models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6');
+    expect(codex).toBeDefined();
+    expect(claude).toBeDefined();
+    expect(pi).toBeDefined();
+    expect('newSessionDefault' in codex!).toBe(false);
+    expect('newSessionDefault' in claude!).toBe(false);
+    expect('newSessionDefault' in pi!).toBe(false);
   });
 
   it('bridge 在投影后应用目标端 perAgent,随后再执行 effort 硬约束', () => {
@@ -355,6 +374,28 @@ describe('registry presence 实体化', () => {
     setXdGatewayModels([]);
     const xd = getActiveCatalog().providers.find((p) => p.id === 'xd');
     for (const list of Object.values(xd?.models ?? {})) expect(list).toEqual([]);
+  });
+
+  it('区域门控后的 XD /models 标记保留，并从 claude-code 可达面投影到 Pi', () => {
+    setXdGatewayModels([
+      {
+        id: 'deepseek/deepseek-v4-pro',
+        agents: ['claude-code', 'codex'],
+        newSessionDefault: ['claude-code', 'codex'],
+      },
+    ]);
+
+    expect(
+      models('xd', 'claude-code').find((m) => m.id === 'deepseek/deepseek-v4-pro')
+        ?.newSessionDefault,
+    ).toEqual(['claude-code', 'codex']);
+    expect(
+      models('xd', 'codex').find((m) => m.id === 'deepseek/deepseek-v4-pro')
+        ?.newSessionDefault,
+    ).toEqual(['claude-code', 'codex']);
+    expect(
+      models('xd', 'pi').find((m) => m.id === 'deepseek/deepseek-v4-pro')?.newSessionDefault,
+    ).toEqual(['claude-code', 'codex']);
   });
 });
 

@@ -12,6 +12,7 @@ import {
   openFileInSidebarFileBrowser,
 } from './openInSidebarFileBrowser';
 import { openBackgroundTasksTab } from './openBackgroundTasksTab';
+import { openTurnReview } from './openTurnReview';
 import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
 /** 在 main 已选定的当前 renderer host 中执行命令，不自行选择宿主。 */
@@ -47,6 +48,15 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     // 直接裁决 'attached',落本地 store(与 open-file-browser 的复用同构)。
     await openBackgroundTasksTab(command.sessionId, {
       ...(command.focusTaskId ? { focusTaskId: command.focusTaskId } : {}),
+    });
+    return;
+  }
+  if (command.type === 'open-turn-review') {
+    await openTurnReview(command.sessionId, command.changeSetIds, {
+      selectedDiffId: command.selectedDiffId ?? null,
+      selectedPath: command.selectedPath ?? null,
+      requestNonce: command.requestNonce,
+      hostSessionId: command.hostSessionId ?? null,
     });
     return;
   }

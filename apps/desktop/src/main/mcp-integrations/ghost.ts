@@ -1,16 +1,18 @@
 /**
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
- * 网关模式:agent 工具箱里永远只有 ghost_list / ghost_call 两件固定工具
- * (缓存前缀零变化),内容现查现报——本文件就是"现查"的真身:
+ * 网关模式:agent 工具箱里的插件发现/调用入口固定为
+ * ghost_list / ghost_info / ghost_call。工具面(名称/schema/基线描述)版本内
+ * 恒定;完整描述(含花名册快照)会话内恒定,内容现查现报——本文件就是
+ * "现查"的真身:
  *
- *   - listAwakeGhosts:每次调用都重新扫 GhostManager(不缓存),装/卸/唤醒/
- *     沉睡对新老会话"下一次查询即生效";
+ *   - listAwakeGhosts / getAwakeGhost:每次调用都重新扫 GhostManager(不缓存),
+ *     装/卸/唤醒/沉睡对新老会话"下一次查询即生效";
  *   - callGhostTool:透传给管子派发器(pipeDispatcher),资格审/按需拉起/
  *     配对超时/崩溃收卷全在那边,错误码两侧同构直接原样交回;
- *   - forgeGuide / forgePack:意识锻造(agent 帮用户做意识)——手册与打包
- *     真身在 cindy-brain/forge.ts,打包成功后经双击转交通道弹装入确认框
- *     (与拖入/双击完全同一个弹窗,装不装永远由用户点头)。
+ *   - forgeGuide / forgeScaffold / forgePack:意识锻造(agent 帮用户做意识)——
+ *     手册、骨架与打包真身在 cindy-brain/forge.ts,打包成功后经双击转交
+ *     通道弹装入确认框(与拖入/双击完全同一个弹窗,装不装永远由用户点头)。
  *
  * cindy-tools 是意识系统工具集,包内零 Electron
  * 依赖,全部能力经本文件注入(设计规范规则 2)。
@@ -20,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
+import { buildGhostRosterPrompt } from 'cindy-tools';
 import type {
   CindyForgePackResult,
   CindyForgeScaffoldResult,
@@ -54,6 +57,7 @@ import {
   deriveGhostSessionContext,
   type GhostSessionContextInjected,
   type GhostSetupAssessment,
+  type InstalledGhost,
 } from '../../shared/ghost.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
@@ -65,6 +69,7 @@ import {
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
@@ -794,6 +799,71 @@ async function grantAttachmentUrls(params: {
   );
 }
 
+function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
+  return getGhostManager()
+    .list()
+    .filter(
+      (ghost) =>
+        ghost.enabled &&
+        isGhostAvailableForActiveSession(ghost.manifest.id) &&
+        ghost.manifest.kind === 'chip' &&
+        (ghost.manifest.tools?.length ?? 0) > 0 &&
+        !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
+    );
+}
+
+const ghostVisibilityDeps = {
+  listGhosts: () => getGhostManager().list(),
+  isAvailableForActiveSession: isGhostAvailableForActiveSession,
+  isDisabledForWorkdir: isGhostDisabledForWorkdir,
+};
+
+function ghostRecall(ghost: InstalledGhost): string | undefined {
+  return ghost.manifest.whenToUse ?? ghost.manifest.description;
+}
+
+/** 供各 harness 会话装配 system/developer 段；每次调用按 workdir 取一次数据。 */
+export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): string {
+  if (!workingDir) return '';
+  const items = visibleChipGhosts(workingDir).map((ghost) => {
+    const recall = ghostRecall(ghost);
+    return {
+      id: ghost.manifest.id,
+      name: ghost.manifest.name,
+      ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
+      ...(recall ? { recall } : {}),
+    };
+  });
+  return buildGhostRosterPrompt(items);
+}
+
+function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
+  const recall = ghostRecall(ghost);
+  let setup: CindyGhostInfo['setup'];
+  try {
+    setup = getGhostSetupAssessment(ghost.manifest.id);
+  } catch (error) {
+    // Discovery is best-effort per plugin. Keep this plugin discoverable
+    // without claiming it is ready; ghost_call retains the strict setup gate.
+    log.warn('ghost setup assessment omitted from discovery', {
+      ghostId: ghost.manifest.id,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+  }
+  return {
+    id: ghost.manifest.id,
+    name: ghost.manifest.name,
+    ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
+    ...(recall ? { recall } : {}),
+    ...(setup ? { setup } : {}),
+    tools: (ghost.manifest.tools ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      ...(tool.parameters ? { parameters: tool.parameters } : {}),
+    })),
+  };
+}
+
 /**
  * 构造总机 deps(每次工具调用都现查,无任何缓存层)。
  *
@@ -811,34 +881,29 @@ export function getCindyGhostsMcpDeps(
     getLiziMcpSessionContext() ?? sessionCtx;
   return {
     // 花名册快照(server 装配时取一次):唤醒的芯片意识 + 召回线索,进
-    // ghost_list/ghost_call 工具描述做语义召回。线索优先 whenToUse(给模型
+    // ghost_list 工具描述做语义召回。system 段由 getGhostRosterPrompt 在每个
+    // session 装配时按 workdir 单独取数,更准确;实时真相以 ghost_list 调用返回为准。
+    // 线索优先 whenToUse(给模型
     // 的场景枚举,可独立调优),缺省回落 description(给人的自我介绍);
     // 两者皆无的意识只列名字与指令(作者该去补——手册已教)。
     //
     // 目录级禁用(ghostWorkdirPrefs):被用户在本会话 workdir 停用的意识
-    // 不进花名册——语义召回从源头消失,"当它不存在"。装配时刻 ALS 未必
-    // 生效,workdir 取 ALS 优先、建线闭包兜底;Codex 共享 bridge 建线期
-    // 语境是全局空值(workingDir=''),此时不过滤(已知限制:codex 会话的
-    // 描述花名册全量,运行期 ghost_list / ghost_call 仍按真实 workdir 拦)。
+    // 不进花名册,ghost_list 也不返回;ghost_info / ghost_call 会明说当前
+    // 目录停用。装配时刻 ALS 未必生效,workdir 取 ALS 优先、建线闭包
+    // 兜底;若没有解析到 workingDir(包括 Codex/Pi bridge 建线期空值),花名册
+    // 宁缺勿全,不注入工具描述;Codex 正常 startSession 的 developerInstructions
+    // 会在拿到真实 workdir 后单独装配 system 段。
     getRosterItems() {
-      const workdir = resolveSessionContext()?.workingDir ?? null;
-      return getGhostManager()
-        .list()
-        .filter(
-          (g) =>
-            g.enabled &&
-            isGhostAvailableForActiveSession(g.manifest.id) &&
-            g.manifest.kind === 'chip' &&
-            (g.manifest.tools?.length ?? 0) > 0 &&
-            !isGhostDisabledForWorkdir(g.manifest.id, workdir),
-        )
+      const workdir = resolveSessionContext()?.workingDir;
+      if (!workdir) return [];
+      return visibleChipGhosts(workdir)
         .map((g) => {
-          const recall = g.manifest.whenToUse ?? g.manifest.description;
+          const recall = ghostRecall(g);
           return {
             id: g.manifest.id,
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
-            ...(recall ? { description: recall } : {}),
+            ...(recall ? { recall } : {}),
           };
         });
     },
@@ -846,41 +911,24 @@ export function getCindyGhostsMcpDeps(
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      return getGhostManager()
-        .list()
-        .filter(
-          (g) =>
-            g.enabled &&
-            isGhostAvailableForActiveSession(g.manifest.id) &&
-            g.manifest.kind === 'chip' &&
-            (g.manifest.tools?.length ?? 0) > 0 &&
-            !isGhostDisabledForWorkdir(g.manifest.id, workdir),
-        )
-        .map((g) => {
-          let setup: CindyGhostInfo['setup'];
-          try {
-            setup = getGhostSetupAssessment(g.manifest.id);
-          } catch (error) {
-            // Roster discovery is best-effort per plugin. Keep this plugin
-            // discoverable without claiming it is ready; ghost_call retains
-            // the strict setup gate and will fail before dispatch.
-            log.warn('ghost setup assessment omitted from roster', {
-              ghostId: g.manifest.id,
-              errorType: error instanceof Error ? error.name : typeof error,
-            });
-          }
-          return {
-            id: g.manifest.id,
-            name: g.manifest.name,
-            ...(g.manifest.command ? { command: g.manifest.command } : {}),
-            ...(setup ? { setup } : {}),
-            tools: (g.manifest.tools ?? []).map((t) => ({
-              name: t.name,
-              description: t.description,
-              ...(t.parameters ? { parameters: t.parameters } : {}),
-            })),
-          };
-        });
+      return visibleChipGhosts(workdir)
+        .map(toCindyGhostInfo);
+    },
+    async getAwakeGhost(ghostId) {
+      const workdir = resolveSessionContext()?.workingDir ?? null;
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      if (!visibility.ok) return visibility;
+      const visible = visibleChipGhosts(workdir).find(
+        (ghost) => ghost.manifest.id === ghostId,
+      );
+      if (visible) {
+        return { ok: true, ghost: toCindyGhostInfo(visible) };
+      }
+      return {
+        ok: false,
+        errorCode: 'GHOST_NOT_FOUND',
+        message: '该插件未声明任何可供调用的工具;不要重试,改用其它方式完成。',
+      };
     },
     async callGhostTool({
       ghostId,
@@ -893,54 +941,24 @@ export function getCindyGhostsMcpDeps(
       grantOnly,
       setupPlan,
     }) {
-      // Check the account/session capability before granting attachments or
-      // directory tickets. A stale roster from a cloud session must not let a
-      // local session create durable grants or wake an account-managed Ghost.
-      if (!isGhostAvailableForActiveSession(ghostId)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_NOT_FOUND',
-          // 这条 message 是 model-visible 的 tool result,会被模型读到并可能回显进对话,
-          // 所以按用户可见口径写「未登录」而不是已废弃的「本地模式」(见
-          // i18n/glossary.json 的 not-signed-in 条目)。句尾的「本地可用方式」保留:
-          // 那个「本地」描述的是能力落在本机,不是账号状态名。
-          message: '该插件需要 Cindy 账号，未登录状态不可用；不要重试，改用本地可用方式。',
-        };
-      }
+      const sessionContext = resolveSessionContext();
+      const sessionIdForConfirm = sessionContext?.sessionId ?? null;
+      const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
+      const sessionWorkdir = sessionContext?.workingDir ?? null;
+      const initialVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!initialVisibility.ok) return initialVisibility;
+      const target = initialVisibility.ghost;
       // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记可读引用
       // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
       // 不做半成品授权。全链路见 grantAttachmentUrls。
       let mergedArgs = args;
-      const sessionContext = resolveSessionContext();
-      const sessionIdForConfirm = sessionContext?.sessionId ?? null;
-      const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
-      const sessionWorkdir = sessionContext?.workingDir ?? null;
-      // 目录级禁用兜底(防御线):花名册/ghost_list 已过滤,正常路径走不到
-      // 这里——只有"会话开着时中途被禁"(快照已含自述)或模型凭上文记忆
-      // 硬调才会命中。message 是可直达模型的人话:停手改道,不要自纠重试。
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-        };
-      }
-      // Runtime setup gate: resolve the target before creating any durable
-      // attachment grant, directory ticket, sandbox, card call, or dispatch.
-      const target = getGhostManager()
-        .list()
-        .find((g) => g.manifest.id === ghostId);
-      if (!target) {
-        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件不存在或已卸载' };
-      }
-      if (!target.enabled) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_ASLEEP',
-          message: '目标插件未启用,可提示用户到主界面侧边栏「插件」中启用',
-        };
-      }
+      // Runtime setup gate: the shared visibility check above runs before any
+      // durable attachment grant, directory ticket, sandbox, card call, or dispatch.
       // grant_only never dispatches and intentionally ignores its tool field.
       if (
         !grantOnly &&
@@ -978,30 +996,13 @@ export function getCindyGhostsMcpDeps(
 
       // OAuth/settings may take minutes. Re-resolve mutable target facts after
       // the waiter completes and before beginning the existing side effects.
-      const refreshed = getGhostManager()
-        .list()
-        .find((g) => g.manifest.id === ghostId);
-      if (!refreshed || !isGhostAvailableForActiveSession(ghostId)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_NOT_FOUND',
-          message: t('newChat.pluginSetup.targetNotFound'),
-        };
-      }
-      if (!refreshed.enabled) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_ASLEEP',
-          message: t('newChat.pluginSetup.targetDisabled'),
-        };
-      }
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-        };
-      }
+      const refreshedVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!refreshedVisibility.ok) return refreshedVisibility;
+      const refreshed = refreshedVisibility.ghost;
       if (
         !grantOnly &&
         !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
@@ -1035,30 +1036,12 @@ export function getCindyGhostsMcpDeps(
       if (grantOnly) {
         // Full pre-grant gate: confirm target, workdir, and setup readiness
         // BEFORE grantAttachmentUrls creates durable ledger entries.
-        const grantTarget = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId);
-        if (!grantTarget || !isGhostAvailableForActiveSession(ghostId)) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_NOT_FOUND',
-            message: t('newChat.pluginSetup.targetNotFound'),
-          };
-        }
-        if (!grantTarget.enabled) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_ASLEEP',
-            message: t('newChat.pluginSetup.targetDisabled'),
-          };
-        }
-        if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-            message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-          };
-        }
+        const grantVisibility = classifyGhostVisibility(
+          ghostId,
+          sessionWorkdir,
+          ghostVisibilityDeps,
+        );
+        if (!grantVisibility.ok) return grantVisibility;
         try {
           const grantOnlyAssessment = getGhostSetupAssessment(ghostId);
           if (grantOnlyAssessment.state !== 'ready') {
@@ -1090,30 +1073,12 @@ export function getCindyGhostsMcpDeps(
         }
         // Post-grant revalidation: the grant process includes an async user
         // confirmation step; re-check everything before returning success.
-        const postGrant = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId);
-        if (!postGrant || !isGhostAvailableForActiveSession(ghostId)) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_NOT_FOUND',
-            message: t('newChat.pluginSetup.targetNotFound'),
-          };
-        }
-        if (!postGrant.enabled) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_ASLEEP',
-            message: t('newChat.pluginSetup.targetDisabled'),
-          };
-        }
-        if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-            message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-          };
-        }
+        const postGrantVisibility = classifyGhostVisibility(
+          ghostId,
+          sessionWorkdir,
+          ghostVisibilityDeps,
+        );
+        if (!postGrantVisibility.ok) return postGrantVisibility;
         let postGrantAssessment: GhostSetupAssessment;
         try {
           postGrantAssessment = getGhostSetupAssessment(ghostId);
@@ -1228,30 +1193,13 @@ export function getCindyGhostsMcpDeps(
       // Pre-dispatch revalidation: attachment grants and dir tickets may have
       // taken time; confirm the target is still available before committing the
       // callId and dispatching to the sandbox.
-      const preDispatch = getGhostManager()
-        .list()
-        .find((g) => g.manifest.id === ghostId);
-      if (!preDispatch || !isGhostAvailableForActiveSession(ghostId)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_NOT_FOUND',
-          message: t('newChat.pluginSetup.targetNotFound'),
-        };
-      }
-      if (!preDispatch.enabled) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_ASLEEP',
-          message: t('newChat.pluginSetup.targetDisabled'),
-        };
-      }
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-        };
-      }
+      const preDispatchVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!preDispatchVisibility.ok) return preDispatchVisibility;
+      const preDispatch = preDispatchVisibility.ghost;
       if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
         return {
           ok: false,
@@ -1289,30 +1237,13 @@ export function getCindyGhostsMcpDeps(
         }
       }
       // Full revalidation after session-context await (DB query may take time)
-      const postCtx = getGhostManager()
-        .list()
-        .find((g) => g.manifest.id === ghostId);
-      if (!postCtx || !isGhostAvailableForActiveSession(ghostId)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_NOT_FOUND',
-          message: t('newChat.pluginSetup.targetNotFound'),
-        };
-      }
-      if (!postCtx.enabled) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_ASLEEP',
-          message: t('newChat.pluginSetup.targetDisabled'),
-        };
-      }
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-        };
-      }
+      const postCtxVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!postCtxVisibility.ok) return postCtxVisibility;
+      const postCtx = postCtxVisibility.ghost;
       if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool)) {
         return {
           ok: false,

@@ -16,10 +16,7 @@
 
 import fs from 'node:fs';
 import type { TelegramIM } from '@cindy/im';
-import {
-  decodeTelegramLaneUserId,
-  decodeTelegramMessageId,
-} from '@cindy/im';
+import { decodeTelegramLaneUserId, decodeTelegramMessageId } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
@@ -27,7 +24,8 @@ import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from 
 import { readTelegramPersona } from './behaviorStore';
 import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
-import { ui, PROCESSING_EMOJI } from './uiText';
+import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
+import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
 
 function ensureWorkingDir(botId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', `telegram-${botId}`);
@@ -56,7 +54,10 @@ function personaBlock(): string {
 /** 发言人显示名/用户名消毒: 平台可改字段是不可信输入, 去控制字符与换行防注入。 */
 function sanitizeSpeakerText(value: string): string {
   // eslint-disable-next-line no-control-regex
-  return value.replace(/[\u0000-\u001f\u007f\u200b]/g, ' ').trim().slice(0, 64);
+  return value
+    .replace(/[\u0000-\u001f\u007f\u200b]/g, ' ')
+    .trim()
+    .slice(0, 64);
 }
 
 export function buildTelegramAdapter(
@@ -69,6 +70,7 @@ export function buildTelegramAdapter(
     output: { kind: 'rich-card', im: telegramIm },
     config,
     ui,
+    interactionExpiredNotice: telegramUiText.expiredCardNotice,
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,
@@ -98,6 +100,20 @@ export function buildTelegramAdapter(
     // DM(无 speaker)不挂, owner 私聊保持全速。
     turnPermissionPolicyFor: (event) =>
       event.speaker ? createTelegramGuestTurnPermissionPolicy(event.messageId) : undefined,
+    groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
+      const lane = decodeTelegramLaneUserId(event.senderId);
+      const provider = `telegram-personal:${event.contextId}`;
+      return {
+        // 跨 lane 检索只给 DM(!lane, 上游已保证 DM 非 owner 不进业务链路)。
+        // 群轮次一律 lane-only —— 与上面 turnPermissionPolicyFor 的 2026-07-30
+        // 裁决同一信任模型: 群窗口/引用块把成员可控文本注入 owner 触发的轮次,
+        // 注入可借 owner 轮次把其它 lane 的历史检索出来回帖泄漏。owner 要跨
+        // lane 查, 走私聊(检索类调用无强确认卡, 不能靠确认兜底)。
+        access: lane ? 'lane' : 'owner',
+        provider,
+        lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
+      };
+    },
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
@@ -139,7 +155,9 @@ export function buildTelegramAdapter(
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
         agentText: `${persona}${ambientBlock}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
-        commit: assembly.commit,
+        commit: async () => {
+          await assembly.commit();
+        },
       };
     },
   };

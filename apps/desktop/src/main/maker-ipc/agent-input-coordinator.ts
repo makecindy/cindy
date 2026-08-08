@@ -1310,7 +1310,15 @@ export class AgentInputCoordinator {
       this.cancelPreparedAutoResume(sessionId, state);
     }
     if (isUiContinuationItem(item)) {
-      this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
+      // queue-head recovery 时**跳过** onUiRetry:那条消息在派发前就失败了,
+      // 从未成为一个 turn,与之前失败的 hook turn 无关(与 retryLastError 对
+      // queue-head 刻意不发 onUiRetry 的语义一致,见 performRetryLastError 注释)。
+      // 下方 queue-head 特判分支会清 recovery 重发队首 A,合成 continue 项不入队;
+      // 若在这里发 onUiRetry(无论用哪个 clientId)会让无关的排队桌面消息认领
+      // 并改写旧 hook/channel 的待续跑记账。
+      if (state.recovery?.kind !== 'queue-head') {
+        this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
+      }
     } else if (automaticOrigin && !schedulerOrigin) {
       this.deps.onAutomaticEnqueue?.(sessionId);
     } else if (!automaticOrigin) {
@@ -1340,6 +1348,53 @@ export class AgentInputCoordinator {
     if (!schedulerOrigin) {
       this.abandonActiveTurnRecoveryForUserAction(state);
       this.clearErrorUnlessQueueHeadBlocked(state);
+    }
+    // —— queue-head recovery 解锁(2026-08 事故复盘)——
+    // queue-head recovery 表示队首消息从未跨过 accepted 边界(派发前失败 /
+    // cancelled-before-dispatch)。getDrainableHead 见 recovery 即返回 null,
+    // 队列永久静止,后续所有消息(含用户新输入)全部排队不派发。
+    // 用户显式动作按 2026-07-13 口径表态(与 active-turn 对齐:「新消息 = 不重试旧消息」):
+    //  - 普通新消息(composer 直发,非 scheduler/orca/自愈续跑):放弃从未 accepted
+    //    的队首消息 A(摘除 + 清理回调),让 B 正常派发——无静默重发、无静默丢失;
+    //  - UI 续跑(「继续」按钮,sendUiTrigger):等价 retryLastError——清 recovery
+    //    重发队首 A(原样重发是既有 retryLastError 对 queue-head 的语义),合成
+    //    continue 项不入队,避免 A 与 continue 双发。
+    // 自动来源(scheduler / orca)与 resume(继续队列)维持既有「不清」语义:
+    // 自动化项不代表用户表态,resume 是机械放行,显式点重试/删除仍是唯一出路。
+    if (state.recovery?.kind === 'queue-head' && !automaticOrigin) {
+      const abandonedClientId = state.recovery.clientId;
+      if (isUiContinuationItem(item)) {
+        state.error = null;
+        state.stickyError = null;
+        state.recovery = null;
+        log.info('ui continue resets queue-head recovery; resending failed head', {
+          sessionId,
+          clientId: abandonedClientId,
+        });
+        // 手动「继续」是真人介入,与 retryLastError 同口径刷新 userSendAt(否则
+        // 会话活跃信号 / 列表排序不会反映这次人工动作)。
+        this.touchUserSend(sessionId, opts?.sendAtMs);
+        this.emit(sessionId);
+        this.scheduleDrain(sessionId, 'ui-continue-queue-head-unlock');
+        return this.getProjection(sessionId);
+      }
+      const abandoned = state.pendingQueue.find((q) => q.clientId === abandonedClientId);
+      if (abandoned) {
+        state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== abandonedClientId);
+        this.removePendingCompactWaitClientId(state, abandonedClientId);
+        // 与 remove() 同口径:摘除消息时同步清其 edit lock,否则留下指向不存在
+        // clientId 的孤儿锁,shouldQueueNewTurn 会把后续新输入误导向排队。
+        state.queueEditLocks = state.queueEditLocks.filter((id) => id !== abandonedClientId);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, abandoned);
+        // 脱敏:只记 id/布尔,不记消息文本(白名单方向,见 log-upload-and-redaction)。
+        log.info('explicit user input abandoned queue-head message (never accepted)', {
+          sessionId,
+          clientId: abandonedClientId,
+        });
+      }
+      state.error = null;
+      state.stickyError = null;
+      state.recovery = null;
     }
     // 用户点「继续任务」表达的是恢复刚才中断/失败的 turn，必须先于此前
     // 已排队的新任务执行；普通 composer / Orca / scheduler 输入仍保持 FIFO。
@@ -2720,7 +2775,17 @@ export class AgentInputCoordinator {
     this.scheduleDrain(sessionId, 'turn-done');
   }
 
-  onSessionClosed(sessionId: string): void {
+  /**
+   * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。
+   *   用于 rehydrate / 凭证切换 close-rebuild 窗口:abort 会取消驱动本次重建的
+   *   input signal(#1930),但**其余清理必须照常**(activeTurn / steer / queue
+   *   状态不能残留,否则 rebuild 失败或 close 后不 rebuild 时 coordinator
+   *   残留旧状态阻塞后续发送)。
+   */
+  onSessionClosed(
+    sessionId: string,
+    opts?: { preserveInputBoundary?: boolean },
+  ): void {
     const state = this.getState(sessionId);
     this.supersedePendingAutoResumeRecoveries(sessionId);
     const releasedAbortLock = state.queueAbortPending;
@@ -2728,7 +2793,7 @@ export class AgentInputCoordinator {
     this.clearAbortReconcileRetry(state);
     this.clearSessionRunningRetry(state);
     this.clearPendingExternalTerminalDone(state);
-    this.abortInputBoundary(sessionId);
+    if (!opts?.preserveInputBoundary) this.abortInputBoundary(sessionId);
     this.abortSteerTransactions(sessionId);
     const active = state.activeTurn;
     if (active && !isActiveTurnDispatched(active)) {

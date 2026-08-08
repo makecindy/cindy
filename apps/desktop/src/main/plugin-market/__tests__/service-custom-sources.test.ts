@@ -30,7 +30,10 @@ const pickerDialog = vi.hoisted(() => ({
   showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })),
 }));
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => os.tmpdir()) },
+  app: {
+    getPath: vi.fn(() => os.tmpdir()),
+    getVersion: vi.fn(() => '1.0.0'),
+  },
   dialog: pickerDialog,
 }));
 vi.mock('../../authManager.js', () => ({
@@ -129,7 +132,7 @@ function serverSummary(overrides: Partial<VisiblePluginSummary> = {}): VisiblePl
 function writeLocalMarket(
   root: string,
   marketName: string,
-  plugins: Array<{ rel: string; id: string; version?: string }>,
+  plugins: Array<{ rel: string; id: string; version?: string; minCindyVersion?: string }>,
 ): string {
   const dir = path.join(root, marketName);
   for (const plugin of plugins) {
@@ -137,7 +140,12 @@ function writeLocalMarket(
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, 'ghost.json'),
-      JSON.stringify(ghostManifest(plugin.id, plugin.version ?? '1.0.0')),
+      JSON.stringify({
+        ...ghostManifest(plugin.id, plugin.version ?? '1.0.0'),
+        ...(plugin.minCindyVersion
+          ? { minCindyVersion: plugin.minCindyVersion }
+          : {}),
+      }),
     );
     fs.writeFileSync(path.join(pluginDir, 'main.js'), '// entry');
   }
@@ -215,6 +223,24 @@ describe('PluginMarketService 自定义市场聚合', () => {
       sourceType: 'local-market',
       sourceMarketName: 'team-lib',
     });
+  });
+
+  it('does not expose custom market releases that require a newer Cindy version', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/compatible', id: 'compatible' },
+      {
+        rel: 'plugins/requires-newer',
+        id: 'requires-newer',
+        minCindyVersion: '2.0.0',
+      },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items.map((item) => item.ghostId)).toEqual(['compatible']);
   });
 
   it('strips bidi/control chars from custom plugin name/description/author in snapshot', async () => {
@@ -420,6 +446,32 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       pluginId,
       source: 'local-market',
       installed: true,
+      version: '1.0.0',
+    });
+  });
+
+  it('custom market 即使自报 cindy-github 也不会获得 server-market 官方标记', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-github-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/github', id: 'cindy-github' },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('cindy-github'),
+      dir: '/ghosts/cindy-github',
+      enabled: true,
+    });
+    const pluginId = customMarketPluginId('team-lib', 'cindy-github');
+    const reviewed = await h.service.detail(pluginId);
+
+    await h.service.install(pluginId, {
+      expectedReleaseId: customMarketReleaseId('team-lib', 'cindy-github', '1.0.0'),
+      expectedManifest: reviewed.manifest,
+    });
+
+    expect(runtime.install.mock.calls[0]?.[1]).toEqual({
+      ghostId: 'cindy-github',
       version: '1.0.0',
     });
   });

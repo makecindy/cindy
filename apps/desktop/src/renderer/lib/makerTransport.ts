@@ -18,6 +18,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
   accountCounterAtRequestStart,
@@ -31,6 +32,7 @@ import type { Message, Session } from '@/lib/ccAgent.types';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import { extractIpcError } from '@/utils/ipcError';
+import type { TurnChangeSetUpdatedPayload } from '../../shared/turnChangeSet';
 
 type FullMaker = typeof window.electronAPI.maker;
 
@@ -239,6 +241,40 @@ export function makerApiFor(sessionId: string): RoutableMaker {
 export function makerApiForSticky(sessionId: string): RoutableMaker {
   const deviceId = getStickySessionDeviceId(sessionId);
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
+/** Subscribe to local exact-turn updates; remote sessions deliberately fail closed in this phase. */
+export function subscribeTurnChangeSetUpdated(
+  sessionId: string,
+  cb: (payload: TurnChangeSetUpdatedPayload) => void,
+): () => void {
+  const bind = (deviceId: string | undefined): (() => void) => {
+    if (!deviceId) {
+      return window.electronAPI.maker.onTurnChangeSetUpdated((raw, ownerStamp) => {
+        if (!isDataOwnerPushCurrent(ownerStamp)) return;
+        const payload = raw as Partial<TurnChangeSetUpdatedPayload> | null;
+        if (payload?.sessionId !== sessionId || !payload.summary) return;
+        cb(payload as TurnChangeSetUpdatedPayload);
+      });
+    }
+    // Exact patches can exceed the 2 MiB device-link frame. This phase fails closed for
+    // controlled sessions instead of truncating a patch and presenting it as exact.
+    return () => {};
+  };
+
+  let currentDeviceId = getStickySessionDeviceId(sessionId);
+  let offInner = bind(currentDeviceId);
+  const offStore = remoteProjectsStore.subscribe(() => {
+    const nextDeviceId = getStickySessionDeviceId(sessionId);
+    if (nextDeviceId === currentDeviceId) return;
+    currentDeviceId = nextDeviceId;
+    offInner();
+    offInner = bind(nextDeviceId);
+  });
+  return () => {
+    offStore();
+    offInner();
+  };
 }
 
 /** 是否远程(device-link)会话。 */

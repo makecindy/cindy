@@ -191,7 +191,11 @@ vi.mock('@/components/new-chat/PermissionSelector', () => ({
       data-testid="permission-selector"
       data-mode={props.permissionMode}
       data-allowed={props.allowedModes?.join(',') ?? ''}
-      onClick={() => props.onPermissionModeChange('bypassPermissions')}
+      onClick={() =>
+        props.onPermissionModeChange(
+          props.permissionMode === 'auto' ? 'bypassPermissions' : 'auto',
+        )
+      }
     >
       {props.permissionMode}
     </button>
@@ -277,7 +281,7 @@ describe('CreateWorkerPopover', () => {
     ).toBe(false);
   });
 
-  it('lets Worker creation choose Full access and saves it as the next default', async () => {
+  it('defaults new Worker creation to Full access', async () => {
     const onCreate = vi.fn();
     render(
       <CreateWorkerPopover
@@ -288,12 +292,9 @@ describe('CreateWorkerPopover', () => {
     );
 
     const selector = screen.getByTestId('permission-selector');
-    expect(selector.getAttribute('data-mode')).toBe('auto');
+    expect(selector.getAttribute('data-mode')).toBe('bypassPermissions');
     expect(selector.getAttribute('data-allowed')).toBe('auto,bypassPermissions');
 
-    fireEvent.click(selector);
-    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(selector.getAttribute('data-mode')).toBe('bypassPermissions'));
     fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
 
     await waitFor(() =>
@@ -303,6 +304,28 @@ describe('CreateWorkerPopover', () => {
     );
     expect(JSON.parse(localStorage.getItem('workerCreationPrefs') ?? '{}')).toMatchObject({
       workerPermissionMode: 'bypassPermissions',
+    });
+  });
+
+  it('keeps a manually saved Auto-review preference after the product default changes', async () => {
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({ workerPermissionMode: 'auto' }),
+    );
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+
+    const selector = screen.getByTestId('permission-selector');
+    await waitFor(() => expect(selector.getAttribute('data-mode')).toBe('auto'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ workerPermissionMode: 'auto' }),
+      ),
+    );
+    expect(JSON.parse(localStorage.getItem('workerCreationPrefs') ?? '{}')).toMatchObject({
+      workerPermissionMode: 'auto',
     });
   });
 
@@ -327,6 +350,10 @@ describe('CreateWorkerPopover', () => {
 
   it('keeps Auto-review when the Full access confirmation is cancelled', async () => {
     mocks.confirm.mockResolvedValue(false);
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({ workerPermissionMode: 'auto' }),
+    );
     const onCreate = vi.fn();
     render(
       <CreateWorkerPopover

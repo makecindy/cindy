@@ -50,13 +50,17 @@ import { AgentTaskCard } from '@/components/chat/AgentTaskCard';
 import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
 
 /**
- * 面板入口的 affordance 判据是「本会话的右栏 bucket 此刻可见」,由路由主实例经
- * SessionNavigationModeProvider 声明(见 useSidebarPanelReachable)。默认 fail
- * closed:没声明 = 打不开 = 不给假入口,所以断言面板入口的用例要显式声明宿主。
+ * 面板入口的 affordance 判据是「本会话的右栏 bucket 通过当前交互可达」，由路由
+ * 主实例或可见 split pane 经 SessionNavigationModeProvider 声明（见
+ * useSidebarPanelReachable）。默认 fail closed：没声明 = 打不开 = 不给假入口。
  */
-const withPanelHost = (hostSessionId: string, element: React.ReactElement) =>
+const withPanelHost = (
+  hostSessionId: string,
+  element: React.ReactElement,
+  mode: 'route-owner' | 'split-pane' = 'route-owner',
+) =>
   React.createElement(SessionNavigationModeProvider, {
-    mode: 'route-owner' as const,
+    mode,
     sidebarPanelHostSessionId: hostSessionId,
     children: element,
   });
@@ -273,6 +277,36 @@ describe('AgentTaskCard', () => {
       btn!.click();
     });
     expect(openBackgroundTasksTabMock).toHaveBeenCalledWith('session-1', { focusTaskId: 'wf-1' });
+  });
+
+  it('opens the background tasks panel on the first click from a split pane', () => {
+    openBackgroundTasksTabMock.mockClear();
+    const { container } = render(
+      withPanelHost(
+        'session-b',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-b',
+          update: {
+            provider: 'claude-code',
+            taskId: 'wf-split',
+            status: 'running',
+            taskType: 'local_workflow',
+            workflowName: 'Split workflow',
+          },
+        }),
+        'split-pane',
+      ),
+    );
+
+    const btn = headerButton(container);
+    expect(btn).not.toBeNull();
+    expect(btn!.hasAttribute('aria-expanded')).toBe(false);
+    act(() => {
+      btn!.click();
+    });
+    expect(openBackgroundTasksTabMock).toHaveBeenCalledWith('session-b', {
+      focusTaskId: 'wf-split',
+    });
   });
 
   it('falls back to the expand toggle when sessionId or taskId is missing on a workflow card', () => {

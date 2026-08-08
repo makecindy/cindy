@@ -26,6 +26,7 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
+type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing'];
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
 type BrowserBackendRecoveryResult = import('../shared/browserBackend').BrowserBackendRecoveryResult;
@@ -45,6 +46,7 @@ type PendingRemotePrecreatedWorktreeTarget =
   import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktreeTarget;
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
+type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawReleaseNotes;
 
 interface NewMakerWorktreeBranchPreferenceSnapshot {
   baseRepo: string;
@@ -59,6 +61,8 @@ interface EnvCheckResult {
   codex: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
   /** pi 可选实验 agent:failed 不影响 allPassed；本次启动会禁用 pi。 */
   pi?: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
+  /** bundled ripgrep(必需):failed 时 allPassed=false,splash 进失败态可重试 (#1956)。 */
+  ripgrep?: { status: 'passed' | 'failed' | 'skipped'; error?: string };
   allPassed: boolean;
   platform: 'darwin' | 'win32' | 'linux';
 }
@@ -133,6 +137,8 @@ interface SessionSharePreview {
   fidelity: 'full' | 'partial' | 'db-only';
   messageCount: number;
   mediaCount: number;
+  /** 协同包携带的 Worker 会话数;普通包为 0。 */
+  orcaWorkerCount: number;
 }
 
 interface LocalSshKeyInfo {
@@ -1192,10 +1198,28 @@ interface ElectronAPI {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
-      /** 文本类(快问快答):选项是轻量任务模型链的档位(供应商×模型),不是媒体目录模型。 */
+      /** 文本类(快问快答):选项是当前供应商目录的全部文本模型(cat: 编码钉值,
+       *  带供应商/模型/徽标等结构化字段供富列表渲染);declaredModel = 身份卡声明
+       *  的偏好模型(目录里解析得到才给,"跟随默认"行据此如实展示实际路由)。 */
       text: {
-        options: Array<{ id: string; label: string }>;
+        options: Array<{
+          id: string;
+          label: string;
+          group: string;
+          providerId: string;
+          agentKind: string;
+          modelId: string;
+          modelName: string;
+          icon?: string;
+          budget: boolean;
+          subscription: boolean;
+          routing?: ProviderRoutingPayload;
+          agentSuffix?: string;
+        }>;
         defaultModel: { id: string; label: string } | null;
+        declaredModel?: { id: string; label: string } | null;
+        /** 存量轻量档位钉(目录扩展前的合法钉值)的展示名表,老钉值回显友好名用。 */
+        utilityProfiles?: Array<{ id: string; label: string }>;
       };
       /** 向量类(文本转向量):同 image/video 走目录派生。 */
       embed: {
@@ -1494,6 +1518,10 @@ interface ElectronAPI {
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     >;
     onRemovalNoticeAvailable: (callback: () => void) => () => void;
+    consumeUpgradeNotice: () => Promise<
+      import('../shared/pluginMarket').PluginUpgradeUserNotice | null
+    >;
+    onUpgradeNoticeAvailable: (callback: () => void) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,
@@ -2101,6 +2129,8 @@ interface ElectronAPI {
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
+    /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
@@ -4130,6 +4160,8 @@ interface ElectronAPI {
             fidelity: 'full' | 'partial' | 'db-only';
             missingTranscripts: string[];
             mediaMissing: number;
+            /** 随包携带的协同 Worker 会话数(非协同包为 0)。 */
+            orcaWorkers: number;
           }
         | { status: 'canceled' }
         | { status: 'oversize'; totalBytes: number; mediaBytes: number; limitBytes: number }
@@ -4162,6 +4194,8 @@ interface ElectronAPI {
         sessionId: string;
         fidelity: 'full' | 'partial' | 'db-only';
         notes: string[];
+        /** 随协同包一并导入的 Worker 会话数;普通包为 0。 */
+        orcaWorkers: number;
       }>;
       cancel: (request: { draftId: string }) => Promise<{ ok: boolean }>;
       classifyPath: (request: {
@@ -4340,6 +4374,21 @@ interface ElectronAPI {
     /** main → renderer:资源看门狗事件(evict-request / kill-notice / cpu-alert)。 */
     onResourceEvent: (
       cb: (event: import('../shared/rsbBrowserBridge').RsbBrowserBridgeResourceEvent) => void,
+    ) => () => void;
+  };
+
+  /**
+   * 资源用量面板(process-monitor):订阅期间 main 才采样;terminate 只对
+   * 本产品 spawn 的 agent 根进程有效,归属由 main 重新校验。
+   */
+  processMonitor: {
+    subscribe: () => Promise<void>;
+    unsubscribe: () => Promise<void>;
+    terminate: (
+      request: import('../shared/processMonitor').TerminateAgentProcessRequest,
+    ) => Promise<import('../shared/processMonitor').TerminateAgentProcessResult>;
+    onSample: (
+      cb: (sample: import('../shared/processMonitor').ProcessMonitorSample) => void,
     ) => () => void;
   };
 
@@ -5311,6 +5360,21 @@ interface ElectronAPI {
     xaiOAuthCancel: () => Promise<{ authorized: boolean }>;
 
     // Push channels
+    listTurnChangeSets: (
+      sessionId: string,
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeSetSummary[]>;
+    getTurnChangeSets: (
+      sessionId: string,
+      ids: string[],
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeSetDetail[]>;
+    applyTurnChangeSet: (
+      sessionId: string,
+      id: string,
+      action: import('../shared/turnChangeSet').TurnChangeAction,
+    ) => Promise<import('../shared/turnChangeSet').TurnChangeActionResult>;
+    onTurnChangeSetUpdated: (
+      cb: (data: unknown, ownerStamp?: unknown) => void,
+    ) => () => void;
     onEvent: (cb: (data: unknown) => void) => () => void;
     onStatusChanged: (cb: (data: unknown) => void) => () => void;
     onInteractionRequest: (cb: (data: unknown) => void) => () => void;
@@ -5719,43 +5783,6 @@ interface ElectronAPI {
       onUpdateProgress: (callback: (progress: ComputerDriverUpdateProgress) => void) => () => void;
     };
   };
-}
-
-/* ── Release notes raw payload shape from CDN ── */
-
-/** Author-grouped item: one block per contributor, with their bullets. */
-interface RawReleaseNotesItem {
-  name: string;
-  list: string[];
-}
-
-interface RawReleaseNotesSection {
-  title: string;
-  items: RawReleaseNotesItem[];
-}
-
-/** Topic-format (v2) block: one user-facing theme with a short narrative. */
-interface RawReleaseNotesTopic {
-  emoji?: string;
-  title: string;
-  text: string;
-  contributors?: string[];
-}
-
-interface RawReleaseNotesPayload {
-  version: string;
-  date: string;
-  /**
-   * Flat contributor list — collective hall-of-fame on top of per-item `by`.
-   * Optional: older notice files predate the field (renderer defaults to []).
-   */
-  contributors?: string[];
-  /** Legacy author-grouped sections. Absent on topic-format payloads. */
-  sections?: RawReleaseNotesSection[];
-  /** Topic-format blocks. Non-empty ⇒ renderer uses the topic layout. */
-  topics?: RawReleaseNotesTopic[];
-  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
-  intro?: string;
 }
 
 /* ── SkillHub Registry types (v0.6) ──

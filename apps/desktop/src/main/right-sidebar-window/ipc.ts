@@ -105,6 +105,46 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       ...(hasFocusTaskId ? { focusTaskId: r.focusTaskId as string | null } : {}),
     };
   }
+  if (r.type === 'open-turn-review') {
+    if (
+      !Array.isArray(r.changeSetIds)
+      || r.changeSetIds.length === 0
+      || r.changeSetIds.length > 16
+      || r.changeSetIds.some((id) => typeof id !== 'string' || id.length === 0 || id.length > 256)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.changeSetIds must contain 1-16 ids');
+    }
+    if (r.selectedPath !== undefined && r.selectedPath !== null && typeof r.selectedPath !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'command.selectedPath must be string | null');
+    }
+    if (
+      r.selectedDiffId !== undefined
+      && r.selectedDiffId !== null
+      && (typeof r.selectedDiffId !== 'string' || r.selectedDiffId.length > 512)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.selectedDiffId must be string | null');
+    }
+    if (typeof r.requestNonce !== 'number' || !Number.isSafeInteger(r.requestNonce)) {
+      throwIpcError('INVALID_PARAMS', 'command.requestNonce must be an integer');
+    }
+    if (
+      r.hostSessionId !== undefined
+      && r.hostSessionId !== null
+      && (typeof r.hostSessionId !== 'string' || r.hostSessionId.length === 0 || r.hostSessionId.length > 256)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.hostSessionId must be string | null');
+    }
+    return {
+      type: 'open-turn-review',
+      sessionId: r.sessionId,
+      changeSetIds: r.changeSetIds as string[],
+      selectedDiffId: typeof r.selectedDiffId === 'string' ? r.selectedDiffId : null,
+      selectedPath: typeof r.selectedPath === 'string' ? r.selectedPath : null,
+      requestNonce: r.requestNonce,
+      // 协同面板里 worker 流的入口带宿主(lead)桶;缺省 null = tab 落 sessionId 自身桶。
+      hostSessionId: typeof r.hostSessionId === 'string' ? r.hostSessionId : null,
+    };
+  }
   if (r.type === 'open-file-browser') {
     if (r.targetKind === 'external-file') {
       if (typeof r.absPath !== 'string' || r.absPath.length === 0) {

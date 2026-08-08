@@ -69,6 +69,7 @@ import type {
   ListCustomizationsOptions,
   ListCustomizationsResult,
 } from '../types/customizations.js';
+import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
 import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
@@ -239,6 +240,19 @@ export interface CodexExtraSpawnConfig {
   codexRemoteCompactionProviderId?: string;
 }
 
+export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
+
+export interface CodexAppServerProcessRegistration {
+  pid: number;
+  role: CodexAppServerProcessRole;
+}
+
+export interface LocalAgentProcessRegistration {
+  pid: number;
+  kind: 'claude' | 'pi';
+  role: 'task-host' | 'control-plane-service';
+}
+
 export interface CodexLocalCredentialModeSwitchContext {
   fromMode?: AgentCredentialMode;
   /**
@@ -284,7 +298,27 @@ export class CodexResumePreparationBlockedError extends Error {
   }
 }
 
+export interface TurnChangeCaptureHooks {
+  /** Capture one known target before the provider is allowed to mutate it. */
+  beforeKnownFileWrite(input: {
+    sessionId: string;
+    provider: 'claude-code' | 'pi';
+    cwd: string;
+    targetPath: string;
+    remote?: boolean;
+  }): Promise<void>;
+  /** Record a tool whose filesystem effects cannot be known before execution. */
+  noteOpaqueWrite(input: {
+    sessionId: string;
+    provider: 'claude-code' | 'pi';
+    cwd: string;
+    remote?: boolean;
+  }): void;
+}
+
 export interface AgentDeps {
+  /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
+  turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;
   runtimeConfig: AgentRuntimeConfig;
   /**
@@ -461,6 +495,22 @@ export interface AgentDeps {
   ) => Promise<CodexExtraSpawnConfig>;
 
   /**
+   * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
+   * 返回 disposer 时会跟随 transport close 调用；远端 SSH transport 不触发。
+   */
+  registerLocalCodexAppServerProcess?: (
+    info: CodexAppServerProcessRegistration,
+  ) => void | (() => void);
+
+  /**
+   * Register a locally spawned Claude/Pi root process with the host. The returned
+   * disposer follows that exact process generation; remote transports never call it.
+   */
+  registerLocalAgentProcess?: (
+    info: LocalAgentProcessRegistration,
+  ) => void | (() => void);
+
+  /**
    * Codex 本地 shared app-server 凭证形态要切换前的宿主协调点。
    *
    * maker-core 不知道 desktop 的 active session / worktree / attachment 生命周期；
@@ -561,6 +611,9 @@ export interface AgentDeps {
    * 缺省 / undefined → 两段都不注入 (host 未接线, 与改造前行为一致)。
    */
   getContactsPromptState?: (ctx: { workingDir?: string }) => ContactsPromptState;
+
+  /** Session 装配时求值一次的插件花名册 system/developer 段；空清单返回空串。 */
+  getGhostRosterPrompt?: (ctx: { workingDir?: string }) => string;
 
   /**
    * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
@@ -1111,6 +1164,12 @@ export interface AgentSessionHandle {
   readonly id: string;
   readonly agentKind: AgentKind;
   readonly model: string;
+  /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
+  getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
+  onRuntimeCapabilitiesChange?(
+    listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+  ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
   /**

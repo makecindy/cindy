@@ -22,6 +22,19 @@ import { ReviewTabBody } from './ReviewTabBody';
 import type { DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
 
 export interface ReviewState {
+  /** Programmatic exact-turn review target. Null keeps the normal Git-backed review surface. */
+  turnTarget: {
+    changeSetIds: string[];
+    selectedDiffId: string | null;
+    selectedPath: string | null;
+    requestNonce: number;
+    /**
+     * 变更集所属会话。null(旧数据)= 与 tab 桶同会话;与桶会话不同(协同面板
+     * 里审查 worker 的轮次)时按它取数,且不提供 git 来源切换(git 视图跟随桶
+     * 会话的 workdir,对 worker 语义错误)。
+     */
+    targetSessionId: string | null;
+  } | null;
   /** 用户收起过哪些 diff id。空数组表示所有当前 diff 默认展开。 */
   collapsedPaths: string[];
   /** diff 展示模式。写操作仍回到原始 unified DiffLine.index。 */
@@ -41,6 +54,7 @@ export interface ReviewState {
 }
 
 const DEFAULT_STATE: ReviewState = {
+  turnTarget: null,
   collapsedPaths: [],
   diffViewMode: 'unified',
   fileTreeVisible: false,
@@ -100,7 +114,29 @@ const plugin: TabKindPlugin<ReviewState> = {
     const branchBaseRef = typeof obj.branchBaseRef === 'string' && isSafeBranchBaseRef(obj.branchBaseRef.trim())
       ? obj.branchBaseRef.trim()
       : null;
-    return { collapsedPaths, diffViewMode, fileTreeVisible, wordWrap, wordDiff, hideWhitespace, richMarkdownPreview, branchBaseRef };
+    const rawTurnTarget = obj.turnTarget;
+    const turnTarget = rawTurnTarget && typeof rawTurnTarget === 'object'
+      && Array.isArray((rawTurnTarget as { changeSetIds?: unknown }).changeSetIds)
+      && (rawTurnTarget as { changeSetIds: unknown[] }).changeSetIds.length > 0
+      && (rawTurnTarget as { changeSetIds: unknown[] }).changeSetIds.length <= 16
+      && (rawTurnTarget as { changeSetIds: unknown[] }).changeSetIds.every((id) => typeof id === 'string')
+      ? {
+          changeSetIds: (rawTurnTarget as { changeSetIds: string[] }).changeSetIds,
+          selectedDiffId: typeof (rawTurnTarget as { selectedDiffId?: unknown }).selectedDiffId === 'string'
+            ? (rawTurnTarget as { selectedDiffId: string }).selectedDiffId
+            : null,
+          selectedPath: typeof (rawTurnTarget as { selectedPath?: unknown }).selectedPath === 'string'
+            ? (rawTurnTarget as { selectedPath: string }).selectedPath
+            : null,
+          requestNonce: typeof (rawTurnTarget as { requestNonce?: unknown }).requestNonce === 'number'
+            ? (rawTurnTarget as { requestNonce: number }).requestNonce
+            : 0,
+          targetSessionId: typeof (rawTurnTarget as { targetSessionId?: unknown }).targetSessionId === 'string'
+            ? (rawTurnTarget as { targetSessionId: string }).targetSessionId
+            : null,
+        }
+      : null;
+    return { turnTarget, collapsedPaths, diffViewMode, fileTreeVisible, wordWrap, wordDiff, hideWhitespace, richMarkdownPreview, branchBaseRef };
   },
 };
 

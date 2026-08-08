@@ -231,6 +231,65 @@ describe('ReviewTabBody compact source dropdown', () => {
   });
 });
 
+describe('ReviewTabBody turn source dropdown', () => {
+  // 轮次审查(turnTarget)与 Git 审查共用同一个来源下拉:轮次态下选中项是
+  // 轮次伪选项,git 来源仍全部可选——这是"从轮次视图切回 git 审查不需要
+  // 关掉重开 tab"的回归钉。
+  it('shows the turn pseudo-source as the selected trigger label', () => {
+    render(createElement(SourceDropdown, {
+      source: 'turn',
+      counts: {},
+      onChange: vi.fn(),
+    }));
+
+    const trigger = screen.getByRole('button', { name: 'rightSidebar.review.sourceDropdownAria' });
+    expect(trigger.textContent).toBe('rightSidebar.review.turn.title');
+  });
+
+  it('lists git sources in turn mode and switches directly without close-reopen', async () => {
+    const onChange = vi.fn();
+    render(createElement(SourceDropdown, {
+      source: 'turn',
+      counts: {},
+      onChange,
+    }));
+
+    const trigger = screen.getByRole('button', { name: 'rightSidebar.review.sourceDropdownAria' });
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+
+    expect(await screen.findByRole('menuitem', { name: 'rightSidebar.review.turn.title' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.review.source.unstaged' }));
+    expect(onChange).toHaveBeenCalledWith('unstaged');
+  });
+
+  it('keeps the turn pseudo-item selection-only (no source change on click)', async () => {
+    const onChange = vi.fn();
+    render(createElement(SourceDropdown, {
+      source: 'turn',
+      counts: {},
+      onChange,
+    }));
+
+    const trigger = screen.getByRole('button', { name: 'rightSidebar.review.sourceDropdownAria' });
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'rightSidebar.review.turn.title' }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not offer the turn pseudo-item while a git source is active', async () => {
+    render(createElement(SourceDropdown, {
+      source: 'unstaged',
+      counts: { unstaged: 0, staged: 0, branch: 0, lastTurn: 0 },
+      onChange: vi.fn(),
+    }));
+
+    const trigger = screen.getByRole('button', { name: 'rightSidebar.review.sourceDropdownAria' });
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    await screen.findByRole('menuitem', { name: 'rightSidebar.review.source.unstaged' });
+    expect(screen.queryByRole('menuitem', { name: 'rightSidebar.review.turn.title' })).toBeNull();
+  });
+});
+
 describe('ReviewTabBody branch base dropdown', () => {
   it('marks stale local branch candidates with a tertiary text suffix', () => {
     render(createElement(BranchBaseDropdown, {

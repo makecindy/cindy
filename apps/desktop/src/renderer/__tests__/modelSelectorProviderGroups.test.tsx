@@ -11,7 +11,7 @@
  *   5. 长供应商名称不撑破弹层(truncate)
  */
 
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -282,13 +282,71 @@ async function openDropdown(): Promise<void> {
   });
 }
 
-async function hoverModelRowWithIntent(row: HTMLElement): Promise<void> {
+type FloatingOptions = {
+  strategy: string;
+  placement: string;
+  transform: boolean;
+  open: boolean;
+  elements: { reference: HTMLElement };
+  whileElementsMounted: (
+    reference: HTMLElement,
+    floating: HTMLElement,
+    update: () => void,
+  ) => () => void;
+};
+
+function floatingOptionsForReference(reference: HTMLElement): FloatingOptions {
+  // React/Floating UI 可能因并发重渲染产生多次调用；按「当前连接锚点 + open」取值，
+  // 守护实际生效的浮层，而不是把调用顺序误当成契约。
+  const options = floatingUiMocks.useFloating.mock.calls
+    .map(([call]) => call as FloatingOptions)
+    .findLast((call) => call.open && call.elements?.reference === reference);
+  expect(options).toBeDefined();
+  if (!options) throw new Error('Floating UI options for the active model row were not found');
+  return options;
+}
+
+function sizeOptionsForFloatingPanel(): {
+  apply: (args: { elements: { floating: HTMLElement }; availableHeight: number }) => void;
+} {
+  // size middleware 的行为由其稳定参数和 apply 回调表达；匹配参数可避开其它渲染留下的调用。
+  const options = floatingUiMocks.size.mock.calls
+    .map(
+      ([call]) =>
+        call as {
+          padding?: number;
+          boundary?: Element[];
+          altBoundary?: boolean;
+          apply?: (args: { elements: { floating: HTMLElement }; availableHeight: number }) => void;
+        },
+    )
+    .findLast(
+      (call) =>
+        call.padding === 8 &&
+        Array.isArray(call.boundary) &&
+        call.boundary.length === 0 &&
+        call.altBoundary === false &&
+        typeof call.apply === 'function',
+    );
+  expect(options).toBeDefined();
+  if (!options?.apply) throw new Error('Floating UI size middleware was not configured');
+  return { apply: options.apply };
+}
+
+async function openModelOptionsPanel(row: HTMLElement): Promise<void> {
   await act(async () => {
-    // MorphPopover requires a real pointer delta before revealing row options. Model that
-    // contract explicitly instead of depending on jsdom's synthetic `isTrusted` value.
-    fireEvent.pointerMove(row, { screenX: 0, screenY: 0 });
-    fireEvent.pointerMove(row, { screenX: 8, screenY: 0 });
+    // ArrowLeft 是模型行公开支持的配置入口；调用前由用例等待 MorphPopover 的 settle 焦点，
+    // 避免把异步焦点交接顺序误当成浮层锚点契约。
+    fireEvent.keyDown(row, { key: 'ArrowLeft' });
   });
+}
+
+async function waitForSearchInputFocus(): Promise<HTMLElement> {
+  const searchInput = screen.getByRole('textbox');
+  // MorphPopover settle 后才把焦点交给搜索框；先等这个最终状态，避免后续 ArrowLeft
+  // reveal 与尚未完成的焦点交接竞态。
+  await waitFor(() => expect(document.activeElement).toBe(searchInput));
+  return searchInput;
 }
 
 describe('ModelSelector provider groups', () => {
@@ -318,10 +376,11 @@ describe('ModelSelector provider groups', () => {
   it('keeps the create-agent secondary panel at the original left/center position with layout coordinates', async () => {
     renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
     await openDropdown();
+    await waitForSearchInputFocus();
 
     const modelList = screen.getByRole('listbox', { name: 'Model list' });
     const row = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
-    await hoverModelRowWithIntent(row);
+    await openModelOptionsPanel(row);
 
     const secondaryPanel = await screen.findByTestId('model-options-floating-panel');
     const positioner = secondaryPanel.closest<HTMLElement>('[data-radix-popper-content-wrapper]');
@@ -330,7 +389,9 @@ describe('ModelSelector provider groups', () => {
     expect(positioner?.style.position).toBe('fixed');
     expect(positioner?.style.left).toBe('120px');
     expect(positioner?.style.top).toBe('24px');
-    expect(positioner?.style.transform).toBe('');
+    // Electron app-region 依赖布局矩形，定位层不能通过 translate 重新定位；这里只守护
+    // no-translate 行为，不锁定 jsdom 对空 transform 的具体序列化。
+    expect(positioner?.style.transform ?? '').not.toMatch(/translate/);
     expect(
       (positioner?.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
     ).toBe('no-drag');
@@ -338,18 +399,7 @@ describe('ModelSelector provider groups', () => {
     expect(secondaryPanel.className).not.toContain('max-h-[');
     expect(secondaryPanel.className).not.toContain('overflow-y-auto');
 
-    const floatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
-      strategy: string;
-      placement: string;
-      transform: boolean;
-      open: boolean;
-      elements: { reference: HTMLElement };
-      whileElementsMounted: (
-        reference: HTMLElement,
-        floating: HTMLElement,
-        update: () => void,
-      ) => () => void;
-    };
+    const floatingOptions = floatingOptionsForReference(row);
     expect(floatingOptions).toMatchObject({
       strategy: 'fixed',
       placement: 'left',
@@ -359,19 +409,39 @@ describe('ModelSelector provider groups', () => {
     expect(floatingOptions.elements.reference).toBe(row);
     const floatingElement = document.createElement('div');
     const cleanup = floatingOptions.whileElementsMounted(row, floatingElement, vi.fn());
-    expect(floatingUiMocks.autoUpdate).toHaveBeenCalledWith(
+    // autoUpdate 必须绑定当前行与浮层元素；按参数匹配，避免其它重渲染的调用顺序影响断言。
+    const autoUpdateCall = floatingUiMocks.autoUpdate.mock.calls.findLast(
+      (call: unknown[]) => call[0] === row && call[1] === floatingElement,
+    );
+    expect(autoUpdateCall).toEqual([
       row,
       floatingElement,
       expect.any(Function),
       { animationFrame: false },
-    );
+    ]);
     cleanup();
 
-    expect(floatingUiMocks.offset).toHaveBeenLastCalledWith({
-      mainAxis: 8,
-      alignmentAxis: 0,
-    });
-    expect(floatingUiMocks.shift).toHaveBeenLastCalledWith(
+    // middleware 参数保留左侧贴边、碰撞留白和可用高度回归；按参数匹配而非取最后调用，
+    // 避免 React 并发重渲染改变 mock 调用顺序。
+    const offsetOptions = floatingUiMocks.offset.mock.calls
+      .map(([call]) => call)
+      .findLast(
+        (call) =>
+          (call as { mainAxis?: number; alignmentAxis?: number })?.mainAxis === 8 &&
+          (call as { mainAxis?: number; alignmentAxis?: number })?.alignmentAxis === 0,
+      );
+    expect(offsetOptions).toEqual({ mainAxis: 8, alignmentAxis: 0 });
+    const shiftOptions = floatingUiMocks.shift.mock.calls
+      .map(([call]) => call)
+      .findLast(
+        (call) =>
+          (call as { mainAxis?: boolean; crossAxis?: boolean; padding?: number })?.mainAxis ===
+            true &&
+          (call as { mainAxis?: boolean; crossAxis?: boolean; padding?: number })?.crossAxis ===
+            false &&
+          (call as { mainAxis?: boolean; crossAxis?: boolean; padding?: number })?.padding === 8,
+      );
+    expect(shiftOptions).toEqual(
       expect.objectContaining({
         mainAxis: true,
         crossAxis: false,
@@ -381,14 +451,22 @@ describe('ModelSelector provider groups', () => {
         altBoundary: false,
       }),
     );
-    expect(floatingUiMocks.flip).toHaveBeenLastCalledWith({
-      padding: 8,
-      boundary: [],
-      altBoundary: false,
-    });
-    const sizeOptions = floatingUiMocks.size.mock.calls.at(-1)?.[0] as {
-      apply: (args: { elements: { floating: HTMLElement }; availableHeight: number }) => void;
-    };
+    const flipOptions = floatingUiMocks.flip.mock.calls
+      .map(([call]) => call)
+      .findLast(
+        (call) =>
+          (call as { padding?: number; boundary?: Element[]; altBoundary?: boolean })?.padding ===
+            8 &&
+          Array.isArray(
+            (call as { padding?: number; boundary?: Element[]; altBoundary?: boolean })?.boundary,
+          ) &&
+          (call as { padding?: number; boundary?: Element[]; altBoundary?: boolean })?.boundary
+            ?.length === 0 &&
+          (call as { padding?: number; boundary?: Element[]; altBoundary?: boolean })
+            ?.altBoundary === false,
+      );
+    expect(flipOptions).toEqual({ padding: 8, boundary: [], altBoundary: false });
+    const sizeOptions = sizeOptionsForFloatingPanel();
     sizeOptions.apply({ elements: { floating: floatingElement }, availableHeight: 180 });
     expect(floatingElement.style.getPropertyValue('--radix-popover-content-available-height')).toBe(
       '180px',
@@ -405,47 +483,54 @@ describe('ModelSelector provider groups', () => {
     expect(document.activeElement).toBe(lastPanelOption);
 
     fireEvent.keyDown(row, { key: 'Escape' });
-    expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
-    expect(screen.getByRole('listbox', { name: 'Model list' })).toBeTruthy();
+    // Escape 关闭的是行级浮层，一级模型列表仍保持打开；等待两个最终 DOM 状态而非依赖
+    // keydown 后 React 同步 flush 的具体顺序。
+    await waitFor(() => {
+      expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
+      expect(screen.getByRole('listbox', { name: 'Model list' })).toBeTruthy();
+    });
   });
 
   it('refreshes the create-agent floating anchor after search remounts the active model row', async () => {
     renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
     await openDropdown();
 
+    const searchInput = await waitForSearchInputFocus();
+
     const modelList = screen.getByRole('listbox', { name: 'Model list' });
     const originalRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
-    await hoverModelRowWithIntent(originalRow);
+    await openModelOptionsPanel(originalRow);
     await screen.findByTestId('model-options-floating-panel');
 
-    const originalFloatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
-      elements: { reference: HTMLElement };
-    };
+    const originalFloatingOptions = floatingOptionsForReference(originalRow);
     expect(originalFloatingOptions.elements.reference).toBe(originalRow);
 
-    const searchInput = screen.getByRole('textbox');
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: 'qwen' } });
     });
-    expect(originalRow.isConnected).toBe(false);
-    expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
-    const floatingCallCountAfterFilter = floatingUiMocks.useFloating.mock.calls.length;
+    // 搜索过滤会卸载旧行，行级浮层必须随之关闭，不能继续引用 detached DOM；这是行为契约，
+    // 不依赖 useFloating 的渲染/调用次数。
+    await waitFor(() => {
+      expect(originalRow.isConnected).toBe(false);
+      expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
+    });
 
     await act(async () => {
       fireEvent.change(searchInput, { target: { value: '' } });
     });
+    // 清空搜索会重新挂载新行，但旧 editing 状态不能让浮层自动复活或把新行误标 active。
+    await waitFor(() => {
+      const restoredRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
+      expect(restoredRow).not.toBe(originalRow);
+      expect(restoredRow.getAttribute('data-model-options-active')).toBeNull();
+      expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
+    });
     const restoredRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
-    expect(restoredRow).not.toBe(originalRow);
-    expect(restoredRow.getAttribute('data-model-options-active')).toBeNull();
-    expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
-    expect(floatingUiMocks.useFloating).toHaveBeenCalledTimes(floatingCallCountAfterFilter);
 
-    await hoverModelRowWithIntent(restoredRow);
+    await openModelOptionsPanel(restoredRow);
     await screen.findByTestId('model-options-floating-panel');
 
-    const restoredFloatingOptions = floatingUiMocks.useFloating.mock.calls.at(-1)?.[0] as {
-      elements: { reference: HTMLElement };
-    };
+    const restoredFloatingOptions = floatingOptionsForReference(restoredRow);
     expect(restoredFloatingOptions.elements.reference).toBe(restoredRow);
     expect(restoredFloatingOptions.elements.reference.isConnected).toBe(true);
   });

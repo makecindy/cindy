@@ -216,6 +216,80 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/searchJump/);
   });
 
+  it('validates and forwards the turn-review host bucket session', async () => {
+    // 协同面板里 worker 流的审查入口带宿主(lead)桶。sanitizer 重建命令对象,
+    // 漏透传 hostSessionId 会让 detached 窗口路径退回 worker 的不可见桶。
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-turn-review',
+          sessionId: 'worker-1',
+          changeSetIds: ['change-1'],
+          requestNonce: 1,
+          hostSessionId: 'lead-1',
+        },
+        allowOpen: true,
+      },
+    );
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-turn-review',
+          sessionId: 'worker-1',
+          changeSetIds: ['change-1'],
+          requestNonce: 2,
+        },
+        allowOpen: true,
+      },
+    );
+
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(1, {
+      command: {
+        type: 'open-turn-review',
+        sessionId: 'worker-1',
+        changeSetIds: ['change-1'],
+        selectedDiffId: null,
+        selectedPath: null,
+        requestNonce: 1,
+        hostSessionId: 'lead-1',
+      },
+      allowOpen: true,
+    });
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(2, {
+      command: {
+        type: 'open-turn-review',
+        sessionId: 'worker-1',
+        changeSetIds: ['change-1'],
+        selectedDiffId: null,
+        selectedPath: null,
+        requestNonce: 2,
+        hostSessionId: null,
+      },
+      allowOpen: true,
+    });
+
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-turn-review',
+            sessionId: 'worker-1',
+            changeSetIds: ['change-1'],
+            requestNonce: 3,
+            hostSessionId: 42,
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/hostSessionId/);
+  });
+
   it('validates and forwards external-file browser commands', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);

@@ -212,4 +212,20 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
     expect(h.deleted).toEqual(['msg-1']);
     expect(h.sent).toEqual(['⚙️ 工作中 · 8s']);
   });
+
+  // #1855 L1: NO_REPLY 生效范围 = all-turns。streamingText 层不认识 ambient/非 ambient,
+  // finalize 的 isNoReply 判定对任何轮次一视同仁 —— 惰性占位下(未建过消息)整条
+  // NO_REPLY 从头到尾零出站零删除, 与 TELEGRAM_PERSONAL_CAPABILITIES.noReplyScope 一致。
+  it('NO_REPLY(惰性占位, 未建消息)零出站零删除 — 任何轮次一视同仁(all-turns)', async () => {
+    const h = makeHarness();
+    const handle = await startTelegramStreaming(h.deps); // 无初始占位
+
+    await handle.finalize('NO_REPLY');
+
+    expect(h.sent).toEqual([]);
+    expect(h.reposted).toEqual([]);
+    expect(h.deleted).toEqual([]);
+    expect(h.calls).toEqual([]);
+    expect(handle.messageId).toBe('');
+  });
 });

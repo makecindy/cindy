@@ -1,29 +1,22 @@
 /**
  * release-notes/index.ts
  * ---------------------------------------------------------------------------
- * Per-version release notes are fetched from CDN by the main process and
- * delivered through `window.electronAPI.fetchReleaseNotes`. Platform routing
- * happens entirely in main (via getPlatformKey()), so the renderer only ever
- * deals with the version string.
- *
- * Successful results are memoised per version so that dismissing and
- * re-opening the dialog from the sidebar does not trigger another fetch.
- *
- * Two payload generations coexist on the CDN:
- *
- * Legacy (author-grouped): each section's `items` is an array of author groups
- *   { "name": "Lizi", "list": ["...", "..."] }
- * The dialog flattens these into one bullet per `list` entry under the
- * matching author sub-head.
- *
- * Topic format (v2): the payload carries `topics` instead of `sections` —
- * user-facing theme blocks, each a short narrative paragraph:
- *   { "emoji": "🎙️", "title": "语音输入更稳", "text": "…", "contributors": ["Lizi"] }
- * plus an optional top-level `intro` one-liner. Presence of a non-empty
- * `topics` array is the discriminator; old payloads never have it.
+ * Main fetches one raw JSON per version; renderer selects the requested
+ * locale and normalizes it for UpdateNoticeDialog. Raw payloads are cached by
+ * version, while normalized results are cached by version + locale so changing
+ * the app language never reuses another language's rendered content or causes
+ * another CDN request.
  */
 
-import { isRenderableTopic } from '../../shared/releaseNotesContent';
+import {
+  hasRenderableContent,
+  isRenderableTopic,
+  type NoticeLocale,
+  type RawItem,
+  type RawLocalizedContent,
+  type RawReleaseNotes,
+} from '../../shared/releaseNotesContent';
+import { DEFAULT_LOCALE } from '../../shared/locale';
 
 /** Per-item shape after flattening: one bullet with its author tag. */
 export interface ReleaseNoteItem {
@@ -33,10 +26,7 @@ export interface ReleaseNoteItem {
 }
 
 /** Author-grouped raw item as authored in the JSON. */
-export interface RawReleaseNoteItem {
-  name: string;
-  list: string[];
-}
+export type RawReleaseNoteItem = RawItem;
 
 export interface ReleaseNoteSection {
   title: string;
@@ -45,6 +35,8 @@ export interface ReleaseNoteSection {
 
 /** Topic-format (v2) block: one user-facing theme with a short narrative. */
 export interface ReleaseNoteTopic {
+  /** Stable internal id shared by every localized version of the topic. */
+  id?: string;
   /** Leading emoji for the topic title. Optional — renderer tolerates absence. */
   emoji?: string;
   title: string;
@@ -63,7 +55,7 @@ export interface ReleaseNotes {
   sections: ReleaseNoteSection[];
   /** Topic-format blocks. Non-empty ⇒ dialog renders the topic layout. */
   topics: ReleaseNoteTopic[];
-  /** Optional one-line lead above the topics (e.g. PR/commit counts). */
+  /** Optional one-line lead above the topics. */
   intro?: string;
 }
 
@@ -72,54 +64,60 @@ function expandRawItem(raw: RawReleaseNoteItem): ReleaseNoteItem[] {
   return raw.list.map((text) => ({ text, by: raw.name }));
 }
 
-// ── In-memory cache (renderer-side) ────────────────────────────────────────
-
-const cache = new Map<string, ReleaseNotes>();
+// Main already caches by version; this renderer raw cache avoids even another
+// IPC round-trip when the user switches locale while the dialog is open.
+const rawCache = new Map<string, RawReleaseNotes>();
+const rawInFlight = new Map<string, Promise<RawReleaseNotes | null>>();
+const localizedCache = new Map<string, ReleaseNotes>();
 
 // Version-index cache — one shot per session; the app version is immutable
 // while the process lives, so a successful fetch never needs to repeat.
 let indexCache: string[] | null = null;
 
-// ── Public API ─────────────────────────────────────────────────────────────
+/** Return the legacy/root content in the same shape as a localized block. */
+function legacyContentFromRoot(raw: RawReleaseNotes): RawLocalizedContent {
+  return {
+    intro: raw.intro,
+    topics: raw.topics,
+    sections: raw.sections,
+  };
+}
 
-/**
- * Fetch the sorted version-index from CDN via main. Used to determine which
- * intermediate versions to pull when the user upgrades across releases.
- * Returns null on failure — caller should fall back to showing the current
- * version only.
- */
-export async function fetchReleaseNotesIndex(): Promise<string[] | null> {
-  if (indexCache) return indexCache;
-  const raw = await window.electronAPI.fetchReleaseNotesIndex();
-  if (!raw) return null;
-  indexCache = raw;
-  return raw;
+function hasUsableContent(content: unknown): content is RawLocalizedContent {
+  return content !== null && typeof content === 'object' && hasRenderableContent(content);
 }
 
 /**
- * Fetch release notes for the given version via the main-process CDN client.
- * Returns null when the CDN has no entry for this version on the current
- * platform, or when the network/parse fails.
- *
- * The CDN payload is normalised defensively before caching: missing
- * `contributors` / `sections` / `topics` become empty arrays, malformed topic
- * entries are dropped, and legacy author-grouped items are flattened.
+ * Select one language from a one-file notice. Empty or malformed localized
+ * blocks count as missing and continue through the fallback chain.
  */
-export async function fetchReleaseNotes(
-  version: string,
-): Promise<ReleaseNotes | null> {
-  const hit = cache.get(version);
-  if (hit) return hit;
+export function selectLocalizedContent(
+  raw: RawReleaseNotes,
+  locale: NoticeLocale,
+): RawLocalizedContent | null {
+  const localized = raw.contentByLocale;
+  if (locale === 'zh-CN') {
+    const zh = localized?.['zh-CN'];
+    if (hasUsableContent(zh)) return zh;
+    const legacy = legacyContentFromRoot(raw);
+    return hasUsableContent(legacy) ? legacy : null;
+  }
 
-  const raw = await window.electronAPI.fetchReleaseNotes(version);
-  if (!raw) return null;
+  for (const candidate of [locale, 'en', 'zh-CN'] as const) {
+    const content = localized?.[candidate];
+    if (hasUsableContent(content)) return content;
+  }
 
-  // Defensive defaults: tolerate older payloads missing `contributors`,
-  // topic-format payloads missing `sections`, and legacy payloads missing
-  // `topics`. Malformed entries (topics, sections, author groups, bullets)
-  // are dropped rather than crashing the dialog on a bad CDN document.
-  const rawTopics = Array.isArray(raw.topics) ? raw.topics : [];
-  const rawSections = Array.isArray(raw.sections) ? raw.sections : [];
+  const legacy = legacyContentFromRoot(raw);
+  return hasUsableContent(legacy) ? legacy : null;
+}
+
+function normalizeReleaseNotes(
+  raw: RawReleaseNotes,
+  content: RawLocalizedContent,
+): ReleaseNotes | null {
+  const rawTopics = Array.isArray(content.topics) ? content.topics : [];
+  const rawSections = Array.isArray(content.sections) ? content.sections : [];
   const notes: ReleaseNotes = {
     version: raw.version,
     date: raw.date,
@@ -140,6 +138,7 @@ export async function fetchReleaseNotes(
     topics: rawTopics
       .filter((t) => isRenderableTopic(t))
       .map((t) => ({
+        ...(typeof t.id === 'string' ? { id: t.id } : {}),
         emoji: typeof t.emoji === 'string' ? t.emoji : undefined,
         title: t.title,
         text: t.text,
@@ -147,16 +146,69 @@ export async function fetchReleaseNotes(
           ? t.contributors.filter((c): c is string => typeof c === 'string')
           : [],
       })),
-    intro: typeof raw.intro === 'string' ? raw.intro : undefined,
+    intro: typeof content.intro === 'string' ? content.intro : undefined,
   };
-  // A notice with no renderable content (e.g. a payload whose topics or
-  // section bullets were all malformed and dropped) must count as a failed
-  // fetch: caching it would open an empty dialog and, worse, advance
-  // lastReadVersion on dismiss so a corrected CDN payload would never be
-  // shown again. Bullet-level truth, mirroring shared hasRenderableContent.
+
   const hasContent =
     notes.topics.length > 0 || notes.sections.some((s) => s.items.length > 0);
-  if (!hasContent) return null;
-  cache.set(version, notes);
+  return hasContent ? notes : null;
+}
+
+async function fetchRawReleaseNotes(version: string): Promise<RawReleaseNotes | null> {
+  const hit = rawCache.get(version);
+  if (hit) return hit;
+
+  const pending = rawInFlight.get(version);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const raw = await window.electronAPI.fetchReleaseNotes(version);
+    if (!raw || !hasRenderableContent(raw)) return null;
+    rawCache.set(version, raw);
+    return raw;
+  })();
+  rawInFlight.set(version, request);
+
+  try {
+    return await request;
+  } finally {
+    if (rawInFlight.get(version) === request) rawInFlight.delete(version);
+  }
+}
+
+/**
+ * Fetch the sorted version-index from CDN via main. Used to determine which
+ * intermediate versions to pull when the user upgrades across releases.
+ */
+export async function fetchReleaseNotesIndex(): Promise<string[] | null> {
+  if (indexCache) return indexCache;
+  const raw = await window.electronAPI.fetchReleaseNotesIndex();
+  if (!raw) return null;
+  indexCache = raw;
+  return raw;
+}
+
+/**
+ * Fetch release notes for one version and select the requested locale.
+ * CDN/main/preload still receive only the version because every language is
+ * carried by the same raw JSON.
+ */
+export async function fetchReleaseNotes(
+  version: string,
+  locale: NoticeLocale = DEFAULT_LOCALE,
+): Promise<ReleaseNotes | null> {
+  const cacheKey = `${version}:${locale}`;
+  const hit = localizedCache.get(cacheKey);
+  if (hit) return hit;
+
+  const raw = await fetchRawReleaseNotes(version);
+  if (!raw) return null;
+
+  const content = selectLocalizedContent(raw, locale);
+  if (!content) return null;
+  const notes = normalizeReleaseNotes(raw, content);
+  if (!notes) return null;
+
+  localizedCache.set(cacheKey, notes);
   return notes;
 }

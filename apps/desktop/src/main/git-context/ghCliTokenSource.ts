@@ -2,7 +2,8 @@
  * ghCliTokenSource — 从本地 GitHub CLI(gh)登录态读取 token 的零配置来源。
  *
  * 动机:绝大多数开发者本机已 `gh auth login` 过,不该强迫再去设置页手填 PAT。
- * token 解析层级(ipc.ts 组装):设置页 PAT(显式,优先)→ 本来源(自动)。
+ * GitHub 插件网络层优先读取本来源，不可用时再回落设置页 PAT；其它宿主
+ * GitHub 功能可直接复用同一个共享 token source。
  *
  * 实现要点:
  *   - `gh auth token` 输出当前登录 token(通常 gho_ 前缀 OAuth token),
@@ -35,6 +36,7 @@ const GH_CANDIDATES: Record<string, string[]> = {
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_NEGATIVE_CACHE_TTL_MS = 30_000;
 const GH_TIMEOUT_MS = 3_000;
+const GH_PROBE_TIMEOUT_MS = 800;
 
 export interface GhCliTokenSourceDeps {
   execFileFn?: (
@@ -54,6 +56,8 @@ export interface GhCliTokenSourceDeps {
 export interface GhCliTokenSource {
   /** 返回本地 gh 登录 token;未安装 / 未登录 / 超时返回 null,永不抛错。 */
   readToken(): Promise<string | null>;
+  /** 只探测 github.com 登录可用性，不读取或缓存 token。 */
+  probeAvailability(): Promise<boolean>;
 }
 
 export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTokenSource {
@@ -95,7 +99,25 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     });
   }
 
+  async function probeAvailability(): Promise<boolean> {
+    const bin = resolveGhBinary();
+    return new Promise<boolean>((resolve) => {
+      try {
+        // stdout/stderr 都不进入日志；该调用只消费退出码，绝不取得 token。
+        execFileFn(
+          bin,
+          ['auth', 'status', '--hostname', 'github.com'],
+          { timeout: GH_PROBE_TIMEOUT_MS },
+          (err) => resolve(err === null),
+        );
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
   return {
+    probeAvailability,
     async readToken(): Promise<string | null> {
       if (cached && cached.expiresAt > now()) return cached.token;
       if (inFlight) return inFlight;

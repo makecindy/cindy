@@ -79,13 +79,16 @@ describe('PluginMarketApi', () => {
         nextCursor: null,
       },
     );
-    const api = new PluginMarketApi(fetcher);
+    const api = new PluginMarketApi(fetcher, () => '1.2.3');
 
     await expect(api.listAll()).resolves.toMatchObject({
       plugins: [{ id: PLUGIN_A }, { id: PLUGIN_B }],
       removals: [],
     });
     expect(fetcher.mock.calls[1]?.[0]).toContain(`cursor=${PLUGIN_A}`);
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
+      headers: { 'x-cindy-version': '1.2.3' },
+    });
   });
 
   it('deduplicates removals by pluginId across pages keeping the first-seen notice', async () => {
