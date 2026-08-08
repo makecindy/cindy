@@ -13,6 +13,7 @@
 import {
   getModel,
   connectedProvidersForAgent,
+  effectiveSourceIdForModel,
   isModelSelectableForNewRoute,
   isModelDisabled,
   isProviderDisabled,
@@ -63,15 +64,27 @@ function tombstoneGuardOptions(
 }
 
 /**
- * 无模型的 headless 调度不能给 Pi 硬塞 Claude 型号：Pi 的可用面由实时连接来源
- * 决定。按模型选择器同一 rail（已连接、runtime 可用、未停用）取首个可聊天模型，
- * 并把 providerId 与 model 成对返回，避免 BYOM 同名模型落到 Cindy 默认路由。
+ * Headless 调度的实时来源快照：
+ * - 给定 modelId 时按模型选择器同一 rail 物化实际 provider；
+ * - 未给 modelId 时为 Pi 取首个可聊天模型，并把 providerId/model 成对返回。
+ * 这样 spawn 凭证、proxy endpoint 与会话持久化不会各自重新猜一次默认来源。
  */
 export async function resolveDefaultScheduleRoute(
   agent: AgentKind,
   preferredProviderId?: string | null,
+  modelId?: string,
 ): Promise<{ model: string; providerId: string } | null> {
   const views = await listRouteGuardProviders();
+  const preferredModelId = modelId?.trim();
+  if (preferredModelId) {
+    const providerId = effectiveSourceIdForModel(
+      views,
+      preferredProviderId,
+      preferredModelId,
+      agent,
+    );
+    return providerId ? { model: preferredModelId, providerId } : null;
+  }
   const connected = connectedProvidersForAgent(views, agent);
   const candidates = preferredProviderId
     ? connected.filter((provider) => provider.id === preferredProviderId)
