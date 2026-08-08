@@ -1370,6 +1370,9 @@ export class GoalController {
     // usageLimited 行:重启后 timer 丢了,按存档的 usageResetAt 重排自动续跑
     //(已过点 → delay 0 触发;未知 resetAt → 不排,留待手动 resume)。
     const limited = await this.deps.storage.listUsageLimited();
+    // await 期间可能已 dispose(reviewer P1:登出/切账号)——不得给旧账号注册
+    // usage-resume timer,否则过期 resetAt 会立即触发跨边界的 autoResume。
+    if (this.disposed) return;
     let rescheduled = 0;
     for (const g of limited) {
       if (g.usageResetAt == null) continue;
@@ -2032,6 +2035,8 @@ export class GoalController {
    * 60s 干等。所以过载那条提示只能说"正在重试",不能说"已恢复"(见 noticeKind)。
    */
   private async autoResumeFromUsageLimit(sessionId: string): Promise<void> {
+    // dispose 后丢弃(reviewer P1:登出/切账号后旧 timer 触发不得跨边界恢复旧账号 goal)。
+    if (this.disposed) return;
     this.usageResumeTimers.delete(sessionId);
     // usageLimited 停驻态正常没有 turn owner。为本次 timer 建一代临时 owner，所有 await
     // 都用对象身份复核；Stop 会同步换成 fresh cancelled owner，旧自动恢复因而不能落提示、
