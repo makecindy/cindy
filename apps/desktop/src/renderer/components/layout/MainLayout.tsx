@@ -379,6 +379,7 @@ export function MainLayout() {
   appshotRouteContextRef.current = { location, navigate };
 
   useEffect(() => {
+    if (!window.electronAPI?.appshots) return;
     const inbox = installAppshotInbox({
       route: async (result) => {
         const { location: currentLocation, navigate: currentNavigate } = appshotRouteContextRef.current;
