@@ -135,6 +135,33 @@ describe('aggregateTurnUsageDetails', () => {
 });
 
 describe('mergeTurnUsageDetailsForMessage', () => {
+  it('adds input-only continuation usage without replacing prior output timing', () => {
+    const generated = buildTurnUsageDetails({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 10,
+      durationMs: 1_200,
+      turnDurationMs: 2_000,
+      model: 'claude-sonnet-4-6',
+    });
+    const terminal = buildTurnUsageDetails({
+      inputTokens: 5,
+      cacheReadTokens: 95,
+      turnDurationMs: 6_500,
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(mergeTurnUsageDetailsForMessage(generated, terminal!)).toMatchObject({
+      inputTokens: 105,
+      outputTokens: 20,
+      cacheReadTokens: 105,
+      totalTokens: 230,
+      durationMs: 1_200,
+      turnDurationMs: 6_500,
+      model: 'claude-sonnet-4-6',
+    });
+  });
+
   it('preserves token facts when a tokenless terminal snapshot supplies the final wall clock', () => {
     const generated = buildTurnUsageDetails({
       inputTokens: 10,

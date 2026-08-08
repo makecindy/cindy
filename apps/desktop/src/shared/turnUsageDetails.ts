@@ -193,6 +193,13 @@ export function mergeTurnUsageDetailsForMessage(
   incoming: TurnUsageDetails,
 ): TurnUsageDetails {
   if (!existing) return incoming;
+  // A continuation can finish without assistant output while still charging
+  // input/cache tokens. That segment reuses the prior assistant message, so it
+  // must extend the existing user-turn aggregate rather than replace the
+  // output tokens and generation duration already attached to that message.
+  if (incoming.outputTokens <= 0 && existing.outputTokens > 0) {
+    return aggregateTurnUsageDetails([existing, incoming]) ?? incoming;
+  }
   const turnDurationMs = Math.max(existing.turnDurationMs ?? 0, incoming.turnDurationMs ?? 0);
   const base = incoming.totalTokens > 0 ? incoming : existing.totalTokens > 0 ? existing : incoming;
   return {

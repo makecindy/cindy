@@ -144,6 +144,7 @@ async function patchAgentMetaPreservingTurnDuration(
   const mergedUsage = mergeTurnUsageDetailsForMessage(previousUsage, turnUsageDetails);
   const needsMergePatch =
     (turnUsageDetails.totalTokens <= 0 && previousUsage.totalTokens > 0) ||
+    (turnUsageDetails.outputTokens <= 0 && previousUsage.outputTokens > 0) ||
     (previousUsage.turnDurationMs ?? 0) > (turnUsageDetails.turnDurationMs ?? 0);
   if (!needsMergePatch) return { result: first, turnUsageDetails };
   const second = await deps.patchAgentMeta(sessionId, clientId, {
