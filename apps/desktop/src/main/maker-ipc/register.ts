@@ -335,7 +335,9 @@ import {
   onAssistantTextEvent,
   onInteractionMessage,
   onInteractionResolved,
+  clearCodexPlanRowsForSession,
   persistCodexPlanOnDone,
+  persistCodexPlanOnTerminalError,
   onThinkingEvent,
   onToolResultEvent,
   onToolResultFullEvent,
@@ -575,6 +577,7 @@ import {
 } from './agentHandoff.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
+import { buildPlanReconcileNote, summarizeOpenPlan } from './planReconcile.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -3835,6 +3838,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // A claim-bearing done seals this SDK segment, but the product turn is
         // still running and may emit another continuation segment. Reset the
         // per-SDK-turn persistence maps while deferring the logical turn marker.
+        // 没有 done 的终态 error(Codex 在 terminal error 后显式压掉迟到的
+        // turnCompleted,persistCodexPlanOnDone 永远不会跑到):本 turn 的计划行
+        // 既没有章也没有 turnCompleted:false,面板会把全勾完的失败计划当旧数据
+        // 兜底退场。在这里补失败印记——只盖 turn 存活标记,不动步骤状态。
+        if (
+          !isContinuationBoundary &&
+          event.source === 'codex' &&
+          event.type !== 'done' &&
+          isTerminalTurnErrorEvent(event)
+        ) {
+          const errorTurnId =
+            typeof (event.data as { raw?: { id?: unknown } } | null | undefined)?.raw?.id === 'string'
+              ? ((event.data as { raw?: { id?: unknown } }).raw!.id as string)
+              : null;
+          persistCodexPlanOnTerminalError(session.id, errorTurnId);
+        }
         if (!isContinuationBoundary && event.source === 'codex' && event.type === 'done') {
           // Renderer applies this terminal snapshot immediately. Persist the
           // same state before sealing the persist queue and clearing the
@@ -3853,6 +3872,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         }
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
+          // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
+          // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久
+          // 钉住,review P1-1)。
+          clearCodexPlanRowsForSession(session.id);
         }
         resetTurnPersistState(session.id);
         // sidebar-card-mode: 摘要触发挪到本轮 assistant 块 flush 入队之后(原先在
@@ -8941,6 +8964,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
+    // 计划对账:未收口的旧计划让 agent 在下一轮顺手交代。读近段历史现算,
+    // 无 pending 状态(清单被更新/清掉后下一轮自然不再注入)。
+    // 窗口 1000 行(交接用 400):计划行被长工具流挤出窗口时 summarize 返回
+    // null → 本轮不注入——降级方向是"少提醒",不会误提醒,可接受;不做全量
+    // 分页回溯,避免每次发送为一个提示扫全历史。
+    peekPlanReconcileNote: async (sessionId) => {
+      // 读排在同一条持久化 FIFO 之后:终态章(persistCodexPlanOnDone)与失败印记
+      // 只是 enqueueWrite 入队,不等它们落库就查,会读到未盖章的旧快照 → 给已经
+      // 收口的计划多注入一次对账;反过来,全勾完但失败的计划可能因 turnCompleted:false
+      // 还没写进去而漏掉唯一的收口通道(review P2)。调用方对失败已经 catch 成 null,
+      // 队列被 app-session 边界打断时最多这一轮不注入。
+      const rows = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
+        listMessagesForAgentHandoff(sessionId, 1000),
+      );
+      const summary = summarizeOpenPlan(rows);
+      return summary ? buildPlanReconcileNote(summary) : null;
+    },
     // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。
