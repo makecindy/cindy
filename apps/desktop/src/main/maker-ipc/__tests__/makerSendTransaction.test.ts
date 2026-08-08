@@ -1337,7 +1337,9 @@ describe('session-agent-switch handoff injection', () => {
     });
     const transaction = createMakerSendTransaction(deps);
 
-    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {});
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
+      persistUserMessage: { clientId: 'client-1', content: '新消息' },
+    });
     expect(session.send).toHaveBeenCalledWith(
       { type: 'user', content: 'RECONCILE-NOTE\n\nHANDOFF-TEXT\n\n新消息' },
       expect.anything(),
@@ -1364,6 +1366,31 @@ describe('session-agent-switch handoff injection', () => {
     });
     expect(session.send).toHaveBeenLastCalledWith(
       { type: 'user', content: '继续' },
+      expect.anything(),
+    );
+
+    // /compact 等斜杠控制消息(白名单判据:落库内容以 '/' 开头)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '/compact' }, undefined, {
+      persistUserMessage: { clientId: 'c3', content: '/compact' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '/compact' },
+      expect.anything(),
+    );
+
+    // coordinator 的合成续跑指令([UI_ACTION_TRIGGER] 前缀)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '[UI_ACTION_TRIGGER]Continue' }, undefined, {
+      persistUserMessage: { clientId: 'c4', content: '[UI_ACTION_TRIGGER]Continue' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '[UI_ACTION_TRIGGER]Continue' },
+      expect.anything(),
+    );
+
+    // 不落可显示 user 行的派发(无 persistUserMessage)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '内部控制' }, undefined, {});
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '内部控制' },
       expect.anything(),
     );
 

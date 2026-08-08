@@ -737,18 +737,31 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : normalized;
       // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
       // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
-      // 只对普通用户开启的新轮次注入:scheduler 定时消息(origin)、自动续跑
-      // (persistUserMessage.autoResume)都是内部派发,它们的"用户消息"不代表用户
-      // 换了话题,注入会让自动轮次去动一份用户没打算收的计划。
+      // 只对"用户真的开口"的普通新轮次注入,判定用白名单而非枚举内部来源
+      // (scheduler/auto-resume/compact/UI 触发续跑…漏一个就会让自动轮次去动
+      // 一份用户没打算收的计划):
+      //  - 排除一切带内部来源标记的派发(origin / autoResume);
+      //  - 排除斜杠控制消息(/compact 等,以 '/' 开头的纯指令)与合成触发
+      //    ([UI_ACTION_TRIGGER] 前缀,coordinator 的续跑指令);
+      //  - 只在消息即将作为可显示 user 行落库(persistUserMessage.content 非空)
+      //    时注入——内部控制轮次都不落可显示 user 行。
       // 失败静默跳过:对账是锦上添花,不能挡发送。
       const soForReconcile = (outgoingSendOpts ?? {}) as MakerSendOptions;
-      const isInternalDispatch =
-        soForReconcile.origin !== undefined ||
-        soForReconcile.persistUserMessage?.autoResume === true ||
-        soForReconcile.persistUserMessage?.origin !== undefined;
-      const planReconcileNote = isInternalDispatch
-        ? null
-        : ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null);
+      const reconcilePersistContent =
+        typeof soForReconcile.persistUserMessage?.content === 'string'
+          ? soForReconcile.persistUserMessage.content
+          : null;
+      const isOrdinaryUserTurn =
+        soForReconcile.origin === undefined &&
+        soForReconcile.persistUserMessage?.autoResume !== true &&
+        soForReconcile.persistUserMessage?.origin === undefined &&
+        reconcilePersistContent !== null &&
+        reconcilePersistContent.length > 0 &&
+        !reconcilePersistContent.startsWith('/') &&
+        !reconcilePersistContent.startsWith('[UI_ACTION_TRIGGER]');
+      const planReconcileNote = isOrdinaryUserTurn
+        ? ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null)
+        : null;
       const withPlanReconcile = planReconcileNote
         ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcileNote)
         : withHandoff;
