@@ -14,7 +14,10 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
 } from '../../../../shared/pluginMarket';
-import { pluginMarketCustomIconSourceToken } from '../../../../shared/pluginMarket';
+import {
+  isPluginMarketCustomIconKey,
+  pluginMarketCustomIconSourceToken,
+} from '../../../../shared/pluginMarket';
 
 type LocalIconStatus = 'idle' | 'queued' | 'loading' | 'loaded' | 'missing' | 'retryable';
 
@@ -394,7 +397,9 @@ export function usePluginMarketIcon(
 ) {
   const request = useMemo<PluginMarketLocalIconRequest | null>(
     () =>
-      item.sourceType !== 'server' && item.customIconKey
+      item.sourceType !== 'server' &&
+      item.customIconKey &&
+      isPluginMarketCustomIconKey(item.customIconKey)
         ? { pluginId: item.pluginId, expectedIconKey: item.customIconKey }
         : null,
     [item.customIconKey, item.pluginId, item.sourceType],

@@ -109,6 +109,16 @@ describe('usePluginMarketIcon', () => {
     expect(localIcons).toHaveBeenCalledTimes(1);
   });
 
+  it('falls back without IPC retries when a custom icon key is invalid', async () => {
+    const item = customItem('invalid-key', '0'.repeat(64));
+    const hook = renderHook(() => usePluginMarketIcon(item, { deferUntilVisible: false }));
+    await act(async () => Promise.resolve());
+
+    expect(hook.result.current.iconDataUrl).toBeUndefined();
+    expect(localIcons).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+
   it('reloads cached bytes when Main publishes a new icon projection generation', async () => {
     const first = customItem('alpha', testCustomIconKey('team-source', 'projection-a', 'old'));
     const next = customItem('alpha', testCustomIconKey('team-source', 'projection-b', 'new'));
