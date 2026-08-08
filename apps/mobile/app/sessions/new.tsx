@@ -4683,7 +4683,14 @@ export default function NewRemoteSessionScreen() {
       // (greptile P1:终检后遗漏设备复核)——precreatedWorktree 存在时补偿 ledger
       // 后中止;不存在(无 worktree 的 Goal 路径)时直接中止。避免闭包绑定的旧设备
       // 在界面已切换后仍创建当前界面未接管的会话。
-      if (await abortIfDeviceSwitched()) return;
+      // 同步快路径(codex 独立审核者 P1):abortIfDeviceSwitched 是 async,设备未
+      // 切换时 await 也会让出微任务——ref 更新排队时「复核通过 → 让出 → 设备切换 →
+      // continuation 不再复核」竞态。先同步 ensureDeviceAlive,未切换零 await 直达
+      // handoff(维持「最后核对后零 await」不变量);已切换才异步补偿并中止。
+      if (!ensureDeviceAlive()) {
+        await abortIfDeviceSwitched();
+        return;
+      }
       // ── commit 段:started 写盘(await)后同步核对 genAt;此后无裸 return ──
       if (precreatedWorktree) {
         const startedRecorded = await registerPendingPrecreatedWorktree(

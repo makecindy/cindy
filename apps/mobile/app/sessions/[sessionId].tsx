@@ -155,6 +155,7 @@ import {
 } from '@/session/ContextSheet';
 import { RecentPhotosStrip, ScreenshotsGrid } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalView, goalStatusLabel } from '@/session/ContextSheetGoalView';
+import { parseGoalLimitsRouteParam } from '@/session/goalLimitsRouteParam';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/session/ComposerAttachmentTray';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import { ImageLightbox } from '@/session/ImageLightbox';
@@ -844,25 +845,14 @@ export default function SessionScreen() {
   // 平时无参 → null,与旧行为一致。
   const [goalError, setGoalError] = useState<string | null>(() => readRouteParam(params.goalError));
   // 新建页 goal.set 失败接回时经路由参数带入的完整 Goal 输入(codex review P2):
-  // objective 原样、limits JSON 序列化(解析失败/缺省 → undefined,坏参数不炸);
-  // 平时无参 → null,与旧行为一致(表单仍从 composer 文字初始化)。
+  // objective 原样、limits 经 parseGoalLimitsRouteParam 严格解析(坏参数忽略整个
+  // limits,不改写为 null——改写会让 limitsTouched=true 显式提交「全部无限」覆盖
+  // 被控端默认;独立审核者 P2)。平时无参 → null,与旧行为一致(表单仍从 composer
+  // 文字初始化)。
   const [goalRestore, setGoalRestore] = useState<{ objective: string; limits?: MobileGoalLimitsInput } | null>(() => {
     const objective = readRouteParam(params.goalObjective);
     if (!objective) return null;
-    let limits: MobileGoalLimitsInput | undefined;
-    const limitsRaw = readRouteParam(params.goalLimits);
-    if (limitsRaw) {
-      try {
-        const parsed = JSON.parse(limitsRaw) as Partial<MobileGoalLimitsInput>;
-        limits = {
-          maxTurns: typeof parsed.maxTurns === 'number' ? parsed.maxTurns : null,
-          budgetTokens: typeof parsed.budgetTokens === 'number' ? parsed.budgetTokens : null,
-          noProgressLimit: typeof parsed.noProgressLimit === 'number' ? parsed.noProgressLimit : null,
-        };
-      } catch {
-        limits = undefined;
-      }
-    }
+    const limits = parseGoalLimitsRouteParam(readRouteParam(params.goalLimits));
     return { objective, ...(limits ? { limits } : {}) };
   });
   // goal.set 失败接回(codex review P2):仅初始化 error 不打开面板,用户跳转后
@@ -6864,13 +6854,22 @@ export default function SessionScreen() {
         setContextSheetOpen(false);
         setContextSheetView('main');
         requestMessageListFollowLatest();
+        // 失败接回的恢复载荷一次性消费(独立审核者 P2):成功后清除 state 与路由
+        // 参数——否则以后清掉该 Goal 重新挂载表单,仍会用第一次失败时的旧
+        // objective/limits;路由参数未消费也会在页面重挂载时再次恢复旧值。
+        setGoalRestore(null);
+        router.setParams({
+          goalObjective: undefined,
+          goalLimits: undefined,
+          goalError: undefined,
+        });
       } catch (err) {
         setGoalError(formatRemoteError(err));
       } finally {
         setGoalBusy(false);
       }
     })();
-  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, sessionId, setComposerDraft, t]);
+  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, router, sessionId, setComposerDraft, t]);
   const handlePauseGoal = useCallback(() => {
     void runGoalAction(
       () => maker.goal.pause(sessionId),

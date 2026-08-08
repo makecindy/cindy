@@ -2094,6 +2094,48 @@ describe('submit guard catalog wiring (source locks)', () => {
       .slice(goalApply, goalCreate)
       .replace(/\/\/[^\n]*/g, '');
     expect(goalBetween).not.toMatch(/await /);
+    // 轮次 42 终检复核(独立审核者 P1):apply 前的设备复核必须是**同步快路径**——
+    // 先 ensureDeviceAlive 同步判,未切换零 await 直达 handoff(维持零 await 不变量);
+    // await abortIfDeviceSwitched 只允许出现在已切换的早退分支里。裸
+    // `if (await abortIfDeviceSwitched())` 会让出微任务,ref 更新排队时打开竞态。
+    // 注意 prepare 段(guard 循环前)的裸 await 复核是合法的「可取消 await」,
+    // 断言只覆盖 guard 循环后到 apply 的 commit 前区段。
+    const finalCheckMarker = '// 终检刷新(await 网络往返)期间设备可能已切换';
+    const finalCheckStart = goalSlice.indexOf(finalCheckMarker);
+    expect(finalCheckStart).toBeGreaterThan(-1);
+    const goalFinalCheck = goalSlice.slice(finalCheckStart, goalApply);
+    expect(goalFinalCheck).toContain('if (!ensureDeviceAlive()) {');
+    expect(goalFinalCheck).not.toMatch(/if \(await abortIfDeviceSwitched\(\)\)/);
+  });
+
+  it('goal failure restore payload is single-use: cleared after goal.set success (independent reviewer P2)', () => {
+    // 失败接回的 objective/limits 载荷(codex review P2)必须一次性消费:goal.set
+    // 成功后清 goalRestore state 与路由参数(goalObjective/goalLimits/goalError),
+    // 否则清掉该 Goal 重新挂载表单仍带旧输入、页面重挂载再次恢复旧值。
+    const sessionSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    expect(sessionSource).toContain("from '@/session/goalLimitsRouteParam'");
+    expect(sessionSource).toContain('parseGoalLimitsRouteParam(readRouteParam(params.goalLimits))');
+    expect(sessionSource).toContain('setGoalRestore(null);');
+    const setParamsBlock = sessionSource.slice(
+      sessionSource.indexOf('setGoalRestore(null);'),
+      sessionSource.indexOf('setGoalRestore(null);') + 400,
+    );
+    expect(setParamsBlock).toContain('goalObjective: undefined');
+    expect(setParamsBlock).toContain('goalLimits: undefined');
+    expect(setParamsBlock).toContain('goalError: undefined');
+    // 一次性消费必须发生在 goal.set 成功之后(与表单关闭同一段),不是任意位置
+    const goalSetSuccess = sessionSource.indexOf('await maker.goal.set({ sessionId, ...input });');
+    const restoreClear = sessionSource.indexOf('setGoalRestore(null);');
+    expect(goalSetSuccess).toBeGreaterThan(-1);
+    expect(restoreClear).toBeGreaterThan(goalSetSuccess);
+    // initial 优先级:恢复载荷优先于 composer 文字带入;无载荷时 initialObjective
+    // 仍从 composer 带入(旧行为)
+    const viewCall = sessionSource.slice(
+      sessionSource.indexOf('initial={goalRestore ?? undefined}') - 200,
+      sessionSource.indexOf('initial={goalRestore ?? undefined}') + 300,
+    );
+    expect(viewCall).toContain('initial={goalRestore ?? undefined}');
+    expect(viewCall).toContain('initialObjective={goalRestore ? undefined : (draft.trim() || undefined)}');
   });
 
   it('goal commit segment: started 后无裸 return,goal.set 先于本地同步(round-22 Spec P1-2/P1-3)', () => {
