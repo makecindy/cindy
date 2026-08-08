@@ -83,6 +83,7 @@ export class ImSchedulerManager {
     readonly SchedulerChannelIdentity[]
   >();
   private readonly runtimeGaps = new RuntimeGapSet();
+  private readonly observedRuntimeGaps = new Map<string, SchedulerRuntimeFrame>();
   private readonly invalidatedRuntimeGaps = new Set<string>();
   private readonly invalidatedRuntimeGapIdentities = new Set<string>();
   private unsubscribe: (() => void) | null = null;
@@ -138,6 +139,7 @@ export class ImSchedulerManager {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.runtimeGaps.clear();
+    this.observedRuntimeGaps.clear();
     this.invalidatedRuntimeGaps.clear();
     this.invalidatedRuntimeGapIdentities.clear();
     this.pendingPeerProbeChannels.clear();
@@ -308,6 +310,9 @@ export class ImSchedulerManager {
 
   private handlePush(sourceDeviceId: string, payload: unknown): void {
     if (!isImSchedulerFrame(payload) || !this.isAuthoritativePeer(sourceDeviceId)) return;
+    for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
+      if (runtime?.state === 'dirty') this.rememberObservedRuntimeGap(runtime);
+    }
     if (payload.kind === 'probe') {
       this.observePeerProbe(sourceDeviceId, payload);
       this.sendAdvertisement(sourceDeviceId, payload.nonce);
@@ -352,6 +357,9 @@ export class ImSchedulerManager {
   private clearRuntimeGapIdentity(identity: string): void {
     const runtime = this.runtimeGaps.get(identity);
     if (runtime) this.rememberInvalidatedRuntimeGap(runtime);
+    for (const observed of this.observedRuntimeGaps.values()) {
+      if (observed.identity === identity) this.rememberInvalidatedRuntimeGap(observed);
+    }
     this.runtimeGaps.clearIdentity(identity);
   }
 
@@ -369,6 +377,21 @@ export class ImSchedulerManager {
       this.rememberInvalidatedRuntimeGapIdentity(runtime.identity);
       this.rememberInvalidatedRuntimeGap(runtime);
     }
+    for (const runtime of this.observedRuntimeGaps.values()) {
+      this.rememberInvalidatedRuntimeGapIdentity(runtime.identity);
+      this.rememberInvalidatedRuntimeGap(runtime);
+    }
+  }
+
+  private rememberObservedRuntimeGap(runtime: SchedulerRuntimeFrame): void {
+    const key = this.runtimeGapKey(runtime);
+    if (this.observedRuntimeGaps.has(key)) return;
+    while (this.observedRuntimeGaps.size >= MAX_RUNTIME_GAPS) {
+      const oldest = this.observedRuntimeGaps.keys().next().value;
+      if (typeof oldest !== 'string') break;
+      this.observedRuntimeGaps.delete(oldest);
+    }
+    this.observedRuntimeGaps.set(key, { ...runtime, state: 'dirty' });
   }
 
   private rememberInvalidatedRuntimeGapIdentity(identity: string): void {

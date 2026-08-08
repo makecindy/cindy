@@ -526,6 +526,79 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
+  it('rejects an unseen old generation observed only in a prior peer advertisement', () => {
+    let localIdentity = identity;
+    let round = 0;
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity: localIdentity }),
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    const oldGap = { identity, generation: 'a'.repeat(32), state: 'dirty' as const };
+    localIdentity = nextIdentity;
+    manager.resetBindingDiscovery();
+    let probe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 2,
+        channels: [{ channel: 'discord', identity: nextIdentity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [oldGap],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+
+    localIdentity = identity;
+    manager.resetBindingDiscovery();
+    probe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string };
+    const refreshedGap = { identity, generation: 'b'.repeat(32), state: 'dirty' as const };
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 3,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [oldGap],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 4,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [refreshedGap],
+      },
+    });
+    expect(manager.getRuntimeGaps().values()).toEqual([refreshedGap]);
+    manager.stop();
+  });
+
   it('allows a same-identity rebind while retaining old generation tombstones', () => {
     let localIdentity: string | null = identity;
     let round = 0;
