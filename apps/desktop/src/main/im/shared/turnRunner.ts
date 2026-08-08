@@ -185,6 +185,8 @@ interface TurnState {
   mediaTempDirs: Set<string>;
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
+  /** SSH host when the session workdir lives on a remote machine. */
+  remoteHostId: string | null;
   done: boolean;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
@@ -688,6 +690,7 @@ export function createTurnRunner(
       mediaDisplayNames: new Map(),
       mediaTempDirs: new Set(),
       workingDir: row.workingDir,
+      remoteHostId: row.remoteHostId ?? null,
       done: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
@@ -2771,6 +2774,7 @@ export function createTurnRunner(
         workingDir: state.workingDir,
         maxFiles: 8,
         existingAbsPaths: [...turn.mediaAbsPaths],
+        remoteHostId: turn.remoteHostId,
       });
       turn.presenter.replaceBody(materialized.text);
       for (const tempDir of materialized.tempDirs) turn.mediaTempDirs.add(tempDir);

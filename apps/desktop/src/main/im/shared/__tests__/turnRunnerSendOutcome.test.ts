@@ -788,6 +788,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       workingDir: 'F:\\XDMaker',
       maxFiles: 8,
       existingAbsPaths: [],
+      remoteHostId: null,
     });
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'report ready\nreport', {
       threadTs: undefined,

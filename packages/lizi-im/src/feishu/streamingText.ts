@@ -215,6 +215,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     // 内联进正文、又经 tool_result 账本 sidechannel 送来时(ghost 读文档
     // xdt_media_inline 内联场景),只保留正文内联位,不在卡片尾部再挂一份。
     const bodyImageAbsPaths = new Set<string>();
+    const deliveredBodyImageAbsPaths = new Set<string>();
     if (imageUrls.length > 0) {
       log.debug(`[feishu/streamingText] uploading ${imageUrls.length} xdt-image(s)`);
       const results = await Promise.all(
@@ -240,11 +241,13 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           }
           bodyImageAbsPaths.add(absPath);
           const key = await uploadImage(absPath);
-          return key ? ([url, key] as const) : null;
+          return key ? { url, key, absPath } : null;
         }),
       );
       for (const r of results) {
-        if (r) imageMap.set(r[0], r[1]);
+        if (!r) continue;
+        imageMap.set(r.url, r.key);
+        deliveredBodyImageAbsPaths.add(r.absPath);
       }
     }
 
@@ -327,7 +330,11 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       );
       await patchCardRaw(this.messageId, fitted.card);
       if (!fitted.droppedMedia) {
-        this.deliveredExtraImageAbsPaths = uploadedExtraImageAbsPaths;
+        this.deliveredExtraImageAbsPaths = this.extraImageAbsPaths.filter(
+          (absPath) =>
+            uploadedExtraImageAbsPaths.includes(absPath) ||
+            deliveredBodyImageAbsPaths.has(absPath),
+        );
       }
       this.flushed = this.buffer;
     } catch (err) {

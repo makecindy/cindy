@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../outbound.js', () => mocks);
 vi.mock('../moduleScope.js', () => ({
   getLog: () => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+  getHost: () => ({
+    media: { resolveMediaUrl: () => '/tmp/shared.png' },
+    paths: { feishuMediaDir: '/tmp' },
+  }),
 }));
 
 import { messages } from '../messages.js';
@@ -79,6 +83,17 @@ describe('feishu streaming text', () => {
     await handle.finalize('正文');
 
     expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(['/tmp/ok.png']);
+  });
+
+  it('acknowledges an extra image delivered through the matching body URL', async () => {
+    mocks.uploadImage.mockResolvedValue('image-key');
+    const handle = await start('ou_owner');
+    handle.addExtraImageAbsPath?.('/tmp/shared.png');
+
+    await handle.finalize('![shared](cindy-media://blobs/shared.png)');
+
+    expect(mocks.uploadImage).toHaveBeenCalledTimes(1);
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(['/tmp/shared.png']);
   });
 
   it('patches a short user-visible notice when the final card shape is rejected', async () => {

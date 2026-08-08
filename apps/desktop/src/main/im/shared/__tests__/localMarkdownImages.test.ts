@@ -2,7 +2,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const remoteFileMocks = vi.hoisted(() => ({
+  materializeSshRemoteFile: vi.fn(),
+}));
+
+vi.mock('../../../file-browser/ssh-media', () => remoteFileMocks);
 
 import {
   materializeLocalMarkdownFiles,
@@ -33,6 +39,10 @@ afterEach(async () => {
   for (const root of tempRoots.splice(0)) {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe('materializeLocalMarkdownImages', () => {
@@ -221,21 +231,54 @@ describe('materializeLocalMarkdownFiles', () => {
     await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('approved content');
   });
 
+  it('materializes SSH workdir attachments through the remote file service', async () => {
+    const cacheRoot = await makeTempRoot();
+    const cachePath = path.join(cacheRoot, 'remote-cache.bin');
+    await fs.writeFile(cachePath, 'remote report');
+    remoteFileMocks.materializeSshRemoteFile.mockResolvedValue({
+      ok: true,
+      cachePath,
+      size: 13,
+      relPath: 'report.txt',
+    });
+
+    const result = await materializeLocalMarkdownFiles({
+      text: '[report](xdt-file:///srv/project/report.txt)',
+      workingDir: '/srv/project',
+      remoteHostId: 'ssh-host-1',
+    });
+    tempRoots.push(...result.tempDirs);
+
+    expect(remoteFileMocks.materializeSshRemoteFile).toHaveBeenCalledWith(
+      { remoteHostId: 'ssh-host-1', workdir: '/srv/project' },
+      '/srv/project/report.txt',
+      100 * 1024 * 1024,
+    );
+    expect(result.files).toHaveLength(1);
+    await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('remote report');
+  });
+
   it('rejects files outside workingDir and symlink escapes without exposing their paths', async () => {
     const parent = await makeTempRoot();
     const workingDir = path.join(parent, 'work');
     const outsidePath = path.join(parent, 'secret.txt');
+    const outsideDir = path.join(parent, 'outside');
+    const outsideNestedPath = path.join(outsideDir, 'nested.txt');
     const symlinkPath = path.join(workingDir, 'linked.txt');
+    const symlinkDir = path.join(workingDir, 'linked-dir');
     await fs.mkdir(workingDir);
+    await fs.mkdir(outsideDir);
     await fs.writeFile(outsidePath, 'secret');
+    await fs.writeFile(outsideNestedPath, 'nested secret');
     await fs.symlink(outsidePath, symlinkPath);
+    await fs.symlink(outsideDir, symlinkDir);
 
     const result = await materializeLocalMarkdownFiles({
-      text: `[outside](xdt-file://${outsidePath})\n[linked](xdt-file://${symlinkPath})`,
+      text: `[outside](xdt-file://${outsidePath})\n[linked](xdt-file://${symlinkPath})\n[parent linked](xdt-file://${path.join(symlinkDir, 'nested.txt')})`,
       workingDir,
     });
 
-    expect(result).toEqual({ files: [], tempDirs: [], text: 'outside\nlinked' });
+    expect(result).toEqual({ files: [], tempDirs: [], text: 'outside\nlinked\nparent linked' });
     expect(result.text).not.toContain('xdt-file://');
     expect(result.text).not.toContain(outsidePath);
   });

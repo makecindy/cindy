@@ -9,7 +9,6 @@
  * 的引用则通过各自的安全解析器取回仓内路径；两类都重新核验文件与图片魔数。
  */
 
-import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,6 +20,8 @@ import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore
 import { ingestMedia } from '../../cindy-media/ingest';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
 import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
+import { materializeSshRemoteFile } from '../../file-browser/ssh-media';
+import { readBoundedFileFollowLinks } from '../../utils/readBoundedFile';
 
 const LOCAL_MARKDOWN_IMAGE_RE = /!\[([^\]\r\n]{0,512})\]\(([^)\r\n]{1,4096})\)/g;
 const DEFAULT_MAX_IMAGES = 4;
@@ -123,6 +124,7 @@ export async function materializeLocalMarkdownFiles(
     maxFiles?: number;
     maxFileBytes?: number;
     existingAbsPaths?: string[];
+    remoteHostId?: string | null;
   },
 ): Promise<MaterializedLocalMarkdownFiles> {
   const refs = collectXdtFileRefs(params.text);
@@ -140,16 +142,18 @@ export async function materializeLocalMarkdownFiles(
   }
 
   let workingDirReal: string | null = null;
-  try {
-    workingDirReal = await fs.realpath(params.workingDir);
-  } catch {
-    // Fail closed: without a canonical root, no model-authored file may be sent.
+  if (!params.remoteHostId) {
+    try {
+      workingDirReal = await fs.realpath(params.workingDir);
+    } catch {
+      // Fail closed: without a canonical root, no model-authored local file may be sent.
+    }
   }
 
   const accepted = new Set<string>();
   const files: Array<{ absPath: string; displayName?: string }> = [];
   let tempDir: string | null = null;
-  if (workingDirReal) {
+  if (workingDirReal || params.remoteHostId) {
     for (const ref of refs) {
       if (files.length >= maxFiles) break;
       try {
@@ -158,41 +162,34 @@ export async function materializeLocalMarkdownFiles(
         );
         const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(candidate) || /^\\\\[^\\]/.test(candidate);
         if (candidate.includes('\u0000') || (!path.isAbsolute(candidate) && !isWindowsAbsolute)) continue;
-        const targetReal = await fs.realpath(candidate);
-        if (!isPathInside(workingDirReal, targetReal)) continue;
-        const beforeOpen = await fs.stat(targetReal);
-        if (!beforeOpen.isFile() || beforeOpen.size <= 0 || beforeOpen.size > maxFileBytes) continue;
-        const key = pathKey(targetReal);
-        if (accepted.has(key) || existing.has(key)) continue;
-
-        // Open the canonical path without following a final symlink, then
-        // compare the descriptor identity with the file that passed the path
-        // check. Once open, later renames/symlink swaps cannot change what is
-        // read. Uploads use a private copy, never the mutable source path.
-        const handle = await fs.open(
-          targetReal,
-          constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-        );
+        let sourcePath: string;
         let buffer: Buffer;
-        try {
-          const opened = await handle.stat();
-          if (
-            !opened.isFile() ||
-            opened.dev !== beforeOpen.dev ||
-            opened.ino !== beforeOpen.ino ||
-            opened.size !== beforeOpen.size ||
-            opened.size > maxFileBytes
-          ) {
-            continue;
-          }
-          buffer = await handle.readFile();
-          if (buffer.byteLength !== opened.size || buffer.byteLength > maxFileBytes) continue;
-        } finally {
-          await handle.close();
+        if (params.remoteHostId) {
+          const remote = await materializeSshRemoteFile(
+            { remoteHostId: params.remoteHostId, workdir: params.workingDir },
+            candidate,
+            maxFileBytes,
+          );
+          if (!remote.ok) continue;
+          sourcePath = remote.cachePath;
+          buffer = await fs.readFile(sourcePath);
+          if (buffer.byteLength !== remote.size || buffer.byteLength > maxFileBytes) continue;
+        } else {
+          const targetReal = await fs.realpath(candidate);
+          if (!workingDirReal || !isPathInside(workingDirReal, targetReal)) continue;
+          const securelyRead = await readBoundedFileFollowLinks(targetReal, maxFileBytes, {
+            containWithin: workingDirReal,
+          });
+          if (!securelyRead || securelyRead.byteLength === 0) continue;
+          sourcePath = targetReal;
+          buffer = securelyRead;
         }
+        const sourcePathKey = pathKey(sourcePath);
+        const key = `${params.remoteHostId ?? 'local'}:${sourcePathKey}`;
+        if (accepted.has(key) || existing.has(sourcePathKey)) continue;
 
         tempDir ??= await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-im-file-'));
-        const extension = path.extname(targetReal).slice(0, 32);
+        const extension = path.extname(candidate).slice(0, 32);
         const stagedPath = path.join(tempDir, `${randomUUID()}${extension}`);
         await fs.writeFile(stagedPath, buffer, { flag: 'wx', mode: 0o600 });
         accepted.add(key);
