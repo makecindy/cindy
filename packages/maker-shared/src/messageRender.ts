@@ -28,8 +28,15 @@ export interface MessageRenderSourceMessageLike {
    * `autoResume` / `origin` — user rows carrying either are internal dispatches
    * (auto-resume continuation, scheduler runs), not the user opening a new
    * topic, so they must not cut a plan session boundary.
+   *
+   * Surfaces that strip `agentMeta` during projection (desktop renderer's
+   * ChatMessage) must instead carry the projected flags below.
    */
   agentMeta?: Record<string, unknown> | null;
+  /** Desktop renderer projection of synthetic trigger rows (auto-resume 等)。 */
+  isSyntheticTrigger?: boolean;
+  /** Desktop renderer projection of scheduler-originated user rows. */
+  automationOrigin?: unknown;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
   /**
@@ -477,12 +484,17 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (message.role === 'user') {
-      // 只有"用户真的开口"才是所有权边界。自动续跑(agentMeta.autoResume)与
-      // scheduler 定时消息(agentMeta.origin)落的也是 user 行,但那是同一件事
-      // 的延续,不能把进行中的计划切成新 session(否则历史里出现重复计划卡)。
+      // 只有"用户真的开口"才是所有权边界。自动续跑与 scheduler 定时消息落的
+      // 也是 user 行,但那是同一件事的延续,不能把进行中的计划切成新 session
+      // (否则历史里出现重复计划卡)。两套字段都认:main/mobile 路径消息带
+      // agentMeta(autoResume/origin);desktop 渲染层把 agentMeta 投影成
+      // isSyntheticTrigger / automationOrigin 后丢弃原 meta。
       const meta = message.agentMeta;
       const syntheticUserRow =
-        meta?.autoResume === true || (meta?.origin !== undefined && meta?.origin !== null);
+        message.isSyntheticTrigger === true ||
+        (message.automationOrigin !== undefined && message.automationOrigin !== null) ||
+        meta?.autoResume === true ||
+        (meta?.origin !== undefined && meta?.origin !== null);
       if (!syntheticUserRow) lastUserIndex = index;
       continue;
     }

@@ -984,6 +984,21 @@ describe('message render todo grouping', () => {
         createdAt: at(6),
         agentMeta: { origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' } },
       };
+      // desktop 渲染层投影后 agentMeta 被丢弃,只剩这两个字段——同样不得切边界。
+      const projectedSyntheticRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-1',
+        content: '',
+        createdAt: at(7),
+        isSyntheticTrigger: true,
+      };
+      const projectedSchedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-2',
+        content: '定时活',
+        createdAt: at(8),
+        automationOrigin: { kind: 'scheduler', scheduleId: 's1' },
+      };
       const progress = tool('todo-live-2', 'TodoWrite', {
         todos: [
           { content: 'Long work', status: 'completed' },
@@ -994,7 +1009,14 @@ describe('message render todo grouping', () => {
       // 自动续跑/scheduler 落的 user 行不是"用户开新话题":同计划的后续更新
       // 仍并入原 session,key 不变,不产生重复计划卡。
       expect(
-        findLatestMessageTodoInsertion([staleTodo, autoResumeRow, schedulerRow, progress]),
+        findLatestMessageTodoInsertion([
+          staleTodo,
+          autoResumeRow,
+          schedulerRow,
+          projectedSyntheticRow,
+          projectedSchedulerRow,
+          progress,
+        ]),
       ).toMatchObject({
         key: 'todo-todo-live',
         todos: [
