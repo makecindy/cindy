@@ -144,6 +144,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 ### 桌面 UI 字号白名单(2026-08,issue #1505)
 
 - **UI 段:{10, 11, 12, 13, 14, 15, 16}px;标题 / 内容段:{18, 20, 24, 28}px。** 下限 10px —— 9px 及以下禁止(再小就不是文字是纹理)。
+- **下限约束的是「开发者写死的档位」,不约束运行期缩放结果。** 用户可把 UI 字号设到 `appearanceSettings.uiSize` 允许的最小值 12（默认 14）,`useFontSettings` 按 `uiSize / 14` 缩放并 `Math.round`,此时 `--text-10` 与 `--text-11` 都会算成 9px（两档在该设置下失去区分）。这是用户主动选择的整体缩小,不是违反下限;守卫也只检查源码里写的档位,不检查运行期计算值。**若要保住 10px 视觉下限,应在字号设置侧（提高 `uiSize` 下限或改缩放曲线）解决,而不是往白名单里加更小的档位。**
 - **写法**:一律用 `tailwind.config.ts` 的 `text-<n>` token 类(映射 `--text-<n>` 变量;doc 紧凑模式与后续字号缩放能力都挂在这层变量上,任意值类会静默漏掉这些机制)。语义类 `text-xs / text-sm / text-base / text-lg` 只收编存量(等值 12 / 14 / 16 / 18)；源码侧禁止使用 `text-xl` 及以上语义档位（由守卫拦截），配置侧 `theme.extend.fontSize` 的 `xl..5xl` 遗留项不在本轮删除范围，避免删除后静默回退到 Tailwind 内置固定值、失去用户字号缩放；其清理另行处理。**禁止新增任意值 `text-[Npx]`(含一切小数)与白名单外档位**;需要新档先改本表与权威来源，再进组件。
 - **镜像约定（目标态；施工由 #1553 承接）**：当前 main 尚未建立白名单与字号实现的镜像关系。四个权威来源必须同步：本表（规范正本）与以下三处代码——`apps/desktop/tailwind.config.ts` 的 `fontSize`（类名可用性与变量映射；漏掉则 `text-<n>` 类根本不存在）、`apps/desktop/src/renderer/styles/globals.css` 的静态 `--text-<n>` 默认值（漏掉则变量未定义并回退到继承值）、`apps/desktop/src/renderer/hooks/useFontSettings.ts` 的 `UI_TEXT_TOKEN_SIZES` 运行时生效值（含用户字号缩放；漏掉则该档位不随用户设置缩放，反向漏则会写出已删档位的陈旧变量）。另有一个消费端需保持一致：`apps/desktop/src/renderer/lib/utils.ts` 的 tailwind-merge `classGroups['font-size']` 负责类名去重，不产生字号值；漏登记会让 `cn()` 合并两个字号类失效，两个类会同时留在 DOM 上。该消费端单独做一致性校验，不计入四个权威来源镜像。同一 hook 的 `SCALED_TAILWIND_TOKENS` 负责语义类运行时缩放，需与 Tailwind 语义类映射保持同步，但不改变本白名单的具体档位。PR4 的守卫按四个权威来源做镜像断言，并单独校验消费端一致性。
 - 品牌画布域(登录 / Splash 家族等设计 px 坐标系表面)不映射本白名单:字面量只允许进画布常量文件(`loginDesignTokens.ts` 的地位,对齐手机端 `loginSkinLayout.ts`)**或下表登记的自包含品牌页生成器**(`oauthResultPage.ts` 整页由 main 侧生成,其内嵌 raw CSS 即该页的常量载体),组件消费端照常受守卫扫描。
@@ -326,7 +327,7 @@ Three tiers — **these three only**:
 - Don't introduce any chromatic color outside the sanctioned semantic set in §2 — no brand blue, no accent green, no warm tones beyond the registered exceptions
 - Don't invent arbitrary radii — only three values exist: 8px (inner controls), 12px (containers), 9999px (pill). Nothing in between, nothing else.
 - Don't add shadows to any element — the flat aesthetic is intentional
-- Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in §3 (markdown `<strong>`, hljs theme ports, login brand canvas); no 800+, no in-between values, anywhere
+- Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in the §3 registry (that table is the single source of truth; it currently covers markdown content, hljs theme ports, login / Splash brand canvas, third-party viewers under `vendor/`, and imperative third-party APIs). Don't re-enumerate the domains here — read §3. No 800+, no in-between values, anywhere
 - Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on the explicitly enumerated sanctioned brand surfaces in §15.7 / §16
 - Don't use gradients anywhere — flat blocks and borders only
 - Don't overcomplicate the layout — stick to the region structure in §5; no complex nested grids
