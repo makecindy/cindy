@@ -358,7 +358,7 @@ export class GoalController {
    * 每个 goal listener 当前绑定的 SessionLike 对象引用。deferred agent switch 落实后
    * live session 会被换成目标引擎的新对象(maker.getSession 返回新引用),用它判等
    * 以决定是否需要把 listener 迁到新 session —— 否则新引擎 turn 的 done/error 事件
-   * 进不了 finalizeTurn,目标永远卡在 active()。
+   * 进不了 finalizeTurn,目标永远卡在 active。
    */
   private readonly listenerSessions = new Map<string, SessionLike>();
   private readonly turns = new Map<string, TurnAccumulator>();
@@ -452,9 +452,10 @@ export class GoalController {
     state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
     // 只允许补充/覆盖 helper 未计算/归一化的字段(from/to/generation/reason);
     // type/goalSessionId/turnIndex/at/budget 由 helper 负责,调用方不可意外覆盖。
-    // reason 允许 string | null(GoalState.lastReason 类型)——helper 内归一化为
-    // undefined,避免 strict 下把 null 赋给 reason?: string 的类型错误。
-    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation' | 'reason'> & { reason?: string | null },
+    // reason 单独定义(不放进 Pick):交叉类型对同名属性取交集,会把 reason 收窄成
+    // string,无法接受 GoalState.lastReason 的 string | null;单独给 nullable 类型后
+    // helper 内归一化为 undefined,strict 下安全。
+    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation'> & { reason?: string | null },
   ): void {
     // dispose 后丢弃观测(登出/切账号 reset 后,in-flight 的旧 controller
     // 扫描/收口不得把旧账号事件写回已清空的环)。
@@ -1056,6 +1057,9 @@ export class GoalController {
    * /已 active 不处理。
    */
   async resumeGoal(sessionId: string, opts?: { auto?: boolean }): Promise<void> {
+    // dispose 后丢弃(reviewer P1:GOAL_RESUME 捕获的旧实例在登出/切账号后不得恢复
+    // 旧账号 goal、重建 turns / attach listener / emit 旧状态)。
+    if (this.disposed) return;
     let existingBoundary = this.turns.get(sessionId);
     let state: GoalState | null | undefined;
     if (existingBoundary?.cancelled) {
@@ -2250,7 +2254,7 @@ export class GoalController {
       }
       // deferred switch 可能刚把 live session 换成目标引擎的新对象;本会话若有 goal
       // listener,必须迁到新 session,否则这轮 turn 的 done/error 事件进不了 finalizeTurn,
-      // 目标卡死在 active()。attachListener 按 session 身份判等,未换则 no-op;
+      // 目标卡死在 active。attachListener 按 session 身份判等,未换则 no-op;
       // 只对已在管(非 dormant)的 goal 重挂,不给 dormant 会话平白加 listener。
       if (this.unsubscribers.has(sessionId)) {
         this.attachListener(sessionId);
