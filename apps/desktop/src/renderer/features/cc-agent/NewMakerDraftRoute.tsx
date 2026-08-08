@@ -2888,6 +2888,18 @@ export function NewMakerDraftRoute() {
           // 让 /plan 走默认发送路径(mergeCommands 优先级 agent-skill > desktop >
           // agent-builtin,同名时 agent-skill 覆盖 desktop)。
           if (hit && hit.kind === 'desktop') {
+            if (isDeviceLinkDraft) {
+              // 远程草稿不可用提示**优先于附件保护**(Copilot):device-link 远程草稿带
+              // 附件时,先提示「远程草稿不支持计划模式」而非给「用 + 菜单」这种远程无效
+              // 的指引;有附件时返回 false 保留草稿(避免清空附件),无附件返回 undefined
+              // 清命令文本(原行为)。
+              // 明确命中 desktop /plan,但草稿是 device-link 远程:计划模式切换在远程
+              // 不可用(onPlanModeChange 不下发)。不静默消费也不放行创建会话 —— 命中
+              // 即提示并 return,避免 /plan 变成首条消息发给远程 agent 或走远程
+              // create-session 路径(Codex P1)。
+              toast.warning(t('newChat.collaboration.planModeUnavailableRemoteDraft'));
+              return files?.length ? false : undefined;
+            }
             // 附件保护(Codex P2):归属确认后才拦截 —— 装了名为 plan 的 agent skill 且
             // 带附件时,hit 为 agent-skill 已在上方放行(skill + 附件正常发给 agent);
             // 只有**明确命中 desktop** /plan 且 composer 已带附件时才不消费:接受命令
@@ -2896,14 +2908,6 @@ export function NewMakerDraftRoute() {
             if (files?.length) {
               toast.info(t('newChat.collaboration.planModeToggleWithAttachments'));
               return false;
-            }
-            if (isDeviceLinkDraft) {
-              // 明确命中 desktop /plan,但草稿是 device-link 远程:计划模式切换在远程
-              // 不可用(onPlanModeChange 不下发)。不静默消费也不放行创建会话 —— 命中
-              // 即提示并 return,避免 /plan 变成首条消息发给远程 agent 或走远程
-              // create-session 路径(Codex P1)。返回 undefined 让 ChatInput 清空 composer。
-              toast.warning(t('newChat.collaboration.planModeUnavailableRemoteDraft'));
-              return;
             }
             // 本地草稿:明确命中 desktop /plan → toggle 草稿 planMode。
             handlePlanModeChange(!effectivePlanMode);

@@ -2460,13 +2460,11 @@ export function CCAgentSessionView({
       const args = slashMatch[2] ?? '';
       const cached = allCommandsRef.current;
       const commands = cached.length > 0 ? cached : await getHelpCommandsSnapshot();
-      const hit = commands.find((c) => c.name.toLowerCase() === cmdName);
-      if (hit?.kind !== 'desktop') return false;
-      // desktop 候选:仅 /plan 需要 forceReload 复核归属(Copilot —— 其它 desktop 命令
-      // 无同名 skill 覆盖语义,每次执行都强制刷新+扫描是纯开销)。allCommandsRef 是会话
-      // 挂载时的快照,会话期间新增/启用的同名 plan skill 不会被它感知 —— palette 打开
-      // 会 forceReload 显示新 skill,但发送路径仍按旧归属把 /plan 当 desktop 执行。
-      // 复核为 agent-skill 则放行给 agent(与 mergeCommands 优先级 agent-skill > desktop 一致)。
+      let hit = commands.find((c) => c.name.toLowerCase() === cmdName);
+      // /plan 特殊:cached 归属不可信,必须在 cached-kind 早退**之前** forceReload 复核
+      // (Codex P2 —— 会话期间同名 skill 被禁用/删除后,palette 已 force-reload 显示内置
+      // /plan,但此处 cached 仍是旧的 agent-skill,提前 return 会让 /plan 被当文字发给
+      // agent 而非 toggle)。
       if (cmdName === 'plan') {
         // /plan 只对**裸命令**做 desktop toggle(Codex P2):`/plan 分析一下` 这类带参数
         // 的命令不属于 toggle 语义,放行给 agent 处理(不消费、不 toggle)。
@@ -2497,6 +2495,10 @@ export function CCAgentSessionView({
           toast.info(t('newChat.collaboration.planModeToggleWithAttachments'));
           return 'preserve';
         }
+        // dispatch 用复核结果(复核前 cached 可能是旧的 agent-skill)。
+        hit = freshHit;
+      } else if (hit?.kind !== 'desktop') {
+        return false;
       }
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。
